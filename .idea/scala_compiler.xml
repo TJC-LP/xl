@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ScalaCompilerConfiguration">
+    <profile name="bsp 1" modules="xl_21284bb2e3">
+      <parameters>
+        <parameter value="-Xsemanticdb" />
+        <parameter value="-sourceroot" />
+        <parameter value="$PROJECT_DIR$" />
+      </parameters>
+    </profile>
+    <profile name="bsp 2" modules="mill-build_">
+      <option name="deprecationWarnings" value="true" />
+      <parameters>
+        <parameter value="-Wconf:msg=will be encoded on the classpath:silent" />
+      </parameters>
+      <plugins>
+        <plugin path="$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/lihaoyi/scalac-mill-moduledefs-plugin_3.7.3/0.11.10/scalac-mill-moduledefs-plugin_3.7.3-0.11.10.jar" />
+      </plugins>
+    </profile>
+    <profile name="bsp 3" modules="tests.cats-effect,tests.core,tests.evaluator,tests.ooxml,xl-cats-effect,xl-cats-effect.test,xl-core,xl-core.test,xl-evaluator,xl-evaluator.test,xl-macros,xl-macros.test,xl-ooxml,xl-ooxml.test,xl-testkit,xl-testkit.test">
+      <option name="implicitConversions" value="true" />
+      <option name="higherKinds" value="true" />
+      <option name="deprecationWarnings" value="true" />
+      <option name="uncheckedWarnings" value="true" />
+      <option name="featureWarnings" value="true" />
+      <parameters>
+        <parameter value="-encoding" />
+        <parameter value="utf-8" />
+        <parameter value="-Xkind-projector" />
+      </parameters>
+    </profile>
+  </component>
+</project>
