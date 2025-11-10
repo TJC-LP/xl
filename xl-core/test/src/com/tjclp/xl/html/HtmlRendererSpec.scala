@@ -5,6 +5,7 @@ import com.tjclp.xl.*
 import com.tjclp.xl.RichText.{*, given}
 import com.tjclp.xl.macros.{cell, range}
 import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.style.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align}
 
 /** Tests for HTML export functionality */
 class HtmlRendererSpec extends FunSuite:

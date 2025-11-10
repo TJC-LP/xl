@@ -5,6 +5,7 @@ import org.scalacheck.Prop.*
 import cats.syntax.all.*
 import Generators.given
 import Patch.{given, *}
+import com.tjclp.xl.style.{CellStyle, StyleId, Font, Fill, Color}
 
 /** Property tests for Patch monoid laws and semantics */
 class PatchSpec extends ScalaCheckSuite:

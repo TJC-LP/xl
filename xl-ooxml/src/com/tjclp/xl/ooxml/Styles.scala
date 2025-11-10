@@ -3,6 +3,17 @@ package com.tjclp.xl.ooxml
 import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.*
+import com.tjclp.xl.style.{
+  Font,
+  Fill,
+  Border,
+  BorderSide,
+  BorderStyle,
+  NumFmt,
+  CellStyle,
+  StyleId,
+  Color
+}
 
 /**
  * Style components and indexing for xl/styles.xml

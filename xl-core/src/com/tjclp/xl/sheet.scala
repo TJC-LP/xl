@@ -1,6 +1,7 @@
 package com.tjclp.xl
 
 import scala.collection.immutable.{Map, Set}
+import com.tjclp.xl.style.{CellStyle, StyleId, StyleRegistry}
 
 /** Properties for columns */
 case class ColumnProperties(

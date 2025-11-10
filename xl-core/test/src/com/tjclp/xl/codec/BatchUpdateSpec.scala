@@ -5,6 +5,7 @@ import com.tjclp.xl.*
 import com.tjclp.xl.codec.{*, given}
 import com.tjclp.xl.RichText.{*, given}
 import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.style.NumFmt
 import java.time.{LocalDate, LocalDateTime}
 
 /** Tests for batch update extension methods */

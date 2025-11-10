@@ -3,6 +3,7 @@ package com.tjclp.xl
 import munit.ScalaCheckSuite
 import org.scalacheck.{Arbitrary, Gen, Prop}
 import org.scalacheck.Prop.*
+import com.tjclp.xl.style.{*, given}
 
 /** Property tests for style system */
 class StyleSpec extends ScalaCheckSuite:

@@ -3,6 +3,7 @@ package com.tjclp.xl.ooxml
 import munit.FunSuite
 import com.tjclp.xl.*
 import com.tjclp.xl.macros.cell
+import com.tjclp.xl.style.{CellStyle, Font, Fill, Color}
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
 import scala.xml.XML

@@ -1,6 +1,7 @@
 package com.tjclp.xl
 
 import java.time.LocalDateTime
+import com.tjclp.xl.style.StyleId
 
 /** Cell value types supported by Excel */
 enum CellValue:

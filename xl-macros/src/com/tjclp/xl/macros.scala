@@ -225,7 +225,7 @@ object formattedLiterals:
       '{
         com.tjclp.xl.Formatted(
           com.tjclp.xl.CellValue.Number(BigDecimal(${ Expr(numStr) })),
-          com.tjclp.xl.NumFmt.Currency
+          com.tjclp.xl.style.NumFmt.Currency
         )
       }
     catch
@@ -244,7 +244,7 @@ object formattedLiterals:
       '{
         com.tjclp.xl.Formatted(
           com.tjclp.xl.CellValue.Number(BigDecimal(${ Expr(numStr) })),
-          com.tjclp.xl.NumFmt.Percent
+          com.tjclp.xl.style.NumFmt.Percent
         )
       }
     catch
@@ -263,7 +263,7 @@ object formattedLiterals:
         com.tjclp.xl.Formatted(
           com.tjclp.xl.CellValue
             .DateTime(java.time.LocalDate.parse(${ Expr(dateStr) }).atStartOfDay()),
-          com.tjclp.xl.NumFmt.Date
+          com.tjclp.xl.style.NumFmt.Date
         )
       }
     catch
@@ -285,7 +285,7 @@ object formattedLiterals:
       '{
         com.tjclp.xl.Formatted(
           com.tjclp.xl.CellValue.Number(BigDecimal(${ Expr(numStr) })),
-          com.tjclp.xl.NumFmt.Currency
+          com.tjclp.xl.style.NumFmt.Currency
         )
       }
     catch

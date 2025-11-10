@@ -2,6 +2,7 @@ package com.tjclp.xl
 
 import munit.FunSuite
 import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.style.StyleId
 
 /** Tests for optics library and focus DSL */
 class OpticsSpec extends FunSuite:

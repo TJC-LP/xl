@@ -1,6 +1,7 @@
 package com.tjclp.xl.codec
 
 import com.tjclp.xl.*
+import com.tjclp.xl.style.CellStyle
 import java.time.{LocalDate, LocalDateTime}
 
 /** Extension methods for type-safe cell operations using codecs */

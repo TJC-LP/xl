@@ -1,6 +1,7 @@
 package com.tjclp.xl
 
 import cats.Monoid
+import com.tjclp.xl.style.{CellStyle, StyleId}
 
 /**
  * Patch ADT for Sheet updates with monoid semantics.

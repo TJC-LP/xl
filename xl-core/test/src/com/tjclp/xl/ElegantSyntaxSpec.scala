@@ -2,6 +2,7 @@ package com.tjclp.xl
 
 import munit.FunSuite
 import java.time.LocalDateTime
+import com.tjclp.xl.style.NumFmt
 
 /** Tests for elegant CellValue syntax (given conversions, batch put, formatted literals) */
 class ElegantSyntaxSpec extends FunSuite:
