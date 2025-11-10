@@ -1,0 +1,19 @@
+package build.`xl-ooxml`
+
+import mill._
+import mill.scalalib._
+
+object `package` extends build.XLModule {
+  override def moduleDeps = Seq(build.`xl-core`)
+
+  override def mvnDeps = Seq(
+    mvn"org.scala-lang.modules::scala-xml:2.3.0"
+  )
+
+  object test extends ScalaTests with TestModule.Munit {
+    override def mvnDeps = Seq(
+      mvn"org.scalameta::munit:1.0.3",
+      mvn"org.scalacheck::scalacheck:1.18.1"
+    )
+  }
+}
