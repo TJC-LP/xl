@@ -105,7 +105,7 @@ $tableRows
 
         // Font family (if different from default)
         if f.name != Font.default.name then
-          html = s"""<span style="font-family: '${f.name}'">$html</span>"""
+          html = s"""<span style="font-family: '${escapeCss(f.name)}'">$html</span>"""
 
         // Apply bold/italic/underline as outermost wrappers
         if f.underline then html = s"<u>$html</u>"
@@ -132,7 +132,8 @@ $tableRows
         if style.font.underline then css += "text-decoration: underline"
         style.font.color.foreach(c => css += s"color: ${c.toHex}")
         if style.font.sizePt != Font.default.sizePt then css += s"font-size: ${style.font.sizePt}pt"
-        if style.font.name != Font.default.name then css += s"font-family: '${style.font.name}'"
+        if style.font.name != Font.default.name then
+          css += s"font-family: '${escapeCss(style.font.name)}'"
 
         // Fill (background color)
         style.fill match
@@ -169,3 +170,8 @@ $tableRows
       .replace("<", "&lt;")
       .replace(">", "&gt;")
       .replace("\"", "&quot;")
+
+  private def escapeCss(s: String): String =
+    s.replace("\\", "\\\\")
+      .replace("'", "\\'")
+      .replace("\"", "\\\"")
