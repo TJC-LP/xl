@@ -7,19 +7,20 @@ import java.nio.file.{Path, Files}
 import java.nio.charset.StandardCharsets
 import com.tjclp.xl.{Workbook, XLError, XLResult}
 
-/** Writer for XLSX files (ZIP assembly)
-  *
-  * Takes a domain Workbook and produces a valid XLSX file with all required parts.
-  */
+/**
+ * Writer for XLSX files (ZIP assembly)
+ *
+ * Takes a domain Workbook and produces a valid XLSX file with all required parts.
+ */
 object XlsxWriter:
 
   /** Write workbook to XLSX file */
   def write(workbook: Workbook, outputPath: Path): XLResult[Unit] =
     try
       // Build shared strings table if beneficial
-      val sst = if SharedStrings.shouldUseSST(workbook) then
-        Some(SharedStrings.fromWorkbook(workbook))
-      else None
+      val sst =
+        if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
+        else None
 
       // Build style index (minimal for now)
       val styleIndex = StyleIndex.fromWorkbook(workbook)
@@ -35,7 +36,7 @@ object XlsxWriter:
 
       // Create content types
       val contentTypes = ContentTypes.minimal(
-        hasStyles = true,  // Always include styles
+        hasStyles = true, // Always include styles
         hasSharedStrings = sst.isDefined,
         sheetCount = workbook.sheets.size
       )
@@ -53,8 +54,7 @@ object XlsxWriter:
 
       Right(())
 
-    catch
-      case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
+    catch case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
 
   /** Write all parts to ZIP file */
   private def writeZip(
@@ -88,13 +88,12 @@ object XlsxWriter:
         writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml)
       }
 
-    finally
-      zip.close()
+    finally zip.close()
 
   /** Write a single XML part to ZIP */
   private def writePart(zip: ZipOutputStream, entryName: String, xml: Elem): Unit =
     val entry = new ZipEntry(entryName)
-    entry.setMethod(ZipEntry.STORED)  // No compression for easier debugging
+    entry.setMethod(ZipEntry.STORED) // No compression for easier debugging
 
     // Convert XML to bytes
     val xmlString = XmlUtil.prettyPrint(xml)
@@ -126,5 +125,4 @@ object XlsxWriter:
         }
       finally
         Files.deleteIfExists(tempPath)
-    catch
-      case e: Exception => Left(XLError.IOError(s"Failed to write bytes: ${e.getMessage}"))
+    catch case e: Exception => Left(XLError.IOError(s"Failed to write bytes: ${e.getMessage}"))

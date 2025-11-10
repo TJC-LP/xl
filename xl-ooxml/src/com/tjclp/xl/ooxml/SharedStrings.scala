@@ -4,16 +4,17 @@ import scala.xml.*
 import XmlUtil.*
 import java.text.Normalizer
 
-/** Shared Strings Table (SST) for xl/sharedStrings.xml
-  *
-  * Deduplicates string values across the workbook. Cells reference strings
-  * by index rather than embedding them inline.
-  *
-  * All strings are normalized to NFC form for consistent deduplication.
-  */
+/**
+ * Shared Strings Table (SST) for xl/sharedStrings.xml
+ *
+ * Deduplicates string values across the workbook. Cells reference strings by index rather than
+ * embedding them inline.
+ *
+ * All strings are normalized to NFC form for consistent deduplication.
+ */
 case class SharedStrings(
-  strings: Vector[String],           // Ordered list of unique strings
-  indexMap: Map[String, Int]         // String → index lookup
+  strings: Vector[String], // Ordered list of unique strings
+  indexMap: Map[String, Int] // String → index lookup
 ) extends XmlWritable:
 
   /** Get index for string (returns None if not found) */
@@ -32,15 +33,23 @@ case class SharedStrings(
     val siElems = strings.map { s =>
       // Check if string needs xml:space="preserve"
       val needsPreserve = s.startsWith(" ") || s.endsWith(" ") || s.contains("  ")
-      val tElem = if needsPreserve then
-        Elem(null, "t", new UnprefixedAttribute("xml:space", "preserve", Null), TopScope, false, Text(s))
-      else
-        elem("t")(Text(s))
+      val tElem =
+        if needsPreserve then
+          Elem(
+            null,
+            "t",
+            new UnprefixedAttribute("xml:space", "preserve", Null),
+            TopScope,
+            false,
+            Text(s)
+          )
+        else elem("t")(Text(s))
 
       elem("si")(tElem)
     }
 
-    elem("sst",
+    elem(
+      "sst",
       "xmlns" -> nsSpreadsheetML,
       "count" -> strings.size.toString,
       "uniqueCount" -> strings.size.toString
@@ -64,9 +73,9 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     val allStrings = wb.sheets.flatMap { sheet =>
       sheet.cells.values.collect {
         case cell if cell.value match {
-          case com.tjclp.xl.CellValue.Text(_) => true
-          case _ => false
-        } =>
+              case com.tjclp.xl.CellValue.Text(_) => true
+              case _ => false
+            } =>
           cell.value match {
             case com.tjclp.xl.CellValue.Text(s) => s
             case _ => "" // Should never happen due to filter
@@ -75,22 +84,23 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     }
     fromStrings(allStrings)
 
-  /** Determine if using SST saves space vs inline strings
-    *
-    * Heuristic: Use SST if total string bytes saved > SST overhead.
-    * SST overhead ≈ 200 bytes + 50 bytes per unique string.
-    * Inline overhead ≈ 30 bytes per cell + string length.
-    */
+  /**
+   * Determine if using SST saves space vs inline strings
+   *
+   * Heuristic: Use SST if total string bytes saved > SST overhead. SST overhead ≈ 200 bytes + 50
+   * bytes per unique string. Inline overhead ≈ 30 bytes per cell + string length.
+   */
   def shouldUseSST(wb: com.tjclp.xl.Workbook): Boolean =
     val textCells = wb.sheets.flatMap { sheet =>
       sheet.cells.values.collect {
         case cell if cell.value match {
-          case com.tjclp.xl.CellValue.Text(s) => true
-          case _ => false
-        } => cell.value match {
-          case com.tjclp.xl.CellValue.Text(s) => s
-          case _ => ""
-        }
+              case com.tjclp.xl.CellValue.Text(s) => true
+              case _ => false
+            } =>
+          cell.value match {
+            case com.tjclp.xl.CellValue.Text(s) => s
+            case _ => ""
+          }
       }
     }
 
@@ -115,8 +125,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
 
     val errors = strings.collect { case Left(err) => err }
 
-    if errors.nonEmpty then
-      Left(s"SharedStrings parse errors: ${errors.mkString(", ")}")
+    if errors.nonEmpty then Left(s"SharedStrings parse errors: ${errors.mkString(", ")}")
     else
       val stringVec = strings.collect { case Right(s) => s }.toVector
       val indexMap = stringVec.zipWithIndex.toMap

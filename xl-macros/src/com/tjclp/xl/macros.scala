@@ -108,26 +108,29 @@ export macros.{cell, range}
 object putMacro:
   import scala.quoted.*
 
-  /** Batch put with automatic CellValue conversion
-    *
-    * Usage:
-    * {{{
-    * import com.tjclp.xl.putMacro.put
-    *
-    * sheet.put(
-    *   cell"A1" -> "Hello",
-    *   cell"B1" -> 42,
-    *   cell"C1" -> true
-    * )
-    * }}}
-    *
-    * Expands to chained .put() calls with zero intermediate allocations.
-    */
+  /**
+   * Batch put with automatic CellValue conversion
+   *
+   * Usage:
+   * {{{
+   * import com.tjclp.xl.putMacro.put
+   *
+   * sheet.put(
+   *   cell"A1" -> "Hello",
+   *   cell"B1" -> 42,
+   *   cell"C1" -> true
+   * )
+   * }}}
+   *
+   * Expands to chained .put() calls with zero intermediate allocations.
+   */
   extension (sheet: com.tjclp.xl.Sheet)
     transparent inline def put(inline pairs: (ARef, Any)*): com.tjclp.xl.Sheet =
       ${ putImpl('sheet, 'pairs) }
 
-  private def putImpl(sheet: Expr[com.tjclp.xl.Sheet], pairs: Expr[Seq[(ARef, Any)]])(using Quotes): Expr[com.tjclp.xl.Sheet] =
+  private def putImpl(sheet: Expr[com.tjclp.xl.Sheet], pairs: Expr[Seq[(ARef, Any)]])(using
+    Quotes
+  ): Expr[com.tjclp.xl.Sheet] =
     import quotes.reflect.*
 
     pairs match
@@ -179,7 +182,8 @@ object formattedLiterals:
   // Helper to extract literal from StringContext
   private def getLiteral(sc: Expr[StringContext])(using Quotes): String =
     val parts = sc.valueOrAbort.parts
-    if (parts.lengthCompare(1) != 0) quotes.reflect.report.errorAndAbort("literal must be a single part")
+    if (parts.lengthCompare(1) != 0)
+      quotes.reflect.report.errorAndAbort("literal must be a single part")
     parts.head
 
   private def moneyImpl(sc: Expr[StringContext])(using Quotes): Expr[com.tjclp.xl.Formatted] =
@@ -189,7 +193,7 @@ object formattedLiterals:
     try
       // Parse money format: strip $, commas, parse number
       val cleaned = s.replaceAll("[\\$,]", "")
-      val numStr = cleaned  // Keep as string for runtime parsing
+      val numStr = cleaned // Keep as string for runtime parsing
       '{
         com.tjclp.xl.Formatted(
           com.tjclp.xl.CellValue.Number(BigDecimal(${ Expr(numStr) })),
@@ -226,16 +230,19 @@ object formattedLiterals:
     try
       // Parse ISO date format: 2025-11-10 and convert to string for runtime parsing
       val localDate = LocalDate.parse(s)
-      val dateStr = localDate.toString  // ISO format
+      val dateStr = localDate.toString // ISO format
       '{
         com.tjclp.xl.Formatted(
-          com.tjclp.xl.CellValue.DateTime(java.time.LocalDate.parse(${ Expr(dateStr) }).atStartOfDay()),
+          com.tjclp.xl.CellValue
+            .DateTime(java.time.LocalDate.parse(${ Expr(dateStr) }).atStartOfDay()),
           com.tjclp.xl.NumFmt.Date
         )
       }
     catch
       case e: Exception =>
-        report.errorAndAbort(s"Invalid date literal '$s': expected ISO format (YYYY-MM-DD), got error: ${e.getMessage}")
+        report.errorAndAbort(
+          s"Invalid date literal '$s': expected ISO format (YYYY-MM-DD), got error: ${e.getMessage}"
+        )
 
   private def accountingImpl(sc: Expr[StringContext])(using Quotes): Expr[com.tjclp.xl.Formatted] =
     import quotes.reflect.report

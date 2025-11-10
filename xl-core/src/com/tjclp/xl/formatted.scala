@@ -1,10 +1,11 @@
 package com.tjclp.xl
 
-/** Formatted cell value with associated number format.
-  *
-  * Used by formatted literal macros (money"", percent"", date"", etc.)
-  * to preserve both the parsed value and the intended display format.
-  */
+/**
+ * Formatted cell value with associated number format.
+ *
+ * Used by formatted literal macros (money"", percent"", date"", etc.) to preserve both the parsed
+ * value and the intended display format.
+ */
 case class Formatted(value: CellValue, numFmt: NumFmt):
   /** Extract just the value */
   def toCellValue: CellValue = value

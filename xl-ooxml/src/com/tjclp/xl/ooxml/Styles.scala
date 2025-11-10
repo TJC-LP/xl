@@ -4,20 +4,21 @@ import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.*
 
-/** Style components and indexing for xl/styles.xml
-  *
-  * Styles are deduplicated by canonical keys to avoid Excel's 64k style limit.
-  * The StyleIndex builds collections of unique fonts, fills, borders, and cellXfs.
-  */
+/**
+ * Style components and indexing for xl/styles.xml
+ *
+ * Styles are deduplicated by canonical keys to avoid Excel's 64k style limit. The StyleIndex builds
+ * collections of unique fonts, fills, borders, and cellXfs.
+ */
 
 /** Index mapping for style components */
 case class StyleIndex(
   fonts: Vector[Font],
   fills: Vector[Fill],
   borders: Vector[Border],
-  numFmts: Vector[(Int, NumFmt)],  // Custom formats with IDs
+  numFmts: Vector[(Int, NumFmt)], // Custom formats with IDs
   cellStyles: Vector[CellStyle],
-  styleToIndex: Map[String, Int]   // Canonical key → cellXf index
+  styleToIndex: Map[String, Int] // Canonical key → cellXf index
 ):
   /** Get style index for a CellStyle (returns 0 if not found - default style) */
   def indexOf(style: CellStyle): Int =
@@ -31,7 +32,7 @@ object StyleIndex:
       sheet.cells.values.flatMap { cell =>
         // For now, cells don't have CellStyle, only styleId
         // This will be enhanced when we add full style support
-        None  // TODO: extract CellStyle from cells
+        None // TODO: extract CellStyle from cells
       }
     }
 
@@ -45,11 +46,12 @@ object StyleIndex:
     val uniqueBorders = styles.map(_.border).distinct
 
     // Collect custom number formats (built-ins don't need entries)
-    val customNumFmts = styles.map(_.numFmt)
+    val customNumFmts = styles
+      .map(_.numFmt)
       .collect { case NumFmt.Custom(code) => code }
       .distinct
       .zipWithIndex
-      .map { case (code, idx) => (164 + idx, NumFmt.Custom(code)) }  // Start at 164 for custom
+      .map { case (code, idx) => (164 + idx, NumFmt.Custom(code)) } // Start at 164 for custom
 
     // Build style index map
     val styleIndex = styles.zipWithIndex.map { case (style, idx) =>
@@ -65,16 +67,19 @@ case class OoxmlStyles(
 
   def toXml: Elem =
     // Number formats (only custom ones; built-ins are implicit)
-    val numFmtsElem = if index.numFmts.nonEmpty then
-      Some(elem("numFmts", "count" -> index.numFmts.size.toString)(
-        index.numFmts.sortBy(_._1).map { case (id, fmt) =>
-          val code = fmt match
-            case NumFmt.Custom(c) => c
-            case _ => "General"  // Shouldn't happen
-          elem("numFmt", "numFmtId" -> id.toString, "formatCode" -> code)()
-        }*
-      ))
-    else None
+    val numFmtsElem =
+      if index.numFmts.nonEmpty then
+        Some(
+          elem("numFmts", "count" -> index.numFmts.size.toString)(
+            index.numFmts.sortBy(_._1).map { case (id, fmt) =>
+              val code = fmt match
+                case NumFmt.Custom(c) => c
+                case _ => "General" // Shouldn't happen
+              elem("numFmt", "numFmtId" -> id.toString, "formatCode" -> code)()
+            }*
+          )
+        )
+      else None
 
     // Fonts
     val fontsElem = elem("fonts", "count" -> index.fonts.size.toString)(
@@ -99,11 +104,14 @@ case class OoxmlStyles(
         val fontIdx = index.fonts.indexOf(style.font)
         val fillIdx = allFills.indexOf(style.fill)
         val borderIdx = index.borders.indexOf(style.border)
-        val numFmtId = NumFmt.builtInId(style.numFmt).getOrElse(
-          index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
-        )
+        val numFmtId = NumFmt
+          .builtInId(style.numFmt)
+          .getOrElse(
+            index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
+          )
 
-        elem("xf",
+        elem(
+          "xf",
           "borderId" -> borderIdx.toString,
           "fillId" -> fillIdx.toString,
           "fontId" -> fontIdx.toString,
@@ -158,8 +166,7 @@ case class OoxmlStyles(
     )
 
   private def borderSideToXml(side: String, borderSide: BorderSide): Elem =
-    if borderSide.style == BorderStyle.None then
-      elem(side)()
+    if borderSide.style == BorderStyle.None then elem(side)()
     else
       val children = borderSide.color.map { color =>
         elem("color", "rgb" -> f"${color.toArgb}%08X")()

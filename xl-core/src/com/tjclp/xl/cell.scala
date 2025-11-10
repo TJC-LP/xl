@@ -28,7 +28,7 @@ enum CellValue:
 object CellValue:
   /** Smart constructor from Any */
   def from(value: Any): CellValue = value match
-    case cv: CellValue => cv  // Already a CellValue, return as-is
+    case cv: CellValue => cv // Already a CellValue, return as-is
     case s: String => Text(s)
     case i: Int => Number(BigDecimal(i))
     case l: Long => Number(BigDecimal(l))

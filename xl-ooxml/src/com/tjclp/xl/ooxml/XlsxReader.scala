@@ -7,10 +7,11 @@ import java.nio.file.Path
 import scala.collection.mutable
 import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, XLError, XLResult, SheetName}
 
-/** Reader for XLSX files (ZIP parsing)
-  *
-  * Parses XLSX ZIP structure and converts to domain Workbook.
-  */
+/**
+ * Reader for XLSX files (ZIP parsing)
+ *
+ * Parses XLSX ZIP structure and converts to domain Workbook.
+ */
 object XlsxReader:
 
   /** Read workbook from XLSX file */
@@ -21,15 +22,12 @@ object XlsxReader:
         readFromStream(is)
       finally
         is.close()
-    catch
-      case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
+    catch case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
 
   /** Read workbook from byte array (for testing) */
   def readFromBytes(bytes: Array[Byte]): XLResult[Workbook] =
-    try
-      readFromStream(new ByteArrayInputStream(bytes))
-    catch
-      case e: Exception => Left(XLError.IOError(s"Failed to read bytes: ${e.getMessage}"))
+    try readFromStream(new ByteArrayInputStream(bytes))
+    catch case e: Exception => Left(XLError.IOError(s"Failed to read bytes: ${e.getMessage}"))
 
   /** Read workbook from input stream */
   private def readFromStream(is: InputStream): XLResult[Workbook] =
@@ -49,18 +47,20 @@ object XlsxReader:
       // Parse workbook structure
       parseWorkbook(parts.toMap)
 
-    finally
-      zip.close()
+    finally zip.close()
 
   /** Parse workbook from collected parts */
   private def parseWorkbook(parts: Map[String, String]): XLResult[Workbook] =
     for
       // Parse workbook.xml
-      workbookXml <- parts.get("xl/workbook.xml")
+      workbookXml <- parts
+        .get("xl/workbook.xml")
         .toRight(XLError.ParseError("xl/workbook.xml", "Missing workbook.xml"))
       workbookElem <- parseXml(workbookXml, "xl/workbook.xml")
-      ooxmlWb <- OoxmlWorkbook.fromXml(workbookElem)
-        .left.map(err => XLError.ParseError("xl/workbook.xml", err): XLError)
+      ooxmlWb <- OoxmlWorkbook
+        .fromXml(workbookElem)
+        .left
+        .map(err => XLError.ParseError("xl/workbook.xml", err): XLError)
 
       // Parse optional shared strings
       sst <- parseOptionalSST(parts)
@@ -70,7 +70,6 @@ object XlsxReader:
 
       // Assemble workbook
       workbook <- assembleWorkbook(sheets)
-
     yield workbook
 
   /** Parse optional shared strings table */
@@ -80,8 +79,10 @@ object XlsxReader:
       case Some(xml) =>
         for
           elem <- parseXml(xml, "xl/sharedStrings.xml")
-          sst <- SharedStrings.fromXml(elem)
-            .left.map(err => XLError.ParseError("xl/sharedStrings.xml", err): XLError)
+          sst <- SharedStrings
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError("xl/sharedStrings.xml", err): XLError)
         yield Some(sst)
 
   /** Parse all worksheets */
@@ -93,11 +94,14 @@ object XlsxReader:
     sheetRefs.toVector.traverse { ref =>
       val sheetPath = s"xl/worksheets/sheet${ref.sheetId}.xml"
       for
-        xml <- parts.get(sheetPath)
+        xml <- parts
+          .get(sheetPath)
           .toRight(XLError.ParseError(sheetPath, s"Missing worksheet: $sheetPath"))
         elem <- parseXml(xml, sheetPath)
-        ooxmlSheet <- OoxmlWorksheet.fromXml(elem)
-          .left.map(err => XLError.ParseError(sheetPath, err): XLError)
+        ooxmlSheet <- OoxmlWorksheet
+          .fromXml(elem)
+          .left
+          .map(err => XLError.ParseError(sheetPath, err): XLError)
         domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst)
       yield domainSheet
     }
@@ -115,9 +119,10 @@ object XlsxReader:
           case ("s", CellValue.Text(idxStr), Some(sharedStrings)) =>
             // Resolve SST index
             idxStr.toIntOption match
-              case Some(idx) => sharedStrings(idx) match
-                case Some(text) => CellValue.Text(text)
-                case None => CellValue.Error(com.tjclp.xl.CellError.Ref)
+              case Some(idx) =>
+                sharedStrings(idx) match
+                  case Some(text) => CellValue.Text(text)
+                  case None => CellValue.Error(com.tjclp.xl.CellError.Ref)
               case None => CellValue.Error(com.tjclp.xl.CellError.Value)
           case _ => ooxmlCell.value
 
@@ -125,22 +130,21 @@ object XlsxReader:
       }
     }
 
-    Right(Sheet(
-      name = name,
-      cells = cells.map(c => c.ref -> c).toMap
-    ))
+    Right(
+      Sheet(
+        name = name,
+        cells = cells.map(c => c.ref -> c).toMap
+      )
+    )
 
   /** Assemble final workbook */
   private def assembleWorkbook(sheets: Vector[Sheet]): XLResult[Workbook] =
-    if sheets.isEmpty then
-      Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
-    else
-      Right(Workbook(sheets = sheets))
+    if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
+    else Right(Workbook(sheets = sheets))
 
   /** Parse XML string to Elem */
   private def parseXml(xmlString: String, location: String): XLResult[Elem] =
-    try
-      Right(XML.loadString(xmlString))
+    try Right(XML.loadString(xmlString))
     catch
       case e: Exception =>
         Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))
