@@ -118,6 +118,49 @@ class PatchSpec extends ScalaCheckSuite:
     assertEquals(updated(ref).styleId, None)
   }
 
+  test("SetCellStyle patch applies CellStyle object") {
+    val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
+    val sheet = emptySheet.put(cell"A1", CellValue.Text("Header"))
+
+    val patch = Patch.SetCellStyle(cell"A1", boldStyle)
+    val result = sheet.applyPatch(patch)
+
+    assert(result.isRight)
+    result.foreach { updated =>
+      // Style should be registered
+      assertEquals(updated.styleRegistry.size, 2) // default + bold
+
+      // Cell should have styleId
+      assert(updated(cell"A1").styleId.isDefined)
+
+      // Can retrieve original style
+      assertEquals(updated.getCellStyle(cell"A1"), Some(boldStyle))
+    }
+  }
+
+  test("SetCellStyle deduplicates identical styles") {
+    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val sheet = emptySheet
+      .put(cell"A1", CellValue.Text("Red1"))
+      .put(cell"A2", CellValue.Text("Red2"))
+
+    val patch =
+      (Patch.SetCellStyle(cell"A1", redStyle): Patch) |+|
+        (Patch.SetCellStyle(cell"A2", redStyle): Patch)
+
+    val result = sheet.applyPatch(patch)
+    result.foreach { updated =>
+      // Should only have 2 styles (default + red)
+      assertEquals(updated.styleRegistry.size, 2)
+
+      // Both cells should reference same style index
+      assertEquals(
+        updated(cell"A1").styleId,
+        updated(cell"A2").styleId
+      )
+    }
+  }
+
   test("Merge patch adds merged range") {
     val sheet = emptySheet
     val range = CellRange(ARef.from1(1, 1), ARef.from1(2, 2))

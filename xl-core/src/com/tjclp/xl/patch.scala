@@ -20,6 +20,9 @@ enum Patch:
   /** Set style for a cell */
   case SetStyle(ref: ARef, styleId: Int)
 
+  /** Set style for a cell using CellStyle object (auto-registers in styleRegistry) */
+  case SetCellStyle(ref: ARef, style: CellStyle)
+
   /** Clear style for a cell */
   case ClearStyle(ref: ARef)
 
@@ -85,6 +88,10 @@ object Patch:
     case SetStyle(ref, styleId) =>
       val cell = sheet(ref).withStyle(styleId)
       Right(sheet.put(cell))
+
+    case SetCellStyle(ref, style) =>
+      // Register style and apply to cell automatically
+      Right(sheet.withCellStyle(ref, style))
 
     case ClearStyle(ref) =>
       val cell = sheet(ref).clearStyle
