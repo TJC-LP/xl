@@ -60,17 +60,25 @@ object Relationships extends XmlReadable[Relationships]:
       )
     )
 
-  /** Create workbook .rels with sheets */
+  /** Create workbook .rels with sheets (for sequential sheet indices) */
   def workbook(
     sheetCount: Int,
     hasStyles: Boolean = false,
     hasSharedStrings: Boolean = false
   ): Relationships =
-    val sheets = (1 to sheetCount).map { i =>
-      Relationship(s"rId$i", relTypeWorksheet, s"worksheets/sheet$i.xml")
+    workbookWithIndices((1 to sheetCount).toSeq, hasStyles, hasSharedStrings)
+
+  /** Create workbook .rels with specific sheet indices (supports non-sequential indices) */
+  def workbookWithIndices(
+    sheetIndices: Seq[Int],
+    hasStyles: Boolean = false,
+    hasSharedStrings: Boolean = false
+  ): Relationships =
+    val sheets = sheetIndices.zipWithIndex.map { case (sheetIdx, i) =>
+      Relationship(s"rId${i + 1}", relTypeWorksheet, s"worksheets/sheet$sheetIdx.xml")
     }
 
-    val nextId = sheetCount + 1
+    val nextId = sheetIndices.size + 1
     val styles =
       if hasStyles then Seq(Relationship(s"rId$nextId", relTypeStyles, "styles.xml")) else Seq.empty
     val sst =

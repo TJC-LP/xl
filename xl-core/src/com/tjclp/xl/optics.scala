@@ -26,7 +26,7 @@ import com.tjclp.xl.style.StyleId
 /** Lens: Total getter and setter for a field */
 final case class Lens[S, A](get: S => A, set: (A, S) => S):
   /** Modify the focused field using a function */
-  def modify(f: A => A)(s: S): A = f(get(s))
+  def modify(f: A => A)(s: S): S = set(f(get(s)), s)
 
   /** Update the focused field using a function */
   def update(f: A => A)(s: S): S = set(f(get(s)), s)

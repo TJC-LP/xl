@@ -3,10 +3,10 @@ package com.tjclp.xl.ooxml
 import scala.xml.*
 import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
 import java.util.zip.ZipInputStream
-import java.nio.file.Path
+import java.nio.file.{Path, Paths}
 import scala.collection.mutable
-import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, XLError, XLResult, SheetName}
-import com.tjclp.xl.style.StyleId
+import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, XLError, XLResult, SheetName, ARef}
+import com.tjclp.xl.style.{StyleId, StyleRegistry}
 
 /**
  * Reader for XLSX files (ZIP parsing)
@@ -66,8 +66,14 @@ object XlsxReader:
       // Parse optional shared strings
       sst <- parseOptionalSST(parts)
 
+      // Parse styles (if present)
+      styles <- parseStyles(parts)
+
+      // Parse workbook relationships
+      workbookRels <- parseWorkbookRelationships(parts)
+
       // Parse sheets
-      sheets <- parseSheets(parts, ooxmlWb.sheets, sst)
+      sheets <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
 
       // Assemble workbook
       workbook <- assembleWorkbook(sheets)
@@ -86,14 +92,47 @@ object XlsxReader:
             .map(err => XLError.ParseError("xl/sharedStrings.xml", err): XLError)
         yield Some(sst)
 
+  /** Parse styles table (falls back to default styles if missing) */
+  private def parseStyles(parts: Map[String, String]): XLResult[WorkbookStyles] =
+    parts.get("xl/styles.xml") match
+      case None => Right(WorkbookStyles.default)
+      case Some(xml) =>
+        for
+          elem <- parseXml(xml, "xl/styles.xml")
+          styles <- WorkbookStyles
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError("xl/styles.xml", err): XLError)
+        yield styles
+
+  /** Parse workbook relationships (used to resolve worksheet locations) */
+  private def parseWorkbookRelationships(parts: Map[String, String]): XLResult[Relationships] =
+    parts.get("xl/_rels/workbook.xml.rels") match
+      case None => Right(Relationships.empty)
+      case Some(xml) =>
+        for
+          elem <- parseXml(xml, "xl/_rels/workbook.xml.rels")
+          rels <- Relationships
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError("xl/_rels/workbook.xml.rels", err): XLError)
+        yield rels
+
   /** Parse all worksheets */
   private def parseSheets(
     parts: Map[String, String],
     sheetRefs: Seq[SheetRef],
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    styles: WorkbookStyles,
+    relationships: Relationships
   ): XLResult[Vector[Sheet]] =
+    val relMap = relationships.relationships.map(rel => rel.id -> rel).toMap
     sheetRefs.toVector.traverse { ref =>
-      val sheetPath = s"xl/worksheets/sheet${ref.sheetId}.xml"
+      val sheetPath = relMap
+        .get(ref.relationshipId)
+        .map(rel => resolveSheetPath(rel.target))
+        .getOrElse(defaultSheetPath(ref.sheetId))
+
       for
         xml <- parts
           .get(sheetPath)
@@ -103,38 +142,58 @@ object XlsxReader:
           .fromXml(elem)
           .left
           .map(err => XLError.ParseError(sheetPath, err): XLError)
-        domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst)
+        domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles)
       yield domainSheet
     }
+
+  private def defaultSheetPath(sheetId: Int): String = s"xl/worksheets/sheet$sheetId.xml"
+
+  private def resolveSheetPath(target: String): String =
+    val cleaned = if target.startsWith("/") then target.drop(1) else target
+    val resolvedPath =
+      if cleaned.startsWith("xl/") || cleaned.startsWith("xl\\") then Paths.get(cleaned)
+      else Paths.get("xl").resolve(cleaned)
+    resolvedPath.normalize().toString.replace('\\', '/')
 
   /** Convert OoxmlWorksheet to domain Sheet */
   private def convertToDomainSheet(
     name: SheetName,
     ooxmlSheet: OoxmlWorksheet,
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    styles: WorkbookStyles
   ): XLResult[Sheet] =
-    val cells = ooxmlSheet.rows.flatMap { row =>
-      row.cells.map { ooxmlCell =>
-        // Resolve SST index if needed
-        val value = (ooxmlCell.cellType, ooxmlCell.value, sst) match
-          case ("s", CellValue.Text(idxStr), Some(sharedStrings)) =>
-            // Resolve SST index
-            idxStr.toIntOption match
-              case Some(idx) =>
-                sharedStrings(idx) match
-                  case Some(text) => CellValue.Text(text)
-                  case None => CellValue.Error(com.tjclp.xl.CellError.Ref)
-              case None => CellValue.Error(com.tjclp.xl.CellError.Value)
-          case _ => ooxmlCell.value
+    val (cellsMap, finalRegistry) =
+      ooxmlSheet.rows.foldLeft((Map.empty[ARef, Cell], StyleRegistry.default)) {
+        case ((cellsAcc, registry), row) =>
+          row.cells.foldLeft((cellsAcc, registry)) { case ((cellMapAcc, registryAcc), ooxmlCell) =>
+            val value = (ooxmlCell.cellType, ooxmlCell.value, sst) match
+              case ("s", CellValue.Text(idxStr), Some(sharedStrings)) =>
+                idxStr.toIntOption match
+                  case Some(idx) =>
+                    sharedStrings(idx) match
+                      case Some(text) => CellValue.Text(text)
+                      case None => CellValue.Error(com.tjclp.xl.CellError.Ref)
+                  case None => CellValue.Error(com.tjclp.xl.CellError.Value)
+              case _ => ooxmlCell.value
 
-        Cell(ooxmlCell.ref, value, ooxmlCell.styleIndex.map(StyleId.apply))
+            val (nextRegistry, styleIdOpt) = ooxmlCell.styleIndex
+              .flatMap(styles.styleAt)
+              .map { style =>
+                val (updatedRegistry, styleId) = registryAcc.register(style)
+                (updatedRegistry, Some(styleId))
+              }
+              .getOrElse((registryAcc, None))
+
+            val cell = Cell(ooxmlCell.ref, value, styleIdOpt)
+            (cellMapAcc.updated(cell.ref, cell), nextRegistry)
+          }
       }
-    }
 
     Right(
       Sheet(
         name = name,
-        cells = cells.map(c => c.ref -> c).toMap
+        cells = cellsMap,
+        styleRegistry = finalRegistry
       )
     )
 

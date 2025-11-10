@@ -364,7 +364,7 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
       ContentTypes.minimal(hasStyles = true, hasSharedStrings = false, sheetCount = 1)
     val rootRels = Relationships.root()
     val workbookRels =
-      Relationships.workbook(sheetCount = 1, hasStyles = true, hasSharedStrings = false)
+      Relationships.workbookWithIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
 
     // Create minimal workbook with one sheet (use provided sheetIndex)
     val ooxmlWb = OoxmlWorkbook(

@@ -217,7 +217,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       } >>
       // Verify workbook.xml has sheetId="3"
       IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
-        assert(result.isRight)
+        assert(result.isRight, s"Should read successfully, got: $result")
         result.foreach { wb =>
           assertEquals(wb.sheets.size, 1)
           assertEquals(wb.sheets(0).name.value, "ThirdSheet")

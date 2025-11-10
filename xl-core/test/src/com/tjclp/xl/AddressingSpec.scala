@@ -142,6 +142,12 @@ class AddressingSpec extends ScalaCheckSuite:
     assert(Column.fromLetter("A1").isLeft)
   }
 
+  test("Column.fromLetter accepts lowercase input") {
+    assertEquals(Column.fromLetter("a"), Right(Column.from0(0)))
+    assertEquals(Column.fromLetter("z"), Right(Column.from0(25)))
+    assertEquals(Column.fromLetter("aa"), Right(Column.from0(26)))
+  }
+
   test("ARef.parse handles common examples") {
     assertEquals(ARef.parse("A1"), Right(ARef.from1(1, 1)))
     assertEquals(ARef.parse("B2"), Right(ARef.from1(2, 2)))
@@ -151,6 +157,11 @@ class AddressingSpec extends ScalaCheckSuite:
     assert(ARef.parse("A").isLeft)
     assert(ARef.parse("1").isLeft)
     assert(ARef.parse("A0").isLeft)
+  }
+
+  test("ARef.parse accepts lowercase columns") {
+    assertEquals(ARef.parse("a1"), Right(ARef.from1(1, 1)))
+    assertEquals(ARef.parse("c5"), Right(ARef.from1(3, 5)))
   }
 
   test("CellRange.parse handles common examples") {

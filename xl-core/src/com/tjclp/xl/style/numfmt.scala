@@ -27,6 +27,33 @@ enum NumFmt:
   case Custom(code: String) // User-defined format
 
 object NumFmt:
+  private val builtInById: Map[Int, NumFmt] = Map(
+    0 -> General,
+    1 -> Integer,
+    2 -> Decimal,
+    3 -> ThousandsSeparator,
+    4 -> ThousandsDecimal,
+    5 -> Currency,
+    6 -> Currency,
+    7 -> Currency,
+    8 -> Currency,
+    9 -> Percent,
+    10 -> PercentDecimal,
+    11 -> Scientific,
+    12 -> Fraction,
+    13 -> Fraction,
+    14 -> Date,
+    15 -> Date,
+    16 -> Date,
+    17 -> Date,
+    18 -> Time,
+    19 -> Time,
+    20 -> Time,
+    21 -> Time,
+    22 -> DateTime,
+    49 -> Text
+  )
+
   /** Built-in format ID mapping for OOXML */
   def builtInId(fmt: NumFmt): Option[Int] = fmt match
     case General => Some(0)
@@ -61,3 +88,7 @@ object NumFmt:
     case "h:mm:ss" => Time
     case "@" => Text
     case other => Custom(other)
+
+  /** Resolve number format by built-in ID (optionally using an explicit format code). */
+  def fromId(id: Int, formatCode: Option[String] = None): Option[NumFmt] =
+    builtInById.get(id).orElse(formatCode.map(parse))
