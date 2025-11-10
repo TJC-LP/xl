@@ -2,16 +2,17 @@ package com.tjclp.xl
 
 import cats.Monoid
 
-/** Patch ADT for Sheet updates with monoid semantics.
-  *
-  * Patches can be composed using the Monoid instance, allowing
-  * batch operations to be built declaratively.
-  *
-  * Laws:
-  * - Associativity: (p1 |+| p2) |+| p3 == p1 |+| (p2 |+| p3)
-  * - Identity: Patch.empty |+| p == p == p |+| Patch.empty
-  * - Idempotence: Applying the same patch twice yields the same result
-  */
+/**
+ * Patch ADT for Sheet updates with monoid semantics.
+ *
+ * Patches can be composed using the Monoid instance, allowing batch operations to be built
+ * declaratively.
+ *
+ * Laws:
+ *   - Associativity: (p1 |+| p2) |+| p3 == p1 |+| (p2 |+| p3)
+ *   - Identity: Patch.empty |+| p == p == p |+| Patch.empty
+ *   - Idempotence: Applying the same patch twice yields the same result
+ */
 enum Patch:
   /** Put a cell value at a reference */
   case Put(ref: ARef, value: CellValue)
@@ -47,11 +48,12 @@ object Patch:
   /** Empty patch (identity element) */
   val empty: Patch = Batch(Vector.empty)
 
-  /** Combine two patches into a batch.
-    *
-    * Flattens nested batches to maintain a flat structure.
-    * Later patches override earlier ones for the same reference.
-    */
+  /**
+   * Combine two patches into a batch.
+   *
+   * Flattens nested batches to maintain a flat structure. Later patches override earlier ones for
+   * the same reference.
+   */
   def combine(p1: Patch, p2: Patch): Patch = (p1, p2) match
     case (Batch(ps1), Batch(ps2)) => Batch(ps1 ++ ps2)
     case (Batch(ps1), p2) => Batch(ps1 :+ p2)
@@ -63,15 +65,19 @@ object Patch:
     def empty: Patch = Patch.empty
     def combine(x: Patch, y: Patch): Patch = Patch.combine(x, y)
 
-  /** Apply a patch to a sheet, returning the modified sheet.
-    *
-    * Patches are applied left-to-right. Later patches override earlier ones
-    * for conflicting operations (e.g., two Puts to the same reference).
-    *
-    * @param sheet The sheet to modify
-    * @param patch The patch to apply
-    * @return Either an error or the modified sheet
-    */
+  /**
+   * Apply a patch to a sheet, returning the modified sheet.
+   *
+   * Patches are applied left-to-right. Later patches override earlier ones for conflicting
+   * operations (e.g., two Puts to the same reference).
+   *
+   * @param sheet
+   *   The sheet to modify
+   * @param patch
+   *   The patch to apply
+   * @return
+   *   Either an error or the modified sheet
+   */
   def applyPatch(sheet: Sheet, patch: Patch): XLResult[Sheet] = patch match
     case Put(ref, value) =>
       Right(sheet.put(ref, value))
@@ -124,6 +130,6 @@ object Patch:
       Patch.applyPatches(sheet, patches)
 
 /** Syntax for patch composition using cats Monoid */
-object syntax:
+object patchSyntax:
   export cats.syntax.monoid.given
   export cats.syntax.semigroup.given

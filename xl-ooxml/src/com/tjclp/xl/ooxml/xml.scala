@@ -2,11 +2,12 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 
-/** XML serialization and deserialization for OOXML parts.
-  *
-  * All serialization is deterministic with canonical attribute/element ordering
-  * for stable diffs and golden tests.
-  */
+/**
+ * XML serialization and deserialization for OOXML parts.
+ *
+ * All serialization is deterministic with canonical attribute/element ordering for stable diffs and
+ * golden tests.
+ */
 
 /** Trait for types that can be serialized to XML */
 trait XmlWritable:
@@ -27,16 +28,20 @@ object XmlUtil:
   val nsContentTypes = "http://schemas.openxmlformats.org/package/2006/content-types"
 
   /** Relationship type URIs */
-  val relTypeOfficeDocument = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
-  val relTypeWorksheet = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+  val relTypeOfficeDocument =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+  val relTypeWorksheet =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
   val relTypeStyles = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"
-  val relTypeSharedStrings = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"
+  val relTypeSharedStrings =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"
 
   /** Content type URIs */
   val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
   val ctWorksheet = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
   val ctStyles = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"
-  val ctSharedStrings = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+  val ctSharedStrings =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
 
   /** Sort attributes by name for deterministic output */
@@ -54,11 +59,20 @@ object XmlUtil:
     Elem(null, label, sortedAttrs, TopScope, minimizeEmpty = true, children*)
 
   /** Create element with namespace */
-  def elemNS(prefix: String, label: String, ns: String, attrs: (String, String)*)(children: Node*): Elem =
+  def elemNS(prefix: String, label: String, ns: String, attrs: (String, String)*)(
+    children: Node*
+  ): Elem =
     val sortedAttrs = attrs.sortBy(_._1).foldLeft(Null: MetaData) { case (acc, (key, value)) =>
       new UnprefixedAttribute(key, value, acc)
     }
-    Elem(prefix, label, sortedAttrs, NamespaceBinding(prefix, ns, TopScope), minimizeEmpty = true, children*)
+    Elem(
+      prefix,
+      label,
+      sortedAttrs,
+      NamespaceBinding(prefix, ns, TopScope),
+      minimizeEmpty = true,
+      children*
+    )
 
   /** Pretty print XML with proper indentation */
   def prettyPrint(node: Node): String =

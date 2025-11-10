@@ -5,17 +5,18 @@ import XmlUtil.*
 
 /** A single relationship in an OOXML package */
 case class Relationship(
-  id: String,           // Relationship ID (e.g., "rId1")
-  `type`: String,       // Type URI
-  target: String,       // Target path
-  targetMode: Option[String] = None  // Optional target mode (External, etc.)
+  id: String, // Relationship ID (e.g., "rId1")
+  `type`: String, // Type URI
+  target: String, // Target path
+  targetMode: Option[String] = None // Optional target mode (External, etc.)
 )
 
-/** Relationships for .rels files
-  *
-  * Maps relationship IDs to targets. Every significant part can have
-  * a corresponding .rels file in a _rels/ subdirectory.
-  */
+/**
+ * Relationships for .rels files
+ *
+ * Maps relationship IDs to targets. Every significant part can have a corresponding .rels file in a
+ * _rels/ subdirectory.
+ */
 case class Relationships(
   relationships: Seq[Relationship]
 ) extends XmlWritable:
@@ -34,9 +35,7 @@ case class Relationships(
       elem("Relationship", attrs*)()
     }
 
-    elem("Relationships",
-      "xmlns" -> nsPackageRels
-    )(relElems*)
+    elem("Relationships", "xmlns" -> nsPackageRels)(relElems*)
 
   /** Find relationship by ID */
   def findById(id: String): Option[Relationship] =
@@ -55,9 +54,11 @@ object Relationships extends XmlReadable[Relationships]:
 
   /** Create root .rels file pointing to workbook */
   def root(workbookPath: String = "xl/workbook.xml"): Relationships =
-    Relationships(Seq(
-      Relationship("rId1", relTypeOfficeDocument, workbookPath)
-    ))
+    Relationships(
+      Seq(
+        Relationship("rId1", relTypeOfficeDocument, workbookPath)
+      )
+    )
 
   /** Create workbook .rels with sheets */
   def workbook(
@@ -70,8 +71,12 @@ object Relationships extends XmlReadable[Relationships]:
     }
 
     val nextId = sheetCount + 1
-    val styles = if hasStyles then Seq(Relationship(s"rId$nextId", relTypeStyles, "styles.xml")) else Seq.empty
-    val sst = if hasSharedStrings then Seq(Relationship(s"rId${nextId + 1}", relTypeSharedStrings, "sharedStrings.xml")) else Seq.empty
+    val styles =
+      if hasStyles then Seq(Relationship(s"rId$nextId", relTypeStyles, "styles.xml")) else Seq.empty
+    val sst =
+      if hasSharedStrings then
+        Seq(Relationship(s"rId${nextId + 1}", relTypeSharedStrings, "sharedStrings.xml"))
+      else Seq.empty
 
     Relationships(sheets ++ styles ++ sst)
 
@@ -87,7 +92,5 @@ object Relationships extends XmlReadable[Relationships]:
 
     val errors = rels.collect { case Left(err) => err }
 
-    if errors.nonEmpty then
-      Left(s"Relationships parse errors: ${errors.mkString(", ")}")
-    else
-      Right(Relationships(rels.collect { case Right(r) => r }))
+    if errors.nonEmpty then Left(s"Relationships parse errors: ${errors.mkString(", ")}")
+    else Right(Relationships(rels.collect { case Right(r) => r }))

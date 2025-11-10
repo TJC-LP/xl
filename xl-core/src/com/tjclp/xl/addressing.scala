@@ -1,8 +1,8 @@
 package com.tjclp.xl
 
-/** Column index with zero-based internal representation.
-  * Opaque type for zero-overhead wrapping.
-  */
+/**
+ * Column index with zero-based internal representation. Opaque type for zero-overhead wrapping.
+ */
 opaque type Column = Int
 
 object Column:
@@ -43,9 +43,9 @@ object Column:
 
 end Column
 
-/** Row index with zero-based internal representation.
-  * Opaque type for zero-overhead wrapping.
-  */
+/**
+ * Row index with zero-based internal representation. Opaque type for zero-overhead wrapping.
+ */
 opaque type Row = Int
 
 object Row:
@@ -81,23 +81,23 @@ object SheetName:
   def apply(name: String): Either[String, SheetName] =
     if name.isEmpty then Left("Sheet name cannot be empty")
     else if name.length > MaxLength then Left(s"Sheet name too long (max $MaxLength): $name")
-    else if name.exists(InvalidChars.contains) then Left(s"Sheet name contains invalid characters: $name")
+    else if name.exists(InvalidChars.contains) then
+      Left(s"Sheet name contains invalid characters: $name")
     else Right(name)
 
   /** Create an unsafe sheet name (use only when validation is guaranteed) */
   def unsafe(name: String): SheetName = name
 
-  extension (name: SheetName)
-    def value: String = name
+  extension (name: SheetName) def value: String = name
 
 end SheetName
 
-/** Absolute cell reference with 64-bit packed representation.
-  * Upper 32 bits: row index
-  * Lower 32 bits: column index
-  *
-  * This allows efficient storage and comparison.
-  */
+/**
+ * Absolute cell reference with 64-bit packed representation. Upper 32 bits: row index Lower 32
+ * bits: column index
+ *
+ * This allows efficient storage and comparison.
+ */
 opaque type ARef = Long
 
 object ARef:
@@ -106,7 +106,7 @@ object ARef:
 
   /** Create cell reference from column and row */
   def apply(col: Column, row: Row): ARef =
-    (rowIndex(row).toLong << 32) | (colIndex(col).toLong & 0xFFFFFFFFL)
+    (rowIndex(row).toLong << 32) | (colIndex(col).toLong & 0xffffffffL)
 
   /** Create cell reference from 0-based indices */
   def from0(colIndex: Int, rowIndex: Int): ARef =
@@ -131,7 +131,7 @@ object ARef:
 
   extension (ref: ARef)
     /** Extract column */
-    def col: Column = Column.from0((ref & 0xFFFFFFFFL).toInt)
+    def col: Column = Column.from0((ref & 0xffffffffL).toInt)
 
     /** Extract row */
     def row: Row = Row.from0((ref >> 32).toInt)
@@ -174,9 +174,9 @@ case class CellRange(start: ARef, end: ARef):
   /** Check if reference is within this range */
   def contains(ref: ARef): Boolean =
     ref.col.index0 >= colStart.index0 &&
-    ref.col.index0 <= colEnd.index0 &&
-    ref.row.index0 >= rowStart.index0 &&
-    ref.row.index0 <= rowEnd.index0
+      ref.col.index0 <= colEnd.index0 &&
+      ref.row.index0 >= rowStart.index0 &&
+      ref.row.index0 <= rowEnd.index0
 
   /** Check if this range intersects with another */
   def intersects(other: CellRange): Boolean =
@@ -228,7 +228,5 @@ object CellRange:
           yield CellRange(startRef, endRef)
         case _ =>
           Left(s"Invalid range format: $s")
-    else if s.nonEmpty then
-      ARef.parse(s).map(ref => CellRange(ref, ref))
-    else
-      Left(s"Invalid range format: $s")
+    else if s.nonEmpty then ARef.parse(s).map(ref => CellRange(ref, ref))
+    else Left(s"Invalid range format: $s")

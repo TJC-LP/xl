@@ -2,10 +2,11 @@ package com.tjclp.xl
 
 import cats.Monoid
 
-/** Style system for Excel cells with units, colors, fonts, fills, borders, and number formats.
-  *
-  * All types are pure values with deterministic canonicalization for deduplication.
-  */
+/**
+ * Style system for Excel cells with units, colors, fonts, fills, borders, and number formats.
+ *
+ * All types are pure values with deterministic canonicalization for deduplication.
+ */
 
 // ========== Units ==========
 
@@ -79,7 +80,7 @@ object Color:
     val cleaned = if hex.startsWith("#") then hex.substring(1) else hex
     cleaned.length match
       case 6 => // #RRGGBB
-        try Right(Rgb(0xFF000000 | Integer.parseInt(cleaned, 16)))
+        try Right(Rgb(0xff000000 | Integer.parseInt(cleaned, 16)))
         catch case _: NumberFormatException => Left(s"Invalid hex color: $hex")
       case 8 => // #AARRGGBB
         try Right(Rgb(Integer.parseUnsignedInt(cleaned, 16)))
@@ -107,19 +108,19 @@ object Color:
 /** Number format for cell values */
 enum NumFmt:
   case General
-  case Integer              // 0
-  case Decimal              // 0.00
-  case ThousandsSeparator   // #,##0
-  case ThousandsDecimal     // #,##0.00
-  case Currency             // $#,##0.00
-  case Percent              // 0%
-  case PercentDecimal       // 0.00%
-  case Scientific           // 0.00E+00
-  case Fraction             // # ?/?
-  case Date                 // m/d/yy
-  case DateTime             // m/d/yy h:mm
-  case Time                 // h:mm:ss
-  case Text                 // @
+  case Integer // 0
+  case Decimal // 0.00
+  case ThousandsSeparator // #,##0
+  case ThousandsDecimal // #,##0.00
+  case Currency // $#,##0.00
+  case Percent // 0%
+  case PercentDecimal // 0.00%
+  case Scientific // 0.00E+00
+  case Fraction // # ?/?
+  case Date // m/d/yy
+  case DateTime // m/d/yy h:mm
+  case Time // h:mm:ss
+  case Text // @
   case Custom(code: String) // User-defined format
 
 object NumFmt:
@@ -289,17 +290,21 @@ case class CellStyle(
 object CellStyle:
   val default: CellStyle = CellStyle()
 
-  /** Generate canonical key for style deduplication.
-    *
-    * Two styles with the same key are structurally equivalent and
-    * should map to the same style index in styles.xml.
-    */
+  /**
+   * Generate canonical key for style deduplication.
+   *
+   * Two styles with the same key are structurally equivalent and should map to the same style index
+   * in styles.xml.
+   */
   def canonicalKey(style: CellStyle): String =
-    val fontKey = s"F:${style.font.name},${style.font.sizePt},${style.font.bold},${style.font.italic},${style.font.underline},${style.font.color}"
+    val fontKey =
+      s"F:${style.font.name},${style.font.sizePt},${style.font.bold},${style.font.italic},${style.font.underline},${style.font.color}"
     val fillKey = s"FL:${style.fill}"
-    val borderKey = s"B:${style.border.left},${style.border.right},${style.border.top},${style.border.bottom}"
+    val borderKey =
+      s"B:${style.border.left},${style.border.right},${style.border.top},${style.border.bottom}"
     val numFmtKey = s"N:${style.numFmt}"
-    val alignKey = s"A:${style.align.horizontal},${style.align.vertical},${style.align.wrapText},${style.align.indent}"
+    val alignKey =
+      s"A:${style.align.horizontal},${style.align.vertical},${style.align.wrapText},${style.align.indent}"
     s"$fontKey|$fillKey|$borderKey|$numFmtKey|$alignKey"
 
 // ========== StylePatch Monoid ==========

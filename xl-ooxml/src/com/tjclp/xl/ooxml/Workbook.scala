@@ -8,31 +8,39 @@ import com.tjclp.xl.SheetName
 case class SheetRef(
   name: SheetName,
   sheetId: Int,
-  relationshipId: String  // r:id
+  relationshipId: String // r:id
 )
 
-/** Workbook for xl/workbook.xml
-  *
-  * Contains sheet references and workbook-level properties.
-  * Each sheet has a name, sheetId (1-based), and r:id pointing to the worksheet part.
-  */
+/**
+ * Workbook for xl/workbook.xml
+ *
+ * Contains sheet references and workbook-level properties. Each sheet has a name, sheetId
+ * (1-based), and r:id pointing to the worksheet part.
+ */
 case class OoxmlWorkbook(
   sheets: Seq[SheetRef]
 ) extends XmlWritable:
 
   def toXml: Elem =
     val sheetsElem = Elem(
-      null, "sheets", Null, TopScope, minimizeEmpty = false,
+      null,
+      "sheets",
+      Null,
+      TopScope,
+      minimizeEmpty = false,
       sheets.sortBy(_.sheetId).map { ref =>
         val rId = new PrefixedAttribute("r", "id", ref.relationshipId, Null)
-        val attrs = new UnprefixedAttribute("name", ref.name.value,
-          new UnprefixedAttribute("sheetId", ref.sheetId.toString, rId))
+        val attrs = new UnprefixedAttribute(
+          "name",
+          ref.name.value,
+          new UnprefixedAttribute("sheetId", ref.sheetId.toString, rId)
+        )
         Elem(null, "sheet", attrs, TopScope, minimizeEmpty = true)
       }*
     )
 
-    val nsBindings = NamespaceBinding(null, nsSpreadsheetML,
-      NamespaceBinding("r", nsRelationships, TopScope))
+    val nsBindings =
+      NamespaceBinding(null, nsSpreadsheetML, NamespaceBinding("r", nsRelationships, TopScope))
 
     Elem(null, "workbook", Null, nsBindings, minimizeEmpty = false, sheetsElem)
 
@@ -66,7 +74,5 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
     }
 
     val errors = parsed.collect { case Left(err) => err }
-    if errors.nonEmpty then
-      Left(s"Sheet parse errors: ${errors.mkString(", ")}")
-    else
-      Right(parsed.collect { case Right(ref) => ref })
+    if errors.nonEmpty then Left(s"Sheet parse errors: ${errors.mkString(", ")}")
+    else Right(parsed.collect { case Right(ref) => ref })

@@ -3,14 +3,15 @@ package com.tjclp.xl.ooxml
 import scala.xml.*
 import XmlUtil.*
 
-/** Content Types for [Content_Types].xml
-  *
-  * Defines MIME types for parts in the OOXML package.
-  * This is a required part at the root of every XLSX file.
-  */
+/**
+ * Content Types for [Content_Types].xml
+ *
+ * Defines MIME types for parts in the OOXML package. This is a required part at the root of every
+ * XLSX file.
+ */
 case class ContentTypes(
-  defaults: Map[String, String],  // extension → contentType
-  overrides: Map[String, String]  // partName → contentType
+  defaults: Map[String, String], // extension → contentType
+  overrides: Map[String, String] // partName → contentType
 ) extends XmlWritable:
 
   def toXml: Elem =
@@ -22,13 +23,15 @@ case class ContentTypes(
       elem("Override", "PartName" -> partName, "ContentType" -> ct)()
     }
 
-    elem("Types",
-      "xmlns" -> nsContentTypes
-    )(defaultElems ++ overrideElems*)
+    elem("Types", "xmlns" -> nsContentTypes)(defaultElems ++ overrideElems*)
 
 object ContentTypes extends XmlReadable[ContentTypes]:
   /** Create minimal content types for a workbook */
-  def minimal(hasStyles: Boolean = false, hasSharedStrings: Boolean = false, sheetCount: Int = 1): ContentTypes =
+  def minimal(
+    hasStyles: Boolean = false,
+    hasSharedStrings: Boolean = false,
+    sheetCount: Int = 1
+  ): ContentTypes =
     val baseDefaults = Map(
       "rels" -> ctRelationships,
       "xml" -> "application/xml"
@@ -39,7 +42,8 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     ) ++ (1 to sheetCount).map(i => s"/xl/worksheets/sheet$i.xml" -> ctWorksheet)
 
     val stylesOverride = if hasStyles then Map("/xl/styles.xml" -> ctStyles) else Map.empty
-    val sstOverride = if hasSharedStrings then Map("/xl/sharedStrings.xml" -> ctSharedStrings) else Map.empty
+    val sstOverride =
+      if hasSharedStrings then Map("/xl/sharedStrings.xml" -> ctSharedStrings) else Map.empty
 
     ContentTypes(
       defaults = baseDefaults,
@@ -66,10 +70,11 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     val overrideErrors = overrides.collect { case Left(err) => err }
     val errors = defaultErrors ++ overrideErrors
 
-    if errors.nonEmpty then
-      Left(s"ContentTypes parse errors: ${errors.mkString(", ")}")
+    if errors.nonEmpty then Left(s"ContentTypes parse errors: ${errors.mkString(", ")}")
     else
-      Right(ContentTypes(
-        defaults = defaults.collect { case Right(pair) => pair }.toMap,
-        overrides = overrides.collect { case Right(pair) => pair }.toMap
-      ))
+      Right(
+        ContentTypes(
+          defaults = defaults.collect { case Right(pair) => pair }.toMap,
+          overrides = overrides.collect { case Right(pair) => pair }.toMap
+        )
+      )

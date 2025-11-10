@@ -1,14 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ScalaCompilerConfiguration">
-    <profile name="bsp 1" modules="xl_21284bb2e3">
+    <profile name="BSP xl-core" modules="">
       <parameters>
-        <parameter value="-Xsemanticdb" />
-        <parameter value="-sourceroot" />
-        <parameter value="$PROJECT_DIR$" />
+        <parameter value="-encoding" />
+        <parameter value="utf-8" />
+        <parameter value="-feature" />
+        <parameter value="-language:implicitConversions" />
+        <parameter value="-language:higherKinds" />
+        <parameter value="-unchecked" />
+        <parameter value="-deprecation" />
+        <parameter value="-Xkind-projector" />
       </parameters>
     </profile>
-    <profile name="bsp 2" modules="mill-build_">
+    <profile name="BSP xl-macros" modules="">
+      <parameters>
+        <parameter value="-encoding" />
+        <parameter value="utf-8" />
+        <parameter value="-feature" />
+        <parameter value="-language:implicitConversions" />
+        <parameter value="-language:higherKinds" />
+        <parameter value="-unchecked" />
+        <parameter value="-deprecation" />
+        <parameter value="-Xkind-projector" />
+      </parameters>
+    </profile>
+    <profile name="bsp 1" modules="mill-build_">
       <option name="deprecationWarnings" value="true" />
       <parameters>
         <parameter value="-Wconf:msg=will be encoded on the classpath:silent" />
@@ -17,7 +34,7 @@
         <plugin path="$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/lihaoyi/scalac-mill-moduledefs-plugin_3.7.3/0.11.10/scalac-mill-moduledefs-plugin_3.7.3-0.11.10.jar" />
       </plugins>
     </profile>
-    <profile name="bsp 3" modules="tests.cats-effect,tests.core,tests.evaluator,tests.ooxml,xl-cats-effect,xl-cats-effect.test,xl-core,xl-core.test,xl-evaluator,xl-evaluator.test,xl-macros,xl-macros.test,xl-ooxml,xl-ooxml.test,xl-testkit,xl-testkit.test">
+    <profile name="bsp 2" modules="xl-cats-effect,xl-cats-effect.test,xl-core,xl-core.test,xl-evaluator,xl-evaluator.test,xl-macros,xl-macros.test,xl-ooxml,xl-ooxml.test,xl-testkit,xl-testkit.test">
       <option name="implicitConversions" value="true" />
       <option name="higherKinds" value="true" />
       <option name="deprecationWarnings" value="true" />

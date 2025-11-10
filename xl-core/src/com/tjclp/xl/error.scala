@@ -1,8 +1,8 @@
 package com.tjclp.xl
 
-/** Error types for the XL library.
-  * All errors are pure values that can be composed and transformed.
-  */
+/**
+ * Error types for the XL library. All errors are pure values that can be composed and transformed.
+ */
 enum XLError:
   /** Invalid cell reference format */
   case InvalidCellRef(ref: String, reason: String)
@@ -67,7 +67,8 @@ object XLError:
       case DuplicateSheet(name) => s"Duplicate sheet name: '$name'"
       case InvalidColumn(index, reason) => s"Invalid column index $index: $reason"
       case InvalidRow(index, reason) => s"Invalid row index $index: $reason"
-      case TypeMismatch(expected, actual, ref) => s"Type mismatch at $ref: expected $expected, got $actual"
+      case TypeMismatch(expected, actual, ref) =>
+        s"Type mismatch at $ref: expected $expected, got $actual"
       case FormulaError(expr, reason) => s"Formula error in '$expr': $reason"
       case StyleError(reason) => s"Style error: $reason"
       case NumberFormatError(format, reason) => s"Number format error '$format': $reason"

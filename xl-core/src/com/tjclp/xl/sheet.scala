@@ -16,11 +16,12 @@ case class RowProperties(
   styleId: Option[Int] = None
 )
 
-/** A worksheet containing cells, merged ranges, and properties.
-  *
-  * Immutable design: all operations return new Sheet instances.
-  * Uses persistent data structures for efficient updates.
-  */
+/**
+ * A worksheet containing cells, merged ranges, and properties.
+ *
+ * Immutable design: all operations return new Sheet instances. Uses persistent data structures for
+ * efficient updates.
+ */
 case class Sheet(
   name: SheetName,
   cells: Map[ARef, Cell] = Map.empty,
@@ -37,8 +38,10 @@ case class Sheet(
 
   /** Get cell at A1 notation */
   def apply(a1: String): XLResult[Cell] =
-    ARef.parse(a1)
-      .left.map(err => XLError.InvalidCellRef(a1, err))
+    ARef
+      .parse(a1)
+      .left
+      .map(err => XLError.InvalidCellRef(a1, err))
       .map(apply)
 
   /** Check if cell exists (not empty) */
@@ -121,10 +124,12 @@ case class Sheet(
       val maxCol = refs.map(_.col.index0).max
       val minRow = refs.map(_.row.index0).min
       val maxRow = refs.map(_.row.index0).max
-      Some(CellRange(
-        ARef.from0(minCol, minRow),
-        ARef.from0(maxCol, maxRow)
-      ))
+      Some(
+        CellRange(
+          ARef.from0(minCol, minRow),
+          ARef.from0(maxCol, maxRow)
+        )
+      )
 
   /** Count of non-empty cells */
   def cellCount: Int = cells.size
@@ -140,8 +145,8 @@ case class Sheet(
 object Sheet:
   /** Create empty sheet with name */
   def apply(name: String): XLResult[Sheet] =
-    SheetName(name)
-      .left.map(err => XLError.InvalidSheetName(name, err))
+    SheetName(name).left
+      .map(err => XLError.InvalidSheetName(name, err))
       .map(sn => Sheet(sn))
 
   /** Create empty sheet with validated name */
@@ -158,10 +163,11 @@ case class WorkbookMetadata(
   appVersion: Option[String] = Some("0.1.0-SNAPSHOT")
 )
 
-/** An Excel workbook containing multiple sheets.
-  *
-  * Immutable design with efficient persistent data structures.
-  */
+/**
+ * An Excel workbook containing multiple sheets.
+ *
+ * Immutable design with efficient persistent data structures.
+ */
 case class Workbook(
   sheets: Vector[Sheet] = Vector.empty,
   metadata: WorkbookMetadata = WorkbookMetadata(),
@@ -175,29 +181,27 @@ case class Workbook(
 
   /** Get sheet by name */
   def apply(name: SheetName): XLResult[Sheet] =
-    sheets.find(_.name == name)
+    sheets
+      .find(_.name == name)
       .toRight(XLError.SheetNotFound(name.value))
 
   /** Get sheet by name string */
   @annotation.targetName("applyByString")
   def apply(name: String): XLResult[Sheet] =
-    SheetName(name)
-      .left.map(err => XLError.InvalidSheetName(name, err): XLError)
+    SheetName(name).left
+      .map(err => XLError.InvalidSheetName(name, err): XLError)
       .flatMap(apply)
 
   /** Add sheet at end */
   def addSheet(sheet: Sheet): XLResult[Workbook] =
-    if sheets.exists(_.name == sheet.name) then
-      Left(XLError.DuplicateSheet(sheet.name.value))
-    else
-      Right(copy(sheets = sheets :+ sheet))
+    if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
+    else Right(copy(sheets = sheets :+ sheet))
 
   /** Insert sheet at index */
   def insertSheet(index: Int, sheet: Sheet): XLResult[Workbook] =
     if index < 0 || index > sheets.size then
       Left(XLError.OutOfBounds(s"insert[$index]", s"Valid range: 0 to ${sheets.size}"))
-    else if sheets.exists(_.name == sheet.name) then
-      Left(XLError.DuplicateSheet(sheet.name.value))
+    else if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
     else
       val (before, after) = sheets.splitAt(index)
       Right(copy(sheets = before ++ (sheet +: after)))
@@ -208,12 +212,9 @@ case class Workbook(
       // Check for duplicate names (excluding the sheet being updated)
       val hasDuplicate = sheets.zipWithIndex
         .exists { case (s, i) => i != index && s.name == sheet.name }
-      if hasDuplicate then
-        Left(XLError.DuplicateSheet(sheet.name.value))
-      else
-        Right(copy(sheets = sheets.updated(index, sheet)))
-    else
-      Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
+      if hasDuplicate then Left(XLError.DuplicateSheet(sheet.name.value))
+      else Right(copy(sheets = sheets.updated(index, sheet)))
+    else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
   /** Update sheet by name */
   def updateSheet(name: SheetName, f: Sheet => Sheet): XLResult[Workbook] =
@@ -225,14 +226,13 @@ case class Workbook(
 
   /** Remove sheet by index */
   def removeSheet(index: Int): XLResult[Workbook] =
-    if sheets.size <= 1 then
-      Left(XLError.InvalidWorkbook("Cannot remove last sheet"))
+    if sheets.size <= 1 then Left(XLError.InvalidWorkbook("Cannot remove last sheet"))
     else if index >= 0 && index < sheets.size then
       val newSheets = sheets.patch(index, Nil, 1)
-      val newActiveIndex = if activeSheetIndex >= newSheets.size then newSheets.size - 1 else activeSheetIndex
+      val newActiveIndex =
+        if activeSheetIndex >= newSheets.size then newSheets.size - 1 else activeSheetIndex
       Right(copy(sheets = newSheets, activeSheetIndex = newActiveIndex))
-    else
-      Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
+    else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
   /** Remove sheet by name */
   def removeSheet(name: SheetName): XLResult[Workbook] =
@@ -253,10 +253,8 @@ case class Workbook(
 
   /** Set active sheet index */
   def setActiveSheet(index: Int): XLResult[Workbook] =
-    if index >= 0 && index < sheets.size then
-      Right(copy(activeSheetIndex = index))
-    else
-      Left(XLError.OutOfBounds(s"active[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
+    if index >= 0 && index < sheets.size then Right(copy(activeSheetIndex = index))
+    else Left(XLError.OutOfBounds(s"active[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
   /** Get active sheet */
   def activeSheet: XLResult[Sheet] = apply(activeSheetIndex)
@@ -270,8 +268,7 @@ case class Workbook(
 object Workbook:
   /** Create workbook with a single empty sheet */
   def apply(sheetName: String): XLResult[Workbook] =
-    for
-      sheet <- Sheet(sheetName)
+    for sheet <- Sheet(sheetName)
     yield Workbook(Vector(sheet))
 
   /** Create empty workbook (requires at least one sheet) */

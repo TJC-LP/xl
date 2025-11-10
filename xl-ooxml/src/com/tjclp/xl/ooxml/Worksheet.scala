@@ -9,7 +9,7 @@ case class OoxmlCell(
   ref: ARef,
   value: CellValue,
   styleIndex: Option[Int] = None,
-  cellType: String = "inlineStr"  // "s" for SST, "inlineStr" for inline, "n" for number, etc.
+  cellType: String = "inlineStr" // "s" for SST, "inlineStr" for inline, "n" for number, etc.
 ):
   def toA1: String = ref.toA1
 
@@ -42,7 +42,7 @@ case class OoxmlCell(
 
 /** Row in worksheet */
 case class OoxmlRow(
-  rowIndex: Int,  // 1-based
+  rowIndex: Int, // 1-based
   cells: Seq[OoxmlCell]
 ):
   def toXml: Elem =
@@ -50,10 +50,11 @@ case class OoxmlRow(
       cells.sortBy(_.ref.col.index0).map(_.toXml)*
     )
 
-/** Worksheet for xl/worksheets/sheet#.xml
-  *
-  * Contains the actual cell data in <sheetData>.
-  */
+/**
+ * Worksheet for xl/worksheets/sheet#.xml
+ *
+ * Contains the actual cell data in <sheetData>.
+ */
 case class OoxmlWorksheet(
   rows: Seq[OoxmlRow]
 ) extends XmlWritable:
@@ -63,10 +64,16 @@ case class OoxmlWorksheet(
       rows.sortBy(_.rowIndex).map(_.toXml)*
     )
 
-    Elem(null, "worksheet",
-      new UnprefixedAttribute("xmlns", nsSpreadsheetML,
-        new PrefixedAttribute("xmlns", "r", nsRelationships, Null)),
-      TopScope, minimizeEmpty = false,
+    Elem(
+      null,
+      "worksheet",
+      new UnprefixedAttribute(
+        "xmlns",
+        nsSpreadsheetML,
+        new PrefixedAttribute("xmlns", "r", nsRelationships, Null)
+      ),
+      TopScope,
+      minimizeEmpty = false,
       sheetDataElem
     )
 
@@ -110,10 +117,8 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     }
 
     val errors = parsed.collect { case Left(err) => err }
-    if errors.nonEmpty then
-      Left(s"Row parse errors: ${errors.mkString(", ")}")
-    else
-      Right(parsed.collect { case Right(row) => row })
+    if errors.nonEmpty then Left(s"Row parse errors: ${errors.mkString(", ")}")
+    else Right(parsed.collect { case Right(row) => row })
 
   private def parseCells(elems: Seq[Elem]): Either[String, Seq[OoxmlCell]] =
     val parsed = elems.map { e =>
@@ -127,10 +132,8 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     }
 
     val errors = parsed.collect { case Left(err) => err }
-    if errors.nonEmpty then
-      Left(s"Cell parse errors: ${errors.mkString(", ")}")
-    else
-      Right(parsed.collect { case Right(cell) => cell })
+    if errors.nonEmpty then Left(s"Cell parse errors: ${errors.mkString(", ")}")
+    else Right(parsed.collect { case Right(cell) => cell })
 
   private def parseCellValue(elem: Elem, cellType: String): Either[String, CellValue] =
     cellType match
@@ -150,10 +153,8 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         // Number
         (elem \ "v").headOption.map(_.text) match
           case Some(numStr) =>
-            try
-              Right(CellValue.Number(BigDecimal(numStr)))
-            catch
-              case _: NumberFormatException => Left(s"Invalid number: $numStr")
+            try Right(CellValue.Number(BigDecimal(numStr)))
+            catch case _: NumberFormatException => Left(s"Invalid number: $numStr")
           case None => Right(CellValue.Empty) // Empty numeric cell
 
       case "b" =>
