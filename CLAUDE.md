@@ -449,16 +449,50 @@ Rich text and cell styles preserved as HTML tags and inline CSS. Useful for dash
 
 ## Documentation
 
-**Primary source**: `docs/plan/` directory (29 markdown files)
+Documentation is organized by purpose (no numbering for easier maintenance):
 
-Key documents:
-- `00-executive-summary.md` → Vision and non-negotiables
-- `01-purity-charter.md` → Effect isolation, totality, laws
-- `02-domain-model.md` → Full type algebra
-- `10-patches-and-optics.md` → Patch Monoid design
-- `18-roadmap.md` → Implementation phases (P0-P11)
-- `25-style-guide.md` → Coding conventions
-- `29-linting.md` → Scalafmt setup
+### Active Plans (`docs/plan/`) - 9 files
+**Future work only** (P7-P11). Completed phases archived.
+- `roadmap.md` → Master status tracker (P0-P11)
+- `error-model-and-safety.md` → P11 security hardening
+- `formula-system.md` → P7+ evaluator
+- `drawings.md`, `charts.md`, `tables-and-pivots.md` → P8-P10 features
+- `benchmarks.md` → Performance testing plan
+- `security.md` → Additional P11 features
+
+### Design Docs (`docs/design/`) - 6 files
+**Architectural decisions** (timeless)
+- `executive-summary.md` → Vision and non-negotiables
+- `purity-charter.md` → Effect isolation, totality, laws
+- `domain-model.md` → Full type algebra (Cell, Sheet, Workbook, RichText, StyleRegistry)
+- `decisions.md` → ADR log (10 decisions documented)
+- `style-guide.md` → Coding conventions
+- `query-api.md` → Unimplemented design spec
+
+### Reference (`docs/reference/`) - 5 files
+**Quick reference material**
+- `testing-guide.md` → Test coverage breakdown (263 tests)
+- `examples.md` → Code samples
+- `glossary.md` → Terminology
+- `ooxml-cheatsheet.md` → Quick reference
+- `ooxml-research.md` → OOXML schemas (ChatGPT research, 484 lines)
+
+### Archived Plans (`docs/archive/plan/`) - 11 files
+**Completed implementation plans** (P0-P6, P31), organized by phase:
+- `p0-bootstrap/` → Build system, linting
+- `p1-addressing/` → Opaque types, macros
+- `p2-patches/` → Patch Monoid
+- `p3-styles/` → Style system
+- `p4-ooxml/` → XML serialization
+- `p5-streaming/` → fs2-data-xml streaming
+- `p6-codecs/` → CellCodec primitives
+- `p31-refactor/` → Optics, RichText, HTML export
+
+### Root Docs
+- `docs/STATUS.md` → Detailed current state (263 tests, performance, limitations)
+- `docs/LIMITATIONS.md` → Current roadmap and missing features
+- `docs/CONTRIBUTING.md` → Contribution guidelines
+- `docs/FAQ.md` → Frequently asked questions
 
 ## CI/CD
 
