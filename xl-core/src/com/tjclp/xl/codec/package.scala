@@ -9,16 +9,16 @@ extension (sheet: Sheet)
   /**
    * Read a typed value from a cell using CellCodec.
    *
-   * Returns Right(None) if cell is empty, Right(Some(value)) if successfully decoded, or Left(error) if there's a
-   * type mismatch.
+   * Returns Right(None) if cell is empty, Right(Some(value)) if successfully decoded, or
+   * Left(error) if there's a type mismatch.
    *
    * @tparam A
    *   The type to decode to (must have a CellCodec instance)
    * @param ref
    *   The cell reference
    * @return
-   *   Either[CodecError, Option[A]] - Right(None) if empty, Right(Some(value)) if success, Left(error) if type
-   *   mismatch
+   *   Either[CodecError, Option[A]] - Right(None) if empty, Right(Some(value)) if success,
+   *   Left(error) if type mismatch
    */
   def readTyped[A: CellCodec](ref: ARef): Either[CodecError, Option[A]] =
     sheet.cells.get(ref) match
@@ -28,8 +28,8 @@ extension (sheet: Sheet)
   /**
    * Put a typed value to a cell with auto-inferred style.
    *
-   * Uses CellCodec to write the value and apply appropriate formatting (e.g., date format for LocalDate, decimal
-   * format for BigDecimal).
+   * Uses CellCodec to write the value and apply appropriate formatting (e.g., date format for
+   * LocalDate, decimal format for BigDecimal).
    *
    * @tparam A
    *   The type to encode (must have a CellCodec instance)
@@ -50,8 +50,9 @@ extension (sheet: Sheet)
   /**
    * Put multiple cells with mixed types, leveraging existing putAll.
    *
-   * Accepts (ARef, Any) pairs and uses runtime pattern matching to resolve the appropriate CellCodec for each value.
-   * Auto-infers styles based on value types (dates get date format, decimals get number format, etc.).
+   * Accepts (ARef, Any) pairs and uses runtime pattern matching to resolve the appropriate
+   * CellCodec for each value. Auto-infers styles based on value types (dates get date format,
+   * decimals get number format, etc.).
    *
    * Example:
    * {{{
@@ -77,47 +78,74 @@ extension (sheet: Sheet)
         case v: String =>
           val (cellValue, styleOpt) = CellCodec[String].write(v)
           cells += Cell(ref, cellValue)
-          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+          styleOpt.foreach(style =>
+            currentSheet =
+              currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1)
+          )
 
         case v: Int =>
           val (cellValue, styleOpt) = CellCodec[Int].write(v)
           cells += Cell(ref, cellValue)
-          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+          styleOpt.foreach(style =>
+            currentSheet =
+              currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1)
+          )
 
         case v: Long =>
           val (cellValue, styleOpt) = CellCodec[Long].write(v)
           cells += Cell(ref, cellValue)
-          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+          styleOpt.foreach(style =>
+            currentSheet =
+              currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1)
+          )
 
         case v: Double =>
           val (cellValue, styleOpt) = CellCodec[Double].write(v)
           cells += Cell(ref, cellValue)
-          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+          styleOpt.foreach(style =>
+            currentSheet =
+              currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1)
+          )
 
         case v: BigDecimal =>
           val (cellValue, styleOpt) = CellCodec[BigDecimal].write(v)
           cells += Cell(ref, cellValue)
-          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+          styleOpt.foreach(style =>
+            currentSheet =
+              currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1)
+          )
 
         case v: Boolean =>
           val (cellValue, styleOpt) = CellCodec[Boolean].write(v)
           cells += Cell(ref, cellValue)
-          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+          styleOpt.foreach(style =>
+            currentSheet =
+              currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1)
+          )
 
         case v: LocalDate =>
           val (cellValue, styleOpt) = CellCodec[LocalDate].write(v)
           cells += Cell(ref, cellValue)
-          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+          styleOpt.foreach(style =>
+            currentSheet =
+              currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1)
+          )
 
         case v: LocalDateTime =>
           val (cellValue, styleOpt) = CellCodec[LocalDateTime].write(v)
           cells += Cell(ref, cellValue)
-          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+          styleOpt.foreach(style =>
+            currentSheet =
+              currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1)
+          )
 
         case v: RichText =>
           val (cellValue, styleOpt) = CellCodec[RichText].write(v)
           cells += Cell(ref, cellValue)
-          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+          styleOpt.foreach(style =>
+            currentSheet =
+              currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1)
+          )
 
         case _ => () // Ignore unsupported types
     }
@@ -128,7 +156,8 @@ extension (sheet: Sheet)
     // Apply styles for cells that need them
     updates.foldLeft(withCells) { case (s, (ref, value)) =>
       value match
-        case _: String | _: Boolean | _: RichText => s // No cell-level style (RichText has run-level formatting)
+        case _: String | _: Boolean | _: RichText =>
+          s // No cell-level style (RichText has run-level formatting)
         case v: Int =>
           val (_, styleOpt) = CellCodec[Int].write(v)
           styleOpt.fold(s)(style => s.withCellStyle(ref, style))

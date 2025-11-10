@@ -3,19 +3,21 @@ package com.tjclp.xl.codec
 import com.tjclp.xl.*
 import java.time.{LocalDate, LocalDateTime}
 
-/** Read a typed value from a Cell.
-  *
-  * Returns Right(None) if the cell is empty, Right(Some(value)) if successfully decoded, or Left(error) if there's a
-  * type mismatch or parse error.
-  */
+/**
+ * Read a typed value from a Cell.
+ *
+ * Returns Right(None) if the cell is empty, Right(Some(value)) if successfully decoded, or
+ * Left(error) if there's a type mismatch or parse error.
+ */
 trait CellReader[A]:
   def read(cell: Cell): Either[CodecError, Option[A]]
 
-/** Write a typed value to produce cell data with optional style hint.
-  *
-  * Returns (CellValue, Optional[CellStyle]) where the style is auto-inferred based on the value type (e.g., DateTime
-  * gets date format, BigDecimal gets decimal format).
-  */
+/**
+ * Write a typed value to produce cell data with optional style hint.
+ *
+ * Returns (CellValue, Optional[CellStyle]) where the style is auto-inferred based on the value type
+ * (e.g., DateTime gets date format, BigDecimal gets decimal format).
+ */
 trait CellWriter[A]:
   def write(a: A): (CellValue, Option[CellStyle])
 
@@ -27,8 +29,8 @@ object CellCodec:
 
   // Helper to create codecs
   private def codec[A](
-      r: Cell => Either[CodecError, Option[A]],
-      w: A => (CellValue, Option[CellStyle])
+    r: Cell => Either[CodecError, Option[A]],
+    w: A => (CellValue, Option[CellStyle])
   ): CellCodec[A] = new CellCodec[A]:
     def read(cell: Cell) = r(cell)
     def write(a: A) = w(a)
@@ -56,7 +58,10 @@ object CellCodec:
           try Right(Some(n.toIntExact))
           catch
             case _: ArithmeticException =>
-              Left(CodecError.ParseError(n.toString, "Int", "Value out of Int range or has decimal places"))
+              Left(
+                CodecError
+                  .ParseError(n.toString, "Int", "Value out of Int range or has decimal places")
+              )
         case other => Left(CodecError.TypeMismatch("Int", other)),
     i => (CellValue.Number(BigDecimal(i)), Some(CellStyle.default.withNumFmt(NumFmt.General)))
   )
@@ -70,7 +75,10 @@ object CellCodec:
           try Right(Some(n.toLongExact))
           catch
             case _: ArithmeticException =>
-              Left(CodecError.ParseError(n.toString, "Long", "Value out of Long range or has decimal places"))
+              Left(
+                CodecError
+                  .ParseError(n.toString, "Long", "Value out of Long range or has decimal places")
+              )
         case other => Left(CodecError.TypeMismatch("Long", other)),
     l => (CellValue.Number(BigDecimal(l)), Some(CellStyle.default.withNumFmt(NumFmt.General)))
   )
@@ -107,7 +115,10 @@ object CellCodec:
     b => (CellValue.Bool(b), None)
   )
 
-  /** LocalDate codec - reads date/datetime cells and Excel serial numbers with auto-inferred date format */
+  /**
+   * LocalDate codec - reads date/datetime cells and Excel serial numbers with auto-inferred date
+   * format
+   */
   inline given CellCodec[LocalDate] = codec(
     cell =>
       cell.value match
@@ -117,12 +128,21 @@ object CellCodec:
           try Right(Some(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate))
           catch
             case e: Exception =>
-              Left(CodecError.ParseError(serial.toString, "LocalDate", s"Invalid Excel serial number: ${e.getMessage}"))
+              Left(
+                CodecError.ParseError(
+                  serial.toString,
+                  "LocalDate",
+                  s"Invalid Excel serial number: ${e.getMessage}"
+                )
+              )
         case other => Left(CodecError.TypeMismatch("LocalDate", other)),
     date => (CellValue.DateTime(date.atStartOfDay), Some(CellStyle.default.withNumFmt(NumFmt.Date)))
   )
 
-  /** LocalDateTime codec - reads date/datetime cells and Excel serial numbers with auto-inferred datetime format */
+  /**
+   * LocalDateTime codec - reads date/datetime cells and Excel serial numbers with auto-inferred
+   * datetime format
+   */
   inline given CellCodec[LocalDateTime] = codec(
     cell =>
       cell.value match
@@ -133,7 +153,11 @@ object CellCodec:
           catch
             case e: Exception =>
               Left(
-                CodecError.ParseError(serial.toString, "LocalDateTime", s"Invalid Excel serial number: ${e.getMessage}")
+                CodecError.ParseError(
+                  serial.toString,
+                  "LocalDateTime",
+                  s"Invalid Excel serial number: ${e.getMessage}"
+                )
               )
         case other => Left(CodecError.TypeMismatch("LocalDateTime", other)),
     dt => (CellValue.DateTime(dt), Some(CellStyle.default.withNumFmt(NumFmt.DateTime)))
@@ -142,8 +166,9 @@ object CellCodec:
   /**
    * RichText codec - reads rich text cells or converts plain text to RichText.
    *
-   * Note: Rich text has formatting within the text runs (intra-cell formatting), not at the cell level. Therefore,
-   * this codec does not return a CellStyle hint (formatting is in the TextRun font properties).
+   * Note: Rich text has formatting within the text runs (intra-cell formatting), not at the cell
+   * level. Therefore, this codec does not return a CellStyle hint (formatting is in the TextRun
+   * font properties).
    */
   inline given CellCodec[RichText] = codec(
     cell =>
@@ -157,10 +182,12 @@ object CellCodec:
     rt => (CellValue.RichText(rt), None) // No cell-level style, formatting is in runs
   )
 
-/** Cell codec error types
-  *
-  * These errors are specific to cell-level encoding/decoding and can be converted to XLError when needed.
-  */
+/**
+ * Cell codec error types
+ *
+ * These errors are specific to cell-level encoding/decoding and can be converted to XLError when
+ * needed.
+ */
 enum CodecError:
   /** Type mismatch when reading a cell */
   case TypeMismatch(expected: String, actual: CellValue)

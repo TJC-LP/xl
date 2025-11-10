@@ -3,8 +3,8 @@ package com.tjclp.xl
 /**
  * Text run with optional font formatting.
  *
- * Maps directly to OOXML `<r>` (text run) element with `<rPr>` (run properties). Supports bold, italic, underline,
- * colors, font size, and font family.
+ * Maps directly to OOXML `<r>` (text run) element with `<rPr>` (run properties). Supports bold,
+ * italic, underline, colors, font size, and font family.
  *
  * @param text
  *   The text content of this run
@@ -12,8 +12,8 @@ package com.tjclp.xl
  *   Optional font formatting (if None, inherits from cell style or defaults)
  */
 case class TextRun(
-    text: String,
-    font: Option[Font] = None
+  text: String,
+  font: Option[Font] = None
 ):
   /** Append another TextRun or String to create RichText */
   def +(other: TextRun): RichText =
@@ -74,8 +74,9 @@ case class TextRun(
 /**
  * Rich text cell value with multiple formatting runs.
  *
- * Allows different formatting within a single cell (e.g., "Bold text and normal text" where "Bold" is bold but "and
- * normal text" is not). Maps to OOXML `<is>` (inline string) with multiple `<r>` (run) elements.
+ * Allows different formatting within a single cell (e.g., "Bold text and normal text" where "Bold"
+ * is bold but "and normal text" is not). Maps to OOXML `<is>` (inline string) with multiple `<r>`
+ * (run) elements.
  *
  * Example:
  * {{{
