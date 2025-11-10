@@ -6,6 +6,9 @@ package com.tjclp.xl
 opaque type Column = Int
 
 object Column:
+  /** Maximum 0-based column index supported by Excel (A-XFD) */
+  val MaxIndex0: Int = 16383
+
   /** Create a Column from 0-based index (0 = A, 1 = B, ...) */
   def from0(index: Int): Column = index
 
@@ -18,7 +21,7 @@ object Column:
     else if !s.forall(c => c >= 'A' && c <= 'Z') then Left(s"Invalid column letter: $s")
     else
       val index = s.foldLeft(0)((acc, c) => acc * 26 + (c - 'A' + 1)) - 1
-      if index < 0 || index > 16383 then Left(s"Column index out of range: $index")
+      if index < 0 || index > MaxIndex0 then Left(s"Column index out of range: $index")
       else Right(index)
 
   extension (col: Column)
@@ -49,6 +52,9 @@ end Column
 opaque type Row = Int
 
 object Row:
+  /** Maximum 0-based row index supported by Excel (1-1,048,576) */
+  val MaxIndex0: Int = 1048575
+
   /** Create a Row from 0-based index (0 = row 1, 1 = row 2, ...) */
   def from0(index: Int): Row = index
 
@@ -125,7 +131,11 @@ object ARef:
       for
         col <- Column.fromLetter(letters)
         rowNum <- digits.toIntOption.toRight(s"Invalid row number: $digits")
-        _ <- Either.cond(rowNum >= 1 && rowNum <= 1048576, (), s"Row out of range: $rowNum")
+        _ <- Either.cond(
+          rowNum >= 1 && rowNum <= Row.MaxIndex0 + 1,
+          (),
+          s"Row out of range: $rowNum"
+        )
         row = Row.from1(rowNum)
       yield apply(col, row)
 

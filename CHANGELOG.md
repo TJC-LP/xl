@@ -45,19 +45,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ARef styling methods: `.styled(style)`, `.styleId(id)`, `.clearStyle`
 - Usage: `import com.tjclp.xl.dsl.*`
 
-**Range Combinators** (`xl-core/src/com/tjclp/xl/sheet.scala` - Phase 2)
+**Range Combinators** (`xl-core/src/com/tjclp/xl/SheetExtensions.scala` - Phase 2)
 - `fillBy(range)(f: (Column, Row) => CellValue)` - Fill using Excel coordinates
 - `tabulate(range)(f: (Int, Int) => CellValue)` - Fill using 0-based indices
-- `putRow(row, startCol, values)` - Horizontal value placement
-- `putCol(col, startRow, values)` - Vertical value placement
+- `putRow(row, startCol, values)` - Horizontal value placement with strict bounds (XLResult)
+- `putCol(col, startRow, values)` - Vertical value placement with strict bounds (XLResult)
+- `putRange(range, values)` - Row-major placement with value-count validation
 - Row-major deterministic iteration for all combinators
 
-**Deterministic Iteration** (`xl-core/src/com/tjclp/xl/sheet.scala` - Phase 2)
+**Deterministic Iteration** (`xl-core/src/com/tjclp/xl/SheetExtensions.scala` - Phase 2)
 - `cellsSorted: Vector[Cell]` - Row-major sorted cells
 - `rowsSorted: Vector[(Row, Vector[Cell])]` - Cells grouped by row
 - `columnsSorted: Vector[(Column, Vector[Cell])]` - Cells grouped by column
 
-**Formula Literal Macro** (`xl-macros/src/com/tjclp/xl/macros.scala` - Phase 2)
+**Formula Literal Macro** (`xl-macros/src/com/tjclp/xl/CellRangeLiterals.scala` - Phase 2)
 - `fx"..."` compile-time validated formula literals
 - Minimal validation (balanced parentheses, no interpolation)
 - Emits `CellValue.Formula(...)` directly
@@ -85,15 +86,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Zero external dependencies (no Monocle)
 
 ### Changed
-- None (all changes are purely additive)
+- `Sheet.putRange(range, values)` now validates the supplied value count and returns `XLResult[Sheet]`, emitting `XLError.ValueCountMismatch` when the count does not match the range size.
+- `Sheet.putRow` and `Sheet.putCol` now return `XLResult[Sheet]`, enforce Excel's column/row limits, and buffer the supplied values to provide deterministic size semantics.
 
 ### Breaking Changes
-- None (100% backward compatible)
+- `Sheet.putRange` return type changed from `Sheet` to `XLResult[Sheet]`; callers must handle the result explicitly.
+- `Sheet.putRow` and `Sheet.putCol` now return `XLResult[Sheet]` instead of `Sheet`.
 
 ### Internal Changes
 - StyleId opaque type used internally (transparent to users at API boundary)
 - StyleRegistry now uses StyleId instead of raw Int
 - OOXML layer performs StyleId ↔ Int conversions at boundaries
+- `xl-macros` macros split into focused sources (`CellRangeLiterals.scala`, `BatchPutMacro.scala`, `FormattedLiterals.scala`) for maintainability.
+- `Sheet` extensions and auxiliary data classes moved to `SheetProperties.scala` and `SheetExtensions.scala` to keep core data structures small.
 
 ### Testing
 - 263 tests (229 original + 34 optics tests)

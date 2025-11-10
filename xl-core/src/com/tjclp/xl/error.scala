@@ -52,6 +52,9 @@ enum XLError:
   /** Parse error (from xl-ooxml layer) */
   case ParseError(location: String, reason: String)
 
+  /** Number of supplied values mismatched expectation */
+  case ValueCountMismatch(expected: Int, actual: Int, context: String)
+
   /** Generic error for extensibility */
   case Other(message: String)
 
@@ -76,6 +79,8 @@ object XLError:
       case InvalidWorkbook(reason) => s"Invalid workbook: $reason"
       case IOError(reason) => s"IO error: $reason"
       case ParseError(location, reason) => s"Parse error at $location: $reason"
+      case ValueCountMismatch(expected, actual, context) =>
+        s"Expected $expected values for $context but received $actual"
       case Other(message) => message
 
 /** Type alias for common result type */
