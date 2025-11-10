@@ -12,26 +12,25 @@ A purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7
 - **Immutable Workbooks**: Persistent data structures with efficient structural sharing
 - **Monoid Composition**: Declarative updates via lawful Patch and StylePatch monoids
 - **Comprehensive Styling**: Colors, fonts, fills, borders, number formats, and alignment
+- **Cell-Level Codecs**: Type-safe encoding/decoding with auto-inferred formatting for 8 primitive types
 - **Deterministic Output**: Canonical XML ordering for stable git diffs and reproducible builds
 - **Property-Based Testing**: ScalaCheck generators and law tests for all core algebras
 
 ## Status
 
-**Current**: ~75% complete with 112/112 tests passing ✅
+**Current**: ~80% complete with 229/229 tests passing ✅
 
-**Implemented** (P0-P5):
+**Implemented** (P0-P6):
 - ✅ Core domain types (Cell, Sheet, Workbook)
 - ✅ Addressing system with compile-time macros (`cell"A1"`, `range"A1:B10"`)
 - ✅ Patch system with Monoid composition for updates
 - ✅ Complete style system (fonts, colors, fills, borders, alignment)
 - ✅ **OOXML I/O**: Read/write XLSX files with SST and styles.xml
-- ✅ **Streaming Write**: True constant-memory streaming with fs2-data-xml (100k+ rows)
+- ✅ **Streaming**: True constant-memory streaming with fs2-data-xml (100k+ rows)
+- ✅ **Cell Codecs**: Type-safe encoding/decoding with auto-inferred formatting
 - ✅ Elegant syntax: given conversions, batch put macro, formatted literals
 
-**In Progress** (P5):
-- 🚧 Streaming Read: Constant-memory reading (currently hybrid)
-
-**Roadmap**: Complete streaming read, codecs with derivation, formulas, charts, drawings, tables.
+**Roadmap**: Formulas, codecs with case class derivation, charts, drawings, tables.
 
 See [docs/plan/18-roadmap.md](docs/plan/18-roadmap.md) for full implementation plan.
 
@@ -102,6 +101,39 @@ val styleUpdates =
 
 val newStyle = CellStyle.default.applyPatch(styleUpdates)
 ```
+
+### Type-Safe Cell Operations with Codecs
+
+XL provides cell-level codecs for type-safe reading and writing with auto-inferred formatting, ideal for unstructured Excel sheets like financial models:
+
+```scala
+import com.tjclp.xl.codec.{*, given}
+
+// Batch updates with mixed types (auto-infers formats)
+val sheet = Sheet("Q1 Forecast").getOrElse(...)
+  .putMixed(
+    cell"A1" -> "Revenue",                        // String: no format
+    cell"B1" -> LocalDate.of(2025, 11, 10),      // Auto: date format
+    cell"C1" -> BigDecimal("1000000.50"),        // Auto: decimal format
+    cell"D1" -> 42                                // Auto: general number format
+  )
+  .put(cell"E1", fx"C1*D1")  // Mix with formulas
+
+// Type-safe reading
+sheet.readTyped[LocalDate](cell"B1") match
+  case Right(Some(date)) => println(s"Date: $date")
+  case Right(None) => println("Cell empty")
+  case Left(error) => println(s"Type error: ${error}")
+
+// Read different types from same sheet
+val revenue = sheet.readTyped[BigDecimal](cell"C1")  // Either[CodecError, Option[BigDecimal]]
+val count = sheet.readTyped[Int](cell"D1")           // Either[CodecError, Option[Int]]
+val name = sheet.readTyped[String](cell"A1")         // Either[CodecError, Option[String]]
+```
+
+**Supported types**: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime
+
+**Why codecs?** Financial models are cell-oriented and irregular (not tabular). Codecs provide type safety and automatic format inference without requiring schema definitions, making them perfect for one-off imports/exports and manual cell manipulation.
 
 ### Streaming API (For Large Files)
 
@@ -190,13 +222,15 @@ excel.readStream(path)
 ### Running Tests
 
 ```bash
-# All tests (112 tests: 95 core + 9 OOXML + 8 streaming)
+# All tests (229 tests: 187 core + 24 OOXML + 18 streaming)
 ./mill __.test
 
 # Individual test suites
 ./mill xl-core.test.testOnly com.tjclp.xl.AddressingSpec
 ./mill xl-core.test.testOnly com.tjclp.xl.PatchSpec
 ./mill xl-core.test.testOnly com.tjclp.xl.StyleSpec
+./mill xl-core.test.testOnly com.tjclp.xl.codec.CellCodecSpec
+./mill xl-core.test.testOnly com.tjclp.xl.codec.BatchUpdateSpec
 ./mill xl-ooxml.test.testOnly com.tjclp.xl.ooxml.OoxmlRoundTripSpec
 ./mill xl-cats-effect.test.testOnly com.tjclp.xl.io.ExcelIOSpec
 ```
@@ -237,6 +271,7 @@ xl/
 - `sheet.scala` → Sheet, Workbook with immutable operations
 - `patch.scala` → Patch Monoid for composing updates
 - `style.scala` → CellStyle, Font, Fill, Border, Color, NumFmt
+- `codec/` → CellCodec instances, batch update extensions
 - `error.scala` → XLError ADT for total error handling
 
 **xl-macros**: Compile-time DSLs
@@ -365,14 +400,16 @@ val emu = Px(96.0).toEmu          // Pixels to EMU (OOXML unit)
 ### Test Coverage
 
 - **Addressing**: 17 property tests for Column, Row, ARef, CellRange
-- **Patches**: 19 tests for Monoid laws and application semantics
-- **Styles**: 41 tests for style system, unit conversions, canonicalization
+- **Patches**: 21 tests for Monoid laws and application semantics
+- **Styles**: 60 tests for style system, unit conversions, canonicalization
+- **Codecs**: 58 tests for encoding/decoding, identity laws, batch updates
 
 All core algebras are tested with:
 - Property-based testing (ScalaCheck)
 - Monoid laws (associativity, identity)
 - Idempotence properties
 - Round-trip invariants
+- Identity laws for codecs
 
 ## Documentation
 

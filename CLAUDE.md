@@ -51,6 +51,11 @@ xl-testkit/      → Test laws, generators, golden files [future]
 - `CellStyle.canonicalKey` → deterministic deduplication for styles.xml
 - Units: `Pt`, `Px`, `Emu` opaque types with bidirectional conversions
 
+**Codecs** (`xl-core/src/com/tjclp/xl/codec/`):
+- `CellCodec[A]` → Bidirectional type-safe encoding/decoding for 8 primitive types
+- `putMixed(updates)` → Batch updates with auto-inferred formatting
+- `readTyped[A](ref)` → Type-safe reading with Either[CodecError, Option[A]]
+
 **OOXML Layer** (`xl-ooxml/src/com/tjclp/xl/ooxml/`):
 - Pure XML serialization with `XmlWritable`/`XmlReadable` traits
 - `ContentTypes`, `Relationships`, `OoxmlWorkbook`, `OoxmlWorksheet` → OOXML parts
@@ -62,7 +67,7 @@ xl-testkit/      → Test laws, generators, golden files [future]
 # Compile everything
 ./mill __.compile
 
-# Run all tests (77 tests: 17 addressing + 19 patch + 41 style)
+# Run all tests (229 tests: 187 core + 24 OOXML + 18 streaming)
 ./mill __.test
 
 # Test specific module
@@ -301,6 +306,66 @@ Macros in `xl-macros/src/com/tjclp/xl/macros.scala`:
 - Emit constants directly: `'{ (${Expr(value)}: T).asInstanceOf[OpaqueType] }`
 - Zero-allocation parsers (no regex, manual char iteration)
 
+### Codec Patterns
+
+Cell-level codecs (`xl-core/src/com/tjclp/xl/codec/`) provide type-safe encoding/decoding with auto-inferred formatting.
+
+#### When to Use Codecs
+
+- ✅ Financial models (cell-oriented, irregular layouts)
+- ✅ Unstructured sheets (no schema)
+- ✅ Type-safe reading from user input
+- ✅ Auto-inferred date/number formats
+
+#### Batch Updates
+
+Always prefer `putMixed` for multi-cell updates:
+
+```scala
+import com.tjclp.xl.codec.{*, given}
+
+sheet.putMixed(
+  cell"A1" -> "Revenue",
+  cell"B1" -> LocalDate.of(2025, 11, 10),  // Auto: date format
+  cell"C1" -> BigDecimal("1000000.50"),    // Auto: decimal format
+  cell"D1" -> 42
+)
+```
+
+**Benefits**: Cleaner syntax, auto-inferred styles, builds on existing `putAll` (no performance overhead).
+
+#### Type-Safe Reading
+
+```scala
+// Reading returns Either[CodecError, Option[A]]
+sheet.readTyped[BigDecimal](cell"C1") match
+  case Right(Some(value)) => // Success: cell has value
+  case Right(None) => // Success: cell is empty
+  case Left(error) => // Error: type mismatch or parse error
+
+// Convert to XLError if needed
+val xlResult: Either[XLError, Option[BigDecimal]] =
+  sheet.readTyped[BigDecimal](ref)
+    .left.map(_.toXLError(ref))
+```
+
+#### Supported Types
+
+8 primitive types with inline given instances (zero-overhead):
+- `String`, `Int`, `Long`, `Double`, `BigDecimal`, `Boolean`, `LocalDate`, `LocalDateTime`
+
+#### Auto-Inferred Formats
+
+- `LocalDate` → `NumFmt.Date`
+- `LocalDateTime` → `NumFmt.DateTime`
+- `BigDecimal` → `NumFmt.Decimal`
+- `Int`, `Long`, `Double` → `NumFmt.General`
+- `String`, `Boolean` → No format (plain)
+
+#### Identity Laws
+
+All codecs satisfy: `codec.read(Cell(ref, codec.write(value)._1)) == Right(Some(value))` (up to formatting precision).
+
 ## Documentation
 
 **Primary source**: `docs/plan/` directory (29 markdown files)
@@ -420,10 +485,15 @@ property("Px to Emu round-trip") {
 
 ## Test Coverage Goal
 
-77/77 tests passing (as of P3 completion):
+229/229 tests passing (as of P6 completion):
 - 17 addressing tests (Column, Row, ARef, CellRange laws)
-- 19 patch tests (Monoid laws, application semantics)
-- 22 style tests (units, colors, builders, canonicalization)
-- 19 style patch tests (Monoid laws, idempotence, overrides)
+- 21 patch tests (Monoid laws, application semantics)
+- 60 style tests (units, colors, builders, canonicalization, StylePatch, StyleRegistry)
+- 8 datetime tests (Excel serial number conversions)
+- 42 codec tests (CellCodec identity laws, type safety, auto-inference)
+- 16 batch update tests (putMixed, readTyped, style deduplication)
+- 18 elegant syntax tests (given conversions, batch put, formatted literals)
+- 24 OOXML tests (round-trip, serialization, styles)
+- 18 streaming tests (fs2-data-xml, constant-memory I/O)
 
 Target: 90%+ coverage with property-based tests for all algebras.
