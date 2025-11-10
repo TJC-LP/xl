@@ -12,7 +12,9 @@ A purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7
 - **Immutable Workbooks**: Persistent data structures with efficient structural sharing
 - **Monoid Composition**: Declarative updates via lawful Patch and StylePatch monoids
 - **Comprehensive Styling**: Colors, fonts, fills, borders, number formats, and alignment
-- **Cell-Level Codecs**: Type-safe encoding/decoding with auto-inferred formatting for 8 primitive types
+- **Cell-Level Codecs**: Type-safe encoding/decoding with auto-inferred formatting for 9 primitive types (including RichText)
+- **Rich Text DSL**: Composable intra-cell formatting with String extensions (.bold.red + " text")
+- **HTML Export**: Convert sheet ranges to HTML tables with inline CSS
 - **Deterministic Output**: Canonical XML ordering for stable git diffs and reproducible builds
 - **Property-Based Testing**: ScalaCheck generators and law tests for all core algebras
 
@@ -134,6 +136,44 @@ val name = sheet.readTyped[String](cell"A1")         // Either[CodecError, Optio
 **Supported types**: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime
 
 **Why codecs?** Financial models are cell-oriented and irregular (not tabular). Codecs provide type safety and automatic format inference without requiring schema definitions, making them perfect for one-off imports/exports and manual cell manipulation.
+
+### Rich Text Formatting (Intra-Cell Styling)
+
+Apply multiple formats within a single cell using the composable DSL:
+
+```scala
+import com.tjclp.xl.RichText.*
+
+// String extension DSL
+val text = "Bold".bold.red + " normal " + "Italic".italic.blue
+
+sheet.put(cell"A1", CellValue.RichText(text))
+
+// Or use putMixed for convenience
+sheet.putMixed(
+  cell"A1" -> ("Error: ".red.bold + "File not found"),
+  cell"A2" -> ("Revenue: ".bold + "+12.5%".green),
+  cell"A3" -> ("Q1 ".size(18.0).bold + "Report".size(18.0).italic)
+)
+```
+
+**Supported formatting**: bold, italic, underline, colors (red/green/blue/black/white/custom), font size, font family
+
+**Why rich text?** Excel supports multiple formatting runs within a cell (OOXML `<is><r>` structure). This is essential for financial reports where values need color-coding (green for positive, red for negative) alongside descriptive text.
+
+### HTML Export
+
+Export sheet ranges to HTML tables for web display:
+
+```scala
+// Export with inline CSS styling
+val html = sheet.toHtml(range"A1:B10")
+
+// Export without styles (plain table)
+val plainHtml = sheet.toHtml(range"A1:B10", includeStyles = false)
+```
+
+Rich text formatting and cell styles are preserved as HTML tags (`<b>`, `<i>`, `<span style="">`) and inline CSS.
 
 ### Streaming API (For Large Files)
 

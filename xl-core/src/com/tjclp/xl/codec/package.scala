@@ -114,6 +114,11 @@ extension (sheet: Sheet)
           cells += Cell(ref, cellValue)
           styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
 
+        case v: RichText =>
+          val (cellValue, styleOpt) = CellCodec[RichText].write(v)
+          cells += Cell(ref, cellValue)
+          styleOpt.foreach(style => currentSheet = currentSheet.copy(styleRegistry = currentSheet.styleRegistry.register(style)._1))
+
         case _ => () // Ignore unsupported types
     }
 
@@ -123,7 +128,7 @@ extension (sheet: Sheet)
     // Apply styles for cells that need them
     updates.foldLeft(withCells) { case (s, (ref, value)) =>
       value match
-        case _: String | _: Boolean => s // No style needed
+        case _: String | _: Boolean | _: RichText => s // No cell-level style (RichText has run-level formatting)
         case v: Int =>
           val (_, styleOpt) = CellCodec[Int].write(v)
           styleOpt.fold(s)(style => s.withCellStyle(ref, style))

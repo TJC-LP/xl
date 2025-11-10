@@ -7,6 +7,9 @@ enum CellValue:
   /** Text/string value */
   case Text(value: String)
 
+  /** Rich text with multiple formatting runs (inline string with formatting) */
+  case RichText(value: com.tjclp.xl.RichText)
+
   /** Numeric value (Excel uses double internally, but we preserve precision) */
   case Number(value: BigDecimal)
 

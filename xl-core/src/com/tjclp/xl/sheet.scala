@@ -179,6 +179,23 @@ extension (sheet: Sheet)
   def getCellStyle(ref: ARef): Option[CellStyle] =
     sheet(ref).styleId.flatMap(sheet.styleRegistry.get)
 
+  /**
+   * Export a cell range to HTML table.
+   *
+   * Generates an HTML `<table>` element with cells rendered as `<td>` elements. Rich text formatting and cell styles
+   * are preserved as HTML tags and inline CSS.
+   *
+   * @param range
+   *   The cell range to export
+   * @param includeStyles
+   *   Whether to include inline CSS for cell styles (default: true)
+   * @return
+   *   HTML table string
+   */
+  @annotation.targetName("toHtmlExt")
+  def toHtml(range: CellRange, includeStyles: Boolean = true): String =
+    com.tjclp.xl.html.HtmlRenderer.toHtml(sheet, range, includeStyles)
+
 object Sheet:
   /** Create empty sheet with name */
   def apply(name: String): XLResult[Sheet] =

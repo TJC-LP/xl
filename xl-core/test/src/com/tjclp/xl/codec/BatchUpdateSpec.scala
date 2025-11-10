@@ -3,6 +3,7 @@ package com.tjclp.xl.codec
 import munit.FunSuite
 import com.tjclp.xl.*
 import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.RichText.{*, given}
 import com.tjclp.xl.macros.{cell, range}
 import java.time.{LocalDate, LocalDateTime}
 
@@ -195,4 +196,67 @@ class BatchUpdateSpec extends FunSuite:
       sheet(cell"A2").styleId,
       "Cells with same type should have same style"
     )
+  }
+
+  // ========== RichText Codec Integration ==========
+
+  test("putMixed: RichText value") {
+    val richText = "Bold".bold + " normal"
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .putMixed(cell"A1" -> richText)
+
+    sheet(cell"A1").value match
+      case CellValue.RichText(rt) =>
+        assertEquals(rt.toPlainText, "Bold normal")
+        assert(rt.runs(0).font.exists(_.bold), "First run should be bold")
+      case other => fail(s"Expected RichText, got $other")
+  }
+
+  test("putMixed: mix RichText with other types") {
+    val richText = "Error: ".red.bold + "File not found"
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .putMixed(
+        cell"A1" -> "Plain text",
+        cell"A2" -> richText,
+        cell"A3" -> 42
+      )
+
+    assertEquals(sheet(cell"A1").value, CellValue.Text("Plain text"))
+    assert(sheet(cell"A2").value.isInstanceOf[CellValue.RichText], "A2 should be RichText")
+    assertEquals(sheet(cell"A3").value, CellValue.Number(BigDecimal(42)))
+  }
+
+  test("readTyped: read RichText from cell") {
+    val richText = "Bold".bold
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .put(cell"A1", CellValue.RichText(richText))
+
+    val result = sheet.readTyped[RichText](cell"A1")
+    result match
+      case Right(Some(rt)) => assertEquals(rt.toPlainText, "Bold")
+      case other => fail(s"Expected Right(Some(RichText)), got $other")
+  }
+
+  test("readTyped: convert plain Text to RichText") {
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .put(cell"A1", CellValue.Text("Hello"))
+
+    val result = sheet.readTyped[RichText](cell"A1")
+    result match
+      case Right(Some(rt)) =>
+        assertEquals(rt.toPlainText, "Hello")
+        assert(rt.isPlainText, "Converted from plain text should be plain")
+      case other => fail(s"Expected Right(Some(RichText)), got $other")
+  }
+
+  test("RichText: identity law") {
+    val original = "Bold".bold.red + " normal"
+    val (cellValue, _) = CellCodec[RichText].write(original)
+    val cell = Cell(cell"A1", cellValue)
+
+    CellCodec[RichText].read(cell) match
+      case Right(Some(rt)) =>
+        assertEquals(rt.toPlainText, original.toPlainText)
+        assertEquals(rt.runs.size, original.runs.size)
+      case other => fail(s"Expected Right(Some(RichText)), got $other")
   }

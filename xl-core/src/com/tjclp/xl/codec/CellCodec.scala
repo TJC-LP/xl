@@ -139,6 +139,24 @@ object CellCodec:
     dt => (CellValue.DateTime(dt), Some(CellStyle.default.withNumFmt(NumFmt.DateTime)))
   )
 
+  /**
+   * RichText codec - reads rich text cells or converts plain text to RichText.
+   *
+   * Note: Rich text has formatting within the text runs (intra-cell formatting), not at the cell level. Therefore,
+   * this codec does not return a CellStyle hint (formatting is in the TextRun font properties).
+   */
+  inline given CellCodec[RichText] = codec(
+    cell =>
+      cell.value match
+        case CellValue.Empty => Right(None)
+        case CellValue.RichText(rt) => Right(Some(rt))
+        case CellValue.Text(s) =>
+          // Plain text can be read as RichText (single unformatted run)
+          Right(Some(RichText.plain(s)))
+        case other => Left(CodecError.TypeMismatch("RichText", other)),
+    rt => (CellValue.RichText(rt), None) // No cell-level style, formatting is in runs
+  )
+
 /** Cell codec error types
   *
   * These errors are specific to cell-level encoding/decoding and can be converted to XLError when needed.

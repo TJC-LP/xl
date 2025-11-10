@@ -52,9 +52,17 @@ xl-testkit/      → Test laws, generators, golden files [future]
 - Units: `Pt`, `Px`, `Emu` opaque types with bidirectional conversions
 
 **Codecs** (`xl-core/src/com/tjclp/xl/codec/`):
-- `CellCodec[A]` → Bidirectional type-safe encoding/decoding for 8 primitive types
+- `CellCodec[A]` → Bidirectional type-safe encoding/decoding for 9 primitive types (String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText)
 - `putMixed(updates)` → Batch updates with auto-inferred formatting
 - `readTyped[A](ref)` → Type-safe reading with Either[CodecError, Option[A]]
+
+**Rich Text** (`xl-core/src/com/tjclp/xl/richtext.scala`):
+- `TextRun` → Single formatted text segment (OOXML `<r>` element)
+- `RichText` → Multiple runs with different formatting within one cell
+- String extensions: `.bold`, `.italic`, `.red`, `.green`, `.size()`, etc.
+
+**HTML Export** (`xl-core/src/com/tjclp/xl/html/`):
+- `sheet.toHtml(range)` → Convert cell range to HTML table with inline CSS
 
 **OOXML Layer** (`xl-ooxml/src/com/tjclp/xl/ooxml/`):
 - Pure XML serialization with `XmlWritable`/`XmlReadable` traits
@@ -351,8 +359,8 @@ val xlResult: Either[XLError, Option[BigDecimal]] =
 
 #### Supported Types
 
-8 primitive types with inline given instances (zero-overhead):
-- `String`, `Int`, `Long`, `Double`, `BigDecimal`, `Boolean`, `LocalDate`, `LocalDateTime`
+9 primitive types with inline given instances (zero-overhead):
+- `String`, `Int`, `Long`, `Double`, `BigDecimal`, `Boolean`, `LocalDate`, `LocalDateTime`, `RichText`
 
 #### Auto-Inferred Formats
 
@@ -360,11 +368,46 @@ val xlResult: Either[XLError, Option[BigDecimal]] =
 - `LocalDateTime` → `NumFmt.DateTime`
 - `BigDecimal` → `NumFmt.Decimal`
 - `Int`, `Long`, `Double` → `NumFmt.General`
-- `String`, `Boolean` → No format (plain)
+- `String`, `Boolean`, `RichText` → No cell-level format (RichText has run-level formatting)
 
 #### Identity Laws
 
 All codecs satisfy: `codec.read(Cell(ref, codec.write(value)._1)) == Right(Some(value))` (up to formatting precision).
+
+#### Rich Text DSL
+
+For intra-cell formatting (multiple formats within one cell):
+
+```scala
+import com.tjclp.xl.RichText.*
+
+// Composable with + operator
+val text = "Bold".bold.red + " normal " + "Italic".italic.blue
+
+// Use with putMixed
+sheet.putMixed(
+  cell"A1" -> ("Error: ".red.bold + "Fix this!"),
+  cell"A2" -> ("Q1 ".size(18.0).bold + "Report".italic)
+)
+
+// Or use directly
+sheet.put(cell"A1", CellValue.RichText(text))
+```
+
+**Formatting methods**: `.bold`, `.italic`, `.underline`, `.red`, `.green`, `.blue`, `.black`, `.white`, `.size(pt)`, `.fontFamily(name)`, `.withColor(color)`
+
+**OOXML mapping**: Each `TextRun` → `<r>` element with `<rPr>` (run properties). Uses `xml:space="preserve"` to preserve whitespace.
+
+#### HTML Export
+
+Export sheet ranges to HTML for web display:
+
+```scala
+val html = sheet.toHtml(range"A1:B10")  // With inline CSS
+val plain = sheet.toHtml(range"A1:B10", includeStyles = false)  // No CSS
+```
+
+Rich text and cell styles preserved as HTML tags and inline CSS. Useful for dashboards, reporting, email generation.
 
 ## Documentation
 
