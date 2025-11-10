@@ -29,7 +29,8 @@ case class Sheet(
   columnProperties: Map[Column, ColumnProperties] = Map.empty,
   rowProperties: Map[Row, RowProperties] = Map.empty,
   defaultColumnWidth: Option[Double] = None,
-  defaultRowHeight: Option[Double] = None
+  defaultRowHeight: Option[Double] = None,
+  styleRegistry: StyleRegistry = StyleRegistry.default
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
