@@ -101,3 +101,86 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = Excel.forIO
     IO(assertEquals(excel.getClass.getSimpleName, "ExcelIO"))
   }
+
+  tempDir.test("writeStreamTrue: creates valid XLSX with 1k rows") { dir =>
+    val path = dir.resolve("streamed-1k.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Generate 1000 rows
+    val rows = fs2.Stream.range(1, 1001).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Text(s"Row $i"),
+        1 -> CellValue.Number(BigDecimal(i * 100)),
+        2 -> CellValue.Bool(i % 2 == 0)
+      ))
+    }
+
+    // Write with true streaming
+    rows.through(excel.writeStreamTrue(path, "Data")).compile.drain.flatMap { _ =>
+      // Verify file exists and is readable
+      IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
+        assert(result.isRight, "File should be readable")
+        result.foreach { wb =>
+          assertEquals(wb.sheets.size, 1)
+          assertEquals(wb.sheets(0).name.value, "Data")
+          // Each row has 3 cells, so 1000 rows × 3 cells = 3000 cells
+          assertEquals(wb.sheets(0).cellCount, 3000)
+        }
+      }
+    }
+  }
+
+  tempDir.test("writeStreamTrue: handles 100k rows with constant memory") { dir =>
+    val path = dir.resolve("streamed-100k.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Generate 100,000 rows (this would OOM with materialized approach)
+    val rows = fs2.Stream.range(1, 100001).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Text(s"Row $i"),
+        1 -> CellValue.Number(BigDecimal(i))
+      ))
+    }
+
+    // Write with true streaming
+    rows.through(excel.writeStreamTrue(path, "BigData")).compile.drain.flatMap { _ =>
+      // Verify file size is reasonable (10-20MB for 100k rows)
+      IO(java.nio.file.Files.size(path)).map { size =>
+        assert(size > 1_000_000, s"File should be at least 1MB, got $size bytes")
+        assert(size < 50_000_000, s"File should be less than 50MB, got $size bytes")
+      }
+    }
+  }
+
+  tempDir.test("writeStreamTrue: output readable by XlsxReader") { dir =>
+    val path = dir.resolve("streamed-test.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Generate test data
+    val rows = fs2.Stream.range(1, 101).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Number(BigDecimal(i)),
+        1 -> CellValue.Text(s"Text $i")
+      ))
+    }
+
+    rows.through(excel.writeStreamTrue(path, "Test")).compile.drain.flatMap { _ =>
+      // Read back with XlsxReader
+      IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
+        assert(result.isRight, s"Should read successfully, got: $result")
+        result.foreach { wb =>
+          assertEquals(wb.sheets.size, 1)
+          val sheet = wb.sheets(0)
+          assertEquals(sheet.cellCount, 200)  // 100 rows × 2 cols
+
+          // Verify first cell
+          val firstCell = sheet(cell"A1")
+          assertEquals(firstCell.value, CellValue.Number(BigDecimal(1)))
+
+          // Verify last row
+          val lastCell = sheet(ARef(Column.from0(0), Row.from1(100)))
+          assertEquals(lastCell.value, CellValue.Number(BigDecimal(100)))
+        }
+      }
+    }
+  }

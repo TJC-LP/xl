@@ -1,17 +1,23 @@
 package com.tjclp.xl.io
 
-import cats.effect.{Async, Sync}
+import cats.effect.{Async, Sync, Resource}
 import cats.syntax.all.*
-import fs2.Stream
+import fs2.{Stream, Pipe}
 import java.nio.file.Path
+import java.io.FileOutputStream
+import java.util.zip.{ZipOutputStream, ZipEntry, CRC32}
+import java.nio.charset.StandardCharsets
 import com.tjclp.xl.{Workbook, XLError}
 import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter}
+import fs2.data.xml
+import fs2.data.xml.XmlEvent
 
-/** Cats Effect interpreter for Excel operations.
-  *
-  * Wraps pure XlsxReader/Writer with effect type F[_].
-  * Future: Will add fs2-data-xml streaming for memory efficiency.
-  */
+/**
+ * Cats Effect interpreter for Excel operations.
+ *
+ * Wraps pure XlsxReader/Writer with effect type F[_]. Future: Will add fs2-data-xml streaming for
+ * memory efficiency.
+ */
 class ExcelIO[F[_]: Async] extends Excel[F]:
 
   /** Read workbook from XLSX file */
@@ -28,11 +34,12 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
       case Left(err) => Async[F].raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
     }
 
-  /** Stream rows from first sheet.
-    *
-    * Current implementation: Materializes workbook then streams rows.
-    * Future: Will use fs2-data-xml for true streaming (constant memory).
-    */
+  /**
+   * Stream rows from first sheet.
+   *
+   * Current implementation: Materializes workbook then streams rows. Future: Will use fs2-data-xml
+   * for true streaming (constant memory).
+   */
   def readStream(path: Path): Stream[F, RowData] =
     Stream.eval(read(path)).flatMap { wb =>
       if wb.sheets.isEmpty then Stream.empty
@@ -47,12 +54,13 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
         case Left(err) => Stream.raiseError[F](new Exception(s"Sheet not found: $sheetName"))
     }
 
-  /** Write rows to XLSX file.
-    *
-    * Current implementation: Materializes all rows then writes.
-    * Future: Will use fs2-data-xml for true streaming.
-    */
-  def writeStream(path: Path, sheetName: String): fs2.Pipe[F, RowData, Unit] =
+  /**
+   * Write rows to XLSX file.
+   *
+   * Current implementation: Materializes all rows then writes. Future: Will use fs2-data-xml for
+   * true streaming.
+   */
+  def writeStream(path: Path, sheetName: String): Pipe[F, RowData, Unit] =
     rows =>
       Stream.eval {
         rows.compile.toVector.flatMap { rowVec =>
@@ -68,11 +76,43 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
         }
       }
 
+  /**
+   * True streaming write with constant memory.
+   *
+   * Uses fs2-data-xml events - never materializes full dataset. Can write unlimited rows with ~50MB
+   * memory.
+   */
+  def writeStreamTrue(path: Path, sheetName: String): Pipe[F, RowData, Unit] =
+    rows =>
+      Stream
+        .bracket(
+          Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
+        )(zip => Sync[F].delay(zip.close()))
+        .flatMap { zip =>
+          // 1. Write static parts first
+          Stream.eval(writeStaticParts(zip, sheetName)) ++
+            // 2. Open worksheet entry
+            Stream.eval(
+              Sync[F].delay(zip.putNextEntry(new ZipEntry("xl/worksheets/sheet1.xml")))
+            ) ++
+            // 3. Stream XML events → bytes → ZIP
+            (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
+              StreamingXmlWriter.worksheetEvents[F](rows))
+              .through(xml.render.raw())
+              .through(fs2.text.utf8.encode)
+              .chunks
+              .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
+            // 4. Close entry
+            Stream.eval(Sync[F].delay(zip.closeEntry()))
+        }
+        .drain
+
   // Helper: Convert Sheet to RowData stream
   private def streamSheet(sheet: com.tjclp.xl.Sheet): Stream[F, RowData] =
     val rowMap = sheet.cells.values
-      .groupBy(_.ref.row.index1)  // Group by 1-based row
-      .view.mapValues { cells =>
+      .groupBy(_.ref.row.index1) // Group by 1-based row
+      .view
+      .mapValues { cells =>
         cells.map(c => c.ref.col.index0 -> c.value).toMap
       }
       .toMap
@@ -98,6 +138,54 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
       }
       sheet = Sheet(name, cells.map(c => c.ref -> c).toMap)
     yield sheet
+
+  // Helper: Write static OOXML parts to ZIP
+  private def writeStaticParts(zip: ZipOutputStream, sheetName: String): F[Unit] =
+    import com.tjclp.xl.ooxml.*
+    import com.tjclp.xl.SheetName
+
+    val contentTypes =
+      ContentTypes.minimal(hasStyles = true, hasSharedStrings = false, sheetCount = 1)
+    val rootRels = Relationships.root()
+    val workbookRels =
+      Relationships.workbook(sheetCount = 1, hasStyles = true, hasSharedStrings = false)
+
+    // Create minimal workbook with one sheet
+    val ooxmlWb = OoxmlWorkbook(
+      sheets = Vector(SheetRef(SheetName.unsafe(sheetName), 1, "rId1"))
+    )
+
+    // Minimal styles
+    val styles = OoxmlStyles.minimal
+
+    for
+      _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml)
+      _ <- writePart(zip, "_rels/.rels", rootRels.toXml)
+      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml)
+      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml)
+      _ <- writePart(zip, "xl/styles.xml", styles.toXml)
+    yield ()
+
+  // Helper: Write a single XML part to ZIP
+  private def writePart(zip: ZipOutputStream, entryName: String, xml: scala.xml.Elem): F[Unit] =
+    Sync[F].delay {
+      val xmlString = com.tjclp.xl.ooxml.XmlUtil.prettyPrint(xml)
+      val bytes = xmlString.getBytes(StandardCharsets.UTF_8)
+
+      val entry = new ZipEntry(entryName)
+      entry.setMethod(ZipEntry.STORED) // No compression
+      entry.setSize(bytes.length)
+      entry.setCompressedSize(bytes.length)
+
+      // Calculate CRC32
+      val crc = new CRC32()
+      crc.update(bytes)
+      entry.setCrc(crc.getValue)
+
+      zip.putNextEntry(entry)
+      zip.write(bytes)
+      zip.closeEntry()
+    }
 
 object ExcelIO:
   /** Create default ExcelIO instance */

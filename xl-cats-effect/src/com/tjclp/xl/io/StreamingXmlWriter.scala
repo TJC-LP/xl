@@ -5,11 +5,12 @@ import fs2.data.xml.*
 import fs2.data.xml.XmlEvent.*
 import com.tjclp.xl.CellValue
 
-/** True streaming XML writer using fs2-data-xml for constant-memory writes.
-  *
-  * Emits XML events incrementally as rows arrive, never materializing
-  * the full document tree in memory.
-  */
+/**
+ * True streaming XML writer using fs2-data-xml for constant-memory writes.
+ *
+ * Emits XML events incrementally as rows arrive, never materializing the full document tree in
+ * memory.
+ */
 object StreamingXmlWriter:
 
   // Helper to create attributes
@@ -18,7 +19,8 @@ object StreamingXmlWriter:
 
   // OOXML namespaces
   private val nsSpreadsheetML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-  private val nsRelationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+  private val nsRelationships =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
   /** Convert column index (0-based) to Excel letter (A, B, AA, etc.) */
   def columnToLetter(col: Int): String =
@@ -37,67 +39,83 @@ object StreamingXmlWriter:
 
       case CellValue.Text(s) =>
         // <c r="A1" t="inlineStr"><is><t>text</t></is></c>
-        ("inlineStr", List(
-          XmlEvent.StartTag(QName("is"), Nil, false),
-          XmlEvent.StartTag(QName("t"), Nil, false),
-          XmlEvent.XmlString(s, false),
-          XmlEvent.EndTag(QName("t")),
-          XmlEvent.EndTag(QName("is"))
-        ))
+        (
+          "inlineStr",
+          List(
+            XmlEvent.StartTag(QName("is"), Nil, false),
+            XmlEvent.StartTag(QName("t"), Nil, false),
+            XmlEvent.XmlString(s, false),
+            XmlEvent.EndTag(QName("t")),
+            XmlEvent.EndTag(QName("is"))
+          )
+        )
 
       case CellValue.Number(n) =>
         // <c r="A1" t="n"><v>42</v></c>
-        ("n", List(
-          XmlEvent.StartTag(QName("v"), Nil, false),
-          XmlEvent.XmlString(n.toString, false),
-          XmlEvent.EndTag(QName("v"))
-        ))
+        (
+          "n",
+          List(
+            XmlEvent.StartTag(QName("v"), Nil, false),
+            XmlEvent.XmlString(n.toString, false),
+            XmlEvent.EndTag(QName("v"))
+          )
+        )
 
       case CellValue.Bool(b) =>
         // <c r="A1" t="b"><v>1</v></c>
-        ("b", List(
-          XmlEvent.StartTag(QName("v"), Nil, false),
-          XmlEvent.XmlString(if b then "1" else "0", false),
-          XmlEvent.EndTag(QName("v"))
-        ))
+        (
+          "b",
+          List(
+            XmlEvent.StartTag(QName("v"), Nil, false),
+            XmlEvent.XmlString(if b then "1" else "0", false),
+            XmlEvent.EndTag(QName("v"))
+          )
+        )
 
       case CellValue.Formula(expr) =>
         // <c r="A1"><f>SUM(A1:A10)</f></c>
-        ("", List(
-          XmlEvent.StartTag(QName("f"), Nil, false),
-          XmlEvent.XmlString(expr, false),
-          XmlEvent.EndTag(QName("f"))
-        ))
+        (
+          "",
+          List(
+            XmlEvent.StartTag(QName("f"), Nil, false),
+            XmlEvent.XmlString(expr, false),
+            XmlEvent.EndTag(QName("f"))
+          )
+        )
 
       case CellValue.Error(err) =>
         import com.tjclp.xl.CellError.toExcel
         // <c r="A1" t="e"><v>#DIV/0!</v></c>
-        ("e", List(
-          XmlEvent.StartTag(QName("v"), Nil, false),
-          XmlEvent.XmlString(err.toExcel, false),
-          XmlEvent.EndTag(QName("v"))
-        ))
+        (
+          "e",
+          List(
+            XmlEvent.StartTag(QName("v"), Nil, false),
+            XmlEvent.XmlString(err.toExcel, false),
+            XmlEvent.EndTag(QName("v"))
+          )
+        )
 
       case CellValue.DateTime(_) =>
         // TODO: Convert DateTime to Excel serial number
-        ("n", List(
-          XmlEvent.StartTag(QName("v"), Nil, false),
-          XmlEvent.XmlString("0", false),
-          XmlEvent.EndTag(QName("v"))
-        ))
+        (
+          "n",
+          List(
+            XmlEvent.StartTag(QName("v"), Nil, false),
+            XmlEvent.XmlString("0", false),
+            XmlEvent.EndTag(QName("v"))
+          )
+        )
 
     // Build cell element
-    val attrs = if cellType.nonEmpty then
-      List(attr("r", ref), attr("t", cellType))
-    else
-      List(attr("r", ref))
+    val attrs =
+      if cellType.nonEmpty then List(attr("r", ref), attr("t", cellType))
+      else List(attr("r", ref))
 
-    if valueEvents.isEmpty && value == CellValue.Empty then
-      Nil  // Don't emit empty cells
+    if valueEvents.isEmpty && value == CellValue.Empty then Nil // Don't emit empty cells
     else
       XmlEvent.StartTag(QName("c"), attrs, valueEvents.isEmpty) ::
-      valueEvents :::
-      (if valueEvents.nonEmpty then List(XmlEvent.EndTag(QName("c"))) else Nil)
+        valueEvents :::
+        (if valueEvents.nonEmpty then List(XmlEvent.EndTag(QName("c"))) else Nil)
 
   /** Generate XML events for a row */
   def rowToEvents(rowData: RowData): List[XmlEvent] =
@@ -110,12 +128,11 @@ object StreamingXmlWriter:
         cellToEvents(colIdx, rowData.rowIndex, value)
       }
 
-    if cellEvents.isEmpty then
-      Nil  // Skip empty rows
+    if cellEvents.isEmpty then Nil // Skip empty rows
     else
       XmlEvent.StartTag(QName("row"), rowAttrs, false) ::
-      cellEvents :::
-      XmlEvent.EndTag(QName("row")) :: Nil
+        cellEvents :::
+        XmlEvent.EndTag(QName("row")) :: Nil
 
   /** Stream worksheet XML events with header/footer scaffolding */
   def worksheetEvents[F[_]](rows: Stream[F, RowData]): Stream[F, XmlEvent] =
@@ -137,5 +154,5 @@ object StreamingXmlWriter:
     )
 
     Stream.emits(header) ++
-    rows.flatMap(row => Stream.emits(rowToEvents(row))) ++
-    Stream.emits(footer)
+      rows.flatMap(row => Stream.emits(rowToEvents(row))) ++
+      Stream.emits(footer)
