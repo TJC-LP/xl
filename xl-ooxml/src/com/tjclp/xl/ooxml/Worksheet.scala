@@ -34,9 +34,10 @@ case class OoxmlCell(
       case CellValue.Error(err) =>
         import com.tjclp.xl.CellError.toExcel
         Seq(elem("v")(Text(err.toExcel)))
-      case CellValue.DateTime(_) =>
-        // DateTime is serialized as number with date format
-        Seq(elem("v")(Text("0"))) // TODO: proper date serialization
+      case CellValue.DateTime(dt) =>
+        // DateTime is serialized as number with Excel serial format
+        val serial = CellValue.dateTimeToExcelSerial(dt)
+        Seq(elem("v")(Text(serial.toString)))
 
     elem("c", attrs*)(valueElem*)
 
@@ -122,10 +123,13 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
               case None => ("inlineStr", cell.value)
           case com.tjclp.xl.CellValue.Number(_) => ("n", cell.value)
           case com.tjclp.xl.CellValue.Bool(_) => ("b", cell.value)
+          case com.tjclp.xl.CellValue.DateTime(dt) =>
+            // Convert to Excel serial number
+            val serial = com.tjclp.xl.CellValue.dateTimeToExcelSerial(dt)
+            ("n", com.tjclp.xl.CellValue.Number(BigDecimal(serial)))
           case com.tjclp.xl.CellValue.Formula(_) => ("str", cell.value) // Formula result
           case com.tjclp.xl.CellValue.Error(_) => ("e", cell.value)
           case com.tjclp.xl.CellValue.Empty => ("", cell.value)
-          case _ => ("inlineStr", cell.value)
 
         OoxmlCell(cell.ref, value, globalStyleIdx, cellType)
       }.toSeq

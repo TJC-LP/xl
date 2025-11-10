@@ -224,3 +224,45 @@ class OoxmlRoundTripSpec extends FunSuite:
     val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
     assertEquals(readWb.sheets(0)(cell"A1").value, CellValue.Text("Merged Header"))
   }
+
+  test("Workbook with DateTime cells serializes to Excel serial numbers") {
+    import java.time.LocalDateTime
+
+    val dt1 = LocalDateTime.of(2025, 11, 10, 0, 0, 0) // Nov 10, 2025 midnight
+    val dt2 = LocalDateTime.of(2000, 1, 1, 12, 0, 0)   // Jan 1, 2000 noon
+
+    val wb = Workbook("Dates").flatMap { initial =>
+      val sheet = initial.sheets(0)
+        .put(cell"A1", CellValue.DateTime(dt1))
+        .put(cell"A2", CellValue.DateTime(dt2))
+
+      initial.updateSheet(0, sheet)
+    }.getOrElse(fail("Should create workbook"))
+
+    val outputPath = tempDir.resolve("dates.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+
+    // Read and verify serial numbers were written (not "0")
+    val readResult = XlsxReader.read(outputPath)
+    val readWb = readResult match
+      case Right(wb) => wb
+      case Left(err) => fail(s"Read failed: ${err.message}")
+
+    val cell1 = readWb.sheets(0)(cell"A1")
+    val cell2 = readWb.sheets(0)(cell"A2")
+
+    // Should be read as Numbers (Excel serial format)
+    cell1.value match
+      case CellValue.Number(serial) =>
+        // Nov 10, 2025 should be ~45975
+        assert(serial > 45900.0 && serial < 46000.0, s"Serial should be ~45975, got $serial")
+      case other =>
+        fail(s"Expected Number, got: $other")
+
+    cell2.value match
+      case CellValue.Number(serial) =>
+        // Jan 1, 2000 noon should be 36526.5
+        assertEquals(serial.toDouble, 36526.5, 0.001)
+      case other =>
+        fail(s"Expected Number, got: $other")
+  }

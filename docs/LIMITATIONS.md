@@ -1,8 +1,8 @@
 # XL Current Limitations and Future Roadmap
 
 **Last Updated**: 2025-11-10
-**Project Status**: ~80% complete, 121/121 tests passing ✅
-**Current Phase**: P5 Complete
+**Project Status**: ~85% complete, 171/171 tests passing ✅
+**Current Phase**: P4-P5 Complete
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -20,12 +20,14 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 - ✅ **SharedStrings Table (SST)**: Deduplication and memory efficiency
 - ✅ **Styles.xml**: Component deduplication and indexing
 - ✅ **Multi-sheet workbooks**: Read and write multiple sheets
-- ✅ **All cell types**: Text, Number, Bool, Formula, Error, DateTime (with limitations)
+- ✅ **All cell types**: Text, Number, Bool, Formula, Error, DateTime
 - ✅ **Streaming Write**: True constant-memory writing with fs2-data-xml (100k+ rows)
 - ✅ **Streaming Read**: True constant-memory reading with fs2-data-xml (100k+ rows)
 - ✅ **Arbitrary sheet access**: Read/write any sheet by index or name
 - ✅ **Elegant syntax**: Given conversions, batch put macro, formatted literals
 - ✅ **Performance optimizations**: Inline hot paths, zero-overhead abstractions
+- ✅ **Style Application**: Full end-to-end formatting with fonts, colors, fills, borders
+- ✅ **DateTime Serialization**: Proper Excel serial number conversion
 
 ### Developer Experience
 - ✅ **Mill build system**: Fast, reliable builds
@@ -37,84 +39,29 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 ---
 
+## Recently Completed ✅ (This Session)
+
+### Style Application End-to-End
+**Completed**: 2025-11-10 (P4 Days 1-3)
+- Added `StyleRegistry` for coordinated style tracking
+- High-level API: `sheet.withCellStyle(ref, style)`, `withRangeStyle(range, style)`
+- Automatic registration and deduplication
+- Unified style index with per-sheet remapping
+- **Result**: Formatted cells now appear correctly in Excel!
+
+### DateTime Serialization
+**Completed**: 2025-11-10 (P4 Day 4)
+- Implemented Excel serial number conversion
+- Accounts for Excel epoch (1899-12-30) and fractional days for time
+- **Result**: Date cells display correctly in Excel (no more "1899-12-30")
+
+---
+
 ## Known Limitations (Categorized by Impact)
 
 ### 🔴 High Impact (Blocks Common Use Cases)
 
-#### 1. Style Application Not Working End-to-End
-**Status**: Tracked but not applied
-**Impact**: Cannot format cells with fonts, colors, borders, etc.
-**Plan**: [P4 Continuation - Styles Integration](plan/05-styles-and-themes.md)
-**Phase**: P4 (In Progress)
-
-**Current State**:
-- `CellStyle` fully implemented and tested
-- `styles.xml` generated with deduplication
-- BUT: `Cell.styleId` is `Option[Int]`, not full `CellStyle`
-- `StyleIndex.fromWorkbook` returns empty (cells don't carry styles)
-- Cells written without `s=` attribute (no style reference)
-
-**What's Missing**:
-```scala
-// TODAY: Doesn't work
-val styled = sheet.put(cell"A1", CellValue.Text("Header"))
-  .withCellStyle(cell"A1", CellStyle.default.withFont(Font.bold))
-// Result: Text appears, but NO formatting in Excel
-
-// AFTER P4: Will work
-val styled = sheet.put(cell"A1", CellValue.Text("Header"))
-  .withCellStyle(cell"A1", headerStyle)
-// Result: Bold, colored header in Excel
-```
-
-**Implementation Needed**:
-1. Change `Cell(ref, value, styleId: Option[Int])` → `Cell(ref, value, style: Option[CellStyle])`
-2. Update `StyleIndex.fromWorkbook` to collect actual styles from cells
-3. Apply style indices during XML serialization (`<c s="1">`)
-4. Update all tests to use new Cell structure
-
-**Effort**: 2-3 days
-**LOC**: ~150 changes across cell.scala, Worksheet.scala, tests
-
-**Workaround**: Use external tools to apply formatting after XL generates data
-
----
-
-#### 2. DateTime Serialization Uses Placeholder
-**Status**: Writes "0" instead of Excel serial number
-**Impact**: Date cells appear as "1899-12-30" (Excel epoch) instead of actual date
-**Plan**: [P4 Continuation - DateTime Support](plan/02-domain-model.md#datetime-handling)
-**Phase**: P4 (Next Priority)
-
-**Current State**:
-```scala
-// TODAY: Doesn't work correctly
-sheet.put(cell"A1", CellValue.DateTime(LocalDateTime.of(2025, 11, 10, 14, 30)))
-// Excel shows: "1899-12-30 00:00:00" (wrong!)
-```
-
-**What's Missing**:
-- Excel serial number conversion: days since 1899-12-30 + fractional time
-- Accounting for Excel's 1900 leap year bug (Feb 29, 1900 doesn't exist)
-- Timezone handling (Excel uses local time)
-
-**Implementation Needed**:
-```scala
-def dateTimeToExcelSerial(dt: LocalDateTime): Double =
-  val epoch1900 = LocalDateTime.of(1899, 12, 30, 0, 0)
-  val days = ChronoUnit.DAYS.between(epoch1900, dt)
-  val secondsInDay = ChronoUnit.SECONDS.between(dt.toLocalDate.atStartOfDay, dt)
-  days.toDouble + (secondsInDay.toDouble / 86400.0)
-```
-
-**Effort**: 1-2 hours
-**LOC**: ~30 changes in CellValue and Worksheet serialization
-
-**Workaround**: Use Text cells with formatted date strings, or Number cells with manual serial conversion
-
----
-
-#### 3. Update Existing Workbooks Not Supported
+#### 1. Update Existing Workbooks Not Supported
 **Status**: Not implemented
 **Impact**: Cannot add a sheet to existing workbook or replace one sheet while preserving others
 **Plan**: [P6 - Advanced I/O](plan/13-streaming-and-performance.md#selective-updates)

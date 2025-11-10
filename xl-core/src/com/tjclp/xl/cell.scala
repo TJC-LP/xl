@@ -38,6 +38,34 @@ object CellValue:
     case dt: LocalDateTime => DateTime(dt)
     case _ => Text(value.toString)
 
+  /**
+   * Convert LocalDateTime to Excel serial number.
+   *
+   * Excel represents dates as the number of days since December 30, 1899, with fractional days
+   * representing time. Note: Excel has a bug where it treats 1900 as a leap year (it wasn't), so
+   * dates before March 1, 1900 are off by one day. This implementation matches Excel's behavior.
+   *
+   * @param dt
+   *   The LocalDateTime to convert
+   * @return
+   *   Excel serial number (days since 1899-12-30 + fractional time)
+   */
+  def dateTimeToExcelSerial(dt: LocalDateTime): Double =
+    import java.time.temporal.ChronoUnit
+
+    // Excel epoch: December 30, 1899 (not Jan 1, 1900, to account for 1900 leap year bug)
+    val epoch1900 = LocalDateTime.of(1899, 12, 30, 0, 0, 0)
+
+    // Calculate days since epoch
+    val days = ChronoUnit.DAYS.between(epoch1900, dt)
+
+    // Calculate fractional day for time component
+    val dayStart = dt.toLocalDate.atStartOfDay
+    val secondsInDay = ChronoUnit.SECONDS.between(dayStart, dt)
+    val fractionOfDay = secondsInDay.toDouble / 86400.0
+
+    days.toDouble + fractionOfDay
+
 /** Excel error types */
 enum CellError:
   /** Division by zero: #DIV/0! */

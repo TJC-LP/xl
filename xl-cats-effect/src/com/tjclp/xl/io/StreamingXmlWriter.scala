@@ -95,13 +95,14 @@ object StreamingXmlWriter:
           )
         )
 
-      case CellValue.DateTime(_) =>
-        // TODO: Convert DateTime to Excel serial number
+      case CellValue.DateTime(dt) =>
+        // Convert to Excel serial number
+        val serial = CellValue.dateTimeToExcelSerial(dt)
         (
           "n",
           List(
             XmlEvent.StartTag(QName("v"), Nil, false),
-            XmlEvent.XmlString("0", false),
+            XmlEvent.XmlString(serial.toString, false),
             XmlEvent.EndTag(QName("v"))
           )
         )

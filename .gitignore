@@ -54,3 +54,8 @@ mill-bsp-out/
 
 ### Environment ###
 .env
+
+### Test Files ###
+*.xlsx
+~$*.xlsx
+test-*.xlsx
