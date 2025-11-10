@@ -22,16 +22,17 @@ object XlsxWriter:
         if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
         else None
 
-      // Build style index (minimal for now)
-      val styleIndex = StyleIndex.fromWorkbook(workbook)
+      // Build unified style index with per-sheet remappings
+      val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
       val styles = OoxmlStyles(styleIndex)
 
       // Convert domain workbook to OOXML
       val ooxmlWb = OoxmlWorkbook.fromDomain(workbook)
 
-      // Convert sheets to OOXML worksheets
-      val ooxmlSheets = workbook.sheets.map { sheet =>
-        OoxmlWorksheet.fromDomainWithSST(sheet, sst)
+      // Convert sheets to OOXML worksheets with style remapping
+      val ooxmlSheets = workbook.sheets.zipWithIndex.map { case (sheet, sheetIdx) =>
+        val remapping = sheetRemappings.getOrElse(sheetIdx, Map.empty)
+        OoxmlWorksheet.fromDomainWithSST(sheet, sst, remapping)
       }
 
       // Create content types

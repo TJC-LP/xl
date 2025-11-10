@@ -25,40 +25,73 @@ case class StyleIndex(
     styleToIndex.getOrElse(CellStyle.canonicalKey(style), 0)
 
 object StyleIndex:
-  /** Build style index from a workbook, collecting all unique styles */
-  def fromWorkbook(wb: Workbook): StyleIndex =
-    // Collect all styles from cells
-    val allStyles = wb.sheets.flatMap { sheet =>
-      sheet.cells.values.flatMap { cell =>
-        // For now, cells don't have CellStyle, only styleId
-        // This will be enhanced when we add full style support
-        None // TODO: extract CellStyle from cells
-      }
-    }
+  /**
+   * Build unified style index from a workbook and per-sheet remapping tables.
+   *
+   * Extracts styles from each sheet's StyleRegistry, builds a unified index with deduplication, and
+   * creates remapping tables to convert sheet-local styleIds to workbook-level indices.
+   *
+   * @param wb
+   *   The workbook to index
+   * @return
+   *   (StyleIndex, Map[sheetIndex -> Map[localStyleId -> globalStyleId]])
+   */
+  def fromWorkbook(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
+    import scala.collection.mutable
 
-    // Start with default style
-    val defaultStyle = CellStyle.default
-    val styles = (defaultStyle +: allStyles.toVector).distinct
+    // Build unified style index by merging all sheet registries
+    var unifiedStyles = Vector(CellStyle.default)
+    var unifiedIndex = Map(CellStyle.canonicalKey(CellStyle.default) -> 0)
+    var nextIdx = 1
+
+    // Build per-sheet remapping tables
+    val remappings = wb.sheets.zipWithIndex.map { case (sheet, sheetIdx) =>
+      val registry = sheet.styleRegistry
+      val remapping = mutable.Map[Int, Int]()
+
+      // Map each local styleId to global index
+      registry.styles.zipWithIndex.foreach { case (style, localIdx) =>
+        val key = CellStyle.canonicalKey(style)
+
+        unifiedIndex.get(key) match
+          case Some(globalIdx) =>
+            // Style already in unified index (deduplication)
+            remapping(localIdx) = globalIdx
+          case None =>
+            // New style - add to unified index
+            unifiedStyles = unifiedStyles :+ style
+            unifiedIndex = unifiedIndex + (key -> nextIdx)
+            remapping(localIdx) = nextIdx
+            nextIdx += 1
+      }
+
+      sheetIdx -> remapping.toMap
+    }.toMap
 
     // Deduplicate components
-    val uniqueFonts = styles.map(_.font).distinct
-    val uniqueFills = styles.map(_.fill).distinct
-    val uniqueBorders = styles.map(_.border).distinct
+    val uniqueFonts = unifiedStyles.map(_.font).distinct
+    val uniqueFills = unifiedStyles.map(_.fill).distinct
+    val uniqueBorders = unifiedStyles.map(_.border).distinct
 
     // Collect custom number formats (built-ins don't need entries)
-    val customNumFmts = styles
+    val customNumFmts = unifiedStyles
       .map(_.numFmt)
       .collect { case NumFmt.Custom(code) => code }
       .distinct
       .zipWithIndex
-      .map { case (code, idx) => (164 + idx, NumFmt.Custom(code)) } // Start at 164 for custom
+      .map { case (code, idx) => (164 + idx, NumFmt.Custom(code)) }
+      .toVector
 
-    // Build style index map
-    val styleIndex = styles.zipWithIndex.map { case (style, idx) =>
-      CellStyle.canonicalKey(style) -> idx
-    }.toMap
+    val styleIndex = StyleIndex(
+      uniqueFonts,
+      uniqueFills,
+      uniqueBorders,
+      customNumFmts,
+      unifiedStyles,
+      unifiedIndex
+    )
 
-    StyleIndex(uniqueFonts, uniqueFills, uniqueBorders, customNumFmts.toVector, styles, styleIndex)
+    (styleIndex, remappings)
 
 /** Serializer for xl/styles.xml */
 case class OoxmlStyles(
@@ -194,6 +227,7 @@ object OoxmlStyles:
     )
     OoxmlStyles(defaultIndex)
 
-  /** Create from workbook */
+  /** Create from workbook (discards remapping tables - only for simple use cases) */
   def fromWorkbook(wb: Workbook): OoxmlStyles =
-    OoxmlStyles(StyleIndex.fromWorkbook(wb))
+    val (styleIndex, _) = StyleIndex.fromWorkbook(wb)
+    OoxmlStyles(styleIndex)

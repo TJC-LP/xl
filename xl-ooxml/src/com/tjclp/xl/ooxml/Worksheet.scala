@@ -81,15 +81,24 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
   /** Create minimal empty worksheet */
   def empty: OoxmlWorksheet = OoxmlWorksheet(Seq.empty)
 
-  /** Create worksheet from domain Sheet (inline strings only for now) */
-  def fromDomain(sheet: Sheet, styleIndexMap: Map[String, Int] = Map.empty): OoxmlWorksheet =
-    fromDomainWithSST(sheet, None, styleIndexMap)
+  /** Create worksheet from domain Sheet (inline strings only) */
+  def fromDomain(sheet: Sheet, styleRemapping: Map[Int, Int] = Map.empty): OoxmlWorksheet =
+    fromDomainWithSST(sheet, None, styleRemapping)
 
-  /** Create worksheet from domain Sheet with optional SST */
+  /**
+   * Create worksheet from domain Sheet with optional SST and style remapping.
+   *
+   * @param sheet
+   *   The domain Sheet to serialize
+   * @param sst
+   *   Optional SharedStrings table for string deduplication
+   * @param styleRemapping
+   *   Map from sheet-local styleId to workbook-level styleId
+   */
   def fromDomainWithSST(
     sheet: Sheet,
     sst: Option[SharedStrings],
-    styleIndexMap: Map[String, Int] = Map.empty
+    styleRemapping: Map[Int, Int] = Map.empty
   ): OoxmlWorksheet =
     // Group cells by row
     val cellsByRow = sheet.cells.values
@@ -99,7 +108,11 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
 
     val rows = cellsByRow.map { case (rowIdx, cells) =>
       val ooxmlCells = cells.map { cell =>
-        val styleIdx = cell.styleId
+        // Remap sheet-local styleId to workbook-level index
+        val globalStyleIdx = cell.styleId.flatMap { localId =>
+          // Look up in remapping table, fall back to 0 (default) if not found
+          styleRemapping.get(localId).orElse(Some(0))
+        }
 
         // Determine cell type and value based on CellValue type and SST availability
         val (cellType, value) = cell.value match
@@ -114,7 +127,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           case com.tjclp.xl.CellValue.Empty => ("", cell.value)
           case _ => ("inlineStr", cell.value)
 
-        OoxmlCell(cell.ref, value, styleIdx, cellType)
+        OoxmlCell(cell.ref, value, globalStyleIdx, cellType)
       }.toSeq
       OoxmlRow(rowIdx, ooxmlCells)
     }

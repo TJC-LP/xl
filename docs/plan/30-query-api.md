@@ -66,13 +66,21 @@ excel.readStream(path)
 
 ### Module Location
 
-**File**: `xl-cats-effect/src/com/tjclp/xl/io/RowQuery.scala` (~200 LOC)
+**Files**:
+- `xl-cats-effect/src/com/tjclp/xl/io/RowQuery.scala` (~200 LOC)
+- `xl-cats-effect/src/com/tjclp/xl/io/RowQuerySyntax.scala` (~50 LOC, optional)
 
 **Rationale**: Co-locate with streaming infrastructure (`Excel.scala`, `StreamingXmlReader.scala`) for:
-1. Shared access to `RowData` type
-2. Integration with existing streaming API
-3. Consistent effect type `F[_]: Sync`
-4. Simpler dependency management (no new module)
+1. **Shared access** to `RowData` type
+2. **Integration** with existing streaming API
+3. **Effect isolation**: Queries are pure transforms (no effect constraints needed)
+4. **No new module**: Simpler dependency management and build configuration
+
+**Effect Type Strategy**:
+- All Pipes have signature `[F[_]]` with **no typeclass constraints** (`Sync`, `Async`, etc.)
+- **Rationale**: Query operations are pure element transforms; no IO or effects involved
+- Stream assembly and execution handled by `ExcelIO` interpreters (which do have effect constraints)
+- Maintains XL's purity charter: effects isolated to interpreter layer
 
 ### Core Types
 
@@ -117,6 +125,13 @@ object RowQuery:
     col: Int
   )(
     predicate: CellValue => Boolean
+  ): Pipe[F, RowData, RowData]
+
+  // Column predicates (Option-aware)
+  def whereColumnOpt[F[_]](
+    col: Int
+  )(
+    predicate: Option[CellValue] => Boolean
   ): Pipe[F, RowData, RowData]
 
   // Row-level predicates
@@ -184,16 +199,21 @@ def matchingRegex[F[_]](
   columns: Set[Int] = Set.empty
 ): Pipe[F, RowData, RowData] =
   _.filter { row =>
-    val cellsToSearch =
+    val cellsToSearch: Iterable[CellValue] =
       if columns.isEmpty then row.cells.values
-      else row.cells.view.filterKeys(columns.contains).values
+      else row.cells.iterator.collect { case (c, v) if columns.contains(c) => v }.toIterable
 
     cellsToSearch.exists { cell =>
-      val str = cellToString(cell)
+      val str = cellToSearchString(cell)
       str.nonEmpty && regex.findFirstIn(str).isDefined
     }
   }
 ```
+
+**Key Optimizations**:
+- Uses `iterator.collect` instead of `view.filterKeys` to avoid building intermediate Map
+- Regex compiled once by caller; `findFirstIn` is O(n) per string
+- Short-circuit `exists` stops at first match
 
 ---
 
@@ -238,16 +258,22 @@ def containsText[F[_]](
   text: String,
   ignoreCase: Boolean = true
 ): Pipe[F, RowData, RowData] =
-  val searchText = if ignoreCase then text.toLowerCase else text
+  import java.util.Locale
+  val needle = if ignoreCase then text.toLowerCase(Locale.ROOT) else text
 
   _.filter { row =>
     row.cells.values.exists { cell =>
-      val cellStr = cellToString(cell)
-      val compareStr = if ignoreCase then cellStr.toLowerCase else cellStr
-      compareStr.contains(searchText)
+      val str = cellToSearchString(cell)
+      val haystack = if ignoreCase then str.toLowerCase(Locale.ROOT) else str
+      haystack.contains(needle)
     }
   }
 ```
+
+**Key Optimizations**:
+- Precomputes lowercased `needle` outside the filter (computed once, not per-row)
+- Uses `Locale.ROOT` for case folding to ensure deterministic, locale-independent behavior
+- Short-circuit `exists` stops at first matching cell
 
 ---
 
@@ -318,6 +344,69 @@ def whereColumn[F[_]](
 
 ---
 
+### 3b. Column Predicates (Option-Aware)
+
+**Signature**:
+```scala
+def whereColumnOpt[F[_]](
+  col: Int
+)(
+  predicate: Option[CellValue] => Boolean
+): Pipe[F, RowData, RowData]
+```
+
+**Semantics**:
+- Returns rows where `predicate` applied to `Option[CellValue]` returns true
+- Enables explicit handling of missing columns without forcing existence checks
+- Useful when "missing" should be treated as valid or invalid depending on context
+
+**Examples**:
+```scala
+// Find rows where email column (3) is missing OR invalid
+val emailRegex = """^[\w\.-]+@[\w\.-]+\.\w+$""".r
+excel.readStream(customers)
+  .through(RowQuery.whereColumnOpt(3) {
+    case Some(CellValue.Text(s)) => emailRegex.findFirstIn(s).isEmpty
+    case Some(_) => true   // Non-text = invalid
+    case None => true      // Missing = invalid
+  })
+  .compile.toList
+
+// Find rows where optional comment column (7) is present and non-empty
+excel.readStream(data)
+  .through(RowQuery.whereColumnOpt(7) {
+    case Some(CellValue.Text(s)) if s.nonEmpty => true
+    case _ => false
+  })
+  .compile.toList
+
+// Find rows where status column (2) is missing OR equals "PENDING"
+excel.readStream(orders)
+  .through(RowQuery.whereColumnOpt(2) {
+    case Some(CellValue.Text(s)) => s == "PENDING"
+    case None => true  // Missing treated as pending
+    case _ => false
+  })
+  .compile.toList
+```
+
+**Implementation Strategy**:
+```scala
+def whereColumnOpt[F[_]](
+  col: Int
+)(
+  predicate: Option[CellValue] => Boolean
+): Pipe[F, RowData, RowData] =
+  _.filter(row => predicate(row.cells.get(col)))
+```
+
+**Rationale**:
+- `whereColumn` forces existence semantics (missing = false)
+- `whereColumnOpt` provides explicit control over missing column behavior
+- Avoids forcing users to re-implement column presence logic at call sites
+
+---
+
 ### 4. Row-Level Predicates
 
 **Signatures**:
@@ -333,7 +422,9 @@ def whereAll[F[_]](
 
 **Semantics**:
 - `whereAny`: Returns rows where **at least one cell** satisfies `predicate`
-- `whereAll`: Returns rows where **all non-empty cells** satisfy `predicate`
+- `whereAll`: Returns rows where **all cells** satisfy `predicate`
+  - **Important**: Empty row (no cells) returns `true` by definition of `forall` over empty collection
+  - All cells must match; typically combine with checks for `CellValue.Empty` if needed
 - Useful for validation (e.g., "find rows with any empty cell")
 
 **Examples**:
@@ -385,9 +476,10 @@ def whereAll[F[_]](
 
 **Types**:
 ```scala
-case class ColumnQuery(
+final case class ColumnQuery(
   col: Int,
-  predicate: CellValue => Boolean
+  predicate: CellValue => Boolean,
+  whenMissing: Boolean = false  // Behavior when column doesn't exist
 )
 ```
 
@@ -405,8 +497,11 @@ def matchingAny[F[_]](
 **Semantics**:
 - `matchingAll`: Returns rows where **all queries** are satisfied (AND logic)
 - `matchingAny`: Returns rows where **at least one query** is satisfied (OR logic)
-- Each `ColumnQuery` specifies a column and a predicate
-- If a column doesn't exist, the query evaluates to `false`
+- Each `ColumnQuery` specifies a column, predicate, and missing column behavior
+- `whenMissing` controls evaluation when column doesn't exist:
+  - `false` (default): Missing column fails the query (returns `false`)
+  - `true`: Missing column passes the query (returns `true`)
+- Provides explicit, predictable semantics for sparse rows
 
 **Examples**:
 ```scala
@@ -463,7 +558,7 @@ def matchingAll[F[_]](
 ): Pipe[F, RowData, RowData] =
   _.filter { row =>
     queries.forall { query =>
-      row.cells.get(query.col).exists(query.predicate)
+      row.cells.get(query.col).fold(query.whenMissing)(query.predicate)
     }
   }
 
@@ -472,10 +567,15 @@ def matchingAny[F[_]](
 ): Pipe[F, RowData, RowData] =
   _.filter { row =>
     queries.exists { query =>
-      row.cells.get(query.col).exists(query.predicate)
+      row.cells.get(query.col).fold(query.whenMissing)(query.predicate)
     }
   }
 ```
+
+**Key Design**: Uses `Option.fold` to handle missing columns deterministically:
+- `row.cells.get(col)` returns `Option[CellValue]`
+- `.fold(whenMissing)(predicate)` evaluates to `whenMissing` if `None`, otherwise applies `predicate`
+- Makes missing column semantics explicit and composable
 
 ---
 
@@ -497,23 +597,26 @@ For regex and text matching, all displayable cell values are converted to string
 
 **Implementation**:
 ```scala
-private def cellToString(cell: CellValue): String = cell match
+private def cellToSearchString(cell: CellValue): String = cell match
   case CellValue.Text(s) => s
   case CellValue.Number(n) => n.toString
   case CellValue.Formula(expr) => expr
-  case CellValue.DateTime(dt) => dt.toString  // ISO-8601
-  case CellValue.Bool(b) => b.toString
+  case CellValue.DateTime(dt) => dt.toString  // ISO-8601 via LocalDateTime.toString
+  case CellValue.Bool(b) => java.lang.Boolean.toString(b)  // Explicit: "true"/"false"
   case CellValue.Empty => ""
-  case CellValue.Error(_) => ""
+  case CellValue.Error(_) => ""  // Could use err.toExcel (e.g., "#DIV/0!") in future
 ```
 
 **Rationale**:
 - **Text**: Primary search target
 - **Number**: Enables numeric pattern matching (e.g., find 5-digit IDs)
 - **Formula**: Enables formula expression search (e.g., find `SUM` usages)
-- **DateTime**: Enables date pattern matching (e.g., find dates in 2024)
-- **Bool**: Enables boolean literal search (rare but complete)
-- **Empty/Error**: Skip (no meaningful content to match)
+  - **Note**: Matches expression, not computed result (evaluation out of scope)
+- **DateTime**: Enables date pattern matching via ISO-8601 (deterministic, locale-independent)
+- **Bool**: Explicit conversion using `java.lang.Boolean.toString` for consistency
+- **Empty/Error**: Skip (no meaningful content to match; errors return empty to avoid false positives)
+
+**Determinism**: All conversions are pure and deterministic; no locale-dependent formatting.
 
 ---
 
@@ -577,6 +680,87 @@ excel.readStream(data)
 
 ---
 
+## Optional Syntax Extensions
+
+For ergonomic chaining, an optional `RowQuerySyntax` module provides extension methods on `Stream[F, RowData]`.
+
+**File**: `xl-cats-effect/src/com/tjclp/xl/io/RowQuerySyntax.scala` (~50 LOC)
+
+**Design**:
+```scala
+package com.tjclp.xl.io
+
+import fs2.Stream
+import scala.util.matching.Regex
+import com.tjclp.xl.CellValue
+
+object RowQuerySyntax:
+  extension [F[_]](stream: Stream[F, RowData])
+    def matchingRegex(regex: Regex, columns: Set[Int] = Set.empty): Stream[F, RowData] =
+      stream.through(RowQuery.matchingRegex(regex, columns))
+
+    def containsText(text: String, ignoreCase: Boolean = true): Stream[F, RowData] =
+      stream.through(RowQuery.containsText(text, ignoreCase))
+
+    def whereColumn(col: Int)(predicate: CellValue => Boolean): Stream[F, RowData] =
+      stream.through(RowQuery.whereColumn(col)(predicate))
+
+    def whereColumnOpt(col: Int)(predicate: Option[CellValue] => Boolean): Stream[F, RowData] =
+      stream.through(RowQuery.whereColumnOpt(col)(predicate))
+
+    def whereAny(predicate: CellValue => Boolean): Stream[F, RowData] =
+      stream.through(RowQuery.whereAny(predicate))
+
+    def whereAll(predicate: CellValue => Boolean): Stream[F, RowData] =
+      stream.through(RowQuery.whereAll(predicate))
+
+    def matchingAll(queries: List[RowQuery.ColumnQuery]): Stream[F, RowData] =
+      stream.through(RowQuery.matchingAll(queries))
+
+    def matchingAny(queries: List[RowQuery.ColumnQuery]): Stream[F, RowData] =
+      stream.through(RowQuery.matchingAny(queries))
+```
+
+**Usage**:
+```scala
+import com.tjclp.xl.io.RowQuerySyntax.*
+
+// With syntax extensions (more fluent)
+excel.readStream(path)
+  .matchingRegex("ERROR".r)
+  .whereColumn(1) { case CellValue.Number(n) => n > 100; case _ => false }
+  .containsText("ACTIVE")
+  .compile.toList
+
+// Without syntax (explicit .through)
+excel.readStream(path)
+  .through(RowQuery.matchingRegex("ERROR".r))
+  .through(RowQuery.whereColumn(1) { case CellValue.Number(n) => n > 100; case _ => false })
+  .through(RowQuery.containsText("ACTIVE"))
+  .compile.toList
+```
+
+**Rationale**:
+- **Optional**: Users can choose style based on preference
+- **Non-invasive**: Doesn't change `RowQuery` or `Excel` APIs
+- **Discoverable**: Extension methods appear in IDE autocomplete
+- **Composable**: Still uses Pipes under the hood
+
+**Export Pattern** (optional):
+```scala
+// In RowQuery.scala
+object RowQuery:
+  // ... core Pipes ...
+
+  object syntax:
+    export RowQuerySyntax.*
+
+// Usage:
+import com.tjclp.xl.io.RowQuery.syntax.*
+```
+
+---
+
 ## Performance Characteristics
 
 ### Memory Profile
@@ -612,6 +796,51 @@ Tested with:
 
 **Key**: Memory stays constant; time scales linearly.
 
+### Performance Optimizations
+
+**Implemented Optimizations**:
+
+1. **Short-circuit evaluation**:
+   - `exists` stops at first match (no full row scan)
+   - `forall` stops at first failure
+   - Saves CPU cycles on rows with early matches
+
+2. **Precomputed values outside filter**:
+   ```scala
+   // ✅ Computed once
+   val needle = text.toLowerCase(Locale.ROOT)
+   _.filter { row => ... haystack.contains(needle) ... }
+
+   // ❌ Would compute per row
+   _.filter { row => ... haystack.contains(text.toLowerCase) ... }
+   ```
+
+3. **Avoid intermediate collections**:
+   - Uses `iterator.collect` instead of `view.filterKeys` for column filtering
+   - Only builds `Iterable` over matched columns, not intermediate Map
+   - Minimizes allocations in hot path
+
+4. **Regex pre-compilation**:
+   - Regex compiled once by caller before creating Pipe
+   - `findFirstIn` reuses compiled DFA/NFA state
+   - No per-row compilation overhead
+
+5. **Locale.ROOT for case folding**:
+   - Avoids slow locale-specific case mapping
+   - JVM can optimize `Locale.ROOT` path
+   - Deterministic across all systems
+
+6. **No cross-row state**:
+   - Each row processed independently
+   - Enables parallelization opportunities (future)
+   - No heap pressure from accumulating state
+
+**Future Optimization Opportunities**:
+- **Parallel row processing**: Use `parEvalMap` for independent predicates
+- **SIMD pattern matching**: Native regex engines with vectorization
+- **Bloom filters**: Pre-filter rows before expensive regex evaluation
+- **Column index caching**: For repeated queries on same columns
+
 ---
 
 ## Implementation Guide
@@ -625,35 +854,46 @@ xl-cats-effect/
 │   ├── ExcelIO.scala                # Existing implementation
 │   ├── StreamingXmlReader.scala     # Existing reader
 │   ├── StreamingXmlWriter.scala     # Existing writer
-│   └── RowQuery.scala               # NEW: Query operations
+│   ├── RowQuery.scala               # NEW: Query operations (~200 LOC)
+│   └── RowQuerySyntax.scala         # NEW: Optional extensions (~50 LOC)
 └── test/src/com/tjclp/xl/io/
     ├── ExcelIOSpec.scala            # Existing tests
-    └── RowQuerySpec.scala           # NEW: Query tests
+    └── RowQuerySpec.scala           # NEW: Query tests (~150 LOC)
 ```
+
+**Total Additions**: ~400 LOC (200 implementation + 50 syntax + 150 tests)
 
 ### Implementation Checklist
 
 **Phase 1: Core Queries** (~200 LOC):
 - [ ] Create `RowQuery.scala`
-- [ ] Implement `cellToString` helper
-- [ ] Implement `matchingRegex`
-- [ ] Implement `containsText`
-- [ ] Implement `whereColumn`
+- [ ] Implement `cellToSearchString` helper (7 cases: Text, Number, Formula, DateTime, Bool, Empty, Error)
+- [ ] Implement `matchingRegex` with `iterator.collect` optimization
+- [ ] Implement `containsText` with `Locale.ROOT` case folding
+- [ ] Implement `whereColumn` (exists semantics)
+- [ ] Implement `whereColumnOpt` (Option-aware semantics)
 - [ ] Implement `whereAny` / `whereAll`
-- [ ] Add scaladoc with examples
+- [ ] Add comprehensive scaladoc with ReDoS warnings and examples
 
 **Phase 2: Multi-Column Queries** (~50 LOC):
-- [ ] Define `ColumnQuery` case class
-- [ ] Implement `matchingAll`
-- [ ] Implement `matchingAny`
-- [ ] Add composition examples
+- [ ] Define `ColumnQuery` case class with `whenMissing: Boolean` field
+- [ ] Implement `matchingAll` using `Option.fold`
+- [ ] Implement `matchingAny` using `Option.fold`
+- [ ] Add multi-column composition examples
 
-**Phase 3: Tests** (~150 LOC):
-- [ ] Unit tests for each query type (10-12 tests)
+**Phase 3: Optional Syntax Extensions** (~50 LOC):
+- [ ] Create `RowQuerySyntax.scala`
+- [ ] Add extension methods for all core operations
+- [ ] Add optional export in `RowQuery.syntax`
+- [ ] Document opt-in usage patterns
+
+**Phase 4: Tests** (~150 LOC):
+- [ ] Unit tests for each query type (12-15 tests including whereColumnOpt)
 - [ ] Property-based streaming tests (5-7 tests)
 - [ ] Integration test with large file (100k+ rows)
 - [ ] Memory profile validation test
 - [ ] Performance regression test
+- [ ] Locale.ROOT determinism test
 
 **Phase 4: Documentation**:
 - [ ] Update `Excel.scala` API docs with query examples
@@ -1195,39 +1435,89 @@ def matchingRegex[F[_]](regex: Regex, ...): Pipe[F, RowData, RowData] =
 
 ### Regex Denial of Service (ReDoS)
 
-**Risk**: Malicious regex patterns can cause exponential backtracking.
+**Risk**: Malicious regex patterns can cause exponential backtracking, leading to performance degradation or hangs.
 
 **Example**:
 ```scala
-val evilRegex = "(a+)+$".r  // Exponential backtracking
+val evilRegex = "(a+)+$".r  // Catastrophic backtracking on "aaaaaaaaaaaaaaaaX"
 excel.readStream(path)
   .through(RowQuery.matchingRegex(evilRegex))
   .compile.count  // May hang on certain inputs
 ```
 
-**Mitigation**:
-1. **Document risk** in API scaladoc
-2. **Recommend timeouts** for user-provided regexes
-3. **Use safe patterns** (avoid nested quantifiers)
+**Common Vulnerable Patterns**:
+- Nested quantifiers: `(a+)+`, `(a*)*`, `(a+)*`
+- Overlapping alternation: `(a|a)*`, `(a|ab)*`
+- Grouped repetition: `(.*a){x}`, `(a+.+)+`
 
-**Future**: Add regex timeout support via `Regex.findFirstMatchIn` with timeout.
+**Mitigation Strategy**:
+1. **Document risk prominently** in `matchingRegex` scaladoc
+2. **Recommend safe patterns**: Use possessive quantifiers (`++`, `*+`) or atomic groups where supported
+3. **User responsibility**: Library users must validate regex patterns (no runtime timeouts in v1 to maintain purity)
+4. **Example safe patterns**:
+   ```scala
+   // ❌ Unsafe
+   "(a+)+".r
+
+   // ✅ Safe alternatives
+   "a+".r               // Simplified
+   "(?>(a+))+".r        // Atomic group (Java regex)
+   ```
+
+**Decision**: No runtime timeouts in v1 to preserve purity and determinism. Users accepting user-provided regexes should validate or sanitize patterns externally.
+
+---
+
+### Locale-Dependent Case Folding
+
+**Risk**: Default `String.toLowerCase()` uses system locale, causing non-deterministic behavior.
+
+**Example**:
+```scala
+// Turkish locale: "I".toLowerCase() == "ı" (not "i")
+// Different results on different systems!
+val text = "INFO"
+text.toLowerCase()  // ❌ Locale-dependent
+```
+
+**Mitigation**:
+- **All case folding uses `Locale.ROOT`**: Ensures deterministic, locale-independent behavior
+- **Implementation**:
+  ```scala
+  import java.util.Locale
+  text.toLowerCase(Locale.ROOT)  // ✅ Always produces same result
+  ```
+- **Benefit**: Same query produces identical results regardless of system locale
 
 ---
 
 ### Formula Injection
 
-**Risk**: Query results written to new files may contain formula injection payloads.
+**Risk**: Query results written to new files may contain formula injection payloads (CSV injection, DDE attacks).
 
 **Example**:
 ```scala
-// Input cell: =1+1
-// Query matches it, writes to output
-// User opens output → formula executes
+// Input cell contains: =1+1|' /c calc'!A1
+// Query matches and writes to output
+// User opens output → malicious formula may execute
 ```
 
 **Mitigation**:
-- **Already handled**: `CellValue.Formula` is explicitly typed; queries don't interpret formulas
-- **Recommendation**: Sanitize formulas when writing to untrusted destinations (outside scope of query API)
+- **Not a Query API concern**: Formula injection is an output/write concern, not a query concern
+- **Already safe**: `CellValue.Formula` is explicitly typed; queries don't interpret or modify formulas
+- **Recommendation**: When writing filtered results to files for untrusted users, sanitize formulas:
+  ```scala
+  def sanitizeCell(cell: CellValue): CellValue = cell match
+    case CellValue.Formula(expr) => CellValue.Text(s"'$expr")  // Prefix with '
+    case other => other
+
+  excel.readStream(input)
+    .through(RowQuery.containsText("EXPORT"))
+    .map(row => row.copy(cells = row.cells.view.mapValues(sanitizeCell).toMap))
+    .through(excel.writeStreamTrue(output, "Sanitized"))
+    .compile.drain
+  ```
+- **Out of scope** for Query API; addressed at write layer or application logic level
 
 ---
 
