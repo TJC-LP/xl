@@ -275,6 +275,7 @@ object WorkbookStyles:
             case (Some(id), Some(code)) => Some(id -> NumFmt.parse(code))
             case _ => None
         }.toMap
+      case Some(_) => Map.empty
       case None => Map.empty
 
   private def parseFonts(root: Elem): Vector[Font] =
@@ -282,6 +283,7 @@ object WorkbookStyles:
       case Some(fontsElem: Elem) =>
         val parsed = getChildren(fontsElem, "font").map(parseFont).toVector
         if parsed.nonEmpty then parsed else Vector(Font.default)
+      case Some(_) => Vector(Font.default)
       case None => Vector(Font.default)
 
   private def parseFont(fontElem: Elem): Font =
@@ -305,6 +307,7 @@ object WorkbookStyles:
       case Some(fillsElem: Elem) =>
         val parsed = getChildren(fillsElem, "fill").map(parseFill).toVector
         if parsed.nonEmpty then parsed else Vector(Fill.None)
+      case Some(_) => Vector(Fill.None)
       case None => Vector(Fill.None)
 
   private def parseFill(fillElem: Elem): Fill =
@@ -319,7 +322,7 @@ object WorkbookStyles:
           case PatternType.Solid =>
             val fg =
               (patternElem \ "fgColor").headOption.collect { case e: Elem => e }.flatMap(parseColor)
-            fg.map(Fill.Solid).getOrElse(Fill.None)
+            fg.map(Fill.Solid.apply).getOrElse(Fill.None)
           case other =>
             val fg =
               (patternElem \ "fgColor").headOption.collect { case e: Elem => e }.flatMap(parseColor)
@@ -328,6 +331,7 @@ object WorkbookStyles:
             (fg, bg) match
               case (Some(fgColor), Some(bgColor)) => Fill.Pattern(fgColor, bgColor, other)
               case _ => Fill.None
+      case Some(_) => Fill.None
       case None => Fill.None
 
   private def parsePatternType(value: String): Option[PatternType] =
@@ -339,6 +343,7 @@ object WorkbookStyles:
       case Some(bordersElem: Elem) =>
         val parsed = getChildren(bordersElem, "border").map(parseBorder).toVector
         if parsed.nonEmpty then parsed else Vector(Border.none)
+      case Some(_) => Vector(Border.none)
       case None => Vector(Border.none)
 
   private def parseBorder(borderElem: Elem): Border =
@@ -359,6 +364,7 @@ object WorkbookStyles:
         val color =
           (sideElem \ "color").headOption.collect { case e: Elem => e }.flatMap(parseColor)
         BorderSide(style, color)
+      case Some(_) => BorderSide.none
       case None => BorderSide.none
 
   private def parseBorderStyle(value: String): Option[BorderStyle] =
@@ -392,6 +398,7 @@ object WorkbookStyles:
           parseCellStyle(xfElem, fonts, fills, borders, numFmts)
         }.toVector
         if parsed.nonEmpty then parsed else Vector(CellStyle.default)
+      case Some(_) => Vector(CellStyle.default)
       case None => Vector(CellStyle.default)
 
   private def parseCellStyle(
@@ -443,6 +450,7 @@ object WorkbookStyles:
             indent = indent
           )
         )
+      case Some(_) => None
       case None => None
 
   private def parseHAlign(value: String): Option[HAlign] =

@@ -107,6 +107,68 @@ object StreamingXmlWriter:
           )
         )
 
+      case CellValue.RichText(richText) =>
+        // <c r="A1" t="inlineStr"><is><r><rPr>...</rPr><t>text</t></r>...</is></c>
+        val isEvents = richText.runs.flatMap { run =>
+          val rStart = XmlEvent.StartTag(QName("r"), Nil, false)
+
+          // Optional <rPr> with font properties
+          val rPrEvents = run.font.toList.flatMap { f =>
+            val propsBuilder = List.newBuilder[XmlEvent]
+
+            // Font style properties
+            if f.bold then propsBuilder += XmlEvent.StartTag(QName("b"), Nil, true)
+            if f.italic then propsBuilder += XmlEvent.StartTag(QName("i"), Nil, true)
+            if f.underline then propsBuilder += XmlEvent.StartTag(QName("u"), Nil, true)
+
+            // Color
+            f.color.foreach { c =>
+              propsBuilder += XmlEvent.StartTag(
+                QName("color"),
+                List(Attr(QName("rgb"), List(XmlString(c.toHex.drop(1), false)))),
+                true
+              )
+            }
+
+            // Size and name
+            propsBuilder += XmlEvent.StartTag(
+              QName("sz"),
+              List(Attr(QName("val"), List(XmlString(f.sizePt.toString, false)))),
+              true
+            )
+            propsBuilder += XmlEvent.StartTag(
+              QName("name"),
+              List(Attr(QName("val"), List(XmlString(f.name, false)))),
+              true
+            )
+
+            XmlEvent.StartTag(QName("rPr"), Nil, false) :: propsBuilder.result() ::: List(
+              XmlEvent.EndTag(QName("rPr"))
+            )
+          }
+
+          // Text element with optional xml:space="preserve"
+          val tAttrs =
+            if run.text.startsWith(" ") || run.text.endsWith(" ") then
+              List(Attr(QName("xml:space"), List(XmlString("preserve", false))))
+            else Nil
+
+          val textEvents = List(
+            XmlEvent.StartTag(QName("t"), tAttrs, false),
+            XmlEvent.XmlString(run.text, false),
+            XmlEvent.EndTag(QName("t"))
+          )
+
+          rStart :: (rPrEvents ::: textEvents ::: List(XmlEvent.EndTag(QName("r"))))
+        }.toList
+
+        (
+          "inlineStr",
+          XmlEvent.StartTag(QName("is"), Nil, false) :: isEvents ::: List(
+            XmlEvent.EndTag(QName("is"))
+          )
+        )
+
     // Build cell element
     val attrs =
       if cellType.nonEmpty then List(attr("r", ref), attr("t", cellType))
