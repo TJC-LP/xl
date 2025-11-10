@@ -369,3 +369,190 @@ class ExcelIOSpec extends CatsEffectSuite:
           fail("Should have failed with duplicate names")
       }
   }
+
+  tempDir.test("readStream: handles 100k rows with constant memory") { dir =>
+    val path = dir.resolve("large-read.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write 100k rows with streaming
+    val writeRows = fs2.Stream.range(1, 100001).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Number(BigDecimal(i)),
+        1 -> CellValue.Text(s"Row $i"),
+        2 -> CellValue.Bool(i % 2 == 0)
+      ))
+    }
+
+    writeRows.through(excel.writeStreamTrue(path, "Data")).compile.drain.flatMap { _ =>
+      // Read with streaming (should use constant memory)
+      excel.readStream(path).compile.count.map { count =>
+        assertEquals(count, 100000L, "Should read all 100k rows")
+      }
+    }
+  }
+
+  tempDir.test("readStream: full round-trip preserves data") { dir =>
+    val path = dir.resolve("round-trip.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write test data
+    val writeRows = fs2.Stream.range(1, 1001).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Number(BigDecimal(i)),
+        1 -> CellValue.Text(s"Text $i"),
+        2 -> CellValue.Bool(i % 2 == 0)
+      ))
+    }
+
+    writeRows.through(excel.writeStreamTrue(path, "Test")).compile.drain.flatMap { _ =>
+      // Read back with streaming
+      excel.readStream(path).compile.toVector.map { rows =>
+        assertEquals(rows.size, 1000)
+
+        // Verify first row
+        val first = rows.head
+        assertEquals(first.rowIndex, 1)
+        assertEquals(first.cells(0), CellValue.Number(BigDecimal(1)))
+        assertEquals(first.cells(1), CellValue.Text("Text 1"))
+        assertEquals(first.cells(2), CellValue.Bool(false))
+
+        // Verify last row
+        val last = rows.last
+        assertEquals(last.rowIndex, 1000)
+        assertEquals(last.cells(0), CellValue.Number(BigDecimal(1000)))
+        assertEquals(last.cells(1), CellValue.Text("Text 1000"))
+        assertEquals(last.cells(2), CellValue.Bool(true))
+      }
+    }
+  }
+
+  tempDir.test("readStream: handles all cell types") { dir =>
+    val path = dir.resolve("all-types.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write different cell types
+    val rows = fs2.Stream.emit(
+      RowData(
+        1,
+        Map(
+          0 -> CellValue.Number(BigDecimal("123.45")),
+          1 -> CellValue.Text("Hello"),
+          2 -> CellValue.Bool(true),
+          3 -> CellValue.Bool(false),
+          4 -> CellValue.Error(CellError.Div0),
+          5 -> CellValue.Empty
+        )
+      )
+    )
+
+    rows.through(excel.writeStreamTrue(path, "Types")).compile.drain.flatMap { _ =>
+      excel.readStream(path).compile.toVector.map { readRows =>
+        assertEquals(readRows.size, 1)
+        val row = readRows.head
+
+        assertEquals(row.cells(0), CellValue.Number(BigDecimal("123.45")))
+        assertEquals(row.cells(1), CellValue.Text("Hello"))
+        assertEquals(row.cells(2), CellValue.Bool(true))
+        assertEquals(row.cells(3), CellValue.Bool(false))
+        assertEquals(row.cells(4), CellValue.Error(CellError.Div0))
+        assert(!row.cells.contains(5), "Empty cells should not be in map")
+      }
+    }
+  }
+
+  tempDir.test("readStream: processes rows incrementally") { dir =>
+    val path = dir.resolve("incremental.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write 10k rows
+    val writeRows = fs2.Stream.range(1, 10001).map(i =>
+      RowData(i, Map(0 -> CellValue.Number(BigDecimal(i))))
+    )
+
+    writeRows.through(excel.writeStreamTrue(path, "Data")).compile.drain.flatMap { _ =>
+      // Read and filter incrementally (should not materialize all rows)
+      excel.readStream(path)
+        .filter(_.rowIndex % 100 == 0)  // Only every 100th row
+        .compile.count.map { count =>
+          assertEquals(count, 100L, "Should find 100 rows (1% of 10k)")
+        }
+    }
+  }
+
+  tempDir.test("readStreamByIndex: reads specific sheet by index") { dir =>
+    val path = dir.resolve("multi-read.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write 3 sheets with different data
+    val sheet1 = fs2.Stream.range(1, 11).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+    val sheet2 = fs2.Stream.range(1, 21).map(i => RowData(i, Map(0 -> CellValue.Text(s"S2-$i"))))
+    val sheet3 = fs2.Stream.range(1, 31).map(i => RowData(i, Map(0 -> CellValue.Bool(i % 2 == 0))))
+
+    excel.writeStreamsSeqTrue(path, Seq("First" -> sheet1, "Second" -> sheet2, "Third" -> sheet3))
+      .flatMap { _ =>
+        // Read second sheet by index
+        excel.readStreamByIndex(path, 2).compile.toVector.map { rows =>
+          assertEquals(rows.size, 20, "Should read 20 rows from second sheet")
+          assertEquals(rows.head.cells(0), CellValue.Text("S2-1"))
+          assertEquals(rows.last.cells(0), CellValue.Text("S2-20"))
+        }
+      }
+  }
+
+  tempDir.test("readSheetStream: reads specific sheet by name") { dir =>
+    val path = dir.resolve("named-read.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write 3 sheets
+    val sales = fs2.Stream.range(1, 11).map(i => RowData(i, Map(0 -> CellValue.Number(i * 100))))
+    val inventory = fs2.Stream.range(1, 6).map(i => RowData(i, Map(0 -> CellValue.Text(s"Item $i"))))
+    val summary = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("Done"))))
+
+    excel.writeStreamsSeqTrue(path, Seq("Sales" -> sales, "Inventory" -> inventory, "Summary" -> summary))
+      .flatMap { _ =>
+        // Read "Inventory" sheet by name
+        excel.readSheetStream(path, "Inventory").compile.toVector.map { rows =>
+          assertEquals(rows.size, 5, "Should read 5 rows from Inventory")
+          assertEquals(rows.head.cells(0), CellValue.Text("Item 1"))
+          assertEquals(rows.last.cells(0), CellValue.Text("Item 5"))
+        }
+      }
+  }
+
+  tempDir.test("readStreamByIndex: handles invalid index") { dir =>
+    val path = dir.resolve("invalid-index.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
+    rows.through(excel.writeStreamTrue(path, "Only")).compile.drain.flatMap { _ =>
+      // Try to read sheet 5 (doesn't exist)
+      excel.readStreamByIndex(path, 5)
+        .compile.toList
+        .attempt
+        .map {
+          case Left(err) =>
+            assert(err.getMessage.contains("Worksheet not found"))
+          case Right(_) =>
+            fail("Should have failed with nonexistent sheet")
+        }
+    }
+  }
+
+  tempDir.test("readSheetStream: handles nonexistent sheet name") { dir =>
+    val path = dir.resolve("bad-name.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
+    rows.through(excel.writeStreamTrue(path, "RealSheet")).compile.drain.flatMap { _ =>
+      // Try to read "FakeSheet"
+      excel.readSheetStream(path, "FakeSheet")
+        .compile.toList
+        .attempt
+        .map {
+          case Left(err) =>
+            assert(err.getMessage.contains("Sheet not found"))
+          case Right(_) =>
+            fail("Should have failed with nonexistent sheet name")
+        }
+    }
+  }

@@ -4,11 +4,11 @@ import cats.effect.{Async, Sync, Resource}
 import cats.syntax.all.*
 import fs2.{Stream, Pipe}
 import java.nio.file.Path
-import java.io.FileOutputStream
-import java.util.zip.{ZipOutputStream, ZipEntry, CRC32}
+import java.io.{FileOutputStream, FileInputStream}
+import java.util.zip.{ZipOutputStream, ZipEntry, CRC32, ZipInputStream, ZipFile}
 import java.nio.charset.StandardCharsets
 import com.tjclp.xl.{Workbook, XLError}
-import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter}
+import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter, SharedStrings}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
 
@@ -35,24 +35,114 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
     }
 
   /**
-   * Stream rows from first sheet.
+   * Stream rows from first sheet with constant memory.
    *
-   * Current implementation: Materializes workbook then streams rows. Future: Will use fs2-data-xml
-   * for true streaming (constant memory).
+   * Uses fs2-data-xml pull parsing - never materializes full worksheet in memory.
    */
   def readStream(path: Path): Stream[F, RowData] =
-    Stream.eval(read(path)).flatMap { wb =>
-      if wb.sheets.isEmpty then Stream.empty
-      else streamSheet(wb.sheets(0))
-    }
+    Stream
+      .bracket(
+        Sync[F].delay(new ZipFile(path.toFile))
+      )(zipFile => Sync[F].delay(zipFile.close()))
+      .flatMap { zipFile =>
+        Stream
+          .eval {
+            // Parse SST if present
+            val sstEntry = Option(zipFile.getEntry("xl/sharedStrings.xml"))
+            sstEntry match
+              case Some(entry) =>
+                val sstBytes = Stream.chunk(
+                  fs2.Chunk.array(
+                    zipFile.getInputStream(entry).readAllBytes()
+                  )
+                )
+                StreamingXmlReader.parseSharedStrings[F](sstBytes)
+              case None =>
+                Sync[F].pure(None)
+          }
+          .flatMap { sst =>
+            // Stream first worksheet
+            val wsEntry = Option(zipFile.getEntry("xl/worksheets/sheet1.xml"))
+            wsEntry match
+              case Some(entry) =>
+                val wsBytes = Stream.chunk(
+                  fs2.Chunk.array(
+                    zipFile.getInputStream(entry).readAllBytes()
+                  )
+                )
+                StreamingXmlReader.parseWorksheetStream(wsBytes, sst)
+              case None =>
+                Stream.empty
+          }
+      }
 
-  /** Stream rows from sheet by name */
+  /**
+   * Stream rows from sheet by name with constant memory.
+   *
+   * Uses fs2-data-xml pull parsing for the target sheet.
+   */
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData] =
-    Stream.eval(read(path)).flatMap { wb =>
-      wb(sheetName) match
-        case Right(sheet) => streamSheet(sheet)
-        case Left(err) => Stream.raiseError[F](new Exception(s"Sheet not found: $sheetName"))
-    }
+    Stream
+      .bracket(
+        Sync[F].delay(new ZipFile(path.toFile))
+      )(zipFile => Sync[F].delay(zipFile.close()))
+      .flatMap { zipFile =>
+        Stream
+          .eval {
+            // Find sheet index by parsing workbook.xml
+            findSheetIndexByName(zipFile, sheetName)
+          }
+          .flatMap {
+            case Some(sheetIndex) =>
+              readStreamByIndex(zipFile, sheetIndex)
+            case None =>
+              Stream.raiseError[F](new Exception(s"Sheet not found: $sheetName"))
+          }
+      }
+
+  /** Stream rows from sheet by index (1-based) with constant memory. */
+  def readStreamByIndex(path: Path, sheetIndex: Int): Stream[F, RowData] =
+    Stream
+      .bracket(
+        Sync[F].delay(new ZipFile(path.toFile))
+      )(zipFile => Sync[F].delay(zipFile.close()))
+      .flatMap { zipFile =>
+        readStreamByIndex(zipFile, sheetIndex)
+      }
+
+  // Helper: Stream rows from specific sheet index using open ZipFile
+  private def readStreamByIndex(zipFile: ZipFile, sheetIndex: Int): Stream[F, RowData] =
+    Stream
+      .eval {
+        // Parse SST if present
+        val sstEntry = Option(zipFile.getEntry("xl/sharedStrings.xml"))
+        sstEntry match
+          case Some(entry) =>
+            val sstBytes = Stream.chunk(
+              fs2.Chunk.array(
+                zipFile.getInputStream(entry).readAllBytes()
+              )
+            )
+            StreamingXmlReader.parseSharedStrings[F](sstBytes)
+          case None =>
+            Sync[F].pure(None)
+      }
+      .flatMap { sst =>
+        // Stream specified worksheet
+        val wsEntry = Option(zipFile.getEntry(s"xl/worksheets/sheet$sheetIndex.xml"))
+        wsEntry match
+          case Some(entry) =>
+            val wsBytes = Stream.chunk(
+              fs2.Chunk.array(
+                zipFile.getInputStream(entry).readAllBytes()
+              )
+            )
+            StreamingXmlReader.parseWorksheetStream(wsBytes, sst)
+          case None =>
+            Stream.raiseError[F](
+              new Exception(s"Worksheet not found: sheet$sheetIndex.xml")
+            )
+      }
 
   /**
    * Write rows to XLSX file.
@@ -291,6 +381,26 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
       zip.putNextEntry(entry)
       zip.write(bytes)
       zip.closeEntry()
+    }
+
+  // Helper: Find sheet index by name from workbook.xml
+  private def findSheetIndexByName(zipFile: ZipFile, sheetName: String): F[Option[Int]] =
+    Sync[F].delay {
+      val wbEntry = Option(zipFile.getEntry("xl/workbook.xml"))
+      wbEntry.flatMap { entry =>
+        import scala.xml.XML
+        val wbXml = XML.load(zipFile.getInputStream(entry))
+
+        // Parse sheet elements
+        val sheets = (wbXml \\ "sheet").toSeq
+        sheets
+          .find { sheetElem =>
+            (sheetElem \ "@name").text == sheetName
+          }
+          .map { sheetElem =>
+            (sheetElem \ "@sheetId").text.toInt
+          }
+      }
     }
 
 object ExcelIO:

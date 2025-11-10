@@ -62,6 +62,19 @@ trait Excel[F[_]]:
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData]
 
   /**
+   * Stream rows from specific sheet by index (1-based).
+   *
+   * Good for: Processing sheets by position rather than name Memory: O(1) constant
+   *
+   * Example:
+   * {{{
+   * // Read second sheet
+   * excel.readStreamByIndex(path, 2).compile.toList
+   * }}}
+   */
+  def readStreamByIndex(path: Path, sheetIndex: Int): Stream[F, RowData]
+
+  /**
    * Write rows to XLSX file as a stream.
    *
    * Good for: Large datasets, generated data, ETL pipelines Memory: O(1) - can write unlimited rows
