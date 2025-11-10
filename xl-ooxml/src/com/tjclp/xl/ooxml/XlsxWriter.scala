@@ -1,0 +1,130 @@
+package com.tjclp.xl.ooxml
+
+import scala.xml.*
+import java.io.{File, FileOutputStream, ByteArrayOutputStream}
+import java.util.zip.{ZipOutputStream, ZipEntry}
+import java.nio.file.{Path, Files}
+import java.nio.charset.StandardCharsets
+import com.tjclp.xl.{Workbook, XLError, XLResult}
+
+/** Writer for XLSX files (ZIP assembly)
+  *
+  * Takes a domain Workbook and produces a valid XLSX file with all required parts.
+  */
+object XlsxWriter:
+
+  /** Write workbook to XLSX file */
+  def write(workbook: Workbook, outputPath: Path): XLResult[Unit] =
+    try
+      // Build shared strings table if beneficial
+      val sst = if SharedStrings.shouldUseSST(workbook) then
+        Some(SharedStrings.fromWorkbook(workbook))
+      else None
+
+      // Build style index (minimal for now)
+      val styleIndex = StyleIndex.fromWorkbook(workbook)
+      val styles = OoxmlStyles(styleIndex)
+
+      // Convert domain workbook to OOXML
+      val ooxmlWb = OoxmlWorkbook.fromDomain(workbook)
+
+      // Convert sheets to OOXML worksheets
+      val ooxmlSheets = workbook.sheets.map { sheet =>
+        OoxmlWorksheet.fromDomainWithSST(sheet, sst)
+      }
+
+      // Create content types
+      val contentTypes = ContentTypes.minimal(
+        hasStyles = true,  // Always include styles
+        hasSharedStrings = sst.isDefined,
+        sheetCount = workbook.sheets.size
+      )
+
+      // Create relationships
+      val rootRels = Relationships.root()
+      val workbookRels = Relationships.workbook(
+        sheetCount = workbook.sheets.size,
+        hasStyles = true,
+        hasSharedStrings = sst.isDefined
+      )
+
+      // Assemble ZIP
+      writeZip(outputPath, contentTypes, rootRels, workbookRels, ooxmlWb, ooxmlSheets, styles, sst)
+
+      Right(())
+
+    catch
+      case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
+
+  /** Write all parts to ZIP file */
+  private def writeZip(
+    path: Path,
+    contentTypes: ContentTypes,
+    rootRels: Relationships,
+    workbookRels: Relationships,
+    workbook: OoxmlWorkbook,
+    sheets: Vector[OoxmlWorksheet],
+    styles: OoxmlStyles,
+    sst: Option[SharedStrings]
+  ): Unit =
+    val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
+    try
+      // Write parts in canonical order
+      writePart(zip, "[Content_Types].xml", contentTypes.toXml)
+      writePart(zip, "_rels/.rels", rootRels.toXml)
+      writePart(zip, "xl/workbook.xml", workbook.toXml)
+      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml)
+
+      // Write styles
+      writePart(zip, "xl/styles.xml", styles.toXml)
+
+      // Write shared strings if present
+      sst.foreach { sharedStrings =>
+        writePart(zip, "xl/sharedStrings.xml", sharedStrings.toXml)
+      }
+
+      // Write worksheets
+      sheets.zipWithIndex.foreach { case (sheet, idx) =>
+        writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml)
+      }
+
+    finally
+      zip.close()
+
+  /** Write a single XML part to ZIP */
+  private def writePart(zip: ZipOutputStream, entryName: String, xml: Elem): Unit =
+    val entry = new ZipEntry(entryName)
+    entry.setMethod(ZipEntry.STORED)  // No compression for easier debugging
+
+    // Convert XML to bytes
+    val xmlString = XmlUtil.prettyPrint(xml)
+    val bytes = xmlString.getBytes(StandardCharsets.UTF_8)
+
+    // Set size and CRC for STORED method
+    entry.setSize(bytes.length)
+    entry.setCompressedSize(bytes.length)
+    entry.setCrc(calculateCrc(bytes))
+
+    zip.putNextEntry(entry)
+    zip.write(bytes)
+    zip.closeEntry()
+
+  /** Calculate CRC32 checksum for ZIP entry */
+  private def calculateCrc(bytes: Array[Byte]): Long =
+    val crc = new java.util.zip.CRC32()
+    crc.update(bytes)
+    crc.getValue
+
+  /** Write workbook to bytes (for testing) */
+  def writeToBytes(workbook: Workbook): XLResult[Array[Byte]] =
+    try
+      val baos = new ByteArrayOutputStream()
+      val tempPath = Files.createTempFile("xl-", ".xlsx")
+      try
+        write(workbook, tempPath).map { _ =>
+          Files.readAllBytes(tempPath)
+        }
+      finally
+        Files.deleteIfExists(tempPath)
+    catch
+      case e: Exception => Left(XLError.IOError(s"Failed to write bytes: ${e.getMessage}"))

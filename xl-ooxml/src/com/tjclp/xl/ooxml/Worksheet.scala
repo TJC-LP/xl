@@ -83,6 +83,14 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
 
   /** Create worksheet from domain Sheet (inline strings only for now) */
   def fromDomain(sheet: Sheet, styleIndexMap: Map[String, Int] = Map.empty): OoxmlWorksheet =
+    fromDomainWithSST(sheet, None, styleIndexMap)
+
+  /** Create worksheet from domain Sheet with optional SST */
+  def fromDomainWithSST(
+    sheet: Sheet,
+    sst: Option[SharedStrings],
+    styleIndexMap: Map[String, Int] = Map.empty
+  ): OoxmlWorksheet =
     // Group cells by row
     val cellsByRow = sheet.cells.values
       .groupBy(_.ref.row.index1) // 1-based row index
@@ -92,7 +100,17 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     val rows = cellsByRow.map { case (rowIdx, cells) =>
       val ooxmlCells = cells.map { cell =>
         val styleIdx = cell.styleId
-        OoxmlCell(cell.ref, cell.value, styleIdx)
+
+        // Determine cell type and value based on SST availability
+        val (cellType, value) = (cell.value, sst) match
+          case (com.tjclp.xl.CellValue.Text(s), Some(sharedStrings)) =>
+            // Use SST if available
+            sharedStrings.indexOf(s) match
+              case Some(idx) => ("s", com.tjclp.xl.CellValue.Text(idx.toString))
+              case None => ("inlineStr", cell.value) // Fallback to inline
+          case _ => ("inlineStr", cell.value)
+
+        OoxmlCell(cell.ref, value, styleIdx, cellType)
       }.toSeq
       OoxmlRow(rowIdx, ooxmlCells)
     }
