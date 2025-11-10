@@ -219,13 +219,16 @@ object CellRange:
 
   /** Parse range from A1:B2 notation */
   def parse(s: String): Either[String, CellRange] =
-    s.split(':') match
-      case Array(start, end) =>
-        for
-          startRef <- ARef.parse(start)
-          endRef <- ARef.parse(end)
-        yield CellRange(startRef, endRef)
-      case Array(single) =>
-        ARef.parse(single).map(ref => CellRange(ref, ref))
-      case _ =>
-        Left(s"Invalid range format: $s")
+    if s.contains(':') then
+      s.split(':') match
+        case Array(start, end) if start.nonEmpty && end.nonEmpty =>
+          for
+            startRef <- ARef.parse(start)
+            endRef <- ARef.parse(end)
+          yield CellRange(startRef, endRef)
+        case _ =>
+          Left(s"Invalid range format: $s")
+    else if s.nonEmpty then
+      ARef.parse(s).map(ref => CellRange(ref, ref))
+    else
+      Left(s"Invalid range format: $s")
