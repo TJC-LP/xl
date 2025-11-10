@@ -98,11 +98,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="63e8133b-ec9c-42dd-a0ed-611b4bae7f9b" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xl-cats-effect/src/com/tjclp/xl/io/Excel.scala" beforeDir="false" afterPath="$PROJECT_DIR$/xl-cats-effect/src/com/tjclp/xl/io/Excel.scala" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xl-cats-effect/src/com/tjclp/xl/io/ExcelIO.scala" beforeDir="false" afterPath="$PROJECT_DIR$/xl-cats-effect/src/com/tjclp/xl/io/ExcelIO.scala" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xl-cats-effect/src/com/tjclp/xl/io/StreamingXmlWriter.scala" beforeDir="false" afterPath="$PROJECT_DIR$/xl-cats-effect/src/com/tjclp/xl/io/StreamingXmlWriter.scala" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xl-cats-effect/test/src/com/tjclp/xl/io/ExcelIOSpec.scala" beforeDir="false" afterPath="$PROJECT_DIR$/xl-cats-effect/test/src/com/tjclp/xl/io/ExcelIOSpec.scala" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -244,7 +241,7 @@
       <workItem from="1762729628144" duration="425000" />
       <workItem from="1762730056989" duration="381000" />
       <workItem from="1762731294597" duration="134000" />
-      <workItem from="1762731479564" duration="4773000" />
+      <workItem from="1762731479564" duration="5539000" />
     </task>
     <servers />
   </component>

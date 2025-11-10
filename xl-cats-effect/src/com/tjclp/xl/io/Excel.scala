@@ -86,16 +86,56 @@ trait Excel[F[_]]:
    * Good for: Very large files (100k+ rows), memory-constrained environments Memory: O(1) constant
    * (~50MB regardless of file size)
    *
+   * @param path
+   *   Output file path
+   * @param sheetName
+   *   Display name for the sheet (shown in Excel tab)
+   * @param sheetIndex
+   *   1-based sheet index (determines internal filename: sheet1.xml, sheet2.xml, etc.)
+   *
    * Example:
    * {{{
    * Stream.range(0, 1000000)
    *   .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
-   *   .through(excel.writeStreamTrue(path, "BigData"))
+   *   .through(excel.writeStreamTrue(path, "BigData", sheetIndex = 1))
    *   .compile
    *   .drain
    * }}}
    */
-  def writeStreamTrue(path: Path, sheetName: String): fs2.Pipe[F, RowData, Unit]
+  def writeStreamTrue(
+    path: Path,
+    sheetName: String,
+    sheetIndex: Int = 1
+  ): fs2.Pipe[F, RowData, Unit]
+
+  /**
+   * Write multiple sheets sequentially with constant memory.
+   *
+   * Streams each sheet in order - never materializes full datasets. Memory usage is constant
+   * regardless of total row count across all sheets.
+   *
+   * @param path
+   *   Output file path
+   * @param sheets
+   *   Sequence of (sheet name, rows) tuples. Sheets are auto-indexed 1, 2, 3...
+   *
+   * Example:
+   * {{{
+   * excel.writeStreamsSeqTrue(
+   *   path,
+   *   Seq(
+   *     "Sales" -> salesRows,      // 100k rows
+   *     "Inventory" -> invRows,    // 100k rows
+   *     "Summary" -> summaryRows   // 1k rows
+   *   )
+   * ).void
+   * // Memory: O(1) constant (~50MB for 201k total rows)
+   * }}}
+   */
+  def writeStreamsSeqTrue(
+    path: Path,
+    sheets: Seq[(String, Stream[F, RowData])]
+  ): F[Unit]
 
 object Excel:
   /** Summon Excel instance from implicit scope */

@@ -82,29 +82,94 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
    * Uses fs2-data-xml events - never materializes full dataset. Can write unlimited rows with ~50MB
    * memory.
    */
-  def writeStreamTrue(path: Path, sheetName: String): Pipe[F, RowData, Unit] =
+  def writeStreamTrue(path: Path, sheetName: String, sheetIndex: Int = 1): Pipe[F, RowData, Unit] =
     rows =>
+      // Validate sheet index
+      if sheetIndex < 1 then
+        Stream.raiseError[F](
+          new IllegalArgumentException(s"Sheet index must be >= 1, got: $sheetIndex")
+        )
+      else
+        Stream
+          .bracket(
+            Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
+          )(zip => Sync[F].delay(zip.close()))
+          .flatMap { zip =>
+            // 1. Write static parts first
+            Stream.eval(writeStaticParts(zip, sheetName, sheetIndex)) ++
+              // 2. Open worksheet entry (use sheetIndex for filename)
+              Stream.eval(
+                Sync[F].delay(
+                  zip.putNextEntry(new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml"))
+                )
+              ) ++
+              // 3. Stream XML events → bytes → ZIP
+              (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
+                StreamingXmlWriter.worksheetEvents[F](rows))
+                .through(xml.render.raw())
+                .through(fs2.text.utf8.encode)
+                .chunks
+                .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
+              // 4. Close entry
+              Stream.eval(Sync[F].delay(zip.closeEntry()))
+          }
+          .drain
+
+  /**
+   * Write multiple sheets sequentially with constant memory.
+   *
+   * Each sheet is streamed in order without materializing the full dataset.
+   */
+  def writeStreamsSeqTrue(path: Path, sheets: Seq[(String, Stream[F, RowData])]): F[Unit] =
+    // Validate inputs
+    if sheets.isEmpty then
+      Async[F].raiseError(new IllegalArgumentException("Must provide at least one sheet"))
+    else if sheets.map(_._1).distinct.size != sheets.size then
+      Async[F].raiseError(
+        new IllegalArgumentException(s"Duplicate sheet names: ${sheets.map(_._1).mkString(", ")}")
+      )
+    else
       Stream
         .bracket(
           Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
         )(zip => Sync[F].delay(zip.close()))
         .flatMap { zip =>
-          // 1. Write static parts first
-          Stream.eval(writeStaticParts(zip, sheetName)) ++
-            // 2. Open worksheet entry
-            Stream.eval(
-              Sync[F].delay(zip.putNextEntry(new ZipEntry("xl/worksheets/sheet1.xml")))
-            ) ++
-            // 3. Stream XML events → bytes → ZIP
-            (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
-              StreamingXmlWriter.worksheetEvents[F](rows))
-              .through(xml.render.raw())
-              .through(fs2.text.utf8.encode)
-              .chunks
-              .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
-            // 4. Close entry
-            Stream.eval(Sync[F].delay(zip.closeEntry()))
+          // Auto-assign sheet indices 1, 2, 3...
+          val sheetsWithIndices = sheets.zipWithIndex.map { case ((name, rows), idx) =>
+            (name, idx + 1, rows)
+          }
+
+          // 1. Write static parts with all sheet metadata
+          Stream.eval(
+            writeStaticPartsMulti(
+              zip,
+              sheetsWithIndices.map { case (name, idx, _) =>
+                (name, idx)
+              }
+            )
+          ) ++
+            // 2. Stream each sheet sequentially
+            Stream
+              .emits(sheetsWithIndices)
+              .flatMap { case (name, sheetIndex, rows) =>
+                // Open worksheet entry
+                Stream.eval(
+                  Sync[F].delay(
+                    zip.putNextEntry(new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml"))
+                  )
+                ) ++
+                  // Stream XML events → bytes → ZIP
+                  (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
+                    StreamingXmlWriter.worksheetEvents[F](rows))
+                    .through(xml.render.raw())
+                    .through(fs2.text.utf8.encode)
+                    .chunks
+                    .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
+                  // Close entry
+                  Stream.eval(Sync[F].delay(zip.closeEntry()))
+              }
         }
+        .compile
         .drain
 
   // Helper: Convert Sheet to RowData stream
@@ -140,7 +205,11 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
     yield sheet
 
   // Helper: Write static OOXML parts to ZIP
-  private def writeStaticParts(zip: ZipOutputStream, sheetName: String): F[Unit] =
+  private def writeStaticParts(
+    zip: ZipOutputStream,
+    sheetName: String,
+    sheetIndex: Int
+  ): F[Unit] =
     import com.tjclp.xl.ooxml.*
     import com.tjclp.xl.SheetName
 
@@ -150,10 +219,47 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
     val workbookRels =
       Relationships.workbook(sheetCount = 1, hasStyles = true, hasSharedStrings = false)
 
-    // Create minimal workbook with one sheet
+    // Create minimal workbook with one sheet (use provided sheetIndex)
     val ooxmlWb = OoxmlWorkbook(
-      sheets = Vector(SheetRef(SheetName.unsafe(sheetName), 1, "rId1"))
+      sheets = Vector(SheetRef(SheetName.unsafe(sheetName), sheetIndex, "rId1"))
     )
+
+    // Minimal styles
+    val styles = OoxmlStyles.minimal
+
+    for
+      _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml)
+      _ <- writePart(zip, "_rels/.rels", rootRels.toXml)
+      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml)
+      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml)
+      _ <- writePart(zip, "xl/styles.xml", styles.toXml)
+    yield ()
+
+  // Helper: Write static OOXML parts for multiple sheets
+  private def writeStaticPartsMulti(
+    zip: ZipOutputStream,
+    sheets: Seq[(String, Int)] // (name, sheetIndex)
+  ): F[Unit] =
+    import com.tjclp.xl.ooxml.*
+    import com.tjclp.xl.SheetName
+
+    val contentTypes = ContentTypes.minimal(
+      hasStyles = true,
+      hasSharedStrings = false,
+      sheetCount = sheets.size
+    )
+    val rootRels = Relationships.root()
+    val workbookRels = Relationships.workbook(
+      sheetCount = sheets.size,
+      hasStyles = true,
+      hasSharedStrings = false
+    )
+
+    // Create workbook with all sheets
+    val sheetRefs = sheets.map { case (name, idx) =>
+      SheetRef(SheetName.unsafe(name), idx, s"rId$idx")
+    }
+    val ooxmlWb = OoxmlWorkbook(sheets = sheetRefs)
 
     // Minimal styles
     val styles = OoxmlStyles.minimal

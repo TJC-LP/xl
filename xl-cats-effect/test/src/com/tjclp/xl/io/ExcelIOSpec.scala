@@ -184,3 +184,188 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
     }
   }
+
+  tempDir.test("writeStreamTrue: supports arbitrary sheet index") { dir =>
+    val path = dir.resolve("sheet3.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val rows = fs2.Stream.range(1, 11).map { i =>
+      RowData(i, Map(0 -> CellValue.Text(s"Row $i")))
+    }
+
+    // Write with sheetIndex = 3
+    rows.through(excel.writeStreamTrue(path, "ThirdSheet", sheetIndex = 3)).compile.drain.flatMap { _ =>
+      // Verify ZIP contains sheet3.xml (not sheet1.xml)
+      IO {
+        import java.util.zip.ZipFile
+        val zipFile = new ZipFile(path.toFile)
+        try {
+          val entries = scala.jdk.CollectionConverters.IteratorHasAsScala(
+            zipFile.entries().asIterator()
+          ).asScala.map(_.getName).toSet
+
+          // Should have sheet3.xml
+          assert(entries.contains("xl/worksheets/sheet3.xml"),
+            s"Expected sheet3.xml, got: ${entries.filter(_.contains("sheet"))}")
+
+          // Should NOT have sheet1.xml or sheet2.xml
+          assert(!entries.contains("xl/worksheets/sheet1.xml"), "Should not have sheet1.xml")
+          assert(!entries.contains("xl/worksheets/sheet2.xml"), "Should not have sheet2.xml")
+        } finally {
+          zipFile.close()
+        }
+      } >>
+      // Verify workbook.xml has sheetId="3"
+      IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
+        assert(result.isRight)
+        result.foreach { wb =>
+          assertEquals(wb.sheets.size, 1)
+          assertEquals(wb.sheets(0).name.value, "ThirdSheet")
+        }
+      }
+    }
+  }
+
+  tempDir.test("writeStreamTrue: rejects invalid sheet index") { dir =>
+    val path = dir.resolve("invalid.xlsx")
+    val excel = ExcelIO.instance[IO]
+    val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
+
+    // sheetIndex = 0 should fail
+    rows.through(excel.writeStreamTrue(path, "Bad", sheetIndex = 0))
+      .compile.drain
+      .attempt
+      .map {
+        case Left(err: IllegalArgumentException) =>
+          assert(err.getMessage.contains("Sheet index must be >= 1"))
+        case Left(other) =>
+          fail(s"Expected IllegalArgumentException, got: $other")
+        case Right(_) =>
+          fail("Should have failed with illegal sheet index")
+      }
+  }
+
+  tempDir.test("writeStreamsSeqTrue: writes 2 sheets") { dir =>
+    val path = dir.resolve("two-sheets.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val sheet1Rows = fs2.Stream.range(1, 11).map { i =>
+      RowData(i, Map(0 -> CellValue.Text(s"Sheet1 Row $i")))
+    }
+    val sheet2Rows = fs2.Stream.range(1, 6).map { i =>
+      RowData(i, Map(0 -> CellValue.Number(BigDecimal(i * 100))))
+    }
+
+    excel.writeStreamsSeqTrue(path, Seq("First" -> sheet1Rows, "Second" -> sheet2Rows)).flatMap {
+      _ =>
+        // Verify with XlsxReader
+        IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
+          assert(result.isRight, s"Should read successfully: $result")
+          result.foreach { wb =>
+            // Should have 2 sheets
+            assertEquals(wb.sheets.size, 2)
+
+            // First sheet
+            assertEquals(wb.sheets(0).name.value, "First")
+            assertEquals(wb.sheets(0).cellCount, 10)
+
+            // Second sheet
+            assertEquals(wb.sheets(1).name.value, "Second")
+            assertEquals(wb.sheets(1).cellCount, 5)
+
+            // Verify content
+            val firstCell = wb.sheets(0)(cell"A1")
+            assertEquals(firstCell.value, CellValue.Text("Sheet1 Row 1"))
+
+            val secondCell = wb.sheets(1)(cell"A1")
+            assertEquals(secondCell.value, CellValue.Number(BigDecimal(100)))
+          }
+        }
+    }
+  }
+
+  tempDir.test("writeStreamsSeqTrue: writes 3 sheets with different sizes") { dir =>
+    val path = dir.resolve("three-sheets.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val sales = fs2.Stream.range(1, 101).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+    val inventory = fs2.Stream.range(1, 51).map(i => RowData(i, Map(0 -> CellValue.Text(s"Item $i"))))
+    val summary = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("Summary"))))
+
+    excel
+      .writeStreamsSeqTrue(
+        path,
+        Seq("Sales" -> sales, "Inventory" -> inventory, "Summary" -> summary)
+      )
+      .flatMap { _ =>
+        IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
+          assert(result.isRight)
+          result.foreach { wb =>
+            assertEquals(wb.sheets.size, 3)
+            assertEquals(wb.sheets(0).name.value, "Sales")
+            assertEquals(wb.sheets(0).cellCount, 100)
+            assertEquals(wb.sheets(1).name.value, "Inventory")
+            assertEquals(wb.sheets(1).cellCount, 50)
+            assertEquals(wb.sheets(2).name.value, "Summary")
+            assertEquals(wb.sheets(2).cellCount, 1)
+          }
+        }
+      }
+  }
+
+  tempDir.test("writeStreamsSeqTrue: handles large multi-sheet workbook") { dir =>
+    val path = dir.resolve("large-multi-sheet.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // 3 sheets with 10k rows each (30k total rows)
+    val sheet1 = fs2.Stream.range(1, 10001).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+    val sheet2 = fs2.Stream.range(1, 10001).map(i => RowData(i, Map(0 -> CellValue.Text(s"$i"))))
+    val sheet3 = fs2.Stream.range(1, 10001).map(i => RowData(i, Map(0 -> CellValue.Bool(i % 2 == 0))))
+
+    excel
+      .writeStreamsSeqTrue(path, Seq("Numbers" -> sheet1, "Text" -> sheet2, "Booleans" -> sheet3))
+      .flatMap { _ =>
+        // Verify file size is reasonable
+        IO(java.nio.file.Files.size(path)).map { size =>
+          assert(size > 100_000, s"File should be at least 100KB, got $size bytes")
+          assert(size < 10_000_000, s"File should be less than 10MB, got $size bytes")
+        }
+      }
+  }
+
+  tempDir.test("writeStreamsSeqTrue: rejects empty sheet list") { dir =>
+    val path = dir.resolve("empty.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    excel
+      .writeStreamsSeqTrue(path, Seq.empty)
+      .attempt
+      .map {
+        case Left(err: IllegalArgumentException) =>
+          assert(err.getMessage.contains("at least one sheet"))
+        case Left(other) =>
+          fail(s"Expected IllegalArgumentException, got: $other")
+        case Right(_) =>
+          fail("Should have failed with empty sheet list")
+      }
+  }
+
+  tempDir.test("writeStreamsSeqTrue: rejects duplicate sheet names") { dir =>
+    val path = dir.resolve("duplicates.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val rows1 = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("A"))))
+    val rows2 = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("B"))))
+
+    excel
+      .writeStreamsSeqTrue(path, Seq("Sheet1" -> rows1, "Sheet1" -> rows2))
+      .attempt
+      .map {
+        case Left(err: IllegalArgumentException) =>
+          assert(err.getMessage.contains("Duplicate sheet names"))
+        case Left(other) =>
+          fail(s"Expected IllegalArgumentException, got: $other")
+        case Right(_) =>
+          fail("Should have failed with duplicate names")
+      }
+  }
