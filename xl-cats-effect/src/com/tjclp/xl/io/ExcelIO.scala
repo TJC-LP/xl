@@ -361,7 +361,7 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     import com.tjclp.xl.SheetName
 
     val contentTypes =
-      ContentTypes.minimal(hasStyles = true, hasSharedStrings = false, sheetCount = 1)
+      ContentTypes.forSheetIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
     val rootRels = Relationships.root()
     val workbookRels =
       Relationships.workbookWithIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
@@ -390,10 +390,10 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     import com.tjclp.xl.ooxml.*
     import com.tjclp.xl.SheetName
 
-    val contentTypes = ContentTypes.minimal(
+    val contentTypes = ContentTypes.forSheetIndices(
+      sheetIndices = sheets.map(_._2),
       hasStyles = true,
-      hasSharedStrings = false,
-      sheetCount = sheets.size
+      hasSharedStrings = false
     )
     val rootRels = Relationships.root()
     val workbookRels = Relationships.workbook(
