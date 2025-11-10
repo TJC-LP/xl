@@ -14,11 +14,14 @@ object macros:
   extension (inline sc: StringContext)
     transparent inline def cell(): ARef = ${ cellImpl0('sc) }
     transparent inline def range(): CellRange = ${ rangeImpl0('sc) }
+    transparent inline def fx(): CellValue = ${ fxImpl0('sc) }
 
     inline def cell(inline args: Any*): ARef =
       ${ errorNoInterpolation('sc, 'args, "cell") }
     inline def range(inline args: Any*): CellRange =
       ${ errorNoInterpolation('sc, 'args, "range") }
+    inline def fx(inline args: Any*): CellValue =
+      ${ errorNoInterpolation('sc, 'args, "fx") }
 
   // -------- Implementations --------
   private def cellImpl0(sc: Expr[StringContext])(using Quotes): Expr[ARef] =
@@ -42,6 +45,31 @@ object macros:
       case e: IllegalArgumentException =>
         report.errorAndAbort(s"Invalid range literal '$s': ${e.getMessage}")
     }
+
+  private def fxImpl0(sc: Expr[StringContext])(using Quotes): Expr[CellValue] =
+    import quotes.reflect.report
+    val s = literal(sc)
+
+    // Minimal validation: no empty formulas, basic character check
+    if (s.isEmpty) {
+      report.errorAndAbort("Formula literal cannot be empty")
+    }
+
+    // Check for balanced parentheses (simple validation)
+    var depth = 0
+    for (c <- s) {
+      if (c == '(') depth += 1
+      else if (c == ')') depth -= 1
+      if (depth < 0) {
+        report.errorAndAbort(s"Formula literal has unbalanced parentheses: '$s'")
+      }
+    }
+    if (depth != 0) {
+      report.errorAndAbort(s"Formula literal has unbalanced parentheses: '$s'")
+    }
+
+    // Emit CellValue.Formula with the validated string
+    '{ CellValue.Formula(${ Expr(s) }) }
 
   private def errorNoInterpolation(sc: Expr[StringContext], args: Expr[Seq[Any]], kind: String)(
     using Quotes
