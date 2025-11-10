@@ -101,13 +101,17 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       val ooxmlCells = cells.map { cell =>
         val styleIdx = cell.styleId
 
-        // Determine cell type and value based on SST availability
-        val (cellType, value) = (cell.value, sst) match
-          case (com.tjclp.xl.CellValue.Text(s), Some(sharedStrings)) =>
-            // Use SST if available
-            sharedStrings.indexOf(s) match
+        // Determine cell type and value based on CellValue type and SST availability
+        val (cellType, value) = cell.value match
+          case com.tjclp.xl.CellValue.Text(s) =>
+            sst.flatMap(_.indexOf(s)) match
               case Some(idx) => ("s", com.tjclp.xl.CellValue.Text(idx.toString))
-              case None => ("inlineStr", cell.value) // Fallback to inline
+              case None => ("inlineStr", cell.value)
+          case com.tjclp.xl.CellValue.Number(_) => ("n", cell.value)
+          case com.tjclp.xl.CellValue.Bool(_) => ("b", cell.value)
+          case com.tjclp.xl.CellValue.Formula(_) => ("str", cell.value) // Formula result
+          case com.tjclp.xl.CellValue.Error(_) => ("e", cell.value)
+          case com.tjclp.xl.CellValue.Empty => ("", cell.value)
           case _ => ("inlineStr", cell.value)
 
         OoxmlCell(cell.ref, value, styleIdx, cellType)
