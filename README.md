@@ -11,16 +11,21 @@ A purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7
 - **Pure Domain Model**: 100% pure core with no side effects, nullable values, or partial functions
 - **Immutable Workbooks**: Persistent data structures with efficient structural sharing
 - **Monoid Composition**: Declarative updates via lawful Patch and StylePatch monoids
+- **Ergonomic DSL**: Clean operators (`:=`, `++`, `.merge`) without type ascription friction
 - **Comprehensive Styling**: Colors, fonts, fills, borders, number formats, and alignment
 - **Cell-Level Codecs**: Type-safe encoding/decoding with auto-inferred formatting for 9 primitive types (including RichText)
-- **Rich Text DSL**: Composable intra-cell formatting with String extensions (.bold.red + " text")
+- **Rich Text DSL**: Composable intra-cell formatting with String extensions (`.bold.red + " text"`)
 - **HTML Export**: Convert sheet ranges to HTML tables with inline CSS
+- **Pure Error Channels**: ExcelR[F] for explicit error handling without exceptions
+- **Optics & Focus**: Lens and Optional for composable, law-governed transformations
+- **Range Combinators**: fillBy, tabulate, putRow, putCol for declarative sheet building
+- **Configurable Writer**: Control SST policy and XML formatting
 - **Deterministic Output**: Canonical XML ordering for stable git diffs and reproducible builds
 - **Property-Based Testing**: ScalaCheck generators and law tests for all core algebras
 
 ## Status
 
-**Current**: ~80% complete with 229/229 tests passing ✅
+**Current**: ~85% complete with 263/263 tests passing ✅
 
 **Implemented** (P0-P6):
 - ✅ Core domain types (Cell, Sheet, Workbook)
@@ -232,6 +237,118 @@ excel.readStream(path)
 - `writeStream`: Hybrid approach (materializes rows, then writes)
 - `readStream`: Currently hybrid (materializes workbook, then streams) - true streaming coming soon
 
+### Pure Error Handling with ExcelR
+
+For pure functional programming without exceptions in the effect type, use `ExcelR[F]`:
+
+```scala
+import com.tjclp.xl.io.{ExcelIO, ExcelR}
+import com.tjclp.xl.{XLResult, XLError}
+import cats.effect.IO
+
+val excel: ExcelR[IO] = ExcelIO.instance
+
+// Explicit error channel - no exceptions
+excel.readR(path).flatMap {
+  case Right(workbook) =>
+    // Successfully loaded
+    processWorkbook(workbook)
+  case Left(error: XLError) =>
+    // Handle error explicitly
+    IO.println(s"Failed to read: ${error.message}")
+}
+
+// Streaming with explicit errors
+excel.readStreamR(path)
+  .evalMap {
+    case Right(rowData) => processRow(rowData)
+    case Left(error) => handleError(error)
+  }
+  .compile.drain
+```
+
+**When to use**:
+- `Excel[F]`: Simpler API, errors raised as F[_] failures (default choice)
+- `ExcelR[F]`: Pure FP, explicit error types, no exceptions in F[_]
+
+Both traits coexist - choose based on your error handling style.
+
+### Configurable Writer
+
+Control SST usage and XML formatting for advanced use cases:
+
+```scala
+import com.tjclp.xl.ooxml.{XlsxWriter, WriterConfig, SstPolicy}
+
+// Compact output (no pretty-printing, ~30% smaller files)
+XlsxWriter.writeWith(
+  workbook,
+  path,
+  WriterConfig(prettyPrint = false)
+)
+
+// Force shared strings table
+XlsxWriter.writeWith(
+  workbook,
+  path,
+  WriterConfig(sstPolicy = SstPolicy.Always)
+)
+```
+
+**Options**:
+- `sstPolicy`: `Auto` (default heuristics), `Always` (force SST), `Never` (inline only)
+- `prettyPrint`: `true` (default, readable XML), `false` (compact, smaller files)
+
+### Range Combinators & Utilities
+
+Fill ranges declaratively with functional combinators:
+
+```scala
+// Fill using Excel coordinates
+sheet.fillBy(range"A1:C10") { (col, row) =>
+  CellValue.Number(BigDecimal(col.index0 + row.index0))
+}
+
+// Fill using 0-based indices
+sheet.tabulate(range"A1:C10") { (colIdx, rowIdx) =>
+  CellValue.Number(BigDecimal(colIdx * rowIdx))
+}
+
+// Populate row or column
+sheet.putRow(Row.from1(1), Column.from1(1), Vector(
+  CellValue.Text("Q1"), CellValue.Text("Q2"), CellValue.Text("Q3")
+))
+
+// Deterministic iteration (sorted)
+sheet.cellsSorted.foreach(c => println(s"${c.ref.toA1}: ${c.value}"))
+```
+
+### Optics & Focus DSL
+
+Composable, law-governed updates with Lens and Optional:
+
+```scala
+import Optics.*
+
+// Modify cell value functionally
+sheet.modifyValue(cell"A1") {
+  case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
+  case other => other
+}
+
+// Conditional transformations
+sheet.modifyCell(cell"B5") { cell =>
+  cell.value match
+    case CellValue.Number(n) if n < 0 => cell.withStyle(negativeStyleId)
+    case _ => cell
+}
+
+// Focus on specific cells
+val updated = sheet.focus(cell"C1").modify(_.withValue(CellValue.Number(42)))(sheet)
+```
+
+**Benefits**: Composable, total functions, zero allocation for simple paths.
+
 ## Development
 
 ### Build Commands
@@ -404,6 +521,31 @@ val result: Either[XLError, Sheet] = sheet.applyPatch(updates)
 ```
 
 **Note**: Type ascription `(patch: Patch)` is required for `|+|` operator due to Scala enum limitations.
+
+### Ergonomic Patch DSL (Simplified Syntax)
+
+For cleaner syntax without type ascription, use the DSL operators:
+
+```scala
+import com.tjclp.xl.dsl.*
+
+// Build patches with := operator and ++ composition
+val patch =
+  (cell"A1" := "Title") ++
+  (cell"B1" := 100) ++
+  range"A1:B1".merge
+
+// Apply to sheet
+val result: Either[XLError, Sheet] = sheet.applyPatch(patch)
+```
+
+**Operators**:
+- `:=` - Assign values (auto-converts primitives to CellValue)
+- `++` - Compose patches (alternative to `|+|`, no type ascription needed)
+- `.merge` / `.unmerge` / `.remove` on CellRange (returns Patch)
+- `.styled(style)` / `.styleId(id)` / `.clearStyle` on ARef
+
+**Benefits**: Cleaner syntax, no type ascription, same semantics as Monoid composition.
 
 ### Styles
 

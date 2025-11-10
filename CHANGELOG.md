@@ -1,0 +1,101 @@
+# Changelog
+
+All notable changes to the XL project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added - P6: Cell-level Codecs
+
+**Type-Safe Cell Operations** (`xl-core/src/com/tjclp/xl/codec/`)
+- Cell-level bidirectional codecs for 9 primitive types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText
+- `putMixed` batch update API with auto-inferred formatting
+- `readTyped[A]` for type-safe cell reading with Either[CodecError, Option[A]]
+- Auto-format inference: LocalDate → NumFmt.Date, LocalDateTime → NumFmt.DateTime, BigDecimal → NumFmt.Decimal
+- Identity laws: `codec.read(Cell(ref, codec.write(value)._1)) == Right(Some(value))`
+
+**RichText DSL** (`xl-core/src/com/tjclp/xl/richtext.scala`)
+- Multi-run formatted text within single cells (OOXML `<r>` elements)
+- Composable with `+` operator: `"Bold".bold.red + " normal " + "Italic".italic.blue`
+- Formatting methods: `.bold`, `.italic`, `.underline`, `.size(pt)`, `.fontFamily(name)`
+- Color shortcuts: `.red`, `.green`, `.blue`, `.black`, `.white`, `.withColor(color)`
+- Given conversions: `String → TextRun`, `TextRun → RichText`
+- Full OOXML round-trip support with `xml:space="preserve"`
+
+**HTML Export** (`xl-core/src/com/tjclp/xl/html/`)
+- `sheet.toHtml(range)` - Export cell ranges to HTML tables
+- Inline CSS preservation of cell styles and rich text formatting
+- Optional style inclusion: `toHtml(range, includeStyles = false)`
+- Use cases: Dashboards, reporting, email generation
+
+### Added - P31: Ergonomics & Purity Enhancements
+
+**Type Safety** (Phase 1)
+- `StyleId` opaque type replacing raw Int for style indices
+- Zero runtime overhead with compile-time safety
+- Prevents accidental mixing of indices across different domains
+
+**Patch DSL** (`xl-core/src/com/tjclp/xl/dsl.scala` - Phase 2)
+- `:=` operator for cell assignment with automatic primitive conversions
+- `++` operator for patch composition (alternative to Cats `|+|`)
+- CellRange operators: `.merge`, `.unmerge`, `.remove` (returns Patch)
+- `PatchBatch` object for varargs patch construction
+- ARef styling methods: `.styled(style)`, `.styleId(id)`, `.clearStyle`
+- Usage: `import com.tjclp.xl.dsl.*`
+
+**Range Combinators** (`xl-core/src/com/tjclp/xl/sheet.scala` - Phase 2)
+- `fillBy(range)(f: (Column, Row) => CellValue)` - Fill using Excel coordinates
+- `tabulate(range)(f: (Int, Int) => CellValue)` - Fill using 0-based indices
+- `putRow(row, startCol, values)` - Horizontal value placement
+- `putCol(col, startRow, values)` - Vertical value placement
+- Row-major deterministic iteration for all combinators
+
+**Deterministic Iteration** (`xl-core/src/com/tjclp/xl/sheet.scala` - Phase 2)
+- `cellsSorted: Vector[Cell]` - Row-major sorted cells
+- `rowsSorted: Vector[(Row, Vector[Cell])]` - Cells grouped by row
+- `columnsSorted: Vector[(Column, Vector[Cell])]` - Cells grouped by column
+
+**Formula Literal Macro** (`xl-macros/src/com/tjclp/xl/macros.scala` - Phase 2)
+- `fx"..."` compile-time validated formula literals
+- Minimal validation (balanced parentheses, no interpolation)
+- Emits `CellValue.Formula(...)` directly
+
+**Pure Error Channels** (`xl-cats-effect/src/com/tjclp/xl/io/` - Phase 3)
+- `ExcelR[F]` trait for explicit error handling without exceptions
+- All methods return `F[XLResult[A]]` or `Stream[F, Either[XLError, A]]`
+- Methods: `readR`, `writeR`, `readStreamR`, `writeStreamR`, etc.
+- Coexists with `Excel[F]` for gradual migration
+- No breaking changes to existing API
+
+**Configurable Writer** (`xl-ooxml/src/com/tjclp/xl/ooxml/XlsxWriter.scala` - Phase 3)
+- `SstPolicy` enum: Auto (default), Always, Never
+- `WriterConfig(sstPolicy, prettyPrint)` for power users
+- `writeWith(workbook, path, config)` method
+- `XmlUtil.compact()` for minimal XML output (~30% smaller files)
+- Backward compatible: `write()` delegates to `writeWith()` with defaults
+
+**Optics Library** (`xl-core/src/com/tjclp/xl/optics.scala` - Phase 4)
+- `Lens[S, A]` - Total optics with get, set, modify, update, andThen
+- `Optional[S, A]` - Partial optics with getOption, modify, getOrElse
+- Predefined optics: `sheetCells`, `cellAt`, `cellValue`, `cellStyleId`, `sheetName`, `mergedRanges`
+- Focus DSL: `sheet.focus(ref)`, `sheet.modifyCell(ref)(f)`, `sheet.modifyValue(ref)(f)`, `sheet.modifyStyleId(ref)(f)`
+- Law-governed: get-put, put-get, put-put
+- Zero external dependencies (no Monocle)
+
+### Changed
+- None (all changes are purely additive)
+
+### Breaking Changes
+- None (100% backward compatible)
+
+### Internal Changes
+- StyleId opaque type used internally (transparent to users at API boundary)
+- StyleRegistry now uses StyleId instead of raw Int
+- OOXML layer performs StyleId ↔ Int conversions at boundaries
+
+### Testing
+- 263 tests (229 original + 34 optics tests)
+- All passing with property-based tests for laws
+- Optics: 3 lens laws + 5 optional behaviors + 26 usage tests

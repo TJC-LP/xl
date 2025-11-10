@@ -75,7 +75,7 @@ xl-testkit/      → Test laws, generators, golden files [future]
 # Compile everything
 ./mill __.compile
 
-# Run all tests (229 tests: 187 core + 24 OOXML + 18 streaming)
+# Run all tests (263 tests: 221 core + 24 OOXML + 18 streaming)
 ./mill __.test
 
 # Test specific module
@@ -314,6 +314,44 @@ Macros in `xl-macros/src/com/tjclp/xl/macros.scala`:
 - Emit constants directly: `'{ (${Expr(value)}: T).asInstanceOf[OpaqueType] }`
 - Zero-allocation parsers (no regex, manual char iteration)
 
+### DSL Patterns
+
+**Patch DSL** (`xl-core/src/com/tjclp/xl/dsl.scala`):
+```scala
+import com.tjclp.xl.dsl.*
+
+// Ergonomic operators (no type ascription needed)
+val patch = (cell"A1" := "Title") ++ (cell"A1".styled(headerStyle)) ++ range"A1:B1".merge
+
+// Compared to Monoid syntax (requires type ascription)
+val patch = (Patch.Put(cell"A1", value): Patch) |+| (Patch.SetStyle(cell"A1", id): Patch)
+```
+
+**Optics** (`xl-core/src/com/tjclp/xl/optics.scala`):
+```scala
+import Optics.*
+
+// Modify cell value functionally
+sheet.modifyValue(cell"A1") {
+  case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
+  case other => other
+}
+
+// Focus on specific cell
+sheet.focus(cell"B1").modify(_.withValue(CellValue.Number(42)))(sheet)
+```
+
+**ExcelR** (Pure error handling):
+```scala
+import com.tjclp.xl.io.ExcelR
+
+val excel: ExcelR[IO] = ExcelIO.instance
+excel.readR(path).flatMap {
+  case Right(wb) => processWorkbook(wb)
+  case Left(err) => handleError(err)
+}
+```
+
 ### Codec Patterns
 
 Cell-level codecs (`xl-core/src/com/tjclp/xl/codec/`) provide type-safe encoding/decoding with auto-inferred formatting.
@@ -528,7 +566,7 @@ property("Px to Emu round-trip") {
 
 ## Test Coverage Goal
 
-229/229 tests passing (as of P6 completion):
+263/263 tests passing (as of P6 + P31 completion):
 - 17 addressing tests (Column, Row, ARef, CellRange laws)
 - 21 patch tests (Monoid laws, application semantics)
 - 60 style tests (units, colors, builders, canonicalization, StylePatch, StyleRegistry)
@@ -536,7 +574,9 @@ property("Px to Emu round-trip") {
 - 42 codec tests (CellCodec identity laws, type safety, auto-inference)
 - 16 batch update tests (putMixed, readTyped, style deduplication)
 - 18 elegant syntax tests (given conversions, batch put, formatted literals)
+- 34 optics tests (Lens/Optional laws, focus DSL, real-world use cases)
 - 24 OOXML tests (round-trip, serialization, styles)
 - 18 streaming tests (fs2-data-xml, constant-memory I/O)
+- 5 RichText tests (composition, formatting, DSL)
 
 Target: 90%+ coverage with property-based tests for all algebras.
