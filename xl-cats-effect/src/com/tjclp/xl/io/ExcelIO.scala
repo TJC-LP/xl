@@ -7,7 +7,7 @@ import java.nio.file.Path
 import java.io.{FileOutputStream, FileInputStream}
 import java.util.zip.{ZipOutputStream, ZipEntry, CRC32, ZipInputStream, ZipFile}
 import java.nio.charset.StandardCharsets
-import com.tjclp.xl.{Workbook, XLError}
+import com.tjclp.xl.{Workbook, XLError, XLResult}
 import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter, SharedStrings}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
@@ -15,10 +15,10 @@ import fs2.data.xml.XmlEvent
 /**
  * Cats Effect interpreter for Excel operations.
  *
- * Wraps pure XlsxReader/Writer with effect type F[_]. Future: Will add fs2-data-xml streaming for
- * memory efficiency.
+ * Implements both Excel[F] (error-raising) and ExcelR[F] (explicit error channel). Wraps pure
+ * XlsxReader/Writer with effect type F[_].
  */
-class ExcelIO[F[_]: Async] extends Excel[F]:
+class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
 
   /** Read workbook from XLSX file */
   def read(path: Path): F[Workbook] =
@@ -261,6 +261,63 @@ class ExcelIO[F[_]: Async] extends Excel[F]:
         }
         .compile
         .drain
+
+  // ========== ExcelR Implementation (Explicit Error Channel) ==========
+
+  /** Read workbook with explicit error result */
+  def readR(path: Path): F[XLResult[Workbook]] =
+    Sync[F].delay(XlsxReader.read(path))
+
+  /** Write workbook with explicit error result */
+  def writeR(wb: Workbook, path: Path): F[XLResult[Unit]] =
+    Sync[F].delay(XlsxWriter.write(wb, path))
+
+  /** Stream rows with explicit error channel */
+  def readStreamR(path: Path): Stream[F, Either[XLError, RowData]] =
+    readStream(path)
+      .map(Right(_))
+      .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
+
+  /** Stream rows from specific sheet by name with explicit error channel */
+  def readSheetStreamR(path: Path, sheetName: String): Stream[F, Either[XLError, RowData]] =
+    readSheetStream(path, sheetName)
+      .map(Right(_))
+      .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
+
+  /** Stream rows from specific sheet by index with explicit error channel */
+  def readStreamByIndexR(path: Path, sheetIndex: Int): Stream[F, Either[XLError, RowData]] =
+    readStreamByIndex(path, sheetIndex)
+      .map(Right(_))
+      .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
+
+  /** Write stream with explicit error channel */
+  def writeStreamR(path: Path, sheetName: String): Pipe[F, RowData, Either[XLError, Unit]] =
+    rows =>
+      writeStream(path, sheetName)(rows)
+        .map(_ => Right(()))
+        .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
+
+  /** True streaming write with explicit error channel */
+  def writeStreamTrueR(
+    path: Path,
+    sheetName: String,
+    sheetIndex: Int = 1
+  ): Pipe[F, RowData, Either[XLError, Unit]] =
+    rows =>
+      writeStreamTrue(path, sheetName, sheetIndex)(rows)
+        .map(_ => Right(()))
+        .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
+
+  /** Write multiple sheets with explicit error channel */
+  def writeStreamsSeqTrueR(
+    path: Path,
+    sheets: Seq[(String, Stream[F, RowData])]
+  ): F[XLResult[Unit]] =
+    writeStreamsSeqTrue(path, sheets)
+      .map(Right(_))
+      .handleErrorWith(e => Async[F].pure(Left(XLError.IOError(e.getMessage))))
+
+  // ========== Private Helpers ==========
 
   // Helper: Convert Sheet to RowData stream
   private def streamSheet(sheet: com.tjclp.xl.Sheet): Stream[F, RowData] =

@@ -3,7 +3,7 @@ package com.tjclp.xl.io
 import cats.effect.Async
 import fs2.Stream
 import java.nio.file.Path
-import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, ARef}
+import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, ARef, XLResult, XLError}
 
 /** Row-level streaming data for efficient processing */
 case class RowData(
@@ -149,6 +149,59 @@ trait Excel[F[_]]:
     path: Path,
     sheets: Seq[(String, Stream[F, RowData])]
   ): F[Unit]
+
+/**
+ * Excel algebra with explicit error channels (pure error handling).
+ *
+ * Similar to Excel[F] but returns XLResult[A] explicitly instead of raising errors. Enables pure
+ * functional error handling without exceptions in the effect type.
+ *
+ * Usage:
+ * {{{
+ *   val excel: ExcelR[IO] = ExcelIO.instance
+ *   excel.readR(path).flatMap {
+ *     case Right(wb) => // Success
+ *     case Left(err) => // Handle error
+ *   }
+ * }}}
+ */
+trait ExcelR[F[_]]:
+
+  /** Read workbook with explicit error result */
+  def readR(path: Path): F[XLResult[Workbook]]
+
+  /** Write workbook with explicit error result */
+  def writeR(wb: Workbook, path: Path): F[XLResult[Unit]]
+
+  /**
+   * Stream rows with explicit error channel.
+   *
+   * Each row is wrapped in Either[XLError, RowData]. On structural parse failure, emits Left
+   * followed by stream termination.
+   */
+  def readStreamR(path: Path): Stream[F, Either[XLError, RowData]]
+
+  /** Stream rows from specific sheet by name with explicit error channel */
+  def readSheetStreamR(path: Path, sheetName: String): Stream[F, Either[XLError, RowData]]
+
+  /** Stream rows from specific sheet by index with explicit error channel */
+  def readStreamByIndexR(path: Path, sheetIndex: Int): Stream[F, Either[XLError, RowData]]
+
+  /** Write stream with explicit error channel */
+  def writeStreamR(path: Path, sheetName: String): fs2.Pipe[F, RowData, Either[XLError, Unit]]
+
+  /** True streaming write with explicit error channel */
+  def writeStreamTrueR(
+    path: Path,
+    sheetName: String,
+    sheetIndex: Int = 1
+  ): fs2.Pipe[F, RowData, Either[XLError, Unit]]
+
+  /** Write multiple sheets with explicit error channel */
+  def writeStreamsSeqTrueR(
+    path: Path,
+    sheets: Seq[(String, Stream[F, RowData])]
+  ): F[XLResult[Unit]]
 
 object Excel:
   /** Summon Excel instance from implicit scope */

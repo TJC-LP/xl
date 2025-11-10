@@ -7,6 +7,23 @@ import java.nio.file.{Path, Files}
 import java.nio.charset.StandardCharsets
 import com.tjclp.xl.{Workbook, XLError, XLResult}
 
+/** Shared Strings Table usage policy */
+enum SstPolicy derives CanEqual:
+  /** Auto-detect based on heuristics (default) */
+  case Auto
+
+  /** Always use SST regardless of content */
+  case Always
+
+  /** Never use SST (inline strings only) */
+  case Never
+
+/** Writer configuration options */
+case class WriterConfig(
+  sstPolicy: SstPolicy = SstPolicy.Auto,
+  prettyPrint: Boolean = true
+)
+
 /**
  * Writer for XLSX files (ZIP assembly)
  *
@@ -14,13 +31,24 @@ import com.tjclp.xl.{Workbook, XLError, XLResult}
  */
 object XlsxWriter:
 
-  /** Write workbook to XLSX file */
+  /** Write workbook to XLSX file with default configuration */
   def write(workbook: Workbook, outputPath: Path): XLResult[Unit] =
+    writeWith(workbook, outputPath, WriterConfig())
+
+  /** Write workbook to XLSX file with custom configuration */
+  def writeWith(
+    workbook: Workbook,
+    outputPath: Path,
+    config: WriterConfig = WriterConfig()
+  ): XLResult[Unit] =
     try
-      // Build shared strings table if beneficial
-      val sst =
-        if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
-        else None
+      // Build shared strings table based on policy
+      val sst = config.sstPolicy match
+        case SstPolicy.Always => Some(SharedStrings.fromWorkbook(workbook))
+        case SstPolicy.Never => None
+        case SstPolicy.Auto =>
+          if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
+          else None
 
       // Build unified style index with per-sheet remappings
       val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
@@ -51,7 +79,17 @@ object XlsxWriter:
       )
 
       // Assemble ZIP
-      writeZip(outputPath, contentTypes, rootRels, workbookRels, ooxmlWb, ooxmlSheets, styles, sst)
+      writeZip(
+        outputPath,
+        contentTypes,
+        rootRels,
+        workbookRels,
+        ooxmlWb,
+        ooxmlSheets,
+        styles,
+        sst,
+        config.prettyPrint
+      )
 
       Right(())
 
@@ -66,38 +104,39 @@ object XlsxWriter:
     workbook: OoxmlWorkbook,
     sheets: Vector[OoxmlWorksheet],
     styles: OoxmlStyles,
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    prettyPrint: Boolean
   ): Unit =
     val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
     try
       // Write parts in canonical order
-      writePart(zip, "[Content_Types].xml", contentTypes.toXml)
-      writePart(zip, "_rels/.rels", rootRels.toXml)
-      writePart(zip, "xl/workbook.xml", workbook.toXml)
-      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml)
+      writePart(zip, "[Content_Types].xml", contentTypes.toXml, prettyPrint)
+      writePart(zip, "_rels/.rels", rootRels.toXml, prettyPrint)
+      writePart(zip, "xl/workbook.xml", workbook.toXml, prettyPrint)
+      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, prettyPrint)
 
       // Write styles
-      writePart(zip, "xl/styles.xml", styles.toXml)
+      writePart(zip, "xl/styles.xml", styles.toXml, prettyPrint)
 
       // Write shared strings if present
       sst.foreach { sharedStrings =>
-        writePart(zip, "xl/sharedStrings.xml", sharedStrings.toXml)
+        writePart(zip, "xl/sharedStrings.xml", sharedStrings.toXml, prettyPrint)
       }
 
       // Write worksheets
       sheets.zipWithIndex.foreach { case (sheet, idx) =>
-        writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml)
+        writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml, prettyPrint)
       }
 
     finally zip.close()
 
   /** Write a single XML part to ZIP */
-  private def writePart(zip: ZipOutputStream, entryName: String, xml: Elem): Unit =
+  private def writePart(zip: ZipOutputStream, entryName: String, xml: Elem, pretty: Boolean): Unit =
     val entry = new ZipEntry(entryName)
     entry.setMethod(ZipEntry.STORED) // No compression for easier debugging
 
-    // Convert XML to bytes
-    val xmlString = XmlUtil.prettyPrint(xml)
+    // Convert XML to bytes with conditional formatting
+    val xmlString = if pretty then XmlUtil.prettyPrint(xml) else XmlUtil.compact(xml)
     val bytes = xmlString.getBytes(StandardCharsets.UTF_8)
 
     // Set size and CRC for STORED method
