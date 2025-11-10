@@ -18,11 +18,11 @@ case class StyleIndex(
   borders: Vector[Border],
   numFmts: Vector[(Int, NumFmt)], // Custom formats with IDs
   cellStyles: Vector[CellStyle],
-  styleToIndex: Map[String, Int] // Canonical key → cellXf index
+  styleToIndex: Map[String, StyleId] // Canonical key → cellXf index
 ):
   /** Get style index for a CellStyle (returns 0 if not found - default style) */
-  def indexOf(style: CellStyle): Int =
-    styleToIndex.getOrElse(CellStyle.canonicalKey(style), 0)
+  def indexOf(style: CellStyle): StyleId =
+    styleToIndex.getOrElse(CellStyle.canonicalKey(style), StyleId(0))
 
 object StyleIndex:
   /**
@@ -41,7 +41,7 @@ object StyleIndex:
 
     // Build unified style index by merging all sheet registries
     var unifiedStyles = Vector(CellStyle.default)
-    var unifiedIndex = Map(CellStyle.canonicalKey(CellStyle.default) -> 0)
+    var unifiedIndex = Map(CellStyle.canonicalKey(CellStyle.default) -> StyleId(0))
     var nextIdx = 1
 
     // Build per-sheet remapping tables
@@ -56,11 +56,11 @@ object StyleIndex:
         unifiedIndex.get(key) match
           case Some(globalIdx) =>
             // Style already in unified index (deduplication)
-            remapping(localIdx) = globalIdx
+            remapping(localIdx) = globalIdx.value
           case None =>
             // New style - add to unified index
             unifiedStyles = unifiedStyles :+ style
-            unifiedIndex = unifiedIndex + (key -> nextIdx)
+            unifiedIndex = unifiedIndex + (key -> StyleId(nextIdx))
             remapping(localIdx) = nextIdx
             nextIdx += 1
       }
@@ -223,7 +223,7 @@ object OoxmlStyles:
       borders = Vector(Border.none),
       numFmts = Vector.empty,
       cellStyles = Vector(CellStyle.default),
-      styleToIndex = Map(CellStyle.canonicalKey(CellStyle.default) -> 0)
+      styleToIndex = Map(CellStyle.canonicalKey(CellStyle.default) -> StyleId(0))
     )
     OoxmlStyles(defaultIndex)
 

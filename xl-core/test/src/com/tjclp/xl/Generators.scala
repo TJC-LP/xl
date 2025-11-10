@@ -69,7 +69,7 @@ object Generators:
     for
       ref <- genARef
       value <- genCellValue
-      styleId <- Gen.option(Gen.choose(0, 100))
+      styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
       comment <- Gen.option(Gen.alphaNumStr)
       hyperlink <- Gen.option(Gen.alphaNumStr.map(s => s"https://example.com/$s"))
     yield Cell(ref, value, styleId, comment, hyperlink)
@@ -79,7 +79,7 @@ object Generators:
     for
       width <- Gen.option(Gen.choose(1.0, 255.0))
       hidden <- Gen.oneOf(true, false)
-      styleId <- Gen.option(Gen.choose(0, 100))
+      styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
     yield ColumnProperties(width, hidden, styleId)
 
   /** Generate row properties */
@@ -87,7 +87,7 @@ object Generators:
     for
       height <- Gen.option(Gen.choose(1.0, 409.0))
       hidden <- Gen.oneOf(true, false)
-      styleId <- Gen.option(Gen.choose(0, 100))
+      styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
     yield RowProperties(height, hidden, styleId)
 
   /** Generate sheet with small number of cells */

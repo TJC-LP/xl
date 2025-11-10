@@ -25,6 +25,42 @@ case class OoxmlCell(
         Seq(elem("is")(elem("t")(Text(text))))
       case CellValue.Text(text) => // SST index
         Seq(elem("v")(Text(text))) // text here would be the SST index as string
+      case CellValue.RichText(richText) =>
+        // Rich text: <is> with multiple <r> (text run) elements
+        val runElems = richText.runs.map { run =>
+          val rPrElems = run.font.map { f =>
+            val fontProps = Seq.newBuilder[Elem]
+
+            // Font style properties (order matters for OOXML)
+            if f.bold then fontProps += elem("b")()
+            if f.italic then fontProps += elem("i")()
+            if f.underline then fontProps += elem("u")()
+
+            // Font color
+            f.color.foreach { c =>
+              fontProps += elem("color", "rgb" -> c.toHex.drop(1))() // Attributes then children
+            }
+
+            // Font size and name
+            fontProps += elem("sz", "val" -> f.sizePt.toString)()
+            fontProps += elem("name", "val" -> f.name)()
+
+            elem("rPr")(fontProps.result()*)
+          }.toSeq
+
+          // Text run: <r> with optional <rPr> and <t>
+          // Add xml:space="preserve" to preserve leading/trailing spaces
+          val textElem =
+            if run.text.startsWith(" ") || run.text.endsWith(" ") then
+              elem("t", "xml:space" -> "preserve")(Text(run.text))
+            else elem("t")(Text(run.text))
+
+          elem("r")(
+            rPrElems ++ Seq(textElem)*
+          )
+        }
+
+        Seq(elem("is")(runElems*))
       case CellValue.Number(num) =>
         Seq(elem("v")(Text(num.toString)))
       case CellValue.Bool(b) =>
@@ -112,7 +148,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         // Remap sheet-local styleId to workbook-level index
         val globalStyleIdx = cell.styleId.flatMap { localId =>
           // Look up in remapping table, fall back to 0 (default) if not found
-          styleRemapping.get(localId).orElse(Some(0))
+          styleRemapping.get(localId.value).orElse(Some(0))
         }
 
         // Determine cell type and value based on CellValue type and SST availability
@@ -121,6 +157,9 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
             sst.flatMap(_.indexOf(s)) match
               case Some(idx) => ("s", com.tjclp.xl.CellValue.Text(idx.toString))
               case None => ("inlineStr", cell.value)
+          case com.tjclp.xl.CellValue.RichText(_) =>
+            // Rich text is always inline (cannot be shared)
+            ("inlineStr", cell.value)
           case com.tjclp.xl.CellValue.Number(_) => ("n", cell.value)
           case com.tjclp.xl.CellValue.Bool(_) => ("b", cell.value)
           case com.tjclp.xl.CellValue.DateTime(dt) =>

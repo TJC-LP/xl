@@ -5,7 +5,7 @@ import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
 import java.util.zip.ZipInputStream
 import java.nio.file.Path
 import scala.collection.mutable
-import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, XLError, XLResult, SheetName}
+import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, XLError, XLResult, SheetName, StyleId}
 
 /**
  * Reader for XLSX files (ZIP parsing)
@@ -126,7 +126,7 @@ object XlsxReader:
               case None => CellValue.Error(com.tjclp.xl.CellError.Value)
           case _ => ooxmlCell.value
 
-        Cell(ooxmlCell.ref, value, ooxmlCell.styleIndex)
+        Cell(ooxmlCell.ref, value, ooxmlCell.styleIndex.map(StyleId.apply))
       }
     }
 

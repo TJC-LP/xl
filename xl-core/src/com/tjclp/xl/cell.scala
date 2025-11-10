@@ -7,6 +7,9 @@ enum CellValue:
   /** Text/string value */
   case Text(value: String)
 
+  /** Rich text with multiple formatting runs (inline string with formatting) */
+  case RichText(value: com.tjclp.xl.RichText)
+
   /** Numeric value (Excel uses double internally, but we preserve precision) */
   case Number(value: BigDecimal)
 
@@ -66,6 +69,31 @@ object CellValue:
 
     days.toDouble + fractionOfDay
 
+  /**
+   * Convert Excel serial number to LocalDateTime.
+   *
+   * Excel represents dates as the number of days since December 30, 1899, with fractional days
+   * representing time. This is the inverse of dateTimeToExcelSerial.
+   *
+   * @param serial
+   *   Excel serial number (days since 1899-12-30 + fractional time)
+   * @return
+   *   LocalDateTime corresponding to the serial number
+   */
+  def excelSerialToDateTime(serial: Double): LocalDateTime =
+    import java.time.temporal.ChronoUnit
+
+    // Excel epoch: December 30, 1899
+    val epoch1900 = LocalDateTime.of(1899, 12, 30, 0, 0, 0)
+
+    // Extract whole days and fractional day
+    val wholeDays = serial.toLong
+    val fractionOfDay = serial - wholeDays
+    val seconds = (fractionOfDay * 86400.0).toLong
+
+    // Add days and seconds to epoch
+    epoch1900.plusDays(wholeDays).plusSeconds(seconds)
+
 /** Excel error types */
 enum CellError:
   /** Division by zero: #DIV/0! */
@@ -116,7 +144,7 @@ object CellError:
 case class Cell(
   ref: ARef,
   value: CellValue = CellValue.Empty,
-  styleId: Option[Int] = None,
+  styleId: Option[StyleId] = None,
   comment: Option[String] = None,
   hyperlink: Option[String] = None
 ):
@@ -133,7 +161,7 @@ case class Cell(
   def withValue(newValue: CellValue): Cell = copy(value = newValue)
 
   /** Update cell style */
-  def withStyle(styleId: Int): Cell = copy(styleId = Some(styleId))
+  def withStyle(styleId: StyleId): Cell = copy(styleId = Some(styleId))
 
   /** Clear cell style */
   def clearStyle: Cell = copy(styleId = None)

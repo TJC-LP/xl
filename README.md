@@ -11,27 +11,33 @@ A purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7
 - **Pure Domain Model**: 100% pure core with no side effects, nullable values, or partial functions
 - **Immutable Workbooks**: Persistent data structures with efficient structural sharing
 - **Monoid Composition**: Declarative updates via lawful Patch and StylePatch monoids
+- **Ergonomic DSL**: Clean operators (`:=`, `++`, `.merge`) without type ascription friction
 - **Comprehensive Styling**: Colors, fonts, fills, borders, number formats, and alignment
+- **Cell-Level Codecs**: Type-safe encoding/decoding with auto-inferred formatting for 9 primitive types (including RichText)
+- **Rich Text DSL**: Composable intra-cell formatting with String extensions (`.bold.red + " text"`)
+- **HTML Export**: Convert sheet ranges to HTML tables with inline CSS
+- **Pure Error Channels**: ExcelR[F] for explicit error handling without exceptions
+- **Optics & Focus**: Lens and Optional for composable, law-governed transformations
+- **Range Combinators**: fillBy, tabulate, putRow, putCol for declarative sheet building
+- **Configurable Writer**: Control SST policy and XML formatting
 - **Deterministic Output**: Canonical XML ordering for stable git diffs and reproducible builds
 - **Property-Based Testing**: ScalaCheck generators and law tests for all core algebras
 
 ## Status
 
-**Current**: ~75% complete with 112/112 tests passing ✅
+**Current**: ~85% complete with 263/263 tests passing ✅
 
-**Implemented** (P0-P5):
+**Implemented** (P0-P6):
 - ✅ Core domain types (Cell, Sheet, Workbook)
 - ✅ Addressing system with compile-time macros (`cell"A1"`, `range"A1:B10"`)
 - ✅ Patch system with Monoid composition for updates
 - ✅ Complete style system (fonts, colors, fills, borders, alignment)
 - ✅ **OOXML I/O**: Read/write XLSX files with SST and styles.xml
-- ✅ **Streaming Write**: True constant-memory streaming with fs2-data-xml (100k+ rows)
+- ✅ **Streaming**: True constant-memory streaming with fs2-data-xml (100k+ rows)
+- ✅ **Cell Codecs**: Type-safe encoding/decoding with auto-inferred formatting
 - ✅ Elegant syntax: given conversions, batch put macro, formatted literals
 
-**In Progress** (P5):
-- 🚧 Streaming Read: Constant-memory reading (currently hybrid)
-
-**Roadmap**: Complete streaming read, codecs with derivation, formulas, charts, drawings, tables.
+**Roadmap**: Formulas, codecs with case class derivation, charts, drawings, tables.
 
 See [docs/plan/18-roadmap.md](docs/plan/18-roadmap.md) for full implementation plan.
 
@@ -103,6 +109,77 @@ val styleUpdates =
 val newStyle = CellStyle.default.applyPatch(styleUpdates)
 ```
 
+### Type-Safe Cell Operations with Codecs
+
+XL provides cell-level codecs for type-safe reading and writing with auto-inferred formatting, ideal for unstructured Excel sheets like financial models:
+
+```scala
+import com.tjclp.xl.codec.{*, given}
+
+// Batch updates with mixed types (auto-infers formats)
+val sheet = Sheet("Q1 Forecast").getOrElse(...)
+  .putMixed(
+    cell"A1" -> "Revenue",                        // String: no format
+    cell"B1" -> LocalDate.of(2025, 11, 10),      // Auto: date format
+    cell"C1" -> BigDecimal("1000000.50"),        // Auto: decimal format
+    cell"D1" -> 42                                // Auto: general number format
+  )
+  .put(cell"E1", fx"C1*D1")  // Mix with formulas
+
+// Type-safe reading
+sheet.readTyped[LocalDate](cell"B1") match
+  case Right(Some(date)) => println(s"Date: $date")
+  case Right(None) => println("Cell empty")
+  case Left(error) => println(s"Type error: ${error}")
+
+// Read different types from same sheet
+val revenue = sheet.readTyped[BigDecimal](cell"C1")  // Either[CodecError, Option[BigDecimal]]
+val count = sheet.readTyped[Int](cell"D1")           // Either[CodecError, Option[Int]]
+val name = sheet.readTyped[String](cell"A1")         // Either[CodecError, Option[String]]
+```
+
+**Supported types**: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime
+
+**Why codecs?** Financial models are cell-oriented and irregular (not tabular). Codecs provide type safety and automatic format inference without requiring schema definitions, making them perfect for one-off imports/exports and manual cell manipulation.
+
+### Rich Text Formatting (Intra-Cell Styling)
+
+Apply multiple formats within a single cell using the composable DSL:
+
+```scala
+import com.tjclp.xl.RichText.*
+
+// String extension DSL
+val text = "Bold".bold.red + " normal " + "Italic".italic.blue
+
+sheet.put(cell"A1", CellValue.RichText(text))
+
+// Or use putMixed for convenience
+sheet.putMixed(
+  cell"A1" -> ("Error: ".red.bold + "File not found"),
+  cell"A2" -> ("Revenue: ".bold + "+12.5%".green),
+  cell"A3" -> ("Q1 ".size(18.0).bold + "Report".size(18.0).italic)
+)
+```
+
+**Supported formatting**: bold, italic, underline, colors (red/green/blue/black/white/custom), font size, font family
+
+**Why rich text?** Excel supports multiple formatting runs within a cell (OOXML `<is><r>` structure). This is essential for financial reports where values need color-coding (green for positive, red for negative) alongside descriptive text.
+
+### HTML Export
+
+Export sheet ranges to HTML tables for web display:
+
+```scala
+// Export with inline CSS styling
+val html = sheet.toHtml(range"A1:B10")
+
+// Export without styles (plain table)
+val plainHtml = sheet.toHtml(range"A1:B10", includeStyles = false)
+```
+
+Rich text formatting and cell styles are preserved as HTML tags (`<b>`, `<i>`, `<span style="">`) and inline CSS.
+
 ### Streaming API (For Large Files)
 
 XL provides constant-memory streaming for files with 100k+ rows using fs2 and fs2-data-xml:
@@ -160,6 +237,118 @@ excel.readStream(path)
 - `writeStream`: Hybrid approach (materializes rows, then writes)
 - `readStream`: Currently hybrid (materializes workbook, then streams) - true streaming coming soon
 
+### Pure Error Handling with ExcelR
+
+For pure functional programming without exceptions in the effect type, use `ExcelR[F]`:
+
+```scala
+import com.tjclp.xl.io.{ExcelIO, ExcelR}
+import com.tjclp.xl.{XLResult, XLError}
+import cats.effect.IO
+
+val excel: ExcelR[IO] = ExcelIO.instance
+
+// Explicit error channel - no exceptions
+excel.readR(path).flatMap {
+  case Right(workbook) =>
+    // Successfully loaded
+    processWorkbook(workbook)
+  case Left(error: XLError) =>
+    // Handle error explicitly
+    IO.println(s"Failed to read: ${error.message}")
+}
+
+// Streaming with explicit errors
+excel.readStreamR(path)
+  .evalMap {
+    case Right(rowData) => processRow(rowData)
+    case Left(error) => handleError(error)
+  }
+  .compile.drain
+```
+
+**When to use**:
+- `Excel[F]`: Simpler API, errors raised as F[_] failures (default choice)
+- `ExcelR[F]`: Pure FP, explicit error types, no exceptions in F[_]
+
+Both traits coexist - choose based on your error handling style.
+
+### Configurable Writer
+
+Control SST usage and XML formatting for advanced use cases:
+
+```scala
+import com.tjclp.xl.ooxml.{XlsxWriter, WriterConfig, SstPolicy}
+
+// Compact output (no pretty-printing, ~30% smaller files)
+XlsxWriter.writeWith(
+  workbook,
+  path,
+  WriterConfig(prettyPrint = false)
+)
+
+// Force shared strings table
+XlsxWriter.writeWith(
+  workbook,
+  path,
+  WriterConfig(sstPolicy = SstPolicy.Always)
+)
+```
+
+**Options**:
+- `sstPolicy`: `Auto` (default heuristics), `Always` (force SST), `Never` (inline only)
+- `prettyPrint`: `true` (default, readable XML), `false` (compact, smaller files)
+
+### Range Combinators & Utilities
+
+Fill ranges declaratively with functional combinators:
+
+```scala
+// Fill using Excel coordinates
+sheet.fillBy(range"A1:C10") { (col, row) =>
+  CellValue.Number(BigDecimal(col.index0 + row.index0))
+}
+
+// Fill using 0-based indices
+sheet.tabulate(range"A1:C10") { (colIdx, rowIdx) =>
+  CellValue.Number(BigDecimal(colIdx * rowIdx))
+}
+
+// Populate row or column
+sheet.putRow(Row.from1(1), Column.from1(1), Vector(
+  CellValue.Text("Q1"), CellValue.Text("Q2"), CellValue.Text("Q3")
+))
+
+// Deterministic iteration (sorted)
+sheet.cellsSorted.foreach(c => println(s"${c.ref.toA1}: ${c.value}"))
+```
+
+### Optics & Focus DSL
+
+Composable, law-governed updates with Lens and Optional:
+
+```scala
+import Optics.*
+
+// Modify cell value functionally
+sheet.modifyValue(cell"A1") {
+  case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
+  case other => other
+}
+
+// Conditional transformations
+sheet.modifyCell(cell"B5") { cell =>
+  cell.value match
+    case CellValue.Number(n) if n < 0 => cell.withStyle(negativeStyleId)
+    case _ => cell
+}
+
+// Focus on specific cells
+val updated = sheet.focus(cell"C1").modify(_.withValue(CellValue.Number(42)))(sheet)
+```
+
+**Benefits**: Composable, total functions, zero allocation for simple paths.
+
 ## Development
 
 ### Build Commands
@@ -190,13 +379,15 @@ excel.readStream(path)
 ### Running Tests
 
 ```bash
-# All tests (112 tests: 95 core + 9 OOXML + 8 streaming)
+# All tests (229 tests: 187 core + 24 OOXML + 18 streaming)
 ./mill __.test
 
 # Individual test suites
 ./mill xl-core.test.testOnly com.tjclp.xl.AddressingSpec
 ./mill xl-core.test.testOnly com.tjclp.xl.PatchSpec
 ./mill xl-core.test.testOnly com.tjclp.xl.StyleSpec
+./mill xl-core.test.testOnly com.tjclp.xl.codec.CellCodecSpec
+./mill xl-core.test.testOnly com.tjclp.xl.codec.BatchUpdateSpec
 ./mill xl-ooxml.test.testOnly com.tjclp.xl.ooxml.OoxmlRoundTripSpec
 ./mill xl-cats-effect.test.testOnly com.tjclp.xl.io.ExcelIOSpec
 ```
@@ -237,6 +428,7 @@ xl/
 - `sheet.scala` → Sheet, Workbook with immutable operations
 - `patch.scala` → Patch Monoid for composing updates
 - `style.scala` → CellStyle, Font, Fill, Border, Color, NumFmt
+- `codec/` → CellCodec instances, batch update extensions
 - `error.scala` → XLError ADT for total error handling
 
 **xl-macros**: Compile-time DSLs
@@ -330,6 +522,31 @@ val result: Either[XLError, Sheet] = sheet.applyPatch(updates)
 
 **Note**: Type ascription `(patch: Patch)` is required for `|+|` operator due to Scala enum limitations.
 
+### Ergonomic Patch DSL (Simplified Syntax)
+
+For cleaner syntax without type ascription, use the DSL operators:
+
+```scala
+import com.tjclp.xl.dsl.*
+
+// Build patches with := operator and ++ composition
+val patch =
+  (cell"A1" := "Title") ++
+  (cell"B1" := 100) ++
+  range"A1:B1".merge
+
+// Apply to sheet
+val result: Either[XLError, Sheet] = sheet.applyPatch(patch)
+```
+
+**Operators**:
+- `:=` - Assign values (auto-converts primitives to CellValue)
+- `++` - Compose patches (alternative to `|+|`, no type ascription needed)
+- `.merge` / `.unmerge` / `.remove` on CellRange (returns Patch)
+- `.styled(style)` / `.styleId(id)` / `.clearStyle` on ARef
+
+**Benefits**: Cleaner syntax, no type ascription, same semantics as Monoid composition.
+
 ### Styles
 
 ```scala
@@ -365,14 +582,16 @@ val emu = Px(96.0).toEmu          // Pixels to EMU (OOXML unit)
 ### Test Coverage
 
 - **Addressing**: 17 property tests for Column, Row, ARef, CellRange
-- **Patches**: 19 tests for Monoid laws and application semantics
-- **Styles**: 41 tests for style system, unit conversions, canonicalization
+- **Patches**: 21 tests for Monoid laws and application semantics
+- **Styles**: 60 tests for style system, unit conversions, canonicalization
+- **Codecs**: 58 tests for encoding/decoding, identity laws, batch updates
 
 All core algebras are tested with:
 - Property-based testing (ScalaCheck)
 - Monoid laws (associativity, identity)
 - Idempotence properties
 - Round-trip invariants
+- Identity laws for codecs
 
 ## Documentation
 

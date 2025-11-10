@@ -51,6 +51,19 @@ xl-testkit/      → Test laws, generators, golden files [future]
 - `CellStyle.canonicalKey` → deterministic deduplication for styles.xml
 - Units: `Pt`, `Px`, `Emu` opaque types with bidirectional conversions
 
+**Codecs** (`xl-core/src/com/tjclp/xl/codec/`):
+- `CellCodec[A]` → Bidirectional type-safe encoding/decoding for 9 primitive types (String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText)
+- `putMixed(updates)` → Batch updates with auto-inferred formatting
+- `readTyped[A](ref)` → Type-safe reading with Either[CodecError, Option[A]]
+
+**Rich Text** (`xl-core/src/com/tjclp/xl/richtext.scala`):
+- `TextRun` → Single formatted text segment (OOXML `<r>` element)
+- `RichText` → Multiple runs with different formatting within one cell
+- String extensions: `.bold`, `.italic`, `.red`, `.green`, `.size()`, etc.
+
+**HTML Export** (`xl-core/src/com/tjclp/xl/html/`):
+- `sheet.toHtml(range)` → Convert cell range to HTML table with inline CSS
+
 **OOXML Layer** (`xl-ooxml/src/com/tjclp/xl/ooxml/`):
 - Pure XML serialization with `XmlWritable`/`XmlReadable` traits
 - `ContentTypes`, `Relationships`, `OoxmlWorkbook`, `OoxmlWorksheet` → OOXML parts
@@ -62,7 +75,7 @@ xl-testkit/      → Test laws, generators, golden files [future]
 # Compile everything
 ./mill __.compile
 
-# Run all tests (77 tests: 17 addressing + 19 patch + 41 style)
+# Run all tests (263 tests: 221 core + 24 OOXML + 18 streaming)
 ./mill __.test
 
 # Test specific module
@@ -301,6 +314,139 @@ Macros in `xl-macros/src/com/tjclp/xl/macros.scala`:
 - Emit constants directly: `'{ (${Expr(value)}: T).asInstanceOf[OpaqueType] }`
 - Zero-allocation parsers (no regex, manual char iteration)
 
+### DSL Patterns
+
+**Patch DSL** (`xl-core/src/com/tjclp/xl/dsl.scala`):
+```scala
+import com.tjclp.xl.dsl.*
+
+// Ergonomic operators (no type ascription needed)
+val patch = (cell"A1" := "Title") ++ (cell"A1".styled(headerStyle)) ++ range"A1:B1".merge
+
+// Compared to Monoid syntax (requires type ascription)
+val patch = (Patch.Put(cell"A1", value): Patch) |+| (Patch.SetStyle(cell"A1", id): Patch)
+```
+
+**Optics** (`xl-core/src/com/tjclp/xl/optics.scala`):
+```scala
+import Optics.*
+
+// Modify cell value functionally
+sheet.modifyValue(cell"A1") {
+  case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
+  case other => other
+}
+
+// Focus on specific cell
+sheet.focus(cell"B1").modify(_.withValue(CellValue.Number(42)))(sheet)
+```
+
+**ExcelR** (Pure error handling):
+```scala
+import com.tjclp.xl.io.ExcelR
+
+val excel: ExcelR[IO] = ExcelIO.instance
+excel.readR(path).flatMap {
+  case Right(wb) => processWorkbook(wb)
+  case Left(err) => handleError(err)
+}
+```
+
+### Codec Patterns
+
+Cell-level codecs (`xl-core/src/com/tjclp/xl/codec/`) provide type-safe encoding/decoding with auto-inferred formatting.
+
+#### When to Use Codecs
+
+- ✅ Financial models (cell-oriented, irregular layouts)
+- ✅ Unstructured sheets (no schema)
+- ✅ Type-safe reading from user input
+- ✅ Auto-inferred date/number formats
+
+#### Batch Updates
+
+Always prefer `putMixed` for multi-cell updates:
+
+```scala
+import com.tjclp.xl.codec.{*, given}
+
+sheet.putMixed(
+  cell"A1" -> "Revenue",
+  cell"B1" -> LocalDate.of(2025, 11, 10),  // Auto: date format
+  cell"C1" -> BigDecimal("1000000.50"),    // Auto: decimal format
+  cell"D1" -> 42
+)
+```
+
+**Benefits**: Cleaner syntax, auto-inferred styles, builds on existing `putAll` (no performance overhead).
+
+#### Type-Safe Reading
+
+```scala
+// Reading returns Either[CodecError, Option[A]]
+sheet.readTyped[BigDecimal](cell"C1") match
+  case Right(Some(value)) => // Success: cell has value
+  case Right(None) => // Success: cell is empty
+  case Left(error) => // Error: type mismatch or parse error
+
+// Convert to XLError if needed
+val xlResult: Either[XLError, Option[BigDecimal]] =
+  sheet.readTyped[BigDecimal](ref)
+    .left.map(_.toXLError(ref))
+```
+
+#### Supported Types
+
+9 primitive types with inline given instances (zero-overhead):
+- `String`, `Int`, `Long`, `Double`, `BigDecimal`, `Boolean`, `LocalDate`, `LocalDateTime`, `RichText`
+
+#### Auto-Inferred Formats
+
+- `LocalDate` → `NumFmt.Date`
+- `LocalDateTime` → `NumFmt.DateTime`
+- `BigDecimal` → `NumFmt.Decimal`
+- `Int`, `Long`, `Double` → `NumFmt.General`
+- `String`, `Boolean`, `RichText` → No cell-level format (RichText has run-level formatting)
+
+#### Identity Laws
+
+All codecs satisfy: `codec.read(Cell(ref, codec.write(value)._1)) == Right(Some(value))` (up to formatting precision).
+
+#### Rich Text DSL
+
+For intra-cell formatting (multiple formats within one cell):
+
+```scala
+import com.tjclp.xl.RichText.*
+
+// Composable with + operator
+val text = "Bold".bold.red + " normal " + "Italic".italic.blue
+
+// Use with putMixed
+sheet.putMixed(
+  cell"A1" -> ("Error: ".red.bold + "Fix this!"),
+  cell"A2" -> ("Q1 ".size(18.0).bold + "Report".italic)
+)
+
+// Or use directly
+sheet.put(cell"A1", CellValue.RichText(text))
+```
+
+**Formatting methods**: `.bold`, `.italic`, `.underline`, `.red`, `.green`, `.blue`, `.black`, `.white`, `.size(pt)`, `.fontFamily(name)`, `.withColor(color)`
+
+**OOXML mapping**: Each `TextRun` → `<r>` element with `<rPr>` (run properties). Uses `xml:space="preserve"` to preserve whitespace.
+
+#### HTML Export
+
+Export sheet ranges to HTML for web display:
+
+```scala
+val html = sheet.toHtml(range"A1:B10")  // With inline CSS
+val plain = sheet.toHtml(range"A1:B10", includeStyles = false)  // No CSS
+```
+
+Rich text and cell styles preserved as HTML tags and inline CSS. Useful for dashboards, reporting, email generation.
+
 ## Documentation
 
 **Primary source**: `docs/plan/` directory (29 markdown files)
@@ -420,10 +566,17 @@ property("Px to Emu round-trip") {
 
 ## Test Coverage Goal
 
-77/77 tests passing (as of P3 completion):
+263/263 tests passing (as of P6 + P31 completion):
 - 17 addressing tests (Column, Row, ARef, CellRange laws)
-- 19 patch tests (Monoid laws, application semantics)
-- 22 style tests (units, colors, builders, canonicalization)
-- 19 style patch tests (Monoid laws, idempotence, overrides)
+- 21 patch tests (Monoid laws, application semantics)
+- 60 style tests (units, colors, builders, canonicalization, StylePatch, StyleRegistry)
+- 8 datetime tests (Excel serial number conversions)
+- 42 codec tests (CellCodec identity laws, type safety, auto-inference)
+- 16 batch update tests (putMixed, readTyped, style deduplication)
+- 18 elegant syntax tests (given conversions, batch put, formatted literals)
+- 34 optics tests (Lens/Optional laws, focus DSL, real-world use cases)
+- 24 OOXML tests (round-trip, serialization, styles)
+- 18 streaming tests (fs2-data-xml, constant-memory I/O)
+- 5 RichText tests (composition, formatting, DSL)
 
 Target: 90%+ coverage with property-based tests for all algebras.

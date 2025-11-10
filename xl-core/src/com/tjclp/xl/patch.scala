@@ -18,7 +18,7 @@ enum Patch:
   case Put(ref: ARef, value: CellValue)
 
   /** Set style for a cell */
-  case SetStyle(ref: ARef, styleId: Int)
+  case SetStyle(ref: ARef, styleId: StyleId)
 
   /** Set style for a cell using CellStyle object (auto-registers in styleRegistry) */
   case SetCellStyle(ref: ARef, style: CellStyle)

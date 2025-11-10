@@ -93,7 +93,7 @@ class PatchSpec extends ScalaCheckSuite:
   test("SetStyle patch sets cell style") {
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
-    val styleId = 42
+    val styleId = StyleId(42)
 
     // First put a cell, then style it
     val patch = (Patch.Put(ref, CellValue.Text("Test")): Patch) |+| (Patch.SetStyle(ref, styleId): Patch)
@@ -107,7 +107,7 @@ class PatchSpec extends ScalaCheckSuite:
   test("ClearStyle patch removes cell style") {
     val sheet = emptySheet
       .put(ARef.from1(1, 1), CellValue.Text("Test"))
-      .put(Cell(ARef.from1(1, 1), CellValue.Text("Test"), Some(42)))
+      .put(Cell(ARef.from1(1, 1), CellValue.Text("Test"), Some(StyleId(42))))
 
     val ref = ARef.from1(1, 1)
     val patch = Patch.ClearStyle(ref)
@@ -231,7 +231,7 @@ class PatchSpec extends ScalaCheckSuite:
     val patches = Vector(
       Patch.Put(r1, CellValue.Text("A1")),
       Patch.Put(r2, CellValue.Number(42)),
-      Patch.SetStyle(r1, 1)
+      Patch.SetStyle(r1, StyleId(1))
     )
 
     val batch = Patch.Batch(patches)
@@ -241,7 +241,7 @@ class PatchSpec extends ScalaCheckSuite:
     val updated = result.getOrElse(fail("Should succeed"))
 
     assertEquals(updated(r1).value, CellValue.Text("A1"))
-    assertEquals(updated(r1).styleId, Some(1))
+    assertEquals(updated(r1).styleId, Some(StyleId(1)))
     assertEquals(updated(r2).value, CellValue.Number(42))
   }
 
@@ -263,7 +263,7 @@ class PatchSpec extends ScalaCheckSuite:
   property("SetStyle patch is idempotent") {
     forAll { (ref: ARef, styleId: Int) =>
       val sheet = emptySheet.put(ref, CellValue.Empty)
-      val patch = Patch.SetStyle(ref, styleId)
+      val patch = Patch.SetStyle(ref, StyleId(styleId))
 
       val once = Patch.applyPatch(sheet, patch).getOrElse(fail("Should succeed"))
       val twice = Patch.applyPatch(once, patch).getOrElse(fail("Should succeed"))
@@ -304,12 +304,12 @@ class PatchSpec extends ScalaCheckSuite:
     val sheet = emptySheet.put(ARef.from1(1, 1), CellValue.Empty)
     val ref = ARef.from1(1, 1)
 
-    val patch = (Patch.SetStyle(ref, 1): Patch) |+| (Patch.SetStyle(ref, 2): Patch)
+    val patch = (Patch.SetStyle(ref, StyleId(1)): Patch) |+| (Patch.SetStyle(ref, StyleId(2)): Patch)
     val result = Patch.applyPatch(sheet, patch)
 
     assert(result.isRight)
     val updated = result.getOrElse(fail("Should succeed"))
-    assertEquals(updated(ref).styleId, Some(2))
+    assertEquals(updated(ref).styleId, Some(StyleId(2)))
   }
 
   // ========== Extension Method Tests ==========
