@@ -23,10 +23,10 @@ object Column:
 
   extension (col: Column)
     /** Get 0-based index (0 = A, 1 = B, ...) */
-    def index0: Int = col
+    inline def index0: Int = col
 
     /** Get 1-based index (1 = A, 2 = B, ...) */
-    def index1: Int = col + 1
+    inline def index1: Int = col + 1
 
     /** Convert to Excel letter notation (A, B, AA, etc.) */
     def toLetter: String =
@@ -36,10 +36,10 @@ object Column:
       loop(col, "")
 
     /** Shift column by offset */
-    def +(offset: Int): Column = col + offset
+    inline def +(offset: Int): Column = col + offset
 
     /** Shift column by negative offset */
-    def -(offset: Int): Column = col - offset
+    inline def -(offset: Int): Column = col - offset
 
 end Column
 
@@ -57,16 +57,16 @@ object Row:
 
   extension (row: Row)
     /** Get 0-based index */
-    def index0: Int = row
+    inline def index0: Int = row
 
     /** Get 1-based index */
-    def index1: Int = row + 1
+    inline def index1: Int = row + 1
 
     /** Shift row by offset */
-    def +(offset: Int): Row = row + offset
+    inline def +(offset: Int): Row = row + offset
 
     /** Shift row by negative offset */
-    def -(offset: Int): Row = row - offset
+    inline def -(offset: Int): Row = row - offset
 
 end Row
 
@@ -88,7 +88,7 @@ object SheetName:
   /** Create an unsafe sheet name (use only when validation is guaranteed) */
   def unsafe(name: String): SheetName = name
 
-  extension (name: SheetName) def value: String = name
+  extension (name: SheetName) inline def value: String = name
 
 end SheetName
 
@@ -105,15 +105,15 @@ object ARef:
   import Row.index0 as rowIndex
 
   /** Create cell reference from column and row */
-  def apply(col: Column, row: Row): ARef =
+  inline def apply(col: Column, row: Row): ARef =
     (rowIndex(row).toLong << 32) | (colIndex(col).toLong & 0xffffffffL)
 
   /** Create cell reference from 0-based indices */
-  def from0(colIndex: Int, rowIndex: Int): ARef =
+  inline def from0(colIndex: Int, rowIndex: Int): ARef =
     apply(Column.from0(colIndex), Row.from0(rowIndex))
 
   /** Create cell reference from 1-based indices */
-  def from1(colIndex: Int, rowIndex: Int): ARef =
+  inline def from1(colIndex: Int, rowIndex: Int): ARef =
     apply(Column.from1(colIndex), Row.from1(rowIndex))
 
   /** Parse cell reference from A1 notation */
@@ -131,10 +131,10 @@ object ARef:
 
   extension (ref: ARef)
     /** Extract column */
-    def col: Column = Column.from0((ref & 0xffffffffL).toInt)
+    inline def col: Column = Column.from0((ref & 0xffffffffL).toInt)
 
     /** Extract row */
-    def row: Row = Row.from0((ref >> 32).toInt)
+    inline def row: Row = Row.from0((ref >> 32).toInt)
 
     /** Convert to A1 notation */
     def toA1: String =
@@ -143,7 +143,7 @@ object ARef:
       s"${toLetter(ref.col)}${index1(ref.row)}"
 
     /** Shift reference by column and row offsets */
-    def shift(colOffset: Int, rowOffset: Int): ARef =
+    inline def shift(colOffset: Int, rowOffset: Int): ARef =
       ARef(ref.col + colOffset, ref.row + rowOffset)
 
 end ARef
@@ -151,28 +151,28 @@ end ARef
 /** Cell range from start to end (inclusive) */
 case class CellRange(start: ARef, end: ARef):
   /** Top-left column */
-  def colStart: Column = start.col
+  inline def colStart: Column = start.col
 
   /** Top-left row */
-  def rowStart: Row = start.row
+  inline def rowStart: Row = start.row
 
   /** Bottom-right column */
-  def colEnd: Column = end.col
+  inline def colEnd: Column = end.col
 
   /** Bottom-right row */
-  def rowEnd: Row = end.row
+  inline def rowEnd: Row = end.row
 
   /** Number of columns in range */
-  def width: Int = colEnd.index0 - colStart.index0 + 1
+  inline def width: Int = colEnd.index0 - colStart.index0 + 1
 
   /** Number of rows in range */
-  def height: Int = rowEnd.index0 - rowStart.index0 + 1
+  inline def height: Int = rowEnd.index0 - rowStart.index0 + 1
 
   /** Total number of cells */
-  def size: Int = width * height
+  inline def size: Int = width * height
 
   /** Check if reference is within this range */
-  def contains(ref: ARef): Boolean =
+  inline def contains(ref: ARef): Boolean =
     ref.col.index0 >= colStart.index0 &&
       ref.col.index0 <= colEnd.index0 &&
       ref.row.index0 >= rowStart.index0 &&
