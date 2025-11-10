@@ -55,6 +55,16 @@ object Emu:
     /** Convert to pixels */
     def toPx: Px = Px((emu * 96.0) / 914400.0)
 
+// ========== StyleId ==========
+
+/** Style identifier for type-safe style indices */
+opaque type StyleId = Int
+
+object StyleId:
+  def apply(i: Int): StyleId = i
+
+  extension (s: StyleId) inline def value: Int = s
+
 // ========== Colors ==========
 
 /** Theme color slots from Office theme */
@@ -357,7 +367,7 @@ object StylePatch:
 // ========== StyleRegistry ==========
 
 /**
- * Registry for tracking CellStyle → Int mappings within a Sheet.
+ * Registry for tracking CellStyle → StyleId mappings within a Sheet.
  *
  * Coordinates style application by deduplicating styles and assigning stable indices. Styles are
  * identified by their canonical key for structural equality.
@@ -369,7 +379,7 @@ object StylePatch:
  */
 case class StyleRegistry(
   styles: Vector[CellStyle] = Vector(CellStyle.default),
-  index: Map[String, Int] = Map(CellStyle.canonicalKey(CellStyle.default) -> 0)
+  index: Map[String, StyleId] = Map(CellStyle.canonicalKey(CellStyle.default) -> StyleId(0))
 ):
   /**
    * Register a style and get its index.
@@ -382,7 +392,7 @@ case class StyleRegistry(
    * @return
    *   (updated registry, style index)
    */
-  def register(style: CellStyle): (StyleRegistry, Int) =
+  def register(style: CellStyle): (StyleRegistry, StyleId) =
     val key = CellStyle.canonicalKey(style)
     index.get(key) match
       case Some(idx) =>
@@ -390,7 +400,7 @@ case class StyleRegistry(
         (this, idx)
       case None =>
         // New style - append and index
-        val idx = styles.size
+        val idx = StyleId(styles.size)
         val updated = copy(
           styles = styles :+ style,
           index = index + (key -> idx)
@@ -405,7 +415,7 @@ case class StyleRegistry(
    * @return
    *   Some(index) if registered, None otherwise
    */
-  def indexOf(style: CellStyle): Option[Int] =
+  def indexOf(style: CellStyle): Option[StyleId] =
     index.get(CellStyle.canonicalKey(style))
 
   /**
@@ -416,8 +426,8 @@ case class StyleRegistry(
    * @return
    *   Some(style) if index is valid, None otherwise
    */
-  def get(idx: Int): Option[CellStyle] =
-    styles.lift(idx)
+  def get(idx: StyleId): Option[CellStyle] =
+    styles.lift(idx.value)
 
   /** Number of registered styles (including default) */
   def size: Int = styles.size

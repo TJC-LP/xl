@@ -50,10 +50,10 @@ case class OoxmlCell(
 
           // Text run: <r> with optional <rPr> and <t>
           // Add xml:space="preserve" to preserve leading/trailing spaces
-          val textElem = if run.text.startsWith(" ") || run.text.endsWith(" ") then
-            elem("t", "xml:space" -> "preserve")(Text(run.text))
-          else
-            elem("t")(Text(run.text))
+          val textElem =
+            if run.text.startsWith(" ") || run.text.endsWith(" ") then
+              elem("t", "xml:space" -> "preserve")(Text(run.text))
+            else elem("t")(Text(run.text))
 
           elem("r")(
             rPrElems ++ Seq(textElem)*
@@ -148,7 +148,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         // Remap sheet-local styleId to workbook-level index
         val globalStyleIdx = cell.styleId.flatMap { localId =>
           // Look up in remapping table, fall back to 0 (default) if not found
-          styleRemapping.get(localId).orElse(Some(0))
+          styleRemapping.get(localId.value).orElse(Some(0))
         }
 
         // Determine cell type and value based on CellValue type and SST availability

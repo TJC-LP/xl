@@ -6,14 +6,14 @@ import scala.collection.immutable.{Map, Set}
 case class ColumnProperties(
   width: Option[Double] = None,
   hidden: Boolean = false,
-  styleId: Option[Int] = None
+  styleId: Option[StyleId] = None
 )
 
 /** Properties for rows */
 case class RowProperties(
   height: Option[Double] = None,
   hidden: Boolean = false,
-  styleId: Option[Int] = None
+  styleId: Option[StyleId] = None
 )
 
 /**
@@ -182,8 +182,8 @@ extension (sheet: Sheet)
   /**
    * Export a cell range to HTML table.
    *
-   * Generates an HTML `<table>` element with cells rendered as `<td>` elements. Rich text formatting and cell styles
-   * are preserved as HTML tags and inline CSS.
+   * Generates an HTML `<table>` element with cells rendered as `<td>` elements. Rich text
+   * formatting and cell styles are preserved as HTML tags and inline CSS.
    *
    * @param range
    *   The cell range to export

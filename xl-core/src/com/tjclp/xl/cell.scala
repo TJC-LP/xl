@@ -144,7 +144,7 @@ object CellError:
 case class Cell(
   ref: ARef,
   value: CellValue = CellValue.Empty,
-  styleId: Option[Int] = None,
+  styleId: Option[StyleId] = None,
   comment: Option[String] = None,
   hyperlink: Option[String] = None
 ):
@@ -161,7 +161,7 @@ case class Cell(
   def withValue(newValue: CellValue): Cell = copy(value = newValue)
 
   /** Update cell style */
-  def withStyle(styleId: Int): Cell = copy(styleId = Some(styleId))
+  def withStyle(styleId: StyleId): Cell = copy(styleId = Some(styleId))
 
   /** Clear cell style */
   def clearStyle: Cell = copy(styleId = None)
