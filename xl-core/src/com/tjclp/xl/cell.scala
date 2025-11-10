@@ -66,6 +66,31 @@ object CellValue:
 
     days.toDouble + fractionOfDay
 
+  /**
+   * Convert Excel serial number to LocalDateTime.
+   *
+   * Excel represents dates as the number of days since December 30, 1899, with fractional days
+   * representing time. This is the inverse of dateTimeToExcelSerial.
+   *
+   * @param serial
+   *   Excel serial number (days since 1899-12-30 + fractional time)
+   * @return
+   *   LocalDateTime corresponding to the serial number
+   */
+  def excelSerialToDateTime(serial: Double): LocalDateTime =
+    import java.time.temporal.ChronoUnit
+
+    // Excel epoch: December 30, 1899
+    val epoch1900 = LocalDateTime.of(1899, 12, 30, 0, 0, 0)
+
+    // Extract whole days and fractional day
+    val wholeDays = serial.toLong
+    val fractionOfDay = serial - wholeDays
+    val seconds = (fractionOfDay * 86400.0).toLong
+
+    // Add days and seconds to epoch
+    epoch1900.plusDays(wholeDays).plusSeconds(seconds)
+
 /** Excel error types */
 enum CellError:
   /** Division by zero: #DIV/0! */
