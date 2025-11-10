@@ -1,46 +1,66 @@
+# Active Plans
 
-# XL — Pure Scala 3.7 Excel (OOXML) Library
+This directory contains **active future work** only. Completed phases are archived in `docs/archive/plan/`.
 
-**Package root:** `com.tjclp.xl`  
-**Scala:** 3.7.x (named tuples, opaque types, enums, inline, macros, derivation)  
-**Design pillars:** Mathematical purity · Determinism · Ease‑of‑use · Performance · Beautiful syntax
+## Current Status
 
-## Why XL?
-- **Predictable & safe:** A law‑governed core with equational reasoning; effect isolation yields testability.
-- **Type‑directed semantics:** Addresses, ranges, styles, formulas, rows/tables are encoded with precise types.
-- **Performance by construction:** Streaming, canonicalization, constant‑time address math, and compile‑time DSLs.
+- **Phases P0-P6 + P31**: ✅ Complete (85%, 263/263 tests passing)
+- **Production Ready**: Core XLSX read/write, streaming, codecs, optics, RichText
+- **Future Work**: Documented below
 
-## What’s in this spec
-This repository of Markdown documents is the **source of truth** for implementation. It contains formal models, mapping tables to OOXML parts, macro designs, test plans, benchmarks, and security notes.
+## Active Plans (Unimplemented Features)
 
-### Table of Contents
-- [00-executive-summary.md](./00-executive-summary.md)
-- [01-purity-charter.md](./01-purity-charter.md)
-- [02-domain-model.md](./02-domain-model.md)
-- [03-addressing-and-dsl.md](./03-addressing-and-dsl.md)
-- [04-formula-system.md](./04-formula-system.md)
-- [05-styles-and-themes.md](./05-styles-and-themes.md)
-- [06-drawings.md](./06-drawings.md)
-- [07-charts.md](./07-charts.md)
-- [08-tables-and-pivots.md](./08-tables-and-pivots.md)
-- [09-codecs-and-named-tuples.md](./09-codecs-and-named-tuples.md)
-- [10-patches-and-optics.md](./10-patches-and-optics.md)
-- [11-ooxml-mapping.md](./11-ooxml-mapping.md)
-- [12-api-surface.md](./12-api-surface.md)
-- [13-streaming-and-performance.md](./13-streaming-and-performance.md)
-- [14-error-model-and-safety.md](./14-error-model-and-safety.md)
-- [15-testing-and-laws.md](./15-testing-and-laws.md)
-- [16-build-and-modules.md](./16-build-and-modules.md)
-- [17-macros-and-syntax.md](./17-macros-and-syntax.md)
-- [18-roadmap.md](./18-roadmap.md)
-- [19-examples.md](./19-examples.md)
-- [20-glossary.md](./20-glossary.md)
-- [21-appendix-ooxml-cheatsheet.md](./21-appendix-ooxml-cheatsheet.md)
-- [22-appendix-benchmarks-plan.md](./22-appendix-benchmarks-plan.md)
-- [23-security.md](./23-security.md)
-- [24-contributing.md](./24-contributing.md)
-- [25-style-guide.md](./25-style-guide.md)
-- [26-decisions-adr.md](./26-decisions-adr.md)
-- [27-faq.md](./27-faq.md)
+### Core Future Work
 
-*Generated on 2025-11-09*
+1. **[formula-system.md](formula-system.md)** - P7+ Formula Evaluator
+   - Status: ⬜ Not started
+   - Scope: AST evaluation, function library, circular reference detection
+   - Note: Formula parsing/serialization already complete
+
+2. **[error-model-and-safety.md](error-model-and-safety.md)** - P11 Security Hardening
+   - Status: Error model ✅ complete, security ⬜ not started
+   - Scope: ZIP bomb detection, formula injection guards, XXE prevention
+   - Priority: High (required for production use)
+
+3. **[security.md](security.md)** - P11 Additional Security Features
+   - Status: ⬜ Not started
+   - Scope: File size limits, macro handling, sanitization
+   - Note: Consider merging with error-model-and-safety.md
+
+### Advanced Features
+
+4. **[drawings.md](drawings.md)** - P8 Images & Shapes
+   - Status: ⬜ Not started
+   - Scope: PNG/JPEG embedding, anchors, text boxes
+
+5. **[charts.md](charts.md)** - P9 Chart Generation
+   - Status: ⬜ Not started
+   - Scope: Bar, line, pie, scatter charts with data binding
+
+6. **[tables-and-pivots.md](tables-and-pivots.md)** - P10 Structured Data
+   - Status: ⬜ Not started
+   - Scope: Excel tables, conditional formatting, data validation
+
+### Infrastructure
+
+7. **[benchmarks.md](benchmarks.md)** - Performance Testing
+   - Status: ⬜ Not started
+   - Scope: JMH benchmarks, POI comparisons, regression tests
+
+8. **[roadmap.md](roadmap.md)** - Master Status Tracker
+   - Status: ✅ Maintained (living document)
+   - Scope: Overall progress, phase definitions, completion criteria
+
+## Related Documentation
+
+- **Design Docs**: `docs/design/` - Architectural decisions (purity charter, domain model, ADRs)
+- **Reference**: `docs/reference/` - Examples, glossary, OOXML research, testing guide
+- **Archived Plans**: `docs/archive/plan/` - Completed P0-P6, P31 implementation plans
+- **Status**: `docs/STATUS.md` - Detailed current state (263 tests, performance, limitations)
+
+## Quick Links
+
+- **[CLAUDE.md](../../CLAUDE.md)** - AI assistant context for working with the codebase
+- **[README.md](../../README.md)** - User-facing documentation
+- **[CONTRIBUTING.md](../CONTRIBUTING.md)** - Contribution guidelines
+- **[FAQ.md](../FAQ.md)** - Frequently asked questions

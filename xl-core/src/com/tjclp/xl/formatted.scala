@@ -1,5 +1,7 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.style.NumFmt
+
 /**
  * Formatted cell value with associated number format.
  *

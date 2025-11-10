@@ -4,6 +4,7 @@ import munit.ScalaCheckSuite
 import org.scalacheck.{Arbitrary, Gen, Prop}
 import org.scalacheck.Prop.*
 import cats.syntax.all.*
+import com.tjclp.xl.style.{*, given}
 
 /** Property tests for StylePatch monoid laws */
 class StylePatchSpec extends ScalaCheckSuite:

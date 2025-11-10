@@ -3,6 +3,7 @@ package com.tjclp.xl
 import munit.FunSuite
 import com.tjclp.xl.macros.{cell, range}
 import com.tjclp.xl.conversions.given
+import com.tjclp.xl.style.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align, NumFmt}
 
 /** Tests for Sheet style extension methods */
 class SheetStyleSpec extends FunSuite:

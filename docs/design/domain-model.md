@@ -57,6 +57,7 @@ enum CellValue derives CanEqual:
   case Bool(value: Boolean)
   case DateTime(value: LocalDateTime)
   case Formula(expr: formula.Expr[Validity])
+  case RichText(value: richtext.RichText)  // Multiple formatted runs in one cell
   case Empty
   case Error(err: CellError)
 
@@ -85,7 +86,8 @@ final case class Sheet(
   cells: Map[addr.ARef, Cell],
   merged: Set[addr.CellRange],
   colProps: Map[addr.Column, Any],
-  rowProps: Map[addr.Row, Any]
+  rowProps: Map[addr.Row, Any],
+  styleRegistry: Option[style.StyleRegistry] = None  // Per-sheet style management
 ) derives CanEqual:
   def cell(ref: addr.ARef): Option[Cell] = cells.get(ref)
   def updateCell(ref: addr.ARef)(f: Cell => Cell): Sheet =
@@ -139,4 +141,66 @@ object style:
     numberFormat: FormatId,
     align: Align
   ) derives CanEqual
+
+  /** Per-sheet style registry for managing cell styles with deduplication.
+    * Maintains bidirectional mapping between CellStyle and integer indices.
+    * Ensures consistent style application across OOXML write/read cycles.
+    */
+  final case class StyleRegistry(
+    styles: Vector[CellStyle],           // Index → Style
+    styleMap: Map[String, Int]           // CanonicalKey → Index
+  ) derives CanEqual:
+    def register(style: CellStyle): (StyleRegistry, Int) = ...
+    def get(index: Int): Option[CellStyle] = ...
+    def indexOf(style: CellStyle): Option[Int] = ...
 ```
+
+## RichText Model (P31)
+
+RichText enables multiple text runs with different formatting within a single cell:
+
+```scala
+object richtext:
+  /** Single formatted text segment (maps to OOXML `<r>` element). */
+  final case class TextRun(
+    text: String,
+    font: Option[style.Font] = None,
+    color: Option[style.Color] = None,
+    bold: Boolean = false,
+    italic: Boolean = false,
+    underline: Boolean = false
+  ) derives CanEqual
+
+  /** Collection of formatted text runs. */
+  final case class RichText(runs: Vector[TextRun]) derives CanEqual:
+    def +(other: TextRun): RichText = copy(runs = runs :+ other)
+    def +(other: RichText): RichText = copy(runs = runs ++ other.runs)
+    def toPlainText: String = runs.map(_.text).mkString
+
+  /** DSL extensions for ergonomic RichText creation. */
+  extension (s: String)
+    def bold: RichText = RichText(Vector(TextRun(s, bold = true)))
+    def italic: RichText = RichText(Vector(TextRun(s, italic = true)))
+    def underline: RichText = RichText(Vector(TextRun(s, underline = true)))
+    def red: RichText = RichText(Vector(TextRun(s, color = Some(Color.fromRgb(255, 0, 0)))))
+    def green: RichText = RichText(Vector(TextRun(s, color = Some(Color.fromRgb(0, 255, 0)))))
+    def blue: RichText = RichText(Vector(TextRun(s, color = Some(Color.fromRgb(0, 0, 255)))))
+    def size(pt: Double): RichText = RichText(Vector(TextRun(s, font = Some(Font("Calibri", pt, false, false)))))
+```
+
+### RichText Usage
+```scala
+import com.tjclp.xl.richtext.*
+
+// Composition with + operator
+val text = "Error: ".red.bold + "Fix this immediately!"
+val header = "Q1 ".size(18.0).bold + "Financial Report".italic
+
+// Put in cell
+sheet.put(cell"A1", CellValue.RichText(text))
+```
+
+### OOXML Mapping
+- `TextRun` → `<r>` element with `<rPr>` (run properties)
+- Multiple runs → `<si>` (shared string item) with multiple `<r>` children
+- Whitespace preserved with `xml:space="preserve"` attribute

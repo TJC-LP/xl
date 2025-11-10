@@ -1,5 +1,7 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.style.{Font, Color}
+
 /**
  * Text run with optional font formatting.
  *

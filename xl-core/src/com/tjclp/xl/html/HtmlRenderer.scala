@@ -1,6 +1,7 @@
 package com.tjclp.xl.html
 
 import com.tjclp.xl.*
+import com.tjclp.xl.style.{Font, Color, BorderStyle, HAlign, VAlign, Fill}
 
 /** Renders Excel sheets to HTML tables with inline CSS styling */
 object HtmlRenderer:

@@ -314,10 +314,22 @@ sheet.tabulate(range"A1:C10") { (colIdx, rowIdx) =>
   CellValue.Number(BigDecimal(colIdx * rowIdx))
 }
 
-// Populate row or column
-sheet.putRow(Row.from1(1), Column.from1(1), Vector(
+// Populate row and column (returns XLResult for strict bounds checking)
+val withRow = sheet.putRow(Row.from1(1), Column.from1(1), Vector(
   CellValue.Text("Q1"), CellValue.Text("Q2"), CellValue.Text("Q3")
-))
+)).fold(err => throw new RuntimeException(err.message), identity)
+
+val withColumn = withRow.putCol(Column.from1(1), Row.from1(2), Vector(
+  CellValue.Text("North"), CellValue.Text("South")
+)).fold(err => throw new RuntimeException(err.message), identity)
+
+// Strict range population (value count must match range size)
+val filled = sheet.putRange(range"A2:B3", Vector(
+  CellValue.Text("North"),
+  CellValue.Number(BigDecimal(42)),
+  CellValue.Text("South"),
+  CellValue.Number(BigDecimal(55))
+)).fold(err => throw new RuntimeException(err.message), identity)
 
 // Deterministic iteration (sorted)
 sheet.cellsSorted.foreach(c => println(s"${c.ref.toA1}: ${c.value}"))

@@ -2,6 +2,7 @@ package com.tjclp.xl
 
 import org.scalacheck.{Arbitrary, Gen}
 import java.time.LocalDateTime
+import com.tjclp.xl.style.StyleId
 
 /** ScalaCheck generators for XL types */
 object Generators:

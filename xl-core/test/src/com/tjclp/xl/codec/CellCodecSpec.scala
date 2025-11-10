@@ -5,6 +5,7 @@ import org.scalacheck.Prop.*
 import com.tjclp.xl.*
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.macros.cell
+import com.tjclp.xl.style.NumFmt
 import java.time.{LocalDate, LocalDateTime}
 
 /** Property-based tests for CellCodec instances */

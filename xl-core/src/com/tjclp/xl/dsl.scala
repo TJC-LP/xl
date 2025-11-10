@@ -1,5 +1,7 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.style.{CellStyle, StyleId}
+
 /**
  * DSL extensions for ergonomic patch building and sheet operations.
  *

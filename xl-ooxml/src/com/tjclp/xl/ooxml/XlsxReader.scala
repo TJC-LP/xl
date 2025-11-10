@@ -5,7 +5,8 @@ import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
 import java.util.zip.ZipInputStream
 import java.nio.file.Path
 import scala.collection.mutable
-import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, XLError, XLResult, SheetName, StyleId}
+import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, XLError, XLResult, SheetName}
+import com.tjclp.xl.style.StyleId
 
 /**
  * Reader for XLSX files (ZIP parsing)

@@ -1,5 +1,7 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.style.StyleId
+
 /**
  * Lightweight optics library for composable updates.
  *
