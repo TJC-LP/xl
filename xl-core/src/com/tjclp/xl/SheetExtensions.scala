@@ -93,8 +93,18 @@ extension (sheet: Sheet)
     sheet.putAll(newCells)
 
   /**
-   * Put cells in a range in row-major order. The number of supplied values must equal the range
-   * size, otherwise a ValueCountMismatch error is returned.
+   * Put cells in a range in row-major order.
+   *
+   * The number of supplied values must exactly match the range size to prevent silent data loss
+   * from truncation or unintended empty cells from padding. Returns ValueCountMismatch error if
+   * counts don't match.
+   *
+   * @param range
+   *   The cell range to populate
+   * @param values
+   *   Cell values in row-major order (must match range size exactly)
+   * @return
+   *   Updated sheet or error if value count doesn't match range size
    */
   def putRange(range: CellRange, values: Iterable[CellValue]): XLResult[Sheet] =
     val refs = range.cells.toVector
@@ -125,13 +135,15 @@ extension (sheet: Sheet)
     val buffered = values.toVector
     if buffered.isEmpty then Right(sheet)
     else
-      val lastColIndex = startCol.index0.toLong + buffered.size - 1
-      if lastColIndex > Column.MaxIndex0 then
+      // Check if writing all values would exceed Excel's column limit
+      val requiredColumns = buffered.size
+      val maxAllowedColumns = Column.MaxIndex0 - startCol.index0 + 1
+      if requiredColumns > maxAllowedColumns then
         val maxCol = Column.from0(Column.MaxIndex0).toLetter
         Left(
           XLError.OutOfBounds(
             s"row ${row.index1}",
-            s"Cannot write past column $maxCol (max ${Column.MaxIndex0 + 1} columns)"
+            s"Cannot write $requiredColumns values starting at ${startCol.toLetter} (Excel limit: column $maxCol)"
           )
         )
       else
@@ -158,12 +170,14 @@ extension (sheet: Sheet)
     val buffered = values.toVector
     if buffered.isEmpty then Right(sheet)
     else
-      val lastRowIndex = startRow.index0.toLong + buffered.size - 1
-      if lastRowIndex > Row.MaxIndex0 then
+      // Check if writing all values would exceed Excel's row limit
+      val requiredRows = buffered.size
+      val maxAllowedRows = Row.MaxIndex0 - startRow.index0 + 1
+      if requiredRows > maxAllowedRows then
         Left(
           XLError.OutOfBounds(
             s"column ${col.toLetter}",
-            s"Cannot write past row ${Row.MaxIndex0 + 1} (Excel row limit)"
+            s"Cannot write $requiredRows values starting at row ${startRow.index1} (Excel limit: row ${Row.MaxIndex0 + 1})"
           )
         )
       else

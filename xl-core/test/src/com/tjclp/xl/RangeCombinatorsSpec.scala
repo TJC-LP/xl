@@ -60,7 +60,7 @@ class RangeCombinatorsSpec extends FunSuite:
 
     overflow match
       case Left(XLError.OutOfBounds(_, reason)) =>
-        assert(reason.contains("Cannot write past column"))
+        assert(reason.contains("Cannot write") && reason.contains("Excel limit"))
       case other =>
         fail(s"Expected OutOfBounds for column overflow, got $other")
   }
@@ -82,7 +82,7 @@ class RangeCombinatorsSpec extends FunSuite:
 
     overflow match
       case Left(XLError.OutOfBounds(_, reason)) =>
-        assert(reason.contains("Cannot write past row"))
+        assert(reason.contains("Cannot write") && reason.contains("Excel limit"))
       case other =>
         fail(s"Expected OutOfBounds for row overflow, got $other")
   }
