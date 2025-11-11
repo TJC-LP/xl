@@ -1,6 +1,6 @@
 # Roadmap — From Spec to MVP and Beyond
 
-**Current Status: ~85% Complete (263/263 tests passing)**
+**Current Status: ~85% Complete (698/698 tests passing)**
 
 ## Completed Phases ✅
 
@@ -60,6 +60,19 @@
 - RichText support (`<si><r>` elements)
 - Round-trip tests (24 passing)
 
+### ✅ P4.1: XLSX Reader & Non-Sequential Sheets (Complete)
+**Status**: 100% Complete
+**Test Coverage**: Part of 698 total tests
+**Definition of Done**:
+- Full XLSX reading with style preservation
+- WorkbookStyles parser (fonts, fills, borders, number formats, alignment)
+- Relationship-based worksheet resolution (r:id mapping)
+- Non-sequential sheet index support (ContentTypes.forSheetIndices)
+- Case-insensitive cell reference parsing (Locale.ROOT normalization)
+- Optics bug fixes (Lens.modify return type)
+- Zero compilation warnings (eliminated all 10 warnings)
+- All tests passing (698/698)
+
 ### ✅ P5: Streaming (Complete)
 **Status**: 100% Complete
 **Test Coverage**: 18 tests passing
@@ -105,6 +118,22 @@
 ---
 
 ## Remaining Phases ⬜
+
+### ⬜ P4.5: OOXML Quality & Spec Compliance (Planned)
+**Priority**: High
+**Estimated Effort**: 6-8 hours
+**Definition of Done**:
+- Fix default fills (gray125 pattern per OOXML spec)
+- Fix SharedStrings count vs uniqueCount tracking
+- Add whitespace preservation for plain text cells (xml:space="preserve")
+- Add alignment serialization to styles.xml
+- Fix Scala version consistency (3.7.3 everywhere)
+- Use idiomatic xml:space namespace construction (PrefixedAttribute)
+- Add AI contracts (REQUIRES/ENSURES/ERRORS) to all affected code
+- Add ~10 comprehensive tests (698 → 708 total)
+- Zero spec violations, full round-trip fidelity
+
+**See**: [ooxml-quality.md](ooxml-quality.md) for detailed issue breakdown
 
 ### ⬜ P6b: Full Codec Derivation (Future)
 **Priority**: Medium
@@ -175,10 +204,12 @@
 | P2: Core & Patches | ✅ Complete | 21 tests | 100% |
 | P3: Styles | ✅ Complete | 60 tests | 100% |
 | P4: OOXML MVP | ✅ Complete | 24 tests | 100% |
+| P4.1: XLSX Reader | ✅ Complete | Integrated | 100% |
+| P4.5: OOXML Quality | ⬜ Planned | +10 tests | 0% |
 | P5: Streaming | ✅ Complete | 18 tests | 100% |
 | P6: Codecs (primitives) | ✅ Complete | 58 tests | 80% |
 | P31: Optics/RichText | ✅ Complete | 39 tests | 100% |
-| **Total Core** | **✅** | **263/263 tests** | **~85%** |
+| **Total Core** | **✅** | **698/698 tests** | **~85%** |
 | P6b: Full Derivation | ⬜ Future | - | 0% |
 | P7: Advanced Macros | ⬜ Future | - | 0% |
 | P8: Drawings | ⬜ Future | - | 0% |

@@ -41,6 +41,16 @@ case class StyleIndex(
     styleToIndex.getOrElse(CellStyle.canonicalKey(style), StyleId(0))
 
 object StyleIndex:
+  /** Empty StyleIndex with only default style (useful for testing) */
+  val empty: StyleIndex = StyleIndex(
+    fonts = Vector.empty,
+    fills = Vector.empty,
+    borders = Vector.empty,
+    numFmts = Vector.empty,
+    cellStyles = Vector(CellStyle.default),
+    styleToIndex = Map(CellStyle.canonicalKey(CellStyle.default) -> StyleId(0))
+  )
+
   /**
    * Build unified style index from a workbook and per-sheet remapping tables.
    *
@@ -135,8 +145,17 @@ case class OoxmlStyles(
       index.fonts.map(fontToXml)*
     )
 
-    // Fills (Excel requires 2 default fills at indices 0-1)
-    val defaultFills = Vector(Fill.None, Fill.Solid(Color.Rgb(0x00000000)))
+    // Fills (Excel requires 2 default fills at indices 0-1 per OOXML spec ECMA-376 Part 1, §18.8.21)
+    // Index 0: patternType="none"
+    // Index 1: patternType="gray125" with appropriate foreground/background colors
+    val defaultFills = Vector(
+      Fill.None,
+      Fill.Pattern(
+        foreground = Color.Rgb(0xff000000), // Black foreground
+        background = Color.Rgb(0xffc0c0c0), // Silver background
+        pattern = PatternType.Gray125
+      )
+    )
     val allFills = (defaultFills ++ index.fills.filterNot(defaultFills.contains)).distinct
     val fillsElem = elem("fills", "count" -> allFills.size.toString)(
       allFills.map(fillToXml)*

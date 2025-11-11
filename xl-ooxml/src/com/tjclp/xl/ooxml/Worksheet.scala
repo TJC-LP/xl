@@ -22,7 +22,20 @@ case class OoxmlCell(
     val valueElem = value match
       case CellValue.Empty => Seq.empty
       case CellValue.Text(text) if cellType == "inlineStr" =>
-        Seq(elem("is")(elem("t")(Text(text))))
+        // Add xml:space="preserve" for text with leading/trailing/multiple spaces
+        val needsPreserve = text.startsWith(" ") || text.endsWith(" ") || text.contains("  ")
+        val tElem =
+          if needsPreserve then
+            Elem(
+              null,
+              "t",
+              PrefixedAttribute("xml", "space", "preserve", Null),
+              TopScope,
+              true,
+              Text(text)
+            )
+          else elem("t")(Text(text))
+        Seq(elem("is")(tElem))
       case CellValue.Text(text) => // SST index
         Seq(elem("v")(Text(text))) // text here would be the SST index as string
       case CellValue.RichText(richText) =>
@@ -52,7 +65,14 @@ case class OoxmlCell(
           // Add xml:space="preserve" to preserve leading/trailing spaces
           val textElem =
             if run.text.startsWith(" ") || run.text.endsWith(" ") then
-              elem("t", "xml:space" -> "preserve")(Text(run.text))
+              Elem(
+                null,
+                "t",
+                PrefixedAttribute("xml", "space", "preserve", Null),
+                TopScope,
+                true,
+                Text(run.text)
+              )
             else elem("t")(Text(run.text))
 
           elem("r")(

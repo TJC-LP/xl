@@ -67,23 +67,28 @@ This directory contains **active future work** only. Completed phases are archiv
 
 ## Bugfix & Integration Guidance
 
-### High-Priority Defects (Active)
+### High-Priority Quality Issues (Active)
 
-- **Styles lost on import (`XlsxReader.convertToDomainSheet`)**
-  - *Symptom*: `Cell.styleId` values refer to workbook-level indices that are never registered in the returned `Sheet`, so any subsequent write or inspection drops formatting.
-  - *Fix plan*: extend the reader pipeline to parse `xl/styles.xml`, hydrate a `StyleRegistry` per sheet, and remap workbook `cellXf` indices into sheet-local `StyleId`s. Update roadmap item P31 (IO parity) once the registry is preserved through the round trip. Tests should cover reading a styled workbook and asserting `sheet.getCellStyle` matches the source fonts/fills.
+9. **[ooxml-quality.md](ooxml-quality.md)** - P4.5 OOXML Spec Compliance
+   - Status: ⬜ Not started (6 issues identified in style review)
+   - Scope: Default fills (gray125), SharedStrings count, whitespace preservation, alignment serialization, Scala version, xml:space construction
+   - Priority: High (spec violations cause data loss and Excel incompatibility)
+   - Estimated effort: 6-8 hours with comprehensive testing
+   - Tests: +10 new tests (698 → 708 total)
 
-- **Worksheet lookup ignores `r:id` relationships**
-  - *Symptom*: `sheetId` is treated as `sheetN.xml`, which fails when Excel leaves gaps or renames targets.
-  - *Fix plan*: load `xl/_rels/workbook.xml.rels`, build a map from `relationshipId` → part path, and have `parseSheets` read using the resolved relationship target. Cover with a test that reorders sheets so that `sheetId` ≠ file suffix.
+### Recently Fixed Defects (Completed)
 
-- **Runtime cell parser rejects lowercase columns**
-  - *Symptom*: APIs such as `"a1".asCell` or `ARef.parse("b2")` return `Invalid column letter` even though Excel treats references case-insensitively and the compile-time macro accepts lowercase.
-  - *Fix plan*: normalize input to uppercase (Locale.ROOT) in `Column.fromLetter` before validation; add tests proving mixed-case references round-trip.
+- ✅ **Styles lost on import** - Fixed in commit 7293ccc
+  - *Solution*: Extended XlsxReader to parse `xl/styles.xml` and populate StyleRegistry per sheet
 
-- **`Lens.modify` does not update structures**
-  - *Symptom*: Method returns the transformed field instead of writing it back via `set`, diverging from the documented behavior and standard lens laws.
-  - *Fix plan*: change `modify` to return `S` and delegate to `set(f(get(s)), s)` (or rename/remove if a pure value transformer is desired). Update `Lens` tests in `OpticsSpec` to exercise `modify` and verify lawfulness.
+- ✅ **Worksheet lookup ignores `r:id` relationships** - Fixed in commit efd0204
+  - *Solution*: Added relationship-based worksheet resolution using `xl/_rels/workbook.xml.rels`
+
+- ✅ **Runtime cell parser rejects lowercase columns** - Fixed in commit 7293ccc
+  - *Solution*: Added `toUpperCase(Locale.ROOT)` normalization to ARef.parse and Column.fromLetter
+
+- ✅ **`Lens.modify` does not update structures** - Fixed in commit 7293ccc
+  - *Solution*: Changed return type to S and delegated to `set(f(get(s)), s)`
 
 ### Implementation Order Best Practices
 

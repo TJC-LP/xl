@@ -39,11 +39,18 @@ object StreamingXmlWriter:
 
       case CellValue.Text(s) =>
         // <c r="A1" t="inlineStr"><is><t>text</t></is></c>
+        // Add xml:space="preserve" for text with leading/trailing/multiple spaces
+        val needsPreserve = s.startsWith(" ") || s.endsWith(" ") || s.contains("  ")
+        val tAttrs =
+          if needsPreserve then
+            List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
+          else Nil
+
         (
           "inlineStr",
           List(
             XmlEvent.StartTag(QName("is"), Nil, false),
-            XmlEvent.StartTag(QName("t"), Nil, false),
+            XmlEvent.StartTag(QName("t"), tAttrs, false),
             XmlEvent.XmlString(s, false),
             XmlEvent.EndTag(QName("t")),
             XmlEvent.EndTag(QName("is"))
@@ -150,7 +157,7 @@ object StreamingXmlWriter:
           // Text element with optional xml:space="preserve"
           val tAttrs =
             if run.text.startsWith(" ") || run.text.endsWith(" ") then
-              List(Attr(QName("xml:space"), List(XmlString("preserve", false))))
+              List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
             else Nil
 
           val textEvents = List(

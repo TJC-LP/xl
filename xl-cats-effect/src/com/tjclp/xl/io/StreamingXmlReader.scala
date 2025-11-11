@@ -29,7 +29,11 @@ object StreamingXmlReader:
       .fold(SSTBuilder.empty)((builder, event) => builder.add(event))
       .map { builder =>
         if builder.strings.isEmpty then None
-        else Some(SharedStrings(builder.strings.toVector, builder.buildIndexMap))
+        else
+          // For streaming, we don't track totalCount during parsing
+          // Use uniqueCount as a safe default (actual count may be higher)
+          val uniqueCount = builder.strings.size
+          Some(SharedStrings(builder.strings.toVector, builder.buildIndexMap, uniqueCount))
       }
 
   /**
