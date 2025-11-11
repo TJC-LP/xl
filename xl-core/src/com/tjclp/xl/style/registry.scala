@@ -21,7 +21,7 @@ package com.tjclp.xl.style
  */
 case class StyleRegistry(
   styles: Vector[CellStyle] = Vector(CellStyle.default),
-  index: Map[String, StyleId] = Map(CellStyle.canonicalKey(CellStyle.default) -> StyleId(0))
+  index: Map[String, StyleId] = Map(CellStyle.default.canonicalKey -> StyleId(0))
 ):
   /**
    * Register a style and get its index.
@@ -35,7 +35,7 @@ case class StyleRegistry(
    *   (updated registry, style index)
    */
   def register(style: CellStyle): (StyleRegistry, StyleId) =
-    val key = CellStyle.canonicalKey(style)
+    val key = style.canonicalKey
     index.get(key) match
       case Some(idx) =>
         // Already registered
@@ -58,7 +58,7 @@ case class StyleRegistry(
    *   Some(index) if registered, None otherwise
    */
   def indexOf(style: CellStyle): Option[StyleId] =
-    index.get(CellStyle.canonicalKey(style))
+    index.get(style.canonicalKey)
 
   /**
    * Retrieve style by index.

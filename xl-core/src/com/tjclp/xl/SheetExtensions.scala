@@ -71,7 +71,7 @@ extension (sheet: Sheet)
    *   Updated sheet with filled cells
    */
   def fillBy(range: CellRange)(f: (Column, Row) => CellValue): Sheet =
-    val newCells = range.cells.map { ref => Cell(ref, f(ref.col, ref.row)) }.toVector
+    val newCells = range.cells.map { ref => Cell(ref, f(ref.col, ref.row)) }
     sheet.putAll(newCells)
 
   /**
@@ -89,7 +89,7 @@ extension (sheet: Sheet)
   def tabulate(range: CellRange)(f: (Int, Int) => CellValue): Sheet =
     val newCells = range.cells.map { ref =>
       Cell(ref, f(ref.col.index0, ref.row.index0))
-    }.toVector
+    }
     sheet.putAll(newCells)
 
   /**
