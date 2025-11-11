@@ -443,14 +443,16 @@ This phase is **not blocking** for production use. The current implementation is
 
 # P6.6: Fix Streaming Reader (Critical Memory Issue)
 
-**Status**: 🔴 Not Started (Critical Bug)
+**Status**: ✅ Complete (2025-11-11)
 **Priority**: CRITICAL (violates documented O(1) claim)
-**Estimated Effort**: 2-3 days
+**Actual Effort**: 2 days
 **Source**: Technical review 2025-11-11
 
-## Problem
+## Problem (SOLVED)
 
-The streaming reader API (`readStreamTrue`, `readStream`, `readStreamByIndex`, `readSheetStream`) uses `InputStream.readAllBytes()` internally, which **materializes entire ZIP entries in memory**. This violates the constant-memory claim and makes the API misleading.
+The streaming reader API (`readStreamTrue`, `readStream`, `readStreamByIndex`, `readSheetStream`) was using `InputStream.readAllBytes()` internally, which **materialized entire ZIP entries in memory**. This violated the constant-memory claim and made the API misleading.
+
+**Fixed**: Replaced all `readAllBytes()` calls with `fs2.io.readInputStream` for true chunked streaming.
 
 **Impact**:
 - Large files (100k+ rows) spike memory or OOM
