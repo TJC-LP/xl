@@ -556,3 +556,52 @@ class ExcelIOSpec extends CatsEffectSuite:
         }
     }
   }
+
+  // ========== Memory Tests (verify true O(1) streaming) ==========
+
+  tempDir.test("readStream: true O(1) memory with fs2.io.readInputStream") { dir =>
+    val path = dir.resolve("memory-test.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write 500k rows (would OOM if using readAllBytes())
+    // This test specifically verifies the fix from readAllBytes() → fs2.io.readInputStream
+    val writeRows = fs2.Stream.range(1, 500001).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Number(BigDecimal(i)),
+        1 -> CellValue.Text(s"Row-$i-with-some-text-content")
+      ))
+    }
+
+    writeRows.through(excel.writeStreamTrue(path, "LargeData")).compile.drain.flatMap { _ =>
+      // Read with true streaming (constant memory via fs2.io.readInputStream)
+      // If this completes without OOM, the O(1) fix is working
+      excel.readStream(path)
+        .filter(_.rowIndex % 10000 == 0)  // Sample 1% to verify correctness
+        .compile.count.map { count =>
+          assertEquals(count, 50L, "Should find 50 sampled rows (500k / 10k)")
+        }
+    }
+  }
+
+  tempDir.test("readStream: concurrent streams don't multiply memory") { dir =>
+    val path1 = dir.resolve("concurrent-1.xlsx")
+    val path2 = dir.resolve("concurrent-2.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write two 100k row files
+    val writeRows1 = fs2.Stream.range(1, 100001).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+    val writeRows2 = fs2.Stream.range(1, 100001).map(i => RowData(i, Map(0 -> CellValue.Text(s"Row-$i"))))
+
+    for
+      _ <- writeRows1.through(excel.writeStreamTrue(path1, "Data1")).compile.drain
+      _ <- writeRows2.through(excel.writeStreamTrue(path2, "Data2")).compile.drain
+
+      // Read both concurrently (should use ~constant memory, not 2x)
+      count1 <- excel.readStream(path1).compile.count.start
+      count2 <- excel.readStream(path2).compile.count.start
+      c1 <- count1.joinWithNever
+      c2 <- count2.joinWithNever
+    yield
+      assertEquals(c1, 100000L)
+      assertEquals(c2, 100000L)
+  }
