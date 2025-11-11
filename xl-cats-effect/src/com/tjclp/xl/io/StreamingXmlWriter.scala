@@ -29,7 +29,33 @@ object StreamingXmlWriter:
       else loop((n / 26) - 1, s"${((n % 26) + 'A').toChar}$acc")
     loop(col, "")
 
-  /** Generate XML events for a single cell */
+  /**
+   * Generate XML events for a single cell
+   *
+   * Converts CellValue to fs2-data-xml events for true streaming output.
+   *
+   * REQUIRES:
+   *   - colIndex in range 0..16383 (Excel column limit)
+   *   - rowIndex in range 1..1048576 (Excel row limit, 1-based)
+   *   - value is valid CellValue
+   * ENSURES:
+   *   - Returns empty list for CellValue.Empty (no cell emitted)
+   *   - Returns complete <c> element events for non-empty cells
+   *   - Text cells: adds xml:space="preserve" via QName(Some("xml"), "space") when needed
+   *   - Whitespace preserved byte-for-byte for text with leading/trailing/double spaces
+   *   - All events are well-formed and balance StartTag/EndTag
+   * DETERMINISTIC: Yes (pure transformation of inputs) ERROR CASES: None (total function over valid
+   * CellValue)
+   *
+   * @param colIndex
+   *   Column index (0-based)
+   * @param rowIndex
+   *   Row index (1-based for Excel compatibility)
+   * @param value
+   *   Cell value to serialize
+   * @return
+   *   List of XML events representing the cell
+   */
   def cellToEvents(colIndex: Int, rowIndex: Int, value: CellValue): List[XmlEvent] =
     val ref = s"${columnToLetter(colIndex)}$rowIndex"
 

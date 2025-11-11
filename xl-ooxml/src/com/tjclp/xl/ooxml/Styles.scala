@@ -145,9 +145,16 @@ case class OoxmlStyles(
       index.fonts.map(fontToXml)*
     )
 
-    // Fills (Excel requires 2 default fills at indices 0-1 per OOXML spec ECMA-376 Part 1, §18.8.21)
-    // Index 0: patternType="none"
-    // Index 1: patternType="gray125" with appropriate foreground/background colors
+    /**
+     * Default fills required by OOXML spec (ECMA-376 Part 1, §18.8.21)
+     *
+     * REQUIRES: None ENSURES:
+     *   - Vector contains exactly 2 fills
+     *   - Index 0: Fill.None (patternType="none")
+     *   - Index 1: Fill.Pattern with Gray125 pattern
+     *   - Gray125 uses black foreground (0xFF000000) and silver background (0xFFC0C0C0)
+     * DETERMINISTIC: Yes (immutable constant) ERROR CASES: None (compile-time constant)
+     */
     val defaultFills = Vector(
       Fill.None,
       Fill.Pattern(
@@ -178,14 +185,19 @@ case class OoxmlStyles(
             index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
           )
 
+        // Serialize alignment as child element if non-default
+        val alignmentChild = alignmentToXml(style.align).toSeq
+        val hasAlignment = alignmentChild.nonEmpty
+
         elem(
           "xf",
+          "applyAlignment" -> (if hasAlignment then "1" else "0"),
           "borderId" -> borderIdx.toString,
           "fillId" -> fillIdx.toString,
           "fontId" -> fontIdx.toString,
           "numFmtId" -> numFmtId.toString,
           "xfId" -> "0"
-        )()
+        )(alignmentChild*)
       }*
     )
 
@@ -248,6 +260,55 @@ case class OoxmlStyles(
       case Color.Theme(slot, tint) =>
         val slotIdx = slot.ordinal
         elem("color", "theme" -> slotIdx.toString, "tint" -> tint.toString)()
+
+  /**
+   * Serialize alignment to XML element if non-default (ECMA-376 Part 1, §18.8.1)
+   *
+   * Only emits <alignment> if at least one property differs from default. Omits default properties
+   * for minimal XML output.
+   *
+   * REQUIRES: align is valid Align instance ENSURES:
+   *   - Returns None if align == Align.default (optimization)
+   *   - Returns Some(<alignment .../>) if any property differs from default
+   *   - Only emits non-default attributes (horizontal, vertical, wrapText, indent)
+   *   - Attribute values match OOXML spec enum names (lowercase)
+   *   - VAlign.Middle serializes as "center" per OOXML spec
+   *   - wrapText serializes as "1" (true) or "0" (false)
+   * DETERMINISTIC: Yes (pure transformation based on Align equality) ERROR CASES: None (total
+   * function)
+   *
+   * @param align
+   *   Alignment settings to serialize
+   * @return
+   *   Some(<alignment .../>) if non-default, None if all properties match Align.default
+   */
+  private def alignmentToXml(align: Align): Option[Elem] =
+    // Don't emit alignment if it matches default exactly
+    if align == Align.default then None
+    else
+      val attrs = Seq.newBuilder[(String, String)]
+
+      // Only include non-default properties
+      if align.horizontal != Align.default.horizontal then
+        val hAlignStr = align.horizontal.toString.toLowerCase(java.util.Locale.ROOT)
+        attrs += ("horizontal" -> hAlignStr)
+
+      if align.vertical != Align.default.vertical then
+        // VAlign.Middle serializes as "center" per OOXML spec
+        val vAlignStr = align.vertical match
+          case VAlign.Middle => "center"
+          case other => other.toString.toLowerCase(java.util.Locale.ROOT)
+        attrs += ("vertical" -> vAlignStr)
+
+      if align.wrapText != Align.default.wrapText then
+        attrs += ("wrapText" -> (if align.wrapText then "1" else "0"))
+
+      if align.indent != Align.default.indent then attrs += ("indent" -> align.indent.toString)
+
+      val attrSeq = attrs.result()
+      // If no attributes, don't emit element (though this shouldn't happen since align != default)
+      if attrSeq.isEmpty then None
+      else Some(elem("alignment", attrSeq*)())
 
 object OoxmlStyles:
   /** Create minimal styles (default only) */

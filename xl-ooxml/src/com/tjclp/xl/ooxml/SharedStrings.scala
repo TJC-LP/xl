@@ -37,6 +37,21 @@ case class SharedStrings(
   /** Count of unique strings */
   def uniqueCount: Int = strings.size
 
+  /**
+   * Serialize SharedStrings to XML (ECMA-376 Part 1, §18.4.9)
+   *
+   * REQUIRES: strings is a valid Vector of normalized strings ENSURES:
+   *   - Emits <sst> root element with xmlns namespace
+   *   - count attribute = totalCount (total string cell instances)
+   *   - uniqueCount attribute = strings.size (unique strings)
+   *   - Each string emitted as <si><t>text</t></si>
+   *   - Adds xml:space="preserve" for strings with leading/trailing/double spaces
+   *   - Uses PrefixedAttribute("xml", "space", "preserve") for proper namespace
+   * DETERMINISTIC: Yes (Vector iteration order is stable) ERROR CASES: None (total function)
+   *
+   * @return
+   *   XML element representing xl/sharedStrings.xml
+   */
   def toXml: Elem =
     val siElems = strings.map { s =>
       // Check if string needs xml:space="preserve"
@@ -84,7 +99,25 @@ object SharedStrings extends XmlReadable[SharedStrings]:
   def normalize(s: String): String =
     Normalizer.normalize(s, Normalizer.Form.NFC)
 
-  /** Build SST from all text cells in a workbook */
+  /**
+   * Build SharedStrings table from workbook text cells
+   *
+   * Extracts all CellValue.Text instances, deduplicates them, and tracks total count.
+   *
+   * REQUIRES: wb contains only valid CellValue.Text cells ENSURES:
+   *   - strings contains unique text values (NFC-normalized and deduplicated)
+   *   - indexMap maps each string to its SST index (0-based)
+   *   - totalCount = number of CellValue.Text instances in workbook
+   *   - totalCount >= strings.size (equality only when no duplicates)
+   *   - Iteration order is stable (sheets processed in Vector order)
+   * DETERMINISTIC: Yes (stable Vector traversal, deterministic deduplication) ERROR CASES: None
+   * (total function, handles empty workbook → empty SST)
+   *
+   * @param wb
+   *   Workbook to extract strings from
+   * @return
+   *   SharedStrings with deduplicated strings and total count
+   */
   def fromWorkbook(wb: com.tjclp.xl.Workbook): SharedStrings =
     val allStrings = wb.sheets.flatMap { sheet =>
       sheet.cells.values.collect {
