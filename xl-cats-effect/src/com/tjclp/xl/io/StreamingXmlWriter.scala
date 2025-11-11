@@ -3,7 +3,7 @@ package com.tjclp.xl.io
 import fs2.Stream
 import fs2.data.xml.*
 import fs2.data.xml.XmlEvent.*
-import com.tjclp.xl.CellValue
+import com.tjclp.xl.cell.CellValue
 
 /**
  * True streaming XML writer using fs2-data-xml for constant-memory writes.
@@ -117,7 +117,7 @@ object StreamingXmlWriter:
         )
 
       case CellValue.Error(err) =>
-        import com.tjclp.xl.CellError.toExcel
+        import com.tjclp.xl.cell.CellError.toExcel
         // <c r="A1" t="e"><v>#DIV/0!</v></c>
         (
           "e",

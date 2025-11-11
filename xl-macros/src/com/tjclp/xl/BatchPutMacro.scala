@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.cell.CellValue
 import scala.quoted.*
 
 /** Batch put macro for elegant multi-cell updates */
@@ -45,7 +46,7 @@ object putMacro:
               report.errorAndAbort("Batch put requires tuple pairs: cell\"A1\" -> value")
 
           // Generate CellValue based on runtime value (use CellValue.from)
-          '{ $sheetExpr.put($ref, com.tjclp.xl.CellValue.from($value)) }
+          '{ $sheetExpr.put($ref, com.tjclp.xl.cell.CellValue.from($value)) }
         }
 
       case _ =>

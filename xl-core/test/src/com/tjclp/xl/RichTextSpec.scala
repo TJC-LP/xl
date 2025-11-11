@@ -1,8 +1,9 @@
 package com.tjclp.xl
 
 import munit.FunSuite
-import com.tjclp.xl.style.{Font, Color}
+import com.tjclp.xl.style.{Color, Font}
 import com.tjclp.xl.RichText.{*, given}
+import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.macros.cell
 
 /** Tests for rich text DSL and TextRun/RichText domain model */

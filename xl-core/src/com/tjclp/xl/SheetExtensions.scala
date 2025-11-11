@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.style.CellStyle
 
 // ========== Style Application Extensions ==========

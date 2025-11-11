@@ -1,11 +1,14 @@
 package com.tjclp.xl.ooxml
 
+import com.tjclp.xl
+import com.tjclp.xl.cell.{Cell, CellError, CellValue}
+
 import scala.xml.*
 import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
 import java.util.zip.ZipInputStream
 import java.nio.file.{Path, Paths}
 import scala.collection.mutable
-import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, XLError, XLResult, SheetName, ARef}
+import com.tjclp.xl.{ARef, Sheet, SheetName, Workbook, XLError, XLResult}
 import com.tjclp.xl.style.{StyleId, StyleRegistry}
 
 /**
@@ -189,8 +192,8 @@ object XlsxReader:
                   case Some(idx) =>
                     sharedStrings(idx) match
                       case Some(text) => CellValue.Text(text)
-                      case None => CellValue.Error(com.tjclp.xl.CellError.Ref)
-                  case None => CellValue.Error(com.tjclp.xl.CellError.Value)
+                      case None => CellValue.Error(CellError.Ref)
+                  case None => CellValue.Error(xl.cell.CellError.Value)
               case _ => ooxmlCell.value
 
             val (nextRegistry, styleIdOpt) = ooxmlCell.styleIndex

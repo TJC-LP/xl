@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.cell.CellValue
 import java.time.LocalDateTime
 import scala.language.implicitConversions
 

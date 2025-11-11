@@ -1,9 +1,10 @@
 package com.tjclp.xl.io
 
 import cats.effect.Async
+import com.tjclp.xl.cell.{Cell, CellValue}
 import fs2.Stream
 import java.nio.file.Path
-import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, ARef, XLResult, XLError}
+import com.tjclp.xl.{Workbook, Sheet, ARef, XLResult, XLError}
 
 /** Row-level streaming data for efficient processing */
 case class RowData(

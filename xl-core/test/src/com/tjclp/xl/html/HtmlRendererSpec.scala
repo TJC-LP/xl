@@ -2,6 +2,7 @@ package com.tjclp.xl.html
 
 import munit.FunSuite
 import com.tjclp.xl.*
+import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.RichText.{*, given}
 import com.tjclp.xl.macros.{cell, range}
 import com.tjclp.xl.codec.{*, given}

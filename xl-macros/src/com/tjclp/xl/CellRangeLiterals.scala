@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.cell.CellValue
 import scala.quoted.*
 
 /**
@@ -119,5 +120,5 @@ object macros:
 
 end macros
 
-/** Export compile-time literals */
-export macros.{cell, range}
+/** Export compile-time literals (cell literal not exported due to package name conflict) */
+export macros.range

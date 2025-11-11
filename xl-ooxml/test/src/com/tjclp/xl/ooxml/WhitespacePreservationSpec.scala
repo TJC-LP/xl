@@ -1,7 +1,8 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.{CellValue, RichText, TextRun}
+import com.tjclp.xl.{RichText, TextRun}
+import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.macros.cell
 
 /** Tests for whitespace preservation in plain text cells (OOXML writer) */

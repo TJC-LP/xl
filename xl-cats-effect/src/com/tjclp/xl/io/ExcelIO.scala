@@ -364,7 +364,8 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     sheetName: String,
     rows: Vector[RowData]
   ): Either[XLError, com.tjclp.xl.Sheet] =
-    import com.tjclp.xl.{Sheet, SheetName, Cell, ARef, Column, Row}
+    import com.tjclp.xl.cell.Cell
+    import com.tjclp.xl.{Sheet, SheetName, ARef, Column, Row}
 
     for
       name <- SheetName(sheetName).left.map(err => XLError.InvalidSheetName(sheetName, err))

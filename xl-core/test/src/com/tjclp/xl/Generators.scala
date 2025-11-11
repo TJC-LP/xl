@@ -1,6 +1,8 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.cell.{Cell, CellError, CellValue}
 import org.scalacheck.{Arbitrary, Gen}
+
 import java.time.LocalDateTime
 import com.tjclp.xl.style.StyleId
 

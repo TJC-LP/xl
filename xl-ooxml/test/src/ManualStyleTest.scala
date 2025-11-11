@@ -1,6 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.*
+import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.macros.{cell, range}
 import com.tjclp.xl.style.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align, NumFmt}
 import java.nio.file.Paths

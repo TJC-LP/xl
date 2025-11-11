@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.cell.CellValue
 import munit.FunSuite
 import com.tjclp.xl.macros.{cell, range}
 import com.tjclp.xl.conversions.given

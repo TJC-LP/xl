@@ -1,5 +1,6 @@
 package com.tjclp.xl.ooxml
 
+import com.tjclp.xl.cell.CellValue
 import scala.xml.*
 import XmlUtil.*
 import java.text.Normalizer
@@ -130,7 +131,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     val allStrings = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.values.iterator.flatMap { cell =>
         cell.value match
-          case com.tjclp.xl.CellValue.Text(s) => Iterator.single(s)
+          case com.tjclp.xl.cell.CellValue.Text(s) => Iterator.single(s)
           case _ => Iterator.empty
       }
     }
@@ -147,7 +148,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     val textCells = wb.sheets.flatMap { sheet =>
       sheet.cells.values.flatMap { cell =>
         cell.value match
-          case com.tjclp.xl.CellValue.Text(s) => Some(s)
+          case com.tjclp.xl.cell.CellValue.Text(s) => Some(s)
           case _ => None
       }
     }

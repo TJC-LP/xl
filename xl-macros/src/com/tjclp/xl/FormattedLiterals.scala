@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.cell.CellValue
 import scala.quoted.*
 import java.time.LocalDate
 
@@ -40,7 +41,7 @@ object FormattedLiterals:
       val numStr = cleaned // Keep as string for runtime parsing
       '{
         com.tjclp.xl.Formatted(
-          com.tjclp.xl.CellValue.Number(BigDecimal(${ Expr(numStr) })),
+          com.tjclp.xl.cell.CellValue.Number(BigDecimal(${ Expr(numStr) })),
           com.tjclp.xl.style.NumFmt.Currency
         )
       }
@@ -59,7 +60,7 @@ object FormattedLiterals:
       val numStr = num.toString
       '{
         com.tjclp.xl.Formatted(
-          com.tjclp.xl.CellValue.Number(BigDecimal(${ Expr(numStr) })),
+          com.tjclp.xl.cell.CellValue.Number(BigDecimal(${ Expr(numStr) })),
           com.tjclp.xl.style.NumFmt.Percent
         )
       }
@@ -77,7 +78,7 @@ object FormattedLiterals:
       val dateStr = localDate.toString // ISO format
       '{
         com.tjclp.xl.Formatted(
-          com.tjclp.xl.CellValue
+          com.tjclp.xl.cell.CellValue
             .DateTime(java.time.LocalDate.parse(${ Expr(dateStr) }).atStartOfDay()),
           com.tjclp.xl.style.NumFmt.Date
         )
@@ -100,7 +101,7 @@ object FormattedLiterals:
       val numStr = num.toString
       '{
         com.tjclp.xl.Formatted(
-          com.tjclp.xl.CellValue.Number(BigDecimal(${ Expr(numStr) })),
+          com.tjclp.xl.cell.CellValue.Number(BigDecimal(${ Expr(numStr) })),
           com.tjclp.xl.style.NumFmt.Currency
         )
       }

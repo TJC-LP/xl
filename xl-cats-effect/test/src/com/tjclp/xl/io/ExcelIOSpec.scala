@@ -2,8 +2,10 @@ package com.tjclp.xl.io
 
 import cats.effect.IO
 import munit.CatsEffectSuite
+
 import java.nio.file.{Files, Path}
 import com.tjclp.xl.*
+import com.tjclp.xl.cell.{CellError, CellValue}
 import com.tjclp.xl.macros.{cell, range}
 
 /** Tests for Excel streaming API */
