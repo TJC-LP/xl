@@ -115,25 +115,27 @@
 - Enhanced patch DSL with ergonomic operators
 - 39 comprehensive tests
 
+### ✅ P4.5: OOXML Quality & Spec Compliance (Complete)
+**Status**: 100% Complete
+**Completed**: 2025-11-10
+**Test Coverage**: +22 new tests (4 new test classes)
+**Commits**: b22832e (Part 1), 4dd98f5 (Part 2)
+**Definition of Done**:
+- ✅ Fixed default fills (gray125 pattern per OOXML spec ECMA-376 §18.8.21)
+- ✅ Fixed SharedStrings count vs uniqueCount tracking
+- ✅ Added whitespace preservation for plain text cells (xml:space="preserve")
+- ✅ Added alignment serialization to styles.xml with round-trip verification
+- ✅ Fixed Scala version consistency (3.7.3 everywhere)
+- ✅ Used idiomatic xml:space namespace construction (PrefixedAttribute)
+- ✅ Added comprehensive AI contracts (REQUIRES/ENSURES/DETERMINISTIC/ERROR CASES)
+- ✅ Added 22 comprehensive tests across 4 new test classes
+- ✅ Zero spec violations, full round-trip fidelity achieved
+
+**See**: [ooxml-quality.md](ooxml-quality.md) for detailed implementation notes
+
 ---
 
 ## Remaining Phases ⬜
-
-### ⬜ P4.5: OOXML Quality & Spec Compliance (Planned)
-**Priority**: High
-**Estimated Effort**: 6-8 hours
-**Definition of Done**:
-- Fix default fills (gray125 pattern per OOXML spec)
-- Fix SharedStrings count vs uniqueCount tracking
-- Add whitespace preservation for plain text cells (xml:space="preserve")
-- Add alignment serialization to styles.xml
-- Fix Scala version consistency (3.7.3 everywhere)
-- Use idiomatic xml:space namespace construction (PrefixedAttribute)
-- Add AI contracts (REQUIRES/ENSURES/ERRORS) to all affected code
-- Add ~10 comprehensive tests (698 → 708 total)
-- Zero spec violations, full round-trip fidelity
-
-**See**: [ooxml-quality.md](ooxml-quality.md) for detailed issue breakdown
 
 ### ⬜ P6b: Full Codec Derivation (Future)
 **Priority**: Medium
@@ -205,7 +207,7 @@
 | P3: Styles | ✅ Complete | 60 tests | 100% |
 | P4: OOXML MVP | ✅ Complete | 24 tests | 100% |
 | P4.1: XLSX Reader | ✅ Complete | Integrated | 100% |
-| P4.5: OOXML Quality | ⬜ Planned | +10 tests | 0% |
+| P4.5: OOXML Quality | ✅ Complete | +22 tests | 100% |
 | P5: Streaming | ✅ Complete | 18 tests | 100% |
 | P6: Codecs (primitives) | ✅ Complete | 58 tests | 80% |
 | P31: Optics/RichText | ✅ Complete | 39 tests | 100% |
