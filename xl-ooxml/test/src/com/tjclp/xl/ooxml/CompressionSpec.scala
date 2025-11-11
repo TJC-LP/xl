@@ -58,12 +58,12 @@ class CompressionSpec extends FunSuite:
     val deflatedSize = Files.size(deflatedPath)
     val storedSize = Files.size(storedPath)
 
-    // DEFLATED should be 50-93% smaller (compression ratio 2x-15x)
+    // DEFLATED should be 50-90% smaller (compression ratio 2x-10x, typical for realistic data)
     assert(deflatedSize < storedSize, s"DEFLATED ($deflatedSize) should be smaller than STORED ($storedSize)")
 
     val ratio = storedSize.toDouble / deflatedSize.toDouble
     assert(ratio >= 2.0, s"Compression ratio ($ratio) should be at least 2x")
-    assert(ratio <= 15.0, s"Compression ratio ($ratio) seems unreasonably high")
+    assert(ratio <= 10.0, s"Compression ratio ($ratio) seems unreasonably high (expected 2-10x for realistic data)")
   }
 
   tempDir.test("prettyPrint increases file size") { dir =>

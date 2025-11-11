@@ -38,6 +38,25 @@ trait Excel[F[_]]:
   def write(wb: Workbook, path: Path): F[Unit]
 
   /**
+   * Write workbook to XLSX file with custom configuration.
+   *
+   * Allows control over compression (DEFLATED/STORED), SST policy, and XML formatting.
+   *
+   * Example:
+   * {{{
+   * // Debug mode (uncompressed, readable)
+   * excel.writeWith(workbook, path, WriterConfig.debug)
+   *
+   * // Custom compression
+   * excel.writeWith(workbook, path, WriterConfig(
+   *   compression = Compression.Stored,
+   *   sstPolicy = SstPolicy.Always
+   * ))
+   * }}}
+   */
+  def writeWith(wb: Workbook, path: Path, config: com.tjclp.xl.ooxml.WriterConfig): F[Unit]
+
+  /**
    * Stream rows from first sheet.
    *
    * Good for: Large files (>10k rows), sequential processing, aggregations Memory: O(1) - constant
@@ -176,6 +195,9 @@ trait ExcelR[F[_]]:
 
   /** Write workbook with explicit error result */
   def writeR(wb: Workbook, path: Path): F[XLResult[Unit]]
+
+  /** Write workbook with explicit error result and custom configuration */
+  def writeWithR(wb: Workbook, path: Path, config: com.tjclp.xl.ooxml.WriterConfig): F[XLResult[Unit]]
 
   /**
    * Stream rows with explicit error channel.
