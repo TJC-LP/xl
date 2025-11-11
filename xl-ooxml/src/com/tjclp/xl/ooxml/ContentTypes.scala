@@ -32,14 +32,26 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     hasSharedStrings: Boolean = false,
     sheetCount: Int = 1
   ): ContentTypes =
+    forSheetIndices((1 to sheetCount).toSeq, hasStyles, hasSharedStrings)
+
+  /** Create content types using explicit sheet indices (supports non-sequential sheets). */
+  def forSheetIndices(
+    sheetIndices: Seq[Int],
+    hasStyles: Boolean = false,
+    hasSharedStrings: Boolean = false
+  ): ContentTypes =
     val baseDefaults = Map(
       "rels" -> ctRelationships,
       "xml" -> "application/xml"
     )
 
+    val sheetOverrides = sheetIndices.distinct.sorted.map { idx =>
+      s"/xl/worksheets/sheet$idx.xml" -> ctWorksheet
+    }
+
     val baseOverrides = Map(
       "/xl/workbook.xml" -> ctWorkbook
-    ) ++ (1 to sheetCount).map(i => s"/xl/worksheets/sheet$i.xml" -> ctWorksheet)
+    ) ++ sheetOverrides
 
     val stylesOverride = if hasStyles then Map("/xl/styles.xml" -> ctStyles) else Map.empty
     val sstOverride =

@@ -1,6 +1,6 @@
 # Roadmap — From Spec to MVP and Beyond
 
-**Current Status: ~85% Complete (263/263 tests passing)**
+**Current Status: ~85% Complete (698/698 tests passing)**
 
 ## Completed Phases ✅
 
@@ -60,6 +60,19 @@
 - RichText support (`<si><r>` elements)
 - Round-trip tests (24 passing)
 
+### ✅ P4.1: XLSX Reader & Non-Sequential Sheets (Complete)
+**Status**: 100% Complete
+**Test Coverage**: Part of 698 total tests
+**Definition of Done**:
+- Full XLSX reading with style preservation
+- WorkbookStyles parser (fonts, fills, borders, number formats, alignment)
+- Relationship-based worksheet resolution (r:id mapping)
+- Non-sequential sheet index support (ContentTypes.forSheetIndices)
+- Case-insensitive cell reference parsing (Locale.ROOT normalization)
+- Optics bug fixes (Lens.modify return type)
+- Zero compilation warnings (eliminated all 10 warnings)
+- All tests passing (698/698)
+
 ### ✅ P5: Streaming (Complete)
 **Status**: 100% Complete
 **Test Coverage**: 18 tests passing
@@ -102,9 +115,40 @@
 - Enhanced patch DSL with ergonomic operators
 - 39 comprehensive tests
 
+### ✅ P4.5: OOXML Quality & Spec Compliance (Complete)
+**Status**: 100% Complete
+**Completed**: 2025-11-10
+**Test Coverage**: +22 new tests (4 new test classes)
+**Commits**: b22832e (Part 1), 4dd98f5 (Part 2)
+**Definition of Done**:
+- ✅ Fixed default fills (gray125 pattern per OOXML spec ECMA-376 §18.8.21)
+- ✅ Fixed SharedStrings count vs uniqueCount tracking
+- ✅ Added whitespace preservation for plain text cells (xml:space="preserve")
+- ✅ Added alignment serialization to styles.xml with round-trip verification
+- ✅ Fixed Scala version consistency (3.7.3 everywhere)
+- ✅ Used idiomatic xml:space namespace construction (PrefixedAttribute)
+- ✅ Added comprehensive AI contracts (REQUIRES/ENSURES/DETERMINISTIC/ERROR CASES)
+- ✅ Added 22 comprehensive tests across 4 new test classes
+- ✅ Zero spec violations, full round-trip fidelity achieved
+
+**See**: [ooxml-quality.md](ooxml-quality.md) for detailed implementation notes
+
 ---
 
 ## Remaining Phases ⬜
+
+### ⬜ P6.5: Performance & Quality Polish (Future)
+**Priority**: Medium
+**Estimated Effort**: 8-10 hours
+**Source**: PR #4 review feedback
+**Definition of Done**:
+- Optimize style indexOf from O(n²) to O(1) using Maps
+- Extract whitespace check to XmlUtil.needsXmlSpacePreserve utility
+- Add XlsxReader error path tests (10+ tests)
+- Add full XLSX round-trip integration test
+- Logging strategy for missing/malformed files (defer to P11)
+
+**See**: [future-improvements.md](future-improvements.md) for detailed breakdown
 
 ### ⬜ P6b: Full Codec Derivation (Future)
 **Priority**: Medium
@@ -175,10 +219,13 @@
 | P2: Core & Patches | ✅ Complete | 21 tests | 100% |
 | P3: Styles | ✅ Complete | 60 tests | 100% |
 | P4: OOXML MVP | ✅ Complete | 24 tests | 100% |
+| P4.1: XLSX Reader | ✅ Complete | Integrated | 100% |
+| P4.5: OOXML Quality | ✅ Complete | +22 tests | 100% |
 | P5: Streaming | ✅ Complete | 18 tests | 100% |
 | P6: Codecs (primitives) | ✅ Complete | 58 tests | 80% |
 | P31: Optics/RichText | ✅ Complete | 39 tests | 100% |
-| **Total Core** | **✅** | **263/263 tests** | **~85%** |
+| **Total Core** | **✅** | **698/698 tests** | **~85%** |
+| P6.5: Perf & Quality | ⬜ Future | - | 0% |
 | P6b: Full Derivation | ⬜ Future | - | 0% |
 | P7: Advanced Macros | ⬜ Future | - | 0% |
 | P8: Drawings | ⬜ Future | - | 0% |

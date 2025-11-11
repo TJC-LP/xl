@@ -11,10 +11,18 @@ import java.text.Normalizer
  * embedding them inline.
  *
  * All strings are normalized to NFC form for consistent deduplication.
+ *
+ * @param strings
+ *   Ordered list of unique strings
+ * @param indexMap
+ *   String → index lookup
+ * @param totalCount
+ *   Total number of string cell instances in workbook (including duplicates)
  */
 case class SharedStrings(
-  strings: Vector[String], // Ordered list of unique strings
-  indexMap: Map[String, Int] // String → index lookup
+  strings: Vector[String],
+  indexMap: Map[String, Int],
+  totalCount: Int // Total instances (>= strings.size)
 ) extends XmlWritable:
 
   /** Get index for string (returns None if not found) */
@@ -29,6 +37,21 @@ case class SharedStrings(
   /** Count of unique strings */
   def uniqueCount: Int = strings.size
 
+  /**
+   * Serialize SharedStrings to XML (ECMA-376 Part 1, §18.4.9)
+   *
+   * REQUIRES: strings is a valid Vector of normalized strings ENSURES:
+   *   - Emits <sst> root element with xmlns namespace
+   *   - count attribute = totalCount (total string cell instances)
+   *   - uniqueCount attribute = strings.size (unique strings)
+   *   - Each string emitted as <si><t>text</t></si>
+   *   - Adds xml:space="preserve" for strings with leading/trailing/double spaces
+   *   - Uses PrefixedAttribute("xml", "space", "preserve") for proper namespace
+   * DETERMINISTIC: Yes (Vector iteration order is stable) ERROR CASES: None (total function)
+   *
+   * @return
+   *   XML element representing xl/sharedStrings.xml
+   */
   def toXml: Elem =
     val siElems = strings.map { s =>
       // Check if string needs xml:space="preserve"
@@ -38,7 +61,7 @@ case class SharedStrings(
           Elem(
             null,
             "t",
-            new UnprefixedAttribute("xml:space", "preserve", Null),
+            PrefixedAttribute("xml", "space", "preserve", Null),
             TopScope,
             false,
             Text(s)
@@ -51,38 +74,61 @@ case class SharedStrings(
     elem(
       "sst",
       "xmlns" -> nsSpreadsheetML,
-      "count" -> strings.size.toString,
-      "uniqueCount" -> strings.size.toString
+      "count" -> totalCount.toString, // Total instances
+      "uniqueCount" -> strings.size.toString // Unique strings
     )(siElems*)
 
 object SharedStrings extends XmlReadable[SharedStrings]:
-  val empty: SharedStrings = SharedStrings(Vector.empty, Map.empty)
+  val empty: SharedStrings = SharedStrings(Vector.empty, Map.empty, 0)
 
-  /** Create SharedStrings from a collection of strings with deduplication */
-  def fromStrings(strings: Iterable[String]): SharedStrings =
-    val normalized = strings.map(normalize).toVector.distinct
+  /**
+   * Create SharedStrings from a collection of strings with deduplication
+   * @param strings
+   *   Collection of strings (may contain duplicates)
+   * @param totalCount
+   *   Total number of string instances (defaults to strings.size for backward compatibility)
+   */
+  def fromStrings(strings: Iterable[String], totalCount: Option[Int] = None): SharedStrings =
+    val stringVec = strings.toVector
+    val normalized = stringVec.map(normalize).distinct
     val indexMap = normalized.zipWithIndex.toMap
-    SharedStrings(normalized, indexMap)
+    val count = totalCount.getOrElse(stringVec.size) // Default to input size if not specified
+    SharedStrings(normalized, indexMap, count)
 
   /** Normalize string to NFC form for consistent comparison */
   def normalize(s: String): String =
     Normalizer.normalize(s, Normalizer.Form.NFC)
 
-  /** Build SST from all text cells in a workbook */
+  /**
+   * Build SharedStrings table from workbook text cells
+   *
+   * Extracts all CellValue.Text instances, deduplicates them, and tracks total count.
+   *
+   * REQUIRES: wb contains only valid CellValue.Text cells ENSURES:
+   *   - strings contains unique text values (NFC-normalized and deduplicated)
+   *   - indexMap maps each string to its SST index (0-based)
+   *   - totalCount = number of CellValue.Text instances in workbook
+   *   - totalCount >= strings.size (equality only when no duplicates)
+   *   - Iteration order is stable (sheets processed in Vector order)
+   * DETERMINISTIC: Yes (stable Vector traversal, deterministic deduplication) ERROR CASES: None
+   * (total function, handles empty workbook → empty SST)
+   *
+   * @param wb
+   *   Workbook to extract strings from
+   * @return
+   *   SharedStrings with deduplicated strings and total count
+   */
   def fromWorkbook(wb: com.tjclp.xl.Workbook): SharedStrings =
     val allStrings = wb.sheets.flatMap { sheet =>
-      sheet.cells.values.collect {
-        case cell if cell.value match {
-              case com.tjclp.xl.CellValue.Text(_) => true
-              case _ => false
-            } =>
-          cell.value match {
-            case com.tjclp.xl.CellValue.Text(s) => s
-            case _ => "" // Should never happen due to filter
-          }
+      sheet.cells.values.flatMap { cell =>
+        cell.value match
+          case com.tjclp.xl.CellValue.Text(s) => Some(s)
+          case _ => None
       }
     }
-    fromStrings(allStrings)
+    // Count total instances before deduplication
+    val totalCount = allStrings.size
+    fromStrings(allStrings, Some(totalCount))
 
   /**
    * Determine if using SST saves space vs inline strings
@@ -92,15 +138,10 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    */
   def shouldUseSST(wb: com.tjclp.xl.Workbook): Boolean =
     val textCells = wb.sheets.flatMap { sheet =>
-      sheet.cells.values.collect {
-        case cell if cell.value match {
-              case com.tjclp.xl.CellValue.Text(s) => true
-              case _ => false
-            } =>
-          cell.value match {
-            case com.tjclp.xl.CellValue.Text(s) => s
-            case _ => ""
-          }
+      sheet.cells.values.flatMap { cell =>
+        cell.value match
+          case com.tjclp.xl.CellValue.Text(s) => Some(s)
+          case _ => None
       }
     }
 
@@ -129,4 +170,11 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     else
       val stringVec = strings.collect { case Right(s) => s }.toVector
       val indexMap = stringVec.zipWithIndex.toMap
-      Right(SharedStrings(stringVec, indexMap))
+
+      // Try to read totalCount from count attribute, fall back to uniqueCount
+      val totalCount = elem
+        .attribute("count")
+        .flatMap(_.text.toIntOption)
+        .getOrElse(stringVec.size) // Default to unique count if missing
+
+      Right(SharedStrings(stringVec, indexMap, totalCount))

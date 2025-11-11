@@ -56,6 +56,18 @@ class OpticsSpec extends FunSuite:
     assertEquals(updated.value, CellValue.Text("HELLO"))
   }
 
+  test("Lens.modify mutates the structure") {
+    import Optics.*
+
+    val cell1 = Cell(ARef.from1(1, 1), CellValue.Text("hello"))
+    val modified = cellValue.modify {
+      case CellValue.Text(s) => CellValue.Text(s.reverse)
+      case other => other
+    }(cell1)
+
+    assertEquals(modified.value, CellValue.Text("olleh"))
+  }
+
   test("Lens.andThen composes lenses") {
     import Optics.*
 
@@ -311,7 +323,7 @@ class OpticsSpec extends FunSuite:
       case other => other
     }(cell1)
 
-    assertEquals(doubled, CellValue.Number(100))
+    assertEquals(doubled.value, CellValue.Number(100))
   }
 
   test("Optional.modify is no-op on missing cells") {

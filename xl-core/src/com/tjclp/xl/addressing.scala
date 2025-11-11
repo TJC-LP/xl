@@ -1,5 +1,7 @@
 package com.tjclp.xl
 
+import java.util.Locale
+
 /**
  * Column index with zero-based internal representation. Opaque type for zero-overhead wrapping.
  */
@@ -16,11 +18,13 @@ object Column:
   def from1(index: Int): Column = index - 1
 
   /** Create a Column from Excel letter notation (A, B, AA, etc.) */
-  def fromLetter(s: String): Either[String, Column] =
-    if s.isEmpty then Left("Column letter cannot be empty")
-    else if !s.forall(c => c >= 'A' && c <= 'Z') then Left(s"Invalid column letter: $s")
+  def fromLetter(input: String): Either[String, Column] =
+    val normalized = input.toUpperCase(Locale.ROOT)
+    if normalized.isEmpty then Left("Column letter cannot be empty")
+    else if !normalized.forall(c => c >= 'A' && c <= 'Z') then
+      Left(s"Invalid column letter: $input")
     else
-      val index = s.foldLeft(0)((acc, c) => acc * 26 + (c - 'A' + 1)) - 1
+      val index = normalized.foldLeft(0)((acc, c) => acc * 26 + (c - 'A' + 1)) - 1
       if index < 0 || index > MaxIndex0 then Left(s"Column index out of range: $index")
       else Right(index)
 
@@ -124,7 +128,8 @@ object ARef:
 
   /** Parse cell reference from A1 notation */
   def parse(s: String): Either[String, ARef] =
-    val (letters, digits) = s.span(c => c >= 'A' && c <= 'Z')
+    val normalized = s.toUpperCase(Locale.ROOT)
+    val (letters, digits) = normalized.span(c => c >= 'A' && c <= 'Z')
     if letters.isEmpty then Left(s"No column letters in: $s")
     else if digits.isEmpty then Left(s"No row digits in: $s")
     else

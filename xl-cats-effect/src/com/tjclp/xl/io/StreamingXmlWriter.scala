@@ -29,7 +29,33 @@ object StreamingXmlWriter:
       else loop((n / 26) - 1, s"${((n % 26) + 'A').toChar}$acc")
     loop(col, "")
 
-  /** Generate XML events for a single cell */
+  /**
+   * Generate XML events for a single cell
+   *
+   * Converts CellValue to fs2-data-xml events for true streaming output.
+   *
+   * REQUIRES:
+   *   - colIndex in range 0..16383 (Excel column limit)
+   *   - rowIndex in range 1..1048576 (Excel row limit, 1-based)
+   *   - value is valid CellValue
+   * ENSURES:
+   *   - Returns empty list for CellValue.Empty (no cell emitted)
+   *   - Returns complete <c> element events for non-empty cells
+   *   - Text cells: adds xml:space="preserve" via QName(Some("xml"), "space") when needed
+   *   - Whitespace preserved byte-for-byte for text with leading/trailing/double spaces
+   *   - All events are well-formed and balance StartTag/EndTag
+   * DETERMINISTIC: Yes (pure transformation of inputs) ERROR CASES: None (total function over valid
+   * CellValue)
+   *
+   * @param colIndex
+   *   Column index (0-based)
+   * @param rowIndex
+   *   Row index (1-based for Excel compatibility)
+   * @param value
+   *   Cell value to serialize
+   * @return
+   *   List of XML events representing the cell
+   */
   def cellToEvents(colIndex: Int, rowIndex: Int, value: CellValue): List[XmlEvent] =
     val ref = s"${columnToLetter(colIndex)}$rowIndex"
 
@@ -39,11 +65,18 @@ object StreamingXmlWriter:
 
       case CellValue.Text(s) =>
         // <c r="A1" t="inlineStr"><is><t>text</t></is></c>
+        // Add xml:space="preserve" for text with leading/trailing/multiple spaces
+        val needsPreserve = s.startsWith(" ") || s.endsWith(" ") || s.contains("  ")
+        val tAttrs =
+          if needsPreserve then
+            List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
+          else Nil
+
         (
           "inlineStr",
           List(
             XmlEvent.StartTag(QName("is"), Nil, false),
-            XmlEvent.StartTag(QName("t"), Nil, false),
+            XmlEvent.StartTag(QName("t"), tAttrs, false),
             XmlEvent.XmlString(s, false),
             XmlEvent.EndTag(QName("t")),
             XmlEvent.EndTag(QName("is"))
@@ -104,6 +137,68 @@ object StreamingXmlWriter:
             XmlEvent.StartTag(QName("v"), Nil, false),
             XmlEvent.XmlString(serial.toString, false),
             XmlEvent.EndTag(QName("v"))
+          )
+        )
+
+      case CellValue.RichText(richText) =>
+        // <c r="A1" t="inlineStr"><is><r><rPr>...</rPr><t>text</t></r>...</is></c>
+        val isEvents = richText.runs.flatMap { run =>
+          val rStart = XmlEvent.StartTag(QName("r"), Nil, false)
+
+          // Optional <rPr> with font properties
+          val rPrEvents = run.font.toList.flatMap { f =>
+            val propsBuilder = List.newBuilder[XmlEvent]
+
+            // Font style properties
+            if f.bold then propsBuilder += XmlEvent.StartTag(QName("b"), Nil, true)
+            if f.italic then propsBuilder += XmlEvent.StartTag(QName("i"), Nil, true)
+            if f.underline then propsBuilder += XmlEvent.StartTag(QName("u"), Nil, true)
+
+            // Color
+            f.color.foreach { c =>
+              propsBuilder += XmlEvent.StartTag(
+                QName("color"),
+                List(Attr(QName("rgb"), List(XmlString(c.toHex.drop(1), false)))),
+                true
+              )
+            }
+
+            // Size and name
+            propsBuilder += XmlEvent.StartTag(
+              QName("sz"),
+              List(Attr(QName("val"), List(XmlString(f.sizePt.toString, false)))),
+              true
+            )
+            propsBuilder += XmlEvent.StartTag(
+              QName("name"),
+              List(Attr(QName("val"), List(XmlString(f.name, false)))),
+              true
+            )
+
+            XmlEvent.StartTag(QName("rPr"), Nil, false) :: propsBuilder.result() ::: List(
+              XmlEvent.EndTag(QName("rPr"))
+            )
+          }
+
+          // Text element with optional xml:space="preserve"
+          val tAttrs =
+            if run.text.startsWith(" ") || run.text.endsWith(" ") || run.text.contains("  ") then
+              List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
+            else Nil
+
+          val textEvents = List(
+            XmlEvent.StartTag(QName("t"), tAttrs, false),
+            XmlEvent.XmlString(run.text, false),
+            XmlEvent.EndTag(QName("t"))
+          )
+
+          rStart :: (rPrEvents ::: textEvents ::: List(XmlEvent.EndTag(QName("r"))))
+        }.toList
+
+        (
+          "inlineStr",
+          XmlEvent.StartTag(QName("is"), Nil, false) :: isEvents ::: List(
+            XmlEvent.EndTag(QName("is"))
           )
         )
 
