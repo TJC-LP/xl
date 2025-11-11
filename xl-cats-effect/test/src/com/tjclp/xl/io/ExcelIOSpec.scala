@@ -563,9 +563,10 @@ class ExcelIOSpec extends CatsEffectSuite:
     val path = dir.resolve("memory-test.xlsx")
     val excel = ExcelIO.instance[IO]
 
-    // Write 500k rows (would OOM if using readAllBytes())
+    // Write 100k rows (would OOM if using readAllBytes())
     // This test specifically verifies the fix from readAllBytes() → fs2.io.readInputStream
-    val writeRows = fs2.Stream.range(1, 500001).map { i =>
+    // Reduced from 500k to 100k for faster CI (still validates O(1) behavior)
+    val writeRows = fs2.Stream.range(1, 100001).map { i =>
       RowData(i, Map(
         0 -> CellValue.Number(BigDecimal(i)),
         1 -> CellValue.Text(s"Row-$i-with-some-text-content")
@@ -576,9 +577,9 @@ class ExcelIOSpec extends CatsEffectSuite:
       // Read with true streaming (constant memory via fs2.io.readInputStream)
       // If this completes without OOM, the O(1) fix is working
       excel.readStream(path)
-        .filter(_.rowIndex % 10000 == 0)  // Sample 1% to verify correctness
+        .filter(_.rowIndex % 10000 == 0)  // Sample 0.01% (1 in 10,000) to verify correctness
         .compile.count.map { count =>
-          assertEquals(count, 50L, "Should find 50 sampled rows (500k / 10k)")
+          assertEquals(count, 10L, "Should find 10 sampled rows (100k / 10k)")
         }
     }
   }

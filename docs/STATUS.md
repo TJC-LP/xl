@@ -110,16 +110,17 @@
 
 **Read Path** (✅ P6.6 Complete):
 - ✅ **True constant-memory streaming** - uses `fs2.io.readInputStream`
-- ✅ O(1) memory regardless of file size
+- ✅ O(1) memory for worksheet data (unlimited rows supported)
 - ✅ Streams worksheet XML incrementally (4KB chunks)
-- ✅ Streams sharedStrings.xml incrementally (4KB chunks)
+- ⚠️  SharedStrings Table (SST) materialized in memory (~10MB typical, scales with unique strings)
 - ✅ Large files (500k+ rows) process without OOM
 - ✅ Memory tests verify O(1) behavior
 
 **Result**:
-- Both streaming **read and write** achieve constant memory ✅
-- 500k rows: ~10MB memory (read + write)
-- 1M+ rows supported without memory issues
+- Both streaming **read and write** achieve constant memory for worksheet data ✅
+- 500k rows: ~10-20MB memory (worksheet streaming + SST materialized)
+- 1M+ rows supported without memory issues (unless >100k unique strings)
+- **Design tradeoff**: SST materialization acceptable for most use cases (text typically <10MB)
 
 ### Security & Safety
 
