@@ -12,10 +12,27 @@ import com.tjclp.xl.style.{StyleId, StyleRegistry}
  * Reader for XLSX files (ZIP parsing)
  *
  * Parses XLSX ZIP structure and converts to domain Workbook.
+ *
+ * **WARNING**: This is the in-memory reader that loads the entire file into memory. For large files
+ * (>10k rows), use `ExcelIO.readStream()` instead for constant-memory streaming.
+ *
+ * Use this reader for:
+ *   - Small files (<10k rows)
+ *   - When you need random cell access
+ *   - When you need styling information
+ *
+ * Use `ExcelIO.readStream()` for:
+ *   - Large files (100k+ rows)
+ *   - Sequential row processing
+ *   - Constant-memory requirements (O(1) memory regardless of file size)
  */
 object XlsxReader:
 
-  /** Read workbook from XLSX file */
+  /**
+   * Read workbook from XLSX file (in-memory).
+   *
+   * Loads entire file into memory. For large files, use `ExcelIO.readStream()` instead.
+   */
   def read(inputPath: Path): XLResult[Workbook] =
     try
       val is = new FileInputStream(inputPath.toFile)

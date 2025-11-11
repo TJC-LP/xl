@@ -55,10 +55,9 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
             val sstEntry = Option(zipFile.getEntry("xl/sharedStrings.xml"))
             sstEntry match
               case Some(entry) =>
-                val sstBytes = Stream.chunk(
-                  fs2.Chunk.array(
-                    zipFile.getInputStream(entry).readAllBytes()
-                  )
+                val sstBytes = fs2.io.readInputStream[F](
+                  Sync[F].delay(zipFile.getInputStream(entry)),
+                  chunkSize = 4096
                 )
                 StreamingXmlReader.parseSharedStrings[F](sstBytes)
               case None =>
@@ -69,10 +68,9 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
             val wsEntry = Option(zipFile.getEntry("xl/worksheets/sheet1.xml"))
             wsEntry match
               case Some(entry) =>
-                val wsBytes = Stream.chunk(
-                  fs2.Chunk.array(
-                    zipFile.getInputStream(entry).readAllBytes()
-                  )
+                val wsBytes = fs2.io.readInputStream[F](
+                  Sync[F].delay(zipFile.getInputStream(entry)),
+                  chunkSize = 4096
                 )
                 StreamingXmlReader.parseWorksheetStream(wsBytes, sst)
               case None =>
@@ -122,10 +120,9 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
         val sstEntry = Option(zipFile.getEntry("xl/sharedStrings.xml"))
         sstEntry match
           case Some(entry) =>
-            val sstBytes = Stream.chunk(
-              fs2.Chunk.array(
-                zipFile.getInputStream(entry).readAllBytes()
-              )
+            val sstBytes = fs2.io.readInputStream[F](
+              Sync[F].delay(zipFile.getInputStream(entry)),
+              chunkSize = 4096
             )
             StreamingXmlReader.parseSharedStrings[F](sstBytes)
           case None =>
@@ -136,10 +133,9 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
         val wsEntry = Option(zipFile.getEntry(s"xl/worksheets/sheet$sheetIndex.xml"))
         wsEntry match
           case Some(entry) =>
-            val wsBytes = Stream.chunk(
-              fs2.Chunk.array(
-                zipFile.getInputStream(entry).readAllBytes()
-              )
+            val wsBytes = fs2.io.readInputStream[F](
+              Sync[F].delay(zipFile.getInputStream(entry)),
+              chunkSize = 4096
             )
             StreamingXmlReader.parseWorksheetStream(wsBytes, sst)
           case None =>
