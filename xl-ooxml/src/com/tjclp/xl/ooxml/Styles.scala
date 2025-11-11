@@ -163,7 +163,20 @@ case class OoxmlStyles(
         pattern = PatternType.Gray125
       )
     )
-    val allFills = (defaultFills ++ index.fills.filterNot(defaultFills.contains)).distinct
+    // Deterministic deduplication preserving first occurrence order
+    // Manual tracking ensures determinism while avoiding duplicate defaults
+    val allFills = {
+      val builder = Vector.newBuilder[Fill]
+      val seen = scala.collection.mutable.Set.empty[Fill]
+
+      for (fill <- defaultFills ++ index.fills) {
+        if (!seen.contains(fill)) {
+          seen += fill
+          builder += fill
+        }
+      }
+      builder.result()
+    }
     val fillsElem = elem("fills", "count" -> allFills.size.toString)(
       allFills.map(fillToXml)*
     )
@@ -174,11 +187,16 @@ case class OoxmlStyles(
     )
 
     // CellXfs (cell format styles)
+    // Pre-build lookup maps for O(1) access instead of O(n) indexOf
+    val fontMap = index.fonts.zipWithIndex.toMap
+    val fillMap = allFills.zipWithIndex.toMap
+    val borderMap = index.borders.zipWithIndex.toMap
+
     val cellXfsElem = elem("cellXfs", "count" -> index.cellStyles.size.toString)(
       index.cellStyles.map { style =>
-        val fontIdx = index.fonts.indexOf(style.font)
-        val fillIdx = allFills.indexOf(style.fill)
-        val borderIdx = index.borders.indexOf(style.border)
+        val fontIdx = fontMap.getOrElse(style.font, -1)
+        val fillIdx = fillMap.getOrElse(style.fill, -1)
+        val borderIdx = borderMap.getOrElse(style.border, -1)
         val numFmtId = NumFmt
           .builtInId(style.numFmt)
           .getOrElse(

@@ -202,9 +202,30 @@ object XlsxReader:
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else Right(Workbook(sheets = sheets))
 
-  /** Parse XML string to Elem */
+  /**
+   * Parse XML string to Elem with XXE protection
+   *
+   * REQUIRES: xmlString is a valid XML string ENSURES:
+   *   - Returns Right(elem) if parsing succeeds
+   *   - Returns Left(XLError) if parsing fails
+   *   - Rejects XML with DOCTYPE declarations (XXE attack prevention)
+   *   - Rejects external entity references
+   * DETERMINISTIC: Yes (for same input) ERROR CASES: Malformed XML, XXE attempts, parser
+   * configuration failures
+   */
   private def parseXml(xmlString: String, location: String): XLResult[Elem] =
-    try Right(XML.loadString(xmlString))
+    try
+      // Configure SAX parser to prevent XXE (XML External Entity) attacks
+      val factory = javax.xml.parsers.SAXParserFactory.newInstance()
+      factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+      factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
+      factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+      factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+      factory.setXIncludeAware(false)
+      factory.setNamespaceAware(true)
+
+      val loader = XML.withSAXParser(factory.newSAXParser())
+      Right(loader.loadString(xmlString))
     catch
       case e: Exception =>
         Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))
