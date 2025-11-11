@@ -29,7 +29,11 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
 
   /** Write workbook to XLSX file */
   def write(wb: Workbook, path: Path): F[Unit] =
-    Sync[F].delay(XlsxWriter.write(wb, path)).flatMap {
+    writeWith(wb, path, com.tjclp.xl.ooxml.WriterConfig.default)
+
+  /** Write workbook to XLSX file with custom configuration */
+  def writeWith(wb: Workbook, path: Path, config: com.tjclp.xl.ooxml.WriterConfig): F[Unit] =
+    Sync[F].delay(XlsxWriter.writeWith(wb, path, config)).flatMap {
       case Right(_) => Async[F].unit
       case Left(err) => Async[F].raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
     }
@@ -168,7 +172,12 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
    * Uses fs2-data-xml events - never materializes full dataset. Can write unlimited rows with ~50MB
    * memory.
    */
-  def writeStreamTrue(path: Path, sheetName: String, sheetIndex: Int = 1): Pipe[F, RowData, Unit] =
+  def writeStreamTrue(
+    path: Path,
+    sheetName: String,
+    sheetIndex: Int = 1,
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+  ): Pipe[F, RowData, Unit] =
     rows =>
       // Validate sheet index
       if sheetIndex < 1 then
@@ -182,12 +191,15 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
           )(zip => Sync[F].delay(zip.close()))
           .flatMap { zip =>
             // 1. Write static parts first
-            Stream.eval(writeStaticParts(zip, sheetName, sheetIndex)) ++
+            Stream.eval(writeStaticParts(zip, sheetName, sheetIndex, config)) ++
               // 2. Open worksheet entry (use sheetIndex for filename)
+              // Note: Must use DEFLATED for streamed worksheets (STORED requires precomputed size/CRC)
               Stream.eval(
-                Sync[F].delay(
-                  zip.putNextEntry(new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml"))
-                )
+                Sync[F].delay {
+                  val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
+                  entry.setMethod(ZipEntry.DEFLATED) // Always DEFLATED for streamed content
+                  zip.putNextEntry(entry)
+                }
               ) ++
               // 3. Stream XML events → bytes → ZIP
               (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
@@ -206,7 +218,11 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
    *
    * Each sheet is streamed in order without materializing the full dataset.
    */
-  def writeStreamsSeqTrue(path: Path, sheets: Seq[(String, Stream[F, RowData])]): F[Unit] =
+  def writeStreamsSeqTrue(
+    path: Path,
+    sheets: Seq[(String, Stream[F, RowData])],
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+  ): F[Unit] =
     // Validate inputs
     if sheets.isEmpty then
       Async[F].raiseError(new IllegalArgumentException("Must provide at least one sheet"))
@@ -231,7 +247,8 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
               zip,
               sheetsWithIndices.map { case (name, idx, _) =>
                 (name, idx)
-              }
+              },
+              config
             )
           ) ++
             // 2. Stream each sheet sequentially
@@ -239,10 +256,13 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
               .emits(sheetsWithIndices)
               .flatMap { case (name, sheetIndex, rows) =>
                 // Open worksheet entry
+                // Note: Must use DEFLATED for streamed worksheets (STORED requires precomputed size/CRC)
                 Stream.eval(
-                  Sync[F].delay(
-                    zip.putNextEntry(new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml"))
-                  )
+                  Sync[F].delay {
+                    val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
+                    entry.setMethod(ZipEntry.DEFLATED) // Always DEFLATED for streamed content
+                    zip.putNextEntry(entry)
+                  }
                 ) ++
                   // Stream XML events → bytes → ZIP
                   (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
@@ -266,7 +286,15 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
 
   /** Write workbook with explicit error result */
   def writeR(wb: Workbook, path: Path): F[XLResult[Unit]] =
-    Sync[F].delay(XlsxWriter.write(wb, path))
+    writeWithR(wb, path, com.tjclp.xl.ooxml.WriterConfig.default)
+
+  /** Write workbook with explicit error result and custom configuration */
+  def writeWithR(
+    wb: Workbook,
+    path: Path,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): F[XLResult[Unit]] =
+    Sync[F].delay(XlsxWriter.writeWith(wb, path, config))
 
   /** Stream rows with explicit error channel */
   def readStreamR(path: Path): Stream[F, Either[XLError, RowData]] =
@@ -297,19 +325,21 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
   def writeStreamTrueR(
     path: Path,
     sheetName: String,
-    sheetIndex: Int = 1
+    sheetIndex: Int = 1,
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): Pipe[F, RowData, Either[XLError, Unit]] =
     rows =>
-      writeStreamTrue(path, sheetName, sheetIndex)(rows)
+      writeStreamTrue(path, sheetName, sheetIndex, config)(rows)
         .map(_ => Right(()))
         .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
 
   /** Write multiple sheets with explicit error channel */
   def writeStreamsSeqTrueR(
     path: Path,
-    sheets: Seq[(String, Stream[F, RowData])]
+    sheets: Seq[(String, Stream[F, RowData])],
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): F[XLResult[Unit]] =
-    writeStreamsSeqTrue(path, sheets)
+    writeStreamsSeqTrue(path, sheets, config)
       .map(Right(_))
       .handleErrorWith(e => Async[F].pure(Left(XLError.IOError(e.getMessage))))
 
@@ -351,7 +381,8 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
   private def writeStaticParts(
     zip: ZipOutputStream,
     sheetName: String,
-    sheetIndex: Int
+    sheetIndex: Int,
+    config: com.tjclp.xl.ooxml.WriterConfig
   ): F[Unit] =
     import com.tjclp.xl.ooxml.*
     import com.tjclp.xl.SheetName
@@ -371,17 +402,18 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     val styles = OoxmlStyles.minimal
 
     for
-      _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml)
-      _ <- writePart(zip, "_rels/.rels", rootRels.toXml)
-      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml)
-      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml)
-      _ <- writePart(zip, "xl/styles.xml", styles.toXml)
+      _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
+      _ <- writePart(zip, "_rels/.rels", rootRels.toXml, config)
+      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
+      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
+      _ <- writePart(zip, "xl/styles.xml", styles.toXml, config)
     yield ()
 
   // Helper: Write static OOXML parts for multiple sheets
   private def writeStaticPartsMulti(
     zip: ZipOutputStream,
-    sheets: Seq[(String, Int)] // (name, sheetIndex)
+    sheets: Seq[(String, Int)], // (name, sheetIndex)
+    config: com.tjclp.xl.ooxml.WriterConfig
   ): F[Unit] =
     import com.tjclp.xl.ooxml.*
     import com.tjclp.xl.SheetName
@@ -408,28 +440,42 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     val styles = OoxmlStyles.minimal
 
     for
-      _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml)
-      _ <- writePart(zip, "_rels/.rels", rootRels.toXml)
-      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml)
-      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml)
-      _ <- writePart(zip, "xl/styles.xml", styles.toXml)
+      _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
+      _ <- writePart(zip, "_rels/.rels", rootRels.toXml, config)
+      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
+      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
+      _ <- writePart(zip, "xl/styles.xml", styles.toXml, config)
     yield ()
 
   // Helper: Write a single XML part to ZIP
-  private def writePart(zip: ZipOutputStream, entryName: String, xml: scala.xml.Elem): F[Unit] =
+  private def writePart(
+    zip: ZipOutputStream,
+    entryName: String,
+    xml: scala.xml.Elem,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): F[Unit] =
     Sync[F].delay {
-      val xmlString = com.tjclp.xl.ooxml.XmlUtil.prettyPrint(xml)
+      import com.tjclp.xl.ooxml.{XmlUtil, Compression}
+
+      // Use config for XML formatting
+      val xmlString = if config.prettyPrint then XmlUtil.prettyPrint(xml) else XmlUtil.compact(xml)
       val bytes = xmlString.getBytes(StandardCharsets.UTF_8)
 
       val entry = new ZipEntry(entryName)
-      entry.setMethod(ZipEntry.STORED) // No compression
-      entry.setSize(bytes.length)
-      entry.setCompressedSize(bytes.length)
+      entry.setMethod(config.compression.zipMethod)
 
-      // Calculate CRC32
-      val crc = new CRC32()
-      crc.update(bytes)
-      entry.setCrc(crc.getValue)
+      // For STORED method, must set size and CRC before writing
+      // For DEFLATED, ZipOutputStream computes these automatically
+      config.compression match
+        case Compression.Stored =>
+          entry.setSize(bytes.length)
+          entry.setCompressedSize(bytes.length)
+          // Calculate CRC32
+          val crc = new CRC32()
+          crc.update(bytes)
+          entry.setCrc(crc.getValue)
+        case Compression.Deflated =>
+          () // ZipOutputStream handles automatically
 
       zip.putNextEntry(entry)
       zip.write(bytes)

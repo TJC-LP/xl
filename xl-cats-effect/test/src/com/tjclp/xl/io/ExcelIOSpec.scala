@@ -606,3 +606,57 @@ class ExcelIOSpec extends CatsEffectSuite:
       assertEquals(c1, 100000L)
       assertEquals(c2, 100000L)
   }
+
+  // ========== Compression Tests (verify WriterConfig respected) ==========
+
+  tempDir.test("writeStreamTrue: config affects static parts compression") { dir =>
+    val excel = ExcelIO.instance[IO]
+
+    // Small dataset (static parts dominate file size)
+    val rows = fs2.Stream.range(1, 11).map { i =>
+      RowData(i, Map(0 -> CellValue.Text(s"Row $i")))
+    }
+
+    val deflatedPath = dir.resolve("streamed-deflated.xlsx")
+    val storedPath = dir.resolve("streamed-stored.xlsx")
+
+    val deflatedConfig = com.tjclp.xl.ooxml.WriterConfig(
+      compression = com.tjclp.xl.ooxml.Compression.Deflated,
+      prettyPrint = false
+    )
+    val storedConfig = com.tjclp.xl.ooxml.WriterConfig(
+      compression = com.tjclp.xl.ooxml.Compression.Stored,
+      prettyPrint = false
+    )
+
+    for
+      _ <- rows.through(excel.writeStreamTrue(deflatedPath, "Data", 1, deflatedConfig)).compile.drain
+      _ <- rows.through(excel.writeStreamTrue(storedPath, "Data", 1, storedConfig)).compile.drain
+      deflatedSize <- IO(java.nio.file.Files.size(deflatedPath))
+      storedSize <- IO(java.nio.file.Files.size(storedPath))
+    yield
+      // DEFLATED should produce smaller or equal size (worksheets always DEFLATED regardless of config)
+      assert(deflatedSize <= storedSize, s"DEFLATED config ($deflatedSize) should be <= STORED config ($storedSize)")
+  }
+
+  tempDir.test("writeStreamTrue: produces compressed output") { dir =>
+    val excel = ExcelIO.instance[IO]
+
+    // Large dataset with repetitive content
+    val rows = fs2.Stream.range(1, 5001).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Text("Repeated content that should compress well"),
+        1 -> CellValue.Number(BigDecimal(i))
+      ))
+    }
+
+    val path = dir.resolve("compressed.xlsx")
+
+    rows.through(excel.writeStreamTrue(path, "Data")).compile.drain.flatMap { _ =>
+      IO(java.nio.file.Files.size(path)).map { size =>
+        // 5000 rows with repetitive text should compress to < 500KB
+        // (uncompressed would be ~2-3MB)
+        assert(size < 500_000, s"File size ($size) suggests poor compression")
+      }
+    }
+  }

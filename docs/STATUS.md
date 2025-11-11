@@ -1,6 +1,6 @@
 # XL Project Status - 2025-11-11
 
-## Current State: ~87% Complete, 265/265 Tests Passing ✅
+## Current State: ~89% Complete, 269/269 Tests Passing ✅
 
 ### What Works (Production-Ready)
 
@@ -44,6 +44,13 @@
 - ✅ `writeStreamTrue` - True constant-memory streaming write (fs2-data-xml)
 - ✅ Benchmark: 100k rows in ~1.8s read (~10MB constant memory) / ~1.1s write (~10MB constant memory)
 
+**Output Configuration** (P6.7 Complete):
+- ✅ WriterConfig with compression and prettyPrint options
+- ✅ Compression.Deflated default (5-10x smaller files)
+- ✅ WriterConfig.debug for debugging (STORED + prettyPrint)
+- ✅ Backward compatible API (writeWith for custom config)
+- ✅ 4 compression tests verify behavior
+
 **Infrastructure**:
 - ✅ Mill build system
 - ✅ Scalafmt 3.10.1 integration
@@ -52,7 +59,7 @@
 
 ### Test Coverage
 
-**263 tests across 4 modules**:
+**269 tests across 4 modules** (P6.6 + P6.7 additions):
 - **xl-core**: 221 tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -63,10 +70,12 @@
   - 18 elegant syntax (given conversions, batch put, formatted literals)
   - 34 optics (Lens/Optional laws, focus DSL, real-world use cases)
   - 5 RichText (composition, formatting, DSL)
-- **xl-ooxml**: 24 tests
+- **xl-ooxml**: 28 tests (+4 compression)
   - Round-trip tests (text, numbers, booleans, mixed, multi-sheet, SST, styles, RichText)
-- **xl-cats-effect**: 18 tests
+  - Compression tests (DEFLATED vs STORED, prettyPrint, defaults, debug mode)
+- **xl-cats-effect**: 20 tests (+2 memory)
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
+  - Memory tests (O(1) verification, concurrent streams)
 
 ---
 

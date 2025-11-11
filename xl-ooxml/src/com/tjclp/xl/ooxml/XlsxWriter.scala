@@ -18,11 +18,40 @@ enum SstPolicy derives CanEqual:
   /** Never use SST (inline strings only) */
   case Never
 
+/**
+ * Compression method for ZIP entries.
+ *
+ * DEFLATED (default) produces 5-10x smaller files with minimal CPU overhead. STORED is useful for
+ * debugging (human-readable ZIP contents).
+ */
+enum Compression derives CanEqual:
+  /** No compression (STORED) - faster writes, larger files, requires CRC32 precomputation */
+  case Stored
+
+  /** DEFLATE compression (DEFLATED) - smaller files, standard production use */
+  case Deflated
+
+  /** ZIP constant for this compression method */
+  def zipMethod: Int = this match
+    case Stored => ZipEntry.STORED
+    case Deflated => ZipEntry.DEFLATED
+
 /** Writer configuration options */
 case class WriterConfig(
   sstPolicy: SstPolicy = SstPolicy.Auto,
-  prettyPrint: Boolean = true
+  compression: Compression = Compression.Deflated,
+  prettyPrint: Boolean = false // Compact XML for production
 )
+
+object WriterConfig:
+  /** Default production configuration: DEFLATED compression + compact XML */
+  val default: WriterConfig = WriterConfig()
+
+  /** Debug configuration: STORED compression + pretty XML for manual inspection */
+  val debug: WriterConfig = WriterConfig(
+    compression = Compression.Stored,
+    prettyPrint = true
+  )
 
 /**
  * Writer for XLSX files (ZIP assembly)
@@ -88,7 +117,7 @@ object XlsxWriter:
         ooxmlSheets,
         styles,
         sst,
-        config.prettyPrint
+        config
       )
 
       Right(())
@@ -105,44 +134,55 @@ object XlsxWriter:
     sheets: Vector[OoxmlWorksheet],
     styles: OoxmlStyles,
     sst: Option[SharedStrings],
-    prettyPrint: Boolean
+    config: WriterConfig
   ): Unit =
     val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
     try
       // Write parts in canonical order
-      writePart(zip, "[Content_Types].xml", contentTypes.toXml, prettyPrint)
-      writePart(zip, "_rels/.rels", rootRels.toXml, prettyPrint)
-      writePart(zip, "xl/workbook.xml", workbook.toXml, prettyPrint)
-      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, prettyPrint)
+      writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
+      writePart(zip, "_rels/.rels", rootRels.toXml, config)
+      writePart(zip, "xl/workbook.xml", workbook.toXml, config)
+      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
 
       // Write styles
-      writePart(zip, "xl/styles.xml", styles.toXml, prettyPrint)
+      writePart(zip, "xl/styles.xml", styles.toXml, config)
 
       // Write shared strings if present
       sst.foreach { sharedStrings =>
-        writePart(zip, "xl/sharedStrings.xml", sharedStrings.toXml, prettyPrint)
+        writePart(zip, "xl/sharedStrings.xml", sharedStrings.toXml, config)
       }
 
       // Write worksheets
       sheets.zipWithIndex.foreach { case (sheet, idx) =>
-        writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml, prettyPrint)
+        writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml, config)
       }
 
     finally zip.close()
 
   /** Write a single XML part to ZIP */
-  private def writePart(zip: ZipOutputStream, entryName: String, xml: Elem, pretty: Boolean): Unit =
+  private def writePart(
+    zip: ZipOutputStream,
+    entryName: String,
+    xml: Elem,
+    config: WriterConfig
+  ): Unit =
     val entry = new ZipEntry(entryName)
-    entry.setMethod(ZipEntry.STORED) // No compression for easier debugging
+    entry.setMethod(config.compression.zipMethod)
 
     // Convert XML to bytes with conditional formatting
-    val xmlString = if pretty then XmlUtil.prettyPrint(xml) else XmlUtil.compact(xml)
+    val xmlString = if config.prettyPrint then XmlUtil.prettyPrint(xml) else XmlUtil.compact(xml)
     val bytes = xmlString.getBytes(StandardCharsets.UTF_8)
 
-    // Set size and CRC for STORED method
-    entry.setSize(bytes.length)
-    entry.setCompressedSize(bytes.length)
-    entry.setCrc(calculateCrc(bytes))
+    // For STORED method, must set size and CRC before writing
+    // For DEFLATED, these are computed automatically by ZipOutputStream
+    config.compression match
+      case Compression.Stored =>
+        entry.setSize(bytes.length)
+        entry.setCompressedSize(bytes.length)
+        entry.setCrc(calculateCrc(bytes))
+      case Compression.Deflated =>
+        // ZipOutputStream computes these automatically for DEFLATED
+        ()
 
     zip.putNextEntry(entry)
     zip.write(bytes)
