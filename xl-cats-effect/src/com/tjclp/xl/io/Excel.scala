@@ -118,7 +118,8 @@ trait Excel[F[_]]:
   def writeStreamTrue(
     path: Path,
     sheetName: String,
-    sheetIndex: Int = 1
+    sheetIndex: Int = 1,
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): fs2.Pipe[F, RowData, Unit]
 
   /**
@@ -131,6 +132,8 @@ trait Excel[F[_]]:
    *   Output file path
    * @param sheets
    *   Sequence of (sheet name, rows) tuples. Sheets are auto-indexed 1, 2, 3...
+   * @param config
+   *   Writer configuration (compression, prettyPrint). Defaults to production settings.
    *
    * Example:
    * {{{
@@ -147,7 +150,8 @@ trait Excel[F[_]]:
    */
   def writeStreamsSeqTrue(
     path: Path,
-    sheets: Seq[(String, Stream[F, RowData])]
+    sheets: Seq[(String, Stream[F, RowData])],
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): F[Unit]
 
 /**
@@ -194,13 +198,15 @@ trait ExcelR[F[_]]:
   def writeStreamTrueR(
     path: Path,
     sheetName: String,
-    sheetIndex: Int = 1
+    sheetIndex: Int = 1,
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): fs2.Pipe[F, RowData, Either[XLError, Unit]]
 
   /** Write multiple sheets with explicit error channel */
   def writeStreamsSeqTrueR(
     path: Path,
-    sheets: Seq[(String, Stream[F, RowData])]
+    sheets: Seq[(String, Stream[F, RowData])],
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): F[XLResult[Unit]]
 
 object Excel:

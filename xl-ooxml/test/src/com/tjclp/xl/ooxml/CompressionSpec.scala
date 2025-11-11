@@ -58,7 +58,7 @@ class CompressionSpec extends FunSuite:
     val deflatedSize = Files.size(deflatedPath)
     val storedSize = Files.size(storedPath)
 
-    // DEFLATED should be 50-90% smaller (compression ratio 2x-10x)
+    // DEFLATED should be 50-93% smaller (compression ratio 2x-15x)
     assert(deflatedSize < storedSize, s"DEFLATED ($deflatedSize) should be smaller than STORED ($storedSize)")
 
     val ratio = storedSize.toDouble / deflatedSize.toDouble
