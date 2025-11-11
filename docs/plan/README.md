@@ -12,42 +12,48 @@ This directory contains **active future work** only. Completed phases are archiv
 
 ### Core Future Work
 
-1. **[formula-system.md](formula-system.md)** - P7+ Formula Evaluator
+1. **[future-improvements.md](future-improvements.md)** - P6.5 Performance & Quality Polish
+   - Status: ⬜ Not started
+   - Source: PR #4 review feedback (medium-priority enhancements)
+   - Scope: O(n²) → O(1) optimization, whitespace utility, error path tests, integration tests
+   - Priority: Medium (8-10 hours)
+
+2. **[formula-system.md](formula-system.md)** - P7+ Formula Evaluator
    - Status: ⬜ Not started
    - Scope: AST evaluation, function library, circular reference detection
    - Note: Formula parsing/serialization already complete
 
-2. **[error-model-and-safety.md](error-model-and-safety.md)** - P11 Security Hardening
+3. **[error-model-and-safety.md](error-model-and-safety.md)** - P11 Security Hardening
    - Status: Error model ✅ complete, security ⬜ not started
    - Scope: ZIP bomb detection, formula injection guards, XXE prevention
    - Priority: High (required for production use)
 
-3. **[security.md](security.md)** - P11 Additional Security Features
+4. **[security.md](security.md)** - P11 Additional Security Features
    - Status: ⬜ Not started
    - Scope: File size limits, macro handling, sanitization
    - Note: Consider merging with error-model-and-safety.md
 
 ### Advanced Features
 
-4. **[drawings.md](drawings.md)** - P8 Images & Shapes
+5. **[drawings.md](drawings.md)** - P8 Images & Shapes
    - Status: ⬜ Not started
    - Scope: PNG/JPEG embedding, anchors, text boxes
 
-5. **[charts.md](charts.md)** - P9 Chart Generation
+6. **[charts.md](charts.md)** - P9 Chart Generation
    - Status: ⬜ Not started
    - Scope: Bar, line, pie, scatter charts with data binding
 
-6. **[tables-and-pivots.md](tables-and-pivots.md)** - P10 Structured Data
+7. **[tables-and-pivots.md](tables-and-pivots.md)** - P10 Structured Data
    - Status: ⬜ Not started
    - Scope: Excel tables, conditional formatting, data validation
 
 ### Infrastructure
 
-7. **[benchmarks.md](benchmarks.md)** - Performance Testing
+8. **[benchmarks.md](benchmarks.md)** - Performance Testing
    - Status: ⬜ Not started
    - Scope: JMH benchmarks, POI comparisons, regression tests
 
-8. **[roadmap.md](roadmap.md)** - Master Status Tracker
+9. **[roadmap.md](roadmap.md)** - Master Status Tracker
    - Status: ✅ Maintained (living document)
    - Scope: Overall progress, phase definitions, completion criteria
 

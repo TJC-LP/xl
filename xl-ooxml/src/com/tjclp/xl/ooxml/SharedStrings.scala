@@ -120,15 +120,10 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    */
   def fromWorkbook(wb: com.tjclp.xl.Workbook): SharedStrings =
     val allStrings = wb.sheets.flatMap { sheet =>
-      sheet.cells.values.collect {
-        case cell if cell.value match {
-              case com.tjclp.xl.CellValue.Text(_) => true
-              case _ => false
-            } =>
-          cell.value match {
-            case com.tjclp.xl.CellValue.Text(s) => s
-            case _ => "" // Should never happen due to filter
-          }
+      sheet.cells.values.flatMap { cell =>
+        cell.value match
+          case com.tjclp.xl.CellValue.Text(s) => Some(s)
+          case _ => None
       }
     }
     // Count total instances before deduplication
@@ -143,15 +138,10 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    */
   def shouldUseSST(wb: com.tjclp.xl.Workbook): Boolean =
     val textCells = wb.sheets.flatMap { sheet =>
-      sheet.cells.values.collect {
-        case cell if cell.value match {
-              case com.tjclp.xl.CellValue.Text(s) => true
-              case _ => false
-            } =>
-          cell.value match {
-            case com.tjclp.xl.CellValue.Text(s) => s
-            case _ => ""
-          }
+      sheet.cells.values.flatMap { cell =>
+        cell.value match
+          case com.tjclp.xl.CellValue.Text(s) => Some(s)
+          case _ => None
       }
     }
 

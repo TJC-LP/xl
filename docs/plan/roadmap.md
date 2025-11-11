@@ -137,6 +137,19 @@
 
 ## Remaining Phases ⬜
 
+### ⬜ P6.5: Performance & Quality Polish (Future)
+**Priority**: Medium
+**Estimated Effort**: 8-10 hours
+**Source**: PR #4 review feedback
+**Definition of Done**:
+- Optimize style indexOf from O(n²) to O(1) using Maps
+- Extract whitespace check to XmlUtil.needsXmlSpacePreserve utility
+- Add XlsxReader error path tests (10+ tests)
+- Add full XLSX round-trip integration test
+- Logging strategy for missing/malformed files (defer to P11)
+
+**See**: [future-improvements.md](future-improvements.md) for detailed breakdown
+
 ### ⬜ P6b: Full Codec Derivation (Future)
 **Priority**: Medium
 **Estimated Effort**: 2-3 weeks
@@ -212,6 +225,7 @@
 | P6: Codecs (primitives) | ✅ Complete | 58 tests | 80% |
 | P31: Optics/RichText | ✅ Complete | 39 tests | 100% |
 | **Total Core** | **✅** | **698/698 tests** | **~85%** |
+| P6.5: Perf & Quality | ⬜ Future | - | 0% |
 | P6b: Full Derivation | ⬜ Future | - | 0% |
 | P7: Advanced Macros | ⬜ Future | - | 0% |
 | P8: Drawings | ⬜ Future | - | 0% |
