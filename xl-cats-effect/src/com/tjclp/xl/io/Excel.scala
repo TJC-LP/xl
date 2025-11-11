@@ -197,7 +197,11 @@ trait ExcelR[F[_]]:
   def writeR(wb: Workbook, path: Path): F[XLResult[Unit]]
 
   /** Write workbook with explicit error result and custom configuration */
-  def writeWithR(wb: Workbook, path: Path, config: com.tjclp.xl.ooxml.WriterConfig): F[XLResult[Unit]]
+  def writeWithR(
+    wb: Workbook,
+    path: Path,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): F[XLResult[Unit]]
 
   /**
    * Stream rows with explicit error channel.
