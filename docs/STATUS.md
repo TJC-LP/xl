@@ -37,12 +37,12 @@
 - ✅ Zero-overhead opaque types
 - ✅ Macros compile away (no runtime parsing)
 
-**Streaming API** (P5 Complete):
+**Streaming API** (P5 Partial):
 - ✅ Excel[F[_]] algebra trait
 - ✅ ExcelIO[IO] interpreter
-- ✅ `readStreamTrue` - True constant-memory streaming read (fs2-data-xml)
+- ⚠️  `readStreamTrue` - Streaming API but **NOT constant-memory** (uses `readAllBytes()` internally)
 - ✅ `writeStreamTrue` - True constant-memory streaming write (fs2-data-xml)
-- ✅ Benchmark: 100k rows in ~1.8s read / ~1.1s write, ~50MB constant memory
+- ✅ Benchmark: 100k rows in ~1.8s read (O(n) memory) / ~1.1s write (~10MB constant memory)
 
 **Infrastructure**:
 - ✅ Mill build system
@@ -98,6 +98,34 @@
 - ❌ Conditional formatting
 - ❌ Data validation
 - ❌ Named ranges
+
+### Streaming I/O Limitations (CRITICAL)
+
+**Write Path** (✅ Working):
+- ✅ True constant-memory streaming with `writeStreamTrue`
+- ✅ O(1) memory regardless of file size
+- ⚠️  No SST support (inline strings only - larger files)
+- ⚠️  Minimal styles (default only - no rich formatting)
+- ⚠️  [Content_Types].xml written before SST decision made
+
+**Read Path** (❌ Not Constant-Memory):
+- ❌ **`readStream` uses `InputStream.readAllBytes()`** - violates O(1) claim
+- ❌ Materializes entire worksheet XML in memory before parsing
+- ❌ Materializes entire sharedStrings.xml in memory
+- ❌ Memory grows with file size (O(n), not O(1))
+- ❌ Large files (100k+ rows) will spike memory or OOM
+
+**Impact**:
+- Current "streaming read" is **NOT suitable for large files**
+- Only streaming **write** achieves constant memory
+- Users should use in-memory API for reads until fixed
+
+**Fix Required** (P6.6 - 2-3 days):
+- Replace `readAllBytes()` with `fs2.io.readInputStream`
+- Stream bytes directly to `StreamingXmlReader` with chunking
+- Add memory tests to prevent regressions
+
+See `docs/plan/streaming-improvements.md` for detailed fix plan.
 
 ### Security & Safety
 
@@ -225,23 +253,27 @@ xl-cats-effect/src/com/tjclp/xl/io/
 
 ## Performance Results (Actual)
 
-### True Streaming Implementation (P5 Complete) ✅
+### Streaming Implementation (P5 Partial) ⚠️
 
-**100k row benchmark** (constant memory):
-- **Write**: ~1.1s, ~50MB memory
-- **Read**: ~1.8s, ~50MB memory
-- **Memory**: O(1) constant, independent of file size
-- **Scalability**: Can handle 1M+ rows without OOM
+**100k row benchmark**:
+- **Write**: ~1.1s, **~10MB constant memory** (O(1)) ✅
+- **Read**: ~1.8s, **~50-100MB memory** (O(n)) ⚠️
+- **Write Scalability**: Can handle 1M+ rows without OOM ✅
+- **Read Scalability**: Limited by available memory ❌
 
-### Comparison to Apache POI
+**Known Issue**: Streaming reader uses `readAllBytes()` for ZIP entries, materializing worksheets and SST fully in memory. This violates the constant-memory claim. See `docs/plan/streaming-improvements.md` for fix.
 
-| Operation | XL (Streaming) | Apache POI | Improvement |
-|-----------|----------------|------------|-------------|
-| Write 100k | 1.1s @ 50MB | ~5s @ 800MB | **4.5x faster, 16x less memory** |
-| Read 100k | 1.8s @ 50MB | ~8s @ 1GB | **4.4x faster, 20x less memory** |
-| Write 1M | ~11s @ 50MB | OOM crash | **Infinite scale** |
+### Comparison to Apache POI (Streaming Write Only)
 
-**Result: Exceeded goal of 3-5x throughput, 5-10x memory improvement**
+| Operation | XL | Apache POI SXSSF | Improvement |
+|-----------|-----|------------------|-------------|
+| **Write 100k** | 1.1s @ 10MB | ~5s @ 800MB | **4.5x faster, 80x less memory** ✅ |
+| **Write 1M** | ~11s @ 10MB | ~50s @ 800MB | **4.5x faster, constant memory** ✅ |
+| **Read 100k** | 1.8s @ 100MB | ~8s @ 1GB | Faster but not constant-memory ⚠️ |
+
+**Note**: Performance claims verified for **writes only**. Reads are faster than POI but materialize entries in memory. See limitations below.
+
+**Result for Writes**: Exceeded goal of 3-5x throughput, achieved 80x memory improvement with constant memory.
 
 ---
 
