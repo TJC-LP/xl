@@ -33,29 +33,39 @@ This directory contains **active future work** only. Completed phases are archiv
    - Scope: File size limits, macro handling, sanitization
    - Note: Consider merging with error-model-and-safety.md
 
+### Architectural Evolution
+
+5. **[lazy-evaluation.md](lazy-evaluation.md)** - Spark-Style Lazy Evaluation
+   - Status: ⬜ Not started (design complete)
+   - Scope: Logical plan DSL, query optimizer (4 passes), streaming execution with fs2
+   - Breaking Change: Sheet → LazySheet (eager → lazy by default)
+   - Benefits: 35% faster writes, O(n) → O(1) memory, 20-40% operation reduction
+   - Timeline: 4-5 weeks (6 phases)
+   - Note: Major architectural rewrite, deferred until post-1.0
+
 ### Advanced Features
 
-5. **[drawings.md](drawings.md)** - P8 Images & Shapes
+6. **[drawings.md](drawings.md)** - P8 Images & Shapes
    - Status: ⬜ Not started
    - Scope: PNG/JPEG embedding, anchors, text boxes
 
-6. **[charts.md](charts.md)** - P9 Chart Generation
+7. **[charts.md](charts.md)** - P9 Chart Generation
    - Status: ⬜ Not started
    - Scope: Bar, line, pie, scatter charts with data binding
 
-7. **[tables-and-pivots.md](tables-and-pivots.md)** - P10 Structured Data
+8. **[tables-and-pivots.md](tables-and-pivots.md)** - P10 Structured Data
    - Status: ⬜ Not started
    - Scope: Excel tables, conditional formatting, data validation
 
 ### Infrastructure
 
-8. **[benchmarks.md](benchmarks.md)** - Performance Testing
+9. **[benchmarks.md](benchmarks.md)** - Performance Testing
    - Status: ⬜ Not started
    - Scope: JMH benchmarks, POI comparisons, regression tests
 
-9. **[roadmap.md](roadmap.md)** - Master Status Tracker
-   - Status: ✅ Maintained (living document)
-   - Scope: Overall progress, phase definitions, completion criteria
+10. **[roadmap.md](roadmap.md)** - Master Status Tracker
+    - Status: ✅ Maintained (living document)
+    - Scope: Overall progress, phase definitions, completion criteria
 
 ## Related Documentation
 
