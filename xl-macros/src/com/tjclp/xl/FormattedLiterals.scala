@@ -4,7 +4,7 @@ import scala.quoted.*
 import java.time.LocalDate
 
 /** Formatted literal macros for compile-time parsing */
-object formattedLiterals:
+object FormattedLiterals:
 
   extension (inline sc: StringContext)
     /** Money literal: money"$1,234.56" → Formatted(Number(1234.56), NumFmt.Currency) */
@@ -108,7 +108,7 @@ object formattedLiterals:
       case e: Exception =>
         report.errorAndAbort(s"Invalid accounting literal '$s': ${e.getMessage}")
 
-end formattedLiterals
+end FormattedLiterals
 
 /** Export formatted literals for import */
-export formattedLiterals.{money, percent, date, accounting}
+export FormattedLiterals.{money, percent, date, accounting}

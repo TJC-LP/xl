@@ -135,7 +135,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
       }
     }
     // fromStrings will count total instances during single-pass deduplication
-    fromStrings(allStrings.toIterable, None)
+    fromStrings(allStrings.iterator.to(Iterable), None)
 
   /**
    * Determine if using SST saves space vs inline strings
