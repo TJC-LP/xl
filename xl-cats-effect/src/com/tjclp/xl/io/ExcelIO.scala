@@ -29,7 +29,11 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
 
   /** Write workbook to XLSX file */
   def write(wb: Workbook, path: Path): F[Unit] =
-    Sync[F].delay(XlsxWriter.write(wb, path)).flatMap {
+    writeWith(wb, path, com.tjclp.xl.ooxml.WriterConfig.default)
+
+  /** Write workbook to XLSX file with custom configuration */
+  def writeWith(wb: Workbook, path: Path, config: com.tjclp.xl.ooxml.WriterConfig): F[Unit] =
+    Sync[F].delay(XlsxWriter.writeWith(wb, path, config)).flatMap {
       case Right(_) => Async[F].unit
       case Left(err) => Async[F].raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
     }
@@ -270,7 +274,15 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
 
   /** Write workbook with explicit error result */
   def writeR(wb: Workbook, path: Path): F[XLResult[Unit]] =
-    Sync[F].delay(XlsxWriter.write(wb, path))
+    writeWithR(wb, path, com.tjclp.xl.ooxml.WriterConfig.default)
+
+  /** Write workbook with explicit error result and custom configuration */
+  def writeWithR(
+    wb: Workbook,
+    path: Path,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): F[XLResult[Unit]] =
+    Sync[F].delay(XlsxWriter.writeWith(wb, path, config))
 
   /** Stream rows with explicit error channel */
   def readStreamR(path: Path): Stream[F, Either[XLError, RowData]] =
