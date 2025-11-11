@@ -505,6 +505,145 @@ Pipeline:
 
 **Caching**: Coursier + Mill artifacts cached for 2-5x speedup.
 
+## Reviewing PR Feedback
+
+### Working with Claude Code and Codex Reviews
+
+This repository uses both **Claude Code** (AI-assisted development) and **Codex** (automated PR review) to maintain code quality.
+
+#### Viewing PR Feedback
+
+```bash
+# View PR details and comments
+gh pr view <number>
+
+# View PR with all comments inline
+gh pr view <number> --comments
+
+# View PR review status
+gh pr view <number> --json reviews --jq '.reviews[] | "\(.author.login): \(.state)\n\(.body)"'
+```
+
+#### Common PR Review Patterns
+
+**1. Codex Automated Reviews**
+- Triggered automatically on PR creation or when marked ready for review
+- Provides detailed code analysis with specific line-by-line suggestions
+- Comments include: spec compliance issues, performance concerns, security risks, test coverage gaps
+- Reviews are comprehensive (6-10 detailed issues typical)
+
+**2. Review Severity Levels**
+
+Reviews categorize issues by priority:
+- **High-Priority (Before Merge)**: Spec violations, data loss bugs, security issues
+- **Medium Priority**: Performance concerns, code quality, test coverage
+- **Future Improvements (Not Blockers)**: Optimizations, refactoring opportunities
+
+**3. Addressing Feedback Workflow**
+
+```bash
+# 1. Plan mode: Review feedback and create fix plan
+# Use Task agent to analyze current state vs feedback
+# Present plan with ExitPlanMode tool
+
+# 2. Execute fixes systematically
+# Fix high-priority issues first
+# Add regression tests for each fix
+# Verify existing tests still pass
+
+# 3. Verify and commit
+./mill __.compile  # Zero warnings
+./mill __.test     # All tests passing
+./mill __.reformat # Format code
+git add -A && git commit -m "Fix: Address PR feedback - <issue>"
+git push
+
+# 4. Update PR with response
+gh pr comment <number> --body "Addressed Issue X: <details>"
+```
+
+#### Real Example: PR #4 Feedback Response
+
+**Review Identified**:
+- Issue 1: RichText missing double-space check (High-Priority)
+- Issue 5: VAlign.Middle mapping concern (turned out to be already correct)
+
+**Response Process**:
+1. Used Task agent to analyze both issues against current code
+2. Found Issue 1 needed fix, Issue 5 was false positive (already implemented correctly)
+3. Fixed Worksheet.scala and StreamingXmlWriter.scala (added `|| run.text.contains("  ")`)
+4. Added regression test for RichText with internal double spaces
+5. Verified all tests passing, formatted code
+6. Committed with reference to PR #4 and specific issue number
+7. Posted PR comment explaining both fixes/verifications
+
+**Key Patterns**:
+- Always verify feedback against current code (use agents to analyze)
+- Some "issues" may already be fixed (verify before changing)
+- Add regression tests for each fix
+- Reference PR number in commit messages
+- Post summary comment on PR explaining what was addressed
+
+#### Common Feedback Categories
+
+**Spec Compliance**:
+- OOXML/ECMA-376 spec violations
+- XML namespace handling
+- Attribute ordering and determinism
+
+**Data Integrity**:
+- Round-trip fidelity issues
+- Data loss scenarios
+- Whitespace/formatting preservation
+
+**Code Quality**:
+- Performance (O(n²) → O(1) optimizations)
+- Code duplication (extract to utilities)
+- Proper error handling
+
+**Security**:
+- XXE prevention
+- ZIP bomb protection
+- Path traversal guards
+- Input validation
+
+**Testing**:
+- Missing edge case tests
+- Property-based law verification
+- Round-trip tests
+
+#### Best Practices
+
+**DO**:
+- ✅ Address high-priority issues immediately before merge
+- ✅ Add regression tests for each fix
+- ✅ Verify "issues" against actual code (may already be fixed)
+- ✅ Document why certain suggestions are deferred (with issue tracking)
+- ✅ Reference PR numbers in commit messages
+- ✅ Post summary comments explaining what was addressed
+
+**DON'T**:
+- ❌ Blindly apply suggestions without verification
+- ❌ Skip tests for "trivial" fixes
+- ❌ Ignore medium/future suggestions (track them for later)
+- ❌ Fix issues without understanding root cause
+
+#### Tracking Future Improvements
+
+Create issues for non-blocking suggestions:
+
+```bash
+# Example: Create issue for performance optimization
+gh issue create --title "Perf: Optimize style indexOf to O(1)" \
+  --body "From PR #4 review: Vector.indexOf is O(n), becomes O(n²) for many styles.
+
+  Recommendation: Use zipWithIndex.toMap for O(1) lookups.
+
+  References: PR #4 Issue 3"
+```
+
+Or add to `docs/plan/README.md` under "Future Work" with priority labels.
+
 ## Common Tasks
 
 ### Adding a New Domain Type
