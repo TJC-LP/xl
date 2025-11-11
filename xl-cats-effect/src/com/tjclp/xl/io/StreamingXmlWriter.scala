@@ -182,7 +182,7 @@ object StreamingXmlWriter:
 
           // Text element with optional xml:space="preserve"
           val tAttrs =
-            if run.text.startsWith(" ") || run.text.endsWith(" ") then
+            if run.text.startsWith(" ") || run.text.endsWith(" ") || run.text.contains("  ") then
               List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
             else Nil
 

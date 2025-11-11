@@ -61,3 +61,17 @@ class WhitespacePreservationSpec extends FunSuite:
     assert(xmlString.contains(" leading"), "Should contain leading space")
     assert(xmlString.contains("trailing "), "Should contain trailing space")
   }
+
+  test("RichText with internal double spaces preserves xml:space") {
+    val richText = RichText(Vector(
+      TextRun("hello  world", None)  // Internal double space
+    ))
+    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val xml = ooxmlCell.toXml
+
+    val xmlString = xml.toString
+    assert(xmlString.contains("xml:space=\"preserve\""),
+      "RichText with internal double spaces should have xml:space='preserve'")
+    assert(xmlString.contains("hello  world"),
+      "Should preserve internal double spaces")
+  }

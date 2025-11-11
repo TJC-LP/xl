@@ -62,9 +62,9 @@ case class OoxmlCell(
           }.toSeq
 
           // Text run: <r> with optional <rPr> and <t>
-          // Add xml:space="preserve" to preserve leading/trailing spaces
+          // Add xml:space="preserve" to preserve leading/trailing/multiple spaces
           val textElem =
-            if run.text.startsWith(" ") || run.text.endsWith(" ") then
+            if run.text.startsWith(" ") || run.text.endsWith(" ") || run.text.contains("  ") then
               Elem(
                 null,
                 "t",
