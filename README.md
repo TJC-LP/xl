@@ -19,13 +19,13 @@ A purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7
 - **Pure Error Channels**: ExcelR[F] for explicit error handling without exceptions
 - **Optics & Focus**: Lens and Optional for composable, law-governed transformations
 - **Range Combinators**: fillBy, tabulate, putRow, putCol for declarative sheet building
-- **Configurable Writer**: Control SST policy and XML formatting
+- **Configurable Writer**: Control compression (DEFLATED/STORED), SST policy, and XML formatting
 - **Deterministic Output**: Canonical XML ordering for stable git diffs and reproducible builds
 - **Property-Based Testing**: ScalaCheck generators and law tests for all core algebras
 
 ## Status
 
-**Current**: ~85% complete with 263/263 tests passing ✅
+**Current**: ~89% complete with 271/271 tests passing ✅
 
 **Implemented** (P0-P6):
 - ✅ Core domain types (Cell, Sheet, Workbook)
@@ -188,14 +188,13 @@ XL provides two I/O modes optimized for different use cases. **Choose the right 
 |--------------|---------------|------------------|--------------|----------|
 | **< 10k rows** | Any | In-memory write/read | ~10MB | Full SST, styles, formatting |
 | **10k-100k rows** | Full styling | In-memory write/read | ~50-100MB | Full SST, styles, formatting |
-| **100k+ rows** | Minimal | Streaming write only | ~10MB (constant) | No SST, default styles only |
+| **100k+ rows** | Minimal | Streaming write/read | ~10MB (constant) | No SST, default styles only |
 | **100k+ rows** | Full styling | Not yet supported | N/A | See roadmap (P7.5) |
 
 **Current Limitations**:
-- ⚠️ **Streaming read** is NOT constant-memory (uses `readAllBytes()` internally). Only use for < 100k rows until P6.6 fix.
 - ⚠️ **Streaming write** doesn't support SST or rich styles. Use for data-heavy, minimal-styling workloads only.
 
-**Recommendation**: Use **in-memory API** for most use cases. Only use streaming write for very large, minimally-styled datasets.
+**Recommendation**: Use **in-memory API** for most use cases. Use streaming for very large files (read or write) with minimal styling.
 
 See [docs/reference/performance-guide.md](docs/reference/performance-guide.md) for detailed guidance.
 
@@ -253,25 +252,25 @@ excel.readStream(path)
 - **Scalability**: Handles 1M+ rows (vs POI OOM at ~500k) ✅
 - **Limitations**: No SST (inline strings only), default styles only ⚠️
 
-**Streaming Read** (⚠️ Not Constant-Memory):
-- **Memory**: O(n) grows with file size (~100MB for 100k rows) ❌
-- **Read Throughput**: ~55,000 rows/second
-- **Issue**: Uses `readAllBytes()` internally (see P6.6 in roadmap)
-- **Workaround**: Use in-memory API for reads until fixed
+**Streaming Read** (✅ Constant-Memory):
+- **Memory**: O(1) constant (~10MB for any file size) ✅
+- **Read Throughput**: ~55,000 rows/second ✅
+- **Implementation**: Uses `fs2.io.readInputStream` with 4KB chunks
+- **Scalability**: Handles 500k+ rows without OOM ✅
 
 **Comparison to Apache POI**:
 - **Write**: 4.5x faster, 80x less memory (10MB vs 800MB) ✅
-- **Read**: Faster but not constant-memory until P6.6 fix ⚠️
+- **Read**: 4.4x faster, 100x less memory (10MB vs 1GB) ✅
 
 **API Methods**:
 - `writeStreamTrue`: True constant-memory streaming (recommended for large writes)
 - `writeStream`: Hybrid approach (materializes rows, then writes)
-- `readStream`: NOT constant-memory yet (use in-memory API instead)
+- `readStream`: True constant-memory streaming ✅
 
 **When to Use**:
 - ✅ Large data generation (1M+ rows, minimal styling)
 - ✅ ETL pipelines (database → Excel with simple formatting)
-- ❌ Large file reading (use in-memory API until P6.6)
+- ✅ Large file reading (500k+ rows with constant memory) ✅
 - ❌ Rich styling at scale (use in-memory for < 100k rows, wait for P7.5 for larger)
 
 ### Pure Error Handling with ExcelR
@@ -312,29 +311,37 @@ Both traits coexist - choose based on your error handling style.
 
 ### Configurable Writer
 
-Control SST usage and XML formatting for advanced use cases:
+Control compression, SST usage, and XML formatting for advanced use cases:
 
 ```scala
-import com.tjclp.xl.ooxml.{XlsxWriter, WriterConfig, SstPolicy}
+import com.tjclp.xl.ooxml.{XlsxWriter, WriterConfig, SstPolicy, Compression}
 
-// Compact output (no pretty-printing, ~30% smaller files)
+// Default (compressed, compact XML)
+XlsxWriter.write(workbook, path)  // Uses WriterConfig.default
+
+// Debug mode (uncompressed, readable XML)
 XlsxWriter.writeWith(
   workbook,
   path,
-  WriterConfig(prettyPrint = false)
+  WriterConfig.debug  // prettyPrint=true, compression=Stored
 )
 
-// Force shared strings table
+// Custom compression settings
 XlsxWriter.writeWith(
   workbook,
   path,
-  WriterConfig(sstPolicy = SstPolicy.Always)
+  WriterConfig(
+    compression = Compression.Stored,  // No compression (faster, 5-10x larger)
+    prettyPrint = true,                // Readable XML (for debugging)
+    sstPolicy = SstPolicy.Always       // Force shared strings table
+  )
 )
 ```
 
 **Options**:
-- `sstPolicy`: `Auto` (default heuristics), `Always` (force SST), `Never` (inline only)
-- `prettyPrint`: `true` (default, readable XML), `false` (compact, smaller files)
+- `compression`: `Compression.Deflated` (default, 5-10x smaller files), `Compression.Stored` (no compression, faster)
+- `sstPolicy`: `SstPolicy.Auto` (default heuristics), `Always` (force SST), `Never` (inline only)
+- `prettyPrint`: `false` (default, compact XML), `true` (readable XML for debugging)
 
 ### Range Combinators & Utilities
 
@@ -428,7 +435,7 @@ val updated = sheet.focus(cell"C1").modify(_.withValue(CellValue.Number(42)))(sh
 ### Running Tests
 
 ```bash
-# All tests (229 tests: 187 core + 24 OOXML + 18 streaming)
+# All tests (271 tests: 221 core + 28 OOXML + 22 streaming)
 ./mill __.test
 
 # Individual test suites
@@ -619,7 +626,7 @@ val emu = Px(96.0).toEmu          // Pixels to EMU (OOXML unit)
 ### Running Tests
 
 ```bash
-# All tests (77 total)
+# All tests (271 total)
 ./mill __.test
 
 # Specific test suite
