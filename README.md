@@ -180,9 +180,28 @@ val plainHtml = sheet.toHtml(range"A1:B10", includeStyles = false)
 
 Rich text formatting and cell styles are preserved as HTML tags (`<b>`, `<i>`, `<span style="">`) and inline CSS.
 
+### Performance & I/O Mode Selection
+
+XL provides two I/O modes optimized for different use cases. **Choose the right mode** based on your dataset size and styling needs:
+
+| Dataset Size | Styling Needs | Recommended Mode | Memory Usage | Features |
+|--------------|---------------|------------------|--------------|----------|
+| **< 10k rows** | Any | In-memory write/read | ~10MB | Full SST, styles, formatting |
+| **10k-100k rows** | Full styling | In-memory write/read | ~50-100MB | Full SST, styles, formatting |
+| **100k+ rows** | Minimal | Streaming write only | ~10MB (constant) | No SST, default styles only |
+| **100k+ rows** | Full styling | Not yet supported | N/A | See roadmap (P7.5) |
+
+**Current Limitations**:
+- ⚠️ **Streaming read** is NOT constant-memory (uses `readAllBytes()` internally). Only use for < 100k rows until P6.6 fix.
+- ⚠️ **Streaming write** doesn't support SST or rich styles. Use for data-heavy, minimal-styling workloads only.
+
+**Recommendation**: Use **in-memory API** for most use cases. Only use streaming write for very large, minimally-styled datasets.
+
+See [docs/reference/performance-guide.md](docs/reference/performance-guide.md) for detailed guidance.
+
 ### Streaming API (For Large Files)
 
-XL provides constant-memory streaming for files with 100k+ rows using fs2 and fs2-data-xml:
+XL provides **streaming write** with constant memory for files with 100k+ rows using fs2 and fs2-data-xml:
 
 #### Write Large Files
 
@@ -205,8 +224,9 @@ Stream.range(1, 1_000_001)
   .compile.drain
   .unsafeRunSync()
 
-// Memory usage: ~50MB constant (not 10GB!)
+// Memory usage: ~10MB constant (not 10GB!)
 // Throughput: ~88k rows/second
+// Note: Inline strings only (no SST), default styles only
 ```
 
 #### Read Large Files
@@ -227,15 +247,32 @@ excel.readStream(path)
 
 #### Performance Characteristics
 
-- **Memory**: O(1) constant (~50MB for any file size)
-- **Write Throughput**: ~88,000 rows/second
-- **Scalability**: Handles 1M+ rows (vs POI OOM at ~500k)
-- **Use Case**: Files >10k rows, ETL pipelines, data generation
+**Streaming Write** (✅ Working):
+- **Memory**: O(1) constant (~10MB for any file size) ✅
+- **Write Throughput**: ~88,000 rows/second ✅
+- **Scalability**: Handles 1M+ rows (vs POI OOM at ~500k) ✅
+- **Limitations**: No SST (inline strings only), default styles only ⚠️
+
+**Streaming Read** (⚠️ Not Constant-Memory):
+- **Memory**: O(n) grows with file size (~100MB for 100k rows) ❌
+- **Read Throughput**: ~55,000 rows/second
+- **Issue**: Uses `readAllBytes()` internally (see P6.6 in roadmap)
+- **Workaround**: Use in-memory API for reads until fixed
+
+**Comparison to Apache POI**:
+- **Write**: 4.5x faster, 80x less memory (10MB vs 800MB) ✅
+- **Read**: Faster but not constant-memory until P6.6 fix ⚠️
 
 **API Methods**:
-- `writeStreamTrue`: True constant-memory streaming with fs2-data-xml events
+- `writeStreamTrue`: True constant-memory streaming (recommended for large writes)
 - `writeStream`: Hybrid approach (materializes rows, then writes)
-- `readStream`: Currently hybrid (materializes workbook, then streams) - true streaming coming soon
+- `readStream`: NOT constant-memory yet (use in-memory API instead)
+
+**When to Use**:
+- ✅ Large data generation (1M+ rows, minimal styling)
+- ✅ ETL pipelines (database → Excel with simple formatting)
+- ❌ Large file reading (use in-memory API until P6.6)
+- ❌ Rich styling at scale (use in-memory for < 100k rows, wait for P7.5 for larger)
 
 ### Pure Error Handling with ExcelR
 

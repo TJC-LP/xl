@@ -20,22 +20,29 @@ case class CellStyle(
   def withNumFmt(n: NumFmt): CellStyle = copy(numFmt = n)
   def withAlign(a: Align): CellStyle = copy(align = a)
 
+  /**
+   * Memoized canonical key for style deduplication.
+   *
+   * Two styles with the same key are structurally equivalent and should map to the same style index
+   * in styles.xml. Computed once and cached for performance.
+   */
+  lazy val canonicalKey: String =
+    val fontKey =
+      s"F:${font.name},${font.sizePt},${font.bold},${font.italic},${font.underline},${font.color}"
+    val fillKey = s"FL:${fill}"
+    val borderKey =
+      s"B:${border.left},${border.right},${border.top},${border.bottom}"
+    val numFmtKey = s"N:${numFmt}"
+    val alignKey =
+      s"A:${align.horizontal},${align.vertical},${align.wrapText},${align.indent}"
+    s"$fontKey|$fillKey|$borderKey|$numFmtKey|$alignKey"
+
 object CellStyle:
   val default: CellStyle = CellStyle()
 
   /**
-   * Generate canonical key for style deduplication.
+   * Generate canonical key for style deduplication (backward compatibility).
    *
-   * Two styles with the same key are structurally equivalent and should map to the same style index
-   * in styles.xml.
+   * Delegates to the memoized instance method for performance.
    */
-  def canonicalKey(style: CellStyle): String =
-    val fontKey =
-      s"F:${style.font.name},${style.font.sizePt},${style.font.bold},${style.font.italic},${style.font.underline},${style.font.color}"
-    val fillKey = s"FL:${style.fill}"
-    val borderKey =
-      s"B:${style.border.left},${style.border.right},${style.border.top},${style.border.bottom}"
-    val numFmtKey = s"N:${style.numFmt}"
-    val alignKey =
-      s"A:${style.align.horizontal},${style.align.vertical},${style.align.wrapText},${style.align.indent}"
-    s"$fontKey|$fillKey|$borderKey|$numFmtKey|$alignKey"
+  def canonicalKey(style: CellStyle): String = style.canonicalKey

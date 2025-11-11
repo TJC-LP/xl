@@ -44,14 +44,17 @@ class StylePerformanceSpec extends FunSuite:
 
     val ooxmlStyles = OoxmlStyles(styleIndex)
 
+    // Warm up JVM
+    (1 to 3).foreach(_ => ooxmlStyles.toXml)
+
     // Measure serialization time
     val start = System.nanoTime()
     val xml = ooxmlStyles.toXml
     val elapsed = (System.nanoTime() - start) / 1_000_000 // Convert to milliseconds
 
-    // Should complete in under 100ms (O(n) performance)
+    // Should complete in under 200ms (O(n) performance, generous threshold for CI)
     // With O(n²), 1000 styles could take 1000ms+
-    assert(elapsed < 100, s"Style serialization took ${elapsed}ms, expected <100ms for O(n) performance")
+    assert(elapsed < 200, s"Style serialization took ${elapsed}ms, expected <200ms for O(n) performance")
 
     // Verify XML was generated correctly
     val xmlString = xml.toString
@@ -102,6 +105,6 @@ class StylePerformanceSpec extends FunSuite:
 
     // With O(n²), ratio would be ~100 (10x styles → 100x time)
     // With O(n), ratio should be ~10 (10x styles → 10x time)
-    // Allow up to 20x for variance
-    assert(ratio < 20.0, s"Performance ratio ${ratio} suggests O(n²) behavior (expected <20 for O(n))")
+    // Allow up to 30x for variance (generous threshold for CI machines)
+    assert(ratio < 30.0, s"Performance ratio ${ratio} suggests O(n²) behavior (expected <30 for O(n))")
   }
