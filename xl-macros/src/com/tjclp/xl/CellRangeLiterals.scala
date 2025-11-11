@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cell.CellValue
 import scala.quoted.*
 

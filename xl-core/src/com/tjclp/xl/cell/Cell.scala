@@ -1,6 +1,6 @@
 package com.tjclp.xl.cell
 
-import com.tjclp.xl.{Column, Row, ARef}
+import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.style.StyleId
 
 object Cell:
@@ -23,13 +23,13 @@ case class Cell(
   hyperlink: Option[String] = None
 ):
   /** Get cell column */
-  def col: Column = ref.col
+  def col: Column = this.ref.col
 
   /** Get cell row */
-  def row: Row = ref.row
+  def row: Row = this.ref.row
 
   /** Get A1 notation */
-  def toA1: String = ref.toA1
+  def toA1: String = this.ref.toA1
 
   /** Update cell value */
   def withValue(newValue: CellValue): Cell = copy(value = newValue)

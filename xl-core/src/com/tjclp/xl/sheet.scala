@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cell.{Cell, CellValue}
 
 import scala.collection.immutable.{Map, Set}

@@ -5,6 +5,7 @@ import org.scalacheck.Prop.*
 import cats.syntax.all.*
 import Generators.given
 import Patch.{*, given}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.macros.cell
 import com.tjclp.xl.style.{CellStyle, Color, Fill, Font, StyleId}

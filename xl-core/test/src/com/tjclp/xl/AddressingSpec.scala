@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import Generators.given

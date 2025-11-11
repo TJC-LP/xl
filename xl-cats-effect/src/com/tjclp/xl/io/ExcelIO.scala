@@ -364,8 +364,9 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     sheetName: String,
     rows: Vector[RowData]
   ): Either[XLError, com.tjclp.xl.Sheet] =
+    import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
     import com.tjclp.xl.cell.Cell
-    import com.tjclp.xl.{Sheet, SheetName, ARef, Column, Row}
+    import com.tjclp.xl.Sheet
 
     for
       name <- SheetName(sheetName).left.map(err => XLError.InvalidSheetName(sheetName, err))
@@ -386,7 +387,7 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     config: com.tjclp.xl.ooxml.WriterConfig
   ): F[Unit] =
     import com.tjclp.xl.ooxml.*
-    import com.tjclp.xl.SheetName
+    import com.tjclp.xl.addressing.SheetName
 
     val contentTypes =
       ContentTypes.forSheetIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
@@ -417,7 +418,7 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     config: com.tjclp.xl.ooxml.WriterConfig
   ): F[Unit] =
     import com.tjclp.xl.ooxml.*
-    import com.tjclp.xl.SheetName
+    import com.tjclp.xl.addressing.SheetName
 
     val contentTypes = ContentTypes.forSheetIndices(
       sheetIndices = sheets.map(_._2),

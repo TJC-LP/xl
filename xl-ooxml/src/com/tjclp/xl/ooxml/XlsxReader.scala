@@ -1,6 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl
+import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cell.{Cell, CellError, CellValue}
 
 import scala.xml.*
@@ -8,7 +9,7 @@ import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
 import java.util.zip.ZipInputStream
 import java.nio.file.{Path, Paths}
 import scala.collection.mutable
-import com.tjclp.xl.{ARef, Sheet, SheetName, Workbook, XLError, XLResult}
+import com.tjclp.xl.{Sheet, Workbook, XLError, XLResult}
 import com.tjclp.xl.style.{StyleId, StyleRegistry}
 
 /**

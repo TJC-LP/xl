@@ -1,6 +1,7 @@
 package com.tjclp.xl.html
 
 import com.tjclp.xl.*
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.style.{Font, Color, BorderStyle, HAlign, VAlign, Fill}
 

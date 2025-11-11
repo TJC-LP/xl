@@ -25,6 +25,9 @@ package com.tjclp
  * }}}
  */
 package object xl:
+  // Import addressing types for use in this package object
+  import addressing.{Column, Row, SheetName, ARef, CellRange}
+
   // Extension methods for ergonomic API
   extension (s: String)
     /** Parse string as cell reference */

@@ -2,7 +2,7 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 import XmlUtil.*
-import com.tjclp.xl.SheetName
+import com.tjclp.xl.addressing.SheetName
 
 /** Sheet reference in workbook.xml */
 case class SheetRef(

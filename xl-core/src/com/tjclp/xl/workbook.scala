@@ -1,5 +1,7 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.addressing.SheetName
+
 /**
  * Excel workbook containing multiple sheets.
  *
@@ -43,7 +45,7 @@ case class Workbook(
   def apply(name: String): XLResult[Sheet] =
     SheetName(name).left
       .map(err => XLError.InvalidSheetName(name, err): XLError)
-      .flatMap(apply)
+      .flatMap((sheetName: SheetName) => apply(sheetName))
 
   /** Add sheet at end */
   def addSheet(sheet: Sheet): XLResult[Workbook] =
