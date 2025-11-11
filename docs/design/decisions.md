@@ -79,3 +79,60 @@
 - **Decision**: Convert `LocalDateTime` ↔ Excel serial numbers (Double) at OOXML boundary
 - **Rationale**: Excel stores dates as numbers; maintain compatibility
 - **Consequence**: Must handle 1900 leap year bug; implemented correctly with comprehensive tests
+
+## ADR-011: Two I/O modes (in-memory and streaming)
+**Date**: 2025-11 (P5 review)
+**Status**: ✅ Implemented (in-memory + streaming write), ⚠️ Streaming read broken
+
+- **Decision**: Maintain both in-memory and streaming implementations instead of unified approach
+- **Rationale**: No single implementation satisfies both "full features" and "constant memory" requirements. Small files need SST/styles, large files need O(1) memory.
+- **Alternatives Considered**:
+  - Streaming-only: Would lose SST/styles (unacceptable for <100k row use cases)
+  - In-memory only: Would OOM on large files (unacceptable for ETL pipelines)
+  - Two-phase streaming: Deferred to P7.5 (complex, not MVP-critical)
+- **Consequences**:
+  - ✅ Best-of-both-worlds (full features OR constant memory)
+  - ✅ Users choose based on needs
+  - ❌ Two implementations to maintain
+  - ❌ Potential confusion about which to use
+- **Mitigation**: Clear documentation in README and performance-guide.md
+
+## ADR-012: Compression defaults to DEFLATED
+**Date**: 2025-11 (P6.7 planned)
+**Status**: ⬜ Not implemented yet
+
+- **Decision**: Default to DEFLATED compression with prettyPrint=false for production use
+- **Current State**: Defaults to STORED (uncompressed) + prettyPrint=true
+- **Rationale**:
+  - STORED requires precomputing CRC/size (overhead)
+  - Uncompressed files are 5-10x larger
+  - Pretty-printed XML is only useful for debugging
+  - Production workflows need small files and fast compression
+- **Consequences**:
+  - ✅ 5-10x smaller files
+  - ✅ Faster overall (no CRC computation)
+  - ✅ Configurable for debugging (WriterConfig)
+  - ❌ Breaking change for users expecting pretty XML
+- **Migration**: Add WriterConfig parameter, deprecate old defaults
+
+## ADR-013: Streaming reader bug acknowledged and scheduled
+**Date**: 2025-11 (P6.6 planned)
+**Status**: ⬜ Fix in progress
+
+- **Decision**: Ship P5 with broken streaming read, fix in P6.6 (2-3 days)
+- **Context**: Streaming read uses `InputStream.readAllBytes()` which materializes entries in memory, violating O(1) claim
+- **Why Shipped**:
+  - Streaming write (more important for ETL) is production-ready
+  - In-memory read works fine for typical sizes (<100k rows)
+  - Fix is straightforward (use fs2.io.readInputStream)
+  - Didn't want to block P5 release
+- **Consequences**:
+  - ✅ Shipped P5 sooner (write streaming immediately useful)
+  - ✅ Users have workaround (use in-memory read)
+  - ❌ Misleading API name (`readStreamTrue` isn't truly streaming)
+  - ❌ Users might try to read large files and spike memory
+- **Mitigation**:
+  - Clear warnings in README.md and STATUS.md
+  - P6.6 prioritized (high priority, 2-3 day fix)
+  - Memory tests to prevent regression
+- **Fix**: Replace `readAllBytes()` with `fs2.io.readInputStream(ioStream, chunkSize = 4096)`

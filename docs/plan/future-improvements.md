@@ -438,3 +438,356 @@ This phase is **not blocking** for production use. The current implementation is
 - Before releasing 1.0 (performance matters for large files)
 - When adding formal benchmarks (P6.5 + benchmarks.md together)
 - When contributor bandwidth allows
+
+---
+
+# P6.6: Fix Streaming Reader (Critical Memory Issue)
+
+**Status**: 🔴 Not Started (Critical Bug)
+**Priority**: CRITICAL (violates documented O(1) claim)
+**Estimated Effort**: 2-3 days
+**Source**: Technical review 2025-11-11
+
+## Problem
+
+The streaming reader API (`readStreamTrue`, `readStream`, `readStreamByIndex`, `readSheetStream`) uses `InputStream.readAllBytes()` internally, which **materializes entire ZIP entries in memory**. This violates the constant-memory claim and makes the API misleading.
+
+**Impact**:
+- Large files (100k+ rows) spike memory or OOM
+- Memory grows with file size (O(n), not O(1))
+- Users expect constant-memory but get linear growth
+
+**Current Broken Implementation**:
+```scala
+// xl-cats-effect/src/com/tjclp/xl/io/ExcelIO.scala
+val bytes = zipFile.getInputStream(entry).readAllBytes()  // ❌ Materializes entire entry!
+StreamingXmlReader.parseWorksheetStream(Stream.emits(bytes))
+```
+
+## Solution
+
+Replace `readAllBytes()` with `fs2.io.readInputStream` for chunked streaming:
+
+```scala
+import fs2.io.readInputStream
+
+val byteStream = readInputStream[F](
+  Sync[F].delay(zipFile.getInputStream(entry)),
+  chunkSize = 4096,
+  closeAfterUse = true
+)
+StreamingXmlReader.parseWorksheetStream(byteStream)
+```
+
+## Files to Change
+
+1. **ExcelIO.scala** (4 methods):
+   - `readStream` - worksheet entries
+   - `readStreamByIndex` - worksheet entries
+   - `readSheetStream` - specific sheet
+   - Update SST parsing in all three
+
+2. **StreamingXmlReader.scala**:
+   - Update `parseSharedStrings` to accept `Stream[F, Byte]` instead of `Array[Byte]`
+   - Update `parseWorksheetStream` if needed
+
+3. **Tests**:
+   - Add memory tests (assert heap doesn't scale with file size)
+   - Test 100k row file uses < 50MB
+   - Test 1M row file uses < 50MB
+
+## Implementation Steps
+
+### Step 1: Update StreamingXmlReader.parseSharedStrings (1 hour)
+```scala
+// Before
+def parseSharedStrings(bytes: Array[Byte]): Either[String, SharedStrings] =
+  val stream = Stream.emits(bytes)
+  // ...
+
+// After
+def parseSharedStrings[F[_]: Async](byteStream: Stream[F, Byte]): F[Either[String, SharedStrings]] =
+  byteStream
+    .through(fs2.data.xml.events.events())
+    .compile.toList
+    .map(parseEvents)
+```
+
+### Step 2: Update ExcelIO methods (2-3 hours)
+```scala
+// Before
+def readStream[F[_]: Async](path: Path): Stream[F, RowData] =
+  // ... get ZIP entry
+  val bytes = zipFile.getInputStream(entry).readAllBytes()
+  StreamingXmlReader.parseWorksheetStream(Stream.emits(bytes))
+
+// After
+def readStream[F[_]: Async](path: Path): Stream[F, RowData] =
+  // ... get ZIP entry
+  val byteStream = readInputStream[F](
+    Sync[F].delay(zipFile.getInputStream(entry)),
+    chunkSize = 4096,
+    closeAfterUse = true
+  )
+  StreamingXmlReader.parseWorksheetStream(byteStream)
+```
+
+### Step 3: Add Memory Tests (1 hour)
+```scala
+test("streaming read uses constant memory for 100k rows"):
+  val large = generateLargeFile(100_000)
+  val memBefore = currentHeapUsage()
+
+  ExcelIO.readStream[IO](large)
+    .compile.drain
+    .unsafeRunSync()
+
+  val memAfter = currentHeapUsage()
+  val memUsed = (memAfter - memBefore) / (1024 * 1024)  // MB
+
+  assert(memUsed < 50, s"Used $memUsed MB (expected < 50 MB)")
+
+test("streaming read uses constant memory for 1M rows"):
+  val huge = generateLargeFile(1_000_000)
+  val memBefore = currentHeapUsage()
+
+  ExcelIO.readStream[IO](huge)
+    .take(1000)  // Process first 1000
+    .compile.drain
+    .unsafeRunSync()
+
+  val memAfter = currentHeapUsage()
+  val memUsed = (memAfter - memBefore) / (1024 * 1024)
+
+  assert(memUsed < 50, s"Used $memUsed MB (expected < 50 MB)")
+```
+
+### Step 4: Update Documentation (30 minutes)
+- Remove ⚠️ warnings from STATUS.md
+- Update README.md streaming section
+- Update performance-guide.md
+
+## Success Criteria
+
+- ✅ Read 100k rows using < 50MB memory
+- ✅ Read 1M rows using < 50MB memory (streaming, not full materialization)
+- ✅ No `readAllBytes()` in codebase
+- ✅ All existing tests pass
+- ✅ Memory tests added (2 new tests)
+
+## Related
+
+- **ADR-013**: Acknowledges this bug and fix plan
+- **streaming-improvements.md**: Full streaming roadmap
+- **io-modes.md**: Architecture explanation
+
+---
+
+# P6.7: Compression Defaults & Configuration
+
+**Status**: 🟡 Not Started (Quick Win)
+**Priority**: HIGH (production readiness)
+**Estimated Effort**: 1 day
+**Source**: Technical review 2025-11-11
+
+## Problem
+
+XlsxWriter currently defaults to **STORED (uncompressed) + prettyPrint=true**, which:
+- Produces files **5-10x larger** than necessary
+- Requires precomputing CRC/size for STORED entries (overhead)
+- Pretty-printed XML only useful for debugging
+- Not production-friendly
+
+## Solution
+
+Add `WriterConfig` with compression control, default to DEFLATED:
+
+```scala
+case class WriterConfig(
+  compression: Compression = Compression.Deflated,
+  prettyPrint: Boolean = false
+)
+
+enum Compression:
+  case Stored   // No compression (debug mode)
+  case Deflated // Standard ZIP compression (production)
+```
+
+## Implementation
+
+### Step 1: Add WriterConfig (1 hour)
+**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/WriterConfig.scala`
+
+```scala
+package com.tjclp.xl.ooxml
+
+/** Compression method for XLSX ZIP entries */
+enum Compression:
+  /** No compression (larger files, faster for debugging) */
+  case Stored
+  /** Standard DEFLATE compression (smaller files, production default) */
+  case Deflated
+
+/**
+ * Configuration for XLSX writer.
+ *
+ * @param compression Compression method (default: Deflated for production)
+ * @param prettyPrint Whether to pretty-print XML (default: false for compact output)
+ */
+case class WriterConfig(
+  compression: Compression = Compression.Deflated,
+  prettyPrint: Boolean = false
+)
+
+object WriterConfig:
+  /** Production defaults: compressed, compact */
+  val default: WriterConfig = WriterConfig()
+
+  /** Debug defaults: uncompressed, pretty-printed for git diffs */
+  val debug: WriterConfig = WriterConfig(Compression.Stored, prettyPrint = true)
+```
+
+### Step 2: Update XlsxWriter.writeZip (2 hours)
+**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/XlsxWriter.scala`
+
+```scala
+def writeZip(
+  workbook: Workbook,
+  outputStream: OutputStream,
+  config: WriterConfig = WriterConfig.default
+): Unit =
+  val zipOut = new ZipOutputStream(outputStream)
+
+  // Set compression method based on config
+  config.compression match
+    case Compression.Stored =>
+      zipOut.setMethod(ZipOutputStream.STORED)
+    case Compression.Deflated =>
+      zipOut.setMethod(ZipOutputStream.DEFLATED)
+      zipOut.setLevel(Deflater.DEFAULT_COMPRESSION)
+
+  // ... write parts
+
+  def writePart(entryName: String, xml: Elem): Unit =
+    val entry = new ZipEntry(entryName)
+
+    config.compression match
+      case Compression.Stored =>
+        // STORED requires precomputed size and CRC
+        val xmlString = if config.prettyPrint then
+          XmlUtil.prettyPrint(xml)
+        else
+          xml.toString  // Compact
+        val bytes = xmlString.getBytes(StandardCharsets.UTF_8)
+        entry.setSize(bytes.length)
+        entry.setCrc(computeCrc(bytes))
+        zipOut.putNextEntry(entry)
+        zipOut.write(bytes)
+
+      case Compression.Deflated =>
+        // DEFLATED doesn't need precomputed size/CRC
+        zipOut.putNextEntry(entry)
+        val xmlString = if config.prettyPrint then
+          XmlUtil.prettyPrint(xml)
+        else
+          xml.toString  // Compact
+        zipOut.write(xmlString.getBytes(StandardCharsets.UTF_8))
+
+    zipOut.closeEntry()
+```
+
+### Step 3: Update ExcelIO API (30 minutes)
+**Location**: `xl-cats-effect/src/com/tjclp/xl/io/ExcelIO.scala`
+
+```scala
+def write[F[_]: Async](
+  workbook: Workbook,
+  path: Path,
+  config: WriterConfig = WriterConfig.default  // Add config parameter
+): F[Unit] =
+  Sync[F].blocking {
+    val out = Files.newOutputStream(path)
+    try XlsxWriter.writeZip(workbook, out, config)
+    finally out.close()
+  }
+```
+
+### Step 4: Add Tests (1 hour)
+```scala
+test("DEFLATED produces smaller files than STORED"):
+  val data = generateWorkbook(10_000)
+
+  val storedPath = writeWith(WriterConfig(Compression.Stored, prettyPrint = false), data)
+  val deflatedPath = writeWith(WriterConfig(Compression.Deflated, prettyPrint = false), data)
+
+  val storedSize = Files.size(storedPath)
+  val deflatedSize = Files.size(deflatedPath)
+
+  assert(deflatedSize < storedSize * 0.5, s"DEFLATED ($deflatedSize) should be < 50% of STORED ($storedSize)")
+
+test("prettyPrint increases file size"):
+  val data = generateWorkbook(10_000)
+
+  val compactPath = writeWith(WriterConfig(Compression.Deflated, prettyPrint = false), data)
+  val prettyPath = writeWith(WriterConfig(Compression.Deflated, prettyPrint = true), data)
+
+  assert(Files.size(prettyPath) > Files.size(compactPath))
+
+test("default config produces valid XLSX"):
+  val wb = generateWorkbook(1000)
+  val path = writeWith(WriterConfig.default, wb)
+
+  // Verify Excel can open it
+  val reloaded = XlsxReader.read(path)
+  assert(reloaded.isRight)
+```
+
+## Benefits
+
+- **5-10x smaller files** (typical DEFLATE compression ratio)
+- **Faster workflows** (no CRC precomputation)
+- **Configurable** (debug mode available with `WriterConfig.debug`)
+- **Backward compatible** (existing calls use new defaults)
+
+## Success Criteria
+
+- ✅ Default config uses DEFLATED + prettyPrint=false
+- ✅ Files 5-10x smaller than old STORED defaults
+- ✅ WriterConfig.debug available for debugging
+- ✅ All existing tests pass with new defaults
+- ✅ 3 new compression tests added
+
+## Related
+
+- **ADR-012**: Decision to default to DEFLATED
+- **streaming-improvements.md**: Overall streaming roadmap
+
+---
+
+# P6.8: Builder Pattern for Batched Operations
+
+**Status**: 🟡 Not Started (Recommended from Lazy Evaluation Review)
+**Priority**: MEDIUM (performance enhancement)
+**Estimated Effort**: 3-4 days
+**Source**: Scoped-down lazy-evaluation.md
+
+## Overview
+
+Add `SheetBuilder` for batching operations instead of full Spark-style optimizer. Captures 80-90% of lazy evaluation benefits with 10% of complexity.
+
+**See**: `docs/plan/lazy-evaluation.md` "Recommended Scope" section for full implementation details.
+
+## Quick Summary
+
+```scala
+val builder = SheetBuilder("Sales")
+(1 to 10000).foreach(i => builder.put(cell"A$i", s"Row $i"))
+val sheet = builder.build  // Single allocation
+
+// 30-50% faster than:
+(1 to 10000).foldLeft(sheet)((s, i) => s.put(cell"A$i", s"Row $i"))
+```
+
+**Effort**: 3-4 days (vs 4-5 weeks for full optimizer)
+**Impact**: 30-50% speedup for batch operations
+**Complexity**: Low (mutable builder pattern, familiar to Scala developers)
