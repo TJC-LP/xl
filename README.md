@@ -67,8 +67,7 @@ cd xl
 
 ```scala
 import com.tjclp.xl.api.*
-import com.tjclp.xl.macros.{cell, range}
-// Optional helpers (col/row/ref + String parsing)
+// Unified helpers + macros (ref, fx, money, percent, date, put, col/row, etc.)
 import com.tjclp.xl.syntax.*
 
 // Create a workbook
@@ -76,13 +75,13 @@ val wb = Workbook("MySheet").map { workbook =>
   val sheet = workbook.sheets(0)
 
   // Use compile-time validated cell references
-  val ref = cell"A1"
+  val a1 = ref"A1"
 
   // Build updates with Monoid composition
   val updates =
-    (Patch.Put(cell"A1", CellValue.Text("Hello")): Patch) |+|
-    (Patch.Put(cell"B1", CellValue.Number(42)): Patch) |+|
-    (Patch.SetStyle(cell"A1", 1): Patch)
+    (Patch.Put(a1, CellValue.Text("Hello")): Patch) |+|
+    (Patch.Put(ref"B1", CellValue.Number(42)): Patch) |+|
+    (Patch.SetStyle(a1, 1): Patch)
 
   // Apply patches to get updated sheet
   sheet.applyPatch(updates).map { updated =>

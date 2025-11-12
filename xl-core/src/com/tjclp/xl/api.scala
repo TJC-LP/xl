@@ -5,7 +5,7 @@ package com.tjclp.xl
  *
  * Import `com.tjclp.xl.api.*` for the full domain model (cells, sheets, workbooks, styles, etc.)
  * and `com.tjclp.xl.syntax.*` for helpers like `col`, `row`, `ref`, and `String` parsing
- * extensions.
+ * extensions (requires `xl-macros`). Macro-free builds can use `com.tjclp.xl.coreSyntax.*`.
  *
  * Example:
  * {{{

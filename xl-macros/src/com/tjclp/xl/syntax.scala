@@ -1,33 +1,18 @@
 package com.tjclp.xl
 
 /**
- * Macro facade for convenient top-level imports.
+ * Unified syntax facade (core helpers + macros).
  *
- * Import all macros via wildcard:
- * {{{
- * import com.tjclp.xl.syntax.*  // Gets ref, fx, money, percent, put, etc.
- * }}}
- *
- * Or selectively:
- * {{{
- * import com.tjclp.xl.syntax.{ref, money, percent}
- * }}}
- *
- * Or import directly from package level (via export syntax.*):
- * {{{
- * import com.tjclp.xl.{ref, money, percent, put}
- * }}}
- *
- * Or import directly from source:
- * {{{
- * import com.tjclp.xl.macros.RefLiteral.ref
- * import com.tjclp.xl.macros.FormattedLiterals.{money, percent}
- * }}}
+ * This lives in `xl-macros` (which depends on `xl-core`) so that importing
+ * `com.tjclp.xl.syntax.*` or even `com.tjclp.xl.*` brings everything in
+ * with one line, similar to Cats' `cats.syntax.all.*`.
  */
 object syntax:
+  // Core helpers (col/row/ref constructors, String parsing, addressing ops)
+  export com.tjclp.xl.coreSyntax.*
+
   // Unified reference literal
-  export com.tjclp.xl.macros.RefLiteral.ref
-  export com.tjclp.xl.addressing.RefType
+  export com.tjclp.xl.macros.RefLiteral.*
 
   // Formula literal
   export com.tjclp.xl.macros.CellRangeLiterals.fx

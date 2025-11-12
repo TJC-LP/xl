@@ -4,15 +4,16 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
 
 /**
- * Helper constructors and parsing extensions.
+ * Core helper constructors and parsing extensions.
  *
- * Import with:
+ * Typically these flow in via `import com.tjclp.xl.syntax.*` (the façade defined in `xl-macros`).
+ * Macro-free consumers can still import directly:
  * {{{
- * import com.tjclp.xl.syntax.*
- * import com.tjclp.xl.syntax.given
+ * import com.tjclp.xl.coreSyntax.*
+ * import com.tjclp.xl.coreSyntax.given
  * }}}
  */
-object syntax:
+object coreSyntax:
 
   // ========== String Parsing Helpers ==========
   extension (s: String)
@@ -38,4 +39,4 @@ object syntax:
   /** Create cell reference from 0-based indices */
   def ref(col: Int, row: Int): ARef = ARef.from0(col, row)
 
-export syntax.*
+export coreSyntax.*

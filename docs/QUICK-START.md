@@ -13,6 +13,7 @@ object myproject extends ScalaModule {
 
   def ivyDeps = Agg(
     ivy"com.tjclp::xl-core:0.1.0",
+    ivy"com.tjclp::xl-macros:0.1.0",
     ivy"com.tjclp::xl-ooxml:0.1.0",
     ivy"com.tjclp::xl-cats-effect:0.1.0"
   )
@@ -25,6 +26,7 @@ scalaVersion := "3.7.3"
 
 libraryDependencies ++= Seq(
   "com.tjclp" %% "xl-core" % "0.1.0",
+  "com.tjclp" %% "xl-macros" % "0.1.0",
   "com.tjclp" %% "xl-ooxml" % "0.1.0",
   "com.tjclp" %% "xl-cats-effect" % "0.1.0"
 )
@@ -35,7 +37,6 @@ libraryDependencies ++= Seq(
 ```scala
 import com.tjclp.xl.api.*
 import com.tjclp.xl.syntax.*
-import com.tjclp.xl.macros.*
 import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.IO
@@ -44,10 +45,10 @@ import java.nio.file.Path
 
 // Create a simple sheet
 val sheet = Sheet("Sales").get.putMixed(
-  cell"A1" -> "Product",
-  cell"B1" -> "Revenue",
-  cell"A2" -> "Widget",
-  cell"B2" -> 1000
+  ref"A1" -> "Product",
+  ref"B1" -> "Revenue",
+  ref"A2" -> "Widget",
+  ref"B2" -> 1000
 )
 
 // Write to file
