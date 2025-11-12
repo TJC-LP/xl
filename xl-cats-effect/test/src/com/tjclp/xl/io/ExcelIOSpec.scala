@@ -7,7 +7,7 @@ import java.nio.file.{Files, Path}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cell.{CellError, CellValue}
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.macros.ref
 
 /** Tests for Excel streaming API */
 class ExcelIOSpec extends CatsEffectSuite:
@@ -23,7 +23,7 @@ class ExcelIOSpec extends CatsEffectSuite:
   tempDir.test("read: loads workbook into memory") { dir =>
     // Create test file using current writer
     val wb = Workbook("Test").flatMap { initial =>
-      val sheet = initial.sheets(0).put(cell"A1", CellValue.Text("Hello"))
+      val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Hello"))
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
@@ -33,7 +33,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       val excel = ExcelIO.instance[IO]
       excel.read(path).map { readWb =>
         assertEquals(readWb.sheets.size, 1)
-        assertEquals(readWb.sheets(0)(cell"A1").value, CellValue.Text("Hello"))
+        assertEquals(readWb.sheets(0)(ref"A1").value, CellValue.Text("Hello"))
       }
     }
   }
@@ -41,8 +41,8 @@ class ExcelIOSpec extends CatsEffectSuite:
   tempDir.test("write: creates valid XLSX file") { dir =>
     val wb = Workbook("Output").flatMap { initial =>
       val sheet = initial.sheets(0)
-        .put(cell"A1", CellValue.Text("Written"))
-        .put(cell"B1", CellValue.Number(BigDecimal(42)))
+        .put(ref"A1", CellValue.Text("Written"))
+        .put(ref"B1", CellValue.Number(BigDecimal(42)))
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
@@ -177,7 +177,7 @@ class ExcelIOSpec extends CatsEffectSuite:
           assertEquals(sheet.cellCount, 200)  // 100 rows × 2 cols
 
           // Verify first cell
-          val firstCell = sheet(cell"A1")
+          val firstCell = sheet(ref"A1")
           assertEquals(firstCell.value, CellValue.Number(BigDecimal(1)))
 
           // Verify last row
@@ -277,10 +277,10 @@ class ExcelIOSpec extends CatsEffectSuite:
             assertEquals(wb.sheets(1).cellCount, 5)
 
             // Verify content
-            val firstCell = wb.sheets(0)(cell"A1")
+            val firstCell = wb.sheets(0)(ref"A1")
             assertEquals(firstCell.value, CellValue.Text("Sheet1 Row 1"))
 
-            val secondCell = wb.sheets(1)(cell"A1")
+            val secondCell = wb.sheets(1)(ref"A1")
             assertEquals(secondCell.value, CellValue.Number(BigDecimal(100)))
           }
         }

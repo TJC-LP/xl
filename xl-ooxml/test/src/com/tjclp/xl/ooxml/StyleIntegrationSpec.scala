@@ -3,7 +3,7 @@ package com.tjclp.xl.ooxml
 import munit.FunSuite
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.macros.cell
+import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.{CellStyle, Font, Fill, Color}
 import java.nio.file.{Files, Path}
@@ -27,10 +27,10 @@ class StyleIntegrationSpec extends FunSuite:
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
 
     val sheet = Sheet("Styled").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("Bold Text"))
-      .withCellStyle(cell"A1", boldStyle)
-      .put(cell"A2", CellValue.Text("Red Background"))
-      .withCellStyle(cell"A2", redStyle)
+      .put(ref"A1", CellValue.Text("Bold Text"))
+      .withCellStyle(ref"A1", boldStyle)
+      .put(ref"A2", CellValue.Text("Red Background"))
+      .withCellStyle(ref"A2", redStyle)
 
     val wb = Workbook(Vector(sheet))
     val path = dir.resolve("styled.xlsx")
@@ -80,12 +80,12 @@ class StyleIntegrationSpec extends FunSuite:
     val headerStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
 
     val sheet1 = Sheet("Sales").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("Product"))
-      .withCellStyle(cell"A1", headerStyle)
+      .put(ref"A1", CellValue.Text("Product"))
+      .withCellStyle(ref"A1", headerStyle)
 
     val sheet2 = Sheet("Inventory").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("Item"))
-      .withCellStyle(cell"A1", headerStyle)
+      .put(ref"A1", CellValue.Text("Item"))
+      .withCellStyle(ref"A1", headerStyle)
 
     val wb = Workbook(Vector(sheet1, sheet2))
     val path = dir.resolve("multi-styled.xlsx")
@@ -121,8 +121,8 @@ class StyleIntegrationSpec extends FunSuite:
 
   tempDir.test("unstyled cells do not have s= attribute") { dir =>
     val sheet = Sheet("Plain").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("No Style"))
-      .put(cell"A2", CellValue.Text("Also No Style"))
+      .put(ref"A1", CellValue.Text("No Style"))
+      .put(ref"A2", CellValue.Text("Also No Style"))
     // No styles applied
 
     val wb = Workbook(Vector(sheet))
@@ -150,8 +150,8 @@ class StyleIntegrationSpec extends FunSuite:
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
 
     val sheet = Sheet("Test").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("Bold"))
-      .withCellStyle(cell"A1", boldStyle)
+      .put(ref"A1", CellValue.Text("Bold"))
+      .withCellStyle(ref"A1", boldStyle)
 
     val wb = Workbook(Vector(sheet))
     val path = dir.resolve("round-trip.xlsx")
@@ -169,9 +169,9 @@ class StyleIntegrationSpec extends FunSuite:
       val readSheet = readWb.sheets(0)
 
       // Cell should exist with value
-      assertEquals(readSheet(cell"A1").value, CellValue.Text("Bold"))
+      assertEquals(readSheet(ref"A1").value, CellValue.Text("Bold"))
 
       // Cell should have styleId (TODO: Eventually verify it resolves to bold font)
-      assert(readSheet(cell"A1").styleId.isDefined, "Styled cell should have styleId after round-trip")
+      assert(readSheet(ref"A1").styleId.isDefined, "Styled cell should have styleId after round-trip")
     }
   }

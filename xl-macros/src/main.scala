@@ -1,7 +1,6 @@
 import com.tjclp.xl.api.*
-import com.tjclp.xl.addressing.{Column, Row, ARef, CellRange, RefType, SheetName}
-import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.macros.ref
+import com.tjclp.xl.*
+import com.tjclp.xl.addressing.Column
 
 @main
 def demo(): Unit =
@@ -13,7 +12,9 @@ def demo(): Unit =
 
   println(s"Cell reference: ${cellRef.toA1}")
   println(s"Range: ${rangeRef.toA1}")
-  println(s"Range size: ${rangeRef.width} cols × ${rangeRef.height} rows = ${rangeRef.size} cells\n")
+  println(
+    s"Range size: ${rangeRef.width} cols × ${rangeRef.height} rows = ${rangeRef.size} cells\n"
+  )
 
   // Create a workbook
   val workbookResult = for

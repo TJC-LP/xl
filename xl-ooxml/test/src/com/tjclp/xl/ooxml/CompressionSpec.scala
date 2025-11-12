@@ -5,7 +5,7 @@ import java.nio.file.{Files, Path}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.macros.cell
+import com.tjclp.xl.macros.ref
 import com.tjclp.xl.codec.syntax.*
 
 /**
@@ -70,7 +70,7 @@ class CompressionSpec extends FunSuite:
 
   tempDir.test("prettyPrint increases file size") { dir =>
     val wb = Workbook("Simple").flatMap { initial =>
-      val sheet = initial.sheets(0).put(cell"A1", CellValue.Text("Test"))
+      val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Test"))
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
@@ -123,14 +123,14 @@ class CompressionSpec extends FunSuite:
       case Right(readWb) =>
         assertEquals(readWb.sheets.size, 1)
         assertEquals(readWb.sheets(0).name.value, "DefaultTest")
-        assertEquals(readWb.sheets(0)(cell"A1").value, CellValue.Text("Row 1"))
+        assertEquals(readWb.sheets(0)(ref"A1").value, CellValue.Text("Row 1"))
       case Left(err) =>
         fail(s"Failed to read back default file: $err")
   }
 
   tempDir.test("WriterConfig.debug uses STORED + prettyPrint") { dir =>
     val wb = Workbook("Debug").flatMap { initial =>
-      val sheet = initial.sheets(0).put(cell"A1", CellValue.Number(42))
+      val sheet = initial.sheets(0).put(ref"A1", CellValue.Number(42))
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
@@ -143,7 +143,7 @@ class CompressionSpec extends FunSuite:
     XlsxReader.read(path) match
       case Right(readWb) =>
         assertEquals(readWb.sheets.size, 1)
-        assertEquals(readWb.sheets(0)(cell"A1").value, CellValue.Number(42))
+        assertEquals(readWb.sheets(0)(ref"A1").value, CellValue.Number(42))
       case Left(err) =>
         fail(s"Failed to read debug file: $err")
   }

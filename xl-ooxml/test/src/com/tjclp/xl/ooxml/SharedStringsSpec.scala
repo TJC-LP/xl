@@ -3,17 +3,17 @@ package com.tjclp.xl.ooxml
 import munit.FunSuite
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.macros.cell
+import com.tjclp.xl.macros.ref
 
 /** Tests for SharedStrings count vs uniqueCount */
 class SharedStringsSpec extends FunSuite:
 
   test("fromWorkbook counts total instances correctly") {
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("Hello"))
-      .put(cell"A2", CellValue.Text("World"))
-      .put(cell"A3", CellValue.Text("Hello")) // Duplicate
-      .put(cell"A4", CellValue.Text("Hello")) // Another duplicate
+      .put(ref"A1", CellValue.Text("Hello"))
+      .put(ref"A2", CellValue.Text("World"))
+      .put(ref"A3", CellValue.Text("Hello")) // Duplicate
+      .put(ref"A4", CellValue.Text("Hello")) // Another duplicate
 
     val wb = Workbook(Vector(sheet))
     val sst = SharedStrings.fromWorkbook(wb)
@@ -27,9 +27,9 @@ class SharedStringsSpec extends FunSuite:
 
   test("toXml emits correct count and uniqueCount") {
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("Alpha"))
-      .put(cell"A2", CellValue.Text("Beta"))
-      .put(cell"A3", CellValue.Text("Alpha")) // Duplicate
+      .put(ref"A1", CellValue.Text("Alpha"))
+      .put(ref"A2", CellValue.Text("Beta"))
+      .put(ref"A3", CellValue.Text("Alpha")) // Duplicate
 
     val wb = Workbook(Vector(sheet))
     val sst = SharedStrings.fromWorkbook(wb)
@@ -46,10 +46,10 @@ class SharedStringsSpec extends FunSuite:
 
   test("workbook with duplicate strings has count > uniqueCount") {
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("Duplicate"))
-      .put(cell"A2", CellValue.Text("Duplicate"))
-      .put(cell"A3", CellValue.Text("Duplicate"))
-      .put(cell"A4", CellValue.Text("Unique"))
+      .put(ref"A1", CellValue.Text("Duplicate"))
+      .put(ref"A2", CellValue.Text("Duplicate"))
+      .put(ref"A3", CellValue.Text("Duplicate"))
+      .put(ref"A4", CellValue.Text("Unique"))
 
     val wb = Workbook(Vector(sheet))
     val sst = SharedStrings.fromWorkbook(wb)
@@ -62,9 +62,9 @@ class SharedStringsSpec extends FunSuite:
 
   test("workbook with no duplicates has count == uniqueCount") {
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("One"))
-      .put(cell"A2", CellValue.Text("Two"))
-      .put(cell"A3", CellValue.Text("Three"))
+      .put(ref"A1", CellValue.Text("One"))
+      .put(ref"A2", CellValue.Text("Two"))
+      .put(ref"A3", CellValue.Text("Three"))
 
     val wb = Workbook(Vector(sheet))
     val sst = SharedStrings.fromWorkbook(wb)

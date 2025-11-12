@@ -3,24 +3,29 @@ package com.tjclp.xl
 /**
  * Macro facade for convenient top-level imports.
  *
- * Re-exports all compile-time validated literals and macros so they can be imported directly:
+ * Import all macros via wildcard:
  * {{{
- * import com.tjclp.xl.macros.*  // Gets ref, money, percent, put, etc.
+ * import com.tjclp.xl.syntax.*  // Gets ref, fx, money, percent, put, etc.
  * }}}
  *
  * Or selectively:
  * {{{
- * import com.tjclp.xl.macros.{ref, money, percent}
+ * import com.tjclp.xl.syntax.{ref, money, percent}
  * }}}
  *
- * Note: Deprecated `cell` and `range` literals are NOT exported at top-level due to naming
- * conflicts with the `cell` package. Use `ref` instead, or import explicitly:
+ * Or import directly from package level (via export syntax.*):
  * {{{
- * import com.tjclp.xl.macros.CellRangeLiterals.{cell, range}  // Deprecated
+ * import com.tjclp.xl.{ref, money, percent, put}
+ * }}}
+ *
+ * Or import directly from source:
+ * {{{
+ * import com.tjclp.xl.macros.RefLiteral.ref
+ * import com.tjclp.xl.macros.FormattedLiterals.{money, percent}
  * }}}
  */
 object syntax:
-  // Unified reference literal (recommended)
+  // Unified reference literal
   export com.tjclp.xl.macros.RefLiteral.ref
   export com.tjclp.xl.addressing.RefType
 
@@ -32,8 +37,5 @@ object syntax:
 
   // Batch put macro
   export com.tjclp.xl.macros.BatchPutMacro.put
-
-  // NOTE: cell and range are NOT exported here due to naming conflict with cell package
-  // Users must use ref"A1" instead, or import deprecated macros explicitly
 
 export syntax.*
