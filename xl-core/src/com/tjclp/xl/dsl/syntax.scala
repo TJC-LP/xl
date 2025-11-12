@@ -120,3 +120,5 @@ object syntax:
    */
   object PatchBatch:
     def apply(patches: Patch*): Patch = Patch.Batch(patches.toVector)
+
+export syntax.*

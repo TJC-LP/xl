@@ -37,3 +37,5 @@ object syntax:
 
   /** Create cell reference from 0-based indices */
   def ref(col: Int, row: Int): ARef = ARef.from0(col, row)
+
+export syntax.*

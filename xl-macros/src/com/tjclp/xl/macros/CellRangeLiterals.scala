@@ -1,7 +1,8 @@
-package com.tjclp.xl
+package com.tjclp.xl.macros
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cell.CellValue
+
 import scala.quoted.*
 
 /**
@@ -13,7 +14,7 @@ import scala.quoted.*
  * range"A1:B2" // CellRange validated at compile time
  * }}}
  */
-object macros:
+object CellRangeLiterals:
 
   // -------- Public API (0-arg fast path) --------
   extension (inline sc: StringContext)
@@ -70,7 +71,7 @@ object macros:
   private def errorNoInterpolation(sc: Expr[StringContext], args: Expr[Seq[Any]], kind: String)(
     using Quotes
   ): Expr[Nothing] =
-    import quotes.reflect.*
+    import quotes.reflect.report
     args match
       case Varargs(Nil) => report.errorAndAbort(s"""Use $kind"...": no interpolation supported""")
       case _ => report.errorAndAbort(s"""$kind"...": interpolation not supported""")
@@ -119,7 +120,7 @@ object macros:
 
   private def fail(msg: String): Nothing = throw new IllegalArgumentException(msg)
 
-end macros
+end CellRangeLiterals
 
 /** Export compile-time literals (cell literal not exported due to package name conflict) */
-export macros.range
+export CellRangeLiterals.*

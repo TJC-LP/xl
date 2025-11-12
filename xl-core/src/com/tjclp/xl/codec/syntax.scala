@@ -116,3 +116,5 @@ object syntax:
       cellsWithStyles.foldLeft(withCells) { case (s, (ref, style)) =>
         s.withCellStyle(ref, style)
       }
+
+export syntax.*

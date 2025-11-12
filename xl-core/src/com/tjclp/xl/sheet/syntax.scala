@@ -5,3 +5,5 @@ object syntax:
   export rangeSyntax.*
   export styleSyntax.*
   export iterationSyntax.*
+
+export syntax.*

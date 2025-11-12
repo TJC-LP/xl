@@ -64,3 +64,5 @@ object syntax:
      */
     def modifyStyleId(ref: ARef)(f: Option[StyleId] => Option[StyleId]): Sheet =
       focus(ref).modify(c => Optics.cellStyleId.update(f)(c))(sheet)
+
+export syntax.*

@@ -74,3 +74,5 @@ object api:
 
   // Style types - units
   export style.units.{Pt, Px, Emu, StyleId}
+
+export api.*

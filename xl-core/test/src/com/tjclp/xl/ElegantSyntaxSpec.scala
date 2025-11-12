@@ -76,7 +76,7 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Batch put: multiple cells at once") {
     import com.tjclp.xl.macros.{cell, range}
-    import com.tjclp.xl.putMacro.put
+    import com.tjclp.xl.macros.put
 
     val sheet = emptySheet.put(
       cell"A1" -> "Name",
@@ -91,7 +91,7 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Batch put: mixed types") {
     import com.tjclp.xl.macros.{cell, range}
-    import com.tjclp.xl.putMacro.put
+    import com.tjclp.xl.macros.put
 
     val sheet = emptySheet.put(
       cell"A1" -> "Product",
@@ -110,7 +110,7 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Batch put: creates table structure") {
     import com.tjclp.xl.macros.{cell, range}
-    import com.tjclp.xl.putMacro.put
+    import com.tjclp.xl.macros.put
 
     val sheet = emptySheet.put(
       // Headers
@@ -136,7 +136,7 @@ class ElegantSyntaxSpec extends FunSuite:
   // ========== Formatted Literals Tests ==========
 
   test("money literal: parses $1,234.56") {
-    import com.tjclp.xl.money
+    import com.tjclp.xl.macros.money
 
     val formatted = money"$$1,234.56"  // $$ escapes the dollar sign
 
@@ -145,7 +145,7 @@ class ElegantSyntaxSpec extends FunSuite:
   }
 
   test("money literal: handles simple formats") {
-    import com.tjclp.xl.money
+    import com.tjclp.xl.macros.money
 
     val f1 = money"$$100"
     val f2 = money"1000.50"
@@ -157,7 +157,7 @@ class ElegantSyntaxSpec extends FunSuite:
   }
 
   test("percent literal: parses 45.5%") {
-    import com.tjclp.xl.percent
+    import com.tjclp.xl.macros.percent
 
     val formatted = percent"45.5%"
 
@@ -166,7 +166,7 @@ class ElegantSyntaxSpec extends FunSuite:
   }
 
   test("percent literal: handles various formats") {
-    import com.tjclp.xl.percent
+    import com.tjclp.xl.macros.percent
 
     val f1 = percent"100%"
     val f2 = percent"0.5%"
@@ -178,7 +178,7 @@ class ElegantSyntaxSpec extends FunSuite:
   }
 
   test("date literal: parses ISO dates") {
-    import com.tjclp.xl.date
+    import com.tjclp.xl.macros.date
 
     val formatted = date"2025-11-10"
 
@@ -191,7 +191,7 @@ class ElegantSyntaxSpec extends FunSuite:
   }
 
   test("accounting literal: parses positive and negative") {
-    import com.tjclp.xl.accounting
+    import com.tjclp.xl.macros.accounting
 
     val positive = accounting"$$123.45"
     val negative = accounting"($$123.45)"
@@ -201,7 +201,7 @@ class ElegantSyntaxSpec extends FunSuite:
   }
 
   test("accounting literal: handles commas") {
-    import com.tjclp.xl.accounting
+    import com.tjclp.xl.macros.accounting
 
     val formatted = accounting"($$1,234.56)"
 
@@ -213,7 +213,7 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Formatted.putFormatted extension works") {
     import com.tjclp.xl.macros.cell
-    import com.tjclp.xl.money
+    import com.tjclp.xl.macros.money
     import Formatted.putFormatted
 
     val formatted = money"$$1,234.56"
@@ -224,8 +224,8 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Combined: batch put + formatted literals") {
     import com.tjclp.xl.macros.cell
-    import com.tjclp.xl.{money, percent}
-    import com.tjclp.xl.putMacro.put
+    import com.tjclp.xl.macros.{money, percent}
+    import com.tjclp.xl.macros.put
     import Formatted.given  // Auto-conversion Formatted → CellValue
 
     val sheet = emptySheet.put(
@@ -241,8 +241,8 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Real-world example: financial report") {
     import com.tjclp.xl.macros.cell
-    import com.tjclp.xl.{money, percent}
-    import com.tjclp.xl.putMacro.put
+    import com.tjclp.xl.macros.{money, percent}
+    import com.tjclp.xl.macros.put
 
     val sheet = emptySheet.put(
       // Headers

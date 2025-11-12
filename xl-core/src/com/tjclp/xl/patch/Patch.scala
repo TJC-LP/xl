@@ -142,8 +142,3 @@ object Patch:
     @annotation.targetName("applyPatchesExt")
     def applyPatches(patches: Patch*): XLResult[Sheet] =
       Patch.applyPatches(sheet, patches)
-
-/** Syntax for patch composition using cats Monoid */
-object patchSyntax:
-  export cats.syntax.monoid.given
-  export cats.syntax.semigroup.given

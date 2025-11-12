@@ -82,3 +82,6 @@ object XLError:
       case ValueCountMismatch(expected, actual, context) =>
         s"Expected $expected values for $context but received $actual"
       case Other(message) => message
+
+/** Type alias for common result type */
+type XLResult[A] = Either[XLError, A]

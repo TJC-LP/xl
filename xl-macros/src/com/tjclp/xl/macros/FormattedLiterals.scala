@@ -1,10 +1,11 @@
-package com.tjclp.xl
+package com.tjclp.xl.macros
 
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.style.numfmt.NumFmt
-import scala.quoted.*
+
 import java.time.LocalDate
+import scala.quoted.*
 
 /** Formatted literal macros for compile-time parsing */
 object FormattedLiterals:
@@ -113,4 +114,4 @@ object FormattedLiterals:
 end FormattedLiterals
 
 /** Export formatted literals for import */
-export FormattedLiterals.{money, percent, date, accounting}
+export FormattedLiterals.*

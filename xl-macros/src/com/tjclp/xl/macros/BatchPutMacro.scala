@@ -1,12 +1,13 @@
-package com.tjclp.xl
+package com.tjclp.xl.macros
 
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.sheet.Sheet
+
 import scala.quoted.*
 
 /** Batch put macro for elegant multi-cell updates */
-object putMacro:
+object BatchPutMacro:
   /**
    * Batch put with automatic CellValue conversion.
    *
@@ -54,4 +55,6 @@ object putMacro:
       case _ =>
         report.errorAndAbort("Batch put requires literal tuple arguments")
 
-end putMacro
+end BatchPutMacro
+
+export BatchPutMacro.*
