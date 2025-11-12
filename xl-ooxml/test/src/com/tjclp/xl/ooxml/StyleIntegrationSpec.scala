@@ -1,9 +1,10 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.macros.cell
+import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.{CellStyle, Font, Fill, Color}
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile

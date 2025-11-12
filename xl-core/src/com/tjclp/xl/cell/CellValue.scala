@@ -1,6 +1,7 @@
 package com.tjclp.xl.cell
 
 import java.time.LocalDateTime
+import com.tjclp.xl.richtext.{RichText => Rt}
 
 /** Cell value types supported by Excel */
 enum CellValue:
@@ -8,7 +9,7 @@ enum CellValue:
   case Text(value: String)
 
   /** Rich text with multiple formatting runs (inline string with formatting) */
-  case RichText(value: com.tjclp.xl.RichText)
+  case RichText(value: Rt)
 
   /** Numeric value (Excel uses double internally, but we preserve precision) */
   case Number(value: BigDecimal)

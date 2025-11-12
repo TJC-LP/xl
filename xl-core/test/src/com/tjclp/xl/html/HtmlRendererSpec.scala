@@ -1,12 +1,18 @@
 package com.tjclp.xl.html
 
 import munit.FunSuite
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.RichText.{*, given}
+import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.macros.{cell, range}
-import com.tjclp.xl.codec.{*, given}
-import com.tjclp.xl.style.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align}
+import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.style.border.{Border, BorderStyle}
+import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.style.fill.Fill
+import com.tjclp.xl.style.font.Font
 
 /** Tests for HTML export functionality */
 class HtmlRendererSpec extends FunSuite:

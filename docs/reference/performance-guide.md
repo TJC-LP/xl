@@ -193,7 +193,7 @@ sheet
 
 **putMixed** (clean, automatic):
 ```scala
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 
 sheet.putMixed(
   cell"A1" -> "Revenue",
@@ -398,7 +398,7 @@ ExcelIO.instance.write[IO](Workbook(Vector(sheet)), path).unsafeRunSync()
 ### Medium Workbooks (10k-100k rows)
 ```scala
 // Use batching
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 
 val cells = (1 to 100_000).map(i =>
   cell"A$i" -> s"Row $i"

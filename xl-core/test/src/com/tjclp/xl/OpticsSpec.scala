@@ -1,10 +1,13 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.optics.syntax.* // Import optics extension methods
+import com.tjclp.xl.dsl.syntax.*
 import munit.FunSuite
 import com.tjclp.xl.macros.{cell, range}
-import com.tjclp.xl.style.StyleId
+import com.tjclp.xl.style.units.StyleId
 
 /** Tests for optics library and focus DSL */
 class OpticsSpec extends FunSuite:

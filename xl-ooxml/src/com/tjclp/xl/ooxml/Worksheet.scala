@@ -4,7 +4,7 @@ import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.addressing.* // For ARef, Column, Row types and extension methods
 import com.tjclp.xl.cell.{Cell, CellValue}
-import com.tjclp.xl.Sheet
+import com.tjclp.xl.sheet.Sheet
 
 /** Cell data for worksheet - maps domain Cell to XML representation */
 case class OoxmlCell(

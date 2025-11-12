@@ -121,7 +121,7 @@ sheet.write(path).unsafeRunSync()  // Optimizer runs, then streams to disk
 ```scala
 package com.tjclp.xl.plan
 
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import java.nio.file.Path
 import cats.effect.IO
 
@@ -612,7 +612,7 @@ package com.tjclp.xl.execution
 import cats.effect.{Async, IO}
 import fs2.{Stream, Chunk}
 import com.tjclp.xl.plan.*
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import java.nio.file.Path
 
 /**
@@ -757,7 +757,7 @@ object StreamingConfig:
 package com.tjclp.xl.execution
 
 import com.tjclp.xl.plan.*
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import cats.effect.IO
 import java.nio.file.Path
 
@@ -842,7 +842,7 @@ object Executor:
 ### Before (Eager)
 
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 
 val sheet = Sheet(SheetName.unsafe("Data"))
   .put(cell"A1", CellValue.Text("Title"))
@@ -856,7 +856,7 @@ ExcelIO.write(workbook, path)
 ### After (Lazy)
 
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import cats.effect.unsafe.implicits.global
 
 // Option 1: Direct streaming write (recommended)
@@ -1262,7 +1262,7 @@ object SheetBuilder:
 **Enhance builder to support codec-based API**:
 
 ```scala
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 
 class SheetBuilder(name: SheetName):
   // ... existing fields ...

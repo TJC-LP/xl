@@ -1,4 +1,4 @@
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{Column, Row, ARef, CellRange, SheetName}
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.macros.{cell, range}

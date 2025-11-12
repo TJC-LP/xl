@@ -2,6 +2,7 @@ package com.tjclp.xl
 
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.sheet.Sheet
 import scala.quoted.*
 
 /** Batch put macro for elegant multi-cell updates */
@@ -22,13 +23,13 @@ object putMacro:
    *
    * Expands to chained .put() calls with zero intermediate allocations.
    */
-  extension (sheet: com.tjclp.xl.Sheet)
-    transparent inline def put(inline pairs: (ARef, Any)*): com.tjclp.xl.Sheet =
+  extension (sheet: Sheet)
+    transparent inline def put(inline pairs: (ARef, Any)*): Sheet =
       ${ putImpl('sheet, 'pairs) }
 
-  private def putImpl(sheet: Expr[com.tjclp.xl.Sheet], pairs: Expr[Seq[(ARef, Any)]])(using
+  private def putImpl(sheet: Expr[Sheet], pairs: Expr[Seq[(ARef, Any)]])(using
     Quotes
-  ): Expr[com.tjclp.xl.Sheet] =
+  ): Expr[Sheet] =
     import quotes.reflect.*
 
     pairs match

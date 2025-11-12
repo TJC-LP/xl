@@ -2,23 +2,15 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 import XmlUtil.*
-import com.tjclp.xl.*
-import com.tjclp.xl.style.{
-  Font,
-  Fill,
-  PatternType,
-  Border,
-  BorderSide,
-  BorderStyle,
-  NumFmt,
-  CellStyle,
-  StyleId,
-  Color,
-  Align,
-  HAlign,
-  VAlign,
-  ThemeSlot
-}
+import com.tjclp.xl.api.*
+import com.tjclp.xl.style.{CellStyle, StyleRegistry}
+import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.style.border.{Border, BorderSide, BorderStyle}
+import com.tjclp.xl.style.color.{Color, ThemeSlot}
+import com.tjclp.xl.style.fill.{Fill, PatternType}
+import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.style.units.StyleId
 
 /**
  * Style components and indexing for xl/styles.xml

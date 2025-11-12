@@ -1,12 +1,13 @@
 package com.tjclp.xl.codec
 
 import munit.FunSuite
-import com.tjclp.xl.*
-import com.tjclp.xl.codec.{*, given}
-import com.tjclp.xl.RichText.{*, given}
+import com.tjclp.xl.api.*
+import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.macros.{cell, range}
-import com.tjclp.xl.style.NumFmt
+import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.style.numfmt.NumFmt
 
 import java.time.{LocalDate, LocalDateTime}
 

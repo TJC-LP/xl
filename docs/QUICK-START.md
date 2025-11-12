@@ -33,9 +33,10 @@ libraryDependencies ++= Seq(
 ## Your First Spreadsheet (30 seconds)
 
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
+import com.tjclp.xl.syntax.*
 import com.tjclp.xl.macros.*
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -81,7 +82,7 @@ ExcelIO.instance.read[IO](Path.of("sales.xlsx")).map {
 ## Type-Safe Reading (1 minute)
 
 ```scala
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 
 val sheet = workbook.sheets.head
 
@@ -178,7 +179,7 @@ sheet.fillBy(range"A1:Z10") { (col, row) =>
 
 ### Rich Text (Multiple Formats in One Cell)
 ```scala
-import com.tjclp.xl.RichText.*
+import com.tjclp.xl.richtext.RichText.*
 
 val text = "Error: ".red.bold + "File not found"
 sheet.putMixed(cell"A1" -> text)
@@ -203,9 +204,9 @@ println(html)  // <table>...</table> with inline CSS
 
 ### Imports You'll Need
 ```scala
-import com.tjclp.xl.*                  // Core types
+import com.tjclp.xl.api.*                  // Core types
 import com.tjclp.xl.macros.*           // cell"A1", range"A1:B10"
-import com.tjclp.xl.codec.{*, given}   // Type-safe codecs (putMixed, readTyped)
+import com.tjclp.xl.codec.syntax.*   // Type-safe codecs (putMixed, readTyped)
 import com.tjclp.xl.style.*            // CellStyle, Font, Fill, etc.
 import com.tjclp.xl.dsl.*              // := operator, ++ combinator
 import com.tjclp.xl.io.ExcelIO         // File I/O
@@ -264,7 +265,7 @@ ExcelIO.instance.write[IO](wb, path).unsafeRunSync()
 ### "Value readTyped is not a member of Sheet"
 **Solution**: Import codec givens:
 ```scala
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 ```
 
 ### "Macro expansion error: Invalid cell reference"

@@ -1,7 +1,14 @@
 package com.tjclp.xl
 
 import munit.FunSuite
-import com.tjclp.xl.style.{StyleRegistry, CellStyle, StyleId, Font, Fill, Color, Border, BorderStyle, NumFmt, Align, HAlign, VAlign}
+import com.tjclp.xl.style.{CellStyle, StyleRegistry}
+import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.style.border.{Border, BorderStyle}
+import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.style.fill.Fill
+import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.style.units.StyleId
 
 /** Tests for StyleRegistry */
 class StyleRegistrySpec extends FunSuite:

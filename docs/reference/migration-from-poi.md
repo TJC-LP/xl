@@ -54,9 +54,9 @@ out.close();
 
 **XL (Scala)**:
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.macros.*
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
@@ -143,7 +143,7 @@ switch (cell.getCellType()) {
 
 **XL (Scala)**:
 ```scala
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 
 // Type-safe reading with Either
 sheet.readTyped[String](cell"A1") match
@@ -407,9 +407,9 @@ out.close();
 
 ### XL Version (Scala)
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.macros.*
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.style.*
 import java.time.LocalDate
 import cats.effect.IO

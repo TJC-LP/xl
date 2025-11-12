@@ -368,7 +368,7 @@ Cell-level codecs (`xl-core/src/com/tjclp/xl/codec/`) provide type-safe encoding
 Always prefer `putMixed` for multi-cell updates:
 
 ```scala
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 
 sheet.putMixed(
   cell"A1" -> "Revenue",
@@ -417,7 +417,7 @@ All codecs satisfy: `codec.read(Cell(ref, codec.write(value)._1)) == Right(Some(
 For intra-cell formatting (multiple formats within one cell):
 
 ```scala
-import com.tjclp.xl.RichText.*
+import com.tjclp.xl.richtext.RichText.*
 
 // Composable with + operator
 val text = "Bold".bold.red + " normal " + "Italic".italic.blue
@@ -709,7 +709,7 @@ import cats.Monoid
 import cats.syntax.all.*
 
 // 4. Project internal
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 
 // 5. Test frameworks (in tests)
 import munit.ScalaCheckSuite

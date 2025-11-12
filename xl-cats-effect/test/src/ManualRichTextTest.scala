@@ -1,9 +1,10 @@
 import cats.effect.{IO, IOApp}
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.io.Excel
-import com.tjclp.xl.RichText.{*, given}
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.richtext.RichText.{*, given}
+import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.sheet.syntax.*
 import java.nio.file.Paths
 
 /** Manual test to verify rich text formatting in Excel.

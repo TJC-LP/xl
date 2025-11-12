@@ -1,28 +1,10 @@
 package com.tjclp.xl.codec
 
-import com.tjclp.xl.*
-import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cell.{Cell, CellValue}
-import com.tjclp.xl.style.{CellStyle, NumFmt}
+import com.tjclp.xl.richtext.RichText
+import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.style.numfmt.NumFmt
 import java.time.{LocalDate, LocalDateTime}
-
-/**
- * Read a typed value from a Cell.
- *
- * Returns Right(None) if the cell is empty, Right(Some(value)) if successfully decoded, or
- * Left(error) if there's a type mismatch or parse error.
- */
-trait CellReader[A]:
-  def read(cell: Cell): Either[CodecError, Option[A]]
-
-/**
- * Write a typed value to produce cell data with optional style hint.
- *
- * Returns (CellValue, Optional[CellStyle]) where the style is auto-inferred based on the value type
- * (e.g., DateTime gets date format, BigDecimal gets decimal format).
- */
-trait CellWriter[A]:
-  def write(a: A): (CellValue, Option[CellStyle])
 
 /** Bidirectional codec for cell values */
 trait CellCodec[A] extends CellReader[A], CellWriter[A]
@@ -184,25 +166,3 @@ object CellCodec:
         case other => Left(CodecError.TypeMismatch("RichText", other)),
     rt => (CellValue.RichText(rt), None) // No cell-level style, formatting is in runs
   )
-
-/**
- * Cell codec error types
- *
- * These errors are specific to cell-level encoding/decoding and can be converted to XLError when
- * needed.
- */
-enum CodecError:
-  /** Type mismatch when reading a cell */
-  case TypeMismatch(expected: String, actual: CellValue)
-
-  /** Parse error when converting cell value to target type */
-  case ParseError(value: String, targetType: String, detail: String)
-
-object CodecError:
-  extension (error: CodecError)
-    /** Convert CodecError to XLError for compatibility with general error handling */
-    def toXLError(ref: ARef): XLError = error match
-      case TypeMismatch(expected, actual) =>
-        XLError.TypeMismatch(expected, actual.toString, ref.toA1)
-      case ParseError(value, targetType, detail) =>
-        XLError.ParseError(ref.toA1, s"Cannot parse '$value' as $targetType: $detail")

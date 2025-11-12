@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.{RichText, TextRun}
+import com.tjclp.xl.richtext.{RichText, TextRun}
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.macros.cell
 

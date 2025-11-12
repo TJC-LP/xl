@@ -2,11 +2,11 @@ package com.tjclp.xl.codec
 
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.macros.cell
-import com.tjclp.xl.style.NumFmt
+import com.tjclp.xl.style.numfmt.NumFmt
 
 import java.time.{LocalDate, LocalDateTime}
 

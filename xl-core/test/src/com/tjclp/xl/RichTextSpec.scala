@@ -1,8 +1,10 @@
 package com.tjclp.xl
 
 import munit.FunSuite
-import com.tjclp.xl.style.{Color, Font}
-import com.tjclp.xl.RichText.{*, given}
+import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.richtext.{RichText, TextRun}
+import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.macros.cell
 

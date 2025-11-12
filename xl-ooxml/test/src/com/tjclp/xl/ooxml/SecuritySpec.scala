@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import java.io.ByteArrayOutputStream
 import java.util.zip.{ZipOutputStream, ZipEntry}
 import java.nio.charset.StandardCharsets

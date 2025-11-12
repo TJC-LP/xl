@@ -4,6 +4,13 @@ import munit.ScalaCheckSuite
 import org.scalacheck.{Arbitrary, Gen, Prop}
 import org.scalacheck.Prop.*
 import com.tjclp.xl.style.{*, given}
+import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.style.border.{Border, BorderSide, BorderStyle}
+import com.tjclp.xl.style.color.{Color, ThemeSlot}
+import com.tjclp.xl.style.fill.{Fill, PatternType}
+import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.style.units.{Emu, Pt, Px, given}
 
 /** Property tests for style system */
 class StyleSpec extends ScalaCheckSuite:

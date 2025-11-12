@@ -3,7 +3,7 @@ package com.tjclp.xl.ooxml
 import munit.FunSuite
 import java.nio.file.{Files, Path}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.macros.{cell, range}
 import com.tjclp.xl.ooxml.{XlsxWriter, XlsxReader}

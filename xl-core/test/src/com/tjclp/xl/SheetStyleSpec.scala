@@ -1,10 +1,18 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.CellValue
-import munit.FunSuite
-import com.tjclp.xl.macros.{cell, range}
 import com.tjclp.xl.conversions.given
-import com.tjclp.xl.style.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align, NumFmt}
+import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.style.border.{Border, BorderStyle}
+import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.style.fill.Fill
+import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.style.numfmt.NumFmt
+import munit.FunSuite
 
 /** Tests for Sheet style extension methods */
 class SheetStyleSpec extends FunSuite:
