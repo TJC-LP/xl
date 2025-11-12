@@ -10,6 +10,9 @@ enum XLError:
   /** Invalid range format */
   case InvalidRange(range: String, reason: String)
 
+  /** Invalid reference (e.g., unqualified ref used with workbook) */
+  case InvalidReference(reason: String)
+
   /** Invalid sheet name */
   case InvalidSheetName(name: String, reason: String)
 
@@ -64,6 +67,7 @@ object XLError:
     def message: String = error match
       case InvalidCellRef(ref, reason) => s"Invalid cell reference '$ref': $reason"
       case InvalidRange(range, reason) => s"Invalid range '$range': $reason"
+      case InvalidReference(reason) => s"Invalid reference: $reason"
       case InvalidSheetName(name, reason) => s"Invalid sheet name '$name': $reason"
       case OutOfBounds(ref, reason) => s"Reference out of bounds '$ref': $reason"
       case SheetNotFound(name) => s"Sheet not found: '$name'"

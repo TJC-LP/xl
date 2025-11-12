@@ -25,7 +25,7 @@ object api:
   export cell.{Cell, CellValue, CellError}
 
   // Addressing types
-  export addressing.{Column, Row, SheetName, ARef, CellRange}
+  export addressing.{Column, Row, SheetName, ARef, CellRange, RefType}
 
   // Rich text types
   export richtext.{TextRun, RichText}

@@ -5,7 +5,7 @@ import java.nio.file.{Files, Path}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.{XlsxWriter, XlsxReader}
 
 /** Round-trip tests for XLSX write → read */
@@ -42,10 +42,10 @@ class OoxmlRoundTripSpec extends FunSuite:
   test("Workbook with text cells") {
     val wb = Workbook("Data").flatMap { initial =>
       val sheet = initial.sheets(0)
-        .put(cell"A1", CellValue.Text("Hello"))
-        .put(cell"B1", CellValue.Text("World"))
-        .put(cell"A2", CellValue.Text("Scala"))
-        .put(cell"B2", CellValue.Text("Excel"))
+        .put(ref"A1", CellValue.Text("Hello"))
+        .put(ref"B1", CellValue.Text("World"))
+        .put(ref"A2", CellValue.Text("Scala"))
+        .put(ref"B2", CellValue.Text("Excel"))
 
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Should create workbook"))
@@ -58,18 +58,18 @@ class OoxmlRoundTripSpec extends FunSuite:
 
     // Verify cells
     val readSheet = readWb.sheets(0)
-    assertEquals(readSheet(cell"A1").value, CellValue.Text("Hello"))
-    assertEquals(readSheet(cell"B1").value, CellValue.Text("World"))
-    assertEquals(readSheet(cell"A2").value, CellValue.Text("Scala"))
-    assertEquals(readSheet(cell"B2").value, CellValue.Text("Excel"))
+    assertEquals(readSheet(ref"A1").value, CellValue.Text("Hello"))
+    assertEquals(readSheet(ref"B1").value, CellValue.Text("World"))
+    assertEquals(readSheet(ref"A2").value, CellValue.Text("Scala"))
+    assertEquals(readSheet(ref"B2").value, CellValue.Text("Excel"))
   }
 
   test("Workbook with number cells") {
     val wb = Workbook("Numbers").flatMap { initial =>
       val sheet = initial.sheets(0)
-        .put(cell"A1", CellValue.Number(BigDecimal(42)))
-        .put(cell"A2", CellValue.Number(BigDecimal(3.14159)))
-        .put(cell"A3", CellValue.Number(BigDecimal(-100)))
+        .put(ref"A1", CellValue.Number(BigDecimal(42)))
+        .put(ref"A2", CellValue.Number(BigDecimal(3.14159)))
+        .put(ref"A3", CellValue.Number(BigDecimal(-100)))
 
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Should create workbook"))
@@ -84,16 +84,16 @@ class OoxmlRoundTripSpec extends FunSuite:
       case Right(readWb) =>
         // Verify numbers
         val readSheet = readWb.sheets(0)
-        assertEquals(readSheet(cell"A1").value, CellValue.Number(BigDecimal(42)))
-        assertEquals(readSheet(cell"A2").value, CellValue.Number(BigDecimal(3.14159)))
-        assertEquals(readSheet(cell"A3").value, CellValue.Number(BigDecimal(-100)))
+        assertEquals(readSheet(ref"A1").value, CellValue.Number(BigDecimal(42)))
+        assertEquals(readSheet(ref"A2").value, CellValue.Number(BigDecimal(3.14159)))
+        assertEquals(readSheet(ref"A3").value, CellValue.Number(BigDecimal(-100)))
   }
 
   test("Workbook with boolean cells") {
     val wb = Workbook("Bools").flatMap { initial =>
       val sheet = initial.sheets(0)
-        .put(cell"A1", CellValue.Bool(true))
-        .put(cell"A2", CellValue.Bool(false))
+        .put(ref"A1", CellValue.Bool(true))
+        .put(ref"A2", CellValue.Bool(false))
 
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Should create workbook"))
@@ -108,22 +108,22 @@ class OoxmlRoundTripSpec extends FunSuite:
       case Right(readWb) =>
         // Verify booleans
         val readSheet = readWb.sheets(0)
-        assertEquals(readSheet(cell"A1").value, CellValue.Bool(true))
-        assertEquals(readSheet(cell"A2").value, CellValue.Bool(false))
+        assertEquals(readSheet(ref"A1").value, CellValue.Bool(true))
+        assertEquals(readSheet(ref"A2").value, CellValue.Bool(false))
   }
 
   test("Workbook with mixed cell types") {
     val wb = Workbook("Mixed").flatMap { initial =>
       val sheet = initial.sheets(0)
-        .put(cell"A1", CellValue.Text("Name"))
-        .put(cell"B1", CellValue.Text("Age"))
-        .put(cell"C1", CellValue.Text("Active"))
-        .put(cell"A2", CellValue.Text("Alice"))
-        .put(cell"B2", CellValue.Number(BigDecimal(30)))
-        .put(cell"C2", CellValue.Bool(true))
-        .put(cell"A3", CellValue.Text("Bob"))
-        .put(cell"B3", CellValue.Number(BigDecimal(25)))
-        .put(cell"C3", CellValue.Bool(false))
+        .put(ref"A1", CellValue.Text("Name"))
+        .put(ref"B1", CellValue.Text("Age"))
+        .put(ref"C1", CellValue.Text("Active"))
+        .put(ref"A2", CellValue.Text("Alice"))
+        .put(ref"B2", CellValue.Number(BigDecimal(30)))
+        .put(ref"C2", CellValue.Bool(true))
+        .put(ref"A3", CellValue.Text("Bob"))
+        .put(ref"B3", CellValue.Number(BigDecimal(25)))
+        .put(ref"C3", CellValue.Bool(false))
 
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Should create workbook"))
@@ -138,19 +138,19 @@ class OoxmlRoundTripSpec extends FunSuite:
       case Right(readWb) =>
         // Verify all cells
         val readSheet = readWb.sheets(0)
-        assertEquals(readSheet(cell"A1").value, CellValue.Text("Name"))
-        assertEquals(readSheet(cell"B2").value, CellValue.Number(BigDecimal(30)))
-        assertEquals(readSheet(cell"C2").value, CellValue.Bool(true))
+        assertEquals(readSheet(ref"A1").value, CellValue.Text("Name"))
+        assertEquals(readSheet(ref"B2").value, CellValue.Number(BigDecimal(30)))
+        assertEquals(readSheet(ref"C2").value, CellValue.Bool(true))
   }
 
   test("Multi-sheet workbook") {
     val wb = Workbook("Sheet1").flatMap { initial =>
-      val sheet1 = initial.sheets(0).put(cell"A1", CellValue.Text("First"))
+      val sheet1 = initial.sheets(0).put(ref"A1", CellValue.Text("First"))
 
       for
         wb2 <- Sheet("Sheet2").flatMap(initial.addSheet)
         wb3 <- wb2.updateSheet(0, sheet1)
-        wb4 <- wb3.updateSheet(1, wb3.sheets(1).put(cell"A1", CellValue.Text("Second")))
+        wb4 <- wb3.updateSheet(1, wb3.sheets(1).put(ref"A1", CellValue.Text("Second")))
       yield wb4
     }.getOrElse(fail("Should create workbook"))
 
@@ -164,8 +164,8 @@ class OoxmlRoundTripSpec extends FunSuite:
     assertEquals(readWb.sheets.size, 2)
     assertEquals(readWb.sheets(0).name.value, "Sheet1")
     assertEquals(readWb.sheets(1).name.value, "Sheet2")
-    assertEquals(readWb.sheets(0)(cell"A1").value, CellValue.Text("First"))
-    assertEquals(readWb.sheets(1)(cell"A1").value, CellValue.Text("Second"))
+    assertEquals(readWb.sheets(0)(ref"A1").value, CellValue.Text("First"))
+    assertEquals(readWb.sheets(1)(ref"A1").value, CellValue.Text("Second"))
   }
 
   test("Workbook with repeated strings triggers SST") {
@@ -212,8 +212,8 @@ class OoxmlRoundTripSpec extends FunSuite:
   test("Workbook with merged cells preserves merges") {
     val wb = Workbook("Merged").flatMap { initial =>
       val sheet = initial.sheets(0)
-        .put(cell"A1", CellValue.Text("Merged Header"))
-        .merge(range"A1:C1")
+        .put(ref"A1", CellValue.Text("Merged Header"))
+        .merge(ref"A1:C1")
 
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Should create workbook"))
@@ -224,7 +224,7 @@ class OoxmlRoundTripSpec extends FunSuite:
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
 
     val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
-    assertEquals(readWb.sheets(0)(cell"A1").value, CellValue.Text("Merged Header"))
+    assertEquals(readWb.sheets(0)(ref"A1").value, CellValue.Text("Merged Header"))
   }
 
   test("Workbook with DateTime cells serializes to Excel serial numbers") {
@@ -235,8 +235,8 @@ class OoxmlRoundTripSpec extends FunSuite:
 
     val wb = Workbook("Dates").flatMap { initial =>
       val sheet = initial.sheets(0)
-        .put(cell"A1", CellValue.DateTime(dt1))
-        .put(cell"A2", CellValue.DateTime(dt2))
+        .put(ref"A1", CellValue.DateTime(dt1))
+        .put(ref"A2", CellValue.DateTime(dt2))
 
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Should create workbook"))
@@ -250,8 +250,8 @@ class OoxmlRoundTripSpec extends FunSuite:
       case Right(wb) => wb
       case Left(err) => fail(s"Read failed: ${err.message}")
 
-    val cell1 = readWb.sheets(0)(cell"A1")
-    val cell2 = readWb.sheets(0)(cell"A2")
+    val cell1 = readWb.sheets(0)(ref"A1")
+    val cell2 = readWb.sheets(0)(ref"A2")
 
     // Should be read as Numbers (Excel serial format)
     cell1.value match

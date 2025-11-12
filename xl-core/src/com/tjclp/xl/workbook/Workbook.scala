@@ -1,6 +1,7 @@
 package com.tjclp.xl.workbook
 
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{RefType, SheetName}
+import com.tjclp.xl.cell.Cell
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheet.Sheet
 
@@ -32,6 +33,26 @@ case class Workbook(
     SheetName(name).left
       .map(err => XLError.InvalidSheetName(name, err): XLError)
       .flatMap((sheetName: SheetName) => apply(sheetName))
+
+  /**
+   * Access cell(s) using unified reference type.
+   *
+   * For qualified refs (Sales!A1), looks up sheet first. For unqualified refs (A1), returns error
+   * since workbook needs sheet qualification.
+   *
+   * Returns Cell for single refs, Iterable[Cell] for ranges.
+   */
+  @annotation.targetName("applyRefType")
+  def apply(ref: RefType): XLResult[Cell | Iterable[Cell]] =
+    ref match
+      case RefType.Cell(_) | RefType.Range(_) =>
+        Left(
+          XLError.InvalidReference("Workbook access requires sheet-qualified ref (e.g., Sales!A1)")
+        )
+      case RefType.QualifiedCell(sheetName, cellRef) =>
+        apply(sheetName).map(sheet => sheet(cellRef))
+      case RefType.QualifiedRange(sheetName, range) =>
+        apply(sheetName).map(sheet => sheet.getRange(range))
 
   /** Add sheet at end */
   def addSheet(sheet: Sheet): XLResult[Workbook] =

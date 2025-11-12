@@ -5,7 +5,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.*
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.macros.ref
 
 /**
  * Tests for deterministic output (byte-identical on re-serialization)
@@ -55,10 +55,10 @@ class DeterminismSpec extends FunSuite:
       case Left(err) => fail(s"Failed to create sheet: $err")
 
     val styledSheet = sheet1
-      .put(cell"A1", CellValue.Text("Hello"))
-      .put(cell"B1", CellValue.Number(42))
+      .put(ref"A1", CellValue.Text("Hello"))
+      .put(ref"B1", CellValue.Number(42))
       .withCellStyle(
-        cell"A1",
+        ref"A1",
         CellStyle(
           font = Font.default.copy(bold = true, sizePt = 14.0),
           fill = Fill.Solid(Color.Rgb(0xffff0000)),

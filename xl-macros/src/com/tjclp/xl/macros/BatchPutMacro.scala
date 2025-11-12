@@ -16,9 +16,9 @@ object BatchPutMacro:
    * import com.tjclp.xl.putMacro.put
    *
    * sheet.put(
-   *   cell"A1" -> "Hello",
-   *   cell"B1" -> 42,
-   *   cell"C1" -> true
+   *   ref"A1" -> "Hello",
+   *   ref"B1" -> 42,
+   *   ref"C1" -> true
    * )
    * }}}
    *

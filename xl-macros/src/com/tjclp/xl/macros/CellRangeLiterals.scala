@@ -18,14 +18,22 @@ object CellRangeLiterals:
 
   // -------- Public API (0-arg fast path) --------
   extension (inline sc: StringContext)
+    @deprecated("Use ref\"A1\" instead (see com.tjclp.xl.macros.ref)", "0.2.0")
     transparent inline def cell(): ARef = ${ cellImpl0('sc) }
+
+    @deprecated("Use ref\"A1:B10\" instead (see com.tjclp.xl.macros.ref)", "0.2.0")
     transparent inline def range(): CellRange = ${ rangeImpl0('sc) }
+
     transparent inline def fx(): CellValue = ${ fxImpl0('sc) }
 
+    @deprecated("Use ref\"A1\" instead (see com.tjclp.xl.macros.ref)", "0.2.0")
     inline def cell(inline args: Any*): ARef =
       ${ errorNoInterpolation('sc, 'args, "cell") }
+
+    @deprecated("Use ref\"A1:B10\" instead (see com.tjclp.xl.macros.ref)", "0.2.0")
     inline def range(inline args: Any*): CellRange =
       ${ errorNoInterpolation('sc, 'args, "range") }
+
     inline def fx(inline args: Any*): CellValue =
       ${ errorNoInterpolation('sc, 'args, "fx") }
 

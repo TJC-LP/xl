@@ -5,7 +5,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.sheet.syntax.*
 import munit.FunSuite
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.macros.ref
 
 class RangeCombinatorsSpec extends FunSuite:
 
@@ -13,7 +13,7 @@ class RangeCombinatorsSpec extends FunSuite:
     Sheet("Test").getOrElse(fail("Failed to create sheet"))
 
   test("putRange populates all cells when counts match") {
-    val targetRange = range"A1:B2"
+    val targetRange = ref"A1:B2"
     val values = Vector(
       CellValue.Text("A1"),
       CellValue.Text("B1"),
@@ -23,14 +23,14 @@ class RangeCombinatorsSpec extends FunSuite:
 
     val updated = newSheet.putRange(targetRange, values).getOrElse(fail("putRange returned error"))
 
-    assertEquals(updated(cell"A1").value, CellValue.Text("A1"))
-    assertEquals(updated(cell"B2").value, CellValue.Text("B2"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("A1"))
+    assertEquals(updated(ref"B2").value, CellValue.Text("B2"))
     assertEquals(updated.cellCount, 4)
   }
 
   test("putRange detects mismatched value counts") {
     val result = newSheet.putRange(
-      range"A1:B2",
+      ref"A1:B2",
       Vector(
         CellValue.Text("A1"),
         CellValue.Text("B1"),
@@ -52,8 +52,8 @@ class RangeCombinatorsSpec extends FunSuite:
     val updated =
       newSheet.putRow(Row.from1(1), Column.from1(1), values).getOrElse(fail("putRow failed"))
 
-    assertEquals(updated(cell"A1").value, CellValue.Text("Q1"))
-    assertEquals(updated(cell"C1").value, CellValue.Text("Q3"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("Q1"))
+    assertEquals(updated(ref"C1").value, CellValue.Text("Q3"))
     assertEquals(updated.cellCount, 3)
 
     val overflow = newSheet.putRow(
@@ -74,8 +74,8 @@ class RangeCombinatorsSpec extends FunSuite:
     val updated =
       newSheet.putCol(Column.from1(1), Row.from1(1), values).getOrElse(fail("putCol failed"))
 
-    assertEquals(updated(cell"A1").value, CellValue.Text("North"))
-    assertEquals(updated(cell"A2").value, CellValue.Text("South"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("North"))
+    assertEquals(updated(ref"A2").value, CellValue.Text("South"))
     assertEquals(updated.cellCount, 2)
 
     val overflow = newSheet.putCol(

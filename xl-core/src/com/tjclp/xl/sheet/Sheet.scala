@@ -1,6 +1,6 @@
 package com.tjclp.xl.sheet
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.style.StyleRegistry
@@ -35,6 +35,21 @@ case class Sheet(
       .left
       .map(err => XLError.InvalidCellRef(a1, err))
       .map(apply)
+
+  /**
+   * Access cell(s) using unified reference type.
+   *
+   * Sheet-qualified refs (Sales!A1) ignore the sheet name and use only the cell/range part.
+   *
+   * Returns Cell for single refs, Iterable[Cell] for ranges.
+   */
+  @annotation.targetName("applyRefType")
+  def apply(ref: RefType): Cell | Iterable[Cell] =
+    ref match
+      case RefType.Cell(cellRef) => apply(cellRef)
+      case RefType.Range(range) => getRange(range)
+      case RefType.QualifiedCell(_, cellRef) => apply(cellRef)
+      case RefType.QualifiedRange(_, range) => getRange(range)
 
   /** Check if cell exists (not empty) */
   def contains(ref: ARef): Boolean =

@@ -6,7 +6,7 @@ import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.optics.syntax.* // Import optics extension methods
 import com.tjclp.xl.dsl.syntax.*
 import munit.FunSuite
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.macros.ref
 import com.tjclp.xl.style.units.StyleId
 
 /** Tests for optics library and focus DSL */
@@ -76,36 +76,36 @@ class OpticsSpec extends FunSuite:
   test("Lens.andThen composes lenses") {
     import Optics.*
 
-    val sheet = emptySheet.put(cell"A1", CellValue.Text("test"))
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("test"))
     val composed = sheetCells.andThen(
       Lens[Map[ARef, Cell], Cell](
-        get = _.get(cell"A1").getOrElse(Cell.empty(cell"A1")),
+        get = _.get(ref"A1").getOrElse(Cell.empty(ref"A1")),
         set = (c, m) => m + (c.ref -> c)
       )
     )
 
-    val newCell = Cell(cell"A1", CellValue.Text("updated"))
+    val newCell = Cell(ref"A1", CellValue.Text("updated"))
     val updated = composed.set(newCell, sheet)
 
-    assertEquals(updated(cell"A1").value, CellValue.Text("updated"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("updated"))
   }
 
   // ========== Optional Behavior ==========
 
-  test("Optional.getOption returns Some for existing cell") {
+  test("Optional.getOption returns Some for existing ref") {
     import Optics.*
 
-    val sheet = emptySheet.put(cell"A1", CellValue.Text("Present"))
-    val opt = cellAt(cell"A1")
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("Present"))
+    val opt = cellAt(ref"A1")
 
     assertEquals(opt.getOption(sheet).map(_.value), Some(CellValue.Text("Present")))
   }
 
-  test("Optional.getOption returns Some(empty) for missing cell") {
+  test("Optional.getOption returns Some(empty) for missing ref") {
     import Optics.*
 
     val sheet = emptySheet
-    val opt = cellAt(cell"Z99")
+    val opt = cellAt(ref"Z99")
 
     // cellAt returns empty cell for missing cells
     val result = opt.getOption(sheet)
@@ -116,20 +116,20 @@ class OpticsSpec extends FunSuite:
   test("Optional.modify only modifies if present") {
     import Optics.*
 
-    val sheet = emptySheet.put(cell"A1", CellValue.Text("test"))
-    val opt = cellAt(cell"A1")
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("test"))
+    val opt = cellAt(ref"A1")
 
     val updated = opt.modify(c => c.withValue(CellValue.Text("modified")))(sheet)
 
-    assertEquals(updated(cell"A1").value, CellValue.Text("modified"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("modified"))
   }
 
   test("Optional.getOrElse returns default for empty") {
     import Optics.*
 
     val sheet = emptySheet
-    val opt = cellAt(cell"B2")
-    val defaultCell = Cell(cell"B2", CellValue.Text("default"))
+    val opt = cellAt(ref"B2")
+    val defaultCell = Cell(ref"B2", CellValue.Text("default"))
 
     // Since cellAt returns empty cell, we should get an empty cell, not the default
     val result = opt.getOrElse(defaultCell)(sheet)
@@ -141,17 +141,17 @@ class OpticsSpec extends FunSuite:
   test("Optics.sheetCells accesses cell map") {
     import Optics.*
 
-    val sheet = emptySheet.put(cell"A1", CellValue.Text("test"))
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("test"))
     val cells = sheetCells.get(sheet)
 
     assertEquals(cells.size, 1)
-    assertEquals(cells(cell"A1").value, CellValue.Text("test"))
+    assertEquals(cells(ref"A1").value, CellValue.Text("test"))
   }
 
   test("Optics.cellValue accesses and modifies value") {
     import Optics.*
 
-    val cell1 = Cell(cell"A1", CellValue.Number(42))
+    val cell1 = Cell(ref"A1", CellValue.Number(42))
     val value = cellValue.get(cell1)
     assertEquals(value, CellValue.Number(42))
 
@@ -162,7 +162,7 @@ class OpticsSpec extends FunSuite:
   test("Optics.cellStyleId accesses and modifies styleId") {
     import Optics.*
 
-    val cell1 = Cell(cell"A1", CellValue.Empty, Some(StyleId(5)))
+    val cell1 = Cell(ref"A1", CellValue.Empty, Some(StyleId(5)))
     assertEquals(cellStyleId.get(cell1), Some(StyleId(5)))
 
     val cleared = cellStyleId.set(None, cell1)
@@ -185,100 +185,100 @@ class OpticsSpec extends FunSuite:
   test("Optics.mergedRanges accesses merged ranges") {
     import Optics.*
 
-    val sheet = emptySheet.merge(range"A1:B2")
+    val sheet = emptySheet.merge(ref"A1:B2")
     val merged = mergedRanges.get(sheet)
 
     assertEquals(merged.size, 1)
-    assert(merged.contains(range"A1:B2"))
+    assert(merged.contains(ref"A1:B2"))
   }
 
   // ========== Focus DSL ==========
 
-  test("sheet.focus returns Optional for cell") {
-    val sheet = emptySheet.put(cell"A1", CellValue.Text("test"))
-    val focused = sheet.focus(cell"A1")
+  test("sheet.focus returns Optional for ref") {
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("test"))
+    val focused = sheet.focus(ref"A1")
 
     val cellOpt = focused.getOption(sheet)
     assert(cellOpt.isDefined)
     assertEquals(cellOpt.get.value, CellValue.Text("test"))
   }
 
-  test("sheet.modifyCell updates cell") {
-    val sheet = emptySheet.put(cell"A1", CellValue.Text("original"))
+  test("sheet.modifyCell updates ref") {
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("original"))
 
-    val updated = sheet.modifyCell(cell"A1")(c => c.withValue(CellValue.Text("modified")))
+    val updated = sheet.modifyCell(ref"A1")(c => c.withValue(CellValue.Text("modified")))
 
-    assertEquals(updated(cell"A1").value, CellValue.Text("modified"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("modified"))
   }
 
   test("sheet.modifyCell creates empty cell if missing") {
     val sheet = emptySheet
 
-    val updated = sheet.modifyCell(cell"B5")(c => c.withValue(CellValue.Number(99)))
+    val updated = sheet.modifyCell(ref"B5")(c => c.withValue(CellValue.Number(99)))
 
-    assertEquals(updated(cell"B5").value, CellValue.Number(99))
+    assertEquals(updated(ref"B5").value, CellValue.Number(99))
   }
 
   test("sheet.modifyValue transforms cell value") {
-    val sheet = emptySheet.put(cell"A1", CellValue.Text("hello"))
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("hello"))
 
-    val updated = sheet.modifyValue(cell"A1") {
+    val updated = sheet.modifyValue(ref"A1") {
       case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
       case other => other
     }
 
-    assertEquals(updated(cell"A1").value, CellValue.Text("HELLO"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("HELLO"))
   }
 
   test("sheet.modifyValue handles non-text values") {
-    val sheet = emptySheet.put(cell"A1", CellValue.Number(42))
+    val sheet = emptySheet.put(ref"A1", CellValue.Number(42))
 
-    val updated = sheet.modifyValue(cell"A1") {
+    val updated = sheet.modifyValue(ref"A1") {
       case CellValue.Number(n) => CellValue.Number(n * 2)
       case other => other
     }
 
-    assertEquals(updated(cell"A1").value, CellValue.Number(84))
+    assertEquals(updated(ref"A1").value, CellValue.Number(84))
   }
 
   test("sheet.modifyStyleId updates style") {
-    val sheet = emptySheet.put(cell"A1", CellValue.Text("styled"))
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("styled"))
 
-    val updated = sheet.modifyStyleId(cell"A1")(_ => Some(StyleId(7)))
+    val updated = sheet.modifyStyleId(ref"A1")(_ => Some(StyleId(7)))
 
-    assertEquals(updated(cell"A1").styleId, Some(StyleId(7)))
+    assertEquals(updated(ref"A1").styleId, Some(StyleId(7)))
   }
 
   test("sheet.modifyStyleId clears style with None") {
     val sheet = emptySheet
-      .put(Cell(cell"A1", CellValue.Text("styled"), Some(StyleId(5))))
+      .put(Cell(ref"A1", CellValue.Text("styled"), Some(StyleId(5))))
 
-    val updated = sheet.modifyStyleId(cell"A1")(_ => None)
+    val updated = sheet.modifyStyleId(ref"A1")(_ => None)
 
-    assertEquals(updated(cell"A1").styleId, None)
+    assertEquals(updated(ref"A1").styleId, None)
   }
 
   // ========== Complex Scenarios ==========
 
   test("chain multiple modifyValue calls") {
     val sheet = emptySheet
-      .put(cell"A1", CellValue.Text("alpha"))
-      .put(cell"A2", CellValue.Text("beta"))
-      .put(cell"A3", CellValue.Text("gamma"))
+      .put(ref"A1", CellValue.Text("alpha"))
+      .put(ref"A2", CellValue.Text("beta"))
+      .put(ref"A3", CellValue.Text("gamma"))
 
     val updated = sheet
-      .modifyValue(cell"A1")(v => CellValue.Text("ALPHA"))
-      .modifyValue(cell"A2")(v => CellValue.Text("BETA"))
-      .modifyValue(cell"A3")(v => CellValue.Text("GAMMA"))
+      .modifyValue(ref"A1")(v => CellValue.Text("ALPHA"))
+      .modifyValue(ref"A2")(v => CellValue.Text("BETA"))
+      .modifyValue(ref"A3")(v => CellValue.Text("GAMMA"))
 
-    assertEquals(updated(cell"A1").value, CellValue.Text("ALPHA"))
-    assertEquals(updated(cell"A2").value, CellValue.Text("BETA"))
-    assertEquals(updated(cell"A3").value, CellValue.Text("GAMMA"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("ALPHA"))
+    assertEquals(updated(ref"A2").value, CellValue.Text("BETA"))
+    assertEquals(updated(ref"A3").value, CellValue.Text("GAMMA"))
   }
 
   test("modifyCell preserves other cell properties") {
     val originalCell = Cell(
-      ref = cell"A1",
+      ref = ref"A1",
       value = CellValue.Text("test"),
       styleId = Some(StyleId(3)),
       comment = Some("Note"),
@@ -286,12 +286,12 @@ class OpticsSpec extends FunSuite:
     )
     val sheet = emptySheet.put(originalCell)
 
-    val updated = sheet.modifyValue(cell"A1") {
+    val updated = sheet.modifyValue(ref"A1") {
       case CellValue.Text(_) => CellValue.Text("changed")
       case other => other
     }
 
-    val cell = updated(cell"A1")
+    val cell = updated(ref"A1")
     assertEquals(cell.value, CellValue.Text("changed"))
     assertEquals(cell.styleId, Some(StyleId(3)))
     assertEquals(cell.comment, Some("Note"))
@@ -300,29 +300,29 @@ class OpticsSpec extends FunSuite:
 
   test("focus DSL works with pattern matching") {
     val sheet = emptySheet
-      .put(cell"A1", CellValue.Number(100))
-      .put(cell"A2", CellValue.Text("skip"))
-      .put(cell"A3", CellValue.Number(200))
+      .put(ref"A1", CellValue.Number(100))
+      .put(ref"A2", CellValue.Text("skip"))
+      .put(ref"A3", CellValue.Number(200))
 
     val updated = sheet
-      .modifyValue(cell"A1") {
+      .modifyValue(ref"A1") {
         case CellValue.Number(n) => CellValue.Number(n * 1.1)
         case other => other
       }
-      .modifyValue(cell"A3") {
+      .modifyValue(ref"A3") {
         case CellValue.Number(n) => CellValue.Number(n * 1.1)
         case other => other
       }
 
-    assertEquals(updated(cell"A1").value, CellValue.Number(BigDecimal("110.0")))
-    assertEquals(updated(cell"A2").value, CellValue.Text("skip"))
-    assertEquals(updated(cell"A3").value, CellValue.Number(BigDecimal("220.0")))
+    assertEquals(updated(ref"A1").value, CellValue.Number(BigDecimal("110.0")))
+    assertEquals(updated(ref"A2").value, CellValue.Text("skip"))
+    assertEquals(updated(ref"A3").value, CellValue.Number(BigDecimal("220.0")))
   }
 
   test("Lens.modify returns transformed value") {
     import Optics.*
 
-    val cell1 = Cell(cell"A1", CellValue.Number(50))
+    val cell1 = Cell(ref"A1", CellValue.Number(50))
     val doubled = cellValue.modify {
       case CellValue.Number(n) => CellValue.Number(n * 2)
       case other => other
@@ -335,22 +335,22 @@ class OpticsSpec extends FunSuite:
     import Optics.*
 
     val sheet = emptySheet // No cells
-    val opt = cellAt(cell"A1")
+    val opt = cellAt(ref"A1")
 
     // Modify should create the cell since cellAt returns Some(empty cell)
     val updated = opt.modify(c => c.withValue(CellValue.Text("new")))(sheet)
 
     // The empty cell was modified
-    assertEquals(updated(cell"A1").value, CellValue.Text("new"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("new"))
   }
 
   test("sheetCells lens allows bulk operations") {
     import Optics.*
 
     val sheet = emptySheet
-      .put(cell"A1", CellValue.Number(1))
-      .put(cell"A2", CellValue.Number(2))
-      .put(cell"A3", CellValue.Number(3))
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"A2", CellValue.Number(2))
+      .put(ref"A3", CellValue.Number(3))
 
     // Get all cells, transform them, set back
     val cells = sheetCells.get(sheet)
@@ -362,21 +362,21 @@ class OpticsSpec extends FunSuite:
 
     val updated = sheetCells.set(doubled, sheet)
 
-    assertEquals(updated(cell"A1").value, CellValue.Number(2))
-    assertEquals(updated(cell"A2").value, CellValue.Number(4))
-    assertEquals(updated(cell"A3").value, CellValue.Number(6))
+    assertEquals(updated(ref"A1").value, CellValue.Number(2))
+    assertEquals(updated(ref"A2").value, CellValue.Number(4))
+    assertEquals(updated(ref"A3").value, CellValue.Number(6))
   }
 
   // ========== Real-World Use Cases ==========
 
-  test("use case: uppercase all text cells in range") {
+  test("use case: uppercase all text cells in ref") {
     val sheet = emptySheet
-      .put(cell"A1", CellValue.Text("apple"))
-      .put(cell"A2", CellValue.Text("banana"))
-      .put(cell"A3", CellValue.Number(42))
-      .put(cell"A4", CellValue.Text("cherry"))
+      .put(ref"A1", CellValue.Text("apple"))
+      .put(ref"A2", CellValue.Text("banana"))
+      .put(ref"A3", CellValue.Number(42))
+      .put(ref"A4", CellValue.Text("cherry"))
 
-    val refs = Vector(cell"A1", cell"A2", cell"A3", cell"A4")
+    val refs = Vector(ref"A1", ref"A2", ref"A3", ref"A4")
 
     var updated = sheet
     refs.foreach { ref =>
@@ -386,42 +386,42 @@ class OpticsSpec extends FunSuite:
       }
     }
 
-    assertEquals(updated(cell"A1").value, CellValue.Text("APPLE"))
-    assertEquals(updated(cell"A2").value, CellValue.Text("BANANA"))
-    assertEquals(updated(cell"A3").value, CellValue.Number(42)) // Unchanged
-    assertEquals(updated(cell"A4").value, CellValue.Text("CHERRY"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("APPLE"))
+    assertEquals(updated(ref"A2").value, CellValue.Text("BANANA"))
+    assertEquals(updated(ref"A3").value, CellValue.Number(42)) // Unchanged
+    assertEquals(updated(ref"A4").value, CellValue.Text("CHERRY"))
   }
 
   test("use case: apply discount to all numbers") {
     val sheet = emptySheet
-      .put(cell"B1", CellValue.Number(100))
-      .put(cell"B2", CellValue.Number(200))
-      .put(cell"B3", CellValue.Number(300))
+      .put(ref"B1", CellValue.Number(100))
+      .put(ref"B2", CellValue.Number(200))
+      .put(ref"B3", CellValue.Number(300))
 
     val discount = 0.9
     var updated = sheet
-    Vector(cell"B1", cell"B2", cell"B3").foreach { ref =>
+    Vector(ref"B1", ref"B2", ref"B3").foreach { ref =>
       updated = updated.modifyValue(ref) {
         case CellValue.Number(n) => CellValue.Number(n * discount)
         case other => other
       }
     }
 
-    assertEquals(updated(cell"B1").value, CellValue.Number(90))
-    assertEquals(updated(cell"B2").value, CellValue.Number(180))
-    assertEquals(updated(cell"B3").value, CellValue.Number(270))
+    assertEquals(updated(ref"B1").value, CellValue.Number(90))
+    assertEquals(updated(ref"B2").value, CellValue.Number(180))
+    assertEquals(updated(ref"B3").value, CellValue.Number(270))
   }
 
   test("use case: conditionally apply styles") {
     val sheet = emptySheet
-      .put(cell"A1", CellValue.Number(-50))
-      .put(cell"A2", CellValue.Number(100))
-      .put(cell"A3", CellValue.Number(-25))
+      .put(ref"A1", CellValue.Number(-50))
+      .put(ref"A2", CellValue.Number(100))
+      .put(ref"A3", CellValue.Number(-25))
 
     val negativeStyleId = StyleId(1)
 
     var updated = sheet
-    Vector(cell"A1", cell"A2", cell"A3").foreach { ref =>
+    Vector(ref"A1", ref"A2", ref"A3").foreach { ref =>
       updated = updated.modifyCell(ref) { c =>
         c.value match
           case CellValue.Number(n) if n < 0 => c.withStyle(negativeStyleId)
@@ -429,66 +429,66 @@ class OpticsSpec extends FunSuite:
       }
     }
 
-    assertEquals(updated(cell"A1").styleId, Some(negativeStyleId))
-    assertEquals(updated(cell"A2").styleId, None)
-    assertEquals(updated(cell"A3").styleId, Some(negativeStyleId))
+    assertEquals(updated(ref"A1").styleId, Some(negativeStyleId))
+    assertEquals(updated(ref"A2").styleId, None)
+    assertEquals(updated(ref"A3").styleId, Some(negativeStyleId))
   }
 
-  test("use case: clear styles from range") {
-    val styledCell = Cell(cell"B1", CellValue.Text("test"), Some(StyleId(5)))
+  test("use case: clear styles from ref") {
+    val styledCell = Cell(ref"B1", CellValue.Text("test"), Some(StyleId(5)))
     val sheet = emptySheet
       .put(styledCell)
-      .put(Cell(cell"B2", CellValue.Text("test2"), Some(StyleId(6))))
+      .put(Cell(ref"B2", CellValue.Text("test2"), Some(StyleId(6))))
 
     var updated = sheet
-    Vector(cell"B1", cell"B2").foreach { ref =>
+    Vector(ref"B1", ref"B2").foreach { ref =>
       updated = updated.modifyStyleId(ref)(_ => None)
     }
 
-    assertEquals(updated(cell"B1").styleId, None)
-    assertEquals(updated(cell"B2").styleId, None)
+    assertEquals(updated(ref"B1").styleId, None)
+    assertEquals(updated(ref"B2").styleId, None)
   }
 
   // ========== Integration with Existing APIs ==========
 
   test("optics work alongside put/putAll") {
     val sheet = emptySheet
-      .put(cell"A1", CellValue.Text("direct"))
-      .modifyValue(cell"A2") { _ => CellValue.Text("optic") }
-      .put(cell"A3", CellValue.Text("direct2"))
+      .put(ref"A1", CellValue.Text("direct"))
+      .modifyValue(ref"A2") { _ => CellValue.Text("optic") }
+      .put(ref"A3", CellValue.Text("direct2"))
 
-    assertEquals(sheet(cell"A1").value, CellValue.Text("direct"))
-    assertEquals(sheet(cell"A2").value, CellValue.Text("optic"))
-    assertEquals(sheet(cell"A3").value, CellValue.Text("direct2"))
+    assertEquals(sheet(ref"A1").value, CellValue.Text("direct"))
+    assertEquals(sheet(ref"A2").value, CellValue.Text("optic"))
+    assertEquals(sheet(ref"A3").value, CellValue.Text("direct2"))
   }
 
   test("optics work with applyPatch") {
     import com.tjclp.xl.dsl.*
 
     val sheet = emptySheet
-      .modifyValue(cell"A1") { _ => CellValue.Text("before patch") }
+      .modifyValue(ref"A1") { _ => CellValue.Text("before patch") }
 
-    val patch = cell"A1" := "after patch"
+    val patch = ref"A1" := "after patch"
     val result = Patch.applyPatch(sheet, patch)
 
     assert(result.isRight)
     val updated = result.getOrElse(fail("Patch failed"))
-    assertEquals(updated(cell"A1").value, CellValue.Text("after patch"))
+    assertEquals(updated(ref"A1").value, CellValue.Text("after patch"))
   }
 
   test("optics preserve sheet structure") {
     val sheet = emptySheet
-      .put(cell"A1", CellValue.Text("test"))
-      .merge(range"A1:B1")
+      .put(ref"A1", CellValue.Text("test"))
+      .merge(ref"A1:B1")
       .setColumnProperties(Column.from1(1), ColumnProperties(width = Some(20.0)))
 
-    val updated = sheet.modifyValue(cell"A1") {
+    val updated = sheet.modifyValue(ref"A1") {
       case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
       case other => other
     }
 
     // Verify merged ranges and column props preserved
     assertEquals(updated.mergedRanges.size, 1)
-    assert(updated.mergedRanges.contains(range"A1:B1"))
+    assert(updated.mergedRanges.contains(ref"A1:B1"))
     assertEquals(updated.getColumnProperties(Column.from1(1)).width, Some(20.0))
   }
