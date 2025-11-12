@@ -12,6 +12,7 @@ import scala.quoted.*
  *   - `ref"A1:B10"` → CellRange (unwrapped)
  *   - `ref"Sales!A1"` → RefType.QualifiedCell
  *   - `ref"'Q1 Sales'!A1:B10"` → RefType.QualifiedRange
+ *   - `ref"'It''s Q1'!A1"` → RefType.QualifiedCell (escaped quotes: '' → ')
  *
  * Uses zero-allocation parsing at compile time for maximum performance.
  *
@@ -50,12 +51,14 @@ object RefLiteral:
 
         if refPart.isEmpty then report.errorAndAbort(s"Missing reference after '!' in: $s")
 
-        // Parse sheet name (handle quotes)
+        // Parse sheet name (handle quotes and escaping)
         val sheetName = if sheetPart.startsWith("'") && sheetPart.endsWith("'") then
-          val unquoted = sheetPart.substring(1, sheetPart.length - 1)
-          if unquoted.isEmpty then report.errorAndAbort("Empty sheet name in quotes")
-          validateSheetName(unquoted)
-          unquoted
+          val quoted = sheetPart.substring(1, sheetPart.length - 1)
+          if quoted.isEmpty then report.errorAndAbort("Empty sheet name in quotes")
+          // Unescape '' → ' (Excel convention)
+          val unescaped = quoted.replace("''", "'")
+          validateSheetName(unescaped)
+          unescaped
         else
           validateSheetName(sheetPart)
           sheetPart

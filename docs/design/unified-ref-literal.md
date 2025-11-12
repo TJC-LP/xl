@@ -121,11 +121,18 @@ private def refImpl0(sc: Expr[StringContext])(using Quotes): Expr[ARef | CellRan
 Excel-compatible parsing:
 - Simple names: `Sales!A1`
 - Quoted names with spaces: `'Q1 Sales'!A1`
-- Escaped quotes: `'It''s Q1'!A1` (not yet implemented)
+- Escaped quotes: `'It''s Q1'!A1` ('' → ') ✅ Implemented
+- Multiple escaped quotes: `'It''s ''Q1'''!A1` → "It's 'Q1'"
 
 Validation rules (Excel spec):
 - Max 31 characters
 - No `: \ / ? * [ ]`
+
+**Escaping rules (Excel convention):**
+- Single quote inside sheet name must be doubled: `'` → `''`
+- Examples:
+  - Sheet "It's Q1" → `'It''s Q1'!A1`
+  - Sheet "'Test'" → `'''Test'''!A1`
 
 ### Integration Points
 
@@ -256,11 +263,35 @@ ref"A$$1"    // Row absolute, column relative
 
 **Status:** Deferred until string interpolation design finalized.
 
+## Implemented Features
+
+### Escaped Quote Support ✅
+
+Excel's single quote escaping is now fully supported:
+
+```scala
+// Sheet name with apostrophe
+ref"'It''s Q1'!A1"           // → RefType.QualifiedCell(SheetName("It's Q1"), ...)
+
+// Multiple quotes
+ref"'It''s ''Q1'''!A1"       // → Sheet name: "It's 'Q1'"
+
+// Round-trip preserved
+val ref = RefType.QualifiedCell(SheetName.unsafe("It's Q1"), ARef.from1(1, 1))
+ref.toA1                      // → "'It''s Q1'!A1"
+RefType.parse(ref.toA1)       // → Right(ref) ✅
+```
+
+**Implementation:**
+- Runtime parser (`RefType.parse`): Unescapes `''` → `'` when parsing
+- Macro parser (`ref` literal): Unescapes at compile time with validation
+- `toA1` method: Escapes `'` → `''` when generating output
+
 ## Related Documentation
 
 - **RefType runtime parser:** `xl-core/src/com/tjclp/xl/addressing/RefType.scala` (companion object)
-- **Property tests:** To be added in `xl-core/test/src/com/tjclp/xl/RefTypeSpec.scala`
-- **Integration tests:** To be added for qualified ref workbook access
+- **Property tests:** `xl-core/test/src/com/tjclp/xl/addressing/RefTypeSpec.scala` ✅ Implemented
+- **Integration tests:** Included in RefTypeSpec (workbook qualified access, pattern matching)
 
 ## Notes
 

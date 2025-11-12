@@ -1,6 +1,6 @@
 import com.tjclp.xl.api.*
-import com.tjclp.xl.*
-import com.tjclp.xl.addressing.Column
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.addressing.{Column, RefType}
 
 @main
 def demo(): Unit =

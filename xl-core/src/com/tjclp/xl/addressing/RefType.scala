@@ -8,22 +8,44 @@ package com.tjclp.xl.addressing
  *   - Cell ranges: `A1:B10`
  *   - Sheet-qualified cells: `Sales!A1` or `'Q1 Sales'!A1`
  *   - Sheet-qualified ranges: `Sales!A1:B10` or `'Q1 Sales'!A1:B10`
+ *   - Escaped quotes in sheet names: `'It''s Q1'!A1` ('' → ')
+ *
+ * **Note on macro vs runtime parsing:**
+ *   - **Compile-time (`ref` macro)**: Simple refs return **unwrapped** types (ARef/CellRange) for
+ *     backwards compatibility. Only sheet-qualified refs return RefType.
+ *   - **Runtime (`RefType.parse`)**: Always returns RefType enum with Cell/Range cases for
+ *     unqualified refs.
  *
  * Usage:
  * {{{
  * import com.tjclp.xl.macros.ref
  *
- * val r1 = ref"A1"              // RefType.Cell(ARef(...))
- * val r2 = ref"A1:B10"          // RefType.Range(CellRange(...))
- * val r3 = ref"Sales!A1"        // RefType.QualifiedCell(SheetName("Sales"), ARef(...))
- * val r4 = ref"Sales!A1:B10"    // RefType.QualifiedRange(SheetName("Sales"), CellRange(...))
+ * // Compile-time macro (unwrapped for simple refs)
+ * val r1: ARef = ref"A1"              // Unwrapped ARef
+ * val r2: CellRange = ref"A1:B10"     // Unwrapped CellRange
+ * val r3 = ref"Sales!A1"              // RefType.QualifiedCell
+ * val r4 = ref"'It''s Q1'!A1:B10"     // RefType.QualifiedRange
+ *
+ * // Runtime parsing (always wrapped)
+ * RefType.parse("A1")                 // Right(RefType.Cell(ARef(...)))
+ * RefType.parse("Sales!A1")           // Right(RefType.QualifiedCell(...))
  * }}}
  */
 enum RefType derives CanEqual:
-  /** Single cell reference (e.g., `A1`) */
+  /**
+   * Single cell reference (e.g., `A1`).
+   *
+   * **Usage**: Returned by `RefType.parse` for unqualified cells. The `ref` macro returns unwrapped
+   * `ARef` instead for backwards compatibility.
+   */
   case Cell(ref: ARef)
 
-  /** Cell range reference (e.g., `A1:B10`) */
+  /**
+   * Cell range reference (e.g., `A1:B10`).
+   *
+   * **Usage**: Returned by `RefType.parse` for unqualified ranges. The `ref` macro returns
+   * unwrapped `CellRange` instead for backwards compatibility.
+   */
   case Range(range: CellRange)
 
   /** Sheet-qualified cell reference (e.g., `Sales!A1` or `'Q1 Sales'!A1`) */
@@ -35,17 +57,26 @@ enum RefType derives CanEqual:
   /**
    * Convert to A1 notation.
    *
-   * For qualified refs, includes sheet name (with quotes if needed).
+   * For qualified refs, includes sheet name (with quotes if needed). Escapes single quotes as ''
+   * (Excel convention).
    */
   def toA1: String = this match
     case Cell(ref) => ref.toA1
     case Range(range) => range.toA1
     case QualifiedCell(sheet, ref) =>
-      val sheetStr = if needsQuoting(sheet.value) then s"'${sheet.value}'" else sheet.value
+      val sheetStr = formatSheetName(sheet.value)
       s"$sheetStr!${ref.toA1}"
     case QualifiedRange(sheet, range) =>
-      val sheetStr = if needsQuoting(sheet.value) then s"'${sheet.value}'" else sheet.value
+      val sheetStr = formatSheetName(sheet.value)
       s"$sheetStr!${range.toA1}"
+
+  /** Format sheet name with proper quoting and escaping */
+  private def formatSheetName(name: String): String =
+    if needsQuoting(name) then
+      // Escape ' → '' and wrap in quotes
+      val escaped = name.replace("'", "''")
+      s"'$escaped'"
+    else name
 
   /** Check if sheet name needs quoting (has spaces or special chars) */
   private def needsQuoting(name: String): Boolean =
@@ -85,11 +116,13 @@ object RefType:
 
       if refPart.isEmpty then return Left(s"Missing reference after '!' in: $s")
 
-      // Parse sheet name (handle quotes)
+      // Parse sheet name (handle quotes and escaping)
       val sheetName = if sheetPart.startsWith("'") && sheetPart.endsWith("'") then
-        val unquoted = sheetPart.substring(1, sheetPart.length - 1)
-        if unquoted.isEmpty then return Left("Empty sheet name in quotes")
-        SheetName(unquoted)
+        val quoted = sheetPart.substring(1, sheetPart.length - 1)
+        if quoted.isEmpty then return Left("Empty sheet name in quotes")
+        // Unescape '' → ' (Excel convention)
+        val unescaped = quoted.replace("''", "'")
+        SheetName(unescaped)
       else SheetName(sheetPart)
 
       sheetName match
