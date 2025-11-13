@@ -21,13 +21,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Module Architecture
 
 ```
-xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style)
-xl-macros/       → Compile-time validated literals (cell"A1", range"A1:B10")
+xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style) + compile-time macros
 xl-ooxml/        → Pure XML serialization/deserialization (no IO)
-xl-cats-effect/  → IO interpreters (ZIP, streaming, file system) [future]
+xl-cats-effect/  → IO interpreters (ZIP, streaming, file system)
 xl-evaluator/    → Optional formula evaluator [future]
 xl-testkit/      → Test laws, generators, golden files [future]
 ```
+
+**Import Pattern (ZIO-style)**:
+```scala
+import com.tjclp.xl.*  // Single import for everything (domain model + macros + DSL)
+```
+
+Macros (ref, money, date, fx) are bundled in xl-core for canonical single-import ergonomics, following the Cats model where syntax sugar is included with the core library.
 
 ### Key Type Relationships
 
@@ -159,10 +165,10 @@ val result = sheet.applyPatch(updates)  // Either[XLError, Sheet]
 
 ### 3. Compile-Time Validated Literals
 
-Macros in `xl-macros` provide zero-cost validated literals:
+Macros in `xl-core/src/com/tjclp/xl/macros/` provide zero-cost validated literals:
 
 ```scala
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.*  // Macros included in unified import
 
 val ref = cell"A1"        // Validated at compile time, emits packed Long
 val rng = range"A1:B10"   // Parsed at compile time
@@ -308,11 +314,12 @@ extension (sheet: Sheet)
 
 ### Macro Patterns
 
-Macros in `xl-macros/src/com/tjclp/xl/macros.scala`:
+Macros in `xl-core/src/com/tjclp/xl/macros/`:
 
 - Use `quotes.reflect.report.errorAndAbort` for compile errors
 - Emit constants directly: `'{ (${Expr(value)}: T).asInstanceOf[OpaqueType] }`
 - Zero-allocation parsers (no regex, manual char iteration)
+- All macros are `transparent inline` (zero runtime cost)
 
 ### DSL Patterns
 
