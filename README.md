@@ -25,11 +25,11 @@ A purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7
 
 ## Status
 
-**Current**: ~89% complete with 271/271 tests passing ✅
+**Current**: ~89% complete with 263/263 tests passing ✅
 
 **Implemented** (P0-P6):
 - ✅ Core domain types (Cell, Sheet, Workbook)
-- ✅ Addressing system with compile-time macros (`cell"A1"`, `range"A1:B10"`)
+- ✅ Addressing system with compile-time macros (`ref"A1"`, `ref"A1:B10"`)
 - ✅ Patch system with Monoid composition for updates
 - ✅ Complete style system (fonts, colors, fills, borders, alignment)
 - ✅ **OOXML I/O**: Read/write XLSX files with SST and styles.xml
@@ -45,7 +45,7 @@ See [docs/plan/18-roadmap.md](docs/plan/18-roadmap.md) for full implementation p
 
 ### Prerequisites
 
-- **JDK**: 17 or 21 (Temurin recommended)
+- **JDK**: 25 LTS (Temurin recommended)
 - **Scala**: 3.7.3 (managed by Mill)
 - **Build Tool**: Mill 0.12.x (included via `./mill` wrapper)
 
@@ -66,9 +66,8 @@ cd xl
 ### Basic Usage
 
 ```scala
-import com.tjclp.xl.api.*
-// Unified helpers + macros (ref, fx, money, percent, date, put, col/row, etc.)
-import com.tjclp.xl.syntax.*
+import com.tjclp.xl.*
+// Unified import: all domain types, syntax, macros (ref", fx", etc.)
 
 // Create a workbook
 val wb = Workbook("MySheet").map { workbook =>
@@ -93,7 +92,7 @@ val wb = Workbook("MySheet").map { workbook =>
 ### Styling Example
 
 ```scala
-import com.tjclp.xl.api.*
+import com.tjclp.xl.*
 
 // Define a style with the builder API
 val headerStyle = CellStyle.default
@@ -120,23 +119,23 @@ import com.tjclp.xl.codec.syntax.*
 // Batch updates with mixed types (auto-infers formats)
 val sheet = Sheet("Q1 Forecast").getOrElse(...)
   .putMixed(
-    cell"A1" -> "Revenue",                        // String: no format
-    cell"B1" -> LocalDate.of(2025, 11, 10),      // Auto: date format
-    cell"C1" -> BigDecimal("1000000.50"),        // Auto: decimal format
-    cell"D1" -> 42                                // Auto: general number format
+    ref"A1" -> "Revenue",                        // String: no format
+    ref"B1" -> LocalDate.of(2025, 11, 10),      // Auto: date format
+    ref"C1" -> BigDecimal("1000000.50"),        // Auto: decimal format
+    ref"D1" -> 42                                // Auto: general number format
   )
-  .put(cell"E1", fx"C1*D1")  // Mix with formulas
+  .put(ref"E1", fx"C1*D1")  // Mix with formulas
 
 // Type-safe reading
-sheet.readTyped[LocalDate](cell"B1") match
+sheet.readTyped[LocalDate](ref"B1") match
   case Right(Some(date)) => println(s"Date: $date")
   case Right(None) => println("Cell empty")
   case Left(error) => println(s"Type error: ${error}")
 
 // Read different types from same sheet
-val revenue = sheet.readTyped[BigDecimal](cell"C1")  // Either[CodecError, Option[BigDecimal]]
-val count = sheet.readTyped[Int](cell"D1")           // Either[CodecError, Option[Int]]
-val name = sheet.readTyped[String](cell"A1")         // Either[CodecError, Option[String]]
+val revenue = sheet.readTyped[BigDecimal](ref"C1")  // Either[CodecError, Option[BigDecimal]]
+val count = sheet.readTyped[Int](ref"D1")           // Either[CodecError, Option[Int]]
+val name = sheet.readTyped[String](ref"A1")         // Either[CodecError, Option[String]]
 ```
 
 **Supported types**: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime
@@ -153,13 +152,13 @@ import com.tjclp.xl.richtext.RichText.*
 // String extension DSL
 val text = "Bold".bold.red + " normal " + "Italic".italic.blue
 
-sheet.put(cell"A1", CellValue.RichText(text))
+sheet.put(ref"A1", CellValue.RichText(text))
 
 // Or use putMixed for convenience
 sheet.putMixed(
-  cell"A1" -> ("Error: ".red.bold + "File not found"),
-  cell"A2" -> ("Revenue: ".bold + "+12.5%".green),
-  cell"A3" -> ("Q1 ".size(18.0).bold + "Report".size(18.0).italic)
+  ref"A1" -> ("Error: ".red.bold + "File not found"),
+  ref"A2" -> ("Revenue: ".bold + "+12.5%".green),
+  ref"A3" -> ("Q1 ".size(18.0).bold + "Report".size(18.0).italic)
 )
 ```
 
@@ -173,10 +172,10 @@ Export sheet ranges to HTML tables for web display:
 
 ```scala
 // Export with inline CSS styling
-val html = sheet.toHtml(range"A1:B10")
+val html = sheet.toHtml(ref"A1:B10")
 
 // Export without styles (plain table)
-val plainHtml = sheet.toHtml(range"A1:B10", includeStyles = false)
+val plainHtml = sheet.toHtml(ref"A1:B10", includeStyles = false)
 ```
 
 Rich text formatting and cell styles are preserved as HTML tags (`<b>`, `<i>`, `<span style="">`) and inline CSS.
@@ -350,12 +349,12 @@ Fill ranges declaratively with functional combinators:
 
 ```scala
 // Fill using Excel coordinates
-sheet.fillBy(range"A1:C10") { (col, row) =>
+sheet.fillBy(ref"A1:C10") { (col, row) =>
   CellValue.Number(BigDecimal(col.index0 + row.index0))
 }
 
 // Fill using 0-based indices
-sheet.tabulate(range"A1:C10") { (colIdx, rowIdx) =>
+sheet.tabulate(ref"A1:C10") { (colIdx, rowIdx) =>
   CellValue.Number(BigDecimal(colIdx * rowIdx))
 }
 
@@ -369,7 +368,7 @@ val withColumn = withRow.putCol(Column.from1(1), Row.from1(2), Vector(
 )).fold(err => throw new RuntimeException(err.message), identity)
 
 // Strict range population (value count must match range size)
-val filled = sheet.putRange(range"A2:B3", Vector(
+val filled = sheet.putRange(ref"A2:B3", Vector(
   CellValue.Text("North"),
   CellValue.Number(BigDecimal(42)),
   CellValue.Text("South"),
@@ -388,20 +387,20 @@ Composable, law-governed updates with Lens and Optional:
 import Optics.*
 
 // Modify cell value functionally
-sheet.modifyValue(cell"A1") {
+sheet.modifyValue(ref"A1") {
   case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
   case other => other
 }
 
 // Conditional transformations
-sheet.modifyCell(cell"B5") { cell =>
+sheet.modifyCell(ref"B5") { cell =>
   cell.value match
     case CellValue.Number(n) if n < 0 => cell.withStyle(negativeStyleId)
     case _ => cell
 }
 
 // Focus on specific cells
-val updated = sheet.focus(cell"C1").modify(_.withValue(CellValue.Number(42)))(sheet)
+val updated = sheet.focus(ref"C1").modify(_.withValue(CellValue.Number(42)))(sheet)
 ```
 
 **Benefits**: Composable, total functions, zero allocation for simple paths.
@@ -436,7 +435,7 @@ val updated = sheet.focus(cell"C1").modify(_.withValue(CellValue.Number(42)))(sh
 ### Running Tests
 
 ```bash
-# All tests (271 tests: 221 core + 28 OOXML + 22 streaming)
+# All tests (263 tests: 221 core + 24 OOXML + 18 streaming)
 ./mill __.test
 
 # Individual test suites
@@ -470,7 +469,6 @@ xl/
 ├── xl-core/          # Pure domain model (Cell, Sheet, Workbook, Patch, Style)
 │   ├── src/          # Core types, addressing, patches, styles
 │   └── test/         # Property-based tests with ScalaCheck
-├── xl-macros/        # Compile-time validated literals (cell"", range"")
 ├── xl-ooxml/         # Pure XML serialization (no IO)
 ├── xl-cats-effect/   # IO interpreters for streaming (future)
 ├── xl-evaluator/     # Formula evaluator (future)
@@ -487,9 +485,6 @@ xl/
 - `style.scala` → CellStyle, Font, Fill, Border, Color, NumFmt
 - `codec/` → CellCodec instances, batch update extensions
 - `error.scala` → XLError ADT for total error handling
-
-**xl-macros**: Compile-time DSLs
-- `macros.scala` → `cell""` and `range""` string interpolators with compile-time validation
 
 **xl-ooxml**: OOXML (Office Open XML) serialization
 - `xml.scala` → XmlWritable/XmlReadable traits, utilities
@@ -544,12 +539,11 @@ Same workbook always produces **byte-identical** XML output:
 ### Addressing
 
 ```scala
-import com.tjclp.xl.api.*
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.*
 
 // Compile-time validated (errors at compile time!)
-val ref = cell"A1"           // Type: ARef
-val rng = range"A1:B10"      // Type: CellRange
+val cellRef = ref"A1"           // Type: ARef
+val rangeRef = ref"A1:B10"      // Type: CellRange
 
 // Runtime parsing (returns Either)
 val parsed = ARef.parse("A1")      // Either[String, ARef]
@@ -564,14 +558,14 @@ val ref2 = ARef(col, row)    // Cell A1
 ### Patches (Monoid Composition)
 
 ```scala
-import com.tjclp.xl.api.*
+import com.tjclp.xl.*
 import cats.syntax.all.*
 
 // Build declarative updates
 val updates =
-  (Patch.Put(cell"A1", CellValue.Text("Title")): Patch) |+|
-  (Patch.Put(cell"B1", CellValue.Number(100)): Patch) |+|
-  (Patch.Merge(range"A1:B1"): Patch)
+  (Patch.Put(ref"A1", CellValue.Text("Title")): Patch) |+|
+  (Patch.Put(ref"B1", CellValue.Number(100)): Patch) |+|
+  (Patch.Merge(ref"A1:B1"): Patch)
 
 // Apply to sheet
 val result: Either[XLError, Sheet] = sheet.applyPatch(updates)
@@ -584,13 +578,13 @@ val result: Either[XLError, Sheet] = sheet.applyPatch(updates)
 For cleaner syntax without type ascription, use the DSL operators:
 
 ```scala
-import com.tjclp.xl.dsl.*
+import com.tjclp.xl.*
 
 // Build patches with := operator and ++ composition
 val patch =
-  (cell"A1" := "Title") ++
-  (cell"B1" := 100) ++
-  range"A1:B1".merge
+  (ref"A1" := "Title") ++
+  (ref"B1" := 100) ++
+  ref"A1:B1".merge
 
 // Apply to sheet
 val result: Either[XLError, Sheet] = sheet.applyPatch(patch)
@@ -607,7 +601,7 @@ val result: Either[XLError, Sheet] = sheet.applyPatch(patch)
 ### Styles
 
 ```scala
-import com.tjclp.xl.api.*
+import com.tjclp.xl.*
 
 // Create a styled cell
 val style = CellStyle.default
@@ -627,7 +621,7 @@ val emu = Px(96.0).toEmu          // Pixels to EMU (OOXML unit)
 ### Running Tests
 
 ```bash
-# All tests (271 total)
+# All tests (263 total)
 ./mill __.test
 
 # Specific test suite
