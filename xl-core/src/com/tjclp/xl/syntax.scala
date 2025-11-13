@@ -4,9 +4,9 @@ package com.tjclp.xl
  * Unified syntax facade bringing together all XL extensions and macros.
  *
  * Import `com.tjclp.xl.*` or `com.tjclp.xl.syntax.*` for access to:
- * - Domain model (Sheet, Cell, Workbook, CellStyle, etc.)
- * - Extension methods (DSL operators, codec operations, optics)
- * - Compile-time validated literals (ref, money, date, fx)
+ *   - Domain model (Sheet, Cell, Workbook, CellStyle, etc.)
+ *   - Extension methods (DSL operators, codec operations, optics)
+ *   - Compile-time validated literals (ref, money, date, fx)
  *
  * This provides ZIO-style single-import ergonomics.
  *
