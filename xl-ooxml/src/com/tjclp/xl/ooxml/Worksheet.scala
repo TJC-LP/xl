@@ -112,16 +112,27 @@ case class OoxmlRow(
 /**
  * Worksheet for xl/worksheets/sheet#.xml
  *
- * Contains the actual cell data in <sheetData>.
+ * Contains the actual cell data in <sheetData> and merged cell ranges in <mergeCells>.
  */
 case class OoxmlWorksheet(
-  rows: Seq[OoxmlRow]
+  rows: Seq[OoxmlRow],
+  mergedRanges: Set[CellRange] = Set.empty
 ) extends XmlWritable:
 
   def toXml: Elem =
     val sheetDataElem = elem("sheetData")(
       rows.sortBy(_.rowIndex).map(_.toXml)*
     )
+
+    // Add mergeCells element if there are merged ranges
+    val mergeCellsElem = if mergedRanges.nonEmpty then
+      val mergeCellElems = mergedRanges.toSeq.sortBy(_.start.toA1).map { range =>
+        elem("mergeCell", "ref" -> range.toA1)()
+      }
+      Some(elem("mergeCells", "count" -> mergedRanges.size.toString)(mergeCellElems*))
+    else None
+
+    val children = sheetDataElem +: mergeCellsElem.toSeq
 
     Elem(
       null,
@@ -133,7 +144,7 @@ case class OoxmlWorksheet(
       ),
       TopScope,
       minimizeEmpty = false,
-      sheetDataElem
+      children*
     )
 
 object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
@@ -197,14 +208,32 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       OoxmlRow(rowIdx, ooxmlCells)
     }
 
-    OoxmlWorksheet(rows)
+    OoxmlWorksheet(rows, sheet.mergedRanges)
 
   def fromXml(elem: Elem): Either[String, OoxmlWorksheet] =
     for
       sheetDataElem <- getChild(elem, "sheetData")
       rowElems = getChildren(sheetDataElem, "row")
       rows <- parseRows(rowElems)
-    yield OoxmlWorksheet(rows)
+      mergedRanges <- parseMergeCells(elem)
+    yield OoxmlWorksheet(rows, mergedRanges)
+
+  private def parseMergeCells(worksheetElem: Elem): Either[String, Set[CellRange]] =
+    // mergeCells is optional
+    (worksheetElem \ "mergeCells").headOption match
+      case None => Right(Set.empty)
+      case Some(mergeCellsElem: Elem) =>
+        val mergeCellElems = getChildren(mergeCellsElem, "mergeCell")
+        val parsed = mergeCellElems.map { elem =>
+          for
+            refStr <- getAttr(elem, "ref")
+            range <- CellRange.parse(refStr)
+          yield range
+        }
+        val errors = parsed.collect { case Left(err) => err }
+        if errors.nonEmpty then Left(s"MergeCell parse errors: ${errors.mkString(", ")}")
+        else Right(parsed.collect { case Right(range) => range }.toSet)
+      case _ => Right(Set.empty) // Non-Elem node, ignore
 
   private def parseRows(elems: Seq[Elem]): Either[String, Seq[OoxmlRow]] =
     val parsed = elems.map { e =>
