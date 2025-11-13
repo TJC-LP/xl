@@ -67,9 +67,9 @@ object syntax:
      * Example:
      * {{{
      * sheet.putMixed(
-     *   cell"A1" -> "Revenue",
-     *   cell"B1" -> LocalDate.of(2025, 11, 10),
-     *   cell"C1" -> BigDecimal("123.45")
+     *   ref"A1" -> "Revenue",
+     *   ref"B1" -> LocalDate.of(2025, 11, 10),
+     *   ref"C1" -> BigDecimal("123.45")
      * )
      * }}}
      *

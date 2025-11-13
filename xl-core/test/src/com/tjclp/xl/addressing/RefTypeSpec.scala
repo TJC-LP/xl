@@ -1,6 +1,9 @@
 package com.tjclp.xl.addressing
 
 import com.tjclp.xl.Generators.{genARef, genCellRange, genSheetName}
+import com.tjclp.xl.workbook.Workbook
+import com.tjclp.xl.sheet.Sheet
+import com.tjclp.xl.cell.{Cell, CellValue}
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import org.scalacheck.{Arbitrary, Gen}
@@ -166,6 +169,17 @@ class RefTypeSpec extends ScalaCheckSuite:
     assert(RefType.parse(s"$name32!A1").isLeft, "32-char sheet name should fail")
   }
 
+  test("Unbalanced quotes - unclosed quote fails") {
+    assert(RefType.parse("'Sales!A1").isLeft, "Unclosed quote should fail")
+    assert(RefType.parse("'Q1 Data!A1:B10").isLeft, "Unclosed quote in range should fail")
+  }
+
+  test("Unbalanced quotes - misplaced quote fails") {
+    assert(RefType.parse("Sales'!A1").isLeft, "Quote at end (not wrapping) should fail")
+    assert(RefType.parse("Sa'les!A1").isLeft, "Quote in middle should fail")
+    assert(RefType.parse("'Sales!A1").isLeft, "Unclosed quote (odd count) should fail")
+  }
+
   // ========== toA1 Quoting Behavior ==========
 
   test("toA1 quotes sheet names with spaces") {
@@ -224,6 +238,53 @@ class RefTypeSpec extends ScalaCheckSuite:
     RefType.parse("A1:XFD1048576") match
       case Right(RefType.Range(range)) => assertEquals(range, expected)
       case other => fail(s"Expected Range with correct range, got $other")
+  }
+
+  // ========== Workbook Integration Tests ==========
+
+  test("Workbook.apply(RefType) - qualified cell reference") {
+    val wb = Workbook("Sales").toOption.get
+    val sheet = wb.sheets(0).put(ARef.from1(1, 1), CellValue.Text("Test"))
+    val updatedWb = wb.updateSheet(0, sheet).toOption.get
+
+    val ref = RefType.QualifiedCell(SheetName.unsafe("Sales"), ARef.from1(1, 1))
+    updatedWb(ref) match
+      case Right(cell: Cell) =>
+        assertEquals(cell.value, CellValue.Text("Test"))
+      case other => fail(s"Expected Right(Cell), got $other")
+  }
+
+  test("Workbook.apply(RefType) - qualified range reference") {
+    val wb = Workbook("Data").toOption.get
+    val sheet = wb.sheets(0)
+      .put(ARef.from1(1, 1), CellValue.Text("A"))
+      .put(ARef.from1(1, 2), CellValue.Text("B"))
+    val updatedWb = wb.updateSheet(0, sheet).toOption.get
+
+    val ref = RefType.QualifiedRange(SheetName.unsafe("Data"), CellRange(ARef.from1(1, 1), ARef.from1(1, 2)))
+    updatedWb(ref) match
+      case Right(cells: Iterable[Cell] @unchecked) =>
+        val values = cells.map(_.value).toList
+        assert(values.contains(CellValue.Text("A")))
+        assert(values.contains(CellValue.Text("B")))
+      case other => fail(s"Expected Right(Iterable[Cell]), got $other")
+  }
+
+  test("Workbook.apply(RefType) - unqualified ref returns error") {
+    val wb = Workbook("Sheet1").toOption.get
+    val unqualifiedCell = RefType.Cell(ARef.from1(1, 1))
+
+    assert(wb(unqualifiedCell).isLeft, "Unqualified cell ref should return Left")
+
+    val unqualifiedRange = RefType.Range(CellRange(ARef.from1(1, 1), ARef.from1(2, 2)))
+    assert(wb(unqualifiedRange).isLeft, "Unqualified range ref should return Left")
+  }
+
+  test("Workbook.apply(RefType) - nonexistent sheet returns error") {
+    val wb = Workbook("Sheet1").toOption.get
+    val ref = RefType.QualifiedCell(SheetName.unsafe("NonExistent"), ARef.from1(1, 1))
+
+    assert(wb(ref).isLeft, "Reference to nonexistent sheet should return Left")
   }
 
 end RefTypeSpec

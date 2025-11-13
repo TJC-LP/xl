@@ -52,7 +52,11 @@ object RefLiteral:
         if refPart.isEmpty then report.errorAndAbort(s"Missing reference after '!' in: $s")
 
         // Parse sheet name (handle quotes and escaping)
-        val sheetName = if sheetPart.startsWith("'") && sheetPart.endsWith("'") then
+        val sheetName = if sheetPart.startsWith("'") then
+          if !sheetPart.endsWith("'") then
+            report.errorAndAbort(
+              s"Unbalanced quotes in sheet name: $sheetPart (missing closing quote)"
+            )
           val quoted = sheetPart.substring(1, sheetPart.length - 1)
           if quoted.isEmpty then report.errorAndAbort("Empty sheet name in quotes")
           // Unescape '' → ' (Excel convention)
@@ -60,6 +64,10 @@ object RefLiteral:
           validateSheetName(unescaped)
           unescaped
         else
+          if sheetPart.contains("'") then
+            report.errorAndAbort(
+              s"Misplaced quote in sheet name: $sheetPart (quotes must wrap entire name)"
+            )
           validateSheetName(sheetPart)
           sheetPart
 
@@ -129,7 +137,18 @@ object RefLiteral:
   // -------- Parsers (Zero-Allocation) --------
 
   /**
-   * Find index of unquoted '!' (not inside 'quotes'). Returns -1 if no unquoted bang found.
+   * Find index of unquoted '!' (not inside 'quotes').
+   *
+   * Uses a toggle approach: each ' flips the inQuote state. This handles escaped quotes ('')
+   * correctly because Excel's escaping convention uses two consecutive quotes to represent a single
+   * literal quote.
+   *
+   * Examples:
+   *   - "Sales!A1" → returns 5 (unquoted)
+   *   - "'Sales!A1'!B1" → returns 11 (second ! is unquoted)
+   *   - "'It''s Q1'!A1" → returns 10 ('' toggles twice, staying inside quotes)
+   *
+   * Returns -1 if no unquoted bang found.
    */
   private def findUnquotedBang(s: String): Int =
     var i = 0

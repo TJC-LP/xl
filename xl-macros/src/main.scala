@@ -1,4 +1,5 @@
 import com.tjclp.xl.*
+import com.tjclp.xl.macros.ref
 
 @main
 def demo(): Unit =
@@ -68,15 +69,15 @@ def demo(): Unit =
   val qualifiedRef = ref"Sales!A1"
   println(s"Qualified ref: ${qualifiedRef.toA1}")
   qualifiedRef match
-    case RefType.QualifiedCell(sheet, cellRef) =>
-      println(s"  Sheet: ${sheet.value}, Cell: ${cellRef.toA1}")
+    case RefType.QualifiedCell(sheetName, cellRef) =>
+      println(s"  Sheet: ${sheetName.value}, Cell: ${cellRef.toA1}")
     case _ => ()
 
   val qualifiedRange = ref"'Q1 Data'!A1:B10"
   println(s"\nQualified range: ${qualifiedRange.toA1}")
   qualifiedRange match
-    case RefType.QualifiedRange(sheet, range) =>
-      println(s"  Sheet: '${sheet.value}', Range: ${range.toA1} (${range.size} cells)")
+    case RefType.QualifiedRange(sheetName, range) =>
+      println(s"  Sheet: '${sheetName.value}', Range: ${range.toA1} (${range.size} cells)")
     case _ => ()
 
   println("\n=== Demo Complete ===")

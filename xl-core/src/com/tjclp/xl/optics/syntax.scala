@@ -12,7 +12,7 @@ import com.tjclp.xl.style.units.StyleId
  * {{{
  *   import com.tjclp.xl.optics.*
  *
- *   sheet.modifyValue(cell"A1") {
+ *   sheet.modifyValue(ref"A1") {
  *     case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
  *     case other => other
  *   }
@@ -34,7 +34,7 @@ object syntax:
      *
      * Example:
      * {{{
-     *   sheet.modifyCell(cell"A1")(_.withValue(CellValue.Text("Updated")))
+     *   sheet.modifyCell(ref"A1")(_.withValue(CellValue.Text("Updated")))
      * }}}
      */
     def modifyCell(ref: ARef)(f: Cell => Cell): Sheet =
@@ -45,10 +45,10 @@ object syntax:
      *
      * Example:
      * {{{
-     *   sheet.modifyValue(cell"A1") {
+     *   sheet.modifyValue(ref"A1") {
      *     case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
      *     case other => other
-     *   *   }
+     *   }
      * }}}
      */
     def modifyValue(ref: ARef)(f: CellValue => CellValue): Sheet =
@@ -59,7 +59,7 @@ object syntax:
      *
      * Example:
      * {{{
-     *   sheet.modifyStyleId(cell"A1")(_.map(id => StyleId(id.value + 1)))
+     *   sheet.modifyStyleId(ref"A1")(_.map(id => StyleId(id.value + 1)))
      * }}}
      */
     def modifyStyleId(ref: ARef)(f: Option[StyleId] => Option[StyleId]): Sheet =
