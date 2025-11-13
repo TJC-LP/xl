@@ -28,6 +28,9 @@ object syntax:
   export patch.syntax.*
   export sheet.syntax.*
 
+  // RichText string extensions (.red, .bold, etc.)
+  export richtext.RichText.{given, *}
+
   // Compile-time validated literals (macros)
   export macros.RefLiteral.*
   export macros.CellRangeLiterals.fx
