@@ -2,7 +2,8 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 import XmlUtil.*
-import com.tjclp.xl.SheetName
+import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.api.Workbook
 
 /** Sheet reference in workbook.xml */
 case class SheetRef(
@@ -50,7 +51,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
     OoxmlWorkbook(Seq(SheetRef(SheetName.unsafe(sheetName), 1, "rId1")))
 
   /** Create workbook from domain model */
-  def fromDomain(wb: com.tjclp.xl.Workbook): OoxmlWorkbook =
+  def fromDomain(wb: Workbook): OoxmlWorkbook =
     val sheetRefs = wb.sheets.zipWithIndex.map { case (sheet, idx) =>
       SheetRef(sheet.name, idx + 1, s"rId${idx + 1}")
     }

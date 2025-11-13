@@ -1,14 +1,15 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.{CellValue, RichText, TextRun}
-import com.tjclp.xl.macros.cell
+import com.tjclp.xl.richtext.{RichText, TextRun}
+import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.macros.ref
 
 /** Tests for whitespace preservation in plain text cells (OOXML writer) */
 class WhitespacePreservationSpec extends FunSuite:
 
   test("plain text with leading space preserves xml:space") {
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.Text(" leading"), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.Text(" leading"), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -22,7 +23,7 @@ class WhitespacePreservationSpec extends FunSuite:
   }
 
   test("plain text with trailing space preserves xml:space") {
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.Text("trailing "), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.Text("trailing "), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -31,7 +32,7 @@ class WhitespacePreservationSpec extends FunSuite:
   }
 
   test("plain text with double spaces preserves xml:space") {
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.Text("double  space"), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.Text("double  space"), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -40,7 +41,7 @@ class WhitespacePreservationSpec extends FunSuite:
   }
 
   test("plain text without spaces omits xml:space") {
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.Text("normal"), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.Text("normal"), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -53,7 +54,7 @@ class WhitespacePreservationSpec extends FunSuite:
       TextRun(" leading", None),
       TextRun("trailing ", None)
     ))
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -66,7 +67,7 @@ class WhitespacePreservationSpec extends FunSuite:
     val richText = RichText(Vector(
       TextRun("hello  world", None)  // Internal double space
     ))
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString

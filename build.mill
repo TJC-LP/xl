@@ -8,6 +8,7 @@ val organization = "com.tjclp"
 
 trait XLModule extends ScalaModule with PublishModule with ScalafmtModule {
   override def scalaVersion: Task.Simple[String] = scala3Version
+  override def javacOptions = Seq("--release", "25")
 
   override def publishVersion = "0.1.0-SNAPSHOT"
 

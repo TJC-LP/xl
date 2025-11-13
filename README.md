@@ -66,21 +66,22 @@ cd xl
 ### Basic Usage
 
 ```scala
-import com.tjclp.xl.*
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.api.*
+// Unified helpers + macros (ref, fx, money, percent, date, put, col/row, etc.)
+import com.tjclp.xl.syntax.*
 
 // Create a workbook
 val wb = Workbook("MySheet").map { workbook =>
   val sheet = workbook.sheets(0)
 
   // Use compile-time validated cell references
-  val ref = cell"A1"
+  val a1 = ref"A1"
 
   // Build updates with Monoid composition
   val updates =
-    (Patch.Put(cell"A1", CellValue.Text("Hello")): Patch) |+|
-    (Patch.Put(cell"B1", CellValue.Number(42)): Patch) |+|
-    (Patch.SetStyle(cell"A1", 1): Patch)
+    (Patch.Put(a1, CellValue.Text("Hello")): Patch) |+|
+    (Patch.Put(ref"B1", CellValue.Number(42)): Patch) |+|
+    (Patch.SetStyle(a1, 1): Patch)
 
   // Apply patches to get updated sheet
   sheet.applyPatch(updates).map { updated =>
@@ -92,7 +93,7 @@ val wb = Workbook("MySheet").map { workbook =>
 ### Styling Example
 
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 
 // Define a style with the builder API
 val headerStyle = CellStyle.default
@@ -114,7 +115,7 @@ val newStyle = CellStyle.default.applyPatch(styleUpdates)
 XL provides cell-level codecs for type-safe reading and writing with auto-inferred formatting, ideal for unstructured Excel sheets like financial models:
 
 ```scala
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 
 // Batch updates with mixed types (auto-infers formats)
 val sheet = Sheet("Q1 Forecast").getOrElse(...)
@@ -147,7 +148,7 @@ val name = sheet.readTyped[String](cell"A1")         // Either[CodecError, Optio
 Apply multiple formats within a single cell using the composable DSL:
 
 ```scala
-import com.tjclp.xl.RichText.*
+import com.tjclp.xl.richtext.RichText.*
 
 // String extension DSL
 val text = "Bold".bold.red + " normal " + "Italic".italic.blue
@@ -279,7 +280,7 @@ For pure functional programming without exceptions in the effect type, use `Exce
 
 ```scala
 import com.tjclp.xl.io.{ExcelIO, ExcelR}
-import com.tjclp.xl.{XLResult, XLError}
+import com.tjclp.xl.error.{XLResult, XLError}
 import cats.effect.IO
 
 val excel: ExcelR[IO] = ExcelIO.instance
@@ -543,7 +544,7 @@ Same workbook always produces **byte-identical** XML output:
 ### Addressing
 
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.macros.{cell, range}
 
 // Compile-time validated (errors at compile time!)
@@ -563,7 +564,7 @@ val ref2 = ARef(col, row)    // Cell A1
 ### Patches (Monoid Composition)
 
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import cats.syntax.all.*
 
 // Build declarative updates
@@ -606,7 +607,7 @@ val result: Either[XLError, Sheet] = sheet.applyPatch(patch)
 ### Styles
 
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 
 // Create a styled cell
 val style = CellStyle.default

@@ -1,5 +1,7 @@
 package com.tjclp.xl.ooxml
 
+import com.tjclp.xl.api.Workbook
+import com.tjclp.xl.cell.CellValue
 import scala.xml.*
 import XmlUtil.*
 import java.text.Normalizer
@@ -125,12 +127,12 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    * @return
    *   SharedStrings with deduplicated strings and total count
    */
-  def fromWorkbook(wb: com.tjclp.xl.Workbook): SharedStrings =
+  def fromWorkbook(wb: Workbook): SharedStrings =
     // Stream strings using iterator for lazy evaluation (50-70% memory reduction for large workbooks)
     val allStrings = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.values.iterator.flatMap { cell =>
         cell.value match
-          case com.tjclp.xl.CellValue.Text(s) => Iterator.single(s)
+          case com.tjclp.xl.cell.CellValue.Text(s) => Iterator.single(s)
           case _ => Iterator.empty
       }
     }
@@ -143,11 +145,11 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    * Heuristic: Use SST if total string bytes saved > SST overhead. SST overhead ≈ 200 bytes + 50
    * bytes per unique string. Inline overhead ≈ 30 bytes per cell + string length.
    */
-  def shouldUseSST(wb: com.tjclp.xl.Workbook): Boolean =
+  def shouldUseSST(wb: Workbook): Boolean =
     val textCells = wb.sheets.flatMap { sheet =>
       sheet.cells.values.flatMap { cell =>
         cell.value match
-          case com.tjclp.xl.CellValue.Text(s) => Some(s)
+          case com.tjclp.xl.cell.CellValue.Text(s) => Some(s)
           case _ => None
       }
     }

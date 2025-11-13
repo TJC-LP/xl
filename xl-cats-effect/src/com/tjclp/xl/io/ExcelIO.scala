@@ -7,7 +7,9 @@ import java.nio.file.Path
 import java.io.{FileOutputStream, FileInputStream}
 import java.util.zip.{ZipOutputStream, ZipEntry, CRC32, ZipInputStream, ZipFile}
 import java.nio.charset.StandardCharsets
-import com.tjclp.xl.{Workbook, XLError, XLResult}
+import com.tjclp.xl.api.Workbook
+import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.sheet.Sheet
 import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter, SharedStrings}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
@@ -346,7 +348,7 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
   // ========== Private Helpers ==========
 
   // Helper: Convert Sheet to RowData stream
-  private def streamSheet(sheet: com.tjclp.xl.Sheet): Stream[F, RowData] =
+  private def streamSheet(sheet: Sheet): Stream[F, RowData] =
     val rowMap = sheet.cells.values
       .groupBy(_.ref.row.index1) // Group by 1-based row
       .view
@@ -363,8 +365,9 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
   private def rowDataToSheet(
     sheetName: String,
     rows: Vector[RowData]
-  ): Either[XLError, com.tjclp.xl.Sheet] =
-    import com.tjclp.xl.{Sheet, SheetName, Cell, ARef, Column, Row}
+  ): Either[XLError, Sheet] =
+    import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
+    import com.tjclp.xl.cell.Cell
 
     for
       name <- SheetName(sheetName).left.map(err => XLError.InvalidSheetName(sheetName, err))
@@ -385,7 +388,7 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     config: com.tjclp.xl.ooxml.WriterConfig
   ): F[Unit] =
     import com.tjclp.xl.ooxml.*
-    import com.tjclp.xl.SheetName
+    import com.tjclp.xl.addressing.SheetName
 
     val contentTypes =
       ContentTypes.forSheetIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
@@ -416,7 +419,7 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
     config: com.tjclp.xl.ooxml.WriterConfig
   ): F[Unit] =
     import com.tjclp.xl.ooxml.*
-    import com.tjclp.xl.SheetName
+    import com.tjclp.xl.addressing.SheetName
 
     val contentTypes = ContentTypes.forSheetIndices(
       sheetIndices = sheets.map(_._2),

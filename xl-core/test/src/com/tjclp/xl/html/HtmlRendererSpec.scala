@@ -1,29 +1,36 @@
 package com.tjclp.xl.html
 
 import munit.FunSuite
-import com.tjclp.xl.*
-import com.tjclp.xl.RichText.{*, given}
-import com.tjclp.xl.macros.{cell, range}
-import com.tjclp.xl.codec.{*, given}
-import com.tjclp.xl.style.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align}
+import com.tjclp.xl.api.*
+import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.richtext.RichText.{*, given}
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.style.border.{Border, BorderStyle}
+import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.style.fill.Fill
+import com.tjclp.xl.style.font.Font
 
 /** Tests for HTML export functionality */
 class HtmlRendererSpec extends FunSuite:
 
   // ========== Basic HTML Export ==========
 
-  test("toHtml: empty range") {
+  test("toHtml: empty ref") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("<table>"), "Should contain table tag")
     assert(html.contains("<td></td>"), "Empty cell should render as empty td")
   }
 
   test("toHtml: single cell with text") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.Text("Hello"))
+      .put(ref"A1", CellValue.Text("Hello"))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("<table>"), "Should contain table tag")
     assert(html.contains("Hello"), "Should contain cell text")
   }
@@ -31,13 +38,13 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: 2x2 grid") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
       .putMixed(
-        cell"A1" -> "A1",
-        cell"B1" -> "B1",
-        cell"A2" -> "A2",
-        cell"B2" -> "B2"
+        ref"A1" -> "A1",
+        ref"B1" -> "B1",
+        ref"A2" -> "A2",
+        ref"B2" -> "B2"
       )
 
-    val html = sheet.toHtml(range"A1:B2")
+    val html = sheet.toHtml(ref"A1:B2")
     assert(html.contains("<table>"))
     assert(html.contains("A1"))
     assert(html.contains("B2"))
@@ -50,34 +57,34 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: rich text with bold") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.RichText("Bold".bold + " normal"))
+      .put(ref"A1", CellValue.RichText("Bold".bold + " normal"))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("<b>Bold</b>"), "Should render bold tag")
     assert(html.contains(" normal"), "Should include normal text")
   }
 
   test("toHtml: rich text with italic") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.RichText("Italic".italic))
+      .put(ref"A1", CellValue.RichText("Italic".italic))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("<i>Italic</i>"), "Should render italic tag")
   }
 
   test("toHtml: rich text with underline") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.RichText("Underline".underline))
+      .put(ref"A1", CellValue.RichText("Underline".underline))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("<u>Underline</u>"), "Should render underline tag")
   }
 
   test("toHtml: rich text with colors") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.RichText("Red".red + " and " + "Green".green))
+      .put(ref"A1", CellValue.RichText("Red".red + " and " + "Green".green))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("color:"), "Should include color style")
     assert(html.contains("<span"), "Should use span for color")
   }
@@ -85,9 +92,9 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: rich text with mixed formatting") {
     val text = "Error: ".red.bold + "File not found".underline
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.RichText(text))
+      .put(ref"A1", CellValue.RichText(text))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("<b>"), "Should have bold")
     assert(html.contains("<u>"), "Should have underline")
     assert(html.contains("color:"), "Should have color")
@@ -102,10 +109,10 @@ class HtmlRendererSpec extends FunSuite:
       .withAlign(Align(HAlign.Center, VAlign.Middle))
 
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(cell"A1" -> "Header")
-      .withCellStyle(cell"A1", headerStyle)
+      .putMixed(ref"A1" -> "Header")
+      .withCellStyle(ref"A1", headerStyle)
 
-    val html = sheet.toHtml(range"A1:A1", includeStyles = true)
+    val html = sheet.toHtml(ref"A1:A1", includeStyles = true)
     assert(html.contains("font-weight: bold"), "Should include bold CSS")
     assert(html.contains("background-color:"), "Should include background color")
     assert(html.contains("text-align: center"), "Should include alignment")
@@ -114,10 +121,10 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: includeStyles=false omits CSS") {
     val boldStyle = CellStyle.default.withFont(Font.default.withBold(true))
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(cell"A1" -> "Bold")
-      .withCellStyle(cell"A1", boldStyle)
+      .putMixed(ref"A1" -> "Bold")
+      .withCellStyle(ref"A1", boldStyle)
 
-    val html = sheet.toHtml(range"A1:A1", includeStyles = false)
+    val html = sheet.toHtml(ref"A1:A1", includeStyles = false)
     assert(!html.contains("style="), "Should not include inline styles")
   }
 
@@ -125,26 +132,26 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: escapes HTML special characters") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.Text("<script>alert('xss')</script>"))
+      .put(ref"A1", CellValue.Text("<script>alert('xss')</script>"))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("&lt;script&gt;"), "Should escape < and >")
     assert(!html.contains("<script>"), "Should not contain unescaped script tag")
   }
 
   test("toHtml: escapes ampersands") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.Text("A & B"))
+      .put(ref"A1", CellValue.Text("A & B"))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("A &amp; B"), "Should escape ampersand")
   }
 
   test("toHtml: escapes quotes") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.Text("""Say "Hello""""))
+      .put(ref"A1", CellValue.Text("""Say "Hello""""))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("&quot;"), "Should escape quotes")
   }
 
@@ -152,33 +159,33 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: number cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(cell"A1" -> BigDecimal("123.45"))
+      .putMixed(ref"A1" -> BigDecimal("123.45"))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("123.45"))
   }
 
   test("toHtml: boolean cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(cell"A1" -> true)
+      .putMixed(ref"A1" -> true)
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("true"))
   }
 
   test("toHtml: date cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(cell"A1" -> java.time.LocalDate.of(2025, 11, 10))
+      .putMixed(ref"A1" -> java.time.LocalDate.of(2025, 11, 10))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("2025"))
   }
 
   test("toHtml: formula cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.Formula("SUM(B1:B10)"))
+      .put(ref"A1", CellValue.Formula("SUM(B1:B10)"))
 
-    val html = sheet.toHtml(range"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("=SUM"), "Should include formula")
   }
 
@@ -187,13 +194,13 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: financial model example") {
     val sheet = Sheet("Q1 Report").getOrElse(fail("Sheet creation failed"))
       .putMixed(
-        cell"A1" -> "Revenue",
-        cell"B1" -> BigDecimal("1000000"),
-        cell"A2" -> "Expenses",
-        cell"B2" -> BigDecimal("750000")
+        ref"A1" -> "Revenue",
+        ref"B1" -> BigDecimal("1000000"),
+        ref"A2" -> "Expenses",
+        ref"B2" -> BigDecimal("750000")
       )
 
-    val html = sheet.toHtml(range"A1:B2")
+    val html = sheet.toHtml(ref"A1:B2")
     assert(html.contains("Revenue"))
     assert(html.contains("1000000"))
     assert(html.contains("Expenses"))
@@ -202,10 +209,10 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: mixed rich text and plain cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(cell"A1", CellValue.RichText("Bold".bold + " text"))
-      .put(cell"A2", CellValue.Text("Plain text"))
+      .put(ref"A1", CellValue.RichText("Bold".bold + " text"))
+      .put(ref"A2", CellValue.Text("Plain text"))
 
-    val html = sheet.toHtml(range"A1:A2")
+    val html = sheet.toHtml(ref"A1:A2")
     assert(html.contains("<b>Bold</b>"), "Rich text should be formatted")
     assert(html.contains("Plain text"), "Plain text should be included")
   }
@@ -223,16 +230,16 @@ class HtmlRendererSpec extends FunSuite:
 
     val sheet = Sheet("Report").getOrElse(fail("Sheet creation failed"))
       .putMixed(
-        cell"A1" -> "Metric",
-        cell"B1" -> "Change"
+        ref"A1" -> "Metric",
+        ref"B1" -> "Change"
       )
-      .withRangeStyle(range"A1:B1", headerStyle)
-      .put(cell"A2", CellValue.Text("Revenue"))
-      .put(cell"B2", CellValue.RichText(positive))
-      .put(cell"A3", CellValue.Text("Costs"))
-      .put(cell"B3", CellValue.RichText(negative))
+      .withRangeStyle(ref"A1:B1", headerStyle)
+      .put(ref"A2", CellValue.Text("Revenue"))
+      .put(ref"B2", CellValue.RichText(positive))
+      .put(ref"A3", CellValue.Text("Costs"))
+      .put(ref"B3", CellValue.RichText(negative))
 
-    val html = sheet.toHtml(range"A1:B3")
+    val html = sheet.toHtml(ref"A1:B3")
 
     // Verify structure
     assert(html.contains("<table>"))

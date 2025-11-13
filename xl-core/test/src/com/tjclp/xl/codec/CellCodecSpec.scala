@@ -2,10 +2,12 @@ package com.tjclp.xl.codec
 
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
+import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.codec.CodecError
-import com.tjclp.xl.macros.cell
-import com.tjclp.xl.style.NumFmt
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.style.numfmt.NumFmt
+
 import java.time.{LocalDate, LocalDateTime}
 
 /** Property-based tests for CellCodec instances */
@@ -13,23 +15,23 @@ class CellCodecSpec extends ScalaCheckSuite:
 
   // ========== String Codec ==========
 
-  test("String codec: read text cell") {
-    val cell = Cell(cell"A1", CellValue.Text("Hello"))
+  test("String codec: read text ref") {
+    val cell = Cell(ref"A1", CellValue.Text("Hello"))
     assertEquals(CellCodec[String].read(cell), Right(Some("Hello")))
   }
 
   test("String codec: empty cell returns None") {
-    val cell = Cell(cell"A1", CellValue.Empty)
+    val cell = Cell(ref"A1", CellValue.Empty)
     assertEquals(CellCodec[String].read(cell), Right(None))
   }
 
   test("String codec: convert number to string") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal("123.45")))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal("123.45")))
     assertEquals(CellCodec[String].read(cell), Right(Some("123.45")))
   }
 
   test("String codec: convert boolean to string") {
-    val cell = Cell(cell"A1", CellValue.Bool(true))
+    val cell = Cell(ref"A1", CellValue.Bool(true))
     assertEquals(CellCodec[String].read(cell), Right(Some("true")))
   }
 
@@ -41,23 +43,23 @@ class CellCodecSpec extends ScalaCheckSuite:
 
   // ========== Int Codec ==========
 
-  test("Int codec: read number cell") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal(42)))
+  test("Int codec: read number ref") {
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal(42)))
     assertEquals(CellCodec[Int].read(cell), Right(Some(42)))
   }
 
   test("Int codec: empty cell returns None") {
-    val cell = Cell(cell"A1", CellValue.Empty)
+    val cell = Cell(ref"A1", CellValue.Empty)
     assertEquals(CellCodec[Int].read(cell), Right(None))
   }
 
   test("Int codec: decimal number fails") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal("123.45")))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal("123.45")))
     assert(CellCodec[Int].read(cell).isLeft)
   }
 
   test("Int codec: text cell fails") {
-    val cell = Cell(cell"A1", CellValue.Text("not a number"))
+    val cell = Cell(ref"A1", CellValue.Text("not a number"))
     assert(CellCodec[Int].read(cell).isLeft)
   }
 
@@ -70,19 +72,19 @@ class CellCodecSpec extends ScalaCheckSuite:
   // ========== Long Codec ==========
 
   test("Long codec: read large number") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal(9876543210L)))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal(9876543210L)))
     assertEquals(CellCodec[Long].read(cell), Right(Some(9876543210L)))
   }
 
   test("Long codec: decimal number fails") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal("9876543210.5")))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal("9876543210.5")))
     assert(CellCodec[Long].read(cell).isLeft)
   }
 
   // ========== Double Codec ==========
 
-  test("Double codec: read number cell") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal("123.45")))
+  test("Double codec: read number ref") {
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal("123.45")))
     assertEquals(CellCodec[Double].read(cell), Right(Some(123.45)))
   }
 
@@ -93,8 +95,8 @@ class CellCodecSpec extends ScalaCheckSuite:
 
   // ========== BigDecimal Codec ==========
 
-  test("BigDecimal codec: read number cell") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal("123.456789")))
+  test("BigDecimal codec: read number ref") {
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal("123.456789")))
     assertEquals(CellCodec[BigDecimal].read(cell), Right(Some(BigDecimal("123.456789"))))
   }
 
@@ -112,23 +114,23 @@ class CellCodecSpec extends ScalaCheckSuite:
 
   // ========== Boolean Codec ==========
 
-  test("Boolean codec: read boolean cell") {
-    val cell = Cell(cell"A1", CellValue.Bool(true))
+  test("Boolean codec: read boolean ref") {
+    val cell = Cell(ref"A1", CellValue.Bool(true))
     assertEquals(CellCodec[Boolean].read(cell), Right(Some(true)))
   }
 
   test("Boolean codec: read 0 as false") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal(0)))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal(0)))
     assertEquals(CellCodec[Boolean].read(cell), Right(Some(false)))
   }
 
   test("Boolean codec: read 1 as true") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal(1)))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal(1)))
     assertEquals(CellCodec[Boolean].read(cell), Right(Some(true)))
   }
 
   test("Boolean codec: other numbers fail") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal(42)))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal(42)))
     assert(CellCodec[Boolean].read(cell).isLeft)
   }
 
@@ -140,15 +142,15 @@ class CellCodecSpec extends ScalaCheckSuite:
 
   // ========== LocalDate Codec ==========
 
-  test("LocalDate codec: read datetime cell") {
+  test("LocalDate codec: read datetime ref") {
     val dt = LocalDateTime.of(2025, 11, 10, 14, 30)
-    val cell = Cell(cell"A1", CellValue.DateTime(dt))
+    val cell = Cell(ref"A1", CellValue.DateTime(dt))
     assertEquals(CellCodec[LocalDate].read(cell), Right(Some(LocalDate.of(2025, 11, 10))))
   }
 
   test("LocalDate codec: read Excel serial number") {
     // November 10, 2025 = 45971 days since Dec 30, 1899
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal(45971)))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal(45971)))
     val result = CellCodec[LocalDate].read(cell)
     assert(result.isRight)
     result.foreach(opt => assert(opt.exists(_.getYear == 2025)))
@@ -172,15 +174,15 @@ class CellCodecSpec extends ScalaCheckSuite:
 
   // ========== LocalDateTime Codec ==========
 
-  test("LocalDateTime codec: read datetime cell") {
+  test("LocalDateTime codec: read datetime ref") {
     val dt = LocalDateTime.of(2025, 11, 10, 14, 30, 45)
-    val cell = Cell(cell"A1", CellValue.DateTime(dt))
+    val cell = Cell(ref"A1", CellValue.DateTime(dt))
     assertEquals(CellCodec[LocalDateTime].read(cell), Right(Some(dt)))
   }
 
   test("LocalDateTime codec: read Excel serial number") {
     // November 10, 2025 14:30:45 ≈ 45971.604 days
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal("45971.604166667")))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal("45971.604166667")))
     val result = CellCodec[LocalDateTime].read(cell)
     assert(result.isRight)
     result.foreach { opt =>
@@ -208,28 +210,28 @@ class CellCodecSpec extends ScalaCheckSuite:
   test("Identity law: String round-trip") {
     val original = "Hello, World!"
     val (cellValue, _) = CellCodec[String].write(original)
-    val cell = Cell(cell"A1", cellValue)
+    val cell = Cell(ref"A1", cellValue)
     assertEquals(CellCodec[String].read(cell), Right(Some(original)))
   }
 
   test("Identity law: Int round-trip") {
     val original = 42
     val (cellValue, _) = CellCodec[Int].write(original)
-    val cell = Cell(cell"A1", cellValue)
+    val cell = Cell(ref"A1", cellValue)
     assertEquals(CellCodec[Int].read(cell), Right(Some(original)))
   }
 
   test("Identity law: Long round-trip") {
     val original = 9876543210L
     val (cellValue, _) = CellCodec[Long].write(original)
-    val cell = Cell(cell"A1", cellValue)
+    val cell = Cell(ref"A1", cellValue)
     assertEquals(CellCodec[Long].read(cell), Right(Some(original)))
   }
 
   test("Identity law: Double round-trip") {
     val original = 123.45
     val (cellValue, _) = CellCodec[Double].write(original)
-    val cell = Cell(cell"A1", cellValue)
+    val cell = Cell(ref"A1", cellValue)
     val result = CellCodec[Double].read(cell)
     assert(result.isRight)
     result.foreach(opt => assert(opt.exists(v => math.abs(v - original) < 0.0001)))
@@ -238,28 +240,28 @@ class CellCodecSpec extends ScalaCheckSuite:
   test("Identity law: BigDecimal round-trip") {
     val original = BigDecimal("123.456789")
     val (cellValue, _) = CellCodec[BigDecimal].write(original)
-    val cell = Cell(cell"A1", cellValue)
+    val cell = Cell(ref"A1", cellValue)
     assertEquals(CellCodec[BigDecimal].read(cell), Right(Some(original)))
   }
 
   test("Identity law: Boolean round-trip") {
     val original = true
     val (cellValue, _) = CellCodec[Boolean].write(original)
-    val cell = Cell(cell"A1", cellValue)
+    val cell = Cell(ref"A1", cellValue)
     assertEquals(CellCodec[Boolean].read(cell), Right(Some(original)))
   }
 
   test("Identity law: LocalDate round-trip") {
     val original = LocalDate.of(2025, 11, 10)
     val (cellValue, _) = CellCodec[LocalDate].write(original)
-    val cell = Cell(cell"A1", cellValue)
+    val cell = Cell(ref"A1", cellValue)
     assertEquals(CellCodec[LocalDate].read(cell), Right(Some(original)))
   }
 
   test("Identity law: LocalDateTime round-trip") {
     val original = LocalDateTime.of(2025, 11, 10, 14, 30, 45)
     val (cellValue, _) = CellCodec[LocalDateTime].write(original)
-    val cell = Cell(cell"A1", cellValue)
+    val cell = Cell(ref"A1", cellValue)
     val result = CellCodec[LocalDateTime].read(cell)
     assert(result.isRight)
     // DateTime may lose subsecond precision in Excel serial format
@@ -276,7 +278,7 @@ class CellCodecSpec extends ScalaCheckSuite:
   // ========== Error Cases ==========
 
   test("Type mismatch: Int from text") {
-    val cell = Cell(cell"A1", CellValue.Text("not a number"))
+    val cell = Cell(ref"A1", CellValue.Text("not a number"))
     CellCodec[Int].read(cell) match
       case Left(CodecError.TypeMismatch(expected, actual)) =>
         assertEquals(expected, "Int")
@@ -284,7 +286,7 @@ class CellCodecSpec extends ScalaCheckSuite:
   }
 
   test("Parse error: Int from decimal") {
-    val cell = Cell(cell"A1", CellValue.Number(BigDecimal("123.45")))
+    val cell = Cell(ref"A1", CellValue.Number(BigDecimal("123.45")))
     CellCodec[Int].read(cell) match
       case Left(CodecError.ParseError(value, targetType, detail)) =>
         assertEquals(targetType, "Int")
@@ -296,7 +298,7 @@ class CellCodecSpec extends ScalaCheckSuite:
 
   test("CodecError.toXLError: TypeMismatch conversion") {
     val cellError = CodecError.TypeMismatch("Int", CellValue.Text("abc"))
-    val xlError = cellError.toXLError(cell"A1")
+    val xlError = cellError.toXLError(ref"A1")
     xlError match
       case XLError.TypeMismatch(exp, act, r) =>
         assertEquals(exp, "Int")
@@ -306,7 +308,7 @@ class CellCodecSpec extends ScalaCheckSuite:
 
   test("CodecError.toXLError: ParseError conversion") {
     val cellError = CodecError.ParseError("123.45", "Int", "has decimal")
-    val xlError = cellError.toXLError(cell"B2")
+    val xlError = cellError.toXLError(ref"B2")
     xlError match
       case XLError.ParseError(loc, rsn) =>
         assertEquals(loc, "B2")

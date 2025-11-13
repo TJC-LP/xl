@@ -1,15 +1,16 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.*
-import com.tjclp.xl.RichText.{*, given}
-import com.tjclp.xl.macros.cell
+import com.tjclp.xl.api.*
+import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.richtext.RichText.{*, given}
+import com.tjclp.xl.macros.ref
 
 /** Tests for rich text OOXML serialization */
 class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: plain text uses simple <is><t> structure") {
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.Text("Hello"), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.Text("Hello"), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -20,7 +21,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text with bold generates <r> with <b/>") {
     val richText = RichText("Bold".bold)
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -33,7 +34,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text with italic generates <r> with <i/>") {
     val richText = RichText("Italic".italic)
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -42,7 +43,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text with underline generates <r> with <u/>") {
     val richText = RichText("Underline".underline)
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -51,7 +52,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text with color generates <color rgb=>") {
     val richText = RichText("Red".red)
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -62,7 +63,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text with font size generates <sz val=>") {
     val richText = RichText("Big".size(18.0))
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -72,7 +73,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text with font family generates <name val=>") {
     val richText = RichText("Text".fontFamily("Calibri"))
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -82,7 +83,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text with multiple runs generates multiple <r> elements") {
     val richText = "Bold".bold + " normal " + "Italic".italic
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -93,7 +94,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text with mixed formatting") {
     val richText = "Error: ".red.bold + "File not found".underline
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -104,7 +105,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text run without formatting has no <rPr>") {
     val richText = RichText.plain("Plain")  // Create plain RichText
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
@@ -116,7 +117,7 @@ class RichTextXmlSpec extends FunSuite:
 
   test("OoxmlCell: rich text preserves text content exactly") {
     val richText = "Special chars: <>&\"".bold
-    val ooxmlCell = OoxmlCell(cell"A1", CellValue.RichText(richText), None, "inlineStr")
+    val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString

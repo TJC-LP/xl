@@ -1,10 +1,14 @@
 package com.tjclp.xl.style
 
+import com.tjclp.xl.style.alignment.Align
+import com.tjclp.xl.style.border.Border
+import com.tjclp.xl.style.fill.Fill
+import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.style.numfmt.NumFmt
+
 /**
  * Complete cell style combining all formatting aspects.
  */
-
-// ========== CellStyle ==========
 
 /** Complete cell style combining all formatting aspects */
 case class CellStyle(

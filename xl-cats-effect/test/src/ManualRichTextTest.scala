@@ -1,9 +1,10 @@
 import cats.effect.{IO, IOApp}
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.io.Excel
-import com.tjclp.xl.RichText.{*, given}
-import com.tjclp.xl.codec.{*, given}
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.richtext.RichText.{*, given}
+import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.sheet.syntax.*
 import java.nio.file.Paths
 
 /** Manual test to verify rich text formatting in Excel.
@@ -29,29 +30,29 @@ object ManualRichTextTest extends IOApp.Simple:
     val report = Sheet("Q1 Performance Report").getOrElse(sys.error("Failed to create sheet"))
       .putMixed(
         // Title with large bold text
-        cell"A1" -> ("Q1 2025 ".size(18.0).bold + "Performance Report".size(18.0).italic),
+        ref"A1" -> ("Q1 2025 ".size(18.0).bold + "Performance Report".size(18.0).italic),
 
         // Section headers
-        cell"A3" -> "Metric".bold,
-        cell"B3" -> "Change".bold,
+        ref"A3" -> "Metric".bold,
+        ref"B3" -> "Change".bold,
 
         // Revenue (positive - green)
-        cell"A4" -> "Revenue",
-        cell"B4" -> ("+12.5%".green.bold + " (strong growth)"),
+        ref"A4" -> "Revenue",
+        ref"B4" -> ("+12.5%".green.bold + " (strong growth)"),
 
         // Expenses (negative - red)
-        cell"A5" -> "Expenses",
-        cell"B5" -> ("+8.2%".red.bold + " (cost increase)"),
+        ref"A5" -> "Expenses",
+        ref"B5" -> ("+8.2%".red.bold + " (cost increase)"),
 
         // Profit (positive - green)
-        cell"A6" -> "Net Profit",
-        cell"B6" -> ("+4.3%".green.bold + " (improved margin)"),
+        ref"A6" -> "Net Profit",
+        ref"B6" -> ("+4.3%".green.bold + " (improved margin)"),
 
         // Warning message
-        cell"A8" -> ("Warning: ".red.bold.underline + "Review quarterly targets".italic),
+        ref"A8" -> ("Warning: ".red.bold.underline + "Review quarterly targets".italic),
 
         // Mixed formatting example
-        cell"A10" -> ("This cell has ".fontFamily("Calibri") +
+        ref"A10" -> ("This cell has ".fontFamily("Calibri") +
           "bold ".bold +
           "italic ".italic +
           "underline ".underline +
@@ -60,11 +61,11 @@ object ManualRichTextTest extends IOApp.Simple:
           "text!".red.size(16.0).bold),
 
         // Plain text for comparison
-        cell"A12" -> "This is plain text (no formatting)",
+        ref"A12" -> "This is plain text (no formatting)",
 
         // Numbers for context
-        cell"A14" -> "Revenue ($M):",
-        cell"B14" -> BigDecimal("1250.50")
+        ref"A14" -> "Revenue ($M):",
+        ref"B14" -> BigDecimal("1250.50")
       )
 
     val workbook = Workbook(Vector(report))
@@ -80,7 +81,7 @@ object ManualRichTextTest extends IOApp.Simple:
       _ <- IO.println("   5. Cell B14: Decimal number format")
 
       // Export to HTML
-      htmlTable = report.toHtml(range"A1:B14")
+      htmlTable = report.toHtml(ref"A1:B14")
       _ <- IO.println(s"\n📊 HTML Export:\n$htmlTable")
       _ <- IO.println("\n✅ You can paste the HTML into a web page to see the formatting")
     yield ()

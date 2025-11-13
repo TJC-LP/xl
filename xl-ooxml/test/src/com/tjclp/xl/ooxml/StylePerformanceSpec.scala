@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
 import com.tjclp.xl.style.*
 
 /**
@@ -31,15 +31,17 @@ class StylePerformanceSpec extends FunSuite:
     val fonts = styles.map(_.font).distinct.toVector
     val fills = styles.map(_.fill).distinct.toVector
     val borders = Vector(Border.none)
+    val styleMappings: Vector[(String, StyleId)] = styles.zipWithIndex.map { case (s, i) =>
+      CellStyle.canonicalKey(s) -> (StyleId(i): StyleId)
+    }.toVector
+
     val styleIndex = StyleIndex(
       fonts = fonts,
       fills = fills,
       borders = borders,
       numFmts = Vector.empty,
       cellStyles = styles.toVector,
-      styleToIndex = styles.zipWithIndex.map { case (s, i) =>
-        CellStyle.canonicalKey(s) -> StyleId(i)
-      }.toMap
+      styleToIndex = styleMappings.toMap
     )
 
     val ooxmlStyles = OoxmlStyles(styleIndex)
@@ -78,15 +80,17 @@ class StylePerformanceSpec extends FunSuite:
         )
       }
 
+      val styleMappings: Vector[(String, StyleId)] = styles.zipWithIndex.map { case (s, i) =>
+        CellStyle.canonicalKey(s) -> (StyleId(i): StyleId)
+      }.toVector
+
       val styleIndex = StyleIndex(
         fonts = styles.map(_.font).distinct.toVector,
         fills = styles.map(_.fill).distinct.toVector,
         borders = Vector(Border.none),
         numFmts = Vector.empty,
         cellStyles = styles.toVector,
-        styleToIndex = styles.zipWithIndex.map { case (s, i) =>
-          CellStyle.canonicalKey(s) -> StyleId(i)
-        }.toMap
+        styleToIndex = styleMappings.toMap
       )
 
       val start = System.nanoTime()

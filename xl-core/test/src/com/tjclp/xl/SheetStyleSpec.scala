@@ -1,9 +1,18 @@
 package com.tjclp.xl
 
-import munit.FunSuite
-import com.tjclp.xl.macros.{cell, range}
+import com.tjclp.xl.api.*
+import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.conversions.given
-import com.tjclp.xl.style.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align, NumFmt}
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.style.border.{Border, BorderStyle}
+import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.style.fill.Fill
+import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.style.numfmt.NumFmt
+import munit.FunSuite
 
 /** Tests for Sheet style extension methods */
 class SheetStyleSpec extends FunSuite:
@@ -11,72 +20,72 @@ class SheetStyleSpec extends FunSuite:
   test("withCellStyle registers and applies style") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("Header"))
-      .withCellStyle(cell"A1", boldStyle)
+      .put(ref"A1", CellValue.Text("Header"))
+      .withCellStyle(ref"A1", boldStyle)
 
     // Registry should have 2 styles (default + bold)
     assertEquals(sheet.styleRegistry.size, 2)
 
     // Cell should have styleId
-    assert(sheet(cell"A1").styleId.isDefined)
+    assert(sheet(ref"A1").styleId.isDefined)
 
     // Can retrieve style
-    assertEquals(sheet.getCellStyle(cell"A1"), Some(boldStyle))
+    assertEquals(sheet.getCellStyle(ref"A1"), Some(boldStyle))
   }
 
   test("withCellStyle deduplicates same style applied twice") {
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", "Text1")
-      .put(cell"A2", "Text2")
-      .withCellStyle(cell"A1", redStyle)
-      .withCellStyle(cell"A2", redStyle)
+      .put(ref"A1", "Text1")
+      .put(ref"A2", "Text2")
+      .withCellStyle(ref"A1", redStyle)
+      .withCellStyle(ref"A2", redStyle)
 
     // Should only have 2 styles (default + red)
     assertEquals(sheet.styleRegistry.size, 2)
 
     // Both cells should have same styleId
     assertEquals(
-      sheet(cell"A1").styleId,
-      sheet(cell"A2").styleId
+      sheet(ref"A1").styleId,
+      sheet(ref"A2").styleId
     )
   }
 
-  test("withRangeStyle applies to all cells in range") {
+  test("withRangeStyle applies to all cells in ref") {
     val headerStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", "Col1")
-      .put(cell"B1", "Col2")
-      .put(cell"C1", "Col3")
-      .withRangeStyle(range"A1:C1", headerStyle)
+      .put(ref"A1", "Col1")
+      .put(ref"B1", "Col2")
+      .put(ref"C1", "Col3")
+      .withRangeStyle(ref"A1:C1", headerStyle)
 
     // All cells should have styleId
-    assert(sheet(cell"A1").styleId.isDefined)
-    assert(sheet(cell"B1").styleId.isDefined)
-    assert(sheet(cell"C1").styleId.isDefined)
+    assert(sheet(ref"A1").styleId.isDefined)
+    assert(sheet(ref"B1").styleId.isDefined)
+    assert(sheet(ref"C1").styleId.isDefined)
 
     // All should be same styleId
-    val styleId = sheet(cell"A1").styleId
-    assertEquals(sheet(cell"B1").styleId, styleId)
-    assertEquals(sheet(cell"C1").styleId, styleId)
+    val styleId = sheet(ref"A1").styleId
+    assertEquals(sheet(ref"B1").styleId, styleId)
+    assertEquals(sheet(ref"C1").styleId, styleId)
 
     // All should retrieve same style
-    assert(sheet.getCellStyle(cell"A1") == Some(headerStyle))
-    assert(sheet.getCellStyle(cell"B1") == Some(headerStyle))
-    assert(sheet.getCellStyle(cell"C1") == Some(headerStyle))
+    assert(sheet.getCellStyle(ref"A1") == Some(headerStyle))
+    assert(sheet.getCellStyle(ref"B1") == Some(headerStyle))
+    assert(sheet.getCellStyle(ref"C1") == Some(headerStyle))
   }
 
-  test("getCellStyle returns None for unstyled cell") {
+  test("getCellStyle returns None for unstyled ref") {
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("Text"))
+      .put(ref"A1", CellValue.Text("Text"))
 
-    assert(sheet.getCellStyle(cell"A1") == None)
+    assert(sheet.getCellStyle(ref"A1") == None)
   }
 
-  test("getCellStyle returns None for empty cell") {
+  test("getCellStyle returns None for empty ref") {
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
 
-    assert(sheet.getCellStyle(cell"A1") == None)
+    assert(sheet.getCellStyle(ref"A1") == None)
   }
 
   test("multiple different styles accumulate in registry") {
@@ -85,30 +94,30 @@ class SheetStyleSpec extends FunSuite:
     val bordered = CellStyle.default.withBorder(Border.all(BorderStyle.Thin))
 
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("Bold"))
-      .put(cell"A2", CellValue.Text("Red"))
-      .put(cell"A3", CellValue.Text("Bordered"))
-      .withCellStyle(cell"A1", bold)
-      .withCellStyle(cell"A2", red)
-      .withCellStyle(cell"A3", bordered)
+      .put(ref"A1", CellValue.Text("Bold"))
+      .put(ref"A2", CellValue.Text("Red"))
+      .put(ref"A3", CellValue.Text("Bordered"))
+      .withCellStyle(ref"A1", bold)
+      .withCellStyle(ref"A2", red)
+      .withCellStyle(ref"A3", bordered)
 
     // Should have 4 styles (default + 3 custom)
     assertEquals(sheet.styleRegistry.size, 4)
 
     // Each cell should have different styleId
-    assert(sheet(cell"A1").styleId != sheet(cell"A2").styleId, "A1 and A2 should have different styles")
-    assert(sheet(cell"A2").styleId != sheet(cell"A3").styleId, "A2 and A3 should have different styles")
+    assert(sheet(ref"A1").styleId != sheet(ref"A2").styleId, "A1 and A2 should have different styles")
+    assert(sheet(ref"A2").styleId != sheet(ref"A3").styleId, "A2 and A3 should have different styles")
   }
 
   test("withCellStyle creates cell if it doesn't exist") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .withCellStyle(cell"A1", boldStyle) // No put() first
+      .withCellStyle(ref"A1", boldStyle) // No put() first
 
     // Cell should exist with style
-    assert(sheet.contains(cell"A1"))
-    assert(sheet(cell"A1").styleId.isDefined)
-    assertEquals(sheet.getCellStyle(cell"A1"), Some(boldStyle))
+    assert(sheet.contains(ref"A1"))
+    assert(sheet(ref"A1").styleId.isDefined)
+    assertEquals(sheet.getCellStyle(ref"A1"), Some(boldStyle))
   }
 
   test("complex styling workflow") {
@@ -123,19 +132,19 @@ class SheetStyleSpec extends FunSuite:
 
     val sheet = Sheet("Report").getOrElse(fail("Failed to create sheet"))
       // Header row
-      .put(cell"A1", CellValue.Text("Name"))
-      .put(cell"B1", CellValue.Text("Amount"))
-      .withRangeStyle(range"A1:B1", headerStyle)
+      .put(ref"A1", CellValue.Text("Name"))
+      .put(ref"B1", CellValue.Text("Amount"))
+      .withRangeStyle(ref"A1:B1", headerStyle)
       // Data rows
-      .put(cell"A2", CellValue.Text("Item 1"))
-      .put(cell"B2", CellValue.Number(BigDecimal("123.45")))
-      .withCellStyle(cell"B2", dataStyle)
+      .put(ref"A2", CellValue.Text("Item 1"))
+      .put(ref"B2", CellValue.Number(BigDecimal("123.45")))
+      .withCellStyle(ref"B2", dataStyle)
 
     // Should have 3 styles (default + header + data)
     assertEquals(sheet.styleRegistry.size, 3)
 
     // Verify styles applied correctly
-    assert(sheet.getCellStyle(cell"A1") == Some(headerStyle))
-    assert(sheet.getCellStyle(cell"B1") == Some(headerStyle))
-    assert(sheet.getCellStyle(cell"B2") == Some(dataStyle))
+    assert(sheet.getCellStyle(ref"A1") == Some(headerStyle))
+    assert(sheet.getCellStyle(ref"B1") == Some(headerStyle))
+    assert(sheet.getCellStyle(ref"B2") == Some(dataStyle))
   }

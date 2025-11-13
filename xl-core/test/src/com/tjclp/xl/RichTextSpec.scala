@@ -1,9 +1,12 @@
 package com.tjclp.xl
 
 import munit.FunSuite
-import com.tjclp.xl.style.{Font, Color}
-import com.tjclp.xl.RichText.{*, given}
-import com.tjclp.xl.macros.cell
+import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.richtext.{RichText, TextRun}
+import com.tjclp.xl.richtext.RichText.{*, given}
+import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.macros.ref
 
 /** Tests for rich text DSL and TextRun/RichText domain model */
 class RichTextSpec extends FunSuite:
@@ -185,7 +188,7 @@ class RichTextSpec extends FunSuite:
 
   test("Cell with RichText value") {
     val richText = "Title".bold.size(18.0)
-    val cellVal = Cell(cell"A1", CellValue.RichText(richText))
+    val cellVal = Cell(ref"A1", CellValue.RichText(richText))
     assertEquals(cellVal.value, CellValue.RichText(richText))
   }
 

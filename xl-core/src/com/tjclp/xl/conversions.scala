@@ -1,5 +1,6 @@
 package com.tjclp.xl
 
+import com.tjclp.xl.cell.CellValue
 import java.time.LocalDateTime
 import scala.language.implicitConversions
 
@@ -12,16 +13,16 @@ import scala.language.implicitConversions
  * {{{
  * import com.tjclp.xl.conversions.given
  *
- * sheet.put(cell"A1", "Hello")      // String → CellValue.Text
- *   .put(cell"B1", 42)              // Int → CellValue.Number
- *   .put(cell"C1", 3.14)            // Double → CellValue.Number
- *   .put(cell"D1", true)            // Boolean → CellValue.Bool
+ * sheet.put(ref"A1", "Hello")      // String → CellValue.Text
+ *   .put(ref"B1", 42)              // Int → CellValue.Number
+ *   .put(ref"C1", 3.14)            // Double → CellValue.Number
+ *   .put(ref"D1", true)            // Boolean → CellValue.Bool
  * }}}
  *
  * All conversions are inline for zero runtime overhead.
  */
-object conversions:
 
+object conversions:
   /** Convert String to CellValue.Text */
   given Conversion[String, CellValue] = CellValue.Text(_)
 
@@ -42,3 +43,5 @@ object conversions:
 
   /** Convert LocalDateTime to CellValue.DateTime */
   given Conversion[LocalDateTime, CellValue] = CellValue.DateTime(_)
+
+export conversions.*

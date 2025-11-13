@@ -4,8 +4,18 @@ import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import cats.syntax.all.*
 import Generators.given
-import Patch.{given, *}
-import com.tjclp.xl.style.{CellStyle, StyleId, Font, Fill, Color}
+import com.tjclp.xl.patch.Patch
+import com.tjclp.xl.patch.Patch.{*, given}
+import com.tjclp.xl.api.*
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
+import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.style.fill.Fill
+import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.style.units.StyleId
 
 /** Property tests for Patch monoid laws and semantics */
 class PatchSpec extends ScalaCheckSuite:
@@ -78,7 +88,7 @@ class PatchSpec extends ScalaCheckSuite:
 
   // ========== Patch Application Tests ==========
 
-  test("Put patch adds a cell") {
+  test("Put patch adds a ref") {
     val sheet = emptySheet
     val ref = ARef.from1(1, 1) // A1
     val value = CellValue.Text("Hello")
@@ -121,9 +131,9 @@ class PatchSpec extends ScalaCheckSuite:
 
   test("SetCellStyle patch applies CellStyle object") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
-    val sheet = emptySheet.put(cell"A1", CellValue.Text("Header"))
+    val sheet = emptySheet.put(ref"A1", CellValue.Text("Header"))
 
-    val patch = Patch.SetCellStyle(cell"A1", boldStyle)
+    val patch = Patch.SetCellStyle(ref"A1", boldStyle)
     val result = sheet.applyPatch(patch)
 
     assert(result.isRight)
@@ -132,22 +142,22 @@ class PatchSpec extends ScalaCheckSuite:
       assertEquals(updated.styleRegistry.size, 2) // default + bold
 
       // Cell should have styleId
-      assert(updated(cell"A1").styleId.isDefined)
+      assert(updated(ref"A1").styleId.isDefined)
 
       // Can retrieve original style
-      assertEquals(updated.getCellStyle(cell"A1"), Some(boldStyle))
+      assertEquals(updated.getCellStyle(ref"A1"), Some(boldStyle))
     }
   }
 
   test("SetCellStyle deduplicates identical styles") {
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
     val sheet = emptySheet
-      .put(cell"A1", CellValue.Text("Red1"))
-      .put(cell"A2", CellValue.Text("Red2"))
+      .put(ref"A1", CellValue.Text("Red1"))
+      .put(ref"A2", CellValue.Text("Red2"))
 
     val patch =
-      (Patch.SetCellStyle(cell"A1", redStyle): Patch) |+|
-        (Patch.SetCellStyle(cell"A2", redStyle): Patch)
+      (Patch.SetCellStyle(ref"A1", redStyle): Patch) |+|
+        (Patch.SetCellStyle(ref"A2", redStyle): Patch)
 
     val result = sheet.applyPatch(patch)
     result.foreach { updated =>
@@ -156,8 +166,8 @@ class PatchSpec extends ScalaCheckSuite:
 
       // Both cells should reference same style index
       assertEquals(
-        updated(cell"A1").styleId,
-        updated(cell"A2").styleId
+        updated(ref"A1").styleId,
+        updated(ref"A2").styleId
       )
     }
   }
@@ -186,7 +196,7 @@ class PatchSpec extends ScalaCheckSuite:
     assert(!updated.mergedRanges.contains(range))
   }
 
-  test("Remove patch removes a cell") {
+  test("Remove patch removes a ref") {
     val ref = ARef.from1(1, 1)
     val sheet = emptySheet.put(ref, CellValue.Text("Test"))
     val patch = Patch.Remove(ref)
@@ -289,7 +299,7 @@ class PatchSpec extends ScalaCheckSuite:
 
   // ========== Override Semantics Tests ==========
 
-  test("Later Put patch overrides earlier Put to same cell") {
+  test("Later Put patch overrides earlier Put to same ref") {
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
@@ -301,7 +311,7 @@ class PatchSpec extends ScalaCheckSuite:
     assertEquals(updated(ref).value, CellValue.Text("Second"))
   }
 
-  test("Later SetStyle overrides earlier SetStyle to same cell") {
+  test("Later SetStyle overrides earlier SetStyle to same ref") {
     val sheet = emptySheet.put(ARef.from1(1, 1), CellValue.Empty)
     val ref = ARef.from1(1, 1)
 

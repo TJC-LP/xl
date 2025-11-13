@@ -1,8 +1,10 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.*
-import com.tjclp.xl.macros.cell
+import com.tjclp.xl.api.*
+import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.macros.ref
+import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.{CellStyle, Font}
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
@@ -15,8 +17,8 @@ class XlsxReaderSpec extends FunSuite:
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
 
     val sheet = Sheet("Styled").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("styled"))
-      .withCellStyle(cell"A1", boldStyle)
+      .put(ref"A1", CellValue.Text("styled"))
+      .withCellStyle(ref"A1", boldStyle)
 
     val wb = Workbook(Vector(sheet))
     val bytes = XlsxWriter.writeToBytes(wb).getOrElse(fail("Failed to write workbook"))
@@ -24,14 +26,14 @@ class XlsxReaderSpec extends FunSuite:
     val readWb = XlsxReader.readFromBytes(bytes).getOrElse(fail("Failed to read workbook"))
     val readSheet = readWb("Styled").getOrElse(fail("Missing sheet"))
 
-    val style = readSheet.getCellStyle(cell"A1")
+    val style = readSheet.getCellStyle(ref"A1")
     assert(style.nonEmpty, "Cell style should be present after read")
     assertEquals(style.map(_.font.bold), Some(true))
   }
 
   test("XlsxReader resolves worksheet paths via relationships") {
     val sheet = Sheet("Rel").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("ok"))
+      .put(ref"A1", CellValue.Text("ok"))
 
     val wb = Workbook(Vector(sheet))
     val bytes = XlsxWriter.writeToBytes(wb).getOrElse(fail("Failed to write workbook"))
@@ -40,7 +42,7 @@ class XlsxReaderSpec extends FunSuite:
     val readWb = XlsxReader.readFromBytes(mutated).getOrElse(fail("Failed to read mutated workbook"))
     val readSheet = readWb("Rel").getOrElse(fail("Missing sheet"))
 
-    assertEquals(readSheet(cell"A1").value, CellValue.Text("ok"))
+    assertEquals(readSheet(ref"A1").value, CellValue.Text("ok"))
   }
 
   private def rewriteWorksheetTarget(bytes: Array[Byte], newSheetFile: String): Array[Byte] =

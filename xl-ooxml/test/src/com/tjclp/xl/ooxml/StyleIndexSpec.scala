@@ -1,9 +1,11 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.*
+import com.tjclp.xl.api.*
+import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.{CellStyle, Font, Fill, Color}
-import com.tjclp.xl.macros.cell
+import com.tjclp.xl.macros.ref
 
 /** Tests for StyleIndex.fromWorkbook with style remapping */
 class StyleIndexSpec extends FunSuite:
@@ -13,10 +15,10 @@ class StyleIndexSpec extends FunSuite:
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
 
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(cell"A1", CellValue.Text("Bold"))
-      .withCellStyle(cell"A1", boldStyle)
-      .put(cell"A2", CellValue.Text("Red"))
-      .withCellStyle(cell"A2", redStyle)
+      .put(ref"A1", CellValue.Text("Bold"))
+      .withCellStyle(ref"A1", boldStyle)
+      .put(ref"A2", CellValue.Text("Red"))
+      .withCellStyle(ref"A2", redStyle)
 
     val wb = Workbook(Vector(sheet))
     val (index, remappings) = StyleIndex.fromWorkbook(wb)
@@ -40,12 +42,12 @@ class StyleIndexSpec extends FunSuite:
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
 
     val sheet1 = Sheet("Sheet1").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("Bold1"))
-      .withCellStyle(cell"A1", boldStyle)
+      .put(ref"A1", CellValue.Text("Bold1"))
+      .withCellStyle(ref"A1", boldStyle)
 
     val sheet2 = Sheet("Sheet2").getOrElse(fail(""))
-      .put(cell"B1", CellValue.Text("Bold2"))
-      .withCellStyle(cell"B1", boldStyle)
+      .put(ref"B1", CellValue.Text("Bold2"))
+      .withCellStyle(ref"B1", boldStyle)
 
     val wb = Workbook(Vector(sheet1, sheet2))
     val (index, remappings) = StyleIndex.fromWorkbook(wb)
@@ -66,13 +68,13 @@ class StyleIndexSpec extends FunSuite:
 
     // Sheet1: localId=1 is bold
     val sheet1 = Sheet("Sheet1").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("Bold"))
-      .withCellStyle(cell"A1", boldStyle)
+      .put(ref"A1", CellValue.Text("Bold"))
+      .withCellStyle(ref"A1", boldStyle)
 
     // Sheet2: localId=1 is red (different style)
     val sheet2 = Sheet("Sheet2").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("Red"))
-      .withCellStyle(cell"A1", redStyle)
+      .put(ref"A1", CellValue.Text("Red"))
+      .withCellStyle(ref"A1", redStyle)
 
     val wb = Workbook(Vector(sheet1, sheet2))
     val (index, remappings) = StyleIndex.fromWorkbook(wb)
@@ -93,7 +95,7 @@ class StyleIndexSpec extends FunSuite:
 
   test("fromWorkbook with empty styleRegistry uses default only") {
     val sheet = Sheet("Plain").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("No Style"))
+      .put(ref"A1", CellValue.Text("No Style"))
     // Don't apply any styles - registry is default
 
     val wb = Workbook(Vector(sheet))
@@ -115,10 +117,10 @@ class StyleIndexSpec extends FunSuite:
     // Both use same font
 
     val sheet = Sheet("Test").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("Style1"))
-      .withCellStyle(cell"A1", style1)
-      .put(cell"A2", CellValue.Text("Style2"))
-      .withCellStyle(cell"A2", style2)
+      .put(ref"A1", CellValue.Text("Style1"))
+      .withCellStyle(ref"A1", style1)
+      .put(ref"A2", CellValue.Text("Style2"))
+      .withCellStyle(ref"A2", style2)
 
     val wb = Workbook(Vector(sheet))
     val (index, _) = StyleIndex.fromWorkbook(wb)
@@ -135,12 +137,12 @@ class StyleIndexSpec extends FunSuite:
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
 
     val sheet1 = Sheet("Sheet1").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("Bold"))
-      .withCellStyle(cell"A1", boldStyle)
+      .put(ref"A1", CellValue.Text("Bold"))
+      .withCellStyle(ref"A1", boldStyle)
 
     val sheet2 = Sheet("Sheet2").getOrElse(fail(""))
-      .put(cell"A1", CellValue.Text("Also Bold"))
-      .withCellStyle(cell"A1", boldStyle)
+      .put(ref"A1", CellValue.Text("Also Bold"))
+      .withCellStyle(ref"A1", boldStyle)
 
     val wb = Workbook(Vector(sheet1, sheet2))
     val (index, remappings) = StyleIndex.fromWorkbook(wb)

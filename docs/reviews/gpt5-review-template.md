@@ -41,7 +41,7 @@ package com.tjclp.xl.io
 import cats.effect.Async
 import fs2.Stream
 import java.nio.file.Path
-import com.tjclp.xl.{Workbook, Sheet, Cell, CellValue, ARef}
+import com.tjclp.xl.api.*
 
 /** Row-level streaming data for efficient processing */
 case class RowData(

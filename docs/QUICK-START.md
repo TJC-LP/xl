@@ -13,6 +13,7 @@ object myproject extends ScalaModule {
 
   def ivyDeps = Agg(
     ivy"com.tjclp::xl-core:0.1.0",
+    ivy"com.tjclp::xl-macros:0.1.0",
     ivy"com.tjclp::xl-ooxml:0.1.0",
     ivy"com.tjclp::xl-cats-effect:0.1.0"
   )
@@ -25,6 +26,7 @@ scalaVersion := "3.7.3"
 
 libraryDependencies ++= Seq(
   "com.tjclp" %% "xl-core" % "0.1.0",
+  "com.tjclp" %% "xl-macros" % "0.1.0",
   "com.tjclp" %% "xl-ooxml" % "0.1.0",
   "com.tjclp" %% "xl-cats-effect" % "0.1.0"
 )
@@ -33,9 +35,9 @@ libraryDependencies ++= Seq(
 ## Your First Spreadsheet (30 seconds)
 
 ```scala
-import com.tjclp.xl.*
-import com.tjclp.xl.macros.*
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.api.*
+import com.tjclp.xl.syntax.*
+import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -43,10 +45,10 @@ import java.nio.file.Path
 
 // Create a simple sheet
 val sheet = Sheet("Sales").get.putMixed(
-  cell"A1" -> "Product",
-  cell"B1" -> "Revenue",
-  cell"A2" -> "Widget",
-  cell"B2" -> 1000
+  ref"A1" -> "Product",
+  ref"B1" -> "Revenue",
+  ref"A2" -> "Widget",
+  ref"B2" -> 1000
 )
 
 // Write to file
@@ -81,7 +83,7 @@ ExcelIO.instance.read[IO](Path.of("sales.xlsx")).map {
 ## Type-Safe Reading (1 minute)
 
 ```scala
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 
 val sheet = workbook.sheets.head
 
@@ -178,7 +180,7 @@ sheet.fillBy(range"A1:Z10") { (col, row) =>
 
 ### Rich Text (Multiple Formats in One Cell)
 ```scala
-import com.tjclp.xl.RichText.*
+import com.tjclp.xl.richtext.RichText.*
 
 val text = "Error: ".red.bold + "File not found"
 sheet.putMixed(cell"A1" -> text)
@@ -203,9 +205,9 @@ println(html)  // <table>...</table> with inline CSS
 
 ### Imports You'll Need
 ```scala
-import com.tjclp.xl.*                  // Core types
+import com.tjclp.xl.api.*                  // Core types
 import com.tjclp.xl.macros.*           // cell"A1", range"A1:B10"
-import com.tjclp.xl.codec.{*, given}   // Type-safe codecs (putMixed, readTyped)
+import com.tjclp.xl.codec.syntax.*   // Type-safe codecs (putMixed, readTyped)
 import com.tjclp.xl.style.*            // CellStyle, Font, Fill, etc.
 import com.tjclp.xl.dsl.*              // := operator, ++ combinator
 import com.tjclp.xl.io.ExcelIO         // File I/O
@@ -264,7 +266,7 @@ ExcelIO.instance.write[IO](wb, path).unsafeRunSync()
 ### "Value readTyped is not a member of Sheet"
 **Solution**: Import codec givens:
 ```scala
-import com.tjclp.xl.codec.{*, given}
+import com.tjclp.xl.codec.syntax.*
 ```
 
 ### "Macro expansion error: Invalid cell reference"

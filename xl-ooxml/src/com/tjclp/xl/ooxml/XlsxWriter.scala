@@ -5,7 +5,8 @@ import java.io.{File, FileOutputStream, ByteArrayOutputStream}
 import java.util.zip.{ZipOutputStream, ZipEntry}
 import java.nio.file.{Path, Files}
 import java.nio.charset.StandardCharsets
-import com.tjclp.xl.{Workbook, XLError, XLResult}
+import com.tjclp.xl.api.Workbook
+import com.tjclp.xl.error.{XLError, XLResult}
 
 /** Shared Strings Table usage policy */
 enum SstPolicy derives CanEqual:

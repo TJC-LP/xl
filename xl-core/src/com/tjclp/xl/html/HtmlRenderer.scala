@@ -1,7 +1,13 @@
 package com.tjclp.xl.html
 
-import com.tjclp.xl.*
-import com.tjclp.xl.style.{Font, Color, BorderStyle, HAlign, VAlign, Fill}
+import com.tjclp.xl.api.*
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.style.alignment.{HAlign, VAlign}
+import com.tjclp.xl.style.border.{BorderStyle, BorderSide}
+import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.style.fill.Fill
+import com.tjclp.xl.style.font.Font
 
 /** Renders Excel sheets to HTML tables with inline CSS styling */
 object HtmlRenderer:
