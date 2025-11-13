@@ -3,9 +3,9 @@ package com.tjclp.xl
 /**
  * Unified syntax facade (core helpers + macros).
  *
- * This lives in `xl-macros` (which depends on `xl-core`) so that importing
- * `com.tjclp.xl.syntax.*` or even `com.tjclp.xl.*` brings everything in
- * with one line, similar to Cats' `cats.syntax.all.*`.
+ * This lives in `xl-macros` (which depends on `xl-core`) so that importing `com.tjclp.xl.syntax.*`
+ * or even `com.tjclp.xl.*` brings everything in with one line, similar to Cats'
+ * `cats.syntax.all.*`.
  */
 object syntax:
   // Core helpers (col/row/ref constructors, String parsing, addressing ops)
