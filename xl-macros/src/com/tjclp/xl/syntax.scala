@@ -9,7 +9,7 @@ package com.tjclp.xl
  */
 object syntax:
   // Core helpers (col/row/ref constructors, String parsing, addressing ops)
-  export com.tjclp.xl.coreSyntax.*
+  export com.tjclp.xl.api.*
 
   // Unified reference literal
   export com.tjclp.xl.macros.RefLiteral.*
