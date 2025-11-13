@@ -13,10 +13,10 @@ import scala.language.implicitConversions
  * {{{
  * import com.tjclp.xl.conversions.given
  *
- * sheet.put(cell"A1", "Hello")      // String → CellValue.Text
- *   .put(cell"B1", 42)              // Int → CellValue.Number
- *   .put(cell"C1", 3.14)            // Double → CellValue.Number
- *   .put(cell"D1", true)            // Boolean → CellValue.Bool
+ * sheet.put(ref"A1", "Hello")      // String → CellValue.Text
+ *   .put(ref"B1", 42)              // Int → CellValue.Number
+ *   .put(ref"C1", 3.14)            // Double → CellValue.Number
+ *   .put(ref"D1", true)            // Boolean → CellValue.Bool
  * }}}
  *
  * All conversions are inline for zero runtime overhead.

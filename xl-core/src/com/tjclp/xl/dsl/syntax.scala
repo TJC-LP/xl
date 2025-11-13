@@ -16,7 +16,7 @@ import com.tjclp.xl.style.units.StyleId
  * {{{
  *   import com.tjclp.xl.dsl.*
  *
- *   val patch = (cell"A1" := "Hello") ++ (cell"A1".styled(boldStyle)) ++ range"A1:B1".merge
+ *   val patch = (ref"A1" := "Hello") ++ (ref"A1".styled(boldStyle)) ++ ref"A1:B1".merge
  *   sheet.applyPatch(patch)
  * }}}
  */
@@ -97,7 +97,7 @@ object syntax:
    *
    * Example:
    * {{{
-   *   val patch = (cell"A1" := "Title") ++ (cell"A1".styled(headerStyle))
+   *   val patch = (ref"A1" := "Title") ++ (ref"A1".styled(headerStyle))
    * }}}
    */
   extension (p1: Patch)
@@ -112,9 +112,9 @@ object syntax:
    * Example:
    * {{{
    *   val patch = PatchBatch(
-   *     cell"A1" := "Title",
-   *     cell"A1".styled(headerStyle),
-   *     range"A1:B1".merge
+   *     ref"A1" := "Title",
+   *     ref"A1".styled(headerStyle),
+   *     ref"A1:B1".merge
    *   )
    * }}}
    */
