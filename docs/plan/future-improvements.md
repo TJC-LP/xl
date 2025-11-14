@@ -289,92 +289,34 @@ val styles = parts.get("xl/styles.xml") match
 
 ### 4. XlsxReader Error Path Tests
 
-**Priority**: Medium (Robustness)
-**Estimated Effort**: 2 hours
-**Source**: PR #4 Issue 4
+✅ **Status**: Complete (see `xl-ooxml/test/src/com/tjclp/xl/ooxml/XlsxReaderErrorSpec.scala`)
 
-**Missing Coverage**:
-
-**Malformed XML**:
-- Test: "XlsxReader rejects invalid workbook.xml"
-- Test: "XlsxReader handles missing required elements gracefully"
-- Test: "XlsxReader reports clear errors for malformed styles.xml"
-
-**Missing Required Files**:
-- Test: "XlsxReader rejects XLSX missing workbook.xml"
-- Test: "XlsxReader handles missing worksheet gracefully"
-- Test: "XlsxReader handles missing [Content_Types].xml"
-
-**Corrupt ZIP Files**:
-- Test: "XlsxReader rejects corrupt ZIP"
-- Test: "XlsxReader handles incomplete ZIP"
-- Test: "XlsxReader rejects ZIP with invalid central directory"
-
-**Invalid Relationships**:
-- Test: "XlsxReader handles broken relationship references"
-- Test: "XlsxReader handles circular relationship references"
-- Test: "XlsxReader handles missing relationship targets"
-
-**Implementation**:
-- Create `xl-ooxml/test/src/com/tjclp/xl/ooxml/XlsxReaderErrorSpec.scala`
-- Use resource files with intentionally malformed XLSX
-- Verify proper error messages (not stack traces)
-- Verify no resource leaks on error
+- Added 10 targeted regression tests covering malformed XML, missing parts, corrupt ZIPs, invalid relationships, and bad shared-string indices.
+- Each fixture is built on the fly (no external files) and asserts precise `XLError` messages or `CellError` fallback behavior.
+- Scenarios now include:
+  - Missing/malformed `workbook.xml`
+  - Missing `sheets` node
+  - Malformed `styles.xml`
+  - Missing worksheet parts and relationship targets
+  - Missing `[Content_Types].xml`
+  - Non-ZIP / truncated ZIP payloads
+  - Invalid shared strings references producing `#REF!`
 
 ---
 
 ### 5. Full XLSX Round-Trip Integration Test
 
-**Priority**: Medium (Integration verification)
-**Estimated Effort**: 1 hour
-**Source**: PR #4 Issue 4
+✅ **Status**: Complete (`xl-ooxml/test/src/com/tjclp/xl/ooxml/OoxmlRoundTripSpec.scala`)
 
-**Goal**: Verify all features survive write → read → write cycle with byte-identical output.
-
-**Test Outline**:
-```scala
-test("full XLSX round-trip preserves all features") {
-  // Create workbook with ALL features:
-  val wb = createComplexWorkbook()
-
-  // Features to test:
-  // - All cell types (Text, Number, Bool, Formula, Error, DateTime, RichText)
-  // - All styles (fonts, fills, borders, numFmts, alignment)
-  // - Merged cells
-  // - Multiple sheets
-  // - Non-sequential sheet indices
-  // - Whitespace in text (leading, trailing, double)
-  // - Duplicate strings (SST deduplication)
-  // - All alignment properties
-  // - RichText with formatting
-
-  // Write to bytes
-  val bytes1 = XlsxWriter.toBytes(wb)
-
-  // Read back
-  val wb2 = XlsxReader.fromBytes(bytes1).getOrElse(fail("Read failed"))
-
-  // Write again
-  val bytes2 = XlsxWriter.toBytes(wb2)
-
-  // Verify byte-identical (deterministic output)
-  assertEquals(bytes1, bytes2, "Second write should be byte-identical")
-
-  // Also verify domain model equality
-  assertEquals(wb2.sheets.size, wb.sheets.size)
-  wb.sheets.zip(wb2.sheets).foreach { case (s1, s2) =>
-    assertEquals(s2.cells, s1.cells, "Cells should round-trip")
-    assertEquals(s2.mergedRanges, s1.mergedRanges, "Merges should round-trip")
-    // ... verify all properties
-  }
-}
-```
-
-**Benefits**:
-- High confidence in round-trip fidelity
-- Catches subtle serialization bugs
-- Verifies deterministic output
-- Integration-level validation
+- Builds a 3-sheet workbook exercising:
+  - All cell value variants (Text, Number, Bool, DateTime, Error)
+  - Shared strings with deduplication
+  - Rich styling (fonts, fills, borders, alignments)
+  - Merged ranges and multi-sheet relationships
+- Asserts:
+  - Domain equality between original and round-tripped workbooks (with special handling for Excel date serials).
+  - Byte-identical output across write → read → write by normalizing ZIP metadata (fixed timestamps) and preserving style registry ordering.
+- Added diagnostics to highlight offending ZIP entries if the deterministic guarantee regresses.
 
 ---
 
@@ -387,6 +329,8 @@ test("full XLSX round-trip preserves all features") {
 - [x] Benchmark tests verify linear scaling (StylePerformanceSpec: 2 tests)
 - [x] Determinism tests verify stable output (DeterminismSpec: 4 tests)
 - [x] Security tests verify XXE protection (SecuritySpec: 3 tests)
+- [x] Error-path regression suite for XlsxReader (10 tests in `XlsxReaderErrorSpec`)
+- [x] Full-feature round-trip integration test with deterministic ZIP output
 - [x] All tests passing (645 total: 169 core + 215 ooxml + 261 cats-effect)
 - [x] Code formatted (Scalafmt 3.10.1)
 - [x] Documentation updated (this file, roadmap.md)
@@ -395,8 +339,6 @@ test("full XLSX round-trip preserves all features") {
 ### Deferred (Medium Priority)
 - [ ] Whitespace check extracted to XmlUtil.needsXmlSpacePreserve
 - [ ] All 5 call sites updated to use utility
-- [ ] 10+ error path tests for XlsxReader
-- [ ] 1 comprehensive round-trip integration test
 - [ ] Logging strategy documented for P11
 
 ### Future Work

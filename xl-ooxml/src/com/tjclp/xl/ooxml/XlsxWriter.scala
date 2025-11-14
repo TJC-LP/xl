@@ -168,6 +168,7 @@ object XlsxWriter:
     config: WriterConfig
   ): Unit =
     val entry = new ZipEntry(entryName)
+    entry.setTime(0L) // deterministic ZIP metadata for reproducible output
     entry.setMethod(config.compression.zipMethod)
 
     // Convert XML to bytes with conditional formatting

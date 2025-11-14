@@ -185,31 +185,24 @@ object XlsxReader:
     sst: Option[SharedStrings],
     styles: WorkbookStyles
   ): XLResult[Sheet] =
-    val (cellsMap, finalRegistry) =
-      ooxmlSheet.rows.foldLeft((Map.empty[ARef, Cell], StyleRegistry.default)) {
-        case ((cellsAcc, registry), row) =>
-          row.cells.foldLeft((cellsAcc, registry)) { case ((cellMapAcc, registryAcc), ooxmlCell) =>
-            val value = (ooxmlCell.cellType, ooxmlCell.value, sst) match
-              case ("s", CellValue.Text(idxStr), Some(sharedStrings)) =>
-                idxStr.toIntOption match
-                  case Some(idx) =>
-                    sharedStrings(idx) match
-                      case Some(text) => CellValue.Text(text)
-                      case None => CellValue.Error(CellError.Ref)
-                  case None => CellValue.Error(com.tjclp.xl.cell.CellError.Value)
-              case _ => ooxmlCell.value
+    val (preRegisteredRegistry, styleMapping) = buildStyleRegistry(styles)
+    val cellsMap =
+      ooxmlSheet.rows.foldLeft(Map.empty[ARef, Cell]) { case (cellsAcc, row) =>
+        row.cells.foldLeft(cellsAcc) { case (cellMapAcc, ooxmlCell) =>
+          val value = (ooxmlCell.cellType, ooxmlCell.value, sst) match
+            case ("s", CellValue.Text(idxStr), Some(sharedStrings)) =>
+              idxStr.toIntOption match
+                case Some(idx) =>
+                  sharedStrings(idx) match
+                    case Some(text) => CellValue.Text(text)
+                    case None => CellValue.Error(CellError.Ref)
+                case None => CellValue.Error(com.tjclp.xl.cell.CellError.Value)
+            case _ => ooxmlCell.value
 
-            val (nextRegistry, styleIdOpt) = ooxmlCell.styleIndex
-              .flatMap(styles.styleAt)
-              .map { style =>
-                val (updatedRegistry, styleId) = registryAcc.register(style)
-                (updatedRegistry, Some(styleId))
-              }
-              .getOrElse((registryAcc, None))
-
-            val cell = Cell(ooxmlCell.ref, value, styleIdOpt)
-            (cellMapAcc.updated(cell.ref, cell), nextRegistry)
-          }
+          val styleIdOpt = ooxmlCell.styleIndex.flatMap(styleMapping.get)
+          val cell = Cell(ooxmlCell.ref, value, styleIdOpt)
+          cellMapAcc.updated(cell.ref, cell)
+        }
       }
 
     Right(
@@ -217,9 +210,18 @@ object XlsxReader:
         name = name,
         cells = cellsMap,
         mergedRanges = ooxmlSheet.mergedRanges,
-        styleRegistry = finalRegistry
+        styleRegistry = preRegisteredRegistry
       )
     )
+
+  private def buildStyleRegistry(
+    styles: WorkbookStyles
+  ): (StyleRegistry, Map[Int, StyleId]) =
+    styles.cellStyles.zipWithIndex.foldLeft((StyleRegistry.default, Map.empty[Int, StyleId])) {
+      case ((registry, mapping), (style, idx)) =>
+        val (nextRegistry, styleId) = registry.register(style)
+        (nextRegistry, mapping.updated(idx, styleId))
+    }
 
   /** Assemble final workbook */
   private def assembleWorkbook(sheets: Vector[Sheet]): XLResult[Workbook] =
