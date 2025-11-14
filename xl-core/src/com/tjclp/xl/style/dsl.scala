@@ -7,6 +7,8 @@ import com.tjclp.xl.style.fill.Fill
 import com.tjclp.xl.style.font.Font
 import com.tjclp.xl.style.numfmt.NumFmt
 
+import scala.quoted.*
+
 /**
  * Fluent DSL for building CellStyle instances with ergonomic shortcuts.
  *
@@ -90,15 +92,19 @@ object dsl:
     /**
      * Set font color from hex code (#RRGGBB or #AARRGGBB).
      *
-     * Invalid codes log a warning and return unchanged style. Use hexValidated"..." macro for
-     * compile-time validation (future feature).
+     * String literals are validated at compile-time (build fails if invalid). Dynamic strings are
+     * validated at runtime (silent fail if invalid, style unchanged).
+     *
+     * Examples:
+     * {{{
+     * style.hex("#FF0000")     // ✅ Compile-time validated
+     * style.hex("#GGGGGG")     // ❌ Compile error: Invalid hex
+     * style.hex(userInput)     // ✅ Runtime validated (silent fail if invalid)
+     * }}}
      */
-    inline def hex(code: String): CellStyle =
-      Color.fromHex(code) match
-        case Right(c) => style.withFont(style.font.withColor(c))
-        case Left(err) =>
-          System.err.println(s"Warning: Invalid hex color code '$code' - $err (style unchanged)")
-          style
+    transparent inline def hex(code: String): CellStyle = ${
+      HexColorMacros.validateHex('code, 'style, false)
+    }
 
     // ========== Preset Background Colors ==========
 
@@ -139,15 +145,19 @@ object dsl:
     /**
      * Set background color from hex code (#RRGGBB or #AARRGGBB).
      *
-     * Invalid codes log a warning and return unchanged style. Use hexValidated"..." macro for
-     * compile-time validation (future feature).
+     * String literals are validated at compile-time (build fails if invalid). Dynamic strings are
+     * validated at runtime (silent fail if invalid, style unchanged).
+     *
+     * Examples:
+     * {{{
+     * style.bgHex("#F5F5F5")   // ✅ Compile-time validated
+     * style.bgHex("#ZZZZZZ")   // ❌ Compile error: Invalid hex
+     * style.bgHex(userBg)      // ✅ Runtime validated (silent fail if invalid)
+     * }}}
      */
-    inline def bgHex(code: String): CellStyle =
-      Color.fromHex(code) match
-        case Right(c) => style.withFill(Fill.Solid(c))
-        case Left(err) =>
-          System.err.println(s"Warning: Invalid hex color code '$code' - $err (style unchanged)")
-          style
+    transparent inline def bgHex(code: String): CellStyle = ${
+      HexColorMacros.validateHex('code, 'style, true)
+    }
 
     // ========== Alignment ==========
 
@@ -255,5 +265,45 @@ object dsl:
     /** Bold, centered - simple column header */
     val columnHeader: CellStyle =
       CellStyle.default.bold.center
+
+/** Macro helpers for compile-time hex color validation */
+private object HexColorMacros:
+  /**
+   * Validates hex color at compile-time if literal, at runtime otherwise.
+   *
+   * @param code
+   *   Hex color code expression
+   * @param style
+   *   Current style expression
+   * @param isBackground
+   *   If true, applies to background; otherwise to font
+   */
+  def validateHex(code: Expr[String], style: Expr[CellStyle], isBackground: Boolean)(using
+    Quotes
+  ): Expr[CellStyle] =
+    import quotes.reflect.*
+
+    code.value match
+      case Some(literal) =>
+        // Compile-time constant - validate now!
+        Color.fromHex(literal) match
+          case Right(c) =>
+            val argb = Expr(c.toArgb)
+            if isBackground then '{ $style.withFill(Fill.Solid(Color.Rgb($argb))) }
+            else '{ $style.withFont($style.font.withColor(Color.Rgb($argb))) }
+          case Left(err) =>
+            report.errorAndAbort(
+              s"Invalid hex color code '$literal': $err\n" +
+                s"Expected format: #RRGGBB or #AARRGGBB with valid hex digits (0-9, A-F)\n" +
+                s"Examples: #FF0000 (red), #00FF00 (green), #4472C4 (blue)"
+            )
+      case None =>
+        // Runtime string - validate at runtime (pure, silent fail)
+        if isBackground then
+          '{ Color.fromHex($code).fold(_ => $style, c => $style.withFill(Fill.Solid(c))) }
+        else
+          '{
+            Color.fromHex($code).fold(_ => $style, c => $style.withFont($style.font.withColor(c)))
+          }
 
 export dsl.*

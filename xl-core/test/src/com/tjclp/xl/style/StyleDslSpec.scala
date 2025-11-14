@@ -79,15 +79,40 @@ class StyleDslSpec extends ScalaCheckSuite:
     assert(style.font.color.isDefined)
   }
 
-  test("hex with short code works") {
-    val style = CellStyle.default.hex("#F00") // Should handle this gracefully
-    // Either parses or silently ignores - test it doesn't crash
-    assert(style != null)
+  test("hex with invalid code silently ignored (runtime validation)") {
+    // Use variable to bypass compile-time validation, test runtime path
+    val invalidCode: String = "invalid"  // Runtime string
+    val style = CellStyle.default.hex(invalidCode)
+    assertEquals(style, CellStyle.default) // No change, silent fail
   }
 
-  test("hex with invalid code silently ignored") {
-    val style = CellStyle.default.hex("invalid")
-    assertEquals(style, CellStyle.default) // No change
+  test("hex with short code silently ignored (runtime validation)") {
+    // Short codes like #F00 are not supported (need #RRGGBB)
+    val shortCode: String = "#F00"
+    val style = CellStyle.default.hex(shortCode)
+    assertEquals(style, CellStyle.default) // No change, silent fail
+  }
+
+  test("hex with literal validates at compile-time") {
+    // String literals are validated at compile-time by macro
+    val red = CellStyle.default.hex("#FF0000")
+    assert(red.font.color.isDefined)
+    assertEquals(red.font.color.get, Color.fromRgb(255, 0, 0))
+
+    val blue = CellStyle.default.hex("#0000FF")
+    assert(blue.font.color.isDefined)
+
+    val customWithAlpha = CellStyle.default.hex("#FF4472C4")
+    assert(customWithAlpha.font.color.isDefined)
+  }
+
+  test("bgHex with literal validates at compile-time") {
+    // String literals are validated at compile-time by macro
+    val lightGray = CellStyle.default.bgHex("#F5F5F5")
+    assert(lightGray.fill.isInstanceOf[Fill.Solid])
+
+    val darkBlue = CellStyle.default.bgHex("#003366")
+    assert(darkBlue.fill.isInstanceOf[Fill.Solid])
   }
 
   // ========== Preset Background Color Tests ==========

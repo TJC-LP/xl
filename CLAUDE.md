@@ -349,6 +349,32 @@ Macros in `xl-core/src/com/tjclp/xl/macros/`:
 - Zero-allocation parsers (no regex, manual char iteration)
 - All macros are `transparent inline` (zero runtime cost)
 
+**Hybrid Compile-Time/Runtime Validation Pattern**:
+
+XL uses a smart pattern for methods that accept both literals and dynamic strings (e.g., `.hex()` in Style DSL):
+
+```scala
+// Macro checks if parameter is compile-time constant
+transparent inline def hex(code: String): CellStyle = ${ hexMacro('code, 'style) }
+
+def hexMacro(code: Expr[String], style: Expr[CellStyle])(using Quotes): Expr[CellStyle] =
+  code.value match
+    case Some(literal) =>
+      // Compile-time validation for string literals
+      Color.fromHex(literal) match
+        case Right(c) => emitConstant(c, style)
+        case Left(err) => quotes.reflect.report.errorAndAbort(s"Invalid hex: $err")
+    case None =>
+      // Runtime validation for dynamic strings (pure, silent fail)
+      '{ Color.fromHex($code).fold(_ => $style, c => applyColor($style, c)) }
+```
+
+**Benefits**:
+- String literals → compile errors if invalid (`style.hex("#GGGGGG")` fails build)
+- Dynamic strings → runtime validation (`style.hex(userInput)` compiles, fails gracefully)
+- Single API (no separate methods needed)
+- Zero overhead (literals emit constants, runtime uses efficient Either)
+
 ### DSL Patterns
 
 **Patch DSL** (`xl-core/src/com/tjclp/xl/dsl.scala`):

@@ -146,10 +146,10 @@ case class Sheet(
           return Left(XLError.UnsupportedType(ref.toA1, unsupported.getClass.getName))
     }
 
-    // Update sheet with new registry and cells (inline putAll implementation)
+    // Update sheet with new registry and cells (O(n) bulk insertion)
     val withCells = copy(
       styleRegistry = registry,
-      cells = cells.foldLeft(this.cells)((acc, cell) => acc.updated(cell.ref, cell))
+      cells = this.cells ++ cells.map(cell => cell.ref -> cell)
     )
 
     // Apply styles in batch

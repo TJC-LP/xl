@@ -124,11 +124,18 @@ val brandStyle = CellStyle.default
   .bold.rgb(68, 114, 196)        // Custom text color
   .bgRgb(240, 240, 240)          // Custom background
 
-// Or use hex codes (e.g., brand guidelines)
+// Hex codes with compile-time validation (literals validated at build time!)
 val tjcStyle = CellStyle.default
-  .white.hex("#003366")          // TJC blue text
-  .bgHex("#F5F5F5")              // Light gray background
+  .white.hex("#003366")          // ✅ TJC blue - validated at compile-time
+  .bgHex("#F5F5F5")              // ✅ Light gray - validated at compile-time
   .bold.center
+
+// Invalid hex codes fail the build:
+// val bad = CellStyle.default.hex("#GGGGGG")  // ❌ Compile error!
+
+// Dynamic hex codes work (runtime validation, silent fail if invalid)
+val userColor = getUserPreference()
+val dynamic = CellStyle.default.hex(userColor)  // ✅ Compiles, pure
 
 // Prebuilt constants for common styles
 val header = Style.header          // Bold, 14pt, blue bg, white text, centered
