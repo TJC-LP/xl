@@ -101,3 +101,15 @@ object XmlUtil:
   /** Get all child elements with given label */
   def getChildren(elem: Elem, label: String): Seq[Elem] =
     (elem \ label).collect { case e: Elem => e }
+
+  /**
+   * Determine whether a text node requires xml:space="preserve".
+   *
+   * REQUIRES: s is a (possibly empty) String ENSURES:
+   *   - Returns true when text has leading or trailing whitespace
+   *   - Returns true when text contains consecutive spaces (" ")
+   *   - Returns false for strings that Excel can safely trim
+   * DETERMINISTIC: Yes (pure function)
+   */
+  def needsXmlSpacePreserve(s: String): Boolean =
+    s.nonEmpty && (s.startsWith(" ") || s.endsWith(" ") || s.contains("  "))

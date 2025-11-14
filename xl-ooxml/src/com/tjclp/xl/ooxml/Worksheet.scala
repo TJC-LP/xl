@@ -25,7 +25,7 @@ case class OoxmlCell(
       case CellValue.Empty => Seq.empty
       case CellValue.Text(text) if cellType == "inlineStr" =>
         // Add xml:space="preserve" for text with leading/trailing/multiple spaces
-        val needsPreserve = text.startsWith(" ") || text.endsWith(" ") || text.contains("  ")
+        val needsPreserve = needsXmlSpacePreserve(text)
         val tElem =
           if needsPreserve then
             Elem(
@@ -66,7 +66,7 @@ case class OoxmlCell(
           // Text run: <r> with optional <rPr> and <t>
           // Add xml:space="preserve" to preserve leading/trailing/multiple spaces
           val textElem =
-            if run.text.startsWith(" ") || run.text.endsWith(" ") || run.text.contains("  ") then
+            if needsXmlSpacePreserve(run.text) then
               Elem(
                 null,
                 "t",

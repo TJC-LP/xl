@@ -329,6 +329,7 @@ val styles = parts.get("xl/styles.xml") match
 - [x] Benchmark tests verify linear scaling (StylePerformanceSpec: 2 tests)
 - [x] Determinism tests verify stable output (DeterminismSpec: 4 tests)
 - [x] Security tests verify XXE protection (SecuritySpec: 3 tests)
+- [x] Whitespace preservation check centralized in `XmlUtil.needsXmlSpacePreserve`
 - [x] Error-path regression suite for XlsxReader (10 tests in `XlsxReaderErrorSpec`)
 - [x] Full-feature round-trip integration test with deterministic ZIP output
 - [x] All tests passing (645 total: 169 core + 215 ooxml + 261 cats-effect)
@@ -337,8 +338,6 @@ val styles = parts.get("xl/styles.xml") match
 - [x] Committed (79b3269)
 
 ### Deferred (Medium Priority)
-- [ ] Whitespace check extracted to XmlUtil.needsXmlSpacePreserve
-- [ ] All 5 call sites updated to use utility
 - [ ] Logging strategy documented for P11
 
 ### Future Work
