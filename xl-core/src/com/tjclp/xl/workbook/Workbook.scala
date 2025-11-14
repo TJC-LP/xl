@@ -54,40 +54,78 @@ case class Workbook(
       case RefType.QualifiedRange(sheetName, range) =>
         apply(sheetName).map(sheet => sheet.getRange(range))
 
+  /**
+   * Put sheet (add-or-replace by name).
+   *
+   * If a sheet with the same name exists, replaces it in-place. Otherwise, adds at end. This is the
+   * preferred method for adding/updating sheets.
+   *
+   * Example:
+   * {{{
+   * val sales = Sheet("Sales").map(_.put(ref"A1" -> "Revenue"))
+   * val wb2 = wb.put(sales).unsafe  // Add or replace "Sales" sheet
+   * }}}
+   */
+  def put(sheet: Sheet): XLResult[Workbook] =
+    sheets.indexWhere(_.name == sheet.name) match
+      case -1 =>
+        // Sheet doesn't exist → add at end
+        Right(copy(sheets = sheets :+ sheet))
+      case index =>
+        // Sheet exists → replace in-place (preserves order)
+        Right(copy(sheets = sheets.updated(index, sheet)))
+
+  /**
+   * Put sheet with explicit name (rename if needed, then add-or-replace).
+   *
+   * Useful for renaming sheets during updates.
+   */
+  def put(name: SheetName, sheet: Sheet): XLResult[Workbook] =
+    put(sheet.copy(name = name))
+
+  /**
+   * Put sheet with explicit name (string variant).
+   */
+  @annotation.targetName("putWithStringName")
+  def put(name: String, sheet: Sheet): XLResult[Workbook] =
+    SheetName(name).left
+      .map(err => XLError.InvalidSheetName(name, err))
+      .flatMap(sn => put(sn, sheet))
+
+  /**
+   * Put multiple sheets atomically (batch operation).
+   *
+   * Example:
+   * {{{
+   * wb.put(Sheet("Sales"), Sheet("Marketing"), Sheet("Finance"))
+   * }}}
+   */
+  def put(firstSheet: Sheet, restSheets: Sheet*): XLResult[Workbook] =
+    (firstSheet +: restSheets).foldLeft(Right(this): XLResult[Workbook]) { (acc, sheet) =>
+      acc.flatMap(_.put(sheet))
+    }
+
   /** Add sheet at end */
+  @deprecated("Use put(sheet) instead (add-or-replace semantic)", "0.2.0")
   def addSheet(sheet: Sheet): XLResult[Workbook] =
     if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
     else Right(copy(sheets = sheets :+ sheet))
 
-  /** Insert sheet at index */
-  def insertSheet(index: Int, sheet: Sheet): XLResult[Workbook] =
-    if index < 0 || index > sheets.size then
-      Left(XLError.OutOfBounds(s"insert[$index]", s"Valid range: 0 to ${sheets.size}"))
-    else if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
-    else
-      val (before, after) = sheets.splitAt(index)
-      Right(copy(sheets = before ++ (sheet +: after)))
-
-  /** Update sheet by index */
-  def updateSheet(index: Int, sheet: Sheet): XLResult[Workbook] =
-    if index >= 0 && index < sheets.size then
-      // Check for duplicate names (excluding the sheet being updated)
-      val hasDuplicate = sheets.zipWithIndex
-        .exists { case (s, i) => i != index && s.name == sheet.name }
-      if hasDuplicate then Left(XLError.DuplicateSheet(sheet.name.value))
-      else Right(copy(sheets = sheets.updated(index, sheet)))
-    else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
-
-  /** Update sheet by name */
-  def updateSheet(name: SheetName, f: Sheet => Sheet): XLResult[Workbook] =
+  /** Remove sheet by name (preferred method) */
+  def remove(name: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == name) match
       case -1 => Left(XLError.SheetNotFound(name.value))
-      case index =>
-        val updated = f(sheets(index))
-        updateSheet(index, updated)
+      case index => removeAt(index)
+
+  /** Remove sheet by name (string variant) */
+  @annotation.targetName("removeByString")
+  def remove(name: String): XLResult[Workbook] =
+    SheetName(name).left
+      .map(err => XLError.InvalidSheetName(name, err))
+      .flatMap(remove)
 
   /** Remove sheet by index */
-  def removeSheet(index: Int): XLResult[Workbook] =
+  def removeAt(index: Int): XLResult[Workbook] =
     if sheets.size <= 1 then Left(XLError.InvalidWorkbook("Cannot remove last sheet"))
     else if index >= 0 && index < sheets.size then
       val newSheets = sheets.patch(index, Nil, 1)
@@ -96,14 +134,8 @@ case class Workbook(
       Right(copy(sheets = newSheets, activeSheetIndex = newActiveIndex))
     else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
-  /** Remove sheet by name */
-  def removeSheet(name: SheetName): XLResult[Workbook] =
-    sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value))
-      case index => removeSheet(index)
-
   /** Rename sheet */
-  def renameSheet(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
+  def rename(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == oldName) match
       case -1 => Left(XLError.SheetNotFound(oldName.value))
       case index =>
@@ -112,6 +144,63 @@ case class Workbook(
         else
           val updated = sheets(index).copy(name = newName)
           Right(copy(sheets = sheets.updated(index, updated)))
+
+  /**
+   * Update sheet by applying a function to it.
+   *
+   * Convenience method for modify-in-place pattern. Extracts sheet, applies function, puts back.
+   *
+   * Example:
+   * {{{
+   * workbook.update("Sales", _.put(ref"A1" -> "Revenue"))
+   * }}}
+   */
+  def update(name: SheetName, f: Sheet => Sheet): XLResult[Workbook] =
+    apply(name).flatMap(sheet => put(f(sheet)))
+
+  /**
+   * Update sheet by applying a function (string variant).
+   */
+  @annotation.targetName("updateByString")
+  def update(name: String, f: Sheet => Sheet): XLResult[Workbook] =
+    SheetName(name).left
+      .map(err => XLError.InvalidSheetName(name, err))
+      .flatMap(sn => update(sn, f))
+
+  /** Insert sheet at specific index (explicit positioning - rarely needed) */
+  def insertAt(index: Int, sheet: Sheet): XLResult[Workbook] =
+    if index < 0 || index > sheets.size then
+      Left(XLError.OutOfBounds(s"insert[$index]", s"Valid range: 0 to ${sheets.size}"))
+    else if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
+    else
+      val (before, after) = sheets.splitAt(index)
+      Right(copy(sheets = before ++ (sheet +: after)))
+
+  // ========== Deprecated Methods (Removed in v0.3.0) ==========
+
+  @deprecated("Use put(sheet) instead (add-or-replace semantic)", "0.2.0")
+  def insertSheet(index: Int, sheet: Sheet): XLResult[Workbook] =
+    insertAt(index, sheet)
+
+  @deprecated("Use put(sheet) instead", "0.2.0")
+  def updateSheet(index: Int, sheet: Sheet): XLResult[Workbook] =
+    put(sheet)
+
+  @deprecated("Use update(name, f) instead", "0.2.0")
+  def updateSheet(name: SheetName, f: Sheet => Sheet): XLResult[Workbook] =
+    update(name, f)
+
+  @deprecated("Use remove(name) instead", "0.2.0")
+  def removeSheet(name: SheetName): XLResult[Workbook] =
+    remove(name)
+
+  @deprecated("Use removeAt(index) instead", "0.2.0")
+  def removeSheet(index: Int): XLResult[Workbook] =
+    removeAt(index)
+
+  @deprecated("Use rename(oldName, newName) instead", "0.2.0")
+  def renameSheet(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
+    rename(oldName, newName)
 
   /** Set active sheet index */
   def setActiveSheet(index: Int): XLResult[Workbook] =

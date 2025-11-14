@@ -67,26 +67,40 @@ cd xl
 
 ```scala
 import com.tjclp.xl.*
-// Unified import: all domain types, syntax, macros (ref", fx", etc.)
+// Unified import: all domain types, syntax, macros (ref", money", date", etc.)
 
-// Create a workbook
-val wb = Workbook("MySheet").map { workbook =>
-  val sheet = workbook.sheets(0)
+// Create workbook and update sheet (clean one-liner!)
+val result = for
+  workbook <- Workbook.empty
+  final <- workbook.update("Sheet1", sheet =>
+    sheet.put(
+      ref"A1" -> "Product",
+      ref"B1" -> "Price",
+      ref"A2" -> "Widget",
+      ref"B2" -> money"$$19.99",    // Formatted literal preserves Currency!
+      ref"C2" -> 42
+    )
+  )
+yield final
 
-  // Use compile-time validated cell references
-  val a1 = ref"A1"
+// Or build sheet first, then add to workbook
+val salesSheet = Sheet("Sales").map(_.put(
+  ref"A1" -> "Revenue",
+  ref"B1" -> money"$$10,000"
+))
 
-  // Build updates with Monoid composition
-  val updates =
-    (Patch.Put(a1, CellValue.Text("Hello")): Patch) |+|
-    (Patch.Put(ref"B1", CellValue.Number(42)): Patch) |+|
-    (Patch.SetStyle(a1, 1): Patch)
+val wb = for
+  workbook <- Workbook.empty
+  sheet <- salesSheet
+  final <- workbook.put(sheet)      // Add-or-replace by sheet name
+yield final
 
-  // Apply patches to get updated sheet
-  sheet.put(updates).map { updated =>
-    workbook.updateSheet(0, updated)
-  }
-}
+// Batch add multiple sheets
+workbook.put(Sheet("Sales"), Sheet("Marketing"), Sheet("Finance"))
+
+// Patch DSL for conditional updates
+val patch = (ref"A1" := "Title") ++ range"A1:C1".merge
+sheet.put(patch).unsafe              // Unwrap if you know it's safe
 ```
 
 ### Styling Example
@@ -94,19 +108,33 @@ val wb = Workbook("MySheet").map { workbook =>
 ```scala
 import com.tjclp.xl.*
 
-// Define a style with the builder API
+// CellStyle DSL with fluent method chaining
 val headerStyle = CellStyle.default
-  .withFont(Font("Arial", 14.0, bold = true))
-  .withFill(Fill.Solid(Color.fromRgb(200, 200, 200)))
-  .withBorder(Border.all(BorderStyle.Thin))
-  .withAlign(Align(HAlign.Center, VAlign.Middle))
+  .bold.size(14.0).fontFamily("Arial")
+  .bgGray.bordered
+  .center.middle
 
-// Apply style patches
-val styleUpdates =
-  (StylePatch.SetFont(Font("Calibri", 12.0)): StylePatch) |+|
-  (StylePatch.SetFill(Fill.Solid(Color.Rgb(0xFFFFFFFF))): StylePatch)
+// Custom colors with RGB
+val brandStyle = CellStyle.default
+  .bold.rgb(68, 114, 196)        // Custom text color
+  .bgRgb(240, 240, 240)          // Custom background
 
-val newStyle = CellStyle.default.put(styleUpdates)
+// Or use hex codes (e.g., brand guidelines)
+val tjcStyle = CellStyle.default
+  .white.hex("#003366")          // TJC blue text
+  .bgHex("#F5F5F5")              // Light gray background
+  .bold.center
+
+// Prebuilt constants for common styles
+val header = Style.header          // Bold, 14pt, blue bg, white text, centered
+val currency = Style.currencyCell  // Currency format, right-aligned
+
+// Apply styles with unified put
+sheet.put(
+  (ref"A1" := "Revenue Report") ++
+  ref"A1".styled(headerStyle) ++
+  range"A1:C1".merge
+)
 ```
 
 ### Type-Safe Cell Operations with Codecs
