@@ -36,6 +36,6 @@ object syntax:
   export macros.RefLiteral.*
   export macros.CellRangeLiterals.fx
   export macros.FormattedLiterals.{money, percent, date, accounting}
-  export macros.BatchPutMacro.put
+  // BatchPutMacro.put removed - dead code (shadowed by Sheet.put member)
 
 export syntax.*

@@ -1,0 +1,15 @@
+# SDKMAN configuration for XL project
+# Auto-switches Java version when entering directory (if sdkman_auto_env=true in ~/.sdkman/etc/config)
+# Install SDKMAN: https://sdkman.io/
+#
+# To enable auto-switching:
+#   echo "sdkman_auto_env=true" >> ~/.sdkman/etc/config
+#
+# To install Java 25 (choose your preferred distribution):
+#   sdk install java 25-tem        # Eclipse Temurin (recommended)
+#   sdk install java 25-amzn       # Amazon Corretto
+#   sdk install java 25-zulu       # Azul Zulu
+#
+# Then update this file with the exact version you installed
+
+java=25-tem

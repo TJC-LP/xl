@@ -10,7 +10,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.macros.BatchPutMacro.put  // For batch put extension
+// Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.CellStyle
 import com.tjclp.xl.style.color.Color

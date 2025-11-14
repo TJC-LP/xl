@@ -1,5 +1,7 @@
 package com.tjclp.xl.addressing
 
+import scala.util.boundary, boundary.break
+
 /**
  * Unified reference type for all Excel addressing formats.
  *
@@ -100,43 +102,44 @@ object RefType:
    * @return
    *   Either error message or parsed RefType
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.Return"))
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def parse(s: String): Either[String, RefType] =
-    if s.isEmpty then return Left("Empty reference")
+    boundary:
+      if s.isEmpty then break(Left("Empty reference"))
 
-    // Check for sheet qualifier (!)
-    val bangIdx = findUnquotedBang(s)
-    if bangIdx < 0 then
-      // No sheet qualifier, parse as cell or range
-      if s.contains(':') then CellRange.parse(s).map(Range.apply)
-      else ARef.parse(s).map(Cell.apply)
-    else
-      // Has sheet qualifier
-      val sheetPart = s.substring(0, bangIdx)
-      val refPart = s.substring(bangIdx + 1)
-
-      if refPart.isEmpty then return Left(s"Missing reference after '!' in: $s")
-
-      // Parse sheet name (handle quotes and escaping)
-      val sheetName = if sheetPart.startsWith("'") then
-        if !sheetPart.endsWith("'") then
-          return Left(s"Unbalanced quotes in sheet name: $sheetPart (missing closing quote)")
-        val quoted = sheetPart.substring(1, sheetPart.length - 1)
-        if quoted.isEmpty then return Left("Empty sheet name in quotes")
-        // Unescape '' → ' (Excel convention)
-        val unescaped = quoted.replace("''", "'")
-        SheetName(unescaped)
+      // Check for sheet qualifier (!)
+      val bangIdx = findUnquotedBang(s)
+      if bangIdx < 0 then
+        // No sheet qualifier, parse as cell or range
+        if s.contains(':') then CellRange.parse(s).map(Range.apply)
+        else ARef.parse(s).map(Cell.apply)
       else
-        if sheetPart.contains("'") then
-          return Left(s"Misplaced quote in sheet name: $sheetPart (quotes must wrap entire name)")
-        SheetName(sheetPart)
+        // Has sheet qualifier
+        val sheetPart = s.substring(0, bangIdx)
+        val refPart = s.substring(bangIdx + 1)
 
-      sheetName match
-        case Left(err) => Left(s"Invalid sheet name: $err")
-        case Right(sheet) =>
-          // Parse ref part as cell or range
-          if refPart.contains(':') then CellRange.parse(refPart).map(QualifiedRange(sheet, _))
-          else ARef.parse(refPart).map(QualifiedCell(sheet, _))
+        if refPart.isEmpty then break(Left(s"Missing reference after '!' in: $s"))
+
+        // Parse sheet name (handle quotes and escaping)
+        val sheetName = if sheetPart.startsWith("'") then
+          if !sheetPart.endsWith("'") then
+            break(Left(s"Unbalanced quotes in sheet name: $sheetPart (missing closing quote)"))
+          val quoted = sheetPart.substring(1, sheetPart.length - 1)
+          if quoted.isEmpty then break(Left("Empty sheet name in quotes"))
+          // Unescape '' → ' (Excel convention)
+          val unescaped = quoted.replace("''", "'")
+          SheetName(unescaped)
+        else
+          if sheetPart.contains("'") then
+            break(Left(s"Misplaced quote in sheet name: $sheetPart (quotes must wrap entire name)"))
+          SheetName(sheetPart)
+
+        sheetName match
+          case Left(err) => Left(s"Invalid sheet name: $err")
+          case Right(sheet) =>
+            // Parse ref part as cell or range
+            if refPart.contains(':') then CellRange.parse(refPart).map(QualifiedRange(sheet, _))
+            else ARef.parse(refPart).map(QualifiedCell(sheet, _))
 
   /**
    * Find index of unquoted '!' (not inside 'quotes').
@@ -152,15 +155,16 @@ object RefType:
    *
    * Returns -1 if no unquoted bang found.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.Return"))
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def findUnquotedBang(s: String): Int =
-    var i = 0
-    var inQuote = false
-    while i < s.length do
-      val c = s.charAt(i)
-      if c == '\'' then inQuote = !inQuote
-      else if c == '!' && !inQuote then return i
-      i += 1
-    -1
+    boundary:
+      var i = 0
+      var inQuote = false
+      while i < s.length do
+        val c = s.charAt(i)
+        if c == '\'' then inQuote = !inQuote
+        else if c == '!' && !inQuote then break(i)
+        i += 1
+      -1
 
 end RefType

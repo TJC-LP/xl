@@ -77,7 +77,6 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Batch put: multiple cells at once") {
     import com.tjclp.xl.macros.ref
-    import com.tjclp.xl.macros.put
 
     val sheet = emptySheet
       .put(
@@ -94,7 +93,6 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Batch put: mixed types") {
     import com.tjclp.xl.macros.ref
-    import com.tjclp.xl.macros.put
 
     val sheet = emptySheet
       .put(
@@ -115,7 +113,6 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Batch put: creates table structure") {
     import com.tjclp.xl.macros.ref
-    import com.tjclp.xl.macros.put
 
     val sheet = emptySheet
       .put(

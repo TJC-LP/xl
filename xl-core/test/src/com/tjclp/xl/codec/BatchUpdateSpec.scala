@@ -6,7 +6,7 @@ import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.macros.BatchPutMacro.put  // For batch put extension
+// Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.numfmt.NumFmt
 import com.tjclp.xl.unsafe.*

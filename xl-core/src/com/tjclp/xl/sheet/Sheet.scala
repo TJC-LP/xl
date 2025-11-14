@@ -6,6 +6,7 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.style.{CellStyle, StyleRegistry}
 
 import scala.collection.immutable.{Map, Set}
+import scala.util.boundary, boundary.break
 
 /**
  * A worksheet containing cells, merged ranges, and properties.
@@ -95,70 +96,71 @@ case class Sheet(
    * @return
    *   Either error (if unsupported type) or updated sheet
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.Return"))
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def put(updates: (ARef, Any)*): XLResult[Sheet] =
     import com.tjclp.xl.codec.{CellCodec, given}
     import java.time.{LocalDate, LocalDateTime}
 
-    // NOTE: Local mutation for performance - buffers are private to this method
-    // and never escape. The function remains pure (referentially transparent) because:
-    // 1. All mutations are confined to this scope
-    // 2. No shared mutable state is accessed
-    // 3. Output depends only on inputs (deterministic)
-    // This is a common FP optimization pattern for bulk operations (similar to Scala stdlib).
+    boundary:
+      // NOTE: Local mutation for performance - buffers are private to this method
+      // and never escape. The function remains pure (referentially transparent) because:
+      // 1. All mutations are confined to this scope
+      // 2. No shared mutable state is accessed
+      // 3. Output depends only on inputs (deterministic)
+      // This is a common FP optimization pattern for bulk operations (similar to Scala stdlib).
 
-    // Single-pass: build cells and collect styles simultaneously
-    val cells = scala.collection.mutable.ArrayBuffer[Cell]()
-    val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
-    var registry = styleRegistry
+      // Single-pass: build cells and collect styles simultaneously
+      val cells = scala.collection.mutable.ArrayBuffer[Cell]()
+      val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
+      var registry = styleRegistry
 
-    // Helper to process a typed value (DRY)
-    def processValue[A: CellCodec](ref: ARef, value: A): Unit =
-      val (cellValue, styleOpt) = CellCodec[A].write(value)
-      cells += Cell(ref, cellValue)
-      styleOpt.foreach { style =>
-        val (newRegistry, _) = registry.register(style)
-        registry = newRegistry
-        cellsWithStyles += ((ref, style))
-      }
-
-    // Pattern match on runtime type and delegate to helper
-    updates.foreach { (ref, value) =>
-      value match
-        // Handle Formatted values (money"", date"", etc.) - preserve NumFmt metadata
-        case formatted: com.tjclp.xl.formatted.Formatted =>
-          cells += Cell(ref, formatted.value)
-          val style = CellStyle.default.withNumFmt(formatted.numFmt)
+      // Helper to process a typed value (DRY)
+      def processValue[A: CellCodec](ref: ARef, value: A): Unit =
+        val (cellValue, styleOpt) = CellCodec[A].write(value)
+        cells += Cell(ref, cellValue)
+        styleOpt.foreach { style =>
           val (newRegistry, _) = registry.register(style)
           registry = newRegistry
           cellsWithStyles += ((ref, style))
+        }
 
-        case v: String => processValue(ref, v)
-        case v: Int => processValue(ref, v)
-        case v: Long => processValue(ref, v)
-        case v: Double => processValue(ref, v)
-        case v: BigDecimal => processValue(ref, v)
-        case v: Boolean => processValue(ref, v)
-        case v: LocalDate => processValue(ref, v)
-        case v: LocalDateTime => processValue(ref, v)
-        case v: com.tjclp.xl.richtext.RichText => processValue(ref, v)
-        case unsupported =>
-          return Left(XLError.UnsupportedType(ref.toA1, unsupported.getClass.getName))
-    }
+      // Pattern match on runtime type and delegate to helper
+      updates.foreach { (ref, value) =>
+        value match
+          // Handle Formatted values (money"", date"", etc.) - preserve NumFmt metadata
+          case formatted: com.tjclp.xl.formatted.Formatted =>
+            cells += Cell(ref, formatted.value)
+            val style = CellStyle.default.withNumFmt(formatted.numFmt)
+            val (newRegistry, _) = registry.register(style)
+            registry = newRegistry
+            cellsWithStyles += ((ref, style))
 
-    // Update sheet with new registry and cells (O(n) bulk insertion)
-    val withCells = copy(
-      styleRegistry = registry,
-      cells = this.cells ++ cells.map(cell => cell.ref -> cell)
-    )
+          case v: String => processValue(ref, v)
+          case v: Int => processValue(ref, v)
+          case v: Long => processValue(ref, v)
+          case v: Double => processValue(ref, v)
+          case v: BigDecimal => processValue(ref, v)
+          case v: Boolean => processValue(ref, v)
+          case v: LocalDate => processValue(ref, v)
+          case v: LocalDateTime => processValue(ref, v)
+          case v: com.tjclp.xl.richtext.RichText => processValue(ref, v)
+          case unsupported =>
+            break(Left(XLError.UnsupportedType(ref.toA1, unsupported.getClass.getName)))
+      }
 
-    // Apply styles in batch
-    import com.tjclp.xl.sheet.styleSyntax.withCellStyle
-    val result = cellsWithStyles.foldLeft(withCells) { case (s, (ref, style)) =>
-      s.withCellStyle(ref, style)
-    }
+      // Update sheet with new registry and cells (O(n) bulk insertion)
+      val withCells = copy(
+        styleRegistry = registry,
+        cells = this.cells ++ cells.map(cell => cell.ref -> cell)
+      )
 
-    Right(result)
+      // Apply styles in batch
+      import com.tjclp.xl.sheet.styleSyntax.withCellStyle
+      val result = cellsWithStyles.foldLeft(withCells) { case (s, (ref, style)) =>
+        s.withCellStyle(ref, style)
+      }
+
+      Right(result)
 
   /**
    * Apply a patch to this sheet.

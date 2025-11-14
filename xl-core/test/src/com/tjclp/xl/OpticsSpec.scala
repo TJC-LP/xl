@@ -7,7 +7,7 @@ import com.tjclp.xl.optics.syntax.* // Import optics extension methods
 import com.tjclp.xl.dsl.syntax.*
 import munit.FunSuite
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.macros.BatchPutMacro.put  // For batch put extension
+// Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.style.units.StyleId
 
 /** Tests for optics library and focus DSL */
