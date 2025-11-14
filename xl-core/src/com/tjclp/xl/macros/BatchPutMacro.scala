@@ -48,15 +48,24 @@ object BatchPutMacro:
             case _ =>
               report.errorAndAbort("Batch put requires tuple pairs: cell\"A1\" -> value")
 
-          // Generate CellValue based on runtime value (use CellValue.from)
-          // TODO(unified-put-api): Handle Formatted values to preserve NumFmt
-          // Currently: Formatted auto-converts to CellValue, loses NumFmt info
-          // Fix: Add case for Formatted, extract numFmt and apply style
-          // Pattern match on value type:
-          //   case formatted: Formatted =>
-          //     val style = CellStyle.default.withNumFmt(formatted.numFmt)
-          //     sheet.put(ref, formatted.value).withCellStyle(ref, style)
-          '{ $sheetExpr.put($ref, com.tjclp.xl.cell.CellValue.from($value)) }
+          // Generate put call - check if value is Formatted to preserve NumFmt
+          value.asTerm.tpe.asType match
+            // Case 1: Formatted value - preserve NumFmt metadata
+            case '[com.tjclp.xl.formatted.Formatted] =>
+              val formattedValue = value.asExprOf[com.tjclp.xl.formatted.Formatted]
+              '{
+                import com.tjclp.xl.sheet.styleSyntax.withCellStyle
+                val formatted = $formattedValue
+                val style =
+                  com.tjclp.xl.style.CellStyle.default.withNumFmt(formatted.numFmt)
+                $sheetExpr
+                  .put($ref, formatted.value)
+                  .withCellStyle($ref, style)
+              }
+
+            // Case 2: All other types - use CellValue.from converter
+            case _ =>
+              '{ $sheetExpr.put($ref, com.tjclp.xl.cell.CellValue.from($value)) }
         }
 
       case _ =>

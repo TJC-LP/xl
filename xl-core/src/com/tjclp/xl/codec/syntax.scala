@@ -100,6 +100,14 @@ object syntax:
       // Pattern match on runtime type and delegate to helper
       updates.foreach { (ref, value) =>
         value match
+          // Handle Formatted values (money"", date"", etc.) - preserve NumFmt metadata
+          case formatted: com.tjclp.xl.formatted.Formatted =>
+            cells += Cell(ref, formatted.value)
+            val style = CellStyle.default.withNumFmt(formatted.numFmt)
+            val (newRegistry, _) = registry.register(style)
+            registry = newRegistry
+            cellsWithStyles += ((ref, style))
+
           case v: String => processValue(ref, v)
           case v: Int => processValue(ref, v)
           case v: Long => processValue(ref, v)
