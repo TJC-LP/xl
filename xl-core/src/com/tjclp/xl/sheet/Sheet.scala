@@ -63,11 +63,20 @@ case class Sheet(
   def put(ref: ARef, value: CellValue): Sheet =
     put(Cell(ref, value))
 
+  // TODO(unified-put-api): Add batch put overload here
+  // transparent inline def put(pairs: (ARef, Any)*): Sheet = ${ putBatchMacro('pairs) }
+  // This will consolidate putAll, putMixed, putTyped into single method with type inference
+
+  // TODO(unified-put-api): Add patch put overload here
+  // def put(patch: Patch): XLResult[Sheet] = Patch.applyPatch(this, patch)
+  // This will replace applyPatch/applyPatches methods
+
   /**
    * Put multiple cells (accepts any traversable collection including Iterator for lazy evaluation)
    */
   def putAll(newCells: IterableOnce[Cell]): Sheet =
     copy(cells = cells ++ newCells.iterator.map(c => c.ref -> c))
+  // TODO(unified-put-api): REMOVE - replace with put(cells.toSeq: _*)
 
   /** Remove cell at reference */
   def remove(ref: ARef): Sheet =

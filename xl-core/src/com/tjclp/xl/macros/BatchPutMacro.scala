@@ -49,6 +49,13 @@ object BatchPutMacro:
               report.errorAndAbort("Batch put requires tuple pairs: cell\"A1\" -> value")
 
           // Generate CellValue based on runtime value (use CellValue.from)
+          // TODO(unified-put-api): Handle Formatted values to preserve NumFmt
+          // Currently: Formatted auto-converts to CellValue, loses NumFmt info
+          // Fix: Add case for Formatted, extract numFmt and apply style
+          // Pattern match on value type:
+          //   case formatted: Formatted =>
+          //     val style = CellStyle.default.withNumFmt(formatted.numFmt)
+          //     sheet.put(ref, formatted.value).withCellStyle(ref, style)
           '{ $sheetExpr.put($ref, com.tjclp.xl.cell.CellValue.from($value)) }
         }
 
