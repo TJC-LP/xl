@@ -130,25 +130,23 @@ class FormattedPreservationSpec extends FunSuite:
     }
   }
 
-  test("putMixed also preserves Formatted (backward compat)") {
+  test("accounting literal preserves Currency format") {
     val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
 
-    // Use deprecated putMixed method
-    val updated = sheet.putMixed(
-      ref"A1" -> money"$$999.99",
-      ref"B1" -> percent"50%"
-    )
+    // Test accounting format (negative shown as parentheses)
+    val updated = sheet.put(ref"A1" -> accounting"$$(999.99)")
 
-    // Verify formats preserved
-    val cellA1 = updated(ref"A1")
-    cellA1.styleId.foreach { styleId =>
+    // Verify value is negative
+    val cell = updated(ref"A1")
+    cell.value match
+      case CellValue.Number(n) =>
+        assertEquals(n, BigDecimal("-999.99"))
+      case other =>
+        fail(s"Expected Number, got: $other")
+
+    // Verify Currency format applied (accounting uses Currency format)
+    cell.styleId.foreach { styleId =>
       val style = updated.styleRegistry.get(styleId).get
       assertEquals(style.numFmt, NumFmt.Currency)
-    }
-
-    val cellB1 = updated(ref"B1")
-    cellB1.styleId.foreach { styleId =>
-      val style = updated.styleRegistry.get(styleId).get
-      assertEquals(style.numFmt, NumFmt.Percent)
     }
   }

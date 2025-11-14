@@ -28,7 +28,7 @@ object ManualRichTextTest extends IOApp.Simple:
 
     // Build a financial report with rich text formatting
     val report = Sheet("Q1 Performance Report").getOrElse(sys.error("Failed to create sheet"))
-      .putMixed(
+      .put(
         // Title with large bold text
         ref"A1" -> ("Q1 2025 ".size(18.0).bold + "Performance Report".size(18.0).italic),
 

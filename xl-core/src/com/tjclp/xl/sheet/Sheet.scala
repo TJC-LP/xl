@@ -129,8 +129,11 @@ case class Sheet(
         case _ => () // Silently skip unsupported types
     }
 
-    // Update sheet with new registry and cells
-    val withCells = copy(styleRegistry = registry).putAll(cells)
+    // Update sheet with new registry and cells (inline putAll implementation)
+    val withCells = copy(
+      styleRegistry = registry,
+      cells = cells.foldLeft(this.cells)((acc, cell) => acc.updated(cell.ref, cell))
+    )
 
     // Apply styles in batch
     import com.tjclp.xl.sheet.styleSyntax.withCellStyle
@@ -159,13 +162,6 @@ case class Sheet(
    */
   def put(patch: com.tjclp.xl.patch.Patch): XLResult[Sheet] =
     com.tjclp.xl.patch.Patch.applyPatch(this, patch)
-
-  /**
-   * Put multiple cells (accepts any traversable collection including Iterator for lazy evaluation)
-   */
-  @deprecated("Use .put(cells.toSeq: _*) instead", "0.2.0")
-  def putAll(newCells: IterableOnce[Cell]): Sheet =
-    copy(cells = cells ++ newCells.iterator.map(c => c.ref -> c))
 
   /** Remove cell at reference */
   def remove(ref: ARef): Sheet =

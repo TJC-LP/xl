@@ -130,9 +130,9 @@ class BatchUpdateSpec extends FunSuite:
     assert(!sheet.contains(ref"B1")) // Unsupported type should not create a cell
   }
 
-  test("putTyped: writes single typed value") {
+  test("put: writes single typed value with auto-inferred style") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putTyped(ref"A1", BigDecimal("123.45"))
+      .put(ref"A1" -> BigDecimal("123.45"))
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("123.45")))
     assert(sheet.getCellStyle(ref"A1").exists(_.numFmt == NumFmt.Decimal), "Should have Decimal format")

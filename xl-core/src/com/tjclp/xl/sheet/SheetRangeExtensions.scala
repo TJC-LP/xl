@@ -24,7 +24,7 @@ object rangeSyntax:
      */
     def fillBy(range: CellRange)(f: (Column, Row) => CellValue): Sheet =
       val newCells = range.cells.map { ref => Cell(ref, f(ref.col, ref.row)) }
-      sheet.putAll(newCells)
+      sheet.copy(cells = sheet.cells ++ newCells.iterator.map(c => c.ref -> c))
 
     /**
      * Fill a range of cells using a function that takes 0-based indices.
@@ -42,7 +42,7 @@ object rangeSyntax:
       val newCells = range.cells.map { ref =>
         Cell(ref, f(ref.col.index0, ref.row.index0))
       }
-      sheet.putAll(newCells)
+      sheet.copy(cells = sheet.cells ++ newCells.iterator.map(c => c.ref -> c))
 
     /**
      * Put cells in a range in row-major order.
@@ -67,7 +67,7 @@ object rangeSyntax:
         Left(XLError.ValueCountMismatch(expected, actual, s"range ${range.toA1}"))
       else
         val newCells = refs.zip(supplied).map { case (ref, value) => Cell(ref, value) }
-        Right(sheet.putAll(newCells))
+        Right(sheet.copy(cells = sheet.cells ++ newCells.iterator.map(c => c.ref -> c)))
 
     /**
      * Put a sequence of values in a row starting from a given column.
@@ -102,7 +102,7 @@ object rangeSyntax:
           val cells = buffered.zipWithIndex.map { case (value, idx) =>
             Cell(ARef.from0(startCol.index0 + idx, row.index0), value)
           }
-          Right(sheet.putAll(cells))
+          Right(sheet.copy(cells = sheet.cells ++ cells.iterator.map(c => c.ref -> c)))
 
     /**
      * Put a sequence of values in a column starting from a given row.
@@ -136,4 +136,4 @@ object rangeSyntax:
           val cells = buffered.zipWithIndex.map { case (value, idx) =>
             Cell(ARef.from0(col.index0, startRow.index0 + idx), value)
           }
-          Right(sheet.putAll(cells))
+          Right(sheet.copy(cells = sheet.cells ++ cells.iterator.map(c => c.ref -> c)))
