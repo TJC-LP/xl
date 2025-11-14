@@ -63,20 +63,36 @@ case class Sheet(
   def put(ref: ARef, value: CellValue): Sheet =
     put(Cell(ref, value))
 
-  // TODO(unified-put-api): Add batch put overload here
-  // transparent inline def put(pairs: (ARef, Any)*): Sheet = ${ putBatchMacro('pairs) }
-  // This will consolidate putAll, putMixed, putTyped into single method with type inference
-
-  // TODO(unified-put-api): Add patch put overload here
-  // def put(patch: Patch): XLResult[Sheet] = Patch.applyPatch(this, patch)
-  // This will replace applyPatch/applyPatches methods
+  /**
+   * Apply a patch to this sheet.
+   *
+   * Patches enable declarative composition of updates (Put, SetStyle, Merge, etc.). Returns Either
+   * for operations that can fail (e.g., merge overlaps, invalid ranges).
+   *
+   * Example:
+   * {{{
+   * val patch = (ref"A1" := "Title") ++ range"A1:C1".merge
+   * sheet.put(patch) match
+   *   case Right(updated) => updated
+   *   case Left(err) => handleError(err)
+   * }}}
+   *
+   * Note: Batch put is available via extension method in macros.BatchPutMacro (exported in syntax)
+   *
+   * @param patch
+   *   The patch to apply
+   * @return
+   *   Either an updated sheet or an error
+   */
+  def put(patch: com.tjclp.xl.patch.Patch): XLResult[Sheet] =
+    com.tjclp.xl.patch.Patch.applyPatch(this, patch)
 
   /**
    * Put multiple cells (accepts any traversable collection including Iterator for lazy evaluation)
    */
+  @deprecated("Use .put(cells.toSeq: _*) instead", "0.2.0")
   def putAll(newCells: IterableOnce[Cell]): Sheet =
     copy(cells = cells ++ newCells.iterator.map(c => c.ref -> c))
-  // TODO(unified-put-api): REMOVE - replace with put(cells.toSeq: _*)
 
   /** Remove cell at reference */
   def remove(ref: ARef): Sheet =

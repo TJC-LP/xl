@@ -3,6 +3,7 @@ package com.tjclp.xl.codec
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cell.Cell
+import com.tjclp.xl.codec.{CellCodec, CodecError} // Explicit import for companion object
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.CellStyle
 import com.tjclp.xl.style.numfmt.NumFmt
@@ -47,6 +48,7 @@ object syntax:
      * @return
      *   Updated sheet with the cell value and style applied
      */
+    @deprecated("Use .put(ref -> value) with batch put syntax instead", "0.2.0")
     def putTyped[A: CellCodec](ref: ARef, value: A): Sheet =
       val (cellValue, styleOpt) = CellCodec[A].write(value)
       val updated = sheet.put(ref, cellValue)
@@ -78,6 +80,7 @@ object syntax:
      * @return
      *   Updated sheet with all cells and styles applied
      */
+    @deprecated("Use .put(pairs: _*) instead (same signature, unified API)", "0.2.0")
     def putMixed(updates: (ARef, Any)*): Sheet =
       // Single-pass: build cells and collect styles simultaneously
       val cells = scala.collection.mutable.ArrayBuffer[Cell]()

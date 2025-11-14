@@ -131,18 +131,16 @@ object Patch:
   def applyPatches(sheet: Sheet, patches: Iterable[Patch]): XLResult[Sheet] =
     applyPatch(sheet, Batch(patches.toVector))
 
-  // TODO(unified-put-api): REMOVE these extensions - replace with Sheet.put(patch)
-  // Migration: sheet.applyPatch(p) becomes sheet.put(p)
-  // Migration: sheet.applyPatches(p1, p2) becomes sheet.put(Patch.Batch(Vector(p1, p2)))
-
   /** Convenience extensions for Sheet */
   extension (sheet: Sheet)
     /** Apply a patch to this sheet */
+    @deprecated("Use .put(patch) instead", "0.2.0")
     @annotation.targetName("applyPatchExt")
     def applyPatch(patch: Patch): XLResult[Sheet] =
       Patch.applyPatch(sheet, patch)
 
     /** Apply multiple patches to this sheet */
+    @deprecated("Use .put(Patch.Batch(patches.toVector)) instead", "0.2.0")
     @annotation.targetName("applyPatchesExt")
     def applyPatches(patches: Patch*): XLResult[Sheet] =
       Patch.applyPatches(sheet, patches)

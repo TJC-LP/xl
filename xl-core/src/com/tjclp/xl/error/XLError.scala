@@ -89,3 +89,35 @@ object XLError:
 
 /** Type alias for common result type */
 type XLResult[A] = Either[XLError, A]
+
+/** Extension methods for XLResult to enable ergonomic error handling and chaining */
+extension [A](result: XLResult[A])
+  /**
+   * Unwrap result, throwing exception if Left.
+   *
+   * Use only when you know the operation cannot fail (e.g., simple Put patches) or when you want to
+   * propagate exceptions up the call stack.
+   *
+   * Example:
+   * {{{
+   * val sheet = Sheet("Data")
+   *   .put(ref"A1", "Title")
+   *   .put(range"A1:C1".merge).unsafe  // Know it's safe, unwrap it
+   *   .put(ref"A2", "More data")       // Continue chaining
+   * }}}
+   */
+  def unsafe: A = result match
+    case Right(value) => value
+    case Left(err) => throw new IllegalStateException(s"XLResult.unsafe failed: ${err.message}")
+
+  /**
+   * Unwrap with fallback value.
+   *
+   * Provides a default value if the result is a Left, enabling graceful degradation.
+   *
+   * Example:
+   * {{{
+   * val sheet = baseSheet.put(patch).getOrElse(baseSheet)  // Fallback to original
+   * }}}
+   */
+  def getOrElse(default: => A): A = result.toOption.getOrElse(default)
