@@ -87,6 +87,7 @@ case class Sheet(
    * @return
    *   Updated sheet with all cells and styles applied
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def put(updates: (ARef, Any)*): Sheet =
     import com.tjclp.xl.codec.{CellCodec, given}
     import java.time.{LocalDate, LocalDateTime}

@@ -124,6 +124,34 @@ All code must pass `./mill __.checkFormat` before commit. Format with `./mill __
 - Prefer **extension methods** over implicit classes
 - Macros must emit **clear diagnostics**
 
+### WartRemover
+
+XL uses [WartRemover](https://www.wartremover.org/) to enforce purity and totality at compile time.
+
+**Policy**: See `docs/design/wartremover-policy.md` for complete wart list and rationale.
+
+**Key enforcements**:
+- ❌ No `null` (Tier 1 - error)
+- ❌ No `.head/.tail` on collections (Tier 1 - error)
+- ❌ No `.get` on Try/Either projections (Tier 1 - error)
+- ⚠️ Warn on `.get` on Option (Tier 2 - warning, acceptable in tests)
+- ⚠️ Warn on `var`/`while`/`return` (Tier 2 - warning, acceptable in macros)
+
+**Suppressing false positives**:
+```scala
+// Inline comment for clarity (preferred)
+parts(0)  // Safe: length == 1 verified above
+
+// @SuppressWarnings for entire methods
+@SuppressWarnings(Array("org.wartremover.warts.Var"))
+def performanceOptimizedCode(): Unit = {
+  var accumulator = 0  // Intentional for performance
+  // ...
+}
+```
+
+**Running**: WartRemover runs automatically during `./mill __.compile` and in pre-commit hooks.
+
 ### Error Handling
 
 Always use `XLResult[A] = Either[XLError, A]`:

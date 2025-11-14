@@ -19,6 +19,14 @@ import scala.quoted.*
  * Return type is transparent: simple refs return unwrapped ARef/CellRange for backwards
  * compatibility, qualified refs return RefType for sheet information.
  */
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.Var",
+    "org.wartremover.warts.While",
+    "org.wartremover.warts.Return",
+    "org.wartremover.warts.AsInstanceOf"
+  )
+)
 object RefLiteral:
 
   // -------- Public API --------
@@ -95,7 +103,7 @@ object RefLiteral:
     val parts = sc.valueOrAbort.parts
     if parts.lengthCompare(1) != 0 then
       quotes.reflect.report.errorAndAbort("literal must be a single part")
-    parts.head
+    parts(0) // Safe: length == 1 verified above
 
   // -------- Const Emitters --------
 

@@ -45,6 +45,7 @@ class XlsxReaderSpec extends FunSuite:
     assertEquals(readSheet(ref"A1").value, CellValue.Text("ok"))
   }
 
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def rewriteWorksheetTarget(bytes: Array[Byte], newSheetFile: String): Array[Byte] =
     val zip = new ZipInputStream(new ByteArrayInputStream(bytes))
     val entries = mutable.LinkedHashMap.empty[String, Array[Byte]]

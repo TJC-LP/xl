@@ -100,6 +100,7 @@ object RefType:
    * @return
    *   Either error message or parsed RefType
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.Return"))
   def parse(s: String): Either[String, RefType] =
     if s.isEmpty then return Left("Empty reference")
 
@@ -151,6 +152,7 @@ object RefType:
    *
    * Returns -1 if no unquoted bang found.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.Return"))
   private def findUnquotedBang(s: String): Int =
     var i = 0
     var inQuote = false

@@ -21,6 +21,11 @@ trait XLModule extends ScalaModule with PublishModule with ScalafmtModule {
     developers = Seq()
   )
 
+  // WartRemover compiler plugin for enhanced code quality
+  def scalacPluginMvnDeps = Seq(
+    mvn"org.wartremover:::wartremover:3.4.1"
+  )
+
   override def scalacOptions = Seq(
     "-encoding", "utf-8",
     "-feature",
@@ -28,6 +33,24 @@ trait XLModule extends ScalaModule with PublishModule with ScalafmtModule {
     "-language:higherKinds",
     "-unchecked",
     "-deprecation",
-    "-Xkind-projector"
+    "-Xkind-projector",
+
+    // WartRemover Tier 1: Core purity warts (errors - fail builds)
+    "-P:wartremover:traverser:org.wartremover.warts.Null",
+    "-P:wartremover:traverser:org.wartremover.warts.TryPartial",
+    "-P:wartremover:traverser:org.wartremover.warts.EitherProjectionPartial",
+    "-P:wartremover:traverser:org.wartremover.warts.TripleQuestionMark",
+    "-P:wartremover:traverser:org.wartremover.warts.ArrayEquals",
+    "-P:wartremover:traverser:org.wartremover.warts.JavaConversions",
+    "-P:wartremover:traverser:org.wartremover.warts.Option2Iterable",
+
+    // WartRemover Tier 2: Code quality warts (warnings only - monitor)
+    "-P:wartremover:only-warn-traverser:org.wartremover.warts.IterableOps",   // Acceptable in tests
+    "-P:wartremover:only-warn-traverser:org.wartremover.warts.OptionPartial", // Acceptable in tests
+    "-P:wartremover:only-warn-traverser:org.wartremover.warts.Var",
+    "-P:wartremover:only-warn-traverser:org.wartremover.warts.Return",
+    "-P:wartremover:only-warn-traverser:org.wartremover.warts.While",
+    "-P:wartremover:only-warn-traverser:org.wartremover.warts.AsInstanceOf",
+    "-P:wartremover:only-warn-traverser:org.wartremover.warts.IsInstanceOf"
   )
 }

@@ -54,6 +54,7 @@ object StyleIndex:
    * @return
    *   (StyleIndex, Map[sheetIndex -> Map[localStyleId -> globalStyleId]])
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def fromWorkbook(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
     import scala.collection.mutable
 
@@ -229,7 +230,7 @@ case class OoxmlStyles(
     )
 
     // Assemble styles.xml
-    val children = numFmtsElem.toSeq ++ Seq(fontsElem, fillsElem, bordersElem, cellXfsElem)
+    val children = numFmtsElem.toList ++ Seq(fontsElem, fillsElem, bordersElem, cellXfsElem)
     elem("styleSheet", "xmlns" -> nsSpreadsheetML)(children*)
 
   private def fontToXml(font: Font): Elem =
@@ -277,7 +278,7 @@ case class OoxmlStyles(
     else
       val children = borderSide.color.map { color =>
         elem("color", "rgb" -> f"${color.toArgb}%08X")()
-      }.toSeq
+      }.toList
       elem(side, "style" -> borderSide.style.toString.toLowerCase)(children*)
 
   private def colorToXml(color: Color): Elem =

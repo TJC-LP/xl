@@ -94,6 +94,7 @@ $tableRows
    *
    * Applies <b>, <i>, <u> tags for font styles and <span style="color:"> for colors.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private def runToHtml(run: TextRun): String =
     val text = escapeHtml(run.text)
     run.font match

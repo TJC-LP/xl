@@ -14,6 +14,7 @@ import scala.quoted.*
  *
  * Note: For cell and range references, use the unified `ref` macro instead.
  */
+@SuppressWarnings(Array("org.wartremover.warts.Var"))
 object CellRangeLiterals:
 
   // -------- Public API --------
@@ -54,7 +55,7 @@ object CellRangeLiterals:
     val parts = sc.valueOrAbort.parts
     if parts.lengthCompare(1) != 0 then
       quotes.reflect.report.errorAndAbort("literal must be a single part")
-    parts.head
+    parts(0) // Safe: length == 1 verified above
 
 end CellRangeLiterals
 

@@ -14,7 +14,7 @@ repos:
         files: \.scala$
 
       - id: scala-compile
-        name: Compile Scala code
+        name: Compile Scala code (with WartRemover)
         entry: ./mill __.compile
         language: system
         pass_filenames: false
