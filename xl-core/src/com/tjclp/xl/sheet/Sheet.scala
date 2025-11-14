@@ -95,7 +95,7 @@ case class Sheet(
    * @return
    *   Either error (if unsupported type) or updated sheet
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.Return"))
   def put(updates: (ARef, Any)*): XLResult[Sheet] =
     import com.tjclp.xl.codec.{CellCodec, given}
     import java.time.{LocalDate, LocalDateTime}

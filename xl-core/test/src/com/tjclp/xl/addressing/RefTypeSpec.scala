@@ -9,6 +9,7 @@ import org.scalacheck.Prop.*
 import org.scalacheck.{Arbitrary, Gen}
 
 /** Property tests for RefType parsing and behavior */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class RefTypeSpec extends ScalaCheckSuite:
 
   // ========== Generators ==========

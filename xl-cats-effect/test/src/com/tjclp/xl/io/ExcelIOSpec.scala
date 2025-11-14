@@ -24,7 +24,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     // Create test file using current writer
     val wb = Workbook("Test").flatMap { initial =>
       val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Hello"))
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("test.xlsx")
@@ -43,7 +43,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       val sheet = initial.sheets(0)
         .put(ref"A1", CellValue.Text("Written"))
         .put(ref"B1", CellValue.Number(BigDecimal(42)))
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("output.xlsx")
@@ -63,7 +63,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       val sheet = (1 to 10).foldLeft(initial.sheets(0)) { (s, i) =>
         s.put(ARef(Column.from0(0), Row.from1(i)), CellValue.Number(BigDecimal(i)))
       }
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("stream-test.xlsx")
@@ -413,6 +413,7 @@ class ExcelIOSpec extends CatsEffectSuite:
         assertEquals(rows.size, 1000)
 
         // Verify first row
+        @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
         val first = rows.head
         assertEquals(first.rowIndex, 1)
         assertEquals(first.cells(0), CellValue.Number(BigDecimal(1)))
@@ -420,6 +421,7 @@ class ExcelIOSpec extends CatsEffectSuite:
         assertEquals(first.cells(2), CellValue.Bool(false))
 
         // Verify last row
+        @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
         val last = rows.last
         assertEquals(last.rowIndex, 1000)
         assertEquals(last.cells(0), CellValue.Number(BigDecimal(1000)))
@@ -451,6 +453,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     rows.through(excel.writeStreamTrue(path, "Types")).compile.drain.flatMap { _ =>
       excel.readStream(path).compile.toVector.map { readRows =>
         assertEquals(readRows.size, 1)
+        @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
         val row = readRows.head
 
         assertEquals(row.cells(0), CellValue.Number(BigDecimal("123.45")))
@@ -496,8 +499,12 @@ class ExcelIOSpec extends CatsEffectSuite:
         // Read second sheet by index
         excel.readStreamByIndex(path, 2).compile.toVector.map { rows =>
           assertEquals(rows.size, 20, "Should read 20 rows from second sheet")
-          assertEquals(rows.head.cells(0), CellValue.Text("S2-1"))
-          assertEquals(rows.last.cells(0), CellValue.Text("S2-20"))
+          @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
+          val first = rows.head
+          @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
+          val last = rows.last
+          assertEquals(first.cells(0), CellValue.Text("S2-1"))
+          assertEquals(last.cells(0), CellValue.Text("S2-20"))
         }
       }
   }
@@ -516,8 +523,12 @@ class ExcelIOSpec extends CatsEffectSuite:
         // Read "Inventory" sheet by name
         excel.readSheetStream(path, "Inventory").compile.toVector.map { rows =>
           assertEquals(rows.size, 5, "Should read 5 rows from Inventory")
-          assertEquals(rows.head.cells(0), CellValue.Text("Item 1"))
-          assertEquals(rows.last.cells(0), CellValue.Text("Item 5"))
+          @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
+          val first = rows.head
+          @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
+          val last = rows.last
+          assertEquals(first.cells(0), CellValue.Text("Item 1"))
+          assertEquals(last.cells(0), CellValue.Text("Item 5"))
         }
       }
   }

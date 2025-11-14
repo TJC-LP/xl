@@ -11,6 +11,7 @@ import com.tjclp.xl.macros.BatchPutMacro.put  // For batch put extension
 import com.tjclp.xl.style.units.StyleId
 
 /** Tests for optics library and focus DSL */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.Var"))
 class OpticsSpec extends FunSuite:
 
   val emptySheet: Sheet = Sheet(SheetName.unsafe("TestSheet"))

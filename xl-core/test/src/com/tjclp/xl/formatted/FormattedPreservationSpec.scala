@@ -10,6 +10,7 @@ import com.tjclp.xl.style.numfmt.NumFmt
 import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class FormattedPreservationSpec extends FunSuite:
 
   test("money literal preserves Currency format in batch put") {

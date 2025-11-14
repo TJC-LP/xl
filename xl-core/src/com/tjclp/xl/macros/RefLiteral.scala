@@ -108,6 +108,7 @@ object RefLiteral:
   // -------- Const Emitters --------
 
   /** Emit unwrapped ARef constant (for simple refs) */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def constARef(col0: Int, row0: Int)(using Quotes): Expr[ARef] =
     val packed = (row0.toLong << 32) | (col0.toLong & 0xffffffffL)
     '{ (${ Expr(packed) }: Long).asInstanceOf[ARef] }

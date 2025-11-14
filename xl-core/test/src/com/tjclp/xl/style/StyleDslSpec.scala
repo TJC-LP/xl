@@ -97,7 +97,7 @@ class StyleDslSpec extends ScalaCheckSuite:
     // String literals are validated at compile-time by macro
     val red = CellStyle.default.hex("#FF0000")
     assert(red.font.color.isDefined)
-    assertEquals(red.font.color.get, Color.fromRgb(255, 0, 0))
+    assertEquals(red.font.color.getOrElse(fail("Color should be defined")), Color.fromRgb(255, 0, 0))
 
     val blue = CellStyle.default.hex("#0000FF")
     assert(blue.font.color.isDefined)
@@ -109,10 +109,10 @@ class StyleDslSpec extends ScalaCheckSuite:
   test("bgHex with literal validates at compile-time") {
     // String literals are validated at compile-time by macro
     val lightGray = CellStyle.default.bgHex("#F5F5F5")
-    assert(lightGray.fill.isInstanceOf[Fill.Solid])
+    assert(lightGray.fill match { case _: Fill.Solid => true; case _ => false })
 
     val darkBlue = CellStyle.default.bgHex("#003366")
-    assert(darkBlue.fill.isInstanceOf[Fill.Solid])
+    assert(darkBlue.fill match { case _: Fill.Solid => true; case _ => false })
   }
 
   // ========== Preset Background Color Tests ==========

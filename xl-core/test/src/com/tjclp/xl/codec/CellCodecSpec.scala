@@ -11,6 +11,7 @@ import com.tjclp.xl.style.numfmt.NumFmt
 import java.time.{LocalDate, LocalDateTime}
 
 /** Property-based tests for CellCodec instances */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class CellCodecSpec extends ScalaCheckSuite:
 
   // ========== String Codec ==========
