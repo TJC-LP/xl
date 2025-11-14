@@ -50,6 +50,20 @@ object StylePatch:
   def applyPatches(style: CellStyle, patches: Iterable[StylePatch]): CellStyle =
     applyPatch(style, Batch(patches.toVector))
 
+  // ========== Composition Operator (No Type Ascription Required) ==========
+
+  extension (p1: StylePatch)
+    /**
+     * Compose two StylePatches without requiring Cats Monoid syntax.
+     *
+     * Eliminates the need for type ascription on enum cases, enabling clean composition:
+     * {{{
+     *   val patch = StylePatch.SetFont(font) ++ StylePatch.SetFill(fill)
+     *   // No need for: (StylePatch.SetFont(font): StylePatch) |+| ...
+     * }}}
+     */
+    infix def ++(p2: StylePatch): StylePatch = StylePatch.combine(p1, p2)
+
   extension (style: CellStyle)
     @annotation.targetName("applyStylePatchExt")
     def applyPatch(patch: StylePatch): CellStyle =

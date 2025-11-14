@@ -27,6 +27,7 @@ object syntax:
   export optics.syntax.*
   export patch.syntax.*
   export sheet.syntax.*
+  export style.dsl.*
 
   // RichText string extensions (.red, .bold, etc.)
   export richtext.RichText.{given, *}
