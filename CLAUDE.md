@@ -158,7 +158,7 @@ val updates =
   (Patch.SetStyle(cell"A1", 1): Patch) |+|
   (Patch.Merge(range"A1:B2"): Patch)
 
-val result = sheet.applyPatch(updates)  // Either[XLError, Sheet]
+val result = sheet.put(updates)  // Either[XLError, Sheet]
 ```
 
 **Important**: Enum cases need type ascription for Monoid syntax (`|+|`).
@@ -296,7 +296,7 @@ All XML output must be deterministic:
 for
   ref <- ARef.parse("A1")
   sheet <- workbook("Sheet1")
-  updated <- sheet.applyPatch(Patch.Put(ref, value))
+  updated <- sheet.put(Patch.Put(ref, value))
 yield updated
 
 // Convert to XLError
@@ -372,20 +372,19 @@ Cell-level codecs (`xl-core/src/com/tjclp/xl/codec/`) provide type-safe encoding
 
 #### Batch Updates
 
-Always prefer `putMixed` for multi-cell updates:
+Use batch `put` for multi-cell updates with automatic type inference:
 
 ```scala
-import com.tjclp.xl.codec.syntax.*
-
-sheet.putMixed(
-  cell"A1" -> "Revenue",
-  cell"B1" -> LocalDate.of(2025, 11, 10),  // Auto: date format
-  cell"C1" -> BigDecimal("1000000.50"),    // Auto: decimal format
-  cell"D1" -> 42
+sheet.put(
+  ref"A1" -> "Revenue",
+  ref"B1" -> LocalDate.of(2025, 11, 10),  // Auto: date format
+  ref"C1" -> BigDecimal("1000000.50"),    // Auto: decimal format
+  ref"D1" -> 42,
+  ref"E1" -> money"$$1,234.56"            // Preserves Currency format!
 )
 ```
 
-**Benefits**: Cleaner syntax, auto-inferred styles, builds on existing `putAll` (no performance overhead).
+**Benefits**: Cleaner syntax, auto-inferred styles, preserves Formatted literal metadata.
 
 #### Type-Safe Reading
 
@@ -430,7 +429,7 @@ import com.tjclp.xl.richtext.RichText.*
 val text = "Bold".bold.red + " normal " + "Italic".italic.blue
 
 // Use with putMixed
-sheet.putMixed(
+sheet.put(
   cell"A1" -> ("Error: ".red.bold + "Fix this!"),
   cell"A2" -> ("Q1 ".size(18.0).bold + "Report".italic)
 )

@@ -83,7 +83,7 @@ val wb = Workbook("MySheet").map { workbook =>
     (Patch.SetStyle(a1, 1): Patch)
 
   // Apply patches to get updated sheet
-  sheet.applyPatch(updates).map { updated =>
+  sheet.put(updates).map { updated =>
     workbook.updateSheet(0, updated)
   }
 }
@@ -106,7 +106,7 @@ val styleUpdates =
   (StylePatch.SetFont(Font("Calibri", 12.0)): StylePatch) |+|
   (StylePatch.SetFill(Fill.Solid(Color.Rgb(0xFFFFFFFF))): StylePatch)
 
-val newStyle = CellStyle.default.applyPatch(styleUpdates)
+val newStyle = CellStyle.default.put(styleUpdates)
 ```
 
 ### Type-Safe Cell Operations with Codecs
@@ -118,7 +118,7 @@ import com.tjclp.xl.codec.syntax.*
 
 // Batch updates with mixed types (auto-infers formats)
 val sheet = Sheet("Q1 Forecast").getOrElse(...)
-  .putMixed(
+  .put(
     ref"A1" -> "Revenue",                        // String: no format
     ref"B1" -> LocalDate.of(2025, 11, 10),      // Auto: date format
     ref"C1" -> BigDecimal("1000000.50"),        // Auto: decimal format
@@ -155,7 +155,7 @@ val text = "Bold".bold.red + " normal " + "Italic".italic.blue
 sheet.put(ref"A1", CellValue.RichText(text))
 
 // Or use putMixed for convenience
-sheet.putMixed(
+sheet.put(
   ref"A1" -> ("Error: ".red.bold + "File not found"),
   ref"A2" -> ("Revenue: ".bold + "+12.5%".green),
   ref"A3" -> ("Q1 ".size(18.0).bold + "Report".size(18.0).italic)
@@ -568,7 +568,7 @@ val updates =
   (Patch.Merge(ref"A1:B1"): Patch)
 
 // Apply to sheet
-val result: Either[XLError, Sheet] = sheet.applyPatch(updates)
+val result: Either[XLError, Sheet] = sheet.put(updates)
 ```
 
 **Note**: Type ascription `(patch: Patch)` is required for `|+|` operator due to Scala enum limitations.
@@ -587,7 +587,7 @@ val patch =
   ref"A1:B1".merge
 
 // Apply to sheet
-val result: Either[XLError, Sheet] = sheet.applyPatch(patch)
+val result: Either[XLError, Sheet] = sheet.put(patch)
 ```
 
 **Operators**:

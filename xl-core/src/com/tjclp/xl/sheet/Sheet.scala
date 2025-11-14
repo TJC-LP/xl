@@ -3,7 +3,7 @@ package com.tjclp.xl.sheet
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.style.StyleRegistry
+import com.tjclp.xl.style.{CellStyle, StyleRegistry}
 
 import scala.collection.immutable.{Map, Set}
 
@@ -64,6 +64,81 @@ case class Sheet(
     put(Cell(ref, value))
 
   /**
+   * Batch put with mixed value types and automatic style inference.
+   *
+   * Accepts (ARef, Any) pairs and uses runtime pattern matching to resolve the appropriate codec
+   * for each value. Auto-infers styles based on value types (dates get date format, decimals get
+   * number format, etc.). Formatted literals (money"", date"", percent"") preserve their NumFmt.
+   *
+   * Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime,
+   * RichText, Formatted. Unsupported types are silently skipped.
+   *
+   * Example:
+   * {{{
+   * sheet.put(
+   *   ref"A1" -> "Revenue",
+   *   ref"B1" -> LocalDate.of(2025, 11, 10),
+   *   ref"C1" -> money"$$1,234.56"
+   * )
+   * }}}
+   *
+   * @param updates
+   *   Varargs of (ARef, Any) pairs
+   * @return
+   *   Updated sheet with all cells and styles applied
+   */
+  def put(updates: (ARef, Any)*): Sheet =
+    import com.tjclp.xl.codec.{CellCodec, given}
+    import java.time.{LocalDate, LocalDateTime}
+
+    // Single-pass: build cells and collect styles simultaneously
+    val cells = scala.collection.mutable.ArrayBuffer[Cell]()
+    val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
+    var registry = styleRegistry
+
+    // Helper to process a typed value (DRY)
+    def processValue[A: CellCodec](ref: ARef, value: A): Unit =
+      val (cellValue, styleOpt) = CellCodec[A].write(value)
+      cells += Cell(ref, cellValue)
+      styleOpt.foreach { style =>
+        val (newRegistry, _) = registry.register(style)
+        registry = newRegistry
+        cellsWithStyles += ((ref, style))
+      }
+
+    // Pattern match on runtime type and delegate to helper
+    updates.foreach { (ref, value) =>
+      value match
+        // Handle Formatted values (money"", date"", etc.) - preserve NumFmt metadata
+        case formatted: com.tjclp.xl.formatted.Formatted =>
+          cells += Cell(ref, formatted.value)
+          val style = CellStyle.default.withNumFmt(formatted.numFmt)
+          val (newRegistry, _) = registry.register(style)
+          registry = newRegistry
+          cellsWithStyles += ((ref, style))
+
+        case v: String => processValue(ref, v)
+        case v: Int => processValue(ref, v)
+        case v: Long => processValue(ref, v)
+        case v: Double => processValue(ref, v)
+        case v: BigDecimal => processValue(ref, v)
+        case v: Boolean => processValue(ref, v)
+        case v: LocalDate => processValue(ref, v)
+        case v: LocalDateTime => processValue(ref, v)
+        case v: com.tjclp.xl.richtext.RichText => processValue(ref, v)
+        case _ => () // Silently skip unsupported types
+    }
+
+    // Update sheet with new registry and cells
+    val withCells = copy(styleRegistry = registry).putAll(cells)
+
+    // Apply styles in batch
+    import com.tjclp.xl.sheet.styleSyntax.withCellStyle
+    cellsWithStyles.foldLeft(withCells) { case (s, (ref, style)) =>
+      s.withCellStyle(ref, style)
+    }
+
+  /**
    * Apply a patch to this sheet.
    *
    * Patches enable declarative composition of updates (Put, SetStyle, Merge, etc.). Returns Either
@@ -76,8 +151,6 @@ case class Sheet(
    *   case Right(updated) => updated
    *   case Left(err) => handleError(err)
    * }}}
-   *
-   * Note: Batch put is available via extension method in macros.BatchPutMacro (exported in syntax)
    *
    * @param patch
    *   The patch to apply

@@ -90,13 +90,13 @@ println("\n=== Formatted Literals ===")
 val priceSheetResult = for
   sheet <- Sheet("Prices")
 yield sheet
-  .putMixed(
+  .put(
     ref"A1" -> "Item",
     ref"B1" -> "Price",
     ref"C1" -> "Discount",
     ref"A2" -> "Widget",
-    ref"B2" -> money"$$19.99",  // Escape $ in string interpolator
-    ref"C2" -> percent"15%"
+    ref"B2" -> money"$$19.99",  // Now preserves Currency format!
+    ref"C2" -> percent"15%"     // Now preserves Percent format!
   )
 
 priceSheetResult match

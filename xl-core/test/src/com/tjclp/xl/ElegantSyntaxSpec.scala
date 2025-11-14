@@ -225,24 +225,31 @@ class ElegantSyntaxSpec extends FunSuite:
   test("Combined: batch put + formatted literals") {
     import com.tjclp.xl.macros.ref
     import com.tjclp.xl.macros.{money, percent}
-    import com.tjclp.xl.macros.put
-    import Formatted.given  // Auto-conversion Formatted → CellValue
 
     val sheet = emptySheet.put(
       ref"A1" -> "Revenue",
-      ref"B1" -> money"$$10,000.00".value,    // Extract value from Formatted
+      ref"B1" -> money"$$10,000.00",    // Preserves Currency format
       ref"A2" -> "Growth",
-      ref"B2" -> percent"15.5%".value
+      ref"B2" -> percent"15.5%"         // Preserves Percent format
     )
 
     assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal("10000.00")))
     assertEquals(sheet(ref"B2").value, CellValue.Number(BigDecimal("0.155")))
+
+    // Verify formats preserved
+    assert(
+      sheet.getCellStyle(ref"B1").exists(_.numFmt == NumFmt.Currency),
+      "money literal should preserve Currency format"
+    )
+    assert(
+      sheet.getCellStyle(ref"B2").exists(_.numFmt == NumFmt.Percent),
+      "percent literal should preserve Percent format"
+    )
   }
 
   test("Real-world example: financial report") {
     import com.tjclp.xl.macros.ref
     import com.tjclp.xl.macros.{money, percent}
-    import com.tjclp.xl.macros.put
 
     val sheet = emptySheet.put(
       // Headers
@@ -251,15 +258,19 @@ class ElegantSyntaxSpec extends FunSuite:
       ref"C1" -> "Growth",
       // Q1
       ref"A2" -> "Q1 2025",
-      ref"B2" -> money"$$125,000.00".value,
-      ref"C2" -> percent"12.5%".value,
+      ref"B2" -> money"$$125,000.00",   // Preserves Currency format
+      ref"C2" -> percent"12.5%",        // Preserves Percent format
       // Q2
       ref"A3" -> "Q2 2025",
-      ref"B3" -> money"$$150,000.00".value,
-      ref"C3" -> percent"20.0%".value
+      ref"B3" -> money"$$150,000.00",
+      ref"C3" -> percent"20.0%"
     )
 
     assertEquals(sheet.cellCount, 9)
     assertEquals(sheet(ref"B2").value, CellValue.Number(BigDecimal("125000.00")))
     assertEquals(sheet(ref"C2").value, CellValue.Number(BigDecimal("0.125")))
+
+    // Verify formats preserved
+    assert(sheet.getCellStyle(ref"B2").exists(_.numFmt == NumFmt.Currency))
+    assert(sheet.getCellStyle(ref"C2").exists(_.numFmt == NumFmt.Percent))
   }

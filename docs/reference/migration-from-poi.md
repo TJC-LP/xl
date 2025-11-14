@@ -60,7 +60,7 @@ import com.tjclp.xl.codec.syntax.*
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
-val sheet = Sheet("Sales").get.putMixed(
+val sheet = Sheet("Sales").get.put(
   cell"A1" -> "Product",
   cell"B1" -> "Revenue",
   cell"A2" -> "Widget",
@@ -111,7 +111,7 @@ val updated = sheet
 // Or use Patch DSL:
 import com.tjclp.xl.dsl.*
 val patch = cell"A1".styled(style)
-sheet.applyPatch(patch)
+sheet.put(patch)
 ```
 
 **Key Differences**:
@@ -421,7 +421,7 @@ val headerStyle = CellStyle.default
 
 // Create sheet
 val sheet = Sheet("Q1 Sales").get
-  .putMixed(
+  .put(
     cell"A1" -> "Product",
     cell"B1" -> "Revenue",
     cell"C1" -> "Date"
@@ -436,7 +436,7 @@ val dataRows = (1 to 1000).flatMap(i =>
     cell"C${i+1}" -> LocalDate.now()
   )
 )
-val withData = sheet.putMixed(dataRows*)
+val withData = sheet.put(dataRows*)
 
 // Write
 val workbook = Workbook(Vector(withData))
