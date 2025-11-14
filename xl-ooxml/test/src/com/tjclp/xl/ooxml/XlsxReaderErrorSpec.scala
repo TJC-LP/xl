@@ -80,7 +80,8 @@ class XlsxReaderErrorSpec extends FunSuite:
     "_rels/.rels" -> rootRelationshipsXml,
     "xl/workbook.xml" -> validWorkbookXml,
     "xl/_rels/workbook.xml.rels" -> workbookRelationshipsXml,
-    "xl/worksheets/sheet1.xml" -> validWorksheetXml
+    "xl/worksheets/sheet1.xml" -> validWorksheetXml,
+    "xl/styles.xml" -> minimalStylesXml
   )
 
   test("XlsxReader rejects XLSX missing workbook.xml") {
@@ -140,6 +141,12 @@ class XlsxReaderErrorSpec extends FunSuite:
       "xl/worksheets/sheet1.xml",
       "Missing worksheet: xl/worksheets/sheet1.xml"
     )
+  }
+
+  test("XlsxReader emits warning when styles.xml missing") {
+    val bytes = buildWorkbook(omit = Set("xl/styles.xml"))
+    val result = XlsxReader.readFromBytesWithWarnings(bytes).getOrElse(fail("Should read"))
+    assertEquals(result.warnings, Vector(XlsxReader.Warning.MissingStylesXml))
   }
 
   test("XlsxReader errors when workbook relationship points to missing target") {

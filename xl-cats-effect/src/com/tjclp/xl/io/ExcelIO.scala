@@ -20,12 +20,15 @@ import fs2.data.xml.XmlEvent
  * Implements both Excel[F] (error-raising) and ExcelR[F] (explicit error channel). Wraps pure
  * XlsxReader/Writer with effect type F[_].
  */
-class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
+class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
+    extends Excel[F]
+    with ExcelR[F]:
 
   /** Read workbook from XLSX file */
   def read(path: Path): F[Workbook] =
-    Sync[F].delay(XlsxReader.read(path)).flatMap {
-      case Right(wb) => Async[F].pure(wb)
+    Sync[F].delay(XlsxReader.readWithWarnings(path)).flatMap {
+      case Right(result) =>
+        result.warnings.traverse_(warningHandler) *> Async[F].pure(result.workbook)
       case Left(err) => Async[F].raiseError(new Exception(s"Failed to read XLSX: ${err.message}"))
     }
 
@@ -507,4 +510,8 @@ class ExcelIO[F[_]: Async] extends Excel[F] with ExcelR[F]:
 
 object ExcelIO:
   /** Create default ExcelIO instance */
-  def instance[F[_]: Async]: Excel[F] = new ExcelIO[F]
+  def instance[F[_]: Async]: ExcelIO[F] = new ExcelIO[F](_ => Async[F].unit)
+
+  /** Create ExcelIO with custom warning handler */
+  def withWarnings[F[_]: Async](handler: XlsxReader.Warning => F[Unit]): ExcelIO[F] =
+    new ExcelIO[F](handler)

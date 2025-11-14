@@ -33,28 +33,45 @@ import com.tjclp.xl.style.units.StyleId
  */
 object XlsxReader:
 
+  /** Warning emitted while reading XLSX input (non-fatal). */
+  enum Warning:
+    case MissingStylesXml
+
+  /** Successful read result with accumulated warnings. */
+  case class ReadResult(workbook: Workbook, warnings: Vector[Warning])
+
   /**
    * Read workbook from XLSX file (in-memory).
    *
    * Loads entire file into memory. For large files, use `ExcelIO.readStream()` instead.
    */
   def read(inputPath: Path): XLResult[Workbook] =
+    readWithWarnings(inputPath).map(_.workbook)
+
+  /** Read workbook and surface non-fatal warnings. */
+  def readWithWarnings(inputPath: Path): XLResult[ReadResult] =
     try
       val is = new FileInputStream(inputPath.toFile)
       try
-        readFromStream(is)
+        readFromStreamWithWarnings(is)
       finally
         is.close()
     catch case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
 
   /** Read workbook from byte array (for testing) */
   def readFromBytes(bytes: Array[Byte]): XLResult[Workbook] =
-    try readFromStream(new ByteArrayInputStream(bytes))
+    readFromBytesWithWarnings(bytes).map(_.workbook)
+
+  def readFromBytesWithWarnings(bytes: Array[Byte]): XLResult[ReadResult] =
+    try readFromStreamWithWarnings(new ByteArrayInputStream(bytes))
     catch case e: Exception => Left(XLError.IOError(s"Failed to read bytes: ${e.getMessage}"))
 
   /** Read workbook from input stream */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def readFromStream(is: InputStream): XLResult[Workbook] =
+    readFromStreamWithWarnings(is).map(_.workbook)
+
+  private def readFromStreamWithWarnings(is: InputStream): XLResult[ReadResult] =
     val zip = new ZipInputStream(is)
     val parts = mutable.Map[String, String]()
 
@@ -74,7 +91,7 @@ object XlsxReader:
     finally zip.close()
 
   /** Parse workbook from collected parts */
-  private def parseWorkbook(parts: Map[String, String]): XLResult[Workbook] =
+  private def parseWorkbook(parts: Map[String, String]): XLResult[ReadResult] =
     for
       // Parse workbook.xml
       workbookXml <- parts
@@ -90,7 +107,7 @@ object XlsxReader:
       sst <- parseOptionalSST(parts)
 
       // Parse styles (if present)
-      styles <- parseStyles(parts)
+      (styles, styleWarnings) <- parseStyles(parts)
 
       // Parse workbook relationships
       workbookRels <- parseWorkbookRelationships(parts)
@@ -100,7 +117,7 @@ object XlsxReader:
 
       // Assemble workbook
       workbook <- assembleWorkbook(sheets)
-    yield workbook
+    yield ReadResult(workbook, styleWarnings)
 
   /** Parse optional shared strings table */
   private def parseOptionalSST(parts: Map[String, String]): XLResult[Option[SharedStrings]] =
@@ -116,9 +133,9 @@ object XlsxReader:
         yield Some(sst)
 
   /** Parse styles table (falls back to default styles if missing) */
-  private def parseStyles(parts: Map[String, String]): XLResult[WorkbookStyles] =
+  private def parseStyles(parts: Map[String, String]): XLResult[(WorkbookStyles, Vector[Warning])] =
     parts.get("xl/styles.xml") match
-      case None => Right(WorkbookStyles.default)
+      case None => Right((WorkbookStyles.default, Vector(Warning.MissingStylesXml)))
       case Some(xml) =>
         for
           elem <- parseXml(xml, "xl/styles.xml")
@@ -126,7 +143,7 @@ object XlsxReader:
             .fromXml(elem)
             .left
             .map(err => XLError.ParseError("xl/styles.xml", err): XLError)
-        yield styles
+        yield (styles, Vector.empty)
 
   /** Parse workbook relationships (used to resolve worksheet locations) */
   private def parseWorkbookRelationships(parts: Map[String, String]): XLResult[Relationships] =
