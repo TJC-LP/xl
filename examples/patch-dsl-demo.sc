@@ -10,7 +10,7 @@
 import com.tjclp.xl.*  // Unified import includes DSL, macros, domain model
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.{IO, IOApp}
-import cats.effect.unsafe.implicits.global
+import cats.effect.unsafe.implicits.global  // Demo only - use IOApp in production
 import java.nio.file.Paths
 
 println("=== XL Patch DSL Demo ===\n")

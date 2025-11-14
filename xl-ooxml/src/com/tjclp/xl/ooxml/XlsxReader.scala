@@ -215,6 +215,7 @@ object XlsxReader:
       Sheet(
         name = name,
         cells = cellsMap,
+        mergedRanges = ooxmlSheet.mergedRanges,
         styleRegistry = finalRegistry
       )
     )

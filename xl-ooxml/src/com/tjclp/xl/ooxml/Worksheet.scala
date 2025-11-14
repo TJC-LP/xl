@@ -126,9 +126,13 @@ case class OoxmlWorksheet(
 
     // Add mergeCells element if there are merged ranges
     val mergeCellsElem = if mergedRanges.nonEmpty then
-      val mergeCellElems = mergedRanges.toSeq.sortBy(_.start.toA1).map { range =>
-        elem("mergeCell", "ref" -> range.toA1)()
-      }
+      // Sort by (row, col) for deterministic, natural ordering (A1, A2, ..., A10, ..., B1, ...)
+      // This gives row-major order and avoids lexicographic issues with string sort
+      val mergeCellElems = mergedRanges.toSeq
+        .sortBy(r => (r.start.row.index0, r.start.col.index0))
+        .map { range =>
+          elem("mergeCell", "ref" -> range.toA1)()
+        }
       Some(elem("mergeCells", "count" -> mergedRanges.size.toString)(mergeCellElems*))
     else None
 
