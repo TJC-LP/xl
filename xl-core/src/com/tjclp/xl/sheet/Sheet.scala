@@ -71,7 +71,7 @@ case class Sheet(
    * number format, etc.). Formatted literals (money"", date"", percent"") preserve their NumFmt.
    *
    * Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime,
-   * RichText, Formatted. Unsupported types are silently skipped.
+   * RichText, Formatted. Unsupported types return Left with error.
    *
    * Example:
    * {{{
@@ -79,16 +79,24 @@ case class Sheet(
    *   ref"A1" -> "Revenue",
    *   ref"B1" -> LocalDate.of(2025, 11, 10),
    *   ref"C1" -> money"$$1,234.56"
-   * )
+   * ) match
+   *   case Right(updated) => updated
+   *   case Left(err) => handleError(err)
+   * }}}
+   *
+   * For demos/REPLs, you can use .unsafe (requires explicit import):
+   * {{{
+   * import com.tjclp.xl.unsafe.*
+   * sheet.put(ref"A1" -> "Hello").unsafe
    * }}}
    *
    * @param updates
    *   Varargs of (ARef, Any) pairs
    * @return
-   *   Updated sheet with all cells and styles applied
+   *   Either error (if unsupported type) or updated sheet
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def put(updates: (ARef, Any)*): Sheet =
+  def put(updates: (ARef, Any)*): XLResult[Sheet] =
     import com.tjclp.xl.codec.{CellCodec, given}
     import java.time.{LocalDate, LocalDateTime}
 
@@ -135,10 +143,7 @@ case class Sheet(
         case v: LocalDateTime => processValue(ref, v)
         case v: com.tjclp.xl.richtext.RichText => processValue(ref, v)
         case unsupported =>
-          throw new IllegalArgumentException(
-            s"Unsupported type for cell update at ${ref.toA1}: ${unsupported.getClass.getName}. " +
-              s"Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText, Formatted"
-          )
+          return Left(XLError.UnsupportedType(ref.toA1, unsupported.getClass.getName))
     }
 
     // Update sheet with new registry and cells (inline putAll implementation)
@@ -149,9 +154,11 @@ case class Sheet(
 
     // Apply styles in batch
     import com.tjclp.xl.sheet.styleSyntax.withCellStyle
-    cellsWithStyles.foldLeft(withCells) { case (s, (ref, style)) =>
+    val result = cellsWithStyles.foldLeft(withCells) { case (s, (ref, style)) =>
       s.withCellStyle(ref, style)
     }
+
+    Right(result)
 
   /**
    * Apply a patch to this sheet.

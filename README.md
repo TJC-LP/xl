@@ -69,22 +69,21 @@ cd xl
 import com.tjclp.xl.*
 // Unified import: all domain types, syntax, macros (ref", money", date", etc.)
 
-// Create workbook and update sheet (clean one-liner!)
+// Create workbook and update sheet (for-comprehension handles errors!)
 val result = for
   workbook <- Workbook.empty
-  final <- workbook.update("Sheet1", sheet =>
-    sheet.put(
-      ref"A1" -> "Product",
-      ref"B1" -> "Price",
-      ref"A2" -> "Widget",
-      ref"B2" -> money"$$19.99",    // Formatted literal preserves Currency!
-      ref"C2" -> 42
-    )
-  )
+  updatedSheet <- Sheet("Sheet1").flatMap(_.put(
+    ref"A1" -> "Product",
+    ref"B1" -> "Price",
+    ref"A2" -> "Widget",
+    ref"B2" -> money"$$19.99",    // Formatted literal preserves Currency!
+    ref"C2" -> 42
+  ))
+  final <- workbook.put(updatedSheet)
 yield final
 
 // Or build sheet first, then add to workbook
-val salesSheet = Sheet("Sales").map(_.put(
+val salesSheet = Sheet("Sales").flatMap(_.put(
   ref"A1" -> "Revenue",
   ref"B1" -> money"$$10,000"
 ))
@@ -98,9 +97,15 @@ yield final
 // Batch add multiple sheets
 workbook.put(Sheet("Sales"), Sheet("Marketing"), Sheet("Finance"))
 
-// Patch DSL for conditional updates
+// Patch DSL for conditional updates (pure Either handling)
 val patch = (ref"A1" := "Title") ++ range"A1:C1".merge
-sheet.put(patch).unsafe              // Unwrap if you know it's safe
+val updatedSheet = sheet.put(patch) match
+  case Right(s) => s
+  case Left(err) => handleError(err)
+
+// For demos/REPLs only - requires explicit opt-in:
+// import com.tjclp.xl.unsafe.*
+// sheet.put(patch).unsafe
 ```
 
 ### Styling Example
@@ -129,12 +134,12 @@ val tjcStyle = CellStyle.default
 val header = Style.header          // Bold, 14pt, blue bg, white text, centered
 val currency = Style.currencyCell  // Currency format, right-aligned
 
-// Apply styles with unified put
-sheet.put(
+// Apply styles with unified put (returns XLResult[Sheet])
+val result = sheet.put(
   (ref"A1" := "Revenue Report") ++
   ref"A1".styled(headerStyle) ++
   range"A1:C1".merge
-)
+)  // Right(updatedSheet) or Left(error)
 ```
 
 ### Type-Safe Cell Operations with Codecs
@@ -144,26 +149,34 @@ XL provides cell-level codecs for type-safe reading and writing with auto-inferr
 ```scala
 import com.tjclp.xl.codec.syntax.*
 
-// Batch updates with mixed types (auto-infers formats)
-val sheet = Sheet("Q1 Forecast").getOrElse(...)
-  .put(
+// Batch updates with mixed types (auto-infers formats) - pure Either handling
+val result = for
+  initialSheet <- Sheet("Q1 Forecast")
+  withData <- initialSheet.put(
     ref"A1" -> "Revenue",                        // String: no format
     ref"B1" -> LocalDate.of(2025, 11, 10),      // Auto: date format
     ref"C1" -> BigDecimal("1000000.50"),        // Auto: decimal format
     ref"D1" -> 42                                // Auto: general number format
   )
-  .put(ref"E1", fx"C1*D1")  // Mix with formulas
+  final <- withData.put(ref"E1", CellValue.from(fx"C1*D1"))
+yield final
 
-// Type-safe reading
-sheet.readTyped[LocalDate](ref"B1") match
-  case Right(Some(date)) => println(s"Date: $date")
-  case Right(None) => println("Cell empty")
-  case Left(error) => println(s"Type error: ${error}")
+// Type-safe reading (result is XLResult[Sheet], so flatMap for chaining)
+result.flatMap { sheet =>
+  sheet.readTyped[LocalDate](ref"B1").left.map(_.toXLError(ref"B1")) match
+    case Right(Some(date)) => Right(s"Date: $date")
+    case Right(None) => Right("Cell empty")
+    case Left(error) => Left(error)
+}
 
-// Read different types from same sheet
-val revenue = sheet.readTyped[BigDecimal](ref"C1")  // Either[CodecError, Option[BigDecimal]]
-val count = sheet.readTyped[Int](ref"D1")           // Either[CodecError, Option[Int]]
-val name = sheet.readTyped[String](ref"A1")         // Either[CodecError, Option[String]]
+// Or simpler - direct pattern match on result
+result match
+  case Right(sheet) =>
+    val revenue = sheet.readTyped[BigDecimal](ref"C1")  // Either[CodecError, Option[BigDecimal]]
+    val count = sheet.readTyped[Int](ref"D1")           // Either[CodecError, Option[Int]]
+    val name = sheet.readTyped[String](ref"A1")         // Either[CodecError, Option[String]]
+    // ... use the values
+  case Left(err) => handleError(err)
 ```
 
 **Supported types**: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime
@@ -182,12 +195,12 @@ val text = "Bold".bold.red + " normal " + "Italic".italic.blue
 
 sheet.put(ref"A1", CellValue.RichText(text))
 
-// Or use putMixed for convenience
-sheet.put(
+// Or batch put with multiple rich text values
+val result = sheet.put(
   ref"A1" -> ("Error: ".red.bold + "File not found"),
   ref"A2" -> ("Revenue: ".bold + "+12.5%".green),
   ref"A3" -> ("Q1 ".size(18.0).bold + "Report".size(18.0).italic)
-)
+)  // Returns XLResult[Sheet]
 ```
 
 **Supported formatting**: bold, italic, underline, colors (red/green/blue/black/white/custom), font size, font family

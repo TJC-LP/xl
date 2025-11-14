@@ -95,10 +95,18 @@ case class Workbook(
   /**
    * Put multiple sheets atomically (batch operation).
    *
+   * Transactional semantics: All sheets must be added successfully or the operation fails. If any
+   * sheet cannot be added (e.g., validation error), the entire batch fails and the workbook is
+   * unchanged. This ensures consistency - you never get a workbook with partial updates.
+   *
    * Example:
    * {{{
-   * wb.put(Sheet("Sales"), Sheet("Marketing"), Sheet("Finance"))
+   * wb.put(Sheet("Sales"), Sheet("Marketing"), Sheet("Finance")) match
+   *   case Right(updated) => updated  // All 3 sheets added
+   *   case Left(err) => original      // None added, workbook unchanged
    * }}}
+   *
+   * For partial success semantics, add sheets individually and accumulate results.
    */
   def put(firstSheet: Sheet, restSheets: Sheet*): XLResult[Workbook] =
     (firstSheet +: restSheets).foldLeft(Right(this): XLResult[Workbook]) { (acc, sheet) =>

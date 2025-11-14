@@ -9,6 +9,7 @@ import com.tjclp.xl.macros.ref
 import com.tjclp.xl.macros.BatchPutMacro.put  // For batch put extension
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.unsafe.*
 
 import java.time.{LocalDate, LocalDateTime}
 
@@ -18,6 +19,7 @@ class BatchUpdateSpec extends FunSuite:
   test("put: single string value") {
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
       .put(ref"A1" -> "Hello")
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Hello"))
     assertEquals(sheet.getCellStyle(ref"A1"), None) // Strings don't get styling
@@ -26,6 +28,7 @@ class BatchUpdateSpec extends FunSuite:
   test("put: single int value with auto-style") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
       .put(ref"A1" -> 42)
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal(42)))
     val style = sheet.getCellStyle(ref"A1")
@@ -35,6 +38,7 @@ class BatchUpdateSpec extends FunSuite:
   test("put: single BigDecimal with decimal format") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
       .put(ref"A1" -> BigDecimal("123.45"))
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("123.45")))
     val style = sheet.getCellStyle(ref"A1")
@@ -45,6 +49,7 @@ class BatchUpdateSpec extends FunSuite:
     val date = LocalDate.of(2025, 11, 10)
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
       .put(ref"A1" -> date)
+      .unsafe
 
     sheet(ref"A1").value match
       case CellValue.DateTime(datetime) => assertEquals(datetime.toLocalDate, date)
@@ -58,6 +63,7 @@ class BatchUpdateSpec extends FunSuite:
     val dt = LocalDateTime.of(2025, 11, 10, 14, 30)
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
       .put(ref"A1" -> dt)
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.DateTime(dt))
     val style = sheet.getCellStyle(ref"A1")
@@ -73,6 +79,7 @@ class BatchUpdateSpec extends FunSuite:
         ref"D1" -> LocalDate.of(2025, 11, 10),
         ref"E1" -> true
       )
+      .unsafe
 
     // Verify values
     assertEquals(sheet(ref"A1").value, CellValue.Text("Title"))
@@ -102,6 +109,7 @@ class BatchUpdateSpec extends FunSuite:
       ref"A1" -> "Hello",
       ref"B1" -> 42
     )
+      .unsafe
 
     // Values should be the same (styles might differ due to auto-inference)
     assertEquals(batched(ref"A1").value, manual(ref"A1").value)
@@ -111,35 +119,59 @@ class BatchUpdateSpec extends FunSuite:
   test("put: overwrites existing cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
       .put(ref"A1" -> "Old")
+      .unsafe
       .put(ref"A1" -> "New")
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("New"))
   }
 
-  test("put: unsupported types throw exception") {
-    // Unsupported types should throw IllegalArgumentException with helpful message
+  test("put: unsupported types return Left (pure)") {
+    // Unsupported types should return Left[XLError.UnsupportedType] (pure behavior)
     case class UnsupportedType(value: String)
 
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
 
-    // Should throw exception for unsupported type
-    val exception = intercept[IllegalArgumentException] {
+    // Should return Left for unsupported type
+    val result = sheet.put(
+      ref"A1" -> "Valid",
+      ref"B1" -> UnsupportedType("Invalid") // Unsupported type
+    )
+
+    result match
+      case Left(XLError.UnsupportedType(ref, typeName)) =>
+        assertEquals(ref, "B1")
+        assert(typeName.contains("UnsupportedType"))
+      case Left(other) =>
+        fail(s"Expected UnsupportedType error, got: $other")
+      case Right(_) =>
+        fail("Expected Left, got Right")
+  }
+
+  test("put: unsupported types throw with .unsafe") {
+    // When using .unsafe, should throw IllegalStateException
+    case class UnsupportedType(value: String)
+
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+
+    // Should throw exception when using .unsafe on error result
+    val exception = intercept[IllegalStateException] {
       sheet.put(
         ref"A1" -> "Valid",
-        ref"B1" -> UnsupportedType("Invalid") // Should throw
-      )
+        ref"B1" -> UnsupportedType("Invalid")
+      ).unsafe
     }
 
     // Verify exception message contains helpful information
+    assert(exception.getMessage.contains("XLResult.unsafe failed"))
     assert(exception.getMessage.contains("Unsupported type"))
     assert(exception.getMessage.contains("B1"))
-    assert(exception.getMessage.contains("UnsupportedType"))
-    assert(exception.getMessage.contains("Supported types"))
   }
 
   test("put: writes single typed value with auto-inferred style") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
       .put(ref"A1" -> BigDecimal("123.45"))
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("123.45")))
     assert(sheet.getCellStyle(ref"A1").exists(_.numFmt == NumFmt.Decimal), "Should have Decimal format")
@@ -175,6 +207,7 @@ class BatchUpdateSpec extends FunSuite:
         ref"B1" -> BigDecimal("123.45"),
         ref"C1" -> "Text"
       )
+      .unsafe
 
     assertEquals(sheet.readTyped[Int](ref"A1"), Right(Some(42)))
     assertEquals(sheet.readTyped[BigDecimal](ref"B1"), Right(Some(BigDecimal("123.45"))))
@@ -188,6 +221,7 @@ class BatchUpdateSpec extends FunSuite:
         ref"B1" -> BigDecimal("123.45"), // Adds decimal style
         ref"C1" -> LocalDate.of(2025, 11, 10) // Adds date style
       )
+      .unsafe
 
     // Should have: default + decimal + date = 3 styles
     assert(sheet.styleRegistry.size >= 3, s"Expected at least 3 styles, got ${sheet.styleRegistry.size}")
@@ -199,6 +233,7 @@ class BatchUpdateSpec extends FunSuite:
         ref"A1" -> BigDecimal("123.45"),
         ref"A2" -> BigDecimal("678.90") // Same type, should reuse style
       )
+      .unsafe
 
     // Both cells should have the same styleId
     assertEquals(
@@ -214,6 +249,7 @@ class BatchUpdateSpec extends FunSuite:
     val richText = "Bold".bold + " normal"
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
       .put(ref"A1" -> richText)
+      .unsafe
 
     sheet(ref"A1").value match
       case CellValue.RichText(rt) =>
@@ -230,6 +266,7 @@ class BatchUpdateSpec extends FunSuite:
         ref"A2" -> richText,
         ref"A3" -> 42
       )
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Plain text"))
     assert(sheet(ref"A2").value.isInstanceOf[CellValue.RichText], "A2 should be RichText")

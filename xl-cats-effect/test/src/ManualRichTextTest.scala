@@ -5,6 +5,7 @@ import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.unsafe.*
 import java.nio.file.Paths
 
 /** Manual test to verify rich text formatting in Excel.
@@ -67,6 +68,7 @@ object ManualRichTextTest extends IOApp.Simple:
         ref"A14" -> "Revenue ($M):",
         ref"B14" -> BigDecimal("1250.50")
       )
+      .unsafe
 
     val workbook = Workbook(Vector(report))
 

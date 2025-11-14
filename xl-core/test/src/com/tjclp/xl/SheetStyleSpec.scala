@@ -12,6 +12,7 @@ import com.tjclp.xl.style.color.Color
 import com.tjclp.xl.style.fill.Fill
 import com.tjclp.xl.style.font.Font
 import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 
 /** Tests for Sheet style extension methods */
@@ -36,8 +37,8 @@ class SheetStyleSpec extends FunSuite:
   test("withCellStyle deduplicates same style applied twice") {
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(ref"A1", "Text1")
-      .put(ref"A2", "Text2")
+      .put(ref"A1" -> "Text1", ref"A2" -> "Text2")
+      .unsafe
       .withCellStyle(ref"A1", redStyle)
       .withCellStyle(ref"A2", redStyle)
 
@@ -54,9 +55,8 @@ class SheetStyleSpec extends FunSuite:
   test("withRangeStyle applies to all cells in ref") {
     val headerStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .put(ref"A1", "Col1")
-      .put(ref"B1", "Col2")
-      .put(ref"C1", "Col3")
+      .put(ref"A1" -> "Col1", ref"B1" -> "Col2", ref"C1" -> "Col3")
+      .unsafe
       .withRangeStyle(ref"A1:C1", headerStyle)
 
     // All cells should have styleId

@@ -7,6 +7,7 @@ import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.unsafe.*
 
 /**
  * Tests for ZIP compression configuration.
@@ -38,7 +39,7 @@ class CompressionSpec extends FunSuite:
           cRef -> s"Row $row with more repetitive content"
         )
       }
-      val sheet = initial.sheets(0).put(cells*)
+      val sheet = initial.sheets(0).put(cells*).unsafe
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
@@ -101,7 +102,7 @@ class CompressionSpec extends FunSuite:
       val cells = (1 to 100).map { row =>
         ARef(Column.from1(1), Row.from1(row)) -> s"Row $row"
       }
-      val sheet = initial.sheets(0).put(cells*)
+      val sheet = initial.sheets(0).put(cells*).unsafe
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Failed to create workbook"))
 

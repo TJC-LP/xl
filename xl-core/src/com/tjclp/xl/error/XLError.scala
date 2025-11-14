@@ -58,6 +58,9 @@ enum XLError:
   /** Number of supplied values mismatched expectation */
   case ValueCountMismatch(expected: Int, actual: Int, context: String)
 
+  /** Unsupported type in batch put operation */
+  case UnsupportedType(ref: String, typeName: String)
+
   /** Generic error for extensibility */
   case Other(message: String)
 
@@ -85,39 +88,9 @@ object XLError:
       case ParseError(location, reason) => s"Parse error at $location: $reason"
       case ValueCountMismatch(expected, actual, context) =>
         s"Expected $expected values for $context but received $actual"
+      case UnsupportedType(ref, typeName) =>
+        s"Unsupported type at $ref: $typeName. Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText, Formatted"
       case Other(message) => message
 
 /** Type alias for common result type */
 type XLResult[A] = Either[XLError, A]
-
-/** Extension methods for XLResult to enable ergonomic error handling and chaining */
-extension [A](result: XLResult[A])
-  /**
-   * Unwrap result, throwing exception if Left.
-   *
-   * Use only when you know the operation cannot fail (e.g., simple Put patches) or when you want to
-   * propagate exceptions up the call stack.
-   *
-   * Example:
-   * {{{
-   * val sheet = Sheet("Data")
-   *   .put(ref"A1", "Title")
-   *   .put(range"A1:C1".merge).unsafe  // Know it's safe, unwrap it
-   *   .put(ref"A2", "More data")       // Continue chaining
-   * }}}
-   */
-  def unsafe: A = result match
-    case Right(value) => value
-    case Left(err) => throw new IllegalStateException(s"XLResult.unsafe failed: ${err.message}")
-
-  /**
-   * Unwrap with fallback value.
-   *
-   * Provides a default value if the result is a Left, enabling graceful degradation.
-   *
-   * Example:
-   * {{{
-   * val sheet = baseSheet.put(patch).getOrElse(baseSheet)  // Fallback to original
-   * }}}
-   */
-  def getOrElse(default: => A): A = result.toOption.getOrElse(default)

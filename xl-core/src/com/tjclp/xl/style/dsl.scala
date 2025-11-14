@@ -87,11 +87,18 @@ object dsl:
     inline def rgb(r: Int, g: Int, b: Int): CellStyle =
       style.withFont(style.font.withColor(Color.fromRgb(r, g, b)))
 
-    /** Set font color from hex code (#RRGGBB or #AARRGGBB). Invalid codes are silently ignored. */
+    /**
+     * Set font color from hex code (#RRGGBB or #AARRGGBB).
+     *
+     * Invalid codes log a warning and return unchanged style. Use hexValidated"..." macro for
+     * compile-time validation (future feature).
+     */
     inline def hex(code: String): CellStyle =
       Color.fromHex(code) match
         case Right(c) => style.withFont(style.font.withColor(c))
-        case Left(_) => style // Silently ignore invalid hex
+        case Left(err) =>
+          System.err.println(s"Warning: Invalid hex color code '$code' - $err (style unchanged)")
+          style
 
     // ========== Preset Background Colors ==========
 
@@ -129,11 +136,18 @@ object dsl:
     inline def bgRgb(r: Int, g: Int, b: Int): CellStyle =
       style.withFill(Fill.Solid(Color.fromRgb(r, g, b)))
 
-    /** Set background from hex code (#RRGGBB or #AARRGGBB). Invalid codes are silently ignored. */
+    /**
+     * Set background color from hex code (#RRGGBB or #AARRGGBB).
+     *
+     * Invalid codes log a warning and return unchanged style. Use hexValidated"..." macro for
+     * compile-time validation (future feature).
+     */
     inline def bgHex(code: String): CellStyle =
       Color.fromHex(code) match
         case Right(c) => style.withFill(Fill.Solid(c))
-        case Left(_) => style
+        case Left(err) =>
+          System.err.println(s"Warning: Invalid hex color code '$code' - $err (style unchanged)")
+          style
 
     // ========== Alignment ==========
 
