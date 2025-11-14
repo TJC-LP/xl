@@ -91,6 +91,13 @@ case class Sheet(
     import com.tjclp.xl.codec.{CellCodec, given}
     import java.time.{LocalDate, LocalDateTime}
 
+    // NOTE: Local mutation for performance - buffers are private to this method
+    // and never escape. The function remains pure (referentially transparent) because:
+    // 1. All mutations are confined to this scope
+    // 2. No shared mutable state is accessed
+    // 3. Output depends only on inputs (deterministic)
+    // This is a common FP optimization pattern for bulk operations (similar to Scala stdlib).
+
     // Single-pass: build cells and collect styles simultaneously
     val cells = scala.collection.mutable.ArrayBuffer[Cell]()
     val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
@@ -126,7 +133,11 @@ case class Sheet(
         case v: LocalDate => processValue(ref, v)
         case v: LocalDateTime => processValue(ref, v)
         case v: com.tjclp.xl.richtext.RichText => processValue(ref, v)
-        case _ => () // Silently skip unsupported types
+        case unsupported =>
+          throw new IllegalArgumentException(
+            s"Unsupported type for cell update at ${ref.toA1}: ${unsupported.getClass.getName}. " +
+              s"Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText, Formatted"
+          )
     }
 
     // Update sheet with new registry and cells (inline putAll implementation)

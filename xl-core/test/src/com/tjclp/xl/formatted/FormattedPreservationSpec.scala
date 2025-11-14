@@ -150,3 +150,55 @@ class FormattedPreservationSpec extends FunSuite:
       assertEquals(style.numFmt, NumFmt.Currency)
     }
   }
+
+  test("Formatted variables preserve format in batch put") {
+    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+
+    // Store formatted values in variables (not inline literals)
+    val revenue = money"$$10,000.00"
+    val growth = percent"15.5%"
+    val reportDate = date"2025-11-14"
+
+    // Pass variables to batch put
+    val updated = sheet.put(
+      ref"A1" -> "Revenue",
+      ref"B1" -> revenue,     // Variable, not literal
+      ref"A2" -> "Growth",
+      ref"B2" -> growth,      // Variable, not literal
+      ref"A3" -> "Date",
+      ref"B3" -> reportDate   // Variable, not literal
+    )
+
+    // Verify Currency format is preserved for money variable
+    val cellB1 = updated(ref"B1")
+    cellB1.styleId match
+      case Some(styleId) =>
+        val style = updated.styleRegistry.get(styleId).getOrElse {
+          fail(s"Style $styleId not found")
+        }
+        assertEquals(style.numFmt, NumFmt.Currency, "money variable should preserve Currency format")
+      case None =>
+        fail("Cell B1 should have a style with Currency format")
+
+    // Verify Percent format is preserved for percent variable
+    val cellB2 = updated(ref"B2")
+    cellB2.styleId match
+      case Some(styleId) =>
+        val style = updated.styleRegistry.get(styleId).getOrElse {
+          fail(s"Style $styleId not found")
+        }
+        assertEquals(style.numFmt, NumFmt.Percent, "percent variable should preserve Percent format")
+      case None =>
+        fail("Cell B2 should have a style with Percent format")
+
+    // Verify Date format is preserved for date variable
+    val cellB3 = updated(ref"B3")
+    cellB3.styleId match
+      case Some(styleId) =>
+        val style = updated.styleRegistry.get(styleId).getOrElse {
+          fail(s"Style $styleId not found")
+        }
+        assertEquals(style.numFmt, NumFmt.Date, "date variable should preserve Date format")
+      case None =>
+        fail("Cell B3 should have a style with Date format")
+  }

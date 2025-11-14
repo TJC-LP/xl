@@ -116,18 +116,25 @@ class BatchUpdateSpec extends FunSuite:
     assertEquals(sheet(ref"A1").value, CellValue.Text("New"))
   }
 
-  test("put: unsupported types are ignored") {
-    // This is a manual test - unsupported types should be silently ignored
+  test("put: unsupported types throw exception") {
+    // Unsupported types should throw IllegalArgumentException with helpful message
     case class UnsupportedType(value: String)
 
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .put(
-        ref"A1" -> "Valid",
-        ref"B1" -> UnsupportedType("Invalid") // Should be ignored
-      )
 
-    assertEquals(sheet(ref"A1").value, CellValue.Text("Valid"))
-    assert(!sheet.contains(ref"B1")) // Unsupported type should not create a cell
+    // Should throw exception for unsupported type
+    val exception = intercept[IllegalArgumentException] {
+      sheet.put(
+        ref"A1" -> "Valid",
+        ref"B1" -> UnsupportedType("Invalid") // Should throw
+      )
+    }
+
+    // Verify exception message contains helpful information
+    assert(exception.getMessage.contains("Unsupported type"))
+    assert(exception.getMessage.contains("B1"))
+    assert(exception.getMessage.contains("UnsupportedType"))
+    assert(exception.getMessage.contains("Supported types"))
   }
 
   test("put: writes single typed value with auto-inferred style") {
