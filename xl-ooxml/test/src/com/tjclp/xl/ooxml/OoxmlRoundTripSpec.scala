@@ -218,13 +218,21 @@ class OoxmlRoundTripSpec extends FunSuite:
       initial.updateSheet(0, sheet)
     }.getOrElse(fail("Should create workbook"))
 
-    // Note: Merged ranges require worksheet relationships, which is future work
-    // For now, just verify basic round-trip works
     val outputPath = tempDir.resolve("merged.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
 
     val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
-    assertEquals(readWb.sheets(0)(ref"A1").value, CellValue.Text("Merged Header"))
+    val readSheet = readWb.sheets(0)
+
+    // Verify cell value preserved
+    assertEquals(readSheet(ref"A1").value, CellValue.Text("Merged Header"))
+
+    // Verify merged ranges preserved
+    assertEquals(readSheet.mergedRanges.size, 1, "Should have exactly one merged range")
+    assert(
+      readSheet.mergedRanges.contains(ref"A1:C1"),
+      "Should preserve A1:C1 merge"
+    )
   }
 
   test("Workbook with DateTime cells serializes to Excel serial numbers") {
