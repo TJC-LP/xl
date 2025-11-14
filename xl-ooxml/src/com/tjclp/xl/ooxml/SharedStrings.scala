@@ -57,7 +57,7 @@ case class SharedStrings(
   def toXml: Elem =
     val siElems = strings.map { s =>
       // Check if string needs xml:space="preserve"
-      val needsPreserve = s.startsWith(" ") || s.endsWith(" ") || s.contains("  ")
+      val needsPreserve = needsXmlSpacePreserve(s)
       val tElem =
         if needsPreserve then
           Elem(

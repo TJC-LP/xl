@@ -1,12 +1,22 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
+import java.io.ByteArrayInputStream
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.time.{Duration, LocalDate, LocalDateTime}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.error.XLResult
+import com.tjclp.xl.cell.{CellError, CellValue}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.{XlsxWriter, XlsxReader}
+import com.tjclp.xl.richtext.RichText
+import com.tjclp.xl.richtext.RichText.given
+import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.sheet.styleSyntax.*
+import com.tjclp.xl.style.dsl.*
+import java.util.zip.ZipInputStream
 
 /** Round-trip tests for XLSX write → read */
 class OoxmlRoundTripSpec extends FunSuite:
@@ -276,3 +286,225 @@ class OoxmlRoundTripSpec extends FunSuite:
       case other =>
         fail(s"Expected Number, got: $other")
   }
+
+  test("Full-feature workbook round-trips values, styles, merges, and bytes") {
+    val original = orFail(buildComprehensiveWorkbook(), "Failed to build workbook")
+
+    val bytes1 = orFail(XlsxWriter.writeToBytes(original), "Failed to write bytes")
+    val roundTripped =
+      orFail(XlsxReader.readFromBytes(bytes1), "Failed to read round-tripped workbook")
+    val bytes2 = orFail(XlsxWriter.writeToBytes(roundTripped), "Failed to re-write bytes")
+
+    assertWorkbookEquality(original, roundTripped)
+    assertZipBytesEqual(bytes1, bytes2)
+  }
+
+  // ---------- Helpers ----------
+
+  private def buildComprehensiveWorkbook(): XLResult[Workbook] =
+    for
+      summary <- buildSummarySheet
+      detail <- buildDetailSheet
+      timeline <- buildTimelineSheet
+    yield Workbook(Vector(summary, detail, timeline))
+
+  private def buildSummarySheet: XLResult[Sheet] =
+    Sheet("Summary").flatMap { base =>
+      base
+        .put(
+          ref"A1" -> "Quarterly Report",
+          ref"A2" -> "Revenue",
+          ref"B2" -> BigDecimal("125000.50"),
+          ref"A3" -> "Expenses",
+          ref"B3" -> BigDecimal("82000.10"),
+          ref"A4" -> "Net Income",
+          ref"B4" -> BigDecimal("43000.40"),
+          ref"C2" -> true,
+          ref"C3" -> false,
+          ref"D2" -> LocalDate.of(2025, 11, 15),
+          ref"D3" -> LocalDate.of(2025, 12, 31),
+          ref"A6" -> "Styled note",
+          ref"B6" -> "Padded text",
+          ref"C6" -> BigDecimal("42.42"),
+          ref"D6" -> LocalDateTime.of(2025, 11, 20, 9, 15),
+          ref"E6" -> "dup-string",
+          ref"E7" -> "dup-string"
+        )
+        .map { populated =>
+          val enriched = populated.put(ref"E2", CellValue.Error(CellError.Div0))
+          val header = CellStyle.default.bold.size(16.0).white.bgBlue.center.middle
+          val currency = CellStyle.default.bold.size(12.0).right
+          val warning = CellStyle.default.red.bgYellow
+          val rich = CellStyle.default.italic
+          enriched
+            .withCellStyle(ref"A1", header)
+            .withRangeStyle(ref"A2:C4", currency)
+            .withCellStyle(ref"E2", warning)
+            .withCellStyle(ref"A6", rich)
+            .merge(ref"A1:E1")
+        }
+    }
+
+  private def buildDetailSheet: XLResult[Sheet] =
+    Sheet("Detail").flatMap { base =>
+      base
+        .put(
+          ref"A1" -> "Region",
+          ref"B1" -> "Units",
+          ref"C1" -> "Price",
+          ref"D1" -> "Total",
+          ref"E1" -> "Updated",
+          ref"A2" -> "North",
+          ref"B2" -> 120,
+          ref"C2" -> BigDecimal("12.50"),
+          ref"D2" -> BigDecimal("1500.00"),
+          ref"A3" -> "South",
+          ref"B3" -> 85,
+          ref"C3" -> BigDecimal("11.00"),
+          ref"D3" -> BigDecimal("935.00"),
+          ref"A4" -> "West",
+          ref"B4" -> 60,
+          ref"C4" -> BigDecimal("10.25"),
+          ref"D4" -> BigDecimal("615.00"),
+          ref"E2" -> LocalDateTime.of(2025, 1, 1, 9, 30),
+          ref"E3" -> LocalDateTime.of(2025, 1, 2, 10, 0),
+          ref"E4" -> LocalDateTime.of(2025, 1, 3, 11, 15),
+          ref"A6" -> "Notes",
+          ref"B6" -> "Use xml:space to keep double spaces"
+        )
+        .map { populated =>
+          val header = CellStyle.default.bold.bgGray.center
+          val number = CellStyle.default.right
+          val noteStyle = CellStyle.default.italic.wrap
+          populated
+            .withRangeStyle(ref"A1:E1", header)
+            .withRangeStyle(ref"B2:D4", number)
+            .withCellStyle(ref"B6", noteStyle)
+        }
+    }
+
+  private def buildTimelineSheet: XLResult[Sheet] =
+    Sheet("Timeline").flatMap { base =>
+      base
+        .put(
+          ref"A1" -> "Milestone",
+          ref"B1" -> "Date",
+          ref"C1" -> "Status",
+          ref"D1" -> "Approved",
+          ref"A2" -> "Kickoff",
+          ref"B2" -> LocalDate.of(2025, 1, 5),
+          ref"C2" -> "On Track",
+          ref"D2" -> true,
+          ref"A3" -> "Launch",
+          ref"B3" -> LocalDate.of(2025, 3, 15),
+          ref"C3" -> "At Risk",
+          ref"D3" -> false
+        )
+        .map { populated =>
+          val header = CellStyle.default.bold.bgBlue.white.center
+          val dateStyle = CellStyle.default.right
+          val warning = CellStyle.default.bold.bgYellow
+          populated
+            .withRangeStyle(ref"A1:D1", header)
+            .withRangeStyle(ref"B2:B3", dateStyle)
+            .withCellStyle(ref"C3", warning)
+        }
+    }
+
+  private def assertWorkbookEquality(expected: Workbook, actual: Workbook): Unit =
+    assertEquals(actual.sheets.size, expected.sheets.size, "Sheet count mismatch after round-trip")
+    expected.sheets.zip(actual.sheets).foreach { case (expSheet, actSheet) =>
+      assertEquals(
+        actSheet.cells.keySet,
+        expSheet.cells.keySet,
+        s"Cell refs mismatch in sheet ${expSheet.name.value}"
+      )
+      expSheet.cells.foreach { case (ref, expCell) =>
+        val actCell = actSheet.cells(ref)
+        assertCellValueEquals(expSheet.name.value, ref, expCell.value, actCell.value)
+        val expStyle = expCell.styleId.flatMap(expSheet.styleRegistry.get)
+        val actStyle = actCell.styleId.flatMap(actSheet.styleRegistry.get)
+        assertEquals(
+          actStyle,
+          expStyle,
+          s"Cell style mismatch at ${expSheet.name.value}!${ref.toA1}"
+        )
+      }
+      assertEquals(
+        actSheet.mergedRanges,
+        expSheet.mergedRanges,
+        s"Merged ranges mismatch in sheet ${expSheet.name.value}"
+      )
+    }
+
+  private def orFail[A](result: XLResult[A], context: String): A =
+    result match
+      case Right(value) => value
+      case Left(err) => fail(s"$context: ${err.message}")
+
+  private def assertCellValueEquals(
+    sheetName: String,
+    ref: ARef,
+    expected: CellValue,
+    actual: CellValue
+  ): Unit =
+    (expected, actual) match
+      case (CellValue.DateTime(exp), CellValue.Number(serial)) =>
+        val asDate = CellValue.excelSerialToDateTime(serial.toDouble)
+        assertDateApproxEquals(sheetName, ref, exp, asDate)
+      case (CellValue.Number(serial), CellValue.DateTime(actualDate)) =>
+        val expectedDate = CellValue.excelSerialToDateTime(serial.toDouble)
+        assertDateApproxEquals(sheetName, ref, expectedDate, actualDate)
+      case _ =>
+        assertEquals(
+          actual,
+          expected,
+          s"Cell value mismatch at $sheetName!${ref.toA1}"
+        )
+
+  private def assertDateApproxEquals(
+    sheetName: String,
+    ref: ARef,
+    expected: LocalDateTime,
+    actual: LocalDateTime
+  ): Unit =
+    val delta = Duration.between(expected, actual).abs()
+    val tolerance = Duration.ofSeconds(1)
+    assert(
+      delta.compareTo(tolerance) <= 0,
+      s"Date mismatch at $sheetName!${ref.toA1}: expected $expected, got $actual"
+    )
+
+  private def assertZipBytesEqual(expected: Array[Byte], actual: Array[Byte]): Unit =
+    if !expected.sameElements(actual) then
+      val expectedEntries = readZipEntries(expected)
+      val actualEntries = readZipEntries(actual)
+      val missing = expectedEntries.keySet.diff(actualEntries.keySet)
+      val extra = actualEntries.keySet.diff(expectedEntries.keySet)
+      val mismatched = expectedEntries.keySet
+        .intersect(actualEntries.keySet)
+        .filter(name => !expectedEntries(name).sameElements(actualEntries(name)))
+
+      val message = new StringBuilder("Round-trip ZIP mismatch detected:\n")
+      if missing.nonEmpty then message.append(s"Missing entries: ${missing.mkString(", ")}\n")
+      if extra.nonEmpty then message.append(s"Extra entries: ${extra.mkString(", ")}\n")
+      mismatched.headOption.foreach { sample =>
+        val snippet = mismatched.toSeq.sorted.take(3).mkString(", ")
+        message.append(s"Entries with differing content (first 3): $snippet\n")
+        val expSnippet = new String(expectedEntries(sample), StandardCharsets.UTF_8).take(500)
+        val actSnippet = new String(actualEntries(sample), StandardCharsets.UTF_8).take(500)
+        message.append(s"Sample diff for $sample:\nEXPECTED: $expSnippet\nACTUAL:   $actSnippet\n")
+      }
+      fail(message.toString)
+
+  private def readZipEntries(bytes: Array[Byte]): Map[String, Array[Byte]] =
+    val zip = new ZipInputStream(new ByteArrayInputStream(bytes))
+    try
+      def loop(acc: Map[String, Array[Byte]]): Map[String, Array[Byte]] =
+        Option(zip.getNextEntry) match
+          case None => acc
+          case Some(entry) =>
+            val data = zip.readAllBytes()
+            loop(acc + (entry.getName -> data))
+      loop(Map.empty)
+    finally zip.close()

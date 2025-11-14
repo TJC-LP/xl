@@ -4,6 +4,7 @@ import fs2.Stream
 import fs2.data.xml.*
 import fs2.data.xml.XmlEvent.*
 import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.ooxml.XmlUtil
 
 /**
  * True streaming XML writer using fs2-data-xml for constant-memory writes.
@@ -66,7 +67,7 @@ object StreamingXmlWriter:
       case CellValue.Text(s) =>
         // <c r="A1" t="inlineStr"><is><t>text</t></is></c>
         // Add xml:space="preserve" for text with leading/trailing/multiple spaces
-        val needsPreserve = s.startsWith(" ") || s.endsWith(" ") || s.contains("  ")
+        val needsPreserve = XmlUtil.needsXmlSpacePreserve(s)
         val tAttrs =
           if needsPreserve then
             List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
@@ -182,7 +183,7 @@ object StreamingXmlWriter:
 
           // Text element with optional xml:space="preserve"
           val tAttrs =
-            if run.text.startsWith(" ") || run.text.endsWith(" ") || run.text.contains("  ") then
+            if XmlUtil.needsXmlSpacePreserve(run.text) then
               List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
             else Nil
 
