@@ -60,10 +60,11 @@ sheetResult match
     // === Complex patch with styles and merges ===
     println("\n=== Complex Patch Example ===")
 
-    // Create a header style
+    // Create a header style with centered alignment
     val headerStyle = CellStyle(
       font = Font(bold = true, sizePt = 14.0),
-      fill = Fill.Solid(Color.fromRgb(68, 114, 196))  // Blue header
+      fill = Fill.Solid(Color.fromRgb(68, 114, 196)),  // Blue header
+      align = Align(horizontal = HAlign.Center, vertical = VAlign.Middle)
     )
 
     val complexPatch =
