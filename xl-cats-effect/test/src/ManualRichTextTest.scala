@@ -5,6 +5,7 @@ import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.unsafe.*
 import java.nio.file.Paths
 
 /** Manual test to verify rich text formatting in Excel.
@@ -28,7 +29,7 @@ object ManualRichTextTest extends IOApp.Simple:
 
     // Build a financial report with rich text formatting
     val report = Sheet("Q1 Performance Report").getOrElse(sys.error("Failed to create sheet"))
-      .putMixed(
+      .put(
         // Title with large bold text
         ref"A1" -> ("Q1 2025 ".size(18.0).bold + "Performance Report".size(18.0).italic),
 
@@ -67,6 +68,7 @@ object ManualRichTextTest extends IOApp.Simple:
         ref"A14" -> "Revenue ($M):",
         ref"B14" -> BigDecimal("1250.50")
       )
+      .unsafe
 
     val workbook = Workbook(Vector(report))
 

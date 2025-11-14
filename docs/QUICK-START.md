@@ -44,7 +44,7 @@ import cats.effect.unsafe.implicits.global
 import java.nio.file.Path
 
 // Create a simple sheet
-val sheet = Sheet("Sales").get.putMixed(
+val sheet = Sheet("Sales").get.put(
   ref"A1" -> "Product",
   ref"B1" -> "Revenue",
   ref"A2" -> "Widget",
@@ -121,7 +121,7 @@ val patch = (cell"A1" := "Product") ++
             (cell"B1" := "Revenue") ++
             range"A1:B1".styled(headerStyle)
 
-sheet.applyPatch(patch).get
+sheet.put(patch).get
 ```
 
 ## Performance Modes
@@ -129,7 +129,7 @@ sheet.applyPatch(patch).get
 ### Small Files (<10k rows)
 ```scala
 // Use in-memory API (simple, full features)
-val sheet = Sheet("Data").get.putMixed(
+val sheet = Sheet("Data").get.put(
   // ... cells
 )
 ExcelIO.instance.write[IO](Workbook(Vector(sheet)), path).unsafeRunSync()
@@ -165,8 +165,8 @@ Stream.range(1, 1_000_001)
 
 ### Create Multi-Sheet Workbook
 ```scala
-val sheet1 = Sheet("Sales").get.putMixed(cell"A1" -> "Sales Data")
-val sheet2 = Sheet("Inventory").get.putMixed(cell"A1" -> "Inventory")
+val sheet1 = Sheet("Sales").get.put(cell"A1" -> "Sales Data")
+val sheet2 = Sheet("Inventory").get.put(cell"A1" -> "Inventory")
 
 val workbook = Workbook(Vector(sheet1, sheet2))
 ```
@@ -183,7 +183,7 @@ sheet.fillBy(range"A1:Z10") { (col, row) =>
 import com.tjclp.xl.richtext.RichText.*
 
 val text = "Error: ".red.bold + "File not found"
-sheet.putMixed(cell"A1" -> text)
+sheet.put(cell"A1" -> text)
 ```
 
 ### Export to HTML
@@ -227,11 +227,11 @@ import java.nio.file.Path              // File paths
 
 ### Key Operations
 - `sheet.put(ref, value)` - Set cell value
-- `sheet.putAll(cells)` - Batch set cells
-- `sheet.putMixed(updates*)` - Type-safe batch with auto-formatting
+- `sheet.put(cells)` - Batch set cells
+- `sheet.put(updates*)` - Type-safe batch with auto-formatting
 - `sheet.get(ref)` - Read cell (Option[Cell])
 - `sheet.readTyped[A](ref)` - Type-safe read (Either[Error, Option[A]])
-- `sheet.applyPatch(patch)` - Apply deferred updates
+- `sheet.put(patch)` - Apply deferred updates
 
 ### Common Patterns
 ```scala
@@ -239,7 +239,7 @@ import java.nio.file.Path              // File paths
 sheet.put(cell"A1", "Hello")
 
 // Batch cells
-sheet.putMixed(
+sheet.put(
   cell"A1" -> "Name",
   cell"B1" -> 42,
   cell"C1" -> LocalDate.now()

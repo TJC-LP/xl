@@ -58,6 +58,9 @@ enum XLError:
   /** Number of supplied values mismatched expectation */
   case ValueCountMismatch(expected: Int, actual: Int, context: String)
 
+  /** Unsupported type in batch put operation */
+  case UnsupportedType(ref: String, typeName: String)
+
   /** Generic error for extensibility */
   case Other(message: String)
 
@@ -85,6 +88,8 @@ object XLError:
       case ParseError(location, reason) => s"Parse error at $location: $reason"
       case ValueCountMismatch(expected, actual, context) =>
         s"Expected $expected values for $context but received $actual"
+      case UnsupportedType(ref, typeName) =>
+        s"Unsupported type at $ref: $typeName. Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText, Formatted"
       case Other(message) => message
 
 /** Type alias for common result type */

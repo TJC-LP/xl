@@ -3,6 +3,7 @@ package com.tjclp.xl.macros
 import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
 
 import scala.quoted.*
+import scala.util.boundary, boundary.break
 
 /**
  * Compile-time validated unified reference literal.
@@ -19,6 +20,12 @@ import scala.quoted.*
  * Return type is transparent: simple refs return unwrapped ARef/CellRange for backwards
  * compatibility, qualified refs return RefType for sheet information.
  */
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.Var",
+    "org.wartremover.warts.While"
+  )
+)
 object RefLiteral:
 
   // -------- Public API --------
@@ -95,14 +102,18 @@ object RefLiteral:
     val parts = sc.valueOrAbort.parts
     if parts.lengthCompare(1) != 0 then
       quotes.reflect.report.errorAndAbort("literal must be a single part")
-    parts.head
+    parts(0) // Safe: length == 1 verified above
 
   // -------- Const Emitters --------
 
-  /** Emit unwrapped ARef constant (for simple refs) */
+  /**
+   * Emit unwrapped ARef constant (for simple refs).
+   *
+   * Uses ARef.from0 public API for encapsulation. The inline function expands to the packed Long
+   * representation at compile time with zero runtime overhead.
+   */
   private def constARef(col0: Int, row0: Int)(using Quotes): Expr[ARef] =
-    val packed = (row0.toLong << 32) | (col0.toLong & 0xffffffffL)
-    '{ (${ Expr(packed) }: Long).asInstanceOf[ARef] }
+    '{ ARef.from0(${ Expr(col0) }, ${ Expr(row0) }) }
 
   /** Emit unwrapped CellRange constant (for simple ranges) */
   private def constCellRange(cs: Int, rs: Int, ce: Int, re: Int)(using Quotes): Expr[CellRange] =
@@ -150,15 +161,17 @@ object RefLiteral:
    *
    * Returns -1 if no unquoted bang found.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def findUnquotedBang(s: String): Int =
-    var i = 0
-    var inQuote = false
-    while i < s.length do
-      val c = s.charAt(i)
-      if c == '\'' then inQuote = !inQuote
-      else if c == '!' && !inQuote then return i
-      i += 1
-    -1
+    boundary:
+      var i = 0
+      var inQuote = false
+      while i < s.length do
+        val c = s.charAt(i)
+        if c == '\'' then inQuote = !inQuote
+        else if c == '!' && !inQuote then break(i)
+        i += 1
+      -1
 
   /**
    * Validate sheet name according to Excel rules. Max 31 chars, no `: \ / ? * [ ]`

@@ -27,6 +27,7 @@ object syntax:
   export optics.syntax.*
   export patch.syntax.*
   export sheet.syntax.*
+  export style.dsl.*
 
   // RichText string extensions (.red, .bold, etc.)
   export richtext.RichText.{given, *}
@@ -35,6 +36,6 @@ object syntax:
   export macros.RefLiteral.*
   export macros.CellRangeLiterals.fx
   export macros.FormattedLiterals.{money, percent, date, accounting}
-  export macros.BatchPutMacro.put
+  // BatchPutMacro.put removed - dead code (shadowed by Sheet.put member)
 
 export syntax.*

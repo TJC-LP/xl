@@ -20,19 +20,19 @@ println(
   s"Range size: ${rangeRef.width} cols × ${rangeRef.height} rows = ${rangeRef.size} cells\n"
 )
 
-// Create a workbook
+// Create a workbook and update sheet with convenience method
 val workbookResult = for
     workbook <- Workbook("Sales")
-    sheet0 <- workbook(0)
-    // Add some data
-    updatedSheet = sheet0
-      .put(ref"A1", CellValue.Text("Product"))
-      .put(ref"B1", CellValue.Text("Price"))
-      .put(ref"A2", CellValue.Text("Widget"))
-      .put(ref"B2", CellValue.Number(19.99))
-      .put(ref"A3", CellValue.Text("Gadget"))
-      .put(ref"B3", CellValue.Number(29.99))
-    finalWorkbook <- workbook.updateSheet(0, updatedSheet)
+    // Update sheet by name with function (clean one-liner!)
+    finalWorkbook <- workbook.update("Sales", sheet =>
+      sheet
+        .put(ref"A1", CellValue.Text("Product"))
+        .put(ref"B1", CellValue.Text("Price"))
+        .put(ref"A2", CellValue.Text("Widget"))
+        .put(ref"B2", CellValue.Number(19.99))
+        .put(ref"A3", CellValue.Text("Gadget"))
+        .put(ref"B3", CellValue.Number(29.99))
+    )
   yield finalWorkbook
 
 workbookResult match
@@ -89,15 +89,15 @@ qualifiedRange match
 println("\n=== Formatted Literals ===")
 val priceSheetResult = for
   sheet <- Sheet("Prices")
-yield sheet
-  .putMixed(
+  withData <- sheet.put(
     ref"A1" -> "Item",
     ref"B1" -> "Price",
     ref"C1" -> "Discount",
     ref"A2" -> "Widget",
-    ref"B2" -> money"$$19.99",  // Escape $ in string interpolator
-    ref"C2" -> percent"15%"
+    ref"B2" -> money"$$19.99",  // Now preserves Currency format!
+    ref"C2" -> percent"15%"     // Now preserves Percent format!
   )
+yield withData
 
 priceSheetResult match
   case Right(priceSheet) =>

@@ -47,7 +47,7 @@ class OoxmlRoundTripSpec extends FunSuite:
         .put(ref"A2", CellValue.Text("Scala"))
         .put(ref"B2", CellValue.Text("Excel"))
 
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Should create workbook"))
 
     // Round-trip
@@ -71,7 +71,7 @@ class OoxmlRoundTripSpec extends FunSuite:
         .put(ref"A2", CellValue.Number(BigDecimal(3.14159)))
         .put(ref"A3", CellValue.Number(BigDecimal(-100)))
 
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Should create workbook"))
 
     // Round-trip
@@ -95,7 +95,7 @@ class OoxmlRoundTripSpec extends FunSuite:
         .put(ref"A1", CellValue.Bool(true))
         .put(ref"A2", CellValue.Bool(false))
 
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Should create workbook"))
 
     // Round-trip
@@ -125,7 +125,7 @@ class OoxmlRoundTripSpec extends FunSuite:
         .put(ref"B3", CellValue.Number(BigDecimal(25)))
         .put(ref"C3", CellValue.Bool(false))
 
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Should create workbook"))
 
     // Round-trip
@@ -148,9 +148,9 @@ class OoxmlRoundTripSpec extends FunSuite:
       val sheet1 = initial.sheets(0).put(ref"A1", CellValue.Text("First"))
 
       for
-        wb2 <- Sheet("Sheet2").flatMap(initial.addSheet)
-        wb3 <- wb2.updateSheet(0, sheet1)
-        wb4 <- wb3.updateSheet(1, wb3.sheets(1).put(ref"A1", CellValue.Text("Second")))
+        wb2 <- Sheet("Sheet2").flatMap(initial.put)
+        wb3 <- wb2.update(wb2.sheets(0).name, _ => sheet1)
+        wb4 <- wb3.update(wb3.sheets(1).name, _ => wb3.sheets(1).put(ref"A1", CellValue.Text("Second")))
       yield wb4
     }.getOrElse(fail("Should create workbook"))
 
@@ -176,7 +176,7 @@ class OoxmlRoundTripSpec extends FunSuite:
         s.put(ARef(Column.from0(0), row), CellValue.Text("Repeated"))
           .put(ARef(Column.from0(1), row), CellValue.Text("Value"))
       }
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Should create workbook"))
 
     // Verify SST would be used
@@ -215,7 +215,7 @@ class OoxmlRoundTripSpec extends FunSuite:
         .put(ref"A1", CellValue.Text("Merged Header"))
         .merge(ref"A1:C1")
 
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("merged.xlsx")
@@ -246,7 +246,7 @@ class OoxmlRoundTripSpec extends FunSuite:
         .put(ref"A1", CellValue.DateTime(dt1))
         .put(ref"A2", CellValue.DateTime(dt2))
 
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("dates.xlsx")

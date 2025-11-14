@@ -11,6 +11,7 @@ import java.util.zip.ZipFile
 import scala.xml.XML
 
 /** End-to-end integration tests for style application */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class StyleIntegrationSpec extends FunSuite:
 
   val tempDir: FunFixture[Path] = FunFixture[Path](

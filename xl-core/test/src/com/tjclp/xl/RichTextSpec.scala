@@ -60,7 +60,7 @@ class RichTextSpec extends FunSuite:
   }
 
   test("TextRun: withColor with custom color") {
-    val purple = Color.fromHex("#800080").toOption.get
+    val purple = Color.fromHex("#800080").toOption.getOrElse(fail("Should parse color"))
     val run = TextRun("Purple").withColor(purple)
     assert(run.font.exists(_.color.contains(purple)), "Should have purple color")
   }

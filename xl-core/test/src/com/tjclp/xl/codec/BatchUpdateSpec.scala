@@ -6,44 +6,50 @@ import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.macros.ref
+// Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.unsafe.*
 
 import java.time.{LocalDate, LocalDateTime}
 
 /** Tests for batch update extension methods */
 class BatchUpdateSpec extends FunSuite:
 
-  test("putMixed: single string value") {
+  test("put: single string value") {
     val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
-      .putMixed(ref"A1" -> "Hello")
+      .put(ref"A1" -> "Hello")
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Hello"))
     assertEquals(sheet.getCellStyle(ref"A1"), None) // Strings don't get styling
   }
 
-  test("putMixed: single int value with auto-style") {
+  test("put: single int value with auto-style") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> 42)
+      .put(ref"A1" -> 42)
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal(42)))
     val style = sheet.getCellStyle(ref"A1")
     assert(style.exists(_.numFmt == NumFmt.General), "Should have General format")
   }
 
-  test("putMixed: single BigDecimal with decimal format") {
+  test("put: single BigDecimal with decimal format") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> BigDecimal("123.45"))
+      .put(ref"A1" -> BigDecimal("123.45"))
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("123.45")))
     val style = sheet.getCellStyle(ref"A1")
     assert(style.exists(_.numFmt == NumFmt.Decimal), "Should have Decimal format")
   }
 
-  test("putMixed: single LocalDate with date format") {
+  test("put: single LocalDate with date format") {
     val date = LocalDate.of(2025, 11, 10)
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> date)
+      .put(ref"A1" -> date)
+      .unsafe
 
     sheet(ref"A1").value match
       case CellValue.DateTime(datetime) => assertEquals(datetime.toLocalDate, date)
@@ -53,31 +59,33 @@ class BatchUpdateSpec extends FunSuite:
     assert(style.exists(_.numFmt == NumFmt.Date), "Should have Date format")
   }
 
-  test("putMixed: single LocalDateTime with datetime format") {
+  test("put: single LocalDateTime with datetime format") {
     val dt = LocalDateTime.of(2025, 11, 10, 14, 30)
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> dt)
+      .put(ref"A1" -> dt)
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.DateTime(dt))
     val style = sheet.getCellStyle(ref"A1")
     assert(style.exists(_.numFmt == NumFmt.DateTime), "Should have DateTime format")
   }
 
-  test("putMixed: multiple values with mixed types") {
+  test("put: multiple values with mixed types") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(
+      .put(
         ref"A1" -> "Title",
         ref"B1" -> 42,
         ref"C1" -> BigDecimal("123.45"),
         ref"D1" -> LocalDate.of(2025, 11, 10),
         ref"E1" -> true
       )
+      .unsafe
 
     // Verify values
     assertEquals(sheet(ref"A1").value, CellValue.Text("Title"))
     assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal(42)))
     assertEquals(sheet(ref"C1").value, CellValue.Number(BigDecimal("123.45")))
-    assert(sheet(ref"D1").value.isInstanceOf[CellValue.DateTime], "D1 should contain DateTime")
+    assert(sheet(ref"D1").value match { case _: CellValue.DateTime => true; case _ => false }, "D1 should contain DateTime")
     assertEquals(sheet(ref"E1").value, CellValue.Bool(true))
 
     // Verify styles applied correctly
@@ -88,52 +96,82 @@ class BatchUpdateSpec extends FunSuite:
     assert(sheet.getCellStyle(ref"E1").isEmpty, "Boolean should have no style")
   }
 
-  test("putMixed: builds on existing putAll") {
+  test("put: batch semantics equivalent to individual puts") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
 
-    // Manual putAll
-    val cells = Seq(
-      Cell(ref"A1", CellValue.Text("Hello")),
-      Cell(ref"B1", CellValue.Number(BigDecimal(42)))
-    )
-    val manual = sheet.putAll(cells)
+    // Manual individual puts
+    val manual = sheet
+      .put(ref"A1", CellValue.Text("Hello"))
+      .put(ref"B1", CellValue.Number(BigDecimal(42)))
 
-    // Using putMixed
-    val batched = sheet.putMixed(
+    // Using batch put
+    val batched = sheet.put(
       ref"A1" -> "Hello",
       ref"B1" -> 42
     )
+      .unsafe
 
-    // Values should be the same (styles might differ)
+    // Values should be the same (styles might differ due to auto-inference)
     assertEquals(batched(ref"A1").value, manual(ref"A1").value)
     assertEquals(batched(ref"B1").value, manual(ref"B1").value)
   }
 
-  test("putMixed: overwrites existing cells") {
+  test("put: overwrites existing cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> "Old")
-      .putMixed(ref"A1" -> "New")
+      .put(ref"A1" -> "Old")
+      .unsafe
+      .put(ref"A1" -> "New")
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("New"))
   }
 
-  test("putMixed: unsupported types are ignored") {
-    // This is a manual test - unsupported types should be silently ignored
+  test("put: unsupported types return Left (pure)") {
+    // Unsupported types should return Left[XLError.UnsupportedType] (pure behavior)
     case class UnsupportedType(value: String)
 
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(
-        ref"A1" -> "Valid",
-        ref"B1" -> UnsupportedType("Invalid") // Should be ignored
-      )
 
-    assertEquals(sheet(ref"A1").value, CellValue.Text("Valid"))
-    assert(!sheet.contains(ref"B1")) // Unsupported type should not create a cell
+    // Should return Left for unsupported type
+    val result = sheet.put(
+      ref"A1" -> "Valid",
+      ref"B1" -> UnsupportedType("Invalid") // Unsupported type
+    )
+
+    result match
+      case Left(XLError.UnsupportedType(ref, typeName)) =>
+        assertEquals(ref, "B1")
+        assert(typeName.contains("UnsupportedType"))
+      case Left(other) =>
+        fail(s"Expected UnsupportedType error, got: $other")
+      case Right(_) =>
+        fail("Expected Left, got Right")
   }
 
-  test("putTyped: writes single typed value") {
+  test("put: unsupported types throw with .unsafe") {
+    // When using .unsafe, should throw IllegalStateException
+    case class UnsupportedType(value: String)
+
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putTyped(ref"A1", BigDecimal("123.45"))
+
+    // Should throw exception when using .unsafe on error result
+    val exception = intercept[IllegalStateException] {
+      sheet.put(
+        ref"A1" -> "Valid",
+        ref"B1" -> UnsupportedType("Invalid")
+      ).unsafe
+    }
+
+    // Verify exception message contains helpful information
+    assert(exception.getMessage.contains("XLResult.unsafe failed"))
+    assert(exception.getMessage.contains("Unsupported type"))
+    assert(exception.getMessage.contains("B1"))
+  }
+
+  test("put: writes single typed value with auto-inferred style") {
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .put(ref"A1" -> BigDecimal("123.45"))
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("123.45")))
     assert(sheet.getCellStyle(ref"A1").exists(_.numFmt == NumFmt.Decimal), "Should have Decimal format")
@@ -164,35 +202,38 @@ class BatchUpdateSpec extends FunSuite:
 
   test("putMixed + readTyped: round-trip") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(
+      .put(
         ref"A1" -> 42,
         ref"B1" -> BigDecimal("123.45"),
         ref"C1" -> "Text"
       )
+      .unsafe
 
     assertEquals(sheet.readTyped[Int](ref"A1"), Right(Some(42)))
     assertEquals(sheet.readTyped[BigDecimal](ref"B1"), Right(Some(BigDecimal("123.45"))))
     assertEquals(sheet.readTyped[String](ref"C1"), Right(Some("Text")))
   }
 
-  test("putMixed: StyleRegistry size increases correctly") {
+  test("put: StyleRegistry size increases correctly") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(
+      .put(
         ref"A1" -> "No style", // Strings don't add styles
         ref"B1" -> BigDecimal("123.45"), // Adds decimal style
         ref"C1" -> LocalDate.of(2025, 11, 10) // Adds date style
       )
+      .unsafe
 
     // Should have: default + decimal + date = 3 styles
     assert(sheet.styleRegistry.size >= 3, s"Expected at least 3 styles, got ${sheet.styleRegistry.size}")
   }
 
-  test("putMixed: deduplicates identical styles") {
+  test("put: deduplicates identical styles") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(
+      .put(
         ref"A1" -> BigDecimal("123.45"),
         ref"A2" -> BigDecimal("678.90") // Same type, should reuse style
       )
+      .unsafe
 
     // Both cells should have the same styleId
     assertEquals(
@@ -204,10 +245,11 @@ class BatchUpdateSpec extends FunSuite:
 
   // ========== RichText Codec Integration ==========
 
-  test("putMixed: RichText value") {
+  test("put: RichText value") {
     val richText = "Bold".bold + " normal"
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> richText)
+      .put(ref"A1" -> richText)
+      .unsafe
 
     sheet(ref"A1").value match
       case CellValue.RichText(rt) =>
@@ -216,17 +258,18 @@ class BatchUpdateSpec extends FunSuite:
       case other => fail(s"Expected RichText, got $other")
   }
 
-  test("putMixed: mix RichText with other types") {
+  test("put: mix RichText with other types") {
     val richText = "Error: ".red.bold + "File not found"
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(
+      .put(
         ref"A1" -> "Plain text",
         ref"A2" -> richText,
         ref"A3" -> 42
       )
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Plain text"))
-    assert(sheet(ref"A2").value.isInstanceOf[CellValue.RichText], "A2 should be RichText")
+    assert(sheet(ref"A2").value match { case _: CellValue.RichText => true; case _ => false }, "A2 should be RichText")
     assertEquals(sheet(ref"A3").value, CellValue.Number(BigDecimal(42)))
   }
 

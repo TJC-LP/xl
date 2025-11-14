@@ -7,9 +7,11 @@ import com.tjclp.xl.optics.syntax.* // Import optics extension methods
 import com.tjclp.xl.dsl.syntax.*
 import munit.FunSuite
 import com.tjclp.xl.macros.ref
+// Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.style.units.StyleId
 
 /** Tests for optics library and focus DSL */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.Var"))
 class OpticsSpec extends FunSuite:
 
   val emptySheet: Sheet = Sheet(SheetName.unsafe("TestSheet"))

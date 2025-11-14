@@ -32,7 +32,7 @@ object FormattedLiterals:
     val parts = sc.valueOrAbort.parts
     if parts.lengthCompare(1) != 0 then
       quotes.reflect.report.errorAndAbort("literal must be a single part")
-    parts.head
+    parts(0) // Safe: length == 1 verified above
 
   private def moneyImpl(sc: Expr[StringContext])(using Quotes): Expr[Formatted] =
     import quotes.reflect.report

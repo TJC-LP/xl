@@ -8,6 +8,7 @@ import com.tjclp.xl.style.{CellStyle, Font, Fill, Color}
 import com.tjclp.xl.macros.ref
 
 /** Tests for StyleIndex.fromWorkbook with style remapping */
+@SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 class StyleIndexSpec extends FunSuite:
 
   test("fromWorkbook with single sheet extracts styles from registry") {

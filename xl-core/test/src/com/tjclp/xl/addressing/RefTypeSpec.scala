@@ -9,6 +9,7 @@ import org.scalacheck.Prop.*
 import org.scalacheck.{Arbitrary, Gen}
 
 /** Property tests for RefType parsing and behavior */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class RefTypeSpec extends ScalaCheckSuite:
 
   // ========== Generators ==========
@@ -245,7 +246,7 @@ class RefTypeSpec extends ScalaCheckSuite:
   test("Workbook.apply(RefType) - qualified cell reference") {
     val wb = Workbook("Sales").toOption.get
     val sheet = wb.sheets(0).put(ARef.from1(1, 1), CellValue.Text("Test"))
-    val updatedWb = wb.updateSheet(0, sheet).toOption.get
+    val updatedWb = wb.put(sheet).toOption.get
 
     val ref = RefType.QualifiedCell(SheetName.unsafe("Sales"), ARef.from1(1, 1))
     updatedWb(ref) match
@@ -259,7 +260,7 @@ class RefTypeSpec extends ScalaCheckSuite:
     val sheet = wb.sheets(0)
       .put(ARef.from1(1, 1), CellValue.Text("A"))
       .put(ARef.from1(1, 2), CellValue.Text("B"))
-    val updatedWb = wb.updateSheet(0, sheet).toOption.get
+    val updatedWb = wb.put(sheet).toOption.get
 
     val ref = RefType.QualifiedRange(SheetName.unsafe("Data"), CellRange(ARef.from1(1, 1), ARef.from1(1, 2)))
     updatedWb(ref) match

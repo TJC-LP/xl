@@ -90,6 +90,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    * @param totalCount
    *   Total number of string instances (defaults to strings.size for backward compatibility)
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def fromStrings(strings: Iterable[String], totalCount: Option[Int] = None): SharedStrings =
     // Stream through strings with LinkedHashSet for O(1) deduplication (50-70% memory reduction)
     import scala.collection.mutable

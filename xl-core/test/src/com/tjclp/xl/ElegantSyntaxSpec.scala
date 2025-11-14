@@ -4,6 +4,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.formatted.Formatted
+import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 import java.time.LocalDateTime
 import com.tjclp.xl.style.numfmt.NumFmt
@@ -76,13 +77,14 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Batch put: multiple cells at once") {
     import com.tjclp.xl.macros.ref
-    import com.tjclp.xl.macros.put
 
-    val sheet = emptySheet.put(
-      ref"A1" -> "Name",
-      ref"B1" -> "Age",
-      ref"C1" -> "Active"
-    )
+    val sheet = emptySheet
+      .put(
+        ref"A1" -> "Name",
+        ref"B1" -> "Age",
+        ref"C1" -> "Active"
+      )
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Name"))
     assertEquals(sheet(ref"B1").value, CellValue.Text("Age"))
@@ -91,15 +93,16 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Batch put: mixed types") {
     import com.tjclp.xl.macros.ref
-    import com.tjclp.xl.macros.put
 
-    val sheet = emptySheet.put(
-      ref"A1" -> "Product",
-      ref"B1" -> 42,
-      ref"C1" -> 3.14,
-      ref"D1" -> true,
-      ref"E1" -> BigDecimal(1000)
-    )
+    val sheet = emptySheet
+      .put(
+        ref"A1" -> "Product",
+        ref"B1" -> 42,
+        ref"C1" -> 3.14,
+        ref"D1" -> true,
+        ref"E1" -> BigDecimal(1000)
+      )
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Product"))
     assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal(42)))
@@ -110,22 +113,23 @@ class ElegantSyntaxSpec extends FunSuite:
 
   test("Batch put: creates table structure") {
     import com.tjclp.xl.macros.ref
-    import com.tjclp.xl.macros.put
 
-    val sheet = emptySheet.put(
-      // Headers
-      ref"A1" -> "Item",
-      ref"B1" -> "Qty",
-      ref"C1" -> "Price",
-      // Row 1
-      ref"A2" -> "Laptop",
-      ref"B2" -> 5,
-      ref"C2" -> 999.99,
-      // Row 2
-      ref"A3" -> "Mouse",
-      ref"B3" -> 25,
-      ref"C3" -> 19.99
-    )
+    val sheet = emptySheet
+      .put(
+        // Headers
+        ref"A1" -> "Item",
+        ref"B1" -> "Qty",
+        ref"C1" -> "Price",
+        // Row 1
+        ref"A2" -> "Laptop",
+        ref"B2" -> 5,
+        ref"C2" -> 999.99,
+        // Row 2
+        ref"A3" -> "Mouse",
+        ref"B3" -> 25,
+        ref"C3" -> 19.99
+      )
+      .unsafe
 
     assertEquals(sheet.cellCount, 9)
     assertEquals(sheet(ref"A2").value, CellValue.Text("Laptop"))
@@ -225,41 +229,56 @@ class ElegantSyntaxSpec extends FunSuite:
   test("Combined: batch put + formatted literals") {
     import com.tjclp.xl.macros.ref
     import com.tjclp.xl.macros.{money, percent}
-    import com.tjclp.xl.macros.put
-    import Formatted.given  // Auto-conversion Formatted → CellValue
 
-    val sheet = emptySheet.put(
-      ref"A1" -> "Revenue",
-      ref"B1" -> money"$$10,000.00".value,    // Extract value from Formatted
-      ref"A2" -> "Growth",
-      ref"B2" -> percent"15.5%".value
-    )
+    val sheet = emptySheet
+      .put(
+        ref"A1" -> "Revenue",
+        ref"B1" -> money"$$10,000.00",    // Preserves Currency format
+        ref"A2" -> "Growth",
+        ref"B2" -> percent"15.5%"         // Preserves Percent format
+      )
+      .unsafe
 
     assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal("10000.00")))
     assertEquals(sheet(ref"B2").value, CellValue.Number(BigDecimal("0.155")))
+
+    // Verify formats preserved
+    assert(
+      sheet.getCellStyle(ref"B1").exists(_.numFmt == NumFmt.Currency),
+      "money literal should preserve Currency format"
+    )
+    assert(
+      sheet.getCellStyle(ref"B2").exists(_.numFmt == NumFmt.Percent),
+      "percent literal should preserve Percent format"
+    )
   }
 
   test("Real-world example: financial report") {
     import com.tjclp.xl.macros.ref
     import com.tjclp.xl.macros.{money, percent}
-    import com.tjclp.xl.macros.put
 
-    val sheet = emptySheet.put(
-      // Headers
-      ref"A1" -> "Quarter",
-      ref"B1" -> "Revenue",
-      ref"C1" -> "Growth",
-      // Q1
-      ref"A2" -> "Q1 2025",
-      ref"B2" -> money"$$125,000.00".value,
-      ref"C2" -> percent"12.5%".value,
-      // Q2
-      ref"A3" -> "Q2 2025",
-      ref"B3" -> money"$$150,000.00".value,
-      ref"C3" -> percent"20.0%".value
-    )
+    val sheet = emptySheet
+      .put(
+        // Headers
+        ref"A1" -> "Quarter",
+        ref"B1" -> "Revenue",
+        ref"C1" -> "Growth",
+        // Q1
+        ref"A2" -> "Q1 2025",
+        ref"B2" -> money"$$125,000.00",   // Preserves Currency format
+        ref"C2" -> percent"12.5%",        // Preserves Percent format
+        // Q2
+        ref"A3" -> "Q2 2025",
+        ref"B3" -> money"$$150,000.00",
+        ref"C3" -> percent"20.0%"
+      )
+      .unsafe
 
     assertEquals(sheet.cellCount, 9)
     assertEquals(sheet(ref"B2").value, CellValue.Number(BigDecimal("125000.00")))
     assertEquals(sheet(ref"C2").value, CellValue.Number(BigDecimal("0.125")))
+
+    // Verify formats preserved
+    assert(sheet.getCellStyle(ref"B2").exists(_.numFmt == NumFmt.Currency))
+    assert(sheet.getCellStyle(ref"C2").exists(_.numFmt == NumFmt.Percent))
   }

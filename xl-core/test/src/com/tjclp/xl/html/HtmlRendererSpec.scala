@@ -5,6 +5,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.macros.ref
+// Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.CellStyle
@@ -13,6 +14,7 @@ import com.tjclp.xl.style.border.{Border, BorderStyle}
 import com.tjclp.xl.style.color.Color
 import com.tjclp.xl.style.fill.Fill
 import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.unsafe.*
 
 /** Tests for HTML export functionality */
 class HtmlRendererSpec extends FunSuite:
@@ -37,12 +39,13 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: 2x2 grid") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(
+      .put(
         ref"A1" -> "A1",
         ref"B1" -> "B1",
         ref"A2" -> "A2",
         ref"B2" -> "B2"
       )
+      .unsafe
 
     val html = sheet.toHtml(ref"A1:B2")
     assert(html.contains("<table>"))
@@ -109,7 +112,8 @@ class HtmlRendererSpec extends FunSuite:
       .withAlign(Align(HAlign.Center, VAlign.Middle))
 
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> "Header")
+      .put(ref"A1" -> "Header")
+      .unsafe
       .withCellStyle(ref"A1", headerStyle)
 
     val html = sheet.toHtml(ref"A1:A1", includeStyles = true)
@@ -121,7 +125,8 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: includeStyles=false omits CSS") {
     val boldStyle = CellStyle.default.withFont(Font.default.withBold(true))
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> "Bold")
+      .put(ref"A1" -> "Bold")
+      .unsafe
       .withCellStyle(ref"A1", boldStyle)
 
     val html = sheet.toHtml(ref"A1:A1", includeStyles = false)
@@ -159,7 +164,8 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: number cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> BigDecimal("123.45"))
+      .put(ref"A1" -> BigDecimal("123.45"))
+      .unsafe
 
     val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("123.45"))
@@ -167,7 +173,8 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: boolean cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> true)
+      .put(ref"A1" -> true)
+      .unsafe
 
     val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("true"))
@@ -175,7 +182,8 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: date cells") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-      .putMixed(ref"A1" -> java.time.LocalDate.of(2025, 11, 10))
+      .put(ref"A1" -> java.time.LocalDate.of(2025, 11, 10))
+      .unsafe
 
     val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("2025"))
@@ -193,12 +201,13 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: financial model example") {
     val sheet = Sheet("Q1 Report").getOrElse(fail("Sheet creation failed"))
-      .putMixed(
+      .put(
         ref"A1" -> "Revenue",
         ref"B1" -> BigDecimal("1000000"),
         ref"A2" -> "Expenses",
         ref"B2" -> BigDecimal("750000")
       )
+      .unsafe
 
     val html = sheet.toHtml(ref"A1:B2")
     assert(html.contains("Revenue"))
@@ -229,10 +238,11 @@ class HtmlRendererSpec extends FunSuite:
     val negative = "-5.2%".red.bold
 
     val sheet = Sheet("Report").getOrElse(fail("Sheet creation failed"))
-      .putMixed(
+      .put(
         ref"A1" -> "Metric",
         ref"B1" -> "Change"
       )
+      .unsafe
       .withRangeStyle(ref"A1:B1", headerStyle)
       .put(ref"A2", CellValue.Text("Revenue"))
       .put(ref"B2", CellValue.RichText(positive))

@@ -4,6 +4,7 @@ import munit.FunSuite
 import com.tjclp.xl.style.{CellStyle, Align, HAlign, VAlign}
 
 /** Tests for alignment serialization to styles.xml */
+@SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 class AlignmentSerializationSpec extends FunSuite:
 
   test("default alignment omits <alignment> element") {

@@ -325,7 +325,7 @@ sheet.withRangeStyle(range"A1:D1", headerStyle)
 // With patches
 val styling = (Patch.SetCellStyle(cell"A1", boldStyle): Patch) |+|
               (Patch.SetCellStyle(cell"B1", redStyle): Patch)
-sheet.applyPatch(styling)
+sheet.put(styling)
 
 // Retrieve style
 sheet.getCellStyle(cell"A1")  // Returns Option[CellStyle]

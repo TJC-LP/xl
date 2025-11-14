@@ -77,7 +77,7 @@ case class StyleRegistry(
   def size: Int = styles.size
 
   /** Check if registry contains only default style */
-  def isEmpty: Boolean = styles.size == 1 && styles.head == CellStyle.default
+  def isEmpty: Boolean = styles.size == 1 && styles(0) == CellStyle.default
 
 object StyleRegistry:
   /** Default registry with only CellStyle.default at index 0 */

@@ -124,6 +124,34 @@ All code must pass `./mill __.checkFormat` before commit. Format with `./mill __
 - Prefer **extension methods** over implicit classes
 - Macros must emit **clear diagnostics**
 
+### WartRemover
+
+XL uses [WartRemover](https://www.wartremover.org/) to enforce purity and totality at compile time.
+
+**Policy**: See `docs/design/wartremover-policy.md` for complete wart list and rationale.
+
+**Key enforcements**:
+- ❌ No `null` (Tier 1 - error)
+- ❌ No `.head/.tail` on collections (Tier 1 - error)
+- ❌ No `.get` on Try/Either projections (Tier 1 - error)
+- ⚠️ Warn on `.get` on Option (Tier 2 - warning, acceptable in tests)
+- ⚠️ Warn on `var`/`while`/`return` (Tier 2 - warning, acceptable in macros)
+
+**Suppressing false positives**:
+```scala
+// Inline comment for clarity (preferred)
+parts(0)  // Safe: length == 1 verified above
+
+// @SuppressWarnings for entire methods
+@SuppressWarnings(Array("org.wartremover.warts.Var"))
+def performanceOptimizedCode(): Unit = {
+  var accumulator = 0  // Intentional for performance
+  // ...
+}
+```
+
+**Running**: WartRemover runs automatically during `./mill __.compile` and in pre-commit hooks.
+
 ### Error Handling
 
 Always use `XLResult[A] = Either[XLError, A]`:
@@ -158,7 +186,7 @@ val updates =
   (Patch.SetStyle(cell"A1", 1): Patch) |+|
   (Patch.Merge(range"A1:B2"): Patch)
 
-val result = sheet.applyPatch(updates)  // Either[XLError, Sheet]
+val result = sheet.put(updates)  // Either[XLError, Sheet]
 ```
 
 **Important**: Enum cases need type ascription for Monoid syntax (`|+|`).
@@ -296,7 +324,7 @@ All XML output must be deterministic:
 for
   ref <- ARef.parse("A1")
   sheet <- workbook("Sheet1")
-  updated <- sheet.applyPatch(Patch.Put(ref, value))
+  updated <- sheet.put(Patch.Put(ref, value))
 yield updated
 
 // Convert to XLError
@@ -320,6 +348,32 @@ Macros in `xl-core/src/com/tjclp/xl/macros/`:
 - Emit constants directly: `'{ (${Expr(value)}: T).asInstanceOf[OpaqueType] }`
 - Zero-allocation parsers (no regex, manual char iteration)
 - All macros are `transparent inline` (zero runtime cost)
+
+**Hybrid Compile-Time/Runtime Validation Pattern**:
+
+XL uses a smart pattern for methods that accept both literals and dynamic strings (e.g., `.hex()` in Style DSL):
+
+```scala
+// Macro checks if parameter is compile-time constant
+transparent inline def hex(code: String): CellStyle = ${ hexMacro('code, 'style) }
+
+def hexMacro(code: Expr[String], style: Expr[CellStyle])(using Quotes): Expr[CellStyle] =
+  code.value match
+    case Some(literal) =>
+      // Compile-time validation for string literals
+      Color.fromHex(literal) match
+        case Right(c) => emitConstant(c, style)
+        case Left(err) => quotes.reflect.report.errorAndAbort(s"Invalid hex: $err")
+    case None =>
+      // Runtime validation for dynamic strings (pure, silent fail)
+      '{ Color.fromHex($code).fold(_ => $style, c => applyColor($style, c)) }
+```
+
+**Benefits**:
+- String literals → compile errors if invalid (`style.hex("#GGGGGG")` fails build)
+- Dynamic strings → runtime validation (`style.hex(userInput)` compiles, fails gracefully)
+- Single API (no separate methods needed)
+- Zero overhead (literals emit constants, runtime uses efficient Either)
 
 ### DSL Patterns
 
@@ -372,20 +426,19 @@ Cell-level codecs (`xl-core/src/com/tjclp/xl/codec/`) provide type-safe encoding
 
 #### Batch Updates
 
-Always prefer `putMixed` for multi-cell updates:
+Use batch `put` for multi-cell updates with automatic type inference:
 
 ```scala
-import com.tjclp.xl.codec.syntax.*
-
-sheet.putMixed(
-  cell"A1" -> "Revenue",
-  cell"B1" -> LocalDate.of(2025, 11, 10),  // Auto: date format
-  cell"C1" -> BigDecimal("1000000.50"),    // Auto: decimal format
-  cell"D1" -> 42
+sheet.put(
+  ref"A1" -> "Revenue",
+  ref"B1" -> LocalDate.of(2025, 11, 10),  // Auto: date format
+  ref"C1" -> BigDecimal("1000000.50"),    // Auto: decimal format
+  ref"D1" -> 42,
+  ref"E1" -> money"$$1,234.56"            // Preserves Currency format!
 )
 ```
 
-**Benefits**: Cleaner syntax, auto-inferred styles, builds on existing `putAll` (no performance overhead).
+**Benefits**: Cleaner syntax, auto-inferred styles, preserves Formatted literal metadata.
 
 #### Type-Safe Reading
 
@@ -430,7 +483,7 @@ import com.tjclp.xl.richtext.RichText.*
 val text = "Bold".bold.red + " normal " + "Italic".italic.blue
 
 // Use with putMixed
-sheet.putMixed(
+sheet.put(
   cell"A1" -> ("Error: ".red.bold + "Fix this!"),
   cell"A2" -> ("Q1 ".size(18.0).bold + "Report".italic)
 )

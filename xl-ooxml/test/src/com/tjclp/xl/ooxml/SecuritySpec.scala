@@ -12,6 +12,7 @@ import java.nio.file.{Files, Path}
  *
  * Verifies protection against XXE (XML External Entity) attacks
  */
+@SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 class SecuritySpec extends FunSuite:
 
   val tempDir: Path = Files.createTempDirectory("xl-sec-test-")

@@ -141,13 +141,13 @@ excel.read[IO](path)  // ✅ Slower but predictable
 **Good** (single putAll):
 ```scala
 val cells = (1 to 10000).map(i => Cell(cell"A$i", CellValue.Number(i)))
-sheet.putAll(cells)
+sheet.put(cells)
 // Creates 1 Sheet instance
 ```
 
 **Best** (putMixed with type safety):
 ```scala
-sheet.putMixed(
+sheet.put(
   (1 to 10000).map(i => cell"A$i" -> i)*
 )
 // Type-safe, auto-format inference, single allocation
@@ -172,7 +172,7 @@ import com.tjclp.xl.dsl.*
 val patch = (1 to 1000).foldLeft(Patch.empty: Patch) { (p, i) =>
   p ++ (cell"A$i" := s"Row $i") ++ range"A$i:B$i".merge
 }
-sheet.applyPatch(patch)  // Execute once at end
+sheet.put(patch)  // Execute once at end
 ```
 
 **Impact**: Reduces intermediate allocations by 50-70%
@@ -195,7 +195,7 @@ sheet
 ```scala
 import com.tjclp.xl.codec.syntax.*
 
-sheet.putMixed(
+sheet.put(
   cell"A1" -> "Revenue",
   cell"B1" -> LocalDate.of(2025, 11, 10),  // Auto: date format
   cell"C1" -> BigDecimal("1000000.50")     // Auto: decimal format
@@ -216,7 +216,7 @@ sheet.putMixed(
 ```scala
 val allRows = database.fetchAll()  // Load 1M rows into memory
 val cells = allRows.map(row => /* convert to cells */)
-sheet.putAll(cells)  // Then write
+sheet.put(cells)  // Then write
 ```
 
 **Good** (stream directly):
@@ -246,7 +246,7 @@ sheet.fillBy(range"A1:Z100") { (col, row) =>
 **Before optimization** (old code):
 ```scala
 val newCells = range.cells.map(...).toVector  // ❌ Unnecessary
-sheet.putAll(newCells)
+sheet.put(newCells)
 ```
 
 **Impact**: 20-30% memory reduction for large ranges (already fixed in latest version)
@@ -286,7 +286,7 @@ val result = data.foldLeft(sheet) { (s, item) =>
 
 // ✅ Good: Single sheet copy
 val cells = data.map(item => Cell(cell"A${item.id}", CellValue.Text(item.name)))
-sheet.putAll(cells)
+sheet.put(cells)
 ```
 
 **Impact**: 10-20x faster for large datasets
@@ -403,7 +403,7 @@ import com.tjclp.xl.codec.syntax.*
 val cells = (1 to 100_000).map(i =>
   cell"A$i" -> s"Row $i"
 )
-val sheet = Sheet("Data").putMixed(cells*)
+val sheet = Sheet("Data").put(cells*)
 
 ExcelIO.instance.write[IO](Workbook(Vector(sheet)), path).unsafeRunSync()
 ```

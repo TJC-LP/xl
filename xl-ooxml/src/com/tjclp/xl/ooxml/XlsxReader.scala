@@ -53,6 +53,7 @@ object XlsxReader:
     catch case e: Exception => Left(XLError.IOError(s"Failed to read bytes: ${e.getMessage}"))
 
   /** Read workbook from input stream */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def readFromStream(is: InputStream): XLResult[Workbook] =
     val zip = new ZipInputStream(is)
     val parts = mutable.Map[String, String]()

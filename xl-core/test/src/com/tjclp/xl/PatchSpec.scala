@@ -10,6 +10,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.macros.ref
+// Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.CellStyle
 import com.tjclp.xl.style.color.Color
@@ -134,7 +135,7 @@ class PatchSpec extends ScalaCheckSuite:
     val sheet = emptySheet.put(ref"A1", CellValue.Text("Header"))
 
     val patch = Patch.SetCellStyle(ref"A1", boldStyle)
-    val result = sheet.applyPatch(patch)
+    val result = sheet.put(patch)
 
     assert(result.isRight)
     result.foreach { updated =>
@@ -159,7 +160,7 @@ class PatchSpec extends ScalaCheckSuite:
       (Patch.SetCellStyle(ref"A1", redStyle): Patch) |+|
         (Patch.SetCellStyle(ref"A2", redStyle): Patch)
 
-    val result = sheet.applyPatch(patch)
+    val result = sheet.put(patch)
     result.foreach { updated =>
       // Should only have 2 styles (default + red)
       assertEquals(updated.styleRegistry.size, 2)
@@ -330,7 +331,7 @@ class PatchSpec extends ScalaCheckSuite:
     val ref = ARef.from1(1, 1)
     val patch = Patch.Put(ref, CellValue.Text("Test"))
 
-    val result = sheet.applyPatch(patch)
+    val result = sheet.put(patch)
     assert(result.isRight)
 
     val updated = result.getOrElse(fail("Should succeed"))
@@ -342,9 +343,13 @@ class PatchSpec extends ScalaCheckSuite:
     val r1 = ARef.from1(1, 1)
     val r2 = ARef.from1(2, 1)
 
-    val result = sheet.applyPatches(
-      Patch.Put(r1, CellValue.Text("A1")),
-      Patch.Put(r2, CellValue.Number(42))
+    val result = sheet.put(
+      Patch.Batch(
+        Vector(
+          Patch.Put(r1, CellValue.Text("A1")),
+          Patch.Put(r2, CellValue.Number(42))
+        )
+      )
     )
 
     assert(result.isRight)

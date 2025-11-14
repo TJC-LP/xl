@@ -1,8 +1,50 @@
 # Unified `put` API + Style DSL
 
-**Status**: Design phase
-**Target**: v0.2.0 (breaking changes acceptable pre-1.0)
+**Status**: ✅ COMPLETE - All phases implemented
+**Version**: v0.2.0 (breaking changes - pre-1.0)
 **Created**: 2025-11-14
+**Completed**: 2025-11-14
+
+---
+
+## Implementation Status
+
+### ✅ Phase 1: CellStyle Builder DSL (COMPLETE)
+- [x] Created `xl-core/src/com/tjclp/xl/style/dsl.scala` with 35 extension methods
+- [x] Added RGB/hex color support (`.rgb()`, `.hex()`, `.bgRgb()`, `.bgHex()`)
+- [x] Added StylePatch `++` operator (no type ascription needed)
+- [x] Exported from main syntax
+- [x] 52 tests in `StyleDslSpec.scala` (all passing)
+- [x] Demo updated with fluent style builder
+- [x] Prebuilt Style constants (Style.header, Style.currencyCell, etc.)
+
+### ✅ Phase 2: Unified Put API (COMPLETE)
+- [x] Added `Sheet.put(updates: (ARef, Any)*)` with full codec inference
+- [x] Added `Sheet.put(patch: Patch)` for patch application
+- [x] Removed `putAll`, `putTyped`, `putMixed` methods
+- [x] Removed `applyPatch`, `applyPatches` extension methods
+- [x] Added XLResult `.unsafe` and `.getOrElse` extensions
+- [x] Moved putMixed implementation into Sheet.put
+
+### ✅ Phase 3: Fix Formatted Bug (COMPLETE)
+- [x] Updated BatchPutMacro to detect Formatted at compile time
+- [x] Preserve NumFmt metadata from money"", date"", percent"" literals
+- [x] Added 5 tests in FormattedPreservationSpec.scala
+- [x] Both macro (Sheet.put) and runtime (deprecated putMixed) handle Formatted
+
+### ✅ Phase 4: Migration (COMPLETE)
+- [x] Migrated 7 test files (~60 call sites)
+- [x] Migrated 1 demo script (examples/demo.sc)
+- [x] Migrated 6 documentation files (README, CLAUDE.md, guides)
+- [x] Removed all deprecated method implementations
+- [x] Inlined putAll into batch put and range extensions
+
+### ✅ Phase 5: XLResult Extensions (COMPLETE)
+- [x] Added `.unsafe` for unwrapping (throws on Left)
+- [x] Added `.getOrElse(default)` for fallback values
+- [x] Enables chaining: `sheet.put(patch).unsafe.put(ref, value)`
+
+---
 
 ## Executive Summary
 

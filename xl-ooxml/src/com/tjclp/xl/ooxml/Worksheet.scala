@@ -61,7 +61,7 @@ case class OoxmlCell(
             fontProps += elem("name", "val" -> f.name)()
 
             elem("rPr")(fontProps.result()*)
-          }.toSeq
+          }.toList
 
           // Text run: <r> with optional <rPr> and <t>
           // Add xml:space="preserve" to preserve leading/trailing/multiple spaces
@@ -136,7 +136,7 @@ case class OoxmlWorksheet(
       Some(elem("mergeCells", "count" -> mergedRanges.size.toString)(mergeCellElems*))
     else None
 
-    val children = sheetDataElem +: mergeCellsElem.toSeq
+    val children = sheetDataElem +: mergeCellsElem.toList
 
     Elem(
       null,

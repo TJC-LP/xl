@@ -7,6 +7,7 @@ import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cell.CellValue
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.unsafe.*
 
 /**
  * Tests for ZIP compression configuration.
@@ -38,8 +39,8 @@ class CompressionSpec extends FunSuite:
           cRef -> s"Row $row with more repetitive content"
         )
       }
-      val sheet = initial.sheets(0).putMixed(cells*)
-      initial.updateSheet(0, sheet)
+      val sheet = initial.sheets(0).put(cells*).unsafe
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
     // Write with DEFLATED (default)
@@ -71,7 +72,7 @@ class CompressionSpec extends FunSuite:
   tempDir.test("prettyPrint increases file size") { dir =>
     val wb = Workbook("Simple").flatMap { initial =>
       val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Test"))
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
     // Write with compact XML
@@ -101,8 +102,8 @@ class CompressionSpec extends FunSuite:
       val cells = (1 to 100).map { row =>
         ARef(Column.from1(1), Row.from1(row)) -> s"Row $row"
       }
-      val sheet = initial.sheets(0).putMixed(cells*)
-      initial.updateSheet(0, sheet)
+      val sheet = initial.sheets(0).put(cells*).unsafe
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("default.xlsx")
@@ -131,7 +132,7 @@ class CompressionSpec extends FunSuite:
   tempDir.test("WriterConfig.debug uses STORED + prettyPrint") { dir =>
     val wb = Workbook("Debug").flatMap { initial =>
       val sheet = initial.sheets(0).put(ref"A1", CellValue.Number(42))
-      initial.updateSheet(0, sheet)
+      initial.update(initial.sheets(0).name, _ => sheet)
     }.getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("debug.xlsx")

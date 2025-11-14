@@ -128,9 +128,10 @@ class StyleRegistrySpec extends FunSuite:
   }
 
   test("multiple registrations of same style return same index") {
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
+    var registry = StyleRegistry.default
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
 
-    var registry = StyleRegistry.default
     val indices = (1 to 10).map { _ =>
       val (updated, idx) = registry.register(boldStyle)
       registry = updated
