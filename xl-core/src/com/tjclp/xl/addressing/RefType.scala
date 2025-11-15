@@ -142,6 +142,16 @@ object RefType:
             else ARef.parse(refPart).map(QualifiedCell(sheet, _))
 
   /**
+   * Parse ref string with XLError wrapping.
+   *
+   * Used by runtime string interpolation macro.
+   */
+  def parseToXLError(s: String): Either[com.tjclp.xl.error.XLError, RefType] =
+    parse(s).left.map { err =>
+      com.tjclp.xl.error.XLError.InvalidReference(s"Failed to parse '$s': $err")
+    }
+
+  /**
    * Find index of unquoted '!' (not inside 'quotes').
    *
    * Uses a toggle approach: each ' flips the inQuote state. This handles escaped quotes ('')

@@ -47,6 +47,22 @@ object Generators:
       ref2 <- genSmallARef
     yield CellRange(ref1, ref2)
 
+  /** Generate RefType (all variants) */
+  val genRefType: Gen[com.tjclp.xl.addressing.RefType] =
+    import com.tjclp.xl.addressing.RefType
+    Gen.oneOf(
+      genARef.map(RefType.Cell.apply),
+      genCellRange.map(RefType.Range.apply),
+      for
+        sheet <- genSheetName
+        ref <- genARef
+      yield RefType.QualifiedCell(sheet, ref),
+      for
+        sheet <- genSheetName
+        range <- genCellRange
+      yield RefType.QualifiedRange(sheet, range)
+    )
+
   /** Generate cell error */
   val genCellError: Gen[CellError] =
     Gen.oneOf(
@@ -152,3 +168,40 @@ object Generators:
   given Arbitrary[Sheet] = Arbitrary(genSheet)
   given Arbitrary[WorkbookMetadata] = Arbitrary(genWorkbookMetadata)
   given Arbitrary[Workbook] = Arbitrary(genWorkbook)
+
+  // ===== String generators for runtime parsing tests =====
+
+  /** Valid money strings */
+  val genMoneyString: Gen[String] = Gen.oneOf(
+    Gen.posNum[Double].map(n => f"$$$n%.2f"),
+    Gen.posNum[Int].map(n => f"$$$n%,d.00"),
+    Gen.const("$1,234.56"),
+    Gen.const("999.99")
+  )
+
+  /** Valid percent strings */
+  val genPercentString: Gen[String] =
+    Gen.choose(0.0, 100.0).map(n => f"$n%.2f%%")
+
+  /** Valid date strings (ISO format) */
+  val genDateString: Gen[String] =
+    Gen.choose(2000, 2030).flatMap { year =>
+      Gen.choose(1, 12).flatMap { month =>
+        Gen.choose(1, 28).map { day =>
+          f"$year%04d-$month%02d-$day%02d"
+        }
+      }
+    }
+
+  /** Valid formula strings */
+  val genFormulaString: Gen[String] = Gen.oneOf(
+    Gen.const("=SUM(A1:A10)"),
+    Gen.const("=IF(A1>0,B1,C1)"),
+    Gen.const("=AVERAGE(B2:B100)"),
+    Gen.const("=COUNT(C1:C50)")
+  )
+
+  // Invalid strings for negative tests
+  val genInvalidMoney: Gen[String] = Gen.oneOf("$ABC", "1.2.3", "$$$$", "")
+  val genInvalidPercent: Gen[String] = Gen.oneOf("ABC%", "1%%", "%", "")
+  val genInvalidDate: Gen[String] = Gen.oneOf("2025-13-01", "not-a-date", "2025/11/10", "")
