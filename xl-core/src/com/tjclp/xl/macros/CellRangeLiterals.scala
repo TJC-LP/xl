@@ -52,7 +52,8 @@ object CellRangeLiterals:
       case _ => report.errorAndAbort(s"""$kind"...": interpolation not supported""")
 
   /**
-   * Macro implementation supporting both compile-time literals and runtime interpolation.
+   * Macro implementation supporting compile-time literals, compile-time optimization, and runtime
+   * interpolation.
    */
   private def fxImplN(
     sc: Expr[StringContext],
@@ -62,14 +63,54 @@ object CellRangeLiterals:
 
     args match
       case Varargs(exprs) if exprs.isEmpty =>
-        // No interpolation - compile-time literal
+        // Branch 1: No interpolation (Phase 1)
         fxImpl0(sc)
 
       case Varargs(_) =>
-        // Has interpolation - runtime parsing
-        '{
-          com.tjclp.xl.cell.FormulaParser.parse($sc.s($args*))
-        }.asExprOf[Either[com.tjclp.xl.error.XLError, CellValue]]
+        MacroUtil.allLiterals(args) match
+          case Some(literals) =>
+            // Branch 2: All compile-time constants - OPTIMIZE (Phase 2)
+            fxCompileTimeOptimized(sc, literals)
+          case None =>
+            // Branch 3: Has runtime variables (Phase 1)
+            fxRuntimePath(sc, args)
+
+  private def fxCompileTimeOptimized(
+    sc: Expr[StringContext],
+    literals: Seq[Any]
+  )(using Quotes): Expr[CellValue] =
+    import quotes.reflect.report
+    val parts = sc.valueOrAbort.parts
+    val fullString = MacroUtil.reconstructString(parts, literals)
+
+    // Reuse existing compile-time validation from fxImpl0
+    if fullString.isEmpty then
+      report.errorAndAbort(
+        MacroUtil.formatCompileError("fx", fullString, "Formula cannot be empty")
+      )
+
+    // Check for balanced parentheses (simple validation)
+    var depth = 0
+    for c <- fullString do
+      if c == '(' then depth += 1
+      else if c == ')' then depth -= 1
+      if depth < 0 then
+        report.errorAndAbort(
+          MacroUtil.formatCompileError("fx", fullString, "Unbalanced parentheses")
+        )
+    if depth != 0 then
+      report.errorAndAbort(MacroUtil.formatCompileError("fx", fullString, "Unbalanced parentheses"))
+
+    // Emit CellValue.Formula with the validated string
+    '{ CellValue.Formula(${ Expr(fullString) }) }
+
+  private def fxRuntimePath(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, CellValue]] =
+    '{
+      com.tjclp.xl.cell.FormulaParser.parse($sc.s($args*))
+    }.asExprOf[Either[com.tjclp.xl.error.XLError, CellValue]]
 
   private def literal(sc: Expr[StringContext])(using Quotes): String =
     val parts = sc.valueOrAbort.parts
