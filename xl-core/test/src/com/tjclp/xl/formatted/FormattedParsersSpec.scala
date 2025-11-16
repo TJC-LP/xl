@@ -65,6 +65,16 @@ class FormattedParsersSpec extends FunSuite:
       case Left(err) => fail(s"Should parse: $err")
   }
 
+  test("parseMoney: preserves high-precision BigDecimal") {
+    FormattedParsers.parseMoney("$1234567890.123456789") match
+      case Right(f) =>
+        f.value match
+          case CellValue.Number(bd) =>
+            assertEquals(bd, BigDecimal("1234567890.123456789"))
+          case _ => fail("Expected Number")
+      case Left(err) => fail(s"Should parse: $err")
+  }
+
   // ===== Percent Parser Tests (8 tests) =====
 
   test("parsePercent: 45.5% with percent sign") {

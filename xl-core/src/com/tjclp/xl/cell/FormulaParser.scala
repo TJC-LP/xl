@@ -33,10 +33,10 @@ object FormulaParser:
     else Right(CellValue.Formula(s))
 
   /**
-   * Check parentheses are balanced.
+   * Check parentheses are balanced, respecting string literals.
    *
-   * Limitation: Does not handle string literals ("text") which may contain parens. This is
-   * acceptable for Phase 1; full parsing is Phase 7.
+   * String literals in Excel formulas use double quotes ("text"). Characters inside quotes are
+   * ignored when balancing parentheses. Escaped quotes ("") within strings are handled correctly.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def validateParentheses(s: String): Boolean =
@@ -44,13 +44,23 @@ object FormulaParser:
       var depth = 0
       var i = 0
       val n = s.length
+      var inString = false
 
       while i < n do
         val c = s.charAt(i)
-        if c == '(' then depth += 1
-        else if c == ')' then
-          depth -= 1
-          if depth < 0 then break(false)
+
+        if c == '"' then
+          // Toggle string state, but handle escaped quotes ("")
+          if inString && i + 1 < n && s.charAt(i + 1) == '"' then i += 1 // Skip the escaped quote
+          else inString = !inString
+        else if !inString then
+          // Only count parens outside of strings
+          if c == '(' then depth += 1
+          else if c == ')' then
+            depth -= 1
+            if depth < 0 then break(false)
+
         i += 1
 
-      depth == 0
+      // Must have balanced parens AND not be inside an unclosed string
+      depth == 0 && !inString

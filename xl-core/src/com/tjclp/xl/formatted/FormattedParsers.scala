@@ -32,7 +32,7 @@ object FormattedParsers:
       val cleaned = s.replaceAll("[\\$,\\s]", "")
       if cleaned.isEmpty then throw new NumberFormatException("Empty value after removing $ and ,")
       val num = BigDecimal(cleaned)
-      Formatted(CellValue.Number(num.toDouble), NumFmt.Currency)
+      Formatted(CellValue.Number(num), NumFmt.Currency)
     }.toEither.left.map { err =>
       XLError.MoneyFormatError(s, err.getMessage)
     }
@@ -57,7 +57,7 @@ object FormattedParsers:
       val cleaned = s.replace("%", "").trim
       if cleaned.isEmpty then throw new NumberFormatException("Empty value after removing %")
       val num = BigDecimal(cleaned) / 100
-      Formatted(CellValue.Number(num.toDouble), NumFmt.Percent)
+      Formatted(CellValue.Number(num), NumFmt.Percent)
     }.toEither.left.map { err =>
       XLError.PercentFormatError(s, err.getMessage)
     }
@@ -108,7 +108,7 @@ object FormattedParsers:
       val cleaned = s.replaceAll("[\\$,()\\s]", "")
       if cleaned.isEmpty then throw new NumberFormatException("Empty value after removing $ , ( )")
       val num = if isNegative then -BigDecimal(cleaned) else BigDecimal(cleaned)
-      Formatted(CellValue.Number(num.toDouble), NumFmt.Currency)
+      Formatted(CellValue.Number(num), NumFmt.Currency)
     }.toEither.left.map { err =>
       XLError.AccountingFormatError(s, err.getMessage)
     }

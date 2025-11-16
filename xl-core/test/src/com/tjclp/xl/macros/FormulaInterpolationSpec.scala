@@ -134,6 +134,60 @@ class FormulaInterpolationSpec extends FunSuite:
       case other => fail(s"Unexpected result: $other")
   }
 
+  // ===== String Literal Edge Cases =====
+
+  test("String literal: formula with ) inside string") {
+    val formulaStr = """=IF(A1=")", "yes", "no")"""
+    fx"$formulaStr" match
+      case Right(CellValue.Formula(expr)) =>
+        assertEquals(expr, """=IF(A1=")", "yes", "no")""")
+      case Left(err) => fail(s"Should parse: $err")
+      case other => fail(s"Unexpected result: $other")
+  }
+
+  test("String literal: formula with ( inside string") {
+    val formulaStr = """=IF(A1="(", "left", "right")"""
+    fx"$formulaStr" match
+      case Right(CellValue.Formula(expr)) =>
+        assertEquals(expr, """=IF(A1="(", "left", "right")""")
+      case Left(err) => fail(s"Should parse: $err")
+      case other => fail(s"Unexpected result: $other")
+  }
+
+  test("String literal: escaped quotes inside string") {
+    val formulaStr = "=CONCATENATE(\"Say \"\"hello\"\"\", A1)"
+    fx"$formulaStr" match
+      case Right(CellValue.Formula(expr)) =>
+        assertEquals(expr, "=CONCATENATE(\"Say \"\"hello\"\"\", A1)")
+      case Left(err) => fail(s"Should parse: $err")
+      case other => fail(s"Unexpected result: $other")
+  }
+
+  test("String literal: multiple strings with parens") {
+    val formulaStr = """=IF(A1=")", B1, "(other)")"""
+    fx"$formulaStr" match
+      case Right(CellValue.Formula(expr)) =>
+        assertEquals(expr, """=IF(A1=")", B1, "(other)")""")
+      case Left(err) => fail(s"Should parse: $err")
+      case other => fail(s"Unexpected result: $other")
+  }
+
+  test("String literal: rejects unclosed string") {
+    val formulaStr = """=IF(A1="unclosed, B1, C1)"""
+    fx"$formulaStr" match
+      case Left(XLError.FormulaError(_, msg)) =>
+        assert(msg.contains("Unbalanced"))
+      case other => fail(s"Should fail for unclosed string, got $other")
+  }
+
+  test("String literal: nested parens with strings") {
+    val formulaStr = """=IF(IF(A1=">", SUM(B1:B10), 0), "result", "none")"""
+    fx"$formulaStr" match
+      case Right(_) => () // Should parse
+      case Left(err) => fail(s"Should parse: $err")
+      case other => fail(s"Unexpected result: $other")
+  }
+
   // ===== Edge Cases =====
 
   test("Edge: formula with whitespace") {
