@@ -127,13 +127,46 @@ object FormattedLiterals:
   )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.error.XLError, Formatted]] =
     args match
       case Varargs(exprs) if exprs.isEmpty =>
-        // No interpolation - compile-time literal
+        // Branch 1: No interpolation (Phase 1)
         moneyImpl(sc)
       case Varargs(_) =>
-        // Has interpolation - runtime parsing
+        MacroUtil.allLiterals(args) match
+          case Some(literals) =>
+            // Branch 2: All compile-time constants - OPTIMIZE (Phase 2)
+            moneyCompileTimeOptimized(sc, literals)
+          case None =>
+            // Branch 3: Has runtime variables (Phase 1)
+            moneyRuntimePath(sc, args)
+
+  private def moneyCompileTimeOptimized(
+    sc: Expr[StringContext],
+    literals: Seq[Any]
+  )(using Quotes): Expr[Formatted] =
+    import quotes.reflect.report
+    val parts = sc.valueOrAbort.parts
+    val fullString = MacroUtil.reconstructString(parts, literals)
+
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.formatted.FormattedParsers.parseMoney(fullString) match
+      case Right(formatted) =>
+        // Valid - emit constant
+        val numStr = formatted.value match
+          case CellValue.Number(bd) => bd.toString
+          case _ => report.errorAndAbort("Unexpected cell value type in money literal")
         '{
-          com.tjclp.xl.formatted.FormattedParsers.parseMoney($sc.s($args*))
-        }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+          Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Currency)
+        }
+      case Left(error) =>
+        // Invalid - compile error with validation message
+        report.errorAndAbort(error.message)
+
+  private def moneyRuntimePath(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, Formatted]] =
+    '{
+      com.tjclp.xl.formatted.FormattedParsers.parseMoney($sc.s($args*))
+    }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
 
   private def percentImplN(
     sc: Expr[StringContext],
@@ -143,9 +176,39 @@ object FormattedLiterals:
       case Varargs(exprs) if exprs.isEmpty =>
         percentImpl(sc)
       case Varargs(_) =>
+        MacroUtil.allLiterals(args) match
+          case Some(literals) => percentCompileTimeOptimized(sc, literals)
+          case None => percentRuntimePath(sc, args)
+
+  private def percentCompileTimeOptimized(
+    sc: Expr[StringContext],
+    literals: Seq[Any]
+  )(using Quotes): Expr[Formatted] =
+    import quotes.reflect.report
+    val parts = sc.valueOrAbort.parts
+    val fullString = MacroUtil.reconstructString(parts, literals)
+
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.formatted.FormattedParsers.parsePercent(fullString) match
+      case Right(formatted) =>
+        // Valid - emit constant
+        val numStr = formatted.value match
+          case CellValue.Number(bd) => bd.toString
+          case _ => report.errorAndAbort("Unexpected cell value type in percent literal")
         '{
-          com.tjclp.xl.formatted.FormattedParsers.parsePercent($sc.s($args*))
-        }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+          Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Percent)
+        }
+      case Left(error) =>
+        // Invalid - compile error (rejects "50%%", etc.)
+        report.errorAndAbort(error.message)
+
+  private def percentRuntimePath(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, Formatted]] =
+    '{
+      com.tjclp.xl.formatted.FormattedParsers.parsePercent($sc.s($args*))
+    }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
 
   private def dateImplN(
     sc: Expr[StringContext],
@@ -155,9 +218,42 @@ object FormattedLiterals:
       case Varargs(exprs) if exprs.isEmpty =>
         dateImpl(sc)
       case Varargs(_) =>
+        MacroUtil.allLiterals(args) match
+          case Some(literals) => dateCompileTimeOptimized(sc, literals)
+          case None => dateRuntimePath(sc, args)
+
+  private def dateCompileTimeOptimized(
+    sc: Expr[StringContext],
+    literals: Seq[Any]
+  )(using Quotes): Expr[Formatted] =
+    import quotes.reflect.report
+    val parts = sc.valueOrAbort.parts
+    val fullString = MacroUtil.reconstructString(parts, literals)
+
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.formatted.FormattedParsers.parseDate(fullString) match
+      case Right(formatted) =>
+        // Valid - emit constant
+        val dateStr = formatted.value match
+          case CellValue.DateTime(dt) => dt.toLocalDate.toString
+          case _ => report.errorAndAbort("Unexpected cell value type in date literal")
         '{
-          com.tjclp.xl.formatted.FormattedParsers.parseDate($sc.s($args*))
-        }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+          Formatted(
+            CellValue.DateTime(java.time.LocalDate.parse(${ Expr(dateStr) }).atStartOfDay()),
+            NumFmt.Date
+          )
+        }
+      case Left(error) =>
+        // Invalid - compile error
+        report.errorAndAbort(error.message)
+
+  private def dateRuntimePath(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, Formatted]] =
+    '{
+      com.tjclp.xl.formatted.FormattedParsers.parseDate($sc.s($args*))
+    }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
 
   private def accountingImplN(
     sc: Expr[StringContext],
@@ -167,9 +263,39 @@ object FormattedLiterals:
       case Varargs(exprs) if exprs.isEmpty =>
         accountingImpl(sc)
       case Varargs(_) =>
+        MacroUtil.allLiterals(args) match
+          case Some(literals) => accountingCompileTimeOptimized(sc, literals)
+          case None => accountingRuntimePath(sc, args)
+
+  private def accountingCompileTimeOptimized(
+    sc: Expr[StringContext],
+    literals: Seq[Any]
+  )(using Quotes): Expr[Formatted] =
+    import quotes.reflect.report
+    val parts = sc.valueOrAbort.parts
+    val fullString = MacroUtil.reconstructString(parts, literals)
+
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.formatted.FormattedParsers.parseAccounting(fullString) match
+      case Right(formatted) =>
+        // Valid - emit constant
+        val numStr = formatted.value match
+          case CellValue.Number(bd) => bd.toString
+          case _ => report.errorAndAbort("Unexpected cell value type in accounting literal")
         '{
-          com.tjclp.xl.formatted.FormattedParsers.parseAccounting($sc.s($args*))
-        }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+          Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Currency)
+        }
+      case Left(error) =>
+        // Invalid - compile error
+        report.errorAndAbort(error.message)
+
+  private def accountingRuntimePath(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, Formatted]] =
+    '{
+      com.tjclp.xl.formatted.FormattedParsers.parseAccounting($sc.s($args*))
+    }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
 
 end FormattedLiterals
 

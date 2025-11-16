@@ -52,7 +52,8 @@ object CellRangeLiterals:
       case _ => report.errorAndAbort(s"""$kind"...": interpolation not supported""")
 
   /**
-   * Macro implementation supporting both compile-time literals and runtime interpolation.
+   * Macro implementation supporting compile-time literals, compile-time optimization, and runtime
+   * interpolation.
    */
   private def fxImplN(
     sc: Expr[StringContext],
@@ -62,14 +63,46 @@ object CellRangeLiterals:
 
     args match
       case Varargs(exprs) if exprs.isEmpty =>
-        // No interpolation - compile-time literal
+        // Branch 1: No interpolation (Phase 1)
         fxImpl0(sc)
 
       case Varargs(_) =>
-        // Has interpolation - runtime parsing
-        '{
-          com.tjclp.xl.cell.FormulaParser.parse($sc.s($args*))
-        }.asExprOf[Either[com.tjclp.xl.error.XLError, CellValue]]
+        MacroUtil.allLiterals(args) match
+          case Some(literals) =>
+            // Branch 2: All compile-time constants - OPTIMIZE (Phase 2)
+            fxCompileTimeOptimized(sc, literals)
+          case None =>
+            // Branch 3: Has runtime variables (Phase 1)
+            fxRuntimePath(sc, args)
+
+  private def fxCompileTimeOptimized(
+    sc: Expr[StringContext],
+    literals: Seq[Any]
+  )(using Quotes): Expr[CellValue] =
+    import quotes.reflect.report
+    val parts = sc.valueOrAbort.parts
+    val fullString = MacroUtil.reconstructString(parts, literals)
+
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.cell.FormulaParser.parse(fullString) match
+      case Right(cellValue) =>
+        // Valid - emit constant
+        cellValue match
+          case CellValue.Formula(expr) =>
+            '{ CellValue.Formula(${ Expr(expr) }) }
+          case _ =>
+            report.errorAndAbort("Unexpected cell value type in formula literal")
+      case Left(error) =>
+        // Invalid - compile error
+        report.errorAndAbort(error.message)
+
+  private def fxRuntimePath(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, CellValue]] =
+    '{
+      com.tjclp.xl.cell.FormulaParser.parse($sc.s($args*))
+    }.asExprOf[Either[com.tjclp.xl.error.XLError, CellValue]]
 
   private def literal(sc: Expr[StringContext])(using Quotes): String =
     val parts = sc.valueOrAbort.parts

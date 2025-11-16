@@ -101,10 +101,13 @@ object RefLiteral:
       case _ => report.errorAndAbort(s"""$kind"...": interpolation not supported""")
 
   /**
-   * Macro implementation supporting both compile-time literals and runtime interpolation.
+   * Macro implementation supporting compile-time literals, compile-time optimization, and runtime
+   * interpolation.
    *
-   *   - No args (literal): Delegates to refImpl0, returns ARef | CellRange | RefType directly
-   *   - With args (interpolation): Builds string at runtime, returns Either[XLError, RefType]
+   * Three branches:
+   *   - No args (literal): Compile-time validation (Phase 1)
+   *   - All args are compile-time constants: Compile-time optimization (Phase 2)
+   *   - Any args are runtime variables: Runtime parsing (Phase 1)
    */
   private def refImplN(
     sc: Expr[StringContext],
@@ -114,15 +117,116 @@ object RefLiteral:
 
     args match
       case Varargs(exprs) if exprs.isEmpty =>
-        // No interpolation - compile-time literal (backward compatible)
+        // Branch 1: No interpolation - compile-time literal (Phase 1)
         refImpl0(sc)
 
       case Varargs(exprs) =>
-        // Has interpolation - runtime parsing
-        '{
-          val str = $sc.s($args*)
-          RefType.parseToXLError(str)
-        }.asExprOf[Either[com.tjclp.xl.error.XLError, RefType]]
+        // Check if all arguments are compile-time constants
+        MacroUtil.allLiterals(args) match
+          case Some(literals) =>
+            // Branch 2: All compile-time constants - OPTIMIZE (Phase 2)
+            compileTimeOptimizedPath(sc, literals)
+
+          case None =>
+            // Branch 3: Has runtime variables - runtime parsing (Phase 1)
+            runtimePath(sc, args)
+
+  /**
+   * Phase 2: Compile-time optimization for all-literal interpolations.
+   *
+   * Reconstructs the full string, parses it at compile time, and emits a constant. Returns
+   * unwrapped ARef, CellRange, or RefType (same as non-interpolated literals).
+   *
+   * If parsing fails, aborts compilation with helpful error message.
+   */
+  private def compileTimeOptimizedPath(
+    sc: Expr[StringContext],
+    literals: Seq[Any]
+  )(using Quotes): Expr[ARef | CellRange | RefType] =
+    import quotes.reflect.report
+
+    val parts = sc.valueOrAbort.parts
+    val fullString = MacroUtil.reconstructString(parts, literals)
+
+    try
+      // Reuse existing compile-time parsing logic from refImpl0
+      // Check for sheet qualifier (!)
+      val bangIdx = findUnquotedBang(fullString)
+      if bangIdx < 0 then
+        // No sheet qualifier - return unwrapped ARef or CellRange
+        if fullString.contains(':') then
+          val ((cs, rs), (ce, re)) = parseRangeLit(fullString)
+          constCellRange(cs, rs, ce, re)
+        else
+          val (c0, r0) = parseCellLit(fullString)
+          constARef(c0, r0)
+      else
+        // Has sheet qualifier - return RefType wrapper
+        val sheetPart = fullString.substring(0, bangIdx)
+        val refPart = fullString.substring(bangIdx + 1)
+
+        if refPart.isEmpty then
+          report.errorAndAbort(
+            MacroUtil.formatCompileError("ref", fullString, s"Missing reference after '!'")
+          )
+
+        // Parse sheet name (handle quotes and escaping)
+        val sheetName = if sheetPart.startsWith("'") then
+          if !sheetPart.endsWith("'") then
+            report.errorAndAbort(
+              MacroUtil.formatCompileError(
+                "ref",
+                fullString,
+                s"Unbalanced quotes in sheet name: $sheetPart"
+              )
+            )
+          val quoted = sheetPart.substring(1, sheetPart.length - 1)
+          if quoted.isEmpty then
+            report.errorAndAbort(
+              MacroUtil.formatCompileError("ref", fullString, "Empty sheet name in quotes")
+            )
+          // Unescape '' → ' (Excel convention)
+          val unescaped = quoted.replace("''", "'")
+          validateSheetName(unescaped)
+          unescaped
+        else
+          if sheetPart.contains("'") then
+            report.errorAndAbort(
+              MacroUtil.formatCompileError(
+                "ref",
+                fullString,
+                s"Misplaced quote in sheet name: $sheetPart (quotes must wrap entire name)"
+              )
+            )
+          validateSheetName(sheetPart)
+          sheetPart
+
+        // Parse ref part as cell or range
+        if refPart.contains(':') then
+          val ((cs, rs), (ce, re)) = parseRangeLit(refPart)
+          constQualifiedRange(sheetName, cs, rs, ce, re)
+        else
+          val (c0, r0) = parseCellLit(refPart)
+          constQualifiedCell(sheetName, c0, r0)
+
+    catch
+      case e: IllegalArgumentException =>
+        report.errorAndAbort(MacroUtil.formatCompileError("ref", fullString, e.getMessage))
+
+  /**
+   * Phase 1: Runtime parsing for dynamic interpolations.
+   *
+   * Builds string at runtime and parses it with existing runtime parser. Returns Either[XLError,
+   * RefType] for explicit error handling.
+   */
+  private def runtimePath(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, RefType]] =
+    '{
+      val str = $sc.s($args*)
+      RefType.parseToXLError(str)
+    }.asExprOf[Either[com.tjclp.xl.error.XLError, RefType]]
 
   private def literal(sc: Expr[StringContext])(using Quotes): String =
     val parts = sc.valueOrAbort.parts
