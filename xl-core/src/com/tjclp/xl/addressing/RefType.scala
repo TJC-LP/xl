@@ -88,6 +88,25 @@ end RefType
 
 object RefType:
   /**
+   * Validate and construct ARef from 0-based indices.
+   *
+   * @return
+   *   Left if indices are out of Excel's valid range, Right(ARef) otherwise
+   */
+  private inline def validateARef(col0: Int, row0: Int): Either[com.tjclp.xl.error.XLError, ARef] =
+    if col0 < 0 || col0 > Column.MaxIndex0 then
+      Left(
+        com.tjclp.xl.error.XLError
+          .InvalidColumn(col0, s"Column index out of range (max ${Column.MaxIndex0})")
+      )
+    else if row0 < 0 || row0 > Row.MaxIndex0 then
+      Left(
+        com.tjclp.xl.error.XLError
+          .InvalidRow(row0, s"Row index out of range (max ${Row.MaxIndex0})")
+      )
+    else Right(ARef.from0(col0, row0))
+
+  /**
    * Parse any reference format from string.
    *
    * Supports:
@@ -103,16 +122,23 @@ object RefType:
    *   Either error message or parsed RefType
    */
   def parse(s: String): Either[String, RefType] =
-    RefParser.parse(s).map {
-      case ParsedRef.Cell(None, col0, row0) => Cell(ARef.from0(col0, row0))
+    RefParser.parse(s).flatMap {
+      case ParsedRef.Cell(None, col0, row0) =>
+        validateARef(col0, row0).left.map(_.message).map(Cell.apply)
       case ParsedRef.Range(None, cs, rs, ce, re) =>
-        val range = CellRange(ARef.from0(cs, rs), ARef.from0(ce, re))
-        Range(range)
+        for
+          start <- validateARef(cs, rs).left.map(_.message)
+          end <- validateARef(ce, re).left.map(_.message)
+        yield Range(CellRange(start, end))
       case ParsedRef.Cell(Some(sheetName), col0, row0) =>
-        QualifiedCell(SheetName.unsafe(sheetName), ARef.from0(col0, row0))
+        validateARef(col0, row0).left
+          .map(_.message)
+          .map(ref => QualifiedCell(SheetName.unsafe(sheetName), ref))
       case ParsedRef.Range(Some(sheetName), cs, rs, ce, re) =>
-        val range = CellRange(ARef.from0(cs, rs), ARef.from0(ce, re))
-        QualifiedRange(SheetName.unsafe(sheetName), range)
+        for
+          start <- validateARef(cs, rs).left.map(_.message)
+          end <- validateARef(ce, re).left.map(_.message)
+        yield QualifiedRange(SheetName.unsafe(sheetName), CellRange(start, end))
     }
 
   /**
