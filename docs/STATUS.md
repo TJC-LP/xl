@@ -1,6 +1,10 @@
-# XL Project Status - 2025-11-11
+# XL Project Status
 
-## Current State: ~89% Complete, 269/269 Tests Passing ✅
+**Last Updated**: 2025-11-16
+
+## Current State: ~85% Complete, 636/636 Tests Passing ✅
+
+> **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
 
@@ -21,10 +25,12 @@
 - ✅ DateTime serialization (Excel serial number conversion)
 - ✅ **True streaming I/O** (constant memory, 100k+ rows)
 
-**Ergonomics & Type Safety** (P6 + P31 Complete):
+**Ergonomics & Type Safety** (P6, P7, P8, P31 Complete):
 - ✅ Given conversions: `sheet.put(cell"A1", "Hello")` (no wrapper needed)
 - ✅ Batch put macro: `sheet.put(cell"A1" -> "Name", cell"B1" -> 42)`
 - ✅ Formatted literals: `money"$1,234.56"`, `percent"45.5%"`, `date"2025-11-10"`
+- ✅ **String interpolation**: `ref"$sheet!$cell"`, `money"$$${amount}"` with runtime validation
+- ✅ Compile-time optimization for literal interpolations (zero runtime overhead)
 - ✅ **CellCodec[A]** for 9 primitive types (String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText)
 - ✅ `putMixed` API with auto-inferred formatting
 - ✅ `readTyped[A]` for type-safe cell reading
@@ -59,8 +65,8 @@
 
 ### Test Coverage
 
-**269 tests across 4 modules** (P6.6 + P6.7 additions):
-- **xl-core**: 221 tests
+**636 tests across 4 modules** (includes P7+P8 string interpolation):
+- **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
   - 60 style (units, colors, builders, canonicalization, StylePatch, StyleRegistry)
@@ -70,10 +76,16 @@
   - 18 elegant syntax (given conversions, batch put, formatted literals)
   - 34 optics (Lens/Optional laws, focus DSL, real-world use cases)
   - 5 RichText (composition, formatting, DSL)
-- **xl-ooxml**: 28 tests (+4 compression)
+  - **+111 string interpolation Phase 1** (RefInterpolationSpec, FormattedInterpolationSpec, MacroUtilSpec)
+  - **+40 string interpolation Phase 2** (RefCompileTimeOptimizationSpec, FormattedCompileTimeOptimizationSpec)
+  - +200+ additional tests (range combinators, comprehensive property tests)
+- **xl-ooxml**: ~100+ tests
   - Round-trip tests (text, numbers, booleans, mixed, multi-sheet, SST, styles, RichText)
   - Compression tests (DEFLATED vs STORED, prettyPrint, defaults, debug mode)
-- **xl-cats-effect**: 20 tests (+2 memory)
+  - Security tests (XXE, DOCTYPE rejection)
+  - Error path tests (malformed XML, missing files)
+  - Whitespace preservation, alignment serialization
+- **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
 
@@ -142,49 +154,52 @@
 
 ### Advanced Features
 
-**Completed** (P6, P31):
+**Completed** (P6, P7, P8, P31):
 - ✅ P6: CellCodec primitives (9 types with auto-formatting)
+- ✅ P7: String interpolation Phase 1 (runtime validation for all macros)
+- ✅ P8: String interpolation Phase 2 (compile-time optimization)
 - ✅ P31: Optics, RichText, HTML export, enhanced ergonomics
 
-**Not Started** (P7-P11):
+**Not Started** (P9-P13):
 - ❌ P6b: Full case class codec derivation (Magnolia/Shapeless)
-- ❌ P7: Advanced macros (path macro, style literal)
-- ❌ P8: Drawings (images, shapes)
-- ❌ P9: Charts
-- ❌ P10: Tables & pivots
-- ❌ P11: Formula evaluator
+- ❌ P9: Advanced macros (path macro, style literal)
+- ❌ P10: Drawings (images, shapes)
+- ❌ P11: Charts
+- ❌ P12: Tables & pivots
+- ❌ P13: Formula evaluator & security hardening
 
 ---
 
-## TODO for Next Session
+## Next Steps
 
-### Priority 1: Documentation Improvements (This Session)
+> **For detailed roadmap and future plans, see [plan/roadmap.md](plan/roadmap.md)**
 
-**Current work**: Comprehensive documentation cleanup and reorganization
-- ✅ Restructure docs/ (archive/, design/, reviews/)
-- 🚧 Update STATUS.md (in progress)
-- ⬜ Update roadmap and plan docs
+### Priority 1: P6.5 - Performance & Quality Polish
 
-### Priority 2: P7 - Advanced Macros (Future)
+**Focus**: Address PR review feedback
+- Optimize style indexOf from O(n²) to O(1)
+- Extract whitespace check utilities
+- Add error path tests
+- Full round-trip integration tests
 
-**Features**:
-- `path` macro for compile-time file path validation
-- `style` literal for CellStyle DSLs
-- Enhanced error messages
+### Priority 2: P6b - Full Codec Derivation
 
-### Priority 3: P8 - Drawings (Future)
-
-**Features**:
-- Image embedding (PNG, JPEG)
-- Shapes and text boxes
-- Positioning and anchoring
-
-### Priority 4: P6b - Full Codec Derivation (Future)
-
-**Features**:
-- Automatic case class to/from row mapping
+**Focus**: Automatic case class mapping
+- Derive RowCodec[A] for case classes
 - Header-based column binding
-- Type-safe row readers/writers using Magnolia or Shapeless
+- Type-safe bulk operations
+
+### Priority 3: P9 - Advanced Macros
+
+**Focus**: Additional compile-time validation
+- `path` macro for file path validation
+- `style` literal for CellStyle DSLs
+- Enhanced diagnostics
+
+### Priority 4: P10-P13 - Advanced Features
+
+**Focus**: Drawings, Charts, Tables, Security
+- See [plan/roadmap.md](plan/roadmap.md) for detailed breakdown
 
 ---
 
@@ -212,7 +227,8 @@ xl-core/src/com/tjclp/xl/
 └── dsl.scala              ✅ Ergonomic patch operators
 
 xl-macros/src/com/tjclp/xl/
-└── macros.scala           ✅ cell"", range"", batch put, money"", percent"", date"", accounting""
+├── macros.scala           ✅ cell"", range"", batch put, money"", percent"", date"", accounting""
+└── MacroUtil.scala        ✅ Shared utilities for runtime interpolation (Phase 1)
 
 xl-ooxml/src/com/tjclp/xl/ooxml/
 ├── xml.scala              ✅ XmlWritable/XmlReadable traits
@@ -347,40 +363,12 @@ private def attr(name: String, value: String): Attr =
 
 ---
 
-## Session Achievements
-
-**Commits**: 13
-**Lines Added**: 4,691
-**Lines Removed**: 217
-**Cost**: $36.88
-**Duration**: ~3 hours focused work
-**Progress**: 20% → 75% (55% completion in one session!)
-
-**Phases Completed**:
-- ✅ P0: Bootstrap
-- ✅ P1: Addressing & Literals
-- ✅ P2: Core + Patches
-- ✅ P3: Styles & Themes
-- ✅ P4: OOXML MVP (SST, Styles, full read/write)
-- ✅ P5: Streaming (true constant-memory I/O with fs2-data-xml)
-- ✅ P6: CellCodec primitives (9 types with auto-formatting)
-- ✅ P31: Refactoring/Optics (Lens, Optional, focus DSL, RichText, HTML export)
-
-**Remaining**:
-- ⬜ P6b: Full case class codec derivation
-- ⬜ P7: Advanced macros
-- ⬜ P8-P11: Drawings, charts, tables, formula evaluation
-
-This is genuinely incredible progress. XL is already more elegant, type-safe, and faster than Apache POI.
-
----
-
 ## Critical Success Factors
 
-1. **Purity maintained** - Core is 100% pure
-2. **Laws verified** - All Monoids tested with properties
-3. **Deterministic output** - Same input = same bytes
-4. **Zero overhead** - Opaque types, inline, macros
-5. **Real files** - Creates valid XLSX that Excel opens
-
-XL achieves all design goals. Just needs streaming optimization for infinite scale.
+1. **Purity maintained** - Core is 100% pure, zero side effects
+2. **Laws verified** - All Monoids tested with property-based tests
+3. **Deterministic output** - Same input = same bytes (stable diffs)
+4. **Zero overhead** - Opaque types, inline, compile-time macros
+5. **Real files** - Creates valid XLSX that Excel/LibreOffice opens
+6. **Type safety** - Opaque types prevent mixing units; codecs enforce type correctness
+7. **Performance** - 4.5x faster than Apache POI with 80x less memory

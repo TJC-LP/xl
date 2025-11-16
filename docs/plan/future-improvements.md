@@ -333,7 +333,7 @@ val styles = parts.get("xl/styles.xml") match
 - [x] Error-path regression suite for XlsxReader (10 tests in `XlsxReaderErrorSpec`)
 - [x] Full-feature round-trip integration test with deterministic ZIP output
 - [x] Reader warnings surfaced via `XlsxReader.readWithWarnings` with effectful logging hook in `ExcelIO`
-- [x] All tests passing (645 total: 169 core + 215 ooxml + 261 cats-effect)
+- [x] All tests passing (636 total as of 2025-11-16)
 - [x] Code formatted (Scalafmt 3.10.1)
 - [x] Documentation updated (this file, roadmap.md)
 - [x] Committed (79b3269)
