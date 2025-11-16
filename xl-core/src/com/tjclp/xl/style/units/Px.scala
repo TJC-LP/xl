@@ -4,13 +4,13 @@ package com.tjclp.xl.style.units
 opaque type Px = Double
 
 object Px:
-  def apply(value: Double): Px = value
+  inline def apply(value: Double): Px = value
 
   extension (px: Px)
-    def value: Double = px
+    inline def value: Double = px
 
     /** Convert to points */
-    def toPt: Pt = Pt(px * 72.0 / 96.0)
+    inline def toPt: Pt = Pt(px * 72.0 / 96.0)
 
     /** Convert to EMUs */
-    def toEmu: Emu = Emu((px * 914400.0 / 96.0).toLong)
+    inline def toEmu: Emu = Emu((px * 914400.0 / 96.0).toLong)

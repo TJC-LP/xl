@@ -252,23 +252,33 @@ Key test files:
 
 ## Implementation Status (Roadmap)
 
-**✅ Complete (P0-P3, ~55%)**:
+> **For detailed phase completion status, see [docs/plan/roadmap.md](docs/plan/roadmap.md)**
+
+**✅ Complete (P0-P8 + P31, ~85%)**:
 - P0: Bootstrap, Mill build, module structure
 - P1: Addressing & Literals (opaque types, macros, 17 tests)
-- P2: Core + Patches (Monoid composition, 19 tests)
-- P3: Styles & Themes (full formatting system, 41 tests)
-- P4: OOXML MVP (50% - XML foundation done, need SST/Styles/ZIP)
+- P2: Core + Patches (Monoid composition, 21 tests)
+- P3: Styles & Themes (full formatting system, 60 tests)
+- P4: OOXML MVP (full read/write, SST, styles.xml, 24 tests)
+- P4.1: XLSX Reader with style preservation
+- P4.5: OOXML Quality & Spec Compliance (+22 tests)
+- P5: Streaming (true constant-memory I/O with fs2-data-xml, 18 tests)
+- P6: CellCodec primitives (9 types, 58 tests)
+- P6.6: Streaming reader memory fix (O(1) memory)
+- P6.7: Compression defaults
+- P7: String Interpolation Phase 1 (runtime validation, +111 tests)
+- P8: String Interpolation Phase 2 (compile-time optimization, +40 tests)
+- P31: Optics, RichText, HTML export (39 tests)
 
-**🚧 In Progress (P4)**:
-- Shared Strings Table (SST) with deduplication
-- Styles.xml mapping
-- ZIP reader/writer
-- Round-trip tests
+**Total: 636/636 tests passing**
 
-**📋 Not Started (P5-P11)**:
-- P5: Streaming (fs2, constant memory)
-- P6: Codecs & Named Tuples (derivation, header binding)
-- P7-P11: Advanced features (drawings, charts, tables, safety)
+**📋 Not Started (P9-P13)**:
+- P6b: Full case class codec derivation
+- P9: Advanced macros (path literal, style literal)
+- P10: Drawings (images, shapes)
+- P11: Charts
+- P12: Tables & pivots
+- P13: Formula evaluator & security hardening
 
 ## Important Constraints
 
@@ -374,6 +384,38 @@ def hexMacro(code: Expr[String], style: Expr[CellStyle])(using Quotes): Expr[Cel
 - Dynamic strings → runtime validation (`style.hex(userInput)` compiles, fails gracefully)
 - Single API (no separate methods needed)
 - Zero overhead (literals emit constants, runtime uses efficient Either)
+
+**String Interpolation Pattern** (P7-P8):
+
+XL macros support runtime string interpolation with compile-time optimization:
+
+```scala
+// Phase 1: Runtime interpolation for all 4 macro families
+val sheet = "Sheet1"
+val col = "B"
+val row = "10"
+
+// Runtime validation (returns Either[XLError, RefType])
+val cellRef = ref"$sheet!$col$row"  // Runtime: parses "Sheet1!B10"
+val money = money"$$$amount"        // Runtime: parses with dollar sign
+val pct = percent"${value}%"        // Runtime: parses with percent
+
+// Phase 2: Compile-time optimization when all parts are literals
+val optimized = ref"${"A"}${"1"}"  // Optimized: emits ARef constant at compile time
+val fallback = ref"$sheet!A1"      // Fallback: uses runtime path (sheet is variable)
+```
+
+**Implementation** (`MacroUtil.scala`):
+- `MacroUtil.reconstructString`: Rebuilds interpolated string from parts
+- Hybrid path: Detects if all interpolated values are compile-time constants
+- Compile-time optimization: Emits opaque type constant directly (zero runtime cost)
+- Runtime fallback: Uses pure Either-based validation for dynamic strings
+
+**Benefits**:
+- Dynamic references from user input (`ref"${userSheet}!${userCell}"`)
+- Type-safe: Returns `Either[XLError, RefType]` for error handling
+- Zero overhead when all parts are literals (Phase 2 optimization)
+- Single unified API (no separate runtime vs compile-time methods)
 
 ### DSL Patterns
 

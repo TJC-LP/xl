@@ -14,36 +14,24 @@ class FormattedInterpolationSpec extends ScalaCheckSuite:
   // ===== Backward Compatibility (Compile-Time Literals) =====
 
   test("Compile-time: money\"$$1,234.56\" returns Formatted directly") {
-    val f = money"$$1,234.56"
-    f match
-      case formatted: Formatted =>
-        assertEquals(formatted.numFmt, NumFmt.Currency)
-        assertEquals(formatted.value, CellValue.Number(1234.56))
-      case other => fail(s"Expected Formatted, got $other")
+    val formatted: Formatted = money"$$1,234.56"
+    assertEquals(formatted.numFmt, NumFmt.Currency)
+    assertEquals(formatted.value, CellValue.Number(1234.56))
   }
 
   test("Compile-time: percent\"45.5%\" returns Formatted directly") {
-    val f = percent"45.5%"
-    f match
-      case formatted: Formatted =>
-        assertEquals(formatted.numFmt, NumFmt.Percent)
-      case other => fail(s"Expected Formatted, got $other")
+    val formatted: Formatted = percent"45.5%"
+    assertEquals(formatted.numFmt, NumFmt.Percent)
   }
 
   test("Compile-time: date\"2025-11-10\" returns Formatted directly") {
-    val f = date"2025-11-10"
-    f match
-      case formatted: Formatted =>
-        assertEquals(formatted.numFmt, NumFmt.Date)
-      case other => fail(s"Expected Formatted, got $other")
+    val formatted: Formatted = date"2025-11-10"
+    assertEquals(formatted.numFmt, NumFmt.Date)
   }
 
   test("Compile-time: accounting\"$$123.45\" returns Formatted directly") {
-    val f = accounting"$$123.45"
-    f match
-      case formatted: Formatted =>
-        assertEquals(formatted.numFmt, NumFmt.Currency)
-      case other => fail(s"Expected Formatted, got $other")
+    val formatted: Formatted = accounting"$$123.45"
+    assertEquals(formatted.numFmt, NumFmt.Currency)
   }
 
   // ===== Money Runtime Interpolation (7 tests) =====

@@ -2,6 +2,7 @@ package com.tjclp.xl.macros
 
 import com.tjclp.xl.cell.{CellValue, FormulaParser}
 import com.tjclp.xl.error.XLError
+import scala.annotation.unchecked
 import munit.FunSuite
 
 class FormulaInterpolationSpec extends FunSuite:
@@ -9,11 +10,9 @@ class FormulaInterpolationSpec extends FunSuite:
   // ===== Backward Compatibility (Compile-Time Literals) =====
 
   test("Compile-time literal: fx\"=SUM(A1:A10)\" returns CellValue directly") {
-    val f = fx"=SUM(A1:A10)"
-    f match
-      case formula: CellValue.Formula =>
-        assertEquals(formula.expression, "=SUM(A1:A10)")
-      case other => fail(s"Expected CellValue.Formula, got $other")
+    fx"=SUM(A1:A10)" match
+      case CellValue.Formula(expr) => assertEquals(expr, "=SUM(A1:A10)")
+      case other => fail(s"Expected Formula, got $other")
   }
 
   // ===== Runtime Interpolation (New Functionality) =====
@@ -23,8 +22,10 @@ class FormulaInterpolationSpec extends FunSuite:
     fx"$formulaStr" match
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=SUM(A1:A10)")
-      case other =>
-        fail(s"Expected Right(Formula), got $other")
+      case Left(err) =>
+        fail(s"Expected Right(Formula), got Left($err)")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("Runtime interpolation: IF formula") {
@@ -32,8 +33,10 @@ class FormulaInterpolationSpec extends FunSuite:
     fx"$formulaStr" match
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=IF(A1>0,B1,C1)")
-      case other =>
-        fail(s"Expected Right(Formula), got $other")
+      case Left(err) =>
+        fail(s"Expected Right(Formula), got Left($err)")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("Runtime interpolation: nested parentheses") {
@@ -41,8 +44,10 @@ class FormulaInterpolationSpec extends FunSuite:
     fx"$formulaStr" match
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=IF(A1>0,SUM(B1:B10),0)")
-      case other =>
-        fail(s"Should parse: $other")
+      case Left(err) =>
+        fail(s"Should parse: $err")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("Runtime interpolation: complex formula with multiple functions") {
@@ -56,9 +61,10 @@ class FormulaInterpolationSpec extends FunSuite:
     val formulaStr = "SUM(A1:A10)"
     fx"$formulaStr" match
       case Right(CellValue.Formula(expr)) =>
-        assertEquals(expr, "SUM(A1:A10)")  // We don't require =
+        assertEquals(expr, "SUM(A1:A10)") // We don't require =
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   // ===== Error Cases =====
@@ -69,8 +75,10 @@ class FormulaInterpolationSpec extends FunSuite:
       case Left(XLError.FormulaError(input, msg)) =>
         assertEquals(input, "")
         assert(msg.contains("empty"))
-      case other =>
-        fail(s"Expected Left(FormulaError), got $other")
+      case Right(value) =>
+        fail(s"Expected Left(FormulaError), got Right($value)")
+      case Left(other) =>
+        fail(s"Expected FormulaError, got $other")
   }
 
   test("Runtime interpolation: unbalanced opening paren returns Left") {
@@ -79,8 +87,10 @@ class FormulaInterpolationSpec extends FunSuite:
       case Left(XLError.FormulaError(input, msg)) =>
         assertEquals(input, "=SUM(A1:A10")
         assert(msg.contains("Unbalanced"))
-      case other =>
-        fail(s"Expected Left(FormulaError), got $other")
+      case Right(value) =>
+        fail(s"Expected Left(FormulaError), got Right($value)")
+      case Left(other) =>
+        fail(s"Expected FormulaError, got $other")
   }
 
   test("Runtime interpolation: unbalanced closing paren returns Left") {
@@ -89,8 +99,10 @@ class FormulaInterpolationSpec extends FunSuite:
       case Left(XLError.FormulaError(input, msg)) =>
         assertEquals(input, "=SUM(A1:A10))")
         assert(msg.contains("Unbalanced"))
-      case other =>
-        fail(s"Expected Left(FormulaError), got $other")
+      case Right(value) =>
+        fail(s"Expected Left(FormulaError), got Right($value)")
+      case Left(other) =>
+        fail(s"Expected FormulaError, got $other")
   }
 
   test("Runtime interpolation: mismatched parens returns Left") {
@@ -98,8 +110,10 @@ class FormulaInterpolationSpec extends FunSuite:
     fx"$invalidStr" match
       case Left(XLError.FormulaError(_, msg)) =>
         assert(msg.contains("Unbalanced"))
-      case other =>
-        fail(s"Expected Left(FormulaError), got $other")
+      case Right(value) =>
+        fail(s"Expected Left(FormulaError), got Right($value)")
+      case Left(other) =>
+        fail(s"Expected FormulaError, got $other")
   }
 
   // ===== Mixed Compile-Time and Runtime =====
@@ -110,7 +124,8 @@ class FormulaInterpolationSpec extends FunSuite:
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=SUM(A1:A10)")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("Mixed interpolation: variable function name") {
@@ -119,7 +134,8 @@ class FormulaInterpolationSpec extends FunSuite:
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=SUM(A1:A10)")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("Mixed interpolation: multiple variables") {
@@ -131,7 +147,8 @@ class FormulaInterpolationSpec extends FunSuite:
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=IF(A1>0,B1,C1)")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   // ===== String Literal Edge Cases =====
@@ -142,7 +159,8 @@ class FormulaInterpolationSpec extends FunSuite:
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, """=IF(A1=")", "yes", "no")""")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("String literal: formula with ( inside string") {
@@ -151,7 +169,8 @@ class FormulaInterpolationSpec extends FunSuite:
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, """=IF(A1="(", "left", "right")""")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("String literal: escaped quotes inside string") {
@@ -160,7 +179,8 @@ class FormulaInterpolationSpec extends FunSuite:
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=CONCATENATE(\"Say \"\"hello\"\"\", A1)")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("String literal: double escaped quotes regression") {
@@ -169,7 +189,8 @@ class FormulaInterpolationSpec extends FunSuite:
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=IF(A1=\"\"test\"\", B1, C1)")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("String literal: multiple strings with parens") {
@@ -178,7 +199,8 @@ class FormulaInterpolationSpec extends FunSuite:
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, """=IF(A1=")", B1, "(other)")""")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("String literal: rejects unclosed string") {
@@ -186,7 +208,9 @@ class FormulaInterpolationSpec extends FunSuite:
     fx"$formulaStr" match
       case Left(XLError.FormulaError(_, msg)) =>
         assert(msg.contains("Unbalanced"))
-      case other => fail(s"Should fail for unclosed string, got $other")
+      case Right(value) => fail(s"Should fail for unclosed string, got Right($value)")
+      case Left(other) =>
+        fail(s"Expected FormulaError, got $other")
   }
 
   test("String literal: nested parens with strings") {
@@ -194,7 +218,6 @@ class FormulaInterpolationSpec extends FunSuite:
     fx"$formulaStr" match
       case Right(_) => () // Should parse
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
   }
 
   // ===== Edge Cases =====
@@ -203,9 +226,10 @@ class FormulaInterpolationSpec extends FunSuite:
     val formulaStr = " =SUM( A1:A10 ) "
     fx"$formulaStr" match
       case Right(CellValue.Formula(expr)) =>
-        assertEquals(expr, " =SUM( A1:A10 ) ")  // Preserve whitespace
+        assertEquals(expr, " =SUM( A1:A10 ) ") // Preserve whitespace
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   test("Edge: formula with many nested parens") {
@@ -213,7 +237,6 @@ class FormulaInterpolationSpec extends FunSuite:
     fx"$formulaStr" match
       case Right(_) => () // Should parse
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
   }
 
   test("Edge: formula with array syntax {1,2,3}") {
@@ -222,7 +245,8 @@ class FormulaInterpolationSpec extends FunSuite:
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=SUM({1,2,3})")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }
 
   // ===== Cell Limit Validation =====
@@ -233,7 +257,9 @@ class FormulaInterpolationSpec extends FunSuite:
       case Left(XLError.FormulaError(input, msg)) =>
         assert(msg.contains("Excel cell limit"))
         assert(input.length < 100) // Truncated in error message
-      case other => fail(s"Should fail for too-long formula, got $other")
+      case Right(value) => fail(s"Should fail for too-long formula, got Right($value)")
+      case Left(other) =>
+        fail(s"Expected FormulaError, got $other")
   }
 
   // ===== Integration =====
@@ -242,13 +268,14 @@ class FormulaInterpolationSpec extends FunSuite:
     val func = "SUM"
     val range = "A1:A10"
 
-    val result = for
-      formula <- fx"=$func($range)"
-    yield formula
+    val result =
+      for formula <- fx"=$func($range)"
+      yield formula
 
     result match
       case Right(CellValue.Formula(expr)) =>
         assertEquals(expr, "=SUM(A1:A10)")
       case Left(err) => fail(s"Should parse: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected Formula, got $other")
   }

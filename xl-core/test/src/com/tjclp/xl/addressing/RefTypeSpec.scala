@@ -241,6 +241,48 @@ class RefTypeSpec extends ScalaCheckSuite:
       case other => fail(s"Expected Range with correct range, got $other")
   }
 
+  // ========== Bounds Validation ==========
+
+  test("Validate Excel limits: Maximum valid column (XFD) succeeds") {
+    assert(RefType.parse("XFD1").isRight, "XFD1 (max column) should succeed")
+  }
+
+  test("Validate Excel limits: Maximum valid row (1048576) succeeds") {
+    assert(RefType.parse("A1048576").isRight, "A1048576 (max row) should succeed")
+  }
+
+  test("Validate Excel limits: Maximum valid cell (XFD1048576) succeeds") {
+    assert(RefType.parse("XFD1048576").isRight, "XFD1048576 (max cell) should succeed")
+  }
+
+  test("Validate Excel limits: Column beyond XFD fails") {
+    assert(RefType.parse("XFE1").isLeft, "XFE1 (beyond max column) should fail")
+  }
+
+  test("Validate Excel limits: Row beyond 1048576 fails") {
+    assert(RefType.parse("A1048577").isLeft, "A1048577 (beyond max row) should fail")
+  }
+
+  test("Validate Excel limits: Both col and row out of bounds fails") {
+    assert(RefType.parse("XFE1048577").isLeft, "XFE1048577 (both out of bounds) should fail")
+  }
+
+  test("Validate Excel limits: Out of bounds in range start fails") {
+    assert(RefType.parse("XFE1:A10").isLeft, "Range with out-of-bounds start should fail")
+  }
+
+  test("Validate Excel limits: Out of bounds in range end fails") {
+    assert(RefType.parse("A1:XFE10").isLeft, "Range with out-of-bounds end should fail")
+  }
+
+  test("Validate Excel limits: Qualified cell out of bounds fails") {
+    assert(RefType.parse("Sales!XFE1").isLeft, "Qualified cell out of bounds should fail")
+  }
+
+  test("Validate Excel limits: Qualified range out of bounds fails") {
+    assert(RefType.parse("Sales!A1:XFE10").isLeft, "Qualified range out of bounds should fail")
+  }
+
   // ========== Workbook Integration Tests ==========
 
   test("Workbook.apply(RefType) - qualified cell reference") {

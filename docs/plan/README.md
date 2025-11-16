@@ -4,8 +4,10 @@ This directory contains **active future work** only. Completed phases are archiv
 
 ## Current Status
 
-- **Phases P0-P6 + P31**: ✅ Complete (85%, 263/263 tests passing)
-- **Production Ready**: Core XLSX read/write, streaming, codecs, optics, RichText
+> **For detailed phase completion status and roadmap, see [roadmap.md](roadmap.md)**
+
+- **Phases P0-P8 + P31**: ✅ Complete (~85%, 636/636 tests passing)
+- **Production Ready**: Core XLSX read/write, streaming, codecs, optics, RichText, string interpolation
 - **Future Work**: Documented below
 
 ## Active Plans (Unimplemented Features)
@@ -18,17 +20,17 @@ This directory contains **active future work** only. Completed phases are archiv
    - Scope: O(n²) → O(1) optimization, whitespace utility, error path tests, integration tests
    - Priority: Medium (8-10 hours)
 
-2. **[formula-system.md](formula-system.md)** - P7+ Formula Evaluator
+2. **[formula-system.md](formula-system.md)** - P9+ Formula Evaluator
    - Status: ⬜ Not started
    - Scope: AST evaluation, function library, circular reference detection
    - Note: Formula parsing/serialization already complete
 
-3. **[error-model-and-safety.md](error-model-and-safety.md)** - P11 Security Hardening
+3. **[error-model-and-safety.md](error-model-and-safety.md)** - P13 Security Hardening
    - Status: Error model ✅ complete, security ⬜ not started
    - Scope: ZIP bomb detection, formula injection guards, XXE prevention
    - Priority: High (required for production use)
 
-4. **[security.md](security.md)** - P11 Additional Security Features
+4. **[security.md](security.md)** - P13 Additional Security Features
    - Status: ⬜ Not started
    - Scope: File size limits, macro handling, sanitization
    - Note: Consider merging with error-model-and-safety.md
@@ -45,15 +47,15 @@ This directory contains **active future work** only. Completed phases are archiv
 
 ### Advanced Features
 
-6. **[drawings.md](drawings.md)** - P8 Images & Shapes
+6. **[drawings.md](drawings.md)** - P10 Images & Shapes
    - Status: ⬜ Not started
    - Scope: PNG/JPEG embedding, anchors, text boxes
 
-7. **[charts.md](charts.md)** - P9 Chart Generation
+7. **[charts.md](charts.md)** - P11 Chart Generation
    - Status: ⬜ Not started
    - Scope: Bar, line, pie, scatter charts with data binding
 
-8. **[tables-and-pivots.md](tables-and-pivots.md)** - P10 Structured Data
+8. **[tables-and-pivots.md](tables-and-pivots.md)** - P12 Structured Data
    - Status: ⬜ Not started
    - Scope: Excel tables, conditional formatting, data validation
 
@@ -71,8 +73,8 @@ This directory contains **active future work** only. Completed phases are archiv
 
 - **Design Docs**: `docs/design/` - Architectural decisions (purity charter, domain model, ADRs)
 - **Reference**: `docs/reference/` - Examples, glossary, OOXML research, testing guide
-- **Archived Plans**: `docs/archive/plan/` - Completed P0-P6, P31 implementation plans
-- **Status**: `docs/STATUS.md` - Detailed current state (263 tests, performance, limitations)
+- **Archived Plans**: `docs/archive/plan/` - Completed P0-P8, P31 implementation plans (inc. string interpolation)
+- **Status**: `docs/STATUS.md` - Detailed current state (636 tests, performance, limitations)
 
 ## Quick Links
 
@@ -87,28 +89,11 @@ This directory contains **active future work** only. Completed phases are archiv
 
 _No active quality issues! All critical defects resolved._
 
-### Recently Completed Quality Improvements
+### Recently Completed (See Archive)
 
-9. ✅ **[ooxml-quality.md](ooxml-quality.md)** - P4.5 OOXML Spec Compliance
-   - Status: ✅ Complete (commits b22832e, 4dd98f5)
-   - Completed: 2025-11-10
-   - Scope: Fixed all 6 critical issues (gray125, SharedStrings count, whitespace, alignment, Scala version, xml:space)
-   - Result: Zero spec violations, zero data loss, full round-trip fidelity
-   - Tests: +22 new tests across 4 test classes
-
-### Recently Fixed Defects
-
-- ✅ **Styles lost on import** - Fixed in commit 7293ccc
-  - *Solution*: Extended XlsxReader to parse `xl/styles.xml` and populate StyleRegistry per sheet
-
-- ✅ **Worksheet lookup ignores `r:id` relationships** - Fixed in commit efd0204
-  - *Solution*: Added relationship-based worksheet resolution using `xl/_rels/workbook.xml.rels`
-
-- ✅ **Runtime cell parser rejects lowercase columns** - Fixed in commit 7293ccc
-  - *Solution*: Added `toUpperCase(Locale.ROOT)` normalization to ARef.parse and Column.fromLetter
-
-- ✅ **`Lens.modify` does not update structures** - Fixed in commit 7293ccc
-  - *Solution*: Changed return type to S and delegated to `set(f(get(s)), s)`
+- ✅ **P4.5 OOXML Spec Compliance** - See `docs/archive/plan/p45-ooxml-quality.md`
+- ✅ **P7-P8 String Interpolation** - See `docs/archive/plan/string-interpolation/`
+- ✅ **Unified Put API** - See `docs/archive/plan/unified-put-api.md`
 
 ### Implementation Order Best Practices
 

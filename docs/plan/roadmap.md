@@ -1,6 +1,7 @@
 # Roadmap — From Spec to MVP and Beyond
 
-**Current Status: ~85% Complete (698/698 tests passing)**
+**Current Status: ~85% Complete (636/636 tests passing)**
+**Last Updated**: 2025-11-16
 
 ## Completed Phases ✅
 
@@ -131,11 +132,84 @@
 - ✅ Added 22 comprehensive tests across 4 new test classes
 - ✅ Zero spec violations, full round-trip fidelity achieved
 
-**See**: [ooxml-quality.md](ooxml-quality.md) for detailed implementation notes
+**See**: [archived: ooxml-quality.md](../archive/plan/p45-ooxml-quality.md) for detailed implementation notes
+
+### ✅ P6.6: Streaming Reader Memory Fix (Complete)
+**Status**: 100% Complete
+**Completed**: 2025-11-13
+**Definition of Done**:
+- Fixed readStream memory leak (bytes.compile.toVector → streaming consumption)
+- Verified O(1) memory usage with fs2.io.readInputStream
+- Added concurrent streams memory test
+- 100k rows @ ~1.8s read, constant memory (~50MB)
+
+### ✅ P6.7: Compression Defaults (Complete)
+**Status**: 100% Complete
+**Completed**: 2025-11-14
+**Definition of Done**:
+- Added compression control to writeStreamTrue
+- Default compression: DEFLATED (level 6)
+- Config affects both static parts and worksheet streams
+- File size reduction: ~70% for typical workbooks
+
+### ✅ P7: String Interpolation - Phase 1 (Complete)
+**Status**: 100% Complete
+**Completed**: 2025-11-15 (PR #12 merged: fe9bc66)
+**Test Coverage**: +111 new tests (4 new test suites)
+**Definition of Done**:
+- ✅ Runtime string interpolation for all 4 macros (ref, money, percent, date, accounting)
+- ✅ MacroUtil.scala: shared utilities for all macros
+- ✅ Hybrid compile-time/runtime validation pattern
+- ✅ Dynamic strings validated at runtime (pure, returns Either)
+- ✅ String literals still validated at compile time (no behavior change)
+- ✅ RefInterpolationSpec: 23 tests for ref"$var" runtime parsing
+- ✅ FormattedInterpolationSpec: 37 tests for money"$var", percent"$var", date"$var", accounting"$var"
+- ✅ MacroUtilSpec: 11 tests for MacroUtil.reconstructString
+- ✅ Phase 1 complete, all tests passing
+
+**See**: [archived: string-interpolation.md](../archive/plan/string-interpolation/) for detailed design
+
+### ✅ P8: String Interpolation - Phase 2 (Complete)
+**Status**: 100% Complete
+**Completed**: 2025-11-16 (commit: 1ccf413)
+**Test Coverage**: +40 new tests (RefCompileTimeOptimizationSpec + FormattedCompileTimeOptimizationSpec)
+**Definition of Done**:
+- ✅ Compile-time optimization when ALL interpolated values are literals
+- ✅ Zero runtime overhead for ref"$col$row" when col/row are string literals
+- ✅ Transparent fallback to runtime path when non-literals present
+- ✅ RefCompileTimeOptimizationSpec: 14 tests verifying optimization
+- ✅ FormattedCompileTimeOptimizationSpec: 16 tests for money/percent/date/accounting
+- ✅ Integration tests: round-trip, edge cases, for-comprehension
+- ✅ Phase 2 complete, all macros have compile-time optimization
+
+**See**: [archived: phase1-implementation-plan.md, phase2-implementation-plan.md](../archive/plan/string-interpolation/) for implementation details
 
 ---
 
 ## Remaining Phases ⬜
+
+### ⬜ P6.8: Surgical Modification & Passthrough (HIGHEST PRIORITY)
+**Priority**: HIGHEST (Foundation for all future OOXML features)
+**Estimated Effort**: 8-10 days (6 phases)
+**Source**: Architectural requirement for zero data loss
+**Definition of Done**:
+- Preserve ALL unknown OOXML parts (charts, images, comments, pivots)
+- Track sheet-level modifications (dirty tracking)
+- Hybrid write strategy (regenerate only modified parts, copy rest)
+- Lazy loading of preserved parts (memory efficient)
+- 2-11x write speedup for partial updates
+- 130+ comprehensive tests
+- Non-breaking API changes (existing code works)
+
+**Value Proposition**:
+- 🎯 Zero data loss: Read file with charts → modify cell → write → charts preserved
+- 🚀 Performance: Only regenerate what changed (11x faster for unmodified)
+- 💾 Memory: Don't materialize unknown parts (30-50MB savings)
+- 🏗️ Foundation: Enables incremental OOXML feature additions
+
+**See**: [surgical-modification.md](surgical-modification.md) for complete design specification
+
+---
 
 ### ⬜ P6.5: Performance & Quality Polish (Future)
 **Priority**: Medium
@@ -160,7 +234,7 @@
 - Type-safe bulk operations
 - Integration with compile-time macros
 
-### ⬜ P7: Advanced Macros (Future)
+### ⬜ P9: Advanced Macros (Future)
 **Priority**: Low
 **Estimated Effort**: 1-2 weeks
 **Definition of Done**:
@@ -169,7 +243,7 @@
 - Enhanced error messages with precise diagnostics
 - Compile-time style validation
 
-### ⬜ P8: Drawings (Future)
+### ⬜ P10: Drawings (Future)
 **Priority**: Medium
 **Estimated Effort**: 3-4 weeks
 **Definition of Done**:
@@ -179,7 +253,7 @@
 - Drawing deduplication
 - xl/drawings/drawing#.xml serialization
 
-### ⬜ P9: Charts (Future)
+### ⬜ P11: Charts (Future)
 **Priority**: Medium
 **Estimated Effort**: 4-6 weeks
 **Definition of Done**:
@@ -188,7 +262,7 @@
 - Chart style customization
 - xl/charts/chart#.xml serialization
 
-### ⬜ P10: Tables & Advanced Features (Future)
+### ⬜ P12: Tables & Advanced Features (Future)
 **Priority**: Low
 **Estimated Effort**: 2-3 weeks
 **Definition of Done**:
@@ -197,7 +271,7 @@
 - Data validation
 - Named ranges
 
-### ⬜ P11: Safety, Security & Documentation (Future)
+### ⬜ P13: Safety, Security & Documentation (Future)
 **Priority**: High (for production use)
 **Estimated Effort**: 2-3 weeks
 **Definition of Done**:
@@ -223,14 +297,18 @@
 | P4.5: OOXML Quality | ✅ Complete | +22 tests | 100% |
 | P5: Streaming | ✅ Complete | 18 tests | 100% |
 | P6: Codecs (primitives) | ✅ Complete | 58 tests | 80% |
+| P6.6: Memory Fix | ✅ Complete | Integrated | 100% |
+| P6.7: Compression | ✅ Complete | Integrated | 100% |
 | P31: Optics/RichText | ✅ Complete | 39 tests | 100% |
-| **Total Core** | **✅** | **698/698 tests** | **~85%** |
+| P7: String Interp Phase 1 | ✅ Complete | +111 tests | 100% |
+| P8: String Interp Phase 2 | ✅ Complete | +40 tests | 100% |
+| **Total Core** | **✅** | **636/636 tests** | **~85%** |
 | P6.5: Perf & Quality | ⬜ Future | - | 0% |
 | P6b: Full Derivation | ⬜ Future | - | 0% |
-| P7: Advanced Macros | ⬜ Future | - | 0% |
-| P8: Drawings | ⬜ Future | - | 0% |
-| P9: Charts | ⬜ Future | - | 0% |
-| P10: Tables | ⬜ Future | - | 0% |
-| P11: Safety/Docs | ⬜ Future | - | 0% |
+| P9: Advanced Macros | ⬜ Future | - | 0% |
+| P10: Drawings | ⬜ Future | - | 0% |
+| P11: Charts | ⬜ Future | - | 0% |
+| P12: Tables | ⬜ Future | - | 0% |
+| P13: Safety/Docs | ⬜ Future | - | 0% |
 
 **Current State**: Production-ready for core spreadsheet operations (read, write, style, stream). Exceeds Apache POI in performance (4.5x faster, 16x less memory). Ready for real-world use in financial modeling, data export, and report generation.

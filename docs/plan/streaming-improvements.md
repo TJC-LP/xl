@@ -1,30 +1,33 @@
 # Streaming I/O Improvements
 
-## Status: Not Started (High Priority)
+## Status: Partially Complete (P6.6-P6.7 ✅ Done, P7.5 ⬜ Future)
+
+**Last Updated**: 2025-11-16
 
 ## Overview
 
-The XL library currently has two I/O modes with different tradeoffs. This document outlines critical fixes and improvements to make streaming truly constant-memory for both reads and writes, plus add full SST/style support to streaming writes.
+The XL library currently has two I/O modes with different tradeoffs. This document outlines completed critical fixes and future improvements for full SST/style support in streaming writes.
 
-## Current State
+## Current State (Updated 2025-11-16)
 
 ### Write Path (✅ Working)
 - **True constant-memory** streaming with `writeStreamTrue`
 - O(1) memory (~10MB) regardless of file size
+- **✅ Compression defaults (P6.7)**: DEFLATED compression, 5-10x smaller files
 - **Limitations**:
   - No SST support (inline strings only → larger files)
   - Minimal styles (default only → no rich formatting)
   - [Content_Types].xml written before SST decision
 
-### Read Path (❌ Broken)
-- **NOT constant-memory** despite API name `readStreamTrue`
-- Uses `InputStream.readAllBytes()` to materialize ZIP entries
-- O(n) memory that grows with file size
-- **Impact**: Large files (100k+ rows) spike memory or OOM
+### Read Path (✅ Fixed in P6.6)
+- **✅ True constant-memory** with `fs2.io.readInputStream`
+- O(1) memory (~50MB) regardless of file size
+- **✅ 100k+ row files** handled without OOM
+- SST materialized in memory (acceptable tradeoff for most use cases)
 
-## Critical Fixes (P6.6-P6.7)
+## Critical Fixes (P6.6-P6.7) ✅ COMPLETE
 
-### P6.6: Fix Streaming Reader (CRITICAL - 2-3 days)
+### P6.6: Fix Streaming Reader ✅ COMPLETE (2025-11-13)
 
 **Problem**: `ExcelIO.readStream` uses `readAllBytes()` for worksheets and SST
 ```scala
@@ -69,9 +72,9 @@ test("streaming read uses constant memory"):
 
 ---
 
-### P6.7: Compression Defaults (QUICK WIN - 1 day)
+### P6.7: Compression Defaults ✅ COMPLETE (2025-11-14)
 
-**Problem**: XlsxWriter defaults to STORED (uncompressed) + pretty-print
+**Problem** (SOLVED): XlsxWriter defaults to STORED (uncompressed) + pretty-print
 - Files are 5-10x larger than necessary
 - Requires precomputing CRC/size for STORED
 - Pretty-print only useful for debugging

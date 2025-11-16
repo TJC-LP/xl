@@ -12,10 +12,10 @@ object Column:
   val MaxIndex0: Int = 16383
 
   /** Create a Column from 0-based index (0 = A, 1 = B, ...) */
-  def from0(index: Int): Column = index
+  inline def from0(index: Int): Column = index
 
   /** Create a Column from 1-based index (1 = A, 2 = B, ...) */
-  def from1(index: Int): Column = index - 1
+  inline def from1(index: Int): Column = index - 1
 
   /** Create a Column from Excel letter notation (A, B, AA, etc.) */
   def fromLetter(input: String): Either[String, Column] =

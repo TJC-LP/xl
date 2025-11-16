@@ -1,6 +1,6 @@
 package com.tjclp.xl.addressing
 
-import scala.util.boundary, boundary.break
+import com.tjclp.xl.addressing.RefParser.ParsedRef
 
 /**
  * Unified reference type for all Excel addressing formats.
@@ -88,6 +88,25 @@ end RefType
 
 object RefType:
   /**
+   * Validate and construct ARef from 0-based indices.
+   *
+   * @return
+   *   Left if indices are out of Excel's valid range, Right(ARef) otherwise
+   */
+  private inline def validateARef(col0: Int, row0: Int): Either[com.tjclp.xl.error.XLError, ARef] =
+    if col0 < 0 || col0 > Column.MaxIndex0 then
+      Left(
+        com.tjclp.xl.error.XLError
+          .InvalidColumn(col0, s"Column index out of range (max ${Column.MaxIndex0})")
+      )
+    else if row0 < 0 || row0 > Row.MaxIndex0 then
+      Left(
+        com.tjclp.xl.error.XLError
+          .InvalidRow(row0, s"Row index out of range (max ${Row.MaxIndex0})")
+      )
+    else Right(ARef.from0(col0, row0))
+
+  /**
    * Parse any reference format from string.
    *
    * Supports:
@@ -102,44 +121,25 @@ object RefType:
    * @return
    *   Either error message or parsed RefType
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def parse(s: String): Either[String, RefType] =
-    boundary:
-      if s.isEmpty then break(Left("Empty reference"))
-
-      // Check for sheet qualifier (!)
-      val bangIdx = findUnquotedBang(s)
-      if bangIdx < 0 then
-        // No sheet qualifier, parse as cell or range
-        if s.contains(':') then CellRange.parse(s).map(Range.apply)
-        else ARef.parse(s).map(Cell.apply)
-      else
-        // Has sheet qualifier
-        val sheetPart = s.substring(0, bangIdx)
-        val refPart = s.substring(bangIdx + 1)
-
-        if refPart.isEmpty then break(Left(s"Missing reference after '!' in: $s"))
-
-        // Parse sheet name (handle quotes and escaping)
-        val sheetName = if sheetPart.startsWith("'") then
-          if !sheetPart.endsWith("'") then
-            break(Left(s"Unbalanced quotes in sheet name: $sheetPart (missing closing quote)"))
-          val quoted = sheetPart.substring(1, sheetPart.length - 1)
-          if quoted.isEmpty then break(Left("Empty sheet name in quotes"))
-          // Unescape '' → ' (Excel convention)
-          val unescaped = quoted.replace("''", "'")
-          SheetName(unescaped)
-        else
-          if sheetPart.contains("'") then
-            break(Left(s"Misplaced quote in sheet name: $sheetPart (quotes must wrap entire name)"))
-          SheetName(sheetPart)
-
-        sheetName match
-          case Left(err) => Left(s"Invalid sheet name: $err")
-          case Right(sheet) =>
-            // Parse ref part as cell or range
-            if refPart.contains(':') then CellRange.parse(refPart).map(QualifiedRange(sheet, _))
-            else ARef.parse(refPart).map(QualifiedCell(sheet, _))
+    RefParser.parse(s).flatMap {
+      case ParsedRef.Cell(None, col0, row0) =>
+        validateARef(col0, row0).left.map(_.message).map(Cell.apply)
+      case ParsedRef.Range(None, cs, rs, ce, re) =>
+        for
+          start <- validateARef(cs, rs).left.map(_.message)
+          end <- validateARef(ce, re).left.map(_.message)
+        yield Range(CellRange(start, end))
+      case ParsedRef.Cell(Some(sheetName), col0, row0) =>
+        validateARef(col0, row0).left
+          .map(_.message)
+          .map(ref => QualifiedCell(SheetName.unsafe(sheetName), ref))
+      case ParsedRef.Range(Some(sheetName), cs, rs, ce, re) =>
+        for
+          start <- validateARef(cs, rs).left.map(_.message)
+          end <- validateARef(ce, re).left.map(_.message)
+        yield QualifiedRange(SheetName.unsafe(sheetName), CellRange(start, end))
+    }
 
   /**
    * Parse ref string with XLError wrapping.
@@ -150,31 +150,5 @@ object RefType:
     parse(s).left.map { err =>
       com.tjclp.xl.error.XLError.InvalidReference(s"Failed to parse '$s': $err")
     }
-
-  /**
-   * Find index of unquoted '!' (not inside 'quotes').
-   *
-   * Uses a toggle approach: each ' flips the inQuote state. This handles escaped quotes ('')
-   * correctly because Excel's escaping convention uses two consecutive quotes to represent a single
-   * literal quote.
-   *
-   * Examples:
-   *   - "Sales!A1" → returns 5 (unquoted)
-   *   - "'Sales!A1'!B1" → returns 11 (second ! is unquoted)
-   *   - "'It''s Q1'!A1" → returns 10 ('' toggles twice, staying inside quotes)
-   *
-   * Returns -1 if no unquoted bang found.
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def findUnquotedBang(s: String): Int =
-    boundary:
-      var i = 0
-      var inQuote = false
-      while i < s.length do
-        val c = s.charAt(i)
-        if c == '\'' then inQuote = !inQuote
-        else if c == '!' && !inQuote then break(i)
-        i += 1
-      -1
 
 end RefType

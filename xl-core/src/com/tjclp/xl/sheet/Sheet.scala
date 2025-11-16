@@ -2,6 +2,7 @@ package com.tjclp.xl.sheet
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.codec.CellCodec
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.style.{CellStyle, StyleRegistry}
 
@@ -148,19 +149,44 @@ case class Sheet(
             break(Left(XLError.UnsupportedType(ref.toA1, unsupported.getClass.getName)))
       }
 
-      // Update sheet with new registry and cells (O(n) bulk insertion)
-      val withCells = copy(
-        styleRegistry = registry,
-        cells = this.cells ++ cells.map(cell => cell.ref -> cell)
-      )
+      Right(applyBulkCells(cells, cellsWithStyles, registry))
 
-      // Apply styles in batch
-      import com.tjclp.xl.sheet.styleSyntax.withCellStyle
-      val result = cellsWithStyles.foldLeft(withCells) { case (s, (ref, style)) =>
-        s.withCellStyle(ref, style)
+  /**
+   * Type-safe variant of [[put]] that requires a single `CellCodec` for all values.
+   *
+   * This avoids runtime type inspection and lets the compiler inline the codec implementation,
+   * ensuring zero-overhead writes when the value type is known statically.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def putTyped[A](updates: (ARef, A)*)(using CellCodec[A]): Sheet =
+    val cells = scala.collection.mutable.ArrayBuffer[Cell]()
+    val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
+    var registry = styleRegistry
+    val codec = summon[CellCodec[A]]
+
+    updates.foreach { (ref, value) =>
+      val (cellValue, styleOpt) = codec.write(value)
+      cells += Cell(ref, cellValue)
+      styleOpt.foreach { style =>
+        val (newRegistry, _) = registry.register(style)
+        registry = newRegistry
+        cellsWithStyles += ((ref, style))
       }
+    }
 
-      Right(result)
+    applyBulkCells(cells, cellsWithStyles, registry)
+
+  private def applyBulkCells(
+    builtCells: Iterable[Cell],
+    styled: Iterable[(ARef, CellStyle)],
+    newRegistry: StyleRegistry
+  ): Sheet =
+    val withCells = copy(
+      styleRegistry = newRegistry,
+      cells = this.cells ++ builtCells.iterator.map(cell => cell.ref -> cell)
+    )
+    import com.tjclp.xl.sheet.styleSyntax.withCellStyle
+    styled.foldLeft(withCells) { case (s, (ref, style)) => s.withCellStyle(ref, style) }
 
   /**
    * Apply a patch to this sheet.

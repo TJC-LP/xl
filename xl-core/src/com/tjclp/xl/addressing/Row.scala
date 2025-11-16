@@ -10,10 +10,10 @@ object Row:
   val MaxIndex0: Int = 1048575
 
   /** Create a Row from 0-based index (0 = row 1, 1 = row 2, ...) */
-  def from0(index: Int): Row = index
+  inline def from0(index: Int): Row = index
 
   /** Create a Row from 1-based index (1 = row 1, 2 = row 2, ...) */
-  def from1(index: Int): Row = index - 1
+  inline def from1(index: Int): Row = index - 1
 
   extension (row: Row)
     /** Get 0-based index */
