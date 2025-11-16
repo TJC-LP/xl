@@ -19,10 +19,10 @@ object CellRangeLiterals:
 
   // -------- Public API --------
   extension (inline sc: StringContext)
-    transparent inline def fx(): CellValue = ${ fxImpl0('sc) }
-
-    inline def fx(inline args: Any*): CellValue =
-      ${ errorNoInterpolation('sc, 'args, "fx") }
+    transparent inline def fx(
+      inline args: Any*
+    ): CellValue | Either[com.tjclp.xl.error.XLError, CellValue] =
+      ${ fxImplN('sc, 'args) }
 
   // -------- Implementations --------
   private def fxImpl0(sc: Expr[StringContext])(using Quotes): Expr[CellValue] =
@@ -50,6 +50,26 @@ object CellRangeLiterals:
     args match
       case Varargs(Nil) => report.errorAndAbort(s"""Use $kind"...": no interpolation supported""")
       case _ => report.errorAndAbort(s"""$kind"...": interpolation not supported""")
+
+  /**
+   * Macro implementation supporting both compile-time literals and runtime interpolation.
+   */
+  private def fxImplN(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[CellValue | Either[com.tjclp.xl.error.XLError, CellValue]] =
+    import quotes.reflect.*
+
+    args match
+      case Varargs(exprs) if exprs.isEmpty =>
+        // No interpolation - compile-time literal
+        fxImpl0(sc)
+
+      case Varargs(_) =>
+        // Has interpolation - runtime parsing
+        '{
+          com.tjclp.xl.cell.FormulaParser.parse($sc.s($args*))
+        }.asExprOf[Either[com.tjclp.xl.error.XLError, CellValue]]
 
   private def literal(sc: Expr[StringContext])(using Quotes): String =
     val parts = sc.valueOrAbort.parts

@@ -32,8 +32,10 @@ object RefLiteral:
   extension (inline sc: StringContext)
     transparent inline def ref(): ARef | CellRange | RefType = ${ refImpl0('sc) }
 
-    inline def ref(inline args: Any*): ARef | CellRange | RefType =
-      ${ errorNoInterpolation('sc, 'args, "ref") }
+    transparent inline def ref(
+      inline args: Any*
+    ): ARef | CellRange | RefType | Either[com.tjclp.xl.error.XLError, RefType] =
+      ${ refImplN('sc, 'args) }
 
   // -------- Implementation --------
   private def refImpl0(sc: Expr[StringContext])(using Quotes): Expr[ARef | CellRange | RefType] =
@@ -97,6 +99,30 @@ object RefLiteral:
     args match
       case Varargs(Nil) => report.errorAndAbort(s"""Use $kind"...": no interpolation supported""")
       case _ => report.errorAndAbort(s"""$kind"...": interpolation not supported""")
+
+  /**
+   * Macro implementation supporting both compile-time literals and runtime interpolation.
+   *
+   *   - No args (literal): Delegates to refImpl0, returns ARef | CellRange | RefType directly
+   *   - With args (interpolation): Builds string at runtime, returns Either[XLError, RefType]
+   */
+  private def refImplN(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[ARef | CellRange | RefType | Either[com.tjclp.xl.error.XLError, RefType]] =
+    import quotes.reflect.*
+
+    args match
+      case Varargs(exprs) if exprs.isEmpty =>
+        // No interpolation - compile-time literal (backward compatible)
+        refImpl0(sc)
+
+      case Varargs(exprs) =>
+        // Has interpolation - runtime parsing
+        '{
+          val str = $sc.s($args*)
+          RefType.parseToXLError(str)
+        }.asExprOf[Either[com.tjclp.xl.error.XLError, RefType]]
 
   private def literal(sc: Expr[StringContext])(using Quotes): String =
     val parts = sc.valueOrAbort.parts

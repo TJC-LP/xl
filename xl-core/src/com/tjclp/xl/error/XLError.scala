@@ -43,6 +43,18 @@ enum XLError:
   /** Number format error */
   case NumberFormatError(format: String, reason: String)
 
+  /** Money format parse error */
+  case MoneyFormatError(value: String, reason: String)
+
+  /** Percent format parse error */
+  case PercentFormatError(value: String, reason: String)
+
+  /** Date format parse error */
+  case DateFormatError(value: String, reason: String)
+
+  /** Accounting format parse error */
+  case AccountingFormatError(value: String, reason: String)
+
   /** Color format error */
   case ColorError(color: String, reason: String)
 
@@ -82,6 +94,10 @@ object XLError:
       case FormulaError(expr, reason) => s"Formula error in '$expr': $reason"
       case StyleError(reason) => s"Style error: $reason"
       case NumberFormatError(format, reason) => s"Number format error '$format': $reason"
+      case MoneyFormatError(value, reason) => s"Invalid money format '$value': $reason"
+      case PercentFormatError(value, reason) => s"Invalid percent format '$value': $reason"
+      case DateFormatError(value, reason) => s"Invalid date format '$value': $reason"
+      case AccountingFormatError(value, reason) => s"Invalid accounting format '$value': $reason"
       case ColorError(color, reason) => s"Color error '$color': $reason"
       case InvalidWorkbook(reason) => s"Invalid workbook: $reason"
       case IOError(reason) => s"IO error: $reason"

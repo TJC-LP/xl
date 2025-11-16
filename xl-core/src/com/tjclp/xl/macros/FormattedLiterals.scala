@@ -12,20 +12,28 @@ object FormattedLiterals:
 
   extension (inline sc: StringContext)
     /** Money literal: money"$1,234.56" → Formatted(Number(1234.56), NumFmt.Currency) */
-    transparent inline def money(): Formatted =
-      ${ moneyImpl('sc) }
+    transparent inline def money(
+      inline args: Any*
+    ): Formatted | Either[com.tjclp.xl.error.XLError, Formatted] =
+      ${ moneyImplN('sc, 'args) }
 
     /** Percent literal: percent"45.5%" → Formatted(Number(0.455), NumFmt.Percent) */
-    transparent inline def percent(): Formatted =
-      ${ percentImpl('sc) }
+    transparent inline def percent(
+      inline args: Any*
+    ): Formatted | Either[com.tjclp.xl.error.XLError, Formatted] =
+      ${ percentImplN('sc, 'args) }
 
     /** Date literal: date"2025-11-10" → Formatted(DateTime(...), NumFmt.Date) */
-    transparent inline def date(): Formatted =
-      ${ dateImpl('sc) }
+    transparent inline def date(
+      inline args: Any*
+    ): Formatted | Either[com.tjclp.xl.error.XLError, Formatted] =
+      ${ dateImplN('sc, 'args) }
 
     /** Accounting literal: accounting"($123.45)" → Formatted(Number(-123.45), NumFmt.Currency) */
-    transparent inline def accounting(): Formatted =
-      ${ accountingImpl('sc) }
+    transparent inline def accounting(
+      inline args: Any*
+    ): Formatted | Either[com.tjclp.xl.error.XLError, Formatted] =
+      ${ accountingImplN('sc, 'args) }
 
   // Helper to extract literal from StringContext
   private def getLiteral(sc: Expr[StringContext])(using Quotes): String =
@@ -110,6 +118,58 @@ object FormattedLiterals:
     catch
       case e: Exception =>
         report.errorAndAbort(s"Invalid accounting literal '$s': ${e.getMessage}")
+
+  // ===== Runtime Implementations =====
+
+  private def moneyImplN(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.error.XLError, Formatted]] =
+    args match
+      case Varargs(exprs) if exprs.isEmpty =>
+        // No interpolation - compile-time literal
+        moneyImpl(sc)
+      case Varargs(_) =>
+        // Has interpolation - runtime parsing
+        '{
+          com.tjclp.xl.formatted.FormattedParsers.parseMoney($sc.s($args*))
+        }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+
+  private def percentImplN(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.error.XLError, Formatted]] =
+    args match
+      case Varargs(exprs) if exprs.isEmpty =>
+        percentImpl(sc)
+      case Varargs(_) =>
+        '{
+          com.tjclp.xl.formatted.FormattedParsers.parsePercent($sc.s($args*))
+        }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+
+  private def dateImplN(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.error.XLError, Formatted]] =
+    args match
+      case Varargs(exprs) if exprs.isEmpty =>
+        dateImpl(sc)
+      case Varargs(_) =>
+        '{
+          com.tjclp.xl.formatted.FormattedParsers.parseDate($sc.s($args*))
+        }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+
+  private def accountingImplN(
+    sc: Expr[StringContext],
+    args: Expr[Seq[Any]]
+  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.error.XLError, Formatted]] =
+    args match
+      case Varargs(exprs) if exprs.isEmpty =>
+        accountingImpl(sc)
+      case Varargs(_) =>
+        '{
+          com.tjclp.xl.formatted.FormattedParsers.parseAccounting($sc.s($args*))
+        }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
 
 end FormattedLiterals
 
