@@ -28,17 +28,21 @@ private final class PreservedPartStoreImpl(
   def open: Resource[IO, PreservedPartHandle] =
     sourcePath match
       case Some(path) =>
-        Resource.make(IO.blocking(new ZipFile(path.toFile)))(zip => IO.blocking(zip.close()))
+        Resource
+          .make(IO.blocking(new ZipFile(path.toFile)))(zip => IO.blocking(zip.close()))
           .map(zip => new ZipPreservedPartHandle(zip, manifest))
       case None => Resource.pure(new EmptyPreservedPartHandle)
 
-private final class ZipPreservedPartHandle(zip: ZipFile, manifest: PartManifest) extends PreservedPartHandle:
+private final class ZipPreservedPartHandle(zip: ZipFile, manifest: PartManifest)
+    extends PreservedPartHandle:
   def exists(path: String): Boolean = manifest.contains(path)
 
   def listAll: Set[String] = manifest.entries.keySet
 
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def streamTo(path: String, output: ZipOutputStream): IO[Unit] =
-    if !manifest.contains(path) then IO.raiseError(new IllegalArgumentException(s"Unknown entry: $path"))
+    if !manifest.contains(path) then
+      IO.raiseError(new IllegalArgumentException(s"Unknown entry: $path"))
     else
       IO.blocking {
         val entry = Option(zip.getEntry(path)).getOrElse {

@@ -34,7 +34,7 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
           bytes <- IO(baos.toByteArray)
         yield {
           val copied = readEntry(bytes, "xl/charts/chart1.xml")
-          assertEquals(copied, data)
+          assertEquals(copied.toSeq, data.toSeq)
         }
       }
     }
@@ -61,6 +61,7 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
   private def readEntry(bytes: Array[Byte], name: String): Array[Byte] =
     val in = new ZipInputStream(new ByteArrayInputStream(bytes))
     val buffer = new Array[Byte](1024)
+    @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
     def readFully(): Array[Byte] =
       val baos = new ByteArrayOutputStream()
       var read = in.read(buffer)

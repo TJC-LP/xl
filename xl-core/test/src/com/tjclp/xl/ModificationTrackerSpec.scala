@@ -14,15 +14,15 @@ class ModificationTrackerSpec extends FunSuite:
     assertEquals(tracker.modifiedSheets, Set(2))
   }
 
-  test("deleteSheet removes sheet from modified set") {
-    val tracker = ModificationTracker.clean.markSheet(1).deleteSheet(1)
+  test("delete removes sheet from modified set") {
+    val tracker = ModificationTracker.clean.markSheet(1).delete(1)
     assert(tracker.deletedSheets.contains(1))
     assert(!tracker.modifiedSheets.contains(1))
   }
 
   test("merge combines changes") {
     val t1 = ModificationTracker.clean.markSheet(0)
-    val t2 = ModificationTracker.clean.deleteSheet(2).markMetadata
+    val t2 = ModificationTracker.clean.delete(2).markMetadata
     val merged = t1.merge(t2)
     assertEquals(merged.modifiedSheets, Set(0))
     assertEquals(merged.deletedSheets, Set(2))

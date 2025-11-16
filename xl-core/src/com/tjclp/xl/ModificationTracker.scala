@@ -1,9 +1,8 @@
 package com.tjclp.xl
 
 /**
- * Immutable tracker for workbook modifications. Tracks all structural
- * changes that impact whether a sheet needs to be rewritten during a hybrid
- * surgical write.
+ * Immutable tracker for workbook modifications. Tracks all structural changes that impact whether a
+ * sheet needs to be rewritten during a hybrid surgical write.
  */
 final case class ModificationTracker(
   modifiedSheets: Set[Int] = Set.empty,
@@ -28,7 +27,7 @@ final case class ModificationTracker(
     if indices.isEmpty then this else copy(modifiedSheets = modifiedSheets ++ indices)
 
   /** Mark a sheet as deleted. */
-  def deleteSheet(index: Int): ModificationTracker =
+  def delete(index: Int): ModificationTracker =
     copy(
       deletedSheets = deletedSheets + index,
       modifiedSheets = modifiedSheets - index

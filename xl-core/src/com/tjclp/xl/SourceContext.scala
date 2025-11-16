@@ -5,9 +5,9 @@ import java.nio.file.Path
 import com.tjclp.xl.ooxml.{PartManifest, PreservedPartStore}
 
 /**
- * Captures metadata about the physical XLSX that produced a [[Workbook]].
- * The context enables surgical write operations by preserving the manifest
- * of ZIP entries and a lazily streamed part store.
+ * Captures metadata about the physical XLSX that produced a [[Workbook]]. The context enables
+ * surgical write operations by preserving the manifest of ZIP entries and a lazily streamed part
+ * store.
  */
 final case class SourceContext(
   sourcePath: Path,
@@ -25,7 +25,7 @@ final case class SourceContext(
 
   /** Mark a sheet as deleted. */
   def markSheetDeleted(sheetIndex: Int): SourceContext =
-    copy(modificationTracker = modificationTracker.deleteSheet(sheetIndex))
+    copy(modificationTracker = modificationTracker.delete(sheetIndex))
 
   /** Mark sheet order as changed. */
   def markReordered: SourceContext =

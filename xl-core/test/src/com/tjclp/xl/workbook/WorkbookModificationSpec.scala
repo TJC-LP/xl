@@ -16,28 +16,28 @@ class WorkbookModificationSpec extends FunSuite:
     Files.deleteIfExists(path)
 
   private val ctx = SourceContext.fromFile(path, PartManifest.empty, PreservedPartStore.empty)
-  private val baseSheet = Sheet("Sheet1").toOption.get
+  private val baseSheet = Sheet("Sheet1").fold(err => fail(s"Failed to create sheet: $err"), identity)
   private val workbook = Workbook(Vector(baseSheet), sourceContext = Some(ctx))
 
-  test("updateSheet marks tracker") {
-    val updated = workbook.updateSheet("Sheet1", identity).toOption.get
-    val tracker = updated.sourceContext.get.modificationTracker
+  test("update marks tracker") {
+    val updated = workbook.update("Sheet1", identity).fold(err => fail(s"Update failed: $err"), identity)
+    val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assertEquals(tracker.modifiedSheets, Set(0))
   }
 
-  test("deleteSheet tracks deletions") {
-    val sheet2 = Sheet("Sheet2").toOption.get
+  test("delete tracks deletions") {
+    val sheet2 = Sheet("Sheet2").fold(err => fail(s"Failed to create sheet: $err"), identity)
     val wb = workbook.copy(sheets = Vector(baseSheet, sheet2))
-    val updated = wb.deleteSheet(SheetName.unsafe("Sheet2")).toOption.get
-    val tracker = updated.sourceContext.get.modificationTracker
+    val updated = wb.delete(SheetName.unsafe("Sheet2")).fold(err => fail(s"Delete failed: $err"), identity)
+    val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assertEquals(tracker.deletedSheets, Set(1))
   }
 
-  test("reorderSheets marks reorder and all sheets modified") {
-    val sheet2 = Sheet("Sheet2").toOption.get
+  test("reorder marks reorder and all sheets modified") {
+    val sheet2 = Sheet("Sheet2").fold(err => fail(s"Failed to create sheet: $err"), identity)
     val wb = workbook.copy(sheets = Vector(baseSheet, sheet2))
-    val reordered = wb.reorderSheets(Vector(SheetName.unsafe("Sheet2"), SheetName.unsafe("Sheet1"))).toOption.get
-    val tracker = reordered.sourceContext.get.modificationTracker
+    val reordered = wb.reorder(Vector(SheetName.unsafe("Sheet2"), SheetName.unsafe("Sheet1"))).fold(err => fail(s"Reorder failed: $err"), identity)
+    val tracker = reordered.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assert(tracker.reorderedSheets)
     assertEquals(tracker.modifiedSheets, Set(0, 1))
   }

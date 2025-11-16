@@ -142,7 +142,9 @@ case class Workbook(
       val newActiveIndex =
         if activeSheetIndex >= newSheets.size then newSheets.size - 1 else activeSheetIndex
       val updatedContext = sourceContext.map(_.markSheetDeleted(index))
-      Right(copy(sheets = newSheets, activeSheetIndex = newActiveIndex, sourceContext = updatedContext))
+      Right(
+        copy(sheets = newSheets, activeSheetIndex = newActiveIndex, sourceContext = updatedContext)
+      )
     else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
   /** Rename sheet */
@@ -169,7 +171,7 @@ case class Workbook(
   def update(name: SheetName, f: Sheet => Sheet): XLResult[Workbook] =
     sheets.indexWhere(_.name == name) match
       case -1 => Left(XLError.SheetNotFound(name.value))
-      case idx => updateSheetAt(idx, f)
+      case idx => updateAt(idx, f)
 
   /**
    * Update sheet by applying a function (string variant).
@@ -180,20 +182,8 @@ case class Workbook(
       .map(err => XLError.InvalidSheetName(name, err))
       .flatMap(sn => update(sn, f))
 
-  /** Update sheet by name while tracking modification state. */
-  def updateSheet(name: SheetName, f: Sheet => Sheet): XLResult[Workbook] =
-    sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value))
-      case idx => updateSheetAt(idx, f)
-
-  /** Update sheet by name (string variant) while tracking modification state. */
-  def updateSheet(name: String, f: Sheet => Sheet): XLResult[Workbook] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(sn => updateSheet(sn, f))
-
   /** Update sheet by index while tracking modification state. */
-  def updateSheetAt(idx: Int, f: Sheet => Sheet): XLResult[Workbook] =
+  def updateAt(idx: Int, f: Sheet => Sheet): XLResult[Workbook] =
     if idx < 0 || idx >= sheets.size then
       Left(XLError.OutOfBounds(s"sheet[$idx]", s"Valid range: 0 to ${sheets.size - 1}"))
     else
@@ -203,34 +193,40 @@ case class Workbook(
       Right(copy(sheets = newSheets, sourceContext = updatedContext))
 
   /** Delete sheet by name while tracking modification state. */
-  def deleteSheet(name: SheetName): XLResult[Workbook] =
+  def delete(name: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == name) match
       case -1 => Left(XLError.SheetNotFound(name.value))
       case idx => removeAt(idx)
 
   /** Delete sheet by name (string variant). */
-  def deleteSheet(name: String): XLResult[Workbook] =
+  @annotation.targetName("deleteByString")
+  def delete(name: String): XLResult[Workbook] =
     SheetName(name).left
       .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(sn => deleteSheet(sn))
+      .flatMap(sn => delete(sn))
 
   /** Reorder sheets to the provided order while tracking modifications. */
-  def reorderSheets(newOrder: Vector[SheetName]): XLResult[Workbook] =
+  def reorder(newOrder: Vector[SheetName]): XLResult[Workbook] =
     if newOrder.size != sheets.size || newOrder.toSet != sheets.map(_.name).toSet then
       Left(XLError.InvalidWorkbook("Sheet names must match existing set"))
     else
       val nameToSheet = sheets.map(sheet => sheet.name -> sheet).toMap
       val reordered = newOrder.map(nameToSheet)
       val activeName = sheets.lift(activeSheetIndex).map(_.name)
-      val newActiveIndex = activeName.flatMap(name => newOrder.indexWhere(_ == name) match
-        case -1 => None
-        case idx => Some(idx)
-      ).getOrElse(activeSheetIndex)
+      val newActiveIndex = activeName
+        .flatMap(name =>
+          newOrder.indexWhere(_ == name) match
+            case -1 => None
+            case idx => Some(idx)
+        )
+        .getOrElse(activeSheetIndex)
       val updatedContext = sourceContext.map { ctx =>
         val tracker = ctx.modificationTracker.markSheets(sheets.indices.toSet)
         ctx.copy(modificationTracker = tracker).markReordered
       }
-      Right(copy(sheets = reordered, activeSheetIndex = newActiveIndex, sourceContext = updatedContext))
+      Right(
+        copy(sheets = reordered, activeSheetIndex = newActiveIndex, sourceContext = updatedContext)
+      )
 
   /** Insert sheet at specific index (explicit positioning - rarely needed) */
   def insertAt(index: Int, sheet: Sheet): XLResult[Workbook] =
@@ -246,10 +242,6 @@ case class Workbook(
   @deprecated("Use put(sheet) instead (add-or-replace semantic)", "0.2.0")
   def insertSheet(index: Int, sheet: Sheet): XLResult[Workbook] =
     insertAt(index, sheet)
-
-  @deprecated("Use put(sheet) instead", "0.2.0")
-  def updateSheet(index: Int, sheet: Sheet): XLResult[Workbook] =
-    put(sheet)
 
   @deprecated("Use remove(name) instead", "0.2.0")
   def removeSheet(name: SheetName): XLResult[Workbook] =

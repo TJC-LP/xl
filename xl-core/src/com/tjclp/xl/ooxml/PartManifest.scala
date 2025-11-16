@@ -21,12 +21,16 @@ object PartManifestEntry:
 /** Complete manifest for all ZIP entries. */
 final case class PartManifest(entries: Map[String, PartManifestEntry]):
 
-  def parsedParts: Set[String] = entries.collect { case (path, entry) if entry.parsed => path }.toSet
+  def parsedParts: Set[String] = entries.collect {
+    case (path, entry) if entry.parsed => path
+  }.toSet
 
-  def unparsedParts: Set[String] = entries.collect { case (path, entry) if !entry.parsed => path }.toSet
+  def unparsedParts: Set[String] = entries.collect {
+    case (path, entry) if !entry.parsed => path
+  }.toSet
 
   def dependentSheets(path: String): Set[Int] =
-    entries.get(path).flatMap(_.sheetIndex).toSet
+    entries.get(path).flatMap(_.sheetIndex).map(Set(_)).getOrElse(Set.empty)
 
   def relationshipsFor(path: String): Set[String] =
     entries.get(path).map(_.relationships).getOrElse(Set.empty)
@@ -46,7 +50,11 @@ final class PartManifestBuilder:
     relationships: Set[String] = Set.empty
   ): PartManifestBuilder =
     updateEntry(path) { entry =>
-      entry.copy(parsed = true, sheetIndex = sheetIndex.orElse(entry.sheetIndex), relationships = relationships)
+      entry.copy(
+        parsed = true,
+        sheetIndex = sheetIndex.orElse(entry.sheetIndex),
+        relationships = relationships
+      )
     }
 
   def recordUnparsed(
@@ -55,7 +63,11 @@ final class PartManifestBuilder:
     relationships: Set[String] = Set.empty
   ): PartManifestBuilder =
     updateEntry(path) { entry =>
-      entry.copy(parsed = false, sheetIndex = sheetIndex.orElse(entry.sheetIndex), relationships = relationships)
+      entry.copy(
+        parsed = false,
+        sheetIndex = sheetIndex.orElse(entry.sheetIndex),
+        relationships = relationships
+      )
     }
 
   def recordRelationships(path: String, relationships: Set[String]): PartManifestBuilder =
@@ -76,7 +88,9 @@ final class PartManifestBuilder:
 
   def build(): PartManifest = PartManifest(entries.toMap)
 
-  private def updateEntry(path: String)(f: PartManifestEntry => PartManifestEntry): PartManifestBuilder =
+  private def updateEntry(path: String)(
+    f: PartManifestEntry => PartManifestEntry
+  ): PartManifestBuilder =
     val updated = f(entries.getOrElse(path, PartManifestEntry.unparsed(path)))
     entries.update(path, updated)
     this
