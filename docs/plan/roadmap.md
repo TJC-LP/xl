@@ -188,6 +188,29 @@
 
 ## Remaining Phases ⬜
 
+### ⬜ P6.8: Surgical Modification & Passthrough (HIGHEST PRIORITY)
+**Priority**: HIGHEST (Foundation for all future OOXML features)
+**Estimated Effort**: 8-10 days (6 phases)
+**Source**: Architectural requirement for zero data loss
+**Definition of Done**:
+- Preserve ALL unknown OOXML parts (charts, images, comments, pivots)
+- Track sheet-level modifications (dirty tracking)
+- Hybrid write strategy (regenerate only modified parts, copy rest)
+- Lazy loading of preserved parts (memory efficient)
+- 2-11x write speedup for partial updates
+- 130+ comprehensive tests
+- Non-breaking API changes (existing code works)
+
+**Value Proposition**:
+- 🎯 Zero data loss: Read file with charts → modify cell → write → charts preserved
+- 🚀 Performance: Only regenerate what changed (11x faster for unmodified)
+- 💾 Memory: Don't materialize unknown parts (30-50MB savings)
+- 🏗️ Foundation: Enables incremental OOXML feature additions
+
+**See**: [surgical-modification.md](surgical-modification.md) for complete design specification
+
+---
+
 ### ⬜ P6.5: Performance & Quality Polish (Future)
 **Priority**: Medium
 **Estimated Effort**: 8-10 hours
