@@ -2,18 +2,17 @@ package com.tjclp.xl
 
 import java.nio.file.Path
 
-import com.tjclp.xl.ooxml.{PartManifest, PreservedPartStore}
+import com.tjclp.xl.ooxml.PartManifest
 
 /**
  * Captures metadata about the physical XLSX that produced a [[Workbook]]. The context enables
- * surgical write operations by preserving the manifest of ZIP entries and a lazily streamed part
- * store.
+ * surgical write operations by preserving the manifest of ZIP entries. The PreservedPartStore can
+ * be reconstructed from the sourcePath when needed for IO operations.
  */
 final case class SourceContext(
   sourcePath: Path,
   partManifest: PartManifest,
-  modificationTracker: ModificationTracker,
-  preservedParts: PreservedPartStore
+  modificationTracker: ModificationTracker
 ):
 
   /** True when no workbook modifications have been recorded. */
@@ -37,9 +36,5 @@ final case class SourceContext(
 
 object SourceContext:
   /** Construct a context for a workbook that originated from a file. */
-  def fromFile(
-    path: Path,
-    manifest: PartManifest,
-    preservedParts: PreservedPartStore
-  ): SourceContext =
-    SourceContext(path, manifest, ModificationTracker.clean, preservedParts)
+  def fromFile(path: Path, manifest: PartManifest): SourceContext =
+    SourceContext(path, manifest, ModificationTracker.clean)

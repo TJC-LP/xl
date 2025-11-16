@@ -1,4 +1,4 @@
-package com.tjclp.xl.ooxml
+package com.tjclp.xl.io
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.nio.file.{Files, Path}
@@ -6,6 +6,7 @@ import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
+import com.tjclp.xl.ooxml.{PartManifest, PartManifestBuilder}
 import munit.CatsEffectSuite
 
 class PreservedPartStoreSpec extends CatsEffectSuite:

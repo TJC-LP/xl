@@ -2,7 +2,7 @@ package com.tjclp.xl
 
 import java.nio.file.Files
 
-import com.tjclp.xl.ooxml.{PartManifest, PreservedPartStore}
+import com.tjclp.xl.ooxml.PartManifest
 import munit.FunSuite
 
 class SourceContextSpec extends FunSuite:
@@ -13,14 +13,14 @@ class SourceContextSpec extends FunSuite:
     Files.deleteIfExists(tempPath)
 
   test("isClean reflects tracker state") {
-    val ctx = SourceContext.fromFile(tempPath, PartManifest.empty, PreservedPartStore.empty)
+    val ctx = SourceContext.fromFile(tempPath, PartManifest.empty)
     assert(ctx.isClean)
     val dirty = ctx.markSheetModified(0)
     assert(!dirty.isClean)
   }
 
   test("mark helpers delegate to tracker") {
-    val ctx = SourceContext.fromFile(tempPath, PartManifest.empty, PreservedPartStore.empty)
+    val ctx = SourceContext.fromFile(tempPath, PartManifest.empty)
     val updated = ctx
       .markSheetModified(1)
       .markSheetDeleted(2)

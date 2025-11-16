@@ -4,7 +4,7 @@ import java.nio.file.Files
 
 import com.tjclp.xl.{SourceContext, Workbook}
 import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.ooxml.{PartManifest, PreservedPartStore}
+import com.tjclp.xl.ooxml.PartManifest
 import com.tjclp.xl.sheet.Sheet
 import munit.FunSuite
 
@@ -15,7 +15,7 @@ class WorkbookModificationSpec extends FunSuite:
   override def afterAll(): Unit =
     Files.deleteIfExists(path)
 
-  private val ctx = SourceContext.fromFile(path, PartManifest.empty, PreservedPartStore.empty)
+  private val ctx = SourceContext.fromFile(path, PartManifest.empty)
   private val baseSheet = Sheet("Sheet1").fold(err => fail(s"Failed to create sheet: $err"), identity)
   private val workbook = Workbook(Vector(baseSheet), sourceContext = Some(ctx))
 

@@ -1,9 +1,10 @@
-package com.tjclp.xl.ooxml
+package com.tjclp.xl.io
 
 import java.nio.file.Path
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import cats.effect.{IO, Resource}
+import com.tjclp.xl.ooxml.PartManifest
 
 /** Provides lazy streaming access to ZIP entries that XL did not modify. */
 trait PreservedPartStore:
