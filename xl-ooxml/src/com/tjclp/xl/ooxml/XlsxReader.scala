@@ -71,6 +71,7 @@ object XlsxReader:
   private def readFromStream(is: InputStream): XLResult[Workbook] =
     readFromStreamWithWarnings(is).map(_.workbook)
 
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def readFromStreamWithWarnings(is: InputStream): XLResult[ReadResult] =
     val zip = new ZipInputStream(is)
     val parts = mutable.Map[String, String]()

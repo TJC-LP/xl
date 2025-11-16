@@ -4,13 +4,13 @@ package com.tjclp.xl.style.units
 opaque type Emu = Long
 
 object Emu:
-  def apply(value: Long): Emu = value
+  inline def apply(value: Long): Emu = value
 
   extension (emu: Emu)
-    def value: Long = emu
+    inline def value: Long = emu
 
     /** Convert to points */
-    def toPt: Pt = Pt((emu * 72.0) / 914400.0)
+    inline def toPt: Pt = Pt((emu * 72.0) / 914400.0)
 
     /** Convert to pixels */
-    def toPx: Px = Px((emu * 96.0) / 914400.0)
+    inline def toPx: Px = Px((emu * 96.0) / 914400.0)

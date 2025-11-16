@@ -11,27 +11,18 @@ class RefInterpolationSpec extends ScalaCheckSuite:
   // ===== Backward Compatibility (Compile-Time Literals) =====
 
   test("Compile-time literal: ref\"A1\" returns ARef directly") {
-    val r = ref"A1"
-    r match
-      case aref: ARef =>
-        assertEquals(aref.toA1, "A1")
-      case other => fail(s"Expected ARef, got $other")
+    val r: ARef = ref"A1"
+    assertEquals(r.toA1, "A1")
   }
 
   test("Compile-time literal: ref\"A1:B10\" returns CellRange directly") {
-    val r = ref"A1:B10"
-    r match
-      case range: CellRange =>
-        assertEquals(range.toA1, "A1:B10")
-      case other => fail(s"Expected CellRange, got $other")
+    val r: CellRange = ref"A1:B10"
+    assertEquals(r.toA1, "A1:B10")
   }
 
   test("Compile-time literal: ref\"Sales!A1\" returns RefType directly") {
-    val r = ref"Sales!A1"
-    r match
-      case qualified: RefType =>
-        assertEquals(qualified.toA1, "Sales!A1")
-      case other => fail(s"Expected RefType, got $other")
+    val r: RefType = ref"Sales!A1"
+    assertEquals(r.toA1, "Sales!A1")
   }
 
   // ===== Runtime Interpolation (New Functionality) =====
@@ -43,8 +34,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
     result match
       case Right(RefType.Cell(aref)) =>
         assertEquals(aref.toA1, "A1")
-      case other =>
-        fail(s"Expected Right(Cell(A1)), got $other")
+      case Left(err) =>
+        fail(s"Expected Right(Cell(A1)), got Left($err)")
+      case Right(other) =>
+        fail(s"Expected Cell, got $other")
   }
 
   test("Runtime interpolation: cell range") {
@@ -54,8 +47,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
     result match
       case Right(RefType.Range(range)) =>
         assertEquals(range.toA1, "A1:B10")
-      case other =>
-        fail(s"Expected Right(Range), got $other")
+      case Left(err) =>
+        fail(s"Expected Right(Range), got Left($err)")
+      case Right(other) =>
+        fail(s"Expected Range, got $other")
   }
 
   test("Runtime interpolation: qualified cell") {
@@ -66,8 +61,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(sheet, aref)) =>
         assertEquals(sheet.value, "Sales")
         assertEquals(aref.toA1, "A1")
-      case other =>
-        fail(s"Expected Right(QualifiedCell), got $other")
+      case Left(err) =>
+        fail(s"Expected Right(QualifiedCell), got Left($err)")
+      case Right(other) =>
+        fail(s"Expected QualifiedCell, got $other")
   }
 
   test("Runtime interpolation: qualified range") {
@@ -78,8 +75,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedRange(sheet, range)) =>
         assertEquals(sheet.value, "Sales")
         assertEquals(range.toA1, "A1:B10")
-      case other =>
-        fail(s"Expected Right(QualifiedRange), got $other")
+      case Left(err) =>
+        fail(s"Expected Right(QualifiedRange), got Left($err)")
+      case Right(other) =>
+        fail(s"Expected QualifiedRange, got $other")
   }
 
   test("Runtime interpolation: quoted sheet name") {
@@ -89,8 +88,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
     result match
       case Right(RefType.QualifiedCell(sheet, _)) =>
         assertEquals(sheet.value, "Q1 Sales")
-      case other =>
-        fail(s"Expected Right with quoted sheet, got $other")
+      case Left(err) =>
+        fail(s"Expected Right with quoted sheet, got Left($err)")
+      case Right(other) =>
+        fail(s"Expected QualifiedCell, got $other")
   }
 
   test("Runtime interpolation: escaped quotes in sheet name") {
@@ -100,8 +101,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
     result match
       case Right(RefType.QualifiedCell(sheet, _)) =>
         assertEquals(sheet.value, "It's Q1")
-      case other =>
-        fail(s"Expected Right with escaped quotes, got $other")
+      case Left(err) =>
+        fail(s"Expected Right with escaped quotes, got Left($err)")
+      case Right(other) =>
+        fail(s"Expected QualifiedCell, got $other")
   }
 
   // ===== Error Cases =====
@@ -113,8 +116,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
     result match
       case Left(err: XLError.InvalidReference) =>
         assert(err.message.contains("INVALID"))
-      case other =>
-        fail(s"Expected Left(InvalidReference), got $other")
+      case Right(value) =>
+        fail(s"Expected Left(InvalidReference), got Right($value)")
+      case Left(other) =>
+        fail(s"Expected InvalidReference, got $other")
   }
 
   test("Runtime interpolation: empty string returns Left") {
@@ -141,8 +146,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(s, aref)) =>
         assertEquals(s.value, "Sales")
         assertEquals(aref.toA1, "A1")
-      case other =>
-        fail(s"Expected Right(QualifiedCell), got $other")
+      case Left(err) =>
+        fail(s"Expected Right(QualifiedCell), got Left($err)")
+      case Right(other) =>
+        fail(s"Expected QualifiedCell, got $other")
   }
 
   test("Mixed interpolation: variable + suffix") {
@@ -153,8 +160,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(s, aref)) =>
         assertEquals(s.value, "Sheet1")
         assertEquals(aref.toA1, "B5")
-      case other =>
-        fail(s"Expected Right(QualifiedCell), got $other")
+      case Left(err) =>
+        fail(s"Expected Right(QualifiedCell), got Left($err)")
+      case Right(other) =>
+        fail(s"Expected QualifiedCell, got $other")
   }
 
   test("Mixed interpolation: multiple variables") {
@@ -167,8 +176,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(s, aref)) =>
         assertEquals(s.value, "Q1")
         assertEquals(aref.toA1, "B42")
-      case other =>
-        fail(s"Expected Right(QualifiedCell), got $other")
+      case Left(err) =>
+        fail(s"Expected Right(QualifiedCell), got Left($err)")
+      case Right(other) =>
+        fail(s"Expected QualifiedCell, got $other")
   }
 
   // ===== Property-Based Tests =====
@@ -218,7 +229,8 @@ class RefInterpolationSpec extends ScalaCheckSuite:
         assertEquals(sheet.value, "Q1 Sales Report")
       case Left(err) =>
         fail(s"Should parse sheet with spaces: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected QualifiedCell, got $other")
   }
 
   test("Edge: Sheet name with special chars") {
@@ -230,7 +242,8 @@ class RefInterpolationSpec extends ScalaCheckSuite:
         assertEquals(sheet.value, "Sheet (2025)")
       case Left(err) =>
         fail(s"Should parse sheet with parens: $err")
-      case other => fail(s"Unexpected result: $other")
+      case Right(other) =>
+        fail(s"Expected QualifiedCell, got $other")
   }
 
   // ===== Integration with for-comprehension =====

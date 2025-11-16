@@ -16,7 +16,7 @@ object SheetName:
     else Right(name)
 
   /** Create an unsafe sheet name (use only when validation is guaranteed) */
-  def unsafe(name: String): SheetName = name
+  inline def unsafe(name: String): SheetName = name
 
   extension (name: SheetName) inline def value: String = name
 

@@ -46,19 +46,19 @@ object ARef:
 
   extension (ref: ARef)
     /** Extract column */
-    def col: Column = Column.from0((ref & 0xffffffffL).toInt)
+    inline def col: Column = Column.from0((ref & 0xffffffffL).toInt)
 
     /** Extract row */
-    def row: Row = Row.from0((ref >> 32).toInt)
+    inline def row: Row = Row.from0((ref >> 32).toInt)
 
     /** Convert to A1 notation */
-    def toA1: String =
+    inline def toA1: String =
       import Column.toLetter
       import Row.index1
       s"${toLetter(ref.col)}${index1(ref.row)}"
 
     /** Shift reference by column and row offsets */
-    def shift(colOffset: Int, rowOffset: Int): ARef =
+    inline def shift(colOffset: Int, rowOffset: Int): ARef =
       ARef(ref.col + colOffset, ref.row + rowOffset)
 
 end ARef
