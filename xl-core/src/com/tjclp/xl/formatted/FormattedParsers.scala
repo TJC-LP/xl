@@ -14,6 +14,9 @@ import scala.util.{Try, Success, Failure}
  */
 object FormattedParsers:
 
+  /** Excel's maximum cell content length per ECMA-376 specification */
+  private val ExcelCellLimit = 32767
+
   /**
    * Parse money format: $1,234.56
    *
@@ -28,14 +31,23 @@ object FormattedParsers:
    *   - Empty: "" or "$"
    */
   def parseMoney(s: String): Either[XLError, Formatted] =
-    Try {
-      val cleaned = s.replaceAll("[\\$,\\s]", "")
-      if cleaned.isEmpty then throw new NumberFormatException("Empty value after removing $ and ,")
-      val num = BigDecimal(cleaned)
-      Formatted(CellValue.Number(num), NumFmt.Currency)
-    }.toEither.left.map { err =>
-      XLError.MoneyFormatError(s, err.getMessage)
-    }
+    if s.length > ExcelCellLimit then
+      Left(
+        XLError.MoneyFormatError(
+          s.take(50) + "...",
+          s"Input exceeds Excel cell limit ($ExcelCellLimit chars)"
+        )
+      )
+    else
+      Try {
+        val cleaned = s.replaceAll("[\\$,\\s]", "")
+        if cleaned.isEmpty then
+          throw new NumberFormatException("Empty value after removing $ and ,")
+        val num = BigDecimal(cleaned)
+        Formatted(CellValue.Number(num), NumFmt.Currency)
+      }.toEither.left.map { err =>
+        XLError.MoneyFormatError(s, err.getMessage)
+      }
 
   /**
    * Parse percent format: 45.5%
@@ -51,16 +63,24 @@ object FormattedParsers:
    *   - Empty: "" or "%"
    */
   def parsePercent(s: String): Either[XLError, Formatted] =
-    Try {
-      // Check for multiple percent signs before removing them
-      if s.count(_ == '%') > 1 then throw new NumberFormatException("Multiple percent signs")
-      val cleaned = s.replace("%", "").trim
-      if cleaned.isEmpty then throw new NumberFormatException("Empty value after removing %")
-      val num = BigDecimal(cleaned) / 100
-      Formatted(CellValue.Number(num), NumFmt.Percent)
-    }.toEither.left.map { err =>
-      XLError.PercentFormatError(s, err.getMessage)
-    }
+    if s.length > ExcelCellLimit then
+      Left(
+        XLError.PercentFormatError(
+          s.take(50) + "...",
+          s"Input exceeds Excel cell limit ($ExcelCellLimit chars)"
+        )
+      )
+    else
+      Try {
+        // Check for multiple percent signs before removing them
+        if s.count(_ == '%') > 1 then throw new NumberFormatException("Multiple percent signs")
+        val cleaned = s.replace("%", "").trim
+        if cleaned.isEmpty then throw new NumberFormatException("Empty value after removing %")
+        val num = BigDecimal(cleaned) / 100
+        Formatted(CellValue.Number(num), NumFmt.Percent)
+      }.toEither.left.map { err =>
+        XLError.PercentFormatError(s, err.getMessage)
+      }
 
   /**
    * Parse ISO date format: 2025-11-10
@@ -78,16 +98,24 @@ object FormattedParsers:
    * Note: Other formats will be added in Phase 2 (compile-time optimization)
    */
   def parseDate(s: String): Either[XLError, Formatted] =
-    Try {
-      val localDate = LocalDate.parse(s) // ISO format: YYYY-MM-DD
-      val dateTime = localDate.atStartOfDay()
-      Formatted(CellValue.DateTime(dateTime), NumFmt.Date)
-    }.toEither.left.map { err =>
-      XLError.DateFormatError(
-        s,
-        s"Expected ISO format (YYYY-MM-DD): ${err.getMessage}"
+    if s.length > ExcelCellLimit then
+      Left(
+        XLError.DateFormatError(
+          s.take(50) + "...",
+          s"Input exceeds Excel cell limit ($ExcelCellLimit chars)"
+        )
       )
-    }
+    else
+      Try {
+        val localDate = LocalDate.parse(s) // ISO format: YYYY-MM-DD
+        val dateTime = localDate.atStartOfDay()
+        Formatted(CellValue.DateTime(dateTime), NumFmt.Date)
+      }.toEither.left.map { err =>
+        XLError.DateFormatError(
+          s,
+          s"Expected ISO format (YYYY-MM-DD): ${err.getMessage}"
+        )
+      }
 
   /**
    * Parse accounting format: ($123.45) or $123.45
@@ -103,12 +131,21 @@ object FormattedParsers:
    *   - Empty: "" or "$()"
    */
   def parseAccounting(s: String): Either[XLError, Formatted] =
-    Try {
-      val isNegative = s.contains("(") && s.contains(")")
-      val cleaned = s.replaceAll("[\\$,()\\s]", "")
-      if cleaned.isEmpty then throw new NumberFormatException("Empty value after removing $ , ( )")
-      val num = if isNegative then -BigDecimal(cleaned) else BigDecimal(cleaned)
-      Formatted(CellValue.Number(num), NumFmt.Currency)
-    }.toEither.left.map { err =>
-      XLError.AccountingFormatError(s, err.getMessage)
-    }
+    if s.length > ExcelCellLimit then
+      Left(
+        XLError.AccountingFormatError(
+          s.take(50) + "...",
+          s"Input exceeds Excel cell limit ($ExcelCellLimit chars)"
+        )
+      )
+    else
+      Try {
+        val isNegative = s.contains("(") && s.contains(")")
+        val cleaned = s.replaceAll("[\\$,()\\s]", "")
+        if cleaned.isEmpty then
+          throw new NumberFormatException("Empty value after removing $ , ( )")
+        val num = if isNegative then -BigDecimal(cleaned) else BigDecimal(cleaned)
+        Formatted(CellValue.Number(num), NumFmt.Currency)
+      }.toEither.left.map { err =>
+        XLError.AccountingFormatError(s, err.getMessage)
+      }

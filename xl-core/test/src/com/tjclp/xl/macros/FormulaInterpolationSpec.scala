@@ -163,6 +163,15 @@ class FormulaInterpolationSpec extends FunSuite:
       case other => fail(s"Unexpected result: $other")
   }
 
+  test("String literal: double escaped quotes regression") {
+    val formulaStr = "=IF(A1=\"\"test\"\", B1, C1)"
+    fx"$formulaStr" match
+      case Right(CellValue.Formula(expr)) =>
+        assertEquals(expr, "=IF(A1=\"\"test\"\", B1, C1)")
+      case Left(err) => fail(s"Should parse: $err")
+      case other => fail(s"Unexpected result: $other")
+  }
+
   test("String literal: multiple strings with parens") {
     val formulaStr = """=IF(A1=")", B1, "(other)")"""
     fx"$formulaStr" match
@@ -214,6 +223,17 @@ class FormulaInterpolationSpec extends FunSuite:
         assertEquals(expr, "=SUM({1,2,3})")
       case Left(err) => fail(s"Should parse: $err")
       case other => fail(s"Unexpected result: $other")
+  }
+
+  // ===== Cell Limit Validation =====
+
+  test("Cell limit: rejects formula exceeding Excel limit") {
+    val longFormula = "=" + ("A" * 33000) // Exceeds 32,767
+    fx"$longFormula" match
+      case Left(XLError.FormulaError(input, msg)) =>
+        assert(msg.contains("Excel cell limit"))
+        assert(input.length < 100) // Truncated in error message
+      case other => fail(s"Should fail for too-long formula, got $other")
   }
 
   // ===== Integration =====

@@ -11,10 +11,12 @@ import scala.util.boundary, boundary.break
  *
  * Limitations:
  *   - Does not validate function names
- *   - Does not detect string literals ("text") which may contain parens
  *   - Does not validate formula syntax beyond parentheses
  */
 object FormulaParser:
+
+  /** Excel's maximum cell content length per ECMA-376 specification */
+  private val ExcelCellLimit = 32767
 
   /**
    * Parse formula string with minimal validation.
@@ -29,6 +31,13 @@ object FormulaParser:
    */
   def parse(s: String): Either[XLError, CellValue] =
     if s.isEmpty then Left(XLError.FormulaError(s, "Formula cannot be empty"))
+    else if s.length > ExcelCellLimit then
+      Left(
+        XLError.FormulaError(
+          s.take(50) + "...",
+          s"Formula exceeds Excel cell limit ($ExcelCellLimit chars)"
+        )
+      )
     else if !validateParentheses(s) then Left(XLError.FormulaError(s, "Unbalanced parentheses"))
     else Right(CellValue.Formula(s))
 
@@ -50,17 +59,22 @@ object FormulaParser:
         val c = s.charAt(i)
 
         if c == '"' then
-          // Toggle string state, but handle escaped quotes ("")
-          if inString && i + 1 < n && s.charAt(i + 1) == '"' then i += 1 // Skip the escaped quote
-          else inString = !inString
+          // Check for escaped quote ("")
+          if inString && i + 1 < n && s.charAt(i + 1) == '"' then
+            i += 2 // Skip both quotes, stay in string
+          else
+            inString = !inString
+            i += 1
         else if !inString then
           // Only count parens outside of strings
           if c == '(' then depth += 1
           else if c == ')' then
             depth -= 1
             if depth < 0 then break(false)
-
-        i += 1
+          i += 1
+        else
+          // Inside string, just skip character
+          i += 1
 
       // Must have balanced parens AND not be inside an unclosed string
       depth == 0 && !inString

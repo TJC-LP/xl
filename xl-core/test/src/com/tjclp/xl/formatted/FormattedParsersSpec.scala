@@ -75,6 +75,15 @@ class FormattedParsersSpec extends FunSuite:
       case Left(err) => fail(s"Should parse: $err")
   }
 
+  test("parseMoney: rejects input exceeding Excel cell limit") {
+    val tooLong = "$" + ("1" * 33000) // Exceeds 32,767
+    FormattedParsers.parseMoney(tooLong) match
+      case Left(XLError.MoneyFormatError(input, msg)) =>
+        assert(msg.contains("Excel cell limit"))
+        assert(input.length < 100) // Truncated
+      case other => fail(s"Should fail for too-long input, got $other")
+  }
+
   // ===== Percent Parser Tests (8 tests) =====
 
   test("parsePercent: 45.5% with percent sign") {
