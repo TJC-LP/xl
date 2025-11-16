@@ -15,32 +15,54 @@ object MacroUtil:
    *
    * Returns None if any argument is a runtime expression, or Some(literals) if all are constants.
    *
-   * Uses reflection to check if each argument is a literal constant.
+   * Uses Scala 3's FromExpr mechanism to properly detect constants (including inline vals).
    *
    * Example:
    * {{{
-   * val x = "A1"              // Compile-time constant
+   * inline val x = "A1"       // Compile-time constant (inline)
    * ref"$x"                   // allLiterals → Some(Seq("A1"))
+   *
+   * val y = "A1"              // Runtime variable
+   * ref"$y"                   // allLiterals → None
    *
    * def getUserInput() = "A1" // Runtime expression
    * ref"${getUserInput()}"    // allLiterals → None
    * }}}
    */
   def allLiterals(args: Expr[Seq[Any]])(using Quotes): Option[Seq[Any]] =
-    import quotes.reflect.*
-
     args match
       case Varargs(exprs) =>
-        val literalValues = exprs.map { expr =>
-          // Check if expression is a literal constant using reflection
-          expr.asTerm match
-            case Inlined(_, _, Literal(constant)) => Some(constant.value)
-            case Literal(constant) => Some(constant.value)
-            case _ => None
-        }
-        // Check if ALL are defined (all are compile-time constants)
-        if literalValues.forall(_.isDefined) then Some(literalValues.flatten.toSeq)
+        val values: Seq[Option[Any]] = exprs.map(extractConst)
+
+        if values.forall(_.isDefined) then Some(values.flatten.toSeq)
         else None
+
+      case _ => None
+
+  /**
+   * Extract compile-time constant value from an Expr[Any].
+   *
+   * Tries common types in order using Scala 3's FromExpr mechanism. Returns None if the expression
+   * is not a compile-time constant.
+   */
+  private def extractConst(expr: Expr[Any])(using Quotes): Option[Any] =
+    // Try string-like first (most common in refs)
+    constOf[String](expr)
+      // Numeric types used in refs
+      .orElse(constOf[Int](expr))
+      .orElse(constOf[Long](expr))
+      .orElse(constOf[Double](expr))
+      // Boolean for completeness
+      .orElse(constOf[Boolean](expr))
+
+  /**
+   * Try to extract a compile-time constant of specific type T.
+   *
+   * Uses Scala 3's Expr.unapply which leverages FromExpr[T] instances.
+   */
+  private def constOf[T: Type: FromExpr](expr: Expr[Any])(using Quotes): Option[T] =
+    expr match
+      case '{ $x: T } => Expr.unapply[T](x)
       case _ => None
 
   /**
