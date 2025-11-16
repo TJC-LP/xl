@@ -146,15 +146,19 @@ object FormattedLiterals:
     val parts = sc.valueOrAbort.parts
     val fullString = MacroUtil.reconstructString(parts, literals)
 
-    try
-      val cleaned = fullString.replaceAll("[\\$,]", "")
-      val numStr = cleaned
-      '{
-        Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Currency)
-      }
-    catch
-      case e: Exception =>
-        report.errorAndAbort(MacroUtil.formatCompileError("money", fullString, e.getMessage))
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.formatted.FormattedParsers.parseMoney(fullString) match
+      case Right(formatted) =>
+        // Valid - emit constant
+        val numStr = formatted.value match
+          case CellValue.Number(bd) => bd.toString
+          case _ => report.errorAndAbort("Unexpected cell value type in money literal")
+        '{
+          Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Currency)
+        }
+      case Left(error) =>
+        // Invalid - compile error with validation message
+        report.errorAndAbort(error.message)
 
   private def moneyRuntimePath(
     sc: Expr[StringContext],
@@ -184,16 +188,19 @@ object FormattedLiterals:
     val parts = sc.valueOrAbort.parts
     val fullString = MacroUtil.reconstructString(parts, literals)
 
-    try
-      val cleaned = fullString.replace("%", "")
-      val num = BigDecimal(cleaned) / 100
-      val numStr = num.toString
-      '{
-        Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Percent)
-      }
-    catch
-      case e: Exception =>
-        report.errorAndAbort(MacroUtil.formatCompileError("percent", fullString, e.getMessage))
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.formatted.FormattedParsers.parsePercent(fullString) match
+      case Right(formatted) =>
+        // Valid - emit constant
+        val numStr = formatted.value match
+          case CellValue.Number(bd) => bd.toString
+          case _ => report.errorAndAbort("Unexpected cell value type in percent literal")
+        '{
+          Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Percent)
+        }
+      case Left(error) =>
+        // Invalid - compile error (rejects "50%%", etc.)
+        report.errorAndAbort(error.message)
 
   private def percentRuntimePath(
     sc: Expr[StringContext],
@@ -223,18 +230,22 @@ object FormattedLiterals:
     val parts = sc.valueOrAbort.parts
     val fullString = MacroUtil.reconstructString(parts, literals)
 
-    try
-      val localDate = LocalDate.parse(fullString)
-      val dateStr = localDate.toString
-      '{
-        Formatted(
-          CellValue.DateTime(java.time.LocalDate.parse(${ Expr(dateStr) }).atStartOfDay()),
-          NumFmt.Date
-        )
-      }
-    catch
-      case e: Exception =>
-        report.errorAndAbort(MacroUtil.formatCompileError("date", fullString, e.getMessage))
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.formatted.FormattedParsers.parseDate(fullString) match
+      case Right(formatted) =>
+        // Valid - emit constant
+        val dateStr = formatted.value match
+          case CellValue.DateTime(dt) => dt.toLocalDate.toString
+          case _ => report.errorAndAbort("Unexpected cell value type in date literal")
+        '{
+          Formatted(
+            CellValue.DateTime(java.time.LocalDate.parse(${ Expr(dateStr) }).atStartOfDay()),
+            NumFmt.Date
+          )
+        }
+      case Left(error) =>
+        // Invalid - compile error
+        report.errorAndAbort(error.message)
 
   private def dateRuntimePath(
     sc: Expr[StringContext],
@@ -264,17 +275,19 @@ object FormattedLiterals:
     val parts = sc.valueOrAbort.parts
     val fullString = MacroUtil.reconstructString(parts, literals)
 
-    try
-      val isNegative = fullString.contains("(") && fullString.contains(")")
-      val cleaned = fullString.replaceAll("[\\$,()\\s]", "")
-      val num = if isNegative then -BigDecimal(cleaned) else BigDecimal(cleaned)
-      val numStr = num.toString
-      '{
-        Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Currency)
-      }
-    catch
-      case e: Exception =>
-        report.errorAndAbort(MacroUtil.formatCompileError("accounting", fullString, e.getMessage))
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.formatted.FormattedParsers.parseAccounting(fullString) match
+      case Right(formatted) =>
+        // Valid - emit constant
+        val numStr = formatted.value match
+          case CellValue.Number(bd) => bd.toString
+          case _ => report.errorAndAbort("Unexpected cell value type in accounting literal")
+        '{
+          Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Currency)
+        }
+      case Left(error) =>
+        // Invalid - compile error
+        report.errorAndAbort(error.message)
 
   private def accountingRuntimePath(
     sc: Expr[StringContext],

@@ -83,26 +83,18 @@ object CellRangeLiterals:
     val parts = sc.valueOrAbort.parts
     val fullString = MacroUtil.reconstructString(parts, literals)
 
-    // Reuse existing compile-time validation from fxImpl0
-    if fullString.isEmpty then
-      report.errorAndAbort(
-        MacroUtil.formatCompileError("fx", fullString, "Formula cannot be empty")
-      )
-
-    // Check for balanced parentheses (simple validation)
-    var depth = 0
-    for c <- fullString do
-      if c == '(' then depth += 1
-      else if c == ')' then depth -= 1
-      if depth < 0 then
-        report.errorAndAbort(
-          MacroUtil.formatCompileError("fx", fullString, "Unbalanced parentheses")
-        )
-    if depth != 0 then
-      report.errorAndAbort(MacroUtil.formatCompileError("fx", fullString, "Unbalanced parentheses"))
-
-    // Emit CellValue.Formula with the validated string
-    '{ CellValue.Formula(${ Expr(fullString) }) }
+    // Call runtime parser at compile-time to ensure validation consistency
+    com.tjclp.xl.cell.FormulaParser.parse(fullString) match
+      case Right(cellValue) =>
+        // Valid - emit constant
+        cellValue match
+          case CellValue.Formula(expr) =>
+            '{ CellValue.Formula(${ Expr(expr) }) }
+          case _ =>
+            report.errorAndAbort("Unexpected cell value type in formula literal")
+      case Left(error) =>
+        // Invalid - compile error
+        report.errorAndAbort(error.message)
 
   private def fxRuntimePath(
     sc: Expr[StringContext],
