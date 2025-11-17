@@ -59,8 +59,8 @@ case class Workbook(
   /**
    * Put sheet (add-or-replace by name).
    *
-   * If a sheet with the same name exists, replaces it in-place. Otherwise, adds at end. This is the
-   * preferred method for adding/updating sheets.
+   * If a sheet with the same name exists, replaces it in-place and marks as modified for surgical
+   * writes. Otherwise, adds at end. This is the preferred method for adding/updating sheets.
    *
    * Example:
    * {{{
@@ -71,11 +71,12 @@ case class Workbook(
   def put(sheet: Sheet): XLResult[Workbook] =
     sheets.indexWhere(_.name == sheet.name) match
       case -1 =>
-        // Sheet doesn't exist → add at end
+        // Sheet doesn't exist → add at end (no tracking needed for new sheets)
         Right(copy(sheets = sheets :+ sheet))
       case index =>
-        // Sheet exists → replace in-place (preserves order)
-        Right(copy(sheets = sheets.updated(index, sheet)))
+        // Sheet exists → replace in-place and track modification
+        val updatedContext = sourceContext.map(_.markSheetModified(index))
+        Right(copy(sheets = sheets.updated(index, sheet), sourceContext = updatedContext))
 
   /**
    * Put sheet with explicit name (rename if needed, then add-or-replace).

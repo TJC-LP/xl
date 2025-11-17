@@ -77,18 +77,16 @@ class ModificationTrackerPropertySpec extends ScalaCheckSuite:
   // ========== Semantic Properties ==========
 
   property("delete removes sheet from modified set") {
-    forAll { (t: ModificationTracker) =>
-      // Use small positive index for test
-      val idx = 7
-      val marked = t.markSheet(idx)
-      val deleted = marked.delete(idx)
+    // Use clean tracker for predictable behavior
+    val idx = 7
+    val marked = ModificationTracker.clean.markSheet(idx)
+    val deleted = marked.delete(idx)
 
-      // Should be in deletedSheets
-      assert(deleted.deletedSheets.contains(idx))
+    // Should be in deletedSheets
+    assert(deleted.deletedSheets.contains(idx))
 
-      // Should NOT be in modifiedSheets
-      assert(!deleted.modifiedSheets.contains(idx))
-    }
+    // Should NOT be in modifiedSheets
+    assert(!deleted.modifiedSheets.contains(idx))
   }
 
   property("markSheets with empty set returns unchanged tracker") {
@@ -108,4 +106,23 @@ class ModificationTrackerPropertySpec extends ScalaCheckSuite:
 
       assertEquals(t.isClean, !hasModifications)
     }
+  }
+
+  property("delete shifts higher indices down") {
+    // Use clean tracker to test index shifting behavior
+    // Mark sheets 0, 5, 10 as modified
+    val marked = ModificationTracker.clean.markSheet(0).markSheet(5).markSheet(10)
+
+    // Delete sheet 5
+    val deleted = marked.delete(5)
+
+    // Verify indices adjusted correctly:
+    // - Index 0 stays 0 (below deleted)
+    // - Index 5 removed (was deleted)
+    // - Index 10 becomes 9 (shifted down)
+    assert(deleted.modifiedSheets.contains(0))
+    assert(!deleted.modifiedSheets.contains(5))
+    assert(deleted.modifiedSheets.contains(9))
+    assert(!deleted.modifiedSheets.contains(10))
+    assert(deleted.deletedSheets.contains(5))
   }

@@ -33,11 +33,26 @@ final case class ModificationTracker(
   def markSheets(indices: Set[Int]): ModificationTracker =
     if indices.isEmpty then this else copy(modifiedSheets = modifiedSheets ++ indices)
 
-  /** Mark a sheet as deleted. */
+  /**
+   * Mark a sheet as deleted and adjust all higher indices.
+   *
+   * When a sheet is deleted, all sheets at higher indices shift down by 1. This method adjusts the
+   * tracked indices accordingly to maintain correctness for surgical writes.
+   *
+   * @param index
+   *   Zero-based sheet index to mark as deleted
+   * @return
+   *   New tracker with deletion recorded and higher indices shifted down
+   */
   def delete(index: Int): ModificationTracker =
     copy(
       deletedSheets = deletedSheets + index,
-      modifiedSheets = modifiedSheets - index
+      // Remove the deleted index and shift down all higher indices
+      modifiedSheets = modifiedSheets.flatMap { i =>
+        if i == index then None // Remove deleted index
+        else if i > index then Some(i - 1) // Shift down
+        else Some(i) // Keep unchanged
+      }
     )
 
   /** Indicate that sheet order changed. */

@@ -4,6 +4,8 @@ import java.nio.file.Files
 
 import com.tjclp.xl.{SourceContext, Workbook}
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.api.*
+import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.PartManifest
 import com.tjclp.xl.sheet.Sheet
 import munit.FunSuite
@@ -48,4 +50,18 @@ class WorkbookModificationSpec extends FunSuite:
     assert(tracker.modifiedMetadata)
     assertEquals(tracker.modifiedSheets, Set.empty)
     assertEquals(renamed.sheets(0).name.value, "Sales")
+  }
+
+  test("put marks sheet as modified when replacing existing sheet") {
+    val modifiedSheet = baseSheet.put(ref"A1" -> "New Value").fold(err => fail(s"Failed to modify sheet: $err"), identity)
+    val updated = workbook.put(modifiedSheet).fold(err => fail(s"Put failed: $err"), identity)
+    val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
+    assertEquals(tracker.modifiedSheets, Set(0))
+  }
+
+  test("put does not mark as modified when adding new sheet") {
+    val newSheet = Sheet("Sheet2").fold(err => fail(s"Failed to create sheet: $err"), identity)
+    val updated = workbook.put(newSheet).fold(err => fail(s"Put failed: $err"), identity)
+    val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
+    assertEquals(tracker.modifiedSheets, Set.empty)
   }
