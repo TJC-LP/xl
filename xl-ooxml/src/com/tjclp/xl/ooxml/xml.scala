@@ -113,3 +113,97 @@ object XmlUtil:
    */
   def needsXmlSpacePreserve(s: String): Boolean =
     s.nonEmpty && (s.startsWith(" ") || s.endsWith(" ") || s.contains("  "))
+
+  /**
+   * Parse run properties (<rPr>) to Font.
+   *
+   * REQUIRES: rPrElem is <rPr> element from OOXML ENSURES:
+   *   - Returns Font with properties extracted from child elements
+   *   - Missing properties use Font defaults (Calibri, 11pt, no formatting)
+   * DETERMINISTIC: Yes (pure XML traversal)
+   *
+   * OOXML structure:
+   *   - <b/> → bold
+   *   - <i/> → italic
+   *   - <u/> → underline
+   *   - <color rgb="RRGGBB"/> → font color (hex without # prefix)
+   *   - <sz val="14.0"/> → size in points
+   *   - <name val="Arial"/> → font family
+   *
+   * @param rPrElem
+   *   The <rPr> element to parse
+   * @return
+   *   Font with formatting properties (default Font if no properties)
+   */
+  def parseRunProperties(rPrElem: Elem): com.tjclp.xl.style.font.Font =
+    import com.tjclp.xl.style.font.Font
+    import com.tjclp.xl.style.color.Color
+
+    val bold = (rPrElem \ "b").nonEmpty
+    val italic = (rPrElem \ "i").nonEmpty
+    val underline = (rPrElem \ "u").nonEmpty
+
+    val color = (rPrElem \ "color").headOption.flatMap { colorElem =>
+      getAttrOpt(colorElem.asInstanceOf[Elem], "rgb").flatMap { rgb =>
+        // Add # prefix for Color.fromHex
+        Color.fromHex(s"#$rgb").toOption
+      }
+    }
+
+    val sizePt = (rPrElem \ "sz").headOption
+      .flatMap(e => getAttrOpt(e.asInstanceOf[Elem], "val"))
+      .flatMap(_.toDoubleOption)
+      .getOrElse(11.0)
+
+    val name = (rPrElem \ "name").headOption
+      .flatMap(e => getAttrOpt(e.asInstanceOf[Elem], "val"))
+      .getOrElse("Calibri")
+
+    Font(
+      name = name,
+      sizePt = sizePt,
+      bold = bold,
+      italic = italic,
+      underline = underline,
+      color = color
+    )
+
+  /**
+   * Parse text runs (<r> elements) to RichText.
+   *
+   * REQUIRES: runElems is sequence of <r> elements from <si> or <is> ENSURES:
+   *   - Returns RichText with TextRun for each <r> element
+   *   - Each run may have optional formatting from <rPr>
+   *   - Runs without <rPr> use default formatting
+   *   - Returns error if any <r> is missing required <t> element
+   * DETERMINISTIC: Yes (stable iteration order)
+   *
+   * OOXML structure:
+   *   - <r><t>text</t></r> → unformatted run
+   *   - <r><rPr>...</rPr><t>text</t></r> → formatted run
+   *
+   * @param runElems
+   *   Sequence of <r> elements
+   * @return
+   *   Either[String, RichText] with error if any run is malformed
+   */
+  def parseTextRuns(runElems: Seq[Node]): Either[String, com.tjclp.xl.richtext.RichText] =
+    import com.tjclp.xl.richtext.{TextRun, RichText}
+
+    val runs = runElems.collect { case e: Elem if e.label == "r" => e }.map { rElem =>
+      // Extract optional <rPr> for formatting
+      val font = (rElem \ "rPr").headOption.map { rPr =>
+        parseRunProperties(rPr.asInstanceOf[Elem])
+      }
+
+      // Extract required <t> text
+      (rElem \ "t").headOption.map(_.text) match
+        case Some(text) => Right(TextRun(text, font))
+        case None => Left("Text run <r> missing <t> element")
+    }
+
+    val errors = runs.collect { case Left(err) => err }
+    if errors.nonEmpty then Left(s"TextRun parse errors: ${errors.mkString(", ")}")
+    else
+      val textRuns = runs.collect { case Right(run) => run }.toVector
+      Right(RichText(textRuns))

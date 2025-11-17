@@ -214,11 +214,16 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
 
     OoxmlWorksheet(rows, sheet.mergedRanges)
 
+  /** Parse worksheet from XML (XmlReadable trait compatibility) */
   def fromXml(elem: Elem): Either[String, OoxmlWorksheet] =
+    fromXmlWithSST(elem, None)
+
+  /** Parse worksheet from XML with optional SharedStrings table */
+  def fromXmlWithSST(elem: Elem, sst: Option[SharedStrings]): Either[String, OoxmlWorksheet] =
     for
       sheetDataElem <- getChild(elem, "sheetData")
       rowElems = getChildren(sheetDataElem, "row")
-      rows <- parseRows(rowElems)
+      rows <- parseRows(rowElems, sst)
       mergedRanges <- parseMergeCells(elem)
     yield OoxmlWorksheet(rows, mergedRanges)
 
@@ -239,13 +244,16 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         else Right(parsed.collect { case Right(range) => range }.toSet)
       case _ => Right(Set.empty) // Non-Elem node, ignore
 
-  private def parseRows(elems: Seq[Elem]): Either[String, Seq[OoxmlRow]] =
+  private def parseRows(
+    elems: Seq[Elem],
+    sst: Option[SharedStrings]
+  ): Either[String, Seq[OoxmlRow]] =
     val parsed = elems.map { e =>
       for
         rStr <- getAttr(e, "r")
         rowIdx <- rStr.toIntOption.toRight(s"Invalid row index: $rStr")
         cellElems = getChildren(e, "c")
-        cells <- parseCells(cellElems)
+        cells <- parseCells(cellElems, sst)
       yield OoxmlRow(rowIdx, cells)
     }
 
@@ -253,14 +261,17 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     if errors.nonEmpty then Left(s"Row parse errors: ${errors.mkString(", ")}")
     else Right(parsed.collect { case Right(row) => row })
 
-  private def parseCells(elems: Seq[Elem]): Either[String, Seq[OoxmlCell]] =
+  private def parseCells(
+    elems: Seq[Elem],
+    sst: Option[SharedStrings]
+  ): Either[String, Seq[OoxmlCell]] =
     val parsed = elems.map { e =>
       for
         refStr <- getAttr(e, "r")
         ref <- ARef.parse(refStr)
         cellType = getAttrOpt(e, "t").getOrElse("")
         styleIdx = getAttrOpt(e, "s").flatMap(_.toIntOption)
-        value <- parseCellValue(e, cellType)
+        value <- parseCellValue(e, cellType, sst)
       yield OoxmlCell(ref, value, styleIdx, cellType)
     }
 
@@ -268,18 +279,48 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     if errors.nonEmpty then Left(s"Cell parse errors: ${errors.mkString(", ")}")
     else Right(parsed.collect { case Right(cell) => cell })
 
-  private def parseCellValue(elem: Elem, cellType: String): Either[String, CellValue] =
+  private def parseCellValue(
+    elem: Elem,
+    cellType: String,
+    sst: Option[SharedStrings]
+  ): Either[String, CellValue] =
     cellType match
-      case "inlineStr" =>
-        // <is><t>text</t></is>
-        (elem \ "is" \ "t").headOption.map(_.text) match
-          case Some(text) => Right(CellValue.Text(text))
-          case None => Left("inlineStr cell missing <is><t>")
+      case "inlineStr" | "str" =>
+        // Both "inlineStr" and "str" cell types use <is> for inline strings
+        // Check for rich text (<is><r>) vs simple text (<is><t>)
+        (elem \ "is").headOption match
+          case None =>
+            // Fallback: "str" type may have text in <v> element
+            (elem \ "v").headOption.map(_.text) match
+              case Some(text) => Right(CellValue.Text(text))
+              case None => Left(s"$cellType cell missing <is> element and <v> element")
+          case Some(isElem: Elem) =>
+            val rElems = getChildren(isElem, "r")
+
+            if rElems.nonEmpty then
+              // Rich text: parse runs with formatting
+              parseTextRuns(rElems).map(CellValue.RichText.apply)
+            else
+              // Simple text: extract from <t>
+              (isElem \ "t").headOption.map(_.text) match
+                case Some(text) => Right(CellValue.Text(text))
+                case None => Left(s"$cellType <is> missing <t> element and has no <r> runs")
+          case _ => Left(s"$cellType <is> is not an Elem")
 
       case "s" =>
-        // SST index - for now just store as text
+        // SST index - resolve using SharedStrings table
         (elem \ "v").headOption.map(_.text) match
-          case Some(idx) => Right(CellValue.Text(idx)) // TODO: resolve SST
+          case Some(idxStr) =>
+            idxStr.toIntOption match
+              case Some(idx) =>
+                sst.flatMap(_.apply(idx)) match
+                  case Some(entry) => Right(sst.get.toCellValue(entry))
+                  case None =>
+                    // SST index out of bounds → CellError.Ref (not parse failure)
+                    Right(CellValue.Error(com.tjclp.xl.cell.CellError.Ref))
+              case None =>
+                // Invalid SST index format → CellError.Value
+                Right(CellValue.Error(com.tjclp.xl.cell.CellError.Value))
           case None => Left("SST cell missing <v>")
 
       case "n" | "" =>

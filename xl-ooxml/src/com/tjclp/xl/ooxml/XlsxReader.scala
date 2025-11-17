@@ -263,7 +263,7 @@ object XlsxReader:
           .toRight(XLError.ParseError(sheetPath, s"Missing worksheet: $sheetPath"))
         elem <- parseXml(xml, sheetPath)
         ooxmlSheet <- OoxmlWorksheet
-          .fromXml(elem)
+          .fromXmlWithSST(elem, sst)
           .left
           .map(err => XLError.ParseError(sheetPath, err): XLError)
         domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles)
@@ -279,7 +279,12 @@ object XlsxReader:
       else Paths.get("xl").resolve(cleaned)
     resolvedPath.normalize().toString.replace('\\', '/')
 
-  /** Convert OoxmlWorksheet to domain Sheet */
+  /**
+   * Convert OoxmlWorksheet to domain Sheet.
+   *
+   * SST resolution now happens in OoxmlWorksheet.fromXml, so ooxmlCell.value is already the final
+   * CellValue (Text or RichText).
+   */
   private def convertToDomainSheet(
     name: SheetName,
     ooxmlSheet: OoxmlWorksheet,
@@ -290,15 +295,8 @@ object XlsxReader:
     val cellsMap =
       ooxmlSheet.rows.foldLeft(Map.empty[ARef, Cell]) { case (cellsAcc, row) =>
         row.cells.foldLeft(cellsAcc) { case (cellMapAcc, ooxmlCell) =>
-          val value = (ooxmlCell.cellType, ooxmlCell.value, sst) match
-            case ("s", CellValue.Text(idxStr), Some(sharedStrings)) =>
-              idxStr.toIntOption match
-                case Some(idx) =>
-                  sharedStrings(idx) match
-                    case Some(text) => CellValue.Text(text)
-                    case None => CellValue.Error(CellError.Ref)
-                case None => CellValue.Error(com.tjclp.xl.cell.CellError.Value)
-            case _ => ooxmlCell.value
+          // SST resolution already done in OoxmlWorksheet.fromXml
+          val value = ooxmlCell.value
 
           val styleIdOpt = ooxmlCell.styleIndex.flatMap(styleMapping.get)
           val cell = Cell(ooxmlCell.ref, value, styleIdOpt)
