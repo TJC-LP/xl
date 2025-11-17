@@ -2,6 +2,12 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 import XmlUtil.*
+
+// Default namespace bindings for generated workbook parts. When reading from an existing workbook
+// we capture the original scope (which may include mc/xr/x15, etc.) and reuse it to avoid Excel
+// namespace warnings.
+private val defaultWorkbookScope =
+  NamespaceBinding(null, nsSpreadsheetML, NamespaceBinding("r", nsRelationships, TopScope))
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.Workbook
 
@@ -62,7 +68,9 @@ case class OoxmlWorkbook(
   definedNames: Option[Elem] = None,
   calcPr: Option[Elem] = None,
   extLst: Option[Elem] = None,
-  otherElements: Seq[Elem] = Seq.empty
+  otherElements: Seq[Elem] = Seq.empty,
+  rootAttributes: MetaData = Null,
+  rootScope: NamespaceBinding = defaultWorkbookScope
 ) extends XmlWritable:
 
   /**
@@ -126,11 +134,10 @@ case class OoxmlWorkbook(
     // Any other elements
     otherElements.foreach(children += _)
 
-    // Build workbook element with namespaces
-    val nsBindings =
-      NamespaceBinding(null, nsSpreadsheetML, NamespaceBinding("r", nsRelationships, TopScope))
+    val scope = Option(rootScope).getOrElse(defaultWorkbookScope)
+    val attrs = Option(rootAttributes).getOrElse(Null)
 
-    Elem(null, "workbook", Null, nsBindings, minimizeEmpty = false, children.result()*)
+    Elem(null, "workbook", attrs, scope, minimizeEmpty = false, children.result()*)
 
 object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   /** Create minimal workbook with one sheet */
@@ -195,7 +202,9 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
       definedNames,
       calcPr,
       extLst,
-      otherElements.toSeq
+      otherElements.toSeq,
+      rootAttributes = elem.attributes,
+      rootScope = Option(elem.scope).getOrElse(defaultWorkbookScope)
     )
 
   private def parseSheets(elems: Seq[Elem]): Either[String, Seq[SheetRef]] =
