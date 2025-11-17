@@ -67,11 +67,21 @@ private final class ZipPreservedPartHandle(zip: ZipFile, manifest: PartManifest)
 
               output.putNextEntry(newEntry)
               val buffer = new Array[Byte](8192)
+              var totalBytesWritten = 0L
               var read = in.read(buffer)
               while read != -1 do
                 output.write(buffer, 0, read)
+                totalBytesWritten += read
                 read = in.read(buffer)
               output.closeEntry()
+
+              // Validate size matches manifest expectation (protection against ZIP bombs and corruption)
+              manifest.entries.get(path).flatMap(_.size).foreach { expectedSize =>
+                if totalBytesWritten != expectedSize then
+                  throw new IllegalStateException(
+                    s"Entry $path size mismatch: expected $expectedSize bytes, wrote $totalBytesWritten bytes"
+                  )
+              }
             }
           }
       yield ()

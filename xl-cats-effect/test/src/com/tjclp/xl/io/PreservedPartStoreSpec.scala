@@ -41,6 +41,56 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
     }
   }
 
+  test("streamTo validates size matches manifest expectation") {
+    val data = "<chart/>".getBytes("UTF-8")
+    tempZipWithSize(Map("xl/charts/chart1.xml" -> data)).use { case (source, actualSize) =>
+      // Create manifest with correct size
+      val builder = new PartManifestBuilder()
+      val entry = new ZipEntry("xl/charts/chart1.xml")
+      entry.setSize(actualSize)
+      val manifest = builder.+=(entry).recordUnparsed("xl/charts/chart1.xml").build()
+
+      val store = PreservedPartStore.fromPath(source, manifest)
+      store.open.use { handle =>
+        val baos = new ByteArrayOutputStream()
+        val zipOut = new ZipOutputStream(baos)
+        // Should succeed with correct size
+        handle.streamTo("xl/charts/chart1.xml", zipOut) *> IO.blocking(zipOut.close())
+      }
+    }
+  }
+
+  test("streamTo fails on size mismatch") {
+    val data = "<chart/>".getBytes("UTF-8")
+    tempZipWithSize(Map("xl/charts/chart1.xml" -> data)).use { case (source, actualSize) =>
+      // Create manifest with WRONG size (off by 10 bytes)
+      val builder = new PartManifestBuilder()
+      val entry = new ZipEntry("xl/charts/chart1.xml")
+      entry.setSize(actualSize + 10) // Intentionally wrong
+      val manifest = builder.+=(entry).recordUnparsed("xl/charts/chart1.xml").build()
+
+      val store = PreservedPartStore.fromPath(source, manifest)
+      store.open.use { handle =>
+        val baos = new ByteArrayOutputStream()
+        val zipOut = new ZipOutputStream(baos)
+        // Should fail with size mismatch error
+        handle
+          .streamTo("xl/charts/chart1.xml", zipOut)
+          .attempt
+          .flatMap { result =>
+            IO {
+              assert(result.isLeft, "Expected streamTo to fail on size mismatch")
+              val error = result.left.getOrElse(fail("Expected Left but got Right"))
+              assert(
+                error.getMessage.contains("size mismatch"),
+                s"Expected size mismatch error, got: ${error.getMessage}"
+              )
+            }
+          }
+      }
+    }
+  }
+
   private def tempZip(entries: Map[String, Array[Byte]]): Resource[IO, Path] =
     Resource.make {
       IO.blocking {
@@ -58,6 +108,26 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
         path
       }
     }(path => IO.blocking(Files.deleteIfExists(path)).void)
+
+  private def tempZipWithSize(entries: Map[String, Array[Byte]]): Resource[IO, (Path, Long)] =
+    Resource.make {
+      IO.blocking {
+        val path = Files.createTempFile("preserved-store", ".zip")
+        val out = new ZipOutputStream(Files.newOutputStream(path))
+        var actualSize = 0L
+        try
+          entries.foreach { case (name, bytes) =>
+            val entry = new ZipEntry(name)
+            out.putNextEntry(entry)
+            out.write(bytes)
+            out.closeEntry()
+            actualSize = bytes.length.toLong
+          }
+        finally
+          out.close()
+        (path, actualSize)
+      }
+    } { case (path, _) => IO.blocking(Files.deleteIfExists(path)).void }
 
   private def readEntry(bytes: Array[Byte], name: String): Array[Byte] =
     val in = new ZipInputStream(new ByteArrayInputStream(bytes))
