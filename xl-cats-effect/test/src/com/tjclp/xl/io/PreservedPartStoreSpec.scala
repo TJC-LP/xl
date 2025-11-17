@@ -109,6 +109,7 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
       }
     }(path => IO.blocking(Files.deleteIfExists(path)).void)
 
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private def tempZipWithSize(entries: Map[String, Array[Byte]]): Resource[IO, (Path, Long)] =
     Resource.make {
       IO.blocking {

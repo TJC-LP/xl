@@ -17,6 +17,7 @@ import munit.FunSuite
  *   3. Unknown parts are indexed but NOT loaded into memory
  *   4. PartManifest has accurate metadata
  */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class XlsxReaderPassthroughSpec extends FunSuite:
 
   test("read from file creates SourceContext") {
