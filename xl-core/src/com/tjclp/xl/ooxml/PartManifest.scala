@@ -64,9 +64,13 @@ final case class PartManifest(entries: Map[String, PartManifestEntry]) derives C
 object PartManifest:
   val empty: PartManifest = PartManifest(Map.empty)
 
-/** Builder used by the reader to accumulate manifest entries. */
-final class PartManifestBuilder:
-  private val entries = scala.collection.mutable.Map.empty[String, PartManifestEntry]
+/**
+ * Immutable builder for accumulating manifest entries during XLSX reading.
+ *
+ * Follows XL's purity charter by using persistent Map for internal state. Each builder method
+ * returns a new instance with updated entries.
+ */
+final case class PartManifestBuilder(entries: Map[String, PartManifestEntry] = Map.empty):
 
   def recordParsed(
     path: String,
@@ -110,14 +114,18 @@ final class PartManifestBuilder:
       )
     }
 
-  def build(): PartManifest = PartManifest(entries.toMap)
+  def build(): PartManifest = PartManifest(entries)
 
   private def updateEntry(path: String)(
     f: PartManifestEntry => PartManifestEntry
   ): PartManifestBuilder =
-    val updated = f(entries.getOrElse(path, PartManifestEntry.unparsed(path)))
-    entries.update(path, updated)
-    this
+    val current = entries.getOrElse(path, PartManifestEntry.unparsed(path))
+    val updated = f(current)
+    copy(entries = entries.updated(path, updated))
 
   private def sizeOf(value: Long): Option[Long] =
     Option.when(value >= 0L)(value)
+
+object PartManifestBuilder:
+  /** Create empty builder. */
+  def empty: PartManifestBuilder = PartManifestBuilder()

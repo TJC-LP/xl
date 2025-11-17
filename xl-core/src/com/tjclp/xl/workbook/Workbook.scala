@@ -134,8 +134,9 @@ case class Workbook(
       .map(err => XLError.InvalidSheetName(name, err))
       .flatMap(remove)
 
-  /** Remove sheet by index */
+  /** Remove sheet by index (Excel requires at least one sheet to remain). */
   def removeAt(index: Int): XLResult[Workbook] =
+    // Validation: Excel workbooks must have at least one sheet
     if sheets.size <= 1 then Left(XLError.InvalidWorkbook("Cannot remove last sheet"))
     else if index >= 0 && index < sheets.size then
       val newSheets = sheets.patch(index, Nil, 1)
@@ -221,9 +222,9 @@ case class Workbook(
             case idx => Some(idx)
         )
         .getOrElse(activeSheetIndex)
-      val updatedContext = sourceContext.map { ctx =>
-        ctx.markReordered
-      }
+      // Sheet reordering only modifies workbook.xml (order metadata), not individual sheet files.
+      // Therefore we mark reordered but don't mark individual sheets as modified.
+      val updatedContext = sourceContext.map(_.markReordered)
       Right(
         copy(sheets = reordered, activeSheetIndex = newActiveIndex, sourceContext = updatedContext)
       )
