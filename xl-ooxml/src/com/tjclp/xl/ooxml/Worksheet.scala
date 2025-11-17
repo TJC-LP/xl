@@ -6,6 +6,18 @@ import com.tjclp.xl.addressing.* // For ARef, Column, Row types and extension me
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.sheet.Sheet
 
+// Default namespaces for generated worksheets. Real files capture the original scope/attributes to
+// avoid redundant declarations and preserve mc/x14/xr bindings from the source sheet.
+private val defaultWorksheetScope =
+  NamespaceBinding(null, nsSpreadsheetML, NamespaceBinding("r", nsRelationships, TopScope))
+
+private def cleanNamespaces(elem: Elem): Elem =
+  val cleanedChildren = elem.child.map {
+    case e: Elem => cleanNamespaces(e)
+    case other => other
+  }
+  elem.copy(scope = TopScope, child = cleanedChildren)
+
 /** Cell data for worksheet - maps domain Cell to XML representation */
 case class OoxmlCell(
   ref: ARef,
@@ -173,18 +185,20 @@ case class OoxmlWorksheet(
   controls: Option[Elem] = None,
   // Extensions
   extLst: Option[Elem] = None,
-  otherElements: Seq[Elem] = Seq.empty
+  otherElements: Seq[Elem] = Seq.empty,
+  rootAttributes: MetaData = Null,
+  rootScope: NamespaceBinding = defaultWorksheetScope
 ) extends XmlWritable:
 
   def toXml: Elem =
     val children = Seq.newBuilder[Node]
 
     // Emit in OOXML Part 1 schema order (§18.3.1.99) - critical for Excel compatibility
-    sheetPr.foreach(children += _)
-    dimension.foreach(children += _)
-    sheetViews.foreach(children += _)
-    sheetFormatPr.foreach(children += _)
-    cols.foreach(children += _) // Column definitions BEFORE sheetData
+    sheetPr.foreach(e => children += cleanNamespaces(e))
+    dimension.foreach(e => children += cleanNamespaces(e))
+    sheetViews.foreach(e => children += cleanNamespaces(e))
+    sheetFormatPr.foreach(e => children += cleanNamespaces(e))
+    cols.foreach(e => children += cleanNamespaces(e)) // Column definitions BEFORE sheetData
 
     // sheetData (always regenerated with current cell values)
     val sheetDataElem = elem("sheetData")(
@@ -200,35 +214,27 @@ case class OoxmlWorksheet(
       children += elem("mergeCells", "count" -> mergedRanges.size.toString)(mergeCellElems*)
 
     // Page layout (after sheetData/mergeCells)
-    pageMargins.foreach(children += _)
-    pageSetup.foreach(children += _)
-    headerFooter.foreach(children += _)
+    pageMargins.foreach(e => children += cleanNamespaces(e))
+    pageSetup.foreach(e => children += cleanNamespaces(e))
+    headerFooter.foreach(e => children += cleanNamespaces(e))
 
     // Drawings and objects
-    drawing.foreach(children += _)
-    legacyDrawing.foreach(children += _)
-    picture.foreach(children += _)
-    oleObjects.foreach(children += _)
-    controls.foreach(children += _)
+    drawing.foreach(e => children += cleanNamespaces(e))
+    legacyDrawing.foreach(e => children += cleanNamespaces(e))
+    picture.foreach(e => children += cleanNamespaces(e))
+    oleObjects.foreach(e => children += cleanNamespaces(e))
+    controls.foreach(e => children += cleanNamespaces(e))
 
     // Extensions
-    extLst.foreach(children += _)
+    extLst.foreach(e => children += cleanNamespaces(e))
 
     // Any other elements
-    otherElements.foreach(children += _)
+    otherElements.foreach(e => children += cleanNamespaces(e))
 
-    Elem(
-      null,
-      "worksheet",
-      new UnprefixedAttribute(
-        "xmlns",
-        nsSpreadsheetML,
-        new PrefixedAttribute("xmlns", "r", nsRelationships, Null)
-      ),
-      TopScope,
-      minimizeEmpty = false,
-      children.result()*
-    )
+    val scope = Option(rootScope).getOrElse(defaultWorksheetScope)
+    val attrs = Option(rootAttributes).getOrElse(Null)
+
+    Elem(null, "worksheet", attrs, scope, minimizeEmpty = false, children.result()*)
 
 object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
   /** Create minimal empty worksheet */
@@ -335,7 +341,9 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.oleObjects,
           preserved.controls,
           preserved.extLst,
-          preserved.otherElements
+          preserved.otherElements,
+          preserved.rootAttributes,
+          preserved.rootScope
         )
       case None =>
         // No preserved metadata - create minimal worksheet
@@ -437,7 +445,9 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       oleObjects,
       controls,
       extLst,
-      otherElements.toSeq
+      otherElements.toSeq,
+      rootAttributes = elem.attributes,
+      rootScope = Option(elem.scope).getOrElse(defaultWorksheetScope)
     )
 
   private def parseMergeCells(worksheetElem: Elem): Either[String, Set[CellRange]] =
