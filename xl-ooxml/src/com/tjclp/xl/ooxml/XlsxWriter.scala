@@ -552,6 +552,32 @@ object XlsxWriter:
     finally sourceZip.close()
 
   /**
+   * Parse SharedStrings from source ZIP for modified sheet cell encoding.
+   *
+   * CRITICAL: Modified sheets need the SST to encode cells as t="s" (SST references) instead of
+   * t="inlineStr" (inline strings). We copy the SST verbatim to output, but parse it here so
+   * modified sheets can reference the same indices as unmodified sheets.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def parsePreservedSST(sourcePath: Path): Option[SharedStrings] =
+    val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
+    try
+      var entry = sourceZip.getNextEntry
+      var result: Option[SharedStrings] = None
+
+      while entry != null && result.isEmpty do
+        if entry.getName == "xl/sharedStrings.xml" then
+          val content = new String(sourceZip.readAllBytes(), "UTF-8")
+          result = parseXml(content, "xl/sharedStrings.xml").toOption
+            .flatMap(SharedStrings.fromXml(_).toOption)
+
+        sourceZip.closeEntry()
+        entry = sourceZip.getNextEntry
+
+      result
+    finally sourceZip.close()
+
+  /**
    * Hybrid write: regenerate modified parts, copy preserved parts.
    *
    * Strategy:
@@ -577,19 +603,23 @@ object XlsxWriter:
     val sharedStringsPath = "xl/sharedStrings.xml"
     val sourceHasSharedStrings = ctx.partManifest.contains(sharedStringsPath)
 
-    // If the source workbook already has shared strings, preserve them byte-for-byte so copied
-    // sheets keep their existing string indices. Only regenerate when we don't have a source SST
-    // (e.g., programmatic workbook) and policy permits.
-    val sst =
-      if sourceHasSharedStrings then None
+    // If source has SST: parse it for modified sheet cell references (but copy verbatim to output)
+    // If no source SST: generate according to policy
+    val (sst, regenerateSharedStrings) =
+      if sourceHasSharedStrings then
+        // Parse preserved SST so modified sheets can reference SST indices (NOT inline strings!)
+        val parsedSST = parsePreservedSST(ctx.sourcePath)
+        (parsedSST, false) // Don't regenerate - will copy verbatim
       else
-        config.sstPolicy match
+        // No source SST - generate if policy allows
+        val generated = config.sstPolicy match
           case SstPolicy.Always => Some(SharedStrings.fromWorkbook(workbook))
           case SstPolicy.Never => None
           case SstPolicy.Auto =>
             if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
             else None
-    val regenerateSharedStrings = sst.isDefined
+        (generated, generated.isDefined)
+
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
 
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)

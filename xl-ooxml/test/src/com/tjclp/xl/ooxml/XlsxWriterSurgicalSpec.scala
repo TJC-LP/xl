@@ -225,7 +225,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
-  test("sharedStrings part is preserved and regenerated sheet uses inline strings") {
+  test("sharedStrings part is preserved and regenerated sheet uses SST references") {
     val source = createWorkbookWithSharedStrings()
 
     val modified = for
@@ -248,16 +248,15 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val sharedStringsEntry = "xl/sharedStrings.xml"
     val sourceSst = readEntryBytes(sourceZip, sourceZip.getEntry(sharedStringsEntry))
     val outputSst = readEntryBytes(outputZip, outputZip.getEntry(sharedStringsEntry))
-    assertEquals(outputSst.toSeq, sourceSst.toSeq, "sharedStrings.xml should be preserved")
+    assertEquals(outputSst.toSeq, sourceSst.toSeq, "sharedStrings.xml should be preserved byte-for-byte")
 
     val sheetXmlBytes = readEntryBytes(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
     val sheetXml = new String(sheetXmlBytes, "UTF-8")
-    assert(sheetXml.contains("""t="inlineStr"""), "Regenerated text cells should be inline")
-    assert(
-      !sheetXml.contains("""t="s"""),
-      "Regenerated sheet should not reference sharedStrings indices"
-    )
-    assert(sheetXml.contains("Updated Text"))
+
+    // Modified sheet should use SST references for existing strings, inline for new strings
+    assert(sheetXml.contains("""t="s""""), "Existing cells should use SST references (t=\"s\")")
+    // New cell "Updated Text" may use inline if not in original SST
+    assert(sheetXml.contains("Updated Text"), "Modified cell should be present")
 
     sourceZip.close()
     outputZip.close()
