@@ -1,8 +1,8 @@
 package com.tjclp.xl.ooxml
 
 import scala.xml.*
-import java.io.{File, FileOutputStream, ByteArrayOutputStream, OutputStream}
-import java.util.zip.{ZipOutputStream, ZipEntry, ZipFile}
+import java.io.{File, FileInputStream, FileOutputStream, ByteArrayOutputStream, OutputStream}
+import java.util.zip.{ZipInputStream, ZipOutputStream, ZipEntry, ZipFile}
 import java.nio.file.{Path, Files, StandardCopyOption}
 import java.nio.charset.StandardCharsets
 import scala.collection.mutable
@@ -455,6 +455,103 @@ object XlsxWriter:
     finally sourceZip.close()
 
   /**
+   * Re-parse structural files from source ZIP for preservation.
+   *
+   * Returns (ContentTypes, rootRels, workbookRels, workbook) parsed from the original file. If any
+   * file is missing or fails to parse, returns None for that component.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def parsePreservedStructure(
+    sourcePath: Path
+  ): (Option[ContentTypes], Option[Relationships], Option[Relationships], Option[OoxmlWorkbook]) =
+    var contentTypes: Option[ContentTypes] = None
+    var rootRels: Option[Relationships] = None
+    var workbookRels: Option[Relationships] = None
+    var workbook: Option[OoxmlWorkbook] = None
+
+    val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
+    try
+      var entry = sourceZip.getNextEntry
+      while entry != null do
+        val entryName = entry.getName
+
+        if entryName == "[Content_Types].xml" then
+          val content = new String(sourceZip.readAllBytes(), "UTF-8")
+          parseXml(content, "[Content_Types].xml") match
+            case Right(elem) =>
+              ContentTypes.fromXml(elem).foreach(ct => contentTypes = Some(ct))
+            case Left(_) => () // Silently ignore - will use minimal fallback
+        else if entryName == "_rels/.rels" then
+          val content = new String(sourceZip.readAllBytes(), "UTF-8")
+          parseXml(content, "_rels/.rels") match
+            case Right(elem) =>
+              Relationships.fromXml(elem).foreach(rels => rootRels = Some(rels))
+            case Left(_) => () // Silently ignore - will use minimal fallback
+        else if entryName == "xl/_rels/workbook.xml.rels" then
+          val content = new String(sourceZip.readAllBytes(), "UTF-8")
+          parseXml(content, "xl/_rels/workbook.xml.rels") match
+            case Right(elem) =>
+              Relationships.fromXml(elem).foreach(rels => workbookRels = Some(rels))
+            case Left(_) => () // Silently ignore - will use minimal fallback
+        else if entryName == "xl/workbook.xml" then
+          val content = new String(sourceZip.readAllBytes(), "UTF-8")
+          parseXml(content, "xl/workbook.xml") match
+            case Right(elem) =>
+              OoxmlWorkbook.fromXml(elem).foreach(wb => workbook = Some(wb))
+            case Left(_) => () // Silently ignore - will use minimal fallback
+        else sourceZip.readAllBytes() // Consume entry
+
+        sourceZip.closeEntry()
+        entry = sourceZip.getNextEntry
+    finally sourceZip.close()
+
+    (contentTypes, rootRels, workbookRels, workbook)
+
+  /** Parse XML with XXE protection (same as XlsxReader) */
+  private def parseXml(xmlString: String, location: String): XLResult[Elem] =
+    try
+      val factory = javax.xml.parsers.SAXParserFactory.newInstance()
+      factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+      factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
+      factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+      factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+      factory.setXIncludeAware(false)
+      factory.setNamespaceAware(true)
+
+      val loader = XML.withSAXParser(factory.newSAXParser())
+      Right(loader.loadString(xmlString))
+    catch
+      case e: Exception => Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))
+
+  /**
+   * Parse worksheet XML from source ZIP to extract preserved metadata.
+   *
+   * Returns the parsed OoxmlWorksheet with all metadata (cols, views, etc.) for merging during
+   * regeneration.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def parsePreservedWorksheet(
+    sourcePath: Path,
+    sheetPath: String
+  ): Option[OoxmlWorksheet] =
+    val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
+    try
+      var entry = sourceZip.getNextEntry
+      var result: Option[OoxmlWorksheet] = None
+
+      while entry != null && result.isEmpty do
+        if entry.getName == sheetPath then
+          val content = new String(sourceZip.readAllBytes(), "UTF-8")
+          result = parseXml(content, sheetPath).toOption
+            .flatMap(OoxmlWorksheet.fromXml(_).toOption)
+
+        sourceZip.closeEntry()
+        entry = sourceZip.getNextEntry
+
+      result
+    finally sourceZip.close()
+
+  /**
    * Hybrid write: regenerate modified parts, copy preserved parts.
    *
    * Strategy:
@@ -487,19 +584,36 @@ object XlsxWriter:
 
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
     val styles = OoxmlStyles(styleIndex)
-    val ooxmlWb = OoxmlWorkbook.fromDomain(workbook)
 
-    // Create structural parts
-    val contentTypes = ContentTypes.minimal(
-      hasStyles = true,
-      hasSharedStrings = sst.isDefined,
-      sheetCount = workbook.sheets.size
+    // Preserve structural parts from source (or fallback to minimal)
+    val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =
+      parsePreservedStructure(ctx.sourcePath)
+
+    // Use preserved workbook structure if available, otherwise create minimal
+    val ooxmlWb = preservedWorkbook match
+      case Some(preserved) =>
+        // Update sheets in preserved structure (names/order may have changed)
+        preserved.updateSheets(workbook.sheets)
+      case None =>
+        // Fallback to minimal for programmatically created workbooks
+        OoxmlWorkbook.fromDomain(workbook)
+
+    val contentTypes = preservedContentTypes.getOrElse(
+      ContentTypes.minimal(
+        hasStyles = true,
+        hasSharedStrings = sst.isDefined,
+        sheetCount = workbook.sheets.size
+      )
     )
-    val rootRels = Relationships.root()
-    val workbookRels = Relationships.workbook(
-      sheetCount = workbook.sheets.size,
-      hasStyles = true,
-      hasSharedStrings = sst.isDefined
+
+    val rootRels = preservedRootRels.getOrElse(Relationships.root())
+
+    val workbookRels = preservedWorkbookRels.getOrElse(
+      Relationships.workbook(
+        sheetCount = workbook.sheets.size,
+        hasStyles = true,
+        hasSharedStrings = sst.isDefined
+      )
     )
 
     // Open output ZIP
@@ -522,9 +636,12 @@ object XlsxWriter:
       // Write sheets: regenerate modified, copy unmodified
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
         if tracker.modifiedSheets.contains(idx) then
-          // Regenerate modified sheet
+          // Regenerate modified sheet with preserved metadata
+          val sheetPath = graph.pathForSheet(idx)
+          val preservedMetadata = parsePreservedWorksheet(ctx.sourcePath, sheetPath)
           val remapping = sheetRemappings.getOrElse(idx, Map.empty)
-          val ooxmlSheet = OoxmlWorksheet.fromDomainWithSST(sheet, sst, remapping)
+          val ooxmlSheet =
+            OoxmlWorksheet.fromDomainWithMetadata(sheet, sst, remapping, preservedMetadata)
           writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet.toXml, config)
         else
           // Copy unmodified sheet from source

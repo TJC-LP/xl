@@ -69,10 +69,14 @@ workbook.sourceContext match
 
 println("\n[Step 3] Making minimal modification...")
 val modifiedResult = for
-  sheet <- workbook(0) // Get first sheet
-  originalValue = sheet.cells.get(ref"A1").map(_.value)
-  _ = println(s"  Original A1 value: $originalValue")
-  updatedSheet <- sheet.put(ref"A1" -> "🎯 Modified by XL Surgical Write")
+  // Use "Syndigo - Valuation" by NAME (safe, not index-dependent)
+  sheet <- workbook("Syndigo - Valuation")
+  // Use Z100 - a safe empty cell far from data
+  testCell = ref"Z100"
+  originalValue = sheet.cells.get(testCell).map(_.value)
+  _ = println(s"  Target: Sheet '${sheet.name.value}', Cell: ${testCell.toA1}")
+  _ = println(s"  Original ${testCell.toA1} value: $originalValue")
+  updatedSheet <- sheet.put(testCell -> "🎯 Modified by XL Surgical Write")
   updated <- workbook.put(updatedSheet)
 yield updated
 
@@ -86,8 +90,11 @@ val modified = modifiedResult match
 
 modified.sourceContext.foreach { ctx =>
   val tracker = ctx.modificationTracker
+  val modifiedSheetNames = tracker.modifiedSheets.flatMap(idx =>
+    modified.sheets.lift(idx).map(_.name.value)
+  ).mkString(", ")
   println(s"\n  Modification Tracker:")
-  println(s"    Modified sheets: ${tracker.modifiedSheets}")
+  println(s"    Modified sheets: ${tracker.modifiedSheets} ($modifiedSheetNames)")
   println(s"    Deleted sheets: ${tracker.deletedSheets}")
   println(s"    Reordered: ${tracker.reorderedSheets}")
   println(s"    Is clean: ${tracker.isClean}")
@@ -121,13 +128,16 @@ val reloaded = verifyResult match
     println(s"  ✗ Failed to reload: $err")
     sys.exit(1)
 
-// Verify modified cell
-val cellValue = reloaded(0).flatMap(sheet => Right(sheet.cells.get(ref"A1").map(_.value)))
+// Verify modified cell by SHEET NAME
+val testCell = ref"Z100"
+val cellValue = reloaded("Syndigo - Valuation").flatMap(sheet =>
+  Right(sheet.cells.get(testCell).map(_.value))
+)
 cellValue match
   case Right(Some(value)) =>
-    println(s"  ✓ Modified cell value: $value")
+    println(s"  ✓ Modified cell ${testCell.toA1} in 'Syndigo - Valuation': $value")
   case _ =>
-    println("  ✗ Modified cell not found")
+    println(s"  ✗ Modified cell ${testCell.toA1} not found in 'Syndigo - Valuation'")
 
 // Compare unknown parts count
 val originalUnknownCount = workbook.sourceContext.get.partManifest.unparsedParts.size
@@ -175,10 +185,11 @@ println("SURGICAL MODIFICATION SUCCESSFUL! 🎉")
 println("=" * 80)
 println("\nSummary:")
 println(s"  - Read ${workbook.sheets.size} sheets")
-println(s"  - Modified 1 cell in 1 sheet")
+println(s"  - Modified 1 cell (Z100) in 'Syndigo - Valuation' sheet (by name, not index)")
 println(s"  - Preserved ${originalUnknownCount} unknown parts")
 println("\nThe hybrid write strategy:")
-println("  ✓ Regenerated only the modified sheet")
-println("  ✓ Copied all unmodified sheets byte-for-byte")
-println("  ✓ Preserved all unknown parts (charts, images, etc.)")
+println("  ✓ Regenerated only 'Syndigo - Valuation' (the modified sheet)")
+println("  ✓ Copied 8 unmodified sheets byte-for-byte (including hidden system sheets)")
+println("  ✓ Preserved all unknown parts (charts, images, comments, calcChain, etc.)")
+println("  ✓ Preserved structural files (ContentTypes, Relationships)")
 println("\n" + "=" * 80)

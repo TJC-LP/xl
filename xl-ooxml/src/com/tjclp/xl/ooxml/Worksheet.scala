@@ -112,31 +112,110 @@ case class OoxmlRow(
 /**
  * Worksheet for xl/worksheets/sheet#.xml
  *
- * Contains the actual cell data in <sheetData> and merged cell ranges in <mergeCells>.
+ * Contains cell data in <sheetData> and preserves all worksheet metadata for surgical modification.
+ * Unparsed elements are preserved as raw XML to maintain Excel compatibility.
+ *
+ * Elements are emitted in OOXML Part 1 schema order (§18.3.1.99).
+ *
+ * @param rows
+ *   Row data with cells
+ * @param mergedRanges
+ *   Merged cell ranges
+ * @param sheetPr
+ *   Sheet properties (pageSetUpPr, outlinePr, tabColor, etc.)
+ * @param dimension
+ *   Used range reference (e.g., ref="B1:U104")
+ * @param sheetViews
+ *   View settings (zoom, gridLines, selection, tabSelected, pane, etc.)
+ * @param sheetFormatPr
+ *   Default row/column sizes and outline levels
+ * @param cols
+ *   Column definitions (CRITICAL - widths, styles, hidden, outlineLevel, etc.)
+ * @param pageMargins
+ *   Page margins (left, right, top, bottom, header, footer)
+ * @param pageSetup
+ *   Page setup (orientation, paperSize, scale, fitToWidth, fitToHeight, etc.)
+ * @param headerFooter
+ *   Header and footer content
+ * @param drawing
+ *   Drawing reference for charts (r:id link to drawing.xml)
+ * @param legacyDrawing
+ *   Legacy VML drawing reference for comments (r:id link to vmlDrawing.vml)
+ * @param picture
+ *   Background picture reference
+ * @param oleObjects
+ *   OLE objects
+ * @param controls
+ *   ActiveX controls
+ * @param extLst
+ *   Extensions
+ * @param otherElements
+ *   Any other elements not explicitly handled
  */
 case class OoxmlWorksheet(
   rows: Seq[OoxmlRow],
-  mergedRanges: Set[CellRange] = Set.empty
+  mergedRanges: Set[CellRange] = Set.empty,
+  // Worksheet metadata (emitted in OOXML schema order)
+  sheetPr: Option[Elem] = None,
+  dimension: Option[Elem] = None,
+  sheetViews: Option[Elem] = None,
+  sheetFormatPr: Option[Elem] = None,
+  cols: Option[Elem] = None,
+  // Page layout
+  pageMargins: Option[Elem] = None,
+  pageSetup: Option[Elem] = None,
+  headerFooter: Option[Elem] = None,
+  // Drawings and objects
+  drawing: Option[Elem] = None,
+  legacyDrawing: Option[Elem] = None,
+  picture: Option[Elem] = None,
+  oleObjects: Option[Elem] = None,
+  controls: Option[Elem] = None,
+  // Extensions
+  extLst: Option[Elem] = None,
+  otherElements: Seq[Elem] = Seq.empty
 ) extends XmlWritable:
 
   def toXml: Elem =
+    val children = Seq.newBuilder[Node]
+
+    // Emit in OOXML Part 1 schema order (§18.3.1.99) - critical for Excel compatibility
+    sheetPr.foreach(children += _)
+    dimension.foreach(children += _)
+    sheetViews.foreach(children += _)
+    sheetFormatPr.foreach(children += _)
+    cols.foreach(children += _) // Column definitions BEFORE sheetData
+
+    // sheetData (always regenerated with current cell values)
     val sheetDataElem = elem("sheetData")(
       rows.sortBy(_.rowIndex).map(_.toXml)*
     )
+    children += sheetDataElem
 
-    // Add mergeCells element if there are merged ranges
-    val mergeCellsElem = if mergedRanges.nonEmpty then
-      // Sort by (row, col) for deterministic, natural ordering (A1, A2, ..., A10, ..., B1, ...)
-      // This gives row-major order and avoids lexicographic issues with string sort
+    // mergeCells (regenerated if present)
+    if mergedRanges.nonEmpty then
       val mergeCellElems = mergedRanges.toSeq
         .sortBy(r => (r.start.row.index0, r.start.col.index0))
-        .map { range =>
-          elem("mergeCell", "ref" -> range.toA1)()
-        }
-      Some(elem("mergeCells", "count" -> mergedRanges.size.toString)(mergeCellElems*))
-    else None
+        .map(range => elem("mergeCell", "ref" -> range.toA1)())
+      children += elem("mergeCells", "count" -> mergedRanges.size.toString)(mergeCellElems*)
 
-    val children = sheetDataElem +: mergeCellsElem.toList
+    // Page layout (after sheetData/mergeCells)
+    pageMargins.foreach(children += _)
+    pageSetup.foreach(children += _)
+    headerFooter.foreach(children += _)
+
+    // Drawings and objects
+    drawing.foreach(children += _)
+    legacyDrawing.foreach(children += _)
+    picture.foreach(children += _)
+    oleObjects.foreach(children += _)
+    controls.foreach(children += _)
+
+    // Extensions
+    extLst.foreach(children += _)
+
+    // Any other elements
+    otherElements.foreach(children += _)
 
     Elem(
       null,
@@ -148,7 +227,7 @@ case class OoxmlWorksheet(
       ),
       TopScope,
       minimizeEmpty = false,
-      children*
+      children.result()*
     )
 
 object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
@@ -173,6 +252,29 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     sheet: Sheet,
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int] = Map.empty
+  ): OoxmlWorksheet =
+    fromDomainWithMetadata(sheet, sst, styleRemapping, None)
+
+  /**
+   * Create worksheet from domain Sheet, preserving metadata from original worksheet XML.
+   *
+   * Used during surgical modification to regenerate sheetData while preserving all worksheet
+   * metadata (column widths, view settings, page setup, etc.).
+   *
+   * @param sheet
+   *   The domain Sheet with updated cell values
+   * @param sst
+   *   Optional SharedStrings table
+   * @param styleRemapping
+   *   Map from sheet-local styleId to workbook-level styleId
+   * @param preservedMetadata
+   *   Optional original worksheet to extract metadata from
+   */
+  def fromDomainWithMetadata(
+    sheet: Sheet,
+    sst: Option[SharedStrings],
+    styleRemapping: Map[Int, Int] = Map.empty,
+    preservedMetadata: Option[OoxmlWorksheet] = None
   ): OoxmlWorksheet =
     // Group cells by row
     val cellsByRow = sheet.cells.values
@@ -212,7 +314,32 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       OoxmlRow(rowIdx, ooxmlCells)
     }
 
-    OoxmlWorksheet(rows, sheet.mergedRanges)
+    // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
+    preservedMetadata match
+      case Some(preserved) =>
+        OoxmlWorksheet(
+          rows,
+          sheet.mergedRanges,
+          // Preserve all metadata from original
+          preserved.sheetPr,
+          preserved.dimension,
+          preserved.sheetViews,
+          preserved.sheetFormatPr,
+          preserved.cols,
+          preserved.pageMargins,
+          preserved.pageSetup,
+          preserved.headerFooter,
+          preserved.drawing,
+          preserved.legacyDrawing,
+          preserved.picture,
+          preserved.oleObjects,
+          preserved.controls,
+          preserved.extLst,
+          preserved.otherElements
+        )
+      case None =>
+        // No preserved metadata - create minimal worksheet
+        OoxmlWorksheet(rows, sheet.mergedRanges)
 
   /** Parse worksheet from XML (XmlReadable trait compatibility) */
   def fromXml(elem: Elem): Either[String, OoxmlWorksheet] =
@@ -221,11 +348,97 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
   /** Parse worksheet from XML with optional SharedStrings table */
   def fromXmlWithSST(elem: Elem, sst: Option[SharedStrings]): Either[String, OoxmlWorksheet] =
     for
+      // Parse sheetData (required)
       sheetDataElem <- getChild(elem, "sheetData")
       rowElems = getChildren(sheetDataElem, "row")
       rows <- parseRows(rowElems, sst)
+
+      // Parse mergeCells (optional)
       mergedRanges <- parseMergeCells(elem)
-    yield OoxmlWorksheet(rows, mergedRanges)
+
+      // Extract ALL preserved metadata elements (all optional)
+      sheetPr = (elem \ "sheetPr").headOption.collect { case e: Elem => e }
+      dimension = (elem \ "dimension").headOption.collect { case e: Elem => e }
+      sheetViews = (elem \ "sheetViews").headOption.collect { case e: Elem => e }
+      sheetFormatPr = (elem \ "sheetFormatPr").headOption.collect { case e: Elem => e }
+      cols = (elem \ "cols").headOption.collect { case e: Elem => e }
+
+      pageMargins = (elem \ "pageMargins").headOption.collect { case e: Elem => e }
+      pageSetup = (elem \ "pageSetup").headOption.collect { case e: Elem => e }
+      headerFooter = (elem \ "headerFooter").headOption.collect { case e: Elem => e }
+
+      drawing = (elem \ "drawing").headOption.collect { case e: Elem => e }
+      legacyDrawing = (elem \ "legacyDrawing").headOption.collect { case e: Elem => e }
+      picture = (elem \ "picture").headOption.collect { case e: Elem => e }
+      oleObjects = (elem \ "oleObjects").headOption.collect { case e: Elem => e }
+      controls = (elem \ "controls").headOption.collect { case e: Elem => e }
+
+      extLst = (elem \ "extLst").headOption.collect { case e: Elem => e }
+
+      // Collect any other elements we don't explicitly handle
+      knownElements = Set(
+        "sheetPr",
+        "dimension",
+        "sheetViews",
+        "sheetFormatPr",
+        "cols",
+        "sheetData",
+        "mergeCells",
+        "pageMargins",
+        "pageSetup",
+        "headerFooter",
+        "drawing",
+        "legacyDrawing",
+        "picture",
+        "oleObjects",
+        "controls",
+        "extLst",
+        // Additional elements from OOXML spec
+        "sheetCalcPr",
+        "sheetProtection",
+        "protectedRanges",
+        "scenarios",
+        "autoFilter",
+        "sortState",
+        "dataConsolidate",
+        "customSheetViews",
+        "phoneticPr",
+        "conditionalFormatting",
+        "dataValidations",
+        "hyperlinks",
+        "printOptions",
+        "rowBreaks",
+        "colBreaks",
+        "customProperties",
+        "cellWatches",
+        "ignoredErrors",
+        "smartTags",
+        "legacyDrawingHF",
+        "webPublishItems",
+        "tableParts"
+      )
+      otherElements = elem.child.collect {
+        case e: Elem if !knownElements.contains(e.label) => e
+      }
+    yield OoxmlWorksheet(
+      rows,
+      mergedRanges,
+      sheetPr,
+      dimension,
+      sheetViews,
+      sheetFormatPr,
+      cols,
+      pageMargins,
+      pageSetup,
+      headerFooter,
+      drawing,
+      legacyDrawing,
+      picture,
+      oleObjects,
+      controls,
+      extLst,
+      otherElements.toSeq
+    )
 
   private def parseMergeCells(worksheetElem: Elem): Either[String, Set[CellRange]] =
     // mergeCells is optional
