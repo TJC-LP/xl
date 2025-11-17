@@ -111,13 +111,46 @@ case class OoxmlCell(
 
     elem("c", attrs*)(valueElem*)
 
-/** Row in worksheet */
+/**
+ * Row in worksheet with full attribute preservation for surgical modification.
+ *
+ * Preserves all OOXML row attributes to maintain byte-level fidelity during regeneration.
+ */
 case class OoxmlRow(
   rowIndex: Int, // 1-based
-  cells: Seq[OoxmlCell]
+  cells: Seq[OoxmlCell],
+  // Row-level attributes (all optional)
+  spans: Option[String] = None, // "2:16" (cell coverage optimization hint)
+  style: Option[Int] = None, // s="7" (row-level style ID)
+  height: Option[Double] = None, // ht="24.95" (custom row height in points)
+  customHeight: Boolean = false, // customHeight="1"
+  customFormat: Boolean = false, // customFormat="1"
+  hidden: Boolean = false, // hidden="1"
+  outlineLevel: Option[Int] = None, // outlineLevel="1" (grouping level)
+  collapsed: Boolean = false, // collapsed="1" (outline collapsed)
+  thickBot: Boolean = false, // thickBot="1" (thick bottom border)
+  thickTop: Boolean = false, // thickTop="1" (thick top border)
+  dyDescent: Option[Double] = None // x14ac:dyDescent="0.25" (font descent adjustment)
 ):
   def toXml: Elem =
-    elem("row", "r" -> rowIndex.toString)(
+    val baseAttrs = Seq("r" -> rowIndex.toString)
+
+    val optionalAttrs = Seq.newBuilder[(String, String)]
+    spans.foreach(s => optionalAttrs += ("spans" -> s))
+    style.foreach(s => optionalAttrs += ("s" -> s.toString))
+    height.foreach(h => optionalAttrs += ("ht" -> h.toString))
+    if customHeight then optionalAttrs += ("customHeight" -> "1")
+    if customFormat then optionalAttrs += ("customFormat" -> "1")
+    if hidden then optionalAttrs += ("hidden" -> "1")
+    outlineLevel.foreach(l => optionalAttrs += ("outlineLevel" -> l.toString))
+    if collapsed then optionalAttrs += ("collapsed" -> "1")
+    if thickBot then optionalAttrs += ("thickBot" -> "1")
+    if thickTop then optionalAttrs += ("thickTop" -> "1")
+    dyDescent.foreach(d => optionalAttrs += ("x14ac:dyDescent" -> d.toString))
+
+    val allAttrs = baseAttrs ++ optionalAttrs.result()
+
+    elem("row", allAttrs*)(
       cells.sortBy(_.ref.col.index0).map(_.toXml)*
     )
 
@@ -173,6 +206,11 @@ case class OoxmlWorksheet(
   sheetViews: Option[Elem] = None,
   sheetFormatPr: Option[Elem] = None,
   cols: Option[Elem] = None,
+  conditionalFormatting: Seq[Elem] = Seq.empty,
+  printOptions: Option[Elem] = None,
+  rowBreaks: Option[Elem] = None,
+  colBreaks: Option[Elem] = None,
+  customPropertiesWs: Option[Elem] = None,
   // Page layout
   pageMargins: Option[Elem] = None,
   pageSetup: Option[Elem] = None,
@@ -213,10 +251,18 @@ case class OoxmlWorksheet(
         .map(range => elem("mergeCell", "ref" -> range.toA1)())
       children += elem("mergeCells", "count" -> mergedRanges.size.toString)(mergeCellElems*)
 
+    // Conditional formatting (multiple allowed)
+    conditionalFormatting.foreach(e => children += cleanNamespaces(e))
+
     // Page layout (after sheetData/mergeCells)
+    printOptions.foreach(e => children += cleanNamespaces(e))
     pageMargins.foreach(e => children += cleanNamespaces(e))
     pageSetup.foreach(e => children += cleanNamespaces(e))
     headerFooter.foreach(e => children += cleanNamespaces(e))
+
+    rowBreaks.foreach(e => children += cleanNamespaces(e))
+    colBreaks.foreach(e => children += cleanNamespaces(e))
+    customPropertiesWs.foreach(e => children += cleanNamespaces(e))
 
     // Drawings and objects
     drawing.foreach(e => children += cleanNamespaces(e))
@@ -282,13 +328,21 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     styleRemapping: Map[Int, Int] = Map.empty,
     preservedMetadata: Option[OoxmlWorksheet] = None
   ): OoxmlWorksheet =
+    // Build a map of row indices to preserved row attributes
+    val preservedRowAttrs = preservedMetadata
+      .map { preserved =>
+        preserved.rows.map(r => r.rowIndex -> r).toMap
+      }
+      .getOrElse(Map.empty)
+
     // Group cells by row
     val cellsByRow = sheet.cells.values
       .groupBy(_.ref.row.index1) // 1-based row index
       .toSeq
       .sortBy(_._1)
 
-    val rows = cellsByRow.map { case (rowIdx, cells) =>
+    // Create rows with cells (preserving attributes from original)
+    val rowsWithCells = cellsByRow.map { case (rowIdx, cells) =>
       val ooxmlCells = cells.map { cell =>
         // Remap sheet-local styleId to workbook-level index
         val globalStyleIdx = cell.styleId.flatMap { localId =>
@@ -317,14 +371,30 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
 
         OoxmlCell(cell.ref, value, globalStyleIdx, cellType)
       }.toSeq
-      OoxmlRow(rowIdx, ooxmlCells)
+
+      // Preserve row attributes from original if available
+      preservedRowAttrs.get(rowIdx) match
+        case Some(original) =>
+          // Merge: use original's attributes, replace cells with new data
+          original.copy(cells = ooxmlCells)
+        case None =>
+          // New row - create with defaults
+          OoxmlRow(rowIdx, ooxmlCells)
     }
+
+    // Preserve empty rows from original (critical for Row 1!)
+    val emptyRowsFromOriginal = preservedMetadata.toList.flatMap { preserved =>
+      preserved.rows.filter(_.cells.isEmpty)
+    }
+
+    // Combine rows with cells + empty rows, sort by index
+    val allRows = (rowsWithCells ++ emptyRowsFromOriginal).sortBy(_.rowIndex)
 
     // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
     preservedMetadata match
       case Some(preserved) =>
         OoxmlWorksheet(
-          rows,
+          allRows, // Use merged rows (with cells + empty rows)
           sheet.mergedRanges,
           // Preserve all metadata from original
           preserved.sheetPr,
@@ -332,6 +402,11 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.sheetViews,
           preserved.sheetFormatPr,
           preserved.cols,
+          preserved.conditionalFormatting,
+          preserved.printOptions,
+          preserved.rowBreaks,
+          preserved.colBreaks,
+          preserved.customPropertiesWs,
           preserved.pageMargins,
           preserved.pageSetup,
           preserved.headerFooter,
@@ -347,7 +422,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         )
       case None =>
         // No preserved metadata - create minimal worksheet
-        OoxmlWorksheet(rows, sheet.mergedRanges)
+        OoxmlWorksheet(rowsWithCells, sheet.mergedRanges)
 
   /** Parse worksheet from XML (XmlReadable trait compatibility) */
   def fromXml(elem: Elem): Either[String, OoxmlWorksheet] =
@@ -365,23 +440,41 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       mergedRanges <- parseMergeCells(elem)
 
       // Extract ALL preserved metadata elements (all optional)
-      sheetPr = (elem \ "sheetPr").headOption.collect { case e: Elem => e }
-      dimension = (elem \ "dimension").headOption.collect { case e: Elem => e }
-      sheetViews = (elem \ "sheetViews").headOption.collect { case e: Elem => e }
-      sheetFormatPr = (elem \ "sheetFormatPr").headOption.collect { case e: Elem => e }
-      cols = (elem \ "cols").headOption.collect { case e: Elem => e }
+      sheetPr = (elem \ "sheetPr").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      dimension = (elem \ "dimension").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      sheetViews = (elem \ "sheetViews").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      sheetFormatPr = (elem \ "sheetFormatPr").headOption.collect { case e: Elem =>
+        cleanNamespaces(e)
+      }
+      cols = (elem \ "cols").headOption.collect { case e: Elem => cleanNamespaces(e) }
 
-      pageMargins = (elem \ "pageMargins").headOption.collect { case e: Elem => e }
-      pageSetup = (elem \ "pageSetup").headOption.collect { case e: Elem => e }
-      headerFooter = (elem \ "headerFooter").headOption.collect { case e: Elem => e }
+      conditionalFormatting = elem.child.collect {
+        case e: Elem if e.label == "conditionalFormatting" => cleanNamespaces(e)
+      }
+      printOptions = (elem \ "printOptions").headOption.collect { case e: Elem =>
+        cleanNamespaces(e)
+      }
+      rowBreaks = (elem \ "rowBreaks").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      colBreaks = (elem \ "colBreaks").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      customPropertiesWs = (elem \ "customProperties").headOption.collect { case e: Elem =>
+        cleanNamespaces(e)
+      }
 
-      drawing = (elem \ "drawing").headOption.collect { case e: Elem => e }
-      legacyDrawing = (elem \ "legacyDrawing").headOption.collect { case e: Elem => e }
-      picture = (elem \ "picture").headOption.collect { case e: Elem => e }
-      oleObjects = (elem \ "oleObjects").headOption.collect { case e: Elem => e }
-      controls = (elem \ "controls").headOption.collect { case e: Elem => e }
+      pageMargins = (elem \ "pageMargins").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      pageSetup = (elem \ "pageSetup").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      headerFooter = (elem \ "headerFooter").headOption.collect { case e: Elem =>
+        cleanNamespaces(e)
+      }
 
-      extLst = (elem \ "extLst").headOption.collect { case e: Elem => e }
+      drawing = (elem \ "drawing").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      legacyDrawing = (elem \ "legacyDrawing").headOption.collect { case e: Elem =>
+        cleanNamespaces(e)
+      }
+      picture = (elem \ "picture").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      oleObjects = (elem \ "oleObjects").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      controls = (elem \ "controls").headOption.collect { case e: Elem => cleanNamespaces(e) }
+
+      extLst = (elem \ "extLst").headOption.collect { case e: Elem => cleanNamespaces(e) }
 
       // Collect any other elements we don't explicitly handle
       knownElements = Set(
@@ -436,6 +529,11 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       sheetViews,
       sheetFormatPr,
       cols,
+      conditionalFormatting,
+      printOptions,
+      rowBreaks,
+      colBreaks,
+      customPropertiesWs,
       pageMargins,
       pageSetup,
       headerFooter,
@@ -475,9 +573,37 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       for
         rStr <- getAttr(e, "r")
         rowIdx <- rStr.toIntOption.toRight(s"Invalid row index: $rStr")
+
+        // Extract ALL row attributes for byte-perfect preservation
+        spans = getAttrOpt(e, "spans")
+        style = getAttrOpt(e, "s").flatMap(_.toIntOption)
+        height = getAttrOpt(e, "ht").flatMap(_.toDoubleOption)
+        customHeight = getAttrOpt(e, "customHeight").contains("1")
+        customFormat = getAttrOpt(e, "customFormat").contains("1")
+        hidden = getAttrOpt(e, "hidden").contains("1")
+        outlineLevel = getAttrOpt(e, "outlineLevel").flatMap(_.toIntOption)
+        collapsed = getAttrOpt(e, "collapsed").contains("1")
+        thickBot = getAttrOpt(e, "thickBot").contains("1")
+        thickTop = getAttrOpt(e, "thickTop").contains("1")
+        dyDescent = getAttrOpt(e, "x14ac:dyDescent").flatMap(_.toDoubleOption)
+
         cellElems = getChildren(e, "c")
         cells <- parseCells(cellElems, sst)
-      yield OoxmlRow(rowIdx, cells)
+      yield OoxmlRow(
+        rowIdx,
+        cells,
+        spans,
+        style,
+        height,
+        customHeight,
+        customFormat,
+        hidden,
+        outlineLevel,
+        collapsed,
+        thickBot,
+        thickTop,
+        dyDescent
+      )
     }
 
     val errors = parsed.collect { case Left(err) => err }
