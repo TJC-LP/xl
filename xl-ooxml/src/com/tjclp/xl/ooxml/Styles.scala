@@ -129,6 +129,138 @@ object StyleIndex:
 
     (styleIndex, remappings)
 
+  /**
+   * Build surgical style index for modified sheets while preserving original styles.
+   *
+   * This variant is used during surgical modification to avoid corruption:
+   *   - Deduplicates styles ONLY from modified sheets (optimal compression)
+   *   - Preserves original styles from source for unmodified sheets (no remapping needed)
+   *   - Ensures unmodified sheets' style references remain valid after write
+   *
+   * Strategy:
+   *   1. Parse original styles.xml to get complete WorkbookStyles
+   *   2. Deduplicate styles from modified sheets only
+   *   3. Ensure all original styles are present in output (fill gaps if needed)
+   *   4. Return remappings ONLY for modified sheets (unmodified sheets use original IDs)
+   *
+   * @param wb
+   *   The workbook with modified sheets
+   * @param modifiedSheetIndices
+   *   Set of sheet indices that were modified (need style remapping)
+   * @param sourcePath
+   *   Path to original XLSX (for parsing styles.xml)
+   * @return
+   *   (StyleIndex with all original + deduplicated styles, Map[modifiedSheetIdx -> remapping])
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def fromWorkbookSurgical(
+    wb: Workbook,
+    modifiedSheetIndices: Set[Int],
+    sourcePath: java.nio.file.Path
+  ): (StyleIndex, Map[Int, Map[Int, Int]]) =
+    import scala.collection.mutable
+    import java.util.zip.ZipInputStream
+    import java.io.FileInputStream
+
+    // Step 1: Parse original styles.xml to get all original styles
+    val originalStyles: Vector[CellStyle] = {
+      val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
+      try
+        var entry = sourceZip.getNextEntry
+        var result: Vector[CellStyle] = Vector(CellStyle.default)
+
+        while entry != null && result.size == 1 do
+          if entry.getName == "xl/styles.xml" then
+            val content = new String(sourceZip.readAllBytes(), "UTF-8")
+            // Parse styles.xml using WorkbookStyles parser
+            val parsed = scala.xml.XML.loadString(content)
+            WorkbookStyles.fromXml(parsed).foreach { wbStyles =>
+              result = wbStyles.cellStyles
+            }
+
+          sourceZip.closeEntry()
+          entry = sourceZip.getNextEntry
+
+        result
+      finally sourceZip.close()
+    }
+
+    // Step 2: Build index starting with original styles (no deduplication yet)
+    var unifiedStyles = originalStyles
+    var unifiedIndex = originalStyles.zipWithIndex.map { case (style, idx) =>
+      style.canonicalKey -> StyleId(idx)
+    }.toMap
+    var nextIdx = originalStyles.size
+
+    // Step 3: Process ONLY modified sheets for deduplication
+    val remappings = wb.sheets.zipWithIndex.flatMap { case (sheet, sheetIdx) =>
+      if modifiedSheetIndices.contains(sheetIdx) then
+        val registry = sheet.styleRegistry
+        val remapping = mutable.Map[Int, Int]()
+
+        // Map each local styleId to global index (with deduplication)
+        registry.styles.zipWithIndex.foreach { case (style, localIdx) =>
+          val key = style.canonicalKey
+
+          unifiedIndex.get(key) match
+            case Some(globalIdx) =>
+              // Style already exists (either from original or previously added)
+              remapping(localIdx) = globalIdx.value
+            case None =>
+              // New style not in original - add to unified index
+              unifiedStyles = unifiedStyles :+ style
+              unifiedIndex = unifiedIndex + (key -> StyleId(nextIdx))
+              remapping(localIdx) = nextIdx
+              nextIdx += 1
+        }
+
+        Some(sheetIdx -> remapping.toMap)
+      else
+        // Unmodified sheet - no remapping needed (uses original style IDs)
+        None
+    }.toMap
+
+    // Step 4: Deduplicate components from unified styles
+    val uniqueFonts = {
+      val seen = mutable.LinkedHashSet.empty[Font]
+      unifiedStyles.foreach(style => seen += style.font)
+      seen.toVector
+    }
+    val uniqueFills = {
+      val seen = mutable.LinkedHashSet.empty[Fill]
+      unifiedStyles.foreach(style => seen += style.fill)
+      seen.toVector
+    }
+    val uniqueBorders = {
+      val seen = mutable.LinkedHashSet.empty[Border]
+      unifiedStyles.foreach(style => seen += style.border)
+      seen.toVector
+    }
+
+    // Collect custom number formats
+    val customNumFmts = {
+      val seen = mutable.LinkedHashSet.empty[String]
+      unifiedStyles.foreach { style =>
+        style.numFmt match
+          case NumFmt.Custom(code) => seen += code
+          case _ => ()
+      }
+      seen.toVector.zipWithIndex.map { case (code, idx) =>
+        (164 + idx, NumFmt.Custom(code))
+      }
+    }
+
+    val styleIndex = StyleIndex(
+      uniqueFonts,
+      uniqueFills,
+      uniqueBorders,
+      customNumFmts,
+      unifiedStyles,
+      unifiedIndex
+    )
+
+    (styleIndex, remappings)
+
 private val defaultStylesScope =
   NamespaceBinding(null, nsSpreadsheetML, TopScope)
 

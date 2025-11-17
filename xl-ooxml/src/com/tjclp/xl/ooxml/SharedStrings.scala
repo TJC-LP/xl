@@ -97,7 +97,10 @@ case class SharedStrings(
           // Use preserved raw <rPr> if available (byte-perfect), otherwise build from Font
           val rPrElems = run.rawRPrXml.flatMap { xmlString =>
             // Parse preserved XML string back to Elem for byte-perfect preservation
-            try Some(scala.xml.XML.loadString(xmlString).asInstanceOf[Elem])
+            try
+              val parsed = scala.xml.XML.loadString(xmlString).asInstanceOf[Elem]
+              // Strip redundant xmlns recursively from entire tree (namespace already on parent <sst>)
+              Some(XmlUtil.stripNamespaces(parsed))
             catch case _: Exception => None
           }.toList match
             case preserved if preserved.nonEmpty => preserved

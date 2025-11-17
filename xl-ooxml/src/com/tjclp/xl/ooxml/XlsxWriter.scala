@@ -677,9 +677,9 @@ object XlsxWriter:
           // Create new SST with combined entries
           val combinedSST = SharedStrings(
             strings = allEntries,
-            indexMap = allEntries.zipWithIndex.flatMap {
-              case (Left(s), idx) => Some(s -> idx)
-              case (Right(_), _) => None // RichText not indexed by string
+            indexMap = allEntries.zipWithIndex.map {
+              case (Left(s), idx) => SharedStrings.normalize(s) -> idx
+              case (Right(rt), idx) => SharedStrings.normalize(rt.toPlainText) -> idx
             }.toMap,
             totalCount = combinedTotalCount
           )
@@ -699,7 +699,12 @@ object XlsxWriter:
 
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
 
-    val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
+    // Use surgical style mode to preserve original style IDs for unmodified sheets
+    val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbookSurgical(
+      workbook,
+      tracker.modifiedSheets,
+      ctx.sourcePath
+    )
 
     // Parse preserved styles namespaces (critical for Excel extension support)
     val (preservedStylesAttrs, preservedStylesScope) = parsePreservedStylesNamespaces(

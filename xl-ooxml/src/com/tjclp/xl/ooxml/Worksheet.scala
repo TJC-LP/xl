@@ -61,7 +61,10 @@ case class OoxmlCell(
           // Use preserved raw <rPr> if available (byte-perfect), otherwise build from Font
           val rPrElems = run.rawRPrXml.flatMap { xmlString =>
             // Parse preserved XML string back to Elem for byte-perfect preservation
-            try Some(scala.xml.XML.loadString(xmlString).asInstanceOf[scala.xml.Elem])
+            try
+              val parsed = scala.xml.XML.loadString(xmlString).asInstanceOf[scala.xml.Elem]
+              // Strip redundant xmlns recursively from entire tree (namespace already on parent)
+              Some(XmlUtil.stripNamespaces(parsed))
             catch case _: Exception => None
           }.toList match
             case preserved if preserved.nonEmpty => preserved
@@ -368,9 +371,11 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
             sst.flatMap(_.indexOf(s)) match
               case Some(idx) => ("s", com.tjclp.xl.cell.CellValue.Text(idx.toString))
               case None => ("inlineStr", cell.value)
-          case com.tjclp.xl.cell.CellValue.RichText(_) =>
-            // Rich text is always inline (cannot be shared)
-            ("inlineStr", cell.value)
+          case com.tjclp.xl.cell.CellValue.RichText(rt) =>
+            // Check if RichText exists in SST (it can be shared!)
+            sst.flatMap(_.indexOf(rt)) match
+              case Some(idx) => ("s", com.tjclp.xl.cell.CellValue.Text(idx.toString))
+              case None => ("inlineStr", cell.value)
           case com.tjclp.xl.cell.CellValue.Number(_) => ("n", cell.value)
           case com.tjclp.xl.cell.CellValue.Bool(_) => ("b", cell.value)
           case com.tjclp.xl.cell.CellValue.DateTime(dt) =>

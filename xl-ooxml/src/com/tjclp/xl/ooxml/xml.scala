@@ -151,6 +151,31 @@ object XmlUtil:
     s.nonEmpty && (s.startsWith(" ") || s.endsWith(" ") || s.contains("  "))
 
   /**
+   * Recursively strip namespace declarations from XML element tree.
+   *
+   * Removes redundant xmlns attributes that cause Excel corruption when elements are re-embedded in
+   * a parent that already declares the namespace.
+   *
+   * REQUIRES: elem is valid Elem ENSURES:
+   *   - Returns Elem with TopScope (no namespace bindings)
+   *   - Recursively processes all child Elems
+   *   - Preserves all attributes except xmlns
+   *   - Preserves text content and structure
+   * DETERMINISTIC: Yes (pure transformation)
+   *
+   * @param elem
+   *   Element to strip namespaces from
+   * @return
+   *   Element with TopScope applied recursively
+   */
+  def stripNamespaces(elem: Elem): Elem =
+    val cleanedChildren = elem.child.map {
+      case e: Elem => stripNamespaces(e)
+      case other => other
+    }
+    elem.copy(scope = TopScope, child = cleanedChildren)
+
+  /**
    * Parse run properties (<rPr>) to Font.
    *
    * REQUIRES: rPrElem is <rPr> element from OOXML ENSURES:
