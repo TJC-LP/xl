@@ -91,10 +91,10 @@ object XmlUtil:
     val printer = new PrettyPrinter(80, 2)
     s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${printer.format(node)}"""
 
-  /** Compact XML without indentation or newlines */
+  /** Compact XML without indentation (newline after declaration for Excel compatibility) */
   def compact(node: Node): String =
     val printer = new PrettyPrinter(0, 0)
-    s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>${printer.format(node)}"""
+    s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${printer.format(node)}"""
 
   /** Get required attribute value */
   def getAttr(elem: Elem, name: String): Either[String, String] =

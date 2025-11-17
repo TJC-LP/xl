@@ -268,7 +268,8 @@ private val defaultStylesScope =
 case class OoxmlStyles(
   index: StyleIndex,
   rootAttributes: Option[MetaData] = None,
-  rootScope: NamespaceBinding = defaultStylesScope
+  rootScope: NamespaceBinding = defaultStylesScope,
+  preservedDxfs: Option[Elem] = None // Differential formats for conditional formatting
 ) extends XmlWritable:
 
   def toXml: Elem =
@@ -366,8 +367,14 @@ case class OoxmlStyles(
       }*
     )
 
-    // Assemble styles.xml with preserved namespaces
-    val children = numFmtsElem.toList ++ Seq(fontsElem, fillsElem, bordersElem, cellXfsElem)
+    // Assemble styles.xml with preserved namespaces and differential formats
+    // OOXML order: numFmts, fonts, fills, borders, cellXfs, dxfs
+    val children = numFmtsElem.toList ++ Seq(
+      fontsElem,
+      fillsElem,
+      bordersElem,
+      cellXfsElem
+    ) ++ preservedDxfs.toList
 
     // Use preserved attributes if available, otherwise create minimal xmlns
     rootAttributes match

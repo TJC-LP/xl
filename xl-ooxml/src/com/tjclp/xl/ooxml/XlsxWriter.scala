@@ -249,6 +249,7 @@ object XlsxWriter:
     config: WriterConfig
   ): Unit =
     val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
+    zip.setLevel(1) // Match Excel's compression level (super fast)
     try
       // Write parts in canonical order
       writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
@@ -284,6 +285,7 @@ object XlsxWriter:
     config: WriterConfig
   ): Unit =
     val zip = new ZipOutputStream(stream)
+    zip.setLevel(1) // Match Excel's compression level (super fast)
     try
       // Write parts in canonical order
       writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
@@ -579,19 +581,21 @@ object XlsxWriter:
     finally sourceZip.close()
 
   /**
-   * Parse preserved styles.xml to extract namespace metadata.
+   * Parse preserved styles.xml to extract namespace metadata and differential formats.
    *
-   * Critical for preserving Excel extension namespaces (x14ac, x16r2, xr, mc:Ignorable).
+   * Critical for preserving Excel extension namespaces (x14ac, x16r2, xr, mc:Ignorable) and
+   * differential formats used by conditional formatting.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private def parsePreservedStylesNamespaces(
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def parsePreservedStylesMetadata(
     sourcePath: Path
-  ): (Option[MetaData], NamespaceBinding) =
+  ): (Option[MetaData], NamespaceBinding, Option[Elem]) =
     val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
     try
       var entry = sourceZip.getNextEntry
       var attrs: Option[MetaData] = None
       var scope: NamespaceBinding = TopScope
+      var dxfs: Option[Elem] = None
 
       while entry != null && attrs.isEmpty do
         if entry.getName == "xl/styles.xml" then
@@ -599,12 +603,14 @@ object XlsxWriter:
           parseXml(content, "xl/styles.xml").toOption.foreach { elem =>
             attrs = Some(elem.attributes)
             scope = elem.scope
+            // Extract <dxfs> element if present (needed for conditional formatting)
+            dxfs = (elem \ "dxfs").headOption.map(_.asInstanceOf[Elem])
           }
 
         sourceZip.closeEntry()
         entry = sourceZip.getNextEntry
 
-      (attrs, scope)
+      (attrs, scope, dxfs)
     finally sourceZip.close()
 
   /**
@@ -706,11 +712,11 @@ object XlsxWriter:
       ctx.sourcePath
     )
 
-    // Parse preserved styles namespaces (critical for Excel extension support)
-    val (preservedStylesAttrs, preservedStylesScope) = parsePreservedStylesNamespaces(
+    // Parse preserved styles metadata (namespaces and dxfs for conditional formatting)
+    val (preservedStylesAttrs, preservedStylesScope, preservedDxfs) = parsePreservedStylesMetadata(
       ctx.sourcePath
     )
-    val styles = OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope)
+    val styles = OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, preservedDxfs)
 
     // Preserve structural parts from source (or fallback to minimal)
     val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =
@@ -747,6 +753,9 @@ object XlsxWriter:
     val zip = target match
       case OutputPath(path) => new ZipOutputStream(new FileOutputStream(path.toFile))
       case OutputStreamTarget(stream) => new ZipOutputStream(stream)
+
+    // Set compression level to match Excel (level 1 = super fast, matches original defS)
+    zip.setLevel(1)
 
     try
       // Write structural parts (always regenerated)

@@ -398,19 +398,9 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           // New row - create with defaults
           OoxmlRow(rowIdx, ooxmlCells)
 
-      // Validate row-level style: only keep if ALL cells use the same style
-      // Per OOXML spec, row `s` attribute only valid if all cells inherit it
-      val allCellsUseSameStyle = baseRow.style.exists { rowStyle =>
-        ooxmlCells.forall(c => c.styleIndex.contains(rowStyle) || c.styleIndex.isEmpty)
-      }
-
-      val validatedRow =
-        if !allCellsUseSameStyle then
-          // Cells have varied styles - remove row-level style and customFormat
-          baseRow.copy(style = None, customFormat = false)
-        else baseRow
-
-      validatedRow
+      // Preserve row-level style exactly as-is from original (even if "invalid" per spec)
+      // Excel expects these preserved, removing them causes corruption warnings
+      baseRow
     }
 
     // Preserve empty rows from original (critical for Row 1!)
