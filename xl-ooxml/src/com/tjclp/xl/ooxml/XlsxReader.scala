@@ -4,6 +4,7 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cell.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.{ModificationTracker, SourceContext}
 
 import scala.xml.*
 import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
@@ -41,9 +42,44 @@ object XlsxReader:
   case class ReadResult(workbook: Workbook, warnings: Vector[Warning])
 
   /**
+   * Handle for accessing source file during read (enables surgical modification).
+   *
+   * Provides the path to the original file, which allows XlsxReader to create a SourceContext with
+   * PreservedPartStore for unknown parts.
+   */
+  case class SourceHandle(path: Path)
+
+  /** Set of ZIP entry paths that XL knows how to parse. All other entries are preserved. */
+  private val knownParts: Set[String] = Set(
+    "[Content_Types].xml",
+    "_rels/.rels",
+    "xl/workbook.xml",
+    "xl/_rels/workbook.xml.rels",
+    "xl/styles.xml",
+    "xl/sharedStrings.xml"
+  )
+
+  /**
+   * Checks if the given ZIP entry path is a known part that XL can parse.
+   *
+   * Known parts include:
+   *   - Core OOXML parts (workbook, styles, sharedStrings)
+   *   - Worksheets (pattern: xl/worksheets/sheet*.xml)
+   *   - Relationships
+   *
+   * All other parts (charts, drawings, images, etc.) are preserved byte-for-byte.
+   */
+  private def isKnownPart(path: String): Boolean =
+    knownParts.contains(path) || path.matches("xl/worksheets/sheet\\d+\\.xml")
+
+  /**
    * Read workbook from XLSX file (in-memory).
    *
    * Loads entire file into memory. For large files, use `ExcelIO.readStream()` instead.
+   *
+   * **Surgical Modification**: When reading from a file (not a stream), XL creates a SourceContext
+   * that enables surgical writes. Unknown parts (charts, images, etc.) are indexed but not loaded
+   * into memory, allowing them to be preserved byte-for-byte on write.
    */
   def read(inputPath: Path): XLResult[Workbook] =
     readWithWarnings(inputPath).map(_.workbook)
@@ -53,7 +89,7 @@ object XlsxReader:
     try
       val is = new FileInputStream(inputPath.toFile)
       try
-        readFromStreamWithWarnings(is)
+        readFromStreamWithWarnings(is, Some(SourceHandle(inputPath)))
       finally
         is.close()
     catch case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
@@ -63,36 +99,83 @@ object XlsxReader:
     readFromBytesWithWarnings(bytes).map(_.workbook)
 
   def readFromBytesWithWarnings(bytes: Array[Byte]): XLResult[ReadResult] =
-    try readFromStreamWithWarnings(new ByteArrayInputStream(bytes))
+    try readFromStreamWithWarnings(new ByteArrayInputStream(bytes), None)
     catch case e: Exception => Left(XLError.IOError(s"Failed to read bytes: ${e.getMessage}"))
 
-  /** Read workbook from input stream */
+  /** Read workbook from input stream (no surgical modification support) */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def readFromStream(is: InputStream): XLResult[Workbook] =
-    readFromStreamWithWarnings(is).map(_.workbook)
+    readFromStreamWithWarnings(is, None).map(_.workbook)
 
+  /**
+   * Read workbook from input stream with optional source handle for surgical modification.
+   *
+   * @param is
+   *   Input stream containing XLSX ZIP data
+   * @param source
+   *   Optional source handle providing path to original file. If provided, creates SourceContext
+   *   with indexed unknown parts for surgical writes.
+   * @return
+   *   ReadResult with workbook and warnings
+   */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def readFromStreamWithWarnings(is: InputStream): XLResult[ReadResult] =
+  private def readFromStreamWithWarnings(
+    is: InputStream,
+    source: Option[SourceHandle]
+  ): XLResult[ReadResult] =
     val zip = new ZipInputStream(is)
     val parts = mutable.Map[String, String]()
+    val manifestBuilder = PartManifestBuilder.empty
 
     try
-      // Read all ZIP entries
+      // Read all ZIP entries - index ALL entries, parse only KNOWN ones
+      var builder = manifestBuilder
       var entry = zip.getNextEntry
       while entry != null do
         if !entry.isDirectory then
-          val content = new String(zip.readAllBytes(), "UTF-8")
-          parts(entry.getName) = content
+          val entryName = entry.getName
+
+          // Record entry metadata in manifest (size, CRC, etc.)
+          builder = builder.+=(entry)
+
+          // Only parse known parts to save memory
+          if isKnownPart(entryName) then
+            val content = new String(zip.readAllBytes(), "UTF-8")
+            parts(entryName) = content
+            builder = builder.recordParsed(entryName)
+          else
+            // Unknown part - index but don't load content
+            builder = builder.recordUnparsed(entryName)
+            zip.readAllBytes() // Consume bytes but don't store
+
         zip.closeEntry()
         entry = zip.getNextEntry
 
-      // Parse workbook structure
-      parseWorkbook(parts.toMap)
+      // Build final manifest
+      val manifest = builder.build()
+
+      // Parse workbook structure from known parts
+      parseWorkbook(parts.toMap, source, manifest)
 
     finally zip.close()
 
-  /** Parse workbook from collected parts */
-  private def parseWorkbook(parts: Map[String, String]): XLResult[ReadResult] =
+  /**
+   * Parse workbook from collected parts and optionally create SourceContext.
+   *
+   * @param parts
+   *   Map of ZIP entry paths to their content (only known parts)
+   * @param source
+   *   Optional source handle for enabling surgical modification
+   * @param manifest
+   *   Part manifest with metadata for all ZIP entries (known + unknown)
+   * @return
+   *   ReadResult with workbook (with optional SourceContext) and warnings
+   */
+  private def parseWorkbook(
+    parts: Map[String, String],
+    source: Option[SourceHandle],
+    manifest: PartManifest
+  ): XLResult[ReadResult] =
     for
       // Parse workbook.xml
       workbookXml <- parts
@@ -116,8 +199,8 @@ object XlsxReader:
       // Parse sheets
       sheets <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
 
-      // Assemble workbook
-      workbook <- assembleWorkbook(sheets)
+      // Assemble workbook with optional SourceContext
+      workbook <- assembleWorkbook(sheets, source, manifest)
     yield ReadResult(workbook, styleWarnings)
 
   /** Parse optional shared strings table */
@@ -241,10 +324,32 @@ object XlsxReader:
         (nextRegistry, mapping.updated(idx, styleId))
     }
 
-  /** Assemble final workbook */
-  private def assembleWorkbook(sheets: Vector[Sheet]): XLResult[Workbook] =
+  /**
+   * Assemble final workbook with optional SourceContext for surgical modification.
+   *
+   * If a source handle is provided, creates a SourceContext that enables surgical writes by
+   * preserving unknown ZIP entries (charts, images, etc.) byte-for-byte.
+   *
+   * @param sheets
+   *   Parsed sheets
+   * @param source
+   *   Optional source handle (path to original file)
+   * @param manifest
+   *   Manifest of all ZIP entries (known + unknown)
+   * @return
+   *   Workbook with optional SourceContext
+   */
+  private def assembleWorkbook(
+    sheets: Vector[Sheet],
+    source: Option[SourceHandle],
+    manifest: PartManifest
+  ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
-    else Right(Workbook(sheets = sheets))
+    else
+      val sourceContext = source.map { handle =>
+        SourceContext.fromFile(handle.path, manifest)
+      }
+      Right(Workbook(sheets = sheets, sourceContext = sourceContext))
 
   /**
    * Parse XML string to Elem with XXE protection
