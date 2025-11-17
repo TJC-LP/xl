@@ -13,7 +13,7 @@ final case class SourceContext(
   sourcePath: Path,
   partManifest: PartManifest,
   modificationTracker: ModificationTracker
-):
+) derives CanEqual:
 
   /** True when no workbook modifications have been recorded. */
   def isClean: Boolean = modificationTracker.isClean

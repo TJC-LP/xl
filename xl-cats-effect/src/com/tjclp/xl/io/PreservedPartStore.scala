@@ -45,30 +45,36 @@ private final class ZipPreservedPartHandle(zip: ZipFile, manifest: PartManifest)
     if !manifest.contains(path) then
       IO.raiseError(new IllegalArgumentException(s"Unknown entry: $path"))
     else
-      IO.blocking {
-        val entry = Option(zip.getEntry(path)).getOrElse {
-          throw new IllegalStateException(s"Entry missing from source: $path")
-        }
-        val newEntry = new ZipEntry(path)
-        newEntry.setTime(0L)
-        newEntry.setMethod(entry.getMethod)
-        if entry.getMethod == ZipEntry.STORED then
-          newEntry.setSize(entry.getSize)
-          newEntry.setCompressedSize(entry.getCompressedSize)
-          newEntry.setCrc(entry.getCrc)
+      for
+        entry <- IO
+          .blocking(Option(zip.getEntry(path)))
+          .flatMap(opt =>
+            IO.fromOption(opt)(new IllegalStateException(s"Entry missing from source: $path"))
+          )
+        _ <- Resource
+          .make(IO.blocking(zip.getInputStream(entry)))(in =>
+            IO.blocking(in.close()).handleErrorWith(_ => IO.unit)
+          )
+          .use { in =>
+            IO.blocking {
+              val newEntry = new ZipEntry(path)
+              newEntry.setTime(0L)
+              newEntry.setMethod(entry.getMethod)
+              if entry.getMethod == ZipEntry.STORED then
+                newEntry.setSize(entry.getSize)
+                newEntry.setCompressedSize(entry.getCompressedSize)
+                newEntry.setCrc(entry.getCrc)
 
-        output.putNextEntry(newEntry)
-        val in = zip.getInputStream(entry)
-        try
-          val buffer = new Array[Byte](8192)
-          var read = in.read(buffer)
-          while read != -1 do
-            output.write(buffer, 0, read)
-            read = in.read(buffer)
-        finally
-          in.close()
-          output.closeEntry()
-      }
+              output.putNextEntry(newEntry)
+              val buffer = new Array[Byte](8192)
+              var read = in.read(buffer)
+              while read != -1 do
+                output.write(buffer, 0, read)
+                read = in.read(buffer)
+              output.closeEntry()
+            }
+          }
+      yield ()
 
 private final class EmptyPreservedPartHandle extends PreservedPartHandle:
   def exists(path: String): Boolean = false

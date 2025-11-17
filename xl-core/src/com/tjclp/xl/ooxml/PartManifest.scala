@@ -12,26 +12,50 @@ final case class PartManifestEntry(
   compressedSize: Option[Long],
   crc: Option[Long],
   method: Option[Int]
-)
+) derives CanEqual
 
 object PartManifestEntry:
   def unparsed(path: String): PartManifestEntry =
     PartManifestEntry(path, parsed = false, None, Set.empty, None, None, None, None)
 
 /** Complete manifest for all ZIP entries. */
-final case class PartManifest(entries: Map[String, PartManifestEntry]):
+final case class PartManifest(entries: Map[String, PartManifestEntry]) derives CanEqual:
 
+  /**
+   * Returns set of all ZIP entry paths that XL parsed (e.g., worksheets, styles.xml, SST). These
+   * parts will be regenerated during write operations.
+   */
   def parsedParts: Set[String] = entries.collect {
     case (path, entry) if entry.parsed => path
   }.toSet
 
+  /**
+   * Returns set of all ZIP entry paths that XL did not parse (e.g., charts, drawings). These parts
+   * will be preserved byte-for-byte during surgical write operations.
+   */
   def unparsedParts: Set[String] = entries.collect {
     case (path, entry) if !entry.parsed => path
   }.toSet
 
+  /**
+   * Returns the sheet indices that depend on the given ZIP entry path.
+   *
+   * @param path
+   *   ZIP entry path (e.g., "xl/worksheets/sheet1.xml")
+   * @return
+   *   Set containing the sheet index if this entry is a worksheet, empty set otherwise
+   */
   def dependentSheets(path: String): Set[Int] =
     entries.get(path).flatMap(_.sheetIndex).map(Set(_)).getOrElse(Set.empty)
 
+  /**
+   * Returns the set of relationship IDs that the given entry depends on.
+   *
+   * @param path
+   *   ZIP entry path
+   * @return
+   *   Set of relationship IDs referenced by this entry, empty set if entry not found
+   */
   def relationshipsFor(path: String): Set[String] =
     entries.get(path).map(_.relationships).getOrElse(Set.empty)
 
