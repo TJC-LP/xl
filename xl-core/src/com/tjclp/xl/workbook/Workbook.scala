@@ -221,8 +221,7 @@ case class Workbook(
         )
         .getOrElse(activeSheetIndex)
       val updatedContext = sourceContext.map { ctx =>
-        val tracker = ctx.modificationTracker.markSheets(sheets.indices.toSet)
-        ctx.copy(modificationTracker = tracker).markReordered
+        ctx.markReordered
       }
       Right(
         copy(sheets = reordered, activeSheetIndex = newActiveIndex, sourceContext = updatedContext)

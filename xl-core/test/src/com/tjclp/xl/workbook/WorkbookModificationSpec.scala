@@ -33,11 +33,11 @@ class WorkbookModificationSpec extends FunSuite:
     assertEquals(tracker.deletedSheets, Set(1))
   }
 
-  test("reorder marks reorder and all sheets modified") {
+  test("reorder marks reorder flag without marking sheets modified") {
     val sheet2 = Sheet("Sheet2").fold(err => fail(s"Failed to create sheet: $err"), identity)
     val wb = workbook.copy(sheets = Vector(baseSheet, sheet2))
     val reordered = wb.reorder(Vector(SheetName.unsafe("Sheet2"), SheetName.unsafe("Sheet1"))).fold(err => fail(s"Reorder failed: $err"), identity)
     val tracker = reordered.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assert(tracker.reorderedSheets)
-    assertEquals(tracker.modifiedSheets, Set(0, 1))
+    assertEquals(tracker.modifiedSheets, Set.empty)
   }
