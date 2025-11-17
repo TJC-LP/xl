@@ -6,9 +6,10 @@ import java.util.zip.{ZipInputStream, ZipOutputStream, ZipEntry, ZipFile}
 import java.nio.file.{Path, Files, StandardCopyOption}
 import java.nio.charset.StandardCharsets
 import scala.collection.mutable
-import com.tjclp.xl.api.Workbook
+import com.tjclp.xl.api.{Workbook, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.SourceContext
+import com.tjclp.xl.richtext.RichText
 
 /** Shared Strings Table usage policy */
 enum SstPolicy derives CanEqual:
@@ -578,6 +579,35 @@ object XlsxWriter:
     finally sourceZip.close()
 
   /**
+   * Parse preserved styles.xml to extract namespace metadata.
+   *
+   * Critical for preserving Excel extension namespaces (x14ac, x16r2, xr, mc:Ignorable).
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def parsePreservedStylesNamespaces(
+    sourcePath: Path
+  ): (Option[MetaData], NamespaceBinding) =
+    val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
+    try
+      var entry = sourceZip.getNextEntry
+      var attrs: Option[MetaData] = None
+      var scope: NamespaceBinding = TopScope
+
+      while entry != null && attrs.isEmpty do
+        if entry.getName == "xl/styles.xml" then
+          val content = new String(sourceZip.readAllBytes(), "UTF-8")
+          parseXml(content, "xl/styles.xml").toOption.foreach { elem =>
+            attrs = Some(elem.attributes)
+            scope = elem.scope
+          }
+
+        sourceZip.closeEntry()
+        entry = sourceZip.getNextEntry
+
+      (attrs, scope)
+    finally sourceZip.close()
+
+  /**
    * Hybrid write: regenerate modified parts, copy preserved parts.
    *
    * Strategy:
@@ -603,13 +633,60 @@ object XlsxWriter:
     val sharedStringsPath = "xl/sharedStrings.xml"
     val sourceHasSharedStrings = ctx.partManifest.contains(sharedStringsPath)
 
-    // If source has SST: parse it for modified sheet cell references (but copy verbatim to output)
-    // If no source SST: generate according to policy
+    // SST Strategy:
+    // - If modified sheets have new strings not in preserved SST → regenerate (to avoid inline string corruption)
+    // - If modified sheets only use existing SST strings → copy verbatim (byte-perfect preservation)
+    // - If no source SST → generate according to policy
     val (sst, regenerateSharedStrings) =
       if sourceHasSharedStrings then
-        // Parse preserved SST so modified sheets can reference SST indices (NOT inline strings!)
+        // Parse preserved SST
         val parsedSST = parsePreservedSST(ctx.sourcePath)
-        (parsedSST, false) // Don't regenerate - will copy verbatim
+
+        // Check if modified sheets contain NEW strings not in preserved SST
+        // Extract Either[String, RichText] entries from modified sheets
+        val modifiedSheetEntries: Set[Either[String, RichText]] =
+          tracker.modifiedSheets.flatMap { idx =>
+            workbook.sheets.lift(idx).toList.flatMap { sheet =>
+              sheet.cells.values.flatMap { cell =>
+                cell.value match
+                  case CellValue.Text(str) => Some(Left(str))
+                  case CellValue.RichText(rt) => Some(Right(rt))
+                  case _ => None
+              }
+            }
+          }.toSet
+
+        // Get preserved SST entries
+        val preservedEntries: Set[Either[String, RichText]] =
+          parsedSST.map(_.strings.toSet).getOrElse(Set.empty)
+
+        // Compare entries directly (Either equality works if content matches)
+        val hasNewStrings = !modifiedSheetEntries.subsetOf(preservedEntries)
+
+        if hasNewStrings then
+          // New strings detected → build SST from preserved + new entries only
+          // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
+          val newEntries = modifiedSheetEntries.diff(preservedEntries).toVector
+          val allEntries = parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries
+
+          // Calculate total reference count: preserved count + new string references
+          val originalTotalCount = parsedSST.map(_.totalCount).getOrElse(0)
+          val newStringRefCount = newEntries.size // Each new entry used at least once
+          val combinedTotalCount = originalTotalCount + newStringRefCount
+
+          // Create new SST with combined entries
+          val combinedSST = SharedStrings(
+            strings = allEntries,
+            indexMap = allEntries.zipWithIndex.flatMap {
+              case (Left(s), idx) => Some(s -> idx)
+              case (Right(_), _) => None // RichText not indexed by string
+            }.toMap,
+            totalCount = combinedTotalCount
+          )
+          (Some(combinedSST), true)
+        else
+          // No new strings → copy preserved SST verbatim for byte-perfect preservation
+          (parsedSST, false)
       else
         // No source SST - generate if policy allows
         val generated = config.sstPolicy match
@@ -623,7 +700,12 @@ object XlsxWriter:
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
 
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
-    val styles = OoxmlStyles(styleIndex)
+
+    // Parse preserved styles namespaces (critical for Excel extension support)
+    val (preservedStylesAttrs, preservedStylesScope) = parsePreservedStylesNamespaces(
+      ctx.sourcePath
+    )
+    val styles = OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope)
 
     // Preserve structural parts from source (or fallback to minimal)
     val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =

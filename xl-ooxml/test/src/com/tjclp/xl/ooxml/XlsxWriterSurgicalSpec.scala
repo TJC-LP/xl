@@ -248,15 +248,23 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val sharedStringsEntry = "xl/sharedStrings.xml"
     val sourceSst = readEntryBytes(sourceZip, sourceZip.getEntry(sharedStringsEntry))
     val outputSst = readEntryBytes(outputZip, outputZip.getEntry(sharedStringsEntry))
-    assertEquals(outputSst.toSeq, sourceSst.toSeq, "sharedStrings.xml should be preserved byte-for-byte")
+
+    // SST should be REGENERATED (not byte-identical) because "Updated Text" is a new string
+    // This prevents inline string corruption that Excel rejects
+    assert(outputSst.length >= sourceSst.length, "Output SST should contain original + new strings")
+    assert(!java.util.Arrays.equals(outputSst, sourceSst), "SST should be regenerated for new strings")
 
     val sheetXmlBytes = readEntryBytes(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
     val sheetXml = new String(sheetXmlBytes, "UTF-8")
 
-    // Modified sheet should use SST references for existing strings, inline for new strings
-    assert(sheetXml.contains("""t="s""""), "Existing cells should use SST references (t=\"s\")")
-    // New cell "Updated Text" may use inline if not in original SST
-    assert(sheetXml.contains("Updated Text"), "Modified cell should be present")
+    // ALL cells (including the new one) should use SST references (t="s") to avoid corruption
+    assert(sheetXml.contains("""t="s""""), "All cells should use SST references (t=\"s\")")
+    assert(!sheetXml.contains("""t="inlineStr""""), "Should not use inline strings (causes corruption)")
+
+    // Verify the modified cell is present
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    val cell = reloaded("Sheet1").flatMap(s => Right(s.cells.get(ref"A1"))).fold(err => fail(s"Get cell failed: $err"), identity)
+    assertEquals(cell.map(_.value), Some(CellValue.Text("Updated Text")))
 
     sourceZip.close()
     outputZip.close()

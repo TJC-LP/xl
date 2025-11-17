@@ -13,10 +13,15 @@ import com.tjclp.xl.style.font.Font
  *   The text content of this run
  * @param font
  *   Optional font formatting (if None, inherits from cell style or defaults)
+ * @param rawRPrXml
+ *   Preserved raw `<rPr>` XML as string for byte-perfect round-tripping. Used during surgical
+ *   modification to preserve properties not in Font model (vertAlign, rFont, family, underline
+ *   styles). Takes precedence over `font` during serialization.
  */
 case class TextRun(
   text: String,
-  font: Option[Font] = None
+  font: Option[Font] = None,
+  rawRPrXml: Option[String] = None
 ):
   /** Append another TextRun or String to create RichText */
   def +(other: TextRun): RichText =

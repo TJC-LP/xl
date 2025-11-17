@@ -26,6 +26,7 @@ object XmlUtil:
   val nsRelationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
   val nsPackageRels = "http://schemas.openxmlformats.org/package/2006/relationships"
   val nsContentTypes = "http://schemas.openxmlformats.org/package/2006/content-types"
+  val nsX14ac = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
 
   /** Relationship type URIs */
   val relTypeOfficeDocument =
@@ -57,6 +58,17 @@ object XmlUtil:
       new UnprefixedAttribute(key, value, acc)
     }
     Elem(null, label, sortedAttrs, TopScope, minimizeEmpty = true, children*)
+
+  /**
+   * Create XML element with attributes in EXACT order provided (no sorting).
+   *
+   * Use this for elements where Excel expects specific attribute order (e.g., row, cell).
+   */
+  def elemOrdered(label: String, attrs: (String, String)*)(children: Node*): Elem =
+    val orderedAttrs = attrs.foldRight(Null: MetaData) { case ((key, value), acc) =>
+      new UnprefixedAttribute(key, value, acc)
+    }
+    Elem(null, label, orderedAttrs, TopScope, minimizeEmpty = true, children*)
 
   /** Create element with namespace */
   def elemNS(prefix: String, label: String, ns: String, attrs: (String, String)*)(
@@ -91,6 +103,30 @@ object XmlUtil:
   /** Get optional attribute value */
   def getAttrOpt(elem: Elem, name: String): Option[String] =
     elem.attribute(name).map(_.text)
+
+  /**
+   * Get optional namespaced attribute value.
+   *
+   * Handles attributes with namespace prefixes (e.g., "x14ac:dyDescent"). Scala XML stores
+   * namespaced attributes by URI, so we need to resolve the prefix.
+   *
+   * @param elem
+   *   The element to search
+   * @param prefixedName
+   *   Attribute name with prefix (e.g., "x14ac:dyDescent")
+   * @return
+   *   Some(value) if attribute found, None otherwise
+   */
+  def getNamespacedAttrOpt(elem: Elem, prefixedName: String): Option[String] =
+    prefixedName.split(':') match
+      case Array(prefix, localName) =>
+        // Resolve prefix to namespace URI using element's scope
+        val nsUri = elem.scope.getURI(prefix)
+        if nsUri != null then elem.attribute(nsUri, localName).map(_.text)
+        else None // Prefix not found in scope
+      case _ =>
+        // No prefix - fallback to normal attribute lookup
+        getAttrOpt(elem, prefixedName)
 
   /** Get required child element */
   def getChild(elem: Elem, label: String): Either[String, Elem] =
@@ -191,14 +227,14 @@ object XmlUtil:
     import com.tjclp.xl.richtext.{TextRun, RichText}
 
     val runs = runElems.collect { case e: Elem if e.label == "r" => e }.map { rElem =>
-      // Extract optional <rPr> for formatting
-      val font = (rElem \ "rPr").headOption.map { rPr =>
-        parseRunProperties(rPr.asInstanceOf[Elem])
-      }
+      // Extract optional <rPr> for formatting and preserve raw XML
+      val rPrElemOpt = (rElem \ "rPr").headOption.map(_.asInstanceOf[Elem])
+      val font = rPrElemOpt.map(parseRunProperties)
+      val rawRPrXml = rPrElemOpt.map(elem => compact(elem)) // Preserve as XML string
 
       // Extract required <t> text
       (rElem \ "t").headOption.map(_.text) match
-        case Some(text) => Right(TextRun(text, font))
+        case Some(text) => Right(TextRun(text, font, rawRPrXml))
         case None => Left("Text run <r> missing <t> element")
     }
 

@@ -94,24 +94,32 @@ case class SharedStrings(
       case Right(richText) =>
         // RichText: <si><r><rPr>...</rPr><t>text</t></r>...</si>
         val runElems = richText.runs.map { run =>
-          // Build <rPr> if run has formatting
-          val rPrElems = run.font.map { f =>
-            import com.tjclp.xl.style.font.Font
-            val fontProps = Seq.newBuilder[Elem]
+          // Use preserved raw <rPr> if available (byte-perfect), otherwise build from Font
+          val rPrElems = run.rawRPrXml.flatMap { xmlString =>
+            // Parse preserved XML string back to Elem for byte-perfect preservation
+            try Some(scala.xml.XML.loadString(xmlString).asInstanceOf[Elem])
+            catch case _: Exception => None
+          }.toList match
+            case preserved if preserved.nonEmpty => preserved
+            case _ =>
+              // Build from Font model if no raw XML or parse failed
+              run.font.map { f =>
+                import com.tjclp.xl.style.font.Font
+                val fontProps = Seq.newBuilder[Elem]
 
-            if f.bold then fontProps += elem("b")()
-            if f.italic then fontProps += elem("i")()
-            if f.underline then fontProps += elem("u")()
+                if f.bold then fontProps += elem("b")()
+                if f.italic then fontProps += elem("i")()
+                if f.underline then fontProps += elem("u")()
 
-            f.color.foreach { c =>
-              fontProps += elem("color", "rgb" -> c.toHex.drop(1))() // Drop # prefix
-            }
+                f.color.foreach { c =>
+                  fontProps += elem("color", "rgb" -> c.toHex.drop(1))() // Drop # prefix
+                }
 
-            fontProps += elem("sz", "val" -> f.sizePt.toString)()
-            fontProps += elem("name", "val" -> f.name)()
+                fontProps += elem("sz", "val" -> f.sizePt.toString)()
+                fontProps += elem("name", "val" -> f.name)()
 
-            elem("rPr")(fontProps.result()*)
-          }.toList
+                elem("rPr")(fontProps.result()*)
+              }.toList
 
           // Build <t> with optional xml:space="preserve"
           val needsPreserve = needsXmlSpacePreserve(run.text)

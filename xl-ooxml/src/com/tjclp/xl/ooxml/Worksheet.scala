@@ -28,10 +28,13 @@ case class OoxmlCell(
   def toA1: String = ref.toA1
 
   def toXml: Elem =
-    val baseAttrs = Seq("r" -> toA1)
-    val typeAttr = if cellType.nonEmpty then Seq("t" -> cellType) else Seq.empty
-    val styleAttr = styleIndex.map(s => Seq("s" -> s.toString)).getOrElse(Seq.empty)
-    val attrs = baseAttrs ++ typeAttr ++ styleAttr
+    // Excel expects attributes in specific order: r, s, t
+    val attrs = Seq.newBuilder[(String, String)]
+    attrs += ("r" -> toA1)
+    styleIndex.foreach(s => attrs += ("s" -> s.toString))
+    if cellType.nonEmpty then attrs += ("t" -> cellType)
+
+    val finalAttrs = attrs.result()
 
     val valueElem = value match
       case CellValue.Empty => Seq.empty
@@ -55,25 +58,34 @@ case class OoxmlCell(
       case CellValue.RichText(richText) =>
         // Rich text: <is> with multiple <r> (text run) elements
         val runElems = richText.runs.map { run =>
-          val rPrElems = run.font.map { f =>
-            val fontProps = Seq.newBuilder[Elem]
+          // Use preserved raw <rPr> if available (byte-perfect), otherwise build from Font
+          val rPrElems = run.rawRPrXml.flatMap { xmlString =>
+            // Parse preserved XML string back to Elem for byte-perfect preservation
+            try Some(scala.xml.XML.loadString(xmlString).asInstanceOf[scala.xml.Elem])
+            catch case _: Exception => None
+          }.toList match
+            case preserved if preserved.nonEmpty => preserved
+            case _ =>
+              // Build from Font model if no raw XML or parse failed
+              run.font.map { f =>
+                val fontProps = Seq.newBuilder[Elem]
 
-            // Font style properties (order matters for OOXML)
-            if f.bold then fontProps += elem("b")()
-            if f.italic then fontProps += elem("i")()
-            if f.underline then fontProps += elem("u")()
+                // Font style properties (order matters for OOXML)
+                if f.bold then fontProps += elem("b")()
+                if f.italic then fontProps += elem("i")()
+                if f.underline then fontProps += elem("u")()
 
-            // Font color
-            f.color.foreach { c =>
-              fontProps += elem("color", "rgb" -> c.toHex.drop(1))() // Attributes then children
-            }
+                // Font color
+                f.color.foreach { c =>
+                  fontProps += elem("color", "rgb" -> c.toHex.drop(1))() // Attributes then children
+                }
 
-            // Font size and name
-            fontProps += elem("sz", "val" -> f.sizePt.toString)()
-            fontProps += elem("name", "val" -> f.name)()
+                // Font size and name
+                fontProps += elem("sz", "val" -> f.sizePt.toString)()
+                fontProps += elem("name", "val" -> f.name)()
 
-            elem("rPr")(fontProps.result()*)
-          }.toList
+                elem("rPr")(fontProps.result()*)
+              }.toList
 
           // Text run: <r> with optional <rPr> and <t>
           // Add xml:space="preserve" to preserve leading/trailing/multiple spaces
@@ -109,7 +121,7 @@ case class OoxmlCell(
         val serial = CellValue.dateTimeToExcelSerial(dt)
         Seq(elem("v")(Text(serial.toString)))
 
-    elem("c", attrs*)(valueElem*)
+    XmlUtil.elemOrdered("c", finalAttrs*)(valueElem*)
 
 /**
  * Row in worksheet with full attribute preservation for surgical modification.
@@ -133,24 +145,24 @@ case class OoxmlRow(
   dyDescent: Option[Double] = None // x14ac:dyDescent="0.25" (font descent adjustment)
 ):
   def toXml: Elem =
-    val baseAttrs = Seq("r" -> rowIndex.toString)
+    // Excel expects attributes in specific order (not alphabetical!)
+    // Order: r, spans, s, customFormat, ht, customHeight, hidden, outlineLevel, collapsed, thickBot, thickTop, x14ac:dyDescent
+    val attrs = Seq.newBuilder[(String, String)]
 
-    val optionalAttrs = Seq.newBuilder[(String, String)]
-    spans.foreach(s => optionalAttrs += ("spans" -> s))
-    style.foreach(s => optionalAttrs += ("s" -> s.toString))
-    height.foreach(h => optionalAttrs += ("ht" -> h.toString))
-    if customHeight then optionalAttrs += ("customHeight" -> "1")
-    if customFormat then optionalAttrs += ("customFormat" -> "1")
-    if hidden then optionalAttrs += ("hidden" -> "1")
-    outlineLevel.foreach(l => optionalAttrs += ("outlineLevel" -> l.toString))
-    if collapsed then optionalAttrs += ("collapsed" -> "1")
-    if thickBot then optionalAttrs += ("thickBot" -> "1")
-    if thickTop then optionalAttrs += ("thickTop" -> "1")
-    dyDescent.foreach(d => optionalAttrs += ("x14ac:dyDescent" -> d.toString))
+    attrs += ("r" -> rowIndex.toString)
+    spans.foreach(s => attrs += ("spans" -> s))
+    style.foreach(s => attrs += ("s" -> s.toString))
+    if customFormat then attrs += ("customFormat" -> "1")
+    height.foreach(h => attrs += ("ht" -> h.toString))
+    if customHeight then attrs += ("customHeight" -> "1")
+    if hidden then attrs += ("hidden" -> "1")
+    outlineLevel.foreach(l => attrs += ("outlineLevel" -> l.toString))
+    if collapsed then attrs += ("collapsed" -> "1")
+    if thickBot then attrs += ("thickBot" -> "1")
+    if thickTop then attrs += ("thickTop" -> "1")
+    dyDescent.foreach(d => attrs += ("x14ac:dyDescent" -> d.toString))
 
-    val allAttrs = baseAttrs ++ optionalAttrs.result()
-
-    elem("row", allAttrs*)(
+    XmlUtil.elemOrdered("row", attrs.result()*)(
       cells.sortBy(_.ref.col.index0).map(_.toXml)*
     )
 
@@ -373,13 +385,27 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       }.toSeq
 
       // Preserve row attributes from original if available
-      preservedRowAttrs.get(rowIdx) match
+      val baseRow = preservedRowAttrs.get(rowIdx) match
         case Some(original) =>
           // Merge: use original's attributes, replace cells with new data
           original.copy(cells = ooxmlCells)
         case None =>
           // New row - create with defaults
           OoxmlRow(rowIdx, ooxmlCells)
+
+      // Validate row-level style: only keep if ALL cells use the same style
+      // Per OOXML spec, row `s` attribute only valid if all cells inherit it
+      val allCellsUseSameStyle = baseRow.style.exists { rowStyle =>
+        ooxmlCells.forall(c => c.styleIndex.contains(rowStyle) || c.styleIndex.isEmpty)
+      }
+
+      val validatedRow =
+        if !allCellsUseSameStyle then
+          // Cells have varied styles - remove row-level style and customFormat
+          baseRow.copy(style = None, customFormat = false)
+        else baseRow
+
+      validatedRow
     }
 
     // Preserve empty rows from original (critical for Row 1!)
@@ -585,7 +611,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         collapsed = getAttrOpt(e, "collapsed").contains("1")
         thickBot = getAttrOpt(e, "thickBot").contains("1")
         thickTop = getAttrOpt(e, "thickTop").contains("1")
-        dyDescent = getAttrOpt(e, "x14ac:dyDescent").flatMap(_.toDoubleOption)
+        dyDescent = XmlUtil.getNamespacedAttrOpt(e, "x14ac:dyDescent").flatMap(_.toDoubleOption)
 
         cellElems = getChildren(e, "c")
         cells <- parseCells(cellElems, sst)

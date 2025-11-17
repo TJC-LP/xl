@@ -129,9 +129,14 @@ object StyleIndex:
 
     (styleIndex, remappings)
 
+private val defaultStylesScope =
+  NamespaceBinding(null, nsSpreadsheetML, TopScope)
+
 /** Serializer for xl/styles.xml */
 case class OoxmlStyles(
-  index: StyleIndex
+  index: StyleIndex,
+  rootAttributes: Option[MetaData] = None,
+  rootScope: NamespaceBinding = defaultStylesScope
 ) extends XmlWritable:
 
   def toXml: Elem =
@@ -229,9 +234,17 @@ case class OoxmlStyles(
       }*
     )
 
-    // Assemble styles.xml
+    // Assemble styles.xml with preserved namespaces
     val children = numFmtsElem.toList ++ Seq(fontsElem, fillsElem, bordersElem, cellXfsElem)
-    elem("styleSheet", "xmlns" -> nsSpreadsheetML)(children*)
+
+    // Use preserved attributes if available, otherwise create minimal xmlns
+    rootAttributes match
+      case Some(attrs) =>
+        // Use preserved attributes and scope from original
+        Elem(null, "styleSheet", attrs, rootScope, minimizeEmpty = false, children*)
+      case None =>
+        // No preserved metadata - create minimal element
+        elem("styleSheet", "xmlns" -> nsSpreadsheetML)(children*)
 
   private def fontToXml(font: Font): Elem =
     val children = Vector(
@@ -318,7 +331,9 @@ case class OoxmlStyles(
 
       // Only include non-default properties
       if align.horizontal != Align.default.horizontal then
-        val hAlignStr = align.horizontal.toString.toLowerCase(java.util.Locale.ROOT)
+        val hAlignStr = align.horizontal match
+          case HAlign.CenterContinuous => "centerContinuous" // OOXML requires camelCase
+          case other => other.toString.toLowerCase(java.util.Locale.ROOT)
         attrs += ("horizontal" -> hAlignStr)
 
       if align.vertical != Align.default.vertical then
