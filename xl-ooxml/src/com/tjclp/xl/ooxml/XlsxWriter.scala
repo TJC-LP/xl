@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets
 import scala.collection.mutable
 import com.tjclp.xl.api.{Workbook, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.SourceContext
+import com.tjclp.xl.{SourceContext, ModificationTracker}
 import com.tjclp.xl.richtext.RichText
 
 /** Shared Strings Table usage policy */
@@ -75,15 +75,24 @@ case class OutputPath(path: Path) extends OutputTarget:
 case class OutputStreamTarget(stream: OutputStream) extends OutputTarget
 
 /**
- * Writer for XLSX files (ZIP assembly)
+ * Unified XLSX writer with intelligent surgical modification.
  *
- * Takes a domain Workbook and produces a valid XLSX file with all required parts.
+ * Single code path that automatically optimizes based on context:
+ *   - **With source** (read → modify → write): Surgical mode
+ *     - Clean → verbatim copy (11x faster)
+ *     - Partially modified → regenerate changed, copy unchanged (2-5x faster)
+ *     - Fully modified → regenerate all with style preservation
+ *   - **Without source** (create → write): Full regeneration (standard path)
  *
- * **Surgical Modification** (Phase 4): When a workbook has a SourceContext (from file-based reads),
- * the writer uses a hybrid strategy:
- *   - Clean workbooks → verbatim file copy (11x faster)
- *   - Partially modified → regenerate changed sheets, copy preserved parts (2-5x faster)
- *   - Fully modified → full regeneration (same as before)
+ * The writer transparently chooses the optimal strategy - users don't need to decide.
+ *
+ * **Key Features**:
+ *   - Preserves unknown parts (charts, comments, drawings)
+ *   - Preserves differential formats (dxfs) for conditional formatting
+ *   - Byte-identical copies for unmodified sheets
+ *   - RichText in SharedStrings (not inlined)
+ *   - Row-level style preservation
+ *   - Excel compression level matching (defS = level 1)
  */
 object XlsxWriter:
 
@@ -110,9 +119,12 @@ object XlsxWriter:
    * Internal dispatch: Choose write strategy based on SourceContext.
    *
    * Strategy selection:
-   *   1. No SourceContext → full regeneration (programmatically created workbook)
-   *   1. SourceContext + clean + file target → verbatim copy (fast path)
-   *   1. SourceContext + dirty → hybrid write (surgical modification)
+   *   1. SourceContext + clean + file target → verbatim copy (fastest)
+   *   1. All other cases → unified write (surgical if source available, else full regeneration)
+   *
+   * Unified write automatically optimizes:
+   *   - With source: regenerate modified, copy unmodified (surgical)
+   *   - Without source: regenerate all (graceful degradation)
    */
   private def writeToTarget(
     workbook: Workbook,
@@ -121,22 +133,18 @@ object XlsxWriter:
   ): XLResult[Unit] =
     try
       workbook.sourceContext match
-        case None =>
-          // No source context → full regeneration (current behavior)
-          regenerateAll(workbook, target, config)
-
         case Some(ctx) if ctx.isClean =>
-          // Clean workbook → check if file target for fast copy
+          // Clean workbook + file target → verbatim copy (ultra-fast)
           target match
             case OutputPath(path) =>
               copyVerbatim(ctx.sourcePath, path)
             case OutputStreamTarget(_) =>
-              // Can't copy verbatim to stream, fall back to regenerate
-              regenerateAll(workbook, target, config)
+              // Can't copy to stream, use unified write (will copy all parts)
+              unifiedWrite(workbook, workbook.sourceContext, target, config)
 
-        case Some(ctx) =>
-          // Dirty workbook → hybrid write (surgical modification)
-          hybridWrite(workbook, ctx, target, config)
+        case _ =>
+          // All other cases: unified write (surgical if source, else full regeneration)
+          unifiedWrite(workbook, workbook.sourceContext, target, config)
 
       Right(())
 
@@ -614,30 +622,42 @@ object XlsxWriter:
     finally sourceZip.close()
 
   /**
-   * Hybrid write: regenerate modified parts, copy preserved parts.
+   * Unified write: intelligently regenerates only what changed, preserves the rest.
    *
    * Strategy:
-   *   1. Build RelationshipGraph to understand dependencies
-   *   1. Determine which parts can be preserved vs regenerated
-   *   1. Regenerate structural parts + modified sheets
-   *   1. Copy unmodified sheets from source
-   *   1. Copy unknown parts that don't reference modified/deleted sheets
+   *   - With source (surgical mode): Regenerate modified sheets, copy unmodified, preserve unknown
+   *     parts
+   *   - Without source (new workbook): Regenerate everything (graceful degradation)
+   *
+   * This unified path handles both surgical modification and normal writes.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private def hybridWrite(
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def unifiedWrite(
     workbook: Workbook,
-    ctx: SourceContext,
+    sourceContext: Option[SourceContext],
     target: OutputTarget,
     config: WriterConfig
   ): Unit =
-    val tracker = ctx.modificationTracker
-    val graph = RelationshipGraph.fromManifest(ctx.partManifest)
+    // Determine modification tracking (all sheets modified if no source)
+    val tracker = sourceContext.map(_.modificationTracker).getOrElse {
+      ModificationTracker(
+        modifiedSheets = workbook.sheets.indices.toSet,
+        deletedSheets = Set.empty,
+        reorderedSheets = false
+      )
+    }
 
-    val preservableParts = determinePreservableParts(workbook, ctx, graph)
-    val regenerateParts = determineRegenerateParts(workbook, ctx)
+    val (graph, preservableParts, regenerateParts) = sourceContext match
+      case Some(ctx) =>
+        val g = RelationshipGraph.fromManifest(ctx.partManifest)
+        val pres = determinePreservableParts(workbook, ctx, g)
+        val regen = determineRegenerateParts(workbook, ctx)
+        (g, pres, regen)
+      case None =>
+        (RelationshipGraph.empty, Set.empty[String], Set.empty[String])
 
     val sharedStringsPath = "xl/sharedStrings.xml"
-    val sourceHasSharedStrings = ctx.partManifest.contains(sharedStringsPath)
+    val sourceHasSharedStrings = sourceContext.exists(_.partManifest.contains(sharedStringsPath))
 
     // SST Strategy:
     // - If modified sheets have new strings not in preserved SST → regenerate (to avoid inline string corruption)
@@ -645,8 +665,8 @@ object XlsxWriter:
     // - If no source SST → generate according to policy
     val (sst, regenerateSharedStrings) =
       if sourceHasSharedStrings then
-        // Parse preserved SST
-        val parsedSST = parsePreservedSST(ctx.sourcePath)
+        // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
+        val parsedSST = parsePreservedSST(sourceContext.get.sourcePath)
 
         // Check if modified sheets contain NEW strings not in preserved SST
         // Extract Either[String, RichText] entries from modified sheets
@@ -705,22 +725,27 @@ object XlsxWriter:
 
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
 
-    // Use surgical style mode to preserve original style IDs for unmodified sheets
-    val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbookSurgical(
-      workbook,
-      tracker.modifiedSheets,
-      ctx.sourcePath
-    )
+    // Style strategy: surgical mode if source available, else full deduplication
+    val (styleIndex, sheetRemappings) = sourceContext match
+      case Some(ctx) =>
+        // Surgical: preserve original styles, deduplicate only modified sheets
+        StyleIndex.fromWorkbookSurgical(workbook, tracker.modifiedSheets, ctx.sourcePath)
+      case None =>
+        // No source: full deduplication across all sheets
+        StyleIndex.fromWorkbook(workbook)
 
-    // Parse preserved styles metadata (namespaces and dxfs for conditional formatting)
-    val (preservedStylesAttrs, preservedStylesScope, preservedDxfs) = parsePreservedStylesMetadata(
-      ctx.sourcePath
-    )
+    // Parse preserved styles metadata (namespaces and dxfs) if source available
+    val (preservedStylesAttrs, preservedStylesScope, preservedDxfs) = sourceContext match
+      case Some(ctx) => parsePreservedStylesMetadata(ctx.sourcePath)
+      case None => (None, TopScope, None)
+
     val styles = OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, preservedDxfs)
 
     // Preserve structural parts from source (or fallback to minimal)
     val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =
-      parsePreservedStructure(ctx.sourcePath)
+      sourceContext match
+        case Some(ctx) => parsePreservedStructure(ctx.sourcePath)
+        case None => (None, None, None, None)
 
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
@@ -769,27 +794,33 @@ object XlsxWriter:
         sst.foreach { sharedStrings =>
           writePart(zip, sharedStringsPath, sharedStrings.toXml, config)
         }
-      else if sourceHasSharedStrings then copyPreservedPart(ctx.sourcePath, sharedStringsPath, zip)
+      else if sourceHasSharedStrings then
+        sourceContext.foreach(ctx => copyPreservedPart(ctx.sourcePath, sharedStringsPath, zip))
 
-      // Write sheets: regenerate modified, copy unmodified
+      // Write sheets: regenerate modified, copy unmodified (if source available)
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
         if tracker.modifiedSheets.contains(idx) then
-          // Regenerate modified sheet with preserved metadata
+          // Regenerate modified sheet with preserved metadata (if available)
           val sheetPath = graph.pathForSheet(idx)
-          val preservedMetadata = parsePreservedWorksheet(ctx.sourcePath, sheetPath)
+          val preservedMetadata =
+            sourceContext.flatMap(ctx => parsePreservedWorksheet(ctx.sourcePath, sheetPath))
           val remapping = sheetRemappings.getOrElse(idx, Map.empty)
           val ooxmlSheet =
             OoxmlWorksheet.fromDomainWithMetadata(sheet, sst, remapping, preservedMetadata)
           writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet.toXml, config)
         else
-          // Copy unmodified sheet from source
-          val sheetPath = graph.pathForSheet(idx)
-          copyPreservedPart(ctx.sourcePath, sheetPath, zip)
+          // Copy unmodified sheet from source (only if source available)
+          sourceContext.foreach { ctx =>
+            val sheetPath = graph.pathForSheet(idx)
+            copyPreservedPart(ctx.sourcePath, sheetPath, zip)
+          }
       }
 
-      // Copy preserved parts (charts, drawings, images, etc.)
-      preservableParts.foreach { path =>
-        copyPreservedPart(ctx.sourcePath, path, zip)
+      // Copy preserved parts (charts, drawings, images, etc.) if source available
+      sourceContext.foreach { ctx =>
+        preservableParts.foreach { path =>
+          copyPreservedPart(ctx.sourcePath, path, zip)
+        }
       }
 
     finally zip.close()
