@@ -253,15 +253,15 @@ case class OoxmlStyles(
       case Fill.Solid(color) =>
         elem("fill")(
           elem("patternFill", "patternType" -> "solid")(
-            elem("fgColor", "rgb" -> f"${color.toArgb}%08X")()
+            colorToXml(color).copy(label = "fgColor") // Use colorToXml to preserve theme colors
           )
         )
 
       case Fill.Pattern(fg, bg, patternType) =>
         elem("fill")(
           elem("patternFill", "patternType" -> patternType.toString.toLowerCase)(
-            elem("fgColor", "rgb" -> f"${fg.toArgb}%08X")(),
-            elem("bgColor", "rgb" -> f"${bg.toArgb}%08X")()
+            colorToXml(fg).copy(label = "fgColor"), // Use colorToXml to preserve theme colors
+            colorToXml(bg).copy(label = "bgColor") // Use colorToXml to preserve theme colors
           )
         )
 
@@ -277,7 +277,7 @@ case class OoxmlStyles(
     if borderSide.style == BorderStyle.None then elem(side)()
     else
       val children = borderSide.color.map { color =>
-        elem("color", "rgb" -> f"${color.toArgb}%08X")()
+        colorToXml(color) // Use colorToXml to preserve theme colors in borders
       }.toList
       elem(side, "style" -> borderSide.style.toString.toLowerCase)(children*)
 
