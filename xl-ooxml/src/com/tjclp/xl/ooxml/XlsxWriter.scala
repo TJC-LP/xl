@@ -574,13 +574,23 @@ object XlsxWriter:
     val preservableParts = determinePreservableParts(workbook, ctx, graph)
     val regenerateParts = determineRegenerateParts(workbook, ctx)
 
-    // Build SST and styles (same as regenerateAll)
-    val sst = config.sstPolicy match
-      case SstPolicy.Always => Some(SharedStrings.fromWorkbook(workbook))
-      case SstPolicy.Never => None
-      case SstPolicy.Auto =>
-        if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
-        else None
+    val sharedStringsPath = "xl/sharedStrings.xml"
+    val sourceHasSharedStrings = ctx.partManifest.contains(sharedStringsPath)
+
+    // If the source workbook already has shared strings, preserve them byte-for-byte so copied
+    // sheets keep their existing string indices. Only regenerate when we don't have a source SST
+    // (e.g., programmatic workbook) and policy permits.
+    val sst =
+      if sourceHasSharedStrings then None
+      else
+        config.sstPolicy match
+          case SstPolicy.Always => Some(SharedStrings.fromWorkbook(workbook))
+          case SstPolicy.Never => None
+          case SstPolicy.Auto =>
+            if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
+            else None
+    val regenerateSharedStrings = sst.isDefined
+    val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
 
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
     val styles = OoxmlStyles(styleIndex)
@@ -601,7 +611,7 @@ object XlsxWriter:
     val contentTypes = preservedContentTypes.getOrElse(
       ContentTypes.minimal(
         hasStyles = true,
-        hasSharedStrings = sst.isDefined,
+        hasSharedStrings = sharedStringsInOutput,
         sheetCount = workbook.sheets.size
       )
     )
@@ -612,7 +622,7 @@ object XlsxWriter:
       Relationships.workbook(
         sheetCount = workbook.sheets.size,
         hasStyles = true,
-        hasSharedStrings = sst.isDefined
+        hasSharedStrings = sharedStringsInOutput
       )
     )
 
@@ -629,9 +639,11 @@ object XlsxWriter:
       writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
       writePart(zip, "xl/styles.xml", styles.toXml, config)
 
-      sst.foreach { sharedStrings =>
-        writePart(zip, "xl/sharedStrings.xml", sharedStrings.toXml, config)
-      }
+      if regenerateSharedStrings then
+        sst.foreach { sharedStrings =>
+          writePart(zip, sharedStringsPath, sharedStrings.toXml, config)
+        }
+      else if sourceHasSharedStrings then copyPreservedPart(ctx.sourcePath, sharedStringsPath, zip)
 
       // Write sheets: regenerate modified, copy unmodified
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>

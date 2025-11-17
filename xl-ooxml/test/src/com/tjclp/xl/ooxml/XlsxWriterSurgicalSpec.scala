@@ -225,6 +225,46 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
+  test("sharedStrings part is preserved and regenerated sheet uses inline strings") {
+    val source = createWorkbookWithSharedStrings()
+
+    val modified = for
+      wb <- XlsxReader.read(source)
+      sheet <- wb("Sheet1")
+      updatedSheet <- sheet.put(ref"A1" -> "Updated Text")
+      updated <- wb.put(updatedSheet)
+    yield updated
+
+    val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
+
+    val output = Files.createTempFile("sst-preserve", ".xlsx")
+    XlsxWriter
+      .write(wb, output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    val sourceZip = new ZipFile(source.toFile)
+    val outputZip = new ZipFile(output.toFile)
+
+    val sharedStringsEntry = "xl/sharedStrings.xml"
+    val sourceSst = readEntryBytes(sourceZip, sourceZip.getEntry(sharedStringsEntry))
+    val outputSst = readEntryBytes(outputZip, outputZip.getEntry(sharedStringsEntry))
+    assertEquals(outputSst.toSeq, sourceSst.toSeq, "sharedStrings.xml should be preserved")
+
+    val sheetXmlBytes = readEntryBytes(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
+    val sheetXml = new String(sheetXmlBytes, "UTF-8")
+    assert(sheetXml.contains("""t="inlineStr"""), "Regenerated text cells should be inline")
+    assert(
+      !sheetXml.contains("""t="s"""),
+      "Regenerated sheet should not reference sharedStrings indices"
+    )
+    assert(sheetXml.contains("Updated Text"))
+
+    sourceZip.close()
+    outputZip.close()
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
   // Helper: Read entry bytes from ZIP
   private def readEntryBytes(zip: ZipFile, entry: ZipEntry): Array[Byte] =
     val is = zip.getInputStream(entry)
@@ -462,6 +502,82 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 <customData>
   <metadata>This is custom data that XL doesn't understand</metadata>
 </customData>"""
+      )
+
+    finally out.close()
+
+    path
+
+  private def createWorkbookWithSharedStrings(): Path =
+    val path = Files.createTempFile("test-sst", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+
+    try
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"""
+      )
+
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/sharedStrings.xml",
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">
+  <si><t>Original Value</t></si>
+  <si><t>Preserved</t></si>
+</sst>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="s"><v>0</v></c>
+      <c r="B1" t="s"><v>1</v></c>
+    </row>
+  </sheetData>
+</worksheet>"""
       )
 
     finally out.close()
