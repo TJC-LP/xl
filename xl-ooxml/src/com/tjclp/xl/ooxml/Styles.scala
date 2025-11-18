@@ -3,6 +3,7 @@ package com.tjclp.xl.ooxml
 import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.api.*
+import com.tjclp.xl.SourceContext
 import com.tjclp.xl.style.{CellStyle, StyleRegistry}
 import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.style.border.{Border, BorderSide, BorderStyle}
@@ -44,7 +45,32 @@ object StyleIndex:
   )
 
   /**
-   * Build unified style index from a workbook and per-sheet remapping tables.
+   * Build unified style index from workbook with automatic optimization.
+   *
+   * Strategy (automatic based on workbook.sourceContext):
+   *   - **With source**: Preserve original styles for byte-perfect surgical modification
+   *   - **Without source**: Full deduplication for optimal compression
+   *
+   * Users don't choose the strategy - the method transparently optimizes based on available
+   * context. This enables read-modify-write workflows to preserve structure automatically while
+   * allowing programmatic creation to produce optimal output.
+   *
+   * @param wb
+   *   The workbook to index
+   * @return
+   *   (StyleIndex for writing, Map[sheetIndex -> Map[localStyleId -> globalStyleId]])
+   */
+  def fromWorkbook(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
+    wb.sourceContext match
+      case Some(ctx) =>
+        // Has source: surgical mode (preserve original structure)
+        fromWorkbookWithSource(wb, ctx)
+      case None =>
+        // No source: full deduplication (optimal compression)
+        fromWorkbookWithoutSource(wb)
+
+  /**
+   * Build unified style index from a workbook with full deduplication (no source).
    *
    * Extracts styles from each sheet's StyleRegistry, builds a unified index with deduplication, and
    * creates remapping tables to convert sheet-local styleIds to workbook-level indices.
@@ -55,7 +81,7 @@ object StyleIndex:
    *   (StyleIndex, Map[sheetIndex -> Map[localStyleId -> globalStyleId]])
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def fromWorkbook(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
+  private def fromWorkbookWithoutSource(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
     import scala.collection.mutable
 
     // Build unified style index by merging all sheet registries
@@ -129,9 +155,151 @@ object StyleIndex:
 
     (styleIndex, remappings)
 
+  /**
+   * Build style index for workbook with source, preserving original styles.
+   *
+   * This variant is used during surgical modification to avoid corruption:
+   *   - Deduplicates styles ONLY from modified sheets (optimal compression)
+   *   - Preserves original styles from source for unmodified sheets (no remapping needed)
+   *   - Ensures unmodified sheets' style references remain valid after write
+   *
+   * Strategy:
+   *   1. Parse original styles.xml to get complete WorkbookStyles
+   *   2. Deduplicate styles from modified sheets only
+   *   3. Ensure all original styles are present in output (fill gaps if needed)
+   *   4. Return remappings ONLY for modified sheets (unmodified sheets use original IDs)
+   *
+   * @param wb
+   *   The workbook with modified sheets
+   * @param ctx
+   *   Source context providing modification tracker and original file path
+   * @return
+   *   (StyleIndex with all original + deduplicated styles, Map[modifiedSheetIdx -> remapping])
+   */
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.Var",
+      "org.wartremover.warts.While",
+      "org.wartremover.warts.IterableOps" // .head is safe - groupBy guarantees non-empty lists
+    )
+  )
+  private def fromWorkbookWithSource(
+    wb: Workbook,
+    ctx: SourceContext
+  ): (StyleIndex, Map[Int, Map[Int, Int]]) =
+    // Extract values from context
+    val tracker = ctx.modificationTracker
+    val modifiedSheetIndices = tracker.modifiedSheets
+    val sourcePath = ctx.sourcePath
+    import scala.collection.mutable
+    import java.util.zip.ZipInputStream
+    import java.io.FileInputStream
+
+    // Step 1: Parse original styles.xml to get ALL components (byte-perfect preservation)
+    val originalWorkbookStyles: WorkbookStyles = {
+      val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
+      try
+        var entry = sourceZip.getNextEntry
+        var result: WorkbookStyles = WorkbookStyles.default
+
+        while entry != null && result == WorkbookStyles.default do
+          if entry.getName == "xl/styles.xml" then
+            val content = new String(sourceZip.readAllBytes(), "UTF-8")
+            // Parse styles.xml using WorkbookStyles parser (with XXE protection)
+            XmlSecurity.parseSafe(content, "xl/styles.xml").toOption.foreach { parsed =>
+              WorkbookStyles.fromXml(parsed).foreach { wbStyles =>
+                result = wbStyles
+              }
+            }
+
+          sourceZip.closeEntry()
+          entry = sourceZip.getNextEntry
+
+        result
+      finally sourceZip.close()
+    }
+
+    val originalStyles = originalWorkbookStyles.cellStyles
+
+    // Step 2: Build index preserving ALL original styles (including duplicates)
+    // Use groupBy to map each canonicalKey to ALL indices that have that key
+    // This prevents the critical bug where duplicate styles in source get lost
+    var unifiedStyles = originalStyles
+    val unifiedIndex: Map[String, List[Int]] = originalStyles.zipWithIndex
+      .groupBy { case (style, _) => style.canonicalKey }
+      .view
+      .mapValues(_.map(_._2).toList)
+      .toMap
+    var nextIdx = originalStyles.size
+    var additionalStyles = mutable.Map[String, Int]() // Track styles added after original
+
+    // Step 3: Process ONLY modified sheets for style remapping
+    val remappings = wb.sheets.zipWithIndex.flatMap { case (sheet, sheetIdx) =>
+      if modifiedSheetIndices.contains(sheetIdx) then
+        val registry = sheet.styleRegistry
+        val remapping = mutable.Map[Int, Int]()
+
+        // Map each local styleId to global index
+        registry.styles.zipWithIndex.foreach { case (style, localIdx) =>
+          val key = style.canonicalKey
+
+          // First, check if this key exists in original styles
+          unifiedIndex.get(key) match
+            case Some(indices) =>
+              // Style exists in original - use FIRST matching index
+              // This preserves original layout and avoids adding duplicates
+              remapping(localIdx) = indices.head
+            case None =>
+              // Not in original - check if we've already added it
+              additionalStyles.get(key) match
+                case Some(addedIdx) =>
+                  // Already added by earlier sheet processing
+                  remapping(localIdx) = addedIdx
+                case None =>
+                  // Truly new style - add it now
+                  unifiedStyles = unifiedStyles :+ style
+                  additionalStyles(key) = nextIdx
+                  remapping(localIdx) = nextIdx
+                  nextIdx += 1
+        }
+
+        Some(sheetIdx -> remapping.toMap)
+      else
+        // Unmodified sheet - no remapping needed (uses original style IDs)
+        None
+    }.toMap
+
+    // Step 4: Use original fonts/fills/borders/numFmts (byte-perfect preservation)
+    // No deduplication - preserves exact fontId/fillId/borderId indices from source
+    val uniqueFonts = originalWorkbookStyles.fonts
+    val uniqueFills = originalWorkbookStyles.fills
+    val uniqueBorders = originalWorkbookStyles.borders
+    val customNumFmts = originalWorkbookStyles.customNumFmts
+
+    // Convert unifiedIndex back to Map[String, StyleId] for StyleIndex
+    // Use first index from each canonicalKey's list (preserves original layout)
+    val styleToIndexMap = unifiedIndex.view.mapValues(indices => StyleId(indices.head)).toMap
+
+    val styleIndex = StyleIndex(
+      uniqueFonts,
+      uniqueFills,
+      uniqueBorders,
+      customNumFmts,
+      unifiedStyles,
+      styleToIndexMap
+    )
+
+    (styleIndex, remappings)
+
+private val defaultStylesScope =
+  NamespaceBinding(null, nsSpreadsheetML, TopScope)
+
 /** Serializer for xl/styles.xml */
 case class OoxmlStyles(
-  index: StyleIndex
+  index: StyleIndex,
+  rootAttributes: Option[MetaData] = None,
+  rootScope: NamespaceBinding = defaultStylesScope,
+  preservedDxfs: Option[Elem] = None // Differential formats for conditional formatting
 ) extends XmlWritable:
 
   def toXml: Elem =
@@ -207,11 +375,14 @@ case class OoxmlStyles(
         val fontIdx = fontMap.getOrElse(style.font, -1)
         val fillIdx = fillMap.getOrElse(style.fill, -1)
         val borderIdx = borderMap.getOrElse(style.border, -1)
-        val numFmtId = NumFmt
-          .builtInId(style.numFmt)
-          .getOrElse(
-            index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
-          )
+        val numFmtId = style.numFmtId.getOrElse {
+          // No raw ID → derive from NumFmt enum (programmatic creation)
+          NumFmt
+            .builtInId(style.numFmt)
+            .getOrElse(
+              index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
+            )
+        }
 
         // Serialize alignment as child element if non-default
         val alignmentChild = alignmentToXml(style.align).toSeq
@@ -229,9 +400,23 @@ case class OoxmlStyles(
       }*
     )
 
-    // Assemble styles.xml
-    val children = numFmtsElem.toList ++ Seq(fontsElem, fillsElem, bordersElem, cellXfsElem)
-    elem("styleSheet", "xmlns" -> nsSpreadsheetML)(children*)
+    // Assemble styles.xml with preserved namespaces and differential formats
+    // OOXML order: numFmts, fonts, fills, borders, cellXfs, dxfs
+    val children = numFmtsElem.toList ++ Seq(
+      fontsElem,
+      fillsElem,
+      bordersElem,
+      cellXfsElem
+    ) ++ preservedDxfs.toList
+
+    // Use preserved attributes if available, otherwise create minimal xmlns
+    rootAttributes match
+      case Some(attrs) =>
+        // Use preserved attributes and scope from original
+        Elem(null, "styleSheet", attrs, rootScope, minimizeEmpty = false, children*)
+      case None =>
+        // No preserved metadata - create minimal element
+        elem("styleSheet", "xmlns" -> nsSpreadsheetML)(children*)
 
   private def fontToXml(font: Font): Elem =
     val children = Vector(
@@ -253,15 +438,15 @@ case class OoxmlStyles(
       case Fill.Solid(color) =>
         elem("fill")(
           elem("patternFill", "patternType" -> "solid")(
-            elem("fgColor", "rgb" -> f"${color.toArgb}%08X")()
+            colorToXml(color).copy(label = "fgColor") // Use colorToXml to preserve theme colors
           )
         )
 
       case Fill.Pattern(fg, bg, patternType) =>
         elem("fill")(
           elem("patternFill", "patternType" -> patternType.toString.toLowerCase)(
-            elem("fgColor", "rgb" -> f"${fg.toArgb}%08X")(),
-            elem("bgColor", "rgb" -> f"${bg.toArgb}%08X")()
+            colorToXml(fg).copy(label = "fgColor"), // Use colorToXml to preserve theme colors
+            colorToXml(bg).copy(label = "bgColor") // Use colorToXml to preserve theme colors
           )
         )
 
@@ -277,7 +462,7 @@ case class OoxmlStyles(
     if borderSide.style == BorderStyle.None then elem(side)()
     else
       val children = borderSide.color.map { color =>
-        elem("color", "rgb" -> f"${color.toArgb}%08X")()
+        colorToXml(color) // Use colorToXml to preserve theme colors in borders
       }.toList
       elem(side, "style" -> borderSide.style.toString.toLowerCase)(children*)
 
@@ -318,7 +503,9 @@ case class OoxmlStyles(
 
       // Only include non-default properties
       if align.horizontal != Align.default.horizontal then
-        val hAlignStr = align.horizontal.toString.toLowerCase(java.util.Locale.ROOT)
+        val hAlignStr = align.horizontal match
+          case HAlign.CenterContinuous => "centerContinuous" // OOXML requires camelCase
+          case other => other.toString.toLowerCase(java.util.Locale.ROOT)
         attrs += ("horizontal" -> hAlignStr)
 
       if align.vertical != Align.default.vertical then
@@ -358,12 +545,29 @@ object OoxmlStyles:
 
 // ========== Workbook Styles Parsing ==========
 
-/** Parsed workbook-level styles mapped by cellXf index */
-case class WorkbookStyles(cellStyles: Vector[CellStyle]):
+/**
+ * Parsed workbook-level styles with complete OOXML structure.
+ *
+ * Stores both domain model (cellStyles) and raw OOXML vectors (fonts, fills, borders) for
+ * byte-perfect preservation during surgical writes.
+ */
+case class WorkbookStyles(
+  cellStyles: Vector[CellStyle],
+  fonts: Vector[Font],
+  fills: Vector[Fill],
+  borders: Vector[Border],
+  customNumFmts: Vector[(Int, NumFmt)]
+):
   def styleAt(index: Int): Option[CellStyle] = cellStyles.lift(index)
 
 object WorkbookStyles:
-  val default: WorkbookStyles = WorkbookStyles(Vector(CellStyle.default))
+  val default: WorkbookStyles = WorkbookStyles(
+    cellStyles = Vector(CellStyle.default),
+    fonts = Vector(Font.default),
+    fills = Vector(Fill.default),
+    borders = Vector(Border.none),
+    customNumFmts = Vector.empty
+  )
 
   def fromXml(elem: Elem): Either[String, WorkbookStyles] =
     val numFmts = parseNumFmts(elem)
@@ -371,7 +575,15 @@ object WorkbookStyles:
     val fills = parseFills(elem)
     val borders = parseBorders(elem)
     val cellStyles = parseCellXfs(elem, fonts, fills, borders, numFmts)
-    Right(WorkbookStyles(cellStyles))
+    Right(
+      WorkbookStyles(
+        cellStyles = cellStyles,
+        fonts = fonts,
+        fills = fills,
+        borders = borders,
+        customNumFmts = numFmts.toVector.sortBy(_._1)
+      )
+    )
 
   private def parseNumFmts(root: Elem): Map[Int, NumFmt] =
     (root \ "numFmts").headOption match
@@ -531,11 +743,18 @@ object WorkbookStyles:
       .flatMap(attr => attr.text.toIntOption)
       .flatMap(borders.lift)
       .getOrElse(Border.none)
-    val numFmtId = xfElem.attribute("numFmtId").flatMap(attr => attr.text.toIntOption)
+    val numFmtIdOpt = xfElem.attribute("numFmtId").flatMap(attr => attr.text.toIntOption)
     val numFmt =
-      numFmtId.flatMap(id => numFmts.get(id).orElse(NumFmt.fromId(id))).getOrElse(NumFmt.General)
+      numFmtIdOpt.flatMap(id => numFmts.get(id).orElse(NumFmt.fromId(id))).getOrElse(NumFmt.General)
     val align = parseAlignment(xfElem).getOrElse(Align.default)
-    CellStyle(font = font, fill = fill, border = border, numFmt = numFmt, align = align)
+    CellStyle(
+      font = font,
+      fill = fill,
+      border = border,
+      numFmt = numFmt,
+      numFmtId = numFmtIdOpt,
+      align = align
+    )
 
   private def parseAlignment(xfElem: Elem): Option[Align] =
     (xfElem \ "alignment").headOption match

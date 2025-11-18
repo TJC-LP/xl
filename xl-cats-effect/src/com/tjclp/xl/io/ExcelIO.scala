@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheet.Sheet
-import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter, SharedStrings}
+import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter, SharedStrings, XmlSecurity}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
 
@@ -493,18 +493,18 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     Sync[F].delay {
       val wbEntry = Option(zipFile.getEntry("xl/workbook.xml"))
       wbEntry.flatMap { entry =>
-        import scala.xml.XML
-        val wbXml = XML.load(zipFile.getInputStream(entry))
-
-        // Parse sheet elements
-        val sheets = (wbXml \\ "sheet").toSeq
-        sheets
-          .find { sheetElem =>
-            (sheetElem \ "@name").text == sheetName
-          }
-          .map { sheetElem =>
-            (sheetElem \ "@sheetId").text.toInt
-          }
+        val xmlContent = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+        XmlSecurity.parseSafe(xmlContent, "xl/workbook.xml").toOption.flatMap { wbXml =>
+          // Parse sheet elements
+          val sheets = (wbXml \\ "sheet").toSeq
+          sheets
+            .find { sheetElem =>
+              (sheetElem \ "@name").text == sheetName
+            }
+            .map { sheetElem =>
+              (sheetElem \ "@sheetId").text.toInt
+            }
+        }
       }
     }
 

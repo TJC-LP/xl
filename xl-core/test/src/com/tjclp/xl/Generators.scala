@@ -205,3 +205,14 @@ object Generators:
   val genInvalidMoney: Gen[String] = Gen.oneOf("$ABC", "1.2.3", "$$$$", "")
   val genInvalidPercent: Gen[String] = Gen.oneOf("ABC%", "1%%", "%", "")
   val genInvalidDate: Gen[String] = Gen.oneOf("2025-13-01", "not-a-date", "2025/11/10", "")
+
+  /** Generate ModificationTracker for property-based testing */
+  val genModificationTracker: Gen[ModificationTracker] =
+    for
+      modifiedSheets <- Gen.containerOf[Set, Int](Gen.choose(0, 20))
+      deletedSheets <- Gen.containerOf[Set, Int](Gen.choose(0, 20))
+      reorderedSheets <- Gen.oneOf(true, false)
+      modifiedMetadata <- Gen.oneOf(true, false)
+    yield ModificationTracker(modifiedSheets, deletedSheets, reorderedSheets, modifiedMetadata)
+
+  given Arbitrary[ModificationTracker] = Arbitrary(genModificationTracker)

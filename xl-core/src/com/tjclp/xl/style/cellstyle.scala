@@ -10,19 +10,38 @@ import com.tjclp.xl.style.numfmt.NumFmt
  * Complete cell style combining all formatting aspects.
  */
 
-/** Complete cell style combining all formatting aspects */
+/**
+ * Complete cell style combining all formatting aspects
+ *
+ * @param font
+ *   Font styling
+ * @param fill
+ *   Background fill
+ * @param border
+ *   Cell borders
+ * @param numFmt
+ *   Number format (semantic type for programmatic use)
+ * @param numFmtId
+ *   Raw Excel format ID (for byte-perfect preservation from source files)
+ * @param align
+ *   Cell alignment
+ */
 case class CellStyle(
   font: Font = Font.default,
   fill: Fill = Fill.default,
   border: Border = Border.none,
   numFmt: NumFmt = NumFmt.General,
+  numFmtId: Option[Int] = None,
   align: Align = Align.default
 ):
   def withFont(f: Font): CellStyle = copy(font = f)
   def withFill(f: Fill): CellStyle = copy(fill = f)
   def withBorder(b: Border): CellStyle = copy(border = b)
-  def withNumFmt(n: NumFmt): CellStyle = copy(numFmt = n)
+  def withNumFmt(n: NumFmt): CellStyle = copy(numFmt = n, numFmtId = None)
   def withAlign(a: Align): CellStyle = copy(align = a)
+
+  /** Set explicit numFmt ID with semantic type (advanced use) */
+  def withNumFmtId(id: Int, fmt: NumFmt): CellStyle = copy(numFmt = fmt, numFmtId = Some(id))
 
   /**
    * Memoized canonical key for style deduplication.

@@ -104,8 +104,9 @@ def writeZip(workbook: Workbook, ...): Unit =
 │      └─ sourceContext: Option[SourceContext]               │
 │             │                                               │
 │             ├─ sourcePath: Path                            │
+│             ├─ partManifest: PartManifest                  │
 │             ├─ modificationTracker: ModificationTracker    │
-│             └─ preservedParts: LazyPreservedParts          │
+│             └─ preservedParts: PreservedPartStore          │
 └─────────────────────────────────────────────────────────────┘
                          ▲                    │
                          │ read               │ write
@@ -129,17 +130,35 @@ def writeZip(workbook: Workbook, ...): Unit =
 
 ### Core Concepts
 
-**1. SourceContext**: Tracks original file and modifications
+**1. SourceContext**: Tracks original file, part manifest, and modifications
 
 ```scala
 case class SourceContext(
   sourcePath: Path,                           // Original file location
+  partManifest: PartManifest,                 // Every part (known + unknown)
   modificationTracker: ModificationTracker,   // What changed
-  preservedParts: LazyPreservedParts          // Unknown parts index
+  preservedParts: PreservedPartStore          // Streams preserved bytes
 )
 ```
 
-**2. ModificationTracker**: Immutable tracking of changes
+**2. PartManifest**: Metadata for all entries
+
+```scala
+case class PartManifestEntry(
+  path: String,
+  parsed: Boolean,              // true if XL loaded & transformed it
+  sheetIndex: Option[Int],      // derived from rel graph for dependency calc
+  relationships: Set[String]    // rIds referenced by this entry
+)
+
+case class PartManifest(entries: Map[String, PartManifestEntry]):
+  def parsedParts: Set[String] = entries.collect { case (p, e) if e.parsed => p }.toSet
+  def unparsedParts: Set[String] = entries.keySet -- parsedParts
+  def dependentSheets(path: String): Set[Int] =
+    entries.get(path).flatMap(_.sheetIndex).toSet
+```
+
+**3. ModificationTracker**: Immutable tracking of changes
 
 ```scala
 case class ModificationTracker(
@@ -150,31 +169,31 @@ case class ModificationTracker(
 )
 ```
 
-**3. LazyPreservedParts**: Efficient access to unknown parts
+**4. PreservedPartStore**: Efficient access to untouched parts
 
 ```scala
-trait LazyPreservedParts:
+trait PreservedPartStore:
+  def open: Resource[IO, PreservedPartHandle]
+
+trait PreservedPartHandle:
   def exists(path: String): Boolean
-  def copyTo(path: String, zip: ZipOutputStream): IO[Unit]
+  def streamTo(path: String, out: ZipOutputStream): IO[Unit]
   def listAll: Set[String]
 ```
 
-**4. Hybrid Write Strategy**: Regenerate only what changed
+**5. Hybrid Write Strategy**: Regenerate only what changed while copying preserved bytes
 
 ```scala
-def writeZip(workbook: Workbook, output: Path): IO[Unit] =
+def writeZip(workbook: Workbook, target: OutputTarget): IO[Unit] =
   workbook.sourceContext match
     case None =>
-      // No source, full regeneration (current behavior)
-      regenerateAll(workbook, output)
+      regenerateAll(workbook, target)
 
-    case Some(ctx) if ctx.modificationTracker.isClean =>
-      // Nothing changed, just copy file
-      Files.copy(ctx.sourcePath, output)
+    case Some(ctx) if ctx.modificationTracker.isClean && target.asPathOption.isDefined =>
+      copyVerbatim(ctx.sourcePath, target.asPathOption.get)   // fast path, handles same-path via temp file
 
     case Some(ctx) =>
-      // Hybrid: regenerate modified, copy preserved
-      hybridWrite(workbook, ctx, output)
+      hybridWrite(workbook, ctx, target)
 ```
 
 ---
@@ -198,18 +217,23 @@ case class Workbook(
   sheets: Vector[Sheet],
   metadata: WorkbookMetadata,
   activeSheetIndex: Int,
-  sourceContext: Option[SourceContext] = None  // NEW: Track original
+  sourceContext: Option[SourceContext] = None  // NEW: Track original + manifest
 )
 
 object Workbook:
   /** Create fresh workbook (no source) */
   def empty: Workbook = Workbook(Vector.empty, WorkbookMetadata.default, 0, None)
 
-  /** Create from existing file (with source tracking) */
-  def fromFile(path: Path, sheets: Vector[Sheet], metadata: WorkbookMetadata): Workbook =
+  /** Internal helper used by XlsxReader */
+  private[xl] def fromFile(
+    path: Path,
+    sheets: Vector[Sheet],
+    metadata: WorkbookMetadata,
+    manifest: PartManifest,
+    preserved: PreservedPartStore
+  ): Workbook =
     val tracker = ModificationTracker.clean
-    val preserved = LazyPreservedParts.fromFile(path)
-    val context = SourceContext(path, tracker, preserved)
+    val context = SourceContext(path, manifest, tracker, preserved)
     Workbook(sheets, metadata, 0, Some(context))
 ```
 
@@ -242,8 +266,9 @@ import cats.effect.IO
  */
 case class SourceContext(
   sourcePath: Path,
+  partManifest: PartManifest,
   modificationTracker: ModificationTracker,
-  preservedParts: LazyPreservedParts
+  preservedParts: PreservedPartStore
 ):
   /** Check if workbook has no modifications (can skip write) */
   def isClean: Boolean = modificationTracker.isClean
@@ -268,17 +293,43 @@ object SourceContext:
   /** Create from file path (called by XlsxReader) */
   def fromFile(
     path: Path,
-    allEntries: Set[String],
-    knownParts: Set[String]
+    manifest: PartManifest,
+    preservedParts: PreservedPartStore
   ): SourceContext =
-    val unknownParts = allEntries -- knownParts
-    val preserved = LazyPreservedParts.fromPath(path, unknownParts)
-    SourceContext(path, ModificationTracker.clean, preserved)
+    SourceContext(path, manifest, ModificationTracker.clean, preserved)
+
 ```
 
 ---
 
-### 3. ModificationTracker (New Type)
+### 3. PartManifest (New Type)
+
+**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/PartManifest.scala`
+
+```scala
+case class PartManifest(
+  entries: Map[String, PartManifestEntry]
+):
+  def parsedParts: Set[String] = entries.collect { case (path, entry) if entry.parsed => path }.toSet
+  def unparsedParts: Set[String] = entries.keySet -- parsedParts
+  def dependsOnSheet(path: String, sheetIdx: Int): Boolean =
+    entries.get(path).exists(_.sheetIndex.contains(sheetIdx))
+  def dependencies(path: String): Set[Int] =
+    entries.get(path).toList.flatMap(_.sheetIndex).toSet
+
+object PartManifest:
+  val empty: PartManifest = PartManifest(Map.empty)
+
+class PartManifestBuilder:
+  def +=(entry: ZipEntry): Unit = ???        // records size/CRC/rel hints
+  def markParsed(path: String): Unit = ???
+  def build(source: Option[SourceHandle]): XLResult[PartManifest] = ???
+```
+```
+
+---
+
+### 4. ModificationTracker (New Type)
 
 **Location**: `xl-core/src/com/tjclp/xl/ModificationTracker.scala` (new file)
 
@@ -349,9 +400,9 @@ object ModificationTracker:
 
 ---
 
-### 4. LazyPreservedParts (New Trait)
+### 5. PreservedPartStore (New Trait)
 
-**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/LazyPreservedParts.scala` (new file)
+**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/PreservedPartStore.scala` (new file)
 
 ```scala
 package com.tjclp.xl.ooxml
@@ -364,69 +415,92 @@ import scala.collection.immutable.Set
 /**
  * Lazy access to preserved ZIP entries from source file.
  *
- * DESIGN: Does NOT materialize entries into memory. All operations
- * stream directly from source ZIP to destination ZIP.
- *
- * PURITY: All operations return IO (file I/O is effect).
+ * DESIGN: Opens the `ZipFile` once per write via Resource, supports chunked streaming, and does not
+ * re-compress entries (raw copy).
  */
-trait LazyPreservedParts:
-  /** Check if part exists in preserved set */
+trait PreservedPartStore:
+  def open: Resource[IO, PreservedPartHandle]
+
+trait PreservedPartHandle:
   def exists(path: String): Boolean
-
-  /** List all preserved part paths */
   def listAll: Set[String]
+  def streamTo(path: String, output: ZipOutputStream): IO[Unit]
 
-  /** Copy part directly to output ZIP (streaming) */
-  def copyTo(path: String, output: ZipOutputStream): IO[Unit]
+object PreservedPartStore:
+  def fromPath(sourcePath: Path, manifest: PartManifest): PreservedPartStore =
+    new PreservedPartStoreImpl(sourcePath, manifest)
 
-  /** Copy multiple parts to output ZIP */
-  def copyAllTo(paths: Set[String], output: ZipOutputStream): IO[Unit] =
-    paths.toList.traverse_(path => copyTo(path, output))
+  val empty: PreservedPartStore = new PreservedPartStoreImpl(null, PartManifest.empty)
 
-object LazyPreservedParts:
-  /** Create from source file path and part names */
-  def fromPath(sourcePath: Path, parts: Set[String]): LazyPreservedParts =
-    new LazyPreservedPartsImpl(sourcePath, parts)
-
-  /** Empty preserved parts (for programmatically created workbooks) */
-  val empty: LazyPreservedParts = new LazyPreservedPartsImpl(null, Set.empty)
-
-private class LazyPreservedPartsImpl(
+private class PreservedPartStoreImpl(
   sourcePath: Path,
-  parts: Set[String]
-) extends LazyPreservedParts:
+  manifest: PartManifest
+) extends PreservedPartStore:
 
-  def exists(path: String): Boolean = parts.contains(path)
+  def open: Resource[IO, PreservedPartHandle] =
+    for
+      zip <- Resource.make(IO(new ZipFile(sourcePath.toFile)))(zf => IO(zf.close()))
+      handle = new PreservedPartHandle:
+        def exists(path: String): Boolean = manifest.entries.contains(path)
+        def listAll: Set[String] = manifest.entries.keySet
+        def streamTo(path: String, output: ZipOutputStream): IO[Unit] =
+          IO.blocking {
+            val entry = zip.getEntry(path)
+            if entry == null then
+              throw new IllegalStateException(s"Entry missing from source: $path")
 
-  def listAll: Set[String] = parts
+            val newEntry = new java.util.zip.ZipEntry(path)
+            newEntry.setTime(0)
+            newEntry.setMethod(ZipEntry.STORED)
+            newEntry.setSize(entry.getSize)
+            newEntry.setCompressedSize(entry.getCompressedSize)
+            newEntry.setCrc(entry.getCrc)
 
-  def copyTo(path: String, output: ZipOutputStream): IO[Unit] =
-    if !exists(path) then
-      IO.raiseError(new IllegalArgumentException(s"Part not preserved: $path"))
-    else
-      Resource.make(IO(new ZipFile(sourcePath.toFile)))(zf => IO(zf.close())).use { zip =>
-        IO {
-          val entry = zip.getEntry(path)
-          if entry == null then
-            throw new IllegalStateException(s"Entry missing from source: $path")
-
-          val newEntry = new java.util.zip.ZipEntry(path)
-          newEntry.setTime(0)  // Deterministic timestamp
-
-          output.putNextEntry(newEntry)
-          val is = zip.getInputStream(entry)
-          is.transferTo(output)
-          is.close()
-          output.closeEntry()
-        }
-      }
+            output.putNextEntry(newEntry)
+            val is = zip.getInputStream(entry)
+            val buffer = new Array[Byte](8192)
+            var read = is.read(buffer)
+            while read != -1 do
+              output.write(buffer, 0, read)
+              read = is.read(buffer)
+            is.close()
+            output.closeEntry()
+          }
+    yield handle
 ```
 
 **Key Properties**:
 - 💾 **Zero memory overhead**: Parts are never materialized, only indexed
 - 🔒 **Read-only**: Source file is never modified
-- 🚀 **Streaming**: `copyTo` streams bytes directly (no buffering)
-- ✅ **Deterministic**: Timestamp set to 0 for byte-identical output
+- 🚀 **Streaming**: `streamTo` copies bytes in chunks via a single `ZipFile`
+- ✅ **Deterministic**: Preserves CRC/size metadata, timestamps normalized to 0
+
+---
+
+### 6. RelationshipGraph (New Type)
+
+**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/RelationshipGraph.scala`
+
+```scala
+case class RelationshipGraph(
+  dependencies: Map[String, Set[Int]],  // part path -> sheet indices
+  sheetPaths: Map[Int, String]          // sheet index -> original worksheet path
+):
+  def dependencies(path: String): Set[Int] = dependencies.getOrElse(path, Set.empty)
+  def pathForSheet(idx: Int): String = sheetPaths.getOrElse(idx, s"xl/worksheets/sheet${idx + 1}.xml")
+```
+
+```scala
+object RelationshipGraph:
+  def fromManifest(manifest: PartManifest): RelationshipGraph =
+    // Parse workbook + per-sheet relationships to get dependencies + original sheet location
+    ???
+```
+
+**Responsibilities**:
+- Resolve worksheet paths using actual relationship targets (handles non-sequential sheet ids)
+- Track dependencies between drawings/charts/comments and sheet indices
+- Surface data for deterministically copying unmodified sheets + dependent `.rels`
 
 ---
 
@@ -516,28 +590,32 @@ def readFromStream(is: InputStream): XLResult[Workbook] =
   parseWorkbook(parts.toMap)
 
 // AFTER
-def readFromStream(is: InputStream, sourcePath: Option[Path]): XLResult[Workbook] =
-  val allEntries = mutable.Set[String]()
-  val parts = mutable.Map[String, String]()
+def readFromStream(
+  is: InputStream,
+  source: Option[SourceHandle]  // provides Path + lazy store builder
+): XLResult[Workbook] =
+  val manifestBuilder = PartManifestBuilder()
+  val parsedParts = mutable.Map[String, String]()
   val zip = new ZipInputStream(is)
   var entry = zip.getNextEntry
 
   while entry != null do
     if !entry.isDirectory then
-      allEntries += entry.getName  // NEW: Index all entries
+      manifestBuilder += entry
 
       if isKnownPart(entry.getName) then
-        val content = new String(zip.readAllBytes(), "UTF-8")
-        parts(entry.getName) = content
-      // else: skip unknown part (don't load into memory)
+        val bytes = zip.readAllBytes()
+        parsedParts(entry.getName) = new String(bytes, "UTF-8")
 
     zip.closeEntry()
     entry = zip.getNextEntry
 
   for
-    wb <- parseWorkbook(parts.toMap)
-    context = sourcePath.map { path =>
-      SourceContext.fromFile(path, allEntries.toSet, knownParts)
+    manifest <- manifestBuilder.build(source)
+    wb <- parseWorkbook(parsedParts.toMap)
+    preserved = source.map(_.preservedStore(manifest)).getOrElse(PreservedPartStore.empty)
+    context = source.map { handle =>
+      SourceContext.fromFile(handle.path, manifest, preserved)
     }
   yield wb.copy(sourceContext = context)
 
@@ -553,6 +631,15 @@ private val knownParts = Set(
 
 private def isKnownPart(path: String): Boolean =
   knownParts.contains(path) || path.matches("xl/worksheets/sheet\\d+\\.xml")
+
+case class SourceHandle(
+  path: Path,
+  preservedStore: PartManifest => PreservedPartStore
+)
+
+object SourceHandle:
+  def fromFile(path: Path): SourceHandle =
+    SourceHandle(path, manifest => PreservedPartStore.fromPath(path, manifest))
 ```
 
 2. **Update public API**:
@@ -562,7 +649,7 @@ object XlsxReader:
   /** Read from file (enables passthrough) */
   def read(path: Path): XLResult[Workbook] =
     val is = Files.newInputStream(path)
-    try readFromStream(is, Some(path))
+    try readFromStream(is, Some(SourceHandle.fromFile(path)))
     finally is.close()
 
   /** Read from stream (no passthrough) */
@@ -571,10 +658,11 @@ object XlsxReader:
 ```
 
 **Key Changes**:
-- ✅ Index all ZIP entries (not just known 7)
-- ✅ Only parse known parts (memory efficient)
-- ✅ Create SourceContext if path provided
+- ✅ Index all ZIP entries with metadata (size, CRC, relationships)
+- ✅ Only parse known parts (memory efficient) while still preserving their original bytes
+- ✅ Create `PartManifest` + `PreservedPartStore` if path provided
 - ✅ Backwards compatible (stream API works unchanged)
+- ✅ Relationship graph built during manifest creation (sheet ↔ dependency mapping)
 
 ---
 
@@ -588,106 +676,98 @@ object XlsxReader:
 
 ```scala
 object XlsxWriter:
+  sealed trait OutputTarget:
+    def asPathOption: Option[Path] = None
+
+  case class OutputPath(path: Path) extends OutputTarget:
+    override def asPathOption: Option[Path] = Some(path)
+
+  case class OutputStreamTarget(stream: OutputStream) extends OutputTarget
+
   /** Write workbook to ZIP file */
   def writeZip(
     workbook: Workbook,
-    outputStream: OutputStream,
+    target: OutputTarget,
     config: WriterConfig = WriterConfig.default
   ): IO[Unit] =
     workbook.sourceContext match
       case None =>
-        // No source, full regeneration
-        regenerateAll(workbook, outputStream, config)
+        regenerateAll(workbook, target, config)
 
-      case Some(ctx) if ctx.isClean =>
-        // No modifications, just copy file
-        IO {
-          Files.copy(ctx.sourcePath, Paths.get(outputStream.toString))
-        }
+    case Some(ctx) if ctx.isClean && target.asPathOption.isDefined =>
+        val dest = target.asPathOption.get
+        copyVerbatim(ctx.sourcePath, dest)  // handles source==dest via temp file swap
 
       case Some(ctx) =>
-        // Hybrid: regenerate modified, copy preserved
-        hybridWrite(workbook, ctx, outputStream, config)
+        hybridWrite(workbook, ctx, target, config)
 
   /** Full regeneration (current behavior) */
   private def regenerateAll(
     workbook: Workbook,
-    outputStream: OutputStream,
+    target: OutputTarget,
     config: WriterConfig
-  ): IO[Unit] = IO {
-    val zip = new ZipOutputStream(outputStream)
-    // ... current implementation unchanged
-  }
+  ): IO[Unit] = target match
+    case OutputPath(path) =>
+      IO.blocking {
+        val os = Files.newOutputStream(path)
+        try writeAllParts(new ZipOutputStream(os), workbook, config)
+        finally os.close()
+      }
+    case OutputStreamTarget(stream) =>
+      IO(blocking = true)(writeAllParts(new ZipOutputStream(stream), workbook, config))
 
   /** Hybrid write: copy + regenerate */
   private def hybridWrite(
     workbook: Workbook,
     ctx: SourceContext,
-    outputStream: OutputStream,
+    target: OutputTarget,
     config: WriterConfig
-  ): IO[Unit] = IO.defer {
-    val zip = new ZipOutputStream(outputStream)
+  ): IO[Unit] =
     val tracker = ctx.modificationTracker
+    val (zipStream, closeStream) = target match
+      case OutputPath(path) =>
+        val os = Files.newOutputStream(path)
+        (new ZipOutputStream(os), () => os.close())
+      case OutputStreamTarget(stream) =>
+        (new ZipOutputStream(stream), () => ())
 
-    // PHASE 1: Determine what to preserve vs. regenerate
-    val preservableParts = determinePreservableParts(workbook, ctx)
-    val regenerateParts = determineRegenerateParts(workbook, ctx)
+    ctx.preservedParts.open.use { handle =>
+      IO.blocking {
+        val graph = RelationshipGraph.fromManifest(ctx.partManifest)
 
-    // PHASE 2: Write structural parts (always regenerated)
-    writeStructuralParts(zip, workbook, config)
+        val preservableParts = determinePreservableParts(workbook, ctx, graph)
+        val regenerateParts = determineRegenerateParts(workbook, ctx)
 
-    // PHASE 3: Write sheets (hybrid)
-    workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
-      if tracker.modifiedSheets.contains(idx) then
-        // Modified sheet → regenerate XML
-        writeSheetXml(zip, sheet, idx, config)
-      else
-        // Unmodified sheet → copy from source
-        val sheetPath = s"xl/worksheets/sheet${idx + 1}.xml"
-        ctx.preservedParts.copyTo(sheetPath, zip)
-    }
+        writeStructuralParts(zipStream, workbook, ctx.partManifest, config, regenerateParts)
 
-    // PHASE 4: Copy unknown preserved parts
-    preservableParts.foreach { path =>
-      ctx.preservedParts.copyTo(path, zip)
-    }
+        workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
+          if tracker.modifiedSheets.contains(idx) then
+            writeSheetXml(zipStream, sheet, idx, config)
+          else
+            val sheetPath = graph.pathForSheet(idx)
+            handle.streamTo(sheetPath, zipStream)
+        }
 
-    IO(zip.close())
-  }
+        preservableParts.foreach { path =>
+          handle.streamTo(path, zipStream)
+        }
+      }
+    }.guarantee(IO(closeStream()))
 
   /** Determine which parts can be preserved */
   private def determinePreservableParts(
     wb: Workbook,
-    ctx: SourceContext
+    ctx: SourceContext,
+    graph: RelationshipGraph
   ): Set[String] =
     val tracker = ctx.modificationTracker
-    val allPreserved = ctx.preservedParts.listAll
+    val unparsed = ctx.partManifest.unparsedParts
 
-    // Filter out parts that depend on modified sheets
-    allPreserved.filter { path =>
-      // Drawings depend on sheet indices
-      if path.matches("xl/drawings/drawing\\d+\\.xml") then
-        val sheetIdx = extractSheetIndex(path)
-        !tracker.modifiedSheets.contains(sheetIdx)
-
-      // Charts depend on sheet data
-      else if path.startsWith("xl/charts/") then
-        // Conservative: preserve only if NO sheets modified
-        tracker.modifiedSheets.isEmpty
-
-      // Comments reference specific cells
-      else if path.matches("xl/comments\\d+\\.xml") then
-        val sheetIdx = extractSheetIndex(path)
-        !tracker.modifiedSheets.contains(sheetIdx)
-
-      // Sheet relationships depend on sheet
-      else if path.matches("xl/worksheets/_rels/sheet\\d+\\.xml\\.rels") then
-        val sheetIdx = extractSheetIndex(path)
-        !tracker.modifiedSheets.contains(sheetIdx)
-
-      // Other parts can be preserved
-      else
-        true
+    unparsed.filter { path =>
+      val dependentSheets = graph.dependencies(path)
+      val touchesDeleted = dependentSheets.exists(tracker.deletedSheets.contains)
+      val touchesModified = dependentSheets.exists(tracker.modifiedSheets.contains)
+      !touchesDeleted && !touchesModified
     }
 
   /** Determine which parts must be regenerated */
@@ -714,20 +794,37 @@ object XlsxWriter:
     if tracker.modifiedSheets.nonEmpty then
       regenerate += "xl/sharedStrings.xml"
 
-    // Regenerate modified sheets
+    // Regenerate modified sheets (domain writes new XML)
     tracker.modifiedSheets.foreach { idx =>
       regenerate += s"xl/worksheets/sheet${idx + 1}.xml"
+    }
+
+    // Regenerate any sheet relationships impacted by modifications/deletions
+    (tracker.modifiedSheets ++ tracker.deletedSheets).foreach { idx =>
+      regenerate += s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+    }
+
+    // Regenerate dependent drawings/comments when sheet changed
+    ctx.partManifest.entries.foreach { case (path, entry) =>
+      if entry.sheetIndex.exists(tracker.modifiedSheets.contains) && entry.parsed then
+        regenerate += path
     }
 
     regenerate.toSet
 ```
 
+`writeStructuralParts` Responsibilities:
+- Merge `[Content_Types].xml` from manifest with regenerated overrides (e.g., add/remove sheets)
+- Rebuild `_rels/.rels` and `xl/_rels/workbook.xml.rels` to ensure new rIds align with regenerated parts
+- Copy untouched defaults/overrides (e.g., `png`, `jpeg`) directly from manifest so preserved parts remain valid
+- Emit new sharedStrings/styles only if flagged in `regenerateParts`
+
 **Key Algorithm**:
 1. **Structural parts**: Always regenerate (workbook.xml, relationships)
-2. **Modified sheets**: Regenerate XML
+2. **Manifest-aware dependencies**: RelationshipGraph dictates what else must be regenerated
 3. **Unmodified sheets**: Copy from source if no dependencies changed
 4. **Unknown parts**: Copy if they don't reference modified sheets
-5. **Dependencies**: Conservative (if unsure, regenerate)
+5. **Dependencies**: Graph-based (no heuristic guessing)
 
 ---
 
@@ -738,12 +835,13 @@ object XlsxWriter:
 **Goal**: Add domain model changes, no behavioral changes yet
 
 **Tasks**:
-1. ✅ Create `xl-core/src/com/tjclp/xl/SourceContext.scala`
-2. ✅ Create `xl-core/src/com/tjclp/xl/ModificationTracker.scala`
-3. ✅ Add `sourceContext: Option[SourceContext]` to `Workbook`
-4. ✅ Add modification helpers to `Workbook` (`updateSheet`, `deleteSheet`, etc.)
-5. ✅ Write unit tests for `ModificationTracker` laws
-6. ✅ Write unit tests for `SourceContext` helpers
+1. ✅ Create `xl-ooxml/src/com/tjclp/xl/ooxml/PartManifest.scala`
+2. ✅ Create `xl-core/src/com/tjclp/xl/SourceContext.scala`
+3. ✅ Create `xl-core/src/com/tjclp/xl/ModificationTracker.scala`
+4. ✅ Add `sourceContext: Option[SourceContext]` to `Workbook`
+5. ✅ Add modification helpers to `Workbook` (`updateSheet`, `deleteSheet`, etc.)
+6. ✅ Write unit tests for `ModificationTracker` + `PartManifest`
+7. ✅ Write unit tests for `SourceContext` helpers
 
 **Success Criteria**:
 - All existing tests pass (no behavioral changes)
@@ -773,17 +871,26 @@ test("updateSheet marks sheet as modified"):
     .copy(sourceContext = Some(SourceContext(...)))
   val updated = wb.updateSheet("Sheet1", identity).getOrElse(???)
   assert(updated.sourceContext.get.modificationTracker.modifiedSheets.nonEmpty)
+
+// PartManifestSpec.scala
+test("tracks parsed/unparsed parts"):
+  val manifest = PartManifestBuilder()
+    .recordParsed("xl/workbook.xml", sheetIndex = None)
+    .recordUnparsed("xl/charts/chart1.xml", sheetIndex = Some(0))
+    .build()
+  assert(manifest.parsedParts == Set("xl/workbook.xml"))
+  assert(manifest.unparsedParts == Set("xl/charts/chart1.xml"))
 ```
 
 ---
 
-### Phase 2: Lazy Preserved Parts (Days 3-4)
+### Phase 2: Preserved Part Store (Days 3-4)
 
-**Goal**: Implement lazy loading of unknown ZIP entries
+**Goal**: Implement lazy loading + streaming copy of all untouched ZIP entries
 
 **Tasks**:
-1. ✅ Create `xl-ooxml/src/com/tjclp/xl/ooxml/LazyPreservedParts.scala`
-2. ✅ Implement `LazyPreservedPartsImpl` with streaming copy
+1. ✅ Create `xl-ooxml/src/com/tjclp/xl/ooxml/PreservedPartStore.scala`
+2. ✅ Implement `PreservedPartStoreImpl` with single open ZipFile + chunked streaming
 3. ✅ Add unit tests for lazy loading
 4. ✅ Add integration tests for large preserved parts
 5. ✅ Add memory tests (verify no materialization)
@@ -795,23 +902,25 @@ test("updateSheet marks sheet as modified"):
 
 **Test Plan**:
 ```scala
-// LazyPreservedPartsSpec.scala
+// PreservedPartStoreSpec.scala
 test("indexing large ZIP doesn't materialize content"):
   val largePath = createZipWith1000Entries(eachSize = 10.MB)
   val memBefore = currentHeap()
 
-  val preserved = LazyPreservedParts.fromPath(largePath, allEntries)
+  val manifest = PartManifest.fromZip(largePath)
+  val preserved = PreservedPartStore.fromPath(largePath, manifest)
   val memAfter = currentHeap()
 
   assert((memAfter - memBefore) < 50.MB)  // Only index, not content
 
 test("copyTo streams without materialization"):
   val sourcePath = createZipWithLargeEntry("xl/charts/chart1.xml", 50.MB)
-  val preserved = LazyPreservedParts.fromPath(sourcePath, Set("xl/charts/chart1.xml"))
+  val manifest = PartManifest.fromZip(sourcePath)
+  val preserved = PreservedPartStore.fromPath(sourcePath, manifest)
 
   val memBefore = currentHeap()
   val output = new ByteArrayOutputStream()
-  preserved.copyTo("xl/charts/chart1.xml", new ZipOutputStream(output)).unsafeRunSync()
+  preserved.open.use(_.streamTo("xl/charts/chart1.xml", new ZipOutputStream(output))).unsafeRunSync()
   val memAfter = currentHeap()
 
   assert((memAfter - memBefore) < 10.MB)  // Streaming, no full buffer
@@ -824,17 +933,19 @@ test("copyTo streams without materialization"):
 **Goal**: XlsxReader indexes all parts and creates SourceContext
 
 **Tasks**:
-1. ✅ Update `XlsxReader.readFromStream` to index all entries
+1. ✅ Update `XlsxReader.readFromStream` to index all entries + capture metadata
 2. ✅ Add `isKnownPart` predicate
-3. ✅ Create `SourceContext` when path provided
-4. ✅ Update public API (`read(path)` vs `readFromStream`)
-5. ✅ Add tests for unknown part preservation
-6. ✅ Verify memory efficiency (unknown parts not loaded)
+3. ✅ Build `PartManifest` (with relationship data) + `PreservedPartStore`
+4. ✅ Create `SourceContext` when `SourceHandle` provided
+5. ✅ Update public API (`read(path)` vs `readFromStream`)
+6. ✅ Add tests for unknown part preservation
+7. ✅ Verify memory efficiency (unknown parts not loaded)
 
 **Success Criteria**:
 - Reading file with charts/images preserves all parts
 - Memory usage unchanged (unknown parts not materialized)
 - Backwards compatible (stream API works)
+- Part manifest contains dependency metadata for RelationshipGraph
 
 **Test Plan**:
 ```scala
@@ -845,7 +956,9 @@ test("read from file creates SourceContext"):
 
   assert(wb.sourceContext.isDefined)
   assert(wb.sourceContext.get.sourcePath == path)
-  assert(wb.sourceContext.get.preservedParts.exists("xl/charts/chart1.xml"))
+  wb.sourceContext.get.preservedParts.open.use { handle =>
+    IO(assert(handle.exists("xl/charts/chart1.xml")))
+  }.unsafeRunSync()
 
 test("read from stream does not create SourceContext"):
   val is = Files.newInputStream(resourcePath("workbook.xlsx"))
@@ -860,7 +973,14 @@ test("unknown parts are indexed but not loaded"):
   val wb = XlsxReader.read(path).getOrElse(???)
   val memAfter = currentHeap()
 
-  assert(wb.sourceContext.get.preservedParts.listAll.size == 100)
+  val preservedCount = wb.sourceContext
+    .get
+    .preservedParts
+    .open
+    .use(handle => IO.pure(handle.listAll.size))
+    .unsafeRunSync()
+
+  assert(preservedCount == 100)
   assert((memAfter - memBefore) < 100.MB)  // Not all 500MB loaded
 ```
 
@@ -874,10 +994,11 @@ test("unknown parts are indexed but not loaded"):
 1. ✅ Implement `hybridWrite` strategy
 2. ✅ Implement `determinePreservableParts`
 3. ✅ Implement `determineRegenerateParts`
-4. ✅ Update `writeZip` to dispatch on SourceContext
-5. ✅ Add tests for hybrid write
-6. ✅ Add tests for part preservation
-7. ✅ Add performance benchmarks
+4. ✅ Build `RelationshipGraph` from manifest
+5. ✅ Update `writeStructuralParts` to merge `[Content_Types]`/rels
+6. ✅ Update `writeZip` to dispatch on SourceContext
+7. ✅ Add tests for hybrid write + relationship safety
+8. ✅ Add performance benchmarks
 
 **Success Criteria**:
 - Unmodified workbook write is fast copy (<100ms)
@@ -894,7 +1015,7 @@ test("unmodified workbook is copied, not regenerated"):
 
   val output = tempFile()
   val timeBefore = System.currentTimeMillis()
-  XlsxWriter.writeZip(wb, Files.newOutputStream(output)).unsafeRunSync()
+  XlsxWriter.writeZip(wb, OutputPath(output)).unsafeRunSync()
   val duration = System.currentTimeMillis() - timeBefore
 
   assert(duration < 100)  // Fast copy, not full regeneration
@@ -906,7 +1027,7 @@ test("modified sheet preserves unmodified parts"):
   val modified = wb.updateSheet("Sheet1", _.put(cell"A1", "Changed")).getOrElse(???)
 
   val output = tempFile()
-  XlsxWriter.writeZip(modified, Files.newOutputStream(output)).unsafeRunSync()
+  XlsxWriter.writeZip(modified, OutputPath(output)).unsafeRunSync()
 
   // Verify chart is preserved
   val zip = new ZipFile(output.toFile)
@@ -926,7 +1047,7 @@ test("modified sheet gets regenerated XML"):
   val modified = wb.updateSheet("Sheet1", _.put(cell"A1", "New Value")).getOrElse(???)
 
   val output = tempFile()
-  XlsxWriter.writeZip(modified, Files.newOutputStream(output)).unsafeRunSync()
+  XlsxWriter.writeZip(modified, OutputPath(output)).unsafeRunSync()
 
   // Re-read and verify value
   val reloaded = XlsxReader.read(output).getOrElse(???)
@@ -962,7 +1083,7 @@ test("deleting sheet with chart removes chart reference"):
   val modified = wb.deleteSheet("Sheet1").getOrElse(???)
 
   val output = tempFile()
-  XlsxWriter.writeZip(modified, Files.newOutputStream(output)).unsafeRunSync()
+  XlsxWriter.writeZip(modified, OutputPath(output)).unsafeRunSync()
 
   // Chart should NOT be in output (no orphaned references)
   val zip = new ZipFile(output.toFile)
@@ -973,7 +1094,7 @@ test("reordering sheets regenerates all sheet XML"):
   val reordered = wb.reorderSheets(Vector("Sheet3", "Sheet1", "Sheet2")).getOrElse(???)
 
   val output = tempFile()
-  XlsxWriter.writeZip(reordered, Files.newOutputStream(output)).unsafeRunSync()
+  XlsxWriter.writeZip(reordered, OutputPath(output)).unsafeRunSync()
 
   val reloaded = XlsxReader.read(output).getOrElse(???)
   assert(reloaded.sheets.map(_.name) == Vector("Sheet3", "Sheet1", "Sheet2"))
@@ -987,7 +1108,7 @@ test("modifying all sheets regenerates everything"):
   // Should regenerate all (no hybrid benefit)
   val output = tempFile()
   val timeBefore = System.currentTimeMillis()
-  XlsxWriter.writeZip(modified, Files.newOutputStream(output)).unsafeRunSync()
+  XlsxWriter.writeZip(modified, OutputPath(output)).unsafeRunSync()
   val duration = System.currentTimeMillis() - timeBefore
 
   // Should be same speed as full regeneration (no hybrid overhead)
@@ -1019,6 +1140,7 @@ test("modifying all sheets regenerates everything"):
 // PerformanceBenchmarkSpec.scala
 test("benchmark: unmodified write"):
   val wb = loadLargeWorkbook(sheets = 10, rowsPerSheet = 10000)
+  val output = OutputPath(tempFile())
 
   val timeBefore = System.currentTimeMillis()
   XlsxWriter.writeZip(wb, output).unsafeRunSync()
@@ -1030,6 +1152,7 @@ test("benchmark: unmodified write"):
 test("benchmark: single sheet modification"):
   val wb = loadLargeWorkbook(sheets = 10, rowsPerSheet = 10000)
   val modified = wb.updateSheet("Sheet1", _.put(cell"A1", "Changed")).getOrElse(???)
+  val output = OutputPath(tempFile())
 
   val timeBefore = System.currentTimeMillis()
   XlsxWriter.writeZip(modified, output).unsafeRunSync()
@@ -1043,6 +1166,7 @@ test("benchmark: all sheets modification"):
   val modified = wb.sheets.indices.foldLeft(wb) { (acc, idx) =>
     acc.updateSheetAt(idx, _.put(cell"A1", "Changed")).getOrElse(acc)
   }
+  val output = OutputPath(tempFile())
 
   val timeBefore = System.currentTimeMillis()
   XlsxWriter.writeZip(modified, output).unsafeRunSync()
@@ -1058,6 +1182,12 @@ test("benchmark: all sheets modification"):
 
 ### Unit Tests (Per Phase)
 
+**PartManifest** (20 tests):
+- ✅ Build from zip entries
+- ✅ Track parsed vs. unparsed parts
+- ✅ Capture sheet dependencies
+- ✅ Handle missing metadata gracefully
+
 **ModificationTracker** (20 tests):
 - ✅ Clean state invariants
 - ✅ Marking sheets as modified
@@ -1071,12 +1201,17 @@ test("benchmark: all sheets modification"):
 - ✅ Clean state detection
 - ✅ Immutability
 
-**LazyPreservedParts** (25 tests):
+**PreservedPartStore** (25 tests):
 - ✅ Lazy loading (no materialization)
 - ✅ Streaming copy
 - ✅ Memory efficiency
 - ✅ Error handling (missing entries)
 - ✅ Large file handling (100MB+ entries)
+
+**RelationshipGraph** (15 tests):
+- ✅ Parses workbook + sheet relationships
+- ✅ Maps drawings/comments/charts to sheet indices
+- ✅ Resolves sheet paths correctly after reorder/deletion
 
 **XlsxReader** (30 tests):
 - ✅ Index all ZIP entries
@@ -1108,10 +1243,16 @@ test("round-trip with charts preserves charts"):
   val modified = wb.updateSheet("Sheet1", _.put(cell"A1", "Changed")).getOrElse(???)
 
   val output = tempFile()
-  XlsxWriter.writeZip(modified, Files.newOutputStream(output)).unsafeRunSync()
+  XlsxWriter.writeZip(modified, OutputPath(output)).unsafeRunSync()
 
   val reloaded = XlsxReader.read(output).getOrElse(???)
-  assert(reloaded.sourceContext.get.preservedParts.exists("xl/charts/chart1.xml"))
+  val preservedCharts = reloaded.sourceContext
+    .get
+    .preservedParts
+    .open
+    .use(handle => IO.pure(handle.exists("xl/charts/chart1.xml")))
+    .unsafeRunSync()
+  assert(preservedCharts)
 
 test("round-trip with images preserves images"):
   val original = resourcePath("workbook-with-images.xlsx")
@@ -1160,6 +1301,7 @@ test("reading 1000-part workbook uses <100MB"):
 test("writing unmodified workbook uses <50MB"):
   val wb = loadLargeWorkbook()
   val memBefore = currentHeap()
+  val output = OutputPath(tempFile())
 
   XlsxWriter.writeZip(wb, output).unsafeRunSync()
   val memAfter = currentHeap()
@@ -1171,6 +1313,8 @@ test("writing unmodified workbook uses <50MB"):
 ```scala
 test("unmodified write is 10x faster than regeneration"):
   val wb = loadLargeWorkbook()
+  val output = OutputPath(tempFile())
+  val output2 = OutputPath(tempFile())
 
   // Measure copy speed
   val copyTime = measureTime {
@@ -1194,21 +1338,16 @@ test("unmodified write is 10x faster than regeneration"):
 
 **Problem**: Deleting a sheet may break references in charts/drawings
 
-**Solution**: Conservative invalidation
+**Solution**: Graph-aware invalidation
 ```scala
-def determinePreservableParts(...): Set[String] =
-  if tracker.deletedSheets.nonEmpty then
-    // Conservative: drop all parts that might reference sheets
-    allPreserved -- Set(
-      "xl/charts/*",
-      "xl/drawings/*",
-      "xl/comments*"
-    )
-  else
-    // ... normal preservation logic
+val graph = RelationshipGraph.fromManifest(ctx.partManifest)
+val deleted = tracker.deletedSheets
+val safe = ctx.partManifest.unparsedParts.filter { path =>
+  graph.dependencies(path).intersect(deleted).isEmpty
+}
 ```
 
-**Trade-off**: May drop more than necessary, but ensures correctness
+**Trade-off**: Requires fully-populated manifest, but only drops parts that actually pointed at deleted sheets
 
 ---
 
@@ -1221,7 +1360,7 @@ def determinePreservableParts(...): Set[String] =
 def hybridWrite(...): IO[Unit] =
   if ctx.modificationTracker.reorderedSheets then
     // Reordering requires full regeneration
-    regenerateAll(workbook, outputStream, config)
+    regenerateAll(workbook, target, config)
   else
     // ... normal hybrid strategy
 ```
@@ -1242,31 +1381,16 @@ def hybridWrite(...): IO[Unit] =
 </xdr:twoCellAnchor>
 ```
 
-**Solution**: Track relationship dependencies
+**Solution**: RelationshipGraph (core deliverable)
 ```scala
-// Phase 4 enhancement
-case class RelationshipGraph(
-  dependencies: Map[String, Set[Int]]  // part → sheet indices
-)
+val graph = RelationshipGraph.fromManifest(ctx.partManifest)
 
-def buildRelationshipGraph(sourcePath: Path): RelationshipGraph =
-  // Parse xl/_rels/workbook.xml.rels
-  // Parse xl/worksheets/_rels/sheet*.xml.rels
-  // Build dependency graph
-  ???
-
-def determinePreservableParts(...): Set[String] =
-  val graph = buildRelationshipGraph(ctx.sourcePath)
-  allPreserved.filter { part =>
-    graph.dependencies.get(part) match
-      case None => true  // No dependencies, safe
-      case Some(sheetIndices) =>
-        // Safe if no referenced sheets modified
-        !sheetIndices.exists(tracker.modifiedSheets.contains)
-  }
+// determinePreservableParts now uses exact sheet dependencies
+val sameSheet = graph.dependencies(part)
+val safe = sameSheet.intersect(tracker.modifiedSheets).isEmpty
 ```
 
-**Trade-off**: More complex, but maximally preserves parts
+**Trade-off**: Requires parsing `_rels` upfront, but avoids heuristic data loss and keeps charts/images/comments intact.
 
 ---
 
@@ -1301,28 +1425,12 @@ def writeStreamTrue(...): Stream[F, Byte] =
 
 **Solution**: Stream with chunking
 ```scala
-def copyTo(path: String, output: ZipOutputStream): IO[Unit] =
-  Resource.make(IO(new ZipFile(sourcePath.toFile)))(zf => IO(zf.close())).use { zip =>
-    IO {
-      val entry = zip.getEntry(path)
-      val is = zip.getInputStream(entry)
-
-      output.putNextEntry(new ZipEntry(path))
-
-      // Stream in 8KB chunks (don't buffer entire file)
-      val buffer = new Array[Byte](8192)
-      var bytesRead = is.read(buffer)
-      while bytesRead != -1 do
-        output.write(buffer, 0, bytesRead)
-        bytesRead = is.read(buffer)
-
-      is.close()
-      output.closeEntry()
-    }
-  }
+preservedParts.open.use { handle =>
+  handle.streamTo("xl/charts/chart1.xml", zipOutputStream)
+}
 ```
 
-**Trade-off**: Slightly slower due to chunking, but constant memory
+**Trade-off**: Slightly slower due to chunking, but constant memory (and CRC preserved)
 
 ---
 
@@ -1467,7 +1575,9 @@ workbook.sourceContext match
   case Some(ctx) =>
     println(s"Source: ${ctx.sourcePath}")
     println(s"Modified sheets: ${ctx.modificationTracker.modifiedSheets}")
-    println(s"Preserved parts: ${ctx.preservedParts.listAll.size}")
+    ctx.preservedParts.open.use { handle =>
+      IO.println(s"Preserved parts: ${handle.listAll.size}")
+    }.unsafeRunSync()
 ```
 
 **Manual Modification Tracking**:
@@ -1567,7 +1677,7 @@ A foundational architecture that:
 1. ✅ Review and approve this design
 2. ✅ Create implementation branch: `feat/surgical-modification`
 3. ✅ Implement Phase 1: Foundation (Days 1-2)
-4. ✅ Implement Phase 2: Lazy Preserved Parts (Days 3-4)
+4. ✅ Implement Phase 2: Preserved Part Store (Days 3-4)
 5. ✅ Implement Phase 3: Reader Enhancement (Days 5-6)
 6. ✅ Implement Phase 4: Writer Enhancement (Days 7-8)
 7. ✅ Implement Phase 5: Integration & Edge Cases (Day 9)
@@ -1582,3 +1692,16 @@ A foundational architecture that:
 ---
 
 _This design is complete and ready for implementation. All architectural decisions are documented, all edge cases are considered, and all tests are specified. This is the foundation for XL's future._
+  private def copyVerbatim(source: Path, dest: Path): IO[Unit] =
+    IO.blocking {
+      if source == dest then
+        val tmp = Files.createTempFile("xl-copy", ".xlsx")
+        Files.copy(source, tmp, StandardCopyOption.REPLACE_EXISTING)
+        Files.move(tmp, dest, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+      else
+        Files.copy(source, dest, StandardCopyOption.REPLACE_EXISTING)
+    }
+
+  private def writeAllParts(zip: ZipOutputStream, workbook: Workbook, config: WriterConfig): Unit =
+    // existing implementation (content types, rels, workbook, styles, sst, sheets)
+    ()

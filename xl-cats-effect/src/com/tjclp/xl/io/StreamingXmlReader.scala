@@ -33,7 +33,9 @@ object StreamingXmlReader:
           // For streaming, we don't track totalCount during parsing
           // Use uniqueCount as a safe default (actual count may be higher)
           val uniqueCount = builder.strings.size
-          Some(SharedStrings(builder.strings.toVector, builder.buildIndexMap, uniqueCount))
+          // Wrap plain text strings in Left() for SSTEntry
+          val entries = builder.strings.toVector.map(s => Left(s): com.tjclp.xl.ooxml.SSTEntry)
+          Some(SharedStrings(entries, builder.buildIndexMap, uniqueCount))
       }
 
   /**
@@ -202,10 +204,12 @@ object StreamingXmlReader:
     ): CellValue =
       cellType match
         case Some("s") =>
-          // Shared string reference
-          value.toIntOption
-            .flatMap(idx => sst.flatMap(_.strings.lift(idx)))
-            .map(CellValue.Text(_))
+          // Shared string reference - resolve using SST
+          (for {
+            sharedStrings <- sst
+            idx <- value.toIntOption
+            entry <- sharedStrings.apply(idx)
+          } yield sharedStrings.toCellValue(entry))
             .getOrElse(CellValue.Empty)
 
         case Some("inlineStr") =>
