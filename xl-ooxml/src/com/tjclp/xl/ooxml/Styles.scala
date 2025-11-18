@@ -168,20 +168,20 @@ object StyleIndex:
     import java.util.zip.ZipInputStream
     import java.io.FileInputStream
 
-    // Step 1: Parse original styles.xml to get all original styles
-    val originalStyles: Vector[CellStyle] = {
+    // Step 1: Parse original styles.xml to get ALL components (byte-perfect preservation)
+    val originalWorkbookStyles: WorkbookStyles = {
       val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
       try
         var entry = sourceZip.getNextEntry
-        var result: Vector[CellStyle] = Vector(CellStyle.default)
+        var result: WorkbookStyles = WorkbookStyles.default
 
-        while entry != null && result.size == 1 do
+        while entry != null && result == WorkbookStyles.default do
           if entry.getName == "xl/styles.xml" then
             val content = new String(sourceZip.readAllBytes(), "UTF-8")
             // Parse styles.xml using WorkbookStyles parser (with XXE protection)
             XmlSecurity.parseSafe(content, "xl/styles.xml").toOption.foreach { parsed =>
               WorkbookStyles.fromXml(parsed).foreach { wbStyles =>
-                result = wbStyles.cellStyles
+                result = wbStyles
               }
             }
 
@@ -191,6 +191,8 @@ object StyleIndex:
         result
       finally sourceZip.close()
     }
+
+    val originalStyles = originalWorkbookStyles.cellStyles
 
     // Step 2: Build index preserving ALL original styles (including duplicates)
     // Use groupBy to map each canonicalKey to ALL indices that have that key
@@ -240,35 +242,12 @@ object StyleIndex:
         None
     }.toMap
 
-    // Step 4: Deduplicate components from unified styles
-    val uniqueFonts = {
-      val seen = mutable.LinkedHashSet.empty[Font]
-      unifiedStyles.foreach(style => seen += style.font)
-      seen.toVector
-    }
-    val uniqueFills = {
-      val seen = mutable.LinkedHashSet.empty[Fill]
-      unifiedStyles.foreach(style => seen += style.fill)
-      seen.toVector
-    }
-    val uniqueBorders = {
-      val seen = mutable.LinkedHashSet.empty[Border]
-      unifiedStyles.foreach(style => seen += style.border)
-      seen.toVector
-    }
-
-    // Collect custom number formats
-    val customNumFmts = {
-      val seen = mutable.LinkedHashSet.empty[String]
-      unifiedStyles.foreach { style =>
-        style.numFmt match
-          case NumFmt.Custom(code) => seen += code
-          case _ => ()
-      }
-      seen.toVector.zipWithIndex.map { case (code, idx) =>
-        (164 + idx, NumFmt.Custom(code))
-      }
-    }
+    // Step 4: Use original fonts/fills/borders/numFmts (byte-perfect preservation)
+    // No deduplication - preserves exact fontId/fillId/borderId indices from source
+    val uniqueFonts = originalWorkbookStyles.fonts
+    val uniqueFills = originalWorkbookStyles.fills
+    val uniqueBorders = originalWorkbookStyles.borders
+    val customNumFmts = originalWorkbookStyles.customNumFmts
 
     // Convert unifiedIndex back to Map[String, StyleId] for StyleIndex
     // Use first index from each canonicalKey's list (preserves original layout)
@@ -539,12 +518,29 @@ object OoxmlStyles:
 
 // ========== Workbook Styles Parsing ==========
 
-/** Parsed workbook-level styles mapped by cellXf index */
-case class WorkbookStyles(cellStyles: Vector[CellStyle]):
+/**
+ * Parsed workbook-level styles with complete OOXML structure.
+ *
+ * Stores both domain model (cellStyles) and raw OOXML vectors (fonts, fills, borders) for
+ * byte-perfect preservation during surgical writes.
+ */
+case class WorkbookStyles(
+  cellStyles: Vector[CellStyle],
+  fonts: Vector[Font],
+  fills: Vector[Fill],
+  borders: Vector[Border],
+  customNumFmts: Vector[(Int, NumFmt)]
+):
   def styleAt(index: Int): Option[CellStyle] = cellStyles.lift(index)
 
 object WorkbookStyles:
-  val default: WorkbookStyles = WorkbookStyles(Vector(CellStyle.default))
+  val default: WorkbookStyles = WorkbookStyles(
+    cellStyles = Vector(CellStyle.default),
+    fonts = Vector(Font.default),
+    fills = Vector(Fill.default),
+    borders = Vector(Border.none),
+    customNumFmts = Vector.empty
+  )
 
   def fromXml(elem: Elem): Either[String, WorkbookStyles] =
     val numFmts = parseNumFmts(elem)
@@ -552,7 +548,15 @@ object WorkbookStyles:
     val fills = parseFills(elem)
     val borders = parseBorders(elem)
     val cellStyles = parseCellXfs(elem, fonts, fills, borders, numFmts)
-    Right(WorkbookStyles(cellStyles))
+    Right(
+      WorkbookStyles(
+        cellStyles = cellStyles,
+        fonts = fonts,
+        fills = fills,
+        borders = borders,
+        customNumFmts = numFmts.toVector.sortBy(_._1)
+      )
+    )
 
   private def parseNumFmts(root: Elem): Map[Int, NumFmt] =
     (root \ "numFmts").headOption match
