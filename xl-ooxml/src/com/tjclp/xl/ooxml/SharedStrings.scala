@@ -165,17 +165,24 @@ object SharedStrings extends XmlReadable[SharedStrings]:
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def fromStrings(strings: Iterable[String], totalCount: Option[Int] = None): SharedStrings =
     // Stream through strings with LinkedHashSet for O(1) deduplication (50-70% memory reduction)
+    // Normalize ONLY for deduplication keys, store original strings
     import scala.collection.mutable
-    val seen = mutable.LinkedHashSet.empty[String]
+    val seenKeys = mutable.LinkedHashSet.empty[String]
+    val uniqueStrings = mutable.ArrayBuffer.empty[String]
     var count = 0
     strings.foreach { s =>
       count += 1
-      seen += normalize(s)
+      val normalizedKey = normalize(s)
+      if seenKeys.add(normalizedKey) then
+        uniqueStrings += s // Store original string, not normalized
     }
-    val normalized = seen.toVector.map(s => Left(s): SSTEntry)
-    val indexMap = seen.toVector.zipWithIndex.toMap
+    val entries = uniqueStrings.toVector.map(s => Left(s): SSTEntry)
+    val indexMap = entries.zipWithIndex.map {
+      case (Left(s), idx) => normalize(s) -> idx
+      case (Right(rt), idx) => normalize(rt.toPlainText) -> idx
+    }.toMap
     val finalCount = totalCount.getOrElse(count)
-    SharedStrings(normalized, indexMap, finalCount)
+    SharedStrings(entries, indexMap, finalCount)
 
   /** Normalize string to NFC form for consistent comparison */
   def normalize(s: String): String =
@@ -278,9 +285,11 @@ object SharedStrings extends XmlReadable[SharedStrings]:
         // RichText: parse runs with formatting
         parseTextRuns(rElems).map(rt => Right(rt): SSTEntry)
       else
-        // Simple text: extract from <t>
-        (si \ "t").headOption.map(_.text) match
-          case Some(text) => Right(Left(normalize(text)): SSTEntry)
+        // Simple text: extract from <t> (preserving whitespace, NO normalization for storage)
+        (si \ "t").headOption
+          .collect { case elem: Elem => elem }
+          .map(getTextPreservingWhitespace) match
+          case Some(text) => Right(Left(text): SSTEntry)
           case None => Left("SharedString <si> missing <t> element and has no <r> runs")
     }
 

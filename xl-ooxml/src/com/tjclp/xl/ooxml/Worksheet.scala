@@ -661,8 +661,10 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         // Check for rich text (<is><r>) vs simple text (<is><t>)
         (elem \ "is").headOption match
           case None =>
-            // Fallback: "str" type may have text in <v> element
-            (elem \ "v").headOption.map(_.text) match
+            // Fallback: "str" type may have text in <v> element (preserving whitespace)
+            (elem \ "v").headOption
+              .collect { case e: Elem => e }
+              .map(getTextPreservingWhitespace) match
               case Some(text) => Right(CellValue.Text(text))
               case None => Left(s"$cellType cell missing <is> element and <v> element")
           case Some(isElem: Elem) =>
@@ -672,8 +674,10 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
               // Rich text: parse runs with formatting
               parseTextRuns(rElems).map(CellValue.RichText.apply)
             else
-              // Simple text: extract from <t>
-              (isElem \ "t").headOption.map(_.text) match
+              // Simple text: extract from <t> (preserving whitespace)
+              (isElem \ "t").headOption
+                .collect { case e: Elem => e }
+                .map(getTextPreservingWhitespace) match
                 case Some(text) => Right(CellValue.Text(text))
                 case None => Left(s"$cellType <is> missing <t> element and has no <r> runs")
           case _ => Left(s"$cellType <is> is not an Elem")

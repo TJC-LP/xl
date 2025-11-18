@@ -153,6 +153,30 @@ object XmlUtil:
     s.nonEmpty && (s.startsWith(" ") || s.endsWith(" ") || s.contains("  "))
 
   /**
+   * Extract text content from XML element, preserving whitespace.
+   *
+   * Unlike `.text` which normalizes whitespace, this method preserves exact whitespace (including
+   * leading/trailing/multiple spaces) by extracting raw text node content.
+   *
+   * REQUIRES: elem is valid Elem ENSURES:
+   *   - Returns exact text content without normalization
+   *   - Preserves leading/trailing whitespace
+   *   - Preserves multiple consecutive spaces
+   *   - Empty if element has no text children
+   * DETERMINISTIC: Yes (pure function)
+   *
+   * @param elem
+   *   XML element to extract text from
+   * @return
+   *   Raw text content preserving all whitespace
+   */
+  def getTextPreservingWhitespace(elem: Elem): String =
+    elem.child.collect {
+      case scala.xml.Text(data) => data
+      case scala.xml.PCData(data) => data
+    }.mkString
+
+  /**
    * Recursively strip namespace declarations from XML element tree.
    *
    * Removes redundant xmlns attributes that cause Excel corruption when elements are re-embedded in
@@ -262,8 +286,10 @@ object XmlUtil:
       val font = rPrElemOpt.map(parseRunProperties)
       val rawRPrXml = rPrElemOpt.map(elem => compact(elem)) // Preserve as XML string
 
-      // Extract required <t> text
-      (rElem \ "t").headOption.map(_.text) match
+      // Extract required <t> text (preserving whitespace)
+      (rElem \ "t").headOption
+        .collect { case elem: Elem => elem }
+        .map(getTextPreservingWhitespace) match
         case Some(text) => Right(TextRun(text, font, rawRPrXml))
         case None => Left("Text run <r> missing <t> element")
     }
