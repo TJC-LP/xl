@@ -108,7 +108,7 @@ class StyleSpec extends ScalaCheckSuite:
     border <- genBorder
     numFmt <- genNumFmt
     align <- genAlign
-  yield CellStyle(font, fill, border, numFmt, align)
+  yield CellStyle(font = font, fill = fill, border = border, numFmt = numFmt, align = align)
 
   given Arbitrary[Pt] = Arbitrary(genPt)
   given Arbitrary[Px] = Arbitrary(genPx)
@@ -387,4 +387,44 @@ class StyleSpec extends ScalaCheckSuite:
       assertEquals(key1, key2)
       true
     }
+  }
+
+  // ========== NumFmt ID Preservation Tests (Regression Prevention) ==========
+
+  test("canonicalKey ignores numFmtId (ensures deduplication works)") {
+    // Critical: styles with same visual properties but different numFmtId must deduplicate
+    val style1 = CellStyle(
+      numFmt = NumFmt.General,
+      numFmtId = Some(0)
+    )
+    val style2 = CellStyle(
+      numFmt = NumFmt.General,
+      numFmtId = None
+    )
+    val style3 = CellStyle(
+      numFmt = NumFmt.General,
+      numFmtId = Some(39) // Different ID but will map to Custom format
+    )
+
+    assertEquals(
+      style1.canonicalKey,
+      style2.canonicalKey,
+      "Styles with same numFmt but different numFmtId must have same canonicalKey"
+    )
+
+    // Note: style3 would have different key because numFmt would be different
+    // (ID 39 maps to accounting format via builtInById)
+  }
+
+  test("NumFmt.fromId recognizes all critical built-in format IDs") {
+    // Test accounting formats (the ones that caused the original bug)
+    assert(NumFmt.fromId(39).isDefined, "ID 39 (accounting #,##0.00) must be recognized")
+    assert(NumFmt.fromId(40).isDefined, "ID 40 (accounting with red negatives) must be recognized")
+    assert(NumFmt.fromId(41).isDefined, "ID 41 (accounting with spaces) must be recognized")
+    assert(NumFmt.fromId(42).isDefined, "ID 42 (accounting with $) must be recognized")
+    assert(NumFmt.fromId(43).isDefined, "ID 43 (accounting .00 with spaces) must be recognized")
+    assert(NumFmt.fromId(44).isDefined, "ID 44 (accounting .00 with $) must be recognized")
+
+    // Test that unrecognized IDs return None (as expected)
+    assert(NumFmt.fromId(200).isEmpty, "Custom ID 200 should not be built-in")
   }

@@ -152,7 +152,13 @@ object StyleIndex:
    * @return
    *   (StyleIndex with all original + deduplicated styles, Map[modifiedSheetIdx -> remapping])
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.Var",
+      "org.wartremover.warts.While",
+      "org.wartremover.warts.IterableOps" // .head is safe - groupBy guarantees non-empty lists
+    )
+  )
   def fromWorkbookSurgical(
     wb: Workbook,
     modifiedSheetIndices: Set[Int],
@@ -162,20 +168,20 @@ object StyleIndex:
     import java.util.zip.ZipInputStream
     import java.io.FileInputStream
 
-    // Step 1: Parse original styles.xml to get all original styles
-    val originalStyles: Vector[CellStyle] = {
+    // Step 1: Parse original styles.xml to get ALL components (byte-perfect preservation)
+    val originalWorkbookStyles: WorkbookStyles = {
       val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
       try
         var entry = sourceZip.getNextEntry
-        var result: Vector[CellStyle] = Vector(CellStyle.default)
+        var result: WorkbookStyles = WorkbookStyles.default
 
-        while entry != null && result.size == 1 do
+        while entry != null && result == WorkbookStyles.default do
           if entry.getName == "xl/styles.xml" then
             val content = new String(sourceZip.readAllBytes(), "UTF-8")
             // Parse styles.xml using WorkbookStyles parser (with XXE protection)
             XmlSecurity.parseSafe(content, "xl/styles.xml").toOption.foreach { parsed =>
               WorkbookStyles.fromXml(parsed).foreach { wbStyles =>
-                result = wbStyles.cellStyles
+                result = wbStyles
               }
             }
 
@@ -186,33 +192,48 @@ object StyleIndex:
       finally sourceZip.close()
     }
 
-    // Step 2: Build index starting with original styles (no deduplication yet)
-    var unifiedStyles = originalStyles
-    var unifiedIndex = originalStyles.zipWithIndex.map { case (style, idx) =>
-      style.canonicalKey -> StyleId(idx)
-    }.toMap
-    var nextIdx = originalStyles.size
+    val originalStyles = originalWorkbookStyles.cellStyles
 
-    // Step 3: Process ONLY modified sheets for deduplication
+    // Step 2: Build index preserving ALL original styles (including duplicates)
+    // Use groupBy to map each canonicalKey to ALL indices that have that key
+    // This prevents the critical bug where duplicate styles in source get lost
+    var unifiedStyles = originalStyles
+    val unifiedIndex: Map[String, List[Int]] = originalStyles.zipWithIndex
+      .groupBy { case (style, _) => style.canonicalKey }
+      .view
+      .mapValues(_.map(_._2).toList)
+      .toMap
+    var nextIdx = originalStyles.size
+    var additionalStyles = mutable.Map[String, Int]() // Track styles added after original
+
+    // Step 3: Process ONLY modified sheets for style remapping
     val remappings = wb.sheets.zipWithIndex.flatMap { case (sheet, sheetIdx) =>
       if modifiedSheetIndices.contains(sheetIdx) then
         val registry = sheet.styleRegistry
         val remapping = mutable.Map[Int, Int]()
 
-        // Map each local styleId to global index (with deduplication)
+        // Map each local styleId to global index
         registry.styles.zipWithIndex.foreach { case (style, localIdx) =>
           val key = style.canonicalKey
 
+          // First, check if this key exists in original styles
           unifiedIndex.get(key) match
-            case Some(globalIdx) =>
-              // Style already exists (either from original or previously added)
-              remapping(localIdx) = globalIdx.value
+            case Some(indices) =>
+              // Style exists in original - use FIRST matching index
+              // This preserves original layout and avoids adding duplicates
+              remapping(localIdx) = indices.head
             case None =>
-              // New style not in original - add to unified index
-              unifiedStyles = unifiedStyles :+ style
-              unifiedIndex = unifiedIndex + (key -> StyleId(nextIdx))
-              remapping(localIdx) = nextIdx
-              nextIdx += 1
+              // Not in original - check if we've already added it
+              additionalStyles.get(key) match
+                case Some(addedIdx) =>
+                  // Already added by earlier sheet processing
+                  remapping(localIdx) = addedIdx
+                case None =>
+                  // Truly new style - add it now
+                  unifiedStyles = unifiedStyles :+ style
+                  additionalStyles(key) = nextIdx
+                  remapping(localIdx) = nextIdx
+                  nextIdx += 1
         }
 
         Some(sheetIdx -> remapping.toMap)
@@ -221,35 +242,16 @@ object StyleIndex:
         None
     }.toMap
 
-    // Step 4: Deduplicate components from unified styles
-    val uniqueFonts = {
-      val seen = mutable.LinkedHashSet.empty[Font]
-      unifiedStyles.foreach(style => seen += style.font)
-      seen.toVector
-    }
-    val uniqueFills = {
-      val seen = mutable.LinkedHashSet.empty[Fill]
-      unifiedStyles.foreach(style => seen += style.fill)
-      seen.toVector
-    }
-    val uniqueBorders = {
-      val seen = mutable.LinkedHashSet.empty[Border]
-      unifiedStyles.foreach(style => seen += style.border)
-      seen.toVector
-    }
+    // Step 4: Use original fonts/fills/borders/numFmts (byte-perfect preservation)
+    // No deduplication - preserves exact fontId/fillId/borderId indices from source
+    val uniqueFonts = originalWorkbookStyles.fonts
+    val uniqueFills = originalWorkbookStyles.fills
+    val uniqueBorders = originalWorkbookStyles.borders
+    val customNumFmts = originalWorkbookStyles.customNumFmts
 
-    // Collect custom number formats
-    val customNumFmts = {
-      val seen = mutable.LinkedHashSet.empty[String]
-      unifiedStyles.foreach { style =>
-        style.numFmt match
-          case NumFmt.Custom(code) => seen += code
-          case _ => ()
-      }
-      seen.toVector.zipWithIndex.map { case (code, idx) =>
-        (164 + idx, NumFmt.Custom(code))
-      }
-    }
+    // Convert unifiedIndex back to Map[String, StyleId] for StyleIndex
+    // Use first index from each canonicalKey's list (preserves original layout)
+    val styleToIndexMap = unifiedIndex.view.mapValues(indices => StyleId(indices.head)).toMap
 
     val styleIndex = StyleIndex(
       uniqueFonts,
@@ -257,7 +259,7 @@ object StyleIndex:
       uniqueBorders,
       customNumFmts,
       unifiedStyles,
-      unifiedIndex
+      styleToIndexMap
     )
 
     (styleIndex, remappings)
@@ -346,11 +348,14 @@ case class OoxmlStyles(
         val fontIdx = fontMap.getOrElse(style.font, -1)
         val fillIdx = fillMap.getOrElse(style.fill, -1)
         val borderIdx = borderMap.getOrElse(style.border, -1)
-        val numFmtId = NumFmt
-          .builtInId(style.numFmt)
-          .getOrElse(
-            index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
-          )
+        val numFmtId = style.numFmtId.getOrElse {
+          // No raw ID → derive from NumFmt enum (programmatic creation)
+          NumFmt
+            .builtInId(style.numFmt)
+            .getOrElse(
+              index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
+            )
+        }
 
         // Serialize alignment as child element if non-default
         val alignmentChild = alignmentToXml(style.align).toSeq
@@ -513,12 +518,29 @@ object OoxmlStyles:
 
 // ========== Workbook Styles Parsing ==========
 
-/** Parsed workbook-level styles mapped by cellXf index */
-case class WorkbookStyles(cellStyles: Vector[CellStyle]):
+/**
+ * Parsed workbook-level styles with complete OOXML structure.
+ *
+ * Stores both domain model (cellStyles) and raw OOXML vectors (fonts, fills, borders) for
+ * byte-perfect preservation during surgical writes.
+ */
+case class WorkbookStyles(
+  cellStyles: Vector[CellStyle],
+  fonts: Vector[Font],
+  fills: Vector[Fill],
+  borders: Vector[Border],
+  customNumFmts: Vector[(Int, NumFmt)]
+):
   def styleAt(index: Int): Option[CellStyle] = cellStyles.lift(index)
 
 object WorkbookStyles:
-  val default: WorkbookStyles = WorkbookStyles(Vector(CellStyle.default))
+  val default: WorkbookStyles = WorkbookStyles(
+    cellStyles = Vector(CellStyle.default),
+    fonts = Vector(Font.default),
+    fills = Vector(Fill.default),
+    borders = Vector(Border.none),
+    customNumFmts = Vector.empty
+  )
 
   def fromXml(elem: Elem): Either[String, WorkbookStyles] =
     val numFmts = parseNumFmts(elem)
@@ -526,7 +548,15 @@ object WorkbookStyles:
     val fills = parseFills(elem)
     val borders = parseBorders(elem)
     val cellStyles = parseCellXfs(elem, fonts, fills, borders, numFmts)
-    Right(WorkbookStyles(cellStyles))
+    Right(
+      WorkbookStyles(
+        cellStyles = cellStyles,
+        fonts = fonts,
+        fills = fills,
+        borders = borders,
+        customNumFmts = numFmts.toVector.sortBy(_._1)
+      )
+    )
 
   private def parseNumFmts(root: Elem): Map[Int, NumFmt] =
     (root \ "numFmts").headOption match
@@ -686,11 +716,18 @@ object WorkbookStyles:
       .flatMap(attr => attr.text.toIntOption)
       .flatMap(borders.lift)
       .getOrElse(Border.none)
-    val numFmtId = xfElem.attribute("numFmtId").flatMap(attr => attr.text.toIntOption)
+    val numFmtIdOpt = xfElem.attribute("numFmtId").flatMap(attr => attr.text.toIntOption)
     val numFmt =
-      numFmtId.flatMap(id => numFmts.get(id).orElse(NumFmt.fromId(id))).getOrElse(NumFmt.General)
+      numFmtIdOpt.flatMap(id => numFmts.get(id).orElse(NumFmt.fromId(id))).getOrElse(NumFmt.General)
     val align = parseAlignment(xfElem).getOrElse(Align.default)
-    CellStyle(font = font, fill = fill, border = border, numFmt = numFmt, align = align)
+    CellStyle(
+      font = font,
+      fill = fill,
+      border = border,
+      numFmt = numFmt,
+      numFmtId = numFmtIdOpt,
+      align = align
+    )
 
   private def parseAlignment(xfElem: Elem): Option[Align] =
     (xfElem \ "alignment").headOption match

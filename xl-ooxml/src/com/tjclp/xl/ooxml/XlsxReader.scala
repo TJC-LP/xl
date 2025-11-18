@@ -327,7 +327,10 @@ object XlsxReader:
   private def buildStyleRegistry(
     styles: WorkbookStyles
   ): (StyleRegistry, Map[Int, StyleId]) =
-    styles.cellStyles.zipWithIndex.foldLeft((StyleRegistry.default, Map.empty[Int, StyleId])) {
+    // Start with EMPTY registry (not default) to preserve exact source styles
+    // This prevents adding an extra "default" style when source style 0 differs from CellStyle.default
+    val emptyRegistry = StyleRegistry(Vector.empty, Map.empty)
+    styles.cellStyles.zipWithIndex.foldLeft((emptyRegistry, Map.empty[Int, StyleId])) {
       case ((registry, mapping), (style, idx)) =>
         val (nextRegistry, styleId) = registry.register(style)
         (nextRegistry, mapping.updated(idx, styleId))

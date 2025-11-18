@@ -49,6 +49,31 @@ object NumFmt:
     20 -> Time,
     21 -> Time,
     22 -> DateTime,
+    // IDs 23-48: Additional built-in formats (ECMA-376 Part 1, §18.8.30)
+    23 -> Custom("General"),
+    27 -> Custom("[$-404]e/m/d"),
+    28 -> Custom("[$-404]e\"年\"m\"月\"d\"日\""),
+    29 -> Custom("[$-404]e\"年\"m\"月\"d\"日\""),
+    30 -> Custom("m/d/yy"),
+    31 -> Custom("yyyy\"年\"m\"月\"d\"日\""),
+    32 -> Custom("h\"時\"mm\"分\""),
+    33 -> Custom("h\"時\"mm\"分\"ss\"秒\""),
+    34 -> Custom("yyyy\"年\"m\"月\""),
+    35 -> Custom("m\"月\"d\"日\""),
+    36 -> Custom("[$-404]e/m/d"),
+    37 -> Custom("#,##0 ;(#,##0)"),
+    38 -> Custom("#,##0 ;[Red](#,##0)"),
+    // CRITICAL: Accounting formats (fix for the bug)
+    39 -> Custom("#,##0.00;(#,##0.00)"),
+    40 -> Custom("#,##0.00;[Red](#,##0.00)"),
+    41 -> Custom("_(* #,##0_);_(* (#,##0);_(* \"-\"_);_(@_)"),
+    42 -> Custom("_(\"$\"* #,##0_);_(\"$\"* (#,##0);_(\"$\"* \"-\"_);_(@_)"),
+    43 -> Custom("_(* #,##0.00_);_(* (#,##0.00);_(* \"-\"??_);_(@_)"),
+    44 -> Custom("_(\"$\"* #,##0.00_);_(\"$\"* (#,##0.00);_(\"$\"* \"-\"??_);_(@_)"),
+    45 -> Custom("mm:ss"),
+    46 -> Custom("[h]:mm:ss"),
+    47 -> Custom("mmss.0"),
+    48 -> Custom("##0.0E+0"),
     49 -> Text
   )
 
