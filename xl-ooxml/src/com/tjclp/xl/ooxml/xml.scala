@@ -204,20 +204,23 @@ object XmlUtil:
     val italic = (rPrElem \ "i").nonEmpty
     val underline = (rPrElem \ "u").nonEmpty
 
-    val color = (rPrElem \ "color").headOption.flatMap { colorElem =>
-      getAttrOpt(colorElem.asInstanceOf[Elem], "rgb").flatMap { rgb =>
-        // Add # prefix for Color.fromHex
-        Color.fromHex(s"#$rgb").toOption
+    val color =
+      (rPrElem \ "color").headOption.collect { case elem: Elem => elem }.flatMap { colorElem =>
+        getAttrOpt(colorElem, "rgb").flatMap { rgb =>
+          // Add # prefix for Color.fromHex
+          Color.fromHex(s"#$rgb").toOption
+        }
       }
-    }
 
     val sizePt = (rPrElem \ "sz").headOption
-      .flatMap(e => getAttrOpt(e.asInstanceOf[Elem], "val"))
+      .collect { case elem: Elem => elem }
+      .flatMap(e => getAttrOpt(e, "val"))
       .flatMap(_.toDoubleOption)
       .getOrElse(11.0)
 
     val name = (rPrElem \ "name").headOption
-      .flatMap(e => getAttrOpt(e.asInstanceOf[Elem], "val"))
+      .collect { case elem: Elem => elem }
+      .flatMap(e => getAttrOpt(e, "val"))
       .getOrElse("Calibri")
 
     Font(
@@ -253,7 +256,7 @@ object XmlUtil:
 
     val runs = runElems.collect { case e: Elem if e.label == "r" => e }.map { rElem =>
       // Extract optional <rPr> for formatting and preserve raw XML
-      val rPrElemOpt = (rElem \ "rPr").headOption.map(_.asInstanceOf[Elem])
+      val rPrElemOpt = (rElem \ "rPr").headOption.collect { case elem: Elem => elem }
       val font = rPrElemOpt.map(parseRunProperties)
       val rawRPrXml = rPrElemOpt.map(elem => compact(elem)) // Preserve as XML string
 

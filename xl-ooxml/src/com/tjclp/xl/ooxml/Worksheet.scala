@@ -62,9 +62,10 @@ case class OoxmlCell(
           val rPrElems = run.rawRPrXml.flatMap { xmlString =>
             // Parse preserved XML string back to Elem for byte-perfect preservation
             try
-              val parsed = scala.xml.XML.loadString(xmlString).asInstanceOf[scala.xml.Elem]
-              // Strip redundant xmlns recursively from entire tree (namespace already on parent)
-              Some(XmlUtil.stripNamespaces(parsed))
+              scala.xml.XML.loadString(xmlString) match
+                case elem: scala.xml.Elem =>
+                  // Strip redundant xmlns recursively from entire tree (namespace already on parent)
+                  Some(XmlUtil.stripNamespaces(elem))
             catch case _: Exception => None
           }.toList match
             case preserved if preserved.nonEmpty => preserved
@@ -683,8 +684,11 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           case Some(idxStr) =>
             idxStr.toIntOption match
               case Some(idx) =>
-                sst.flatMap(_.apply(idx)) match
-                  case Some(entry) => Right(sst.get.toCellValue(entry))
+                (for {
+                  sharedStrings <- sst
+                  entry <- sharedStrings.apply(idx)
+                } yield sharedStrings.toCellValue(entry)) match
+                  case Some(cellValue) => Right(cellValue)
                   case None =>
                     // SST index out of bounds → CellError.Ref (not parse failure)
                     Right(CellValue.Error(com.tjclp.xl.cell.CellError.Ref))

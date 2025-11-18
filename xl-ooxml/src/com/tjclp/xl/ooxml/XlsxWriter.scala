@@ -471,7 +471,7 @@ object XlsxWriter:
    * Returns (ContentTypes, rootRels, workbookRels, workbook) parsed from the original file. If any
    * file is missing or fails to parse, returns None for that component.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def parsePreservedStructure(
     sourcePath: Path
   ): (Option[ContentTypes], Option[Relationships], Option[Relationships], Option[OoxmlWorkbook]) =
@@ -540,7 +540,7 @@ object XlsxWriter:
    * Returns the parsed OoxmlWorksheet with all metadata (cols, views, etc.) for merging during
    * regeneration.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def parsePreservedWorksheet(
     sourcePath: Path,
     sheetPath: String
@@ -569,7 +569,7 @@ object XlsxWriter:
    * t="inlineStr" (inline strings). We copy the SST verbatim to output, but parse it here so
    * modified sheets can reference the same indices as unmodified sheets.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def parsePreservedSST(sourcePath: Path): Option[SharedStrings] =
     val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
     try
@@ -612,7 +612,7 @@ object XlsxWriter:
             attrs = Some(elem.attributes)
             scope = elem.scope
             // Extract <dxfs> element if present (needed for conditional formatting)
-            dxfs = (elem \ "dxfs").headOption.map(_.asInstanceOf[Elem])
+            dxfs = (elem \ "dxfs").headOption.collect { case e: Elem => e }
           }
 
         sourceZip.closeEntry()
@@ -666,7 +666,7 @@ object XlsxWriter:
     val (sst, regenerateSharedStrings) =
       if sourceHasSharedStrings then
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
-        val parsedSST = parsePreservedSST(sourceContext.get.sourcePath)
+        val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.sourcePath)).getOrElse(None)
 
         // Check if modified sheets contain NEW strings not in preserved SST
         // Extract Either[String, RichText] entries from modified sheets

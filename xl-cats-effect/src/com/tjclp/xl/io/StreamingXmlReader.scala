@@ -205,9 +205,11 @@ object StreamingXmlReader:
       cellType match
         case Some("s") =>
           // Shared string reference - resolve using SST
-          value.toIntOption
-            .flatMap(idx => sst.flatMap(_.apply(idx)))
-            .map(entry => sst.get.toCellValue(entry))
+          (for {
+            sharedStrings <- sst
+            idx <- value.toIntOption
+            entry <- sharedStrings.apply(idx)
+          } yield sharedStrings.toCellValue(entry))
             .getOrElse(CellValue.Empty)
 
         case Some("inlineStr") =>
