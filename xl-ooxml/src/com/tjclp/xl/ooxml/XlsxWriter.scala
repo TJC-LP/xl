@@ -1,14 +1,16 @@
 package com.tjclp.xl.ooxml
 
 import scala.xml.*
-import java.io.{File, FileInputStream, FileOutputStream, ByteArrayOutputStream, OutputStream}
-import java.util.zip.{ZipInputStream, ZipOutputStream, ZipEntry, ZipFile}
-import java.nio.file.{Path, Files, StandardCopyOption}
+import java.io.{ByteArrayOutputStream, FileOutputStream, OutputStream}
+import java.security.MessageDigest
+import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
+import java.nio.file.{Files, Path}
 import java.nio.charset.StandardCharsets
 import scala.collection.mutable
+import scala.util.{Failure, Success, Try, Using}
 import com.tjclp.xl.api.{Workbook, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.{SourceContext, ModificationTracker}
+import com.tjclp.xl.{ModificationTracker, SourceContext}
 import com.tjclp.xl.richtext.RichText
 
 /** Shared Strings Table usage policy */
@@ -137,7 +139,7 @@ object XlsxWriter:
           // Clean workbook + file target → verbatim copy (ultra-fast)
           target match
             case OutputPath(path) =>
-              copyVerbatim(ctx.sourcePath, path)
+              copyVerbatim(ctx, path)
             case OutputStreamTarget(_) =>
               // Can't copy to stream, use unified write (will copy all parts)
               unifiedWrite(workbook, workbook.sourceContext, target, config)
@@ -158,14 +160,38 @@ object XlsxWriter:
    *
    * Handles edge case where source == dest (no-op).
    */
-  private def copyVerbatim(source: Path, dest: Path): Unit =
-    if source == dest then
-      // Source and destination are the same file - no-op
-      ()
-    else
-      // Simple file copy using NIO
-      Files.copy(source, dest, StandardCopyOption.REPLACE_EXISTING)
-      ()
+  private def copyVerbatim(ctx: SourceContext, dest: Path): Unit =
+    val source = ctx.sourcePath
+    if source != dest then
+      val fingerprint = ctx.fingerprint
+      val currentSize = Files.size(source)
+      if currentSize != fingerprint.size then
+        throw new IllegalStateException(
+          s"Source file changed size since read (expected ${fingerprint.size} bytes, found $currentSize)"
+        )
+
+      val digest = MessageDigest.getInstance("SHA-256")
+
+      val bytesCopied = usingOrThrow(Using.Manager { use =>
+        val in = use(Files.newInputStream(source))
+        val out = use(Files.newOutputStream(dest))
+        val buffer = new Array[Byte](8192)
+
+        def loop(total: Long): Long =
+          val read = in.read(buffer)
+          if read == -1 then total
+          else
+            digest.update(buffer, 0, read)
+            out.write(buffer, 0, read)
+            loop(total + read)
+
+        loop(0L)
+      })
+
+      val computedDigest = digest.digest()
+      if !fingerprint.matches(bytesCopied, computedDigest) then
+        Files.deleteIfExists(dest)
+        throw new IllegalStateException("Source file changed since read; refusing to copy verbatim")
 
   /**
    * Full regeneration of all XLSX parts (current behavior).
@@ -426,6 +452,35 @@ object XlsxWriter:
 
     regenerate.toSet
 
+  private def usingOrThrow[A](result: Try[A]): A =
+    result match
+      case Success(value) => value
+      case Failure(exception) => throw exception
+
+  /** Helper to open a ZipFile with automatic resource management. */
+  private def withZipFile[A](path: Path)(f: ZipFile => A): A =
+    usingOrThrow(Using.Manager { use =>
+      val zip = use(new ZipFile(path.toFile))
+      f(zip)
+    })
+
+  /** Read the contents of a ZIP entry as UTF-8 string if it exists. */
+  private def readZipEntry(zip: ZipFile, entryName: String): Option[String] =
+    Option(zip.getEntry(entryName)).map { entry =>
+      usingOrThrow(Using.Manager { use =>
+        val in = use(zip.getInputStream(entry))
+        new String(in.readAllBytes(), StandardCharsets.UTF_8)
+      })
+    }
+
+  private def parseOptionalEntry[T](
+    zip: ZipFile,
+    entryName: String
+  )(parse: Elem => Either[String, T]): Option[T] =
+    readZipEntry(zip, entryName).flatMap { xmlString =>
+      XmlSecurity.parseSafe(xmlString, entryName).toOption.flatMap(elem => parse(elem).toOption)
+    }
+
   /**
    * Copy a single preserved part from source ZIP to output ZIP.
    *
@@ -437,14 +492,13 @@ object XlsxWriter:
     partPath: String,
     outputZip: ZipOutputStream
   ): Unit =
-    val sourceZip = new ZipFile(sourcePath.toFile)
-    try
-      val entry = sourceZip.getEntry(partPath)
-      if entry == null then throw new IllegalStateException(s"Entry missing from source: $partPath")
+    withZipFile(sourcePath) { sourceZip =>
+      val entry = Option(sourceZip.getEntry(partPath)).getOrElse {
+        throw new IllegalStateException(s"Entry missing from source: $partPath")
+      }
 
-      // Create new entry with deterministic metadata
       val newEntry = new ZipEntry(partPath)
-      newEntry.setTime(0L) // Deterministic timestamp
+      newEntry.setTime(0L)
       newEntry.setMethod(entry.getMethod)
 
       if entry.getMethod == ZipEntry.STORED then
@@ -452,18 +506,20 @@ object XlsxWriter:
         newEntry.setCompressedSize(entry.getCompressedSize)
         newEntry.setCrc(entry.getCrc)
 
-      // Stream bytes directly (preserves compression)
-      outputZip.putNextEntry(newEntry)
-      val is = sourceZip.getInputStream(entry)
-      try
-        val buffer = new Array[Byte](8192)
-        var read = is.read(buffer)
-        while read != -1 do
-          outputZip.write(buffer, 0, read)
-          read = is.read(buffer)
-      finally is.close()
-      outputZip.closeEntry()
-    finally sourceZip.close()
+      var entryOpen = false
+      usingOrThrow(Using.Manager { use =>
+        val in = use(sourceZip.getInputStream(entry))
+        try
+          outputZip.putNextEntry(newEntry)
+          entryOpen = true
+          val buffer = new Array[Byte](8192)
+          var read = in.read(buffer)
+          while read != -1 do
+            outputZip.write(buffer, 0, read)
+            read = in.read(buffer)
+        finally if entryOpen then outputZip.closeEntry()
+      })
+    }
 
   /**
    * Re-parse structural files from source ZIP for preservation.
@@ -471,68 +527,17 @@ object XlsxWriter:
    * Returns (ContentTypes, rootRels, workbookRels, workbook) parsed from the original file. If any
    * file is missing or fails to parse, returns None for that component.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def parsePreservedStructure(
     sourcePath: Path
   ): (Option[ContentTypes], Option[Relationships], Option[Relationships], Option[OoxmlWorkbook]) =
-    var contentTypes: Option[ContentTypes] = None
-    var rootRels: Option[Relationships] = None
-    var workbookRels: Option[Relationships] = None
-    var workbook: Option[OoxmlWorkbook] = None
-
-    val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
-    try
-      var entry = sourceZip.getNextEntry
-      while entry != null do
-        val entryName = entry.getName
-
-        if entryName == "[Content_Types].xml" then
-          val content = new String(sourceZip.readAllBytes(), "UTF-8")
-          parseXml(content, "[Content_Types].xml") match
-            case Right(elem) =>
-              ContentTypes.fromXml(elem).foreach(ct => contentTypes = Some(ct))
-            case Left(_) => () // Silently ignore - will use minimal fallback
-        else if entryName == "_rels/.rels" then
-          val content = new String(sourceZip.readAllBytes(), "UTF-8")
-          parseXml(content, "_rels/.rels") match
-            case Right(elem) =>
-              Relationships.fromXml(elem).foreach(rels => rootRels = Some(rels))
-            case Left(_) => () // Silently ignore - will use minimal fallback
-        else if entryName == "xl/_rels/workbook.xml.rels" then
-          val content = new String(sourceZip.readAllBytes(), "UTF-8")
-          parseXml(content, "xl/_rels/workbook.xml.rels") match
-            case Right(elem) =>
-              Relationships.fromXml(elem).foreach(rels => workbookRels = Some(rels))
-            case Left(_) => () // Silently ignore - will use minimal fallback
-        else if entryName == "xl/workbook.xml" then
-          val content = new String(sourceZip.readAllBytes(), "UTF-8")
-          parseXml(content, "xl/workbook.xml") match
-            case Right(elem) =>
-              OoxmlWorkbook.fromXml(elem).foreach(wb => workbook = Some(wb))
-            case Left(_) => () // Silently ignore - will use minimal fallback
-        else sourceZip.readAllBytes() // Consume entry
-
-        sourceZip.closeEntry()
-        entry = sourceZip.getNextEntry
-    finally sourceZip.close()
-
-    (contentTypes, rootRels, workbookRels, workbook)
-
-  /** Parse XML with XXE protection (same as XlsxReader) */
-  private def parseXml(xmlString: String, location: String): XLResult[Elem] =
-    try
-      val factory = javax.xml.parsers.SAXParserFactory.newInstance()
-      factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-      factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
-      factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-      factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-      factory.setXIncludeAware(false)
-      factory.setNamespaceAware(true)
-
-      val loader = XML.withSAXParser(factory.newSAXParser())
-      Right(loader.loadString(xmlString))
-    catch
-      case e: Exception => Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))
+    withZipFile(sourcePath) { zip =>
+      val contentTypes = parseOptionalEntry(zip, "[Content_Types].xml")(ContentTypes.fromXml)
+      val rootRels = parseOptionalEntry(zip, "_rels/.rels")(Relationships.fromXml)
+      val workbookRels =
+        parseOptionalEntry(zip, "xl/_rels/workbook.xml.rels")(Relationships.fromXml)
+      val workbook = parseOptionalEntry(zip, "xl/workbook.xml")(OoxmlWorkbook.fromXml)
+      (contentTypes, rootRels, workbookRels, workbook)
+    }
 
   /**
    * Parse worksheet XML from source ZIP to extract preserved metadata.
@@ -540,27 +545,22 @@ object XlsxWriter:
    * Returns the parsed OoxmlWorksheet with all metadata (cols, views, etc.) for merging during
    * regeneration.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def parsePreservedWorksheet(
     sourcePath: Path,
     sheetPath: String
-  ): Option[OoxmlWorksheet] =
-    val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
-    try
-      var entry = sourceZip.getNextEntry
-      var result: Option[OoxmlWorksheet] = None
-
-      while entry != null && result.isEmpty do
-        if entry.getName == sheetPath then
-          val content = new String(sourceZip.readAllBytes(), "UTF-8")
-          result = parseXml(content, sheetPath).toOption
-            .flatMap(OoxmlWorksheet.fromXml(_).toOption)
-
-        sourceZip.closeEntry()
-        entry = sourceZip.getNextEntry
-
-      result
-    finally sourceZip.close()
+  ): XLResult[Option[OoxmlWorksheet]] =
+    Try(withZipFile(sourcePath)(zip => readZipEntry(zip, sheetPath))) match
+      case Failure(e) =>
+        Left(XLError.IOError(s"Failed to read preserved worksheet $sheetPath: ${e.getMessage}"))
+      case Success(None) => Right(None)
+      case Success(Some(xmlString)) =>
+        for
+          elem <- XmlSecurity.parseSafe(xmlString, sheetPath)
+          worksheet <- OoxmlWorksheet
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError(sheetPath, err): XLError)
+        yield Some(worksheet)
 
   /**
    * Parse SharedStrings from source ZIP for modified sheet cell encoding.
@@ -571,22 +571,14 @@ object XlsxWriter:
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def parsePreservedSST(sourcePath: Path): Option[SharedStrings] =
-    val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
-    try
-      var entry = sourceZip.getNextEntry
-      var result: Option[SharedStrings] = None
-
-      while entry != null && result.isEmpty do
-        if entry.getName == "xl/sharedStrings.xml" then
-          val content = new String(sourceZip.readAllBytes(), "UTF-8")
-          result = parseXml(content, "xl/sharedStrings.xml").toOption
-            .flatMap(SharedStrings.fromXml(_).toOption)
-
-        sourceZip.closeEntry()
-        entry = sourceZip.getNextEntry
-
-      result
-    finally sourceZip.close()
+    Try(withZipFile(sourcePath)(zip => readZipEntry(zip, "xl/sharedStrings.xml"))) match
+      case Failure(_) => None
+      case Success(None) => None
+      case Success(Some(xmlString)) =>
+        XmlSecurity
+          .parseSafe(xmlString, "xl/sharedStrings.xml")
+          .toOption
+          .flatMap(SharedStrings.fromXml(_).toOption)
 
   /**
    * Parse preserved styles.xml to extract namespace metadata and differential formats.
@@ -594,32 +586,18 @@ object XlsxWriter:
    * Critical for preserving Excel extension namespaces (x14ac, x16r2, xr, mc:Ignorable) and
    * differential formats used by conditional formatting.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def parsePreservedStylesMetadata(
     sourcePath: Path
   ): (Option[MetaData], NamespaceBinding, Option[Elem]) =
-    val sourceZip = new ZipInputStream(new FileInputStream(sourcePath.toFile))
-    try
-      var entry = sourceZip.getNextEntry
-      var attrs: Option[MetaData] = None
-      var scope: NamespaceBinding = TopScope
-      var dxfs: Option[Elem] = None
-
-      while entry != null && attrs.isEmpty do
-        if entry.getName == "xl/styles.xml" then
-          val content = new String(sourceZip.readAllBytes(), "UTF-8")
-          parseXml(content, "xl/styles.xml").toOption.foreach { elem =>
-            attrs = Some(elem.attributes)
-            scope = elem.scope
-            // Extract <dxfs> element if present (needed for conditional formatting)
-            dxfs = (elem \ "dxfs").headOption.collect { case e: Elem => e }
-          }
-
-        sourceZip.closeEntry()
-        entry = sourceZip.getNextEntry
-
-      (attrs, scope, dxfs)
-    finally sourceZip.close()
+    Try(withZipFile(sourcePath)(zip => readZipEntry(zip, "xl/styles.xml"))) match
+      case Failure(_) => (None, TopScope, None)
+      case Success(None) => (None, TopScope, None)
+      case Success(Some(xmlString)) =>
+        XmlSecurity.parseSafe(xmlString, "xl/styles.xml").toOption match
+          case Some(elem) =>
+            val dxfs = (elem \ "dxfs").headOption.collect { case e: Elem => e }
+            (Some(elem.attributes), elem.scope, dxfs)
+          case None => (None, TopScope, None)
 
   /**
    * Unified write: intelligently regenerates only what changed, preserves the rest.
@@ -686,14 +664,14 @@ object XlsxWriter:
         val preservedEntries: Set[Either[String, RichText]] =
           parsedSST.map(_.strings.toSet).getOrElse(Set.empty)
 
-        // Compare entries directly (Either equality works if content matches)
-        val hasNewStrings = !modifiedSheetEntries.subsetOf(preservedEntries)
+        // Determine if modified sheets introduced new strings
+        val newEntries = modifiedSheetEntries.diff(preservedEntries)
 
-        if hasNewStrings then
+        if newEntries.nonEmpty then
           // New strings detected → build SST from preserved + new entries only
           // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
-          val newEntries = modifiedSheetEntries.diff(preservedEntries).toVector
-          val allEntries = parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries
+          val combinedEntries =
+            parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries.toVector
 
           // Calculate total reference count: preserved count + new string references
           val originalTotalCount = parsedSST.map(_.totalCount).getOrElse(0)
@@ -702,8 +680,8 @@ object XlsxWriter:
 
           // Create new SST with combined entries
           val combinedSST = SharedStrings(
-            strings = allEntries,
-            indexMap = allEntries.zipWithIndex.map {
+            strings = combinedEntries,
+            indexMap = combinedEntries.zipWithIndex.map {
               case (Left(s), idx) => SharedStrings.normalize(s) -> idx
               case (Right(rt), idx) => SharedStrings.normalize(rt.toPlainText) -> idx
             }.toMap,
@@ -724,6 +702,7 @@ object XlsxWriter:
         (generated, generated.isDefined)
 
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
+    val sstForSheets = if regenerateSharedStrings then sst else None
 
     // Style strategy: surgical mode if source available, else full deduplication
     val (styleIndex, sheetRemappings) = sourceContext match
@@ -802,11 +781,17 @@ object XlsxWriter:
         if tracker.modifiedSheets.contains(idx) then
           // Regenerate modified sheet with preserved metadata (if available)
           val sheetPath = graph.pathForSheet(idx)
-          val preservedMetadata =
-            sourceContext.flatMap(ctx => parsePreservedWorksheet(ctx.sourcePath, sheetPath))
+          val preservedMetadata = sourceContext
+            .map(ctx => parsePreservedWorksheet(ctx.sourcePath, sheetPath))
+            .getOrElse(Right(None)) match
+            case Right(value) => value
+            case Left(err) =>
+              throw new IllegalStateException(
+                s"Failed to parse preserved worksheet $sheetPath: ${err.message}"
+              )
           val remapping = sheetRemappings.getOrElse(idx, Map.empty)
           val ooxmlSheet =
-            OoxmlWorksheet.fromDomainWithMetadata(sheet, sst, remapping, preservedMetadata)
+            OoxmlWorksheet.fromDomainWithMetadata(sheet, sstForSheets, remapping, preservedMetadata)
           writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet.toXml, config)
         else
           // Copy unmodified sheet from source (only if source available)

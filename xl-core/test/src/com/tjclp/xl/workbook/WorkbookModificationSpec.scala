@@ -2,7 +2,7 @@ package com.tjclp.xl.workbook
 
 import java.nio.file.Files
 
-import com.tjclp.xl.{SourceContext, Workbook}
+import com.tjclp.xl.{SourceContext, SourceFingerprint, Workbook}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
 import com.tjclp.xl.macros.ref
@@ -17,7 +17,7 @@ class WorkbookModificationSpec extends FunSuite:
   override def afterAll(): Unit =
     Files.deleteIfExists(path)
 
-  private val ctx = SourceContext.fromFile(path, PartManifest.empty)
+  private val ctx = SourceContext.fromFile(path, PartManifest.empty, SourceFingerprint.fromPath(path))
   private val baseSheet = Sheet("Sheet1").fold(err => fail(s"Failed to create sheet: $err"), identity)
   private val workbook = Workbook(Vector(baseSheet), sourceContext = Some(ctx))
 

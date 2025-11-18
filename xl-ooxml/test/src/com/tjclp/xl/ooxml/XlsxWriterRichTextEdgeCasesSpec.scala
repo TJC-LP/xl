@@ -301,6 +301,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
   private def createWorkbookWithComplexRichText(): Path =
     val path = Files.createTempFile("test-richtext-complex", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
@@ -394,6 +395,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
   private def createWorkbookWithWhitespaceText(): Path =
     val path = Files.createTempFile("test-whitespace", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
@@ -477,6 +479,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
   private def createWorkbookWithEmptyRows(): Path =
     val path = Files.createTempFile("test-empty-rows", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
@@ -563,6 +566,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
   private def createWorkbookWithRowLevelStyles(): Path =
     val path = Files.createTempFile("test-row-styles", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(

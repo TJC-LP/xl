@@ -13,14 +13,14 @@ class SourceContextSpec extends FunSuite:
     Files.deleteIfExists(tempPath)
 
   test("isClean reflects tracker state") {
-    val ctx = SourceContext.fromFile(tempPath, PartManifest.empty)
+    val ctx = SourceContext.fromFile(tempPath, PartManifest.empty, SourceFingerprint.fromPath(tempPath))
     assert(ctx.isClean)
     val dirty = ctx.markSheetModified(0)
     assert(!dirty.isClean)
   }
 
   test("mark helpers delegate to tracker") {
-    val ctx = SourceContext.fromFile(tempPath, PartManifest.empty)
+    val ctx = SourceContext.fromFile(tempPath, PartManifest.empty, SourceFingerprint.fromPath(tempPath))
     val updated = ctx
       .markSheetModified(1)
       .markSheetDeleted(2)

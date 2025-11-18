@@ -294,6 +294,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
   private def createWorkbookWithNamespaces(): Path =
     val path = Files.createTempFile("test-namespaces", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
@@ -358,6 +359,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
   private def createWorkbookWithThemeColors(): Path =
     val path = Files.createTempFile("test-theme", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
@@ -449,6 +451,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
   private def createWorkbookWithRichRowAttributes(): Path =
     val path = Files.createTempFile("test-row-attrs", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
@@ -537,6 +540,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
   private def createWorkbookWithRichTextSST(): Path =
     val path = Files.createTempFile("test-richtext-sst", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(

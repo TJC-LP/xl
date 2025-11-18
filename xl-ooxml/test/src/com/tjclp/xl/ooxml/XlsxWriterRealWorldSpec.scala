@@ -244,6 +244,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
   private def createComplexWorkbook(): Path =
     val path = Files.createTempFile("test-complex", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       // Content Types (comprehensive)

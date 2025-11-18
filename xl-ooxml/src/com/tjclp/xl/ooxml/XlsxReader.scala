@@ -4,13 +4,15 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cell.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.{ModificationTracker, SourceContext}
+import com.tjclp.xl.{ModificationTracker, SourceContext, SourceFingerprint}
 
 import scala.xml.*
 import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
+import java.nio.file.{Files, Path, Paths}
+import java.security.{DigestInputStream, MessageDigest}
 import java.util.zip.ZipInputStream
-import java.nio.file.{Path, Paths}
 import scala.collection.mutable
+import scala.collection.immutable.ArraySeq
 import com.tjclp.xl.style.StyleRegistry
 import com.tjclp.xl.style.units.StyleId
 
@@ -47,7 +49,9 @@ object XlsxReader:
    * Provides the path to the original file, which allows XlsxReader to create a SourceContext with
    * PreservedPartStore for unknown parts.
    */
-  case class SourceHandle(path: Path)
+  case class SourceHandle(path: Path, size: Long, digest: MessageDigest):
+    def finalizeFingerprint(): SourceFingerprint =
+      SourceFingerprint(size, ArraySeq.unsafeWrapArray(digest.digest()))
 
   /** Set of ZIP entry paths that XL knows how to parse. All other entries are preserved. */
   private val knownParts: Set[String] = Set(
@@ -87,11 +91,14 @@ object XlsxReader:
   /** Read workbook and surface non-fatal warnings. */
   def readWithWarnings(inputPath: Path): XLResult[ReadResult] =
     try
-      val is = new FileInputStream(inputPath.toFile)
+      val size = Files.size(inputPath)
+      val digest = MessageDigest.getInstance("SHA-256")
+      val fileStream = new FileInputStream(inputPath.toFile)
+      val digestStream = new DigestInputStream(fileStream, digest)
       try
-        readFromStreamWithWarnings(is, Some(SourceHandle(inputPath)))
+        readFromStreamWithWarnings(digestStream, Some(SourceHandle(inputPath, size, digest)))
       finally
-        is.close()
+        digestStream.close()
     catch case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
 
   /** Read workbook from byte array (for testing) */
@@ -154,8 +161,11 @@ object XlsxReader:
       // Build final manifest
       val manifest = builder.build()
 
+      // Compute fingerprint if reading from a file
+      val fingerprint = source.map(_.finalizeFingerprint())
+
       // Parse workbook structure from known parts
-      parseWorkbook(parts.toMap, source, manifest)
+      parseWorkbook(parts.toMap, source, manifest, fingerprint)
 
     finally zip.close()
 
@@ -174,7 +184,8 @@ object XlsxReader:
   private def parseWorkbook(
     parts: Map[String, String],
     source: Option[SourceHandle],
-    manifest: PartManifest
+    manifest: PartManifest,
+    fingerprint: Option[SourceFingerprint]
   ): XLResult[ReadResult] =
     for
       // Parse workbook.xml
@@ -200,7 +211,7 @@ object XlsxReader:
       sheets <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
 
       // Assemble workbook with optional SourceContext
-      workbook <- assembleWorkbook(sheets, source, manifest)
+      workbook <- assembleWorkbook(sheets, source, manifest, fingerprint)
     yield ReadResult(workbook, styleWarnings)
 
   /** Parse optional shared strings table */
@@ -340,14 +351,22 @@ object XlsxReader:
   private def assembleWorkbook(
     sheets: Vector[Sheet],
     source: Option[SourceHandle],
-    manifest: PartManifest
+    manifest: PartManifest,
+    fingerprint: Option[SourceFingerprint]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
-      val sourceContext = source.map { handle =>
-        SourceContext.fromFile(handle.path, manifest)
-      }
-      Right(Workbook(sheets = sheets, sourceContext = sourceContext))
+      val sourceContextEither: XLResult[Option[SourceContext]] =
+        (source, fingerprint) match
+          case (Some(handle), Some(fp)) =>
+            Right(Some(SourceContext.fromFile(handle.path, manifest, fp)))
+          case (None, None) => Right(None)
+          case (Some(_), None) =>
+            Left(XLError.IOError("Missing source fingerprint for workbook"))
+          case (None, Some(_)) =>
+            Left(XLError.IOError("Unexpected source fingerprint without source handle"))
+
+      sourceContextEither.map(ctx => Workbook(sheets = sheets, sourceContext = ctx))
 
   /**
    * Parse XML string to Elem with XXE protection
@@ -361,21 +380,7 @@ object XlsxReader:
    * configuration failures
    */
   private def parseXml(xmlString: String, location: String): XLResult[Elem] =
-    try
-      // Configure SAX parser to prevent XXE (XML External Entity) attacks
-      val factory = javax.xml.parsers.SAXParserFactory.newInstance()
-      factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-      factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
-      factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-      factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
-      factory.setXIncludeAware(false)
-      factory.setNamespaceAware(true)
-
-      val loader = XML.withSAXParser(factory.newSAXParser())
-      Right(loader.loadString(xmlString))
-    catch
-      case e: Exception =>
-        Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))
+    XmlSecurity.parseSafe(xmlString, location)
 
   /** Extension for traverse on Vector */
   extension [A](vec: Vector[A])

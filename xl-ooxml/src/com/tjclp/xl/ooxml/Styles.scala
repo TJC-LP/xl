@@ -172,10 +172,11 @@ object StyleIndex:
         while entry != null && result.size == 1 do
           if entry.getName == "xl/styles.xml" then
             val content = new String(sourceZip.readAllBytes(), "UTF-8")
-            // Parse styles.xml using WorkbookStyles parser
-            val parsed = scala.xml.XML.loadString(content)
-            WorkbookStyles.fromXml(parsed).foreach { wbStyles =>
-              result = wbStyles.cellStyles
+            // Parse styles.xml using WorkbookStyles parser (with XXE protection)
+            XmlSecurity.parseSafe(content, "xl/styles.xml").toOption.foreach { parsed =>
+              WorkbookStyles.fromXml(parsed).foreach { wbStyles =>
+                result = wbStyles.cellStyles
+              }
             }
 
           sourceZip.closeEntry()

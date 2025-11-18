@@ -2,6 +2,8 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 
+import com.tjclp.xl.error.{XLError, XLResult}
+
 /**
  * XML serialization and deserialization for OOXML parts.
  *
@@ -271,3 +273,20 @@ object XmlUtil:
     else
       val textRuns = runs.collect { case Right(run) => run }.toVector
       Right(RichText(textRuns))
+
+object XmlSecurity:
+  /** Shared XXE-safe XML parser. */
+  def parseSafe(xmlString: String, location: String): XLResult[Elem] =
+    try
+      val factory = javax.xml.parsers.SAXParserFactory.newInstance()
+      factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+      factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
+      factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+      factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+      factory.setXIncludeAware(false)
+      factory.setNamespaceAware(true)
+
+      val loader = XML.withSAXParser(factory.newSAXParser())
+      Right(loader.loadString(xmlString))
+    catch
+      case e: Exception => Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))

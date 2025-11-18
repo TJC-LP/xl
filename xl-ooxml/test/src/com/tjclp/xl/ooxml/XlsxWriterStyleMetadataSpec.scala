@@ -291,6 +291,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
   private def createWorkbookWithManyStyles(): Path =
     val path = Files.createTempFile("test-many-styles", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
@@ -403,6 +404,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
   private def createWorkbookWithRichMetadata(): Path =
     val path = Files.createTempFile("test-metadata", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
@@ -485,6 +487,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
   private def createWorkbookWithAllMetadataTypes(): Path =
     val path = Files.createTempFile("test-all-metadata", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
@@ -565,6 +568,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
   private def createWorkbookWithDxfs(): Path =
     val path = Files.createTempFile("test-dxfs", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1) // Match production compression level
 
     try
       writeEntry(
