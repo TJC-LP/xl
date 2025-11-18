@@ -152,7 +152,13 @@ object StyleIndex:
    * @return
    *   (StyleIndex with all original + deduplicated styles, Map[modifiedSheetIdx -> remapping])
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.Var",
+      "org.wartremover.warts.While",
+      "org.wartremover.warts.IterableOps" // .head is safe - groupBy guarantees non-empty lists
+    )
+  )
   def fromWorkbookSurgical(
     wb: Workbook,
     modifiedSheetIndices: Set[Int],
@@ -186,33 +192,46 @@ object StyleIndex:
       finally sourceZip.close()
     }
 
-    // Step 2: Build index starting with original styles (no deduplication yet)
+    // Step 2: Build index preserving ALL original styles (including duplicates)
+    // Use groupBy to map each canonicalKey to ALL indices that have that key
+    // This prevents the critical bug where duplicate styles in source get lost
     var unifiedStyles = originalStyles
-    var unifiedIndex = originalStyles.zipWithIndex.map { case (style, idx) =>
-      style.canonicalKey -> StyleId(idx)
-    }.toMap
+    val unifiedIndex: Map[String, List[Int]] = originalStyles.zipWithIndex
+      .groupBy { case (style, _) => style.canonicalKey }
+      .view
+      .mapValues(_.map(_._2).toList)
+      .toMap
     var nextIdx = originalStyles.size
+    var additionalStyles = mutable.Map[String, Int]() // Track styles added after original
 
-    // Step 3: Process ONLY modified sheets for deduplication
+    // Step 3: Process ONLY modified sheets for style remapping
     val remappings = wb.sheets.zipWithIndex.flatMap { case (sheet, sheetIdx) =>
       if modifiedSheetIndices.contains(sheetIdx) then
         val registry = sheet.styleRegistry
         val remapping = mutable.Map[Int, Int]()
 
-        // Map each local styleId to global index (with deduplication)
+        // Map each local styleId to global index
         registry.styles.zipWithIndex.foreach { case (style, localIdx) =>
           val key = style.canonicalKey
 
+          // First, check if this key exists in original styles
           unifiedIndex.get(key) match
-            case Some(globalIdx) =>
-              // Style already exists (either from original or previously added)
-              remapping(localIdx) = globalIdx.value
+            case Some(indices) =>
+              // Style exists in original - use FIRST matching index
+              // This preserves original layout and avoids adding duplicates
+              remapping(localIdx) = indices.head
             case None =>
-              // New style not in original - add to unified index
-              unifiedStyles = unifiedStyles :+ style
-              unifiedIndex = unifiedIndex + (key -> StyleId(nextIdx))
-              remapping(localIdx) = nextIdx
-              nextIdx += 1
+              // Not in original - check if we've already added it
+              additionalStyles.get(key) match
+                case Some(addedIdx) =>
+                  // Already added by earlier sheet processing
+                  remapping(localIdx) = addedIdx
+                case None =>
+                  // Truly new style - add it now
+                  unifiedStyles = unifiedStyles :+ style
+                  additionalStyles(key) = nextIdx
+                  remapping(localIdx) = nextIdx
+                  nextIdx += 1
         }
 
         Some(sheetIdx -> remapping.toMap)
@@ -251,13 +270,17 @@ object StyleIndex:
       }
     }
 
+    // Convert unifiedIndex back to Map[String, StyleId] for StyleIndex
+    // Use first index from each canonicalKey's list (preserves original layout)
+    val styleToIndexMap = unifiedIndex.view.mapValues(indices => StyleId(indices.head)).toMap
+
     val styleIndex = StyleIndex(
       uniqueFonts,
       uniqueFills,
       uniqueBorders,
       customNumFmts,
       unifiedStyles,
-      unifiedIndex
+      styleToIndexMap
     )
 
     (styleIndex, remappings)
@@ -346,11 +369,14 @@ case class OoxmlStyles(
         val fontIdx = fontMap.getOrElse(style.font, -1)
         val fillIdx = fillMap.getOrElse(style.fill, -1)
         val borderIdx = borderMap.getOrElse(style.border, -1)
-        val numFmtId = NumFmt
-          .builtInId(style.numFmt)
-          .getOrElse(
-            index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
-          )
+        val numFmtId = style.numFmtId.getOrElse {
+          // No raw ID → derive from NumFmt enum (programmatic creation)
+          NumFmt
+            .builtInId(style.numFmt)
+            .getOrElse(
+              index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0)
+            )
+        }
 
         // Serialize alignment as child element if non-default
         val alignmentChild = alignmentToXml(style.align).toSeq
@@ -686,11 +712,18 @@ object WorkbookStyles:
       .flatMap(attr => attr.text.toIntOption)
       .flatMap(borders.lift)
       .getOrElse(Border.none)
-    val numFmtId = xfElem.attribute("numFmtId").flatMap(attr => attr.text.toIntOption)
+    val numFmtIdOpt = xfElem.attribute("numFmtId").flatMap(attr => attr.text.toIntOption)
     val numFmt =
-      numFmtId.flatMap(id => numFmts.get(id).orElse(NumFmt.fromId(id))).getOrElse(NumFmt.General)
+      numFmtIdOpt.flatMap(id => numFmts.get(id).orElse(NumFmt.fromId(id))).getOrElse(NumFmt.General)
     val align = parseAlignment(xfElem).getOrElse(Align.default)
-    CellStyle(font = font, fill = fill, border = border, numFmt = numFmt, align = align)
+    CellStyle(
+      font = font,
+      fill = fill,
+      border = border,
+      numFmt = numFmt,
+      numFmtId = numFmtIdOpt,
+      align = align
+    )
 
   private def parseAlignment(xfElem: Elem): Option[Align] =
     (xfElem \ "alignment").headOption match

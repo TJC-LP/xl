@@ -424,9 +424,13 @@ class OoxmlRoundTripSpec extends FunSuite:
         assertCellValueEquals(expSheet.name.value, ref, expCell.value, actCell.value)
         val expStyle = expCell.styleId.flatMap(expSheet.styleRegistry.get)
         val actStyle = actCell.styleId.flatMap(actSheet.styleRegistry.get)
+        // Normalize styles: compare semantic meaning (numFmt) not raw ID (numFmtId)
+        // Round-trip enriches with numFmtId, which is expected behavior
+        val normalizedExp = expStyle.map(_.copy(numFmtId = None))
+        val normalizedAct = actStyle.map(_.copy(numFmtId = None))
         assertEquals(
-          actStyle,
-          expStyle,
+          normalizedAct,
+          normalizedExp,
           s"Cell style mismatch at ${expSheet.name.value}!${ref.toA1}"
         )
       }
