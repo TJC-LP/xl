@@ -704,14 +704,8 @@ object XlsxWriter:
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
     val sstForSheets = if regenerateSharedStrings then sst else None
 
-    // Style strategy: surgical mode if source available, else full deduplication
-    val (styleIndex, sheetRemappings) = sourceContext match
-      case Some(ctx) =>
-        // Surgical: preserve original styles, deduplicate only modified sheets
-        StyleIndex.fromWorkbookSurgical(workbook, tracker.modifiedSheets, ctx.sourcePath)
-      case None =>
-        // No source: full deduplication across all sheets
-        StyleIndex.fromWorkbook(workbook)
+    // Build style index (automatic optimization based on sourceContext)
+    val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
 
     // Parse preserved styles metadata (namespaces and dxfs) if source available
     val (preservedStylesAttrs, preservedStylesScope, preservedDxfs) = sourceContext match

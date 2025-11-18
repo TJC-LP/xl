@@ -3,6 +3,7 @@ package com.tjclp.xl.ooxml
 import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.api.*
+import com.tjclp.xl.SourceContext
 import com.tjclp.xl.style.{CellStyle, StyleRegistry}
 import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.style.border.{Border, BorderSide, BorderStyle}
@@ -44,7 +45,32 @@ object StyleIndex:
   )
 
   /**
-   * Build unified style index from a workbook and per-sheet remapping tables.
+   * Build unified style index from workbook with automatic optimization.
+   *
+   * Strategy (automatic based on workbook.sourceContext):
+   *   - **With source**: Preserve original styles for byte-perfect surgical modification
+   *   - **Without source**: Full deduplication for optimal compression
+   *
+   * Users don't choose the strategy - the method transparently optimizes based on available
+   * context. This enables read-modify-write workflows to preserve structure automatically while
+   * allowing programmatic creation to produce optimal output.
+   *
+   * @param wb
+   *   The workbook to index
+   * @return
+   *   (StyleIndex for writing, Map[sheetIndex -> Map[localStyleId -> globalStyleId]])
+   */
+  def fromWorkbook(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
+    wb.sourceContext match
+      case Some(ctx) =>
+        // Has source: surgical mode (preserve original structure)
+        fromWorkbookWithSource(wb, ctx)
+      case None =>
+        // No source: full deduplication (optimal compression)
+        fromWorkbookWithoutSource(wb)
+
+  /**
+   * Build unified style index from a workbook with full deduplication (no source).
    *
    * Extracts styles from each sheet's StyleRegistry, builds a unified index with deduplication, and
    * creates remapping tables to convert sheet-local styleIds to workbook-level indices.
@@ -55,7 +81,7 @@ object StyleIndex:
    *   (StyleIndex, Map[sheetIndex -> Map[localStyleId -> globalStyleId]])
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def fromWorkbook(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
+  private def fromWorkbookWithoutSource(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
     import scala.collection.mutable
 
     // Build unified style index by merging all sheet registries
@@ -130,7 +156,7 @@ object StyleIndex:
     (styleIndex, remappings)
 
   /**
-   * Build surgical style index for modified sheets while preserving original styles.
+   * Build style index for workbook with source, preserving original styles.
    *
    * This variant is used during surgical modification to avoid corruption:
    *   - Deduplicates styles ONLY from modified sheets (optimal compression)
@@ -145,10 +171,8 @@ object StyleIndex:
    *
    * @param wb
    *   The workbook with modified sheets
-   * @param modifiedSheetIndices
-   *   Set of sheet indices that were modified (need style remapping)
-   * @param sourcePath
-   *   Path to original XLSX (for parsing styles.xml)
+   * @param ctx
+   *   Source context providing modification tracker and original file path
    * @return
    *   (StyleIndex with all original + deduplicated styles, Map[modifiedSheetIdx -> remapping])
    */
@@ -159,11 +183,14 @@ object StyleIndex:
       "org.wartremover.warts.IterableOps" // .head is safe - groupBy guarantees non-empty lists
     )
   )
-  def fromWorkbookSurgical(
+  private def fromWorkbookWithSource(
     wb: Workbook,
-    modifiedSheetIndices: Set[Int],
-    sourcePath: java.nio.file.Path
+    ctx: SourceContext
   ): (StyleIndex, Map[Int, Map[Int, Int]]) =
+    // Extract values from context
+    val tracker = ctx.modificationTracker
+    val modifiedSheetIndices = tracker.modifiedSheets
+    val sourcePath = ctx.sourcePath
     import scala.collection.mutable
     import java.util.zip.ZipInputStream
     import java.io.FileInputStream
