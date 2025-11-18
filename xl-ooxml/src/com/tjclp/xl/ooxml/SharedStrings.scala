@@ -96,13 +96,11 @@ case class SharedStrings(
         val runElems = richText.runs.map { run =>
           // Use preserved raw <rPr> if available (byte-perfect), otherwise build from Font
           val rPrElems = run.rawRPrXml.flatMap { xmlString =>
-            // Parse preserved XML string back to Elem for byte-perfect preservation
-            try
-              scala.xml.XML.loadString(xmlString) match
-                case elem: Elem =>
-                  // Strip redundant xmlns recursively from entire tree (namespace already on parent <sst>)
-                  Some(XmlUtil.stripNamespaces(elem))
-            catch case _: Exception => None
+            // Parse preserved XML string back to Elem with XXE protection
+            XmlSecurity.parseSafe(xmlString, "SST richtext rPr").toOption.map { elem =>
+              // Strip redundant xmlns recursively from entire tree (namespace already on parent <sst>)
+              XmlUtil.stripNamespaces(elem)
+            }
           }.toList match
             case preserved if preserved.nonEmpty => preserved
             case _ =>

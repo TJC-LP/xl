@@ -647,24 +647,33 @@ object XlsxWriter:
         val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.sourcePath)).getOrElse(None)
 
         // Check if modified sheets contain NEW strings not in preserved SST
-        // Extract Either[String, RichText] entries from modified sheets
+        // Extract entries from modified sheets (normalize for comparison consistency)
         val modifiedSheetEntries: Set[Either[String, RichText]] =
           tracker.modifiedSheets.flatMap { idx =>
             workbook.sheets.lift(idx).toList.flatMap { sheet =>
               sheet.cells.values.flatMap { cell =>
                 cell.value match
-                  case CellValue.Text(str) => Some(Left(str))
+                  case CellValue.Text(str) => Some(Left(SharedStrings.normalize(str)))
                   case CellValue.RichText(rt) => Some(Right(rt))
                   case _ => None
               }
             }
           }.toSet
 
-        // Get preserved SST entries
+        // Get preserved SST entries (normalize for comparison)
         val preservedEntries: Set[Either[String, RichText]] =
-          parsedSST.map(_.strings.toSet).getOrElse(Set.empty)
+          parsedSST
+            .map(
+              _.strings
+                .map {
+                  case Left(s) => Left(SharedStrings.normalize(s))
+                  case Right(rt) => Right(rt)
+                }
+                .toSet
+            )
+            .getOrElse(Set.empty)
 
-        // Determine if modified sheets introduced new strings
+        // Determine if modified sheets introduced new strings (normalized comparison)
         val newEntries = modifiedSheetEntries.diff(preservedEntries)
 
         if newEntries.nonEmpty then
