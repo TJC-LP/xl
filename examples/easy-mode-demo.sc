@@ -70,9 +70,9 @@ println()
 println("💾 Example 5: Excel IO (EasyExcel)")
 
 val workbook = Workbook.empty
-  .addSheet(report)
-  .addSheet(quickSheet)
-  .addSheet(richSheet)
+  .put(report)
+  .put(quickSheet)
+  .put(richSheet)
   .remove("Sheet1")  // Sheet1 always included by default per Excel standards
   .unsafe  // Single unwrap at the end!
 
