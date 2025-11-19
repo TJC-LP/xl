@@ -21,23 +21,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Module Architecture
 
 ```
-xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style) + compile-time macros
-xl-ooxml/        → Pure XML serialization/deserialization (no IO)
-xl-cats-effect/  → IO interpreters (ZIP, streaming, file system)
+xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), macros, DSL
+xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
+xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, fs2-based streaming)
 xl-evaluator/    → Optional formula evaluator [future]
-xl-testkit/      → Test laws, generators, golden files [future]
+xl-testkit/      → Test laws, generators, helpers [future]
 ```
 
-**Import Pattern (ZIO-style)**:
+**Import Pattern (single-import ergonomics)**:
 ```scala
-import com.tjclp.xl.*  // Single import for everything (domain model + macros + DSL)
+import com.tjclp.xl.*  // Domain model, macros, DSL, rich text
 ```
 
-Macros (ref, money, date, fx) are bundled in xl-core for canonical single-import ergonomics, following the Cats model where syntax sugar is included with the core library.
+Macros (`ref`, `fx`, money/percent/date/accounting) are bundled in `xl-core` and surfaced through this unified import.
 
 ### Key Type Relationships
 
-**Addressing** (`xl-core/src/com/tjclp/xl/addressing.scala`):
+**Addressing** (`xl-core/src/com/tjclp/xl/addressing/`):
 - `Column`, `Row` → opaque types wrapping Int (zero-overhead)
 - `ARef` → opaque Long (64-bit packed: high 32 bits = row, low 32 bits = col)
 - `CellRange(start: ARef, end: ARef)` → normalized, inclusive range
@@ -59,8 +59,8 @@ Macros (ref, money, date, fx) are bundled in xl-core for canonical single-import
 
 **Codecs** (`xl-core/src/com/tjclp/xl/codec/`):
 - `CellCodec[A]` → Bidirectional type-safe encoding/decoding for 9 primitive types (String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText)
-- `putMixed(updates)` → Batch updates with auto-inferred formatting
-- `readTyped[A](ref)` → Type-safe reading with Either[CodecError, Option[A]]
+- Batch `Sheet.put(ref -> value, ...)` → auto-inferred formatting (this is the former `putMixed` behavior, now folded into `Sheet.put`)
+- `readTyped[A](ref)` → Type-safe reading with `Either[CodecError, Option[A]]`
 
 **Rich Text** (`xl-core/src/com/tjclp/xl/richtext.scala`):
 - `TextRun` → Single formatted text segment (OOXML `<r>` element)
@@ -81,7 +81,7 @@ Macros (ref, money, date, fx) are bundled in xl-core for canonical single-import
 # Compile everything
 ./mill __.compile
 
-# Run all tests (263 tests: 221 core + 24 OOXML + 18 streaming)
+# Run all tests (see docs/STATUS.md for current counts)
 ./mill __.test
 
 # Test specific module
@@ -117,7 +117,7 @@ Macros (ref, money, date, fx) are bundled in xl-core for canonical single-import
 
 All code must pass `./mill __.checkFormat` before commit. Format with `./mill __.reformat`.
 
-**Style rules** (from `docs/plan/25-style-guide.md`):
+**Style rules** (see also `docs/design/style-guide.md`):
 - Prefer **opaque types** for domain quantities
 - Use **enums** for closed sets; `derives CanEqual` everywhere
 - Keep public functions **total**; return Either/Option for errors
@@ -181,15 +181,18 @@ opaque type ARef = Long   // Packed representation: (row << 32) | col
 Both `Patch` and `StylePatch` are Monoids, enabling declarative composition:
 
 ```scala
-val updates =
-  (Patch.Put(cell"A1", CellValue.Text("Hello")): Patch) |+|
-  (Patch.SetStyle(cell"A1", 1): Patch) |+|
-  (Patch.Merge(range"A1:B2"): Patch)
+import com.tjclp.xl.*
+import com.tjclp.xl.dsl.*
 
-val result = sheet.put(updates)  // Either[XLError, Sheet]
+val patch: Patch =
+  (ref"A1" := "Hello") ++
+  ref"A1".styled(CellStyle.default.bold) ++
+  ref"A1:B2".merge
+
+val result: XLResult[Sheet] = sheet.put(patch)
 ```
 
-**Important**: Enum cases need type ascription for Monoid syntax (`|+|`).
+**Important**: If you use Cats’ `|+|` instead of the DSL `++`, enum cases still need type ascription.
 
 ### 3. Compile-Time Validated Literals
 
@@ -198,11 +201,14 @@ Macros in `xl-core/src/com/tjclp/xl/macros/` provide zero-cost validated literal
 ```scala
 import com.tjclp.xl.*  // Macros included in unified import
 
-val ref = cell"A1"        // Validated at compile time, emits packed Long
-val rng = range"A1:B10"   // Parsed at compile time
+val cellRef: ARef = ref"A1"          // Validated at compile time
+val range: CellRange = ref"A1:B10"   // Parsed at compile time
+
+val formula = fx"=SUM(A1:B10)"       // Validated CellValue.Formula
+val price   = money"$$1,234.56"      // Formatted(value, NumFmt.Currency)
 ```
 
-**Implementation**: Zero-allocation parsers emit constants directly as `Expr[ARef]`.
+**Implementation**: Zero-allocation parsers emit constants directly as `Expr[ARef]`, `Expr[CellRange]`, or `Expr[CellValue]`. Runtime paths use `Either` for rich error reporting.
 
 ### 4. Deterministic Canonicalization
 
@@ -254,31 +260,10 @@ Key test files:
 
 > **For detailed phase completion status, see [docs/plan/roadmap.md](docs/plan/roadmap.md)**
 
-**✅ Complete (P0-P8 + P31, ~85%)**:
-- P0: Bootstrap, Mill build, module structure
-- P1: Addressing & Literals (opaque types, macros, 17 tests)
-- P2: Core + Patches (Monoid composition, 21 tests)
-- P3: Styles & Themes (full formatting system, 60 tests)
-- P4: OOXML MVP (full read/write, SST, styles.xml, 24 tests)
-- P4.1: XLSX Reader with style preservation
-- P4.5: OOXML Quality & Spec Compliance (+22 tests)
-- P5: Streaming (true constant-memory I/O with fs2-data-xml, 18 tests)
-- P6: CellCodec primitives (9 types, 58 tests)
-- P6.6: Streaming reader memory fix (O(1) memory)
-- P6.7: Compression defaults
-- P7: String Interpolation Phase 1 (runtime validation, +111 tests)
-- P8: String Interpolation Phase 2 (compile-time optimization, +40 tests)
-- P31: Optics, RichText, HTML export (39 tests)
+Implementation phases and current status (including test counts and performance results) are tracked in:
 
-**Total: 636/636 tests passing**
-
-**📋 Not Started (P9-P13)**:
-- P6b: Full case class codec derivation
-- P9: Advanced macros (path literal, style literal)
-- P10: Drawings (images, shapes)
-- P11: Charts
-- P12: Tables & pivots
-- P13: Formula evaluator & security hardening
+- `docs/plan/roadmap.md` – phase definitions and completion status
+- `docs/STATUS.md` – current capabilities, coverage, and performance
 
 ## Important Constraints
 
@@ -323,7 +308,7 @@ All XML output must be deterministic:
 
 1. **Attribute order**: Always sort by name (`XmlUtil.elem` does this)
 2. **Element order**: Sort by natural key (style index, cell ref, etc.)
-3. **Whitespace**: Use `XmlUtil.prettyPrint` for consistent formatting
+3. **Whitespace**: Prefer `XmlUtil.compact` for production (stable single-line elements) and `XmlUtil.prettyPrint` for debug builds (via `WriterConfig.debug`)
 
 ## Common Patterns
 

@@ -1,8 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2025-11-10
-**Project Status**: ~85% complete, 171/171 tests passing ✅
-**Current Phase**: P4-P5 Complete
+**Last Updated**: 2025-11-18
+**Current Phase**: Core domain + OOXML + streaming I/O complete; advanced features in progress.
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -10,9 +9,9 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 ## What Works Today ✅
 
-### Core Features (P0-P5 Complete)
+### Core Features
 - ✅ **Type-safe addressing**: Column, Row, ARef with zero-overhead opaque types
-- ✅ **Compile-time literals**: `cell"A1"`, `range"A1:B10"` validated at compile time
+- ✅ **Compile-time literals**: `ref"A1"` / `ref"A1:B10"` validated at compile time
 - ✅ **Immutable domain model**: Cell, Sheet, Workbook with persistent data structures
 - ✅ **Patch Monoid**: Declarative updates with lawful composition
 - ✅ **Complete style system**: Fonts, colors, fills, borders, number formats, alignment
@@ -59,71 +58,43 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 ## Known Limitations (Categorized by Impact)
 
-### 🔴 High Impact (Blocks Common Use Cases)
+### 🔴 High Impact (Blocks Some Large-File Use Cases)
 
-#### 1. Update Existing Workbooks Not Supported
-**Status**: Not implemented
-**Impact**: Cannot add a sheet to existing workbook or replace one sheet while preserving others
-**Plan**: [P6 - Advanced I/O](plan/13-streaming-and-performance.md#selective-updates)
-**Phase**: P6 (Future)
+#### 1. Streaming Updates of Existing Workbooks Not Supported
+**Status**: Not implemented as a first‑class API.
 
-**What Doesn't Work**:
-```scala
-// Want: Add "Q4" sheet to existing workbook
-excel.updateSheetStreamTrue(
-  inputPath = existing,
-  outputPath = updated,
-  sheetName = "Q4",
-  rows = q4Data,
-  mode = UpdateMode.Append
-)
-// Result: NOT IMPLEMENTED
-```
+**What works today**:
+- You can **read an existing workbook**, modify it in memory using the pure domain APIs (`Workbook.update`, `Sheet.put`, patches), and then write it back with `XlsxWriter`.
+- When the workbook was read from a file, `SourceContext` + `ModificationTracker` enable *surgical modification*: unchanged parts are copied verbatim, changed sheets are regenerated, and unknown parts (charts, images, comments) are preserved.
 
-**Why It's Hard**:
-- Must read existing ZIP → parse all sheets → preserve non-target sheets
-- Shared Strings Table must be merged (complex)
-- Style indices must be remapped (complex)
-- Memory: O(n) for preserved sheets (breaks streaming guarantee)
+**What is still missing**:
+- A **streaming‑style “update this workbook in place” API** (e.g. “replace Sheet X with a new `Stream[RowData]` without loading all other sheets into memory”).
 
-**Implementation Complexity**: VERY HIGH (15-20 days)
-- SST merging logic: ~3 days
-- Style index remapping: ~3 days
-- ZIP read-modify-write: ~4 days
-- Streaming coordination: ~3 days
-- Comprehensive testing: ~5 days
+**Impact**:
+- For very large multi‑sheet workbooks where you only want to append/replace one sheet, you currently need to either:
+  - Use the in‑memory API (which loads all sheets), or
+  - Implement custom ZIP‑level manipulation yourself.
 
 **Workaround**:
-- Read full workbook with `excel.read()`
-- Update in memory
-- Write full workbook with `excel.write()`
-- For large files: Use external tools or manual ZIP manipulation
+- Use `XlsxReader.read(path)` → domain transforms → `XlsxWriter.writeWith(wb, path, config)` for correctness and preservation of unknown parts.
 
 ---
 
 ### 🟡 Medium Impact (Reduces Functionality)
 
-#### 4. Merged Cells Not Serialized
-**Status**: Tracked but not written to XML
-**Impact**: Merge ranges lost on write
-**Plan**: [P4 Continuation - Merged Cells](plan/11-ooxml-mapping.md#merged-cells)
-**Phase**: P4 (Next Priority)
+#### 4. Merged Cells in Streaming Writes
+**Status**: Fully supported in the in‑memory OOXML path; not emitted by streaming writers.
 
 **Current State**:
-- `Sheet.mergedRanges: Set[CellRange]` tracks merged regions
-- `Patch.Merge(range)` and `Patch.Unmerge(range)` work correctly
-- BUT: Not serialized to `<mergeCells>` in worksheet XML
+- In‑memory:
+  - `Sheet.mergedRanges: Set[CellRange]` tracks merged regions.
+  - `OoxmlWorksheet.toXml` emits `<mergeCells>` / `<mergeCell>` for those ranges.
+- Streaming write (`writeStreamTrue`, `writeStreamsSeqTrue`):
+  - Only writes `sheetData` with plain rows and cells; no merged cell metadata is currently generated.
 
-**What's Missing**:
-```xml
-<!-- Should emit in worksheet.xml: -->
-<mergeCells count="1">
-  <mergeCell ref="A1:B2"/>
-</mergeCells>
-```
-
-**Effort**: 2-3 hours
-**LOC**: ~40 changes in Worksheet.scala
+**Impact**:
+- In‑memory read/write round‑trips preserve merges.
+- Pure streaming‑generated workbooks will not contain merged ranges.
 
 ---
 

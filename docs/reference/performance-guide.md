@@ -18,32 +18,31 @@ XL provides two distinct I/O implementations with different performance characte
 
 ### In-Memory Mode (Default)
 
-**Use For**: Small-to-medium workbooks (<100k rows)
+**Use For**: Small‑to‑medium workbooks (<100k rows) or any workload that needs full styling and metadata.
 
 **Characteristics**:
-- Builds full XML trees in memory
-- Full feature support (SST, styles, formulas, merged cells)
-- Deterministic output (byte-identical on re-write)
-- Pretty-printed XML (good for git diffs)
+- Builds full XML trees in memory.
+- Full feature support (SST, styles, merged cells, RichText).
+- Deterministic output (byte‑identical structure on re‑write).
+- Compact XML with DEFLATED compression by default; pretty‑printed STORED output is available for debugging via `WriterConfig.debug`.
 
 **API**:
 ```scala
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.IO
 
-val excel = ExcelIO.instance
+val excel = ExcelIO.instance[IO]
 
 // Write
-excel.write[IO](workbook, path).unsafeRunSync()
+excel.write(workbook, path).unsafeRunSync()
 
 // Read
-excel.read[IO](path).map {
-  case Right(wb) => // Process workbook
-  case Left(err) => // Handle error
+excel.read(path).map { wb =>
+  // Process workbook
 }.unsafeRunSync()
 ```
 
-**Memory Profile**:
+**Memory Profile (approximate)**:
 ```
 10k rows:   ~10MB
 50k rows:   ~50MB
@@ -59,12 +58,12 @@ excel.read[IO](path).map {
 
 ### Streaming Write Mode
 
-**Use For**: Large data generation (100k+ rows, minimal styling)
+**Use For**: Large data generation (100k+ rows) when you can live with minimal styling and inline strings.
 
 **Characteristics**:
-- O(1) constant memory (~10MB regardless of file size)
-- fs2-data-xml event streaming
-- **Limitations**: No SST support (inline strings only), default styles only
+- O(1) constant memory for worksheet data (~10MB regardless of row count).
+- fs2‑data‑xml event streaming; no intermediate XML trees.
+- **Limitations**: No SST support (inline strings only), minimal styles (no rich formatting or merged cells).
 
 **API**:
 ```scala
@@ -72,7 +71,7 @@ import com.tjclp.xl.io.Excel
 import com.tjclp.xl.io.RowData
 import fs2.Stream
 
-val excel = Excel.forIO
+val excel = com.tjclp.xl.io.Excel.forIO
 
 // Generate 1M rows
 Stream.range(1, 1_000_001)
@@ -95,36 +94,45 @@ Stream.range(1, 1_000_001)
 ```
 
 **Performance**:
-- Write: ~88k rows/sec
-- **4.5x faster than Apache POI**
-- **80x less memory than POI**
+- Write: ~88k rows/sec in benchmarks.
+- In practice, ~4–5x faster and vastly more memory‑efficient than typical in‑memory POI usage for large datasets.
 
 **Tradeoffs**:
-- ✅ Constant memory
-- ✅ Excellent performance
-- ❌ No SST (larger files if many duplicate strings)
-- ❌ Default styles only (no rich formatting)
+- ✅ Constant memory for worksheet data.
+- ✅ Excellent throughput at high row counts.
+- ❌ No SST (larger files if many duplicate strings).
+- ❌ Minimal styles only (no rich formatting at scale).
 
 ---
 
-### Streaming Read Mode (⚠️ BROKEN - Do Not Use)
+### Streaming Read Mode
 
-**Current Issue**: Despite being called `readStream`, this mode uses `InputStream.readAllBytes()` internally and is **NOT constant-memory**.
+**Use For**: Sequential processing of large worksheets (filtering, aggregation, ETL) where you don’t need full styling information.
 
-**Status**: Known bug, tracked as P6.6 in roadmap (2-3 day fix)
+**Characteristics**:
+- O(1) memory for worksheet data by streaming XML via `fs2.io.readInputStream` + fs2‑data‑xml.
+- `SharedStrings` (if present) are parsed once up front, so memory use scales with the number of unique strings, not total rows.
+- Emits `Stream[F, RowData]` with 1‑based row indices and 0‑based column indices.
 
-**Workaround**: Use in-memory read API instead:
+**API**:
 ```scala
-// DON'T use readStream for large files yet
-// excel.readStream(largePath)  // ❌ Will spike memory!
+import com.tjclp.xl.io.Excel
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
 
-// DO use in-memory read (works correctly)
-excel.read[IO](path)  // ✅ Slower but predictable
+val excel = Excel.forIO
+
+excel.readStream(path)
+  .filter(_.rowIndex > 1) // skip header
+  .evalMap(row => IO.println(row))
+  .compile.drain
+  .unsafeRunSync()
 ```
 
-**Fix ETA**: P6.6 will replace `readAllBytes()` with `fs2.io.readInputStream` for true streaming
-
----
+**Tradeoffs**:
+- ✅ True streaming (no materialization of full sheets).
+- ✅ Great for ETL and analytics pipelines.
+- ❌ Does not expose full formatting/metadata; for that, use the in‑memory APIs.
 
 ## Performance Optimization Techniques
 
@@ -179,34 +187,40 @@ sheet.put(patch)  // Execute once at end
 
 ---
 
-### 3. Prefer putMixed for Type Safety + Auto-Formatting
+### 3. Prefer Batch `Sheet.put` for Type Safety + Auto-Formatting
 
-**Manual** (verbose, error-prone):
+**Manual** (verbose, error‑prone):
 ```scala
+import com.tjclp.xl.*
+
+val dateStyle = CellStyle.default.numFmt(NumFmt.Date)
+val decimalStyle = CellStyle.default.numFmt(NumFmt.Number)
+
 sheet
-  .put(cell"A1", CellValue.Text("Revenue"))
-  .put(cell"B1", CellValue.DateTime(LocalDate.of(2025, 11, 10)))
-  .withCellStyle(cell"B1", dateStyle)  // Must manually set format
-  .put(cell"C1", CellValue.Number(BigDecimal("1000000.50")))
-  .withCellStyle(cell"C1", decimalStyle)  // Must manually set format
+  .put(ref"A1", CellValue.Text("Revenue"))
+  .put(ref"B1", CellValue.DateTime(LocalDate.of(2025, 11, 10)))
+  .withCellStyle(ref"B1", dateStyle)    // Must manually set format
+  .put(ref"C1", CellValue.Number(BigDecimal("1000000.50")))
+  .withCellStyle(ref"C1", decimalStyle) // Must manually set format
 ```
 
-**putMixed** (clean, automatic):
+**Batch `put` with codecs** (clean, automatic):
 ```scala
+import com.tjclp.xl.*
 import com.tjclp.xl.codec.syntax.*
 
 sheet.put(
-  cell"A1" -> "Revenue",
-  cell"B1" -> LocalDate.of(2025, 11, 10),  // Auto: date format
-  cell"C1" -> BigDecimal("1000000.50")     // Auto: decimal format
+  ref"A1" -> "Revenue",                         // String
+  ref"B1" -> LocalDate.of(2025, 11, 10),        // Auto: date format
+  ref"C1" -> BigDecimal("1000000.50")           // Auto: number format
 )
 ```
 
 **Benefits**:
-- Auto-inferred number formats
-- Type-safe (compile error if unsupported type)
-- Single allocation
-- Cleaner code
+- Auto‑inferred number formats via `CellCodec`.
+- Type‑safe (compile error if unsupported type).
+- Single bulk update instead of many tiny ones.
+- Cleaner code.
 
 ---
 

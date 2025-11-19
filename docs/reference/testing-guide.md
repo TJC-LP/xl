@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: 263/263 tests passing across 4 modules
+**Current Status**: 636/636 tests passing across 4 modules
 
 ## Test Infrastructure
 
@@ -60,14 +60,13 @@ xl-cats-effect/test/src/com/tjclp/xl/io/
 - **Round-trip precision**: BigDecimal maintains precision
 
 #### Batch Operations (16 tests)
-- **putMixed**: Heterogeneous updates with type inference
+- **Batch `Sheet.put`**: Heterogeneous updates with type-safe codecs (replaces old `putMixed`)
 - **Style deduplication**: Multiple cells with same format share style
 - **Given conversions**: Implicit codec resolution
 - **Type-safe reading**: `readTyped[A]` with compile-time types
 
-#### Elegant Syntax (18 tests)
-- **Given conversions**: `sheet.put(cell"A1", "text")` without wrappers
-- **Batch put macro**: `sheet.put(cell"A1" -> "Name", cell"B1" -> 42)`
+- **Given conversions**: `sheet.put(ref"A1", "text")` without wrappers
+- **Batch put**: `sheet.put(ref"A1" -> "Name", ref"B1" -> 42)` via codecs
 - **Formatted literals**: `money"$1,234.56"`, `percent"45.5%"`, `date"2025-11-10"`, `accounting"-$500.00"`
 - **Macro expansion**: Compile-time parsing verified
 
@@ -102,13 +101,13 @@ xl-cats-effect/test/src/com/tjclp/xl/io/
 ### xl-cats-effect: 18 tests ✅
 
 #### Streaming I/O (18 tests)
-- **writeStreamTrue**: Event-based XML write with fs2-data-xml
-- **readStreamTrue**: Event-based XML read with fs2-data-xml
+- **writeStreamTrue / writeStreamsSeqTrue**: Event-based ZIP write via fs2-data-xml
+- **readStream / readSheetStream / readStreamByIndex**: Event-based worksheet reads with fs2-data-xml + fs2.io.readInputStream
 - **Constant memory**: O(1) memory usage verified (100k rows @ ~50MB)
 - **Large files**: 100k+ row tests pass
-- **Multi-sheet streaming**: Multiple worksheets in one file
-- **SST integration**: Shared strings work with streaming
-- **Style integration**: Styles applied correctly during stream
+- **Multi-sheet streaming**: Multiple worksheets in one file (true streaming sequence)
+- **Shared strings**: SST parsing integrates with streaming readers
+- **Style integration**: Minimal styles + default formatting preserved in streaming writes
 - **Error handling**: Invalid XML returns `Left[XLError]`
 - **Performance**: Benchmarked at 4.5x faster than Apache POI
 

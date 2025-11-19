@@ -18,17 +18,17 @@ This guide helps Java developers migrate from Apache POI to XL. The two librarie
 
 | POI API | XL Equivalent | Notes |
 |---------|---------------|-------|
-| `new XSSFWorkbook()` | `Workbook(SheetName.unsafe("Sheet1"))` | Returns Either |
-| `workbook.createSheet("Data")` | `Workbook("Data").map(_._1)` | Immutable |
-| `sheet.createRow(0)` | N/A (cell-oriented) | XL is cell-based, not row-based |
-| `row.createCell(0)` | `sheet.put(cell"A1", value)` | Pure function |
-| `cell.setCellValue("Hello")` | `cell"A1" := "Hello"` | DSL syntax |
-| `cell.setCellValue(42)` | `cell"A1" := 42` | Auto-converts |
-| `cell.setCellValue(true)` | `cell"A1" := true` | Type-safe |
-| `cell.getCellValue()` | `sheet.get(cell"A1")` | Returns Option[Cell] |
-| `cell.getNumericCellValue()` | `sheet.readTyped[Int](cell"A1")` | Type-safe, Either for errors |
-| `cell.setCellStyle(style)` | `sheet.withCellStyle(cell"A1", styleId)` | Requires style registry |
-| `workbook.write(out)` | `ExcelIO.instance.write[IO](wb, path)` | Effect-wrapped |
+| `new XSSFWorkbook()` | `Workbook.empty` | Returns `XLResult[Workbook]` |
+| `workbook.createSheet("Data")` | `Workbook("Data")` | Immutable, returns `Either` |
+| `sheet.createRow(0)` | N/A – XL is cell-oriented |
+| `row.createCell(0)` | `sheet.put(ref"A1", value)` | Pure and immutable |
+| `cell.setCellValue("Hello")` | `ref"A1" := "Hello"` | DSL syntax |
+| `cell.setCellValue(42)` | `ref"A1" := 42` | Auto-converts |
+| `cell.setCellValue(true)` | `ref"A1" := true` | Type-safe |
+| `cell.getCellValue()` | `sheet(ref"A1")` | Returns `Cell` (empty cells yield `CellValue.Empty`) |
+| `cell.getNumericCellValue()` | `sheet.readTyped[Int](ref"A1")` | Returns `Either[CodecError, Option[Int]]` |
+| `cell.setCellStyle(style)` | `sheet.withCellStyle(ref"A1", styleId)` | Register style first |
+| `workbook.write(out)` | `ExcelIO.instance[IO].write(wb, path)` | Effect-wrapped |
 
 ## Common Patterns
 
@@ -54,28 +54,29 @@ out.close();
 
 **XL (Scala)**:
 ```scala
-import com.tjclp.xl.api.*
-import com.tjclp.xl.macros.*
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.*
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
-val sheet = Sheet("Sales").get.put(
-  cell"A1" -> "Product",
-  cell"B1" -> "Revenue",
-  cell"A2" -> "Widget",
-  cell"B2" -> 1000
-)
+val sheet =
+  Sheet("Sales").map(_.put(
+    ref"A1" -> "Product",
+    ref"B1" -> "Revenue",
+    ref"A2" -> "Widget",
+    ref"B2" -> 1000
+  )).unsafe
 
-val workbook = Workbook(Vector(sheet))
-ExcelIO.instance.write[IO](workbook, Path.of("sales.xlsx")).unsafeRunSync()
+val workbook =
+  Workbook.empty.flatMap(_.put(sheet)).unsafe
+
+ExcelIO.instance[IO].write(workbook, Path.of("sales.xlsx")).unsafeRunSync()
 ```
 
-**Key Differences**:
-- XL is **cell-oriented** (no explicit rows)
-- XL uses **immutable updates** (no setters)
-- XL requires **effect handling** (IO)
-- XL uses **compile-time validated** cell references (`cell"A1"`)
+- **Key Differences**:
+  - XL is **cell-oriented** (no explicit rows)
+  - XL uses **immutable updates** (no setters)
+  - XL requires **effect handling** (`IO`)
+  - XL uses **compile-time validated** references (`ref"A1"`)
 
 ---
 
@@ -106,11 +107,11 @@ val style = CellStyle.default
 val (registry, styleId) = sheet.styleRegistry.register(style)
 val updated = sheet
   .copy(styleRegistry = registry)
-  .withCellStyle(cell"A1", styleId)
+  .withCellStyle(ref"A1", styleId)
 
 // Or use Patch DSL:
 import com.tjclp.xl.dsl.*
-val patch = cell"A1".styled(style)
+val patch = ref"A1".styled(style)
 sheet.put(patch)
 ```
 
@@ -143,16 +144,17 @@ switch (cell.getCellType()) {
 
 **XL (Scala)**:
 ```scala
+import com.tjclp.xl.*
 import com.tjclp.xl.codec.syntax.*
 
 // Type-safe reading with Either
-sheet.readTyped[String](cell"A1") match
+sheet.readTyped[String](ref"A1") match
   case Right(Some(s)) => println(s"String: $s")
   case Right(None) => println("Cell empty")
   case Left(error) => println(s"Type error: $error")
 
 // Or pattern match on CellValue
-sheet.get(cell"A1") match
+sheet.get(ref"A1") match
   case Some(cell) =>
     cell.value match
       case CellValue.Text(s) => println(s"String: $s")
@@ -228,8 +230,8 @@ cell.setCellValue("Goodbye"); // Overwrites
 
 **XL Philosophy**: Immutable values, pure functions, explicit updates
 ```scala
-val sheet1 = sheet.put(cell"A1", "Hello")     // New Sheet
-val sheet2 = sheet1.put(cell"A1", "Goodbye")  // New Sheet (sheet1 unchanged)
+val sheet1 = sheet.put(ref"A1", "Hello")     // New Sheet
+val sheet2 = sheet1.put(ref"A1", "Goodbye")  // New Sheet (sheet1 unchanged)
 ```
 
 **Migration Tip**: Think of XL operations as creating new versions, not modifying in place.
@@ -246,7 +248,7 @@ Cell cell = row.createCell(3);  // D6
 
 **XL Philosophy**: Cell-centric (direct cell addressing)
 ```scala
-sheet.put(cell"D6", "value")  // Direct, no row object needed
+sheet.put(ref"D6", "value")  // Direct, no row object needed
 ```
 
 **Migration Tip**: XL doesn't have explicit Row objects. Use `ARef` (cell references) directly.
@@ -362,9 +364,9 @@ if (row == null) {
 
 **XL**:
 ```scala
-sheet.get(cell"A1") match
+sheet.get(ref"A1") match
   case Some(cell) => // Exists
-  case None => sheet.put(cell"A1", CellValue.Empty)  // Explicit creation
+  case None => sheet.put(ref"A1", CellValue.Empty)  // Explicit creation
 ```
 
 **Why**: XL is explicit (no magic auto-creation)
@@ -420,22 +422,23 @@ val headerStyle = CellStyle.default
   .withFont(Font("Arial", 12.0, bold = true))
 
 // Create sheet
-val sheet = Sheet("Q1 Sales").get
-  .put(
-    cell"A1" -> "Product",
-    cell"B1" -> "Revenue",
-    cell"C1" -> "Date"
-  )
-  .withRangeStyle(range"A1:C1", headerStyle)
+val sheet =
+  Sheet("Q1 Sales").map(_.put(
+    ref"A1" -> "Product",
+    ref"B1" -> "Revenue",
+    ref"C1" -> "Date"
+  )).get
+
+val styledHeader = sheet.withRangeStyle(ref"A1:C1", headerStyle)
 
 // Data rows (batched for performance)
-val dataRows = (1 to 1000).flatMap(i =>
+val dataRows = (1 to 1000).flatMap { i =>
   Seq(
-    cell"A${i+1}" -> s"Product $i",
-    cell"B${i+1}" -> i * 100,
-    cell"C${i+1}" -> LocalDate.now()
+    ref"A${i+1}" -> s"Product $i",
+    ref"B${i+1}" -> i * 100,
+    ref"C${i+1}" -> LocalDate.now()
   )
-)
+}
 val withData = sheet.put(dataRows*)
 
 // Write

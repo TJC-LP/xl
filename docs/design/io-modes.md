@@ -54,78 +54,40 @@ XL has **two distinct I/O implementations** with fundamentally different archite
 
 ### In-Memory Path
 
-```
-Read:
-User calls ExcelIO.read(path)
-  ↓
-XlsxReader opens ZIP file
-  ↓
-For each part (workbook, sheets, styles, sst):
-  1. getInputStream(entry)
-  2. XML.load(stream)              ← Builds full scala.xml.Elem
-  3. Parse Elem → OOXML model
-  4. Convert OOXML → Domain model
-  ↓
-Return Workbook (all sheets in memory)
+Read (simplified):
+- `ExcelIO.read(path)` calls `XlsxReader.readWithWarnings`.
+- The reader walks the ZIP, parses only *known* parts into `scala.xml.Elem`s, and turns them into OOXML model types.
+- It then converts OOXML types into the pure domain `Workbook`, optionally attaching a `SourceContext` for surgical writes.
 
-Memory: O(n) where n = total cells
-Time: Fast (one-shot parsing)
-Features: Full (SST, styles, formulas, merged cells)
-```
+Write (simplified):
+- `ExcelIO.write(workbook, path)` calls `XlsxWriter.writeWith` with `WriterConfig.default`.
+- The writer builds a shared `StyleIndex` and optional `SharedStrings` table, converts domain objects into OOXML parts, and serializes them as XML into a new ZIP.
+- Output is compact XML (no pretty‑printing) with `Compression.Deflated` by default; `WriterConfig.debug` switches to pretty‑printed XML and STORED compression for debugging.
 
-```
-Write:
-User calls ExcelIO.write(workbook, path)
-  ↓
-Convert domain → OOXML model
-  ↓
-Build style index (deduplicate across workbook)
-Build SST (deduplicate strings)
-  ↓
-For each part:
-  1. model.toXml → scala.xml.Elem
-  2. XmlUtil.prettyPrint(elem) → String
-  3. zipOut.putNextEntry()
-  4. zipOut.write(str.getBytes)
-  ↓
-Close ZIP, done
-
-Memory: O(n) where n = total cells
-Time: Moderate (XML tree building + serialization)
-Features: Full
-Output: Pretty-printed, STORED by default
-```
+Characteristics:
+- Memory: **O(n)** in the number of cells.
+- Features: **Full** (SST, styles, merged cells, RichText, etc.).
+- Deterministic output: stable ordering for reliable diffs.
 
 ---
 
 ### Streaming Path
 
-```
-Write:
-User calls writeStreamTrue(dataStream, path, sheetName)
-  ↓
-StreamingXmlWriter receives Stream[F, RowData]
-  ↓
-Write static parts first:
-  - [Content_Types].xml (no SST, minimal styles)
-  - xl/_rels/workbook.xml.rels
-  - xl/workbook.xml
-  - xl/styles.xml (defaults only)
-  ↓
-Open xl/worksheets/sheet1.xml entry
-  ↓
-For each RowData in stream:
-  1. Convert to XML events (StartElement, Characters, EndElement)
-  2. Emit events directly to ZipOutputStream
-  3. No intermediate String/Elem
-  ↓
-Close worksheet entry, close ZIP
+Write (`writeStreamTrue` / `writeStreamsSeqTrue`):
+- Static parts (`[Content_Types].xml`, workbook relationships, minimal `styles.xml`) are written once up front.
+- For each streamed `RowData`, `StreamingXmlWriter` emits XML events directly to a `ZipOutputStream` without building intermediate XML trees.
+- Output is compact XML with `Compression.Deflated` by default; by design it uses inline strings (no SST) and a minimal style set.
 
-Memory: O(1) constant (~10MB)
-Time: Fast (direct streaming, no trees)
-Features: Limited (no SST, default styles only)
-Output: Compact XML, STORED by default
-```
+Read (`readStream` / `readSheetStream` / `readStreamByIndex`):
+- The ZIP is opened as a `ZipFile`, and the target worksheet entry is streamed through fs2‑data‑xml as a stream of XML events.
+- Those events are converted into `RowData` records on the fly.
+- The `SharedStrings` table (if present) is parsed once up front and held in memory; worksheet data itself is streamed.
+
+Characteristics:
+- Memory: **O(1)** for worksheet data (plus the in‑memory SST and minimal bookkeeping).
+- Features:
+  - Write: inline strings only, default styles, no merged cells or advanced sheet metadata.
+  - Read: values and basic types; you typically use it for ETL/analytics rather than formatting‑preserving workflows.
 
 ```
 Read:
@@ -199,29 +161,11 @@ Features: Limited (reads values only, minimal style info)
 
 ### ADR-013: Streaming Read Bug - Why Not Fixed Yet?
 
-**Decision**: Ship with broken streaming read, fix in P6.6
+**Status**: Historical only – the original streaming reader used `readAllBytes()` and was O(n) in memory. As of P6.6 it has been rewritten on top of `fs2.io.readInputStream` and fs2‑data‑xml and now achieves the same constant‑memory characteristics as the streaming writer.
 
-**Context**:
-- Streaming read uses `InputStream.readAllBytes()` (O(n) memory)
-- Violates constant-memory claim
-- Easy fix (2-3 days) but not critical for MVP
-
-**Why Shipped**:
-1. **Write is more important** (data generation, ETL output)
-2. **In-memory read works fine** for typical sizes
-3. **Users can work around** (use in-memory API)
-4. **Fix is straightforward** (use fs2.io.readInputStream)
-
-**Consequences**:
-- ✅ Shipping sooner (don't block on read fix)
-- ✅ Write streaming is production-ready
-- ❌ Misleading API name (`readStreamTrue` isn't truly streaming)
-- ❌ Users might expect constant-memory reads
-
-**Mitigation**:
-- Clear documentation (README, STATUS.md)
-- Warning in API docs
-- P6.6 prioritized (2-3 days, high priority)
+Today:
+- `ExcelIO.readStream` / `readSheetStream` / `readStreamByIndex` are safe to use for large files.
+- The remaining trade‑off is **feature coverage**, not memory use (you do not get full styling/metadata preservation from the streaming APIs).
 
 ---
 

@@ -2,15 +2,15 @@
 
 **Last Updated**: 2025-11-16
 
-## Current State: ~85% Complete, 636/636 Tests Passing ✅
+## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
 
-**Core Features** (P0-P5 Complete):
+**Core Features**:
 - ✅ Type-safe addressing (Column, Row, ARef with 64-bit packing)
-- ✅ Compile-time validated literals: `cell"A1"`, `range"A1:B10"`
+- ✅ Compile-time validated literals: `ref"A1"` and `ref"A1:B10"`
 - ✅ Immutable domain model (Cell, Sheet, Workbook)
 - ✅ Patch Monoid for declarative updates
 - ✅ Complete style system (Font, Fill, Border, Color, NumFmt, Align)
@@ -25,14 +25,14 @@
 - ✅ DateTime serialization (Excel serial number conversion)
 - ✅ **True streaming I/O** (constant memory, 100k+ rows)
 
-**Ergonomics & Type Safety** (P6, P7, P8, P31 Complete):
-- ✅ Given conversions: `sheet.put(cell"A1", "Hello")` (no wrapper needed)
-- ✅ Batch put macro: `sheet.put(cell"A1" -> "Name", cell"B1" -> 42)`
+**Ergonomics & Type Safety**:
+- ✅ Given conversions: `sheet.put(ref"A1", "Hello")` (no wrapper needed)
+- ✅ Batch put via varargs `Sheet.put(ref -> value, ...)`
 - ✅ Formatted literals: `money"$1,234.56"`, `percent"45.5%"`, `date"2025-11-10"`
 - ✅ **String interpolation**: `ref"$sheet!$cell"`, `money"$$${amount}"` with runtime validation
 - ✅ Compile-time optimization for literal interpolations (zero runtime overhead)
 - ✅ **CellCodec[A]** for 9 primitive types (String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText)
-- ✅ `putMixed` API with auto-inferred formatting
+- ✅ Batch `Sheet.put` with auto-inferred formatting (former `putMixed` API)
 - ✅ `readTyped[A]` for type-safe cell reading
 - ✅ **Optics** module (Lens, Optional, focus DSL)
 - ✅ RichText DSL: `"Bold".bold.red + " normal " + "Italic".italic.blue`
@@ -43,11 +43,11 @@
 - ✅ Zero-overhead opaque types
 - ✅ Macros compile away (no runtime parsing)
 
-**Streaming API** (P5 + P6.6 Complete):
+**Streaming API**:
 - ✅ Excel[F[_]] algebra trait
 - ✅ ExcelIO[IO] interpreter
-- ✅ `readStreamTrue` - True constant-memory streaming read (fs2.io.readInputStream)
-- ✅ `writeStreamTrue` - True constant-memory streaming write (fs2-data-xml)
+- ✅ `readStream` / `readSheetStream` / `readStreamByIndex` – constant‑memory streaming read (fs2.io.readInputStream + fs2‑data‑xml)
+- ✅ `writeStreamTrue` / `writeStreamsSeqTrue` – constant‑memory streaming write (fs2‑data‑xml)
 - ✅ Benchmark: 100k rows in ~1.8s read (~10MB constant memory) / ~1.1s write (~10MB constant memory)
 
 **Output Configuration** (P6.7 Complete):
@@ -96,11 +96,11 @@
 ### XML Serialization
 
 **Minor Limitations**:
-- ❌ Formula parsing stores as string only (no AST yet) - P11 feature
-- ❌ No merged cell XML serialization (mergedRanges tracked but not written)
-- ❌ Hyperlinks not serialized
-- ❌ Comments not serialized
-- ❌ Column/row properties not serialized (width, height, hidden)
+- ❌ Formula parsing stores expressions as strings only (no AST/evaluator yet).
+- ⚠️ Merged cells are fully supported in the in‑memory OOXML path, but not emitted by streaming writers.
+- ❌ Hyperlinks not serialized.
+- ❌ Comments not serialized.
+- ❌ Column/row properties (width, height, hidden) are parsed and tracked in the domain model but not yet serialized back into `<cols>` / `<row>` in the regenerated XML.
 
 ### Style System
 

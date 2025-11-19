@@ -25,21 +25,11 @@ A purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7
 
 ## Status
 
-**Current**: ~89% complete with 263/263 tests passing ✅
+XL’s core domain model, in‑memory OOXML mapping, and streaming I/O are production‑ready; advanced features like a full formula evaluator, charts, drawings, and tables are still on the roadmap.
 
-**Implemented** (P0-P6):
-- ✅ Core domain types (Cell, Sheet, Workbook)
-- ✅ Addressing system with compile-time macros (`ref"A1"`, `ref"A1:B10"`)
-- ✅ Patch system with Monoid composition for updates
-- ✅ Complete style system (fonts, colors, fills, borders, alignment)
-- ✅ **OOXML I/O**: Read/write XLSX files with SST and styles.xml
-- ✅ **Streaming**: True constant-memory streaming with fs2-data-xml (100k+ rows)
-- ✅ **Cell Codecs**: Type-safe encoding/decoding with auto-inferred formatting
-- ✅ Elegant syntax: given conversions, batch put macro, formatted literals
-
-**Roadmap**: Formulas, codecs with case class derivation, charts, drawings, tables.
-
-See [docs/plan/18-roadmap.md](docs/plan/18-roadmap.md) for full implementation plan.
+- For a detailed, regularly updated status (including test coverage and performance numbers), see `docs/STATUS.md`.
+- For phase‑level planning and future work, see `docs/plan/roadmap.md`.
+- For architecture and module relationships, see `docs/design/architecture.md`.
 
 ## Quick Start
 
