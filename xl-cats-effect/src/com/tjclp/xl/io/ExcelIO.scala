@@ -96,7 +96,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       .flatMap { zipFile =>
         Stream
           .eval {
-            // Find sheets index by parsing workbooks.xml
+            // Find sheets index by parsing workbook.xml
             findSheetIndexByName(zipFile, sheetName)
           }
           .flatMap {
@@ -410,8 +410,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     for
       _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
       _ <- writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      _ <- writePart(zip, "xl/workbooks.xml", ooxmlWb.toXml, config)
-      _ <- writePart(zip, "xl/_rels/workbooks.xml.rels", workbookRels.toXml, config)
+      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
+      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
       _ <- writePart(zip, "xl/styles.xml", styles.toXml, config)
     yield ()
 
@@ -448,8 +448,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     for
       _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
       _ <- writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      _ <- writePart(zip, "xl/workbooks.xml", ooxmlWb.toXml, config)
-      _ <- writePart(zip, "xl/_rels/workbooks.xml.rels", workbookRels.toXml, config)
+      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
+      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
       _ <- writePart(zip, "xl/styles.xml", styles.toXml, config)
     yield ()
 
@@ -488,15 +488,15 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       zip.closeEntry()
     }
 
-  // Helper: Find sheets index by name from workbooks.xml
+  // Helper: Find sheets index by name from workbook.xml
   private def findSheetIndexByName(zipFile: ZipFile, sheetName: String): F[Option[Int]] =
     Sync[F].delay {
-      val wbEntry = Option(zipFile.getEntry("xl/workbooks.xml"))
+      val wbEntry = Option(zipFile.getEntry("xl/workbook.xml"))
       wbEntry.flatMap { entry =>
         val xmlContent = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
-        XmlSecurity.parseSafe(xmlContent, "xl/workbooks.xml").toOption.flatMap { wbXml =>
-          // Parse sheets elements
-          val sheets = (wbXml \\ "sheets").toSeq
+        XmlSecurity.parseSafe(xmlContent, "xl/workbook.xml").toOption.flatMap { wbXml =>
+          // Parse sheet elements
+          val sheets = (wbXml \\ "sheet").toSeq
           sheets
             .find { sheetElem =>
               (sheetElem \ "@name").text == sheetName

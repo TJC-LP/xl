@@ -288,8 +288,8 @@ object XlsxWriter:
       // Write parts in canonical order
       writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
       writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      writePart(zip, "xl/workbooks.xml", workbook.toXml, config)
-      writePart(zip, "xl/_rels/workbooks.xml.rels", workbookRels.toXml, config)
+      writePart(zip, "xl/workbook.xml", workbook.toXml, config)
+      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
 
       // Write styles
       writePart(zip, "xl/styles.xml", styles.toXml, config)
@@ -324,8 +324,8 @@ object XlsxWriter:
       // Write parts in canonical order
       writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
       writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      writePart(zip, "xl/workbooks.xml", workbook.toXml, config)
-      writePart(zip, "xl/_rels/workbooks.xml.rels", workbookRels.toXml, config)
+      writePart(zip, "xl/workbook.xml", workbook.toXml, config)
+      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
 
       // Write styles
       writePart(zip, "xl/styles.xml", styles.toXml, config)
@@ -411,7 +411,7 @@ object XlsxWriter:
    * Determine which parts must be regenerated during surgical write.
    *
    * Parts that must be regenerated:
-   *   - Structural parts (always): workbooks.xml, relationships, content types
+   *   - Structural parts (always): workbook.xml, relationships, content types
    *   - Styles/SST if any sheets modified (indices may change)
    *   - Modified sheets
    *   - Relationships for modified/deleted sheets
@@ -430,8 +430,8 @@ object XlsxWriter:
     regenerate ++= Set(
       "[Content_Types].xml",
       "_rels/.rels",
-      "xl/workbooks.xml",
-      "xl/_rels/workbooks.xml.rels"
+      "xl/workbook.xml",
+      "xl/_rels/workbook.xml.rels"
     )
 
     // Regenerate styles if any sheets modified (styles indices may change)
@@ -534,8 +534,8 @@ object XlsxWriter:
       val contentTypes = parseOptionalEntry(zip, "[Content_Types].xml")(ContentTypes.fromXml)
       val rootRels = parseOptionalEntry(zip, "_rels/.rels")(Relationships.fromXml)
       val workbookRels =
-        parseOptionalEntry(zip, "xl/_rels/workbooks.xml.rels")(Relationships.fromXml)
-      val workbook = parseOptionalEntry(zip, "xl/workbooks.xml")(OoxmlWorkbook.fromXml)
+        parseOptionalEntry(zip, "xl/_rels/workbook.xml.rels")(Relationships.fromXml)
+      val workbook = parseOptionalEntry(zip, "xl/workbook.xml")(OoxmlWorkbook.fromXml)
       (contentTypes, rootRels, workbookRels, workbook)
     }
 
@@ -768,8 +768,8 @@ object XlsxWriter:
       // Write structural parts (always regenerated)
       writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
       writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      writePart(zip, "xl/workbooks.xml", ooxmlWb.toXml, config)
-      writePart(zip, "xl/_rels/workbooks.xml.rels", workbookRels.toXml, config)
+      writePart(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
+      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
       writePart(zip, "xl/styles.xml", styles.toXml, config)
 
       if regenerateSharedStrings then

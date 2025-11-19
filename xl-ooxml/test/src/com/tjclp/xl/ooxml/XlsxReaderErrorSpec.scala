@@ -21,14 +21,14 @@ class XlsxReaderErrorSpec extends FunSuite:
     """<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
 
   private val rootRelationshipsXml =
     """<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
 </Relationships>"""
 
   private val workbookRelationshipsXml =
@@ -39,12 +39,12 @@ class XlsxReaderErrorSpec extends FunSuite:
 
   private val validWorkbookXml =
     """<?xml version="1.0" encoding="UTF-8"?>
-<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbooks>"""
+</workbook>"""
 
   private val validWorksheetXml =
     """<?xml version="1.0" encoding="UTF-8"?>
@@ -78,41 +78,41 @@ class XlsxReaderErrorSpec extends FunSuite:
   private val baseParts: Map[String, String] = Map(
     "[Content_Types].xml" -> contentTypesXml,
     "_rels/.rels" -> rootRelationshipsXml,
-    "xl/workbooks.xml" -> validWorkbookXml,
-    "xl/_rels/workbooks.xml.rels" -> workbookRelationshipsXml,
+    "xl/workbook.xml" -> validWorkbookXml,
+    "xl/_rels/workbook.xml.rels" -> workbookRelationshipsXml,
     "xl/worksheets/sheet1.xml" -> validWorksheetXml,
     "xl/styles.xml" -> minimalStylesXml
   )
 
-  test("XlsxReader rejects XLSX missing workbooks.xml") {
-    val bytes = buildWorkbook(omit = Set("xl/workbooks.xml"))
-    assertParseError(XlsxReader.readFromBytes(bytes), "xl/workbooks.xml", "Missing workbooks.xml")
+  test("XlsxReader rejects XLSX missing workbook.xml") {
+    val bytes = buildWorkbook(omit = Set("xl/workbook.xml"))
+    assertParseError(XlsxReader.readFromBytes(bytes), "xl/workbook.xml", "Missing workbook.xml")
   }
 
-  test("XlsxReader rejects malformed workbooks.xml") {
-    val malformed = "<workbooks><sheets></workbooks>" // malformed closing tags
-    val bytes = buildWorkbook(overrides = Map("xl/workbooks.xml" -> malformed))
+  test("XlsxReader rejects malformed workbook.xml") {
+    val malformed = "<workbook><sheets></workbook>" // malformed closing tags
+    val bytes = buildWorkbook(overrides = Map("xl/workbook.xml" -> malformed))
 
     XlsxReader.readFromBytes(bytes) match
       case Left(XLError.ParseError(location, message)) =>
-        assertEquals(location, "xl/workbooks.xml")
+        assertEquals(location, "xl/workbook.xml")
         assert(
           message.toLowerCase.contains("xml parse"),
           s"Expected XML parse errors message, got: $message"
         )
-      case other => fail(s"Expected ParseError for malformed workbooks, got $other")
+      case other => fail(s"Expected ParseError for malformed workbook, got $other")
   }
 
-  test("XlsxReader rejects workbooks.xml missing required sheets element") {
+  test("XlsxReader rejects workbook.xml missing required sheets element") {
     val invalidWorkbook =
       """<?xml version="1.0" encoding="UTF-8"?>
-<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-</workbooks>"""
-    val bytes = buildWorkbook(overrides = Map("xl/workbooks.xml" -> invalidWorkbook))
+</workbook>"""
+    val bytes = buildWorkbook(overrides = Map("xl/workbook.xml" -> invalidWorkbook))
     XlsxReader.readFromBytes(bytes) match
       case Left(XLError.ParseError(location, message)) =>
-        assertEquals(location, "xl/workbooks.xml")
+        assertEquals(location, "xl/workbook.xml")
         assert(
           message.contains("Missing required child element: sheets"),
           s"Expected missing sheets errors, got: $message"
@@ -134,7 +134,7 @@ class XlsxReaderErrorSpec extends FunSuite:
       case other => fail(s"Expected ParseError for malformed styles, got $other")
   }
 
-  test("XlsxReader errors when worksheet part referenced by workbooks is missing") {
+  test("XlsxReader errors when worksheet part referenced by workbook is missing") {
     val bytes = buildWorkbook(omit = Set("xl/worksheets/sheet1.xml"))
     assertParseError(
       XlsxReader.readFromBytes(bytes),
@@ -149,14 +149,14 @@ class XlsxReaderErrorSpec extends FunSuite:
     assertEquals(result.warnings, Vector(XlsxReader.Warning.MissingStylesXml))
   }
 
-  test("XlsxReader errors when workbooks relationship points to missing target") {
+  test("XlsxReader errors when workbook relationship points to missing target") {
     val rels =
       """<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/ghost.xml"/>
 </Relationships>"""
     val bytes = buildWorkbook(
-      overrides = Map("xl/_rels/workbooks.xml.rels" -> rels)
+      overrides = Map("xl/_rels/workbook.xml.rels" -> rels)
     )
     assertParseError(
       XlsxReader.readFromBytes(bytes),
@@ -165,7 +165,7 @@ class XlsxReaderErrorSpec extends FunSuite:
     )
   }
 
-  test("XlsxReader gracefully handles workbooks without [Content_Types].xml") {
+  test("XlsxReader gracefully handles workbook without [Content_Types].xml") {
     val bytes = buildWorkbook(omit = Set("[Content_Types].xml"))
 
     val workbook = XlsxReader.readFromBytes(bytes).getOrElse(fail("Workbook should parse"))
@@ -177,8 +177,8 @@ class XlsxReaderErrorSpec extends FunSuite:
     val bytes = "not-a-zip".getBytes(StandardCharsets.UTF_8)
     XlsxReader.readFromBytes(bytes) match
       case Left(XLError.ParseError(location, message)) =>
-        assertEquals(location, "xl/workbooks.xml")
-        assertEquals(message, "Missing workbooks.xml")
+        assertEquals(location, "xl/workbook.xml")
+        assertEquals(message, "Missing workbook.xml")
       case Left(XLError.IOError(_)) =>
         () // acceptable alternate failure mode
       case other => fail(s"Expected failure for non-zip input, got $other")

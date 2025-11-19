@@ -50,7 +50,7 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     }
 
     val baseOverrides = Map(
-      "/xl/workbooks.xml" -> ctWorkbook
+      "/xl/workbook.xml" -> ctWorkbook
     ) ++ sheetOverrides
 
     val stylesOverride = if hasStyles then Map("/xl/styles.xml" -> ctStyles) else Map.empty

@@ -149,7 +149,7 @@ case class Workbook(
       )
     else Left(XLError.OutOfBounds(s"sheets[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
-  /** Rename sheets (marks metadata as modified since sheets names live in workbooks.xml). */
+  /** Rename sheets (marks metadata as modified since sheets names live in workbook.xml). */
   def rename(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == oldName) match
       case -1 => Left(XLError.SheetNotFound(oldName.value))
@@ -223,7 +223,7 @@ case class Workbook(
             case idx => Some(idx)
         )
         .getOrElse(activeSheetIndex)
-      // Sheet reordering only modifies workbooks.xml (order metadata), not individual sheets files.
+      // Sheet reordering only modifies workbook.xml (order metadata), not individual sheets files.
       // Therefore we mark reordered but don't mark individual sheets as modified.
       val updatedContext = sourceContext.map(_.markReordered)
       Right(

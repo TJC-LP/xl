@@ -48,14 +48,14 @@ class RelationshipGraphSpec extends FunSuite:
   test("fromManifest handles parts with no sheets dependencies") {
     val builder = PartManifestBuilder.empty
       .recordUnparsed("xl/media/image1.png") // No sheetIndex
-      .recordParsed("xl/workbooks.xml") // No sheetIndex
+      .recordParsed("xl/workbook.xml") // No sheetIndex
     val manifest = builder.build()
 
     val graph = RelationshipGraph.fromManifest(manifest)
 
     // Parts with no sheetIndex have empty dependencies
     assertEquals(graph.dependenciesFor("xl/media/image1.png"), Set.empty)
-    assertEquals(graph.dependenciesFor("xl/workbooks.xml"), Set.empty)
+    assertEquals(graph.dependenciesFor("xl/workbook.xml"), Set.empty)
   }
 
   test("dependenciesFor returns empty set for unknown paths") {

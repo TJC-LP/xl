@@ -57,8 +57,8 @@ object XlsxReader:
   private val knownParts: Set[String] = Set(
     "[Content_Types].xml",
     "_rels/.rels",
-    "xl/workbooks.xml",
-    "xl/_rels/workbooks.xml.rels",
+    "xl/workbook.xml",
+    "xl/_rels/workbook.xml.rels",
     "xl/styles.xml",
     "xl/sharedStrings.xml"
   )
@@ -188,15 +188,15 @@ object XlsxReader:
     fingerprint: Option[SourceFingerprint]
   ): XLResult[ReadResult] =
     for
-      // Parse workbooks.xml
+      // Parse workbook.xml
       workbookXml <- parts
-        .get("xl/workbooks.xml")
-        .toRight(XLError.ParseError("xl/workbooks.xml", "Missing workbooks.xml"))
-      workbookElem <- parseXml(workbookXml, "xl/workbooks.xml")
+        .get("xl/workbook.xml")
+        .toRight(XLError.ParseError("xl/workbook.xml", "Missing workbook.xml"))
+      workbookElem <- parseXml(workbookXml, "xl/workbook.xml")
       ooxmlWb <- OoxmlWorkbook
         .fromXml(workbookElem)
         .left
-        .map(err => XLError.ParseError("xl/workbooks.xml", err): XLError)
+        .map(err => XLError.ParseError("xl/workbook.xml", err): XLError)
 
       // Parse optional shared strings
       sst <- parseOptionalSST(parts)
@@ -242,15 +242,15 @@ object XlsxReader:
 
   /** Parse workbooks relationships (used to resolve worksheet locations) */
   private def parseWorkbookRelationships(parts: Map[String, String]): XLResult[Relationships] =
-    parts.get("xl/_rels/workbooks.xml.rels") match
+    parts.get("xl/_rels/workbook.xml.rels") match
       case None => Right(Relationships.empty)
       case Some(xml) =>
         for
-          elem <- parseXml(xml, "xl/_rels/workbooks.xml.rels")
+          elem <- parseXml(xml, "xl/_rels/workbook.xml.rels")
           rels <- Relationships
             .fromXml(elem)
             .left
-            .map(err => XLError.ParseError("xl/_rels/workbooks.xml.rels", err): XLError)
+            .map(err => XLError.ParseError("xl/_rels/workbook.xml.rels", err): XLError)
         yield rels
 
   /** Parse all worksheets */

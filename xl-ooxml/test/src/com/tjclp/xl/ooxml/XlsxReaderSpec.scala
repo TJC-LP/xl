@@ -62,9 +62,9 @@ class XlsxReaderSpec extends FunSuite:
     val newSheetPath = s"xl/worksheets/$newSheetFile"
     entries(newSheetPath) = sheetBytes
 
-    entries.get("xl/_rels/workbooks.xml.rels").foreach { relBytes =>
+    entries.get("xl/_rels/workbook.xml.rels").foreach { relBytes =>
       entries.update(
-        "xl/_rels/workbooks.xml.rels",
+        "xl/_rels/workbook.xml.rels",
         replaceAll(relBytes, "worksheets/sheet1.xml", s"worksheets/$newSheetFile")
       )
     }

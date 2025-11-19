@@ -8,11 +8,11 @@ class PartManifestSpec extends FunSuite:
 
   test("builder tracks parsed and unparsed parts") {
     val manifest = new PartManifestBuilder()
-      .recordParsed("xl/workbooks.xml")
+      .recordParsed("xl/workbook.xml")
       .recordUnparsed("xl/charts/chart1.xml", sheetIndex = Some(0))
       .build()
 
-    assertEquals(manifest.parsedParts, Set("xl/workbooks.xml"))
+    assertEquals(manifest.parsedParts, Set("xl/workbook.xml"))
     assertEquals(manifest.unparsedParts, Set("xl/charts/chart1.xml"))
     assertEquals(manifest.dependentSheets("xl/charts/chart1.xml"), Set(0))
   }

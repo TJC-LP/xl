@@ -15,7 +15,7 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
     PreservedPartStore.empty.open.use { handle =>
       IO {
         assertEquals(handle.listAll, Set.empty[String])
-        assert(!handle.exists("xl/workbooks.xml"))
+        assert(!handle.exists("xl/workbook.xml"))
       }
     }
   }

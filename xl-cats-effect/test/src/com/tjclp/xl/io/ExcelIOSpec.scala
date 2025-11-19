@@ -218,7 +218,7 @@ class ExcelIOSpec extends CatsEffectSuite:
           zipFile.close()
         }
       } >>
-      // Verify workbooks.xml has sheetId="3"
+      // Verify workbook.xml has sheetId="3"
       IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
         assert(result.isRight, s"Should read successfully, got: $result")
         result.foreach { wb =>

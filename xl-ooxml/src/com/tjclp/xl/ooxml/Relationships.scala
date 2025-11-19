@@ -53,7 +53,7 @@ object Relationships extends XmlReadable[Relationships]:
   val empty: Relationships = Relationships(Seq.empty)
 
   /** Create root .rels file pointing to workbooks */
-  def root(workbookPath: String = "xl/workbooks.xml"): Relationships =
+  def root(workbookPath: String = "xl/workbook.xml"): Relationships =
     Relationships(
       Seq(
         Relationship("rId1", relTypeOfficeDocument, workbookPath)
