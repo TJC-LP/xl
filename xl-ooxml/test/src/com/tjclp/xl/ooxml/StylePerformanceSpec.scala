@@ -2,16 +2,16 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.style.*
+import com.tjclp.xl.styles.*
 
 /**
- * Performance tests for style serialization
+ * Performance tests for styles serialization
  *
  * Verifies that O(n²) → O(1) optimization in Styles.toXml scales linearly
  */
 class StylePerformanceSpec extends FunSuite:
 
-  test("style serialization scales linearly with 1000+ unique styles") {
+  test("styles serialization scales linearly with 1000+ unique styles") {
     // Generate 1000 unique cell styles
     val styles = (0 until 1000).map { i =>
       val hue = (i * 360.0 / 1000.0).toInt

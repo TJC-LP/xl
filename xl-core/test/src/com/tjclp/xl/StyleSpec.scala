@@ -3,16 +3,16 @@ package com.tjclp.xl
 import munit.ScalaCheckSuite
 import org.scalacheck.{Arbitrary, Gen, Prop}
 import org.scalacheck.Prop.*
-import com.tjclp.xl.style.{*, given}
-import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
-import com.tjclp.xl.style.border.{Border, BorderSide, BorderStyle}
-import com.tjclp.xl.style.color.{Color, ThemeSlot}
-import com.tjclp.xl.style.fill.{Fill, PatternType}
-import com.tjclp.xl.style.font.Font
-import com.tjclp.xl.style.numfmt.NumFmt
-import com.tjclp.xl.style.units.{Emu, Pt, Px, given}
+import com.tjclp.xl.styles.{*, given}
+import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+import com.tjclp.xl.styles.color.{Color, ThemeSlot}
+import com.tjclp.xl.styles.fill.{Fill, PatternType}
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.styles.units.{Emu, Pt, Px, given}
 
-/** Property tests for style system */
+/** Property tests for styles system */
 class StyleSpec extends ScalaCheckSuite:
 
   // ========== Generators ==========

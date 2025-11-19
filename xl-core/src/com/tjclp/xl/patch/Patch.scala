@@ -2,12 +2,12 @@ package com.tjclp.xl.patch
 
 import cats.Monoid
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.error.XLResult
-import com.tjclp.xl.sheet.{ColumnProperties, RowProperties, Sheet}
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.errors.XLResult
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Patch ADT for Sheet updates with monoid semantics.
@@ -24,13 +24,13 @@ enum Patch:
   /** Put a cell value at a reference */
   case Put(ref: ARef, value: CellValue)
 
-  /** Set style for a cell */
+  /** Set styles for a cell */
   case SetStyle(ref: ARef, styleId: StyleId)
 
-  /** Set style for a cell using CellStyle object (auto-registers in styleRegistry) */
+  /** Set styles for a cell using CellStyle object (auto-registers in styleRegistry) */
   case SetCellStyle(ref: ARef, style: CellStyle)
 
-  /** Clear style for a cell */
+  /** Clear styles for a cell */
   case ClearStyle(ref: ARef)
 
   /** Merge cells in a range */
@@ -76,17 +76,17 @@ object Patch:
     def combine(x: Patch, y: Patch): Patch = Patch.combine(x, y)
 
   /**
-   * Apply a patch to a sheet, returning the modified sheet.
+   * Apply a patch to a sheets, returning the modified sheets.
    *
    * Patches are applied left-to-right. Later patches override earlier ones for conflicting
    * operations (e.g., two Puts to the same reference).
    *
    * @param sheet
-   *   The sheet to modify
+   *   The sheets to modify
    * @param patch
    *   The patch to apply
    * @return
-   *   Either an error or the modified sheet
+   *   Either an errors or the modified sheets
    */
   def applyPatch(sheet: Sheet, patch: Patch): XLResult[Sheet] = patch match
     case Put(ref, value) =>
@@ -97,7 +97,7 @@ object Patch:
       Right(sheet.put(cell))
 
     case SetCellStyle(ref, style) =>
-      // Register style and apply to cell automatically
+      // Register styles and apply to cell automatically
       Right(sheet.withCellStyle(ref, style))
 
     case ClearStyle(ref) =>

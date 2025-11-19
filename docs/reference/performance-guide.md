@@ -38,7 +38,7 @@ excel.write(workbook, path).unsafeRunSync()
 
 // Read
 excel.read(path).map { wb =>
-  // Process workbook
+  // Process workbooks
 }.unsafeRunSync()
 ```
 
@@ -207,7 +207,7 @@ sheet
 **Batch `put` with codecs** (clean, automatic):
 ```scala
 import com.tjclp.xl.*
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.codecs.syntax.*
 
 sheet.put(
   ref"A1" -> "Revenue",                         // String
@@ -293,12 +293,12 @@ sheet.put(newCells)
 
 ### Pitfall 1: Fold with Put Instead of PutAll
 ```scala
-// ❌ Bad: O(n) sheet copies
+// ❌ Bad: O(n) sheets copies
 val result = data.foldLeft(sheet) { (s, item) =>
   s.put(cell"A${item.id}", item.name)
 }
 
-// ✅ Good: Single sheet copy
+// ✅ Good: Single sheets copy
 val cells = data.map(item => Cell(cell"A${item.id}", CellValue.Text(item.name)))
 sheet.put(cells)
 ```
@@ -412,7 +412,7 @@ ExcelIO.instance.write[IO](Workbook(Vector(sheet)), path).unsafeRunSync()
 ### Medium Workbooks (10k-100k rows)
 ```scala
 // Use batching
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.codecs.syntax.*
 
 val cells = (1 to 100_000).map(i =>
   cell"A$i" -> s"Row $i"

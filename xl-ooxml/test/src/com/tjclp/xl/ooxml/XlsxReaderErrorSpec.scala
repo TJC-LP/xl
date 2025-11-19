@@ -2,15 +2,15 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.cell.{CellError, CellValue}
-import com.tjclp.xl.error.XLError
+import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.errors.XLError
 import com.tjclp.xl.api.Workbook
 import java.io.ByteArrayOutputStream
 import java.util.zip.{ZipEntry, ZipOutputStream}
 import java.nio.charset.StandardCharsets
 
 /**
- * Regression tests for error handling paths inside XlsxReader.
+ * Regression tests for errors handling paths inside XlsxReader.
  *
  * These cover malformed XML, missing parts, and corrupted ZIP archives to
  * ensure we surface precise XLErrors instead of throwing.
@@ -21,14 +21,14 @@ class XlsxReaderErrorSpec extends FunSuite:
     """<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
 
   private val rootRelationshipsXml =
     """<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
 
   private val workbookRelationshipsXml =
@@ -39,12 +39,12 @@ class XlsxReaderErrorSpec extends FunSuite:
 
   private val validWorkbookXml =
     """<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
 
   private val validWorksheetXml =
     """<?xml version="1.0" encoding="UTF-8"?>
@@ -78,44 +78,44 @@ class XlsxReaderErrorSpec extends FunSuite:
   private val baseParts: Map[String, String] = Map(
     "[Content_Types].xml" -> contentTypesXml,
     "_rels/.rels" -> rootRelationshipsXml,
-    "xl/workbook.xml" -> validWorkbookXml,
-    "xl/_rels/workbook.xml.rels" -> workbookRelationshipsXml,
+    "xl/workbooks.xml" -> validWorkbookXml,
+    "xl/_rels/workbooks.xml.rels" -> workbookRelationshipsXml,
     "xl/worksheets/sheet1.xml" -> validWorksheetXml,
     "xl/styles.xml" -> minimalStylesXml
   )
 
-  test("XlsxReader rejects XLSX missing workbook.xml") {
-    val bytes = buildWorkbook(omit = Set("xl/workbook.xml"))
-    assertParseError(XlsxReader.readFromBytes(bytes), "xl/workbook.xml", "Missing workbook.xml")
+  test("XlsxReader rejects XLSX missing workbooks.xml") {
+    val bytes = buildWorkbook(omit = Set("xl/workbooks.xml"))
+    assertParseError(XlsxReader.readFromBytes(bytes), "xl/workbooks.xml", "Missing workbooks.xml")
   }
 
-  test("XlsxReader rejects malformed workbook.xml") {
-    val malformed = "<workbook><sheets></workbook>" // malformed closing tags
-    val bytes = buildWorkbook(overrides = Map("xl/workbook.xml" -> malformed))
+  test("XlsxReader rejects malformed workbooks.xml") {
+    val malformed = "<workbooks><sheets></workbooks>" // malformed closing tags
+    val bytes = buildWorkbook(overrides = Map("xl/workbooks.xml" -> malformed))
 
     XlsxReader.readFromBytes(bytes) match
       case Left(XLError.ParseError(location, message)) =>
-        assertEquals(location, "xl/workbook.xml")
+        assertEquals(location, "xl/workbooks.xml")
         assert(
           message.toLowerCase.contains("xml parse"),
-          s"Expected XML parse error message, got: $message"
+          s"Expected XML parse errors message, got: $message"
         )
-      case other => fail(s"Expected ParseError for malformed workbook, got $other")
+      case other => fail(s"Expected ParseError for malformed workbooks, got $other")
   }
 
-  test("XlsxReader rejects workbook.xml missing required sheets element") {
+  test("XlsxReader rejects workbooks.xml missing required sheets element") {
     val invalidWorkbook =
       """<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-</workbook>"""
-    val bytes = buildWorkbook(overrides = Map("xl/workbook.xml" -> invalidWorkbook))
+</workbooks>"""
+    val bytes = buildWorkbook(overrides = Map("xl/workbooks.xml" -> invalidWorkbook))
     XlsxReader.readFromBytes(bytes) match
       case Left(XLError.ParseError(location, message)) =>
-        assertEquals(location, "xl/workbook.xml")
+        assertEquals(location, "xl/workbooks.xml")
         assert(
           message.contains("Missing required child element: sheets"),
-          s"Expected missing sheets error, got: $message"
+          s"Expected missing sheets errors, got: $message"
         )
       case other => fail(s"Expected ParseError for missing sheets node, got $other")
   }
@@ -129,12 +129,12 @@ class XlsxReaderErrorSpec extends FunSuite:
         assertEquals(location, "xl/styles.xml")
         assert(
           message.toLowerCase.contains("xml parse"),
-          s"Expected XML parse error, got: $message"
+          s"Expected XML parse errors, got: $message"
         )
       case other => fail(s"Expected ParseError for malformed styles, got $other")
   }
 
-  test("XlsxReader errors when worksheet part referenced by workbook is missing") {
+  test("XlsxReader errors when worksheet part referenced by workbooks is missing") {
     val bytes = buildWorkbook(omit = Set("xl/worksheets/sheet1.xml"))
     assertParseError(
       XlsxReader.readFromBytes(bytes),
@@ -149,14 +149,14 @@ class XlsxReaderErrorSpec extends FunSuite:
     assertEquals(result.warnings, Vector(XlsxReader.Warning.MissingStylesXml))
   }
 
-  test("XlsxReader errors when workbook relationship points to missing target") {
+  test("XlsxReader errors when workbooks relationship points to missing target") {
     val rels =
       """<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/ghost.xml"/>
 </Relationships>"""
     val bytes = buildWorkbook(
-      overrides = Map("xl/_rels/workbook.xml.rels" -> rels)
+      overrides = Map("xl/_rels/workbooks.xml.rels" -> rels)
     )
     assertParseError(
       XlsxReader.readFromBytes(bytes),
@@ -170,15 +170,15 @@ class XlsxReaderErrorSpec extends FunSuite:
 
     val workbook = XlsxReader.readFromBytes(bytes).getOrElse(fail("Workbook should parse"))
     val sheet = workbook("Sheet1").getOrElse(fail("Expected Sheet1"))
-    assertEquals(sheet(ref"A1").value, com.tjclp.xl.cell.CellValue.Text("Hello"))
+    assertEquals(sheet(ref"A1").value, com.tjclp.xl.cells.CellValue.Text("Hello"))
   }
 
   test("XlsxReader rejects non-ZIP input instead of silently succeeding") {
     val bytes = "not-a-zip".getBytes(StandardCharsets.UTF_8)
     XlsxReader.readFromBytes(bytes) match
       case Left(XLError.ParseError(location, message)) =>
-        assertEquals(location, "xl/workbook.xml")
-        assertEquals(message, "Missing workbook.xml")
+        assertEquals(location, "xl/workbooks.xml")
+        assertEquals(message, "Missing workbooks.xml")
       case Left(XLError.IOError(_)) =>
         () // acceptable alternate failure mode
       case other => fail(s"Expected failure for non-zip input, got $other")

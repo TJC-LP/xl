@@ -26,18 +26,18 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 
     val wb = XlsxReader
       .read(path)
-      .fold(err => fail(s"Failed to read workbook: $err"), identity)
+      .fold(err => fail(s"Failed to read workbooks: $err"), identity)
 
     // Should have SourceContext since read from file
     assert(wb.sourceContext.isDefined, "Reading from file should create SourceContext")
 
     val ctx = wb.sourceContext.get
     assertEquals(ctx.sourcePath, path)
-    assert(ctx.isClean, "Freshly read workbook should have clean tracker")
+    assert(ctx.isClean, "Freshly read workbooks should have clean tracker")
 
     // PartManifest should contain both known and unknown parts
     val manifest = ctx.partManifest
-    assert(manifest.parsedParts.contains("xl/workbook.xml"))
+    assert(manifest.parsedParts.contains("xl/workbooks.xml"))
     assert(manifest.unparsedParts.contains("xl/charts/chart1.xml"))
 
     // Clean up
@@ -49,20 +49,20 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 
     val wb = XlsxReader
       .readFromBytes(bytes)
-      .fold(err => fail(s"Failed to read workbook: $err"), identity)
+      .fold(err => fail(s"Failed to read workbooks: $err"), identity)
 
     // Should NOT have SourceContext (no file path available)
     assert(wb.sourceContext.isEmpty, "Reading from bytes should not create SourceContext")
   }
 
   test("unknown parts are indexed but not loaded") {
-    // Create workbook with a large unknown part (chart XML)
+    // Create workbooks with a large unknown part (chart XML)
     val largeChart = "<chart>" + ("x" * 1024 * 1024) + "</chart>" // 1MB chart
     val path = createWorkbookWithLargeChart(largeChart)
 
     val wb = XlsxReader
       .read(path)
-      .fold(err => fail(s"Failed to read workbook: $err"), identity)
+      .fold(err => fail(s"Failed to read workbooks: $err"), identity)
 
     // Verify SourceContext exists
     assert(wb.sourceContext.isDefined)
@@ -89,15 +89,15 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 
     val wb = XlsxReader
       .read(path)
-      .fold(err => fail(s"Failed to read workbook: $err"), identity)
+      .fold(err => fail(s"Failed to read workbooks: $err"), identity)
 
     val manifest = wb.sourceContext.get.partManifest
 
     // Parsed parts (known to XL)
     val expectedParsed = Set(
-      "xl/workbook.xml",
+      "xl/workbooks.xml",
       "xl/worksheets/sheet1.xml",
-      "xl/_rels/workbook.xml.rels",
+      "xl/_rels/workbooks.xml.rels",
       "_rels/.rels",
       "[Content_Types].xml"
     )
@@ -124,7 +124,7 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 
   // Helper: Create minimal XLSX with one worksheet and one chart (unknown part)
   private def createMinimalWorkbookWithChart(): Path =
-    val path = Files.createTempFile("test-workbook-chart", ".xlsx")
+    val path = Files.createTempFile("test-workbooks-chart", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
 
     try
@@ -133,7 +133,7 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
 </Types>""")
@@ -141,19 +141,19 @@ class XlsxReaderPassthroughSpec extends FunSuite:
       // Root rels
       writeEntry(out, "_rels/.rels", """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>""")
 
       // Workbook
-      writeEntry(out, "xl/workbook.xml", """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      writeEntry(out, "xl/workbooks.xml", """<?xml version="1.0"?>
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>""")
+</workbooks>""")
 
       // Workbook rels
-      writeEntry(out, "xl/_rels/workbook.xml.rels", """<?xml version="1.0"?>
+      writeEntry(out, "xl/_rels/workbooks.xml.rels", """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 </Relationships>""")
@@ -191,26 +191,26 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>""")
 
       // Root rels
       writeEntry(out, "_rels/.rels", """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>""")
 
       // Workbook
-      writeEntry(out, "xl/workbook.xml", """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      writeEntry(out, "xl/workbooks.xml", """<?xml version="1.0"?>
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>""")
+</workbooks>""")
 
       // Workbook rels
-      writeEntry(out, "xl/_rels/workbook.xml.rels", """<?xml version="1.0"?>
+      writeEntry(out, "xl/_rels/workbooks.xml.rels", """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 </Relationships>""")
@@ -229,7 +229,7 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 
     baos.toByteArray
 
-  // Helper: Create workbook with large chart
+  // Helper: Create workbooks with large chart
   private def createWorkbookWithLargeChart(chartContent: String): Path =
     val path = Files.createTempFile("test-large-chart", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
@@ -240,24 +240,24 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
 </Types>""")
 
       writeEntry(out, "_rels/.rels", """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>""")
 
-      writeEntry(out, "xl/workbook.xml", """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      writeEntry(out, "xl/workbooks.xml", """<?xml version="1.0"?>
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>""")
+</workbooks>""")
 
-      writeEntry(out, "xl/_rels/workbook.xml.rels", """<?xml version="1.0"?>
+      writeEntry(out, "xl/_rels/workbooks.xml.rels", """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 </Relationships>""")

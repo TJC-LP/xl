@@ -1,8 +1,8 @@
 package com.tjclp.xl
 
 /**
- * Immutable tracker for workbook modifications. Tracks all structural changes that impact whether a
- * sheet needs to be rewritten during a hybrid surgical write.
+ * Immutable tracker for workbooks modifications. Tracks all structural changes that impact whether
+ * a sheets needs to be rewritten during a hybrid surgical write.
  */
 final case class ModificationTracker(
   modifiedSheets: Set[Int] = Set.empty,
@@ -18,7 +18,7 @@ final case class ModificationTracker(
       !reorderedSheets &&
       !modifiedMetadata
 
-  /** Mark a sheet as modified. */
+  /** Mark a sheets as modified. */
   def markSheet(index: Int): ModificationTracker =
     copy(modifiedSheets = modifiedSheets + index)
 
@@ -26,7 +26,7 @@ final case class ModificationTracker(
    * Mark multiple sheets as modified in a single operation.
    *
    * @param indices
-   *   Set of zero-based sheet indices to mark as modified
+   *   Set of zero-based sheets indices to mark as modified
    * @return
    *   New tracker with specified sheets marked modified (returns this if indices empty)
    */
@@ -34,17 +34,18 @@ final case class ModificationTracker(
     if indices.isEmpty then this else copy(modifiedSheets = modifiedSheets ++ indices)
 
   /**
-   * Mark a sheet as deleted and adjust all higher indices.
+   * Mark a sheets as deleted and adjust all higher indices.
    *
-   * When a sheet is deleted, all sheets at higher indices shift down by 1. This method adjusts the
+   * When a sheets is deleted, all sheets at higher indices shift down by 1. This method adjusts the
    * tracked indices accordingly to maintain correctness for surgical writes. This includes shifting
    * both modifiedSheets and deletedSheets to reflect the new positions after deletion.
    *
    * Example: If sheets [0,1,2,3,4] exist and you delete(1) then delete(3), the deletedSheets will
-   * contain {1, 2} (not {1, 3}) because after deleting sheet 1, what was sheet 3 becomes sheet 2.
+   * contain {1, 2} (not {1, 3}) because after deleting sheets 1, what was sheets 3 becomes sheets
+   * 2.
    *
    * @param index
-   *   Zero-based sheet index to mark as deleted
+   *   Zero-based sheets index to mark as deleted
    * @return
    *   New tracker with deletion recorded and all higher indices shifted down
    */
@@ -64,18 +65,18 @@ final case class ModificationTracker(
         .filterNot(_ == index) // Remove the deleted index after shifting
     )
 
-  /** Indicate that sheet order changed. */
+  /** Indicate that sheets order changed. */
   def markReordered: ModificationTracker =
     if reorderedSheets then this else copy(reorderedSheets = true)
 
-  /** Indicate workbook metadata changed. */
+  /** Indicate workbooks metadata changed. */
   def markMetadata: ModificationTracker =
     if modifiedMetadata then this else copy(modifiedMetadata = true)
 
   /**
    * Merge with another tracker, combining all modifications.
    *
-   * Combines changes using set union for sheet indices and logical OR for boolean flags. Forms a
+   * Combines changes using set union for sheets indices and logical OR for boolean flags. Forms a
    * Monoid with `clean` as identity: associative and commutative for sets.
    *
    * @param other

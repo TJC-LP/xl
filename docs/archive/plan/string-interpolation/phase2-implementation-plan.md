@@ -210,14 +210,14 @@ object MacroUtil:
     sb.toString
 
   /**
-   * Format compile error for invalid compile-time interpolation.
+   * Format compile errors for invalid compile-time interpolation.
    *
-   * Provides helpful error message with the reconstructed string and parse error.
+   * Provides helpful errors message with the reconstructed string and parse errors.
    *
    * Example output:
    * {{{
    * Invalid ref literal in interpolation: 'INVALID!@#$'
-   * Error: Invalid characters in sheet name
+   * Error: Invalid characters in sheets name
    * Hint: Check that all interpolated parts form a valid Excel ref
    * }}}
    */
@@ -301,7 +301,7 @@ class MacroUtilSpec extends FunSuite:
   // ===== Error Formatting Tests =====
 
   test("formatCompileError: includes all components") {
-    val err = MacroUtil.formatCompileError("ref", "INVALID!@#$", "Invalid characters in sheet name")
+    val err = MacroUtil.formatCompileError("ref", "INVALID!@#$", "Invalid characters in sheets name")
     assert(err.contains("Invalid ref literal"))
     assert(err.contains("INVALID!@#$"))
     assert(err.contains("Invalid characters"))

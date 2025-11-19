@@ -2,14 +2,14 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 
 /** Tests for SharedStrings count vs uniqueCount */
 class SharedStringsSpec extends FunSuite:
 
   test("fromWorkbook counts total instances correctly") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheets"))
       .put(ref"A1", CellValue.Text("Hello"))
       .put(ref"A2", CellValue.Text("World"))
       .put(ref"A3", CellValue.Text("Hello")) // Duplicate
@@ -26,7 +26,7 @@ class SharedStringsSpec extends FunSuite:
   }
 
   test("toXml emits correct count and uniqueCount") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheets"))
       .put(ref"A1", CellValue.Text("Alpha"))
       .put(ref"A2", CellValue.Text("Beta"))
       .put(ref"A3", CellValue.Text("Alpha")) // Duplicate
@@ -44,8 +44,8 @@ class SharedStringsSpec extends FunSuite:
     assertEquals(uniqueCount, 2, "uniqueCount attribute should be 2 (unique strings)")
   }
 
-  test("workbook with duplicate strings has count > uniqueCount") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+  test("workbooks with duplicate strings has count > uniqueCount") {
+    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheets"))
       .put(ref"A1", CellValue.Text("Duplicate"))
       .put(ref"A2", CellValue.Text("Duplicate"))
       .put(ref"A3", CellValue.Text("Duplicate"))
@@ -60,8 +60,8 @@ class SharedStringsSpec extends FunSuite:
     assertEquals(sst.strings.size, 2)
   }
 
-  test("workbook with no duplicates has count == uniqueCount") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+  test("workbooks with no duplicates has count == uniqueCount") {
+    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheets"))
       .put(ref"A1", CellValue.Text("One"))
       .put(ref"A2", CellValue.Text("Two"))
       .put(ref"A3", CellValue.Text("Three"))

@@ -14,7 +14,7 @@ class ModificationTrackerSpec extends FunSuite:
     assertEquals(tracker.modifiedSheets, Set(2))
   }
 
-  test("delete removes sheet from modified set") {
+  test("delete removes sheets from modified set") {
     val tracker = ModificationTracker.clean.markSheet(1).delete(1)
     assert(tracker.deletedSheets.contains(1))
     assert(!tracker.modifiedSheets.contains(1))
@@ -31,12 +31,12 @@ class ModificationTrackerSpec extends FunSuite:
 
   test("multiple deletions track correct indices") {
     // When deleting in ascending order, indices don't shift previous deletions
-    // delete(2) then delete(5) means: delete sheet at index 2, then delete sheet at current index 5
-    // After deleting 2, original sheet 5 is now at index 4, but we're deleting at index 5
-    // (which is original sheet 6), so deletedSheets = {2, 5}
+    // delete(2) then delete(5) means: delete sheets at index 2, then delete sheets at current index 5
+    // After deleting 2, original sheets 5 is now at index 4, but we're deleting at index 5
+    // (which is original sheets 6), so deletedSheets = {2, 5}
     val tracker = ModificationTracker.clean
       .delete(2) // deletedSheets = {2}
-      .delete(5) // deletedSheets = {2, 5} (deleting current index 5, not original sheet 5)
+      .delete(5) // deletedSheets = {2, 5} (deleting current index 5, not original sheets 5)
 
     assertEquals(tracker.deletedSheets, Set(2, 5))
   }

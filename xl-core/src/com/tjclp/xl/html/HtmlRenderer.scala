@@ -2,25 +2,25 @@ package com.tjclp.xl.html
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cell.{Cell, CellValue}
-import com.tjclp.xl.style.alignment.{HAlign, VAlign}
-import com.tjclp.xl.style.border.{BorderStyle, BorderSide}
-import com.tjclp.xl.style.color.Color
-import com.tjclp.xl.style.fill.Fill
-import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
+import com.tjclp.xl.styles.border.{BorderStyle, BorderSide}
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
 
 /** Renders Excel sheets to HTML tables with inline CSS styling */
 object HtmlRenderer:
 
   /**
-   * Export a sheet range to an HTML table.
+   * Export a sheets range to an HTML table.
    *
    * Generates a `<table>` element with cells converted to `<td>` elements. If includeStyles is
    * true, cell styles are converted to inline CSS. Rich text cells are rendered with HTML
    * formatting tags (<b>, <i>, <u>, <span>).
    *
    * @param sheet
-   *   The sheet to export
+   *   The sheets to export
    * @param range
    *   The cell range to export
    * @param includeStyles
@@ -51,7 +51,7 @@ object HtmlRenderer:
               case Some(cell) =>
                 val style = if includeStyles then cellStyleToInlineCss(cell, sheet) else ""
                 val content = cellValueToHtml(cell.value)
-                val styleAttr = if style.nonEmpty then s""" style="$style"""" else ""
+                val styleAttr = if style.nonEmpty then s""" styles="$style"""" else ""
                 s"<td$styleAttr>$content</td>"
           }
           .mkString
@@ -92,7 +92,7 @@ $tableRows
   /**
    * Convert a TextRun to HTML with formatting.
    *
-   * Applies <b>, <i>, <u> tags for font styles and <span style="color:"> for colors.
+   * Applies <b>, <i>, <u> tags for font styles and <span styles="color:"> for colors.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private def runToHtml(run: TextRun): String =
@@ -104,16 +104,16 @@ $tableRows
 
         // Apply color as innermost wrapper
         f.color.foreach { c =>
-          html = s"""<span style="color: ${c.toHex}">$html</span>"""
+          html = s"""<span styles="color: ${c.toHex}">$html</span>"""
         }
 
         // Font size (if different from default)
         if f.sizePt != Font.default.sizePt then
-          html = s"""<span style="font-size: ${f.sizePt}pt">$html</span>"""
+          html = s"""<span styles="font-size: ${f.sizePt}pt">$html</span>"""
 
         // Font family (if different from default)
         if f.name != Font.default.name then
-          html = s"""<span style="font-family: '${escapeCss(f.name)}'">$html</span>"""
+          html = s"""<span styles="font-family: '${escapeCss(f.name)}'">$html</span>"""
 
         // Apply bold/italic/underline as outermost wrappers
         if f.underline then html = s"<u>$html</u>"
@@ -123,10 +123,10 @@ $tableRows
         html
 
   /**
-   * Convert cell-level style to inline CSS.
+   * Convert cell-level styles to inline CSS.
    *
    * Generates CSS properties for font, fill, alignment, etc. Returns empty string if cell has no
-   * style.
+   * styles.
    */
   private def cellStyleToInlineCss(cell: Cell, sheet: Sheet): String =
     cell.styleId
@@ -136,7 +136,7 @@ $tableRows
 
         // Font properties (apply only if not default)
         if style.font.bold then css += "font-weight: bold"
-        if style.font.italic then css += "font-style: italic"
+        if style.font.italic then css += "font-styles: italic"
         if style.font.underline then css += "text-decoration: underline"
         style.font.color.foreach(c => css += s"color: ${c.toHex}")
         if style.font.sizePt != Font.default.sizePt then css += s"font-size: ${style.font.sizePt}pt"

@@ -4,7 +4,7 @@ import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 import munit.FunSuite
 
@@ -15,13 +15,13 @@ import munit.FunSuite
  *   1. RichText rawRPrXml byte-perfect preservation (Times New Roman, underline styles)
  *   2. xml:space="preserve" for text with double spaces
  *   3. Empty row preservation (rows with no cells but with attributes)
- *   4. Row-level style validation (row s attribute when cells override)
+ *   4. Row-level styles validation (row s attribute when cells override)
  *
  * Corresponds to commits:
  *   - 802e020: RichText rawRPrXml preservation
  *   - 4998af2: xml:space="preserve" for whitespace
  *   - e1f36fe: Empty row preservation
- *   - 802e020: Row-level style validation
+ *   - 802e020: Row-level styles validation
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
@@ -61,10 +61,10 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
       "Times New Roman font lost (rawRPrXml not preserved)"
     )
 
-    // Should have underline style (singleAccounting is specific underline type)
+    // Should have underline styles (singleAccounting is specific underline type)
     assert(
       sstXml.contains("""<u""") || sstXml.contains("singleAccounting"),
-      "Underline style lost (rawRPrXml not preserved)"
+      "Underline styles lost (rawRPrXml not preserved)"
     )
 
     // Should have vertAlign for superscript
@@ -134,7 +134,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
       .read(output)
       .fold(err => fail(s"Round-trip reload failed: $err"), identity)
 
-    val sheet = reloaded("Sheet1").fold(err => fail(s"Get sheet failed: $err"), identity)
+    val sheet = reloaded("Sheet1").fold(err => fail(s"Get sheets failed: $err"), identity)
 
     // A1: Leading space
     val a1Cell = sheet.cells.get(ref"A1")
@@ -197,7 +197,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
       "Empty row 1 should preserve height attribute"
     )
 
-    // Row 2: Empty but with style
+    // Row 2: Empty but with styles
     assert(
       sheetXml.contains("""<row r="2""""),
       "Empty row 2 should be preserved"
@@ -206,7 +206,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     assert(row2Match.isDefined, "Row 2 element not found")
     assert(
       row2Match.get.contains("s="),
-      "Empty row 2 should preserve style attribute"
+      "Empty row 2 should preserve styles attribute"
     )
 
     // Row 3: Has cell (modified)
@@ -225,9 +225,9 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
-  // TODO: Enable when row-level style output in regenerated sheets matches exact Excel pattern
+  // TODO: Enable when row-level styles output in regenerated sheets matches exact Excel pattern
   // Currently row-level styles may be validated/removed during regeneration (per OOXML spec)
-  test("preserves row-level style when cells have different styles (Excel pattern)".ignore) {
+  test("preserves row-level styles when cells have different styles (Excel pattern)".ignore) {
     // Regression test for commit 802e020
     // Bug: Row s and customFormat invalid when cells have varied styles
     // Solution: Validate and remove if cells have different styles (per OOXML spec)
@@ -246,21 +246,21 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
     // Write back
-    val output = Files.createTempFile("row-style", ".xlsx")
+    val output = Files.createTempFile("row-styles", ".xlsx")
     XlsxWriter
       .write(wb, output)
       .fold(err => fail(s"Failed to write: $err"), identity)
 
-    // Verify sheet1.xml preserves row-level style
+    // Verify sheet1.xml preserves row-level styles
     val outputZip = new ZipFile(output.toFile)
     val sheetXml = readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
 
-    // Row 1: All cells use same style (row s="1" is valid)
+    // Row 1: All cells use same styles (row s="1" is valid)
     val row1Match = """<row r="1"[^>]*>""".r.findFirstIn(sheetXml)
     assert(row1Match.isDefined, "Row 1 not found")
     assert(
       row1Match.get.contains("""s="1""""),
-      "Row 1 should preserve s=\"1\" when all cells use same style"
+      "Row 1 should preserve s=\"1\" when all cells use same styles"
     )
 
     // Row 2: Cells have different styles (row s may be preserved - Excel does this)
@@ -268,14 +268,14 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     val row2Match = """<row r="2"[^>]*>.*?</row>""".r.findFirstIn(sheetXml)
     assert(row2Match.isDefined, "Row 2 not found")
 
-    // Verify cells in row 2 have their own style attributes
+    // Verify cells in row 2 have their own styles attributes
     val cellsWithStyles = """<c r="[A-Z]\d+" s="\d+"""".r.findAllIn(row2Match.get).toSeq
     assert(
       cellsWithStyles.length >= 2,
-      "Row 2 should have cells with explicit style attributes"
+      "Row 2 should have cells with explicit styles attributes"
     )
 
-    // Row 3: Row style with customFormat
+    // Row 3: Row styles with customFormat
     val row3Match = """<row r="3"[^>]*>""".r.findFirstIn(sheetXml)
     assert(row3Match.isDefined, "Row 3 not found")
     assert(
@@ -311,7 +311,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
 </Types>"""
@@ -322,24 +322,24 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -405,7 +405,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
 </Types>"""
@@ -416,24 +416,24 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -489,7 +489,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>"""
@@ -500,24 +500,24 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -576,7 +576,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>"""
@@ -587,24 +587,24 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>

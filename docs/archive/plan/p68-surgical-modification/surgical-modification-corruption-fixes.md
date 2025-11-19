@@ -287,7 +287,7 @@ def toXml: Elem =
   val nsBindings = NamespaceBinding(null, nsSpreadsheetML,
                      NamespaceBinding("r", nsRelationships, TopScope))
 
-  Elem(null, "workbook", Null, nsBindings, minimizeEmpty = false, children.result()*)
+  Elem(null, "workbooks", Null, nsBindings, minimizeEmpty = false, children.result()*)
 ```
 
 **Problem**:
@@ -314,7 +314,7 @@ def toXml: Elem =
   val scope = Option(rootScope).getOrElse(defaultWorkbookScope)
   val attrs = Option(rootAttributes).getOrElse(Null)
 
-  Elem(null, "workbook", attrs, scope, minimizeEmpty = false, children.result()*)
+  Elem(null, "workbooks", attrs, scope, minimizeEmpty = false, children.result()*)
 ```
 
 **Changes Made**:
@@ -344,7 +344,7 @@ def toXml: Elem =
 ```scala
 /** Strip redundant namespace declarations from element (they'll inherit from parent). */
 private def stripRedundantNamespaces(elem: Elem): Elem =
-  // Only keep namespaces not already declared on parent (workbook root)
+  // Only keep namespaces not already declared on parent (workbooks root)
   val cleanedChildren = elem.child.map {
     case e: Elem => stripRedundantNamespaces(e)
     case other => other
@@ -409,11 +409,11 @@ def fromXml(elem: Elem): Either[String, OoxmlWorkbook] =
 
 **Testing**:
 ```scala
-test("workbook.xml preserves mc:Ignorable attribute"):
+test("workbooks.xml preserves mc:Ignorable attribute"):
   val input = parseXml("""
-    <workbook xmlns="..." mc:Ignorable="x15 xr">
-      <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
-    </workbook>
+    <workbooks xmlns="..." mc:Ignorable="x15 xr">
+      <sheets><sheets name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+    </workbooks>
   """)
 
   val wb = OoxmlWorkbook.fromXml(input).toOption.get
@@ -633,7 +633,7 @@ private def parseRows(
     )
   }
 
-  // ... error handling ...
+  // ... errors handling ...
 ```
 
 #### Step 3.3: Emit Row Attributes
@@ -850,28 +850,28 @@ private def parseDefinedNameValue(elem: Elem): String =
 ```scala
 class XlsxWriterCorruptionFixesSpec extends munit.FunSuite:
 
-  test("workbook.xml preserves mc:Ignorable attribute"):
-    // Parse workbook with mc:Ignorable
+  test("workbooks.xml preserves mc:Ignorable attribute"):
+    // Parse workbooks with mc:Ignorable
     // Regenerate
     // Verify attribute present in output
 
-  test("workbook.xml does not pollute child namespaces"):
-    // Parse workbook with xmlns on root only
+  test("workbooks.xml does not pollute child namespaces"):
+    // Parse workbooks with xmlns on root only
     // Regenerate
     // Count xmlns occurrences in output (should be 1, not 9)
 
   test("worksheet preserves conditionalFormatting"):
-    // Parse sheet with 12 conditional formatting rules
+    // Parse sheets with 12 conditional formatting rules
     // Regenerate
     // Verify all 12 rules present in output
 
-  test("worksheet preserves row attributes (spans, height, style)"):
-    // Parse sheet with custom row heights
+  test("worksheet preserves row attributes (spans, height, styles)"):
+    // Parse sheets with custom row heights
     // Regenerate
     // Verify attributes preserved
 
   test("worksheet preserves printOptions and rowBreaks"):
-    // Parse sheet with print settings and page breaks
+    // Parse sheets with print settings and page breaks
     // Regenerate
     // Verify elements present
 ```
@@ -903,8 +903,8 @@ test("Syndigo file surgical modification - no corruption warning"):
   // 5. Assertions
   assert(reloaded.sheets.size == 9)
 
-  // Extract and verify workbook.xml
-  val workbookXml = extractFromZip(output, "xl/workbook.xml")
+  // Extract and verify workbooks.xml
+  val workbookXml = extractFromZip(output, "xl/workbooks.xml")
   assert(workbookXml.contains("mc:Ignorable"), "mc:Ignorable must be present")
 
   // Count namespace declarations (should be ~10 on root, not 50+ total)
@@ -942,8 +942,8 @@ test("Syndigo file surgical modification - golden file"):
   XlsxWriter.write(wb, output)
 
   // Compare key files
-  val goldenWorkbook = extractFromZip(golden, "xl/workbook.xml")
-  val outputWorkbook = extractFromZip(output, "xl/workbook.xml")
+  val goldenWorkbook = extractFromZip(golden, "xl/workbooks.xml")
+  val outputWorkbook = extractFromZip(output, "xl/workbooks.xml")
 
   assertEquals(goldenWorkbook, outputWorkbook, "Workbook XML must match golden file")
 
@@ -1091,8 +1091,8 @@ Instead of parsing → domain → regenerating, preserve the original sheet XML 
 
 ```bash
 $ ./mill xl-ooxml.test.testOnly com.tjclp.xl.ooxml.WorkbookNamespaceSpec
-✅ round-trip workbook preserves mc:Ignorable attribute and namespace bindings
-✅ generated minimal workbook exposes default spreadsheet and relationship namespaces
+✅ round-trip workbooks preserves mc:Ignorable attribute and namespace bindings
+✅ generated minimal workbooks exposes default spreadsheet and relationship namespaces
 
 $ ./mill __.test
 ✅ All 585 tests passing
@@ -1114,7 +1114,7 @@ $ ./mill __.test
 # Extract and view first 10 SST entries
 unzip -p data/syndigo-surgical-output.xlsx xl/sharedStrings.xml | xmllint --format - | grep -A2 "<si>" | head -40
 
-# Check cell A1 content in sheet 0
+# Check cell A1 content in sheets 0
 unzip -p data/syndigo-surgical-output.xlsx xl/worksheets/sheet1.xml | xmllint --format - | grep "A1" -A2
 ```
 

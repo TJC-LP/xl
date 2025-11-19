@@ -6,7 +6,7 @@ import munit.CatsEffectSuite
 import java.nio.file.{Files, Path}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, Column, Row}
-import com.tjclp.xl.cell.{CellError, CellValue}
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.macros.ref
 
 /** Tests for Excel streaming API */
@@ -20,12 +20,12 @@ class ExcelIOSpec extends CatsEffectSuite:
         .forEach(Files.delete)
   )
 
-  tempDir.test("read: loads workbook into memory") { dir =>
+  tempDir.test("read: loads workbooks into memory") { dir =>
     // Create test file using current writer
     val wb = Workbook("Test").flatMap { initial =>
       val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Hello"))
       initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    }.getOrElse(fail("Failed to create workbooks"))
 
     val path = dir.resolve("test.xlsx")
     IO(com.tjclp.xl.ooxml.XlsxWriter.write(wb, path)).flatMap { _ =>
@@ -44,7 +44,7 @@ class ExcelIOSpec extends CatsEffectSuite:
         .put(ref"A1", CellValue.Text("Written"))
         .put(ref"B1", CellValue.Number(BigDecimal(42)))
       initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    }.getOrElse(fail("Failed to create workbooks"))
 
     val path = dir.resolve("output.xlsx")
     val excel = ExcelIO.instance[IO]
@@ -57,14 +57,14 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("readStream: streams rows from sheet") { dir =>
+  tempDir.test("readStream: streams rows from sheets") { dir =>
     // Create test file with multiple rows
     val wb = Workbook("Data").flatMap { initial =>
       val sheet = (1 to 10).foldLeft(initial.sheets(0)) { (s, i) =>
         s.put(ARef(Column.from0(0), Row.from1(i)), CellValue.Number(BigDecimal(i)))
       }
       initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    }.getOrElse(fail("Failed to create workbooks"))
 
     val path = dir.resolve("stream-test.xlsx")
     IO(com.tjclp.xl.ooxml.XlsxWriter.write(wb, path)).flatMap { _ =>
@@ -188,7 +188,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("writeStreamTrue: supports arbitrary sheet index") { dir =>
+  tempDir.test("writeStreamTrue: supports arbitrary sheets index") { dir =>
     val path = dir.resolve("sheet3.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -209,7 +209,7 @@ class ExcelIOSpec extends CatsEffectSuite:
 
           // Should have sheet3.xml
           assert(entries.contains("xl/worksheets/sheet3.xml"),
-            s"Expected sheet3.xml, got: ${entries.filter(_.contains("sheet"))}")
+            s"Expected sheet3.xml, got: ${entries.filter(_.contains("sheets"))}")
 
           // Should NOT have sheet1.xml or sheet2.xml
           assert(!entries.contains("xl/worksheets/sheet1.xml"), "Should not have sheet1.xml")
@@ -218,7 +218,7 @@ class ExcelIOSpec extends CatsEffectSuite:
           zipFile.close()
         }
       } >>
-      // Verify workbook.xml has sheetId="3"
+      // Verify workbooks.xml has sheetId="3"
       IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
         assert(result.isRight, s"Should read successfully, got: $result")
         result.foreach { wb =>
@@ -229,7 +229,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("writeStreamTrue: rejects invalid sheet index") { dir =>
+  tempDir.test("writeStreamTrue: rejects invalid sheets index") { dir =>
     val path = dir.resolve("invalid.xlsx")
     val excel = ExcelIO.instance[IO]
     val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
@@ -244,7 +244,7 @@ class ExcelIOSpec extends CatsEffectSuite:
         case Left(other) =>
           fail(s"Expected IllegalArgumentException, got: $other")
         case Right(_) =>
-          fail("Should have failed with illegal sheet index")
+          fail("Should have failed with illegal sheets index")
       }
   }
 
@@ -268,11 +268,11 @@ class ExcelIOSpec extends CatsEffectSuite:
             // Should have 2 sheets
             assertEquals(wb.sheets.size, 2)
 
-            // First sheet
+            // First sheets
             assertEquals(wb.sheets(0).name.value, "First")
             assertEquals(wb.sheets(0).cellCount, 10)
 
-            // Second sheet
+            // Second sheets
             assertEquals(wb.sheets(1).name.value, "Second")
             assertEquals(wb.sheets(1).cellCount, 5)
 
@@ -316,8 +316,8 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
   }
 
-  tempDir.test("writeStreamsSeqTrue: handles large multi-sheet workbook") { dir =>
-    val path = dir.resolve("large-multi-sheet.xlsx")
+  tempDir.test("writeStreamsSeqTrue: handles large multi-sheets workbooks") { dir =>
+    val path = dir.resolve("large-multi-sheets.xlsx")
     val excel = ExcelIO.instance[IO]
 
     // 3 sheets with 10k rows each (30k total rows)
@@ -336,7 +336,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
   }
 
-  tempDir.test("writeStreamsSeqTrue: rejects empty sheet list") { dir =>
+  tempDir.test("writeStreamsSeqTrue: rejects empty sheets list") { dir =>
     val path = dir.resolve("empty.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -345,15 +345,15 @@ class ExcelIOSpec extends CatsEffectSuite:
       .attempt
       .map {
         case Left(err: IllegalArgumentException) =>
-          assert(err.getMessage.contains("at least one sheet"))
+          assert(err.getMessage.contains("at least one sheets"))
         case Left(other) =>
           fail(s"Expected IllegalArgumentException, got: $other")
         case Right(_) =>
-          fail("Should have failed with empty sheet list")
+          fail("Should have failed with empty sheets list")
       }
   }
 
-  tempDir.test("writeStreamsSeqTrue: rejects duplicate sheet names") { dir =>
+  tempDir.test("writeStreamsSeqTrue: rejects duplicate sheets names") { dir =>
     val path = dir.resolve("duplicates.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -365,7 +365,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       .attempt
       .map {
         case Left(err: IllegalArgumentException) =>
-          assert(err.getMessage.contains("Duplicate sheet names"))
+          assert(err.getMessage.contains("Duplicate sheets names"))
         case Left(other) =>
           fail(s"Expected IllegalArgumentException, got: $other")
         case Right(_) =>
@@ -485,7 +485,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("readStreamByIndex: reads specific sheet by index") { dir =>
+  tempDir.test("readStreamByIndex: reads specific sheets by index") { dir =>
     val path = dir.resolve("multi-read.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -496,9 +496,9 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     excel.writeStreamsSeqTrue(path, Seq("First" -> sheet1, "Second" -> sheet2, "Third" -> sheet3))
       .flatMap { _ =>
-        // Read second sheet by index
+        // Read second sheets by index
         excel.readStreamByIndex(path, 2).compile.toVector.map { rows =>
-          assertEquals(rows.size, 20, "Should read 20 rows from second sheet")
+          assertEquals(rows.size, 20, "Should read 20 rows from second sheets")
           @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
           val first = rows.head
           @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
@@ -509,7 +509,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
   }
 
-  tempDir.test("readSheetStream: reads specific sheet by name") { dir =>
+  tempDir.test("readSheetStream: reads specific sheets by name") { dir =>
     val path = dir.resolve("named-read.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -520,7 +520,7 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     excel.writeStreamsSeqTrue(path, Seq("Sales" -> sales, "Inventory" -> inventory, "Summary" -> summary))
       .flatMap { _ =>
-        // Read "Inventory" sheet by name
+        // Read "Inventory" sheets by name
         excel.readSheetStream(path, "Inventory").compile.toVector.map { rows =>
           assertEquals(rows.size, 5, "Should read 5 rows from Inventory")
           @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
@@ -539,7 +539,7 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
     rows.through(excel.writeStreamTrue(path, "Only")).compile.drain.flatMap { _ =>
-      // Try to read sheet 5 (doesn't exist)
+      // Try to read sheets 5 (doesn't exist)
       excel.readStreamByIndex(path, 5)
         .compile.toList
         .attempt
@@ -547,12 +547,12 @@ class ExcelIOSpec extends CatsEffectSuite:
           case Left(err) =>
             assert(err.getMessage.contains("Worksheet not found"))
           case Right(_) =>
-            fail("Should have failed with nonexistent sheet")
+            fail("Should have failed with nonexistent sheets")
         }
     }
   }
 
-  tempDir.test("readSheetStream: handles nonexistent sheet name") { dir =>
+  tempDir.test("readSheetStream: handles nonexistent sheets name") { dir =>
     val path = dir.resolve("bad-name.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -566,7 +566,7 @@ class ExcelIOSpec extends CatsEffectSuite:
           case Left(err) =>
             assert(err.getMessage.contains("Sheet not found"))
           case Right(_) =>
-            fail("Should have failed with nonexistent sheet name")
+            fail("Should have failed with nonexistent sheets name")
         }
     }
   }

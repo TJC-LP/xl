@@ -3,8 +3,8 @@ package com.tjclp.xl.io
 import cats.effect.Async
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.cell.{Cell, CellValue}
-import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.errors.{XLError, XLResult}
 import fs2.Stream
 import java.nio.file.Path
 
@@ -18,7 +18,7 @@ case class RowData(
  * Excel algebra for pure functional XLSX operations.
  *
  * Provides both in-memory and streaming APIs:
- *   - read/write: Load entire workbook into memory (good for <10k rows)
+ *   - read/write: Load entire workbooks into memory (good for <10k rows)
  *   - readStream/writeStream: Constant-memory streaming (good for 100k+ rows)
  *
  * Type parameter F[_] is the effect type (typically cats.effect.IO).
@@ -26,7 +26,7 @@ case class RowData(
 trait Excel[F[_]]:
 
   /**
-   * Read entire workbook into memory.
+   * Read entire workbooks into memory.
    *
    * Good for: Small files (<10k rows), random access, complex transformations Memory: O(n) where n =
    * total cells
@@ -34,24 +34,24 @@ trait Excel[F[_]]:
   def read(path: Path): F[Workbook]
 
   /**
-   * Write workbook to XLSX file.
+   * Write workbooks to XLSX file.
    *
    * Good for: Small workbooks, complete data available Memory: O(n) where n = total cells
    */
   def write(wb: Workbook, path: Path): F[Unit]
 
   /**
-   * Write workbook to XLSX file with custom configuration.
+   * Write workbooks to XLSX file with custom configuration.
    *
    * Allows control over compression (DEFLATED/STORED), SST policy, and XML formatting.
    *
    * Example:
    * {{{
    * // Debug mode (uncompressed, readable)
-   * excel.writeWith(workbook, path, WriterConfig.debug)
+   * excel.writeWith(workbooks, path, WriterConfig.debug)
    *
    * // Custom compression
-   * excel.writeWith(workbook, path, WriterConfig(
+   * excel.writeWith(workbooks, path, WriterConfig(
    *   compression = Compression.Stored,
    *   sstPolicy = SstPolicy.Always
    * ))
@@ -60,7 +60,7 @@ trait Excel[F[_]]:
   def writeWith(wb: Workbook, path: Path, config: com.tjclp.xl.ooxml.WriterConfig): F[Unit]
 
   /**
-   * Stream rows from first sheet.
+   * Stream rows from first sheets.
    *
    * Good for: Large files (>10k rows), sequential processing, aggregations Memory: O(1) - constant
    * memory regardless of file size
@@ -77,20 +77,20 @@ trait Excel[F[_]]:
   def readStream(path: Path): Stream[F, RowData]
 
   /**
-   * Stream rows from specific sheet by name.
+   * Stream rows from specific sheets by name.
    *
-   * Good for: Processing specific sheet in multi-sheet workbook Memory: O(1) constant
+   * Good for: Processing specific sheets in multi-sheets workbooks Memory: O(1) constant
    */
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData]
 
   /**
-   * Stream rows from specific sheet by index (1-based).
+   * Stream rows from specific sheets by index (1-based).
    *
    * Good for: Processing sheets by position rather than name Memory: O(1) constant
    *
    * Example:
    * {{{
-   * // Read second sheet
+   * // Read second sheets
    * excel.readStreamByIndex(path, 2).compile.toList
    * }}}
    */
@@ -124,9 +124,9 @@ trait Excel[F[_]]:
    * @param path
    *   Output file path
    * @param sheetName
-   *   Display name for the sheet (shown in Excel tab)
+   *   Display name for the sheets (shown in Excel tab)
    * @param sheetIndex
-   *   1-based sheet index (determines internal filename: sheet1.xml, sheet2.xml, etc.)
+   *   1-based sheets index (determines internal filename: sheet1.xml, sheet2.xml, etc.)
    *
    * Example:
    * {{{
@@ -147,13 +147,13 @@ trait Excel[F[_]]:
   /**
    * Write multiple sheets sequentially with constant memory.
    *
-   * Streams each sheet in order - never materializes full datasets. Memory usage is constant
+   * Streams each sheets in order - never materializes full datasets. Memory usage is constant
    * regardless of total row count across all sheets.
    *
    * @param path
    *   Output file path
    * @param sheets
-   *   Sequence of (sheet name, rows) tuples. Sheets are auto-indexed 1, 2, 3...
+   *   Sequence of (sheets name, rows) tuples. Sheets are auto-indexed 1, 2, 3...
    * @param config
    *   Writer configuration (compression, prettyPrint). Defaults to production settings.
    *
@@ -177,29 +177,29 @@ trait Excel[F[_]]:
   ): F[Unit]
 
 /**
- * Excel algebra with explicit error channels (pure error handling).
+ * Excel algebra with explicit errors channels (pure errors handling).
  *
  * Similar to Excel[F] but returns XLResult[A] explicitly instead of raising errors. Enables pure
- * functional error handling without exceptions in the effect type.
+ * functional errors handling without exceptions in the effect type.
  *
  * Usage:
  * {{{
  *   val excel: ExcelR[IO] = ExcelIO.instance
  *   excel.readR(path).flatMap {
  *     case Right(wb) => // Success
- *     case Left(err) => // Handle error
+ *     case Left(err) => // Handle errors
  *   }
  * }}}
  */
 trait ExcelR[F[_]]:
 
-  /** Read workbook with explicit error result */
+  /** Read workbooks with explicit errors result */
   def readR(path: Path): F[XLResult[Workbook]]
 
-  /** Write workbook with explicit error result */
+  /** Write workbooks with explicit errors result */
   def writeR(wb: Workbook, path: Path): F[XLResult[Unit]]
 
-  /** Write workbook with explicit error result and custom configuration */
+  /** Write workbooks with explicit errors result and custom configuration */
   def writeWithR(
     wb: Workbook,
     path: Path,
@@ -207,23 +207,23 @@ trait ExcelR[F[_]]:
   ): F[XLResult[Unit]]
 
   /**
-   * Stream rows with explicit error channel.
+   * Stream rows with explicit errors channel.
    *
    * Each row is wrapped in Either[XLError, RowData]. On structural parse failure, emits Left
    * followed by stream termination.
    */
   def readStreamR(path: Path): Stream[F, Either[XLError, RowData]]
 
-  /** Stream rows from specific sheet by name with explicit error channel */
+  /** Stream rows from specific sheets by name with explicit errors channel */
   def readSheetStreamR(path: Path, sheetName: String): Stream[F, Either[XLError, RowData]]
 
-  /** Stream rows from specific sheet by index with explicit error channel */
+  /** Stream rows from specific sheets by index with explicit errors channel */
   def readStreamByIndexR(path: Path, sheetIndex: Int): Stream[F, Either[XLError, RowData]]
 
-  /** Write stream with explicit error channel */
+  /** Write stream with explicit errors channel */
   def writeStreamR(path: Path, sheetName: String): fs2.Pipe[F, RowData, Either[XLError, Unit]]
 
-  /** True streaming write with explicit error channel */
+  /** True streaming write with explicit errors channel */
   def writeStreamTrueR(
     path: Path,
     sheetName: String,
@@ -231,7 +231,7 @@ trait ExcelR[F[_]]:
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): fs2.Pipe[F, RowData, Either[XLError, Unit]]
 
-  /** Write multiple sheets with explicit error channel */
+  /** Write multiple sheets with explicit errors channel */
   def writeStreamsSeqTrueR(
     path: Path,
     sheets: Seq[(String, Stream[F, RowData])],

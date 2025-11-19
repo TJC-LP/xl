@@ -418,7 +418,7 @@ This follows the **dual representation pattern** established for `CellValue.Numb
 # After fix:
 scala-cli run data/surgical-demo.sc
 
-# Verify style 283 has numFmtId=39:
+# Verify styles 283 has numFmtId=39:
 python3 <<'PYEOF'
 import xml.etree.ElementTree as ET, zipfile
 with zipfile.ZipFile('data/syndigo-surgical-output.xlsx') as zf:

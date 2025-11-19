@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.style.{CellStyle, Align, HAlign, VAlign}
+import com.tjclp.xl.styles.{CellStyle, Align, HAlign, VAlign}
 
 /** Tests for alignment serialization to styles.xml */
 @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
@@ -23,13 +23,13 @@ class AlignmentSerializationSpec extends FunSuite:
     val xfElems = xml \ "cellXfs" \ "xf"
     assert(xfElems.nonEmpty, "Should have xf elements")
 
-    // Default style should have applyAlignment="0" and no <alignment> child
+    // Default styles should have applyAlignment="0" and no <alignment> child
     val firstXf = xfElems(0)
     val applyAlignment = (firstXf \ "@applyAlignment").text
-    assertEquals(applyAlignment, "0", "Default style should have applyAlignment='0'")
+    assertEquals(applyAlignment, "0", "Default styles should have applyAlignment='0'")
 
     val alignmentElems = firstXf \ "alignment"
-    assert(alignmentElems.isEmpty, "Default style should not have <alignment> element")
+    assert(alignmentElems.isEmpty, "Default styles should not have <alignment> element")
   }
 
   test("non-default alignment includes applyAlignment=1") {

@@ -1,14 +1,14 @@
 package com.tjclp.xl
 
 import munit.FunSuite
-import com.tjclp.xl.style.{CellStyle, StyleRegistry}
-import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
-import com.tjclp.xl.style.border.{Border, BorderStyle}
-import com.tjclp.xl.style.color.Color
-import com.tjclp.xl.style.fill.Fill
-import com.tjclp.xl.style.font.Font
-import com.tjclp.xl.style.numfmt.NumFmt
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
+import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.styles.border.{Border, BorderStyle}
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.styles.units.StyleId
 
 /** Tests for StyleRegistry */
 class StyleRegistrySpec extends FunSuite:
@@ -20,24 +20,24 @@ class StyleRegistrySpec extends FunSuite:
     assertEquals(registry.indexOf(CellStyle.default), Some(StyleId(0)))
   }
 
-  test("register new style appends and returns index") {
+  test("register new styles appends and returns index") {
     val registry = StyleRegistry.default
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
 
     val (updated, idx) = registry.register(boldStyle)
 
-    assertEquals(idx, StyleId(1), "New style should get index 1")
+    assertEquals(idx, StyleId(1), "New styles should get index 1")
     assertEquals(updated.size, 2, "Should have 2 styles now")
     assertEquals(updated.get(StyleId(1)), Some(boldStyle))
   }
 
-  test("register duplicate style returns existing index") {
+  test("register duplicate styles returns existing index") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
 
     val (registry1, idx1) = StyleRegistry.default.register(boldStyle)
     val (registry2, idx2) = registry1.register(boldStyle)
 
-    assertEquals(idx1, idx2, "Same style should get same index")
+    assertEquals(idx1, idx2, "Same styles should get same index")
     assertEquals(registry2.size, 2, "Should not duplicate")
   }
 
@@ -57,7 +57,7 @@ class StyleRegistrySpec extends FunSuite:
     assertEquals(r3.size, 4) // default + 3 custom
   }
 
-  test("indexOf returns None for unregistered style") {
+  test("indexOf returns None for unregistered styles") {
     val registry = StyleRegistry.default
     val customStyle = CellStyle.default.withFont(Font("Arial", 16.0))
 
@@ -93,7 +93,7 @@ class StyleRegistrySpec extends FunSuite:
     assert(registry.isEmpty)
 
     val (updated, _) = registry.register(CellStyle.default.withFont(Font("Arial", 14.0, bold = true)))
-    assert(!updated.isEmpty, "Should not be empty after adding custom style")
+    assert(!updated.isEmpty, "Should not be empty after adding custom styles")
   }
 
   test("register preserves order") {
@@ -111,7 +111,7 @@ class StyleRegistrySpec extends FunSuite:
     assertEquals(r3.get(StyleId(3)), Some(style3))
   }
 
-  test("register complex style with all components") {
+  test("register complex styles with all components") {
     val complexStyle = CellStyle(
       font = Font("Calibri", 12.0, bold = true, italic = true),
       fill = Fill.Solid(Color.Rgb(0xFFFFCC00)),
@@ -127,7 +127,7 @@ class StyleRegistrySpec extends FunSuite:
     assertEquals(registry.indexOf(complexStyle), Some(StyleId(1)))
   }
 
-  test("multiple registrations of same style return same index") {
+  test("multiple registrations of same styles return same index") {
     @SuppressWarnings(Array("org.wartremover.warts.Var"))
     var registry = StyleRegistry.default
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))

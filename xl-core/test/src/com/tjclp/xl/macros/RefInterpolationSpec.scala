@@ -2,7 +2,7 @@ package com.tjclp.xl.macros
 
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
-import com.tjclp.xl.error.XLError
+import com.tjclp.xl.errors.XLError
 import munit.{FunSuite, ScalaCheckSuite}
 import org.scalacheck.Prop.*
 
@@ -81,7 +81,7 @@ class RefInterpolationSpec extends ScalaCheckSuite:
         fail(s"Expected QualifiedRange, got $other")
   }
 
-  test("Runtime interpolation: quoted sheet name") {
+  test("Runtime interpolation: quoted sheets name") {
     val quotedStr = "'Q1 Sales'!A1"
     val result = ref"$quotedStr"
 
@@ -89,12 +89,12 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(sheet, _)) =>
         assertEquals(sheet.value, "Q1 Sales")
       case Left(err) =>
-        fail(s"Expected Right with quoted sheet, got Left($err)")
+        fail(s"Expected Right with quoted sheets, got Left($err)")
       case Right(other) =>
         fail(s"Expected QualifiedCell, got $other")
   }
 
-  test("Runtime interpolation: escaped quotes in sheet name") {
+  test("Runtime interpolation: escaped quotes in sheets name") {
     val escapedStr = "'It''s Q1'!A1"
     val result = ref"$escapedStr"
 
@@ -228,7 +228,7 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(sheet, _)) =>
         assertEquals(sheet.value, "Q1 Sales Report")
       case Left(err) =>
-        fail(s"Should parse sheet with spaces: $err")
+        fail(s"Should parse sheets with spaces: $err")
       case Right(other) =>
         fail(s"Expected QualifiedCell, got $other")
   }
@@ -241,7 +241,7 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(sheet, _)) =>
         assertEquals(sheet.value, "Sheet (2025)")
       case Left(err) =>
-        fail(s"Should parse sheet with parens: $err")
+        fail(s"Should parse sheets with parens: $err")
       case Right(other) =>
         fail(s"Expected QualifiedCell, got $other")
   }

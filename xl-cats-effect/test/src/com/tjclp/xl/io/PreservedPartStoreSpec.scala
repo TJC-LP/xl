@@ -15,7 +15,7 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
     PreservedPartStore.empty.open.use { handle =>
       IO {
         assertEquals(handle.listAll, Set.empty[String])
-        assert(!handle.exists("xl/workbook.xml"))
+        assert(!handle.exists("xl/workbooks.xml"))
       }
     }
   }
@@ -73,7 +73,7 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
       store.open.use { handle =>
         val baos = new ByteArrayOutputStream()
         val zipOut = new ZipOutputStream(baos)
-        // Should fail with size mismatch error
+        // Should fail with size mismatch errors
         handle
           .streamTo("xl/charts/chart1.xml", zipOut)
           .attempt
@@ -83,7 +83,7 @@ class PreservedPartStoreSpec extends CatsEffectSuite:
               val error = result.left.getOrElse(fail("Expected Left but got Right"))
               assert(
                 error.getMessage.contains("size mismatch"),
-                s"Expected size mismatch error, got: ${error.getMessage}"
+                s"Expected size mismatch errors, got: ${error.getMessage}"
               )
             }
           }

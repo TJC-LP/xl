@@ -2,9 +2,9 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.*
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.*
 import com.tjclp.xl.macros.ref
 
 /**
@@ -48,11 +48,11 @@ class DeterminismSpec extends FunSuite:
     assert(xml1.contains("patternFill"), "Should have pattern fills")
   }
 
-  test("workbook styles serialize deterministically across writes") {
-    // Create workbook with styled cells
+  test("workbooks styles serialize deterministically across writes") {
+    // Create workbooks with styled cells
     val sheet1 = Sheet("Sheet1") match
       case Right(s) => s
-      case Left(err) => fail(s"Failed to create sheet: $err")
+      case Left(err) => fail(s"Failed to create sheets: $err")
 
     val styledSheet = sheet1
       .put(ref"A1", CellValue.Text("Hello"))
@@ -68,7 +68,7 @@ class DeterminismSpec extends FunSuite:
         )
       )
 
-    // Build StyleIndex from workbook
+    // Build StyleIndex from workbooks
     val (styleIndex1, _) = StyleIndex.fromWorkbook(Workbook(sheets = Vector(styledSheet)))
     val (styleIndex2, _) = StyleIndex.fromWorkbook(Workbook(sheets = Vector(styledSheet)))
 
@@ -83,7 +83,7 @@ class DeterminismSpec extends FunSuite:
   test("multiple identical fills deduplicate deterministically") {
     val redFill = Fill.Solid(Color.Rgb(0xffff0000))
 
-    // Create style index where same fill appears multiple times
+    // Create styles index where same fill appears multiple times
     val styleIndex = StyleIndex(
       fonts = Vector(Font.default),
       fills = Vector(redFill, redFill, redFill), // Same fill 3 times

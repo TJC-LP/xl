@@ -2,20 +2,20 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.{CellStyle, Font, Fill, Color}
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.{CellStyle, Font, Fill, Color}
 import com.tjclp.xl.macros.ref
 
-/** Tests for StyleIndex.fromWorkbook with style remapping */
+/** Tests for StyleIndex.fromWorkbook with styles remapping */
 @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 class StyleIndexSpec extends FunSuite:
 
-  test("fromWorkbook with single sheet extracts styles from registry") {
+  test("fromWorkbook with single sheets extracts styles from registry") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
 
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheets"))
       .put(ref"A1", CellValue.Text("Bold"))
       .withCellStyle(ref"A1", boldStyle)
       .put(ref"A2", CellValue.Text("Red"))
@@ -60,7 +60,7 @@ class StyleIndexSpec extends FunSuite:
     val sheet1Remapping = remappings.getOrElse(0, Map.empty)
     val sheet2Remapping = remappings.getOrElse(1, Map.empty)
 
-    assertEquals(sheet1Remapping.get(1), sheet2Remapping.get(1), "Same style should map to same global index")
+    assertEquals(sheet1Remapping.get(1), sheet2Remapping.get(1), "Same styles should map to same global index")
   }
 
   test("fromWorkbook with conflicting local indices remaps correctly") {
@@ -72,7 +72,7 @@ class StyleIndexSpec extends FunSuite:
       .put(ref"A1", CellValue.Text("Bold"))
       .withCellStyle(ref"A1", boldStyle)
 
-    // Sheet2: localId=1 is red (different style)
+    // Sheet2: localId=1 is red (different styles)
     val sheet2 = Sheet("Sheet2").getOrElse(fail(""))
       .put(ref"A1", CellValue.Text("Red"))
       .withCellStyle(ref"A1", redStyle)
@@ -102,7 +102,7 @@ class StyleIndexSpec extends FunSuite:
     val wb = Workbook(Vector(sheet))
     val (index, remappings) = StyleIndex.fromWorkbook(wb)
 
-    // Should only have default style
+    // Should only have default styles
     assertEquals(index.cellStyles.size, 1)
     assertEquals(index.cellStyles.head, CellStyle.default)
 
@@ -155,5 +155,5 @@ class StyleIndexSpec extends FunSuite:
     val sheet1Remapping = remappings.getOrElse(0, Map.empty)
     val sheet2Remapping = remappings.getOrElse(1, Map.empty)
 
-    assertEquals(sheet1Remapping.get(1), sheet2Remapping.get(1), "Same style should map to same global index")
+    assertEquals(sheet1Remapping.get(1), sheet2Remapping.get(1), "Same styles should map to same global index")
   }

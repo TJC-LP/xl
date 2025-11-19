@@ -4,7 +4,7 @@ import munit.ScalaCheckSuite
 import org.scalacheck.{Arbitrary, Gen, Prop}
 import org.scalacheck.Prop.*
 import cats.syntax.all.*
-import com.tjclp.xl.style.{*, given}
+import com.tjclp.xl.styles.{*, given}
 
 /** Property tests for StylePatch monoid laws */
 class StylePatchSpec extends ScalaCheckSuite:
@@ -34,7 +34,7 @@ class StylePatchSpec extends ScalaCheckSuite:
     forAll { (patch: StylePatch) =>
       val combined = (StylePatch.empty: StylePatch) |+| (patch: StylePatch)
 
-      // Apply both to default style and verify they produce same result
+      // Apply both to default styles and verify they produce same result
       val style = CellStyle.default
       val result1 = applyPatch(style, combined)
       val result2 = applyPatch(style, patch)
@@ -48,7 +48,7 @@ class StylePatchSpec extends ScalaCheckSuite:
     forAll { (patch: StylePatch) =>
       val combined = (patch: StylePatch) |+| (StylePatch.empty: StylePatch)
 
-      // Apply both to default style and verify they produce same result
+      // Apply both to default styles and verify they produce same result
       val style = CellStyle.default
       val result1 = applyPatch(style, combined)
       val result2 = applyPatch(style, patch)
@@ -63,7 +63,7 @@ class StylePatchSpec extends ScalaCheckSuite:
       val left = ((p1: StylePatch) |+| (p2: StylePatch)) |+| (p3: StylePatch)
       val right = (p1: StylePatch) |+| ((p2: StylePatch) |+| (p3: StylePatch))
 
-      // Apply both to same style and verify results are identical
+      // Apply both to same styles and verify results are identical
       val style = CellStyle.default
       val leftResult = applyPatch(style, left)
       val rightResult = applyPatch(style, right)

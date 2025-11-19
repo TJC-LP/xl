@@ -1,6 +1,6 @@
 package com.tjclp.xl.macros
 
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 
 import scala.quoted.*
 
@@ -21,7 +21,7 @@ object CellRangeLiterals:
   extension (inline sc: StringContext)
     transparent inline def fx(
       inline args: Any*
-    ): CellValue | Either[com.tjclp.xl.error.XLError, CellValue] =
+    ): CellValue | Either[com.tjclp.xl.errors.XLError, CellValue] =
       ${ fxImplN('sc, 'args) }
 
   // -------- Implementations --------
@@ -58,7 +58,7 @@ object CellRangeLiterals:
   private def fxImplN(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[CellValue | Either[com.tjclp.xl.error.XLError, CellValue]] =
+  )(using Quotes): Expr[CellValue | Either[com.tjclp.xl.errors.XLError, CellValue]] =
     import quotes.reflect.*
 
     args match
@@ -84,7 +84,7 @@ object CellRangeLiterals:
     val fullString = MacroUtil.reconstructString(parts, literals)
 
     // Call runtime parser at compile-time to ensure validation consistency
-    com.tjclp.xl.cell.FormulaParser.parse(fullString) match
+    com.tjclp.xl.cells.FormulaParser.parse(fullString) match
       case Right(cellValue) =>
         // Valid - emit constant
         cellValue match
@@ -93,16 +93,16 @@ object CellRangeLiterals:
           case _ =>
             report.errorAndAbort("Unexpected cell value type in formula literal")
       case Left(error) =>
-        // Invalid - compile error
+        // Invalid - compile errors
         report.errorAndAbort(error.message)
 
   private def fxRuntimePath(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, CellValue]] =
+  )(using Quotes): Expr[Either[com.tjclp.xl.errors.XLError, CellValue]] =
     '{
-      com.tjclp.xl.cell.FormulaParser.parse($sc.s($args*))
-    }.asExprOf[Either[com.tjclp.xl.error.XLError, CellValue]]
+      com.tjclp.xl.cells.FormulaParser.parse($sc.s($args*))
+    }.asExprOf[Either[com.tjclp.xl.errors.XLError, CellValue]]
 
   private def literal(sc: Expr[StringContext])(using Quotes): String =
     val parts = sc.valueOrAbort.parts

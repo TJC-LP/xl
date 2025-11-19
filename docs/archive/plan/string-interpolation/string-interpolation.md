@@ -41,9 +41,9 @@ XL macros currently only support compile-time string literals:
 val ref = ref"A1"                    // ✅ Works
 val range = ref"Sales!A1:B10"        // ✅ Works
 
-// Dynamic values: Compile error
+// Dynamic values: Compile errors
 val sheetName = "Sales"
-val cell = ref"$sheetName!A1"        // ❌ Compile error: "Use string interpolation (not yet supported)"
+val cell = ref"$sheetName!A1"        // ❌ Compile errors: "Use string interpolation (not yet supported)"
 ```
 
 Users must fall back to runtime parsing:
@@ -57,7 +57,7 @@ val result = RefType.parse(s"$sheetName!A1")  // Verbose, loses macro ergonomics
 With string interpolation support:
 
 ```scala
-// Dynamic sheet names
+// Dynamic sheets names
 val sheet = "Q1 Sales"
 val ref = ref"$sheet!A1"                       // ✅ Returns Either[XLError, RefType]
 
@@ -183,7 +183,7 @@ def compileTimePath(parts: Seq[String], literals: Seq[Any])(using Quotes): Expr[
       '{ RefType.QualifiedCell(SheetName(${ Expr(qualified.sheet.value) }), ...) }
 
     case Left(err) =>
-      // Compile error with helpful message
+      // Compile errors with helpful message
       report.errorAndAbort(
         s"Invalid cell reference in interpolation: ${fullString}\n" +
         s"Error: $err\n" +
@@ -475,11 +475,11 @@ test("ref with absolute column and row") {
 // Edge cases
 test("ref with empty interpolation") {
   val empty = ""
-  val result = ref"$empty!A1"  // Invalid: empty sheet name
+  val result = ref"$empty!A1"  // Invalid: empty sheets name
   assert(result.isLeft)
 }
 
-test("ref with special characters in sheet name") {
+test("ref with special characters in sheets name") {
   val sheet = "Q1 'Sales'"
   val result = ref"$sheet!A1"  // Should handle escaping
   assert(result.isRight)
@@ -533,7 +533,7 @@ money"$$$amount" + ".00"       // Format with 2 decimals (future enhancement)
            if literals.length == argExprs.length then
              // Compile-time: reconstruct and validate
              val fullString = interleave(parts, literals.map(_.toString))
-             validateMoneyLiteral(fullString)  // Aborts on error
+             validateMoneyLiteral(fullString)  // Aborts on errors
            else
              // Runtime: parse and wrap in Either
              '{
@@ -748,7 +748,7 @@ test("fx with unbalanced parens") {
 **Totality**: Aborts compilation on invalid input (same as current macros)
 
 ```scala
-val ref = ref"Invalid!@#$"  // Compile error with helpful message
+val ref = ref"Invalid!@#$"  // Compile errors with helpful message
 ```
 
 **Purity**: No runtime effects (emits constants directly)
@@ -923,13 +923,13 @@ property("ref interpolation associativity") {
 **Example**:
 
 ```scala
-// Only String allowed for sheet name
+// Only String allowed for sheets name
 val sheet: Int = 42
-val ref = ref"$sheet!A1"  // Compile error: "Expected String for sheet name, got Int"
+val ref = ref"$sheet!A1"  // Compile errors: "Expected String for sheets name, got Int"
 
 // Only String or ARef allowed for cell reference
 val cell: Double = 3.14
-val ref = ref"Sales!$cell"  // Compile error: "Expected String or ARef for cell, got Double"
+val ref = ref"Sales!$cell"  // Compile errors: "Expected String or ARef for cell, got Double"
 ```
 
 **Note**: This phase is optional and may be deferred indefinitely. The type safety benefit is marginal compared to implementation complexity.
@@ -974,7 +974,7 @@ val ref = ref"Sales!$cell"  // Compile error: "Expected String or ARef for cell,
      ref match
        case Left(XLError.InvalidReference(input, reason)) =>
          assertEquals(input, invalid)
-       case other => fail(s"Expected InvalidReference error, got: $other")
+       case other => fail(s"Expected InvalidReference errors, got: $other")
    }
    ```
 
@@ -983,13 +983,13 @@ val ref = ref"Sales!$cell"  // Compile error: "Expected String or ARef for cell,
    test("ref with empty interpolation") {
      val empty = ""
      val ref = ref"$empty!A1"
-     assert(ref.isLeft)  // Empty sheet name is invalid
+     assert(ref.isLeft)  // Empty sheets name is invalid
    }
 
-   test("ref with whitespace in sheet name") {
+   test("ref with whitespace in sheets name") {
      val sheet = "Q1 Sales"
      val ref = ref"$sheet!A1"
-     assert(ref.isRight)  // Whitespace is valid in sheet names
+     assert(ref.isRight)  // Whitespace is valid in sheets names
    }
 
    test("ref with quote escaping") {
@@ -1173,12 +1173,12 @@ def getCellValue(
     // Parse user input with validation
     ref <- ref"$sheetName!$cellRef"  // Returns Either[XLError, RefType]
 
-    // Extract sheet and cell
+    // Extract sheets and cell
     (sheet, cell) <- ref match
       case RefType.QualifiedCell(name, cell) => Right((name, cell))
       case _ => Left(XLError.InvalidReference(cellRef, "Expected qualified cell"))
 
-    // Lookup sheet and cell
+    // Lookup sheets and cell
     sheetObj <- workbook(sheet.value)
     cellObj <- sheetObj(cell)
   yield cellObj.value
@@ -1215,7 +1215,7 @@ def createSumColumn(
     yield (resultCell, formula)
   }
 
-  // Collect all formulas (fail fast on first error)
+  // Collect all formulas (fail fast on first errors)
   formulas.toList.sequence.map { updates =>
     updates.foldLeft(sheet) { case (s, (ref, formula)) =>
       s.put(ref -> formula).getOrElse(s)  // Apply formula
@@ -1375,7 +1375,7 @@ val ref = ref"A1"
 **Pattern 1: Handle Either Explicitly**
 
 ```scala
-// New: Interpolation with error handling
+// New: Interpolation with errors handling
 val sheetName = getUserInput()
 val result = ref"$sheetName!A1"  // Returns Either[XLError, RefType]
 

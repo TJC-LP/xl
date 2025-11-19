@@ -4,23 +4,23 @@ import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.api.*
 import com.tjclp.xl.SourceContext
-import com.tjclp.xl.style.{CellStyle, StyleRegistry}
-import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
-import com.tjclp.xl.style.border.{Border, BorderSide, BorderStyle}
-import com.tjclp.xl.style.color.{Color, ThemeSlot}
-import com.tjclp.xl.style.fill.{Fill, PatternType}
-import com.tjclp.xl.style.font.Font
-import com.tjclp.xl.style.numfmt.NumFmt
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
+import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+import com.tjclp.xl.styles.color.{Color, ThemeSlot}
+import com.tjclp.xl.styles.fill.{Fill, PatternType}
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Style components and indexing for xl/styles.xml
  *
- * Styles are deduplicated by canonical keys to avoid Excel's 64k style limit. The StyleIndex builds
- * collections of unique fonts, fills, borders, and cellXfs.
+ * Styles are deduplicated by canonical keys to avoid Excel's 64k styles limit. The StyleIndex
+ * builds collections of unique fonts, fills, borders, and cellXfs.
  */
 
-/** Index mapping for style components */
+/** Index mapping for styles components */
 case class StyleIndex(
   fonts: Vector[Font],
   fills: Vector[Fill],
@@ -29,12 +29,12 @@ case class StyleIndex(
   cellStyles: Vector[CellStyle],
   styleToIndex: Map[String, StyleId] // Canonical key → cellXf index
 ):
-  /** Get style index for a CellStyle (returns 0 if not found - default style) */
+  /** Get styles index for a CellStyle (returns 0 if not found - default styles) */
   def indexOf(style: CellStyle): StyleId =
     styleToIndex.getOrElse(style.canonicalKey, StyleId(0))
 
 object StyleIndex:
-  /** Empty StyleIndex with only default style (useful for testing) */
+  /** Empty StyleIndex with only default styles (useful for testing) */
   val empty: StyleIndex = StyleIndex(
     fonts = Vector.empty,
     fills = Vector.empty,
@@ -45,9 +45,9 @@ object StyleIndex:
   )
 
   /**
-   * Build unified style index from workbook with automatic optimization.
+   * Build unified styles index from workbooks with automatic optimization.
    *
-   * Strategy (automatic based on workbook.sourceContext):
+   * Strategy (automatic based on workbooks.sourceContext):
    *   - **With source**: Preserve original styles for byte-perfect surgical modification
    *   - **Without source**: Full deduplication for optimal compression
    *
@@ -56,7 +56,7 @@ object StyleIndex:
    * allowing programmatic creation to produce optimal output.
    *
    * @param wb
-   *   The workbook to index
+   *   The workbooks to index
    * @return
    *   (StyleIndex for writing, Map[sheetIndex -> Map[localStyleId -> globalStyleId]])
    */
@@ -70,13 +70,13 @@ object StyleIndex:
         fromWorkbookWithoutSource(wb)
 
   /**
-   * Build unified style index from a workbook with full deduplication (no source).
+   * Build unified styles index from a workbooks with full deduplication (no source).
    *
-   * Extracts styles from each sheet's StyleRegistry, builds a unified index with deduplication, and
-   * creates remapping tables to convert sheet-local styleIds to workbook-level indices.
+   * Extracts styles from each sheets's StyleRegistry, builds a unified index with deduplication,
+   * and creates remapping tables to convert sheets-local styleIds to workbooks-level indices.
    *
    * @param wb
-   *   The workbook to index
+   *   The workbooks to index
    * @return
    *   (StyleIndex, Map[sheetIndex -> Map[localStyleId -> globalStyleId]])
    */
@@ -84,12 +84,12 @@ object StyleIndex:
   private def fromWorkbookWithoutSource(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
     import scala.collection.mutable
 
-    // Build unified style index by merging all sheet registries
+    // Build unified styles index by merging all sheets registries
     var unifiedStyles = Vector(CellStyle.default)
     var unifiedIndex = Map(CellStyle.default.canonicalKey -> StyleId(0))
     var nextIdx = 1
 
-    // Build per-sheet remapping tables
+    // Build per-sheets remapping tables
     val remappings = wb.sheets.zipWithIndex.map { case (sheet, sheetIdx) =>
       val registry = sheet.styleRegistry
       val remapping = mutable.Map[Int, Int]()
@@ -103,7 +103,7 @@ object StyleIndex:
             // Style already in unified index (deduplication)
             remapping(localIdx) = globalIdx.value
           case None =>
-            // New style - add to unified index
+            // New styles - add to unified index
             unifiedStyles = unifiedStyles :+ style
             unifiedIndex = unifiedIndex + (key -> StyleId(nextIdx))
             remapping(localIdx) = nextIdx
@@ -156,12 +156,12 @@ object StyleIndex:
     (styleIndex, remappings)
 
   /**
-   * Build style index for workbook with source, preserving original styles.
+   * Build styles index for workbooks with source, preserving original styles.
    *
    * This variant is used during surgical modification to avoid corruption:
    *   - Deduplicates styles ONLY from modified sheets (optimal compression)
    *   - Preserves original styles from source for unmodified sheets (no remapping needed)
-   *   - Ensures unmodified sheets' style references remain valid after write
+   *   - Ensures unmodified sheets' styles references remain valid after write
    *
    * Strategy:
    *   1. Parse original styles.xml to get complete WorkbookStyles
@@ -170,7 +170,7 @@ object StyleIndex:
    *   4. Return remappings ONLY for modified sheets (unmodified sheets use original IDs)
    *
    * @param wb
-   *   The workbook with modified sheets
+   *   The workbooks with modified sheets
    * @param ctx
    *   Source context providing modification tracker and original file path
    * @return
@@ -233,7 +233,7 @@ object StyleIndex:
     var nextIdx = originalStyles.size
     var additionalStyles = mutable.Map[String, Int]() // Track styles added after original
 
-    // Step 3: Process ONLY modified sheets for style remapping
+    // Step 3: Process ONLY modified sheets for styles remapping
     val remappings = wb.sheets.zipWithIndex.flatMap { case (sheet, sheetIdx) =>
       if modifiedSheetIndices.contains(sheetIdx) then
         val registry = sheet.styleRegistry
@@ -253,10 +253,10 @@ object StyleIndex:
               // Not in original - check if we've already added it
               additionalStyles.get(key) match
                 case Some(addedIdx) =>
-                  // Already added by earlier sheet processing
+                  // Already added by earlier sheets processing
                   remapping(localIdx) = addedIdx
                 case None =>
-                  // Truly new style - add it now
+                  // Truly new styles - add it now
                   unifiedStyles = unifiedStyles :+ style
                   additionalStyles(key) = nextIdx
                   remapping(localIdx) = nextIdx
@@ -265,7 +265,7 @@ object StyleIndex:
 
         Some(sheetIdx -> remapping.toMap)
       else
-        // Unmodified sheet - no remapping needed (uses original style IDs)
+        // Unmodified sheets - no remapping needed (uses original styles IDs)
         None
     }.toMap
 
@@ -464,7 +464,7 @@ case class OoxmlStyles(
       val children = borderSide.color.map { color =>
         colorToXml(color) // Use colorToXml to preserve theme colors in borders
       }.toList
-      elem(side, "style" -> borderSide.style.toString.toLowerCase)(children*)
+      elem(side, "styles" -> borderSide.style.toString.toLowerCase)(children*)
 
   private def colorToXml(color: Color): Elem =
     color match
@@ -538,7 +538,7 @@ object OoxmlStyles:
     )
     OoxmlStyles(defaultIndex)
 
-  /** Create from workbook (discards remapping tables - only for simple use cases) */
+  /** Create from workbooks (discards remapping tables - only for simple use cases) */
   def fromWorkbook(wb: Workbook): OoxmlStyles =
     val (styleIndex, _) = StyleIndex.fromWorkbook(wb)
     OoxmlStyles(styleIndex)
@@ -546,7 +546,7 @@ object OoxmlStyles:
 // ========== Workbook Styles Parsing ==========
 
 /**
- * Parsed workbook-level styles with complete OOXML structure.
+ * Parsed workbooks-level styles with complete OOXML structure.
  *
  * Stores both domain model (cellStyles) and raw OOXML vectors (fonts, fills, borders) for
  * byte-perfect preservation during surgical writes.
@@ -678,7 +678,7 @@ object WorkbookStyles:
     (borderElem \ side).headOption match
       case Some(sideElem: Elem) =>
         val style = sideElem
-          .attribute("style")
+          .attribute("styles")
           .flatMap(attr => parseBorderStyle(attr.text))
           .getOrElse(BorderStyle.None)
         val color =

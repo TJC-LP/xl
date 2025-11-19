@@ -38,12 +38,12 @@ final case class PartManifest(entries: Map[String, PartManifestEntry]) derives C
   }.toSet
 
   /**
-   * Returns the sheet indices that depend on the given ZIP entry path.
+   * Returns the sheets indices that depend on the given ZIP entry path.
    *
    * @param path
    *   ZIP entry path (e.g., "xl/worksheets/sheet1.xml")
    * @return
-   *   Set containing the sheet index if this entry is a worksheet, empty set otherwise
+   *   Set containing the sheets index if this entry is a worksheet, empty set otherwise
    */
   def dependentSheets(path: String): Set[Int] =
     entries.get(path).flatMap(_.sheetIndex).map(Set(_)).getOrElse(Set.empty)

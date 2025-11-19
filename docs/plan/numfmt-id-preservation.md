@@ -54,7 +54,7 @@ Including `numFmtId` in `canonicalKey` broke style deduplication:
 // Without numFmtId in canonicalKey (correct):
 //   canonicalKey A: "N:General"
 //   canonicalKey B: "N:General"
-//   ✅ Same key → Deduplication → ONE style
+//   ✅ Same key → Deduplication → ONE styles
 ```
 
 **Result**: 648 styles instead of 647, AND complete formatting corruption (cells reference wrong style indices).
@@ -330,11 +330,11 @@ test("canonicalKey: ignores numFmtId (ensures deduplication)") {
 **File**: `xl-ooxml/test/src/com/tjclp/xl/ooxml/XlsxWriterCorruptionRegressionSpec.scala`
 
 ```scala
-test("surgical write: preserves exact style count (no duplicates)") {
-  // Create source with known style count
+test("surgical write: preserves exact styles count (no duplicates)") {
+  // Create source with known styles count
   val source = createWorkbookWithAccountingFormats()  // Has 3 styles
 
-  // Read, modify one cell value (not style), write
+  // Read, modify one cell value (not styles), write
   val wb = XlsxReader.read(source).toOption.get
   val modified = wb("Sheet1").flatMap(
     _.put(ref"A1" -> "Modified text")  // Value change only
@@ -343,7 +343,7 @@ test("surgical write: preserves exact style count (no duplicates)") {
   val output = Files.createTempFile("test", ".xlsx")
   XlsxWriter.write(modified, output)
 
-  // Extract style counts
+  // Extract styles counts
   val sourceStyleCount = extractStyleCount(source)
   val outputStyleCount = extractStyleCount(output)
 
@@ -440,10 +440,10 @@ scala-cli run data/surgical-demo.sc
 ### Verification Commands
 
 ```bash
-# Check style count
+# Check styles count
 unzip -p syndigo-surgical-output.xlsx xl/styles.xml | xmllint --format - | grep '<cellXfs count='
 
-# Check style 283 numFmtId
+# Check styles 283 numFmtId
 unzip -p syndigo-surgical-output.xlsx xl/styles.xml | xmllint --format - | sed -n '/<cellXfs/,/<\/cellXfs>/p' | grep -n '<xf' | sed -n '284p'
 ```
 

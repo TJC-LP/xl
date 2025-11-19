@@ -9,7 +9,7 @@ import java.nio.charset.StandardCharsets
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try, Using}
 import com.tjclp.xl.api.{Workbook, CellValue}
-import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.errors.{XLError, XLResult}
 import com.tjclp.xl.{ModificationTracker, SourceContext}
 import com.tjclp.xl.richtext.RichText
 
@@ -83,7 +83,7 @@ case class OutputStreamTarget(stream: OutputStream) extends OutputTarget
  *   - **With source** (read → modify → write): Surgical mode
  *     - Clean → verbatim copy (11x faster)
  *     - Partially modified → regenerate changed, copy unchanged (2-5x faster)
- *     - Fully modified → regenerate all with style preservation
+ *     - Fully modified → regenerate all with styles preservation
  *   - **Without source** (create → write): Full regeneration (standard path)
  *
  * The writer transparently chooses the optimal strategy - users don't need to decide.
@@ -93,20 +93,20 @@ case class OutputStreamTarget(stream: OutputStream) extends OutputTarget
  *   - Preserves differential formats (dxfs) for conditional formatting
  *   - Byte-identical copies for unmodified sheets
  *   - RichText in SharedStrings (not inlined)
- *   - Row-level style preservation
+ *   - Row-level styles preservation
  *   - Excel compression level matching (defS = level 1)
  */
 object XlsxWriter:
 
-  /** Write workbook to XLSX file with default configuration */
+  /** Write workbooks to XLSX file with default configuration */
   def write(workbook: Workbook, outputPath: Path): XLResult[Unit] =
     writeWith(workbook, outputPath, WriterConfig())
 
   /**
-   * Write workbook to XLSX file with custom configuration.
+   * Write workbooks to XLSX file with custom configuration.
    *
-   * **Surgical Modification**: Automatically uses hybrid strategy when workbook has SourceContext:
-   *   - Clean workbook → verbatim copy (11x faster)
+   * **Surgical Modification**: Automatically uses hybrid strategy when workbooks has SourceContext:
+   *   - Clean workbooks → verbatim copy (11x faster)
    *   - Partially modified → regenerate changed parts, preserve rest (2-5x faster)
    *   - No SourceContext → full regeneration (current behavior)
    */
@@ -136,7 +136,7 @@ object XlsxWriter:
     try
       workbook.sourceContext match
         case Some(ctx) if ctx.isClean =>
-          // Clean workbook + file target → verbatim copy (ultra-fast)
+          // Clean workbooks + file target → verbatim copy (ultra-fast)
           target match
             case OutputPath(path) =>
               copyVerbatim(ctx, path)
@@ -155,7 +155,7 @@ object XlsxWriter:
   /**
    * Copy source file verbatim to destination (for clean workbooks).
    *
-   * Fast path optimization: When a workbook has no modifications, just copy the source file
+   * Fast path optimization: When a workbooks has no modifications, just copy the source file
    * byte-for-byte instead of regenerating all XML. This is 10-11x faster than full regeneration.
    *
    * Handles edge case where source == dest (no-op).
@@ -215,14 +215,14 @@ object XlsxWriter:
         if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
         else None
 
-    // Build unified style index with per-sheet remappings
+    // Build unified styles index with per-sheets remappings
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
     val styles = OoxmlStyles(styleIndex)
 
-    // Convert domain workbook to OOXML
+    // Convert domain workbooks to OOXML
     val ooxmlWb = OoxmlWorkbook.fromDomain(workbook)
 
-    // Convert sheets to OOXML worksheets with style remapping
+    // Convert sheets to OOXML worksheets with styles remapping
     val ooxmlSheets = workbook.sheets.zipWithIndex.map { case (sheet, sheetIdx) =>
       val remapping = sheetRemappings.getOrElse(sheetIdx, Map.empty)
       OoxmlWorksheet.fromDomainWithSST(sheet, sst, remapping)
@@ -288,8 +288,8 @@ object XlsxWriter:
       // Write parts in canonical order
       writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
       writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      writePart(zip, "xl/workbook.xml", workbook.toXml, config)
-      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
+      writePart(zip, "xl/workbooks.xml", workbook.toXml, config)
+      writePart(zip, "xl/_rels/workbooks.xml.rels", workbookRels.toXml, config)
 
       // Write styles
       writePart(zip, "xl/styles.xml", styles.toXml, config)
@@ -324,8 +324,8 @@ object XlsxWriter:
       // Write parts in canonical order
       writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
       writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      writePart(zip, "xl/workbook.xml", workbook.toXml, config)
-      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
+      writePart(zip, "xl/workbooks.xml", workbook.toXml, config)
+      writePart(zip, "xl/_rels/workbooks.xml.rels", workbookRels.toXml, config)
 
       // Write styles
       writePart(zip, "xl/styles.xml", styles.toXml, config)
@@ -411,8 +411,8 @@ object XlsxWriter:
    * Determine which parts must be regenerated during surgical write.
    *
    * Parts that must be regenerated:
-   *   - Structural parts (always): workbook.xml, relationships, content types
-   *   - Styles/SST if any sheet modified (indices may change)
+   *   - Structural parts (always): workbooks.xml, relationships, content types
+   *   - Styles/SST if any sheets modified (indices may change)
    *   - Modified sheets
    *   - Relationships for modified/deleted sheets
    *
@@ -430,14 +430,14 @@ object XlsxWriter:
     regenerate ++= Set(
       "[Content_Types].xml",
       "_rels/.rels",
-      "xl/workbook.xml",
-      "xl/_rels/workbook.xml.rels"
+      "xl/workbooks.xml",
+      "xl/_rels/workbooks.xml.rels"
     )
 
-    // Regenerate styles if any sheet modified (style indices may change)
+    // Regenerate styles if any sheets modified (styles indices may change)
     if tracker.modifiedSheets.nonEmpty then regenerate += "xl/styles.xml"
 
-    // Regenerate SST if any sheet modified (string indices may change)
+    // Regenerate SST if any sheets modified (string indices may change)
     if tracker.modifiedSheets.nonEmpty then regenerate += "xl/sharedStrings.xml"
 
     // Regenerate modified sheets
@@ -447,7 +447,7 @@ object XlsxWriter:
 
     // Regenerate relationships for modified/deleted sheets
     (tracker.modifiedSheets ++ tracker.deletedSheets).foreach { idx =>
-      regenerate += s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+      regenerate += s"xl/worksheets/_rels/sheets${idx + 1}.xml.rels"
     }
 
     regenerate.toSet
@@ -524,7 +524,7 @@ object XlsxWriter:
   /**
    * Re-parse structural files from source ZIP for preservation.
    *
-   * Returns (ContentTypes, rootRels, workbookRels, workbook) parsed from the original file. If any
+   * Returns (ContentTypes, rootRels, workbookRels, workbooks) parsed from the original file. If any
    * file is missing or fails to parse, returns None for that component.
    */
   private def parsePreservedStructure(
@@ -534,8 +534,8 @@ object XlsxWriter:
       val contentTypes = parseOptionalEntry(zip, "[Content_Types].xml")(ContentTypes.fromXml)
       val rootRels = parseOptionalEntry(zip, "_rels/.rels")(Relationships.fromXml)
       val workbookRels =
-        parseOptionalEntry(zip, "xl/_rels/workbook.xml.rels")(Relationships.fromXml)
-      val workbook = parseOptionalEntry(zip, "xl/workbook.xml")(OoxmlWorkbook.fromXml)
+        parseOptionalEntry(zip, "xl/_rels/workbooks.xml.rels")(Relationships.fromXml)
+      val workbook = parseOptionalEntry(zip, "xl/workbooks.xml")(OoxmlWorkbook.fromXml)
       (contentTypes, rootRels, workbookRels, workbook)
     }
 
@@ -563,7 +563,7 @@ object XlsxWriter:
         yield Some(worksheet)
 
   /**
-   * Parse SharedStrings from source ZIP for modified sheet cell encoding.
+   * Parse SharedStrings from source ZIP for modified sheets cell encoding.
    *
    * CRITICAL: Modified sheets need the SST to encode cells as t="s" (SST references) instead of
    * t="inlineStr" (inline strings). We copy the SST verbatim to output, but parse it here so
@@ -605,7 +605,7 @@ object XlsxWriter:
    * Strategy:
    *   - With source (surgical mode): Regenerate modified sheets, copy unmodified, preserve unknown
    *     parts
-   *   - Without source (new workbook): Regenerate everything (graceful degradation)
+   *   - Without source (new workbooks): Regenerate everything (graceful degradation)
    *
    * This unified path handles both surgical modification and normal writes.
    */
@@ -713,7 +713,7 @@ object XlsxWriter:
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
     val sstForSheets = if regenerateSharedStrings then sst else None
 
-    // Build style index (automatic optimization based on sourceContext)
+    // Build styles index (automatic optimization based on sourceContext)
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
 
     // Parse preserved styles metadata (namespaces and dxfs) if source available
@@ -729,7 +729,7 @@ object XlsxWriter:
         case Some(ctx) => parsePreservedStructure(ctx.sourcePath)
         case None => (None, None, None, None)
 
-    // Use preserved workbook structure if available, otherwise create minimal
+    // Use preserved workbooks structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
         // Update sheets in preserved structure (names/order may have changed)
@@ -768,8 +768,8 @@ object XlsxWriter:
       // Write structural parts (always regenerated)
       writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
       writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      writePart(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
-      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
+      writePart(zip, "xl/workbooks.xml", ooxmlWb.toXml, config)
+      writePart(zip, "xl/_rels/workbooks.xml.rels", workbookRels.toXml, config)
       writePart(zip, "xl/styles.xml", styles.toXml, config)
 
       if regenerateSharedStrings then
@@ -782,7 +782,7 @@ object XlsxWriter:
       // Write sheets: regenerate modified, copy unmodified (if source available)
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
         if tracker.modifiedSheets.contains(idx) then
-          // Regenerate modified sheet with preserved metadata (if available)
+          // Regenerate modified sheets with preserved metadata (if available)
           val sheetPath = graph.pathForSheet(idx)
           val preservedMetadata = sourceContext
             .map(ctx => parsePreservedWorksheet(ctx.sourcePath, sheetPath))
@@ -797,7 +797,7 @@ object XlsxWriter:
             OoxmlWorksheet.fromDomainWithMetadata(sheet, sstForSheets, remapping, preservedMetadata)
           writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet.toXml, config)
         else
-          // Copy unmodified sheet from source (only if source available)
+          // Copy unmodified sheets from source (only if source available)
           sourceContext.foreach { ctx =>
             val sheetPath = graph.pathForSheet(idx)
             copyPreservedPart(ctx.sourcePath, sheetPath, zip)
@@ -813,7 +813,7 @@ object XlsxWriter:
 
     finally zip.close()
 
-  /** Write workbook to bytes (for testing) */
+  /** Write workbooks to bytes (for testing) */
   def writeToBytes(workbook: Workbook): XLResult[Array[Byte]] =
     try
       val baos = new ByteArrayOutputStream()

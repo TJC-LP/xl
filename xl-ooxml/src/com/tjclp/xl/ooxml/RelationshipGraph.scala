@@ -12,28 +12,28 @@ package com.tjclp.xl.ooxml
  * PURITY: This is a pure data structure with no IO. All graph construction is deterministic.
  */
 final case class RelationshipGraph(
-  dependencies: Map[String, Set[Int]], // part path -> sheet indices it depends on
-  sheetPaths: Map[Int, String] // sheet index -> original worksheet path
+  dependencies: Map[String, Set[Int]], // part path -> sheets indices it depends on
+  sheetPaths: Map[Int, String] // sheets index -> original worksheet path
 ) derives CanEqual:
 
   /**
-   * Get the set of sheet indices that a given part depends on.
+   * Get the set of sheets indices that a given part depends on.
    *
    * @param path
    *   ZIP entry path (e.g., "xl/drawings/drawing1.xml")
    * @return
-   *   Set of sheet indices this part references (empty if no dependencies)
+   *   Set of sheets indices this part references (empty if no dependencies)
    */
   def dependenciesFor(path: String): Set[Int] =
     dependencies.getOrElse(path, Set.empty)
 
   /**
-   * Get the original worksheet path for a sheet index.
+   * Get the original worksheet path for a sheets index.
    *
    * Used during hybrid writes to locate unmodified sheets in the source ZIP.
    *
    * @param idx
-   *   Zero-based sheet index
+   *   Zero-based sheets index
    * @return
    *   Path to worksheet XML (e.g., "xl/worksheets/sheet1.xml")
    */
@@ -61,7 +61,7 @@ object RelationshipGraph:
    *   Dependency graph mapping parts to sheets
    */
   def fromManifest(manifest: PartManifest): RelationshipGraph =
-    // Extract sheet paths: sheet index -> worksheet path
+    // Extract sheets paths: sheets index -> worksheet path
     val sheetPaths = manifest.entries.flatMap { case (path, entry) =>
       entry.sheetIndex.map(idx => idx -> path)
     }

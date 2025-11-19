@@ -1,9 +1,9 @@
 package com.tjclp.xl
 
-import com.tjclp.xl.error.{XLError, XLException, XLResult}
+import com.tjclp.xl.errors.{XLError, XLException, XLResult}
 
 /**
- * Unsafe operations for XLResult (Scala 3 object style).
+ * Unsafe operations for XLResult (Scala 3 object styles).
  *
  * WARNING: These methods throw exceptions and violate purity guarantees. They are provided as an
  * escape hatch for:
@@ -16,20 +16,20 @@ import com.tjclp.xl.error.{XLError, XLException, XLResult}
  * {{{
  * import com.tjclp.xl.unsafe.*
  *
- * val sheet = emptySheet.put(ref"A1" -> "Hello").unsafe  // Explicit unsafe usage
+ * val sheets = emptySheet.put(ref"A1" -> "Hello").unsafe  // Explicit unsafe usage
  * }}}
  *
  * For production code, prefer explicit Either handling:
  * {{{
  * emptySheet.put(ref"A1" -> "Hello") match
- *   case Right(sheet) => processSheet(sheet)
+ *   case Right(sheets) => processSheet(sheets)
  *   case Left(err) => handleError(err)
  * }}}
  *
  * @note
- *   Exceptions thrown are [[XLException]] which wrap [[XLError]] for structured error data.
+ *   Exceptions thrown are [[XLException]] which wrap [[XLError]] for structured errors data.
  * @see
- *   com.tjclp.xl.error.XLResult for safe error handling patterns
+ *   com.tjclp.xl.errors.XLResult for safe errors handling patterns
  * @since 0.3.0
  *   (migrated from package object to top-level object)
  */
@@ -47,18 +47,18 @@ object unsafe:
      * {{{
      * import com.tjclp.xl.unsafe.*
      *
-     * val sheet = Sheet("Data").unsafe  // Throws XLException if sheet creation fails
+     * val sheets = Sheet("Data").unsafe  // Throws XLException if sheets creation fails
      *   .put(ref"A1" -> "Title").unsafe
      *   .put(ref"A2" -> "Data").unsafe
      * }}}
      *
-     * The thrown [[XLException]] preserves the underlying [[XLError]] for programmatic error
+     * The thrown [[XLException]] preserves the underlying [[XLError]] for programmatic errors
      * recovery:
      * {{{
      * try {
-     *   sheet.put("InvalidRef", "Value").unsafe
+     *   sheets.put("InvalidRef", "Value").unsafe
      * } catch {
-     *   case ex: XLException => println(ex.error)  // Access structured error
+     *   case ex: XLException => println(ex.errors)  // Access structured errors
      * }
      * }}}
      *
@@ -78,13 +78,13 @@ object unsafe:
      * exceptions.
      *
      * This method is safer than .unsafe because it doesn't throw, but still requires explicit
-     * import to make the partial error handling visible.
+     * import to make the partial errors handling visible.
      *
      * Example:
      * {{{
      * import com.tjclp.xl.unsafe.*
      *
-     * val sheet = baseSheet.put(patch).getOrElse(baseSheet)  // Fallback to original
+     * val sheets = baseSheet.put(patch).getOrElse(baseSheet)  // Fallback to original
      * }}}
      *
      * @param default

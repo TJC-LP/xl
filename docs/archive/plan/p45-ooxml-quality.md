@@ -143,13 +143,13 @@ def toXml: Elem =
 
 **AI Contract Requirements**:
 ```scala
-/** Create SharedStrings table from workbook
+/** Create SharedStrings table from workbooks
   *
   * REQUIRES: wb contains only valid CellValue.Text cells
   * ENSURES:
   *   - strings contains unique text values (deduped)
   *   - indexMap maps each string to its SST index
-  *   - totalCount = number of text cell instances in workbook
+  *   - totalCount = number of text cell instances in workbooks
   *   - totalCount >= strings.size (equality when no duplicates)
   * DETERMINISTIC: Yes (iteration order is stable)
   * ERROR CASES: None (total function)

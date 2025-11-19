@@ -4,9 +4,9 @@ import munit.FunSuite
 import java.nio.file.{Files, Path}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, Column, Row}
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.codecs.syntax.*
 import com.tjclp.xl.unsafe.*
 
 /**
@@ -27,7 +27,7 @@ class CompressionSpec extends FunSuite:
   )
 
   tempDir.test("DEFLATED produces smaller files than STORED") { dir =>
-    // Create workbook with repetitive data (compresses well)
+    // Create workbooks with repetitive data (compresses well)
     val wb = Workbook("Data").flatMap { initial =>
       val cells = (1 to 1000).flatMap { row =>
         val aRef = ARef(Column.from1(1), Row.from1(row))
@@ -41,7 +41,7 @@ class CompressionSpec extends FunSuite:
       }
       val sheet = initial.sheets(0).put(cells*).unsafe
       initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    }.getOrElse(fail("Failed to create workbooks"))
 
     // Write with DEFLATED (default)
     val deflatedPath = dir.resolve("deflated.xlsx")
@@ -73,7 +73,7 @@ class CompressionSpec extends FunSuite:
     val wb = Workbook("Simple").flatMap { initial =>
       val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Test"))
       initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    }.getOrElse(fail("Failed to create workbooks"))
 
     // Write with compact XML
     val compactPath = dir.resolve("compact.xlsx")
@@ -104,7 +104,7 @@ class CompressionSpec extends FunSuite:
       }
       val sheet = initial.sheets(0).put(cells*).unsafe
       initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    }.getOrElse(fail("Failed to create workbooks"))
 
     val path = dir.resolve("default.xlsx")
 
@@ -133,7 +133,7 @@ class CompressionSpec extends FunSuite:
     val wb = Workbook("Debug").flatMap { initial =>
       val sheet = initial.sheets(0).put(ref"A1", CellValue.Number(42))
       initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    }.getOrElse(fail("Failed to create workbooks"))
 
     val path = dir.resolve("debug.xlsx")
     XlsxWriter.writeWith(wb, path, WriterConfig.debug) match

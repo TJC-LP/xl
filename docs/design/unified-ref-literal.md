@@ -70,7 +70,7 @@ workbook(ref"Sales!A1") match
   case Right(cell: Cell) => println(s"Found cell: ${cell.value}")
   case Left(err) => println(s"Error: ${err.message}")
 
-// Sheet access (ignores sheet qualifier if present)
+// Sheet access (ignores sheets qualifier if present)
 sheet(ref"A1")              // Returns Cell
 sheet(ref"Sales!A1")        // Returns Cell (ignores "Sales!")
 sheet(ref"A1:B10")          // Returns Iterable[Cell]
@@ -88,7 +88,7 @@ private def refImpl0(sc: Expr[StringContext])(using Quotes): Expr[ARef | CellRan
   try
     val bangIdx = findUnquotedBang(s)  // Find '!' outside quotes
     if bangIdx < 0 then
-      // No sheet qualifier → return unwrapped type
+      // No sheets qualifier → return unwrapped type
       if s.contains(':') then
         val ((cs, rs), (ce, re)) = parseRangeLit(s)
         constCellRange(cs, rs, ce, re)  // Expr[CellRange]
@@ -96,11 +96,11 @@ private def refImpl0(sc: Expr[StringContext])(using Quotes): Expr[ARef | CellRan
         val (c0, r0) = parseCellLit(s)
         constARef(c0, r0)  // Expr[ARef]
     else
-      // Has sheet qualifier → return RefType wrapper
+      // Has sheets qualifier → return RefType wrapper
       val sheetPart = s.substring(0, bangIdx)
       val refPart = s.substring(bangIdx + 1)
 
-      // Parse sheet name (handle 'quoted names')
+      // Parse sheets name (handle 'quoted names')
       val sheetName = if sheetPart.startsWith("'") then
         validateSheetName(unquote(sheetPart))
       else
@@ -141,7 +141,7 @@ Validation rules (Excel spec):
 def apply(ref: RefType): XLResult[Cell | Iterable[Cell]] =
   ref match
     case RefType.Cell(_) | RefType.Range(_) =>
-      Left(XLError.InvalidReference("Workbook access requires sheet-qualified ref"))
+      Left(XLError.InvalidReference("Workbook access requires sheets-qualified ref"))
     case RefType.QualifiedCell(sheet, cellRef) =>
       apply(sheet).map(s => s(cellRef))
     case RefType.QualifiedRange(sheet, range) =>
@@ -154,8 +154,8 @@ def apply(ref: RefType): Cell | Iterable[Cell] =
   ref match
     case RefType.Cell(cellRef) => apply(cellRef)
     case RefType.Range(range) => getRange(range)
-    case RefType.QualifiedCell(_, cellRef) => apply(cellRef)  // Ignores sheet
-    case RefType.QualifiedRange(_, range) => getRange(range)  // Ignores sheet
+    case RefType.QualifiedCell(_, cellRef) => apply(cellRef)  // Ignores sheets
+    case RefType.QualifiedRange(_, range) => getRange(range)  // Ignores sheets
 ```
 
 ## Benefits

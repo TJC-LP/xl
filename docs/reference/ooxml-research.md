@@ -275,7 +275,7 @@ trait CellReader[A]:
   def read(cell: Cell): Either[CellError, A]
 
 trait CellWriter[A]:
-  def write(a: A): CellPatch // value + style hints
+  def write(a: A): CellPatch // value + styles hints
 
 object CellCodec:
   given CellReader[Int] = ???

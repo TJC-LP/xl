@@ -46,7 +46,7 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import java.nio.file.Path
 
-// Build a simple sheet (Sales) with two rows
+// Build a simple sheets (Sales) with two rows
 val sheet =
   Sheet("Sales").unsafe
     .put(
@@ -57,7 +57,7 @@ val sheet =
     )
     .unsafe
 
-// Create a workbook and add the sheet
+// Create a workbooks and add the sheets
 val workbook =
   Workbook.empty
     .flatMap(_.put(sheet))
@@ -82,7 +82,7 @@ val path  = Path.of("sales.xlsx")
 
 val program: IO[Unit] =
   excel.read(path).flatMap { workbook =>
-    // Access first sheet
+    // Access first sheets
     val sheet = workbook.sheets.head
 
     // Read cell value at B2 (returns a Cell; empty cells have CellValue.Empty)
@@ -97,7 +97,7 @@ program.unsafeRunSync()
 
 ```scala
 import com.tjclp.xl.*
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.codecs.syntax.*
 
 val sheet = workbook.sheets.head
 
@@ -105,7 +105,7 @@ val sheet = workbook.sheets.head
 sheet.readTyped[Int](ref"B2") match
   case Right(Some(revenue)) => println(s"Revenue: $$${revenue}")
   case Right(None) => println("Empty cell")
-  case Left(error) => println(s"Type error: ${error}")
+  case Left(error) => println(s"Type errors: ${error}")
 ```
 
 ## Adding Styles (2 minutes)
@@ -113,13 +113,13 @@ sheet.readTyped[Int](ref"B2") match
 ```scala
 import com.tjclp.xl.*
 
-// Define a header style (bold, centered, gray background)
+// Define a header styles (bold, centered, gray background)
 val headerStyle = CellStyle.default
   .bold.size(14.0).fontFamily("Arial")
   .bgGray.bordered
   .center.middle
 
-// Apply style to A1 and B1 using the sheet extension
+// Apply styles to A1 and B1 using the sheets extension
 val styledSheet =
   sheet
     .withCellStyle(ref"A1", headerStyle)
@@ -245,7 +245,7 @@ println(html)  // <table>...</table> with inline CSS
 ### Imports You'll Need
 ```scala
 import com.tjclp.xl.*                   // Core types, macros, DSL
-import com.tjclp.xl.codec.syntax.*      // Type-safe codecs (readTyped, etc.)
+import com.tjclp.xl.codecs.syntax.*      // Type-safe codecs (readTyped, etc.)
 import com.tjclp.xl.dsl.*               // := operator, ++ combinator
 import com.tjclp.xl.io.{ExcelIO, Excel} // File and streaming I/O
 import cats.effect.IO
@@ -282,7 +282,7 @@ sheet.put(
   ref"C1" -> java.time.LocalDate.now()
 )
 
-// Apply style
+// Apply styles
 sheet.withCellStyle(ref"A1", headerStyle)
 
 // Range operations
@@ -305,7 +305,7 @@ ExcelIO.instance[IO].write(wb, path).unsafeRunSync()
 ### "Value readTyped is not a member of Sheet"
 **Solution**: Import codec givens:
 ```scala
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.codecs.syntax.*
 ```
 
 ### "Macro expansion error: Invalid cell reference"

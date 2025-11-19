@@ -2,7 +2,7 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 
-import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.errors.{XLError, XLResult}
 
 /**
  * XML serialization and deserialization for OOXML parts.
@@ -18,7 +18,7 @@ trait XmlWritable:
 
 /** Trait for types that can be deserialized from XML */
 trait XmlReadable[A]:
-  /** Parse from XML element, returning error message on failure */
+  /** Parse from XML element, returning errors message on failure */
   def fromXml(elem: Elem): Either[String, A]
 
 /** XML utilities for OOXML */
@@ -40,7 +40,7 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"
 
   /** Content type URIs */
-  val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+  val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"
   val ctWorksheet = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
   val ctStyles = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"
   val ctSharedStrings =
@@ -222,9 +222,9 @@ object XmlUtil:
    * @return
    *   Font with formatting properties (default Font if no properties)
    */
-  def parseRunProperties(rPrElem: Elem): com.tjclp.xl.style.font.Font =
-    import com.tjclp.xl.style.font.Font
-    import com.tjclp.xl.style.color.Color
+  def parseRunProperties(rPrElem: Elem): com.tjclp.xl.styles.font.Font =
+    import com.tjclp.xl.styles.font.Font
+    import com.tjclp.xl.styles.color.Color
 
     val bold = (rPrElem \ "b").nonEmpty
     val italic = (rPrElem \ "i").nonEmpty
@@ -265,7 +265,7 @@ object XmlUtil:
    *   - Returns RichText with TextRun for each <r> element
    *   - Each run may have optional formatting from <rPr>
    *   - Runs without <rPr> use default formatting
-   *   - Returns error if any <r> is missing required <t> element
+   *   - Returns errors if any <r> is missing required <t> element
    * DETERMINISTIC: Yes (stable iteration order)
    *
    * OOXML structure:
@@ -275,7 +275,7 @@ object XmlUtil:
    * @param runElems
    *   Sequence of <r> elements
    * @return
-   *   Either[String, RichText] with error if any run is malformed
+   *   Either[String, RichText] with errors if any run is malformed
    */
   def parseTextRuns(runElems: Seq[Node]): Either[String, com.tjclp.xl.richtext.RichText] =
     import com.tjclp.xl.richtext.{TextRun, RichText}
@@ -315,4 +315,4 @@ object XmlSecurity:
       val loader = XML.withSAXParser(factory.newSAXParser())
       Right(loader.loadString(xmlString))
     catch
-      case e: Exception => Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))
+      case e: Exception => Left(XLError.ParseError(location, s"XML parse errors: ${e.getMessage}"))

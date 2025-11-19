@@ -446,7 +446,7 @@ excel.readStream(matrix)
   })
   .compile.count
 
-// Find rows with at least one error
+// Find rows with at least one errors
 excel.readStream(calculations)
   .through(RowQuery.whereAny {
     case CellValue.Error(_) => true

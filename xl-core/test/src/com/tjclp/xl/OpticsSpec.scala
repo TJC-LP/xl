@@ -2,13 +2,13 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.optics.syntax.* // Import optics extension methods
 import com.tjclp.xl.dsl.syntax.*
 import munit.FunSuite
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.units.StyleId
 
 /** Tests for optics library and focus DSL */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.Var"))
@@ -174,7 +174,7 @@ class OpticsSpec extends FunSuite:
     assertEquals(restyled.styleId, Some(StyleId(10)))
   }
 
-  test("Optics.sheetName accesses sheet name") {
+  test("Optics.sheetName accesses sheets name") {
     import Optics.*
 
     val sheet = emptySheet
@@ -196,7 +196,7 @@ class OpticsSpec extends FunSuite:
 
   // ========== Focus DSL ==========
 
-  test("sheet.focus returns Optional for ref") {
+  test("sheets.focus returns Optional for ref") {
     val sheet = emptySheet.put(ref"A1", CellValue.Text("test"))
     val focused = sheet.focus(ref"A1")
 
@@ -205,7 +205,7 @@ class OpticsSpec extends FunSuite:
     assertEquals(cellOpt.get.value, CellValue.Text("test"))
   }
 
-  test("sheet.modifyCell updates ref") {
+  test("sheets.modifyCell updates ref") {
     val sheet = emptySheet.put(ref"A1", CellValue.Text("original"))
 
     val updated = sheet.modifyCell(ref"A1")(c => c.withValue(CellValue.Text("modified")))
@@ -213,7 +213,7 @@ class OpticsSpec extends FunSuite:
     assertEquals(updated(ref"A1").value, CellValue.Text("modified"))
   }
 
-  test("sheet.modifyCell creates empty cell if missing") {
+  test("sheets.modifyCell creates empty cell if missing") {
     val sheet = emptySheet
 
     val updated = sheet.modifyCell(ref"B5")(c => c.withValue(CellValue.Number(99)))
@@ -221,7 +221,7 @@ class OpticsSpec extends FunSuite:
     assertEquals(updated(ref"B5").value, CellValue.Number(99))
   }
 
-  test("sheet.modifyValue transforms cell value") {
+  test("sheets.modifyValue transforms cell value") {
     val sheet = emptySheet.put(ref"A1", CellValue.Text("hello"))
 
     val updated = sheet.modifyValue(ref"A1") {
@@ -232,7 +232,7 @@ class OpticsSpec extends FunSuite:
     assertEquals(updated(ref"A1").value, CellValue.Text("HELLO"))
   }
 
-  test("sheet.modifyValue handles non-text values") {
+  test("sheets.modifyValue handles non-text values") {
     val sheet = emptySheet.put(ref"A1", CellValue.Number(42))
 
     val updated = sheet.modifyValue(ref"A1") {
@@ -243,7 +243,7 @@ class OpticsSpec extends FunSuite:
     assertEquals(updated(ref"A1").value, CellValue.Number(84))
   }
 
-  test("sheet.modifyStyleId updates style") {
+  test("sheets.modifyStyleId updates styles") {
     val sheet = emptySheet.put(ref"A1", CellValue.Text("styled"))
 
     val updated = sheet.modifyStyleId(ref"A1")(_ => Some(StyleId(7)))
@@ -251,7 +251,7 @@ class OpticsSpec extends FunSuite:
     assertEquals(updated(ref"A1").styleId, Some(StyleId(7)))
   }
 
-  test("sheet.modifyStyleId clears style with None") {
+  test("sheets.modifyStyleId clears styles with None") {
     val sheet = emptySheet
       .put(Cell(ref"A1", CellValue.Text("styled"), Some(StyleId(5))))
 
@@ -478,7 +478,7 @@ class OpticsSpec extends FunSuite:
     assertEquals(updated(ref"A1").value, CellValue.Text("after patch"))
   }
 
-  test("optics preserve sheet structure") {
+  test("optics preserve sheets structure") {
     val sheet = emptySheet
       .put(ref"A1", CellValue.Text("test"))
       .merge(ref"A1:B1")

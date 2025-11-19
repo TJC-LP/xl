@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.style.{Fill, Color, PatternType, CellStyle}
+import com.tjclp.xl.styles.{Fill, Color, PatternType, CellStyle}
 import scala.xml.Elem
 
 /** Tests for OOXML Styles serialization (xl/styles.xml) */

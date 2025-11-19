@@ -121,9 +121,9 @@ object StyleIndex:
 2. **Add new public dispatcher**:
    ```scala
    /**
-    * Build unified style index from workbook with automatic optimization.
+    * Build unified styles index from workbooks with automatic optimization.
     *
-    * Strategy (automatic based on workbook.sourceContext):
+    * Strategy (automatic based on workbooks.sourceContext):
     *   - With source: Preserve original styles (byte-perfect surgical modification)
     *   - Without source: Full deduplication (optimal compression)
     *
@@ -453,9 +453,9 @@ private def fromWorkbookWithSource(
 
 ```scala
   /**
-   * Build unified style index from workbook with automatic optimization.
+   * Build unified styles index from workbooks with automatic optimization.
    *
-   * Strategy (automatic based on workbook.sourceContext):
+   * Strategy (automatic based on workbooks.sourceContext):
    *   - **With source**: Preserve original styles for byte-perfect surgical modification
    *   - **Without source**: Full deduplication for optimal compression
    *
@@ -464,7 +464,7 @@ private def fromWorkbookWithSource(
    * allowing programmatic creation to produce optimal output.
    *
    * @param wb
-   *   The workbook to index
+   *   The workbooks to index
    * @return
    *   (StyleIndex for writing, Map[sheetIndex -> styleId remapping])
    */
@@ -607,7 +607,7 @@ StyleIndex.fromWorkbook(wb)  // Assumes wb has sourceContext
 ```bash
 cd data
 
-# Check style count
+# Check styles count
 unzip -p syndigo-surgical-output.xlsx xl/styles.xml | \
   xmllint --format - | grep '<cellXfs count='
 

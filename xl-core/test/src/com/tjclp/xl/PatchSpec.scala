@@ -8,20 +8,20 @@ import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.patch.Patch.{*, given}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.color.Color
-import com.tjclp.xl.style.fill.Fill
-import com.tjclp.xl.style.font.Font
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.units.StyleId
 
 /** Property tests for Patch monoid laws and semantics */
 class PatchSpec extends ScalaCheckSuite:
 
-  // Helper to create a simple test sheet
+  // Helper to create a simple test sheets
   def emptySheet: Sheet = Sheet(SheetName.unsafe("Test"))
 
   // ========== Monoid Laws ==========
@@ -73,7 +73,7 @@ class PatchSpec extends ScalaCheckSuite:
       val left = (p1 |+| p2) |+| p3
       val right = p1 |+| (p2 |+| p3)
 
-      // Apply both to the same sheet and verify results are identical
+      // Apply both to the same sheets and verify results are identical
       val sheet = emptySheet
       val leftResult = Patch.applyPatch(sheet, left)
       val rightResult = Patch.applyPatch(sheet, right)
@@ -102,12 +102,12 @@ class PatchSpec extends ScalaCheckSuite:
     assertEquals(updated(ref).value, value)
   }
 
-  test("SetStyle patch sets cell style") {
+  test("SetStyle patch sets cell styles") {
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
     val styleId = StyleId(42)
 
-    // First put a cell, then style it
+    // First put a cell, then styles it
     val patch = (Patch.Put(ref, CellValue.Text("Test")): Patch) |+| (Patch.SetStyle(ref, styleId): Patch)
     val result = Patch.applyPatch(sheet, patch)
 
@@ -116,7 +116,7 @@ class PatchSpec extends ScalaCheckSuite:
     assertEquals(updated(ref).styleId, Some(styleId))
   }
 
-  test("ClearStyle patch removes cell style") {
+  test("ClearStyle patch removes cell styles") {
     val sheet = emptySheet
       .put(ARef.from1(1, 1), CellValue.Text("Test"))
       .put(Cell(ARef.from1(1, 1), CellValue.Text("Test"), Some(StyleId(42))))
@@ -145,7 +145,7 @@ class PatchSpec extends ScalaCheckSuite:
       // Cell should have styleId
       assert(updated(ref"A1").styleId.isDefined)
 
-      // Can retrieve original style
+      // Can retrieve original styles
       assertEquals(updated.getCellStyle(ref"A1"), Some(boldStyle))
     }
   }
@@ -165,7 +165,7 @@ class PatchSpec extends ScalaCheckSuite:
       // Should only have 2 styles (default + red)
       assertEquals(updated.styleRegistry.size, 2)
 
-      // Both cells should reference same style index
+      // Both cells should reference same styles index
       assertEquals(
         updated(ref"A1").styleId,
         updated(ref"A2").styleId

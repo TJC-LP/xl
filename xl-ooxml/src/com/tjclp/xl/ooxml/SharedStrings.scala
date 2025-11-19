@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.richtext.RichText
 import scala.xml.*
 import XmlUtil.*
@@ -13,7 +13,7 @@ type SSTEntry = Either[String, RichText]
 /**
  * Shared Strings Table (SST) for xl/sharedStrings.xml
  *
- * Deduplicates string values across the workbook. Cells reference strings by index rather than
+ * Deduplicates string values across the workbooks. Cells reference strings by index rather than
  * embedding them inline.
  *
  * Supports both plain text and rich text (formatted runs). All plain text is normalized to NFC form
@@ -24,7 +24,7 @@ type SSTEntry = Either[String, RichText]
  * @param indexMap
  *   Plain text → index lookup (used for deduplication)
  * @param totalCount
- *   Total number of string cell instances in workbook (including duplicates)
+ *   Total number of string cell instances in workbooks (including duplicates)
  */
 case class SharedStrings(
   strings: Vector[SSTEntry],
@@ -106,7 +106,7 @@ case class SharedStrings(
             case _ =>
               // Build from Font model if no raw XML or parse failed
               run.font.map { f =>
-                import com.tjclp.xl.style.font.Font
+                import com.tjclp.xl.styles.font.Font
                 val fontProps = Seq.newBuilder[Elem]
 
                 if f.bold then fontProps += elem("b")()
@@ -187,7 +187,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     Normalizer.normalize(s, Normalizer.Form.NFC)
 
   /**
-   * Build SharedStrings table from workbook text and rich text cells
+   * Build SharedStrings table from workbooks text and rich text cells
    *
    * Extracts all CellValue.Text and CellValue.RichText instances, deduplicates by plain text
    * content, and tracks total count.
@@ -195,11 +195,11 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    * REQUIRES: wb contains valid CellValue.Text or CellValue.RichText cells ENSURES:
    *   - strings contains unique entries (plain text or RichText)
    *   - indexMap maps plain text to SST index (deduplication by content)
-   *   - totalCount = number of text/richtext cell instances in workbook
+   *   - totalCount = number of text/richtext cell instances in workbooks
    *   - totalCount >= strings.size (equality only when no duplicates)
    *   - Iteration order is stable (sheets processed in Vector order)
    * DETERMINISTIC: Yes (stable Vector traversal, deterministic deduplication) ERROR CASES: None
-   * (total function, handles empty workbook → empty SST)
+   * (total function, handles empty workbooks → empty SST)
    *
    * @param wb
    *   Workbook to extract strings from
@@ -211,8 +211,8 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     val allEntries = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.values.iterator.flatMap { cell =>
         cell.value match
-          case com.tjclp.xl.cell.CellValue.Text(s) => Iterator.single(Left(s): SSTEntry)
-          case com.tjclp.xl.cell.CellValue.RichText(rt) => Iterator.single(Right(rt): SSTEntry)
+          case com.tjclp.xl.cells.CellValue.Text(s) => Iterator.single(Left(s): SSTEntry)
+          case com.tjclp.xl.cells.CellValue.RichText(rt) => Iterator.single(Right(rt): SSTEntry)
           case _ => Iterator.empty
       }
     }
@@ -259,7 +259,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     val textCells = wb.sheets.flatMap { sheet =>
       sheet.cells.values.flatMap { cell =>
         cell.value match
-          case com.tjclp.xl.cell.CellValue.Text(s) => Some(s)
+          case com.tjclp.xl.cells.CellValue.Text(s) => Some(s)
           case _ => None
       }
     }

@@ -76,7 +76,7 @@ class ModificationTrackerPropertySpec extends ScalaCheckSuite:
 
   // ========== Semantic Properties ==========
 
-  property("delete removes sheet from modified set") {
+  property("delete removes sheets from modified set") {
     // Use clean tracker for predictable behavior
     val idx = 7
     val marked = ModificationTracker.clean.markSheet(idx)
@@ -113,7 +113,7 @@ class ModificationTrackerPropertySpec extends ScalaCheckSuite:
     // Mark sheets 0, 5, 10 as modified
     val marked = ModificationTracker.clean.markSheet(0).markSheet(5).markSheet(10)
 
-    // Delete sheet 5
+    // Delete sheets 5
     val deleted = marked.delete(5)
 
     // Verify indices adjusted correctly:
@@ -131,7 +131,7 @@ class ModificationTrackerPropertySpec extends ScalaCheckSuite:
     // Start with clean tracker, mark sheets at indices 2, 5, 10
     val marked = ModificationTracker.clean.markSheet(2).markSheet(5).markSheet(10)
 
-    // Delete sheet 2 (shifts 5→4 and 10→9)
+    // Delete sheets 2 (shifts 5→4 and 10→9)
     val afterFirst = marked.delete(2)
 
     // Verify state after first deletion
@@ -140,12 +140,12 @@ class ModificationTrackerPropertySpec extends ScalaCheckSuite:
     assert(afterFirst.modifiedSheets.contains(9)) // Was 10
     assert(!afterFirst.modifiedSheets.contains(2)) // Deleted, removed from modified
 
-    // Delete sheet 4 (which was originally sheet 5, shifts 9→8)
+    // Delete sheets 4 (which was originally sheets 5, shifts 9→8)
     val afterSecond = afterFirst.delete(4)
 
     // Verify final state
     assertEquals(afterSecond.deletedSheets, Set(2, 4))
-    assertEquals(afterSecond.modifiedSheets, Set(8)) // Original sheet 10, shifted twice
+    assertEquals(afterSecond.modifiedSheets, Set(8)) // Original sheets 10, shifted twice
   }
 
   property("deletedSheets indices shift on subsequent deletions") {

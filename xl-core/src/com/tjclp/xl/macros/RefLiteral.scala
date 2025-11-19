@@ -18,7 +18,7 @@ import scala.quoted.*
  * Uses zero-allocation parsing at compile time for maximum performance.
  *
  * Return type is transparent: simple refs return unwrapped ARef/CellRange for backwards
- * compatibility, qualified refs return RefType for sheet information.
+ * compatibility, qualified refs return RefType for sheets information.
  */
 @SuppressWarnings(
   Array(
@@ -34,7 +34,7 @@ object RefLiteral:
 
     transparent inline def ref(
       inline args: Any*
-    ): ARef | CellRange | RefType | Either[com.tjclp.xl.error.XLError, RefType] =
+    ): ARef | CellRange | RefType | Either[com.tjclp.xl.errors.XLError, RefType] =
       ${ refImplN('sc, 'args) }
 
   // -------- Implementation --------
@@ -66,7 +66,7 @@ object RefLiteral:
   private def refImplN(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[ARef | CellRange | RefType | Either[com.tjclp.xl.error.XLError, RefType]] =
+  )(using Quotes): Expr[ARef | CellRange | RefType | Either[com.tjclp.xl.errors.XLError, RefType]] =
     import quotes.reflect.*
 
     args match
@@ -91,7 +91,7 @@ object RefLiteral:
    * Reconstructs the full string, parses it at compile time, and emits a constant. Returns
    * unwrapped ARef, CellRange, or RefType (same as non-interpolated literals).
    *
-   * If parsing fails, aborts compilation with helpful error message.
+   * If parsing fails, aborts compilation with helpful errors message.
    */
   private def compileTimeOptimizedPath(
     sc: Expr[StringContext],
@@ -121,16 +121,16 @@ object RefLiteral:
    * Phase 1: Runtime parsing for dynamic interpolations.
    *
    * Builds string at runtime and parses it with existing runtime parser. Returns Either[XLError,
-   * RefType] for explicit error handling.
+   * RefType] for explicit errors handling.
    */
   private def runtimePath(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, RefType]] =
+  )(using Quotes): Expr[Either[com.tjclp.xl.errors.XLError, RefType]] =
     '{
       val str = $sc.s($args*)
       RefType.parseToXLError(str)
-    }.asExprOf[Either[com.tjclp.xl.error.XLError, RefType]]
+    }.asExprOf[Either[com.tjclp.xl.errors.XLError, RefType]]
 
   private def literal(sc: Expr[StringContext])(using Quotes): String =
     val parts = sc.valueOrAbort.parts

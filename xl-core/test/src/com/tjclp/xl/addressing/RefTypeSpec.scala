@@ -1,9 +1,9 @@
 package com.tjclp.xl.addressing
 
 import com.tjclp.xl.Generators.{genARef, genCellRange, genSheetName}
-import com.tjclp.xl.workbook.Workbook
-import com.tjclp.xl.sheet.Sheet
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.cells.{Cell, CellValue}
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import org.scalacheck.{Arbitrary, Gen}
@@ -110,20 +110,20 @@ class RefTypeSpec extends ScalaCheckSuite:
       case other => fail(s"Expected RefType.QualifiedRange, got $other")
   }
 
-  test("Parse quoted sheet: 'Q1 Sales'!A1") {
+  test("Parse quoted sheets: 'Q1 Sales'!A1") {
     RefType.parse("'Q1 Sales'!A1") match
       case Right(RefType.QualifiedCell(sheet, ref)) =>
         assertEquals(sheet.value, "Q1 Sales")
         assertEquals(ref.toA1, "A1")
-      case other => fail(s"Expected RefType.QualifiedCell with quoted sheet, got $other")
+      case other => fail(s"Expected RefType.QualifiedCell with quoted sheets, got $other")
   }
 
-  test("Parse quoted sheet with range: 'Q1 Sales'!A1:B10") {
+  test("Parse quoted sheets with range: 'Q1 Sales'!A1:B10") {
     RefType.parse("'Q1 Sales'!A1:B10") match
       case Right(RefType.QualifiedRange(sheet, range)) =>
         assertEquals(sheet.value, "Q1 Sales")
         assertEquals(range.toA1, "A1:B10")
-      case other => fail(s"Expected RefType.QualifiedRange with quoted sheet, got $other")
+      case other => fail(s"Expected RefType.QualifiedRange with quoted sheets, got $other")
   }
 
   test("Parse escaped quote: 'It''s Q1'!A1") {
@@ -152,11 +152,11 @@ class RefTypeSpec extends ScalaCheckSuite:
     assert(RefType.parse("Sales!").isLeft, "Missing ref after ! should fail")
   }
 
-  test("Empty quoted sheet name fails") {
-    assert(RefType.parse("''!A1").isLeft, "Empty quoted sheet name should fail")
+  test("Empty quoted sheets name fails") {
+    assert(RefType.parse("''!A1").isLeft, "Empty quoted sheets name should fail")
   }
 
-  test("Invalid sheet name chars fail") {
+  test("Invalid sheets name chars fail") {
     assert(RefType.parse("Sales:Q1!A1").isLeft, "Sheet name with : should fail")
     assert(RefType.parse("Sales\\Q1!A1").isLeft, "Sheet name with \\ should fail")
     assert(RefType.parse("Sales/Q1!A1").isLeft, "Sheet name with / should fail")
@@ -166,8 +166,8 @@ class RefTypeSpec extends ScalaCheckSuite:
     val name31 = "a" * 31
     val name32 = "a" * 32
 
-    assert(RefType.parse(s"$name31!A1").isRight, "31-char sheet name should succeed")
-    assert(RefType.parse(s"$name32!A1").isLeft, "32-char sheet name should fail")
+    assert(RefType.parse(s"$name31!A1").isRight, "31-char sheets name should succeed")
+    assert(RefType.parse(s"$name32!A1").isLeft, "32-char sheets name should fail")
   }
 
   test("Unbalanced quotes - unclosed quote fails") {
@@ -183,20 +183,20 @@ class RefTypeSpec extends ScalaCheckSuite:
 
   // ========== toA1 Quoting Behavior ==========
 
-  test("toA1 quotes sheet names with spaces") {
+  test("toA1 quotes sheets names with spaces") {
     val ref = RefType.QualifiedCell(SheetName.unsafe("Q1 Sales"), ARef.from1(1, 1))
     assertEquals(ref.toA1, "'Q1 Sales'!A1")
   }
 
-  test("toA1 doesn't quote simple sheet names") {
+  test("toA1 doesn't quote simple sheets names") {
     val ref = RefType.QualifiedCell(SheetName.unsafe("Sales"), ARef.from1(1, 1))
     assertEquals(ref.toA1, "Sales!A1")
   }
 
-  test("toA1 quotes sheet names with single quotes") {
+  test("toA1 quotes sheets names with single quotes") {
     val ref = RefType.QualifiedCell(SheetName.unsafe("It's Q1"), ARef.from1(1, 1))
     // Should produce escaped quotes
-    assert(ref.toA1.contains("'"), "Should quote sheet name with apostrophe")
+    assert(ref.toA1.contains("'"), "Should quote sheets name with apostrophe")
   }
 
   // ========== Pattern Matching ==========
@@ -313,7 +313,7 @@ class RefTypeSpec extends ScalaCheckSuite:
       case other => fail(s"Expected Right(Iterable[Cell]), got $other")
   }
 
-  test("Workbook.apply(RefType) - unqualified ref returns error") {
+  test("Workbook.apply(RefType) - unqualified ref returns errors") {
     val wb = Workbook("Sheet1").toOption.get
     val unqualifiedCell = RefType.Cell(ARef.from1(1, 1))
 
@@ -323,11 +323,11 @@ class RefTypeSpec extends ScalaCheckSuite:
     assert(wb(unqualifiedRange).isLeft, "Unqualified range ref should return Left")
   }
 
-  test("Workbook.apply(RefType) - nonexistent sheet returns error") {
+  test("Workbook.apply(RefType) - nonexistent sheets returns errors") {
     val wb = Workbook("Sheet1").toOption.get
     val ref = RefType.QualifiedCell(SheetName.unsafe("NonExistent"), ARef.from1(1, 1))
 
-    assert(wb(ref).isLeft, "Reference to nonexistent sheet should return Left")
+    assert(wb(ref).isLeft, "Reference to nonexistent sheets should return Left")
   }
 
 end RefTypeSpec

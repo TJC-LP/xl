@@ -75,7 +75,7 @@ def writeStreamTrue(path: Path, sheetName: String): Pipe[F, RowData, Unit] =
       Sync[F].delay(createZipOutputStream(path))
     )(zip => Sync[F].delay(zip.close()))
     .flatMap { zip =>
-      // 1. Write static parts (Content_Types, rels, workbook, styles)
+      // 1. Write static parts (Content_Types, rels, workbooks, styles)
       Stream.eval(writeStaticParts(zip, sheetName)) ++
 
       // 2. Open worksheet ZIP entry
@@ -119,8 +119,8 @@ private def writeStaticParts[F[_]: Sync](
   for
     _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml)
     _ <- writePart(zip, "_rels/.rels", rootRels.toXml)
-    _ <- writePart(zip, "xl/workbook.xml", workbook.toXml)
-    _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml)
+    _ <- writePart(zip, "xl/workbooks.xml", workbook.toXml)
+    _ <- writePart(zip, "xl/_rels/workbooks.xml.rels", workbookRels.toXml)
     _ <- writePart(zip, "xl/styles.xml", styles.toXml)
   yield ()
 

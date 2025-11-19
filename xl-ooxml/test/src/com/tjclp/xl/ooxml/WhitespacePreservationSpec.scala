@@ -2,7 +2,7 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.richtext.{RichText, TextRun}
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 
 /** Tests for whitespace preservation in plain text cells (OOXML writer) */

@@ -100,7 +100,7 @@ def imperativeParser(s: String): Result = {
   // ... performance-critical imperative code
 }
 
-// Option 3: @annotation.nowarn (Scala 3 style)
+// Option 3: @annotation.nowarn (Scala 3 styles)
 @annotation.nowarn("msg=Var")
 def optimizedCode(): Unit = {
   var accumulator = 0

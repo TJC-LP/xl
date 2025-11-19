@@ -38,7 +38,7 @@ Modern Scala 3 libraries (ZIO, Cats Effect, circe, http4s) reserve the term **"u
 ```scala
 import com.tjclp.xl.*
 
-// Explicit Either-based error handling
+// Explicit Either-based errors handling
 val result: Either[XLError, Workbook] = for {
   sheet <- Sheet("Sales")
   updated <- sheet.put(ref"A1" := "Product")
@@ -132,7 +132,7 @@ sheet
 
 **2. Inline Styling (for one-offs)**
 ```scala
-// Data + style together
+// Data + styles together
 sheet.put("A1", "Title", headerStyle)
 ```
 
@@ -166,7 +166,7 @@ sheet.put("A1", "Error: ".bold.red + "Fix this")
 **File**: `xl-core/src/com/tjclp/xl/error/XLException.scala` (NEW)
 
 ```scala
-package com.tjclp.xl.error
+package com.tjclp.xl.errors
 
 final class XLException(val error: XLError) extends RuntimeException(error.message)
 ```
@@ -178,7 +178,7 @@ final class XLException(val error: XLError) extends RuntimeException(error.messa
 ```scala
 package com.tjclp.xl
 
-import com.tjclp.xl.error.{XLError, XLException, XLResult}
+import com.tjclp.xl.errors.{XLError, XLException, XLResult}
 
 object unsafe:
   extension [A](result: XLResult[A])
@@ -253,9 +253,9 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.cell.Cell
-import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.codec.CellCodec
+import com.tjclp.xl.codecs.CellCodec
 import com.tjclp.xl.unsafe.unsafe // Internal use of .unsafe
 
 /**
@@ -277,7 +277,7 @@ object extensions:
     def put(cellRef: String, value: Double): Sheet = ...
     // ... other primitive overloads
 
-    // --- Styled Put (data + style inline) ---
+    // --- Styled Put (data + styles inline) ---
     def put(cellRef: String, value: String, style: CellStyle): Sheet =
       ARef.parse(cellRef)
         .flatMap { ref =>
@@ -287,7 +287,7 @@ object extensions:
         .unsafe
 
     def put(cellRef: String, value: Int, style: CellStyle): Sheet = ...
-    // ... other primitive overloads with style
+    // ... other primitive overloads with styles
 
     // --- Range Put (auto-detects ":" in ref) ---
     def put[A: CellCodec](rangeRef: String, values: List[A]): Sheet =
@@ -303,7 +303,7 @@ object extensions:
         .unsafe
 
     def put[A: CellCodec](rangeRef: String, values: List[A], style: CellStyle): Sheet =
-      // Put data + style the range
+      // Put data + styles the range
       put(rangeRef, values).style(rangeRef, style)
 
     // --- Style Method (formatting without data) ---
@@ -346,7 +346,7 @@ If these don't exist, they can be implemented as:
 ```scala
 extension (sheet: Sheet)
   def styleCell(ref: ARef, style: CellStyle): XLResult[Sheet] =
-    // Apply style to the cell at ref, preserving its value
+    // Apply styles to the cell at ref, preserving its value
     sheet.cells.get(ref) match
       case Some(cell) => sheet.put(Patch.Put(ref, cell.value, Some(style)))
       case None => sheet.put(Patch.Put(ref, CellValue.Empty, Some(style)))
@@ -410,10 +410,10 @@ Excel.write(Workbook.empty.addSheet(report), "q1-sales.xlsx")
 import com.tjclp.xl.easy.*
 
 val sheet = Sheet("Quick Report")
-  .put("A1", "Sales Report", titleStyle)    // Inline style
+  .put("A1", "Sales Report", titleStyle)    // Inline styles
   .put("A2", "Revenue", headerStyle)
   .put("A3:A10", products)                   // Data only
-  .put("B3:B10", revenues, currencyStyle)   // Data + style
+  .put("B3:B10", revenues, currencyStyle)   // Data + styles
 
 Excel.write(Workbook.empty.addSheet(sheet), "quick.xlsx")
 ```
@@ -455,7 +455,7 @@ try {
   sheet.put("InvalidRef", "Value")
 } catch {
   case ex: XLException =>
-    // Access structural error info
+    // Access structural errors info
     ex.error match {
       case XLError.InvalidCellRef(ref, reason) => ...
       case _ => ...
@@ -478,13 +478,13 @@ try {
 ```scala
 // Single cell
 sheet.put("A1", "Value")                    // Data only
-sheet.put("A1", "Value", style)             // Data + inline style
+sheet.put("A1", "Value", style)             // Data + inline styles
 sheet.put("A1", 42)                         // Type-safe primitives
 sheet.put("A1", 42, currencyStyle)
 
 // Range (auto-detects ":" in ref)
 sheet.put("A1:A10", products)               // List[String]
-sheet.put("B1:B10", revenues, currencyStyle) // List + style
+sheet.put("B1:B10", revenues, currencyStyle) // List + styles
 ```
 
 **Styling Operations**:
@@ -503,14 +503,14 @@ sheet.range("A1:B10")                       // List[Cell]
 **Transformations** (pure):
 ```scala
 sheet.toHtml(range"A1:B10")                 // String
-sheet.merge("A1:B1")                        // Sheet (throws on parse error)
+sheet.merge("A1:B1")                        // Sheet (throws on parse errors)
 ```
 
 ### Workbook Extensions
 
 ```scala
 // Construction
-Workbook.empty.addSheet(sheet)              // Add sheet
+Workbook.empty.addSheet(sheet)              // Add sheets
 wb.sheet("Sales")                           // Get by name (throws if not found)
 wb.removeSheet("OldData")                   // Remove by name
 ```

@@ -2,9 +2,9 @@ import cats.effect.{IO, IOApp}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.io.Excel
 import com.tjclp.xl.richtext.RichText.{*, given}
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.codecs.syntax.*
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.unsafe.*
 import java.nio.file.Paths
 
@@ -28,7 +28,7 @@ object ManualRichTextTest extends IOApp.Simple:
     val outputPath = Paths.get("rich-text-demo.xlsx")
 
     // Build a financial report with rich text formatting
-    val report = Sheet("Q1 Performance Report").getOrElse(sys.error("Failed to create sheet"))
+    val report = Sheet("Q1 Performance Report").getOrElse(sys.error("Failed to create sheets"))
       .put(
         // Title with large bold text
         ref"A1" -> ("Q1 2025 ".size(18.0).bold + "Performance Report".size(18.0).italic),

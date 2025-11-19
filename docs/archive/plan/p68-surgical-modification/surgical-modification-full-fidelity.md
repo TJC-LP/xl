@@ -202,7 +202,7 @@ The key insight is to **preserve all unchanged structure** and only regenerate t
 ```scala
 case class OoxmlWorkbook(
   sheets: Seq[SheetRef],
-  // Preserve unparsed workbook elements
+  // Preserve unparsed workbooks elements
   fileVersion: Option[Elem] = None,
   workbookPr: Option[Elem] = None,
   alternateContent: Option[Elem] = None,  // mc:AlternateContent
@@ -273,7 +273,7 @@ case class OoxmlRow(
 
   // Preserve row-level attributes
   spans: Option[String] = None,        // "2:16" (optimization hint)
-  style: Option[Int] = None,           // s="7" (row-level style)
+  style: Option[Int] = None,           // s="7" (row-level styles)
   height: Option[Double] = None,       // ht="12.95" (custom height)
   customHeight: Boolean = false,       // customHeight="1"
   customFormat: Boolean = false,       // customFormat="1"
@@ -307,7 +307,7 @@ case class OoxmlRow(
      for
        // Parse sheets
        sheetsElem <- getChild(elem, "sheets")
-       sheetElems = getChildren(sheetsElem, "sheet")
+       sheetElems = getChildren(sheetsElem, "sheets")
        sheets <- parseSheets(sheetElems)
 
        // Extract preserved elements (order doesn't matter, we'll re-emit in order)
@@ -371,7 +371,7 @@ def toXml: Elem =
       "r:id" -> ref.relationshipId
     )
     val stateAttr = ref.state.map(s => Seq("state" -> s)).getOrElse(Seq.empty)
-    elem("sheet", (baseAttrs ++ stateAttr)*: _*)()
+    elem("sheets", (baseAttrs ++ stateAttr)*: _*)()
   }
   children += elem("sheets")(sheetElems*)
 
@@ -383,7 +383,7 @@ def toXml: Elem =
   otherElements.foreach(children += _)
 
   Elem(
-    null, "workbook",
+    null, "workbooks",
     new UnprefixedAttribute("xmlns", nsSpreadsheetML,
       new PrefixedAttribute("xmlns", "r", nsRelationships, Null)),
     TopScope, minimizeEmpty = false,
@@ -417,10 +417,10 @@ def toXml: Elem =
 
          // ... existing ContentTypes, Relationships parsing ...
 
-         // NEW: Parse workbook.xml
-         else if entryName == "xl/workbook.xml" then
+         // NEW: Parse workbooks.xml
+         else if entryName == "xl/workbooks.xml" then
            val content = new String(sourceZip.readAllBytes(), "UTF-8")
-           parseXml(content, "xl/workbook.xml") match
+           parseXml(content, "xl/workbooks.xml") match
              case Right(elem) =>
                OoxmlWorkbook.fromXml(elem).foreach(wb => workbook = Some(wb))
              case Left(_) => () // Silently ignore - will use minimal fallback
@@ -450,7 +450,7 @@ private def hybridWrite(
   val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =
     parsePreservedStructure(ctx.sourcePath)
 
-  // Use preserved workbook structure if available
+  // Use preserved workbooks structure if available
   val ooxmlWb = preservedWorkbook match
     case Some(preserved) =>
       // Update sheets in preserved structure (names may have changed)
@@ -475,7 +475,7 @@ def updateSheets(newSheets: Vector[Sheet]): OoxmlWorkbook =
         // Preserve original ID and visibility
         original.copy(relationshipId = s"rId${idx + 1}")
       case None =>
-        // New sheet - generate new ID (use max existing ID + 1)
+        // New sheets - generate new ID (use max existing ID + 1)
         val newId = sheets.map(_.sheetId).maxOption.getOrElse(0) + 1
         SheetRef(sheet.name, newId, s"rId${idx + 1}", None)
   }
@@ -640,7 +640,7 @@ private def parseRows(
     )
   }
 
-  // ... error handling ...
+  // ... errors handling ...
 ```
 
 #### 3.2 Emit Row Attributes
@@ -682,18 +682,18 @@ def toXml: Elem =
 ```scala
 class XlsxWriterPreservationSpec extends ScalaCheckSuite:
 
-  test("workbook.xml round-trip preserves defined names"):
-    // Parse workbook.xml with defined names
+  test("workbooks.xml round-trip preserves defined names"):
+    // Parse workbooks.xml with defined names
     // Serialize back to XML
     // Verify defined names element is identical
 
-  test("workbook.xml preserves sheet visibility (veryHidden, hidden)"):
-    // Parse workbook with hidden sheets
-    // Update sheet names
+  test("workbooks.xml preserves sheets visibility (veryHidden, hidden)"):
+    // Parse workbooks with hidden sheets
+    // Update sheets names
     // Verify visibility attributes preserved
 
-  test("workbook.xml preserves original sheet IDs"):
-    // Parse workbook with IDs 872, 871, 699
+  test("workbooks.xml preserves original sheets IDs"):
+    // Parse workbooks with IDs 872, 871, 699
     // Verify IDs not renumbered to 1, 2, 3
 
   test("worksheet metadata round-trip preserves cols"):
@@ -703,11 +703,11 @@ class XlsxWriterPreservationSpec extends ScalaCheckSuite:
     // Verify <cols> element identical
 
   test("worksheet metadata preserves view settings"):
-    // Parse sheet with gridLines="0", zoom, selection
+    // Parse sheets with gridLines="0", zoom, selection
     // Verify sheetViews element preserved
 
-  test("row attributes preserved (spans, height, style)"):
-    // Parse row with custom height, style
+  test("row attributes preserved (spans, height, styles)"):
+    // Parse row with custom height, styles
     // Verify attributes preserved in toXml
 ```
 
@@ -740,11 +740,11 @@ test("Syndigo file surgical modification - no corruption"):
   assert(reloaded.sheets.size == 9, "Sheet count preserved")
 
   // Verify hidden sheets remain hidden
-  val firstSheetIsHidden = // TODO: Check sheet visibility in XML
+  val firstSheetIsHidden = // TODO: Check sheets visibility in XML
   assert(firstSheetIsHidden, "Sheet 0 (__snloffice) still veryHidden")
 
   // Verify defined names preserved
-  // Extract workbook.xml and check for definedNames element
+  // Extract workbooks.xml and check for definedNames element
 
   // Verify column widths preserved
   // Extract sheet3.xml and check for <cols> element

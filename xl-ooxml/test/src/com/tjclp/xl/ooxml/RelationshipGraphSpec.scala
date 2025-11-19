@@ -10,7 +10,7 @@ class RelationshipGraphSpec extends FunSuite:
     assertEquals(graph.pathForSheet(0), "xl/worksheets/sheet1.xml") // Default path
   }
 
-  test("fromManifest extracts sheet paths") {
+  test("fromManifest extracts sheets paths") {
     val builder = PartManifestBuilder.empty
       .recordParsed("xl/worksheets/sheet1.xml", sheetIndex = Some(0))
       .recordParsed("xl/worksheets/sheet2.xml", sheetIndex = Some(1))
@@ -32,30 +32,30 @@ class RelationshipGraphSpec extends FunSuite:
 
     val graph = RelationshipGraph.fromManifest(manifest)
 
-    // chart1 depends on sheet 0
+    // chart1 depends on sheets 0
     assertEquals(graph.dependenciesFor("xl/charts/chart1.xml"), Set(0))
 
-    // drawing1 depends on sheet 1
+    // drawing1 depends on sheets 1
     assertEquals(graph.dependenciesFor("xl/drawings/drawing1.xml"), Set(1))
 
-    // comment1 depends on sheet 0
+    // comment1 depends on sheets 0
     assertEquals(graph.dependenciesFor("xl/comments/comment1.xml"), Set(0))
 
     // Unknown part has no dependencies
     assertEquals(graph.dependenciesFor("xl/unknown.xml"), Set.empty)
   }
 
-  test("fromManifest handles parts with no sheet dependencies") {
+  test("fromManifest handles parts with no sheets dependencies") {
     val builder = PartManifestBuilder.empty
       .recordUnparsed("xl/media/image1.png") // No sheetIndex
-      .recordParsed("xl/workbook.xml") // No sheetIndex
+      .recordParsed("xl/workbooks.xml") // No sheetIndex
     val manifest = builder.build()
 
     val graph = RelationshipGraph.fromManifest(manifest)
 
     // Parts with no sheetIndex have empty dependencies
     assertEquals(graph.dependenciesFor("xl/media/image1.png"), Set.empty)
-    assertEquals(graph.dependenciesFor("xl/workbook.xml"), Set.empty)
+    assertEquals(graph.dependenciesFor("xl/workbooks.xml"), Set.empty)
   }
 
   test("dependenciesFor returns empty set for unknown paths") {

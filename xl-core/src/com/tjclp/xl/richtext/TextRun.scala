@@ -1,7 +1,7 @@
 package com.tjclp.xl.richtext
 
-import com.tjclp.xl.style.color.Color
-import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.font.Font
 
 /**
  * Text run with optional font formatting.
@@ -12,7 +12,7 @@ import com.tjclp.xl.style.font.Font
  * @param text
  *   The text content of this run
  * @param font
- *   Optional font formatting (if None, inherits from cell style or defaults)
+ *   Optional font formatting (if None, inherits from cell styles or defaults)
  * @param rawRPrXml
  *   Preserved raw `<rPr>` XML as string for byte-perfect round-tripping. Used during surgical
  *   modification to preserve properties not in Font model (vertAlign, rFont, family, underline

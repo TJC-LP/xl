@@ -157,7 +157,7 @@ def performanceOptimizedCode(): Unit = {
 Always use `XLResult[A] = Either[XLError, A]`:
 
 ```scala
-// ✅ Good: Total function with explicit error
+// ✅ Good: Total function with explicit errors
 def parseCell(s: String): XLResult[ARef] =
   ARef.parse(s).left.map(err => XLError.InvalidCellRef(s, err))
 
@@ -219,7 +219,7 @@ For stable diffs and deduplication:
 val key = CellStyle.canonicalKey(style)
 
 // XML attributes/elements in sorted order
-XmlUtil.elem("sheet", "name" -> "Sheet1", "sheetId" -> "1")(...)
+XmlUtil.elem("sheets", "name" -> "Sheet1", "sheetId" -> "1")(...)
 ```
 
 ### 5. Law-Based Testing
@@ -297,7 +297,7 @@ Styles are deduplicated by `CellStyle.canonicalKey`:
 
 ```scala
 val key = CellStyle.canonicalKey(style)  // Structural hash
-// Equal keys → same style index in styles.xml
+// Equal keys → same styles index in styles.xml
 ```
 
 **Critical**: When implementing styles.xml writer, build style index first, then emit cells.
@@ -387,7 +387,7 @@ val pct = percent"${value}%"        // Runtime: parses with percent
 
 // Phase 2: Compile-time optimization when all parts are literals
 val optimized = ref"${"A"}${"1"}"  // Optimized: emits ARef constant at compile time
-val fallback = ref"$sheet!A1"      // Fallback: uses runtime path (sheet is variable)
+val fallback = ref"$sheet!A1"      // Fallback: uses runtime path (sheets is variable)
 ```
 
 **Implementation** (`MacroUtil.scala`):
@@ -474,7 +474,7 @@ sheet.put(
 sheet.readTyped[BigDecimal](cell"C1") match
   case Right(Some(value)) => // Success: cell has value
   case Right(None) => // Success: cell is empty
-  case Left(error) => // Error: type mismatch or parse error
+  case Left(error) => // Error: type mismatch or parse errors
 
 // Convert to XLError if needed
 val xlResult: Either[XLError, Option[BigDecimal]] =

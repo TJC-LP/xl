@@ -101,16 +101,16 @@ Establish foundation for Phase 1 by adding:
 **Add after line 45** (after `NumberFormatError`):
 
 ```scala
-/** Money format parse error */
+/** Money format parse errors */
 case MoneyFormatError(value: String, reason: String)
 
-/** Percent format parse error */
+/** Percent format parse errors */
 case PercentFormatError(value: String, reason: String)
 
-/** Date format parse error */
+/** Date format parse errors */
 case DateFormatError(value: String, reason: String)
 
-/** Accounting format parse error */
+/** Accounting format parse errors */
 case AccountingFormatError(value: String, reason: String)
 ```
 
@@ -177,7 +177,7 @@ val genInvalidDate: Gen[String] = Gen.oneOf("2025-13-01", "not-a-date", "2025/11
 **Location**: `xl-core/test/src/com/tjclp/xl/error/XLErrorSpec.scala`
 
 ```scala
-package com.tjclp.xl.error
+package com.tjclp.xl.errors
 
 import munit.FunSuite
 
@@ -262,7 +262,7 @@ class XLErrorSpec extends FunSuite:
 
 **Verification**:
 ```bash
-./mill xl-core.test.testOnly com.tjclp.xl.error.XLErrorSpec
+./mill xl-core.test.testOnly com.tjclp.xl.errorss.XLErrorSpec
 ```
 
 ### 5. Documentation Updates
@@ -283,7 +283,7 @@ Remove bullet:
 ### 6. Success Criteria
 
 - [ ] `./mill xl-core.compile` succeeds with 0 warnings
-- [ ] `./mill xl-core.test.testOnly com.tjclp.xl.error.XLErrorSpec` passes (8/8 tests)
+- [ ] `./mill xl-core.test.testOnly com.tjclp.xl.errors.XLErrorSpec` passes (8/8 tests)
 - [ ] `./mill __.test` passes (all 263 existing tests + 8 new = 271 total)
 - [ ] No changes to existing macro behavior
 - [ ] Glossary updated with new error types
@@ -417,7 +417,7 @@ def parseToXLError(s: String): Either[XLError, RefType] =
 package com.tjclp.xl.macros
 
 import com.tjclp.xl.*
-import com.tjclp.xl.error.XLError
+import com.tjclp.xl.errors.XLError
 import munit.{FunSuite, ScalaCheckSuite}
 import org.scalacheck.Prop.*
 import org.scalacheck.Gen
@@ -495,7 +495,7 @@ class RefInterpolationSpec extends ScalaCheckSuite:
         fail(s"Expected Right(QualifiedRange), got $other")
   }
 
-  test("Runtime interpolation: quoted sheet name") {
+  test("Runtime interpolation: quoted sheets name") {
     val quotedStr = "'Q1 Sales'!A1"
     val result = ref"$quotedStr"
 
@@ -503,10 +503,10 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(sheet, _)) =>
         assertEquals(sheet.value, "Q1 Sales")
       case other =>
-        fail(s"Expected Right with quoted sheet, got $other")
+        fail(s"Expected Right with quoted sheets, got $other")
   }
 
-  test("Runtime interpolation: escaped quotes in sheet name") {
+  test("Runtime interpolation: escaped quotes in sheets name") {
     val escapedStr = "'It''s Q1'!A1"
     val result = ref"$escapedStr"
 
@@ -644,7 +644,7 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(sheet, _)) =>
         assertEquals(sheet.value, "Q1 Sales Report")
       case Left(err) =>
-        fail(s"Should parse sheet with spaces: $err")
+        fail(s"Should parse sheets with spaces: $err")
   }
 
   test("Edge: Sheet name with special chars") {
@@ -655,7 +655,7 @@ class RefInterpolationSpec extends ScalaCheckSuite:
       case Right(RefType.QualifiedCell(sheet, _)) =>
         assertEquals(sheet.value, "Sheet (2025)")
       case Left(err) =>
-        fail(s"Should parse sheet with parens: $err")
+        fail(s"Should parse sheets with parens: $err")
   }
 
   // ===== Integration with for-comprehension =====
@@ -792,7 +792,7 @@ val priceStr = "$1,234.56"
 val priceStr = "$1,234.56"
 money"$priceStr" match
   case Right(formatted) => // Use formatted value
-  case Left(err) => // Handle parse error
+  case Left(err) => // Handle parse errors
 ```
 
 ### 2. Files Modified/Created
@@ -815,8 +815,8 @@ money"$priceStr" match
 package com.tjclp.xl.formatted
 
 import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.error.XLError
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.errors.XLError
+import com.tjclp.xl.styles.numfmt.NumFmt
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import scala.util.{Try, Success, Failure}
@@ -1030,8 +1030,8 @@ private def accountingImplN(
 package com.tjclp.xl.formatted
 
 import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.error.XLError
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.errors.XLError
+import com.tjclp.xl.styles.numfmt.NumFmt
 import munit.FunSuite
 import java.time.LocalDate
 
@@ -1281,8 +1281,8 @@ package com.tjclp.xl.macros
 
 import com.tjclp.xl.*
 import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.error.XLError
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.errors.XLError
+import com.tjclp.xl.styles.numfmt.NumFmt
 import munit.{FunSuite, ScalaCheckSuite}
 import org.scalacheck.Prop.*
 import java.time.LocalDate
@@ -1707,7 +1707,7 @@ val cellValue = CellValue.Formula(formulaStr)  // No validation
 val formulaStr = "=SUM(A1:A10)"
 fx"$formulaStr" match
   case Right(cellValue) => // Use formula
-  case Left(err) => // Handle parse error
+  case Left(err) => // Handle parse errors
 ```
 
 ### 2. Files Modified/Created
@@ -1728,7 +1728,7 @@ fx"$formulaStr" match
 ```scala
 package com.tjclp.xl.cell
 
-import com.tjclp.xl.error.XLError
+import com.tjclp.xl.errors.XLError
 
 /**
  * Pure runtime parser for formula strings.
@@ -1836,7 +1836,7 @@ private def fxImplN(
 package com.tjclp.xl.macros
 
 import com.tjclp.xl.cell.{CellValue, FormulaParser}
-import com.tjclp.xl.error.XLError
+import com.tjclp.xl.errors.XLError
 import munit.FunSuite
 
 class FormulaInterpolationSpec extends FunSuite:
@@ -1850,7 +1850,7 @@ class FormulaInterpolationSpec extends FunSuite:
     assertEquals(formula.expression, "=SUM(A1:A10)")
   }
 
-  // Note: Compile-time validation error test (unbalanced parens) would be:
+  // Note: Compile-time validation errors test (unbalanced parens) would be:
   // test("Compile-time: unbalanced parens fails at compile time") {
   //   // val f = fx"=SUM(A1:A10"  // Should not compile
   // }
@@ -2253,7 +2253,7 @@ Phase 1 is **non-breaking**, so deployment is straightforward:
 
 ```scala
 ref"$userInput"         // Either[XLError, RefType]
-ref.unsafe"$userInput"  // RefType (throws on error)
+ref.unsafe"$userInput"  // RefType (throws on errors)
 ```
 
 **Decision**: Defer to post-Phase 1. Gather user feedback first.

@@ -6,7 +6,7 @@ import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import com.tjclp.xl.SourceContext
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 import munit.FunSuite
 
@@ -26,18 +26,18 @@ class XlsxWriterSurgicalSpec extends FunSuite:
   private def requireContext(wb: Workbook): SourceContext =
     wb.sourceContext.getOrElse(fail("Workbook should have SourceContext"))
 
-  test("clean workbook write copies source verbatim") {
-    // Create minimal workbook with chart
+  test("clean workbooks write copies source verbatim") {
+    // Create minimal workbooks with chart
     val source = createMinimalWorkbookWithChart()
 
-    // Read workbook (creates SourceContext)
+    // Read workbooks (creates SourceContext)
     val wb = XlsxReader
       .read(source)
       .fold(err => fail(s"Failed to read: $err"), identity)
 
     assert(wb.sourceContext.isDefined, "Workbook should have SourceContext")
     val ctx = requireContext(wb)
-    assert(ctx.isClean, "Freshly read workbook should be clean")
+    assert(ctx.isClean, "Freshly read workbooks should be clean")
 
     // Write back without modifications
     val output = Files.createTempFile("clean-write", ".xlsx")
@@ -62,15 +62,15 @@ class XlsxWriterSurgicalSpec extends FunSuite:
         // Real Excel files will successfully use verbatim copy
 
       case Left(err) =>
-        fail(s"Unexpected error: $err")
+        fail(s"Unexpected errors: $err")
 
     // Clean up
     Files.deleteIfExists(source)
     Files.deleteIfExists(output)
   }
 
-  test("modified sheet triggers hybrid write with preservation") {
-    // Create workbook with chart
+  test("modified sheets triggers hybrid write with preservation") {
+    // Create workbooks with chart
     val source = createMinimalWorkbookWithChart()
 
     // Read and modify one cell
@@ -84,7 +84,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
     assert(wb.sourceContext.isDefined)
-    assert(!requireContext(wb).isClean, "Modified workbook should be dirty")
+    assert(!requireContext(wb).isClean, "Modified workbooks should be dirty")
 
     // Write back
     val output = Files.createTempFile("modified-write", ".xlsx")
@@ -123,10 +123,10 @@ class XlsxWriterSurgicalSpec extends FunSuite:
   }
 
   test("unmodified sheets are copied, modified sheets regenerated") {
-    // Create workbook with 2 sheets
+    // Create workbooks with 2 sheets
     val source = createWorkbookWith2Sheets()
 
-    // Modify only sheet 1, leave sheet 2 untouched
+    // Modify only sheets 1, leave sheets 2 untouched
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
@@ -137,7 +137,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
     val tracker = requireContext(wb).modificationTracker
-    assertEquals(tracker.modifiedSheets, Set(0), "Only sheet 0 should be modified")
+    assertEquals(tracker.modifiedSheets, Set(0), "Only sheets 0 should be modified")
 
     // Write back
     val output = Files.createTempFile("partial-modify", ".xlsx")
@@ -175,8 +175,8 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
-  test("workbook without SourceContext uses full regeneration") {
-    // Create workbook programmatically (no SourceContext)
+  test("workbooks without SourceContext uses full regeneration") {
+    // Create workbooks programmatically (no SourceContext)
     val result = for
       wb <- Workbook("TestSheet")
       sheet <- wb("TestSheet")
@@ -184,11 +184,11 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       updated <- wb.put(updatedSheet)
     yield updated
 
-    val wb = result.fold(err => fail(s"Failed to create workbook: $err"), identity)
+    val wb = result.fold(err => fail(s"Failed to create workbooks: $err"), identity)
 
-    assert(wb.sourceContext.isEmpty, "Programmatic workbook should not have SourceContext")
+    assert(wb.sourceContext.isEmpty, "Programmatic workbooks should not have SourceContext")
 
-    // Write (should use regenerateAll, not throw error)
+    // Write (should use regenerateAll, not throw errors)
     val output = Files.createTempFile("programmatic", ".xlsx")
     XlsxWriter
       .write(wb, output)
@@ -207,7 +207,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
   }
 
   test("unknown parts in unparsedParts are preserved") {
-    // Create workbook with unknown part
+    // Create workbooks with unknown part
     val source = createWorkbookWithUnknownPart()
 
     // Read and modify
@@ -245,7 +245,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
-  test("sharedStrings part is preserved and regenerated sheet uses SST references") {
+  test("sharedStrings part is preserved and regenerated sheets uses SST references") {
     val source = createWorkbookWithSharedStrings()
 
     val modified = for
@@ -299,7 +299,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     try is.readAllBytes()
     finally is.close()
 
-  // Helper: Create minimal workbook with chart (unknown part)
+  // Helper: Create minimal workbooks with chart (unknown part)
   private def createMinimalWorkbookWithChart(): Path =
     val path = Files.createTempFile("test-chart", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
@@ -314,7 +314,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
 </Types>"""
@@ -326,26 +326,26 @@ class XlsxWriterSurgicalSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       // Workbook
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       // Workbook rels
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -383,7 +383,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     path
 
-  // Helper: Create workbook with 2 sheets
+  // Helper: Create workbooks with 2 sheets
   private def createWorkbookWith2Sheets(): Path =
     val path = Files.createTempFile("test-2-sheets", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
@@ -397,7 +397,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
@@ -408,25 +408,25 @@ class XlsxWriterSurgicalSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
-    <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet2" sheetId="2" r:id="rId2"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -464,7 +464,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     path
 
-  // Helper: Create workbook with unknown part
+  // Helper: Create workbooks with unknown part
   private def createWorkbookWithUnknownPart(): Path =
     val path = Files.createTempFile("test-unknown", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
@@ -478,7 +478,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
       )
@@ -488,24 +488,24 @@ class XlsxWriterSurgicalSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -552,7 +552,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
 </Types>"""
@@ -563,24 +563,24 @@ class XlsxWriterSurgicalSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>

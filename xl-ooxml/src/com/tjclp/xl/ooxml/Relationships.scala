@@ -52,15 +52,15 @@ case class Relationships(
 object Relationships extends XmlReadable[Relationships]:
   val empty: Relationships = Relationships(Seq.empty)
 
-  /** Create root .rels file pointing to workbook */
-  def root(workbookPath: String = "xl/workbook.xml"): Relationships =
+  /** Create root .rels file pointing to workbooks */
+  def root(workbookPath: String = "xl/workbooks.xml"): Relationships =
     Relationships(
       Seq(
         Relationship("rId1", relTypeOfficeDocument, workbookPath)
       )
     )
 
-  /** Create workbook .rels with sheets (for sequential sheet indices) */
+  /** Create workbooks .rels with sheets (for sequential sheets indices) */
   def workbook(
     sheetCount: Int,
     hasStyles: Boolean = false,
@@ -68,7 +68,7 @@ object Relationships extends XmlReadable[Relationships]:
   ): Relationships =
     workbookWithIndices((1 to sheetCount).toSeq, hasStyles, hasSharedStrings)
 
-  /** Create workbook .rels with specific sheet indices (supports non-sequential indices) */
+  /** Create workbooks .rels with specific sheets indices (supports non-sequential indices) */
   def workbookWithIndices(
     sheetIndices: Seq[Int],
     hasStyles: Boolean = false,

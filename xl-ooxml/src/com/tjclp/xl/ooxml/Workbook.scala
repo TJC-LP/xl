@@ -3,7 +3,7 @@ package com.tjclp.xl.ooxml
 import scala.xml.*
 import XmlUtil.*
 
-// Default namespace bindings for generated workbook parts. When reading from an existing workbook
+// Default namespace bindings for generated workbooks parts. When reading from an existing workbooks
 // we capture the original scope (which may include mc/xr/x15, etc.) and reuse it to avoid Excel
 // namespace warnings.
 private val defaultWorkbookScope =
@@ -12,7 +12,7 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.Workbook
 
 /**
- * Sheet reference in workbook.xml
+ * Sheet reference in workbooks.xml
  *
  * @param name
  *   Sheet name
@@ -31,11 +31,11 @@ case class SheetRef(
 )
 
 /**
- * Workbook for xl/workbook.xml
+ * Workbook for xl/workbooks.xml
  *
- * Contains sheet references and workbook-level properties. For surgical modification, preserves all
- * unparsed elements from the original workbook.xml (defined names, workbook properties, etc.) to
- * maintain Excel compatibility and prevent corruption warnings.
+ * Contains sheets references and workbooks-level properties. For surgical modification, preserves
+ * all unparsed elements from the original workbooks.xml (defined names, workbooks properties, etc.)
+ * to maintain Excel compatibility and prevent corruption warnings.
  *
  * @param sheets
  *   Sheet references (name, ID, visibility, relationship)
@@ -48,7 +48,7 @@ case class SheetRef(
  * @param revisionPtr
  *   xr:revisionPtr element (revision tracking)
  * @param bookViews
- *   Book views (window size, active tab, first visible sheet)
+ *   Book views (window size, active tab, first visible sheets)
  * @param definedNames
  *   Defined names element with ALL named ranges (CRITICAL - thousands in real files)
  * @param calcPr
@@ -74,7 +74,7 @@ case class OoxmlWorkbook(
 ) extends XmlWritable:
 
   /**
-   * Update sheets while preserving all workbook metadata.
+   * Update sheets while preserving all workbooks metadata.
    *
    * Maps domain sheets to SheetRefs, preserving original sheetIds and visibility from the source
    * file. For new sheets, generates new IDs.
@@ -87,7 +87,7 @@ case class OoxmlWorkbook(
           // Preserve original ID and visibility, update relationship ID
           original.copy(relationshipId = s"rId${idx + 1}")
         case None =>
-          // New sheet - generate new ID (use max existing ID + 1)
+          // New sheets - generate new ID (use max existing ID + 1)
           val newId = sheets.map(_.sheetId).maxOption.getOrElse(0) + 1
           SheetRef(sheet.name, newId, s"rId${idx + 1}", None)
     }
@@ -109,7 +109,7 @@ case class OoxmlWorkbook(
         "name" -> ref.name.value,
         "sheetId" -> ref.sheetId.toString
       )
-      // Add state attribute if sheet is hidden/veryHidden
+      // Add state attribute if sheets is hidden/veryHidden
       val stateAttr = ref.state.map(s => Seq("state" -> s)).getOrElse(Seq.empty)
       val allAttrs = baseAttrs ++ stateAttr
 
@@ -118,7 +118,7 @@ case class OoxmlWorkbook(
       val attrs = allAttrs.foldRight(rId: MetaData) { case ((k, v), acc) =>
         new UnprefixedAttribute(k, v, acc)
       }
-      Elem(null, "sheet", attrs, TopScope, minimizeEmpty = true)
+      Elem(null, "sheets", attrs, TopScope, minimizeEmpty = true)
     }
     children += Elem(null, "sheets", Null, TopScope, minimizeEmpty = false, sheetElems*)
 
@@ -137,14 +137,14 @@ case class OoxmlWorkbook(
     val scope = Option(rootScope).getOrElse(defaultWorkbookScope)
     val attrs = Option(rootAttributes).getOrElse(Null)
 
-    Elem(null, "workbook", attrs, scope, minimizeEmpty = false, children.result()*)
+    Elem(null, "workbooks", attrs, scope, minimizeEmpty = false, children.result()*)
 
 object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
-  /** Create minimal workbook with one sheet */
+  /** Create minimal workbooks with one sheets */
   def minimal(sheetName: String = "Sheet1"): OoxmlWorkbook =
     OoxmlWorkbook(Seq(SheetRef(SheetName.unsafe(sheetName), 1, "rId1")))
 
-  /** Create workbook from domain model */
+  /** Create workbooks from domain model */
   def fromDomain(wb: Workbook): OoxmlWorkbook =
     val sheetRefs = wb.sheets.zipWithIndex.map { case (sheet, idx) =>
       SheetRef(sheet.name, idx + 1, s"rId${idx + 1}")
@@ -155,7 +155,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
     for
       // Parse sheets (required element)
       sheetsElem <- getChild(elem, "sheets")
-      sheetElems = getChildren(sheetsElem, "sheet")
+      sheetElems = getChildren(sheetsElem, "sheets")
       sheets <- parseSheets(sheetElems)
 
       // Extract all preserved elements (optional)

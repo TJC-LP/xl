@@ -2,10 +2,10 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.{CellStyle, Font}
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.{CellStyle, Font}
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 import java.nio.charset.StandardCharsets
@@ -16,31 +16,31 @@ class XlsxReaderSpec extends FunSuite:
   test("XlsxReader preserves cell styles when reading") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
 
-    val sheet = Sheet("Styled").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Styled").getOrElse(fail("Failed to create sheets"))
       .put(ref"A1", CellValue.Text("styled"))
       .withCellStyle(ref"A1", boldStyle)
 
     val wb = Workbook(Vector(sheet))
-    val bytes = XlsxWriter.writeToBytes(wb).getOrElse(fail("Failed to write workbook"))
+    val bytes = XlsxWriter.writeToBytes(wb).getOrElse(fail("Failed to write workbooks"))
 
-    val readWb = XlsxReader.readFromBytes(bytes).getOrElse(fail("Failed to read workbook"))
-    val readSheet = readWb("Styled").getOrElse(fail("Missing sheet"))
+    val readWb = XlsxReader.readFromBytes(bytes).getOrElse(fail("Failed to read workbooks"))
+    val readSheet = readWb("Styled").getOrElse(fail("Missing sheets"))
 
     val style = readSheet.getCellStyle(ref"A1")
-    assert(style.nonEmpty, "Cell style should be present after read")
+    assert(style.nonEmpty, "Cell styles should be present after read")
     assertEquals(style.map(_.font.bold), Some(true))
   }
 
   test("XlsxReader resolves worksheet paths via relationships") {
-    val sheet = Sheet("Rel").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Rel").getOrElse(fail("Failed to create sheets"))
       .put(ref"A1", CellValue.Text("ok"))
 
     val wb = Workbook(Vector(sheet))
-    val bytes = XlsxWriter.writeToBytes(wb).getOrElse(fail("Failed to write workbook"))
+    val bytes = XlsxWriter.writeToBytes(wb).getOrElse(fail("Failed to write workbooks"))
     val mutated = rewriteWorksheetTarget(bytes, "sheet42.xml")
 
-    val readWb = XlsxReader.readFromBytes(mutated).getOrElse(fail("Failed to read mutated workbook"))
-    val readSheet = readWb("Rel").getOrElse(fail("Missing sheet"))
+    val readWb = XlsxReader.readFromBytes(mutated).getOrElse(fail("Failed to read mutated workbooks"))
+    val readSheet = readWb("Rel").getOrElse(fail("Missing sheets"))
 
     assertEquals(readSheet(ref"A1").value, CellValue.Text("ok"))
   }
@@ -58,13 +58,13 @@ class XlsxReaderSpec extends FunSuite:
     zip.close()
 
     val oldSheet = "xl/worksheets/sheet1.xml"
-    val sheetBytes = entries.remove(oldSheet).getOrElse(fail(s"Missing $oldSheet in workbook"))
+    val sheetBytes = entries.remove(oldSheet).getOrElse(fail(s"Missing $oldSheet in workbooks"))
     val newSheetPath = s"xl/worksheets/$newSheetFile"
     entries(newSheetPath) = sheetBytes
 
-    entries.get("xl/_rels/workbook.xml.rels").foreach { relBytes =>
+    entries.get("xl/_rels/workbooks.xml.rels").foreach { relBytes =>
       entries.update(
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         replaceAll(relBytes, "worksheets/sheet1.xml", s"worksheets/$newSheetFile")
       )
     }

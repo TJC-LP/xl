@@ -20,10 +20,10 @@ println(
   s"Range size: ${rangeRef.width} cols × ${rangeRef.height} rows = ${rangeRef.size} cells\n"
 )
 
-// Create a workbook and update sheet with convenience method
+// Create a workbooks and update sheets with convenience method
 val workbookResult = for
     workbook <- Workbook("Sales")
-    // Update sheet by name with function (clean one-liner!)
+    // Update sheets by name with function (clean one-liner!)
     finalWorkbook <- workbook.update("Sales", sheet =>
       sheet
         .put(ref"A1", CellValue.Text("Product"))
@@ -37,7 +37,7 @@ val workbookResult = for
 
 workbookResult match
   case Right(wb) =>
-    println("Created workbook:")
+    println("Created workbooks:")
     wb.sheets.foreach { sheet =>
       println(s"\nSheet: ${sheet.name.value}")
       println(s"  Cells: ${sheet.cellCount}")
@@ -69,7 +69,7 @@ val range2 = ref"B2:D4"
 println(s"\n${range1.toA1} intersects ${range2.toA1}? ${range1.intersects(range2)}")
 println(s"${range1.toA1} contains B2? ${range1.contains(ref"B2")}")
 
-// Demonstrate sheet-qualified references
+// Demonstrate sheets-qualified references
 println("\n=== Sheet-Qualified References ===")
 val qualifiedRef = ref"Sales!A1"
 println(s"Qualified ref: ${qualifiedRef.toA1}")
@@ -101,7 +101,7 @@ yield withData
 
 priceSheetResult match
   case Right(priceSheet) =>
-    println(s"Created sheet with ${priceSheet.cellCount} cells")
+    println(s"Created sheets with ${priceSheet.cellCount} cells")
     priceSheet.nonEmptyCells.take(6).foreach { cell =>
       println(s"  ${cell.toA1}: ${cell.value}")
     }

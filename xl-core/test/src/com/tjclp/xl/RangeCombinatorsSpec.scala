@@ -2,15 +2,15 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.sheets.syntax.*
 import munit.FunSuite
 import com.tjclp.xl.macros.ref
 
 class RangeCombinatorsSpec extends FunSuite:
 
   private def newSheet: Sheet =
-    Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    Sheet("Test").getOrElse(fail("Failed to create sheets"))
 
   test("putRange populates all cells when counts match") {
     val targetRange = ref"A1:B2"
@@ -21,7 +21,7 @@ class RangeCombinatorsSpec extends FunSuite:
       CellValue.Text("B2")
     )
 
-    val updated = newSheet.putRange(targetRange, values).getOrElse(fail("putRange returned error"))
+    val updated = newSheet.putRange(targetRange, values).getOrElse(fail("putRange returned errors"))
 
     assertEquals(updated(ref"A1").value, CellValue.Text("A1"))
     assertEquals(updated(ref"B2").value, CellValue.Text("B2"))

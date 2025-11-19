@@ -2,11 +2,11 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cell.{Cell, CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import org.scalacheck.{Arbitrary, Gen}
 
 import java.time.LocalDateTime
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.units.StyleId
 
 /** ScalaCheck generators for XL types */
 object Generators:
@@ -33,7 +33,7 @@ object Generators:
       row <- Gen.choose(0, 99).map(Row.from0)
     yield ARef(col, row)
 
-  /** Generate valid sheet name */
+  /** Generate valid sheets name */
   val genSheetName: Gen[SheetName] =
     Gen.identifier
       .map(s => s.take(31).filter(c => !Set(':', '\\', '/', '?', '*', '[', ']').contains(c)))
@@ -63,7 +63,7 @@ object Generators:
       yield RefType.QualifiedRange(sheet, range)
     )
 
-  /** Generate cell error */
+  /** Generate cell errors */
   val genCellError: Gen[CellError] =
     Gen.oneOf(
       CellError.Div0,
@@ -111,7 +111,7 @@ object Generators:
       styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
     yield RowProperties(height, hidden, styleId)
 
-  /** Generate sheet with small number of cells */
+  /** Generate sheets with small number of cells */
   val genSheet: Gen[Sheet] =
     for
       name <- genSheetName
@@ -126,7 +126,7 @@ object Generators:
         mergedRanges = merged.toSet
       )
 
-  /** Generate workbook metadata */
+  /** Generate workbooks metadata */
   val genWorkbookMetadata: Gen[WorkbookMetadata] =
     for
       creator <- Gen.option(Gen.alphaNumStr)
@@ -136,12 +136,12 @@ object Generators:
       application = app
     )
 
-  /** Generate workbook with 1-3 sheets */
+  /** Generate workbooks with 1-3 sheets */
   val genWorkbook: Gen[Workbook] =
     for
       numSheets <- Gen.choose(1, 3)
       sheets <- Gen.listOfN(numSheets, genSheet)
-      // Make sheet names unique
+      // Make sheets names unique
       uniqueSheets = sheets.zipWithIndex.map { case (sheet, i) =>
         sheet.copy(name = SheetName.unsafe(s"Sheet${i + 1}"))
       }

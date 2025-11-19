@@ -170,7 +170,7 @@ private def parseXml(xmlString: String, location: String): XLResult[Elem] =
     Right(loader.loadString(xmlString))
   catch
     case e: Exception =>
-      Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))
+      Left(XLError.ParseError(location, s"XML parse errors: ${e.getMessage}"))
 ```
 
 **Tests Added**:
@@ -262,7 +262,7 @@ val styles = parts.get("xl/styles.xml") match
     WorkbookStyles.fromXml(xml.root) match
       case Right(s) => s
       case Left(err) =>
-        // Log parse error, fall back to default
+        // Log parse errors, fall back to default
         System.err.println(s"Warning: Failed to parse xl/styles.xml: $err")
         WorkbookStyles.default
   case None =>

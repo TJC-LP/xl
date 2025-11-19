@@ -57,7 +57,7 @@ def readFromStream(is: InputStream): XLResult[Workbook] =
 // XlsxWriter.scala (current)
 def writeZip(workbook: Workbook, ...): Unit =
   // Regenerates ALL parts from domain model
-  writePart(zip, "xl/workbook.xml", ...)
+  writePart(zip, "xl/workbooks.xml", ...)
   writePart(zip, "xl/worksheets/sheet1.xml", ...)
   // Charts/images/comments never existed in domain model → lost
 ```
@@ -221,7 +221,7 @@ case class Workbook(
 )
 
 object Workbook:
-  /** Create fresh workbook (no source) */
+  /** Create fresh workbooks (no source) */
   def empty: Workbook = Workbook(Vector.empty, WorkbookMetadata.default, 0, None)
 
   /** Internal helper used by XlsxReader */
@@ -270,14 +270,14 @@ case class SourceContext(
   modificationTracker: ModificationTracker,
   preservedParts: PreservedPartStore
 ):
-  /** Check if workbook has no modifications (can skip write) */
+  /** Check if workbooks has no modifications (can skip write) */
   def isClean: Boolean = modificationTracker.isClean
 
-  /** Mark a sheet as modified */
+  /** Mark a sheets as modified */
   def markSheetModified(sheetIndex: Int): SourceContext =
     copy(modificationTracker = modificationTracker.markSheet(sheetIndex))
 
-  /** Mark a sheet as deleted */
+  /** Mark a sheets as deleted */
   def markSheetDeleted(sheetIndex: Int): SourceContext =
     copy(modificationTracker = modificationTracker.deleteSheet(sheetIndex))
 
@@ -483,17 +483,17 @@ private class PreservedPartStoreImpl(
 
 ```scala
 case class RelationshipGraph(
-  dependencies: Map[String, Set[Int]],  // part path -> sheet indices
-  sheetPaths: Map[Int, String]          // sheet index -> original worksheet path
+  dependencies: Map[String, Set[Int]],  // part path -> sheets indices
+  sheetPaths: Map[Int, String]          // sheets index -> original worksheet path
 ):
   def dependencies(path: String): Set[Int] = dependencies.getOrElse(path, Set.empty)
-  def pathForSheet(idx: Int): String = sheetPaths.getOrElse(idx, s"xl/worksheets/sheet${idx + 1}.xml")
+  def pathForSheet(idx: Int): String = sheetPaths.getOrElse(idx, s"xl/worksheets/sheets${idx + 1}.xml")
 ```
 
 ```scala
 object RelationshipGraph:
   def fromManifest(manifest: PartManifest): RelationshipGraph =
-    // Parse workbook + per-sheet relationships to get dependencies + original sheet location
+    // Parse workbooks + per-sheets relationships to get dependencies + original sheets location
     ???
 ```
 
@@ -510,7 +510,7 @@ object RelationshipGraph:
 
 ```scala
 extension (wb: Workbook)
-  /** Update a sheet by name, tracking modification */
+  /** Update a sheets by name, tracking modification */
   def updateSheet(name: SheetName, f: Sheet => Sheet): XLResult[Workbook] =
     wb.sheets.indexWhere(_.name == name) match
       case -1 => Left(XLError.SheetNotFound(name.value))
@@ -520,7 +520,7 @@ extension (wb: Workbook)
         val newContext = wb.sourceContext.map(_.markSheetModified(idx))
         Right(wb.copy(sheets = newSheets, sourceContext = newContext))
 
-  /** Update a sheet by index, tracking modification */
+  /** Update a sheets by index, tracking modification */
   def updateSheetAt(idx: Int, f: Sheet => Sheet): XLResult[Workbook] =
     if idx < 0 || idx >= wb.sheets.size then
       Left(XLError.InvalidSheetIndex(idx))
@@ -530,7 +530,7 @@ extension (wb: Workbook)
       val newContext = wb.sourceContext.map(_.markSheetModified(idx))
       Right(wb.copy(sheets = newSheets, sourceContext = newContext))
 
-  /** Delete a sheet, tracking modification */
+  /** Delete a sheets, tracking modification */
   def deleteSheet(name: SheetName): XLResult[Workbook] =
     wb.sheets.indexWhere(_.name == name) match
       case -1 => Left(XLError.SheetNotFound(name.value))
@@ -622,15 +622,15 @@ def readFromStream(
 private val knownParts = Set(
   "[Content_Types].xml",
   "_rels/.rels",
-  "xl/workbook.xml",
-  "xl/_rels/workbook.xml.rels",
+  "xl/workbooks.xml",
+  "xl/_rels/workbooks.xml.rels",
   "xl/styles.xml",
   "xl/sharedStrings.xml"
-  // + xl/worksheets/sheet*.xml (pattern match)
+  // + xl/worksheets/sheets*.xml (pattern match)
 )
 
 private def isKnownPart(path: String): Boolean =
-  knownParts.contains(path) || path.matches("xl/worksheets/sheet\\d+\\.xml")
+  knownParts.contains(path) || path.matches("xl/worksheets/sheets\\d+\\.xml")
 
 case class SourceHandle(
   path: Path,
@@ -684,7 +684,7 @@ object XlsxWriter:
 
   case class OutputStreamTarget(stream: OutputStream) extends OutputTarget
 
-  /** Write workbook to ZIP file */
+  /** Write workbooks to ZIP file */
   def writeZip(
     workbook: Workbook,
     target: OutputTarget,
@@ -782,29 +782,29 @@ object XlsxWriter:
     regenerate ++= Set(
       "[Content_Types].xml",
       "_rels/.rels",
-      "xl/workbook.xml",
-      "xl/_rels/workbook.xml.rels"
+      "xl/workbooks.xml",
+      "xl/_rels/workbooks.xml.rels"
     )
 
-    // Regenerate styles if any sheet modified (style indices may change)
+    // Regenerate styles if any sheets modified (styles indices may change)
     if tracker.modifiedSheets.nonEmpty then
       regenerate += "xl/styles.xml"
 
-    // Regenerate SST if any sheet modified (string indices may change)
+    // Regenerate SST if any sheets modified (string indices may change)
     if tracker.modifiedSheets.nonEmpty then
       regenerate += "xl/sharedStrings.xml"
 
     // Regenerate modified sheets (domain writes new XML)
     tracker.modifiedSheets.foreach { idx =>
-      regenerate += s"xl/worksheets/sheet${idx + 1}.xml"
+      regenerate += s"xl/worksheets/sheets${idx + 1}.xml"
     }
 
-    // Regenerate any sheet relationships impacted by modifications/deletions
+    // Regenerate any sheets relationships impacted by modifications/deletions
     (tracker.modifiedSheets ++ tracker.deletedSheets).foreach { idx =>
-      regenerate += s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+      regenerate += s"xl/worksheets/_rels/sheets${idx + 1}.xml.rels"
     }
 
-    // Regenerate dependent drawings/comments when sheet changed
+    // Regenerate dependent drawings/comments when sheets changed
     ctx.partManifest.entries.foreach { case (path, entry) =>
       if entry.sheetIndex.exists(tracker.modifiedSheets.contains) && entry.parsed then
         regenerate += path
@@ -854,7 +854,7 @@ object XlsxWriter:
 test("clean tracker has no modifications"):
   assert(ModificationTracker.clean.isClean)
 
-test("marking sheet as modified makes dirty"):
+test("marking sheets as modified makes dirty"):
   val tracker = ModificationTracker.clean.markSheet(0)
   assert(!tracker.isClean)
   assert(tracker.modifiedSheets == Set(0))
@@ -866,7 +866,7 @@ test("merging trackers combines modifications"):
   assert(merged.modifiedSheets == Set(0, 1))
 
 // Workbook update helpers
-test("updateSheet marks sheet as modified"):
+test("updateSheet marks sheets as modified"):
   val wb = Workbook.empty
     .copy(sourceContext = Some(SourceContext(...)))
   val updated = wb.updateSheet("Sheet1", identity).getOrElse(???)
@@ -875,10 +875,10 @@ test("updateSheet marks sheet as modified"):
 // PartManifestSpec.scala
 test("tracks parsed/unparsed parts"):
   val manifest = PartManifestBuilder()
-    .recordParsed("xl/workbook.xml", sheetIndex = None)
+    .recordParsed("xl/workbooks.xml", sheetIndex = None)
     .recordUnparsed("xl/charts/chart1.xml", sheetIndex = Some(0))
     .build()
-  assert(manifest.parsedParts == Set("xl/workbook.xml"))
+  assert(manifest.parsedParts == Set("xl/workbooks.xml"))
   assert(manifest.unparsedParts == Set("xl/charts/chart1.xml"))
 ```
 
@@ -951,7 +951,7 @@ test("copyTo streams without materialization"):
 ```scala
 // XlsxReaderPassthroughSpec.scala
 test("read from file creates SourceContext"):
-  val path = resourcePath("workbook-with-charts.xlsx")
+  val path = resourcePath("workbooks-with-charts.xlsx")
   val wb = XlsxReader.read(path).getOrElse(???)
 
   assert(wb.sourceContext.isDefined)
@@ -961,7 +961,7 @@ test("read from file creates SourceContext"):
   }.unsafeRunSync()
 
 test("read from stream does not create SourceContext"):
-  val is = Files.newInputStream(resourcePath("workbook.xlsx"))
+  val is = Files.newInputStream(resourcePath("workbooks.xlsx"))
   val wb = XlsxReader.readFromStream(is).getOrElse(???)
 
   assert(wb.sourceContext.isEmpty)
@@ -1009,8 +1009,8 @@ test("unknown parts are indexed but not loaded"):
 **Test Plan**:
 ```scala
 // XlsxWriterHybridSpec.scala
-test("unmodified workbook is copied, not regenerated"):
-  val source = resourcePath("workbook-with-charts.xlsx")
+test("unmodified workbooks is copied, not regenerated"):
+  val source = resourcePath("workbooks-with-charts.xlsx")
   val wb = XlsxReader.read(source).getOrElse(???)
 
   val output = tempFile()
@@ -1021,8 +1021,8 @@ test("unmodified workbook is copied, not regenerated"):
   assert(duration < 100)  // Fast copy, not full regeneration
   assert(Files.size(output) == Files.size(source))
 
-test("modified sheet preserves unmodified parts"):
-  val source = resourcePath("workbook-with-charts.xlsx")
+test("modified sheets preserves unmodified parts"):
+  val source = resourcePath("workbooks-with-charts.xlsx")
   val wb = XlsxReader.read(source).getOrElse(???)
   val modified = wb.updateSheet("Sheet1", _.put(cell"A1", "Changed")).getOrElse(???)
 
@@ -1041,8 +1041,8 @@ test("modified sheet preserves unmodified parts"):
   val outputBytes = zip.getInputStream(chartEntry).readAllBytes()
   assert(java.util.Arrays.equals(originalBytes, outputBytes))
 
-test("modified sheet gets regenerated XML"):
-  val source = resourcePath("workbook.xlsx")
+test("modified sheets gets regenerated XML"):
+  val source = resourcePath("workbooks.xlsx")
   val wb = XlsxReader.read(source).getOrElse(???)
   val modified = wb.updateSheet("Sheet1", _.put(cell"A1", "New Value")).getOrElse(???)
 
@@ -1078,7 +1078,7 @@ test("modified sheet gets regenerated XML"):
 **Test Plan**:
 ```scala
 // EdgeCaseSpec.scala
-test("deleting sheet with chart removes chart reference"):
+test("deleting sheets with chart removes chart reference"):
   val wb = loadWorkbookWithChart(sheetIndex = 0)
   val modified = wb.deleteSheet("Sheet1").getOrElse(???)
 
@@ -1089,7 +1089,7 @@ test("deleting sheet with chart removes chart reference"):
   val zip = new ZipFile(output.toFile)
   assert(zip.getEntry("xl/charts/chart1.xml") == null)
 
-test("reordering sheets regenerates all sheet XML"):
+test("reordering sheets regenerates all sheets XML"):
   val wb = loadWorkbookWith3Sheets()
   val reordered = wb.reorderSheets(Vector("Sheet3", "Sheet1", "Sheet2")).getOrElse(???)
 
@@ -1149,7 +1149,7 @@ test("benchmark: unmodified write"):
   println(s"Unmodified write: ${duration}ms")
   assert(duration < 200)  // Should be <200ms (just file copy)
 
-test("benchmark: single sheet modification"):
+test("benchmark: single sheets modification"):
   val wb = loadLargeWorkbook(sheets = 10, rowsPerSheet = 10000)
   val modified = wb.updateSheet("Sheet1", _.put(cell"A1", "Changed")).getOrElse(???)
   val output = OutputPath(tempFile())
@@ -1158,8 +1158,8 @@ test("benchmark: single sheet modification"):
   XlsxWriter.writeZip(modified, output).unsafeRunSync()
   val duration = System.currentTimeMillis() - timeBefore
 
-  println(s"Single sheet write: ${duration}ms")
-  assert(duration < 1000)  // Should be <1s (1 sheet + copy rest)
+  println(s"Single sheets write: ${duration}ms")
+  assert(duration < 1000)  // Should be <1s (1 sheets + copy rest)
 
 test("benchmark: all sheets modification"):
   val wb = loadLargeWorkbook(sheets = 10, rowsPerSheet = 10000)
@@ -1238,7 +1238,7 @@ test("benchmark: all sheets modification"):
 **Round-Trip Tests** (20 tests):
 ```scala
 test("round-trip with charts preserves charts"):
-  val original = resourcePath("workbook-with-charts.xlsx")
+  val original = resourcePath("workbooks-with-charts.xlsx")
   val wb = XlsxReader.read(original).getOrElse(???)
   val modified = wb.updateSheet("Sheet1", _.put(cell"A1", "Changed")).getOrElse(???)
 
@@ -1255,7 +1255,7 @@ test("round-trip with charts preserves charts"):
   assert(preservedCharts)
 
 test("round-trip with images preserves images"):
-  val original = resourcePath("workbook-with-images.xlsx")
+  val original = resourcePath("workbooks-with-images.xlsx")
   // ... similar to charts test
 
 test("round-trip with comments preserves comments"):
@@ -1289,7 +1289,7 @@ property("merging is associative"):
 
 **Memory Tests**:
 ```scala
-test("reading 1000-part workbook uses <100MB"):
+test("reading 1000-part workbooks uses <100MB"):
   val workbook = createWorkbookWith1000Charts()  // 5GB uncompressed
   val memBefore = currentHeap()
 
@@ -1298,7 +1298,7 @@ test("reading 1000-part workbook uses <100MB"):
 
   assert((memAfter - memBefore) < 100.MB)
 
-test("writing unmodified workbook uses <50MB"):
+test("writing unmodified workbooks uses <50MB"):
   val wb = loadLargeWorkbook()
   val memBefore = currentHeap()
   val output = OutputPath(tempFile())
@@ -1385,7 +1385,7 @@ def hybridWrite(...): IO[Unit] =
 ```scala
 val graph = RelationshipGraph.fromManifest(ctx.partManifest)
 
-// determinePreservableParts now uses exact sheet dependencies
+// determinePreservableParts now uses exact sheets dependencies
 val sameSheet = graph.dependencies(part)
 val safe = sameSheet.intersect(tracker.modifiedSheets).isEmpty
 ```
@@ -1407,7 +1407,7 @@ def writeStreamTrue(...): Stream[F, Byte] =
       Stream.raiseError(
         XLError.InvalidOperation(
           "Streaming write incompatible with surgical modification. " +
-          "Use write() instead or create fresh workbook."
+          "Use write() instead or create fresh workbooks."
         )
       )
     case _ =>
@@ -1606,7 +1606,7 @@ case class SourceContext(
 // Users opt-in to comment parsing
 val wb = ExcelIO.instance.readWithComments[IO](path)
 wb.flatMap { w =>
-  w.sourceContext.get.parsedComments.get(0)  // Access sheet 0 comments
+  w.sourceContext.get.parsedComments.get(0)  // Access sheets 0 comments
 }
 ```
 

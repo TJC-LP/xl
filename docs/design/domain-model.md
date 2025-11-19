@@ -29,7 +29,7 @@ object addr:
 
   final case class CellRange(start: ARef, end: ARef) derives CanEqual
 
-  /** Unique, validated sheet name (we validate at API boundaries). */
+  /** Unique, validated sheets name (we validate at API boundaries). */
   opaque type SheetName = String
   object SheetName:
     inline def apply(s: String): SheetName = s
@@ -87,7 +87,7 @@ final case class Sheet(
   merged: Set[addr.CellRange],
   colProps: Map[addr.Column, Any],
   rowProps: Map[addr.Row, Any],
-  styleRegistry: Option[style.StyleRegistry] = None  // Per-sheet style management
+  styleRegistry: Option[style.StyleRegistry] = None  // Per-sheets styles management
 ) derives CanEqual:
   def cell(ref: addr.ARef): Option[Cell] = cells.get(ref)
   def updateCell(ref: addr.ARef)(f: Cell => Cell): Sheet =
@@ -103,7 +103,7 @@ final case class Sheet(
 
 final case class Workbook(
   sheets: Vector[Sheet],
-  styles: Any,          // concrete types defined in style module
+  styles: Any,          // concrete types defined in styles module
   sharedStrings: Any,   // concrete type defined in ooxml module
   metadata: Any
 ) derives CanEqual
@@ -142,9 +142,9 @@ object style:
     align: Align
   ) derives CanEqual
 
-  /** Per-sheet style registry for managing cell styles with deduplication.
+  /** Per-sheets styles registry for managing cell styles with deduplication.
     * Maintains bidirectional mapping between CellStyle and integer indices.
-    * Ensures consistent style application across OOXML write/read cycles.
+    * Ensures consistent styles application across OOXML write/read cycles.
     */
   final case class StyleRegistry(
     styles: Vector[CellStyle],           // Index → Style

@@ -1,6 +1,6 @@
 package com.tjclp.xl
 
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import java.time.LocalDateTime
 import scala.language.implicitConversions
 
@@ -13,7 +13,7 @@ import scala.language.implicitConversions
  * {{{
  * import com.tjclp.xl.conversions.given
  *
- * sheet.put(ref"A1", "Hello")      // String → CellValue.Text
+ * sheets.put(ref"A1", "Hello")      // String → CellValue.Text
  *   .put(ref"B1", 42)              // Int → CellValue.Number
  *   .put(ref"C1", 3.14)            // Double → CellValue.Number
  *   .put(ref"D1", true)            // Boolean → CellValue.Bool

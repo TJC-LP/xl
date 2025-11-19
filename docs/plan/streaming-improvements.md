@@ -118,7 +118,7 @@ enum Compression:
 
 #### Phase 1: Scan Data (Build Registries)
 ```scala
-// First pass: collect style IDs and strings without writing
+// First pass: collect styles IDs and strings without writing
 case class RegistryBuilder(
   styles: mutable.LinkedHashMap[CellStyle, StyleId],
   strings: mutable.LinkedHashMap[String, Int],
@@ -142,7 +142,7 @@ val (styleReg, sstReg) = dataStream
 1. [Content_Types].xml (with SST and styles overrides)
 2. Relationships (xl/_rels/workbook.xml.rels)
 3. Workbook (xl/workbook.xml)
-4. Worksheets (xl/worksheets/*.xml) - use stable style/string indices
+4. Worksheets (xl/worksheets/*.xml) - use stable styles/string indices
 5. Styles.xml (xl/styles.xml) - from styleReg
 6. SharedStrings.xml (xl/sharedStrings.xml) - from sstReg
 ```

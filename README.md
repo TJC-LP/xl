@@ -59,7 +59,7 @@ cd xl
 import com.tjclp.xl.*
 // Unified import: all domain types, syntax, macros (ref", money", date", etc.)
 
-// Create workbook and update sheet (for-comprehension handles errors!)
+// Create workbooks and update sheets (for-comprehension handles errors!)
 val result = for
   workbook <- Workbook.empty
   updatedSheet <- Sheet("Sheet1").flatMap(_.put(
@@ -72,7 +72,7 @@ val result = for
   final <- workbook.put(updatedSheet)
 yield final
 
-// Or build sheet first, then add to workbook
+// Or build sheets first, then add to workbooks
 val salesSheet = Sheet("Sales").flatMap(_.put(
   ref"A1" -> "Revenue",
   ref"B1" -> money"$$10,000"
@@ -81,7 +81,7 @@ val salesSheet = Sheet("Sales").flatMap(_.put(
 val wb = for
   workbook <- Workbook.empty
   sheet <- salesSheet
-  final <- workbook.put(sheet)      // Add-or-replace by sheet name
+  final <- workbook.put(sheet)      // Add-or-replace by sheets name
 yield final
 
 // Batch add multiple sheets
@@ -95,7 +95,7 @@ val updatedSheet = sheet.put(patch) match
 
 // For demos/REPLs only - requires explicit opt-in:
 // import com.tjclp.xl.unsafe.*
-// sheet.put(patch).unsafe
+// sheets.put(patch).unsafe
 ```
 
 ### Styling Example
@@ -121,7 +121,7 @@ val tjcStyle = CellStyle.default
   .bold.center
 
 // Invalid hex codes fail the build:
-// val bad = CellStyle.default.hex("#GGGGGG")  // ❌ Compile error!
+// val bad = CellStyle.default.hex("#GGGGGG")  // ❌ Compile errors!
 
 // Dynamic hex codes work (runtime validation, silent fail if invalid)
 val userColor = getUserPreference()
@@ -136,7 +136,7 @@ val result = sheet.put(
   (ref"A1" := "Revenue Report") ++
   ref"A1".styled(headerStyle) ++
   range"A1:C1".merge
-)  // Right(updatedSheet) or Left(error)
+)  // Right(updatedSheet) or Left(errors)
 ```
 
 ### Type-Safe Cell Operations with Codecs
@@ -144,7 +144,7 @@ val result = sheet.put(
 XL provides cell-level codecs for type-safe reading and writing with auto-inferred formatting, ideal for unstructured Excel sheets like financial models:
 
 ```scala
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.codecs.syntax.*
 
 // Batch updates with mixed types (auto-infers formats) - pure Either handling
 val result = for
@@ -317,18 +317,18 @@ For pure functional programming without exceptions in the effect type, use `Exce
 
 ```scala
 import com.tjclp.xl.io.{ExcelIO, ExcelR}
-import com.tjclp.xl.error.{XLResult, XLError}
+import com.tjclp.xl.errors.{XLResult, XLError}
 import cats.effect.IO
 
 val excel: ExcelR[IO] = ExcelIO.instance
 
-// Explicit error channel - no exceptions
+// Explicit errors channel - no exceptions
 excel.readR(path).flatMap {
   case Right(workbook) =>
     // Successfully loaded
     processWorkbook(workbook)
   case Left(error: XLError) =>
-    // Handle error explicitly
+    // Handle errors explicitly
     IO.println(s"Failed to read: ${error.message}")
 }
 
@@ -480,8 +480,8 @@ val updated = sheet.focus(ref"C1").modify(_.withValue(CellValue.Number(42)))(she
 ./mill xl-core.test.testOnly com.tjclp.xl.AddressingSpec
 ./mill xl-core.test.testOnly com.tjclp.xl.PatchSpec
 ./mill xl-core.test.testOnly com.tjclp.xl.StyleSpec
-./mill xl-core.test.testOnly com.tjclp.xl.codec.CellCodecSpec
-./mill xl-core.test.testOnly com.tjclp.xl.codec.BatchUpdateSpec
+./mill xl-core.test.testOnly com.tjclp.xl.codecss.CellCodecSpec
+./mill xl-core.test.testOnly com.tjclp.xl.codecss.BatchUpdateSpec
 ./mill xl-ooxml.test.testOnly com.tjclp.xl.ooxml.OoxmlRoundTripSpec
 ./mill xl-cats-effect.test.testOnly com.tjclp.xl.io.ExcelIOSpec
 ```
@@ -605,7 +605,7 @@ val updates =
   (Patch.Put(ref"B1", CellValue.Number(100)): Patch) |+|
   (Patch.Merge(ref"A1:B1"): Patch)
 
-// Apply to sheet
+// Apply to sheets
 val result: Either[XLError, Sheet] = sheet.put(updates)
 ```
 
@@ -624,7 +624,7 @@ val patch =
   (ref"B1" := 100) ++
   ref"A1:B1".merge
 
-// Apply to sheet
+// Apply to sheets
 val result: Either[XLError, Sheet] = sheet.put(patch)
 ```
 

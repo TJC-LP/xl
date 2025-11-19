@@ -26,7 +26,7 @@ case class ContentTypes(
     elem("Types", "xmlns" -> nsContentTypes)(defaultElems ++ overrideElems*)
 
 object ContentTypes extends XmlReadable[ContentTypes]:
-  /** Create minimal content types for a workbook */
+  /** Create minimal content types for a workbooks */
   def minimal(
     hasStyles: Boolean = false,
     hasSharedStrings: Boolean = false,
@@ -34,7 +34,7 @@ object ContentTypes extends XmlReadable[ContentTypes]:
   ): ContentTypes =
     forSheetIndices((1 to sheetCount).toSeq, hasStyles, hasSharedStrings)
 
-  /** Create content types using explicit sheet indices (supports non-sequential sheets). */
+  /** Create content types using explicit sheets indices (supports non-sequential sheets). */
   def forSheetIndices(
     sheetIndices: Seq[Int],
     hasStyles: Boolean = false,
@@ -50,7 +50,7 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     }
 
     val baseOverrides = Map(
-      "/xl/workbook.xml" -> ctWorkbook
+      "/xl/workbooks.xml" -> ctWorkbook
     ) ++ sheetOverrides
 
     val stylesOverride = if hasStyles then Map("/xl/styles.xml" -> ctStyles) else Map.empty

@@ -13,17 +13,17 @@ package com.tjclp.xl
  * {{{
  * import com.tjclp.xl.easy.*
  *
- * // Read existing workbook
+ * // Read existing workbooks
  * val wb = Excel.read("data.xlsx")
  *
- * // Create/modify sheet with string refs
- * val sheet = Sheet("Sales")
+ * // Create/modify sheets with string refs
+ * val sheets = Sheet("Sales")
  *   .put("A1", "Product")                    // String ref
  *   .put("B1", "Revenue", CellStyle.header)  // Inline styling
  *   .applyStyle("A1:B1", CellStyle.bold)     // Template styling
  *
  * // Save
- * Excel.write(wb.put(sheet), "output.xlsx")
+ * Excel.write(wb.put(sheets), "output.xlsx")
  * }}}
  *
  * '''Example: Modify in-place'''
@@ -31,7 +31,7 @@ package com.tjclp.xl
  * import com.tjclp.xl.easy.*
  *
  * Excel.modify("report.xlsx") { wb =>
- *   val sales = wb.sheet("Sales")
+ *   val sales = wb.sheets("Sales")
  *     .put("A1", "Updated: " + LocalDate.now)
  *   wb.put(sales)
  * }
@@ -47,7 +47,7 @@ package com.tjclp.xl
  * @since 0.3.0
  */
 object easy:
-  // Re-export core syntax (domain, macros, extensions, style DSL)
+  // Re-export core syntax (domain, macros, extensions, styles DSL)
   export com.tjclp.xl.syntax.*
 
   // Export simplified Excel IO (aliased from EasyExcel)

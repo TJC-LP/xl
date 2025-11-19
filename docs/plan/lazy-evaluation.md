@@ -126,7 +126,7 @@ import java.nio.file.Path
 import cats.effect.IO
 
 /**
- * Logical plan representing a sequence of operations on a sheet.
+ * Logical plan representing a sequence of operations on a sheets.
  *
  * This is an immutable tree structure that describes what to do, not how to do it.
  * Execution is deferred until an action (write, collect, count, show) is called.
@@ -151,7 +151,7 @@ sealed trait LogicalPlan:
   def transform(f: LogicalPlan => LogicalPlan): LogicalPlan
 
 /**
- * Base case: Wrap an existing materialized sheet.
+ * Base case: Wrap an existing materialized sheets.
  */
 case class BaseSheet(sheet: MaterializedSheet) extends LogicalPlan:
   def transform(f: LogicalPlan => LogicalPlan): LogicalPlan = f(this)
@@ -194,7 +194,7 @@ case class Limit(parent: LogicalPlan, n: Int) extends LogicalPlan:
     f(Limit(parent.transform(f), n))
 
 /**
- * Set style for a cell.
+ * Set styles for a cell.
  */
 case class SetStyle(parent: LogicalPlan, ref: ARef, style: CellStyle) extends LogicalPlan:
   def transform(f: LogicalPlan => LogicalPlan): LogicalPlan =
@@ -213,7 +213,7 @@ import java.nio.file.Path
 import cats.effect.IO
 
 /**
- * Lazy sheet that builds a logical plan without executing operations.
+ * Lazy sheets that builds a logical plan without executing operations.
  *
  * This is the primary API for working with sheets in lazy mode.
  * Operations are composable and form a computation graph that only executes
@@ -221,14 +221,14 @@ import cats.effect.IO
  *
  * Example:
  * {{{
- * val sheet = LazySheet("Sales")
+ * val sheets = LazySheet("Sales")
  *   .put(cell"A1", "Revenue")
  *   .put(cell"B1", 1000)
  *   .merge(range"A1:B1")
  *
  * // No computation yet!
  *
- * sheet.write(path).unsafeRunSync()  // Execute optimized plan, stream to disk
+ * sheets.write(path).unsafeRunSync()  // Execute optimized plan, stream to disk
  * }}}
  */
 case class LazySheet(plan: LogicalPlan):
@@ -250,14 +250,14 @@ case class LazySheet(plan: LogicalPlan):
 
 object LazySheet:
   /**
-   * Create a new lazy sheet with given name.
-   * No materialized sheet is created until an action is triggered.
+   * Create a new lazy sheets with given name.
+   * No materialized sheets is created until an action is triggered.
    */
   def apply(name: SheetName): LazySheet =
     LazySheet(BaseSheet(MaterializedSheet(name)))
 
   /**
-   * Wrap an existing materialized sheet in lazy API.
+   * Wrap an existing materialized sheets in lazy API.
    */
   def fromMaterialized(sheet: MaterializedSheet): LazySheet =
     LazySheet(BaseSheet(sheet))
@@ -406,7 +406,7 @@ object DeadCodeEliminator:
       Put(parent, ref2, v2)
 
     case SetStyle(SetStyle(parent, ref1, _), ref2, s2) if ref1 == ref2 =>
-      // Second style overwrites first → eliminate first
+      // Second styles overwrites first → eliminate first
       SetStyle(parent, ref2, s2)
 
     case Merge(Merge(parent, range1), range2) if range1 == range2 =>
@@ -486,7 +486,7 @@ package com.tjclp.xl.optimizer
 import com.tjclp.xl.plan.*
 
 /**
- * Statistics about a materialized sheet, used for cost-based optimization.
+ * Statistics about a materialized sheets, used for cost-based optimization.
  */
 case class Statistics(
   rowCount: Long,
@@ -636,7 +636,7 @@ object StreamingExecutor:
    */
   def executeStream[F[_]: Async](plan: LogicalPlan): Stream[F, Cell] = plan match
     case BaseSheet(sheet) =>
-      // Stream cells from materialized sheet
+      // Stream cells from materialized sheets
       Stream.iterable(sheet.cells.values)
 
     case Put(parent, ref, value) =>
@@ -660,9 +660,9 @@ object StreamingExecutor:
       executeStream(parent)
 
     case SetStyle(parent, ref, style) =>
-      // Update style for matching cell in stream
+      // Update styles for matching cell in stream
       executeStream(parent).map { cell =>
-        if cell.ref == ref then cell.copy(styleId = Some(0)) // TODO: style registry
+        if cell.ref == ref then cell.copy(styleId = Some(0)) // TODO: styles registry
         else cell
       }
 
@@ -762,14 +762,14 @@ import cats.effect.IO
 import java.nio.file.Path
 
 /**
- * Basic executor that materializes entire sheet in memory.
+ * Basic executor that materializes entire sheets in memory.
  * Use this for small sheets or when you need immediate access to all cells.
  *
  * For large sheets (>100k cells), use StreamingExecutor instead.
  */
 object Executor:
   /**
-   * Execute logical plan and materialize full sheet.
+   * Execute logical plan and materialize full sheets.
    */
   def execute(plan: LogicalPlan): MaterializedSheet =
     val optimized = Optimizer.optimize(plan)
@@ -1178,9 +1178,9 @@ package com.tjclp.xl
 import scala.collection.mutable
 
 /**
- * Mutable builder for batching sheet operations.
+ * Mutable builder for batching sheets operations.
  *
- * Accumulates put/merge/style operations in memory and applies them in a single pass
+ * Accumulates put/merge/styles operations in memory and applies them in a single pass
  * when build() is called. This eliminates intermediate Sheet allocations (30-50% speedup
  * for large batch operations).
  *
@@ -1190,7 +1190,7 @@ import scala.collection.mutable
  * {{{
  * val builder = SheetBuilder("Sales")
  * (1 to 10000).foreach(i => builder.put(cell"A\$i", s"Row \$i"))
- * val sheet = builder.build  // Single allocation, ~30% faster than fold
+ * val sheets = builder.build  // Single allocation, ~30% faster than fold
  * }}}
  */
 class SheetBuilder(name: SheetName):
@@ -1206,7 +1206,7 @@ class SheetBuilder(name: SheetName):
     this
 
   /**
-   * Queue a put with style (deferred).
+   * Queue a put with styles (deferred).
    */
   def putStyled(ref: ARef, value: CellValue, style: CellStyle): this.type =
     cellBuffer(ref) = Cell(ref, value)
@@ -1221,11 +1221,11 @@ class SheetBuilder(name: SheetName):
     this
 
   /**
-   * Execute all queued operations and return materialized sheet.
+   * Execute all queued operations and return materialized sheets.
    * This is the only point where computation happens.
    */
   def build: Sheet =
-    // Start with base sheet
+    // Start with base sheets
     var sheet = Sheet(name)
 
     // Apply all cells in one pass (single putAll)
@@ -1262,7 +1262,7 @@ object SheetBuilder:
 **Enhance builder to support codec-based API**:
 
 ```scala
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.codecs.syntax.*
 
 class SheetBuilder(name: SheetName):
   // ... existing fields ...
@@ -1272,7 +1272,7 @@ class SheetBuilder(name: SheetName):
    */
   def putMixed(updates: (ARef, Any)*): this.type =
     updates.foreach { case (ref, value) =>
-      // Use CellCodec to encode value + infer style
+      // Use CellCodec to encode value + infer styles
       value match
         case v: String => put(ref, CellValue.Text(v))
         case v: Int => put(ref, CellValue.Number(BigDecimal(v)))

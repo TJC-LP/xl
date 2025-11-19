@@ -2,8 +2,8 @@ package com.tjclp.xl.io
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
-import com.tjclp.xl.error.XLException
-import com.tjclp.xl.workbook.Workbook
+import com.tjclp.xl.errors.XLException
+import com.tjclp.xl.workbooks.Workbook
 
 import java.nio.file.{Path, Paths}
 
@@ -18,14 +18,14 @@ import java.nio.file.{Path, Paths}
  * import com.tjclp.xl.easy.*
  *
  * val wb = Excel.read("data.xlsx")
- * // ... modify workbook
+ * // ... modify workbooks
  * Excel.write(wb, "output.xlsx")
  * }}}
  *
  * '''Example: Modify pattern'''
  * {{{
  * Excel.modify("data.xlsx") { wb =>
- *   wb.sheet("Sales")
+ *   wb.sheets("Sales")
  *     .put("A1", "Updated")
  * }
  * }}}
@@ -39,14 +39,14 @@ object EasyExcel:
   private val excel = ExcelIO.instance[IO]
 
   /**
-   * Read workbook from file path.
+   * Read workbooks from file path.
    *
    * @param path
    *   File path (string)
    * @return
    *   Workbook
    * @throws XLException
-   *   if workbook cannot be parsed
+   *   if workbooks cannot be parsed
    * @throws java.io.IOException
    *   if file cannot be read
    */
@@ -54,7 +54,7 @@ object EasyExcel:
     excel.read(Paths.get(path)).unsafeRunSync()
 
   /**
-   * Write workbook to file path.
+   * Write workbooks to file path.
    *
    * @param workbook
    *   Workbook to write
@@ -67,12 +67,12 @@ object EasyExcel:
     excel.write(workbook, Paths.get(path)).unsafeRunSync()
 
   /**
-   * Modify workbook in-place (read → transform → write).
+   * Modify workbooks in-place (read → transform → write).
    *
    * '''Example:'''
    * {{{
    * Excel.modify("data.xlsx") { wb =>
-   *   val updated = wb.sheet("Sales")
+   *   val updated = wb.sheets("Sales")
    *     .put("A1", "New Value")
    *   wb.put(updated)
    * }
@@ -83,7 +83,7 @@ object EasyExcel:
    * @param f
    *   Transformation function
    * @throws XLException
-   *   if workbook cannot be parsed
+   *   if workbooks cannot be parsed
    * @throws java.io.IOException
    *   if file cannot be read/written
    */

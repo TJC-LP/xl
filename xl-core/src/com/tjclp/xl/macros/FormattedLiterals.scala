@@ -1,8 +1,8 @@
 package com.tjclp.xl.macros
 
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formatted.Formatted
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 import java.time.LocalDate
 import scala.quoted.*
@@ -14,25 +14,25 @@ object FormattedLiterals:
     /** Money literal: money"$1,234.56" → Formatted(Number(1234.56), NumFmt.Currency) */
     transparent inline def money(
       inline args: Any*
-    ): Formatted | Either[com.tjclp.xl.error.XLError, Formatted] =
+    ): Formatted | Either[com.tjclp.xl.errors.XLError, Formatted] =
       ${ moneyImplN('sc, 'args) }
 
     /** Percent literal: percent"45.5%" → Formatted(Number(0.455), NumFmt.Percent) */
     transparent inline def percent(
       inline args: Any*
-    ): Formatted | Either[com.tjclp.xl.error.XLError, Formatted] =
+    ): Formatted | Either[com.tjclp.xl.errors.XLError, Formatted] =
       ${ percentImplN('sc, 'args) }
 
     /** Date literal: date"2025-11-10" → Formatted(DateTime(...), NumFmt.Date) */
     transparent inline def date(
       inline args: Any*
-    ): Formatted | Either[com.tjclp.xl.error.XLError, Formatted] =
+    ): Formatted | Either[com.tjclp.xl.errors.XLError, Formatted] =
       ${ dateImplN('sc, 'args) }
 
     /** Accounting literal: accounting"($123.45)" → Formatted(Number(-123.45), NumFmt.Currency) */
     transparent inline def accounting(
       inline args: Any*
-    ): Formatted | Either[com.tjclp.xl.error.XLError, Formatted] =
+    ): Formatted | Either[com.tjclp.xl.errors.XLError, Formatted] =
       ${ accountingImplN('sc, 'args) }
 
   // Helper to extract literal from StringContext
@@ -96,7 +96,7 @@ object FormattedLiterals:
     catch
       case e: Exception =>
         report.errorAndAbort(
-          s"Invalid date literal '$s': expected ISO format (YYYY-MM-DD), got error: ${e.getMessage}"
+          s"Invalid date literal '$s': expected ISO format (YYYY-MM-DD), got errors: ${e.getMessage}"
         )
 
   private def accountingImpl(sc: Expr[StringContext])(using Quotes): Expr[Formatted] =
@@ -124,7 +124,7 @@ object FormattedLiterals:
   private def moneyImplN(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.error.XLError, Formatted]] =
+  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.errors.XLError, Formatted]] =
     args match
       case Varargs(exprs) if exprs.isEmpty =>
         // Branch 1: No interpolation (Phase 1)
@@ -157,21 +157,21 @@ object FormattedLiterals:
           Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Currency)
         }
       case Left(error) =>
-        // Invalid - compile error with validation message
+        // Invalid - compile errors with validation message
         report.errorAndAbort(error.message)
 
   private def moneyRuntimePath(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, Formatted]] =
+  )(using Quotes): Expr[Either[com.tjclp.xl.errors.XLError, Formatted]] =
     '{
       com.tjclp.xl.formatted.FormattedParsers.parseMoney($sc.s($args*))
-    }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+    }.asExprOf[Either[com.tjclp.xl.errors.XLError, Formatted]]
 
   private def percentImplN(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.error.XLError, Formatted]] =
+  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.errors.XLError, Formatted]] =
     args match
       case Varargs(exprs) if exprs.isEmpty =>
         percentImpl(sc)
@@ -199,21 +199,21 @@ object FormattedLiterals:
           Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Percent)
         }
       case Left(error) =>
-        // Invalid - compile error (rejects "50%%", etc.)
+        // Invalid - compile errors (rejects "50%%", etc.)
         report.errorAndAbort(error.message)
 
   private def percentRuntimePath(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, Formatted]] =
+  )(using Quotes): Expr[Either[com.tjclp.xl.errors.XLError, Formatted]] =
     '{
       com.tjclp.xl.formatted.FormattedParsers.parsePercent($sc.s($args*))
-    }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+    }.asExprOf[Either[com.tjclp.xl.errors.XLError, Formatted]]
 
   private def dateImplN(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.error.XLError, Formatted]] =
+  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.errors.XLError, Formatted]] =
     args match
       case Varargs(exprs) if exprs.isEmpty =>
         dateImpl(sc)
@@ -244,21 +244,21 @@ object FormattedLiterals:
           )
         }
       case Left(error) =>
-        // Invalid - compile error
+        // Invalid - compile errors
         report.errorAndAbort(error.message)
 
   private def dateRuntimePath(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, Formatted]] =
+  )(using Quotes): Expr[Either[com.tjclp.xl.errors.XLError, Formatted]] =
     '{
       com.tjclp.xl.formatted.FormattedParsers.parseDate($sc.s($args*))
-    }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+    }.asExprOf[Either[com.tjclp.xl.errors.XLError, Formatted]]
 
   private def accountingImplN(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.error.XLError, Formatted]] =
+  )(using Quotes): Expr[Formatted | Either[com.tjclp.xl.errors.XLError, Formatted]] =
     args match
       case Varargs(exprs) if exprs.isEmpty =>
         accountingImpl(sc)
@@ -286,16 +286,16 @@ object FormattedLiterals:
           Formatted(CellValue.Number(BigDecimal(${ Expr(numStr) })), NumFmt.Currency)
         }
       case Left(error) =>
-        // Invalid - compile error
+        // Invalid - compile errors
         report.errorAndAbort(error.message)
 
   private def accountingRuntimePath(
     sc: Expr[StringContext],
     args: Expr[Seq[Any]]
-  )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, Formatted]] =
+  )(using Quotes): Expr[Either[com.tjclp.xl.errors.XLError, Formatted]] =
     '{
       com.tjclp.xl.formatted.FormattedParsers.parseAccounting($sc.s($args*))
-    }.asExprOf[Either[com.tjclp.xl.error.XLError, Formatted]]
+    }.asExprOf[Either[com.tjclp.xl.errors.XLError, Formatted]]
 
 end FormattedLiterals
 

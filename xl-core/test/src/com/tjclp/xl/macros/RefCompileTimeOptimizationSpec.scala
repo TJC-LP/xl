@@ -9,7 +9,7 @@ class RefCompileTimeOptimizationSpec extends ScalaCheckSuite:
 
   // ===== Compile-Time Optimization Tests (Phase 2) =====
 
-  test("Optimized: ref\"$sheet!$cell\" with all literals") {
+  test("Optimized: ref\"$sheets!$cell\" with all literals") {
     inline val sheet = "Sales" // inline makes it compile-time constant
     inline val cell = "A1"
     val result = ref"$sheet!$cell"
@@ -55,7 +55,7 @@ class RefCompileTimeOptimizationSpec extends ScalaCheckSuite:
       case other => fail(s"Expected optimized QualifiedRange, got $other")
   }
 
-  test("Optimized: quoted sheet name literal") {
+  test("Optimized: quoted sheets name literal") {
     inline val quotedSheet = "'Q1 Sales'" // Literal with quotes
     val result = ref"$quotedSheet!A1"
 
@@ -65,7 +65,7 @@ class RefCompileTimeOptimizationSpec extends ScalaCheckSuite:
       case other => fail(s"Expected optimized QualifiedCell, got $other")
   }
 
-  test("Optimized: escaped quotes in sheet name") {
+  test("Optimized: escaped quotes in sheets name") {
     inline val escaped = "'It''s Q1'" // Excel escaping: '' → '
     val result = ref"$escaped!A1"
 
@@ -215,25 +215,25 @@ class RefCompileTimeOptimizationSpec extends ScalaCheckSuite:
       case other => fail(s"Expected QualifiedCell, got $other")
   }
 
-  // Note: Compile-time error tests are commented because they would fail compilation.
-  // To manually verify, uncomment and check that compilation fails with expected error.
+  // Note: Compile-time errors tests are commented because they would fail compilation.
+  // To manually verify, uncomment and check that compilation fails with expected errors.
 
   /*
-  test("Compile error: invalid literal in interpolation") {
+  test("Compile errors: invalid literal in interpolation") {
     val invalid = "NOT_VALID!@#$"
     val result = ref"$invalid"  // Should NOT compile
     // Expected: "Invalid ref literal in interpolation: 'NOT_VALID!@#$'"
   }
 
-  test("Compile error: empty sheet name") {
+  test("Compile errors: empty sheets name") {
     val empty = ""
     val result = ref"$empty!A1"  // Should NOT compile
-    // Expected: "Empty sheet name"
+    // Expected: "Empty sheets name"
   }
 
-  test("Compile error: missing ref after bang") {
-    val sheet = "Sales"
-    val result = ref"$sheet!"  // Should NOT compile
+  test("Compile errors: missing ref after bang") {
+    val sheets = "Sales"
+    val result = ref"$sheets!"  // Should NOT compile
     // Expected: "Missing reference after '!'"
   }
   */

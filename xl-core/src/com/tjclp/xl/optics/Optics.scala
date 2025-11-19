@@ -1,9 +1,9 @@
 package com.tjclp.xl.optics
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cell.{Cell, CellValue}
-import com.tjclp.xl.sheet.Sheet
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Predefined optics for common Sheet/Cell operations.
@@ -17,7 +17,7 @@ import com.tjclp.xl.style.units.StyleId
  */
 object Optics:
 
-  /** Lens for accessing all cells in a sheet */
+  /** Lens for accessing all cells in a sheets */
   val sheetCells: Lens[Sheet, Map[ARef, Cell]] =
     Lens(
       get = s => s.cells,
@@ -48,7 +48,7 @@ object Optics:
           case None => c.clearStyle
     )
 
-  /** Lens for accessing sheet name */
+  /** Lens for accessing sheets name */
   val sheetName: Lens[Sheet, SheetName] =
     Lens(
       get = s => s.name,

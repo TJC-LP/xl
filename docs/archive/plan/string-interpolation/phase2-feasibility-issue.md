@@ -127,7 +127,7 @@ StringContext("", "!A1").ref(sheet)
 ```scala
 args match
   case Varargs(exprs) =>
-    // exprs(0) is an Expr[Any] representing the variable reference to `sheet`
+    // exprs(0) is an Expr[Any] representing the variable reference to `sheets`
     exprs(0).asTerm  // What is this?
 ```
 
@@ -313,7 +313,7 @@ def allLiterals(args: Expr[Seq[Any]])(using Quotes): Option[Seq[Any]] =
 **File**: `xl-core/src/com/tjclp/xl/style/dsl.scala` (lines 281-307)
 
 ```scala
-// In style DSL
+// In styles DSL
 transparent inline def hex(code: String): CellStyle = ${ validateHex('code, 'style, false) }
 
 // Macro implementation
@@ -391,10 +391,10 @@ ref"$sheet!A1"
 
 // What macro sees:
 // sc.parts = Seq("", "!A1")
-// args = Varargs(Seq(Expr(sheet)))
+// args = Varargs(Seq(Expr(sheets)))
 
 // Expected: expr should be inlined to Literal("Sales")
-// Actual: expr is Ident("sheet") reference?
+// Actual: expr is Ident("sheets") reference?
 ```
 
 ### Test Case 3: Regular val (Should NOT Optimize)
@@ -406,7 +406,7 @@ ref"$sheet!A1"
 
 // What macro sees:
 // sc.parts = Seq("", "!A1")
-// args = Varargs(Seq(Expr(sheet)))
+// args = Varargs(Seq(Expr(sheets)))
 
 // Expected: Runtime path (can't optimize)
 // Actual: Runtime path ✓ (correct)

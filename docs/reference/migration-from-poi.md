@@ -98,7 +98,7 @@ cell.setCellStyle(style);
 
 **XL (Scala)**:
 ```scala
-import com.tjclp.xl.style.*
+import com.tjclp.xl.styles.*
 
 val style = CellStyle.default
   .withFont(Font("Arial", 12.0, bold = true, color = Color.fromHex("#FF0000")))
@@ -145,13 +145,13 @@ switch (cell.getCellType()) {
 **XL (Scala)**:
 ```scala
 import com.tjclp.xl.*
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.codecs.syntax.*
 
 // Type-safe reading with Either
 sheet.readTyped[String](ref"A1") match
   case Right(Some(s)) => println(s"String: $s")
   case Right(None) => println("Cell empty")
-  case Left(error) => println(s"Type error: $error")
+  case Left(error) => println(s"Type errors: $error")
 
 // Or pattern match on CellValue
 sheet.get(ref"A1") match
@@ -271,7 +271,7 @@ try {
 ```scala
 ExcelIO.instance.read[IO](path).map {
   case Right(wb) => // Success
-  case Left(error: XLError) => // Explicit error handling
+  case Left(error: XLError) => // Explicit errors handling
 }.unsafeRunSync()
 ```
 
@@ -386,7 +386,7 @@ header.createCell(0).setCellValue("Product");
 header.createCell(1).setCellValue("Revenue");
 header.createCell(2).setCellValue("Date");
 
-// Header style
+// Header styles
 CellStyle headerStyle = workbook.createCellStyle();
 Font font = workbook.createFont();
 font.setBold(true);
@@ -411,17 +411,17 @@ out.close();
 ```scala
 import com.tjclp.xl.api.*
 import com.tjclp.xl.macros.*
-import com.tjclp.xl.codec.syntax.*
-import com.tjclp.xl.style.*
+import com.tjclp.xl.codecs.syntax.*
+import com.tjclp.xl.styles.*
 import java.time.LocalDate
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
-// Header style
+// Header styles
 val headerStyle = CellStyle.default
   .withFont(Font("Arial", 12.0, bold = true))
 
-// Create sheet
+// Create sheets
 val sheet =
   Sheet("Q1 Sales").map(_.put(
     ref"A1" -> "Product",

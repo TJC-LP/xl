@@ -65,7 +65,7 @@ class MacroUtilSpec extends FunSuite:
   // ===== Error Formatting Tests =====
 
   test("formatCompileError: includes all components") {
-    val err = MacroUtil.formatCompileError("ref", "INVALID!@#$", "Invalid characters in sheet name")
+    val err = MacroUtil.formatCompileError("ref", "INVALID!@#$", "Invalid characters in sheets name")
     assert(err.contains("Invalid ref literal"))
     assert(err.contains("INVALID!@#$"))
     assert(err.contains("Invalid characters"))

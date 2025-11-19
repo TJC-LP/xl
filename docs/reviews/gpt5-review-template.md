@@ -53,7 +53,7 @@ case class RowData(
  * Excel algebra for pure functional XLSX operations.
  *
  * Provides both in-memory and streaming APIs:
- *   - read/write: Load entire workbook into memory (good for <10k rows)
+ *   - read/write: Load entire workbooks into memory (good for <10k rows)
  *   - readStream/writeStream: Constant-memory streaming (good for 100k+ rows)
  */
 trait Excel[F[_]]:

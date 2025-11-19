@@ -3,7 +3,7 @@ package com.tjclp.xl.io
 import fs2.Stream
 import fs2.data.xml.*
 import fs2.data.xml.XmlEvent.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.ooxml.XmlUtil
 
 /**
@@ -118,7 +118,7 @@ object StreamingXmlWriter:
         )
 
       case CellValue.Error(err) =>
-        import com.tjclp.xl.cell.CellError.toExcel
+        import com.tjclp.xl.cells.CellError.toExcel
         // <c r="A1" t="e"><v>#DIV/0!</v></c>
         (
           "e",
@@ -150,7 +150,7 @@ object StreamingXmlWriter:
           val rPrEvents = run.font.toList.flatMap { f =>
             val propsBuilder = List.newBuilder[XmlEvent]
 
-            // Font style properties
+            // Font styles properties
             if f.bold then propsBuilder += XmlEvent.StartTag(QName("b"), Nil, true)
             if f.italic then propsBuilder += XmlEvent.StartTag(QName("i"), Nil, true)
             if f.underline then propsBuilder += XmlEvent.StartTag(QName("u"), Nil, true)

@@ -4,14 +4,14 @@ import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 import munit.FunSuite
 
 /**
  * Real-world integration test for surgical modification.
  *
- * This test validates the surgical modification system against a complex workbook
+ * This test validates the surgical modification system against a complex workbooks
  * that mimics real-world Excel files with:
  *   - Multiple sheets (some hidden)
  *   - Charts and drawings
@@ -38,9 +38,9 @@ import munit.FunSuite
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class XlsxWriterRealWorldSpec extends FunSuite:
 
-  test("complex workbook with charts, conditionalFormatting, hidden sheets, named ranges") {
+  test("complex workbooks with charts, conditionalFormatting, hidden sheets, named ranges") {
     // This test validates ALL 26 fixes from the surgical-mod branch against
-    // a single comprehensive real-world-like workbook
+    // a single comprehensive real-world-like workbooks
 
     val source = createComplexWorkbook()
 
@@ -55,11 +55,11 @@ class XlsxWriterRealWorldSpec extends FunSuite:
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
     assert(wb.sourceContext.isDefined, "Workbook should have SourceContext")
-    assert(!wb.sourceContext.get.isClean, "Modified workbook should be dirty")
+    assert(!wb.sourceContext.get.isClean, "Modified workbooks should be dirty")
 
     // Verify only Sheet1 modified
     val tracker = wb.sourceContext.get.modificationTracker
-    assertEquals(tracker.modifiedSheets, Set(0), "Only sheet 0 should be modified")
+    assertEquals(tracker.modifiedSheets, Set(0), "Only sheets 0 should be modified")
 
     // Write back
     val output = Files.createTempFile("complex-real-world", ".xlsx")
@@ -99,7 +99,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
     )
 
     // ===== Validation 2: Defined Names Preserved =====
-    val workbookXml = readEntryString(outputZip, outputZip.getEntry("xl/workbook.xml"))
+    val workbookXml = readEntryString(outputZip, outputZip.getEntry("xl/workbooks.xml"))
     assert(
       workbookXml.contains("<definedNames>"),
       "Defined names section missing"
@@ -127,7 +127,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
     // ===== Validation 4: Hidden Sheets Preserved =====
     assert(
       workbookXml.contains("""state="hidden""""),
-      "Hidden sheet state missing (Sheet3 should be hidden)"
+      "Hidden sheets state missing (Sheet3 should be hidden)"
     )
 
     // ===== Validation 5: Theme Colors Preserved =====
@@ -180,7 +180,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
     )
 
     // ===== Validation 10: Modified Cell Present =====
-    // Note: Cell uses SST reference, so check SST instead of sheet XML
+    // Note: Cell uses SST reference, so check SST instead of sheets XML
     assert(
       sstXml.contains("Modified by XL"),
       "Modified cell content missing from SST"
@@ -255,7 +255,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
@@ -273,32 +273,32 @@ class XlsxWriterRealWorldSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
-      // Workbook with namespaces, defined names, hidden sheet
+      // Workbook with namespaces, defined names, hidden sheets
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" mc:Ignorable="x15">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" mc:Ignorable="x15">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
-    <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
-    <sheet name="Sheet3" sheetId="3" state="hidden" r:id="rId3"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet2" sheetId="2" r:id="rId2"/>
+    <sheets name="Sheet3" sheetId="3" state="hidden" r:id="rId3"/>
   </sheets>
   <definedNames>
     <definedName name="MyNamedRange">Sheet1!$A$1:$A$10</definedName>
     <definedName name="SalesTotal">Sheet2!$B$5</definedName>
   </definedNames>
-</workbook>"""
+</workbooks>"""
       )
 
       // Workbook rels
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -328,7 +328,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
   </fills>
   <borders count="2">
     <border><left/><right/><top/><bottom/><diagonal/></border>
-    <border><left style="thin"><color theme="1" tint="0.5"/></left><right/><top/><bottom/><diagonal/></border>
+    <border><left styles="thin"><color theme="1" tint="0.5"/></left><right/><top/><bottom/><diagonal/></border>
   </borders>
   <cellXfs count="5">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
@@ -419,7 +419,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
 </Relationships>"""
       )
 
-      // Sheet2: Clean sheet (will be byte-identical after modification)
+      // Sheet2: Clean sheets (will be byte-identical after modification)
       writeEntry(
         out,
         "xl/worksheets/sheet2.xml",
@@ -436,7 +436,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
 </worksheet>"""
       )
 
-      // Sheet3: Hidden sheet
+      // Sheet3: Hidden sheets
       writeEntry(
         out,
         "xl/worksheets/sheet3.xml",

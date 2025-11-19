@@ -1,7 +1,7 @@
 package com.tjclp.xl.macros
 
-import com.tjclp.xl.cell.{CellValue, FormulaParser}
-import com.tjclp.xl.error.XLError
+import com.tjclp.xl.cells.{CellValue, FormulaParser}
+import com.tjclp.xl.errors.XLError
 import scala.annotation.unchecked
 import munit.FunSuite
 
@@ -256,7 +256,7 @@ class FormulaInterpolationSpec extends FunSuite:
     fx"$longFormula" match
       case Left(XLError.FormulaError(input, msg)) =>
         assert(msg.contains("Excel cell limit"))
-        assert(input.length < 100) // Truncated in error message
+        assert(input.length < 100) // Truncated in errors message
       case Right(value) => fail(s"Should fail for too-long formula, got Right($value)")
       case Left(other) =>
         fail(s"Expected FormulaError, got $other")

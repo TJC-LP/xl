@@ -2,18 +2,18 @@ package com.tjclp.xl.html
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
-import com.tjclp.xl.codec.syntax.*
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
-import com.tjclp.xl.style.border.{Border, BorderStyle}
-import com.tjclp.xl.style.color.Color
-import com.tjclp.xl.style.fill.Fill
-import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.codecs.syntax.*
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.styles.border.{Border, BorderStyle}
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.unsafe.*
 
 /** Tests for HTML export functionality */
@@ -88,7 +88,7 @@ class HtmlRendererSpec extends FunSuite:
       .put(ref"A1", CellValue.RichText("Red".red + " and " + "Green".green))
 
     val html = sheet.toHtml(ref"A1:A1")
-    assert(html.contains("color:"), "Should include color style")
+    assert(html.contains("color:"), "Should include color styles")
     assert(html.contains("<span"), "Should use span for color")
   }
 
@@ -105,7 +105,7 @@ class HtmlRendererSpec extends FunSuite:
 
   // ========== Cell Style Export ==========
 
-  test("toHtml: cell style as inline CSS") {
+  test("toHtml: cell styles as inline CSS") {
     val headerStyle = CellStyle.default
       .withFont(Font("Arial", 14.0, bold = true))
       .withFill(Fill.Solid(Color.fromRgb(200, 200, 200)))
@@ -130,7 +130,7 @@ class HtmlRendererSpec extends FunSuite:
       .withCellStyle(ref"A1", boldStyle)
 
     val html = sheet.toHtml(ref"A1:A1", includeStyles = false)
-    assert(!html.contains("style="), "Should not include inline styles")
+    assert(!html.contains("styles="), "Should not include inline styles")
   }
 
   // ========== HTML Escaping ==========

@@ -2,15 +2,15 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.{CellStyle, Font, Fill, Color}
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.{CellStyle, Font, Fill, Color}
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
 import scala.xml.XML
 
-/** End-to-end integration tests for style application */
+/** End-to-end integration tests for styles application */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class StyleIntegrationSpec extends FunSuite:
 
@@ -27,7 +27,7 @@ class StyleIntegrationSpec extends FunSuite:
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
 
-    val sheet = Sheet("Styled").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Styled").getOrElse(fail("Failed to create sheets"))
       .put(ref"A1", CellValue.Text("Bold Text"))
       .withCellStyle(ref"A1", boldStyle)
       .put(ref"A2", CellValue.Text("Red Background"))
@@ -36,7 +36,7 @@ class StyleIntegrationSpec extends FunSuite:
     val wb = Workbook(Vector(sheet))
     val path = dir.resolve("styled.xlsx")
 
-    // Write workbook
+    // Write workbooks
     val result = XlsxWriter.write(wb, path)
     assert(result.isRight, s"Failed to write: $result")
 
@@ -65,8 +65,8 @@ class StyleIntegrationSpec extends FunSuite:
       val a1StyleAttr = (cellA1.get \ "@s").text
       val a2StyleAttr = (cellA2.get \ "@s").text
 
-      assert(a1StyleAttr.nonEmpty, "A1 should have style attribute")
-      assert(a2StyleAttr.nonEmpty, "A2 should have style attribute")
+      assert(a1StyleAttr.nonEmpty, "A1 should have styles attribute")
+      assert(a2StyleAttr.nonEmpty, "A2 should have styles attribute")
       assert(a1StyleAttr != a2StyleAttr, "Different styles should have different indices")
 
       // Indices should be 1 and 2 (not 0 which is default)
@@ -77,7 +77,7 @@ class StyleIntegrationSpec extends FunSuite:
     }
   }
 
-  tempDir.test("multi-sheet workbook deduplicates shared styles") { dir =>
+  tempDir.test("multi-sheets workbooks deduplicates shared styles") { dir =>
     val headerStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
 
     val sheet1 = Sheet("Sales").getOrElse(fail(""))
@@ -101,9 +101,9 @@ class StyleIntegrationSpec extends FunSuite:
 
       // Should have 2 cellXfs (default + header), NOT 3
       val cellXfs = (stylesXml \\ "cellXfs" \\ "xf")
-      assertEquals(cellXfs.size, 2, "Shared style should be deduplicated")
+      assertEquals(cellXfs.size, 2, "Shared styles should be deduplicated")
 
-      // Both sheets should reference same style index for their A1 cells
+      // Both sheets should reference same styles index for their A1 cells
       val sheet1Entry = zipFile.getEntry("xl/worksheets/sheet1.xml")
       val sheet1Xml = XML.load(zipFile.getInputStream(sheet1Entry))
       val sheet1A1 = (sheet1Xml \\ "c").find(c => (c \ "@r").text == "A1").get
@@ -114,7 +114,7 @@ class StyleIntegrationSpec extends FunSuite:
       val sheet2A1 = (sheet2Xml \\ "c").find(c => (c \ "@r").text == "A1").get
       val sheet2Style = (sheet2A1 \ "@s").text
 
-      assertEquals(sheet1Style, sheet2Style, "Both sheets should reference same style index")
+      assertEquals(sheet1Style, sheet2Style, "Both sheets should reference same styles index")
     } finally {
       zipFile.close()
     }

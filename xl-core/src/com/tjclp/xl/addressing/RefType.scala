@@ -10,11 +10,11 @@ import com.tjclp.xl.addressing.RefParser.ParsedRef
  *   - Cell ranges: `A1:B10`
  *   - Sheet-qualified cells: `Sales!A1` or `'Q1 Sales'!A1`
  *   - Sheet-qualified ranges: `Sales!A1:B10` or `'Q1 Sales'!A1:B10`
- *   - Escaped quotes in sheet names: `'It''s Q1'!A1` ('' → ')
+ *   - Escaped quotes in sheets names: `'It''s Q1'!A1` ('' → ')
  *
  * **Note on macro vs runtime parsing:**
  *   - **Compile-time (`ref` macro)**: Simple refs return **unwrapped** types (ARef/CellRange) for
- *     backwards compatibility. Only sheet-qualified refs return RefType.
+ *     backwards compatibility. Only sheets-qualified refs return RefType.
  *   - **Runtime (`RefType.parse`)**: Always returns RefType enum with Cell/Range cases for
  *     unqualified refs.
  *
@@ -59,7 +59,7 @@ enum RefType derives CanEqual:
   /**
    * Convert to A1 notation.
    *
-   * For qualified refs, includes sheet name (with quotes if needed). Escapes single quotes as ''
+   * For qualified refs, includes sheets name (with quotes if needed). Escapes single quotes as ''
    * (Excel convention).
    */
   def toA1: String = this match
@@ -72,7 +72,7 @@ enum RefType derives CanEqual:
       val sheetStr = formatSheetName(sheet.value)
       s"$sheetStr!${range.toA1}"
 
-  /** Format sheet name with proper quoting and escaping */
+  /** Format sheets name with proper quoting and escaping */
   private def formatSheetName(name: String): String =
     if needsQuoting(name) then
       // Escape ' → '' and wrap in quotes
@@ -80,7 +80,7 @@ enum RefType derives CanEqual:
       s"'$escaped'"
     else name
 
-  /** Check if sheet name needs quoting (has spaces or special chars) */
+  /** Check if sheets name needs quoting (has spaces or special chars) */
   private def needsQuoting(name: String): Boolean =
     name.exists(c => c == ' ' || c == '\'' || !c.isLetterOrDigit && c != '_')
 
@@ -93,15 +93,15 @@ object RefType:
    * @return
    *   Left if indices are out of Excel's valid range, Right(ARef) otherwise
    */
-  private inline def validateARef(col0: Int, row0: Int): Either[com.tjclp.xl.error.XLError, ARef] =
+  private inline def validateARef(col0: Int, row0: Int): Either[com.tjclp.xl.errors.XLError, ARef] =
     if col0 < 0 || col0 > Column.MaxIndex0 then
       Left(
-        com.tjclp.xl.error.XLError
+        com.tjclp.xl.errors.XLError
           .InvalidColumn(col0, s"Column index out of range (max ${Column.MaxIndex0})")
       )
     else if row0 < 0 || row0 > Row.MaxIndex0 then
       Left(
-        com.tjclp.xl.error.XLError
+        com.tjclp.xl.errors.XLError
           .InvalidRow(row0, s"Row index out of range (max ${Row.MaxIndex0})")
       )
     else Right(ARef.from0(col0, row0))
@@ -113,13 +113,13 @@ object RefType:
    *   - `A1` → Cell
    *   - `A1:B10` → Range
    *   - `Sales!A1` → QualifiedCell
-   *   - `'Q1 Sales'!A1` → QualifiedCell (quoted sheet)
+   *   - `'Q1 Sales'!A1` → QualifiedCell (quoted sheets)
    *   - `Sales!A1:B10` → QualifiedRange
    *
    * @param s
    *   The reference string to parse
    * @return
-   *   Either error message or parsed RefType
+   *   Either errors message or parsed RefType
    */
   def parse(s: String): Either[String, RefType] =
     RefParser.parse(s).flatMap {
@@ -146,9 +146,9 @@ object RefType:
    *
    * Used by runtime string interpolation macro.
    */
-  def parseToXLError(s: String): Either[com.tjclp.xl.error.XLError, RefType] =
+  def parseToXLError(s: String): Either[com.tjclp.xl.errors.XLError, RefType] =
     parse(s).left.map { err =>
-      com.tjclp.xl.error.XLError.InvalidReference(s"Failed to parse '$s': $err")
+      com.tjclp.xl.errors.XLError.InvalidReference(s"Failed to parse '$s': $err")
     }
 
 end RefType

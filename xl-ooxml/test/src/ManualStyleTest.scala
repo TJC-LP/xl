@@ -2,10 +2,10 @@ package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align, NumFmt}
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align, NumFmt}
 import java.nio.file.Paths
 
 /** Manual test to generate a styled XLSX for visual verification in Excel.
@@ -41,7 +41,7 @@ object ManualStyleTest:
     val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
 
     // Build worksheet
-    val sheet = Sheet("StyleDemo").getOrElse(sys.error("Failed to create sheet"))
+    val sheet = Sheet("StyleDemo").getOrElse(sys.error("Failed to create sheets"))
       // Row 1: Individual styles
       .put(ref"A1", CellValue.Text("BOLD"))
       .withCellStyle(ref"A1", boldStyle)
@@ -65,7 +65,7 @@ object ManualStyleTest:
       .put(ref"D3", CellValue.Number(BigDecimal("99.95")))
       .withCellStyle(ref"D3", currencyStyle)
 
-    // Create workbook
+    // Create workbooks
     val wb = Workbook(Vector(sheet))
 
     // Write to file

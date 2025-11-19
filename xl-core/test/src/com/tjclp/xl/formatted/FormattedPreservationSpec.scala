@@ -2,11 +2,11 @@ package com.tjclp.xl.formatted
 
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formatted.Formatted
-import com.tjclp.xl.sheet.Sheet
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 
@@ -14,7 +14,7 @@ import munit.FunSuite
 class FormattedPreservationSpec extends FunSuite:
 
   test("money literal preserves Currency format in batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test").getOrElse(fail("Should create sheets"))
 
     // Use batch put with money literal
     val updated = sheet.put(ref"A1" -> money"$$1,234.56").unsafe
@@ -27,7 +27,7 @@ class FormattedPreservationSpec extends FunSuite:
       case other =>
         fail(s"Expected Number, got: $other")
 
-    // Verify cell has Currency format applied via style
+    // Verify cell has Currency format applied via styles
     cell.styleId match
       case Some(styleId) =>
         val style = updated.styleRegistry.get(styleId).getOrElse {
@@ -39,11 +39,11 @@ class FormattedPreservationSpec extends FunSuite:
           "money literal should apply Currency format"
         )
       case None =>
-        fail("Cell should have a style with Currency format")
+        fail("Cell should have a styles with Currency format")
   }
 
   test("date literal preserves Date format in batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test").getOrElse(fail("Should create sheets"))
 
     val updated = sheet.put(ref"A1" -> date"2025-11-10").unsafe
 
@@ -59,11 +59,11 @@ class FormattedPreservationSpec extends FunSuite:
         }
         assertEquals(style.numFmt, NumFmt.Date, "date literal should apply Date format")
       case None =>
-        fail("Cell should have style with Date format")
+        fail("Cell should have styles with Date format")
   }
 
   test("percent literal preserves Percent format in batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test").getOrElse(fail("Should create sheets"))
 
     val updated = sheet.put(ref"A1" -> percent"15.5%").unsafe
 
@@ -85,11 +85,11 @@ class FormattedPreservationSpec extends FunSuite:
         }
         assertEquals(style.numFmt, NumFmt.Percent, "percent literal should apply Percent format")
       case None =>
-        fail("Cell should have style with Percent format")
+        fail("Cell should have styles with Percent format")
   }
 
   test("mixed formatted and plain values in single batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test").getOrElse(fail("Should create sheets"))
 
     val updated = sheet.put(
       ref"A1" -> "Product",               // Plain String
@@ -134,7 +134,7 @@ class FormattedPreservationSpec extends FunSuite:
   }
 
   test("accounting literal preserves Currency format") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test").getOrElse(fail("Should create sheets"))
 
     // Test accounting format (negative shown as parentheses)
     val updated = sheet.put(ref"A1" -> accounting"$$(999.99)").unsafe
@@ -155,7 +155,7 @@ class FormattedPreservationSpec extends FunSuite:
   }
 
   test("Formatted variables preserve format in batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test").getOrElse(fail("Should create sheets"))
 
     // Store formatted values in variables (not inline literals)
     val revenue = money"$$10,000.00"
@@ -182,7 +182,7 @@ class FormattedPreservationSpec extends FunSuite:
         }
         assertEquals(style.numFmt, NumFmt.Currency, "money variable should preserve Currency format")
       case None =>
-        fail("Cell B1 should have a style with Currency format")
+        fail("Cell B1 should have a styles with Currency format")
 
     // Verify Percent format is preserved for percent variable
     val cellB2 = updated(ref"B2")
@@ -193,7 +193,7 @@ class FormattedPreservationSpec extends FunSuite:
         }
         assertEquals(style.numFmt, NumFmt.Percent, "percent variable should preserve Percent format")
       case None =>
-        fail("Cell B2 should have a style with Percent format")
+        fail("Cell B2 should have a styles with Percent format")
 
     // Verify Date format is preserved for date variable
     val cellB3 = updated(ref"B3")
@@ -204,5 +204,5 @@ class FormattedPreservationSpec extends FunSuite:
         }
         assertEquals(style.numFmt, NumFmt.Date, "date variable should preserve Date format")
       case None =>
-        fail("Cell B3 should have a style with Date format")
+        fail("Cell B3 should have a styles with Date format")
   }

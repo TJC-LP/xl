@@ -1,9 +1,9 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cell.{Cell, CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
-import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.errors.{XLError, XLResult}
 import com.tjclp.xl.{ModificationTracker, SourceContext, SourceFingerprint}
 
 import scala.xml.*
@@ -13,8 +13,8 @@ import java.security.{DigestInputStream, MessageDigest}
 import java.util.zip.ZipInputStream
 import scala.collection.mutable
 import scala.collection.immutable.ArraySeq
-import com.tjclp.xl.style.StyleRegistry
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.StyleRegistry
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Reader for XLSX files (ZIP parsing)
@@ -57,8 +57,8 @@ object XlsxReader:
   private val knownParts: Set[String] = Set(
     "[Content_Types].xml",
     "_rels/.rels",
-    "xl/workbook.xml",
-    "xl/_rels/workbook.xml.rels",
+    "xl/workbooks.xml",
+    "xl/_rels/workbooks.xml.rels",
     "xl/styles.xml",
     "xl/sharedStrings.xml"
   )
@@ -67,7 +67,7 @@ object XlsxReader:
    * Checks if the given ZIP entry path is a known part that XL can parse.
    *
    * Known parts include:
-   *   - Core OOXML parts (workbook, styles, sharedStrings)
+   *   - Core OOXML parts (workbooks, styles, sharedStrings)
    *   - Worksheets (pattern: xl/worksheets/sheet*.xml)
    *   - Relationships
    *
@@ -77,7 +77,7 @@ object XlsxReader:
     knownParts.contains(path) || path.matches("xl/worksheets/sheet\\d+\\.xml")
 
   /**
-   * Read workbook from XLSX file (in-memory).
+   * Read workbooks from XLSX file (in-memory).
    *
    * Loads entire file into memory. For large files, use `ExcelIO.readStream()` instead.
    *
@@ -88,7 +88,7 @@ object XlsxReader:
   def read(inputPath: Path): XLResult[Workbook] =
     readWithWarnings(inputPath).map(_.workbook)
 
-  /** Read workbook and surface non-fatal warnings. */
+  /** Read workbooks and surface non-fatal warnings. */
   def readWithWarnings(inputPath: Path): XLResult[ReadResult] =
     try
       val size = Files.size(inputPath)
@@ -101,7 +101,7 @@ object XlsxReader:
         digestStream.close()
     catch case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
 
-  /** Read workbook from byte array (for testing) */
+  /** Read workbooks from byte array (for testing) */
   def readFromBytes(bytes: Array[Byte]): XLResult[Workbook] =
     readFromBytesWithWarnings(bytes).map(_.workbook)
 
@@ -109,13 +109,13 @@ object XlsxReader:
     try readFromStreamWithWarnings(new ByteArrayInputStream(bytes), None)
     catch case e: Exception => Left(XLError.IOError(s"Failed to read bytes: ${e.getMessage}"))
 
-  /** Read workbook from input stream (no surgical modification support) */
+  /** Read workbooks from input stream (no surgical modification support) */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def readFromStream(is: InputStream): XLResult[Workbook] =
     readFromStreamWithWarnings(is, None).map(_.workbook)
 
   /**
-   * Read workbook from input stream with optional source handle for surgical modification.
+   * Read workbooks from input stream with optional source handle for surgical modification.
    *
    * @param is
    *   Input stream containing XLSX ZIP data
@@ -123,7 +123,7 @@ object XlsxReader:
    *   Optional source handle providing path to original file. If provided, creates SourceContext
    *   with indexed unknown parts for surgical writes.
    * @return
-   *   ReadResult with workbook and warnings
+   *   ReadResult with workbooks and warnings
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def readFromStreamWithWarnings(
@@ -164,13 +164,13 @@ object XlsxReader:
       // Compute fingerprint if reading from a file
       val fingerprint = source.map(_.finalizeFingerprint())
 
-      // Parse workbook structure from known parts
+      // Parse workbooks structure from known parts
       parseWorkbook(parts.toMap, source, manifest, fingerprint)
 
     finally zip.close()
 
   /**
-   * Parse workbook from collected parts and optionally create SourceContext.
+   * Parse workbooks from collected parts and optionally create SourceContext.
    *
    * @param parts
    *   Map of ZIP entry paths to their content (only known parts)
@@ -179,7 +179,7 @@ object XlsxReader:
    * @param manifest
    *   Part manifest with metadata for all ZIP entries (known + unknown)
    * @return
-   *   ReadResult with workbook (with optional SourceContext) and warnings
+   *   ReadResult with workbooks (with optional SourceContext) and warnings
    */
   private def parseWorkbook(
     parts: Map[String, String],
@@ -188,15 +188,15 @@ object XlsxReader:
     fingerprint: Option[SourceFingerprint]
   ): XLResult[ReadResult] =
     for
-      // Parse workbook.xml
+      // Parse workbooks.xml
       workbookXml <- parts
-        .get("xl/workbook.xml")
-        .toRight(XLError.ParseError("xl/workbook.xml", "Missing workbook.xml"))
-      workbookElem <- parseXml(workbookXml, "xl/workbook.xml")
+        .get("xl/workbooks.xml")
+        .toRight(XLError.ParseError("xl/workbooks.xml", "Missing workbooks.xml"))
+      workbookElem <- parseXml(workbookXml, "xl/workbooks.xml")
       ooxmlWb <- OoxmlWorkbook
         .fromXml(workbookElem)
         .left
-        .map(err => XLError.ParseError("xl/workbook.xml", err): XLError)
+        .map(err => XLError.ParseError("xl/workbooks.xml", err): XLError)
 
       // Parse optional shared strings
       sst <- parseOptionalSST(parts)
@@ -204,13 +204,13 @@ object XlsxReader:
       // Parse styles (if present)
       (styles, styleWarnings) <- parseStyles(parts)
 
-      // Parse workbook relationships
+      // Parse workbooks relationships
       workbookRels <- parseWorkbookRelationships(parts)
 
       // Parse sheets
       sheets <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
 
-      // Assemble workbook with optional SourceContext
+      // Assemble workbooks with optional SourceContext
       workbook <- assembleWorkbook(sheets, source, manifest, fingerprint)
     yield ReadResult(workbook, styleWarnings)
 
@@ -240,17 +240,17 @@ object XlsxReader:
             .map(err => XLError.ParseError("xl/styles.xml", err): XLError)
         yield (styles, Vector.empty)
 
-  /** Parse workbook relationships (used to resolve worksheet locations) */
+  /** Parse workbooks relationships (used to resolve worksheet locations) */
   private def parseWorkbookRelationships(parts: Map[String, String]): XLResult[Relationships] =
-    parts.get("xl/_rels/workbook.xml.rels") match
+    parts.get("xl/_rels/workbooks.xml.rels") match
       case None => Right(Relationships.empty)
       case Some(xml) =>
         for
-          elem <- parseXml(xml, "xl/_rels/workbook.xml.rels")
+          elem <- parseXml(xml, "xl/_rels/workbooks.xml.rels")
           rels <- Relationships
             .fromXml(elem)
             .left
-            .map(err => XLError.ParseError("xl/_rels/workbook.xml.rels", err): XLError)
+            .map(err => XLError.ParseError("xl/_rels/workbooks.xml.rels", err): XLError)
         yield rels
 
   /** Parse all worksheets */
@@ -328,7 +328,7 @@ object XlsxReader:
     styles: WorkbookStyles
   ): (StyleRegistry, Map[Int, StyleId]) =
     // Start with EMPTY registry (not default) to preserve exact source styles
-    // This prevents adding an extra "default" style when source style 0 differs from CellStyle.default
+    // This prevents adding an extra "default" styles when source styles 0 differs from CellStyle.default
     val emptyRegistry = StyleRegistry(Vector.empty, Map.empty)
     styles.cellStyles.zipWithIndex.foldLeft((emptyRegistry, Map.empty[Int, StyleId])) {
       case ((registry, mapping), (style, idx)) =>
@@ -337,7 +337,7 @@ object XlsxReader:
     }
 
   /**
-   * Assemble final workbook with optional SourceContext for surgical modification.
+   * Assemble final workbooks with optional SourceContext for surgical modification.
    *
    * If a source handle is provided, creates a SourceContext that enables surgical writes by
    * preserving unknown ZIP entries (charts, images, etc.) byte-for-byte.
@@ -357,7 +357,7 @@ object XlsxReader:
     manifest: PartManifest,
     fingerprint: Option[SourceFingerprint]
   ): XLResult[Workbook] =
-    if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
+    if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheets"))
     else
       val sourceContextEither: XLResult[Option[SourceContext]] =
         (source, fingerprint) match
@@ -365,7 +365,7 @@ object XlsxReader:
             Right(Some(SourceContext.fromFile(handle.path, manifest, fp)))
           case (None, None) => Right(None)
           case (Some(_), None) =>
-            Left(XLError.IOError("Missing source fingerprint for workbook"))
+            Left(XLError.IOError("Missing source fingerprint for workbooks"))
           case (None, Some(_)) =>
             Left(XLError.IOError("Unexpected source fingerprint without source handle"))
 

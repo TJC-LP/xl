@@ -1,13 +1,13 @@
 package com.tjclp.xl.dsl
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.patch.Patch
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.units.StyleId
 
 /**
- * DSL extensions for ergonomic patch building and sheet operations.
+ * DSL extensions for ergonomic patch building and sheets operations.
  *
  * Provides operator syntax for creating and composing patches without requiring Cats Monoid syntax
  * or type ascription on enum cases.
@@ -17,7 +17,7 @@ import com.tjclp.xl.style.units.StyleId
  *   import com.tjclp.xl.dsl.*
  *
  *   val patch = (ref"A1" := "Hello") ++ (ref"A1".styled(boldStyle)) ++ ref"A1:B1".merge
- *   sheet.applyPatch(patch)
+ *   sheets.applyPatch(patch)
  * }}}
  */
 
@@ -59,7 +59,7 @@ object syntax:
     /**
      * Create a SetCellStyle patch using a CellStyle object.
      *
-     * The style will be auto-registered in the sheet's StyleRegistry when applied.
+     * The styles will be auto-registered in the sheets's StyleRegistry when applied.
      */
     def styled(style: CellStyle): Patch = Patch.SetCellStyle(ref, style)
 

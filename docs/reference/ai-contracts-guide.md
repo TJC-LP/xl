@@ -130,7 +130,7 @@ def toColumnLetter(col: Int): String = ...
   * REQUIRES: s is non-empty string
   * ENSURES:
   *   - Returns Right(ARef) if s is valid A1 notation (e.g., "A1", "XFD1048576")
-  *   - Returns Left(error) if s is invalid
+  *   - Returns Left(errors) if s is invalid
   *   - Input is normalized to uppercase before parsing (case-insensitive)
   *   - Result.toA1 round-trips to normalized input
   * DETERMINISTIC: Yes (pure parsing with stable normalization)
@@ -141,7 +141,7 @@ def toColumnLetter(col: Int): String = ...
   *   - Out of range → Left("Column/row index out of range")
   *
   * @param s Cell reference in A1 notation (case-insensitive)
-  * @return Either error message or ARef
+  * @return Either errors message or ARef
   */
 def parse(s: String): Either[String, ARef] = ...
 ```
@@ -149,16 +149,16 @@ def parse(s: String): Either[String, ARef] = ...
 ### Example 3: Function With State Dependencies
 
 ```scala
-/** Apply patch to sheet and return updated sheet
+/** Apply patch to sheets and return updated sheets
   *
   * REQUIRES:
   *   - patch is well-formed (all refs are valid)
-  *   - sheet.styleRegistry contains all styleIds referenced in patch
+  *   - sheets.styleRegistry contains all styleIds referenced in patch
   * ENSURES:
-  *   - Returns Right(sheet') with patch applied
-  *   - sheet'.cells reflects all Put/Remove operations
+  *   - Returns Right(sheets') with patch applied
+  *   - sheets'.cells reflects all Put/Remove operations
   *   - Merged regions updated according to Merge operations
-  *   - Original sheet is unchanged (immutable)
+  *   - Original sheets is unchanged (immutable)
   *   - Returns Left(XLError) if patch references invalid styleId
   * DETERMINISTIC: Yes (pure transformation, no side effects)
   * ERROR CASES:
@@ -166,7 +166,7 @@ def parse(s: String): Either[String, ARef] = ...
   *   - Conflicting merge ranges → Left(XLError.InvalidMerge)
   *
   * @param patch Patch to apply
-  * @return Either error or updated sheet
+  * @return Either errors or updated sheets
   */
 def applyPatch(patch: Patch): Either[XLError, Sheet] = ...
 ```
@@ -174,17 +174,17 @@ def applyPatch(patch: Patch): Either[XLError, Sheet] = ...
 ### Example 4: Complex Transformation
 
 ```scala
-/** Create SharedStrings table from workbook text cells
+/** Create SharedStrings table from workbooks text cells
   *
   * REQUIRES: wb contains only valid CellValue.Text cells
   * ENSURES:
   *   - strings contains unique text values (deduplicated)
   *   - indexMap maps each string to its SST index (0-based)
-  *   - totalCount = number of CellValue.Text instances in workbook
+  *   - totalCount = number of CellValue.Text instances in workbooks
   *   - totalCount >= strings.size (equality only when no duplicates)
   *   - Iteration order is stable (sheets processed in Vector order)
   * DETERMINISTIC: Yes (iteration order is stable via Vector traversal)
-  * ERROR CASES: None (total function, handles empty workbook → empty SST)
+  * ERROR CASES: None (total function, handles empty workbooks → empty SST)
   *
   * @param wb Workbook to extract strings from
   * @return SharedStrings with deduplicated strings and total count
@@ -289,7 +289,7 @@ AI contracts should align with test coverage:
 /** Parse A1 notation to cell reference
   *
   * REQUIRES: s is non-empty string
-  * ENSURES: Returns Right(ARef) if valid, Left(error) if invalid
+  * ENSURES: Returns Right(ARef) if valid, Left(errors) if invalid
   * DETERMINISTIC: Yes
   * ERROR CASES:
   *   - Empty input → Left("No column letters")

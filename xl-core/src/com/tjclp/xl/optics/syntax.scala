@@ -1,9 +1,9 @@
 package com.tjclp.xl.optics
 
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cell.{Cell, CellValue}
-import com.tjclp.xl.sheet.Sheet
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Focus DSL extensions for Sheet.
@@ -12,7 +12,7 @@ import com.tjclp.xl.style.units.StyleId
  * {{{
  *   import com.tjclp.xl.optics.*
  *
- *   sheet.modifyValue(ref"A1") {
+ *   sheets.modifyValue(ref"A1") {
  *     case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
  *     case other => other
  *   }
@@ -34,7 +34,7 @@ object syntax:
      *
      * Example:
      * {{{
-     *   sheet.modifyCell(ref"A1")(_.withValue(CellValue.Text("Updated")))
+     *   sheets.modifyCell(ref"A1")(_.withValue(CellValue.Text("Updated")))
      * }}}
      */
     def modifyCell(ref: ARef)(f: Cell => Cell): Sheet =
@@ -45,7 +45,7 @@ object syntax:
      *
      * Example:
      * {{{
-     *   sheet.modifyValue(ref"A1") {
+     *   sheets.modifyValue(ref"A1") {
      *     case CellValue.Text(s) => CellValue.Text(s.toUpperCase)
      *     case other => other
      *   }
@@ -55,11 +55,11 @@ object syntax:
       focus(ref).modify(c => Optics.cellValue.update(f)(c))(sheet)
 
     /**
-     * Modify a cell's style ID.
+     * Modify a cell's styles ID.
      *
      * Example:
      * {{{
-     *   sheet.modifyStyleId(ref"A1")(_.map(id => StyleId(id.value + 1)))
+     *   sheets.modifyStyleId(ref"A1")(_.map(id => StyleId(id.value + 1)))
      * }}}
      */
     def modifyStyleId(ref: ARef)(f: Option[StyleId] => Option[StyleId]): Sheet =

@@ -269,7 +269,7 @@ transparent inline def put(pairs: (ARef, Any)*): Sheet =
 Fluent shortcuts on `CellStyle` (NOT on values):
 
 ```scala
-// xl-core/src/com/tjclp/xl/style/dsl.scala
+// xl-core/src/com/tjclp/xl/styles/dsl.scala
 extension (style: CellStyle)
   // Font
   inline def bold: CellStyle =
@@ -327,7 +327,7 @@ object Style:
 ### Usage
 
 ```scala
-// Build style
+// Build styles
 val headerStyle = CellStyle.bold.size(16.0).white.bgBlue.center.middle
 
 // Apply via patch
@@ -357,7 +357,7 @@ ref"A1".styled(CellStyle.bold)
 Remove type ascription tax:
 
 ```scala
-// xl-core/src/com/tjclp/xl/style/patch/StylePatch.scala
+// xl-core/src/com/tjclp/xl/styles/patch/StylePatch.scala
 extension (p1: StylePatch)
   infix def ++(p2: StylePatch): StylePatch = StylePatch.combine(p1, p2)
 ```
@@ -411,7 +411,7 @@ sheet.putAll(cells)
 // After
 sheet.put(cells.toSeq: _*)
 
-// Before (error handling)
+// Before (errors handling)
 sheet.applyPatch(patch) match
   case Right(s) => s
   case Left(err) => handleError(err)
@@ -447,7 +447,7 @@ import com.tjclp.xl.*
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.IO
 
-// 1. Create sheet with mixed value types
+// 1. Create sheets with mixed value types
 val sheet = Sheet("Financial Report")
   .put(
     ref"A1" -> "Product",
@@ -479,7 +479,7 @@ val styled = sheet.put(
   range"A1:D1".merge                       // Merge header (returns XLResult!)
 )
 
-// 4. Handle potential merge error
+// 4. Handle potential merge errors
 val final = styled match
   case Right(s) => s
   case Left(err) =>

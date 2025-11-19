@@ -24,27 +24,27 @@ class SecuritySpec extends FunSuite:
       .forEach(Files.delete)
 
   test("XlsxReader rejects malicious XLSX with DOCTYPE declaration") {
-    // Create a malicious XLSX with XXE payload in workbook.xml
+    // Create a malicious XLSX with XXE payload in workbooks.xml
     val maliciousWorkbookXml = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
   </sheets>
   <value>&xxe;</value>
-</workbook>"""
+</workbooks>"""
 
     val contentTypes = """<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="xml" ContentType="application/xml"/>
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
 
     val rels = """<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
 
     val workbookRels = """<?xml version="1.0" encoding="UTF-8"?>
@@ -68,8 +68,8 @@ class SecuritySpec extends FunSuite:
 
     addEntry("[Content_Types].xml", contentTypes)
     addEntry("_rels/.rels", rels)
-    addEntry("xl/workbook.xml", maliciousWorkbookXml) // Malicious!
-    addEntry("xl/_rels/workbook.xml.rels", workbookRels)
+    addEntry("xl/workbooks.xml", maliciousWorkbookXml) // Malicious!
+    addEntry("xl/_rels/workbooks.xml.rels", workbookRels)
     addEntry("xl/worksheets/sheet1.xml", sheet1)
 
     zos.close()
@@ -82,13 +82,13 @@ class SecuritySpec extends FunSuite:
     // Attempt to read malicious XLSX
     val result = XlsxReader.read(tempFile)
 
-    // Should fail with parse error (DOCTYPE rejected)
+    // Should fail with parse errors (DOCTYPE rejected)
     result match
       case Left(error) =>
         val errorMsg = error.toString.toLowerCase
         assert(
           errorMsg.contains("parse") || errorMsg.contains("doctype") || errorMsg.contains("xml"),
-          s"Should reject XXE with parse error, got: $error"
+          s"Should reject XXE with parse errors, got: $error"
         )
       case Right(_) =>
         fail("XlsxReader should reject XLSX with DOCTYPE declaration (XXE vulnerability)")
@@ -112,21 +112,21 @@ class SecuritySpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="xml" ContentType="application/xml"/>
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
 
     val rels = """<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
 
     val workbookXml = """<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
 
     val workbookRels = """<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -144,8 +144,8 @@ class SecuritySpec extends FunSuite:
 
     addEntry("[Content_Types].xml", contentTypes)
     addEntry("_rels/.rels", rels)
-    addEntry("xl/workbook.xml", workbookXml)
-    addEntry("xl/_rels/workbook.xml.rels", workbookRels)
+    addEntry("xl/workbooks.xml", workbookXml)
+    addEntry("xl/_rels/workbooks.xml.rels", workbookRels)
     addEntry("xl/worksheets/sheet1.xml", maliciousSheetXml) // Malicious!
 
     zos.close()
@@ -158,7 +158,7 @@ class SecuritySpec extends FunSuite:
     // Attempt to read malicious XLSX
     val result = XlsxReader.read(tempFile)
 
-    // Should fail with parse error (external entities rejected)
+    // Should fail with parse errors (external entities rejected)
     result match
       case Left(error) =>
         val errorMsg = error.toString.toLowerCase
@@ -173,23 +173,23 @@ class SecuritySpec extends FunSuite:
   test("XlsxReader successfully parses legitimate XLSX without DOCTYPE") {
     // Verify that XXE protection doesn't break legitimate files
     val legitimateWorkbookXml = """<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
 
     val contentTypes = """<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="xml" ContentType="application/xml"/>
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
 
     val rels = """<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
 
     val workbookRels = """<?xml version="1.0" encoding="UTF-8"?>
@@ -219,8 +219,8 @@ class SecuritySpec extends FunSuite:
 
     addEntry("[Content_Types].xml", contentTypes)
     addEntry("_rels/.rels", rels)
-    addEntry("xl/workbook.xml", legitimateWorkbookXml)
-    addEntry("xl/_rels/workbook.xml.rels", workbookRels)
+    addEntry("xl/workbooks.xml", legitimateWorkbookXml)
+    addEntry("xl/_rels/workbooks.xml.rels", workbookRels)
     addEntry("xl/worksheets/sheet1.xml", sheet1)
 
     zos.close()
@@ -235,9 +235,9 @@ class SecuritySpec extends FunSuite:
 
     result match
       case Right(workbook) =>
-        assertEquals(workbook.sheets.size, 1, "Should have 1 sheet")
+        assertEquals(workbook.sheets.size, 1, "Should have 1 sheets")
         assertEquals(workbook.sheets.head.name.value, "Sheet1", "Sheet name should be Sheet1")
         assertEquals(workbook.sheets.head.cells.size, 1, "Should have 1 cell")
       case Left(error) =>
-        fail(s"Legitimate XLSX should parse successfully, got error: $error")
+        fail(s"Legitimate XLSX should parse successfully, got errors: $error")
   }

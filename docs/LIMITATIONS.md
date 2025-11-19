@@ -414,7 +414,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 **What's Missing**:
 ```scala
-// WANT: Automatic codec derivation
+// WANT: Automatic codecs derivation
 case class Person(name: String, age: Int, salary: BigDecimal)
 
 given Codec[Person] = Codec.derived

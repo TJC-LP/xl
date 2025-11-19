@@ -1,9 +1,9 @@
 package com.tjclp.xl.formatted
 
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.sheet.Sheet
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Formatted cell value with associated number format.
@@ -28,11 +28,11 @@ object Formatted:
 
   /** Extension methods for Sheet to handle Formatted values */
   extension (sheet: Sheet)
-    /** Put formatted value (uses format for future style integration) */
+    /** Put formatted value (uses format for future styles integration) */
     @annotation.targetName("putFormattedExt")
     def putFormatted(ref: ARef, formatted: Formatted): Sheet =
       // For now, just put the value
-      // Future: integrate with style system to apply numFmt
+      // Future: integrate with styles system to apply numFmt
       sheet.put(ref, formatted.value)
 
     /** Put multiple formatted values */

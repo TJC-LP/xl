@@ -15,12 +15,12 @@ import java.nio.file.Paths
 
 println("=== XL Patch DSL Demo ===\n")
 
-// Create a base sheet
+// Create a base sheets
 val sheetResult = Sheet("Demo")
 
 sheetResult match
   case Right(sheet) =>
-    println("✓ Created empty sheet\n")
+    println("✓ Created empty sheets\n")
 
     // === OLD WAY: Verbose with type ascription ===
     println("=== OLD WAY (Verbose, requires type ascription with Cats) ===")
@@ -60,7 +60,7 @@ sheetResult match
     // === Complex patch with styles and merges ===
     println("\n=== Complex Patch Example ===")
 
-    // Create a header style with fluent DSL (compare to verbose constructor!)
+    // Create a header styles with fluent DSL (compare to verbose constructor!)
     val headerStyle = CellStyle.default.bold.size(14.0).white.bgBlue.center.middle
 
     val complexPatch =
@@ -145,7 +145,7 @@ sheetResult match
     // === Write to Excel file ===
     println("\n=== Write to Excel File ===")
 
-    // Build a complete workbook with the complex patch
+    // Build a complete workbooks with the complex patch
     val finalWorkbookResult = for
       reportSheet <- Sheet("Sales Report")
       populatedSheet <- Patch.applyPatch(reportSheet, complexPatch)
@@ -156,7 +156,7 @@ sheetResult match
         val outputPath = Paths.get("patch-demo-output.xlsx")
         val excel = ExcelIO.instance[IO]
 
-        println(s"Writing workbook to: ${outputPath.toAbsolutePath}")
+        println(s"Writing workbooks to: ${outputPath.toAbsolutePath}")
 
         // Write the file using Cats Effect IO
         val writeResult = excel.write(workbook, outputPath).attempt.unsafeRunSync()
@@ -171,16 +171,16 @@ sheetResult match
             println(s"✗ Error writing file: ${err.getMessage}")
 
       case Left(err) =>
-        println(s"✗ Error creating workbook: ${err.message}")
+        println(s"✗ Error creating workbooks: ${err.message}")
 
   case Left(err) =>
-    println(s"✗ Error creating sheet: ${err.message}")
+    println(s"✗ Error creating sheets: ${err.message}")
 
 println("\n=== Key Takeaways ===")
 println("1. Import com.tjclp.xl.* (unified import includes DSL, macros, domain model)")
 println("2. Use := operator: ref\"A1\" := \"value\" (auto-converts types)")
 println("3. Use ++ operator to combine patches (no type ascription needed!)")
-println("4. Extension methods: .styled(style), .merge, .unmerge, .remove")
+println("4. Extension methods: .styled(styles), .merge, .unmerge, .remove")
 println("5. PatchBatch(patches*) for varargs construction")
 println("6. ExcelIO.instance[IO] for file I/O (pure effect system)")
 println("\n=== Demo Complete ===")

@@ -5,7 +5,7 @@ import cats.syntax.all.*
 import fs2.{Stream, Pipe}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
-import com.tjclp.xl.cell.{CellValue, CellError}
+import com.tjclp.xl.cells.{CellValue, CellError}
 import com.tjclp.xl.ooxml.SharedStrings
 
 /**
@@ -225,7 +225,7 @@ object StreamingXmlReader:
           CellValue.Bool(value == "1" || value.equalsIgnoreCase("true"))
 
         case Some("e") =>
-          // Error - map common Excel error strings
+          // Error - map common Excel errors strings
           val errorOpt = value match
             case "#DIV/0!" => Some(CellError.Div0)
             case "#N/A" => Some(CellError.NA)

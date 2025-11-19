@@ -6,12 +6,12 @@ import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 import javax.xml.parsers.DocumentBuilderFactory
 
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 import munit.FunSuite
 
 /**
- * Regression tests for style and metadata preservation in surgical modification.
+ * Regression tests for styles and metadata preservation in surgical modification.
  *
  * These tests prevent regression of secondary corruption issues related to:
  *   1. Style ID conflicts between original and new styles
@@ -20,7 +20,7 @@ import munit.FunSuite
  *   4. Differential formats (dxfs) missing
  *
  * Corresponds to commits:
- *   - 8f58f15: Surgical style mode
+ *   - 8f58f15: Surgical styles mode
  *   - 2304cec: Worksheet metadata preservation
  *   - 802e020: Element ordering
  *   - 4998af2: dxfs preservation
@@ -28,14 +28,14 @@ import munit.FunSuite
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.AsInstanceOf"))
 class XlsxWriterStyleMetadataSpec extends FunSuite:
 
-  test("surgical style mode preserves original style IDs for unmodified sheets") {
+  test("surgical styles mode preserves original styles IDs for unmodified sheets") {
     // Regression test for commit 8f58f15
-    // Bug: Style deduplication caused unmodified sheets to reference non-existent style IDs
+    // Bug: Style deduplication caused unmodified sheets to reference non-existent styles IDs
     // Solution: StyleIndex.fromWorkbookSurgical preserves all original styles
 
     val source = createWorkbookWithManyStyles()
 
-    // Modify only sheet 1 (adds new styles), leave sheet 2 untouched
+    // Modify only sheets 1 (adds new styles), leave sheets 2 untouched
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
@@ -46,12 +46,12 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
     // Write back
-    val output = Files.createTempFile("style-surgical", ".xlsx")
+    val output = Files.createTempFile("styles-surgical", ".xlsx")
     XlsxWriter
       .write(wb, output)
       .fold(err => fail(s"Failed to write: $err"), identity)
 
-    // Verify styles.xml has original style count + new styles
+    // Verify styles.xml has original styles count + new styles
     val outputZip = new ZipFile(output.toFile)
     val stylesXml = readEntryString(outputZip, outputZip.getEntry("xl/styles.xml"))
 
@@ -68,11 +68,11 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
       s"Style count $countAttr too low - original styles may have been dropped"
     )
 
-    // Verify unmodified Sheet2 uses original style IDs (e.g., s="3")
+    // Verify unmodified Sheet2 uses original styles IDs (e.g., s="3")
     val sheet2Xml = readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet2.xml"))
     assert(
       sheet2Xml.contains("""s="3""""),
-      "Sheet2 should reference original style ID 3 (surgical mode preserves IDs)"
+      "Sheet2 should reference original styles ID 3 (surgical mode preserves IDs)"
     )
 
     // Verify modified Sheet1 can use new styles (higher IDs)
@@ -86,7 +86,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
-  test("preserves worksheet metadata during sheet regeneration") {
+  test("preserves worksheet metadata during sheets regeneration") {
     // Regression test for commit 2304cec
     // Bug: 14 metadata fields lost during regeneration (cols, views, conditionalFormatting, etc.)
     // Impact: Conditional formatting, print settings, frozen panes all lost
@@ -301,7 +301,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
@@ -313,25 +313,25 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
-    <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet2" sheetId="2" r:id="rId2"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -358,7 +358,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
   </fills>
   <borders count="2">
     <border><left/><right/><top/><bottom/><diagonal/></border>
-    <border><left style="thin"/><right/><top/><bottom/><diagonal/></border>
+    <border><left styles="thin"/><right/><top/><bottom/><diagonal/></border>
   </borders>
   <cellXfs count="5">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
@@ -383,7 +383,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
 </worksheet>"""
       )
 
-      // Sheet2 uses style ID 3 (should be preserved in output)
+      // Sheet2 uses styles ID 3 (should be preserved in output)
       writeEntry(
         out,
         "xl/worksheets/sheet2.xml",
@@ -414,7 +414,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
       )
@@ -424,24 +424,24 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -497,7 +497,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
       )
@@ -507,24 +507,24 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -578,7 +578,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>"""
@@ -589,24 +589,24 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>

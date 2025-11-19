@@ -6,10 +6,10 @@ import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 import javax.xml.parsers.DocumentBuilderFactory
 
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.richtext.RichText
-import com.tjclp.xl.style.{CellStyle, Color, Fill}
+import com.tjclp.xl.styles.{CellStyle, Color, Fill}
 import munit.FunSuite
 
 /**
@@ -33,7 +33,7 @@ import munit.FunSuite
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 
-  test("preserves mc:Ignorable namespace attribute on workbook root (PRIMARY corruption fix)") {
+  test("preserves mc:Ignorable namespace attribute on workbooks root (PRIMARY corruption fix)") {
     // Regression test for commit 4bfb9f4
     // Bug: Missing mc:Ignorable caused PRIMARY Excel corruption warning
     // Root cause: Workbook.toXml didn't preserve namespace metadata from source
@@ -56,9 +56,9 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
       .write(wb, output)
       .fold(err => fail(s"Failed to write: $err"), identity)
 
-    // Verify workbook.xml has mc:Ignorable attribute
+    // Verify workbooks.xml has mc:Ignorable attribute
     val outputZip = new ZipFile(output.toFile)
-    val workbookXml = readEntryString(outputZip, outputZip.getEntry("xl/workbook.xml"))
+    val workbookXml = readEntryString(outputZip, outputZip.getEntry("xl/workbooks.xml"))
 
     // Parse XML to check root attributes
     val doc = parseXml(workbookXml)
@@ -147,7 +147,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 
   test("preserves all 10 row attributes during regeneration (prevents 6% data loss)") {
     // Regression test for commit e1f36fe
-    // Bug: Row attributes lost during regeneration (spans, style, height, etc.)
+    // Bug: Row attributes lost during regeneration (spans, styles, height, etc.)
     // Impact: 2,170 bytes data loss, 6% of row metadata
 
     val source = createWorkbookWithRichRowAttributes()
@@ -177,7 +177,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 
     // Row 2: All 10 attributes
     assert(sheetXml.contains("""spans="1:5""""), "Row 'spans' attribute missing")
-    assert(sheetXml.contains("""s="1""""), "Row 's' (style) attribute missing")
+    assert(sheetXml.contains("""s="1""""), "Row 's' (styles) attribute missing")
     assert(sheetXml.contains("""customHeight="1""""), "Row 'customHeight' attribute missing")
     assert(sheetXml.contains("""ht=""""), "Row 'ht' (height) attribute missing")
 
@@ -304,7 +304,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
       )
@@ -314,25 +314,25 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       // Workbook with full namespace declarations including mc:Ignorable
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" xmlns:xr6="http://schemas.microsoft.com/office/spreadsheetml/2016/revision6" xmlns:xr10="http://schemas.microsoft.com/office/spreadsheetml/2016/revision10" mc:Ignorable="x15 xr xr6 xr10">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" xmlns:xr6="http://schemas.microsoft.com/office/spreadsheetml/2016/revision6" xmlns:xr10="http://schemas.microsoft.com/office/spreadsheetml/2016/revision10" mc:Ignorable="x15 xr xr6 xr10">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -369,7 +369,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>"""
@@ -380,24 +380,24 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -422,7 +422,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
   </fills>
   <borders count="2">
     <border><left/><right/><top/><bottom/><diagonal/></border>
-    <border><left style="thin"><color theme="1" tint="0.5"/></left><right/><top/><bottom/><diagonal/></border>
+    <border><left styles="thin"><color theme="1" tint="0.5"/></left><right/><top/><bottom/><diagonal/></border>
   </borders>
   <cellXfs count="2">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
@@ -461,7 +461,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>"""
@@ -472,24 +472,24 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
@@ -550,7 +550,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/workbooks.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
 </Types>"""
@@ -561,24 +561,24 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
         "_rels/.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbooks.xml"/>
 </Relationships>"""
       )
 
       writeEntry(
         out,
-        "xl/workbook.xml",
+        "xl/workbooks.xml",
         """<?xml version="1.0"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbooks xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheets name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>"""
+</workbooks>"""
       )
 
       writeEntry(
         out,
-        "xl/_rels/workbook.xml.rels",
+        "xl/_rels/workbooks.xml.rels",
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
