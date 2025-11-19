@@ -29,6 +29,9 @@ object syntax:
   export sheet.syntax.*
   export style.dsl.*
 
+  // Easy Mode: String-based extensions (Sheet.put("A1", value), Sheet.style("A1:B1", style))
+  export extensions.*
+
   // RichText string extensions (.red, .bold, etc.)
   export richtext.RichText.{given, *}
 

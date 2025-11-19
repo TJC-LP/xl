@@ -5,6 +5,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.error.XLException
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)
 import com.tjclp.xl.sheet.syntax.*
@@ -149,13 +150,13 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("put: unsupported types throw with .unsafe") {
-    // When using .unsafe, should throw IllegalStateException
+    // When using .unsafe, should throw XLException (wrapping XLError)
     case class UnsupportedType(value: String)
 
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
 
-    // Should throw exception when using .unsafe on error result
-    val exception = intercept[IllegalStateException] {
+    // Should throw XLException when using .unsafe on error result
+    val exception = intercept[XLException] {
       sheet.put(
         ref"A1" -> "Valid",
         ref"B1" -> UnsupportedType("Invalid")
@@ -163,9 +164,11 @@ class BatchUpdateSpec extends FunSuite:
     }
 
     // Verify exception message contains helpful information
-    assert(exception.getMessage.contains("XLResult.unsafe failed"))
     assert(exception.getMessage.contains("Unsupported type"))
     assert(exception.getMessage.contains("B1"))
+
+    // Verify we can access the underlying XLError for structured error handling
+    assert(exception.error.isInstanceOf[XLError])
   }
 
   test("put: writes single typed value with auto-inferred style") {
