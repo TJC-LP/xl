@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2025-11-16
+**Last Updated**: 2025-11-19
 
 ## Current State
 
@@ -17,6 +17,8 @@
 - ✅ StylePatch Monoid for style composition
 - ✅ StyleRegistry for per-sheet style management
 - ✅ **End-to-end XLSX read/write** (creates real Excel files)
+- ✅ **Surgical modification** (read → modify → write preserves unknown parts: charts, images, drawings, comments)
+- ✅ Hybrid write optimization (11x speedup for unmodified workbooks, 2-5x for partial modifications)
 - ✅ Shared Strings Table (SST) deduplication
 - ✅ Styles.xml with component deduplication
 - ✅ Multi-sheet workbooks
@@ -65,7 +67,7 @@
 
 ### Test Coverage
 
-**636 tests across 4 modules** (includes P7+P8 string interpolation):
+**680 tests across 4 modules** (includes P7+P8 string interpolation + P6.8 surgical modification):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
