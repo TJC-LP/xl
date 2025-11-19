@@ -168,7 +168,9 @@ class BatchUpdateSpec extends FunSuite:
     assert(exception.getMessage.contains("B1"))
 
     // Verify we can access the underlying XLError for structured error handling
-    assert(exception.error.isInstanceOf[XLError])
+    exception.error match
+      case _: XLError => // Success - error is structured
+      case other => fail(s"Expected XLError, got: $other")
   }
 
   test("put: writes single typed value with auto-inferred style") {
