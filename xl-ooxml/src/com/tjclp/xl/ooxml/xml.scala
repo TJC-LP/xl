@@ -40,7 +40,7 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"
 
   /** Content type URIs */
-  val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheets.main+xml"
+  val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
   val ctWorksheet = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
   val ctStyles = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"
   val ctSharedStrings =
