@@ -12,7 +12,7 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.Workbook
 
 /**
- * Sheet reference in workbooks.xml
+ * Sheet reference in workbook.xml
  *
  * @param name
  *   Sheet name
@@ -31,10 +31,10 @@ case class SheetRef(
 )
 
 /**
- * Workbook for xl/workbooks.xml
+ * Workbook for xl/workbook.xml
  *
  * Contains sheets references and workbooks-level properties. For surgical modification, preserves
- * all unparsed elements from the original workbooks.xml (defined names, workbooks properties, etc.)
+ * all unparsed elements from the original workbook.xml (defined names, workbooks properties, etc.)
  * to maintain Excel compatibility and prevent corruption warnings.
  *
  * @param sheets
@@ -118,7 +118,7 @@ case class OoxmlWorkbook(
       val attrs = allAttrs.foldRight(rId: MetaData) { case ((k, v), acc) =>
         new UnprefixedAttribute(k, v, acc)
       }
-      Elem(null, "sheets", attrs, TopScope, minimizeEmpty = true)
+      Elem(null, "sheet", attrs, TopScope, minimizeEmpty = true)
     }
     children += Elem(null, "sheets", Null, TopScope, minimizeEmpty = false, sheetElems*)
 
@@ -137,7 +137,7 @@ case class OoxmlWorkbook(
     val scope = Option(rootScope).getOrElse(defaultWorkbookScope)
     val attrs = Option(rootAttributes).getOrElse(Null)
 
-    Elem(null, "workbooks", attrs, scope, minimizeEmpty = false, children.result()*)
+    Elem(null, "workbook", attrs, scope, minimizeEmpty = false, children.result()*)
 
 object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   /** Create minimal workbooks with one sheets */
@@ -155,7 +155,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
     for
       // Parse sheets (required element)
       sheetsElem <- getChild(elem, "sheets")
-      sheetElems = getChildren(sheetsElem, "sheets")
+      sheetElems = getChildren(sheetsElem, "sheet")
       sheets <- parseSheets(sheetElems)
 
       // Extract all preserved elements (optional)
