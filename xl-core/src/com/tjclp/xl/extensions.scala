@@ -1,12 +1,13 @@
 package com.tjclp.xl
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cell.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheet.Sheet
 import com.tjclp.xl.style.CellStyle
 import com.tjclp.xl.unsafe.*
+import com.tjclp.xl.workbook.Workbook
 
 import java.time.{LocalDate, LocalDateTime}
 
@@ -263,3 +264,80 @@ object extensions:
     def merge(rangeRef: String): Sheet =
       val range = toXLResult(CellRange.parse(rangeRef), rangeRef, "Invalid range").unsafe
       sheet.merge(range)
+
+  // ========== XLResult[Workbook] Extensions: Chainable Operations ==========
+
+  extension (result: XLResult[Workbook])
+    /**
+     * Add sheet to workbook (chainable).
+     *
+     * Enables chaining workbook operations without intermediate .unsafe calls:
+     * {{{
+     * val wb = Workbook.empty
+     *   .addSheet(report)
+     *   .addSheet(quickSheet)
+     *   .unsafe  // Single unwrap at the end
+     * }}}
+     *
+     * @param sheet
+     *   Sheet to add
+     * @return
+     *   XLResult[Workbook] for further chaining
+     */
+    @annotation.targetName("addSheetChainable")
+    def addSheet(sheet: Sheet): XLResult[Workbook] =
+      result.flatMap(_.put(sheet))
+
+    /**
+     * Put sheet (add-or-replace, chainable).
+     *
+     * @param sheet
+     *   Sheet to add or replace
+     * @return
+     *   XLResult[Workbook] for further chaining
+     */
+    @annotation.targetName("putSheetChainable")
+    def put(sheet: Sheet): XLResult[Workbook] =
+      result.flatMap(_.put(sheet))
+
+    /**
+     * Update sheet by name (chainable).
+     *
+     * @param name
+     *   Sheet name
+     * @param f
+     *   Transform function
+     * @return
+     *   XLResult[Workbook] for further chaining
+     */
+    @annotation.targetName("updateSheetChainable")
+    def update(name: String, f: Sheet => Sheet): XLResult[Workbook] =
+      result.flatMap(_.update(name, f))
+
+    /**
+     * Remove sheet by name (chainable).
+     *
+     * @param name
+     *   Sheet name
+     * @return
+     *   XLResult[Workbook] for further chaining
+     */
+    @annotation.targetName("removeSheetChainable")
+    def remove(name: String): XLResult[Workbook] =
+      result.flatMap(wb =>
+        toXLResult(SheetName(name), name, "Invalid sheet name").flatMap(wb.remove)
+      )
+
+  // ========== Workbook Extensions: String-Based Lookups ==========
+
+  extension (workbook: Workbook)
+    /**
+     * Get sheet by name (string).
+     *
+     * @param name
+     *   Sheet name
+     * @return
+     *   Some(sheet) if found, None otherwise
+     */
+    def getSheet(name: String): Option[Sheet] =
+      workbook(name).toOption

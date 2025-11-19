@@ -68,10 +68,11 @@ println()
 // ========== Example 5: Excel IO ==========
 println("💾 Example 5: Excel IO (EasyExcel)")
 
-val workbook = Workbook.empty.unsafe
-  .addSheet(report).unsafe
-  .addSheet(quickSheet).unsafe
-  .addSheet(richSheet).unsafe
+val workbook = Workbook.empty
+  .addSheet(report)
+  .addSheet(quickSheet)
+  .addSheet(richSheet)
+  .unsafe  // Single unwrap at the end!
 
 Excel.write(workbook, "/tmp/easy-mode-demo.xlsx")
 println(s"  ✓ Wrote /tmp/easy-mode-demo.xlsx")
