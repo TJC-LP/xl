@@ -73,6 +73,7 @@ val workbook = Workbook.empty
   .addSheet(report)
   .addSheet(quickSheet)
   .addSheet(richSheet)
+  .remove("Sheet1")  // Sheet1 always included by default per Excel standards
   .unsafe  // Single unwrap at the end!
 
 Excel.write(workbook, "/tmp/easy-mode-demo.xlsx")
@@ -87,8 +88,23 @@ val modifiedSheet = firstSheet.put("A5", "Updated: " + LocalDate.now.toString).u
 println(s"  ✓ Modified sheet in-memory (${modifiedSheet.cells.size} cells)")
 println()
 
-// ========== Example 6: Error Handling ==========
-println("⚠️  Example 6: Structured Errors")
+// ========== Example 6: HTML Export ==========
+println("🌐 Example 6: HTML Export")
+
+// Export report sheet to HTML with styles
+val htmlWithStyles = report.toHtml(ref"A1:B3")
+println(s"  ✓ Generated HTML with inline CSS (${htmlWithStyles.length} chars)")
+
+// Export without styles for plain tables
+val htmlPlain = report.toHtml(ref"A1:B3", includeStyles = false)
+println(s"  ✓ Generated plain HTML (${htmlPlain.length} chars)")
+
+// Show a snippet of the styled HTML
+println(s"  ✓ Preview:\n```html\n$htmlWithStyles\n```")
+println()
+
+// ========== Example 7: Error Handling ==========
+println("⚠️  Example 7: Structured Errors")
 
 try {
   Sheet("Test").put("INVALID!!!!", "fail").unsafe
@@ -99,4 +115,4 @@ try {
 }
 println()
 
-println("✨ Easy Mode API: String refs, template styling, simplified IO!")
+println("✨ Easy Mode API: String refs, template styling, simplified IO, HTML export!")
