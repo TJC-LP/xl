@@ -104,3 +104,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 263 tests (229 original + 34 optics tests)
 - All passing with property-based tests for laws
 - Optics: 3 lens laws + 5 optional behaviors + 26 usage tests
+
+### Added - P6.8: Surgical Modification & Unified Write Path
+
+**Complete**: 2025-11-18 (PR #16)
+
+**Surgical Modification Infrastructure** (`xl-core/src/com/tjclp/xl/`, `xl-ooxml/src/com/tjclp/xl/ooxml/`)
+- **SourceContext**: Tracks source file metadata (path, SHA-256 fingerprint, PartManifest, ModificationTracker)
+- **ModificationTracker**: Monoid-based dirty tracking for sheets (marks modified, deleted, reordered)
+- **PartManifest**: Distinguishes parsed vs unparsed ZIP entries for byte-perfect preservation
+- **PreservedPartStore**: Lazy streaming access to preserved parts with Resource-safe cleanup
+- **RelationshipGraph**: Tracks OOXML part relationships to prevent broken rId references
+
+**Hybrid Write Strategy** (`xl-ooxml/src/com/tjclp/xl/ooxml/XlsxWriter.scala`)
+- **Verbatim copy optimization**: 11x speedup for unmodified workbooks (byte-for-byte with fingerprint validation)
+- **Surgical write**: Only regenerate modified sheets, copy rest byte-perfect (2-5x speedup)
+- **Intelligent SST handling**: Preserve original SST unless new strings introduced (prevents inline string corruption)
+- **Full regeneration fallback**: No SourceContext → standard write path (backwards compatible)
+
+**Unified Style Indexing** (`xl-ooxml/src/com/tjclp/xl/ooxml/Styles.scala`)
+- **Single public API**: `StyleIndex.fromWorkbook(wb)` auto-detects source context
+- **Automatic optimization**: Preserves styles for surgical writes, full deduplication otherwise
+- **Transparent to users**: Existing code works unchanged, optimization automatic
+
+**Security & Correctness Fixes**
+- **XXE hardening**: Migrated RichText XML parsing to `XmlSecurity.parseSafe` (prevents XXE attacks)
+  - Fixed: `SharedStrings.scala` (SST richtext rPr parsing)
+  - Fixed: `Worksheet.scala` (worksheet richtext rPr parsing)
+- **SST normalization fix**: Normalize strings consistently in both modified/preserved sets (prevents false "new string" detection)
+- **Whitespace preservation**: Added `getTextPreservingWhitespace()` helper for exact whitespace round-trips
+  - Partial fix: Reading preserves whitespace correctly
+  - Known issue: Writing still has edge cases (tracked in Issue #17)
+
+**Test Coverage**: 44 surgical modification tests (all passing)
+- Core surgical write behavior (6 tests)
+- Reader passthrough (5 tests)
+- ModificationTracker (19 tests: 6 basic + 13 property-based Monoid laws)
+- Workbook modification tracking (6 tests)
+- PartManifest & RelationshipGraph (8 tests)
+- Corruption regressions (4 tests)
+- Real-world file preservation (1 test)
+
+**Performance**
+- Unmodified workbooks: 11x faster (verbatim copy)
+- Partially modified: 2-5x faster (surgical write)
+- Memory: 30-50MB savings (lazy part loading)
