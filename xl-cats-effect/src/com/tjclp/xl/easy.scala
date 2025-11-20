@@ -20,7 +20,7 @@ package com.tjclp.xl
  * val sheet = Sheet("Sales")
  *   .put("A1", "Product")                    // String ref
  *   .put("B1", "Revenue", CellStyle.header)  // Inline styling
- *   .applyStyle("A1:B1", CellStyle.bold)     // Template styling
+ *   .style("A1:B1", CellStyle.bold)          // Template styling
  *
  * // Save
  * Excel.write(wb.put(sheet), "output.xlsx")

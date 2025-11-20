@@ -95,16 +95,35 @@ object syntax:
    * These extensions allow `ref"$var"` (which returns `Either[XLError, RefType]`) to work directly
    * with patch DSL operators without manual extraction of ARef/CellRange.
    *
-   * Example:
+   * '''Important Limitation: Assignment operators (`:=`) only work on single cells'''
+   *
+   * When applied to ranges, assignment operators return `Patch.empty` (silent no-op) rather than
+   * throwing errors. This is intentional for composability in fold operations, but users should be
+   * aware of this behavior.
+   *
+   * '''Working examples (single cells):'''
    * {{{
    *   val row = "5"
    *   for {
-   *     cellRef <- ref"A$row"
-   *     rangeRef <- ref"A1:B$row"
-   *   } yield
-   *     (cellRef := "Value") ++     // Works directly!
-   *     (rangeRef.styled(style)) ++
-   *     rangeRef.merge
+   *     cellRef <- ref"A$row"      // RefType.Cell
+   *   } yield (cellRef := "Value")  // ✓ Works - creates Put patch
+   * }}}
+   *
+   * '''Silent no-op examples (ranges):'''
+   * {{{
+   *   val rangeRef = ref"A1:B10"    // RefType.Range
+   *   rangeRef := "Value"            // ✗ Silent no-op - returns Patch.empty
+   *
+   *   // To style ranges, use .styled() or apply to individual cells:
+   *   rangeRef.styled(style)         // ✓ Works for ranges
+   * }}}
+   *
+   * '''Other operations work on both cells and ranges:'''
+   * {{{
+   *   cellRef.styled(style)          // ✓ Works
+   *   rangeRef.styled(style)         // ✓ Works (cells only, not ranges in current impl)
+   *   rangeRef.merge                 // ✓ Works
+   *   rangeRef.remove                // ✓ Works
    * }}}
    */
   extension (refType: RefType)

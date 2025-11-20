@@ -23,12 +23,12 @@ import java.time.{LocalDate, LocalDateTime}
  * val sheet = Sheet("Sales")
  *   .put("A1", "Product")
  *   .put("B1", "Revenue", headerStyle)
- *   .applyStyle("A1:B1", boldStyle)
+ *   .style("A1:B1", boldStyle)
  *   .unsafe  // Single boundary point
  * }}}
  *
  * '''Styling approaches:'''
- *   - `.applyStyle(range, style)` - Template pattern (format before data)
+ *   - `.style(range, style)` - Template pattern (format before data)
  *   - `.put(ref, value, style)` - Inline styling
  *   - RichText - Intra-cell formatting
  *
