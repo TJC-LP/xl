@@ -136,7 +136,7 @@
 - ✅ Added 22 comprehensive tests across 4 new test classes
 - ✅ Zero spec violations, full round-trip fidelity achieved
 
-**See**: [archived: ooxml-quality.md](../archive/plan/p45-ooxml-quality.md) for detailed implementation notes
+**See**: [archived: ooxml-quality.md](../archive/plan/p4-5-ooxml-quality.md) for detailed implementation notes
 
 ### ✅ P6.6: Streaming Reader Memory Fix (Complete)
 **Status**: 100% Complete
@@ -214,7 +214,7 @@
 - ✅ 💾 Memory: 30-50MB savings via lazy loading (no materialization of unknown parts)
 - ✅ 🏗️ Foundation: Enables incremental OOXML feature additions (charts, drawings future work)
 
-**See**: [archived: surgical-modification.md](../archive/plan/p68-surgical-modification/) for design history
+**See**: [archived: surgical-modification.md](../archive/plan/p6-8-surgical-modification/) for design history
 
 ### ✅ Post-P8 Enhancements (Complete)
 
@@ -232,7 +232,7 @@
 - ✅ Fixes surgical modification style corruption
 - ✅ Preserves Excel built-in format IDs (including accounting formats 37-44)
 
-**See**: [archived: numfmt-id-preservation.md, numfmt-preservation.md](../archive/plan/p68-surgical-modification/) for problem analysis
+**See**: [archived: numfmt-id-preservation.md, numfmt-preservation.md](../archive/plan/p6-8-surgical-modification/) for problem analysis
 
 ---
 

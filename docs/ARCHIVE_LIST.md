@@ -12,11 +12,11 @@ docs/archive/
 │   ├── p2-patches/            # Phase 2 plans (complete)
 │   ├── p3-styles/             # Phase 3 plans (complete)
 │   ├── p4-ooxml/              # Phase 4 plans (complete)
-│   ├── p45-ooxml-quality.md   # Phase 4.5 (complete)
+│   ├── p4-5-ooxml-quality.md   # Phase 4.5 (complete)
 │   ├── p5-streaming/          # Phase 5 plans (complete)
 │   ├── p6-codecs/             # Phase 6 plans (complete)
-│   ├── p31-refactor/          # Phase 31 refactoring (complete)
-│   ├── p68-surgical-modification/  # Phase 6.8 surgical modification (complete)
+│   ├── p3-1-refactor/          # Phase 31 refactoring (complete)
+│   ├── p6-8-surgical-modification/  # Phase 6.8 surgical modification (complete)
 │   ├── string-interpolation/  # P7-P8 string interpolation (complete)
 │   ├── unified-put-api.md     # Unified put API consolidation (complete)
 │   ├── completed-post-p8/     # Other completed plans after P8
@@ -31,8 +31,8 @@ docs/archive/
 | Original Path | New Path | Reason | Date |
 |---------------|----------|--------|------|
 | `docs/plan/type-class-put.md` | `docs/archive/plan/completed-post-p8/type-class-put.md` | ✅ Completed in PR #20 (type class consolidation for Easy Mode put()) | 2025-11-20 |
-| `docs/plan/numfmt-preservation.md` | `docs/archive/plan/p68-surgical-modification/numfmt-preservation.md` | ✅ Completed in P6.8 (surgical modification); duplicate of numfmt-id-preservation.md | 2025-11-20 |
-| `docs/plan/numfmt-id-preservation.md` | `docs/archive/plan/p68-surgical-modification/numfmt-id-preservation.md` | ✅ Completed in P6.8 (CellStyle.numFmtId field for byte-perfect preservation) | 2025-11-20 |
+| `docs/plan/numfmt-preservation.md` | `docs/archive/plan/p6-8-surgical-modification/numfmt-preservation.md` | ✅ Completed in P6.8 (surgical modification); duplicate of numfmt-id-preservation.md | 2025-11-20 |
+| `docs/plan/numfmt-id-preservation.md` | `docs/archive/plan/p6-8-surgical-modification/numfmt-id-preservation.md` | ✅ Completed in P6.8 (CellStyle.numFmtId field for byte-perfect preservation) | 2025-11-20 |
 | `docs/plan/lazy-evaluation.md` | `docs/archive/plan/deferred/lazy-evaluation.md` | ⏸ Deferred indefinitely (Spark-style optimizer deemed overkill; streaming-improvements.md prioritized instead) | 2025-11-20 |
 
 ### Session 2: Design Docs Archive
