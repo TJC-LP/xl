@@ -215,6 +215,7 @@ object XlsxWriter:
               (nextSet, hasNone || comment.author.isEmpty)
           }
         // Sort for deterministic output (Excel preserves insertion order; we choose determinism here)
+        // to keep serialized files stable across runs.
         val realAuthors = authorSet.toVector.sorted
         val authors = if hasUnauthored then Vector("") ++ realAuthors else realAuthors
 

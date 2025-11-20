@@ -58,6 +58,7 @@ object VmlDrawing:
   private val ShapeIdBase = 1024
   // Reserve a wide per-sheet range so shape IDs stay unique even for dense comment sheets.
   // 1M per sheet supports extremely heavy comment usage and still allows ~2k sheets before Int overflow.
+  // Documented limit: Int.MaxValue (~2.1B) / 1_000_000 ≈ 2147 sheets.
   private val ShapeIdStride = 1_000_000
 
   /**

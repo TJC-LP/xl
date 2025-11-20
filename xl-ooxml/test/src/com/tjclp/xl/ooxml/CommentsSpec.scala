@@ -407,6 +407,38 @@ class CommentsSpec extends FunSuite:
       "Author prefix should be stripped on read")
   }
 
+  test("stripAuthorPrefix handles Excel-style CRLF author prefix") {
+    val authorName = "Excel User"
+    val richTextWithAuthor = com.tjclp.xl.richtext.RichText(
+      Vector(
+        com.tjclp.xl.richtext.TextRun(
+          s"$authorName: ",
+          Some(com.tjclp.xl.styles.font.Font.default.copy(bold = true))
+        ),
+        com.tjclp.xl.richtext.TextRun("\r\nActual comment")
+      )
+    )
+
+    val ooxmlComment = OoxmlComment(
+      ref = ref"A1",
+      authorId = 0,
+      text = richTextWithAuthor
+    )
+
+    val ooxmlComments = OoxmlComments(
+      authors = Vector(authorName),
+      comments = Vector(ooxmlComment)
+    )
+
+    val domainMap = XlsxReader.convertToDomainComments(ooxmlComments) match
+      case Right(m) => m
+      case Left(err) => fail(s"Failed to convert: $err")
+
+    val domainComment = domainMap.get(ref"A1").getOrElse(fail("Comment missing"))
+    assertEquals(domainComment.author, Some(authorName))
+    assertEquals(domainComment.text.toPlainText, "Actual comment")
+  }
+
   test("empty authors list is preserved") {
     val comments = OoxmlComments(
       authors = Vector.empty,

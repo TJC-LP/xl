@@ -315,15 +315,27 @@ object XlsxReader:
   ): com.tjclp.xl.richtext.RichText =
     text.runs match
       case firstRun +: secondRun +: tail
-          if firstRun.text == s"$authorName:" &&
+          if authorPrefixMatches(firstRun, authorName) &&
             firstRun.font.exists(_.bold) &&
-            secondRun.text.startsWith("\n") =>
+            startsWithNewline(secondRun.text) =>
         // Exact match for XL-generated format - strip it
-        val cleanedSecondRun = secondRun.copy(text = secondRun.text.drop(1))
+        val cleanedSecondRun = secondRun.copy(text = dropLeadingNewline(secondRun.text))
         com.tjclp.xl.richtext.RichText(Vector(cleanedSecondRun) ++ tail)
       case _ =>
         // Different format or no prefix - preserve as-is (might be real Excel file)
         text
+
+  private def authorPrefixMatches(run: com.tjclp.xl.richtext.TextRun, authorName: String): Boolean =
+    val normalized = run.text.replace("\u00A0", " ").trim // Excel can emit nbsp and spaces
+    normalized == s"$authorName:" || normalized == s"$authorName: "
+
+  private def startsWithNewline(text: String): Boolean =
+    text.startsWith("\n") || text.startsWith("\r\n")
+
+  private def dropLeadingNewline(text: String): String =
+    if text.startsWith("\r\n") then text.drop(2)
+    else if text.startsWith("\n") then text.drop(1)
+    else text
 
   private[ooxml] def convertToDomainComments(
     ooxmlComments: OoxmlComments,
