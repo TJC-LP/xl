@@ -139,10 +139,10 @@ val commentedSheet = Sheet("Commented Data")
   .put("A3", "Net Profit")
   .put("B3", "=B1-B2")  // Formula
   // Add plain text comments
-  .withComment(ref"B1", Comment.plainText("Revenue increased by 15% vs Q3", Some("Finance Team")))
-  .withComment(ref"B2", Comment.plainText("Includes one-time marketing spend", Some("CFO")))
+  .comment(ref"B1", Comment.plainText("Revenue increased by 15% vs Q3", Some("Finance Team")))
+  .comment(ref"B2", Comment.plainText("Includes one-time marketing spend", Some("CFO")))
   // Rich text comment with formatting
-  .withComment(ref"B3", Comment(
+  .comment(ref"B3", Comment(
     text = "Net profit: ".bold + "$37,500".green.bold + " (30% margin)".italic,
     author = Some("CEO")
   ))

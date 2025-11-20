@@ -259,9 +259,9 @@ object extensions:
       result.flatMap(_.put(patch))
 
     /** Add comment to cell (chainable). */
-    @annotation.targetName("withCommentChainable")
-    def withComment(ref: ARef, comment: Comment): XLResult[Sheet] =
-      result.map(_.withComment(ref, comment))
+    @annotation.targetName("commentChainable")
+    def comment(ref: ARef, comment: Comment): XLResult[Sheet] =
+      result.map(_.comment(ref, comment))
 
   // ========== XLResult[Workbook] Extensions: Chainable Operations ==========
 
@@ -296,5 +296,5 @@ object extensions:
      * @return
      *   Some(sheet) if found, None otherwise
      */
-    def getSheet(name: String): Option[Sheet] =
+    def get(name: String): Option[Sheet] =
       workbook(name).toOption

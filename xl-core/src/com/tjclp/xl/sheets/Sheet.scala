@@ -244,7 +244,7 @@ case class Sheet(
     mergedRanges.find(_.contains(ref))
 
   /** Add comment to cell */
-  def withComment(ref: ARef, comment: Comment): Sheet =
+  def comment(ref: ARef, comment: Comment): Sheet =
     copy(comments = comments.updated(ref, comment))
 
   /** Get comment at cell reference */
