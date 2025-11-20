@@ -21,16 +21,15 @@ println("📋 Example 1: String-Based References (Easy Mode)")
 val headerStyle = CellStyle.default.bold.size(12.0).center
 val titleStyle = CellStyle.default.bold.size(14.0).bgBlue.white
 
-val template = Sheet("Q1 Report").unsafe
-  .applyStyle("A1:D1", titleStyle)      // String-based range styling
+val report = Sheet("Q1 Report")
+  .applyStyle("A1:D1", titleStyle)      // Chainable XLResult[Sheet]
   .applyStyle("A2:D2", headerStyle)
-
-val report = template
-  .put("A1", "Q1 2025 Sales Report")    // String-based put
+  .put("A1", "Q1 2025 Sales Report")    // Chains on XLResult[Sheet]
   .put("A2", "Product")
   .put("B2", "Units")
   .put("A3", "Widget")
   .put("B3", 150)
+  .unsafe  // Single unwrap at end
 
 println(s"  ✓ Used string refs for ${report.cells.size} cells")
 println()
@@ -38,9 +37,10 @@ println()
 // ========== Example 2: Inline Styling ==========
 println("🎨 Example 2: Inline Styling")
 
-val quickSheet = Sheet("Quick").unsafe
+val quickSheet = Sheet("Quick")
   .put("A1", "Alert", CellStyle.default.bold.red)
   .put("A2", "Success", CellStyle.default.bold.green)
+  .unsafe
 
 println(s"  ✓ Applied inline styles")
 println()
@@ -48,9 +48,10 @@ println()
 // ========== Example 3: Rich Text ==========
 println("💬 Example 3: Rich Text")
 
-val richSheet = Sheet("RichText").unsafe
+val richSheet = Sheet("RichText")
   .put("A1", "Status: ".bold + "ACTIVE".green.bold)
   .put("A2", "Error: ".red.bold + "Fix immediately!")
+  .unsafe
 
 println(s"  ✓ Created rich text cells")
 println()
@@ -82,7 +83,7 @@ println(s"  ✓ Read back (${loaded.sheets.size} sheets)")
 
 // Demonstrate in-memory modification
 val firstSheet = loaded.sheets.headOption.getOrElse(throw new Exception("No sheets"))
-val modifiedSheet = firstSheet.put("A5", "Updated: " + LocalDate.now.toString)
+val modifiedSheet = firstSheet.put("A5", "Updated: " + LocalDate.now.toString).unsafe
 println(s"  ✓ Modified sheet in-memory (${modifiedSheet.cells.size} cells)")
 println()
 
