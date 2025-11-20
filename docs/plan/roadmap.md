@@ -339,3 +339,75 @@
 | P13: Safety/Docs | ⬜ Future | - | 0% |
 
 **Current State**: Production-ready for core spreadsheet operations (read, write, style, stream). Exceeds Apache POI in performance (4.5x faster, 16x less memory). Ready for real-world use in financial modeling, data export, and report generation.
+
+---
+
+## How to Use This Roadmap
+
+This roadmap provides **granular phase tracking** (P0-P13) with specific completion criteria and test counts.
+
+**For different purposes, see**:
+- **Strategic vision**: [strategic-implementation-plan.md](strategic-implementation-plan.md) (7-phase framework, parallelization)
+- **Code scaffolds**: [docs/reference/implementation-scaffolds.md](../reference/implementation-scaffolds.md) (implementation patterns)
+- **Current status**: [docs/STATUS.md](../STATUS.md) (capabilities, performance, limitations)
+- **Quick start**: [docs/QUICK-START.md](../QUICK-START.md) (get started in 5 minutes)
+
+---
+
+## Related Documentation
+
+### Active Plans
+Plans in this directory cover **active future work** only. Completed phases are archived.
+
+**Core Future Work**:
+- [future-improvements.md](future-improvements.md) - P6.5 polish
+- [formula-system.md](formula-system.md) - P9+ evaluator
+- [error-model-and-safety.md](error-model-and-safety.md) - P13 security
+- [streaming-improvements.md](streaming-improvements.md) - P7.5 streaming enhancements
+- [advanced-features.md](advanced-features.md) - P10-P12 (drawings, charts, tables, benchmarks)
+
+### Design Docs
+`docs/design/` - Architectural decisions (timeless):
+- `purity-charter.md` - Effect isolation, totality, laws
+- `domain-model.md` - Full type algebra
+- `decisions.md` - ADR log
+- `wartremover-policy.md` - Compile-time safety policy
+
+### Reference
+`docs/reference/` - Quick reference material:
+- `testing-guide.md` - Test coverage breakdown
+- `examples.md` - Code samples
+- `implementation-scaffolds.md` - Comprehensive code patterns for AI agents
+- `ooxml-research.md` - OOXML spec research
+- `performance-guide.md` - Performance tuning guide
+
+### Archived Plans
+`docs/archive/plan/` - Completed implementation plans:
+- P0-P8, P31 phases (bootstrap through string interpolation)
+- Surgical modification, type-class consolidation, numFmt preservation
+- String interpolation phases, unified put API
+
+### Root Docs
+- `STATUS.md` - Detailed current state
+- `LIMITATIONS.md` - Current limitations and roadmap
+- `CONTRIBUTING.md` - Contribution guidelines
+- `FAQ-AND-GLOSSARY.md` - Questions and terminology
+- `ARCHIVE_LIST.md` - Archive tracking
+
+---
+
+## Implementation Order Best Practices
+
+When working on new features or fixes:
+
+1. **Data-loss fixes first** – Prioritize IO defects (styles + relationships) before API ergonomics. They affect workbook integrity and downstream milestones relying on round-tripping.
+
+2. **Shared infrastructure next** – When two bugs share plumbing (e.g., style handling touches reader and writer), design changes together to avoid churn in later phases.
+
+3. **API consistency pass** – Once IO stability restored, address library-surface issues (`Column.fromLetter`, `Lens.modify`) so future feature work assumes correct primitives.
+
+4. **Document & test as you go** – Each fix should add regression tests under owning module (`xl-ooxml/test/`, `xl-core/test/`) and update plan docs so contributors know where work landed.
+
+5. **Align with roadmap phases** – Tag each fix with relevant plan phase (e.g., P31 for IO, P0 for core API) to keep this roadmap authoritative and help future triage.
+
+Keep this guidance in sync whenever priorities shift or blocking bugs are discovered.

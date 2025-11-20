@@ -1,5 +1,9 @@
 # Unified `ref` Literal Design
 
+> **Status**: ✅ Completed – Unified `ref"..."` literal implemented, replacing `cell"..."`/`range"..."`.
+> This document is retained as a historical design record.
+> **Archived**: 2025-11-20
+
 **Status:** Implemented ✅
 **Date:** 2025-11-12
 **Context:** Discovered during package structure refactoring

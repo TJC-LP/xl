@@ -26,12 +26,36 @@ docs/archive/
 
 ## Recently Archived (2025-11-20)
 
+### Session 1: Plan Cleanup
+
 | Original Path | New Path | Reason | Date |
 |---------------|----------|--------|------|
 | `docs/plan/type-class-put.md` | `docs/archive/plan/completed-post-p8/type-class-put.md` | ✅ Completed in PR #20 (type class consolidation for Easy Mode put()) | 2025-11-20 |
 | `docs/plan/numfmt-preservation.md` | `docs/archive/plan/p68-surgical-modification/numfmt-preservation.md` | ✅ Completed in P6.8 (surgical modification); duplicate of numfmt-id-preservation.md | 2025-11-20 |
 | `docs/plan/numfmt-id-preservation.md` | `docs/archive/plan/p68-surgical-modification/numfmt-id-preservation.md` | ✅ Completed in P6.8 (CellStyle.numFmtId field for byte-perfect preservation) | 2025-11-20 |
 | `docs/plan/lazy-evaluation.md` | `docs/archive/plan/deferred/lazy-evaluation.md` | ⏸ Deferred indefinitely (Spark-style optimizer deemed overkill; streaming-improvements.md prioritized instead) | 2025-11-20 |
+
+### Session 2: Design Docs Archive
+
+| Original Path | New Path | Reason | Date |
+|---------------|----------|--------|------|
+| `docs/design/easy-mode-api.md` | `docs/archive/design/easy-mode-api.md` | ✅ Completed (PR #20); design proposal fully implemented | 2025-11-20 |
+| `docs/design/unified-ref-literal.md` | `docs/archive/design/unified-ref-literal.md` | ✅ Implemented (ref"..." literal standard; cell"..." deprecated) | 2025-11-20 |
+
+### Session 2: File Consolidations
+
+| Action | Files | Result | Reason | Date |
+|--------|-------|--------|--------|------|
+| Merge | `drawings.md`, `charts.md`, `tables-and-pivots.md`, `benchmarks.md` → `advanced-features.md` | -4 files | Consolidated stub plans (<20 lines each) into comprehensive P10-P12 plan | 2025-11-20 |
+| Merge | `security.md` → `error-model-and-safety.md` | -1 file | Eliminated duplicate P13 security coverage | 2025-11-20 |
+| Merge | `style-guide.md` → `CONTRIBUTING.md` | -1 file | Style guide naturally part of contribution guidelines | 2025-11-20 |
+| Merge | `glossary.md` + `FAQ.md` → `FAQ-AND-GLOSSARY.md` | -2 files (+1 new) | Natural pairing of questions and terminology | 2025-11-20 |
+| Merge | `ooxml-cheatsheet.md` → `ooxml-research.md` | -1 file | Cheatsheet as "Quick Reference" section | 2025-11-20 |
+| Merge | `executive-summary.md` → Deleted | -1 file | Content redundant with README.md and project overview | 2025-11-20 |
+| Merge | `quick-wins.md` → `future-improvements.md` | -1 file | Both track low-priority enhancements | 2025-11-20 |
+| Merge | `plan/README.md` → `roadmap.md` | -1 file | Plan index integrated into roadmap "How to Use" section | 2025-11-20 |
+
+**Total Consolidation**: 41 files → 28 files (**-13 files**, 32% reduction)
 
 ## Previously Archived (Historical)
 

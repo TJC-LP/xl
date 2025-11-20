@@ -20,9 +20,19 @@ Error handling is centralized in `com.tjclp.xl.error.XLError` (see `xl-core/src/
 
 The following security hardening features are deferred to P11:
 
+### Threat Model
+**Untrusted inputs**: Adversarial `.xlsx` files, malformed XML, formula injection vectors
+
+**Attack vectors**:
+- ZIP bombs (compression ratio attacks)
+- XML entity expansion
+- Formula injection (CSV injection via Excel)
+- Path traversal in ZIP entries
+- Resource exhaustion (memory, disk, CPU)
+
 ### ZIP Bomb Detection
 - **Entry count limits**: Prevent archives with excessive file counts
-- **Uncompressed size limits**: Detect compression ratio attacks
+- **Uncompressed size limits**: Detect compression ratio attacks (cap size/ratio)
 - **Nested archive detection**: Prevent recursive bombs
 - **Path traversal prevention**: Reject `..` or absolute paths in ZIP entries
 
@@ -44,6 +54,12 @@ The following security hardening features are deferred to P11:
 ### XML External Entity (XXE) Prevention
 - ✅ **Currently safe**: scala-xml and fs2-data-xml default to safe parsers
 - ⬜ **Explicit hardening**: Disable DTDs, external entities explicitly
+- **XML parser limits**: Entity expansion disabled, depth limits, attribute count limits
+
+### Security Guidance
+- **Never evaluate macros**: Do not embed active content (XLSM vbaProject.bin never executed)
+- **Prefer typed formulas**: Use formula AST over string manipulation where possible
+- **Formula text sanitizer**: Opt-in allowlist for untrusted text writes
 
 ## Priority
 

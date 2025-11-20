@@ -1,6 +1,10 @@
 # Easy Mode API: Ultra-Clean Single-Import Ergonomics
 
-**Status**: Design Proposal (Revised)
+> **Status**: ✅ Completed – Easy Mode API implemented via type-class consolidation (PR #20).
+> This document is retained as a historical design record.
+> **Archived**: 2025-11-20
+
+**Status**: ~~Design Proposal~~ → ✅ Implemented (PR #20)
 **Author**: Claude (AI Assistant)
 **Date**: 2025-11-19
 **Goal**: Make `import com.tjclp.xl.*` so ergonomic that incorrect code is harder to write than correct code

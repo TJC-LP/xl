@@ -88,8 +88,15 @@ Tier 2 warts (warnings) are monitored but don't fail builds:
 
 ## Code Style
 
-- Keep printers deterministic; update canonicalization when structures change.
-- Document every new public type in `/docs` with examples.
-- Prefer **opaque types** for domain quantities.
-- Use **enums** for closed sets; `derives CanEqual` everywhere.
-- Keep public functions **total**; return Either/Option for errors.
+XL follows strict coding conventions to maintain purity, totality, and law-governed semantics:
+
+- Prefer **opaque types** for domain quantities (Column, Row, ARef, etc.)
+- Use **enums** for closed sets; `derives CanEqual` everywhere
+- Use **final case class** for all data model types (prevents subclassing, enables JVM optimizations)
+- Keep public functions **total**; return ADTs (Either/Option) for errors
+- Prefer **extension methods** over implicit classes
+- Macros must emit **clear diagnostics**; avoid surprises in desugaring
+- Keep printers deterministic; update canonicalization when structures change
+- Document every new public type in `/docs` with examples
+
+For detailed style rationale and examples, see `docs/design/purity-charter.md` and `CLAUDE.md`.
