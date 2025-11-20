@@ -2,12 +2,12 @@ package com.tjclp.xl.patch
 
 import cats.Monoid
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLResult
-import com.tjclp.xl.sheet.{ColumnProperties, RowProperties, Sheet}
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Patch ADT for Sheet updates with monoid semantics.

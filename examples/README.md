@@ -33,6 +33,21 @@ The script showcases:
 - Formatted literals (money, percent, date)
 - Rich text formatting
 
+### Running easy-mode-demo.sc
+
+```bash
+scala-cli run examples/easy-mode-demo.sc
+```
+
+The script showcases **Easy Mode API** (LLM-friendly ergonomics):
+- String-based cell references (`.put("A1", value)`)
+- Template-first styling (`.style("A1:B1", style)`)
+- Inline styling (`.put("A1", value, style)`)
+- Safe lookups (`.cell("A1")` returns `Option`)
+- Rich text formatting (`"Error: ".red.bold + "Fix!"`)
+- Simplified IO (`Excel.read/write/modify`)
+- Structured exception handling (`XLException` wraps `XLError`)
+
 ## Adding New Examples
 
 Create a new `.sc` script file with scala-cli directives:

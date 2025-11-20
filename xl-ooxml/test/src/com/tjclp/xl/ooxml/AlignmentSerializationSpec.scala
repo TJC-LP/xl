@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import munit.FunSuite
-import com.tjclp.xl.style.{CellStyle, Align, HAlign, VAlign}
+import com.tjclp.xl.styles.{CellStyle, Align, HAlign, VAlign}
 
 /** Tests for alignment serialization to styles.xml */
 @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))

@@ -2,9 +2,9 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.*
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.*
 import com.tjclp.xl.macros.ref
 
 /**

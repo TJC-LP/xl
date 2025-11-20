@@ -1,6 +1,6 @@
 package com.tjclp.xl.macros
 
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 
 import scala.quoted.*
 
@@ -84,7 +84,7 @@ object CellRangeLiterals:
     val fullString = MacroUtil.reconstructString(parts, literals)
 
     // Call runtime parser at compile-time to ensure validation consistency
-    com.tjclp.xl.cell.FormulaParser.parse(fullString) match
+    com.tjclp.xl.cells.FormulaParser.parse(fullString) match
       case Right(cellValue) =>
         // Valid - emit constant
         cellValue match
@@ -101,7 +101,7 @@ object CellRangeLiterals:
     args: Expr[Seq[Any]]
   )(using Quotes): Expr[Either[com.tjclp.xl.error.XLError, CellValue]] =
     '{
-      com.tjclp.xl.cell.FormulaParser.parse($sc.s($args*))
+      com.tjclp.xl.cells.FormulaParser.parse($sc.s($args*))
     }.asExprOf[Either[com.tjclp.xl.error.XLError, CellValue]]
 
   private def literal(sc: Expr[StringContext])(using Quotes): String =

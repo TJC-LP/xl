@@ -2,18 +2,18 @@ package com.tjclp.xl.html
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.codec.syntax.*
-import com.tjclp.xl.sheet.syntax.*
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
-import com.tjclp.xl.style.border.{Border, BorderStyle}
-import com.tjclp.xl.style.color.Color
-import com.tjclp.xl.style.fill.Fill
-import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.sheets.syntax.*
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.styles.border.{Border, BorderStyle}
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.unsafe.*
 
 /** Tests for HTML export functionality */

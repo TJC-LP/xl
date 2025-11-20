@@ -3,7 +3,7 @@ package com.tjclp.xl.io
 import cats.effect.Async
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import fs2.Stream
 import java.nio.file.Path

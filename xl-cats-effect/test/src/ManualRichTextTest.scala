@@ -4,7 +4,7 @@ import com.tjclp.xl.io.Excel
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.unsafe.*
 import java.nio.file.Paths
 

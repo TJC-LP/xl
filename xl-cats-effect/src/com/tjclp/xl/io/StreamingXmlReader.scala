@@ -5,7 +5,7 @@ import cats.syntax.all.*
 import fs2.{Stream, Pipe}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
-import com.tjclp.xl.cell.{CellValue, CellError}
+import com.tjclp.xl.cells.{CellValue, CellError}
 import com.tjclp.xl.ooxml.SharedStrings
 
 /**

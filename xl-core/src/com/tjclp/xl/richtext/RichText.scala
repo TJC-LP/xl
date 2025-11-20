@@ -1,6 +1,6 @@
 package com.tjclp.xl.richtext
 
-import com.tjclp.xl.style.color.Color
+import com.tjclp.xl.styles.color.Color
 
 /**
  * Rich text cell value with multiple formatting runs.

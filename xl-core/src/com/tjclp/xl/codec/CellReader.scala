@@ -1,6 +1,6 @@
 package com.tjclp.xl.codec
 
-import com.tjclp.xl.cell.Cell
+import com.tjclp.xl.cells.Cell
 
 /**
  * Read a typed value from a Cell.

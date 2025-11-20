@@ -1,7 +1,7 @@
 package com.tjclp.xl.codec
 
-import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.styles.CellStyle
 
 /**
  * Write a typed value to produce cell data with optional style hint.

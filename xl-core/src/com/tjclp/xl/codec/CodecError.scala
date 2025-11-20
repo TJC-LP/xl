@@ -1,7 +1,7 @@
 package com.tjclp.xl.codec
 
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
 
 /**

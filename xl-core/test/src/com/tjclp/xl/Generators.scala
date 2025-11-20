@@ -2,11 +2,12 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cell.{Cell, CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
+import com.tjclp.xl.context.ModificationTracker
 import org.scalacheck.{Arbitrary, Gen}
 
 import java.time.LocalDateTime
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.units.StyleId
 
 /** ScalaCheck generators for XL types */
 object Generators:

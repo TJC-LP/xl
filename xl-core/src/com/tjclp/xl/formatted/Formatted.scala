@@ -1,9 +1,9 @@
 package com.tjclp.xl.formatted
 
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cell.CellValue
-import com.tjclp.xl.sheet.Sheet
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Formatted cell value with associated number format.

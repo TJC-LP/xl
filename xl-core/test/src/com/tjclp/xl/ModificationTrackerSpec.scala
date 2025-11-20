@@ -1,6 +1,7 @@
 package com.tjclp.xl
 
 import munit.FunSuite
+import com.tjclp.xl.context.ModificationTracker
 
 class ModificationTrackerSpec extends FunSuite:
 

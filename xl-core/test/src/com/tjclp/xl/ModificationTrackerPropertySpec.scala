@@ -3,6 +3,7 @@ package com.tjclp.xl
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import Generators.given
+import com.tjclp.xl.context.ModificationTracker
 
 /** Property-based tests for ModificationTracker Monoid laws and semantics */
 class ModificationTrackerPropertySpec extends ScalaCheckSuite:

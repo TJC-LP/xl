@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.richtext.RichText
 import scala.xml.*
 import XmlUtil.*
@@ -106,7 +106,7 @@ case class SharedStrings(
             case _ =>
               // Build from Font model if no raw XML or parse failed
               run.font.map { f =>
-                import com.tjclp.xl.style.font.Font
+                import com.tjclp.xl.styles.font.Font
                 val fontProps = Seq.newBuilder[Elem]
 
                 if f.bold then fontProps += elem("b")()
@@ -211,8 +211,8 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     val allEntries = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.values.iterator.flatMap { cell =>
         cell.value match
-          case com.tjclp.xl.cell.CellValue.Text(s) => Iterator.single(Left(s): SSTEntry)
-          case com.tjclp.xl.cell.CellValue.RichText(rt) => Iterator.single(Right(rt): SSTEntry)
+          case com.tjclp.xl.cells.CellValue.Text(s) => Iterator.single(Left(s): SSTEntry)
+          case com.tjclp.xl.cells.CellValue.RichText(rt) => Iterator.single(Right(rt): SSTEntry)
           case _ => Iterator.empty
       }
     }
@@ -259,7 +259,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     val textCells = wb.sheets.flatMap { sheet =>
       sheet.cells.values.flatMap { cell =>
         cell.value match
-          case com.tjclp.xl.cell.CellValue.Text(s) => Some(s)
+          case com.tjclp.xl.cells.CellValue.Text(s) => Some(s)
           case _ => None
       }
     }

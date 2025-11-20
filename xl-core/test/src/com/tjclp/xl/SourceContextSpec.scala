@@ -2,6 +2,7 @@ package com.tjclp.xl
 
 import java.nio.file.Files
 
+import com.tjclp.xl.context.{SourceContext, SourceFingerprint}
 import com.tjclp.xl.ooxml.PartManifest
 import munit.FunSuite
 

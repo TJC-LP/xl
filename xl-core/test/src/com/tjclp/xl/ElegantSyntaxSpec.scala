@@ -1,13 +1,13 @@
 package com.tjclp.xl
 
-import com.tjclp.xl.api.*
+import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 import java.time.LocalDateTime
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /** Tests for elegant CellValue syntax (given conversions, batch put, formatted literals) */
 class ElegantSyntaxSpec extends FunSuite:

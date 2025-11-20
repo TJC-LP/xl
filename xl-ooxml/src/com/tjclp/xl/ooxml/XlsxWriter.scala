@@ -10,7 +10,7 @@ import scala.collection.mutable
 import scala.util.{Failure, Success, Try, Using}
 import com.tjclp.xl.api.{Workbook, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.{ModificationTracker, SourceContext}
+import com.tjclp.xl.context.{ModificationTracker, SourceContext}
 import com.tjclp.xl.richtext.RichText
 
 /** Shared Strings Table usage policy */

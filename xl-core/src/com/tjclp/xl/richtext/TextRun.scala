@@ -1,7 +1,7 @@
 package com.tjclp.xl.richtext
 
-import com.tjclp.xl.style.color.Color
-import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.font.Font
 
 /**
  * Text run with optional font formatting.
