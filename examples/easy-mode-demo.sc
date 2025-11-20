@@ -85,9 +85,15 @@ val products = List(
   ("Doohickey", 39.99, 25)
 )
 
-// Build patch by folding over data with interpolated refs
+// Build patch by folding over data with interpolated refs + conditional styling
 val dynamicPatch = products.zipWithIndex.foldLeft(Patch.empty) { case (acc, ((name, price, qty), idx)) =>
   val row = (idx + 4).toString  // Start at row 4
+
+  // Conditional styling: green if price > 25, red otherwise
+  val priceStyle = if (price > 25.0)
+    CellStyle.default.bold.green
+  else
+    CellStyle.default.bold.red
 
   // Runtime interpolation returns Either[XLError, RefType]
   // RefType now supports := operator directly!
@@ -99,6 +105,7 @@ val dynamicPatch = products.zipWithIndex.foldLeft(Patch.empty) { case (acc, ((na
     acc ++
     (nameRef := name) ++      // Works directly with RefType!
     (priceRef := price) ++
+    (priceRef.styled(priceStyle)) ++  // Conditional styling!
     (qtyRef := qty)
   ).getOrElse(acc)  // Graceful fallback on parse error
 }
@@ -111,6 +118,7 @@ val dynamicSheet = Sheet("Dynamic")
   .unsafe
 
 println(s"  ✓ Generated ${products.size} rows dynamically with interpolated refs")
+println(s"  ✓ Applied conditional styling (green if price > $$25, red otherwise)")
 println(s"  ✓ Total cells: ${dynamicSheet.cells.size}")
 println()
 
