@@ -51,5 +51,18 @@ object easy:
   export com.tjclp.xl.api.* // Domain types (Sheet, Cell, Workbook, CellStyle, etc.)
   export com.tjclp.xl.syntax.* // Macros, extensions, style DSL
 
+  // Re-export CellWriter given instances for type class-based put() methods
+  export com.tjclp.xl.extensions.{
+    given_CellCodec_String,
+    given_CellCodec_Int,
+    given_CellCodec_Long,
+    given_CellCodec_Double,
+    given_CellCodec_BigDecimal,
+    given_CellCodec_Boolean,
+    given_CellCodec_LocalDate,
+    given_CellCodec_LocalDateTime,
+    given_CellCodec_RichText
+  }
+
   // Export simplified Excel IO (aliased from EasyExcel)
   export com.tjclp.xl.io.EasyExcel as Excel
