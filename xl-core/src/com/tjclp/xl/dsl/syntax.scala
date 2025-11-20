@@ -1,6 +1,6 @@
 package com.tjclp.xl.dsl
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, RefType}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.styles.CellStyle
@@ -86,6 +86,105 @@ object syntax:
 
     /** Create a RemoveRange patch to clear all cells in the range */
     def remove: Patch = Patch.RemoveRange(range)
+
+  // ========== RefType Extensions (Runtime Interpolation Support) ==========
+
+  /**
+   * RefType extensions for seamless patch DSL integration with runtime-interpolated refs.
+   *
+   * These extensions allow `ref"$var"` (which returns `Either[XLError, RefType]`) to work directly
+   * with patch DSL operators without manual extraction of ARef/CellRange.
+   *
+   * Example:
+   * {{{
+   *   val row = "5"
+   *   for {
+   *     cellRef <- ref"A$row"
+   *     rangeRef <- ref"A1:B$row"
+   *   } yield
+   *     (cellRef := "Value") ++     // Works directly!
+   *     (rangeRef.styled(style)) ++
+   *     rangeRef.merge
+   * }}}
+   */
+  extension (refType: RefType)
+    /** Create Put patch from RefType (delegates to underlying ARef) */
+    @annotation.targetName("refTypeAssignCellValue")
+    inline def :=(cv: CellValue): Patch = refType match
+      case RefType.Cell(aref) => aref := cv
+      case RefType.QualifiedCell(_, aref) => aref := cv
+      case _ => Patch.empty // Ranges can't be assigned single values
+
+    /** Create Put patch with automatic conversion from String */
+    @annotation.targetName("refTypeAssignString")
+    inline def :=(value: String): Patch = refType match
+      case RefType.Cell(aref) => aref := value
+      case RefType.QualifiedCell(_, aref) => aref := value
+      case _ => Patch.empty
+
+    /** Create Put patch with automatic conversion from Int */
+    @annotation.targetName("refTypeAssignInt")
+    inline def :=(value: Int): Patch = refType match
+      case RefType.Cell(aref) => aref := value
+      case RefType.QualifiedCell(_, aref) => aref := value
+      case _ => Patch.empty
+
+    /** Create Put patch with automatic conversion from Long */
+    @annotation.targetName("refTypeAssignLong")
+    inline def :=(value: Long): Patch = refType match
+      case RefType.Cell(aref) => aref := value
+      case RefType.QualifiedCell(_, aref) => aref := value
+      case _ => Patch.empty
+
+    /** Create Put patch with automatic conversion from Double */
+    @annotation.targetName("refTypeAssignDouble")
+    inline def :=(value: Double): Patch = refType match
+      case RefType.Cell(aref) => aref := value
+      case RefType.QualifiedCell(_, aref) => aref := value
+      case _ => Patch.empty
+
+    /** Create Put patch with automatic conversion from BigDecimal */
+    @annotation.targetName("refTypeAssignBigDecimal")
+    inline def :=(value: BigDecimal): Patch = refType match
+      case RefType.Cell(aref) => aref := value
+      case RefType.QualifiedCell(_, aref) => aref := value
+      case _ => Patch.empty
+
+    /** Create Put patch with automatic conversion from Boolean */
+    @annotation.targetName("refTypeAssignBoolean")
+    inline def :=(value: Boolean): Patch = refType match
+      case RefType.Cell(aref) => aref := value
+      case RefType.QualifiedCell(_, aref) => aref := value
+      case _ => Patch.empty
+
+    /** Create Put patch with automatic conversion from LocalDateTime */
+    @annotation.targetName("refTypeAssignLocalDateTime")
+    inline def :=(value: java.time.LocalDateTime): Patch = refType match
+      case RefType.Cell(aref) => aref := value
+      case RefType.QualifiedCell(_, aref) => aref := value
+      case _ => Patch.empty
+
+    /** Apply style to RefType (only works for cells, returns empty for ranges) */
+    @annotation.targetName("refTypeStyled")
+    def styled(style: CellStyle): Patch = refType match
+      case RefType.Cell(aref) => aref.styled(style)
+      case RefType.QualifiedCell(_, aref) => aref.styled(style)
+      case _ => Patch.empty // Ranges require batch styling (not supported via single patch)
+
+    /** Merge RefType (only works for ranges, returns empty for cells) */
+    @annotation.targetName("refTypeMerge")
+    def merge: Patch = refType match
+      case RefType.Range(range) => range.merge
+      case RefType.QualifiedRange(_, range) => range.merge
+      case _ => Patch.empty // Cells can't be merged alone
+
+    /** Remove RefType (works for both cells and ranges) */
+    @annotation.targetName("refTypeRemove")
+    def remove: Patch = refType match
+      case RefType.Cell(aref) => Patch.Remove(aref)
+      case RefType.Range(range) => range.remove
+      case RefType.QualifiedCell(_, aref) => Patch.Remove(aref)
+      case RefType.QualifiedRange(_, range) => range.remove
 
   // ========== Patch Composition Extensions ==========
 

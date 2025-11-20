@@ -54,8 +54,68 @@ val richSheet = Sheet("RichText")
 println(s"  ✓ Created rich text cells")
 println()
 
-// ========== Example 4: Safe Lookups ==========
-println("🔍 Example 4: Safe Lookups")
+// ========== Example 4: Patch DSL (Declarative Alternative) ==========
+println("🔧 Example 4: Patch DSL (Declarative Approach)")
+
+val boldStyle = CellStyle.default.bold
+val patchSheet = Sheet("Patch Demo")
+  .put(
+    (ref"A1" := "Product Report") ++
+    ref"A1".styled(headerStyle) ++
+    ref"A1:C1".merge ++
+    (ref"A3" := "Product") ++
+    (ref"B3" := "Price") ++
+    (ref"C3" := "Quantity") ++
+    (ref"A4" := "Widget") ++
+    (ref"B4" := 19.99) ++
+    (ref"C4" := 100)
+  )
+  .unsafe
+
+println(s"  ✓ Built sheet with Patch DSL (${patchSheet.cells.size} cells, ${patchSheet.mergedRanges.size} merge)")
+println()
+
+// ========== Example 5: Dynamic Patch with String Interpolation ==========
+println("🔥 Example 5: Dynamic Patch Generation (Runtime Refs)")
+
+// Sample data: products to populate
+val products = List(
+  ("Widget", 19.99, 100),
+  ("Gadget", 29.99, 50),
+  ("Doohickey", 39.99, 25)
+)
+
+// Build patch by folding over data with interpolated refs
+val dynamicPatch = products.zipWithIndex.foldLeft(Patch.empty) { case (acc, ((name, price, qty), idx)) =>
+  val row = (idx + 4).toString  // Start at row 4
+
+  // Runtime interpolation returns Either[XLError, RefType]
+  // RefType now supports := operator directly!
+  (for {
+    nameRef <- ref"A$row"
+    priceRef <- ref"B$row"
+    qtyRef <- ref"C$row"
+  } yield
+    acc ++
+    (nameRef := name) ++      // Works directly with RefType!
+    (priceRef := price) ++
+    (qtyRef := qty)
+  ).getOrElse(acc)  // Graceful fallback on parse error
+}
+
+val dynamicSheet = Sheet("Dynamic")
+  .put(ref"A3" := "Product")
+  .put(ref"B3" := "Price")
+  .put(ref"C3" := "Quantity")
+  .put(dynamicPatch)
+  .unsafe
+
+println(s"  ✓ Generated ${products.size} rows dynamically with interpolated refs")
+println(s"  ✓ Total cells: ${dynamicSheet.cells.size}")
+println()
+
+// ========== Example 6: Safe Lookups ==========
+println("🔍 Example 6: Safe Lookups")
 
 val value = report.cell("A3")          // ✨ Clean lookup!
 val range = report.range("A3:B3")      // ✨ Get cells in range!
@@ -64,13 +124,15 @@ println(s"  ✓ Looked up cell: ${value.map(_.value)}")
 println(s"  ✓ Found ${range.size} cells in range")
 println()
 
-// ========== Example 5: Excel IO ==========
-println("💾 Example 5: Excel IO (EasyExcel)")
+// ========== Example 7: Excel IO ==========
+println("💾 Example 7: Excel IO (EasyExcel)")
 
 val workbook = Workbook.empty
   .put(report)
   .put(quickSheet)
   .put(richSheet)
+  .put(patchSheet)
+  .put(dynamicSheet)
   .remove("Sheet1")  // Sheet1 is always created by default per Excel standards
   .unsafe  // Single unwrap at the end!
 
@@ -86,8 +148,8 @@ val modifiedSheet = firstSheet.put("A5", "Updated: " + LocalDate.now.toString).u
 println(s"  ✓ Modified sheet in-memory (${modifiedSheet.cells.size} cells)")
 println()
 
-// ========== Example 6: Error Handling ==========
-println("⚠️  Example 6: Structured Errors")
+// ========== Example 8: Error Handling ==========
+println("⚠️  Example 8: Structured Errors")
 
 try {
   Sheet("Test").unsafe.put("INVALID!!!!", "fail")
@@ -98,4 +160,4 @@ try {
 }
 println()
 
-println("✨ Easy Mode API: String refs, template styling, simplified IO!")
+println("✨ Easy Mode API: Chainable + Declarative + Dynamic (with interpolation)!")

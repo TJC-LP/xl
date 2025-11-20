@@ -357,6 +357,11 @@ object extensions:
     def merge(rangeRef: String): XLResult[Sheet] =
       result.flatMap(_.merge(rangeRef))
 
+    /** Apply patch (chainable). */
+    @annotation.targetName("putPatchChainable")
+    def put(patch: com.tjclp.xl.patch.Patch): XLResult[Sheet] =
+      result.flatMap(_.put(patch))
+
   // ========== XLResult[Workbook] Extensions: Chainable Operations ==========
 
   extension (result: XLResult[Workbook])
