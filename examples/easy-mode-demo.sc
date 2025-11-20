@@ -120,6 +120,12 @@ val dynamicSheet = Sheet("Dynamic")
 println(s"  ✓ Generated ${products.size} rows dynamically with interpolated refs")
 println(s"  ✓ Applied conditional styling (green if price > $$25, red otherwise)")
 println(s"  ✓ Total cells: ${dynamicSheet.cells.size}")
+
+// Export to HTML to visualize the conditional styling
+val htmlOutput = dynamicSheet.toHtml(ref"A3:C6")
+println(s"  ✓ Exported to HTML (${htmlOutput.length} chars)")
+println(s"\nHTML Preview (with conditional styling):")
+println(htmlOutput)
 println()
 
 // ========== Example 6: Safe Lookups ==========
