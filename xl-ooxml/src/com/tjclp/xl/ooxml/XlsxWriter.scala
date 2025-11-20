@@ -230,7 +230,11 @@ object XlsxWriter:
   /**
    * Build worksheet relationships for a sheet with comments.
    *
-   * Creates relationship referencing ../commentsN.xml (N is 1-based sheet index).
+   * Creates relationships for:
+   *   - Comments content (../commentsN.xml)
+   *   - VML drawing for visual indicators (../drawings/vmlDrawingN.xml)
+   *
+   * N is 1-based sheet index.
    */
   private def buildWorksheetRelationships(sheetIndex: Int): Relationships =
     Relationships(
@@ -239,6 +243,11 @@ object XlsxWriter:
           id = "rId1",
           `type` = XmlUtil.relTypeComments,
           target = s"../comments$sheetIndex.xml"
+        ),
+        Relationship(
+          id = "rId2",
+          `type` = XmlUtil.relTypeVmlDrawing,
+          target = s"../drawings/vmlDrawing$sheetIndex.vml"
         )
       )
     )
@@ -265,8 +274,11 @@ object XlsxWriter:
         if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
         else None
 
-    // Build comments data
+    // Build comments data and VML drawings
     val (commentsBySheet, sheetsWithComments) = buildCommentsData(workbook)
+    val vmlDrawings = commentsBySheet.map { case (idx, comments) =>
+      idx -> VmlDrawing.generateForComments(comments, idx)
+    }
 
     // Build unified style index with per-sheet remappings
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
@@ -310,6 +322,7 @@ object XlsxWriter:
           styles,
           sst,
           commentsBySheet,
+          vmlDrawings,
           config
         )
       case OutputStreamTarget(stream) =>
@@ -323,6 +336,7 @@ object XlsxWriter:
           styles,
           sst,
           commentsBySheet,
+          vmlDrawings,
           config
         )
 
@@ -337,6 +351,7 @@ object XlsxWriter:
     styles: OoxmlStyles,
     sst: Option[SharedStrings],
     commentsBySheet: Map[Int, OoxmlComments],
+    vmlDrawings: Map[Int, String],
     config: WriterConfig
   ): Unit =
     val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
@@ -372,9 +387,14 @@ object XlsxWriter:
         }
       }
 
-      // Write comment files for sheets with comments
+      // Write comment files and VML drawings for sheets with comments
       commentsBySheet.foreach { case (idx, comments) =>
         writePart(zip, s"xl/comments${idx + 1}.xml", OoxmlComments.toXml(comments), config)
+
+        // Write VML drawing for comment indicators
+        vmlDrawings.get(idx).foreach { vmlXml =>
+          writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
+        }
       }
 
     finally zip.close()
@@ -390,6 +410,7 @@ object XlsxWriter:
     styles: OoxmlStyles,
     sst: Option[SharedStrings],
     commentsBySheet: Map[Int, OoxmlComments],
+    vmlDrawings: Map[Int, String],
     config: WriterConfig
   ): Unit =
     val zip = new ZipOutputStream(stream)
@@ -425,12 +446,43 @@ object XlsxWriter:
         }
       }
 
-      // Write comment files for sheets with comments
+      // Write comment files and VML drawings for sheets with comments
       commentsBySheet.foreach { case (idx, comments) =>
         writePart(zip, s"xl/comments${idx + 1}.xml", OoxmlComments.toXml(comments), config)
+
+        // Write VML drawing for comment indicators
+        vmlDrawings.get(idx).foreach { vmlXml =>
+          writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
+        }
       }
 
     finally zip.close()
+
+  /** Write VML part to ZIP (VML is plain text, not standard XML) */
+  private def writeVmlPart(
+    zip: ZipOutputStream,
+    entryName: String,
+    vmlXml: String,
+    config: WriterConfig
+  ): Unit =
+    val entry = new ZipEntry(entryName)
+    entry.setTime(0L) // Deterministic timestamps
+    entry.setMethod(config.compression.zipMethod)
+
+    val bytes = vmlXml.getBytes(StandardCharsets.UTF_8)
+
+    config.compression match
+      case Compression.Stored =>
+        entry.setSize(bytes.length)
+        entry.setCompressedSize(bytes.length)
+        val crc = new java.util.zip.CRC32()
+        crc.update(bytes)
+        entry.setCrc(crc.getValue)
+      case Compression.Deflated => ()
+
+    zip.putNextEntry(entry)
+    zip.write(bytes)
+    zip.closeEntry()
 
   /** Write a single XML part to ZIP */
   private def writePart(
@@ -813,8 +865,11 @@ object XlsxWriter:
 
     val styles = OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, preservedDxfs)
 
-    // Build comments data
+    // Build comments data and VML drawings
     val (commentsBySheet, sheetsWithComments) = buildCommentsData(workbook)
+    val vmlDrawings = commentsBySheet.map { case (idx, comments) =>
+      idx -> VmlDrawing.generateForComments(comments, idx)
+    }
 
     // Preserve structural parts from source (or fallback to minimal)
     val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =
@@ -908,6 +963,11 @@ object XlsxWriter:
                 val sheetRels = buildWorksheetRelationships(idx + 1)
                 writePart(zip, relsPath, sheetRels.toXml, config)
                 writePart(zip, commentPath, OoxmlComments.toXml(comments), config)
+
+                // Write VML drawing for comment indicators
+                vmlDrawings.get(idx).foreach { vmlXml =>
+                  writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
+                }
               }
         else
           // Copy unmodified sheet from source (only if source available)

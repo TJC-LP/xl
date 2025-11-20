@@ -44,7 +44,8 @@ object ContentTypes extends XmlReadable[ContentTypes]:
   ): ContentTypes =
     val baseDefaults = Map(
       "rels" -> ctRelationships,
-      "xml" -> "application/xml"
+      "xml" -> "application/xml",
+      "vml" -> ctVmlDrawing
     )
 
     val sheetOverrides = sheetIndices.distinct.sorted.map { idx =>

@@ -40,6 +40,8 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"
   val relTypeComments =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
+  val relTypeVmlDrawing =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing"
 
   /** Content type URIs */
   val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -48,6 +50,7 @@ object XmlUtil:
   val ctSharedStrings =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
   val ctComments = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
+  val ctVmlDrawing = "application/vnd.openxmlformats-officedocument.vmlDrawing"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
 
   /** Sort attributes by name for deterministic output */
