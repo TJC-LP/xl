@@ -1,11 +1,11 @@
 package com.tjclp.xl.io
 
-import cats.effect.IO
+import cats.effect.{IO, Sync}
 import cats.effect.unsafe.implicits.global
 import com.tjclp.xl.error.XLException
 import com.tjclp.xl.workbooks.Workbook
 
-import java.nio.file.{Path, Paths}
+import java.nio.file.{Files, Path, Paths, StandardCopyOption}
 
 /**
  * Simplified Excel IO for Easy Mode API.
@@ -69,6 +69,9 @@ object EasyExcel:
   /**
    * Modify workbook in-place (read → transform → write).
    *
+   * Uses atomic file replacement to avoid ZIP corruption when writing to the source file. Writes to
+   * a temporary file first, then atomically moves it to the target path.
+   *
    * '''Example:'''
    * {{{
    * Excel.modify("data.xlsx") { wb =>
@@ -88,10 +91,28 @@ object EasyExcel:
    *   if file cannot be read/written
    */
   def modify(path: String)(f: Workbook => Workbook): Unit =
-    val p = Paths.get(path)
+    val targetPath = Paths.get(path)
     val result = for
-      wb <- excel.read(p)
+      wb <- excel.read(targetPath)
       modified = f(wb)
-      _ <- excel.write(modified, p)
+      // Write to temp file to avoid reading from file being written (ZIP corruption)
+      parent = Option(targetPath.getParent).getOrElse(Paths.get("."))
+      tempFile <- Sync[IO].delay(Files.createTempFile(parent, ".xl-modify-", ".tmp"))
+      writeResult <- excel.write(modified, tempFile).attempt
+      _ <- writeResult match
+        case Right(_) =>
+          // Success: atomically replace original
+          Sync[IO].delay(
+            Files.move(
+              tempFile,
+              targetPath,
+              StandardCopyOption.REPLACE_EXISTING,
+              StandardCopyOption.ATOMIC_MOVE
+            )
+          )
+        case Left(err) =>
+          // Failure: clean up temp and propagate error
+          Sync[IO].delay(Files.deleteIfExists(tempFile)) >>
+            IO.raiseError(err)
     yield ()
     result.unsafeRunSync()

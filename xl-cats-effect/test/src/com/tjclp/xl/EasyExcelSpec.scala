@@ -155,9 +155,48 @@ class EasyExcelSpec extends CatsEffectSuite:
   }
 
   // ========== Modify Operations ==========
-  // Note: Modify tests skipped for now due to empty workbook serialization issues.
-  // Will be added after basic write/read round-trip is stable.
 
-  test("modify would read, transform, and write".ignore) {
-    // TODO: Implement after fixing empty workbook write issues
+  test("modify reads, transforms, and writes") {
+    val tempFile = Files.createTempFile("test-modify", ".xlsx")
+    try {
+      // Setup - note: Workbook.empty creates Sheet1 by default
+      val initial = Workbook.empty.unsafe
+      Excel.write(initial, tempFile.toString)
+
+      // Modify - update the default Sheet1
+      Excel.modify(tempFile.toString) { wb =>
+        wb.update("Sheet1", _.put("A1", "Modified").unsafe).unsafe
+      }
+
+      // Verify
+      val loaded = Excel.read(tempFile.toString)
+      val sheet1 = loaded.getSheet("Sheet1").get
+      assertEquals(sheet1.cell("A1").map(_.value), Some(CellValue.Text("Modified")))
+    } finally {
+      Files.deleteIfExists(tempFile)
+    }
+  }
+
+  test("modify preserves unmodified sheets") {
+    val tempFile = Files.createTempFile("test-preserve", ".xlsx")
+    try {
+      // Setup with 2 sheets
+      val initial = Workbook.empty
+        .put(Sheet("Preserve").put("A1", "Original").unsafe)
+        .unsafe
+
+      Excel.write(initial, tempFile.toString)
+
+      // Modify only Sheet1 (not Preserve)
+      Excel.modify(tempFile.toString) { wb =>
+        wb.update("Sheet1", _.put("A1", "Changed").unsafe).unsafe
+      }
+
+      // Verify "Preserve" sheet unchanged
+      val loaded = Excel.read(tempFile.toString)
+      val preserve = loaded.getSheet("Preserve").get
+      assertEquals(preserve.cell("A1").map(_.value), Some(CellValue.Text("Original")))
+    } finally {
+      Files.deleteIfExists(tempFile)
+    }
   }
