@@ -21,6 +21,9 @@ package com.tjclp.xl
  * }}}
  */
 object syntax:
+  // Easy Mode utilities
+  export error.XLException // Exception wrapper for .unsafe boundary
+
   // Core syntax extensions with selective aliasing to avoid export conflicts
   export dsl.syntax as dslSyntax
   export dslSyntax.*
