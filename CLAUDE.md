@@ -76,6 +76,13 @@ Macros (`ref`, `fx`, money/percent/date/accounting) are bundled in `xl-core` and
 - `RichText` → Multiple runs with different formatting within one cell
 - String extensions: `.bold`, `.italic`, `.red`, `.green`, `.size()`, etc.
 
+**Comments** (`xl-core/src/com/tjclp/xl/cells/Comment.scala`):
+- `Comment(text: RichText, author: Option[String])` → Excel cell annotations
+- Sheet-level storage: `Sheet.comments: Map[ARef, Comment]`
+- API: `.comment(ref, comment)`, `.getComment(ref)`, `.removeComment(ref)`, `.hasComment(ref)`
+- OOXML round-trip: `xl/commentsN.xml` + VML drawing indicators
+- HTML export: Rendered as `title` attributes (hover tooltips)
+
 **HTML Export** (`xl-core/src/com/tjclp/xl/html/`):
 - `sheet.toHtml(range)` → Convert cell range to HTML table with inline CSS
 
@@ -129,6 +136,7 @@ All code must pass `./mill __.checkFormat` before commit. Format with `./mill __
 **Style rules** (see also `docs/design/style-guide.md`):
 - Prefer **opaque types** for domain quantities
 - Use **enums** for closed sets; `derives CanEqual` everywhere
+- Use **final case class** for all data model types (prevents subclassing, enables JVM optimizations)
 - Keep public functions **total**; return Either/Option for errors
 - Prefer **extension methods** over implicit classes
 - Macros must emit **clear diagnostics**
@@ -543,6 +551,40 @@ val plain = sheet.toHtml(range"A1:B10", includeStyles = false)  // No CSS
 
 Rich text and cell styles preserved as HTML tags and inline CSS. Useful for dashboards, reporting, email generation.
 
+#### Comments
+
+Add Excel annotations to cells with rich text and author attribution:
+
+```scala
+import com.tjclp.xl.cells.Comment
+
+// Plain text comments
+val simple = Comment.plainText("Review this value")
+val withAuthor = Comment.plainText("Q1 2025 data", Some("Finance Team"))
+
+// Rich text comments
+val formatted = Comment(
+  text = "Note: ".bold.red + "Critical issue!",
+  author = Some("Reviewer")
+)
+
+// Add to sheet
+val annotated = sheet
+  .comment(ref"A1", Comment.plainText("Revenue increased 15%", Some("CFO")))
+  .comment(ref"B2", formatted)
+
+// Retrieve comments
+sheet.getComment(ref"A1")  // Option[Comment]
+sheet.hasComment(ref"A1")  // Boolean
+sheet.removeComment(ref"A1")  // Remove annotation
+
+// HTML export with comment tooltips
+val htmlWithTooltips = sheet.toHtml(range"A1:C3", includeComments = true)
+// Comments appear as title="Author: text" attributes on <td> elements
+```
+
+**OOXML round-trip**: Comments serialize to `xl/commentsN.xml` (content) and `xl/drawings/vmlDrawingN.vml` (visual indicators). Yellow triangles display in Excel when hovering over commented cells.
+
 ## Documentation
 
 Documentation is organized by purpose (no numbering for easier maintenance):
@@ -567,7 +609,7 @@ Documentation is organized by purpose (no numbering for easier maintenance):
 
 ### Reference (`docs/reference/`) - 5 files
 **Quick reference material**
-- `testing-guide.md` → Test coverage breakdown (263 tests)
+- `testing-guide.md` → Test coverage breakdown (680+ tests)
 - `examples.md` → Code samples
 - `glossary.md` → Terminology
 - `ooxml-cheatsheet.md` → Quick reference
@@ -585,7 +627,7 @@ Documentation is organized by purpose (no numbering for easier maintenance):
 - `p31-refactor/` → Optics, RichText, HTML export
 
 ### Root Docs
-- `docs/STATUS.md` → Detailed current state (263 tests, performance, limitations)
+- `docs/STATUS.md` → Detailed current state (680+ tests, performance, limitations)
 - `docs/LIMITATIONS.md` → Current roadmap and missing features
 - `docs/CONTRIBUTING.md` → Contribution guidelines
 - `docs/FAQ.md` → Frequently asked questions
@@ -833,9 +875,9 @@ property("Px to Emu round-trip") {
 - **OOXML mapping**: `docs/plan/11-ooxml-mapping.md` for XML structure
 - **Security**: `docs/plan/23-security.md` for ZIP/XXE/formula injection guards
 
-## Test Coverage Goal
+## Test Coverage
 
-263/263 tests passing (as of P6 + P31 completion):
+680+ tests passing (as of Phase 1.1 completion - includes Comments, Security, Performance tests):
 - 17 addressing tests (Column, Row, ARef, CellRange laws)
 - 21 patch tests (Monoid laws, application semantics)
 - 60 style tests (units, colors, builders, canonicalization, StylePatch, StyleRegistry)

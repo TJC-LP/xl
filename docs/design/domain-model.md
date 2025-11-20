@@ -115,9 +115,15 @@ final case class Workbook(
 
 ## Comments & links
 ```scala
-final case class Comment(author: String, text: String) derives CanEqual
-final case class Hyperlink(target: String) derives CanEqual
+final case class Comment(
+  text: RichText,
+  author: Option[String]
+) derives CanEqual
+
+final case class Hyperlink(target: String) derives CanEqual  // Future
 ```
+
+**Storage**: Comments stored at sheet level (`Sheet.comments: Map[ARef, Comment]`), not in Cell. This is memory-efficient (most cells don't have comments) and aligns with OOXML structure.
 
 ## Style model (summary; full detail in 05-styles-and-themes.md)
 ```scala
