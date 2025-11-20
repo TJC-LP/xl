@@ -5,8 +5,8 @@ import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 

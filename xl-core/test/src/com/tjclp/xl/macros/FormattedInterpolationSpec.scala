@@ -4,7 +4,7 @@ import com.tjclp.xl.*
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formatted.Formatted
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.styles.numfmt.NumFmt
 import munit.{FunSuite, ScalaCheckSuite}
 import org.scalacheck.Prop.*
 import java.time.LocalDate

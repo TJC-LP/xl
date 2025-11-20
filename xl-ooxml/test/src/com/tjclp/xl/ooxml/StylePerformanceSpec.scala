@@ -2,7 +2,7 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.style.*
+import com.tjclp.xl.styles.*
 
 /**
  * Performance tests for style serialization

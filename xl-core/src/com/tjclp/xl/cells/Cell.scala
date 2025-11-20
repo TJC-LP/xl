@@ -1,7 +1,7 @@
 package com.tjclp.xl.cells
 
 import com.tjclp.xl.addressing.{ARef, Column, Row}
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.units.StyleId
 
 object Cell:
   /** Create cell from reference and value */

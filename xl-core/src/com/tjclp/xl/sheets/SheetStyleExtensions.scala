@@ -2,7 +2,7 @@ package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.Cell
-import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.styles.CellStyle
 
 // ========== Style Application Extensions ==========
 

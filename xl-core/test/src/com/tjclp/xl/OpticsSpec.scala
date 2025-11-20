@@ -8,7 +8,7 @@ import com.tjclp.xl.dsl.syntax.*
 import munit.FunSuite
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.units.StyleId
 
 /** Tests for optics library and focus DSL */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.Var"))

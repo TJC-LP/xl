@@ -9,7 +9,7 @@ import com.tjclp.xl.error.XLException
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)
 import com.tjclp.xl.sheets.syntax.*
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.unsafe.*
 
 import java.time.{LocalDate, LocalDateTime}

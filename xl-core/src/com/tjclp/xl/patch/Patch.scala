@@ -6,8 +6,8 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
 import com.tjclp.xl.sheets.syntax.*
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Patch ADT for Sheet updates with monoid semantics.

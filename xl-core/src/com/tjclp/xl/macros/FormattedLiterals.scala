@@ -2,7 +2,7 @@ package com.tjclp.xl.macros
 
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formatted.Formatted
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 import java.time.LocalDate
 import scala.quoted.*

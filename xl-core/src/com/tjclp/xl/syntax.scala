@@ -37,7 +37,7 @@ object syntax:
   export sheets.syntax as sheetSyntax
   export sheetSyntax.*
 
-  export style.dsl as styleDsl
+  export styles.dsl as styleDsl
   export styleDsl.*
 
   // Easy Mode: String-based extensions (Sheet.put("A1", value), Sheet.style("A1:B1", style))

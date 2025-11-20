@@ -2,8 +2,8 @@ package com.tjclp.xl.codec
 
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.richtext.RichText
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 import java.time.{LocalDate, LocalDateTime}
 
 /** Bidirectional codec for cell values */

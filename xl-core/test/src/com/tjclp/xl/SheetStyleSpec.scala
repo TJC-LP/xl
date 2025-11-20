@@ -5,13 +5,13 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.conversions.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.syntax.*
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
-import com.tjclp.xl.style.border.{Border, BorderStyle}
-import com.tjclp.xl.style.color.Color
-import com.tjclp.xl.style.fill.Fill
-import com.tjclp.xl.style.font.Font
-import com.tjclp.xl.style.numfmt.NumFmt
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.styles.border.{Border, BorderStyle}
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 

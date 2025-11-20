@@ -4,7 +4,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec.CellCodec
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.style.{CellStyle, StyleRegistry}
+import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
 
 import scala.collection.immutable.{Map, Set}
 import scala.util.boundary, boundary.break

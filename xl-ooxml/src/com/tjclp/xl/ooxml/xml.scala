@@ -222,9 +222,9 @@ object XmlUtil:
    * @return
    *   Font with formatting properties (default Font if no properties)
    */
-  def parseRunProperties(rPrElem: Elem): com.tjclp.xl.style.font.Font =
-    import com.tjclp.xl.style.font.Font
-    import com.tjclp.xl.style.color.Color
+  def parseRunProperties(rPrElem: Elem): com.tjclp.xl.styles.font.Font =
+    import com.tjclp.xl.styles.font.Font
+    import com.tjclp.xl.styles.color.Color
 
     val bold = (rPrElem \ "b").nonEmpty
     val italic = (rPrElem \ "i").nonEmpty

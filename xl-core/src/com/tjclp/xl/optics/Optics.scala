@@ -3,7 +3,7 @@ package com.tjclp.xl.optics
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Predefined optics for common Sheet/Cell operations.

@@ -3,8 +3,8 @@ package com.tjclp.xl.dsl
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.patch.Patch
-import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * DSL extensions for ergonomic patch building and sheet operations.

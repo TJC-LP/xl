@@ -6,7 +6,7 @@ import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import org.scalacheck.{Arbitrary, Gen}
 
 import java.time.LocalDateTime
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.units.StyleId
 
 /** ScalaCheck generators for XL types */
 object Generators:

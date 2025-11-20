@@ -49,31 +49,31 @@ object api:
   export codec.{CellCodec, CellReader, CellWriter, CodecError}
 
   // Style types - core
-  export style.{CellStyle, StyleRegistry}
+  export styles.{CellStyle, StyleRegistry}
 
   // Style types - alignment
-  export style.alignment.{HAlign, VAlign, Align}
+  export styles.alignment.{HAlign, VAlign, Align}
 
   // Style types - border
-  export style.border.{BorderStyle, BorderSide, Border}
+  export styles.border.{BorderStyle, BorderSide, Border}
 
   // Style types - color
-  export style.color.{ThemeSlot, Color}
+  export styles.color.{ThemeSlot, Color}
 
   // Style types - fill
-  export style.fill.{PatternType, Fill}
+  export styles.fill.{PatternType, Fill}
 
   // Style types - font
-  export style.font.Font
+  export styles.font.Font
 
   // Style types - numfmt
-  export style.numfmt.NumFmt
+  export styles.numfmt.NumFmt
 
   // Style types - patch
-  export style.patch.StylePatch
+  export styles.patch.StylePatch
 
   // Style types - units
-  export style.units.{Pt, Px, Emu, StyleId}
+  export styles.units.{Pt, Px, Emu, StyleId}
 
   // Surface Column helpers at the root package for single-import ergonomics
   export addressing.Column.toLetter

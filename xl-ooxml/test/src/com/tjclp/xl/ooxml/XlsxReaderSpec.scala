@@ -5,7 +5,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.syntax.*
-import com.tjclp.xl.style.{CellStyle, Font}
+import com.tjclp.xl.styles.{CellStyle, Font}
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 import java.nio.charset.StandardCharsets

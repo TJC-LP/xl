@@ -3,11 +3,11 @@ package com.tjclp.xl.html
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.style.alignment.{HAlign, VAlign}
-import com.tjclp.xl.style.border.{BorderStyle, BorderSide}
-import com.tjclp.xl.style.color.Color
-import com.tjclp.xl.style.fill.Fill
-import com.tjclp.xl.style.font.Font
+import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
+import com.tjclp.xl.styles.border.{BorderStyle, BorderSide}
+import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
 
 /** Renders Excel sheets to HTML tables with inline CSS styling */
 object HtmlRenderer:

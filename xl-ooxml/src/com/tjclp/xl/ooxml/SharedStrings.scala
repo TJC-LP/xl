@@ -106,7 +106,7 @@ case class SharedStrings(
             case _ =>
               // Build from Font model if no raw XML or parse failed
               run.font.map { f =>
-                import com.tjclp.xl.style.font.Font
+                import com.tjclp.xl.styles.font.Font
                 val fontProps = Seq.newBuilder[Elem]
 
                 if f.bold then fontProps += elem("b")()

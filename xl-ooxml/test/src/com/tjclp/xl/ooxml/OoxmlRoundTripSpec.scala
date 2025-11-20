@@ -13,9 +13,9 @@ import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.{XlsxWriter, XlsxReader}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.richtext.RichText.given
-import com.tjclp.xl.style.CellStyle
+import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.sheets.styleSyntax.*
-import com.tjclp.xl.style.dsl.*
+import com.tjclp.xl.styles.dsl.*
 import java.util.zip.ZipInputStream
 
 /** Round-trip tests for XLSX write → read */

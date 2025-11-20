@@ -13,8 +13,8 @@ import java.security.{DigestInputStream, MessageDigest}
 import java.util.zip.ZipInputStream
 import scala.collection.mutable
 import scala.collection.immutable.ArraySeq
-import com.tjclp.xl.style.StyleRegistry
-import com.tjclp.xl.style.units.StyleId
+import com.tjclp.xl.styles.StyleRegistry
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Reader for XLSX files (ZIP parsing)

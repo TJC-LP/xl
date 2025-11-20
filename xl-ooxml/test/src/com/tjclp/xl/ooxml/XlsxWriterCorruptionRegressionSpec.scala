@@ -9,7 +9,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.richtext.RichText
-import com.tjclp.xl.style.{CellStyle, Color, Fill}
+import com.tjclp.xl.styles.{CellStyle, Color, Fill}
 import munit.FunSuite
 
 /**
