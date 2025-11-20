@@ -1,6 +1,11 @@
 # NumFmt ID Preservation Plan
 
-**Status**: Ready for Implementation
+> **Status**: ✅ Completed – This plan was implemented as part of P6.8 Surgical Modification.
+> CellStyle now includes `numFmtId: Option[Int]` for byte-perfect format preservation.
+> See commit 3e1362b and related P6.8 work.
+> **Archived**: 2025-11-20
+
+**Status**: ~~Ready for Implementation~~ → ✅ Implemented in P6.8
 **Priority**: P0 (Blocks surgical modification correctness)
 **Complexity**: Medium
 **Estimated Effort**: 4-6 hours

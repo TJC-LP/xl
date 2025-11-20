@@ -1,5 +1,9 @@
 # Type Class Consolidation for Easy Mode `put()` API
 
+> **Status**: ✅ Completed – This plan has been fully implemented in PR #20.
+> This document is retained as a historical design/implementation record.
+> **Archived**: 2025-11-20
+
 **Status**: ✅ Implemented (PR #20)
 **Author**: Claude Code Agent
 **Date**: 2025-11-19 (Design) / 2025-11-20 (Implementation)

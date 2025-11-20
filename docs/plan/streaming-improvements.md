@@ -2,11 +2,16 @@
 
 ## Status: Partially Complete (P6.6-P6.7 ✅ Done, P7.5 ⬜ Future)
 
-**Last Updated**: 2025-11-16
+**Last Updated**: 2025-11-20
 
 ## Overview
 
-The XL library currently has two I/O modes with different tradeoffs. This document outlines completed critical fixes and future improvements for full SST/style support in streaming writes.
+The XL library currently has two I/O modes with different tradeoffs. This document outlines:
+- **✅ Completed critical fixes** (P6.6-P6.7) - constant-memory read, compression defaults
+- **⬜ Future improvements** (P7.5) - full SST/style support in streaming writes (not yet started)
+
+> **Note**: The completed sections (P6.6-P6.7) serve as historical implementation records.
+> Active planning focuses on P7.5 strategic improvements below.
 
 ## Current State (Updated 2025-11-16)
 

@@ -1,5 +1,10 @@
 # Lazy Evaluation Architecture (Spark-Style)
 
+> **Status**: ⏸ Deferred Indefinitely – Full Catalyst-style optimizer deemed overkill for Excel use cases.
+> Builder pattern (Phase 1) may be reconsidered in future, but full optimizer (Phase 2-6) is not planned.
+> See streaming-improvements.md for the prioritized alternative approach.
+> **Archived**: 2025-11-20
+
 ## Status: SCOPED DOWN - Builder Pattern Only (Not Full Optimizer)
 
 **Update 2025-11-11**: After technical review, **full Catalyst-style optimizer is overkill** for Excel use cases.

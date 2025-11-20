@@ -1,7 +1,7 @@
 # Roadmap — From Spec to MVP and Beyond
 
 **Current Status: ~87% Complete (680/680 tests passing)**
-**Last Updated**: 2025-11-19
+**Last Updated**: 2025-11-20
 
 ## Completed Phases ✅
 
@@ -211,6 +211,24 @@
 - ✅ 🏗️ Foundation: Enables incremental OOXML feature additions (charts, drawings future work)
 
 **See**: [archived: surgical-modification.md](../archive/plan/p68-surgical-modification/) for design history
+
+### ✅ Post-P8 Enhancements (Complete)
+
+**Type Class Consolidation for Easy Mode put() API** (Complete - PR #20, 2025-11-20):
+- ✅ Reduced 36 overloads to ~4-6 generic methods using CellWriter type class
+- ✅ 120 LOC → 50 LOC (58% reduction)
+- ✅ Auto-format inference (LocalDate → Date, BigDecimal → Decimal)
+- ✅ Extensibility (users can add custom types)
+- ✅ Zero overhead (inline given instances)
+
+**See**: [archived: type-class-put.md](../archive/plan/completed-post-p8/type-class-put.md) for detailed design
+
+**NumFmt ID Preservation** (Complete - P6.8, commit 3e1362b):
+- ✅ CellStyle.numFmtId field for byte-perfect format preservation
+- ✅ Fixes surgical modification style corruption
+- ✅ Preserves Excel built-in format IDs (including accounting formats 37-44)
+
+**See**: [archived: numfmt-id-preservation.md, numfmt-preservation.md](../archive/plan/p68-surgical-modification/) for problem analysis
 
 ---
 
