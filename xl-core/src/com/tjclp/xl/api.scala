@@ -39,6 +39,9 @@ object api:
   // Workbook types
   export workbooks.{Workbook, WorkbookMetadata}
 
+  // Context types (for surgical modification)
+  export context.{SourceContext, SourceFingerprint}
+
   // Optics types
   export optics.{Lens, Optional, Optics}
 

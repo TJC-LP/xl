@@ -2,7 +2,8 @@ package com.tjclp.xl.workbooks
 
 import java.nio.file.Files
 
-import com.tjclp.xl.{SourceContext, SourceFingerprint, Workbook}
+import com.tjclp.xl.Workbook
+import com.tjclp.xl.context.{SourceContext, SourceFingerprint}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
 import com.tjclp.xl.macros.ref

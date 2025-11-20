@@ -1,11 +1,11 @@
-package com.tjclp.xl
+package com.tjclp.xl.context
+
+import com.tjclp.xl.ooxml.PartManifest
+import com.tjclp.xl.workbooks.Workbook
 
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
-
 import scala.collection.immutable.ArraySeq
-
-import com.tjclp.xl.ooxml.PartManifest
 
 /**
  * Captures metadata about the physical XLSX that produced a [[Workbook]]. The context enables
