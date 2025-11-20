@@ -28,12 +28,21 @@ xl-evaluator/    → Optional formula evaluator [future]
 xl-testkit/      → Test laws, generators, helpers [future]
 ```
 
-**Import Pattern (single-import ergonomics)**:
+**Import Patterns**:
+
 ```scala
+// Core API: Pure functional (no IO)
 import com.tjclp.xl.*  // Domain model, macros, DSL, rich text
+
+// Easy Mode API: Core + IO + type class instances
+import com.tjclp.xl.easy.{*, given}  // Note: {*, given} syntax required for CellWriter instances
+import com.tjclp.xl.unsafe.*         // .unsafe boundary (explicit opt-in)
 ```
 
-Macros (`ref`, `fx`, money/percent/date/accounting) are bundled in `xl-core` and surfaced through this unified import.
+**Why `{*, given}` syntax?**
+Scala 3's `export` doesn't automatically include given instances with `import *`. The `{*, given}` pattern imports both regular members and given instances for the type class-based `put()` methods.
+
+Macros (`ref`, `fx`, money/percent/date/accounting) are bundled in `xl-core` and surfaced through both import patterns.
 
 ### Key Type Relationships
 

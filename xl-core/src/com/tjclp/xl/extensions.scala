@@ -39,17 +39,7 @@ import java.time.{LocalDate, LocalDateTime}
 object extensions:
 
   // Re-export CellWriter given instances for type class-based put() methods
-  export com.tjclp.xl.codec.CellCodec.{
-    given_CellCodec_String,
-    given_CellCodec_Int,
-    given_CellCodec_Long,
-    given_CellCodec_Double,
-    given_CellCodec_BigDecimal,
-    given_CellCodec_Boolean,
-    given_CellCodec_LocalDate,
-    given_CellCodec_LocalDateTime,
-    given_CellCodec_RichText
-  }
+  export com.tjclp.xl.codec.CellCodec.given
 
   // Helper to convert Either[String, A] to XLResult[A]
   private def toXLResult[A](
@@ -112,6 +102,11 @@ object extensions:
      *
      * Merges auto-inferred style (from type) with explicit CellStyle. Explicit style takes
      * precedence for conflicting properties.
+     *
+     * @note
+     *   NumFmt merging behavior: If explicit style has General format, auto-inferred NumFmt is
+     *   applied (e.g., Date for LocalDate). To force General format for typed values, apply styling
+     *   after put() instead: `sheet.put("A1", date).style("A1", style)`.
      *
      * @tparam A
      *   The value type (must have CellWriter instance)
