@@ -13,7 +13,7 @@ enum XLError:
   /** Invalid reference (e.g., unqualified ref used with workbooks) */
   case InvalidReference(reason: String)
 
-  /** Invalid sheets name */
+  /** Invalid sheet name */
   case InvalidSheetName(name: String, reason: String)
 
   /** Cell reference out of bounds */
@@ -22,7 +22,7 @@ enum XLError:
   /** Sheet not found */
   case SheetNotFound(name: String)
 
-  /** Duplicate sheets name */
+  /** Duplicate sheet name */
   case DuplicateSheet(name: String)
 
   /** Invalid column index */
@@ -83,10 +83,10 @@ object XLError:
       case InvalidCellRef(ref, reason) => s"Invalid cell reference '$ref': $reason"
       case InvalidRange(range, reason) => s"Invalid range '$range': $reason"
       case InvalidReference(reason) => s"Invalid reference: $reason"
-      case InvalidSheetName(name, reason) => s"Invalid sheets name '$name': $reason"
+      case InvalidSheetName(name, reason) => s"Invalid sheet name '$name': $reason"
       case OutOfBounds(ref, reason) => s"Reference out of bounds '$ref': $reason"
       case SheetNotFound(name) => s"Sheet not found: '$name'"
-      case DuplicateSheet(name) => s"Duplicate sheets name: '$name'"
+      case DuplicateSheet(name) => s"Duplicate sheet name: '$name'"
       case InvalidColumn(index, reason) => s"Invalid column index $index: $reason"
       case InvalidRow(index, reason) => s"Invalid row index $index: $reason"
       case TypeMismatch(expected, actual, ref) =>

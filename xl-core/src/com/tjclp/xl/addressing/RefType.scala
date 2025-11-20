@@ -10,7 +10,7 @@ import com.tjclp.xl.addressing.RefParser.ParsedRef
  *   - Cell ranges: `A1:B10`
  *   - Sheet-qualified cells: `Sales!A1` or `'Q1 Sales'!A1`
  *   - Sheet-qualified ranges: `Sales!A1:B10` or `'Q1 Sales'!A1:B10`
- *   - Escaped quotes in sheets names: `'It''s Q1'!A1` ('' → ')
+ *   - Escaped quotes in sheet names: `'It''s Q1'!A1` ('' → ')
  *
  * **Note on macro vs runtime parsing:**
  *   - **Compile-time (`ref` macro)**: Simple refs return **unwrapped** types (ARef/CellRange) for
@@ -59,7 +59,7 @@ enum RefType derives CanEqual:
   /**
    * Convert to A1 notation.
    *
-   * For qualified refs, includes sheets name (with quotes if needed). Escapes single quotes as ''
+   * For qualified refs, includes sheet name (with quotes if needed). Escapes single quotes as ''
    * (Excel convention).
    */
   def toA1: String = this match
@@ -72,7 +72,7 @@ enum RefType derives CanEqual:
       val sheetStr = formatSheetName(sheet.value)
       s"$sheetStr!${range.toA1}"
 
-  /** Format sheets name with proper quoting and escaping */
+  /** Format sheet name with proper quoting and escaping */
   private def formatSheetName(name: String): String =
     if needsQuoting(name) then
       // Escape ' → '' and wrap in quotes
@@ -80,7 +80,7 @@ enum RefType derives CanEqual:
       s"'$escaped'"
     else name
 
-  /** Check if sheets name needs quoting (has spaces or special chars) */
+  /** Check if sheet name needs quoting (has spaces or special chars) */
   private def needsQuoting(name: String): Boolean =
     name.exists(c => c == ' ' || c == '\'' || !c.isLetterOrDigit && c != '_')
 
@@ -113,7 +113,7 @@ object RefType:
    *   - `A1` → Cell
    *   - `A1:B10` → Range
    *   - `Sales!A1` → QualifiedCell
-   *   - `'Q1 Sales'!A1` → QualifiedCell (quoted sheets)
+   *   - `'Q1 Sales'!A1` → QualifiedCell (quoted sheet)
    *   - `Sales!A1:B10` → QualifiedRange
    *
    * @param s

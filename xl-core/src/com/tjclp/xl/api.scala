@@ -88,7 +88,7 @@ object api:
     def asRange: XLResult[CellRange] =
       CellRange.parse(s).left.map(err => XLError.InvalidRange(s, err))
 
-    /** Parse string as sheets name */
+    /** Parse string as sheet name */
     def asSheetName: XLResult[SheetName] =
       SheetName(s).left.map(err => XLError.InvalidSheetName(s, err))
 

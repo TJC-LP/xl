@@ -42,26 +42,26 @@ final case class SourceContext(
   fingerprint: SourceFingerprint
 ) derives CanEqual:
 
-  /** True when no workbooks modifications have been recorded. */
+  /** True when no workbook modifications have been recorded. */
   def isClean: Boolean = modificationTracker.isClean
 
-  /** Mark a sheets as modified. */
+  /** Mark a sheet as modified. */
   def markSheetModified(sheetIndex: Int): SourceContext =
     copy(modificationTracker = modificationTracker.markSheet(sheetIndex))
 
-  /** Mark a sheets as deleted. */
+  /** Mark a sheet as deleted. */
   def markSheetDeleted(sheetIndex: Int): SourceContext =
     copy(modificationTracker = modificationTracker.delete(sheetIndex))
 
-  /** Mark sheets order as changed. */
+  /** Mark sheet order as changed. */
   def markReordered: SourceContext =
     copy(modificationTracker = modificationTracker.markReordered)
 
-  /** Mark workbooks-level metadata as changed. */
+  /** Mark workbook-level metadata as changed. */
   def markMetadataModified: SourceContext =
     copy(modificationTracker = modificationTracker.markMetadata)
 
 object SourceContext:
-  /** Construct a context for a workbooks that originated from a file. */
+  /** Construct a context for a workbook that originated from a file. */
   def fromFile(path: Path, manifest: PartManifest, fingerprint: SourceFingerprint): SourceContext =
     SourceContext(path, manifest, ModificationTracker.clean, fingerprint)

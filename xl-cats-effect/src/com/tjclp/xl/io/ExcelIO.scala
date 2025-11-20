@@ -24,7 +24,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     extends Excel[F]
     with ExcelR[F]:
 
-  /** Read workbooks from XLSX file */
+  /** Read workbook from XLSX file */
   def read(path: Path): F[Workbook] =
     Sync[F].delay(XlsxReader.readWithWarnings(path)).flatMap {
       case Right(result) =>
@@ -32,11 +32,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       case Left(err) => Async[F].raiseError(new Exception(s"Failed to read XLSX: ${err.message}"))
     }
 
-  /** Write workbooks to XLSX file */
+  /** Write workbook to XLSX file */
   def write(wb: Workbook, path: Path): F[Unit] =
     writeWith(wb, path, com.tjclp.xl.ooxml.WriterConfig.default)
 
-  /** Write workbooks to XLSX file with custom configuration */
+  /** Write workbook to XLSX file with custom configuration */
   def writeWith(wb: Workbook, path: Path, config: com.tjclp.xl.ooxml.WriterConfig): F[Unit] =
     Sync[F].delay(XlsxWriter.writeWith(wb, path, config)).flatMap {
       case Right(_) => Async[F].unit
@@ -44,7 +44,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     }
 
   /**
-   * Stream rows from first sheets with constant memory.
+   * Stream rows from first sheet with constant memory.
    *
    * Uses fs2-data-xml pull parsing - never materializes full worksheet in memory.
    */
@@ -84,9 +84,9 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       }
 
   /**
-   * Stream rows from sheets by name with constant memory.
+   * Stream rows from sheet by name with constant memory.
    *
-   * Uses fs2-data-xml pull parsing for the target sheets.
+   * Uses fs2-data-xml pull parsing for the target sheet.
    */
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData] =
     Stream
@@ -107,7 +107,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           }
       }
 
-  /** Stream rows from sheets by index (1-based) with constant memory. */
+  /** Stream rows from sheet by index (1-based) with constant memory. */
   def readStreamByIndex(path: Path, sheetIndex: Int): Stream[F, RowData] =
     Stream
       .bracket(
@@ -117,7 +117,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         readStreamByIndex(zipFile, sheetIndex)
       }
 
-  // Helper: Stream rows from specific sheets index using open ZipFile
+  // Helper: Stream rows from specific sheet index using open ZipFile
   private def readStreamByIndex(zipFile: ZipFile, sheetIndex: Int): Stream[F, RowData] =
     Stream
       .eval {
@@ -145,7 +145,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
             StreamingXmlReader.parseWorksheetStream(wsBytes, sst)
           case None =>
             Stream.raiseError[F](
-              new Exception(s"Worksheet not found: sheets$sheetIndex.xml")
+              new Exception(s"Worksheet not found: sheet$sheetIndex.xml")
             )
       }
 
@@ -163,11 +163,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           val sheet = rowDataToSheet(sheetName, rowVec)
           sheet match
             case Right(s) =>
-              // Create workbooks with single sheets
+              // Create workbook with single sheet
               val wb = Workbook(Vector(s))
               write(wb, path)
             case Left(err) =>
-              Async[F].raiseError(new Exception(s"Failed to create sheets: ${err.message}"))
+              Async[F].raiseError(new Exception(s"Failed to create sheet: ${err.message}"))
         }
       }
 
@@ -221,7 +221,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   /**
    * Write multiple sheets sequentially with constant memory.
    *
-   * Each sheets is streamed in order without materializing the full dataset.
+   * Each sheet is streamed in order without materializing the full dataset.
    */
   def writeStreamsSeqTrue(
     path: Path,
@@ -230,10 +230,10 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   ): F[Unit] =
     // Validate inputs
     if sheets.isEmpty then
-      Async[F].raiseError(new IllegalArgumentException("Must provide at least one sheets"))
+      Async[F].raiseError(new IllegalArgumentException("Must provide at least one sheet"))
     else if sheets.map(_._1).distinct.size != sheets.size then
       Async[F].raiseError(
-        new IllegalArgumentException(s"Duplicate sheets names: ${sheets.map(_._1).mkString(", ")}")
+        new IllegalArgumentException(s"Duplicate sheet names: ${sheets.map(_._1).mkString(", ")}")
       )
     else
       Stream
@@ -241,12 +241,12 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
         )(zip => Sync[F].delay(zip.close()))
         .flatMap { zip =>
-          // Auto-assign sheets indices 1, 2, 3...
+          // Auto-assign sheet indices 1, 2, 3...
           val sheetsWithIndices = sheets.zipWithIndex.map { case ((name, rows), idx) =>
             (name, idx + 1, rows)
           }
 
-          // 1. Write static parts with all sheets metadata
+          // 1. Write static parts with all sheet metadata
           Stream.eval(
             writeStaticPartsMulti(
               zip,
@@ -256,7 +256,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
               config
             )
           ) ++
-            // 2. Stream each sheets sequentially
+            // 2. Stream each sheet sequentially
             Stream
               .emits(sheetsWithIndices)
               .flatMap { case (name, sheetIndex, rows) =>
@@ -285,15 +285,15 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
 
   // ========== ExcelR Implementation (Explicit Error Channel) ==========
 
-  /** Read workbooks with explicit errors result */
+  /** Read workbook with explicit errors result */
   def readR(path: Path): F[XLResult[Workbook]] =
     Sync[F].delay(XlsxReader.read(path))
 
-  /** Write workbooks with explicit errors result */
+  /** Write workbook with explicit errors result */
   def writeR(wb: Workbook, path: Path): F[XLResult[Unit]] =
     writeWithR(wb, path, com.tjclp.xl.ooxml.WriterConfig.default)
 
-  /** Write workbooks with explicit errors result and custom configuration */
+  /** Write workbook with explicit errors result and custom configuration */
   def writeWithR(
     wb: Workbook,
     path: Path,
@@ -307,13 +307,13 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       .map(Right(_))
       .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
 
-  /** Stream rows from specific sheets by name with explicit errors channel */
+  /** Stream rows from specific sheet by name with explicit errors channel */
   def readSheetStreamR(path: Path, sheetName: String): Stream[F, Either[XLError, RowData]] =
     readSheetStream(path, sheetName)
       .map(Right(_))
       .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
 
-  /** Stream rows from specific sheets by index with explicit errors channel */
+  /** Stream rows from specific sheet by index with explicit errors channel */
   def readStreamByIndexR(path: Path, sheetIndex: Int): Stream[F, Either[XLError, RowData]] =
     readStreamByIndex(path, sheetIndex)
       .map(Right(_))
@@ -399,7 +399,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     val workbookRels =
       Relationships.workbookWithIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
 
-    // Create minimal workbooks with one sheets (use provided sheetIndex)
+    // Create minimal workbook with one sheet (use provided sheetIndex)
     val ooxmlWb = OoxmlWorkbook(
       sheets = Vector(SheetRef(SheetName.unsafe(sheetName), sheetIndex, "rId1"))
     )
@@ -436,7 +436,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       hasSharedStrings = false
     )
 
-    // Create workbooks with all sheets
+    // Create workbook with all sheets
     val sheetRefs = sheets.map { case (name, idx) =>
       SheetRef(SheetName.unsafe(name), idx, s"rId$idx")
     }
@@ -488,7 +488,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       zip.closeEntry()
     }
 
-  // Helper: Find sheets index by name from workbook.xml
+  // Helper: Find sheet index by name from workbook.xml
   private def findSheetIndexByName(zipFile: ZipFile, sheetName: String): F[Option[Int]] =
     Sync[F].delay {
       val wbEntry = Option(zipFile.getEntry("xl/workbook.xml"))

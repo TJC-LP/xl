@@ -26,7 +26,7 @@ case class RowData(
 trait Excel[F[_]]:
 
   /**
-   * Read entire workbooks into memory.
+   * Read entire workbook into memory.
    *
    * Good for: Small files (<10k rows), random access, complex transformations Memory: O(n) where n =
    * total cells
@@ -34,24 +34,24 @@ trait Excel[F[_]]:
   def read(path: Path): F[Workbook]
 
   /**
-   * Write workbooks to XLSX file.
+   * Write workbook to XLSX file.
    *
-   * Good for: Small workbooks, complete data available Memory: O(n) where n = total cells
+   * Good for: Small workbook, complete data available Memory: O(n) where n = total cells
    */
   def write(wb: Workbook, path: Path): F[Unit]
 
   /**
-   * Write workbooks to XLSX file with custom configuration.
+   * Write workbook to XLSX file with custom configuration.
    *
    * Allows control over compression (DEFLATED/STORED), SST policy, and XML formatting.
    *
    * Example:
    * {{{
    * // Debug mode (uncompressed, readable)
-   * excel.writeWith(workbooks, path, WriterConfig.debug)
+   * excel.writeWith(workbook, path, WriterConfig.debug)
    *
    * // Custom compression
-   * excel.writeWith(workbooks, path, WriterConfig(
+   * excel.writeWith(workbook, path, WriterConfig(
    *   compression = Compression.Stored,
    *   sstPolicy = SstPolicy.Always
    * ))
@@ -60,7 +60,7 @@ trait Excel[F[_]]:
   def writeWith(wb: Workbook, path: Path, config: com.tjclp.xl.ooxml.WriterConfig): F[Unit]
 
   /**
-   * Stream rows from first sheets.
+   * Stream rows from first sheet.
    *
    * Good for: Large files (>10k rows), sequential processing, aggregations Memory: O(1) - constant
    * memory regardless of file size
@@ -77,20 +77,20 @@ trait Excel[F[_]]:
   def readStream(path: Path): Stream[F, RowData]
 
   /**
-   * Stream rows from specific sheets by name.
+   * Stream rows from specific sheet by name.
    *
-   * Good for: Processing specific sheets in multi-sheets workbooks Memory: O(1) constant
+   * Good for: Processing specific sheet in multi-sheet workbook Memory: O(1) constant
    */
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData]
 
   /**
-   * Stream rows from specific sheets by index (1-based).
+   * Stream rows from specific sheet by index (1-based).
    *
-   * Good for: Processing sheets by position rather than name Memory: O(1) constant
+   * Good for: Processing sheet by position rather than name Memory: O(1) constant
    *
    * Example:
    * {{{
-   * // Read second sheets
+   * // Read second sheet
    * excel.readStreamByIndex(path, 2).compile.toList
    * }}}
    */
@@ -124,9 +124,9 @@ trait Excel[F[_]]:
    * @param path
    *   Output file path
    * @param sheetName
-   *   Display name for the sheets (shown in Excel tab)
+   *   Display name for the sheet (shown in Excel tab)
    * @param sheetIndex
-   *   1-based sheets index (determines internal filename: sheet1.xml, sheet2.xml, etc.)
+   *   1-based sheet index (determines internal filename: sheet1.xml, sheet2.xml, etc.)
    *
    * Example:
    * {{{
@@ -153,7 +153,7 @@ trait Excel[F[_]]:
    * @param path
    *   Output file path
    * @param sheets
-   *   Sequence of (sheets name, rows) tuples. Sheets are auto-indexed 1, 2, 3...
+   *   Sequence of (sheet name, rows) tuples. Sheets are auto-indexed 1, 2, 3...
    * @param config
    *   Writer configuration (compression, prettyPrint). Defaults to production settings.
    *
@@ -193,13 +193,13 @@ trait Excel[F[_]]:
  */
 trait ExcelR[F[_]]:
 
-  /** Read workbooks with explicit errors result */
+  /** Read workbook with explicit errors result */
   def readR(path: Path): F[XLResult[Workbook]]
 
-  /** Write workbooks with explicit errors result */
+  /** Write workbook with explicit errors result */
   def writeR(wb: Workbook, path: Path): F[XLResult[Unit]]
 
-  /** Write workbooks with explicit errors result and custom configuration */
+  /** Write workbook with explicit errors result and custom configuration */
   def writeWithR(
     wb: Workbook,
     path: Path,
@@ -214,10 +214,10 @@ trait ExcelR[F[_]]:
    */
   def readStreamR(path: Path): Stream[F, Either[XLError, RowData]]
 
-  /** Stream rows from specific sheets by name with explicit errors channel */
+  /** Stream rows from specific sheet by name with explicit errors channel */
   def readSheetStreamR(path: Path, sheetName: String): Stream[F, Either[XLError, RowData]]
 
-  /** Stream rows from specific sheets by index with explicit errors channel */
+  /** Stream rows from specific sheet by index with explicit errors channel */
   def readStreamByIndexR(path: Path, sheetIndex: Int): Stream[F, Either[XLError, RowData]]
 
   /** Write stream with explicit errors channel */

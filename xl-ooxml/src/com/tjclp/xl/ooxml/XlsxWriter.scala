@@ -98,15 +98,15 @@ case class OutputStreamTarget(stream: OutputStream) extends OutputTarget
  */
 object XlsxWriter:
 
-  /** Write workbooks to XLSX file with default configuration */
+  /** Write workbook to XLSX file with default configuration */
   def write(workbook: Workbook, outputPath: Path): XLResult[Unit] =
     writeWith(workbook, outputPath, WriterConfig())
 
   /**
-   * Write workbooks to XLSX file with custom configuration.
+   * Write workbook to XLSX file with custom configuration.
    *
-   * **Surgical Modification**: Automatically uses hybrid strategy when workbooks has SourceContext:
-   *   - Clean workbooks → verbatim copy (11x faster)
+   * **Surgical Modification**: Automatically uses hybrid strategy when workbook has SourceContext:
+   *   - Clean workbook → verbatim copy (11x faster)
    *   - Partially modified → regenerate changed parts, preserve rest (2-5x faster)
    *   - No SourceContext → full regeneration (current behavior)
    */
@@ -136,7 +136,7 @@ object XlsxWriter:
     try
       workbook.sourceContext match
         case Some(ctx) if ctx.isClean =>
-          // Clean workbooks + file target → verbatim copy (ultra-fast)
+          // Clean workbook + file target → verbatim copy (ultra-fast)
           target match
             case OutputPath(path) =>
               copyVerbatim(ctx, path)
@@ -153,9 +153,9 @@ object XlsxWriter:
     catch case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
 
   /**
-   * Copy source file verbatim to destination (for clean workbooks).
+   * Copy source file verbatim to destination (for clean workbook).
    *
-   * Fast path optimization: When a workbooks has no modifications, just copy the source file
+   * Fast path optimization: When a workbook has no modifications, just copy the source file
    * byte-for-byte instead of regenerating all XML. This is 10-11x faster than full regeneration.
    *
    * Handles edge case where source == dest (no-op).
@@ -219,7 +219,7 @@ object XlsxWriter:
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
     val styles = OoxmlStyles(styleIndex)
 
-    // Convert domain workbooks to OOXML
+    // Convert domain workbook to OOXML
     val ooxmlWb = OoxmlWorkbook.fromDomain(workbook)
 
     // Convert sheets to OOXML worksheets with styles remapping
@@ -447,7 +447,7 @@ object XlsxWriter:
 
     // Regenerate relationships for modified/deleted sheets
     (tracker.modifiedSheets ++ tracker.deletedSheets).foreach { idx =>
-      regenerate += s"xl/worksheets/_rels/sheets${idx + 1}.xml.rels"
+      regenerate += s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
     }
 
     regenerate.toSet
@@ -524,7 +524,7 @@ object XlsxWriter:
   /**
    * Re-parse structural files from source ZIP for preservation.
    *
-   * Returns (ContentTypes, rootRels, workbookRels, workbooks) parsed from the original file. If any
+   * Returns (ContentTypes, rootRels, workbookRels, workbook) parsed from the original file. If any
    * file is missing or fails to parse, returns None for that component.
    */
   private def parsePreservedStructure(
@@ -605,7 +605,7 @@ object XlsxWriter:
    * Strategy:
    *   - With source (surgical mode): Regenerate modified sheets, copy unmodified, preserve unknown
    *     parts
-   *   - Without source (new workbooks): Regenerate everything (graceful degradation)
+   *   - Without source (new workbook): Regenerate everything (graceful degradation)
    *
    * This unified path handles both surgical modification and normal writes.
    */
@@ -729,13 +729,13 @@ object XlsxWriter:
         case Some(ctx) => parsePreservedStructure(ctx.sourcePath)
         case None => (None, None, None, None)
 
-    // Use preserved workbooks structure if available, otherwise create minimal
+    // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
         // Update sheets in preserved structure (names/order may have changed)
         preserved.updateSheets(workbook.sheets)
       case None =>
-        // Fallback to minimal for programmatically created workbooks
+        // Fallback to minimal for programmatically created workbook
         OoxmlWorkbook.fromDomain(workbook)
 
     val contentTypes = preservedContentTypes.getOrElse(
@@ -813,7 +813,7 @@ object XlsxWriter:
 
     finally zip.close()
 
-  /** Write workbooks to bytes (for testing) */
+  /** Write workbook to bytes (for testing) */
   def writeToBytes(workbook: Workbook): XLResult[Array[Byte]] =
     try
       val baos = new ByteArrayOutputStream()

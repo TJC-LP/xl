@@ -345,7 +345,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       .attempt
       .map {
         case Left(err: IllegalArgumentException) =>
-          assert(err.getMessage.contains("at least one sheets"))
+          assert(err.getMessage.contains("at least one sheet"))
         case Left(other) =>
           fail(s"Expected IllegalArgumentException, got: $other")
         case Right(_) =>
@@ -365,7 +365,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       .attempt
       .map {
         case Left(err: IllegalArgumentException) =>
-          assert(err.getMessage.contains("Duplicate sheets names"))
+          assert(err.getMessage.contains("Duplicate sheet names"))
         case Left(other) =>
           fail(s"Expected IllegalArgumentException, got: $other")
         case Right(_) =>

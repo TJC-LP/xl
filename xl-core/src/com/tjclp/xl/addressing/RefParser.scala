@@ -40,15 +40,15 @@ object RefParser:
   private def parseSheetName(part: String): String =
     if part.startsWith("'") then
       if !part.endsWith("'") then
-        fail(s"Unbalanced quotes in sheets name: $part (missing closing quote)")
+        fail(s"Unbalanced quotes in sheet name: $part (missing closing quote)")
       val quoted = part.substring(1, part.length - 1)
-      if quoted.isEmpty then fail("Empty sheets name in quotes")
+      if quoted.isEmpty then fail("Empty sheet name in quotes")
       val unescaped = quoted.replace("''", "'")
       validateSheetName(unescaped)
       unescaped
     else
       if part.contains("'") then
-        fail(s"Misplaced quote in sheets name: $part (quotes must wrap entire name)")
+        fail(s"Misplaced quote in sheet name: $part (quotes must wrap entire name)")
       validateSheetName(part)
       part
 
@@ -65,11 +65,11 @@ object RefParser:
       -1
 
   private def validateSheetName(name: String): Unit =
-    if name.isEmpty then fail("sheets name cannot be empty")
-    if name.length > 31 then fail("sheets name max length is 31 chars")
+    if name.isEmpty then fail("sheet name cannot be empty")
+    if name.length > 31 then fail("sheet name max length is 31 chars")
     val invalid = Set(':', '\\', '/', '?', '*', '[', ']')
     name.foreach { c =>
-      if invalid.contains(c) then fail(s"sheets name cannot contain: $c")
+      if invalid.contains(c) then fail(s"sheet name cannot contain: $c")
     }
 
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))

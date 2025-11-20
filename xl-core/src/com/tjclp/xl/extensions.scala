@@ -367,7 +367,7 @@ object extensions:
     @annotation.targetName("removeSheetChainable")
     def remove(name: String): XLResult[Workbook] =
       result.flatMap(wb =>
-        toXLResult(SheetName(name), name, "Invalid sheets name").flatMap(wb.remove)
+        toXLResult(SheetName(name), name, "Invalid sheet name").flatMap(wb.remove)
       )
 
   // ========== Workbook Extensions: String-Based Lookups ==========
