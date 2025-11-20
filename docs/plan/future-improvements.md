@@ -779,7 +779,7 @@ These are **documentation alignment** tasks first; implementation is already in 
 
 - **Streaming read behavior**
   - `ExcelIO.readStream` / `readSheetStream` / `readStreamByIndex` now use `fs2.io.readInputStream` and fs2‑data‑xml.
-  - Clean up any lingering references to the old “broken streaming read” implementation; treat P6.6 as done and focus on feature coverage trade‑offs instead.
+  - Clean up any lingering references to the old “broken streaming read” implementation; treat P6.6 as done and focus on feature coverage trade‑offs instead. ✅ (done)
 
 ## Small Code-Facing Wins (Potential Future Changes)
 
@@ -803,4 +803,3 @@ These are implementation candidates that are safe and localized, but are *not* i
 - When you land one of these improvements:
   - Update this document and `docs/STATUS.md` if the item materially changes behavior.
   - Prefer small, isolated PRs that tackle one bullet at a time.
-

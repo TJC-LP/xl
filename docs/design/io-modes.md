@@ -146,7 +146,7 @@ Features: Limited (reads values only, minimal style info)
 **Rationale**:
 1. **Most use cases are small** (<10k rows, full features needed)
 2. **Streaming has limitations** (no SST/styles currently)
-3. **Streaming read is broken** (P6.6 - uses readAllBytes)
+3. **Streaming read is fixed but feature-limited** (constant memory, minimal metadata)
 4. **In-memory is simpler** (easier API, full features)
 
 **Consequences**:
