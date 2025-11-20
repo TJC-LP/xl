@@ -2,7 +2,7 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.optics.syntax.* // Import optics extension methods
 import com.tjclp.xl.dsl.syntax.*
 import munit.FunSuite

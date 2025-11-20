@@ -3,7 +3,7 @@ package com.tjclp.xl.ooxml
 import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.addressing.* // For ARef, Column, Row types and extension methods
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheet.Sheet
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
@@ -116,7 +116,7 @@ case class OoxmlCell(
       case CellValue.Formula(expr) =>
         Seq(elem("f")(Text(expr))) // Simplified - full formula support later
       case CellValue.Error(err) =>
-        import com.tjclp.xl.cell.CellError.toExcel
+        import com.tjclp.xl.cells.CellError.toExcel
         Seq(elem("v")(Text(err.toExcel)))
       case CellValue.DateTime(dt) =>
         // DateTime is serialized as number with Excel serial format
@@ -366,24 +366,24 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
 
         // Determine cell type and value based on CellValue type and SST availability
         val (cellType, value) = cell.value match
-          case com.tjclp.xl.cell.CellValue.Text(s) =>
+          case com.tjclp.xl.cells.CellValue.Text(s) =>
             sst.flatMap(_.indexOf(s)) match
-              case Some(idx) => ("s", com.tjclp.xl.cell.CellValue.Text(idx.toString))
+              case Some(idx) => ("s", com.tjclp.xl.cells.CellValue.Text(idx.toString))
               case None => ("inlineStr", cell.value)
-          case com.tjclp.xl.cell.CellValue.RichText(rt) =>
+          case com.tjclp.xl.cells.CellValue.RichText(rt) =>
             // Check if RichText exists in SST (it can be shared!)
             sst.flatMap(_.indexOf(rt)) match
-              case Some(idx) => ("s", com.tjclp.xl.cell.CellValue.Text(idx.toString))
+              case Some(idx) => ("s", com.tjclp.xl.cells.CellValue.Text(idx.toString))
               case None => ("inlineStr", cell.value)
-          case com.tjclp.xl.cell.CellValue.Number(_) => ("n", cell.value)
-          case com.tjclp.xl.cell.CellValue.Bool(_) => ("b", cell.value)
-          case com.tjclp.xl.cell.CellValue.DateTime(dt) =>
+          case com.tjclp.xl.cells.CellValue.Number(_) => ("n", cell.value)
+          case com.tjclp.xl.cells.CellValue.Bool(_) => ("b", cell.value)
+          case com.tjclp.xl.cells.CellValue.DateTime(dt) =>
             // Convert to Excel serial number
-            val serial = com.tjclp.xl.cell.CellValue.dateTimeToExcelSerial(dt)
-            ("n", com.tjclp.xl.cell.CellValue.Number(BigDecimal(serial)))
-          case com.tjclp.xl.cell.CellValue.Formula(_) => ("str", cell.value) // Formula result
-          case com.tjclp.xl.cell.CellValue.Error(_) => ("e", cell.value)
-          case com.tjclp.xl.cell.CellValue.Empty => ("", cell.value)
+            val serial = com.tjclp.xl.cells.CellValue.dateTimeToExcelSerial(dt)
+            ("n", com.tjclp.xl.cells.CellValue.Number(BigDecimal(serial)))
+          case com.tjclp.xl.cells.CellValue.Formula(_) => ("str", cell.value) // Formula result
+          case com.tjclp.xl.cells.CellValue.Error(_) => ("e", cell.value)
+          case com.tjclp.xl.cells.CellValue.Empty => ("", cell.value)
 
         OoxmlCell(cell.ref, value, globalStyleIdx, cellType)
       }.toSeq
@@ -693,10 +693,10 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
                   case Some(cellValue) => Right(cellValue)
                   case None =>
                     // SST index out of bounds → CellError.Ref (not parse failure)
-                    Right(CellValue.Error(com.tjclp.xl.cell.CellError.Ref))
+                    Right(CellValue.Error(com.tjclp.xl.cells.CellError.Ref))
               case None =>
                 // Invalid SST index format → CellError.Value
-                Right(CellValue.Error(com.tjclp.xl.cell.CellError.Value))
+                Right(CellValue.Error(com.tjclp.xl.cells.CellError.Value))
           case None => Left("SST cell missing <v>")
 
       case "n" | "" =>
@@ -718,7 +718,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         // Error
         (elem \ "v").headOption.map(_.text) match
           case Some(errStr) =>
-            import com.tjclp.xl.cell.CellError
+            import com.tjclp.xl.cells.CellError
             CellError.parse(errStr).map(CellValue.Error.apply)
           case None => Left("Error cell missing <v>")
 

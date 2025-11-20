@@ -2,7 +2,7 @@ package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align, NumFmt}

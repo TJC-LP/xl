@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheet
 
 import com.tjclp.xl.addressing.{Column, Row}
-import com.tjclp.xl.cell.Cell
+import com.tjclp.xl.cells.Cell
 
 // ========== Deterministic Iteration Helpers ==========
 

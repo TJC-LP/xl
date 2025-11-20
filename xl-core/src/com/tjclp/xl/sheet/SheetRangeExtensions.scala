@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheet
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 
 // ========== Range Combinators ==========

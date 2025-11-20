@@ -1,4 +1,4 @@
-package com.tjclp.xl.cell
+package com.tjclp.xl.cells
 
 import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.style.units.StyleId

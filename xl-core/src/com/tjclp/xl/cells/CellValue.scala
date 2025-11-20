@@ -1,4 +1,4 @@
-package com.tjclp.xl.cell
+package com.tjclp.xl.cells
 
 import java.time.LocalDateTime
 import com.tjclp.xl.richtext.{RichText => Rt}

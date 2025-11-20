@@ -3,7 +3,7 @@ package com.tjclp.xl.addressing
 import com.tjclp.xl.Generators.{genARef, genCellRange, genSheetName}
 import com.tjclp.xl.workbook.Workbook
 import com.tjclp.xl.sheet.Sheet
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import org.scalacheck.{Arbitrary, Gen}

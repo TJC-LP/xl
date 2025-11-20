@@ -1,7 +1,7 @@
 package com.tjclp.xl.optics
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheet.Sheet
 import com.tjclp.xl.style.units.StyleId
 

@@ -1,7 +1,7 @@
 package com.tjclp.xl.dsl
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.style.CellStyle
 import com.tjclp.xl.style.units.StyleId

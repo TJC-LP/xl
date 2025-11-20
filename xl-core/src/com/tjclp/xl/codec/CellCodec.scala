@@ -1,6 +1,6 @@
 package com.tjclp.xl.codec
 
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.style.CellStyle
 import com.tjclp.xl.style.numfmt.NumFmt

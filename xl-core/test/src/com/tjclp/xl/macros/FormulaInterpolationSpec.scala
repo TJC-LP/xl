@@ -1,6 +1,6 @@
 package com.tjclp.xl.macros
 
-import com.tjclp.xl.cell.{CellValue, FormulaParser}
+import com.tjclp.xl.cells.{CellValue, FormulaParser}
 import com.tjclp.xl.error.XLError
 import scala.annotation.unchecked
 import munit.FunSuite

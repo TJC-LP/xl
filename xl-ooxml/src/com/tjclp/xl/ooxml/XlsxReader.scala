@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cell.{Cell, CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.{ModificationTracker, SourceContext, SourceFingerprint}

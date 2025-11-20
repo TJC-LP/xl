@@ -1,4 +1,4 @@
-package com.tjclp.xl.cell
+package com.tjclp.xl.cells
 
 object CellError:
   /** Parse error from Excel notation */

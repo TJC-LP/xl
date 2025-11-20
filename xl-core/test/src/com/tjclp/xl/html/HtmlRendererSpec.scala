@@ -2,7 +2,7 @@ package com.tjclp.xl.html
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension

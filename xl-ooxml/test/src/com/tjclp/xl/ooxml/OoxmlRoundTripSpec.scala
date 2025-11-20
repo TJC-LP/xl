@@ -8,7 +8,7 @@ import java.time.{Duration, LocalDate, LocalDateTime}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.error.XLResult
-import com.tjclp.xl.cell.{CellError, CellValue}
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.{XlsxWriter, XlsxReader}
 import com.tjclp.xl.richtext.RichText

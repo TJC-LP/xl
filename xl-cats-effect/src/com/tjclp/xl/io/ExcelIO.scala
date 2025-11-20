@@ -370,7 +370,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     rows: Vector[RowData]
   ): Either[XLError, Sheet] =
     import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
-    import com.tjclp.xl.cell.Cell
+    import com.tjclp.xl.cells.Cell
 
     for
       name <- SheetName(sheetName).left.map(err => XLError.InvalidSheetName(sheetName, err))

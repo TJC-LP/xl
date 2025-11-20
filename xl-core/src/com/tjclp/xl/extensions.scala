@@ -1,7 +1,7 @@
 package com.tjclp.xl
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheet.Sheet

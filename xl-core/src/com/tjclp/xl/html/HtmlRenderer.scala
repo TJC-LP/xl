@@ -2,7 +2,7 @@ package com.tjclp.xl.html
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.style.alignment.{HAlign, VAlign}
 import com.tjclp.xl.style.border.{BorderStyle, BorderSide}
 import com.tjclp.xl.style.color.Color

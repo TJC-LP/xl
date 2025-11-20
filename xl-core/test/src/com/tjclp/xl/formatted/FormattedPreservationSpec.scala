@@ -2,7 +2,7 @@ package com.tjclp.xl.formatted
 
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.sheet.Sheet
 import com.tjclp.xl.style.CellStyle

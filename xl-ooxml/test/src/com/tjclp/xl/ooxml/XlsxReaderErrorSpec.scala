@@ -2,7 +2,7 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.cell.{CellError, CellValue}
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.api.Workbook
 import java.io.ByteArrayOutputStream
@@ -170,7 +170,7 @@ class XlsxReaderErrorSpec extends FunSuite:
 
     val workbook = XlsxReader.readFromBytes(bytes).getOrElse(fail("Workbook should parse"))
     val sheet = workbook("Sheet1").getOrElse(fail("Expected Sheet1"))
-    assertEquals(sheet(ref"A1").value, com.tjclp.xl.cell.CellValue.Text("Hello"))
+    assertEquals(sheet(ref"A1").value, com.tjclp.xl.cells.CellValue.Text("Hello"))
   }
 
   test("XlsxReader rejects non-ZIP input instead of silently succeeding") {

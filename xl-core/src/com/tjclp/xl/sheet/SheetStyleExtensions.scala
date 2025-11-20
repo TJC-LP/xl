@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheet
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cell.Cell
+import com.tjclp.xl.cells.Cell
 import com.tjclp.xl.style.CellStyle
 
 // ========== Style Application Extensions ==========

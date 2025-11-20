@@ -5,7 +5,7 @@ import com.tjclp.xl.style.color.Color
 import com.tjclp.xl.style.font.Font
 import com.tjclp.xl.richtext.{RichText, TextRun}
 import com.tjclp.xl.richtext.RichText.{*, given}
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.macros.ref
 
 /** Tests for rich text DSL and TextRun/RichText domain model */

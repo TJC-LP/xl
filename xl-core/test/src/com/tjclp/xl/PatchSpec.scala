@@ -8,7 +8,7 @@ import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.patch.Patch.{*, given}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cell.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.sheet.syntax.*

@@ -52,5 +52,3 @@ object easy:
 
   // Export simplified Excel IO (aliased from EasyExcel)
   export com.tjclp.xl.io.EasyExcel as Excel
-
-export easy.*

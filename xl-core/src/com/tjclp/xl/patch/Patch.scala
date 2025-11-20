@@ -2,7 +2,7 @@ package com.tjclp.xl.patch
 
 import cats.Monoid
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cell.CellValue
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.sheet.{ColumnProperties, RowProperties, Sheet}
 import com.tjclp.xl.sheet.syntax.*

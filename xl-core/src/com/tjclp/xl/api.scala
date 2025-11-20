@@ -22,7 +22,7 @@ object api:
   export error.{XLError, XLResult}
 
   // Cell types
-  export cell.{Cell, CellValue, CellError}
+  export cells.{Cell, CellValue, CellError}
 
   // Addressing types
   export addressing.{Column, Row, SheetName, ARef, CellRange, RefType}

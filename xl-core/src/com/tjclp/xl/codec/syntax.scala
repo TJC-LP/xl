@@ -2,7 +2,7 @@ package com.tjclp.xl.codec
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cell.Cell
+import com.tjclp.xl.cells.Cell
 import com.tjclp.xl.codec.{CellCodec, CodecError} // Explicit import for companion object
 import com.tjclp.xl.sheet.syntax.*
 import com.tjclp.xl.style.CellStyle
