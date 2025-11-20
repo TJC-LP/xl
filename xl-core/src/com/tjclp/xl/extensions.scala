@@ -223,6 +223,21 @@ object extensions:
         .map(r => r.cells.flatMap(sheet.cells.get).toList)
         .getOrElse(List.empty)
 
+    /**
+     * Get cell(s) at reference (auto-detects cell vs range).
+     *
+     * Convenience method that handles both single cells and ranges uniformly. Returns List[Cell]
+     * for consistent handling.
+     *
+     * @param ref
+     *   Cell ("A1") or range ("A1:B10")
+     * @return
+     *   List of cells (empty if invalid ref or no cells exist)
+     */
+    def get(ref: String): List[Cell] =
+      if ref.contains(":") then range(ref) // Range → List[Cell]
+      else cell(ref).toList // Cell → List[0 or 1]
+
   // ========== Sheet Extensions: Merge Operations ==========
 
   extension (sheet: Sheet)
