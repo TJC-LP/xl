@@ -4,7 +4,7 @@ import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.conversions.given
 import com.tjclp.xl.macros.ref
-import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.style.CellStyle
 import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.style.border.{Border, BorderStyle}

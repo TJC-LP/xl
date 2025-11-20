@@ -8,7 +8,7 @@ import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.XLException
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)
-import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.style.numfmt.NumFmt
 import com.tjclp.xl.unsafe.*
 

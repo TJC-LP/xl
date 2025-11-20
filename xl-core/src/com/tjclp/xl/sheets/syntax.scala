@@ -1,4 +1,4 @@
-package com.tjclp.xl.sheet
+package com.tjclp.xl.sheets
 
 /** Aggregate sheet extension helpers for convenient imports. */
 object syntax:

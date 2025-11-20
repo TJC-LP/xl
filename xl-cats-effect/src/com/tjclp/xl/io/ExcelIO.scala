@@ -9,7 +9,7 @@ import java.util.zip.{ZipOutputStream, ZipEntry, CRC32, ZipInputStream, ZipFile}
 import java.nio.charset.StandardCharsets
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.sheet.Sheet
+import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter, SharedStrings, XmlSecurity}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent

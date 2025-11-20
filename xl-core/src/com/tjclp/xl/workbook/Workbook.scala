@@ -4,7 +4,7 @@ import com.tjclp.xl.SourceContext
 import com.tjclp.xl.addressing.{RefType, SheetName}
 import com.tjclp.xl.cells.Cell
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.sheet.Sheet
+import com.tjclp.xl.sheets.Sheet
 
 /**
  * An Excel workbook containing multiple sheets.

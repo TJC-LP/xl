@@ -31,7 +31,7 @@ object api:
   export richtext.{TextRun, RichText}
 
   // Sheet types
-  export sheet.{Sheet, ColumnProperties, RowProperties}
+  export sheets.{Sheet, ColumnProperties, RowProperties}
 
   // Patch types
   export patch.Patch

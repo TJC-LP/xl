@@ -11,7 +11,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
-import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.style.CellStyle
 import com.tjclp.xl.style.color.Color
 import com.tjclp.xl.style.fill.Fill

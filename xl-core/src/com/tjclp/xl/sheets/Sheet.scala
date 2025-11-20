@@ -1,4 +1,4 @@
-package com.tjclp.xl.sheet
+package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
@@ -188,7 +188,7 @@ case class Sheet(
       styleRegistry = newRegistry,
       cells = this.cells ++ builtCells.iterator.map(cell => cell.ref -> cell)
     )
-    import com.tjclp.xl.sheet.styleSyntax.withCellStyle
+    import com.tjclp.xl.sheets.styleSyntax.withCellStyle
     styled.foldLeft(withCells) { case (s, (ref, style)) => s.withCellStyle(ref, style) }
 
   /**

@@ -4,7 +4,7 @@ import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.addressing.* // For ARef, Column, Row types and extension methods
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.sheet.Sheet
+import com.tjclp.xl.sheets.Sheet
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
 // avoid redundant declarations and preserve mc/x14/xr bindings from the source sheet.

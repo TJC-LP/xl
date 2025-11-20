@@ -7,7 +7,7 @@ import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.macros.ref
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.codec.syntax.*
-import com.tjclp.xl.sheet.syntax.*
+import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.style.CellStyle
 import com.tjclp.xl.style.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.style.border.{Border, BorderStyle}

@@ -34,7 +34,7 @@ object syntax:
   export patch.syntax as patchSyntax
   export patchSyntax.*
 
-  export sheet.syntax as sheetSyntax
+  export sheets.syntax as sheetSyntax
   export sheetSyntax.*
 
   export style.dsl as styleDsl

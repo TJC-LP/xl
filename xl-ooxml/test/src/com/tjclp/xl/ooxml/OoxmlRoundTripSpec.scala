@@ -14,7 +14,7 @@ import com.tjclp.xl.ooxml.{XlsxWriter, XlsxReader}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.richtext.RichText.given
 import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.sheet.styleSyntax.*
+import com.tjclp.xl.sheets.styleSyntax.*
 import com.tjclp.xl.style.dsl.*
 import java.util.zip.ZipInputStream
 
