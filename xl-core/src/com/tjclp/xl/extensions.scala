@@ -48,7 +48,15 @@ object extensions:
   // ========== Sheet Extensions: Data Operations ==========
 
   extension (sheet: Sheet)
-    /** Put String value at cell reference (returns XLResult for chaining). */
+    /**
+     * Put String value at cell reference (returns XLResult for chaining).
+     *
+     * @note
+     *   This method parses the cell reference at runtime (~1-2 μs overhead per call). For
+     *   performance-critical loops with known references, prefer the compile-time validated
+     *   `ref"A1"` macro combined with direct `sheet.put(ref, value)` calls to avoid repeated
+     *   parsing.
+     */
     def put(cellRef: String, value: String): XLResult[Sheet] =
       toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
         .map(ref => sheet.put(ref, CellValue.Text(value)))

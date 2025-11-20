@@ -96,12 +96,16 @@ object EasyExcel:
       wb <- excel.read(targetPath)
       modified = f(wb)
       // Write to temp file to avoid reading from file being written (ZIP corruption)
+      // Atomic file replacement ensures transaction safety:
+      // - Original file preserved if write fails
+      // - No intermediate corrupt state visible to readers
+      // - ATOMIC_MOVE provides filesystem-level atomicity
       parent = Option(targetPath.getParent).getOrElse(Paths.get("."))
       tempFile <- Sync[IO].delay(Files.createTempFile(parent, ".xl-modify-", ".tmp"))
       writeResult <- excel.write(modified, tempFile).attempt
       _ <- writeResult match
         case Right(_) =>
-          // Success: atomically replace original
+          // Success: atomically replace original (preserves original if move fails)
           Sync[IO].delay(
             Files.move(
               tempFile,
@@ -111,7 +115,7 @@ object EasyExcel:
             )
           )
         case Left(err) =>
-          // Failure: clean up temp and propagate error
+          // Failure: clean up temp and propagate error (original unchanged)
           Sync[IO].delay(Files.deleteIfExists(tempFile)) >>
             IO.raiseError(err)
     yield ()
