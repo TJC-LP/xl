@@ -21,13 +21,24 @@ package com.tjclp.xl
  * }}}
  */
 object syntax:
-  // Core syntax extensions from various subpackages
-  export dsl.syntax.*
-  export codec.syntax.*
-  export optics.syntax.*
-  export patch.syntax.*
-  export sheet.syntax.*
-  export style.dsl.*
+  // Core syntax extensions with selective aliasing to avoid export conflicts
+  export dsl.syntax as dslSyntax
+  export dslSyntax.*
+
+  export codec.syntax as codecSyntax
+  export codecSyntax.*
+
+  export optics.syntax as opticsSyntax
+  export opticsSyntax.*
+
+  export patch.syntax as patchSyntax
+  export patchSyntax.*
+
+  export sheet.syntax as sheetSyntax
+  export sheetSyntax.*
+
+  export style.dsl as styleDsl
+  export styleDsl.*
 
   // Easy Mode: String-based extensions (Sheet.put("A1", value), Sheet.style("A1:B1", style))
   export extensions.*
