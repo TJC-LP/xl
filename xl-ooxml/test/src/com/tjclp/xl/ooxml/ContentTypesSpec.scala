@@ -14,3 +14,20 @@ class ContentTypesSpec extends FunSuite:
     // Ensure no unwanted sheet2 entry when not requested
     assertEquals(overrides.contains("/xl/worksheets/sheet2.xml"), false)
   }
+
+  test("forSheetIndices adds VML overrides when comments are present") {
+    val contentTypes =
+      ContentTypes.forSheetIndices(
+        Seq(1, 2),
+        hasStyles = false,
+        hasSharedStrings = false,
+        sheetsWithComments = Set(2)
+      )
+
+    val overrides = contentTypes.overrides
+    assertEquals(
+      overrides.get("/xl/drawings/vmlDrawing2.vml"),
+      Some(XmlUtil.ctVmlDrawing)
+    )
+    assert(!overrides.contains("/xl/drawings/vmlDrawing1.vml"))
+  }

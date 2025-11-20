@@ -14,6 +14,15 @@ case class ContentTypes(
   overrides: Map[String, String] // partName → contentType
 ) extends XmlWritable:
 
+  def withCommentOverrides(sheetsWithComments: Set[Int]): ContentTypes =
+    if sheetsWithComments.isEmpty then this
+    else
+      val overridesToAdd =
+        ContentTypes.commentOverrides(sheetsWithComments) ++ ContentTypes.vmlOverrides(
+          sheetsWithComments
+        )
+      copy(overrides = overrides ++ overridesToAdd)
+
   def toXml: Elem =
     val defaultElems = defaults.toSeq.sortBy(_._1).map { (ext, ct) =>
       elem("Default", "Extension" -> ext, "ContentType" -> ct)()
@@ -53,13 +62,12 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     }
 
     // Add comment overrides for sheets with comments
-    val commentOverrides = sheetsWithComments.toSeq.sorted.map { idx =>
-      s"/xl/comments$idx.xml" -> ctComments
-    }
+    val commentOverrides = ContentTypes.commentOverrides(sheetsWithComments)
+    val vmlOverrides = ContentTypes.vmlOverrides(sheetsWithComments)
 
     val baseOverrides = Map(
       "/xl/workbook.xml" -> ctWorkbook
-    ) ++ sheetOverrides ++ commentOverrides
+    ) ++ sheetOverrides ++ commentOverrides ++ vmlOverrides
 
     val stylesOverride = if hasStyles then Map("/xl/styles.xml" -> ctStyles) else Map.empty
     val sstOverride =
@@ -98,3 +106,13 @@ object ContentTypes extends XmlReadable[ContentTypes]:
           overrides = overrides.collect { case Right(pair) => pair }.toMap
         )
       )
+
+  private def commentOverrides(sheetsWithComments: Set[Int]): Seq[(String, String)] =
+    sheetsWithComments.toSeq.sorted.map { idx =>
+      s"/xl/comments$idx.xml" -> ctComments
+    }
+
+  private def vmlOverrides(sheetsWithComments: Set[Int]): Seq[(String, String)] =
+    sheetsWithComments.toSeq.sorted.map { idx =>
+      s"/xl/drawings/vmlDrawing$idx.vml" -> ctVmlDrawing
+    }

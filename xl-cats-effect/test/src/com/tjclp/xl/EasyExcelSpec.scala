@@ -104,7 +104,7 @@ class EasyExcelSpec extends CatsEffectSuite:
       Excel.write(original, tempFile.toString)
       val loaded = Excel.read(tempFile.toString)
 
-      val sales = loaded.get("Sales").get
+      val sales = loaded.get("Sales").getOrElse(fail("Expected Sales sheet"))
       assertEquals(sales.cell("A1").map(_.value), Some(CellValue.Text("Revenue")))
       assertEquals(sales.cell("B1").map(_.value), Some(CellValue.Number(BigDecimal(1000))))
     } finally {
@@ -123,8 +123,8 @@ class EasyExcelSpec extends CatsEffectSuite:
       Excel.write(original, tempFile.toString)
       val loaded = Excel.read(tempFile.toString)
 
-      val styled = loaded.get("Styled").get
-      val cell = styled.cell("A1").get
+      val styled = loaded.get("Styled").getOrElse(fail("Expected Styled sheet"))
+      val cell = styled.cell("A1").getOrElse(fail("Expected cell at A1"))
       // Verify style preserved (has styleId)
       assert(cell.styleId.isDefined)
     } finally {
@@ -171,7 +171,7 @@ class EasyExcelSpec extends CatsEffectSuite:
 
       // Verify
       val loaded = Excel.read(tempFile.toString)
-      val sheet1 = loaded.get("Sheet1").get
+      val sheet1 = loaded.get("Sheet1").getOrElse(fail("Expected Sheet1"))
       assertEquals(sheet1.cell("A1").map(_.value), Some(CellValue.Text("Modified")))
     } finally {
       Files.deleteIfExists(tempFile)
@@ -195,7 +195,7 @@ class EasyExcelSpec extends CatsEffectSuite:
 
       // Verify "Preserve" sheet unchanged
       val loaded = Excel.read(tempFile.toString)
-      val preserve = loaded.get("Preserve").get
+      val preserve = loaded.get("Preserve").getOrElse(fail("Expected Preserve sheet"))
       assertEquals(preserve.cell("A1").map(_.value), Some(CellValue.Text("Original")))
     } finally {
       Files.deleteIfExists(tempFile)

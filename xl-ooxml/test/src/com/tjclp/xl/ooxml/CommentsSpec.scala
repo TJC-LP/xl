@@ -2,10 +2,12 @@ package com.tjclp.xl.ooxml
 
 import munit.FunSuite
 import scala.xml.*
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.richtext.RichText.* // Import DSL extensions
+import com.tjclp.xl.cells.Comment
 
 /**
  * Tests for OOXML Comments parsing and serialization.
@@ -37,12 +39,12 @@ class CommentsSpec extends FunSuite:
     val result = OoxmlComments.fromXml(xml)
 
     assert(result.isRight, s"Expected successful parse, got: $result")
-    val comments = result.toOption.get
+    val comments = result.toOption.getOrElse(fail("Expected Right"))
 
     assertEquals(comments.authors, Vector("John Doe"))
     assertEquals(comments.comments.size, 1)
 
-    val comment = comments.comments.head
+    val comment = comments.comments.headOption.getOrElse(fail("Expected comment"))
     assertEquals(comment.ref, ref"A1")
     assertEquals(comment.authorId, 0)
     assertEquals(comment.text.toPlainText, "This is a comment")
@@ -69,7 +71,7 @@ class CommentsSpec extends FunSuite:
     val result = OoxmlComments.fromXml(xml)
 
     assert(result.isRight)
-    val comments = result.toOption.get
+    val comments = result.toOption.getOrElse(fail("Expected Right"))
 
     assertEquals(comments.authors.size, 3)
     assertEquals(comments.authors(0), "Alice")
@@ -108,9 +110,9 @@ class CommentsSpec extends FunSuite:
     val result = OoxmlComments.fromXml(xml)
 
     assert(result.isRight)
-    val comments = result.toOption.get
+    val comments = result.toOption.getOrElse(fail("Expected Right"))
 
-    val comment = comments.comments.head
+    val comment = comments.comments.headOption.getOrElse(fail("Expected comment"))
     assertEquals(comment.text.runs.size, 2)
 
     // First run: bold + red
@@ -142,19 +144,19 @@ class CommentsSpec extends FunSuite:
     val parsed1 = OoxmlComments.fromXml(originalXml)
     assert(parsed1.isRight)
 
-    val encoded = OoxmlComments.toXml(parsed1.toOption.get)
+    val encoded = OoxmlComments.toXml(parsed1.toOption.getOrElse(fail("Expected Right")))
     val parsed2 = OoxmlComments.fromXml(encoded)
 
     assert(parsed2.isRight)
 
-    val comments1 = parsed1.toOption.get
-    val comments2 = parsed2.toOption.get
+    val comments1 = parsed1.toOption.getOrElse(fail("Expected Right"))
+    val comments2 = parsed2.toOption.getOrElse(fail("Expected Right"))
 
     assertEquals(comments1.authors, comments2.authors)
     assertEquals(comments1.comments.size, comments2.comments.size)
 
-    val c1 = comments1.comments.head
-    val c2 = comments2.comments.head
+    val c1 = comments1.comments.headOption.getOrElse(fail("Expected comment"))
+    val c2 = comments2.comments.headOption.getOrElse(fail("Expected comment"))
 
     assertEquals(c1.ref, c2.ref)
     assertEquals(c1.authorId, c2.authorId)
@@ -178,16 +180,17 @@ class CommentsSpec extends FunSuite:
     val result = OoxmlComments.fromXml(xml)
     assert(result.isRight)
 
-    val comment = result.toOption.get.comments.head
+    val comments = result.toOption.getOrElse(fail("Expected Right"))
+    val comment = comments.comments.headOption.getOrElse(fail("Expected comment"))
     assert(comment.otherAttrs.contains("futureAttr"))
     assertEquals(comment.otherAttrs("futureAttr"), "value123")
 
     // Round-trip should preserve it
-    val encoded = OoxmlComments.toXml(result.toOption.get)
+    val encoded = OoxmlComments.toXml(comments)
     val reparsed = OoxmlComments.fromXml(encoded)
 
     assert(reparsed.isRight)
-    val comment2 = reparsed.toOption.get.comments.head
+    val comment2 = reparsed.toOption.getOrElse(fail("Expected Right")).comments.headOption.getOrElse(fail("Expected comment"))
     assertEquals(comment2.otherAttrs.get("futureAttr"), Some("value123"))
   }
 
@@ -209,7 +212,7 @@ class CommentsSpec extends FunSuite:
     val result = OoxmlComments.fromXml(xml)
     assert(result.isRight)
 
-    val comment = result.toOption.get.comments.head
+    val comment = result.toOption.getOrElse(fail("Expected Right")).comments.headOption.getOrElse(fail("Expected comment"))
     // Whitespace should be preserved
     assertEquals(comment.text.toPlainText, "  Leading and trailing spaces  ")
   }
@@ -259,6 +262,23 @@ class CommentsSpec extends FunSuite:
     assert(result.isLeft, "Should fail when cell reference is invalid")
   }
 
+  test("convertToDomainComments fails on out-of-bounds authorId") {
+    val comments = OoxmlComments(
+      authors = Vector("Author0"),
+      comments = Vector(
+        OoxmlComment(
+          ref = ref"A1",
+          authorId = 5,
+          text = RichText.plain("Bad authorId"),
+          shapeId = 0
+        )
+      )
+    )
+
+    val result = XlsxReader.convertToDomainComments(comments, "xl/comments1.xml")
+    assert(result.isLeft, s"Expected failure for invalid authorId, got: $result")
+  }
+
   test("encode simple comment produces valid XML") {
     val comment = OoxmlComment(
       ref = ref"H8",
@@ -281,7 +301,9 @@ class CommentsSpec extends FunSuite:
     assert((xml \ "commentList" \ "comment").nonEmpty)
 
     // Verify required attributes
-    val commentElem = (xml \ "commentList" \ "comment").head.asInstanceOf[Elem]
+    val commentElem = (xml \ "commentList" \ "comment").headOption match
+      case Some(e: Elem) => e
+      case _ => fail("Expected comment element")
     assertEquals((commentElem \ "@ref").text, "H8")
     assertEquals((commentElem \ "@authorId").text, "0")
     assertEquals((commentElem \ "@shapeId").text, "0")
@@ -309,13 +331,17 @@ class CommentsSpec extends FunSuite:
     val xml = OoxmlComments.toXml(comments)
 
     // Verify text structure has multiple runs
-    val textElem = (xml \ "commentList" \ "comment" \ "text").head.asInstanceOf[Elem]
+    val textElem = (xml \ "commentList" \ "comment" \ "text").headOption match
+      case Some(e: Elem) => e
+      case _ => fail("Expected text element")
     val runs = textElem \ "r"
 
     assert(runs.size >= 2, "Should have at least 2 runs (formatted + plain)")
 
     // First run should have formatting
-    val run1 = runs(0).asInstanceOf[Elem]
+    val run1 = runs.headOption match
+      case Some(e: Elem) => e
+      case _ => fail("Expected run element")
     assert((run1 \ "rPr").nonEmpty, "First run should have formatting properties")
     assert((run1 \ "rPr" \ "b").nonEmpty, "First run should be bold")
     assert((run1 \ "rPr" \ "color").nonEmpty, "First run should have color")
@@ -331,7 +357,9 @@ class CommentsSpec extends FunSuite:
     )
 
     val xml = OoxmlComments.toXml(OoxmlComments(Vector("Author"), Vector(commentWithGuid)))
-    val commentElem = (xml \ "commentList" \ "comment").head.asInstanceOf[Elem]
+    val commentElem = (xml \ "commentList" \ "comment").headOption match
+      case Some(e: Elem) => e
+      case _ => fail("Expected comment element")
 
     val xrNs = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
     val uidAttr = commentElem.attribute(xrNs, "uid").map(_.text)
@@ -366,7 +394,7 @@ class CommentsSpec extends FunSuite:
       case Right(m) => m
       case Left(err) => fail(s"Failed to convert: $err")
 
-    val domainComment = domainMap.get(ref"A1").get
+    val domainComment = domainMap.get(ref"A1").getOrElse(fail("Expected comment at A1"))
 
     // Verify author extracted correctly
     assertEquals(domainComment.author, Some(authorName))
@@ -389,6 +417,86 @@ class CommentsSpec extends FunSuite:
     val reparsed = OoxmlComments.fromXml(xml)
 
     assert(reparsed.isRight)
-    assertEquals(reparsed.toOption.get.authors, Vector.empty)
-    assertEquals(reparsed.toOption.get.comments, Vector.empty)
+    val reparsedComments = reparsed.toOption.getOrElse(fail("Expected Right"))
+    assertEquals(reparsedComments.authors, Vector.empty)
+    assertEquals(reparsedComments.comments, Vector.empty)
   }
+
+  test("VML shape IDs do not collide across sheets with dense comments") {
+    def commentsForSheet(count: Int): OoxmlComments =
+      val comments = (0 until count).map { idx =>
+        OoxmlComment(
+          ref = ARef.from1(1, idx + 1),
+          authorId = 0,
+          text = RichText.plain(s"Comment $idx")
+        )
+      }.toVector
+      OoxmlComments(
+        authors = Vector("Author"),
+        comments = comments
+      )
+
+    val sheet0 = commentsForSheet(150) // exceeds legacy stride of 100
+    val sheet1 = commentsForSheet(5)
+
+    val ids0 = extractShapeIds(VmlDrawing.generateForComments(sheet0, 0))
+    val ids1 = extractShapeIds(VmlDrawing.generateForComments(sheet1, 1))
+
+    assertEquals(ids0.size, 150)
+    assertEquals(ids1.size, 5)
+    assert(ids0.intersect(ids1).isEmpty, s"Shape IDs should not collide: ${ids0.intersect(ids1)}")
+  }
+
+  test("round-trip preserves very long author names") {
+    val longAuthor = "L" * 300
+    val baseSheet = Sheet("Sheet1") match
+      case Right(s) => s
+      case Left(err) => fail(s"Failed to build sheet: $err")
+
+    val sheet = baseSheet.comment(
+      ref"A1",
+      Comment.plainText("Long author note", Some(longAuthor))
+    )
+    val workbook = Workbook(Vector(sheet))
+
+    val bytes = XlsxWriter.writeToBytes(workbook) match
+      case Right(b) => b
+      case Left(err) => fail(s"Write failed: $err")
+
+    val reread = XlsxReader.readFromBytes(bytes) match
+      case Right(wb) => wb
+      case Left(err) => fail(s"Read failed: $err")
+
+    val rereadSheet = reread.sheets.headOption.getOrElse(fail("Expected sheet"))
+    val comment = rereadSheet.comments.get(ref"A1").getOrElse(
+      fail("Missing comment after round-trip")
+    )
+
+    assertEquals(comment.author, Some(longAuthor))
+  }
+
+  test("comments on merged cells survive round-trip") {
+    val baseSheet = Sheet("Sheet1") match
+      case Right(s) => s
+      case Left(err) => fail(s"Failed to build sheet: $err")
+
+    val mergedRange = CellRange(ref"A1", ref"B1")
+    val withMerge = baseSheet.copy(mergedRanges = baseSheet.mergedRanges + mergedRange)
+    val sheet = withMerge.comment(ref"A1", Comment.plainText("Merged cell note", Some("Author")))
+    val workbook = Workbook(Vector(sheet))
+
+    val bytes = XlsxWriter.writeToBytes(workbook) match
+      case Right(b) => b
+      case Left(err) => fail(s"Write failed: $err")
+
+    val reread = XlsxReader.readFromBytes(bytes) match
+      case Right(wb) => wb
+      case Left(err) => fail(s"Read failed: $err")
+
+    val rereadSheet = reread.sheets.headOption.getOrElse(fail("Expected sheet"))
+    assert(rereadSheet.mergedRanges.contains(mergedRange), "Merged range should round-trip")
+    assertEquals(rereadSheet.comments.get(ref"A1").flatMap(_.author), Some("Author"))
+  }
+
+  private def extractShapeIds(vml: String): Set[Int] =
+    "_x0000_s(\\d+)".r.findAllMatchIn(vml).map(_.group(1).toInt).toSet

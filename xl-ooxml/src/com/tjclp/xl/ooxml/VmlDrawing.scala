@@ -36,6 +36,29 @@ object VmlDrawing:
       |  <v:path gradientshapeok="t" o:connecttype="rect"/>
       | </v:shapetype>""".stripMargin
 
+  // Excel defaults (derived from Excel-generated VML):
+  // - Column width: 8.43 chars ≈ 75pt
+  // - Row height: 15pt
+  // The offsets keep the note box tucked into the top-right corner like native Excel output.
+  private val DefaultColumnWidthPt = 75.0
+  private val DefaultRowHeightPt = 15.0
+  private val CommentBoxLeftPaddingPt = 59.25
+  private val CommentBoxTopPaddingPt = 1.5
+  private val CommentBoxWidthPt = 108.0
+  private val CommentBoxHeightPt = 59.25
+
+  // Anchor offsets (pt-based) copied from Excel VML for comment indicators
+  private val AnchorFromColOffset = 15
+  private val AnchorFromRowOffset = 2
+  private val AnchorToColOffset = 15
+  private val AnchorToRowOffset = 16
+  private val AnchorColumnSpan = 2
+  private val AnchorRowSpan = 3
+
+  private val ShapeIdBase = 1024
+  private val ShapeIdStride =
+    1024 // Allocate generous per-sheet range to avoid collisions on dense sheets
+
   /**
    * Generate complete VML XML for a sheet's comment indicators.
    *
@@ -52,7 +75,7 @@ object VmlDrawing:
    *   Complete VML XML string (compact format, no pretty-printing)
    */
   def generateForComments(comments: OoxmlComments, sheetIndex: Int): String =
-    val baseShapeId = 1024 + (sheetIndex * 100) // Unique IDs per sheet
+    val baseShapeId = ShapeIdBase + (sheetIndex * ShapeIdStride) // Unique IDs per sheet
     val shapes = comments.comments.zipWithIndex.map { case (comment, idx) =>
       generateShape(comment, baseShapeId + idx)
     }
@@ -91,16 +114,17 @@ object VmlDrawing:
     val row = ref.row.index0 // 0-based (ARef enforces Excel limits: 0-1048575)
 
     // Simplified positioning (Excel adjusts on open)
-    val marginLeft = col * 75.0 + 59.25 // pt units
-    val marginTop = row * 15.0 + 1.5 // pt units
+    val marginLeft = col * DefaultColumnWidthPt + CommentBoxLeftPaddingPt // pt units
+    val marginTop = row * DefaultRowHeightPt + CommentBoxTopPaddingPt // pt units
 
     // Anchor: [fromCol, fromColOffset, fromRow, fromRowOffset, toCol, toColOffset, toRow, toRowOffset]
     // Use fixed offsets - Excel adjusts for optimal display
-    val anchor = s"$col, 15, $row, 2, ${col + 2}, 15, ${row + 3}, 16"
+    val anchor =
+      s"$col, $AnchorFromColOffset, $row, $AnchorFromRowOffset, ${col + AnchorColumnSpan}, $AnchorToColOffset, ${row + AnchorRowSpan}, $AnchorToRowOffset"
 
     s"""<v:shape id="_x0000_s$shapeId" type="#_x0000_t202"
        |          style="position:absolute;margin-left:${marginLeft}pt;margin-top:${marginTop}pt;
-       |                 width:108pt;height:59.25pt;z-index:$shapeId;visibility:hidden"
+       |                 width:${CommentBoxWidthPt}pt;height:${CommentBoxHeightPt}pt;z-index:$shapeId;visibility:hidden"
        |          fillcolor="infoBackground [80]" strokecolor="none [81]" o:insetmode="auto">
        |  <v:fill color2="infoBackground [80]"/>
        |  <v:shadow color="none [81]" obscured="t"/>

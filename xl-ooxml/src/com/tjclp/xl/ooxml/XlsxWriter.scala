@@ -206,8 +206,15 @@ object XlsxWriter:
       else
         // Build author list (deduplicated and sorted for deterministic output)
         // Reserve index 0 for unauthored comments (empty string)
-        val realAuthors = sheet.comments.values.flatMap(_.author).toVector.distinct.sorted
-        val hasUnauthored = sheet.comments.values.exists(_.author.isEmpty)
+        val (authorSet, hasUnauthored) =
+          sheet.comments.values.foldLeft((Set.empty[String], false)) {
+            case ((existing, hasNone), comment) =>
+              val nextSet = comment.author match
+                case Some(author) => existing + author
+                case None => existing
+              (nextSet, hasNone || comment.author.isEmpty)
+          }
+        val realAuthors = authorSet.toVector.sorted
         val authors = if hasUnauthored then Vector("") ++ realAuthors else realAuthors
 
         val authorMap = authors.zipWithIndex.map { case (author, i) => author -> i }.toMap
@@ -228,9 +235,10 @@ object XlsxWriter:
                 Some(com.tjclp.xl.styles.font.Font.default.copy(bold = true))
               )
               // Prepend newline to the first run of comment text
-              val textWithNewline = comment.text.runs match
-                case head +: tail =>
+              val textWithNewline = comment.text.runs.headOption match
+                case Some(head) =>
                   // Create new TextRun with newline prepended
+                  val tail = comment.text.runs.drop(1)
                   val textWithNewline = "\n" + head.text
                   val modifiedFirstRun = com.tjclp.xl.richtext.TextRun(
                     textWithNewline,
@@ -238,7 +246,7 @@ object XlsxWriter:
                     head.rawRPrXml
                   )
                   com.tjclp.xl.richtext.RichText(Vector(authorRun, modifiedFirstRun) ++ tail)
-                case Vector() =>
+                case None =>
                   // Empty comment text - just add author with newline
                   com.tjclp.xl.richtext.RichText(
                     Vector(
@@ -332,12 +340,15 @@ object XlsxWriter:
     }
 
     // Create content types
-    val contentTypes = ContentTypes.minimal(
-      hasStyles = true, // Always include styles
-      hasSharedStrings = sst.isDefined,
-      sheetCount = workbook.sheets.size,
-      sheetsWithComments = sheetsWithComments
-    )
+    val contentTypes =
+      ContentTypes
+        .minimal(
+          hasStyles = true, // Always include styles
+          hasSharedStrings = sst.isDefined,
+          sheetCount = workbook.sheets.size,
+          sheetsWithComments = sheetsWithComments
+        )
+        .withCommentOverrides(sheetsWithComments)
 
     // Create relationships
     val rootRels = Relationships.root()
@@ -924,7 +935,7 @@ object XlsxWriter:
         // Fallback to minimal for programmatically created workbooks
         OoxmlWorkbook.fromDomain(workbook)
 
-    val contentTypes = preservedContentTypes.getOrElse(
+    val baseContentTypes = preservedContentTypes.getOrElse(
       ContentTypes.minimal(
         hasStyles = true,
         hasSharedStrings = sharedStringsInOutput,
@@ -932,6 +943,7 @@ object XlsxWriter:
         sheetsWithComments = sheetsWithComments
       )
     )
+    val contentTypes = baseContentTypes.withCommentOverrides(sheetsWithComments)
 
     val rootRels = preservedRootRels.getOrElse(Relationships.root())
 

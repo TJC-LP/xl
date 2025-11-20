@@ -249,7 +249,29 @@ object XlsxReader:
             .fromXml(elem)
             .left
             .map(err => XLError.ParseError(relsPath, err): XLError)
-        yield rels.relationships.find(_.`type` == XmlUtil.relTypeComments).map(_.target)
+          commentTarget <- rels.relationships
+            .find(_.`type` == XmlUtil.relTypeComments) match
+            case None => Right(None)
+            case Some(rel) => resolveCommentPath(rel.target, relsPath).map(Some(_))
+        yield commentTarget
+
+  private def resolveCommentPath(target: String, relsPath: String): XLResult[String] =
+    val cleanedTarget = if target.startsWith("/") then target.drop(1) else target
+    val targetPath =
+      if cleanedTarget.startsWith("xl/") || cleanedTarget.startsWith("xl\\") then
+        Paths.get(cleanedTarget)
+      else Paths.get("xl/worksheets").resolve(cleanedTarget)
+
+    val normalized = targetPath.normalize().toString.replace('\\', '/')
+
+    if normalized.startsWith("xl/") then Right(normalized)
+    else
+      Left(
+        XLError.ParseError(
+          relsPath,
+          s"Invalid comment relationship target outside xl/: $target"
+        )
+      )
 
   /**
    * Parse comments for a single sheet.
@@ -258,24 +280,18 @@ object XlsxReader:
    */
   private def parseCommentsForSheet(
     parts: Map[String, String],
-    commentTarget: String
+    commentPath: String
   ): XLResult[Map[ARef, com.tjclp.xl.cells.Comment]] =
-    // Resolve relative path (e.g., "../comments1.xml" -> "xl/comments1.xml")
-    val resolvedPath =
-      if commentTarget.startsWith("../") then s"xl/${commentTarget.drop(3)}"
-      else if commentTarget.startsWith("xl/") then commentTarget
-      else s"xl/$commentTarget"
-
-    parts.get(resolvedPath) match
+    parts.get(commentPath) match
       case None => Right(Map.empty) // Missing comment file (graceful degradation)
       case Some(xml) =>
         for
-          elem <- parseXml(xml, resolvedPath)
+          elem <- parseXml(xml, commentPath)
           ooxmlComments <- OoxmlComments
             .fromXml(elem)
             .left
-            .map(err => XLError.ParseError(resolvedPath, err): XLError)
-          domainComments <- convertToDomainComments(ooxmlComments)
+            .map(err => XLError.ParseError(commentPath, err): XLError)
+          domainComments <- convertToDomainComments(ooxmlComments, commentPath)
         yield domainComments
 
   /**
@@ -310,30 +326,49 @@ object XlsxReader:
         text
 
   private[ooxml] def convertToDomainComments(
-    ooxmlComments: OoxmlComments
+    ooxmlComments: OoxmlComments,
+    commentPath: String = "comments.xml"
   ): XLResult[Map[ARef, com.tjclp.xl.cells.Comment]] =
     val authorMap = ooxmlComments.authors.zipWithIndex.map { case (author, idx) =>
       idx -> author
     }.toMap
 
-    val comments = ooxmlComments.comments.map { ooxmlComment =>
-      val author =
-        authorMap.get(ooxmlComment.authorId).filter(_.nonEmpty) // Ignore empty string (unauthored)
+    ooxmlComments.comments
+      .foldLeft[XLResult[Map[ARef, com.tjclp.xl.cells.Comment]]](Right(Map.empty)) {
+        case (accEither, ooxmlComment) =>
+          for
+            acc <- accEither
+            _ <- validateAuthorId(ooxmlComment, ooxmlComments.authors.size, commentPath)
+            author =
+              authorMap
+                .get(ooxmlComment.authorId)
+                .filter(_.nonEmpty) // Ignore empty string (unauthored)
 
-      // Strip author prefix from text if present (writer prepends "Author:\n")
-      val cleanedText = author match
-        case Some(authorName) =>
-          stripAuthorPrefix(ooxmlComment.text, authorName)
-        case None => ooxmlComment.text
+            cleanedText = author match
+              case Some(authorName) =>
+                stripAuthorPrefix(ooxmlComment.text, authorName)
+              case None => ooxmlComment.text
 
-      val domainComment = com.tjclp.xl.cells.Comment(
-        text = cleanedText,
-        author = author
+            domainComment = com.tjclp.xl.cells.Comment(
+              text = cleanedText,
+              author = author
+            )
+          yield acc.updated(ooxmlComment.ref, domainComment)
+      }
+
+  private def validateAuthorId(
+    ooxmlComment: OoxmlComment,
+    authorCount: Int,
+    commentPath: String
+  ): XLResult[Unit] =
+    if ooxmlComment.authorId >= 0 && ooxmlComment.authorId < authorCount then Right(())
+    else
+      Left(
+        XLError.ParseError(
+          commentPath,
+          s"Invalid authorId ${ooxmlComment.authorId} for comment ${ooxmlComment.ref.toA1} (authors: $authorCount)"
+        )
       )
-      ooxmlComment.ref -> domainComment
-    }.toMap
-
-    Right(comments)
 
   /** Parse styles table (falls back to default styles if missing) */
   private def parseStyles(parts: Map[String, String]): XLResult[(WorkbookStyles, Vector[Warning])] =

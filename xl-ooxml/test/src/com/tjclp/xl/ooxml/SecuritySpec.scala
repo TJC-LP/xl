@@ -241,3 +241,69 @@ class SecuritySpec extends FunSuite:
       case Left(error) =>
         fail(s"Legitimate XLSX should parse successfully, got error: $error")
   }
+
+  test("XlsxReader rejects comment relationship path traversal") {
+    val workbookXml = """<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>
+  </sheets>
+</workbook>"""
+
+    val contentTypes = """<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>
+</Types>"""
+
+    val rels = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+
+    val workbookRels = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+
+    val sheetRels = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../../workbook.xml"/>
+</Relationships>"""
+
+    val sheet1 = """<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData/>
+</worksheet>"""
+
+    val baos = ByteArrayOutputStream()
+    val zos = ZipOutputStream(baos)
+
+    def addEntry(name: String, content: String): Unit =
+      zos.putNextEntry(ZipEntry(name))
+      zos.write(content.getBytes(StandardCharsets.UTF_8))
+      zos.closeEntry()
+
+    addEntry("[Content_Types].xml", contentTypes)
+    addEntry("_rels/.rels", rels)
+    addEntry("xl/workbook.xml", workbookXml)
+    addEntry("xl/_rels/workbook.xml.rels", workbookRels)
+    addEntry("xl/worksheets/sheet1.xml", sheet1)
+    addEntry("xl/worksheets/_rels/sheet1.xml.rels", sheetRels)
+
+    zos.close()
+    val maliciousBytes = baos.toByteArray
+
+    val tempFile = tempDir.resolve("comment-path-traversal.xlsx")
+    Files.write(tempFile, maliciousBytes)
+
+    val result = XlsxReader.read(tempFile)
+
+    assert(
+      result.isLeft,
+      s"Reader should reject comment relationship path traversal, got: $result"
+    )
+  }
