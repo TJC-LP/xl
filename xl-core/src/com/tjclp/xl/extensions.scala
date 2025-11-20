@@ -87,7 +87,21 @@ object extensions:
       toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").map { ref =>
         val (cellValue, styleOpt) = summon[CellWriter[A]].write(value)
         val updated = sheet.put(ref, cellValue)
-        styleOpt.fold(updated)(style => updated.withCellStyle(ref, style))
+
+        styleOpt.fold(updated) { autoStyle =>
+          // Preserve existing template styles; only add NumFmt if the cell is unstyled or General.
+          val existingStyle =
+            updated.cells.get(ref).flatMap(_.styleId).flatMap(updated.styleRegistry.get)
+
+          existingStyle match
+            case None =>
+              updated.withCellStyle(ref, autoStyle)
+            case Some(style) if style.numFmt == com.tjclp.xl.styles.numfmt.NumFmt.General =>
+              val merged = style.copy(numFmt = autoStyle.numFmt)
+              updated.withCellStyle(ref, merged)
+            case Some(_) =>
+              updated
+        }
       }
 
   // ========== Sheet Extensions: Styled Data Operations ==========
