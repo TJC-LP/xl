@@ -1,122 +1,163 @@
 # Streaming I/O Improvements
 
-## Status: Partially Complete (P6.6-P6.7 ✅ Done, P7.5 ⬜ Future)
-
+**Status**: 🟡 Partially Complete (P6.6-P6.7 ✅, P7.5 ⬜ Future)
+**Priority**: Medium (P7.5 future enhancements)
+**Estimated Effort**: 3-4 weeks (P7.5 only)
 **Last Updated**: 2025-11-20
 
-## Overview
+---
 
-The XL library currently has two I/O modes with different tradeoffs. This document outlines:
-- **✅ Completed critical fixes** (P6.6-P6.7) - constant-memory read, compression defaults
-- **⬜ Future improvements** (P7.5) - full SST/style support in streaming writes (not yet started)
+## Metadata
 
-> **Note**: The completed sections (P6.6-P6.7) serve as historical implementation records.
-> Active planning focuses on P7.5 strategic improvements below.
+| Field | Value |
+|-------|-------|
+| **Owner Modules** | `xl-cats-effect` (streaming I/O), `xl-ooxml` (two-phase writer) |
+| **Touches Files** | `ExcelIO.scala`, `StreamingXmlWriter.scala`, `TwoPhaseWriter.scala` (new) |
+| **Dependencies** | P0-P8 complete, P6.6-P6.7 complete |
+| **Enables** | Full-feature streaming (SST + styles at O(1) memory) |
+| **Parallelizable With** | WI-07 (formula), WI-10 (tables), WI-11 (charts) — different modules |
+| **Merge Risk** | Low (new streaming implementation, existing in-memory path unchanged) |
 
-## Current State (Updated 2025-11-16)
+---
 
-### Write Path (✅ Working)
-- **True constant-memory** streaming with `writeStreamTrue`
+## Work Items
+
+| ID | Description | Type | Files | Status | PR |
+|----|-------------|------|-------|--------|----|
+| `P6.6` | Fix streaming reader memory leak | Fix | `ExcelIO.scala`, `StreamingXmlReader.scala` | ✅ Done | (2025-11-13) |
+| `P6.7` | Compression defaults (DEFLATED) | Config | `WriterConfig.scala`, `XlsxWriter.scala` | ✅ Done | (2025-11-14) |
+| `WI-16` | Two-phase streaming writer | Feature | `TwoPhaseWriter.scala` (new) | ⏳ Not Started | - |
+| `WI-17` | SST heuristic improvement | Optimize | `XlsxWriter.scala` | ⏳ Not Started | - |
+| `WI-18` | Merged cells serialization | Feature | `OoxmlWorksheet.scala` | ⏳ Not Started | - |
+| `WI-19` | Column/row properties serialization | Feature | `OoxmlWorksheet.scala` | ⏳ Not Started | - |
+| `WI-20` | Query API (RowQuery filtering) | Feature | `QueryApi.scala` (new) | ⏳ Not Started | - |
+
+---
+
+## Dependencies
+
+### Prerequisites (Complete)
+- ✅ P6.6: Streaming reader fixed (fs2.io.readInputStream)
+- ✅ P6.7: Compression defaults (DEFLATED)
+
+### Enables
+- Full-feature streaming for large datasets (100k+ rows with rich formatting)
+- Query API for streaming filters/transforms
+
+### File Conflicts
+- **Low risk**: WI-16 (Two-phase writer) is new implementation
+- **Low risk**: WI-18/WI-19 modify OoxmlWorksheet (additive)
+- **Medium risk**: WI-20 (Query API) touches xl-core (Sheet extensions)
+
+### Safe Parallelization
+- ✅ WI-07/WI-08 (Formula) — different module
+- ✅ WI-10 (Tables) — different OOXML parts
+- ✅ WI-15 (Benchmarks) — infrastructure
+
+---
+
+## Worktree Strategy
+
+**Branch naming**: `streaming` or `WI-16-two-phase-writer`
+
+**Merge order**:
+1. WI-16 (Two-phase writer) — foundation for rich streaming
+2. WI-17 (SST heuristic) — optimization, can parallel
+3. WI-18/WI-19 (Merged cells, col/row props) — can parallel
+4. WI-20 (Query API) — after two-phase writer
+
+**Conflict resolution**: Minimal — mostly new files
+
+---
+
+## Execution Algorithm
+
+### WI-16: Two-Phase Streaming Writer (3-4 weeks)
+```
+1. Create worktree: `gtr create WI-16-two-phase-writer`
+2. Design phase 1 (registry building):
+   - RegistryBuilder for styles
+   - RegistryBuilder for SST
+   - Stream once to collect metadata
+3. Design phase 2 (write with indices):
+   - Reorder ZIP writing (ContentTypes after registries)
+   - Use stable indices in worksheet XML
+4. Implement disk-backed SST option (MapDB)
+5. Add memory tests (< 100MB for 1M rows)
+6. Add round-trip tests (SST + styles)
+7. Run tests: `./mill xl-cats-effect.test`
+8. Create PR: "feat(streaming): add two-phase writer with SST/styles"
+9. Update roadmap: WI-16 → ✅ Complete
+```
+
+### WI-17: SST Heuristic Improvement (1 hour)
+```
+1. Create worktree: `gtr create WI-17-sst-heuristic`
+2. Update shouldUseSST logic:
+   - Calculate deduplication ratio
+   - Use 20% savings threshold
+3. Add tests verifying heuristic
+4. Run tests: `./mill xl-ooxml.test`
+5. Create PR: "optimize(ooxml): improve SST heuristic"
+6. Update roadmap: WI-17 → ✅ Complete
+```
+
+### WI-18: Merged Cells Serialization (2-3 hours)
+```
+1. Create worktree: `gtr create WI-18-merged-cells`
+2. Add mergeCells XML emission in OoxmlWorksheet
+3. Add round-trip tests
+4. Run tests: `./mill xl-ooxml.test`
+5. Create PR: "feat(ooxml): serialize merged cells to XML"
+6. Update roadmap: WI-18 → ✅ Complete
+```
+
+### WI-19: Column/Row Properties (3-4 hours)
+```
+1. Create worktree: `gtr create WI-19-col-row-props`
+2. Add <cols> and row @ht serialization in OoxmlWorksheet
+3. Add round-trip tests
+4. Run tests: `./mill xl-ooxml.test`
+5. Create PR: "feat(ooxml): serialize column/row properties"
+6. Update roadmap: WI-19 → ✅ Complete
+```
+
+### WI-20: Query API (4-5 days)
+```
+1. Create worktree: `gtr create WI-20-query-api`
+2. Design RowQuery DSL (filter, map, groupBy)
+3. Implement streaming query operators
+4. Add tests for query composition
+5. Run tests: `./mill xl-core.test`
+6. Create PR: "feat(core): add query API for streaming transforms"
+7. Update roadmap: WI-20 → ✅ Complete
+```
+
+---
+
+## Design
+
+### Current State (P6.6-P6.7 Complete)
+
+**Write Path** (✅ Working):
+- True constant-memory streaming with `writeStreamTrue`
 - O(1) memory (~10MB) regardless of file size
-- **✅ Compression defaults (P6.7)**: DEFLATED compression, 5-10x smaller files
+- ✅ DEFLATED compression (5-10x smaller files)
 - **Limitations**:
-  - No SST support (inline strings only → larger files)
+  - No SST support (inline strings → larger files)
   - Minimal styles (default only → no rich formatting)
-  - [Content_Types].xml written before SST decision
 
-### Read Path (✅ Fixed in P6.6)
-- **✅ True constant-memory** with `fs2.io.readInputStream`
+**Read Path** (✅ Fixed in P6.6):
+- ✅ True constant-memory with `fs2.io.readInputStream`
 - O(1) memory (~50MB) regardless of file size
-- **✅ 100k+ row files** handled without OOM
-- SST materialized in memory (acceptable tradeoff for most use cases)
+- ✅ 100k+ row files handled without OOM
+- SST materialized in memory (acceptable tradeoff)
 
-## Critical Fixes (P6.6-P6.7) ✅ COMPLETE
-
-### P6.6: Fix Streaming Reader ✅ COMPLETE (2025-11-13)
-
-**Problem**: `ExcelIO.readStream` uses `readAllBytes()` for worksheets and SST
-```scala
-// Current broken implementation
-val bytes = zipFile.getInputStream(entry).readAllBytes()  // ❌ Materializes entire entry
-StreamingXmlReader.parseWorksheetStream(Stream.emits(bytes))
-```
-
-**Solution**: Use `fs2.io.readInputStream` for chunked streaming
-```scala
-// Fixed implementation
-import fs2.io.readInputStream
-
-val byteStream = readInputStream[IO](
-  Sync[IO].delay(zipFile.getInputStream(entry)),
-  chunkSize = 4096,
-  closeAfterUse = true
-)
-StreamingXmlReader.parseWorksheetStream(byteStream)
-```
-
-**Changes Required**:
-1. Update `ExcelIO.readStream` (xl-cats-effect/src/com/tjclp/xl/io/ExcelIO.scala)
-2. Update `ExcelIO.readStreamByIndex`
-3. Update `ExcelIO.readSheetStream`
-4. Update `StreamingXmlReader.parseSharedStrings` to accept `Stream[F, Byte]`
-5. Add memory tests (assert heap doesn't scale with file size)
-
-**Test**:
-```scala
-test("streaming read uses constant memory"):
-  val large = generateFile(100_000)  // 100k rows
-
-  val memBefore = currentHeap()
-  ExcelIO.readStream[IO](large).compile.drain.unsafeRunSync()
-  val memAfter = currentHeap()
-
-  assert((memAfter - memBefore) < 50_000_000)  // < 50MB
-```
-
-**Impact**: True O(1) memory for reads, can handle 1M+ row files
-
----
-
-### P6.7: Compression Defaults ✅ COMPLETE (2025-11-14)
-
-**Problem** (SOLVED): XlsxWriter defaults to STORED (uncompressed) + pretty-print
-- Files are 5-10x larger than necessary
-- Requires precomputing CRC/size for STORED
-- Pretty-print only useful for debugging
-
-**Solution**: Add compression control, default to DEFLATED
-```scala
-case class WriterConfig(
-  compression: Compression = Compression.Deflated,
-  prettyPrint: Boolean = false
-)
-
-enum Compression:
-  case Stored   // No compression (debug only)
-  case Deflated // Standard ZIP compression
-```
-
-**Changes Required**:
-1. Add `WriterConfig` to xl-ooxml
-2. Update `XlsxWriter.writeZip` to use config
-3. Implement DEFLATED (remove STORED flag, no CRC/size precompute)
-4. Default to `WriterConfig(Deflated, prettyPrint = false)`
-5. Add compression tests
-
-**Impact**:
-- Smaller files (5-10x reduction typical)
-- Faster workflows (no CRC computation)
-- Configurable for debugging (STORED + pretty)
-
----
-
-## Strategic Improvements (P7.5)
-
-### P7.5: Two-Phase Streaming Writer with SST/Styles (3-4 weeks)
+### P7.5: Two-Phase Streaming Writer (Not Started)
 
 **Problem**: Current streaming writer can't support SST or styles because:
-1. [Content_Types].xml written first (before knowing if SST needed)
-2. Styles.xml requires style registry (built during worksheet write)
+1. `[Content_Types].xml` written first (before knowing if SST needed)
+2. `Styles.xml` requires style registry (built during worksheet write)
 3. SST requires string deduplication (need to see all strings first)
 
 **Solution**: Two-phase approach with deferred static parts
@@ -142,8 +183,7 @@ val (styleReg, sstReg) = dataStream
 ```
 
 #### Phase 2: Write with Stable Indices
-```scala
-// Now write in this order:
+```
 1. [Content_Types].xml (with SST and styles overrides)
 2. Relationships (xl/_rels/workbook.xml.rels)
 3. Workbook (xl/workbook.xml)
@@ -173,14 +213,6 @@ val sstMap = DBMaker
 sstMap.put("some string", 0)
 ```
 
-**Changes Required**:
-1. Add `TwoPhaseStreamingWriter` (new class)
-2. Implement registry builders (mutable, stateful)
-3. Add disk-backed map option for SST
-4. Restructure ZIP writing order
-5. Update [Content_Types].xml to include SST/styles upfront
-6. Add tests for large datasets with many unique strings/styles
-
 **Tradeoffs**:
 - **Pro**: Full features (SST, styles) with near-constant memory
 - **Pro**: Can handle 1M+ rows with rich formatting
@@ -191,11 +223,9 @@ sstMap.put("some string", 0)
 - Large datasets (100k+ rows) with full styling needs
 - Use disk-backed SST if > 100k unique strings
 
----
+### Minor Improvements
 
-## Minor Improvements
-
-### Improve SST Heuristic (1 hour)
+#### WI-17: Improve SST Heuristic
 **Current**: `shouldUseSST = totalCount > 100 && uniqueCount < totalCount`
 **Problem**: Too simplistic, adds SST overhead for mostly-unique datasets
 
@@ -208,17 +238,7 @@ def shouldUseSST(totalCount: Int, uniqueCount: Int): Boolean =
 
 **Impact**: Avoids SST overhead when strings are mostly unique
 
----
-
-### Theme Color Resolution (1-2 days)
-**Current**: `Color.Theme.toArgb` returns approximation (often black)
-**Fix**: Parse `xl/theme/theme1.xml`, resolve color palette
-
-**Impact**: Correct theme colors in rich text and cell fills
-
----
-
-### Merged Cells Serialization (2-3 hours)
+#### WI-18: Merged Cells Serialization
 **Current**: `mergedRanges` tracked but not written to XML
 **Fix**: Emit `<mergeCells>` in worksheet.xml
 
@@ -233,9 +253,7 @@ if mergedRanges.nonEmpty then
 
 **Impact**: Merged cells preserved in round-trip
 
----
-
-### Column/Row Properties Serialization (3-4 hours)
+#### WI-19: Column/Row Properties Serialization
 **Current**: Widths/heights tracked but not written
 **Fix**: Emit `<cols>` and `row ht=""` attributes
 
@@ -257,143 +275,82 @@ else null
 
 **Impact**: Column widths/row heights preserved
 
----
+#### WI-20: Query API
+**Goal**: Streaming filters and transformations
 
-## Testing Strategy
-
-### Memory Tests (Critical)
+**Design**:
 ```scala
-test("streaming read: O(1) memory for 100k rows"):
-  val large = generateLargeFile(100_000)
-  val memBefore = currentHeapUsage()
+trait RowQuery:
+  def filter(predicate: RowData => Boolean): RowQuery
+  def map(f: RowData => RowData): RowQuery
+  def groupBy(key: RowData => String): Map[String, Stream[F, RowData]]
 
-  ExcelIO.readStream[IO](large)
-    .compile.drain
-    .unsafeRunSync()
-
-  val memAfter = currentHeapUsage()
-  val memUsed = (memAfter - memBefore) / (1024 * 1024)
-
-  assert(memUsed < 50, s"Used $memUsed MB, expected < 50 MB")
-
-test("streaming read: O(1) memory for 1M rows"):
-  val huge = generateLargeFile(1_000_000)
-  val memBefore = currentHeapUsage()
-
-  ExcelIO.readStream[IO](huge)
-    .take(1000)  // Process first 1000
-    .compile.drain
-    .unsafeRunSync()
-
-  val memAfter = currentHeapUsage()
-  val memUsed = (memAfter - memBefore) / (1024 * 1024)
-
-  assert(memUsed < 50, s"Used $memUsed MB, expected < 50 MB")
+// Usage
+ExcelIO.readStream(path)
+  .query
+  .filter(_.cells.get(0).exists(_.asInt > 1000))
+  .map(row => row.copy(cells = row.cells + (10 -> calculated)))
+  .through(ExcelIO.writeStreamTrue(outputPath, "Filtered"))
 ```
 
-### Compression Tests
-```scala
-test("DEFLATED produces smaller files"):
-  val data = generateData(10_000)
-
-  val storedSize = writeWith(WriterConfig(Stored, prettyPrint = false), data)
-  val deflatedSize = writeWith(WriterConfig(Deflated, prettyPrint = false), data)
-
-  assert(deflatedSize < storedSize * 0.3, "DEFLATED should be 3x smaller")
-
-test("prettyPrint increases file size"):
-  val data = generateData(10_000)
-
-  val compactSize = writeWith(WriterConfig(Deflated, prettyPrint = false), data)
-  val prettySize = writeWith(WriterConfig(Deflated, prettyPrint = true), data)
-
-  assert(prettySize > compactSize)
-```
-
-### Two-Phase Writer Tests
-```scala
-test("two-phase writer preserves SST"):
-  val data = Stream.range(0, 100_000).map(i =>
-    RowData(Vector(s"String ${i % 1000}"))  // 1000 unique strings
-  )
-
-  val path = TwoPhaseStreamingWriter.write(data, tempPath)
-  val wb = XlsxReader.read(path)
-
-  // Should have SST with 1000 entries, total count 100k
-  assert(wb.sheets.head.cells.values.forall(_.value.isText))
-
-test("two-phase writer handles many unique styles"):
-  val data = Stream.range(0, 100_000).map(i =>
-    RowData(Vector("text"), styles = Vector(uniqueStyle(i % 1000)))
-  )
-
-  val memBefore = currentHeapUsage()
-  TwoPhaseStreamingWriter.write(data, tempPath).unsafeRunSync()
-  val memAfter = currentHeapUsage()
-
-  assert((memAfter - memBefore) < 100_000_000)  // < 100MB
-```
+**Impact**: Ergonomic streaming transformations
 
 ---
 
-## Implementation Priority
+## Definition of Done
 
-### Phase 1: Critical Fixes (Week 1)
-1. **P6.6**: Fix streaming reader (2-3 days) - CRITICAL
-2. **P6.7**: Compression defaults (1 day) - QUICK WIN
-3. Memory tests (1 day)
+### Completed (P6.6-P6.7) ✅
+- [x] Streaming reader uses fs2.io.readInputStream (O(1) memory)
+- [x] Compression defaults to DEFLATED
+- [x] WriterConfig for compression/prettyPrint
+- [x] Memory tests pass (< 50MB for 100k rows)
+- [x] Compression tests verify 5-10x reduction
 
-**Deliverable**: True O(1) streaming reads, smaller files
-
-### Phase 2: Minor Improvements (Week 2)
-4. SST heuristic (1 hour)
-5. Merged cells (2-3 hours)
-6. Column/row properties (3-4 hours)
-7. Theme colors (1-2 days)
-
-**Deliverable**: Feature completeness for in-memory path
-
-### Phase 3: Two-Phase Writer (Weeks 3-4)
-8. **P7.5**: Implement two-phase streaming writer (3-4 weeks)
-9. Add disk-backed SST option
-10. Comprehensive tests
-
-**Deliverable**: Full streaming with SST/styles
+### Future Work (P7.5)
+- [ ] Two-phase writer implemented
+- [ ] SST + styles in streaming write
+- [ ] Disk-backed SST option
+- [ ] Query API for streaming transforms
+- [ ] Minor improvements (merged cells, col/row props, SST heuristic)
+- [ ] 30+ tests added
+- [ ] Performance maintained (< 100MB for 1M rows)
 
 ---
 
-## Success Criteria
+## Module Ownership
 
-### P6.6 (Streaming Reader Fix)
-- ✅ Read 100k rows using < 50MB memory
-- ✅ Read 1M rows using < 50MB memory
-- ✅ Memory tests pass
-- ✅ No `readAllBytes()` in codebase
+**Primary**: `xl-cats-effect` (ExcelIO.scala, TwoPhaseWriter.scala)
 
-### P6.7 (Compression)
-- ✅ Default to DEFLATED
-- ✅ Files 3-5x smaller than STORED
-- ✅ Configurable compression mode
-- ✅ Pretty-print configurable
+**Secondary**: `xl-ooxml` (OoxmlWorksheet.scala for merged cells/props)
 
-### P7.5 (Two-Phase Writer)
-- ✅ Write 1M rows with full styles using < 100MB memory
-- ✅ SST with 100k unique strings using < 100MB
-- ✅ Disk-backed SST option for very large datasets
-- ✅ Round-trip tests with SST/styles
+**Test Files**: `xl-cats-effect/test` (StreamingSpec, MemorySpec, CompressionSpec)
 
 ---
 
-## Related Documents
+## Merge Risk Assessment
 
-- **STATUS.md**: Current limitations documented
-- **io-modes.md**: Architecture decision for two I/O modes
-- **performance-guide.md**: User guidance on mode selection
-- **future-improvements.md**: Roadmap priorities
+**Risk Level**: Low
+
+**Rationale**:
+- Two-phase writer is new implementation (doesn't break existing)
+- Minor improvements are additive to OoxmlWorksheet
+- Query API is new API surface
+- No breaking changes to existing streaming
 
 ---
 
-## Author
+## Related Documentation
 
-Documented 2025-11-11 based on technical review feedback
+- **Roadmap**: `docs/plan/roadmap.md` (WI-16 through WI-20)
+- **Design**: `docs/design/io-modes.md` (streaming vs in-memory architecture)
+- **Performance**: `docs/reference/performance-guide.md` (mode selection guidance)
+- **Strategic**: `docs/plan/strategic-implementation-plan.md` (Phase 1: Hardening & Streaming)
+
+---
+
+## Notes
+
+- **P6.6-P6.7 complete** — constant-memory read, compression defaults operational
+- **P7.5 deferred** — two-phase writer is enhancement, not critical (in-memory path works for rich formatting)
+- **Estimated timeline**: 3-4 weeks for P7.5 if needed
+- **Priority**: Medium (in-memory path adequate for most use cases)

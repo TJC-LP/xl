@@ -284,6 +284,69 @@ Implementation phases and current status (including test counts and performance 
 - `docs/plan/roadmap.md` – phase definitions and completion status
 - `docs/STATUS.md` – current capabilities, coverage, and performance
 
+## Documentation Structure for AI Agents
+
+XL uses a **living algorithm documentation model** optimized for parallel AI-driven development:
+
+### Primary Interface: `docs/plan/roadmap.md`
+
+**The single source of truth** for work scheduling:
+- **TL;DR section**: Quick orientation (current status, available work)
+- **Visual DAG**: Embedded Mermaid dependency graph with color-coded status
+  - 🟢 Green: Completed (merged to main)
+  - 🔵 Blue: Available (all dependencies met, ready to start)
+  - ⚪ Gray: Blocked (waiting on hard dependencies)
+- **Work Items Table**: Maps DAG nodes to plan docs with module ownership and merge risk
+- **Work Selection Algorithm**: Step-by-step instructions for picking next task
+- **Worktree Strategy**: Parallel work guidelines and conflict matrix
+- **Historical Phases**: P0-P13 completion tracking (for context only)
+
+### Active Plan Docs (`docs/plan/*.md`)
+
+Each plan doc contains:
+- **Metadata header**: Module ownership, dependencies, merge risk, parallelization guidance
+- **Work Items table**: PR-sized chunks with IDs matching roadmap DAG
+- **Execution Algorithm**: Agent-executable steps (worktree creation, implementation, testing, PR)
+- **Definition of Done**: Checklist for completion verification
+
+**Active plans**:
+- `future-improvements.md` — Performance & quality polish (P6.5)
+- `formula-system.md` — Typed formula engine (WI-07 through WI-09)
+- `advanced-features.md` — Drawings, charts, tables, benchmarks (WI-10 through WI-15)
+- `error-model-and-safety.md` — Security hardening (WI-30 through WI-34)
+- `streaming-improvements.md` — Two-phase writer, query API (WI-16 through WI-20)
+
+### Workflow for AI Agents
+
+**When starting new work**:
+1. Check `docs/plan/roadmap.md` TL;DR for available work (🔵 blue nodes)
+2. Run `gtr list` to verify no conflicting worktrees
+3. Select work item from roadmap Work Items Table
+4. Check Module Ownership for merge risk
+5. Read corresponding plan doc for implementation details
+6. Follow Execution Algorithm in plan doc
+7. Use `.github/pull_request_template.md` checklist for documentation updates
+
+**After PR merge**:
+1. Update roadmap.md (status, DAG, TL;DR)
+2. Update STATUS.md (if new capability)
+3. Update LIMITATIONS.md (if limitation removed)
+4. Archive plan doc if phase complete (move to git history)
+5. Commit documentation updates
+
+### Parallelization Strategy
+
+**Module Conflict Matrix** (from roadmap.md):
+- **High risk**: `xl-core/Sheet.scala` — central domain model (serialize work)
+- **Medium risk**: `xl-ooxml/Worksheet.scala` — OOXML hub (coordinate)
+- **Low risk**: `xl-evaluator/` — new module (parallelize freely)
+- **None**: `xl-testkit/`, new OOXML parts — completely independent
+
+**Safe parallel combinations**:
+- ✅ WI-07 (xl-evaluator) + WI-10 (xl-ooxml) + WI-15 (xl-testkit)
+- ✅ WI-11 (charts) + WI-12 (drawings) — coordinate Worksheet.scala changes
+- ⚠️ WI-08 + WI-09 (both xl-evaluator) — serialize or use different files
+
 ## Important Constraints
 
 ### ARef Packing
@@ -589,50 +652,58 @@ val htmlWithTooltips = sheet.toHtml(range"A1:C3", includeComments = true)
 
 ## Documentation
 
-Documentation is organized by purpose (no numbering for easier maintenance):
+Documentation is organized by purpose as a **living algorithm** (current + future only; git history = archaeology):
 
-### Active Plans (`docs/plan/`) - 9 files
-**Future work only** (P7-P11). Completed phases archived.
-- `roadmap.md` → Master status tracker (P0-P11)
-- `error-model-and-safety.md` → P11 security hardening
-- `formula-system.md` → P7+ evaluator
-- `drawings.md`, `charts.md`, `tables-and-pivots.md` → P8-P10 features
-- `benchmarks.md` → Performance testing plan
-- `security.md` → Additional P11 features
+### Primary Roadmap (`docs/plan/`) - 6 files
+**The scheduler** (single source of truth for work ordering):
+- `roadmap.md` → Visual DAG, Work Items table, Algorithm for agents
+- `future-improvements.md` → Performance & quality polish (P6.5)
+- `formula-system.md` → Typed formula engine (WI-07 through WI-09)
+- `advanced-features.md` → Drawings, charts, tables, benchmarks (WI-10 through WI-15)
+- `error-model-and-safety.md` → Security hardening (WI-30 through WI-34)
+- `streaming-improvements.md` → Two-phase writer, query API (WI-16 through WI-20)
+- `strategic-implementation-plan.md` → 7-phase execution framework
 
-### Design Docs (`docs/design/`) - 6 files
-**Architectural decisions** (timeless)
-- `executive-summary.md` → Vision and non-negotiables
+### Design Docs (`docs/design/`) - 7 files
+**Architectural decisions** (timeless):
+- `architecture.md` → Module structure and wiring
 - `purity-charter.md` → Effect isolation, totality, laws
-- `domain-model.md` → Full type algebra (Cell, Sheet, Workbook, RichText, StyleRegistry)
-- `decisions.md` → ADR log (10 decisions documented)
-- `style-guide.md` → Coding conventions
-- `query-api.md` → Unimplemented design spec
+- `domain-model.md` → Full type algebra (Cell, Sheet, Workbook, RichText)
+- `decisions.md` → ADR log (12+ decisions documented)
+- `wartremover-policy.md` → Compile-time safety policy
+- `io-modes.md` → Streaming vs in-memory semantics
+- `query-api.md` → Future query DSL design
 
-### Reference (`docs/reference/`) - 5 files
-**Quick reference material**
+### Reference (`docs/reference/`) - 6 files
+**Quick reference material**:
 - `testing-guide.md` → Test coverage breakdown (680+ tests)
 - `examples.md` → Code samples
-- `glossary.md` → Terminology
-- `ooxml-cheatsheet.md` → Quick reference
-- `ooxml-research.md` → OOXML schemas (ChatGPT research, 484 lines)
-
-### Archived Plans (`docs/archive/plan/`) - 11 files
-**Completed implementation plans** (P0-P6, P31), organized by phase:
-- `p0-bootstrap/` → Build system, linting
-- `p1-addressing/` → Opaque types, macros
-- `p2-patches/` → Patch Monoid
-- `p3-styles/` → Style system
-- `p4-ooxml/` → XML serialization
-- `p5-streaming/` → fs2-data-xml streaming
-- `p6-codecs/` → CellCodec primitives
-- `p31-refactor/` → Optics, RichText, HTML export
+- `implementation-scaffolds.md` → Comprehensive code patterns for AI agents
+- `ooxml-research.md` → OOXML spec research
+- `performance-guide.md` → Performance tuning guide
+- `migration-from-poi.md` → POI migration guide
+- `ai-contracts-guide.md` → AI contract patterns
 
 ### Root Docs
-- `docs/STATUS.md` → Detailed current state (680+ tests, performance, limitations)
-- `docs/LIMITATIONS.md` → Current roadmap and missing features
-- `docs/CONTRIBUTING.md` → Contribution guidelines
-- `docs/FAQ.md` → Frequently asked questions
+- `docs/STATUS.md` → Detailed current state (680+ tests, performance)
+- `docs/LIMITATIONS.md` → Current limitations and future roadmap
+- `docs/CONTRIBUTING.md` → Contribution guidelines (includes style guide)
+- `docs/FAQ-AND-GLOSSARY.md` → Questions and terminology
+- `docs/QUICK-START.md` → 5-minute getting started guide
+
+### Historical Documentation
+**Archive removed from HEAD** (2025-11-20) to reduce noise for AI agents.
+
+All historical plans (P0-P8, P31, surgical modification, string interpolation) are preserved in git history. To access:
+```bash
+# View archive at last commit before deletion
+git show d8bb232:docs/archive/plan/
+
+# Search historical plans
+git log --all -- 'docs/archive/**/*.md'
+```
+
+**Rationale**: HEAD = living algorithm (current + future). Git history = archaeology.
 
 ## CI/CD
 

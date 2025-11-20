@@ -94,7 +94,7 @@ Beyond workbook/worksheet/styles/SST (already complete), remaining OOXML parts:
 * `LazySheet` as default representation
 * Tighter integration with fs2
 
-**Status**: Deferred (archived in `docs/archive/plan/deferred/lazy-evaluation.md`)
+**Status**: Deferred (see git history for detailed rationale)
 
 ---
 
@@ -318,7 +318,7 @@ Coordination needed around OOXML relationship plumbing, but each sub-area has ow
 * Essentially own "epic" touching everything
 * Best treated as focused, time-boxed project after rest settles
 
-**Status**: **Deferred post-1.0** (see `docs/archive/plan/deferred/lazy-evaluation.md`)
+**Status**: **Deferred post-1.0** (see git history for lazy evaluation design)
 
 ---
 

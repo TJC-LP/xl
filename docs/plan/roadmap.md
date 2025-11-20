@@ -1,3 +1,258 @@
+# XL Roadmap — Living Algorithm for Parallel AI Development
+
+**Last Updated**: 2025-11-20
+
+---
+
+## TL;DR (For AI Agents)
+
+**Current Status**: Phase 1.1 complete (680+ tests passing). Core domain model, OOXML I/O, streaming, and codecs operational.
+
+**Active Work**: None (awaiting task assignment)
+
+**Next Available Work**:
+- `WI-07` — Formula Parser (unblocks evaluator stream)
+- `WI-10` — Table Support (independent, high-value)
+- `WI-15` — Benchmark Suite (enables optimizations)
+
+**Quick Start**: Jump to [Work Selection Algorithm](#work-selection-algorithm) for step-by-step work item selection.
+
+---
+
+## Visual Dependency Graph
+
+```mermaid
+graph TB
+    %% Completed work (green)
+    P0["P0-P8, P31<br/>Foundation Complete"]:::completed
+
+    %% Available work (blue - ready to start)
+    WI07["WI-07: Formula Parser<br/>(formula-system.md)"]:::available
+    WI10["WI-10: Table Support<br/>(advanced-features.md)"]:::available
+    WI11["WI-11: Chart Model<br/>(advanced-features.md)"]:::available
+    WI15["WI-15: Benchmark Suite<br/>(advanced-features.md)"]:::available
+    WI20["WI-20: Query API<br/>(streaming-improvements.md)"]:::available
+
+    %% Blocked work (gray - waiting on dependencies)
+    WI08["WI-08: Formula Evaluator"]:::blocked
+    WI09["WI-09: Function Library"]:::blocked
+    WI12["WI-12: Drawing Layer"]:::blocked
+    WI13["WI-13: Pivot Tables"]:::blocked
+    WI16["WI-16: Streaming Opts"]:::blocked
+
+    %% Dependencies
+    P0 --> WI07
+    P0 --> WI10
+    P0 --> WI11
+    P0 --> WI15
+    P0 --> WI20
+
+    WI07 --> WI08
+    WI08 --> WI09
+    WI11 --> WI12
+    WI10 --> WI13
+    WI15 --> WI16
+
+    %% Style definitions
+    classDef completed fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    classDef available fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
+    classDef blocked fill:#D3D3D3,stroke:#808080,stroke-width:2px,color:#000
+```
+
+**Legend**:
+- 🟢 **Green** — Completed (merged to main)
+- 🔵 **Blue** — Available (all dependencies complete, ready to start)
+- ⚪ **Gray** — Blocked (waiting on hard dependencies)
+
+---
+
+## Work Items Table
+
+| Task ID | Summary | Stream | Plan Doc | Modules | Status | Hard Deps | Merge Risk |
+|---------|---------|--------|----------|---------|--------|-----------|------------|
+| **P0-P8** | Foundation Complete | Core | (see git history) | all | ✅ Complete | - | N/A |
+| **WI-07** | Formula Parser | Formula | `formula-system.md` §1-2 | xl-evaluator | 🔵 Available | P0-P8 | Low |
+| **WI-08** | Formula Evaluator | Formula | `formula-system.md` §3 | xl-evaluator | ⚪ Blocked | WI-07 | Medium |
+| **WI-09** | Function Library | Formula | `formula-system.md` §4 | xl-evaluator | ⚪ Blocked | WI-08 | Low |
+| **WI-10** | Table Support | Advanced | `advanced-features.md` §Tables | xl-ooxml | 🔵 Available | P0-P8 | Low |
+| **WI-11** | Chart Model | Advanced | `advanced-features.md` §Charts | xl-ooxml | 🔵 Available | P0-P8 | Low |
+| **WI-12** | Drawing Layer | Advanced | `advanced-features.md` §Drawings | xl-ooxml | ⚪ Blocked | WI-11 | Medium |
+| **WI-13** | Pivot Tables | Advanced | `advanced-features.md` §Pivots | xl-ooxml | ⚪ Blocked | WI-10 | High |
+| **WI-15** | Benchmark Suite | Infra | `advanced-features.md` §Benchmarks | xl-testkit | 🔵 Available | P0-P8 | None |
+| **WI-16** | Streaming Optimizations | Core | `streaming-improvements.md` | xl-cats-effect | ⚪ Blocked | WI-15 | Medium |
+| **WI-20** | Query API | Core | `streaming-improvements.md` §Query | xl-core | 🔵 Available | P0-P8 | Medium |
+| **WI-30** | Security Hardening | Safety | `error-model-and-safety.md` | xl-ooxml | 🔵 Available | P0-P8 | Low |
+
+**Column Definitions**:
+- **Task ID**: Unique identifier matching DAG nodes
+- **Summary**: One-line description
+- **Stream**: Formula / Advanced / Core / Infra / Safety
+- **Plan Doc**: Detailed implementation plan (with section reference)
+- **Modules**: Mill modules affected (for conflict prediction)
+- **Status**: ✅ Complete | 🔵 Available | ⚪ Blocked
+- **Hard Deps**: Must complete before starting
+- **Merge Risk**: None/Low/Medium/High (file conflict probability)
+
+---
+
+## Work Selection Algorithm
+
+When starting new work, follow this algorithm:
+
+### Step 1: Check Active Work
+```bash
+gtr list
+```
+- If worktrees exist → **Resume existing work** (don't start new tasks)
+- If no worktrees → Proceed to Step 2
+
+### Step 2: Filter Available Tasks
+From [Work Items Table](#work-items-table), select tasks where:
+1. Status = 🔵 Available (all hard dependencies complete)
+2. No conflicting active worktrees (check Step 3)
+
+### Step 3: Conflict Detection
+Check **Modules** column against active worktrees:
+- **High risk**: Same module + same files → **Skip** (complete existing work first)
+- **Medium risk**: Same module + different files → **Warn** (ask user)
+- **Low/None risk**: Different modules → **Safe** (proceed)
+
+**Example**:
+```
+Active: WI-08 (xl-evaluator)
+Candidate: WI-09 (xl-evaluator) → HIGH RISK (same module)
+Candidate: WI-10 (xl-ooxml) → LOW RISK (different module)
+```
+
+### Step 4: Suggest Next Task
+Present top 2-3 candidates with rationale:
+```
+Available tasks (sorted by priority):
+1. WI-07 (Formula Parser) — Unblocks 2 downstream tasks, low conflict
+2. WI-10 (Table Support) — High user value, independent work
+3. WI-15 (Benchmark Suite) — Infrastructure, no conflicts
+
+Recommendation: WI-07 (enables evaluator stream)
+Create worktree? [Y/n]
+```
+
+### Step 5: Create Worktree
+```bash
+cd /Users/rcaputo3/git/xl
+gtr create <task-id>  # e.g., gtr create WI-07-formula-parser
+```
+
+### Step 6: Update Roadmap
+After creating worktree:
+1. Change task Status to 🟡 Active (this file)
+2. Update DAG node class to `active`
+3. Commit roadmap update
+
+### Step 7: Post-Completion Updates
+When work merges to main:
+1. Change Status to ✅ Complete
+2. Update DAG node class to `completed`
+3. Recalculate downstream statuses (blocked → available)
+4. Update TL;DR with newly available tasks
+5. Archive plan doc if phase complete
+
+---
+
+## Worktree Strategy
+
+### Naming Convention
+```
+<task-id>-<short-description>
+```
+Examples:
+- `WI-07-formula-parser`
+- `WI-10-table-support`
+- `WI-15-benchmarks`
+
+Branch names: `claude/WI-07-formula-parser`
+
+### Parallel Work Guidelines
+
+**Safe Combinations** (different modules):
+- ✅ WI-10 (xl-ooxml/tables) + WI-15 (xl-testkit/benchmarks)
+- ✅ WI-07 (xl-evaluator) + WI-10 (xl-ooxml)
+
+**Risky Combinations** (same module):
+- ⚠️ WI-08 (xl-evaluator) + WI-09 (xl-evaluator)
+- ⚠️ WI-10 (xl-ooxml) + WI-11 (xl-ooxml) — coordinate if many changes
+
+**Module Conflict Matrix**:
+
+| Module | Risk Level | Reason |
+|--------|------------|--------|
+| `xl-core/Sheet.scala` | **High** | Central domain model, many features touch |
+| `xl-ooxml/Worksheet.scala` | **Medium** | OOXML serialization hub |
+| `xl-evaluator/` | **Low** | New module, isolated |
+| `xl-testkit/` | **None** | Infrastructure, no conflicts |
+
+### Merge Order
+1. Complete work items in dependency order (check Hard Deps column)
+2. Merge PRs sequentially if High risk
+3. Parallel merge if Low/None risk
+
+---
+
+## Priority Guidelines
+
+### High Priority (Start First)
+1. **WI-07** (Formula Parser) — Unblocks entire evaluator stream
+2. **WI-10** (Table Support) — High user value, independent
+3. **WI-30** (Security) — Production requirement
+
+### Medium Priority (Next Wave)
+4. **WI-11** (Chart Model) — High value, can parallel with WI-10
+5. **WI-15** (Benchmark Suite) — Needed before optimizations
+6. **WI-20** (Query API) — DX improvement
+
+### Low Priority (After Core Features)
+7. **WI-16** (Streaming Opts) — Wait for benchmarks first
+8. **WI-13** (Pivot Tables) — Complex, requires tables + formulas
+
+### User-Driven Priorities
+If user requests specific feature:
+1. Check if WI-XX exists in table → Use that ID
+2. If new feature → Add WI-XX row with dependencies
+3. Validate feasibility with user
+
+---
+
+## FAQ
+
+### Q: What if two agents want the same task?
+**A**: First agent to create worktree wins. Second agent sees status change and picks different task.
+
+### Q: Can I work on a blocked task?
+**A**: Not recommended. Dependencies exist for architectural reasons. Complete prerequisites first.
+
+### Q: What if my task conflicts with active work?
+**A**:
+- **High risk** (same module + files) → Wait for completion
+- **Medium risk** → Coordinate with other agent/user
+- **Low risk** → Proceed independently
+
+### Q: How do I add a new work item?
+**A**:
+1. Add row to Work Items Table with next WI-XX ID
+2. Add node to Mermaid DAG with dependencies
+3. Update TL;DR if immediately available
+4. Create/update plan doc in `docs/plan/`
+
+### Q: What if plan doc doesn't exist yet?
+**A**: Create stub plan doc with Work Items table before starting implementation.
+
+---
+
+## Detailed Phase Documentation
+
+Below is the complete history of all phases. For **active work**, see plan docs in `docs/plan/`. For **completed phase details**, see git history (commit d8bb232 and earlier).
+
+---
+
 # Roadmap — From Spec to MVP and Beyond
 
 **Current Status: ~87% Complete (680/680 tests passing)**
@@ -136,7 +391,7 @@
 - ✅ Added 22 comprehensive tests across 4 new test classes
 - ✅ Zero spec violations, full round-trip fidelity achieved
 
-**See**: [archived: ooxml-quality.md](../archive/plan/p4-5-ooxml-quality.md) for detailed implementation notes
+**Historical details**: See git history (commit d8bb232 and earlier) for archived implementation plans
 
 ### ✅ P6.6: Streaming Reader Memory Fix (Complete)
 **Status**: 100% Complete
@@ -171,7 +426,7 @@
 - ✅ MacroUtilSpec: 11 tests for MacroUtil.reconstructString
 - ✅ Phase 1 complete, all tests passing
 
-**See**: [archived: string-interpolation.md](../archive/plan/string-interpolation/) for detailed design
+**Historical details**: See git history for detailed design
 
 ### ✅ P8: String Interpolation - Phase 2 (Complete)
 **Status**: 100% Complete
@@ -186,7 +441,7 @@
 - ✅ Integration tests: round-trip, edge cases, for-comprehension
 - ✅ Phase 2 complete, all macros have compile-time optimization
 
-**See**: [archived: phase1-implementation-plan.md, phase2-implementation-plan.md](../archive/plan/string-interpolation/) for implementation details
+**Historical details**: See git history for implementation details
 
 ### ✅ P6.8: Surgical Modification & Passthrough (Complete)
 **Status**: 100% Complete
@@ -214,7 +469,7 @@
 - ✅ 💾 Memory: 30-50MB savings via lazy loading (no materialization of unknown parts)
 - ✅ 🏗️ Foundation: Enables incremental OOXML feature additions (charts, drawings future work)
 
-**See**: [archived: surgical-modification.md](../archive/plan/p6-8-surgical-modification/) for design history
+**Historical details**: See git history for design history
 
 ### ✅ Post-P8 Enhancements (Complete)
 
@@ -225,14 +480,14 @@
 - ✅ Extensibility (users can add custom types)
 - ✅ Zero overhead (inline given instances)
 
-**See**: [archived: type-class-put.md](../archive/plan/completed-post-p8/type-class-put.md) for detailed design
+**Historical details**: See git history for detailed design
 
 **NumFmt ID Preservation** (Complete - P6.8, commit 3e1362b):
 - ✅ CellStyle.numFmtId field for byte-perfect format preservation
 - ✅ Fixes surgical modification style corruption
 - ✅ Preserves Excel built-in format IDs (including accounting formats 37-44)
 
-**See**: [archived: numfmt-id-preservation.md, numfmt-preservation.md](../archive/plan/p6-8-surgical-modification/) for problem analysis
+**Historical details**: See git history for problem analysis
 
 ---
 
@@ -381,18 +636,28 @@ Plans in this directory cover **active future work** only. Completed phases are 
 - `ooxml-research.md` - OOXML spec research
 - `performance-guide.md` - Performance tuning guide
 
-### Archived Plans
-`docs/archive/plan/` - Completed implementation plans:
-- P0-P8, P31 phases (bootstrap through string interpolation)
-- Surgical modification, type-class consolidation, numFmt preservation
-- String interpolation phases, unified put API
-
 ### Root Docs
 - `STATUS.md` - Detailed current state
 - `LIMITATIONS.md` - Current limitations and roadmap
 - `CONTRIBUTING.md` - Contribution guidelines
 - `FAQ-AND-GLOSSARY.md` - Questions and terminology
-- `ARCHIVE_LIST.md` - Archive tracking
+
+### Historical Documentation
+**Archived plans removed from HEAD** (2025-11-20) to reduce noise for AI agents.
+
+All historical implementation plans (P0-P8, P31, surgical modification, string interpolation, etc.) are preserved in git history. To access:
+```bash
+# View archive at last commit before deletion
+git show d8bb232:docs/archive/plan/
+
+# Search historical plans
+git log --all -- 'docs/archive/**/*.md'
+
+# Restore specific file temporarily
+git show d8bb232:docs/archive/plan/p5-streaming/streaming-and-performance.md
+```
+
+**Rationale**: HEAD docs = living algorithm (current + future only). Git history = archaeology.
 
 ---
 

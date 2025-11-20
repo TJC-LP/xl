@@ -1,34 +1,172 @@
-# Advanced Features Plan (P10-P12 + Benchmarks)
+# Advanced Features (Drawings, Charts, Tables, Benchmarks)
 
-**Status**: ⬜ Not Started (Future Work)
+**Status**: ⬜ Not Started
+**Priority**: Medium-High
+**Estimated Effort**: 10-15 weeks total
 **Last Updated**: 2025-11-20
-**Purpose**: Consolidated plan for advanced Excel features beyond core I/O
-
-> **Note**: This document consolidates planning for drawings, charts, tables/pivots, and performance benchmarks. For implementation scaffolds, see [docs/reference/implementation-scaffolds.md](../reference/implementation-scaffolds.md).
 
 ---
 
-## Overview
+## Metadata
 
-This plan covers advanced Excel features that build upon the core OOXML foundation (P0-P8 complete). These features are prioritized for Phases 10-12 and include:
-
-1. **Drawings & Images** (P10) - Pictures, shapes, anchors
-2. **Charts** (P11) - Data visualization with typed grammar
-3. **Tables & Pivot Tables** (P12) - Structured data and aggregations
-4. **Performance Benchmarks** (Infrastructure) - JMH testing and POI comparisons
-
-**Dependencies**: Most features depend on Phase 4 (Formula Engine & Dependency Graph) for proper data binding and relationship management.
+| Field | Value |
+|-------|-------|
+| **Owner Modules** | `xl-ooxml`, `xl-testkit` (benchmarks), `xl-evaluator` (chart data binding) |
+| **Touches Files** | New files in `xl/drawings/`, `xl/charts/`, `xl/tables/`, benchmark module |
+| **Dependencies** | P0-P8 complete; Charts/Tables benefit from WI-07/WI-08 (formula engine) |
+| **Enables** | Full Excel feature parity (visual elements, data structures) |
+| **Parallelizable With** | WI-07/WI-08 (formula) — independent modules; WI-15 can start immediately |
+| **Merge Risk** | Low (new OOXML parts, minimal overlap with existing code) |
 
 ---
 
-## 1. Drawings & Graphics (P10)
+## Work Items
+
+| ID | Description | Type | Files | Status | PR |
+|----|-------------|------|-------|--------|----|
+| `WI-10` | Table Support | Feature | `xl/ooxml/OoxmlTable.scala` | ⏳ Not Started | - |
+| `WI-11` | Chart Model | Feature | `xl/ooxml/OoxmlChart.scala` | ⏳ Not Started | - |
+| `WI-12` | Drawing Layer | Feature | `xl/ooxml/OoxmlDrawing.scala` | ⏳ Not Started | - |
+| `WI-13` | Pivot Tables | Feature | `xl/ooxml/OoxmlPivot.scala` | ⏳ Not Started | - |
+| `WI-15` | Benchmark Suite | Infra | `xl-benchmarks/` (new module) | ⏳ Not Started | - |
+
+---
+
+## Dependencies
+
+### Prerequisites (Complete)
+- ✅ P0-P8: Foundation complete (OOXML I/O, styles, streaming operational)
+- ✅ P6.8: Surgical modification (preserves unknown parts during development)
+
+### Recommended Order
+1. **WI-15** (Benchmarks) — Can start immediately, establishes performance baseline
+2. **WI-12** (Drawings) — Foundational for charts, relatively isolated
+3. **WI-10** (Tables) — Needed for chart data binding, depends on named ranges (defer or implement inline)
+4. **WI-11** (Charts) — Final integration, depends on drawings + tables recommended
+5. **WI-13** (Pivot Tables) — Complex, requires tables + formula engine
+
+### File Conflicts
+- **Low risk**: All work items create new OOXML parts (new files)
+- **Medium risk**: WI-11 (Charts) may modify Worksheet.scala for chart relationships
+- **High risk**: WI-13 (Pivots) touches tables + formula evaluation (coordinate with WI-08)
+
+### Safe Parallelization
+- ✅ WI-15 (Benchmarks) + any other work — completely independent
+- ✅ WI-10 (Tables) + WI-12 (Drawings) — different OOXML parts
+- ✅ WI-07/WI-08 (Formula) + WI-15 (Benchmarks) — different modules
+
+---
+
+## Worktree Strategy
+
+**Branch naming**: `<feature>` (e.g., `drawings`, `charts`, `tables`, `benchmarks`)
+
+**Merge order**:
+1. WI-15 (Benchmarks) — anytime (independent)
+2. WI-12 (Drawings) — before WI-11 (charts depend on drawings)
+3. WI-10 (Tables) — before WI-13 (pivots depend on tables)
+4. WI-11 (Charts) — after WI-12, optionally after WI-10
+5. WI-13 (Pivots) — last (depends on tables + formulas)
+
+**Conflict resolution**:
+- If multiple agents working on different WI-XX items, coordinate merge order
+- Use PR drafts to signal work in progress
+
+---
+
+## Execution Algorithm
+
+### WI-15: Benchmark Suite (Start Immediately)
+```
+1. Create worktree: `gtr create WI-15-benchmarks`
+2. Set up xl-benchmarks module in build.mill
+3. Add JMH dependencies
+4. Create benchmark suites:
+   - ReadWriteBenchmark (streaming vs in-memory)
+   - PatchBenchmark (single cell vs batch)
+   - StyleBenchmark (deduplication, indexing)
+5. Add POI comparison benchmarks
+6. Configure CI job for regression alerts
+7. Run benchmarks: `./mill xl-benchmarks.runJmh`
+8. Document results in STATUS.md
+9. Create PR: "feat(benchmarks): add JMH performance testing suite"
+10. Update roadmap: WI-15 → ✅ Complete, WI-16 → 🔵 Available
+```
+
+### WI-12: Drawing Layer (After WI-15)
+```
+1. Create worktree: `gtr create WI-12-drawings`
+2. Define Drawing AST in xl-ooxml:
+   - Anchor (TwoCell, OneCell)
+   - Picture (image bytes, anchor, alt text)
+   - Shape (Rect, Ellipse, Line, Polygon)
+3. Implement OoxmlDrawing serialization
+4. Add media deduplication (SHA-256)
+5. Wire into relationship graph
+6. Add round-trip tests with embedded images
+7. Run tests: `./mill xl-ooxml.test`
+8. Create PR: "feat(ooxml): add drawing layer support"
+9. Update roadmap: WI-12 → ✅ Complete
+```
+
+### WI-10: Table Support (Parallel with WI-12)
+```
+1. Create worktree: `gtr create WI-10-tables`
+2. Define TableSpec AST:
+   - Range, style, headers, totals row
+   - AutoFilter configuration
+3. Implement OoxmlTable serialization
+4. Add structured reference support (basic or defer to formula engine)
+5. Add round-trip tests
+6. Run tests: `./mill xl-ooxml.test`
+7. Create PR: "feat(ooxml): add Excel table support"
+8. Update roadmap: WI-10 → ✅ Complete, WI-13 → recalculate dependencies
+```
+
+### WI-11: Chart Model (After WI-12, optionally WI-10)
+```
+1. Create worktree: `gtr create WI-11-charts`
+2. Define Chart AST:
+   - ChartType (Bar, Line, Pie, Scatter)
+   - Series (data binding, styling)
+   - Axes (Category, Value, Time)
+   - Legend positioning
+3. Implement OoxmlChart serialization
+4. Wire chart data bindings (use cell ranges initially)
+5. Add round-trip tests for each chart type
+6. Run tests: `./mill xl-ooxml.test`
+7. Create PR: "feat(ooxml): add chart model support"
+8. Update roadmap: WI-11 → ✅ Complete
+```
+
+### WI-13: Pivot Tables (Last — Requires Tables + Formulas)
+```
+1. Create worktree: `gtr create WI-13-pivots`
+2. Define PivotSpec AST:
+   - Source range/cache
+   - Row/column/value fields
+   - Aggregations (Sum, Avg, Count, Min, Max)
+3. Implement pivot cache materialization
+4. Implement OoxmlPivot serialization
+5. Wire into dependency graph for refresh
+6. Add comprehensive round-trip tests
+7. Run tests: `./mill xl-ooxml.test`
+8. Create PR: "feat(ooxml): add pivot table support"
+9. Update roadmap: WI-13 → ✅ Complete
+```
+
+---
+
+## Detailed Design
+
+### 1. Drawings & Graphics (P10)
 
 **Status**: ⬜ Not Started
 **Estimated Effort**: 10-15 days
 **Priority**: Medium
 **LOC**: ~800
 
-### Scope
+#### Scope
 
 **Anchors**:
 - `TwoCell(fromRow, fromCol, fromDx, fromDy) → (toRow, toCol, toDx, toDy)`
@@ -45,7 +183,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 - Pure affine transforms with composition law; identity is no-op
 - Text boxes with RichText content
 
-### OOXML Mapping
+#### OOXML Mapping
 
 - Drawings reside in `xl/drawings/drawing#.xml` with anchors:
   - `xdr:twoCellAnchor` for cell-relative positioning
@@ -53,7 +191,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 - Media stored under `/xl/media/*.png|*.jpeg`
 - Relations via `drawing#.xml.rels` and `workbook.xml.rels`
 
-### Implementation Strategy
+#### Implementation Strategy
 
 1. Define pure AST for drawings (Anchor, Picture, Shape types)
 2. Implement XmlCodec[OoxmlDrawing] for serialization
@@ -65,14 +203,14 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 
 ---
 
-## 2. Charts (P11)
+### 2. Charts (P11)
 
 **Status**: ⬜ Not Started
 **Estimated Effort**: 20-30 days
 **Priority**: Medium
 **LOC**: ~1500+
 
-### Scope
+#### Scope
 
 **Chart Types**:
 - **Marks**: `Column|Bar` (clustered/stacked), `Line` (smooth/markers), `Area` (stacked), `Scatter`, `Pie`
@@ -84,7 +222,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 - Multiple series per chart
 - Data binding to cell ranges or tables
 
-### Semantics
+#### Semantics
 
 **Normalization**:
 - Series order → by `name` (stable sort)
@@ -100,7 +238,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 - Pure values
 - Printed deterministically
 
-### OOXML Mapping
+#### OOXML Mapping
 
 - Charts in `xl/charts/chart#.xml`:
   - `c:barChart|lineChart|pieChart|scatterChart`
@@ -112,7 +250,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
   - `c:strRef` for string data
   - With `f` formulas referencing sheet ranges
 
-### Implementation Strategy
+#### Implementation Strategy
 
 1. Define pure Chart AST (ChartType, Series, Axis, Legend types)
 2. Implement typed grammar for chart specifications
@@ -125,14 +263,14 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 
 ---
 
-## 3. Tables & Pivot Tables (P12)
+### 3. Tables & Pivot Tables (P12)
 
 **Status**: ⬜ Not Started
 **Estimated Effort**: 15-20 days
 **Priority**: Low
 **LOC**: ~1000
 
-### Scope
+#### Scope
 
 **Excel Tables**:
 - `TableSpec(range, style, showFilterButtons, totalsRow)`
@@ -151,7 +289,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 - Serialization to `slicer*.xml` (total)
 - Interactions adjust pivot cache query
 
-### OOXML Mapping
+#### OOXML Mapping
 
 **Tables**:
 - `xl/tables/table#.xml` for table definitions
@@ -163,7 +301,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 - `xl/pivotCache/pivotCacheDefinition#.xml` for data cache
 - `xl/pivotCache/pivotCacheRecords#.xml` for materialized data
 
-### Implementation Strategy
+#### Implementation Strategy
 
 1. Define pure AST for tables (TableSpec, ColumnDef, TotalsRow)
 2. Define pure AST for pivots (PivotSpec, Field, Aggregation)
@@ -176,13 +314,13 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 
 ---
 
-## 4. Performance Benchmarks (Infrastructure)
+### 4. Performance Benchmarks (Infrastructure)
 
 **Status**: ⬜ Not Started
 **Estimated Effort**: 1-2 weeks
 **Priority**: High (for performance claims validation)
 
-### Scope
+#### Scope
 
 **JMH Benchmarks**:
 - Parse 100k-row sheet (no styles) → measure allocs/op and throughput
@@ -205,7 +343,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 - **GC**: GC pause counts and durations
 - **Overhead**: Pure functional overhead vs imperative (should be zero)
 
-### Infrastructure
+#### Infrastructure
 
 **Build Integration**:
 - `xl-benchmarks` module with sbt-jmh plugin
@@ -217,7 +355,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 2. Establish baseline performance targets
 3. Track improvements/regressions per phase
 
-**Comparison Matrix**:
+**Comparison Matrix** (Current estimates):
 ```
 | Operation          | XL      | Apache POI | Improvement |
 |--------------------|---------|------------|-------------|
@@ -226,7 +364,7 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 | Memory (100k rows) | ~50MB   | ~800MB     | 16x less    |
 ```
 
-### Implementation Strategy
+#### Implementation Strategy
 
 1. Set up `xl-benchmarks` module with JMH dependencies
 2. Implement core operation benchmarks (read, write, patch)
@@ -243,74 +381,164 @@ This plan covers advanced Excel features that build upon the core OOXML foundati
 
 ### Phase Dependencies
 
-**Drawings** (P10):
+**Drawings** (WI-12):
 - ✅ P4 OOXML foundation complete
 - ✅ P6.8 Surgical modification (unknown part preservation)
-- ⬜ Relationship graph (Phase 2 of strategic plan)
+- Recommended: Relationship graph extensions (minimal)
 
-**Charts** (P11):
+**Charts** (WI-11):
 - ✅ P4 OOXML foundation complete
-- ⬜ P10 Drawings (charts often contain embedded shapes)
-- ⬜ Phase 4 Formula/Graph (for data binding)
-- ⬜ Tables (P12) optional but beneficial
+- Recommended: WI-12 (Drawings) — charts often contain embedded shapes
+- Optional: WI-07/WI-08 (Formula) — for dynamic data binding
+- Optional: WI-10 (Tables) — for table-based chart data
 
-**Tables** (P12):
+**Tables** (WI-10):
 - ✅ P4 OOXML foundation complete
-- ⬜ Phase 2 Named ranges + relationships
-- ⬜ Phase 4 Formula engine (for structured references)
+- Optional: Named ranges support (can implement inline)
+- Optional: WI-07/WI-08 (Formula) — for structured references
 
-**Benchmarks**:
+**Pivots** (WI-13):
+- ✅ P4 OOXML foundation complete
+- Required: WI-10 (Tables) — pivot source data
+- Required: WI-08 (Formula Evaluator) — for aggregations
+- High dependency complexity
+
+**Benchmarks** (WI-15):
 - ✅ Can start immediately
 - ✅ Current implementation provides baseline
 - Expand as features added
 
 ### Recommended Implementation Order
 
-1. **Benchmarks** (parallel with any other work) - establishes performance baseline
-2. **Drawings** - foundational for charts, relatively isolated
-3. **Tables** - needed for chart data binding, depends on named ranges
-4. **Charts** - final integration, depends on drawings + tables + formulas
+1. **WI-15** (Benchmarks) — parallel with any other work, establishes performance baseline
+2. **WI-12** (Drawings) — foundational for charts, relatively isolated
+3. **WI-10** (Tables) — needed for chart data binding
+4. **WI-11** (Charts) — final integration, benefits from WI-12 + WI-10
+5. **WI-13** (Pivots) — most complex, requires WI-10 + WI-08
+
+---
+
+## Definition of Done
+
+### Per Feature
+
+**Drawings Complete** (WI-12) when:
+- [x] Can embed PNG/JPEG images with two-cell and one-cell anchors
+- [x] Can create basic shapes (rectangle, ellipse, line)
+- [x] Media deduplication via SHA-256 works correctly
+- [x] Round-trip tests preserve all drawing properties
+- [x] Surgical modification preserves existing drawings
+
+**Charts Complete** (WI-11) when:
+- [x] Can create bar, line, pie, scatter charts
+- [x] Data binding to cell ranges works
+- [x] Chart styling (colors, fonts, legend) is fully configurable
+- [x] Round-trip tests preserve all chart properties
+- [x] Surgical modification preserves existing charts
+
+**Tables Complete** (WI-10) when:
+- [x] Can create Excel tables with headers and totals
+- [x] AutoFilter works correctly
+- [x] Table styles and banding serialize properly
+- [x] Round-trip tests preserve table structure
+
+**Pivots Complete** (WI-13) when:
+- [x] Can create pivot tables with row/column/value fields
+- [x] Aggregations work (Sum, Avg, Count, Min, Max)
+- [x] Pivot cache materializes correctly
+- [x] Round-trip tests preserve pivot structure
+
+**Benchmarks Complete** (WI-15) when:
+- [x] JMH benchmarks run in CI
+- [x] Performance regression alerts configured
+- [x] All claimed performance improvements verified (4.5x faster, 16x less memory)
+- [x] POI comparison benchmarks establish competitive advantage
+
+### Overall Phase
+
+- [ ] All WI-10 through WI-15 marked ✅ Complete
+- [ ] 200+ tests added (50 per feature + benchmarks)
+- [ ] STATUS.md updated with new capabilities
+- [ ] LIMITATIONS.md updated (remove what's now implemented)
+- [ ] Examples added to docs/reference/examples.md
+- [ ] Zero WartRemover errors
+- [ ] Code formatted
+
+---
+
+## Module Ownership
+
+**Per Work Item**:
+- **WI-10** (Tables): `xl-ooxml` (OoxmlTable.scala, TableSpec.scala)
+- **WI-11** (Charts): `xl-ooxml` (OoxmlChart.scala, ChartSpec.scala, ChartML serialization)
+- **WI-12** (Drawings): `xl-ooxml` (OoxmlDrawing.scala, DrawingSpec.scala, media/)
+- **WI-13** (Pivots): `xl-ooxml` + `xl-evaluator` (PivotSpec.scala, pivot cache, aggregations)
+- **WI-15** (Benchmarks): `xl-benchmarks` (new module, JMH suites)
+
+**Shared Files** (potential conflicts):
+- `xl-ooxml/src/com/tjclp/xl/ooxml/Worksheet.scala` — **Medium risk** (WI-11, WI-12 add relationships)
+- `xl-ooxml/src/com/tjclp/xl/ooxml/Relationships.scala` — **Medium risk** (all features add relationship types)
+
+---
+
+## Merge Risk Assessment
+
+**WI-10** (Tables): **Low**
+- New files only
+- Minimal Worksheet.scala changes
+
+**WI-11** (Charts): **Medium**
+- Touches Worksheet.scala (chart relationships)
+- Complex OOXML (ChartML is verbose)
+
+**WI-12** (Drawings): **Low**
+- New files, isolated OOXML part
+- Media deduplication is self-contained
+
+**WI-13** (Pivots): **High**
+- Depends on tables + formula evaluator
+- Complex data flow (source → cache → pivot)
+- Cross-module coordination required
+
+**WI-15** (Benchmarks): **None**
+- New module, zero overlap with features
 
 ---
 
 ## Success Criteria
 
-**Drawings Complete** when:
-- ✅ Can embed PNG/JPEG images with two-cell and one-cell anchors
-- ✅ Can create basic shapes (rectangle, ellipse, line)
-- ✅ Media deduplication via SHA-256 works correctly
-- ✅ Round-trip tests preserve all drawing properties
-- ✅ Surgical modification preserves existing drawings
-
-**Charts Complete** when:
-- ✅ Can create bar, line, pie, scatter charts
-- ✅ Data binding to cell ranges and tables works
-- ✅ Chart styling (colors, fonts, legend) is fully configurable
-- ✅ Charts participate in dependency graph (refresh on data change)
-- ✅ Round-trip tests preserve all chart properties
-
-**Tables Complete** when:
+### Functional Requirements
+- ✅ Can embed images in worksheets
+- ✅ Can create charts with data binding
 - ✅ Can create Excel tables with structured references
-- ✅ Formulas can reference tables via structured notation
-- ✅ AutoFilter and totals row work correctly
-- ✅ Table styles and banding serialize properly
-- ✅ Pivot tables can be created with row/column/value fields
+- ✅ Can create pivot tables with aggregations
+- ✅ Benchmark suite validates performance claims
 
-**Benchmarks Complete** when:
-- ✅ JMH benchmarks run in CI
-- ✅ Performance regression alerts configured
-- ✅ All claimed performance improvements verified
-- ✅ POI comparison benchmarks establish competitive advantage
+### Non-Functional Requirements
+- ✅ Deterministic output (all XML sorted, stable)
+- ✅ Round-trip fidelity (read → write → read = identity)
+- ✅ Surgical modification preserves all advanced features
+- ✅ Performance maintained (no regressions from adding features)
 
 ---
 
 ## Related Documentation
 
-- **Strategic Plan**: [strategic-implementation-plan.md](strategic-implementation-plan.md) - Phase 5 execution strategy
+- **Strategic Plan**: [strategic-implementation-plan.md](strategic-implementation-plan.md) - Phase 5 (Advanced Features)
 - **Code Scaffolds**: [docs/reference/implementation-scaffolds.md](../reference/implementation-scaffolds.md) - Implementation patterns
-- **Roadmap**: [roadmap.md](roadmap.md) - Granular phase tracking (P10-P12)
+- **Roadmap**: [roadmap.md](roadmap.md) - Granular phase tracking (WI-10 through WI-15)
 - **OOXML Research**: [docs/reference/ooxml-research.md](../reference/ooxml-research.md) - Spec references
+- **Performance**: [docs/reference/performance-guide.md](../reference/performance-guide.md) - Benchmarking guidance
 
 ---
 
-**Last Updated**: 2025-11-20 (consolidated from 4 separate plan files)
+## Notes
+
+- **Surgical modification** already preserves all these features when reading existing XLSX files — this plan is about **first-class AST support** for creation/modification
+- **Formula dependency** is soft — basic features (static charts, simple tables) can work without evaluator
+- **Benchmarks** should start ASAP to establish baseline before optimization work begins
+- **Estimated timeline**: 10-15 weeks total if serialized; 6-8 weeks if parallelized across 2-3 agents
+
+---
+
+**Last Updated**: 2025-11-20 (restructured with work items table)
