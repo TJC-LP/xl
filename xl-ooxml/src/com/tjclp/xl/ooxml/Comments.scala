@@ -254,11 +254,16 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
 
     val textXml = encodeCommentText(c.text)
 
+    // Include xr namespace binding if GUID present (required for PrefixedAttribute)
+    val scope = c.guid match
+      case Some(_) => NamespaceBinding("xr", xrNs, TopScope)
+      case None => TopScope
+
     Elem(
       null,
       "comment",
       attrsWithGuid,
-      TopScope, // No namespace binding - parent has it
+      scope,
       minimizeEmpty = true,
       textXml +: c.otherChildren*
     )

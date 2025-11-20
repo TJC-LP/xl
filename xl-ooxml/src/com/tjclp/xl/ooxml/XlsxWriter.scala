@@ -204,16 +204,16 @@ object XlsxWriter:
     val commentsBySheet = workbook.sheets.zipWithIndex.flatMap { case (sheet, idx) =>
       if sheet.comments.isEmpty then None
       else
-        // Build author list (deduplicated across sheet)
-        val authors = sheet.comments.values.flatMap(_.author).toVector.distinct
+        // Build author list (deduplicated and sorted for deterministic output)
+        val authors = sheet.comments.values.flatMap(_.author).toVector.distinct.sorted
 
         val authorMap = authors.zipWithIndex.map { case (author, i) => author -> i }.toMap
 
         // Convert domain Comments to OOXML (sorted by ref for deterministic output)
         val ooxmlComments = sheet.comments.toVector.sortBy(_._1.toA1).map { case (ref, comment) =>
           val authorId = comment.author.flatMap(authorMap.get).getOrElse(0)
-          // Generate UUID for comment tracking (Excel format: {UPPERCASE-UUID})
-          val guid = s"{${java.util.UUID.randomUUID().toString.toUpperCase}}"
+          // Note: xr:uid GUIDs omitted for new comments (deterministic output)
+          // GUIDs are optional per OOXML spec and only needed for revision tracking
 
           // Excel displays author as part of comment text (bold first run)
           val textWithAuthor = comment.author match
@@ -249,7 +249,7 @@ object XlsxWriter:
             ref = ref,
             authorId = authorId,
             text = textWithAuthor,
-            guid = Some(guid)
+            guid = None // Omit for deterministic output (GUIDs optional per spec)
           )
         }
 

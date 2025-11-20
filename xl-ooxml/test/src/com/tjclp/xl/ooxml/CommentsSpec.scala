@@ -264,7 +264,8 @@ class CommentsSpec extends FunSuite:
       ref = ref"H8",
       authorId = 0,
       text = RichText.plain("Test comment"),
-      guid = Some("{ABC-123}")
+      shapeId = 0,
+      guid = None // GUIDs optional per OOXML spec (omitted for deterministic output)
     )
 
     val comments = OoxmlComments(
@@ -279,14 +280,16 @@ class CommentsSpec extends FunSuite:
     assert((xml \ "authors" \ "author").nonEmpty)
     assert((xml \ "commentList" \ "comment").nonEmpty)
 
-    // Verify attributes
+    // Verify required attributes
     val commentElem = (xml \ "commentList" \ "comment").head.asInstanceOf[Elem]
     assertEquals((commentElem \ "@ref").text, "H8")
     assertEquals((commentElem \ "@authorId").text, "0")
-    // Check for xr:uid namespaced attribute
+    assertEquals((commentElem \ "@shapeId").text, "0")
+
+    // Verify GUID omitted (deterministic output)
     val xrNs = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
     val uidAttr = commentElem.attribute(xrNs, "uid").map(_.text)
-    assertEquals(uidAttr, Some("{ABC-123}"))
+    assertEquals(uidAttr, None)
   }
 
   test("encode rich text comment with formatting") {
@@ -316,6 +319,23 @@ class CommentsSpec extends FunSuite:
     assert((run1 \ "rPr").nonEmpty, "First run should have formatting properties")
     assert((run1 \ "rPr" \ "b").nonEmpty, "First run should be bold")
     assert((run1 \ "rPr" \ "color").nonEmpty, "First run should have color")
+  }
+
+  test("GUID preservation when provided (for read round-trips)") {
+    val commentWithGuid = OoxmlComment(
+      ref = ref"A1",
+      authorId = 0,
+      text = RichText.plain("Test"),
+      shapeId = 0,
+      guid = Some("{PRESERVED-GUID}")
+    )
+
+    val xml = OoxmlComments.toXml(OoxmlComments(Vector("Author"), Vector(commentWithGuid)))
+    val commentElem = (xml \ "commentList" \ "comment").head.asInstanceOf[Elem]
+
+    val xrNs = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+    val uidAttr = commentElem.attribute(xrNs, "uid").map(_.text)
+    assertEquals(uidAttr, Some("{PRESERVED-GUID}"))
   }
 
   test("empty authors list is preserved") {
