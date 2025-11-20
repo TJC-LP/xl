@@ -22,7 +22,7 @@ object api:
   export error.{XLError, XLResult}
 
   // Cell types
-  export cells.{Cell, CellValue, CellError}
+  export cells.{Cell, CellValue, CellError, Comment}
 
   // Addressing types
   export addressing.{Column, Row, SheetName, ARef, CellRange, RefType}
@@ -30,7 +30,7 @@ object api:
   // Rich text types
   export richtext.{TextRun, RichText}
 
-  // Sheet types (Comment is exported as it's in the root package)
+  // Sheet types
   export sheets.{Sheet, ColumnProperties, RowProperties}
 
   // Patch types

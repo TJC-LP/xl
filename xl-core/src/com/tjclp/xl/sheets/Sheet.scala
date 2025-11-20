@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.codec.CellCodec
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
@@ -24,7 +24,7 @@ case class Sheet(
   defaultColumnWidth: Option[Double] = None,
   defaultRowHeight: Option[Double] = None,
   styleRegistry: StyleRegistry = StyleRegistry.default,
-  comments: Map[ARef, com.tjclp.xl.Comment] = Map.empty
+  comments: Map[ARef, Comment] = Map.empty
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -244,11 +244,11 @@ case class Sheet(
     mergedRanges.find(_.contains(ref))
 
   /** Add comment to cell */
-  def withComment(ref: ARef, comment: com.tjclp.xl.Comment): Sheet =
+  def withComment(ref: ARef, comment: Comment): Sheet =
     copy(comments = comments.updated(ref, comment))
 
   /** Get comment at cell reference */
-  def getComment(ref: ARef): Option[com.tjclp.xl.Comment] =
+  def getComment(ref: ARef): Option[Comment] =
     comments.get(ref)
 
   /** Remove comment from cell */
