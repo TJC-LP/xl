@@ -10,7 +10,7 @@
 A: We want immutability, type safety, and compile-time guarantees; POI's design makes that difficult.
 
 **Q: Will charts look identical to Excel's?**
-A: Yes for supported types: the mapping targets Excel's ChartML directly with theme-aware colors and deterministic ordering.
+A: Charts are not implemented yet; when added they will target ChartML with deterministic output.
 
 **Q: Do you support `.xls`?**
 A: Not initially. Focus is `.xlsx`/`.xlsm`. BIFF can be a separate module later.

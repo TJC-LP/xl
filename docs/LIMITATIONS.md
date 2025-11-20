@@ -632,7 +632,7 @@ See: [plan/23-security.md](plan/23-security.md)
 | **Streaming Write** | ✅ | ✅ | XL: 88k rows/s, POI: ~30k rows/s |
 | **Streaming Read** | ✅ | ✅ | XL: 55k rows/s, POI: ~40k rows/s |
 | **Multi-sheet** | ✅ | ✅ | XL: Arbitrary, POI: Sequential |
-| **Styles** | ⚠️ | ✅ | XL: Tracked, not applied yet |
+| **Styles** | ✅ | ✅ | XL: Full in-memory; streaming uses minimal default styles |
 | **Formulas (eval)** | ❌ | ✅ | POI has evaluator |
 | **Charts** | ❌ | ✅ | POI: Full support |
 | **Drawings** | ❌ | ✅ | POI: Images/shapes |
@@ -651,16 +651,17 @@ See: [plan/23-security.md](plan/23-security.md)
 
 **Yes, if your use case is**:
 - Large dataset export (100k+ rows)
-- ETL pipelines (read → transform → write)
+- ETL pipelines (streaming read/write, constant memory)
 - Data generation (reports, analytics)
 - Multi-sheet workbooks
-- Basic cell types (text, numbers, booleans)
+- Core cell types and rich text
+- Styling in in-memory workflows (full styles supported)
 
-**No, if you need**:
-- Rich formatting (fonts, colors, borders) - P4 in progress
-- Charts or drawings - P8-P9 (future)
-- Formula evaluation - P11 (future)
-- Excel macros - Not planned
+**No/Not yet, if you need**:
+- Charts or drawings (planned)
+- Tables/pivots/conditional formatting/data validation (planned)
+- Formula evaluation (planned)
+- Excel macros (not planned to execute; preservation to be defined)
 
 ---
 
@@ -690,13 +691,10 @@ See: [plan/23-security.md](plan/23-security.md)
 
 ---
 
-### Q: When will P4 style application be complete?
+### Q: How should I choose between streaming and in-memory?
 
-**Estimate**: 2-3 days of focused work
-
-**Blocker**: None (just needs implementation)
-
-**Priority**: HIGH (enables most common formatting use cases)
+- **Need full styles/metadata or random access**: use in-memory read/write (`ExcelIO`).
+- **Need constant memory and sequential processing**: use streaming (`readStream`, `writeStreamTrue`); styles are minimal and strings are inline.
 
 ---
 
