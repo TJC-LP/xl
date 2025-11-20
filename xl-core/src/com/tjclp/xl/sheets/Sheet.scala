@@ -23,7 +23,8 @@ case class Sheet(
   rowProperties: Map[Row, RowProperties] = Map.empty,
   defaultColumnWidth: Option[Double] = None,
   defaultRowHeight: Option[Double] = None,
-  styleRegistry: StyleRegistry = StyleRegistry.default
+  styleRegistry: StyleRegistry = StyleRegistry.default,
+  comments: Map[ARef, com.tjclp.xl.Comment] = Map.empty
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -241,6 +242,22 @@ case class Sheet(
   /** Get merged range containing ref (if any) */
   def getMergedRange(ref: ARef): Option[CellRange] =
     mergedRanges.find(_.contains(ref))
+
+  /** Add comment to cell */
+  def withComment(ref: ARef, comment: com.tjclp.xl.Comment): Sheet =
+    copy(comments = comments.updated(ref, comment))
+
+  /** Get comment at cell reference */
+  def getComment(ref: ARef): Option[com.tjclp.xl.Comment] =
+    comments.get(ref)
+
+  /** Remove comment from cell */
+  def removeComment(ref: ARef): Sheet =
+    copy(comments = comments.removed(ref))
+
+  /** Check if cell has a comment */
+  def hasComment(ref: ARef): Boolean =
+    comments.contains(ref)
 
   /** Set column properties */
   def setColumnProperties(col: Column, props: ColumnProperties): Sheet =

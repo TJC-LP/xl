@@ -30,7 +30,7 @@ object api:
   // Rich text types
   export richtext.{TextRun, RichText}
 
-  // Sheet types
+  // Sheet types (Comment is exported as it's in the root package)
   export sheets.{Sheet, ColumnProperties, RowProperties}
 
   // Patch types
