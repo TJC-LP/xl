@@ -5,6 +5,8 @@ This directory contains **active future work** only. Completed phases are archiv
 ## Current Status
 
 > **For detailed phase completion status and roadmap, see [roadmap.md](roadmap.md)**
+>
+> **For strategic vision and parallelization strategy, see [strategic-implementation-plan.md](strategic-implementation-plan.md)**
 
 - **Phases P0-P8 + P31**: ✅ Complete (~85%, 636/636 tests passing)
 - **Production Ready**: Core XLSX read/write, streaming, codecs, optics, RichText, string interpolation
@@ -35,29 +37,23 @@ This directory contains **active future work** only. Completed phases are archiv
    - Scope: File size limits, macro handling, sanitization
    - Note: Consider merging with error-model-and-safety.md
 
-### Architectural Evolution
-
-5. **[lazy-evaluation.md](lazy-evaluation.md)** - Spark-Style Lazy Evaluation
-   - Status: ⬜ Not started (design complete)
-   - Scope: Logical plan DSL, query optimizer (4 passes), streaming execution with fs2
-   - Breaking Change: Sheet → LazySheet (eager → lazy by default)
-   - Benefits: 35% faster writes, O(n) → O(1) memory, 20-40% operation reduction
-   - Timeline: 4-5 weeks (6 phases)
-   - Note: Major architectural rewrite, deferred until post-1.0
-
 ### Advanced Features
 
-6. **[drawings.md](drawings.md)** - P10 Images & Shapes
+5. **[drawings.md](drawings.md)** - P10 Images & Shapes
    - Status: ⬜ Not started
    - Scope: PNG/JPEG embedding, anchors, text boxes
 
-7. **[charts.md](charts.md)** - P11 Chart Generation
+6. **[charts.md](charts.md)** - P11 Chart Generation
    - Status: ⬜ Not started
    - Scope: Bar, line, pie, scatter charts with data binding
 
-8. **[tables-and-pivots.md](tables-and-pivots.md)** - P12 Structured Data
+7. **[tables-and-pivots.md](tables-and-pivots.md)** - P12 Structured Data
    - Status: ⬜ Not started
    - Scope: Excel tables, conditional formatting, data validation
+
+8. **[streaming-improvements.md](streaming-improvements.md)** - P7.5 Streaming Write Enhancements
+   - Status: Partially complete (P6.6-P6.7 ✅, P7.5 ⬜)
+   - Scope: SST support in streaming writes, two-phase writer
 
 ### Infrastructure
 
@@ -68,6 +64,10 @@ This directory contains **active future work** only. Completed phases are archiv
 10. **[roadmap.md](roadmap.md)** - Master Status Tracker
     - Status: ✅ Maintained (living document)
     - Scope: Overall progress, phase definitions, completion criteria
+
+11. **[strategic-implementation-plan.md](strategic-implementation-plan.md)** - Strategic Vision (NEW)
+    - Status: ✅ Active (living document)
+    - Scope: 7-phase strategic framework, parallelization strategies, dependency management
 
 ## Related Documentation
 

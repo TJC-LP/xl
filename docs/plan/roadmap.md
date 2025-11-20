@@ -3,6 +3,10 @@
 **Current Status: ~87% Complete (680/680 tests passing)**
 **Last Updated**: 2025-11-20
 
+> **For strategic vision and 7-phase execution framework, see [strategic-implementation-plan.md](strategic-implementation-plan.md)**
+>
+> **For implementation code scaffolds and patterns, see [docs/reference/implementation-scaffolds.md](../reference/implementation-scaffolds.md)**
+
 ## Completed Phases ✅
 
 ### ✅ P0: Bootstrap & CI (Complete)
