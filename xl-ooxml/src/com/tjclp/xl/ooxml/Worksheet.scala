@@ -410,6 +410,23 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     // Combine rows with cells + empty rows, sort by index
     val allRows = (rowsWithCells ++ emptyRowsFromOriginal).sortBy(_.rowIndex)
 
+    // Generate legacyDrawing element if sheet has comments but no preserved legacyDrawing
+    val legacyDrawingElem =
+      if sheet.comments.nonEmpty then
+        preservedMetadata.flatMap(_.legacyDrawing).orElse {
+          // New comments - generate legacyDrawing reference to VML
+          Some(
+            Elem(
+              prefix = null,
+              label = "legacyDrawing",
+              attributes = new PrefixedAttribute("r", "id", "rId2", Null),
+              scope = NamespaceBinding("r", nsRelationships, TopScope),
+              minimizeEmpty = true
+            )
+          )
+        }
+      else preservedMetadata.flatMap(_.legacyDrawing)
+
     // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
     preservedMetadata match
       case Some(preserved) =>
@@ -431,7 +448,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.pageSetup,
           preserved.headerFooter,
           preserved.drawing,
-          preserved.legacyDrawing,
+          legacyDrawingElem, // Use computed element (preserved or generated)
           preserved.picture,
           preserved.oleObjects,
           preserved.controls,
@@ -441,8 +458,12 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.rootScope
         )
       case None =>
-        // No preserved metadata - create minimal worksheet
-        OoxmlWorksheet(rowsWithCells, sheet.mergedRanges)
+        // No preserved metadata - create minimal worksheet with legacyDrawing if comments exist
+        OoxmlWorksheet(
+          rowsWithCells,
+          sheet.mergedRanges,
+          legacyDrawing = legacyDrawingElem
+        )
 
   /** Parse worksheet from XML (XmlReadable trait compatibility) */
   def fromXml(elem: Elem): Either[String, OoxmlWorksheet] =

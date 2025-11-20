@@ -74,7 +74,10 @@ object XlsxReader:
    * All other parts (charts, drawings, images, etc.) are preserved byte-for-byte.
    */
   private def isKnownPart(path: String): Boolean =
-    knownParts.contains(path) || path.matches("xl/worksheets/sheet\\d+\\.xml")
+    knownParts.contains(path) ||
+      path.matches("xl/worksheets/sheet\\d+\\.xml") ||
+      path.matches("xl/comments\\d+\\.xml") ||
+      path.matches("xl/worksheets/_rels/sheet\\d+\\.xml\\.rels")
 
   /**
    * Read workbook from XLSX file (in-memory).
@@ -227,6 +230,158 @@ object XlsxReader:
             .map(err => XLError.ParseError("xl/sharedStrings.xml", err): XLError)
         yield Some(sst)
 
+  /**
+   * Parse worksheet relationships to find comment references.
+   *
+   * Returns the comment target path (e.g., "../comments1.xml") if a comment relationship exists.
+   */
+  private def parseWorksheetRelationships(
+    parts: Map[String, String],
+    sheetIndex: Int
+  ): XLResult[Option[String]] =
+    val relsPath = s"xl/worksheets/_rels/sheet$sheetIndex.xml.rels"
+    parts.get(relsPath) match
+      case None => Right(None) // No relationships for this sheet
+      case Some(xml) =>
+        for
+          elem <- parseXml(xml, relsPath)
+          rels <- Relationships
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError(relsPath, err): XLError)
+          commentTarget <- rels.relationships
+            .find(_.`type` == XmlUtil.relTypeComments) match
+            case None => Right(None)
+            case Some(rel) => resolveCommentPath(rel.target, relsPath).map(Some(_))
+        yield commentTarget
+
+  private def resolveCommentPath(target: String, relsPath: String): XLResult[String] =
+    val cleanedTarget = if target.startsWith("/") then target.drop(1) else target
+    val targetPath =
+      if cleanedTarget.startsWith("xl/") || cleanedTarget.startsWith("xl\\") then
+        Paths.get(cleanedTarget)
+      else Paths.get("xl/worksheets").resolve(cleanedTarget)
+
+    val normalized = targetPath.normalize().toString.replace('\\', '/')
+
+    if normalized.startsWith("xl/") then Right(normalized)
+    else
+      Left(
+        XLError.ParseError(
+          relsPath,
+          s"Invalid comment relationship target outside xl/: $target"
+        )
+      )
+
+  /**
+   * Parse comments for a single sheet.
+   *
+   * Resolves relative path from worksheet relationship and parses the comment XML file.
+   */
+  private def parseCommentsForSheet(
+    parts: Map[String, String],
+    commentPath: String
+  ): XLResult[Map[ARef, com.tjclp.xl.cells.Comment]] =
+    parts.get(commentPath) match
+      case None => Right(Map.empty) // Missing comment file (graceful degradation)
+      case Some(xml) =>
+        for
+          elem <- parseXml(xml, commentPath)
+          ooxmlComments <- OoxmlComments
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError(commentPath, err): XLError)
+          domainComments <- convertToDomainComments(ooxmlComments, commentPath)
+        yield domainComments
+
+  /**
+   * Convert OOXML comments to domain Comment map.
+   *
+   * Maps author IDs to author names and creates domain Comment objects.
+   */
+  /**
+   * Strip author prefix from comment text if present AND it matches XL's exact format.
+   *
+   * Only strips if:
+   *   1. First run text is exactly "AuthorName:" (colon, no newline)
+   *   2. First run is bold
+   *   3. Second run starts with newline
+   *
+   * This ensures we only strip prefixes WE added, not author text from real Excel files.
+   */
+  private[ooxml] def stripAuthorPrefix(
+    text: com.tjclp.xl.richtext.RichText,
+    authorName: String
+  ): com.tjclp.xl.richtext.RichText =
+    text.runs match
+      case firstRun +: secondRun +: tail
+          if authorPrefixMatches(firstRun, authorName) &&
+            firstRun.font.exists(_.bold) &&
+            startsWithNewline(secondRun.text) =>
+        // Exact match for XL-generated format - strip it
+        val cleanedSecondRun = secondRun.copy(text = dropLeadingNewline(secondRun.text))
+        com.tjclp.xl.richtext.RichText(Vector(cleanedSecondRun) ++ tail)
+      case _ =>
+        // Different format or no prefix - preserve as-is (might be real Excel file)
+        text
+
+  private def authorPrefixMatches(run: com.tjclp.xl.richtext.TextRun, authorName: String): Boolean =
+    val normalized = run.text.replace("\u00A0", " ").trim // Excel can emit nbsp and spaces
+    normalized == s"$authorName:" || normalized == s"$authorName: "
+
+  private def startsWithNewline(text: String): Boolean =
+    text.startsWith("\n") || text.startsWith("\r\n")
+
+  private def dropLeadingNewline(text: String): String =
+    if text.startsWith("\r\n") then text.drop(2)
+    else if text.startsWith("\n") then text.drop(1)
+    else text
+
+  private[ooxml] def convertToDomainComments(
+    ooxmlComments: OoxmlComments,
+    commentPath: String = "comments.xml"
+  ): XLResult[Map[ARef, com.tjclp.xl.cells.Comment]] =
+    val authorMap = ooxmlComments.authors.zipWithIndex.map { case (author, idx) =>
+      idx -> author
+    }.toMap
+
+    ooxmlComments.comments
+      .foldLeft[XLResult[Map[ARef, com.tjclp.xl.cells.Comment]]](Right(Map.empty)) {
+        case (accEither, ooxmlComment) =>
+          for
+            acc <- accEither
+            _ <- validateAuthorId(ooxmlComment, ooxmlComments.authors.size, commentPath)
+            author =
+              authorMap
+                .get(ooxmlComment.authorId)
+                .filter(_.nonEmpty) // Ignore empty string (unauthored)
+
+            cleanedText = author match
+              case Some(authorName) =>
+                stripAuthorPrefix(ooxmlComment.text, authorName)
+              case None => ooxmlComment.text
+
+            domainComment = com.tjclp.xl.cells.Comment(
+              text = cleanedText,
+              author = author
+            )
+          yield acc.updated(ooxmlComment.ref, domainComment)
+      }
+
+  private def validateAuthorId(
+    ooxmlComment: OoxmlComment,
+    authorCount: Int,
+    commentPath: String
+  ): XLResult[Unit] =
+    if ooxmlComment.authorId >= 0 && ooxmlComment.authorId < authorCount then Right(())
+    else
+      Left(
+        XLError.ParseError(
+          commentPath,
+          s"Invalid authorId ${ooxmlComment.authorId} for comment ${ooxmlComment.ref.toA1} (authors: $authorCount)"
+        )
+      )
+
   /** Parse styles table (falls back to default styles if missing) */
   private def parseStyles(parts: Map[String, String]): XLResult[(WorkbookStyles, Vector[Warning])] =
     parts.get("xl/styles.xml") match
@@ -262,7 +417,7 @@ object XlsxReader:
     relationships: Relationships
   ): XLResult[Vector[Sheet]] =
     val relMap = relationships.relationships.map(rel => rel.id -> rel).toMap
-    sheetRefs.toVector.traverse { ref =>
+    sheetRefs.toVector.zipWithIndex.traverse { case (ref, idx) =>
       val sheetPath = relMap
         .get(ref.relationshipId)
         .map(rel => resolveSheetPath(rel.target))
@@ -277,7 +432,13 @@ object XlsxReader:
           .fromXmlWithSST(elem, sst)
           .left
           .map(err => XLError.ParseError(sheetPath, err): XLError)
-        domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles)
+        // Parse worksheet relationships to find comment references (1-based sheet index)
+        commentTarget <- parseWorksheetRelationships(parts, idx + 1)
+        // Parse comments if relationship exists
+        comments <- commentTarget match
+          case Some(target) => parseCommentsForSheet(parts, target)
+          case None => Right(Map.empty)
+        domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles, comments)
       yield domainSheet
     }
 
@@ -300,7 +461,8 @@ object XlsxReader:
     name: SheetName,
     ooxmlSheet: OoxmlWorksheet,
     sst: Option[SharedStrings],
-    styles: WorkbookStyles
+    styles: WorkbookStyles,
+    comments: Map[ARef, com.tjclp.xl.cells.Comment]
   ): XLResult[Sheet] =
     val (preRegisteredRegistry, styleMapping) = buildStyleRegistry(styles)
     val cellsMap =
@@ -320,7 +482,8 @@ object XlsxReader:
         name = name,
         cells = cellsMap,
         mergedRanges = ooxmlSheet.mergedRanges,
-        styleRegistry = preRegisteredRegistry
+        styleRegistry = preRegisteredRegistry,
+        comments = comments
       )
     )
 

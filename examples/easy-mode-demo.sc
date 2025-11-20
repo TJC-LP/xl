@@ -128,8 +128,42 @@ println(s"\nHTML Preview (with conditional styling):")
 println(htmlOutput)
 println()
 
-// ========== Example 6: Safe Lookups ==========
-println("🔍 Example 6: Safe Lookups")
+// ========== Example 6: Comments & Annotations ==========
+println("💬 Example 6: Comments & Annotations")
+
+val commentedSheet = Sheet("Commented Data")
+  .put("A1", "Q4 Revenue")
+  .put("B1", 125000)
+  .put("A2", "Q4 Expenses")
+  .put("B2", 87500)
+  .put("A3", "Net Profit")
+  .put("B3", "=B1-B2")  // Formula
+  // Add plain text comments
+  .comment(ref"B1", Comment.plainText("Revenue increased by 15% vs Q3", Some("Finance Team")))
+  .comment(ref"B2", Comment.plainText("Includes one-time marketing spend", Some("CFO")))
+  // Rich text comment with formatting
+  .comment(ref"B3", Comment(
+    text = "Net profit: ".bold + "$37,500".green.bold + " (30% margin)".italic,
+    author = Some("CEO")
+  ))
+  .unsafe
+
+println(s"  ✓ Created sheet with ${commentedSheet.comments.size} comments")
+commentedSheet.comments.foreach { (ref, comment) =>
+  val author = comment.author.map(a => s"[$a]").getOrElse("[Anonymous]")
+  println(s"  ✓ ${ref.toA1} $author: ${comment.text.toPlainText.take(40)}...")
+}
+
+// Export to HTML with comments as tooltips
+val htmlWithComments = commentedSheet.toHtml(ref"A1:B3", includeComments = true)
+println(s"\n  ✓ HTML export with comments (${htmlWithComments.length} chars)")
+println(s"  ℹ️  Hover over cells in browser to see comment tooltips!")
+println("\nHTML Preview (with comment tooltips):")
+println(htmlWithComments)
+println()
+
+// ========== Example 7: Safe Lookups ==========
+println("🔍 Example 7: Safe Lookups")
 
 val value = report.cell("A3")          // ✨ Clean lookup!
 val range = report.range("A3:B3")      // ✨ Get cells in range!
@@ -138,8 +172,8 @@ println(s"  ✓ Looked up cell: ${value.map(_.value)}")
 println(s"  ✓ Found ${range.size} cells in range")
 println()
 
-// ========== Example 7: Excel IO ==========
-println("💾 Example 7: Excel IO (EasyExcel)")
+// ========== Example 8: Excel IO ==========
+println("💾 Example 8: Excel IO (EasyExcel)")
 
 val workbook = Workbook.empty
   .put(report)
@@ -147,6 +181,7 @@ val workbook = Workbook.empty
   .put(richSheet)
   .put(patchSheet)
   .put(dynamicSheet)
+  .put(commentedSheet)
   .remove("Sheet1")  // Sheet1 is always created by default per Excel standards
   .unsafe  // Single unwrap at the end!
 
@@ -162,8 +197,8 @@ val modifiedSheet = firstSheet.put("A5", "Updated: " + LocalDate.now.toString).u
 println(s"  ✓ Modified sheet in-memory (${modifiedSheet.cells.size} cells)")
 println()
 
-// ========== Example 8: Error Handling ==========
-println("⚠️  Example 8: Structured Errors")
+// ========== Example 9: Error Handling ==========
+println("⚠️  Example 9: Structured Errors")
 
 try {
   Sheet("Test").unsafe.put("INVALID!!!!", "fail")

@@ -17,7 +17,8 @@ object HtmlRenderer:
    *
    * Generates a `<table>` element with cells converted to `<td>` elements. If includeStyles is
    * true, cell styles are converted to inline CSS. Rich text cells are rendered with HTML
-   * formatting tags (<b>, <i>, <u>, <span>).
+   * formatting tags (<b>, <i>, <u>, <span>). Comments are rendered as HTML title attributes
+   * (tooltips on hover).
    *
    * @param sheet
    *   The sheet to export
@@ -25,13 +26,16 @@ object HtmlRenderer:
    *   The cell range to export
    * @param includeStyles
    *   Whether to include inline CSS for cell styles (default: true)
+   * @param includeComments
+   *   Whether to include comments as HTML title attributes (default: true)
    * @return
    *   HTML table string
    */
   def toHtml(
     sheet: Sheet,
     range: CellRange,
-    includeStyles: Boolean = true
+    includeStyles: Boolean = true,
+    includeComments: Boolean = true
   ): String =
     // Group cells by row for table structure
     val cellsByRow = range.cells.toSeq
@@ -52,7 +56,21 @@ object HtmlRenderer:
                 val style = if includeStyles then cellStyleToInlineCss(cell, sheet) else ""
                 val content = cellValueToHtml(cell.value)
                 val styleAttr = if style.nonEmpty then s""" style="$style"""" else ""
-                s"<td$styleAttr>$content</td>"
+
+                // Add comment as title attribute (tooltip) if present
+                val commentAttr =
+                  if includeComments then
+                    sheet
+                      .getComment(ref)
+                      .map { comment =>
+                        val commentText = comment.text.toPlainText
+                        val authorPrefix = comment.author.map(a => s"$a: ").getOrElse("")
+                        s""" title="${escapeHtml(authorPrefix + commentText)}""""
+                      }
+                      .getOrElse("")
+                  else ""
+
+                s"<td$styleAttr$commentAttr>$content</td>"
           }
           .mkString
         s"  <tr>$cellsHtml</tr>"
@@ -178,6 +196,7 @@ $tableRows
       .replace("<", "&lt;")
       .replace(">", "&gt;")
       .replace("\"", "&quot;")
+      .replace("'", "&#39;")
 
   private def escapeCss(s: String): String =
     s.replace("\\", "\\\\")

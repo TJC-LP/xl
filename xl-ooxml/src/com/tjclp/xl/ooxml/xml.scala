@@ -38,6 +38,10 @@ object XmlUtil:
   val relTypeStyles = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"
   val relTypeSharedStrings =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"
+  val relTypeComments =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
+  val relTypeVmlDrawing =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing"
 
   /** Content type URIs */
   val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -45,6 +49,8 @@ object XmlUtil:
   val ctStyles = "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"
   val ctSharedStrings =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+  val ctComments = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
+  val ctVmlDrawing = "application/vnd.openxmlformats-officedocument.vmlDrawing"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
 
   /** Sort attributes by name for deterministic output */
@@ -95,8 +101,9 @@ object XmlUtil:
 
   /** Compact XML without indentation (newline after declaration for Excel compatibility) */
   def compact(node: Node): String =
-    val printer = new PrettyPrinter(0, 0)
-    s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${printer.format(node)}"""
+    // Use toString instead of PrettyPrinter to preserve all whitespace (including newlines)
+    // PrettyPrinter normalizes whitespace in text nodes, which corrupts comments with newlines
+    s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${node.toString}"""
 
   /** Get required attribute value */
   def getAttr(elem: Elem, name: String): Either[String, String] =
@@ -150,7 +157,8 @@ object XmlUtil:
    * DETERMINISTIC: Yes (pure function)
    */
   def needsXmlSpacePreserve(s: String): Boolean =
-    s.nonEmpty && (s.startsWith(" ") || s.endsWith(" ") || s.contains("  "))
+    s.nonEmpty && (s.startsWith(" ") || s.endsWith(" ") || s.contains("  ") ||
+      s.contains("\n") || s.contains("\r") || s.contains("\t"))
 
   /**
    * Extract text content from XML element, preserving whitespace.

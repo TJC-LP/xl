@@ -46,15 +46,22 @@ object styleSyntax:
      * Export a cell range to HTML table.
      *
      * Generates an HTML `<table>` element with cells rendered as `<td>` elements. Rich text
-     * formatting and cell styles are preserved as HTML tags and inline CSS.
+     * formatting and cell styles are preserved as HTML tags and inline CSS. Comments are rendered
+     * as HTML title attributes (tooltips on hover).
      *
      * @param range
      *   The cell range to export
      * @param includeStyles
      *   Whether to include inline CSS for cell styles (default: true)
+     * @param includeComments
+     *   Whether to include comments as HTML title attributes (default: true)
      * @return
      *   HTML table string
      */
     @annotation.targetName("toHtmlExt")
-    def toHtml(range: CellRange, includeStyles: Boolean = true): String =
-      com.tjclp.xl.html.HtmlRenderer.toHtml(sheet, range, includeStyles)
+    def toHtml(
+      range: CellRange,
+      includeStyles: Boolean = true,
+      includeComments: Boolean = true
+    ): String =
+      com.tjclp.xl.html.HtmlRenderer.toHtml(sheet, range, includeStyles, includeComments)

@@ -48,7 +48,7 @@ package com.tjclp.xl
  */
 object easy:
   // Re-export complete core API
-  export com.tjclp.xl.api.* // Domain types (Sheet, Cell, Workbook, CellStyle, etc.)
+  export com.tjclp.xl.api.* // Domain types (Sheet, Cell, Workbook, CellStyle, Comment, etc.)
   export com.tjclp.xl.syntax.* // Macros, extensions, style DSL
 
   // Re-export CellWriter given instances for type class-based put() methods

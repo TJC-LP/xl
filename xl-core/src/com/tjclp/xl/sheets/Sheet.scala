@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.codec.CellCodec
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
@@ -23,7 +23,8 @@ case class Sheet(
   rowProperties: Map[Row, RowProperties] = Map.empty,
   defaultColumnWidth: Option[Double] = None,
   defaultRowHeight: Option[Double] = None,
-  styleRegistry: StyleRegistry = StyleRegistry.default
+  styleRegistry: StyleRegistry = StyleRegistry.default,
+  comments: Map[ARef, Comment] = Map.empty
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -241,6 +242,22 @@ case class Sheet(
   /** Get merged range containing ref (if any) */
   def getMergedRange(ref: ARef): Option[CellRange] =
     mergedRanges.find(_.contains(ref))
+
+  /** Add comment to cell */
+  def comment(ref: ARef, comment: Comment): Sheet =
+    copy(comments = comments.updated(ref, comment))
+
+  /** Get comment at cell reference */
+  def getComment(ref: ARef): Option[Comment] =
+    comments.get(ref)
+
+  /** Remove comment from cell */
+  def removeComment(ref: ARef): Sheet =
+    copy(comments = comments.removed(ref))
+
+  /** Check if cell has a comment */
+  def hasComment(ref: ARef): Boolean =
+    comments.contains(ref)
 
   /** Set column properties */
   def setColumnProperties(col: Column, props: ColumnProperties): Sheet =

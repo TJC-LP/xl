@@ -194,6 +194,113 @@ object XlsxWriter:
         throw new IllegalStateException("Source file changed since read; refusing to copy verbatim")
 
   /**
+   * Build per-sheet comment data for serialization.
+   *
+   * Returns:
+   *   - Map[Int, OoxmlComments]: sheet index (0-based) -> comments to write
+   *   - Set[Int]: indices (1-based) of sheets with comments for content types
+   */
+  private def buildCommentsData(workbook: Workbook): (Map[Int, OoxmlComments], Set[Int]) =
+    val commentsBySheet = workbook.sheets.zipWithIndex.flatMap { case (sheet, idx) =>
+      if sheet.comments.isEmpty then None
+      else
+        // Build author list (deduplicated and sorted for deterministic output)
+        // Reserve index 0 for unauthored comments (empty string)
+        val (authorSet, hasUnauthored) =
+          sheet.comments.values.foldLeft((Set.empty[String], false)) {
+            case ((existing, hasNone), comment) =>
+              val nextSet = comment.author match
+                case Some(author) => existing + author
+                case None => existing
+              (nextSet, hasNone || comment.author.isEmpty)
+          }
+        // Sort for deterministic output (Excel preserves insertion order; we choose determinism here)
+        // to keep serialized files stable across runs.
+        val realAuthors = authorSet.toVector.sorted
+        val authors = if hasUnauthored then Vector("") ++ realAuthors else realAuthors
+
+        val authorMap = authors.zipWithIndex.map { case (author, i) => author -> i }.toMap
+
+        // Convert domain Comments to OOXML (sorted by ref for deterministic output)
+        val ooxmlComments = sheet.comments.toVector.sortBy(_._1.toA1).map { case (ref, comment) =>
+          val authorId =
+            comment.author.flatMap(authorMap.get).getOrElse(0) // Index 0 = "" for unauthored
+          // Note: xr:uid GUIDs omitted for new comments (deterministic output)
+          // GUIDs are optional per OOXML spec and only needed for revision tracking
+
+          // Excel displays author as part of comment text (bold first run)
+          val textWithAuthor = comment.author match
+            case Some(author) =>
+              // Prepend author name as bold run
+              val authorRun = com.tjclp.xl.richtext.TextRun(
+                s"$author:",
+                Some(com.tjclp.xl.styles.font.Font.default.copy(bold = true))
+              )
+              // Prepend newline to the first run of comment text
+              val textWithNewline = comment.text.runs.headOption match
+                case Some(head) =>
+                  // Create new TextRun with newline prepended
+                  val tail = comment.text.runs.drop(1)
+                  val textWithNewline = "\n" + head.text
+                  val modifiedFirstRun = com.tjclp.xl.richtext.TextRun(
+                    textWithNewline,
+                    head.font,
+                    head.rawRPrXml
+                  )
+                  com.tjclp.xl.richtext.RichText(Vector(authorRun, modifiedFirstRun) ++ tail)
+                case None =>
+                  // Empty comment text - just add author with newline
+                  com.tjclp.xl.richtext.RichText(
+                    Vector(
+                      authorRun,
+                      com.tjclp.xl.richtext.TextRun("\n")
+                    )
+                  )
+              textWithNewline
+            case None => comment.text
+
+          OoxmlComment(
+            ref = ref,
+            authorId = authorId,
+            text = textWithAuthor,
+            guid = None // Omit for deterministic output (GUIDs optional per spec)
+          )
+        }
+
+        Some(idx -> OoxmlComments(authors, ooxmlComments))
+    }.toMap
+
+    // Convert to 1-based indices for file naming and content types
+    val sheetsWithComments = commentsBySheet.keySet.map(_ + 1)
+
+    (commentsBySheet, sheetsWithComments)
+
+  /**
+   * Build worksheet relationships for a sheet with comments.
+   *
+   * Creates relationships for:
+   *   - Comments content (../commentsN.xml)
+   *   - VML drawing for visual indicators (../drawings/vmlDrawingN.xml)
+   *
+   * N is 1-based sheet index.
+   */
+  private def buildWorksheetRelationships(sheetIndex: Int): Relationships =
+    Relationships(
+      Seq(
+        Relationship(
+          id = "rId1",
+          `type` = XmlUtil.relTypeComments,
+          target = s"../comments$sheetIndex.xml"
+        ),
+        Relationship(
+          id = "rId2",
+          `type` = XmlUtil.relTypeVmlDrawing,
+          target = s"../drawings/vmlDrawing$sheetIndex.vml"
+        )
+      )
+    )
+
+  /**
    * Full regeneration of all XLSX parts (current behavior).
    *
    * Used when:
@@ -215,6 +322,12 @@ object XlsxWriter:
         if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
         else None
 
+    // Build comments data and VML drawings
+    val (commentsBySheet, sheetsWithComments) = buildCommentsData(workbook)
+    val vmlDrawings = commentsBySheet.map { case (idx, comments) =>
+      idx -> VmlDrawing.generateForComments(comments, idx)
+    }
+
     // Build unified style index with per-sheet remappings
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
     val styles = OoxmlStyles(styleIndex)
@@ -229,11 +342,15 @@ object XlsxWriter:
     }
 
     // Create content types
-    val contentTypes = ContentTypes.minimal(
-      hasStyles = true, // Always include styles
-      hasSharedStrings = sst.isDefined,
-      sheetCount = workbook.sheets.size
-    )
+    val contentTypes =
+      ContentTypes
+        .minimal(
+          hasStyles = true, // Always include styles
+          hasSharedStrings = sst.isDefined,
+          sheetCount = workbook.sheets.size,
+          sheetsWithComments = sheetsWithComments
+        )
+        .withCommentOverrides(sheetsWithComments)
 
     // Create relationships
     val rootRels = Relationships.root()
@@ -255,6 +372,8 @@ object XlsxWriter:
           ooxmlSheets,
           styles,
           sst,
+          commentsBySheet,
+          vmlDrawings,
           config
         )
       case OutputStreamTarget(stream) =>
@@ -267,6 +386,8 @@ object XlsxWriter:
           ooxmlSheets,
           styles,
           sst,
+          commentsBySheet,
+          vmlDrawings,
           config
         )
 
@@ -280,6 +401,8 @@ object XlsxWriter:
     sheets: Vector[OoxmlWorksheet],
     styles: OoxmlStyles,
     sst: Option[SharedStrings],
+    commentsBySheet: Map[Int, OoxmlComments],
+    vmlDrawings: Map[Int, String],
     config: WriterConfig
   ): Unit =
     val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
@@ -302,6 +425,27 @@ object XlsxWriter:
       // Write worksheets
       sheets.zipWithIndex.foreach { case (sheet, idx) =>
         writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml, config)
+
+        // Write worksheet relationships if this sheet has comments
+        commentsBySheet.get(idx).foreach { _ =>
+          val sheetRels = buildWorksheetRelationships(idx + 1)
+          writePart(
+            zip,
+            s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels",
+            sheetRels.toXml,
+            config
+          )
+        }
+      }
+
+      // Write comment files and VML drawings for sheets with comments
+      commentsBySheet.foreach { case (idx, comments) =>
+        writePart(zip, s"xl/comments${idx + 1}.xml", OoxmlComments.toXml(comments), config)
+
+        // Write VML drawing for comment indicators
+        vmlDrawings.get(idx).foreach { vmlXml =>
+          writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
+        }
       }
 
     finally zip.close()
@@ -316,6 +460,8 @@ object XlsxWriter:
     sheets: Vector[OoxmlWorksheet],
     styles: OoxmlStyles,
     sst: Option[SharedStrings],
+    commentsBySheet: Map[Int, OoxmlComments],
+    vmlDrawings: Map[Int, String],
     config: WriterConfig
   ): Unit =
     val zip = new ZipOutputStream(stream)
@@ -338,9 +484,56 @@ object XlsxWriter:
       // Write worksheets
       sheets.zipWithIndex.foreach { case (sheet, idx) =>
         writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml, config)
+
+        // Write worksheet relationships if this sheet has comments
+        commentsBySheet.get(idx).foreach { _ =>
+          val sheetRels = buildWorksheetRelationships(idx + 1)
+          writePart(
+            zip,
+            s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels",
+            sheetRels.toXml,
+            config
+          )
+        }
+      }
+
+      // Write comment files and VML drawings for sheets with comments
+      commentsBySheet.foreach { case (idx, comments) =>
+        writePart(zip, s"xl/comments${idx + 1}.xml", OoxmlComments.toXml(comments), config)
+
+        // Write VML drawing for comment indicators
+        vmlDrawings.get(idx).foreach { vmlXml =>
+          writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
+        }
       }
 
     finally zip.close()
+
+  /** Write VML part to ZIP (VML is plain text, not standard XML) */
+  private def writeVmlPart(
+    zip: ZipOutputStream,
+    entryName: String,
+    vmlXml: String,
+    config: WriterConfig
+  ): Unit =
+    val entry = new ZipEntry(entryName)
+    entry.setTime(0L) // Deterministic timestamps
+    entry.setMethod(config.compression.zipMethod)
+
+    val bytes = vmlXml.getBytes(StandardCharsets.UTF_8)
+
+    config.compression match
+      case Compression.Stored =>
+        entry.setSize(bytes.length)
+        entry.setCompressedSize(bytes.length)
+        val crc = new java.util.zip.CRC32()
+        crc.update(bytes)
+        entry.setCrc(crc.getValue)
+      case Compression.Deflated => ()
+
+    zip.putNextEntry(entry)
+    zip.write(bytes)
+    zip.closeEntry()
 
   /** Write a single XML part to ZIP */
   private def writePart(
@@ -723,6 +916,12 @@ object XlsxWriter:
 
     val styles = OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, preservedDxfs)
 
+    // Build comments data and VML drawings
+    val (commentsBySheet, sheetsWithComments) = buildCommentsData(workbook)
+    val vmlDrawings = commentsBySheet.map { case (idx, comments) =>
+      idx -> VmlDrawing.generateForComments(comments, idx)
+    }
+
     // Preserve structural parts from source (or fallback to minimal)
     val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =
       sourceContext match
@@ -738,13 +937,15 @@ object XlsxWriter:
         // Fallback to minimal for programmatically created workbooks
         OoxmlWorkbook.fromDomain(workbook)
 
-    val contentTypes = preservedContentTypes.getOrElse(
+    val baseContentTypes = preservedContentTypes.getOrElse(
       ContentTypes.minimal(
         hasStyles = true,
         hasSharedStrings = sharedStringsInOutput,
-        sheetCount = workbook.sheets.size
+        sheetCount = workbook.sheets.size,
+        sheetsWithComments = sheetsWithComments
       )
     )
+    val contentTypes = baseContentTypes.withCommentOverrides(sheetsWithComments)
 
     val rootRels = preservedRootRels.getOrElse(Relationships.root())
 
@@ -796,11 +997,44 @@ object XlsxWriter:
           val ooxmlSheet =
             OoxmlWorksheet.fromDomainWithMetadata(sheet, sstForSheets, remapping, preservedMetadata)
           writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet.toXml, config)
+
+          // Comments: copy from source if available, else generate new
+          val commentPath = s"xl/comments${idx + 1}.xml"
+          val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+
+          sourceContext match
+            case Some(ctx) if ctx.partManifest.contains(commentPath) =>
+              // Preserve existing comments byte-for-byte (comments independent of cell values)
+              copyPreservedPart(ctx.sourcePath, commentPath, zip)
+              if ctx.partManifest.contains(relsPath) then
+                copyPreservedPart(ctx.sourcePath, relsPath, zip)
+
+            case _ =>
+              // No source comments - write new ones if sheet has comments
+              commentsBySheet.get(idx).foreach { comments =>
+                val sheetRels = buildWorksheetRelationships(idx + 1)
+                writePart(zip, relsPath, sheetRels.toXml, config)
+                writePart(zip, commentPath, OoxmlComments.toXml(comments), config)
+
+                // Write VML drawing for comment indicators
+                vmlDrawings.get(idx).foreach { vmlXml =>
+                  writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
+                }
+              }
         else
           // Copy unmodified sheet from source (only if source available)
           sourceContext.foreach { ctx =>
             val sheetPath = graph.pathForSheet(idx)
             copyPreservedPart(ctx.sourcePath, sheetPath, zip)
+
+            // Copy comments and relationships if they exist (unchanged sheets)
+            val commentPath = s"xl/comments${idx + 1}.xml"
+            if ctx.partManifest.contains(commentPath) then
+              copyPreservedPart(ctx.sourcePath, commentPath, zip)
+
+            val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+            if ctx.partManifest.contains(relsPath) then
+              copyPreservedPart(ctx.sourcePath, relsPath, zip)
           }
       }
 

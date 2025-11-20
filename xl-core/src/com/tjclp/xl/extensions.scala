@@ -1,7 +1,7 @@
 package com.tjclp.xl
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.codec.CellWriter
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.richtext.RichText
@@ -258,6 +258,11 @@ object extensions:
     def put(patch: com.tjclp.xl.patch.Patch): XLResult[Sheet] =
       result.flatMap(_.put(patch))
 
+    /** Add comment to cell (chainable). */
+    @annotation.targetName("commentChainable")
+    def comment(ref: ARef, cmt: Comment): XLResult[Sheet] =
+      result.map(_.comment(ref, cmt))
+
   // ========== XLResult[Workbook] Extensions: Chainable Operations ==========
 
   extension (result: XLResult[Workbook])
@@ -291,5 +296,5 @@ object extensions:
      * @return
      *   Some(sheet) if found, None otherwise
      */
-    def getSheet(name: String): Option[Sheet] =
+    def get(name: String): Option[Sheet] =
       workbook(name).toOption

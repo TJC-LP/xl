@@ -160,6 +160,18 @@ class HtmlRendererSpec extends FunSuite:
     assert(html.contains("&quot;"), "Should escape quotes")
   }
 
+  test("toHtml: escapes comment tooltip content (HTML + quotes)") {
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .put(ref"A1" -> "value").unsafe
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("""<b onload="x" data='y'>&test</b>""", Some("""Auth"or'&""")))
+
+    val html = sheet.toHtml(ref"A1:A1", includeComments = true)
+    assert(html.contains("""title=""""), s"Tooltip should be present, got: $html")
+    assert(html.contains("""Auth&quot;or&#39;&amp;:"""), "Author should be escaped")
+    assert(html.contains("""&lt;b onload=&quot;x&quot; data=&#39;y&#39;&gt;"""), "Comment body should escape tags/quotes")
+    assert(html.contains("""&amp;test"""), "Ampersand in body should be escaped")
+  }
+
   // ========== Different Cell Types ==========
 
   test("toHtml: number cells") {

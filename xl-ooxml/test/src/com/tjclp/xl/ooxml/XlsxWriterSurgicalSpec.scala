@@ -8,6 +8,7 @@ import com.tjclp.xl.context.SourceContext
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 
 /**
@@ -291,6 +292,61 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     outputZip.close()
     Files.deleteIfExists(source)
     Files.deleteIfExists(output)
+  }
+
+  test("comments are preserved byte-for-byte on unmodified sheets during surgical write") {
+    val sheet1 = Sheet("Sheet1").getOrElse(fail("Sheet1 creation failed"))
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Note", Some("Author")))
+    val sheet2 = Sheet("Sheet2").getOrElse(fail("Sheet2 creation failed"))
+      .put(ref"A1" -> "Data")
+      .unsafe
+
+    val initialWb = Workbook(Vector(sheet1, sheet2))
+    val sourcePath = Files.createTempFile("comments-source", ".xlsx")
+    XlsxWriter.write(initialWb, sourcePath).fold(err => fail(s"Initial write failed: $err"), identity)
+
+    // Reload to get SourceContext for surgical write
+    val withContext = XlsxReader.read(sourcePath).fold(err => fail(s"Read failed: $err"), identity)
+    val modified = for
+      s2 <- withContext("Sheet2")
+      updatedS2 <- s2.put(ref"B1" -> "Modified")
+      wb2 <- withContext.put(updatedS2)
+    yield wb2
+    val modifiedWb = modified.fold(err => fail(s"Modification failed: $err"), identity)
+
+    val outputPath = Files.createTempFile("comments-output", ".xlsx")
+    XlsxWriter.write(modifiedWb, outputPath).fold(err => fail(s"Surgical write failed: $err"), identity)
+
+    val sourceZip = new ZipFile(sourcePath.toFile)
+    val outputZip = new ZipFile(outputPath.toFile)
+
+    val sourceComments = readEntryBytes(sourceZip, sourceZip.getEntry("xl/comments1.xml"))
+    val outputComments = readEntryBytes(outputZip, outputZip.getEntry("xl/comments1.xml"))
+    assertEquals(
+      outputComments.toSeq,
+      sourceComments.toSeq,
+      "Comments XML should be preserved byte-for-byte for unmodified sheet"
+    )
+
+    val sourceVml = readEntryBytes(sourceZip, sourceZip.getEntry("xl/drawings/vmlDrawing1.vml"))
+    val outputVml = readEntryBytes(outputZip, outputZip.getEntry("xl/drawings/vmlDrawing1.vml"))
+    assertEquals(
+      outputVml.toSeq,
+      sourceVml.toSeq,
+      "VML for unmodified sheet should be preserved byte-for-byte"
+    )
+
+    val reread =
+      XlsxReader.read(outputPath).fold(err => fail(s"Reload failed: $err"), identity)
+    val comment =
+      reread("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity).getComment(ref"A1")
+    assertEquals(comment.flatMap(_.author), Some("Author"))
+    assertEquals(comment.map(_.text.toPlainText), Some("Note"))
+
+    sourceZip.close()
+    outputZip.close()
+    Files.deleteIfExists(sourcePath)
+    Files.deleteIfExists(outputPath)
   }
 
   // Helper: Read entry bytes from ZIP
