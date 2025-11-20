@@ -61,9 +61,12 @@ case class Sheet(
   def put(cell: Cell): Sheet =
     copy(cells = cells.updated(cell.ref, cell))
 
-  /** Put value at reference */
+  /** Put value at reference (preserves existing cell metadata) */
   def put(ref: ARef, value: CellValue): Sheet =
-    put(Cell(ref, value))
+    val updatedCell = cells.get(ref) match
+      case Some(existing) => existing.withValue(value) // Preserve styleId, comment, hyperlink
+      case None => Cell(ref, value) // New cell with no metadata
+    put(updatedCell)
 
   /**
    * Batch put with mixed value types and automatic style inference.

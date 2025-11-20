@@ -148,3 +148,51 @@ class SheetStyleSpec extends FunSuite:
     assert(sheet.getCellStyle(ref"B1") == Some(headerStyle))
     assert(sheet.getCellStyle(ref"B2") == Some(dataStyle))
   }
+
+  test("put() preserves existing cell style") {
+    val titleStyle = CellStyle.default
+      .withFont(Font("Arial", 14.0, bold = true))
+      .withFill(Fill.Solid(Color.Rgb(0xFF0000FF)))
+
+    // Style first, then put value (template pattern)
+    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+      .withCellStyle(ref"A1", titleStyle)
+      .put(ref"A1", CellValue.Text("Title"))
+
+    // Style should be preserved
+    assert(sheet(ref"A1").styleId.isDefined, "Cell should have styleId")
+    assertEquals(sheet.getCellStyle(ref"A1"), Some(titleStyle), "Style should be preserved")
+    assertEquals(sheet(ref"A1").value, CellValue.Text("Title"), "Value should be set")
+  }
+
+  test("put() preserves style across multiple updates") {
+    val style = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
+
+    // Style once, update value multiple times
+    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+      .withCellStyle(ref"A1", style)
+      .put(ref"A1", CellValue.Text("Version 1"))
+      .put(ref"A1", CellValue.Text("Version 2"))
+      .put(ref"A1", CellValue.Text("Version 3"))
+
+    // Style should still be there
+    assert(sheet.getCellStyle(ref"A1") == Some(style), "Style should persist across multiple puts")
+    assertEquals(sheet(ref"A1").value, CellValue.Text("Version 3"), "Should have final value")
+  }
+
+  test("put() preserves comment and hyperlink metadata") {
+    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+      .put(ref"A1", CellValue.Text("Link"))
+      .copy(cells = {
+        val cell = Sheet("Test").unsafe(ref"A1")
+          .withComment("Important note")
+          .withHyperlink("https://example.com")
+        Map(ref"A1" -> cell)
+      })
+      .put(ref"A1", CellValue.Text("Updated Link"))
+
+    // Comment and hyperlink should be preserved
+    assertEquals(sheet(ref"A1").comment, Some("Important note"), "Comment should be preserved")
+    assertEquals(sheet(ref"A1").hyperlink, Some("https://example.com"), "Hyperlink should be preserved")
+    assertEquals(sheet(ref"A1").value, CellValue.Text("Updated Link"), "Value should be updated")
+  }
