@@ -283,7 +283,10 @@ class CommentsSpec extends FunSuite:
     val commentElem = (xml \ "commentList" \ "comment").head.asInstanceOf[Elem]
     assertEquals((commentElem \ "@ref").text, "H8")
     assertEquals((commentElem \ "@authorId").text, "0")
-    assertEquals((commentElem \ "@guid").text, "{ABC-123}")
+    // Check for xr:uid namespaced attribute
+    val xrNs = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+    val uidAttr = commentElem.attribute(xrNs, "uid").map(_.text)
+    assertEquals(uidAttr, Some("{ABC-123}"))
   }
 
   test("encode rich text comment with formatting") {

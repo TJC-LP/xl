@@ -417,9 +417,9 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           // New comments - generate legacyDrawing reference to VML
           Some(
             Elem(
-              prefix = "r",
+              prefix = null,
               label = "legacyDrawing",
-              attributes = new UnprefixedAttribute("id", "rId2", Null),
+              attributes = new PrefixedAttribute("r", "id", "rId2", Null),
               scope = NamespaceBinding("r", nsRelationships, TopScope),
               minimizeEmpty = true
             )

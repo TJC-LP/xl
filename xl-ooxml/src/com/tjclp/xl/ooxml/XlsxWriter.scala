@@ -212,10 +212,13 @@ object XlsxWriter:
         // Convert domain Comments to OOXML (sorted by ref for deterministic output)
         val ooxmlComments = sheet.comments.toVector.sortBy(_._1.toA1).map { case (ref, comment) =>
           val authorId = comment.author.flatMap(authorMap.get).getOrElse(0)
+          // Generate UUID for comment tracking (Excel format: {UPPERCASE-UUID})
+          val guid = s"{${java.util.UUID.randomUUID().toString.toUpperCase}}"
           OoxmlComment(
             ref = ref,
             authorId = authorId,
-            text = comment.text
+            text = comment.text,
+            guid = Some(guid)
           )
         }
 

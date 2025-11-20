@@ -38,6 +38,7 @@ final case class OoxmlComment(
   ref: ARef,
   authorId: Int,
   text: RichText,
+  shapeId: Int = 0,
   guid: Option[String] = None,
   otherAttrs: Map[String, String] = Map.empty,
   otherChildren: Seq[Elem] = Seq.empty
@@ -139,17 +140,21 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
       textElem <- getChild(elem, "text")
       text <- parseCommentText(textElem)
     yield
-      val known = Set("ref", "authorId", "guid")
+      val known = Set("ref", "authorId", "shapeId")
       val attrs = elem.attributes.asAttrMap.filterNot { case (k, _) => known.contains(k) }
       val others = elem.child.collect {
         case el: Elem if el.label != "text" => el
       }.toVector
 
+      // Parse xr:uid (namespaced attribute) - try both xr:uid and plain guid for backwards compat
+      val guid = getNamespacedAttrOpt(elem, "xr:uid").orElse(getAttrOpt(elem, "guid"))
+
       OoxmlComment(
         ref = ref,
         authorId = authorId,
         text = text,
-        guid = getAttrOpt(elem, "guid"),
+        shapeId = getAttrOpt(elem, "shapeId").flatMap(_.toIntOption).getOrElse(0),
+        guid = guid,
         otherAttrs = attrs,
         otherChildren = others
       )
@@ -195,7 +200,10 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
    *   XML element <comments>...</comments>
    */
   def toXml(comments: OoxmlComments): Elem =
-    <comments xmlns={nsSpreadsheetML}>
+    <comments xmlns={nsSpreadsheetML}
+              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+              mc:Ignorable="xr"
+              xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision">
       <authors>
         {comments.authors.map(a => <author>{a}</author>)}
       </authors>
@@ -222,21 +230,35 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
   private def encodeComment(c: OoxmlComment): Elem =
     val baseAttrs = Map(
       "ref" -> c.ref.toA1,
-      "authorId" -> c.authorId.toString
-    ) ++ c.guid.map("guid" -> _).toList.toMap ++ c.otherAttrs
+      "authorId" -> c.authorId.toString,
+      "shapeId" -> c.shapeId.toString
+    ) ++ c.otherAttrs
 
     // Sort attributes for deterministic output
     val sortedAttrs = baseAttrs.toSeq.sortBy(_._1).foldLeft(Null: MetaData) { case (acc, (k, v)) =>
       new UnprefixedAttribute(k, v, acc)
     }
 
+    // Add xr:uid as namespaced attribute if guid is present
+    // Note: xr namespace is declared at root <comments> element, not here
+    val xrNs = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+    val attrsWithGuid = c.guid match
+      case Some(guid) =>
+        new PrefixedAttribute(
+          "xr",
+          "uid",
+          guid,
+          sortedAttrs
+        )
+      case None => sortedAttrs
+
     val textXml = encodeCommentText(c.text)
 
     Elem(
       null,
       "comment",
-      sortedAttrs,
-      TopScope,
+      attrsWithGuid,
+      TopScope, // No namespace binding - parent has it
       minimizeEmpty = true,
       textXml +: c.otherChildren*
     )

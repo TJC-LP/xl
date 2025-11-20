@@ -101,9 +101,9 @@ object VmlDrawing:
     s"""<v:shape id="_x0000_s$shapeId" type="#_x0000_t202"
        |          style="position:absolute;margin-left:${marginLeft}pt;margin-top:${marginTop}pt;
        |                 width:108pt;height:59.25pt;z-index:$shapeId;visibility:hidden"
-       |          fillcolor="#ffffe1" o:insetmode="auto">
-       |  <v:fill color2="#ffffe1"/>
-       |  <v:shadow on="t" color="black" obscured="t"/>
+       |          fillcolor="infoBackground [80]" strokecolor="none [81]" o:insetmode="auto">
+       |  <v:fill color2="infoBackground [80]"/>
+       |  <v:shadow color="none [81]" obscured="t"/>
        |  <v:path o:connecttype="none"/>
        |  <v:textbox style="mso-direction-alt:auto">
        |   <div style="text-align:left"></div>
