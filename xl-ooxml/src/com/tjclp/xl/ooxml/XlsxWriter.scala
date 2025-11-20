@@ -214,10 +214,41 @@ object XlsxWriter:
           val authorId = comment.author.flatMap(authorMap.get).getOrElse(0)
           // Generate UUID for comment tracking (Excel format: {UPPERCASE-UUID})
           val guid = s"{${java.util.UUID.randomUUID().toString.toUpperCase}}"
+
+          // Excel displays author as part of comment text (bold first run)
+          val textWithAuthor = comment.author match
+            case Some(author) =>
+              // Prepend author name as bold run
+              val authorRun = com.tjclp.xl.richtext.TextRun(
+                s"$author:",
+                Some(com.tjclp.xl.styles.font.Font.default.copy(bold = true))
+              )
+              // Prepend newline to the first run of comment text
+              val textWithNewline = comment.text.runs match
+                case head +: tail =>
+                  // Create new TextRun with newline prepended
+                  val textWithNewline = "\n" + head.text
+                  val modifiedFirstRun = com.tjclp.xl.richtext.TextRun(
+                    textWithNewline,
+                    head.font,
+                    head.rawRPrXml
+                  )
+                  com.tjclp.xl.richtext.RichText(Vector(authorRun, modifiedFirstRun) ++ tail)
+                case Vector() =>
+                  // Empty comment text - just add author with newline
+                  com.tjclp.xl.richtext.RichText(
+                    Vector(
+                      authorRun,
+                      com.tjclp.xl.richtext.TextRun("\n")
+                    )
+                  )
+              textWithNewline
+            case None => comment.text
+
           OoxmlComment(
             ref = ref,
             authorId = authorId,
-            text = comment.text,
+            text = textWithAuthor,
             guid = Some(guid)
           )
         }

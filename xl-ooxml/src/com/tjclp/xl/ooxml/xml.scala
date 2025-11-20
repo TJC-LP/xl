@@ -101,8 +101,9 @@ object XmlUtil:
 
   /** Compact XML without indentation (newline after declaration for Excel compatibility) */
   def compact(node: Node): String =
-    val printer = new PrettyPrinter(0, 0)
-    s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${printer.format(node)}"""
+    // Use toString instead of PrettyPrinter to preserve all whitespace (including newlines)
+    // PrettyPrinter normalizes whitespace in text nodes, which corrupts comments with newlines
+    s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${node.toString}"""
 
   /** Get required attribute value */
   def getAttr(elem: Elem, name: String): Either[String, String] =
@@ -156,7 +157,8 @@ object XmlUtil:
    * DETERMINISTIC: Yes (pure function)
    */
   def needsXmlSpacePreserve(s: String): Boolean =
-    s.nonEmpty && (s.startsWith(" ") || s.endsWith(" ") || s.contains("  "))
+    s.nonEmpty && (s.startsWith(" ") || s.endsWith(" ") || s.contains("  ") ||
+      s.contains("\n") || s.contains("\r") || s.contains("\t"))
 
   /**
    * Extract text content from XML element, preserving whitespace.
