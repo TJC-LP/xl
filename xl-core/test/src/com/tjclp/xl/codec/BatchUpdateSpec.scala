@@ -170,7 +170,6 @@ class BatchUpdateSpec extends FunSuite:
     // Verify we can access the underlying XLError for structured error handling
     exception.error match
       case _: XLError => // Success - error is structured
-      case other => fail(s"Expected XLError, got: $other")
   }
 
   test("put: writes single typed value with auto-inferred style") {
