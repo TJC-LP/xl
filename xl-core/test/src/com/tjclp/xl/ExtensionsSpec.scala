@@ -3,6 +3,7 @@ package com.tjclp.xl
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
+import com.tjclp.xl.extensions.given // For CellWriter given instances
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
@@ -503,4 +504,47 @@ class ExtensionsSpec extends FunSuite:
     assert(result.isRight)
     // 8 cells: A1,B1,C1,D1 (styled from range) + A2,B2,C2,D2 (data)
     assertEquals(result.unsafe.cells.size, 8)
+  }
+
+  // ========== NumFmt Auto-Application Tests (Bug Fix Verification) ==========
+
+  test("put LocalDate auto-applies Date format (BUG FIX)") {
+    val result = baseSheet.put("A1", LocalDate.of(2025, 11, 19))
+
+    result match
+      case Right(updated) =>
+        val ref = ARef.parse("A1").toOption.get
+        val cell = updated.cells(ref)
+        assert(cell.styleId.isDefined, "Cell should have style")
+        val style = updated.styleRegistry.get(cell.styleId.get).get
+        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Date)
+      case Left(err) => fail(s"Unexpected error: $err")
+  }
+
+  test("put BigDecimal auto-applies Decimal format") {
+    val result = baseSheet.put("A1", BigDecimal("123.45"))
+
+    result match
+      case Right(updated) =>
+        val ref = ARef.parse("A1").toOption.get
+        val cell = updated.cells(ref)
+        assert(cell.styleId.isDefined)
+        val style = updated.styleRegistry.get(cell.styleId.get).get
+        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Decimal)
+      case Left(err) => fail(s"Unexpected error: $err")
+  }
+
+  test("put LocalDate with style merges auto NumFmt") {
+    val boldStyle = CellStyle.default.bold
+    val result = baseSheet.put("A1", LocalDate.of(2025, 11, 19), boldStyle)
+
+    result match
+      case Right(updated) =>
+        val ref = ARef.parse("A1").toOption.get
+        val cell = updated.cells(ref)
+        val style = updated.styleRegistry.get(cell.styleId.get).get
+        // Verify both bold and Date format applied
+        assert(style.font.bold)
+        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Date)
+      case Left(err) => fail(s"Unexpected error: $err")
   }

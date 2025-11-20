@@ -1,10 +1,11 @@
 # Type Class Consolidation for Easy Mode `put()` API
 
-**Status**: Design Proposal
+**Status**: ✅ Implemented (PR #20)
 **Author**: Claude Code Agent
-**Date**: 2025-11-19
+**Date**: 2025-11-19 (Design) / 2025-11-20 (Implementation)
 **Context**: PR #19 review identified 120 lines of duplicated `put()` overloads
 **Goal**: Reduce 36 overloads to ~4-6 generic methods using type classes
+**Result**: 120 LOC → 50 LOC (58% reduction), 583 → 586 tests (+3 for NumFmt bug fix)
 
 ---
 

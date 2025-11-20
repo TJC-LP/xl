@@ -53,6 +53,9 @@ mill-bsp-out/
 ### Environment ###
 .env
 
+### Repomix ###
+repomix*
+
 ### Test Files ###
 *.xlsx
 ~$*.xlsx
