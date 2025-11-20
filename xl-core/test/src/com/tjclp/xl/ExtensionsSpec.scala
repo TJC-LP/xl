@@ -3,6 +3,7 @@ package com.tjclp.xl
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
+import com.tjclp.xl.extensions.given // For CellWriter given instances
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
@@ -219,7 +220,9 @@ class ExtensionsSpec extends FunSuite:
     val sheet = baseSheet.put("A1", "Value").unsafe
     val cells = sheet.get("A1")
     assertEquals(cells.length, 1)
-    assertEquals(cells.head.value, CellValue.Text("Value"))
+    cells.headOption match
+      case Some(cell) => assertEquals(cell.value, CellValue.Text("Value"))
+      case None => fail("Expected one cell at A1")
   }
 
   test("get auto-detects range") {
@@ -324,10 +327,12 @@ class ExtensionsSpec extends FunSuite:
 
     assert(result.isRight)
     val sheet = result.unsafe
-    val cell = sheet.cell("A1").get
-    // Verify data added and style preserved
-    assertEquals(cell.value, CellValue.Text("Data"))
-    assert(cell.styleId.isDefined)
+    sheet.cell("A1") match
+      case Some(cell) =>
+        // Verify data added and style preserved
+        assertEquals(cell.value, CellValue.Text("Data"))
+        assert(cell.styleId.isDefined)
+      case None => fail("Expected styled cell at A1")
   }
 
   test("style range then put individual cells preserves formatting") {
@@ -412,17 +417,21 @@ class ExtensionsSpec extends FunSuite:
   test("put styled String applies both value and style") {
     val result = baseSheet.put("A1", "Styled", testStyle)
     assert(result.isRight)
-    val cell = result.unsafe.cell("A1").get
-    assertEquals(cell.value, CellValue.Text("Styled"))
-    assert(cell.styleId.isDefined)
+    result.unsafe.cell("A1") match
+      case Some(cell) =>
+        assertEquals(cell.value, CellValue.Text("Styled"))
+        assert(cell.styleId.isDefined)
+      case None => fail("Expected styled cell at A1")
   }
 
   test("put styled Int applies both") {
     val result = baseSheet.put("A1", 999, testStyle)
     assert(result.isRight)
-    val cell = result.unsafe.cell("A1").get
-    assertEquals(cell.value, CellValue.Number(BigDecimal(999)))
-    assert(cell.styleId.isDefined)
+    result.unsafe.cell("A1") match
+      case Some(cell) =>
+        assertEquals(cell.value, CellValue.Number(BigDecimal(999)))
+        assert(cell.styleId.isDefined)
+      case None => fail("Expected styled cell at A1")
   }
 
   test("put styled LocalDate applies both") {
@@ -503,4 +512,66 @@ class ExtensionsSpec extends FunSuite:
     assert(result.isRight)
     // 8 cells: A1,B1,C1,D1 (styled from range) + A2,B2,C2,D2 (data)
     assertEquals(result.unsafe.cells.size, 8)
+  }
+
+  // ========== NumFmt Auto-Application Tests (Bug Fix Verification) ==========
+
+  test("put LocalDate auto-applies Date format (BUG FIX)") {
+    val result = baseSheet.put("A1", LocalDate.of(2025, 11, 19))
+
+    result match
+      case Right(updated) =>
+        val ref = ARef.parse("A1").fold(err => fail(s"parse failed: $err"), identity)
+        val cell = updated.cells(ref)
+        assert(cell.styleId.isDefined, "Cell should have style")
+        val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
+        val style = updated.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
+        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Date)
+      case Left(err) => fail(s"Unexpected error: $err")
+  }
+
+  test("put BigDecimal auto-applies Decimal format") {
+    val result = baseSheet.put("A1", BigDecimal("123.45"))
+
+    result match
+      case Right(updated) =>
+        val ref = ARef.parse("A1").fold(err => fail(s"parse failed: $err"), identity)
+        val cell = updated.cells(ref)
+        assert(cell.styleId.isDefined)
+        val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
+        val style = updated.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
+        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Decimal)
+      case Left(err) => fail(s"Unexpected error: $err")
+  }
+
+  test("put LocalDate with style merges auto NumFmt") {
+    val boldStyle = CellStyle.default.bold
+    val result = baseSheet.put("A1", LocalDate.of(2025, 11, 19), boldStyle)
+
+    result match
+      case Right(updated) =>
+        val ref = ARef.parse("A1").fold(err => fail(s"parse failed: $err"), identity)
+        val cell = updated.cells(ref)
+        val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
+        val style = updated.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
+        // Verify both bold and Date format applied
+        assert(style.font.bold)
+        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Date)
+      case Left(err) => fail(s"Unexpected error: $err")
+  }
+
+  test("put preserves template style while applying auto NumFmt") {
+    val templateStyle = CellStyle.default.bold
+    val templated = baseSheet.style("A1", templateStyle).unsafe
+    val result = templated.put("A1", BigDecimal("123.45"))
+
+    result match
+      case Right(updated) =>
+        val ref = ARef.parse("A1").fold(err => fail(s"parse failed: $err"), identity)
+        val cell = updated.cells(ref)
+        val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
+        val style = updated.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
+        assert(style.font.bold, "Template bold style should remain")
+        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Decimal)
+      case Left(err) => fail(s"Unexpected error: $err")
   }

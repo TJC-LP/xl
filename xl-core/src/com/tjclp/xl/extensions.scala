@@ -2,6 +2,7 @@ package com.tjclp.xl
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.codec.CellWriter
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.Sheet
@@ -37,6 +38,9 @@ import java.time.{LocalDate, LocalDateTime}
 @SuppressWarnings(Array("org.wartremover.warts.Throw"))
 object extensions:
 
+  // Re-export CellWriter given instances for type class-based put() methods
+  export com.tjclp.xl.codec.CellCodec.given
+
   // Helper to convert Either[String, A] to XLResult[A]
   private def toXLResult[A](
     either: Either[String, A],
@@ -49,132 +53,88 @@ object extensions:
 
   extension (sheet: Sheet)
     /**
-     * Put String value at cell reference (returns XLResult for chaining).
+     * Put typed value at cell reference.
+     *
+     * Supports: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText.
+     * Auto-infers NumFmt based on type (LocalDate → Date, BigDecimal → Decimal, etc.).
      *
      * @note
      *   This method parses the cell reference at runtime (~1-2 μs overhead per call). For
      *   performance-critical loops with known references, prefer the compile-time validated
      *   `ref"A1"` macro combined with direct `sheet.put(ref, value)` calls to avoid repeated
      *   parsing.
+     *
+     * @tparam A
+     *   The value type (must have CellWriter instance)
+     * @param cellRef
+     *   Cell reference like "A1"
+     * @param value
+     *   Typed value to write
+     * @return
+     *   XLResult[Sheet] for chaining
      */
-    def put(cellRef: String, value: String): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map(ref => sheet.put(ref, CellValue.Text(value)))
+    def put[A: CellWriter](cellRef: String, value: A): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").map { ref =>
+        val (cellValue, styleOpt) = summon[CellWriter[A]].write(value)
+        val updated = sheet.put(ref, cellValue)
 
-    /** Put Int value at cell reference. */
-    def put(cellRef: String, value: Int): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map(ref => sheet.put(ref, CellValue.Number(BigDecimal(value))))
+        styleOpt.fold(updated) { autoStyle =>
+          // Preserve existing template styles; only add NumFmt if the cell is unstyled or General.
+          val existingStyle =
+            updated.cells.get(ref).flatMap(_.styleId).flatMap(updated.styleRegistry.get)
 
-    /** Put Long value at cell reference. */
-    def put(cellRef: String, value: Long): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map(ref => sheet.put(ref, CellValue.Number(BigDecimal(value))))
-
-    /** Put Double value at cell reference. */
-    def put(cellRef: String, value: Double): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map(ref => sheet.put(ref, CellValue.Number(BigDecimal(value))))
-
-    /** Put BigDecimal value at cell reference. */
-    def put(cellRef: String, value: BigDecimal): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map(ref => sheet.put(ref, CellValue.Number(value)))
-
-    /** Put Boolean value at cell reference. */
-    def put(cellRef: String, value: Boolean): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map(ref => sheet.put(ref, CellValue.Bool(value)))
-
-    /** Put LocalDate value at cell reference. */
-    def put(cellRef: String, value: LocalDate): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map(ref => sheet.put(ref, CellValue.DateTime(value.atStartOfDay)))
-
-    /** Put LocalDateTime value at cell reference. */
-    def put(cellRef: String, value: LocalDateTime): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map(ref => sheet.put(ref, CellValue.DateTime(value)))
-
-    /** Put RichText value at cell reference. */
-    def put(cellRef: String, value: RichText): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map(ref => sheet.put(ref, CellValue.RichText(value)))
+          existingStyle match
+            case None =>
+              updated.withCellStyle(ref, autoStyle)
+            case Some(style) if style.numFmt == com.tjclp.xl.styles.numfmt.NumFmt.General =>
+              val merged = style.copy(numFmt = autoStyle.numFmt)
+              updated.withCellStyle(ref, merged)
+            case Some(_) =>
+              updated
+        }
+      }
 
   // ========== Sheet Extensions: Styled Data Operations ==========
 
   extension (sheet: Sheet)
-    /** Put String value with inline styling. */
-    def put(cellRef: String, value: String, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map { ref =>
-          val updated = sheet.put(ref, CellValue.Text(value))
-          updated.withCellStyle(ref, cellStyle)
-        }
+    /**
+     * Put typed value with inline styling.
+     *
+     * Merges auto-inferred style (from type) with explicit CellStyle. Explicit style takes
+     * precedence for conflicting properties.
+     *
+     * @note
+     *   NumFmt merging behavior: If explicit style has General format, auto-inferred NumFmt is
+     *   applied (e.g., Date for LocalDate). To force General format for typed values, apply styling
+     *   after put() instead: `sheet.put("A1", date).style("A1", style)`.
+     *
+     * @tparam A
+     *   The value type (must have CellWriter instance)
+     * @param cellRef
+     *   Cell reference like "A1"
+     * @param value
+     *   Typed value to write
+     * @param cellStyle
+     *   Explicit cell style to apply
+     * @return
+     *   XLResult[Sheet] for chaining
+     */
+    def put[A: CellWriter](cellRef: String, value: A, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").map { ref =>
+        val (cellValue, autoStyleOpt) = summon[CellWriter[A]].write(value)
+        val updated = sheet.put(ref, cellValue)
 
-    /** Put Int value with inline styling. */
-    def put(cellRef: String, value: Int, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map { ref =>
-          val updated = sheet.put(ref, CellValue.Number(BigDecimal(value)))
-          updated.withCellStyle(ref, cellStyle)
-        }
+        // Merge auto-inferred style with explicit style (explicit wins)
+        val finalStyle = autoStyleOpt match
+          case Some(autoStyle) =>
+            // Preserve NumFmt from auto-inference if explicit style uses default General format
+            if cellStyle.numFmt == com.tjclp.xl.styles.numfmt.NumFmt.General then
+              cellStyle.copy(numFmt = autoStyle.numFmt)
+            else cellStyle
+          case None => cellStyle
 
-    /** Put Long value with inline styling. */
-    def put(cellRef: String, value: Long, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map { ref =>
-          val updated = sheet.put(ref, CellValue.Number(BigDecimal(value)))
-          updated.withCellStyle(ref, cellStyle)
-        }
-
-    /** Put Double value with inline styling. */
-    def put(cellRef: String, value: Double, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map { ref =>
-          val updated = sheet.put(ref, CellValue.Number(BigDecimal(value)))
-          updated.withCellStyle(ref, cellStyle)
-        }
-
-    /** Put BigDecimal value with inline styling. */
-    def put(cellRef: String, value: BigDecimal, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map { ref =>
-          val updated = sheet.put(ref, CellValue.Number(value))
-          updated.withCellStyle(ref, cellStyle)
-        }
-
-    /** Put Boolean value with inline styling. */
-    def put(cellRef: String, value: Boolean, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map { ref =>
-          val updated = sheet.put(ref, CellValue.Bool(value))
-          updated.withCellStyle(ref, cellStyle)
-        }
-
-    /** Put LocalDate value with inline styling. */
-    def put(cellRef: String, value: LocalDate, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map { ref =>
-          val updated = sheet.put(ref, CellValue.DateTime(value.atStartOfDay))
-          updated.withCellStyle(ref, cellStyle)
-        }
-
-    /** Put LocalDateTime value with inline styling. */
-    def put(cellRef: String, value: LocalDateTime, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map { ref =>
-          val updated = sheet.put(ref, CellValue.DateTime(value))
-          updated.withCellStyle(ref, cellStyle)
-        }
-
-    /** Put RichText value with inline styling. */
-    def put(cellRef: String, value: RichText, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
-        .map { ref =>
-          val updated = sheet.put(ref, CellValue.RichText(value))
-          updated.withCellStyle(ref, cellStyle)
-        }
+        updated.withCellStyle(ref, finalStyle)
+      }
 
   // ========== Sheet Extensions: Style Operations ==========
 
@@ -264,94 +224,22 @@ object extensions:
   // ========== XLResult[Sheet] Extensions: Chainable Operations ==========
 
   extension (result: XLResult[Sheet])
-    /** Put String value (chainable). */
-    @annotation.targetName("putStringChainable")
-    def put(cellRef: String, value: String): XLResult[Sheet] =
+    /**
+     * Put typed value (chainable).
+     *
+     * Chains after previous XLResult[Sheet] operations. All types supported.
+     */
+    @annotation.targetName("putGenericChainable")
+    def put[A: CellWriter](cellRef: String, value: A): XLResult[Sheet] =
       result.flatMap(_.put(cellRef, value))
 
-    /** Put Int value (chainable). */
-    @annotation.targetName("putIntChainable")
-    def put(cellRef: String, value: Int): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value))
-
-    /** Put Long value (chainable). */
-    @annotation.targetName("putLongChainable")
-    def put(cellRef: String, value: Long): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value))
-
-    /** Put Double value (chainable). */
-    @annotation.targetName("putDoubleChainable")
-    def put(cellRef: String, value: Double): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value))
-
-    /** Put BigDecimal value (chainable). */
-    @annotation.targetName("putBigDecimalChainable")
-    def put(cellRef: String, value: BigDecimal): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value))
-
-    /** Put Boolean value (chainable). */
-    @annotation.targetName("putBooleanChainable")
-    def put(cellRef: String, value: Boolean): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value))
-
-    /** Put LocalDate value (chainable). */
-    @annotation.targetName("putLocalDateChainable")
-    def put(cellRef: String, value: LocalDate): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value))
-
-    /** Put LocalDateTime value (chainable). */
-    @annotation.targetName("putLocalDateTimeChainable")
-    def put(cellRef: String, value: LocalDateTime): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value))
-
-    /** Put RichText value (chainable). */
-    @annotation.targetName("putRichTextChainable")
-    def put(cellRef: String, value: RichText): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value))
-
-    /** Put String with style (chainable). */
-    @annotation.targetName("putStringStyledChainable")
-    def put(cellRef: String, value: String, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value, cellStyle))
-
-    /** Put Int with style (chainable). */
-    @annotation.targetName("putIntStyledChainable")
-    def put(cellRef: String, value: Int, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value, cellStyle))
-
-    /** Put Long with style (chainable). */
-    @annotation.targetName("putLongStyledChainable")
-    def put(cellRef: String, value: Long, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value, cellStyle))
-
-    /** Put Double with style (chainable). */
-    @annotation.targetName("putDoubleStyledChainable")
-    def put(cellRef: String, value: Double, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value, cellStyle))
-
-    /** Put BigDecimal with style (chainable). */
-    @annotation.targetName("putBigDecimalStyledChainable")
-    def put(cellRef: String, value: BigDecimal, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value, cellStyle))
-
-    /** Put Boolean with style (chainable). */
-    @annotation.targetName("putBooleanStyledChainable")
-    def put(cellRef: String, value: Boolean, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value, cellStyle))
-
-    /** Put LocalDate with style (chainable). */
-    @annotation.targetName("putLocalDateStyledChainable")
-    def put(cellRef: String, value: LocalDate, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value, cellStyle))
-
-    /** Put LocalDateTime with style (chainable). */
-    @annotation.targetName("putLocalDateTimeStyledChainable")
-    def put(cellRef: String, value: LocalDateTime, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.put(cellRef, value, cellStyle))
-
-    /** Put RichText with style (chainable). */
-    @annotation.targetName("putRichTextStyledChainable")
-    def put(cellRef: String, value: RichText, cellStyle: CellStyle): XLResult[Sheet] =
+    /**
+     * Put typed value with style (chainable).
+     *
+     * Chains after previous XLResult[Sheet] operations with inline styling.
+     */
+    @annotation.targetName("putGenericStyledChainable")
+    def put[A: CellWriter](cellRef: String, value: A, cellStyle: CellStyle): XLResult[Sheet] =
       result.flatMap(_.put(cellRef, value, cellStyle))
 
     /**
