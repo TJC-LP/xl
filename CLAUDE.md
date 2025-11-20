@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **XL** is a purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7. The design prioritizes **purity, totality, determinism, and law-governed semantics** with zero-overhead opaque types and compile-time DSLs.
 
+> **Guiding Principle**: You are working on **the best Excel library in the world**. Before making any decision, ask yourself: **"What would the best Excel library in the world do?"**
+
 **Package**: `com.tjclp.xl`
 **Build**: Mill 0.12.x
 **Scala**: 3.7.3
