@@ -6,12 +6,15 @@ package com.tjclp.xl.error
  * This class bridges the pure Either-based error model with exception-based APIs (like Easy Mode).
  * The underlying [[XLError]] is preserved for programmatic error recovery and structured logging.
  *
+ * '''Note''': Constructor is `private[xl]` to ensure exceptions are only created by the library
+ * itself through the `.unsafe` boundary. External code should use `Either[XLError, A]` directly.
+ *
  * '''Example: Catching and inspecting errors'''
  * {{{
  * import com.tjclp.xl.*
  *
  * try {
- *   sheet.put("InvalidRef", "Value")  // Easy Mode throws XLException
+ *   sheet.put("InvalidRef", "Value").unsafe  // .unsafe throws XLException
  * } catch {
  *   case ex: XLException =>
  *     ex.error match {
@@ -24,4 +27,4 @@ package com.tjclp.xl.error
  * @param error
  *   The underlying structured error
  */
-final class XLException(val error: XLError) extends RuntimeException(error.message)
+final class XLException private[xl] (val error: XLError) extends RuntimeException(error.message)
