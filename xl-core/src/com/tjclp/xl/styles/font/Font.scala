@@ -3,7 +3,7 @@ package com.tjclp.xl.styles.font
 import com.tjclp.xl.styles.color.Color
 
 /** Font styling for cell text */
-case class Font(
+final case class Font(
   name: String = "Calibri",
   sizePt: Double = 11.0,
   bold: Boolean = false,

@@ -3,7 +3,7 @@ package com.tjclp.xl.styles.border
 import com.tjclp.xl.styles.color.Color
 
 /** Single border side */
-case class BorderSide(
+final case class BorderSide(
   style: BorderStyle = BorderStyle.None,
   color: Option[Color] = None
 )

@@ -18,7 +18,7 @@ import com.tjclp.xl.styles.font.Font
  *   modification to preserve properties not in Font model (vertAlign, rFont, family, underline
  *   styles). Takes precedence over `font` during serialization.
  */
-case class TextRun(
+final case class TextRun(
   text: String,
   font: Option[Font] = None,
   rawRPrXml: Option[String] = None

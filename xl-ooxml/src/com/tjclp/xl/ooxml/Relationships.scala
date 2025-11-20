@@ -4,7 +4,7 @@ import scala.xml.*
 import XmlUtil.*
 
 /** A single relationship in an OOXML package */
-case class Relationship(
+final case class Relationship(
   id: String, // Relationship ID (e.g., "rId1")
   `type`: String, // Type URI
   target: String, // Target path
@@ -17,7 +17,7 @@ case class Relationship(
  * Maps relationship IDs to targets. Every significant part can have a corresponding .rels file in a
  * _rels/ subdirectory.
  */
-case class Relationships(
+final case class Relationships(
   relationships: Seq[Relationship]
 ) extends XmlWritable:
 

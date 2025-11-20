@@ -1,7 +1,7 @@
 package com.tjclp.xl.styles.alignment
 
 /** Cell alignment settings */
-case class Align(
+final case class Align(
   horizontal: HAlign = HAlign.Left,
   vertical: VAlign = VAlign.Bottom,
   wrapText: Boolean = false,

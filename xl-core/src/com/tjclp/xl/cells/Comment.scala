@@ -27,7 +27,7 @@ import com.tjclp.xl.richtext.RichText
  *
  * @since 0.4.0
  */
-case class Comment(
+final case class Comment(
   text: RichText,
   author: Option[String]
 ) derives CanEqual

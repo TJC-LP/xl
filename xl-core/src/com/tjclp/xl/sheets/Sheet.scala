@@ -15,7 +15,7 @@ import scala.util.boundary, boundary.break
  * Immutable design: all operations return new Sheet instances. Uses persistent data structures for
  * efficient updates.
  */
-case class Sheet(
+final case class Sheet(
   name: SheetName,
   cells: Map[ARef, Cell] = Map.empty,
   mergedRanges: Set[CellRange] = Set.empty,
