@@ -74,7 +74,10 @@ object XlsxReader:
    * All other parts (charts, drawings, images, etc.) are preserved byte-for-byte.
    */
   private def isKnownPart(path: String): Boolean =
-    knownParts.contains(path) || path.matches("xl/worksheets/sheet\\d+\\.xml")
+    knownParts.contains(path) ||
+      path.matches("xl/worksheets/sheet\\d+\\.xml") ||
+      path.matches("xl/comments\\d+\\.xml") ||
+      path.matches("xl/worksheets/_rels/sheet\\d+\\.xml\\.rels")
 
   /**
    * Read workbook from XLSX file (in-memory).
@@ -227,6 +230,77 @@ object XlsxReader:
             .map(err => XLError.ParseError("xl/sharedStrings.xml", err): XLError)
         yield Some(sst)
 
+  /**
+   * Parse worksheet relationships to find comment references.
+   *
+   * Returns the comment target path (e.g., "../comments1.xml") if a comment relationship exists.
+   */
+  private def parseWorksheetRelationships(
+    parts: Map[String, String],
+    sheetIndex: Int
+  ): XLResult[Option[String]] =
+    val relsPath = s"xl/worksheets/_rels/sheet$sheetIndex.xml.rels"
+    parts.get(relsPath) match
+      case None => Right(None) // No relationships for this sheet
+      case Some(xml) =>
+        for
+          elem <- parseXml(xml, relsPath)
+          rels <- Relationships
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError(relsPath, err): XLError)
+        yield rels.relationships.find(_.`type` == XmlUtil.relTypeComments).map(_.target)
+
+  /**
+   * Parse comments for a single sheet.
+   *
+   * Resolves relative path from worksheet relationship and parses the comment XML file.
+   */
+  private def parseCommentsForSheet(
+    parts: Map[String, String],
+    commentTarget: String
+  ): XLResult[Map[ARef, com.tjclp.xl.cells.Comment]] =
+    // Resolve relative path (e.g., "../comments1.xml" -> "xl/comments1.xml")
+    val resolvedPath =
+      if commentTarget.startsWith("../") then s"xl/${commentTarget.drop(3)}"
+      else if commentTarget.startsWith("xl/") then commentTarget
+      else s"xl/$commentTarget"
+
+    parts.get(resolvedPath) match
+      case None => Right(Map.empty) // Missing comment file (graceful degradation)
+      case Some(xml) =>
+        for
+          elem <- parseXml(xml, resolvedPath)
+          ooxmlComments <- OoxmlComments
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError(resolvedPath, err): XLError)
+          domainComments <- convertToDomainComments(ooxmlComments)
+        yield domainComments
+
+  /**
+   * Convert OOXML comments to domain Comment map.
+   *
+   * Maps author IDs to author names and creates domain Comment objects.
+   */
+  private def convertToDomainComments(
+    ooxmlComments: OoxmlComments
+  ): XLResult[Map[ARef, com.tjclp.xl.cells.Comment]] =
+    val authorMap = ooxmlComments.authors.zipWithIndex.map { case (author, idx) =>
+      idx -> author
+    }.toMap
+
+    val comments = ooxmlComments.comments.map { ooxmlComment =>
+      val author = authorMap.get(ooxmlComment.authorId)
+      val domainComment = com.tjclp.xl.cells.Comment(
+        text = ooxmlComment.text,
+        author = author
+      )
+      ooxmlComment.ref -> domainComment
+    }.toMap
+
+    Right(comments)
+
   /** Parse styles table (falls back to default styles if missing) */
   private def parseStyles(parts: Map[String, String]): XLResult[(WorkbookStyles, Vector[Warning])] =
     parts.get("xl/styles.xml") match
@@ -262,7 +336,7 @@ object XlsxReader:
     relationships: Relationships
   ): XLResult[Vector[Sheet]] =
     val relMap = relationships.relationships.map(rel => rel.id -> rel).toMap
-    sheetRefs.toVector.traverse { ref =>
+    sheetRefs.toVector.zipWithIndex.traverse { case (ref, idx) =>
       val sheetPath = relMap
         .get(ref.relationshipId)
         .map(rel => resolveSheetPath(rel.target))
@@ -277,7 +351,13 @@ object XlsxReader:
           .fromXmlWithSST(elem, sst)
           .left
           .map(err => XLError.ParseError(sheetPath, err): XLError)
-        domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles)
+        // Parse worksheet relationships to find comment references (1-based sheet index)
+        commentTarget <- parseWorksheetRelationships(parts, idx + 1)
+        // Parse comments if relationship exists
+        comments <- commentTarget match
+          case Some(target) => parseCommentsForSheet(parts, target)
+          case None => Right(Map.empty)
+        domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles, comments)
       yield domainSheet
     }
 
@@ -300,7 +380,8 @@ object XlsxReader:
     name: SheetName,
     ooxmlSheet: OoxmlWorksheet,
     sst: Option[SharedStrings],
-    styles: WorkbookStyles
+    styles: WorkbookStyles,
+    comments: Map[ARef, com.tjclp.xl.cells.Comment]
   ): XLResult[Sheet] =
     val (preRegisteredRegistry, styleMapping) = buildStyleRegistry(styles)
     val cellsMap =
@@ -320,7 +401,8 @@ object XlsxReader:
         name = name,
         cells = cellsMap,
         mergedRanges = ooxmlSheet.mergedRanges,
-        styleRegistry = preRegisteredRegistry
+        styleRegistry = preRegisteredRegistry,
+        comments = comments
       )
     )
 

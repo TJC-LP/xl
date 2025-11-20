@@ -30,15 +30,17 @@ object ContentTypes extends XmlReadable[ContentTypes]:
   def minimal(
     hasStyles: Boolean = false,
     hasSharedStrings: Boolean = false,
-    sheetCount: Int = 1
+    sheetCount: Int = 1,
+    sheetsWithComments: Set[Int] = Set.empty
   ): ContentTypes =
-    forSheetIndices((1 to sheetCount).toSeq, hasStyles, hasSharedStrings)
+    forSheetIndices((1 to sheetCount).toSeq, hasStyles, hasSharedStrings, sheetsWithComments)
 
   /** Create content types using explicit sheet indices (supports non-sequential sheets). */
   def forSheetIndices(
     sheetIndices: Seq[Int],
     hasStyles: Boolean = false,
-    hasSharedStrings: Boolean = false
+    hasSharedStrings: Boolean = false,
+    sheetsWithComments: Set[Int] = Set.empty
   ): ContentTypes =
     val baseDefaults = Map(
       "rels" -> ctRelationships,
@@ -49,9 +51,14 @@ object ContentTypes extends XmlReadable[ContentTypes]:
       s"/xl/worksheets/sheet$idx.xml" -> ctWorksheet
     }
 
+    // Add comment overrides for sheets with comments
+    val commentOverrides = sheetsWithComments.toSeq.sorted.map { idx =>
+      s"/xl/comments$idx.xml" -> ctComments
+    }
+
     val baseOverrides = Map(
       "/xl/workbook.xml" -> ctWorkbook
-    ) ++ sheetOverrides
+    ) ++ sheetOverrides ++ commentOverrides
 
     val stylesOverride = if hasStyles then Map("/xl/styles.xml" -> ctStyles) else Map.empty
     val sstOverride =
