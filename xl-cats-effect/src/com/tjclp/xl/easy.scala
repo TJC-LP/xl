@@ -47,8 +47,9 @@ package com.tjclp.xl
  * @since 0.3.0
  */
 object easy:
-  // Re-export core syntax (domain, macros, extensions, style DSL)
-  export com.tjclp.xl.syntax.*
+  // Re-export complete core API
+  export com.tjclp.xl.api.* // Domain types (Sheet, Cell, Workbook, CellStyle, etc.)
+  export com.tjclp.xl.syntax.* // Macros, extensions, style DSL
 
   // Export simplified Excel IO (aliased from EasyExcel)
   export com.tjclp.xl.io.EasyExcel as Excel

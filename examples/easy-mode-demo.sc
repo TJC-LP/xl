@@ -7,9 +7,8 @@
 //   1. Publish locally: ./mill xl-core.publishLocal && ./mill xl-cats-effect.publishLocal
 //   2. Run script: scala-cli run examples/easy-mode-demo.sc
 
-import com.tjclp.xl.*              // Domain model + extensions + macros + XLException
-import com.tjclp.xl.unsafe.*          // .unsafe boundary (explicit opt-in)
-import com.tjclp.xl.io.EasyExcel as Excel
+import com.tjclp.xl.easy.*   // Complete Easy Mode: domain + extensions + macros + Excel IO
+import com.tjclp.xl.unsafe.*   // .unsafe boundary (explicit opt-in)
 import java.time.LocalDate
 
 println("🚀 XL Easy Mode API Demo\n")
