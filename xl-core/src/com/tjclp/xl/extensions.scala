@@ -6,7 +6,6 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheet.Sheet
 import com.tjclp.xl.style.CellStyle
-import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.workbook.Workbook
 
 import java.time.{LocalDate, LocalDateTime}
@@ -14,26 +13,24 @@ import java.time.{LocalDate, LocalDateTime}
 /**
  * String-based extensions for ergonomic Easy Mode API.
  *
- * These extensions accept string cell references and throw [[com.tjclp.xl.error.XLException]] on
- * parse errors, enabling a more script-friendly API without explicit Either handling.
+ * Extensions return [[XLResult]] for chainable error handling. Use `.unsafe` once at the end of
+ * chains to unwrap.
  *
- * '''Philosophy:''' `.unsafe` is an implementation detail. Users never type `.unsafe` in their code -
- * it's hidden within these extension methods.
- *
- * '''Example: Easy Mode usage'''
+ * '''Example: Chainable operations'''
  * {{{
- * import com.tjclp.xl.*  // Includes extensions automatically
+ * import com.tjclp.xl.*
  *
  * val sheet = Sheet("Sales")
- *   .put("A1", "Product")               // String ref, throws on invalid ref
- *   .put("B1", "Revenue", headerStyle)  // With inline styling
- *   .applyStyle("A1:B1", boldStyle)     // Template-first: style then data
+ *   .put("A1", "Product")
+ *   .put("B1", "Revenue", headerStyle)
+ *   .applyStyle("A1:B1", boldStyle)
+ *   .unsafe  // Single boundary point
  * }}}
  *
- * '''Two styling approaches:'''
- *   - `.applyStyle(range, style)` - Format structure before data (template pattern)
- *   - `.put(ref, value, style)` - Inline styling for one-offs
- *   - RichText - Intra-cell formatting (multiple styles in one cell)
+ * '''Styling approaches:'''
+ *   - `.applyStyle(range, style)` - Template pattern (format before data)
+ *   - `.put(ref, value, style)` - Inline styling
+ *   - RichText - Intra-cell formatting
  *
  * @since 0.3.0
  */
@@ -51,277 +48,319 @@ object extensions:
   // ========== Sheet Extensions: Data Operations ==========
 
   extension (sheet: Sheet)
-    /**
-     * Put a String value at cell reference (string).
-     *
-     * @param cellRef
-     *   Cell reference like "A1", "B2", etc.
-     * @param value
-     *   String value to write
-     * @return
-     *   Updated sheet
-     * @throws com.tjclp.xl.error.XLException
-     *   if cellRef is invalid
-     */
-    def put(cellRef: String, value: String): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      sheet.put(ref, CellValue.Text(value))
+    /** Put String value at cell reference (returns XLResult for chaining). */
+    def put(cellRef: String, value: String): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map(ref => sheet.put(ref, CellValue.Text(value)))
 
-    /** Put an Int value at cell reference (string). */
-    def put(cellRef: String, value: Int): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      sheet.put(ref, CellValue.Number(BigDecimal(value)))
+    /** Put Int value at cell reference. */
+    def put(cellRef: String, value: Int): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map(ref => sheet.put(ref, CellValue.Number(BigDecimal(value))))
 
-    /** Put a Long value at cell reference (string). */
-    def put(cellRef: String, value: Long): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      sheet.put(ref, CellValue.Number(BigDecimal(value)))
+    /** Put Long value at cell reference. */
+    def put(cellRef: String, value: Long): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map(ref => sheet.put(ref, CellValue.Number(BigDecimal(value))))
 
-    /** Put a Double value at cell reference (string). */
-    def put(cellRef: String, value: Double): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      sheet.put(ref, CellValue.Number(BigDecimal(value)))
+    /** Put Double value at cell reference. */
+    def put(cellRef: String, value: Double): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map(ref => sheet.put(ref, CellValue.Number(BigDecimal(value))))
 
-    /** Put a BigDecimal value at cell reference (string). */
-    def put(cellRef: String, value: BigDecimal): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      sheet.put(ref, CellValue.Number(value))
+    /** Put BigDecimal value at cell reference. */
+    def put(cellRef: String, value: BigDecimal): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map(ref => sheet.put(ref, CellValue.Number(value)))
 
-    /** Put a Boolean value at cell reference (string). */
-    def put(cellRef: String, value: Boolean): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      sheet.put(ref, CellValue.Bool(value))
+    /** Put Boolean value at cell reference. */
+    def put(cellRef: String, value: Boolean): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map(ref => sheet.put(ref, CellValue.Bool(value)))
 
-    /** Put a LocalDate value at cell reference (string). */
-    def put(cellRef: String, value: LocalDate): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      sheet.put(ref, CellValue.DateTime(value.atStartOfDay))
+    /** Put LocalDate value at cell reference. */
+    def put(cellRef: String, value: LocalDate): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map(ref => sheet.put(ref, CellValue.DateTime(value.atStartOfDay)))
 
-    /** Put a LocalDateTime value at cell reference (string). */
-    def put(cellRef: String, value: LocalDateTime): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      sheet.put(ref, CellValue.DateTime(value))
+    /** Put LocalDateTime value at cell reference. */
+    def put(cellRef: String, value: LocalDateTime): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map(ref => sheet.put(ref, CellValue.DateTime(value)))
 
-    /** Put a RichText value at cell reference (string). */
-    def put(cellRef: String, value: RichText): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      sheet.put(ref, CellValue.RichText(value))
+    /** Put RichText value at cell reference. */
+    def put(cellRef: String, value: RichText): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map(ref => sheet.put(ref, CellValue.RichText(value)))
 
   // ========== Sheet Extensions: Styled Data Operations ==========
 
   extension (sheet: Sheet)
-    /**
-     * Put a String value with inline styling.
-     *
-     * @param cellRef
-     *   Cell reference like "A1"
-     * @param value
-     *   String value
-     * @param style
-     *   CellStyle to apply
-     * @return
-     *   Updated sheet with value and style
-     * @throws com.tjclp.xl.error.XLException
-     *   if cellRef is invalid
-     */
-    def put(cellRef: String, value: String, style: CellStyle): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      val updated = sheet.put(ref, CellValue.Text(value))
-      updated.withCellStyle(ref, style)
+    /** Put String value with inline styling. */
+    def put(cellRef: String, value: String, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map { ref =>
+          val updated = sheet.put(ref, CellValue.Text(value))
+          updated.withCellStyle(ref, cellStyle)
+        }
 
-    /** Put an Int value with inline styling. */
-    def put(cellRef: String, value: Int, style: CellStyle): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      val updated = sheet.put(ref, CellValue.Number(BigDecimal(value)))
-      updated.withCellStyle(ref, style)
+    /** Put Int value with inline styling. */
+    def put(cellRef: String, value: Int, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map { ref =>
+          val updated = sheet.put(ref, CellValue.Number(BigDecimal(value)))
+          updated.withCellStyle(ref, cellStyle)
+        }
 
-    /** Put a Long value with inline styling. */
-    def put(cellRef: String, value: Long, style: CellStyle): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      val updated = sheet.put(ref, CellValue.Number(BigDecimal(value)))
-      updated.withCellStyle(ref, style)
+    /** Put Long value with inline styling. */
+    def put(cellRef: String, value: Long, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map { ref =>
+          val updated = sheet.put(ref, CellValue.Number(BigDecimal(value)))
+          updated.withCellStyle(ref, cellStyle)
+        }
 
-    /** Put a Double value with inline styling. */
-    def put(cellRef: String, value: Double, style: CellStyle): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      val updated = sheet.put(ref, CellValue.Number(BigDecimal(value)))
-      updated.withCellStyle(ref, style)
+    /** Put Double value with inline styling. */
+    def put(cellRef: String, value: Double, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map { ref =>
+          val updated = sheet.put(ref, CellValue.Number(BigDecimal(value)))
+          updated.withCellStyle(ref, cellStyle)
+        }
 
-    /** Put a BigDecimal value with inline styling. */
-    def put(cellRef: String, value: BigDecimal, style: CellStyle): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      val updated = sheet.put(ref, CellValue.Number(value))
-      updated.withCellStyle(ref, style)
+    /** Put BigDecimal value with inline styling. */
+    def put(cellRef: String, value: BigDecimal, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map { ref =>
+          val updated = sheet.put(ref, CellValue.Number(value))
+          updated.withCellStyle(ref, cellStyle)
+        }
 
-    /** Put a Boolean value with inline styling. */
-    def put(cellRef: String, value: Boolean, style: CellStyle): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      val updated = sheet.put(ref, CellValue.Bool(value))
-      updated.withCellStyle(ref, style)
+    /** Put Boolean value with inline styling. */
+    def put(cellRef: String, value: Boolean, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map { ref =>
+          val updated = sheet.put(ref, CellValue.Bool(value))
+          updated.withCellStyle(ref, cellStyle)
+        }
 
-    /** Put a LocalDate value with inline styling. */
-    def put(cellRef: String, value: LocalDate, style: CellStyle): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      val updated = sheet.put(ref, CellValue.DateTime(value.atStartOfDay))
-      updated.withCellStyle(ref, style)
+    /** Put LocalDate value with inline styling. */
+    def put(cellRef: String, value: LocalDate, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map { ref =>
+          val updated = sheet.put(ref, CellValue.DateTime(value.atStartOfDay))
+          updated.withCellStyle(ref, cellStyle)
+        }
 
-    /** Put a LocalDateTime value with inline styling. */
-    def put(cellRef: String, value: LocalDateTime, style: CellStyle): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      val updated = sheet.put(ref, CellValue.DateTime(value))
-      updated.withCellStyle(ref, style)
+    /** Put LocalDateTime value with inline styling. */
+    def put(cellRef: String, value: LocalDateTime, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map { ref =>
+          val updated = sheet.put(ref, CellValue.DateTime(value))
+          updated.withCellStyle(ref, cellStyle)
+        }
 
-    /** Put a RichText value with inline styling. */
-    def put(cellRef: String, value: RichText, style: CellStyle): Sheet =
-      val ref = toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").unsafe
-      val updated = sheet.put(ref, CellValue.RichText(value))
-      updated.withCellStyle(ref, style)
+    /** Put RichText value with inline styling. */
+    def put(cellRef: String, value: RichText, cellStyle: CellStyle): XLResult[Sheet] =
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference")
+        .map { ref =>
+          val updated = sheet.put(ref, CellValue.RichText(value))
+          updated.withCellStyle(ref, cellStyle)
+        }
 
   // ========== Sheet Extensions: Style Operations ==========
 
   extension (sheet: Sheet)
     /**
-     * Apply style to a cell or range (template pattern).
-     *
-     * This method enables template-first workflows: format structure before filling data.
-     *
-     * '''Example: Template-first workflow'''
-     * {{{
-     * val template = Sheet("Q1 Sales")
-     *   .applyStyle("A1:E1", titleStyle)       // Title row
-     *   .applyStyle("A2:E2", headerStyle)      // Header row
-     *   .applyStyle("A3:E100", dataStyle)      // Data rows
-     *
-     * val report = template
-     *   .put("A1", "Q1 2025 Sales Report")
-     *   .put("A2", "Product")
-     * }}}
-     *
-     * Automatically detects whether ref is a single cell or range (by presence of ":").
+     * Apply style to cell or range (template pattern).
      *
      * @param ref
-     *   Cell reference ("A1") or range ("A1:B10")
+     *   Cell ("A1") or range ("A1:B10")
      * @param cellStyle
      *   CellStyle to apply
      * @return
-     *   Updated sheet with style applied
-     * @throws com.tjclp.xl.error.XLException
-     *   if ref is invalid
+     *   XLResult[Sheet] for chaining
      */
-    def applyStyle(ref: String, cellStyle: CellStyle): Sheet =
+    @annotation.targetName("applyStyleSheet")
+    def applyStyle(ref: String, cellStyle: CellStyle): XLResult[Sheet] =
       if ref.contains(":") then
-        // Range styling
-        val range = toXLResult(CellRange.parse(ref), ref, "Invalid range").unsafe
-        sheet.withRangeStyle(range, cellStyle)
+        toXLResult(CellRange.parse(ref), ref, "Invalid range")
+          .map(range => sheet.withRangeStyle(range, cellStyle))
       else
-        // Single cell styling
-        val aref = toXLResult(ARef.parse(ref), ref, "Invalid cell reference").unsafe
-        sheet.withCellStyle(aref, cellStyle)
+        toXLResult(ARef.parse(ref), ref, "Invalid cell reference")
+          .map(aref => sheet.withCellStyle(aref, cellStyle))
 
-  // ========== Sheet Extensions: Lookup Operations ==========
+  // ========== Sheet Extensions: Lookup Operations (Safe) ==========
 
   extension (sheet: Sheet)
     /**
-     * Get cell at reference (string), returning Option.
+     * Get cell at reference (safe lookup).
      *
-     * This is naturally safe - returns None for missing cells or invalid refs, no exceptions.
+     * Returns None for invalid references or missing cells. No exceptions thrown.
      *
      * @param cellRef
      *   Cell reference like "A1"
      * @return
-     *   Some(cell) if present and valid ref, None otherwise
+     *   Some(cell) if valid ref and exists, None otherwise
      */
     def getCell(cellRef: String): Option[Cell] =
       ARef.parse(cellRef).toOption.flatMap(ref => sheet.cells.get(ref))
 
     /**
-     * Get all cells in range (string).
+     * Get cells in range (safe lookup).
+     *
+     * Returns empty list for invalid ranges. Only includes existing cells.
      *
      * @param rangeRef
      *   Range like "A1:B10"
      * @return
-     *   List of cells in range (only cells that exist)
-     * @throws com.tjclp.xl.error.XLException
-     *   if rangeRef is invalid
+     *   List of cells (only existing cells)
      */
     def getCells(rangeRef: String): List[Cell] =
-      val range = toXLResult(CellRange.parse(rangeRef), rangeRef, "Invalid range").unsafe
-      range.cells.flatMap(sheet.cells.get).toList
+      CellRange
+        .parse(rangeRef)
+        .toOption
+        .map(r => r.cells.flatMap(sheet.cells.get).toList)
+        .getOrElse(List.empty)
 
   // ========== Sheet Extensions: Merge Operations ==========
 
   extension (sheet: Sheet)
     /**
-     * Merge cells in range (string).
+     * Merge cells in range.
      *
      * @param rangeRef
      *   Range like "A1:B1"
      * @return
-     *   Updated sheet with merged range
-     * @throws com.tjclp.xl.error.XLException
-     *   if rangeRef is invalid
+     *   XLResult[Sheet] for chaining
      */
-    def merge(rangeRef: String): Sheet =
-      val range = toXLResult(CellRange.parse(rangeRef), rangeRef, "Invalid range").unsafe
-      sheet.merge(range)
+    def merge(rangeRef: String): XLResult[Sheet] =
+      toXLResult(CellRange.parse(rangeRef), rangeRef, "Invalid range")
+        .map(range => sheet.merge(range))
+
+  // ========== XLResult[Sheet] Extensions: Chainable Operations ==========
+
+  extension (result: XLResult[Sheet])
+    /** Put String value (chainable). */
+    @annotation.targetName("putStringChainable")
+    def put(cellRef: String, value: String): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value))
+
+    /** Put Int value (chainable). */
+    @annotation.targetName("putIntChainable")
+    def put(cellRef: String, value: Int): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value))
+
+    /** Put Long value (chainable). */
+    @annotation.targetName("putLongChainable")
+    def put(cellRef: String, value: Long): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value))
+
+    /** Put Double value (chainable). */
+    @annotation.targetName("putDoubleChainable")
+    def put(cellRef: String, value: Double): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value))
+
+    /** Put BigDecimal value (chainable). */
+    @annotation.targetName("putBigDecimalChainable")
+    def put(cellRef: String, value: BigDecimal): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value))
+
+    /** Put Boolean value (chainable). */
+    @annotation.targetName("putBooleanChainable")
+    def put(cellRef: String, value: Boolean): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value))
+
+    /** Put LocalDate value (chainable). */
+    @annotation.targetName("putLocalDateChainable")
+    def put(cellRef: String, value: LocalDate): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value))
+
+    /** Put LocalDateTime value (chainable). */
+    @annotation.targetName("putLocalDateTimeChainable")
+    def put(cellRef: String, value: LocalDateTime): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value))
+
+    /** Put RichText value (chainable). */
+    @annotation.targetName("putRichTextChainable")
+    def put(cellRef: String, value: RichText): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value))
+
+    /** Put String with style (chainable). */
+    @annotation.targetName("putStringStyledChainable")
+    def put(cellRef: String, value: String, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value, cellStyle))
+
+    /** Put Int with style (chainable). */
+    @annotation.targetName("putIntStyledChainable")
+    def put(cellRef: String, value: Int, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value, cellStyle))
+
+    /** Put Long with style (chainable). */
+    @annotation.targetName("putLongStyledChainable")
+    def put(cellRef: String, value: Long, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value, cellStyle))
+
+    /** Put Double with style (chainable). */
+    @annotation.targetName("putDoubleStyledChainable")
+    def put(cellRef: String, value: Double, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value, cellStyle))
+
+    /** Put BigDecimal with style (chainable). */
+    @annotation.targetName("putBigDecimalStyledChainable")
+    def put(cellRef: String, value: BigDecimal, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value, cellStyle))
+
+    /** Put Boolean with style (chainable). */
+    @annotation.targetName("putBooleanStyledChainable")
+    def put(cellRef: String, value: Boolean, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value, cellStyle))
+
+    /** Put LocalDate with style (chainable). */
+    @annotation.targetName("putLocalDateStyledChainable")
+    def put(cellRef: String, value: LocalDate, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value, cellStyle))
+
+    /** Put LocalDateTime with style (chainable). */
+    @annotation.targetName("putLocalDateTimeStyledChainable")
+    def put(cellRef: String, value: LocalDateTime, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value, cellStyle))
+
+    /** Put RichText with style (chainable). */
+    @annotation.targetName("putRichTextStyledChainable")
+    def put(cellRef: String, value: RichText, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(cellRef, value, cellStyle))
+
+    /**
+     * Apply style (chainable).
+     */
+    @annotation.targetName("applyStyleSheetChainable")
+    def applyStyle(ref: String, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.applyStyle(ref, cellStyle))
+
+    /** Merge range (chainable). */
+    def merge(rangeRef: String): XLResult[Sheet] =
+      result.flatMap(_.merge(rangeRef))
 
   // ========== XLResult[Workbook] Extensions: Chainable Operations ==========
 
   extension (result: XLResult[Workbook])
-    /**
-     * Add sheet to workbook (chainable).
-     *
-     * Enables chaining workbook operations without intermediate .unsafe calls:
-     * {{{
-     * val wb = Workbook.empty
-     *   .addSheet(report)
-     *   .addSheet(quickSheet)
-     *   .unsafe  // Single unwrap at the end
-     * }}}
-     *
-     * @param sheet
-     *   Sheet to add
-     * @return
-     *   XLResult[Workbook] for further chaining
-     */
+    /** Add sheet to workbook (chainable). */
     @annotation.targetName("addSheetChainable")
     def addSheet(sheet: Sheet): XLResult[Workbook] =
       result.flatMap(_.put(sheet))
 
-    /**
-     * Put sheet (add-or-replace, chainable).
-     *
-     * @param sheet
-     *   Sheet to add or replace
-     * @return
-     *   XLResult[Workbook] for further chaining
-     */
+    /** Put sheet (chainable). */
     @annotation.targetName("putSheetChainable")
     def put(sheet: Sheet): XLResult[Workbook] =
       result.flatMap(_.put(sheet))
 
-    /**
-     * Update sheet by name (chainable).
-     *
-     * @param name
-     *   Sheet name
-     * @param f
-     *   Transform function
-     * @return
-     *   XLResult[Workbook] for further chaining
-     */
+    /** Update sheet by name (chainable). */
     @annotation.targetName("updateSheetChainable")
     def update(name: String, f: Sheet => Sheet): XLResult[Workbook] =
       result.flatMap(_.update(name, f))
 
-    /**
-     * Remove sheet by name (chainable).
-     *
-     * @param name
-     *   Sheet name
-     * @return
-     *   XLResult[Workbook] for further chaining
-     */
+    /** Remove sheet by name (chainable). */
     @annotation.targetName("removeSheetChainable")
     def remove(name: String): XLResult[Workbook] =
       result.flatMap(wb =>
@@ -332,7 +371,9 @@ object extensions:
 
   extension (workbook: Workbook)
     /**
-     * Get sheet by name (string).
+     * Get sheet by name (safe lookup).
+     *
+     * Returns None if sheet not found. No exceptions thrown.
      *
      * @param name
      *   Sheet name
