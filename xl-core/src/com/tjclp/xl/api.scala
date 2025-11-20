@@ -37,7 +37,7 @@ object api:
   export patch.Patch
 
   // Workbook types
-  export workbook.{Workbook, WorkbookMetadata}
+  export workbooks.{Workbook, WorkbookMetadata}
 
   // Optics types
   export optics.{Lens, Optional, Optics}

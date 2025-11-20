@@ -3,7 +3,7 @@ package com.tjclp.xl.io
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.tjclp.xl.error.XLException
-import com.tjclp.xl.workbook.Workbook
+import com.tjclp.xl.workbooks.Workbook
 
 import java.nio.file.{Path, Paths}
 

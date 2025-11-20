@@ -6,7 +6,7 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
-import com.tjclp.xl.workbook.Workbook
+import com.tjclp.xl.workbooks.Workbook
 
 import java.time.{LocalDate, LocalDateTime}
 

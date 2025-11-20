@@ -1,4 +1,4 @@
-package com.tjclp.xl.workbook
+package com.tjclp.xl.workbooks
 
 /** Workbook metadata */
 case class WorkbookMetadata(
