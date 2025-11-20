@@ -196,6 +196,7 @@ $tableRows
       .replace("<", "&lt;")
       .replace(">", "&gt;")
       .replace("\"", "&quot;")
+      .replace("'", "&#39;")
 
   private def escapeCss(s: String): String =
     s.replace("\\", "\\\\")

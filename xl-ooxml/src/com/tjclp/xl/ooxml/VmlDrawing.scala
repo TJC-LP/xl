@@ -56,8 +56,9 @@ object VmlDrawing:
   private val AnchorRowSpan = 3
 
   private val ShapeIdBase = 1024
-  private val ShapeIdStride =
-    1024 // Allocate generous per-sheet range to avoid collisions on dense sheets
+  // Reserve a wide per-sheet range so shape IDs stay unique even for dense comment sheets.
+  // 1M per sheet supports extremely heavy comment usage and still allows ~2k sheets before Int overflow.
+  private val ShapeIdStride = 1_000_000
 
   /**
    * Generate complete VML XML for a sheet's comment indicators.

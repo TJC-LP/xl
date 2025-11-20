@@ -260,8 +260,8 @@ object extensions:
 
     /** Add comment to cell (chainable). */
     @annotation.targetName("commentChainable")
-    def comment(ref: ARef, comment: Comment): XLResult[Sheet] =
-      result.map(_.comment(ref, comment))
+    def comment(ref: ARef, cmt: Comment): XLResult[Sheet] =
+      result.map(_.comment(ref, cmt))
 
   // ========== XLResult[Workbook] Extensions: Chainable Operations ==========
 

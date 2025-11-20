@@ -214,6 +214,7 @@ object XlsxWriter:
                 case None => existing
               (nextSet, hasNone || comment.author.isEmpty)
           }
+        // Sort for deterministic output (Excel preserves insertion order; we choose determinism here)
         val realAuthors = authorSet.toVector.sorted
         val authors = if hasUnauthored then Vector("") ++ realAuthors else realAuthors
 
