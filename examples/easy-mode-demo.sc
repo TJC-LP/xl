@@ -20,9 +20,9 @@ val headerStyle = CellStyle.default.bold.size(12.0).center
 val titleStyle = CellStyle.default.bold.size(14.0).bgBlue.white
 
 val report = Sheet("Q1 Report")
-  .applyStyle("A1:D1", titleStyle)      // Chainable XLResult[Sheet]
-  .applyStyle("A2:D2", headerStyle)
-  .put("A1", "Q1 2025 Sales Report")    // Chains on XLResult[Sheet]
+  .style("A1:D1", titleStyle)           // ✨ Clean chainable API!
+  .style("A2:D2", headerStyle)
+  .put("A1", "Q1 2025 Sales Report")
   .put("A2", "Product")
   .put("B2", "Units")
   .put("A3", "Widget")
@@ -57,20 +57,21 @@ println()
 // ========== Example 4: Safe Lookups ==========
 println("🔍 Example 4: Safe Lookups")
 
-val value = report.getCell("A3")
-val cells = report.getCells("A3:B3")
+val value = report.cell("A3")          // ✨ Clean lookup!
+val range = report.range("A3:B3")      // ✨ Get cells in range!
 
 println(s"  ✓ Looked up cell: ${value.map(_.value)}")
-println(s"  ✓ Found ${cells.size} cells in range")
+println(s"  ✓ Found ${range.size} cells in range")
 println()
 
 // ========== Example 5: Excel IO ==========
 println("💾 Example 5: Excel IO (EasyExcel)")
 
 val workbook = Workbook.empty
-  .addSheet(report)
-  .addSheet(quickSheet)
-  .addSheet(richSheet)
+  .put(report)
+  .put(quickSheet)
+  .put(richSheet)
+  .remove("Sheet1")  // Sheet1 is always created by default per Excel standards
   .unsafe  // Single unwrap at the end!
 
 Excel.write(workbook, "/tmp/easy-mode-demo.xlsx")

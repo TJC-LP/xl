@@ -181,8 +181,8 @@ object extensions:
      * @return
      *   XLResult[Sheet] for chaining
      */
-    @annotation.targetName("applyStyleSheet")
-    def applyStyle(ref: String, cellStyle: CellStyle): XLResult[Sheet] =
+    @annotation.targetName("styleSheet")
+    def style(ref: String, cellStyle: CellStyle): XLResult[Sheet] =
       if ref.contains(":") then
         toXLResult(CellRange.parse(ref), ref, "Invalid range")
           .map(range => sheet.withRangeStyle(range, cellStyle))
@@ -203,7 +203,7 @@ object extensions:
      * @return
      *   Some(cell) if valid ref and exists, None otherwise
      */
-    def getCell(cellRef: String): Option[Cell] =
+    def cell(cellRef: String): Option[Cell] =
       ARef.parse(cellRef).toOption.flatMap(ref => sheet.cells.get(ref))
 
     /**
@@ -216,7 +216,7 @@ object extensions:
      * @return
      *   List of cells (only existing cells)
      */
-    def getCells(rangeRef: String): List[Cell] =
+    def range(rangeRef: String): List[Cell] =
       CellRange
         .parse(rangeRef)
         .toOption
@@ -334,9 +334,9 @@ object extensions:
     /**
      * Apply style (chainable).
      */
-    @annotation.targetName("applyStyleSheetChainable")
-    def applyStyle(ref: String, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.applyStyle(ref, cellStyle))
+    @annotation.targetName("styleSheetChainable")
+    def style(ref: String, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.style(ref, cellStyle))
 
     /** Merge range (chainable). */
     def merge(rangeRef: String): XLResult[Sheet] =
@@ -345,12 +345,7 @@ object extensions:
   // ========== XLResult[Workbook] Extensions: Chainable Operations ==========
 
   extension (result: XLResult[Workbook])
-    /** Add sheet to workbook (chainable). */
-    @annotation.targetName("addSheetChainable")
-    def addSheet(sheet: Sheet): XLResult[Workbook] =
-      result.flatMap(_.put(sheet))
-
-    /** Put sheet (chainable). */
+    /** Put sheet (add-or-replace, chainable). */
     @annotation.targetName("putSheetChainable")
     def put(sheet: Sheet): XLResult[Workbook] =
       result.flatMap(_.put(sheet))

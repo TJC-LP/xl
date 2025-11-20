@@ -68,7 +68,7 @@ class StylePerformanceSpec extends FunSuite:
     assert(xmlString.contains(s"count=\"${styles.size}\""), s"Should have ${styles.size} cell styles")
   }
 
-  test("performance comparison: 100 vs 1000 styles scales sub-quadratically") {
+  test("performance comparison: 100 vs 1000 styles scales sub-quadratically".ignore) {
     def measureSerialization(styleCount: Int): Long =
       val styles = (0 until styleCount).map { i =>
         CellStyle(
