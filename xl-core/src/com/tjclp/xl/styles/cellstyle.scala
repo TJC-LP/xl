@@ -26,7 +26,7 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  * @param align
  *   Cell alignment
  */
-case class CellStyle(
+final case class CellStyle(
   font: Font = Font.default,
   fill: Fill = Fill.default,
   border: Border = Border.none,

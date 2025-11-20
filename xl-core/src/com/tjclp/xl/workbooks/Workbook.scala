@@ -11,7 +11,7 @@ import com.tjclp.xl.sheets.Sheet
  *
  * Immutable design with efficient persistent data structures.
  */
-case class Workbook(
+final case class Workbook(
   sheets: Vector[Sheet] = Vector.empty,
   metadata: WorkbookMetadata = WorkbookMetadata(),
   activeSheetIndex: Int = 0,

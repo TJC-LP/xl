@@ -21,7 +21,7 @@ import com.tjclp.xl.styles.units.StyleId
  */
 
 /** Index mapping for style components */
-case class StyleIndex(
+final case class StyleIndex(
   fonts: Vector[Font],
   fills: Vector[Fill],
   borders: Vector[Border],
@@ -295,7 +295,7 @@ private val defaultStylesScope =
   NamespaceBinding(null, nsSpreadsheetML, TopScope)
 
 /** Serializer for xl/styles.xml */
-case class OoxmlStyles(
+final case class OoxmlStyles(
   index: StyleIndex,
   rootAttributes: Option[MetaData] = None,
   rootScope: NamespaceBinding = defaultStylesScope,
@@ -551,7 +551,7 @@ object OoxmlStyles:
  * Stores both domain model (cellStyles) and raw OOXML vectors (fonts, fills, borders) for
  * byte-perfect preservation during surgical writes.
  */
-case class WorkbookStyles(
+final case class WorkbookStyles(
   cellStyles: Vector[CellStyle],
   fonts: Vector[Font],
   fills: Vector[Fill],

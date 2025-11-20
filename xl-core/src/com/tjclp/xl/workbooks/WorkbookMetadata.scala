@@ -1,7 +1,7 @@
 package com.tjclp.xl.workbooks
 
 /** Workbook metadata */
-case class WorkbookMetadata(
+final case class WorkbookMetadata(
   creator: Option[String] = None,
   created: Option[java.time.LocalDateTime] = None,
   modified: Option[java.time.LocalDateTime] = None,

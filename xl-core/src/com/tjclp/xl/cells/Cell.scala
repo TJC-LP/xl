@@ -15,7 +15,7 @@ object Cell:
   def empty(ref: ARef): Cell = Cell(ref, CellValue.Empty)
 
 /** Cell with value and optional metadata */
-case class Cell(
+final case class Cell(
   ref: ARef,
   value: CellValue = CellValue.Empty,
   styleId: Option[StyleId] = None,

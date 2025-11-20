@@ -21,7 +21,7 @@ import com.tjclp.xl.styles.units.StyleId
  *   - Styles are deduplicated by canonicalKey
  *   - Indices are stable (same style always gets same index within a registry)
  */
-case class StyleRegistry(
+final case class StyleRegistry(
   styles: Vector[CellStyle] = Vector(CellStyle.default),
   index: Map[String, StyleId] = Map(CellStyle.default.canonicalKey -> StyleId(0))
 ):

@@ -1,7 +1,7 @@
 package com.tjclp.xl.addressing
 
 /** Cell range from start to end (inclusive) */
-case class CellRange(start: ARef, end: ARef):
+final case class CellRange(start: ARef, end: ARef):
   /** Top-left column */
   inline def colStart: Column = start.col
 

@@ -26,7 +26,7 @@ type SSTEntry = Either[String, RichText]
  * @param totalCount
  *   Total number of string cell instances in workbook (including duplicates)
  */
-case class SharedStrings(
+final case class SharedStrings(
   strings: Vector[SSTEntry],
   indexMap: Map[String, Int],
   totalCount: Int // Total instances (>= strings.size)

@@ -18,7 +18,7 @@ import com.tjclp.xl.styles.color.Color
  * @param runs
  *   Vector of text runs with individual formatting
  */
-case class RichText(runs: Vector[TextRun]):
+final case class RichText(runs: Vector[TextRun]):
   /** Append another RichText (concatenate runs) */
   def +(other: RichText): RichText =
     RichText(runs ++ other.runs)

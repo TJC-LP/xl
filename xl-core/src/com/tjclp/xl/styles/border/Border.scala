@@ -3,7 +3,7 @@ package com.tjclp.xl.styles.border
 import com.tjclp.xl.styles.color.Color
 
 /** Cell borders (all four sides) */
-case class Border(
+final case class Border(
   left: BorderSide = BorderSide.none,
   right: BorderSide = BorderSide.none,
   top: BorderSide = BorderSide.none,
