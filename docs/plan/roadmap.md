@@ -13,7 +13,7 @@
 **Status**: 100% Complete
 **Definition of Done**:
 - Mill build system configured
-- Module structure (`xl-core`, `xl-macros`, `xl-ooxml`, `xl-cats-effect`)
+- Module structure (`xl-core`, `xl-ooxml`, `xl-cats-effect`, `xl-testkit`, `xl-evaluator`; macros live inside `xl-core`)
 - Scalafmt 3.10.1 integration
 - GitHub Actions CI pipeline
 - Documentation framework (CLAUDE.md, README.md, docs/plan/)

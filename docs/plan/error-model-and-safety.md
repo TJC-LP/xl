@@ -4,23 +4,17 @@
 
 ## Completed: Error Model ✅
 
-Total error handling implemented with `XLError` ADT:
+Error handling is centralized in `com.tjclp.xl.error.XLError` (see `xl-core/src/com/tjclp/xl/error/XLError.scala`). Key cases:
 
-```scala
-enum XLError derives CanEqual:
-  case Io(msg: String)                           // interpreters only
-  case Parse(path: String, reason: String)
-  case Semantic(reason: String)
-  case Validation(reason: String)
-  case InvalidCellRef(ref: String, reason: String)
-  case CodecError(ref: ARef, reason: String)
-  case Unsupported(feature: String)
-```
+- Addressing/validation: `InvalidCellRef`, `InvalidRange`, `InvalidReference`, `InvalidSheetName`, `InvalidColumn`, `InvalidRow`, `OutOfBounds`
+- Workbook structure: `SheetNotFound`, `DuplicateSheet`, `InvalidWorkbook`, `ValueCountMismatch`
+- Typing/formatting: `TypeMismatch`, `FormulaError`, `StyleError`, `NumberFormatError`, `MoneyFormatError`, `PercentFormatError`, `DateFormatError`, `AccountingFormatError`, `ColorError`, `UnsupportedType`
+- IO/parse surface: `IOError`, `ParseError`, `Other`
 
-- ✅ **No throws**: All public APIs return `Either[XLError, A]` (aliased as `XLResult[A]`)
-- ✅ **Platform exception conversion**: IOException, XML parsing errors wrapped
-- ✅ **Validation**: Cell ref parsing, range validation, style construction all total
-- ✅ **Codec errors**: Type mismatches, parse failures returned as Left
+- ✅ Public APIs are pure: return `XLResult[A] = Either[XLError, A]` (exceptions only via explicit `.unsafe` helpers)
+- ✅ Platform exceptions are wrapped into `IOError` / `ParseError` in interpreter layers
+- ✅ Validation: address parsing, sheet names, styles, codecs are total and never throw
+- ✅ Codec errors: Type mismatches and decode failures stay in the `XLResult` channel
 
 ## Not Started: Security Features (P11) ⬜
 

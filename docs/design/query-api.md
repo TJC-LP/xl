@@ -1,9 +1,11 @@
 # 30. Query API
 
-**Status**: Design Phase
-**Phase**: P5 (Streaming Extensions)
+**Status**: Design-only (not implemented in code)
+**Phase**: P5 (Streaming Extensions, future)
 **Dependencies**: P4 (OOXML MVP), P5 (Streaming Read/Write)
-**Module**: `xl-cats-effect`
+**Module**: `xl-cats-effect` (planned)
+
+> Implementation note: The described `RowQuery.scala` / `RowQuerySyntax.scala` files do **not** exist yet. This document remains a target design for a future streaming query layer.
 
 ---
 
