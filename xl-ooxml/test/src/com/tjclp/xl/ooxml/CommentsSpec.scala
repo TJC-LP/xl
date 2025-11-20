@@ -338,6 +338,47 @@ class CommentsSpec extends FunSuite:
     assertEquals(uidAttr, Some("{PRESERVED-GUID}"))
   }
 
+  test("round-trip with authored comments strips author prefix correctly") {
+    // Simulate what XlsxWriter produces: author name prepended to text
+    val authorName = "John Doe"
+    val commentText = "Important note"
+
+    // Create OOXML comment as writer would generate it
+    val richTextWithAuthor = com.tjclp.xl.richtext.RichText(Vector(
+      com.tjclp.xl.richtext.TextRun(s"$authorName:", Some(com.tjclp.xl.styles.font.Font.default.copy(bold = true))),
+      com.tjclp.xl.richtext.TextRun(s"\n$commentText")
+    ))
+
+    val ooxmlComment = OoxmlComment(
+      ref = ref"A1",
+      authorId = 0,
+      text = richTextWithAuthor,
+      shapeId = 0
+    )
+
+    val ooxmlComments = OoxmlComments(
+      authors = Vector(authorName),
+      comments = Vector(ooxmlComment)
+    )
+
+    // Convert to domain (should strip author prefix)
+    val domainMap = XlsxReader.convertToDomainComments(ooxmlComments) match
+      case Right(m) => m
+      case Left(err) => fail(s"Failed to convert: $err")
+
+    val domainComment = domainMap.get(ref"A1").get
+
+    // Verify author extracted correctly
+    assertEquals(domainComment.author, Some(authorName))
+
+    // Verify text has author prefix stripped (should just be "Important note")
+    assertEquals(domainComment.text.toPlainText, commentText)
+
+    // Verify no double-prefixing after round-trip
+    assert(!domainComment.text.toPlainText.contains("John Doe:"),
+      "Author prefix should be stripped on read")
+  }
+
   test("empty authors list is preserved") {
     val comments = OoxmlComments(
       authors = Vector.empty,

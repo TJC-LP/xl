@@ -283,7 +283,33 @@ object XlsxReader:
    *
    * Maps author IDs to author names and creates domain Comment objects.
    */
-  private def convertToDomainComments(
+  /**
+   * Strip author prefix from comment text if present AND it matches XL's exact format.
+   *
+   * Only strips if:
+   *   1. First run text is exactly "AuthorName:" (colon, no newline)
+   *   2. First run is bold
+   *   3. Second run starts with newline
+   *
+   * This ensures we only strip prefixes WE added, not author text from real Excel files.
+   */
+  private[ooxml] def stripAuthorPrefix(
+    text: com.tjclp.xl.richtext.RichText,
+    authorName: String
+  ): com.tjclp.xl.richtext.RichText =
+    text.runs match
+      case firstRun +: secondRun +: tail
+          if firstRun.text == s"$authorName:" &&
+            firstRun.font.exists(_.bold) &&
+            secondRun.text.startsWith("\n") =>
+        // Exact match for XL-generated format - strip it
+        val cleanedSecondRun = secondRun.copy(text = secondRun.text.drop(1))
+        com.tjclp.xl.richtext.RichText(Vector(cleanedSecondRun) ++ tail)
+      case _ =>
+        // Different format or no prefix - preserve as-is (might be real Excel file)
+        text
+
+  private[ooxml] def convertToDomainComments(
     ooxmlComments: OoxmlComments
   ): XLResult[Map[ARef, com.tjclp.xl.cells.Comment]] =
     val authorMap = ooxmlComments.authors.zipWithIndex.map { case (author, idx) =>
@@ -291,9 +317,17 @@ object XlsxReader:
     }.toMap
 
     val comments = ooxmlComments.comments.map { ooxmlComment =>
-      val author = authorMap.get(ooxmlComment.authorId)
+      val author =
+        authorMap.get(ooxmlComment.authorId).filter(_.nonEmpty) // Ignore empty string (unauthored)
+
+      // Strip author prefix from text if present (writer prepends "Author:\n")
+      val cleanedText = author match
+        case Some(authorName) =>
+          stripAuthorPrefix(ooxmlComment.text, authorName)
+        case None => ooxmlComment.text
+
       val domainComment = com.tjclp.xl.cells.Comment(
-        text = ooxmlComment.text,
+        text = cleanedText,
         author = author
       )
       ooxmlComment.ref -> domainComment

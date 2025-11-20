@@ -87,12 +87,8 @@ object VmlDrawing:
    */
   private def generateShape(comment: OoxmlComment, shapeId: Int): String =
     val ref = comment.ref
-    val col = ref.col.index0 // 0-based
-    val row = ref.row.index0 // 0-based
-
-    // Defensive validation (ARef already enforces, but defense-in-depth)
-    require(col >= 0 && col <= 16383, s"Column $col exceeds Excel maximum (16383)")
-    require(row >= 0 && row <= 1048575, s"Row $row exceeds Excel maximum (1048575)")
+    val col = ref.col.index0 // 0-based (ARef enforces Excel limits: 0-16383)
+    val row = ref.row.index0 // 0-based (ARef enforces Excel limits: 0-1048575)
 
     // Simplified positioning (Excel adjusts on open)
     val marginLeft = col * 75.0 + 59.25 // pt units

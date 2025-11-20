@@ -205,13 +205,17 @@ object XlsxWriter:
       if sheet.comments.isEmpty then None
       else
         // Build author list (deduplicated and sorted for deterministic output)
-        val authors = sheet.comments.values.flatMap(_.author).toVector.distinct.sorted
+        // Reserve index 0 for unauthored comments (empty string)
+        val realAuthors = sheet.comments.values.flatMap(_.author).toVector.distinct.sorted
+        val hasUnauthored = sheet.comments.values.exists(_.author.isEmpty)
+        val authors = if hasUnauthored then Vector("") ++ realAuthors else realAuthors
 
         val authorMap = authors.zipWithIndex.map { case (author, i) => author -> i }.toMap
 
         // Convert domain Comments to OOXML (sorted by ref for deterministic output)
         val ooxmlComments = sheet.comments.toVector.sortBy(_._1.toA1).map { case (ref, comment) =>
-          val authorId = comment.author.flatMap(authorMap.get).getOrElse(0)
+          val authorId =
+            comment.author.flatMap(authorMap.get).getOrElse(0) // Index 0 = "" for unauthored
           // Note: xr:uid GUIDs omitted for new comments (deterministic output)
           // GUIDs are optional per OOXML spec and only needed for revision tracking
 
