@@ -240,7 +240,7 @@ class TableSpec extends FunSuite:
     assertEquals(xml.label, "table")
     assertEquals((xml \ "@id").text, "1")
     assertEquals((xml \ "@name").text, "Table1")
-    assertEquals((xml \ "@displayName").text, "Table 1")
+    assertEquals((xml \ "@displayName").text, "Table_1")  // Spaces sanitized to underscores
     assertEquals((xml \ "@ref").text, "A1:D10")
 
     val columns = xml \ "tableColumns" \ "tableColumn"
@@ -328,7 +328,7 @@ class TableSpec extends FunSuite:
       ref = CellRange(ref"A1", ref"B10"),
       headerRowCount = 1,
       totalsRowCount = 0,
-      columns = Vector(OoxmlTableColumn(1, "Col", Map("futureAttr" -> "value"))),
+      columns = Vector(OoxmlTableColumn(1, "Col", None, None, Map("futureAttr" -> "value"))),
       autoFilter = None,
       styleInfo = None,
       otherAttrs = Map("unknownAttr" -> "preserved"),
@@ -338,14 +338,14 @@ class TableSpec extends FunSuite:
     val xml = OoxmlTable.toXml(table)
 
     // Unknown table attrs preserved
-    assert((xml \ "@unknownAttr").text == "preserved")
+    assertEquals((xml \ "@unknownAttr").text, "preserved")
 
     // Unknown child elements preserved
-    assert((xml \ "futureElement").nonEmpty)
+    assert((xml \ "futureElement").nonEmpty, "Expected futureElement to be preserved")
 
     // Column attrs preserved
     val col = (xml \ "tableColumns" \ "tableColumn").head
-    assert((col \ "@futureAttr").text == "value")
+    assertEquals((col \ "@futureAttr").text, "value")
   }
 
   // ========================================
@@ -462,7 +462,7 @@ class TableSpec extends FunSuite:
       ref = CellRange(ref"A1", ref"B10"),
       headerRowCount = 1,
       totalsRowCount = 0,
-      columns = Vector(OoxmlTableColumn(1, "Col", Map("future" -> "value"))),
+      columns = Vector(OoxmlTableColumn(1, "Col", None, None, Map("future" -> "value"))),
       autoFilter = None,
       styleInfo = None,
       otherAttrs = Map("unknownAttr" -> "preserved")
@@ -545,7 +545,7 @@ class TableSpec extends FunSuite:
   test("convert domain TableSpec to OOXML") {
     val domainTable = TableSpec.fromColumnNames(
       name = "Sales",
-      displayName = "Sales Data",
+      displayName = "SalesData",  // No spaces (Excel requirement)
       range = CellRange(ref"A1", ref"D100"),
       columnNames = Vector("Date", "Amount", "Category", "Status")
     )
@@ -554,7 +554,7 @@ class TableSpec extends FunSuite:
 
     assertEquals(ooxmlTable.id, 1L)
     assertEquals(ooxmlTable.name, "Sales")
-    assertEquals(ooxmlTable.displayName, "Sales Data")
+    assertEquals(ooxmlTable.displayName, "SalesData")
     assertEquals(ooxmlTable.ref, domainTable.range)
     assertEquals(ooxmlTable.columns.size, 4)
     assertEquals(ooxmlTable.columns(0).name, "Date")
@@ -658,7 +658,7 @@ class TableSpec extends FunSuite:
   test("workbook with single table round-trips") {
     val table = TableSpec.fromColumnNames(
       name = "SalesData",
-      displayName = "Sales Data",
+      displayName = "SalesData",  // No spaces (Excel requirement)
       range = CellRange(ref"A1", ref"D100"),
       columnNames = Vector("Date", "Product", "Amount", "Status")
     )

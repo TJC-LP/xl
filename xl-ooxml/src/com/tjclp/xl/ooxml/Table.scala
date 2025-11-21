@@ -31,6 +31,8 @@ import com.tjclp.xl.tables.{
 final case class OoxmlTableColumn(
   id: Long,
   name: String,
+  uid: Option[String] = None, // xr3:uid for Excel 2016+ revision tracking
+  dataDxfId: Option[Int] = None, // Optional data formatting ID
   otherAttrs: Map[String, String] = Map.empty
 )
 
@@ -85,9 +87,12 @@ final case class OoxmlTable(
   ref: CellRange,
   headerRowCount: Int,
   totalsRowCount: Int,
+  totalsRowShown: Boolean = false, // Excel attribute name differs from count
   columns: Vector[OoxmlTableColumn],
   autoFilter: Option[CellRange],
+  autoFilterUid: Option[String] = None, // xr:uid for autoFilter element
   styleInfo: Option[OoxmlTableStyleInfo],
+  tableUid: Option[String] = None, // xr:uid for table element
   otherAttrs: Map[String, String] = Map.empty,
   otherChildren: Seq[Elem] = Seq.empty
 )
@@ -151,7 +156,16 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
         range <- CellRange.parse(refStr).left.map(err => s"Invalid table ref '$refStr': $err")
       yield
         val headerCount = getAttrOpt(elem, "headerRowCount").flatMap(_.toIntOption).getOrElse(1)
-        val totalsCount = getAttrOpt(elem, "totalsRowCount").flatMap(_.toIntOption).getOrElse(0)
+
+        // Excel uses totalsRowShown, older files may have totalsRowCount
+        // Prefer totalsRowShown if present, fall back to totalsRowCount
+        val totalsShown = getAttrOpt(elem, "totalsRowShown").exists(v => v == "1" || v == "true")
+        val totalsCount =
+          if totalsShown then 1
+          else getAttrOpt(elem, "totalsRowCount").flatMap(_.toIntOption).getOrElse(0)
+
+        // Parse table UID (xr:uid namespace attribute)
+        val tableUid = getNamespacedAttrOpt(elem, "xr:uid")
 
         // Parse columns
         val columnsElem = (elem \ "tableColumns").headOption
@@ -159,11 +173,16 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
           (colsElem \ "tableColumn").collect { case c: Elem => c }.map(decodeColumn)
         }.toVector
 
-        // Parse AutoFilter
-        val autoFilterRange =
-          (elem \ "autoFilter").headOption.collect { case af: Elem => af }.flatMap { afElem =>
-            getAttrOpt(afElem, "ref").flatMap(CellRange.parse(_).toOption)
-          }
+        // Parse AutoFilter with UID
+        val (autoFilterRange, autoFilterUid) =
+          (elem \ "autoFilter").headOption
+            .collect { case af: Elem => af }
+            .map { afElem =>
+              val range = getAttrOpt(afElem, "ref").flatMap(CellRange.parse(_).toOption)
+              val uid = getNamespacedAttrOpt(afElem, "xr:uid")
+              (range, uid)
+            }
+            .getOrElse((None, None))
 
         // Parse table style info
         val styleInfo = (elem \ "tableStyleInfo").headOption
@@ -177,7 +196,9 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
           "displayName",
           "ref",
           "headerRowCount",
-          "totalsRowCount"
+          "totalsRowCount",
+          "totalsRowShown",
+          "xr:uid" // Don't preserve as otherAttr (handled explicitly)
         )
         val attrs = elem.attributes.asAttrMap.filterNot { case (k, _) => knownAttrs.contains(k) }
 
@@ -194,9 +215,12 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
           ref = range,
           headerRowCount = headerCount,
           totalsRowCount = totalsCount,
+          totalsRowShown = totalsShown || totalsCount > 0, // Derive from count if shown not present
           columns = columns,
           autoFilter = autoFilterRange,
+          autoFilterUid = autoFilterUid,
           styleInfo = styleInfo,
+          tableUid = tableUid,
           otherAttrs = attrs,
           otherChildren = others
         )
@@ -212,11 +236,13 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
   private def decodeColumn(elem: Elem): OoxmlTableColumn =
     val id = getAttrOpt(elem, "id").flatMap(_.toLongOption).getOrElse(0L)
     val name = getAttrOpt(elem, "name").getOrElse("")
+    val uid = getNamespacedAttrOpt(elem, "xr3:uid")
+    val dataDxfId = getAttrOpt(elem, "dataDxfId").flatMap(_.toIntOption)
 
-    val known = Set("id", "name")
+    val known = Set("id", "name", "xr3:uid", "dataDxfId")
     val attrs = elem.attributes.asAttrMap.filterNot { case (k, _) => known.contains(k) }
 
-    OoxmlTableColumn(id, name, attrs)
+    OoxmlTableColumn(id, name, uid, dataDxfId, attrs)
 
   /**
    * Parse table style info from XML.
@@ -266,30 +292,83 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
    *   XML element for xl/tables/tableN.xml
    */
   def toXml(table: OoxmlTable): Elem =
-    val baseAttrs = Seq(
-      "id" -> table.id.toString,
-      "name" -> table.name,
-      "displayName" -> table.displayName,
-      "ref" -> table.ref.toA1,
-      "headerRowCount" -> table.headerRowCount.toString,
-      "totalsRowCount" -> table.totalsRowCount.toString
-    ) ++ table.otherAttrs.toSeq
+    // CRITICAL: Excel requires xmlns declarations FIRST in attribute list
+    // Scala XML NamespaceBinding serializes namespaces LAST, so we must treat xmlns as regular attributes
+
+    // Derive totalsRowShown from either the explicit flag or totalsRowCount
+    val showTotals = table.totalsRowShown || table.totalsRowCount > 0
+
+    // Build attributes in REVERSE order (linked list serializes backwards)
+    // Excel expects: xmlns, xmlns:mc, mc:Ignorable, xmlns:xr, xmlns:xr3, id, xr:uid, name, displayName, ref, totalsRowShown
+    // So build in reverse: totalsRowShown → ref → displayName → name → xr:uid → id → xmlns:xr3 → xmlns:xr → mc:Ignorable → xmlns:mc → xmlns
+
+    // Start with other attributes
+    val attrs1 = table.otherAttrs.foldLeft(scala.xml.Null: scala.xml.MetaData) {
+      case (acc, (k, v)) =>
+        new scala.xml.UnprefixedAttribute(k, v, acc)
+    }
+
+    // Sanitize displayName: Excel does NOT allow spaces (replaces with underscores during repair)
+    val sanitizedDisplayName = table.displayName.replace(' ', '_')
+
+    // Regular attributes (in reverse of target order)
+    val attrs2 =
+      new scala.xml.UnprefixedAttribute("totalsRowShown", if showTotals then "1" else "0", attrs1)
+    val attrs3 = new scala.xml.UnprefixedAttribute("ref", table.ref.toA1, attrs2)
+    val attrs4 = new scala.xml.UnprefixedAttribute("displayName", sanitizedDisplayName, attrs3)
+    val attrs5 = new scala.xml.UnprefixedAttribute("name", table.name, attrs4)
+    val attrs6 = table.tableUid match
+      case Some(uid) => new scala.xml.PrefixedAttribute("xr", "uid", uid, attrs5)
+      case None => attrs5
+    val attrs7 = new scala.xml.UnprefixedAttribute("id", table.id.toString, attrs6)
+
+    // Namespace declarations (as regular attributes, in reverse order)
+    val attrs8 = new scala.xml.UnprefixedAttribute(
+      "xmlns:xr3",
+      "http://schemas.microsoft.com/office/spreadsheetml/2016/revision3",
+      attrs7
+    )
+    val attrs9 = new scala.xml.UnprefixedAttribute(
+      "xmlns:xr",
+      "http://schemas.microsoft.com/office/spreadsheetml/2014/revision",
+      attrs8
+    )
+    val attrs10 = new scala.xml.PrefixedAttribute("mc", "Ignorable", "xr xr3", attrs9)
+    val attrs11 = new scala.xml.UnprefixedAttribute(
+      "xmlns:mc",
+      "http://schemas.openxmlformats.org/markup-compatibility/2006",
+      attrs10
+    )
+    val finalAttrs = new scala.xml.UnprefixedAttribute("xmlns", nsSpreadsheetML, attrs11)
+
+    // Build child elements: autoFilter → tableColumns → tableStyleInfo
+    val autoFilterElem = table.autoFilter.map { range =>
+      val afUidAttr = table.autoFilterUid match
+        case Some(uid) => scala.xml.Attribute("xr", "uid", uid, scala.xml.Null)
+        case None => scala.xml.Null
+
+      scala.xml.Elem(
+        null,
+        "autoFilter",
+        new scala.xml.UnprefixedAttribute("ref", range.toA1, afUidAttr),
+        scala.xml.TopScope,
+        minimizeEmpty = true
+      )
+    }
+
+    val tableColumnsElem = elem("tableColumns", "count" -> table.columns.size.toString)(
+      table.columns.map(encodeColumn)*
+    )
 
     val children = Seq(
-      // tableColumns
-      elem(
-        "tableColumns",
-        "count" -> table.columns.size.toString
-      )(table.columns.map(encodeColumn)*),
-      // autoFilter (optional)
-      table.autoFilter.map(range => elem("autoFilter", "ref" -> range.toA1)()).toSeq,
-      // tableStyleInfo (optional)
+      autoFilterElem.toSeq,
+      Seq(tableColumnsElem),
       table.styleInfo.map(encodeStyleInfo).toSeq,
-      // Other unknown children
       table.otherChildren
     ).flatten
 
-    elem("table", baseAttrs*)(children*)
+    // Use TopScope since we're handling namespaces as regular attributes
+    scala.xml.Elem(null, "table", finalAttrs, scala.xml.TopScope, minimizeEmpty = false, children*)
 
   /**
    * Serialize table column to XML.
@@ -300,12 +379,27 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
    *   XML element
    */
   private def encodeColumn(col: OoxmlTableColumn): Elem =
-    val attrs = Seq(
-      "id" -> col.id.toString,
-      "name" -> col.name
-    ) ++ col.otherAttrs.toSeq
+    // Build attributes in reverse order (linked list serializes backwards)
+    // Excel expects: id, xr3:uid, name, dataDxfId
+    // Build order: dataDxfId, name, xr3:uid, id
 
-    elem("tableColumn", attrs*)()
+    val attrs1 = col.otherAttrs.foldLeft(scala.xml.Null: scala.xml.MetaData) { case (acc, (k, v)) =>
+      new scala.xml.UnprefixedAttribute(k, v, acc)
+    }
+
+    val attrs2 = col.dataDxfId match
+      case Some(id) => new scala.xml.UnprefixedAttribute("dataDxfId", id.toString, attrs1)
+      case None => attrs1
+
+    val attrs3 = new scala.xml.UnprefixedAttribute("name", col.name, attrs2)
+
+    val attrs4 = col.uid match
+      case Some(uid) => new scala.xml.PrefixedAttribute("xr3", "uid", uid, attrs3)
+      case None => attrs3
+
+    val finalAttrs = new scala.xml.UnprefixedAttribute("id", col.id.toString, attrs4)
+
+    scala.xml.Elem(null, "tableColumn", finalAttrs, scala.xml.TopScope, minimizeEmpty = true)
 
   /**
    * Serialize table style info to XML.
@@ -316,15 +410,38 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
    *   XML element
    */
   private def encodeStyleInfo(info: OoxmlTableStyleInfo): Elem =
-    val attrs = Seq(
-      "name" -> info.name,
-      "showFirstColumn" -> (if info.showFirstColumn then "1" else "0"),
-      "showLastColumn" -> (if info.showLastColumn then "1" else "0"),
-      "showRowStripes" -> (if info.showRowStripes then "1" else "0"),
-      "showColumnStripes" -> (if info.showColumnStripes then "1" else "0")
-    ) ++ info.otherAttrs.toSeq
+    // Build attributes in reverse order (linked list serializes backwards)
+    // Excel expects: name, showFirstColumn, showLastColumn, showRowStripes, showColumnStripes
+    // Build order: showColumnStripes, showRowStripes, showLastColumn, showFirstColumn, name
 
-    elem("tableStyleInfo", attrs*)()
+    val attrs1 = info.otherAttrs.foldLeft(scala.xml.Null: scala.xml.MetaData) {
+      case (acc, (k, v)) =>
+        new scala.xml.UnprefixedAttribute(k, v, acc)
+    }
+
+    val attrs2 = new scala.xml.UnprefixedAttribute(
+      "showColumnStripes",
+      if info.showColumnStripes then "1" else "0",
+      attrs1
+    )
+    val attrs3 = new scala.xml.UnprefixedAttribute(
+      "showRowStripes",
+      if info.showRowStripes then "1" else "0",
+      attrs2
+    )
+    val attrs4 = new scala.xml.UnprefixedAttribute(
+      "showLastColumn",
+      if info.showLastColumn then "1" else "0",
+      attrs3
+    )
+    val attrs5 = new scala.xml.UnprefixedAttribute(
+      "showFirstColumn",
+      if info.showFirstColumn then "1" else "0",
+      attrs4
+    )
+    val finalAttrs = new scala.xml.UnprefixedAttribute("name", info.name, attrs5)
+
+    scala.xml.Elem(null, "tableStyleInfo", finalAttrs, scala.xml.TopScope, minimizeEmpty = true)
 
   override def toXml: Elem =
     throw new UnsupportedOperationException("Use toXml(table: OoxmlTable) instead")
@@ -345,8 +462,19 @@ object TableConversions:
    *   OOXML table
    */
   def toOoxml(spec: TableSpec, id: Long): OoxmlTable =
+    import java.util.UUID
+
+    // Generate UIDs for Excel revision tracking
+    val tableUid = Some(s"{${UUID.randomUUID().toString.toUpperCase}}")
+    val autoFilterUid =
+      spec.autoFilter.filter(_.enabled).map(_ => s"{${UUID.randomUUID().toString.toUpperCase}}")
+
     val columns = spec.columns.map { col =>
-      OoxmlTableColumn(col.id, col.name)
+      OoxmlTableColumn(
+        id = col.id,
+        name = col.name,
+        uid = Some(s"{${UUID.randomUUID().toString.toUpperCase}}") // xr3:uid for each column
+      )
     }
 
     val autoFilterRange = spec.autoFilter.filter(_.enabled).map(_ => spec.range)
@@ -363,9 +491,12 @@ object TableConversions:
       ref = spec.range,
       headerRowCount = headerCount,
       totalsRowCount = totalsCount,
+      totalsRowShown = spec.showTotalsRow,
       columns = columns,
       autoFilter = autoFilterRange,
-      styleInfo = Some(styleInfo)
+      autoFilterUid = autoFilterUid,
+      styleInfo = Some(styleInfo),
+      tableUid = tableUid
     )
 
   /**
@@ -391,7 +522,7 @@ object TableConversions:
       range = ooxml.ref,
       columns = columns,
       showHeaderRow = ooxml.headerRowCount > 0,
-      showTotalsRow = ooxml.totalsRowCount > 0,
+      showTotalsRow = ooxml.totalsRowShown || ooxml.totalsRowCount > 0, // Check both attributes
       autoFilter = autoFilter,
       style = style
     )
