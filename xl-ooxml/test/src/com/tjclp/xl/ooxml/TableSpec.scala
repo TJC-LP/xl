@@ -49,7 +49,7 @@ class TableSpec extends FunSuite:
     val result = OoxmlTable.fromXml(xml)
 
     assert(result.isRight, s"Expected successful parse, got: $result")
-    val table = result.toOption.getOrElse(fail("Expected Right"))
+    val table = result.fold(err => fail(s"Expected Right: $err"), identity)
 
     assertEquals(table.id, 1L)
     assertEquals(table.name, "Table1")
@@ -73,10 +73,10 @@ class TableSpec extends FunSuite:
 
     val result = OoxmlTable.fromXml(xml)
     assert(result.isRight)
-    val table = result.toOption.getOrElse(fail("Expected Right"))
+    val table = result.fold(err => fail(s"Expected Right: $err"), identity)
 
-    assert(table.autoFilter.isDefined, "Expected AutoFilter")
-    assertEquals(table.autoFilter.get, CellRange(ref"A1", ref"C100"))
+    val autoFilter = table.autoFilter.getOrElse(fail("Expected AutoFilter"))
+    assertEquals(autoFilter, CellRange(ref"A1", ref"C100"))
   }
 
   test("parse table with style info") {
@@ -94,12 +94,12 @@ class TableSpec extends FunSuite:
 
     val result = OoxmlTable.fromXml(xml)
     assert(result.isRight)
-    val table = result.toOption.getOrElse(fail("Expected Right"))
+    val table = result.fold(err => fail(s"Expected Right: $err"), identity)
 
-    assert(table.styleInfo.isDefined)
-    assertEquals(table.styleInfo.get.name, "TableStyleMedium9")
-    assert(table.styleInfo.get.showRowStripes)
-    assert(!table.styleInfo.get.showColumnStripes)
+    val styleInfo = table.styleInfo.getOrElse(fail("Expected styleInfo"))
+    assertEquals(styleInfo.name, "TableStyleMedium9")
+    assert(styleInfo.showRowStripes)
+    assert(!styleInfo.showColumnStripes)
   }
 
   test("parse table with header and totals rows") {
@@ -115,7 +115,7 @@ class TableSpec extends FunSuite:
 
     val result = OoxmlTable.fromXml(xml)
     assert(result.isRight)
-    val table = result.toOption.getOrElse(fail("Expected Right"))
+    val table = result.fold(err => fail(s"Expected Right: $err"), identity)
 
     assertEquals(table.headerRowCount, 1)
     assertEquals(table.totalsRowCount, 1)
@@ -134,7 +134,7 @@ class TableSpec extends FunSuite:
 
     val result = OoxmlTable.fromXml(xml)
     assert(result.isRight)
-    val table = result.toOption.getOrElse(fail("Expected Right"))
+    val table = result.fold(err => fail(s"Expected Right: $err"), identity)
 
     assert(table.otherAttrs.contains("futureAttr"))
     assertEquals(table.otherAttrs("futureAttr"), "value123")
@@ -157,10 +157,10 @@ class TableSpec extends FunSuite:
 
     val result = OoxmlTable.fromXml(xml)
     assert(result.isRight)
-    val table = result.toOption.getOrElse(fail("Expected Right"))
+    val table = result.fold(err => fail(s"Expected Right: $err"), identity)
 
-    assert(table.otherChildren.nonEmpty, "Expected unknown child preserved")
-    assertEquals(table.otherChildren.head.label, "futureElement")
+    val firstChild = table.otherChildren.headOption.getOrElse(fail("Expected unknown child preserved"))
+    assertEquals(firstChild.label, "futureElement")
   }
 
   test("error on missing required attribute: id") {
@@ -267,7 +267,7 @@ class TableSpec extends FunSuite:
 
     val autoFilter = xml \ "autoFilter"
     assert(autoFilter.nonEmpty, "Expected autoFilter element")
-    assertEquals((autoFilter.head \ "@ref").text, "A1:C100")
+    assertEquals((autoFilter.headOption.getOrElse(fail("Expected autoFilter element")) \ "@ref").text, "A1:C100")
   }
 
   test("encode table with style info") {
@@ -295,9 +295,10 @@ class TableSpec extends FunSuite:
 
     val styleElem = xml \ "tableStyleInfo"
     assert(styleElem.nonEmpty)
-    assertEquals((styleElem.head \ "@name").text, "TableStyleMedium9")
-    assertEquals((styleElem.head \ "@showRowStripes").text, "1")
-    assertEquals((styleElem.head \ "@showColumnStripes").text, "0")
+    val styleElemNode = styleElem.headOption.getOrElse(fail("Expected tableStyleInfo element"))
+    assertEquals((styleElemNode \ "@name").text, "TableStyleMedium9")
+    assertEquals((styleElemNode \ "@showRowStripes").text, "1")
+    assertEquals((styleElemNode \ "@showColumnStripes").text, "0")
   }
 
   test("attribute ordering is deterministic") {
@@ -344,7 +345,7 @@ class TableSpec extends FunSuite:
     assert((xml \ "futureElement").nonEmpty, "Expected futureElement to be preserved")
 
     // Column attrs preserved
-    val col = (xml \ "tableColumns" \ "tableColumn").head
+    val col = (xml \ "tableColumns" \ "tableColumn").headOption.getOrElse(fail("Expected tableColumn element"))
     assertEquals((col \ "@futureAttr").text, "value")
   }
 
@@ -365,12 +366,12 @@ class TableSpec extends FunSuite:
     val parsed1 = OoxmlTable.fromXml(originalXml)
     assert(parsed1.isRight)
 
-    val encoded = OoxmlTable.toXml(parsed1.toOption.get)
+    val encoded = OoxmlTable.toXml(parsed1.fold(err => fail(s"Expected Right: $err"), identity))
     val parsed2 = OoxmlTable.fromXml(encoded)
     assert(parsed2.isRight)
 
-    val table1 = parsed1.toOption.get
-    val table2 = parsed2.toOption.get
+    val table1 = parsed1.fold(err => fail(s"Expected Right: $err"), identity)
+    val table2 = parsed2.fold(err => fail(s"Expected Right: $err"), identity)
 
     assertEquals(table1.id, table2.id)
     assertEquals(table1.name, table2.name)
@@ -397,7 +398,7 @@ class TableSpec extends FunSuite:
     )
 
     val xml = OoxmlTable.toXml(table)
-    val reparsed = OoxmlTable.fromXml(xml).toOption.get
+    val reparsed = OoxmlTable.fromXml(xml).fold(err => fail(s"Expected Right: $err"), identity)
 
     assertEquals(reparsed.autoFilter, table.autoFilter)
   }
@@ -424,11 +425,12 @@ class TableSpec extends FunSuite:
     )
 
     val xml = OoxmlTable.toXml(table)
-    val reparsed = OoxmlTable.fromXml(xml).toOption.get
+    val reparsed = OoxmlTable.fromXml(xml).fold(err => fail(s"Expected Right: $err"), identity)
 
-    assertEquals(reparsed.styleInfo.get.name, styleInfo.name)
-    assertEquals(reparsed.styleInfo.get.showFirstColumn, styleInfo.showFirstColumn)
-    assertEquals(reparsed.styleInfo.get.showRowStripes, styleInfo.showRowStripes)
+    val reparsedStyleInfo = reparsed.styleInfo.getOrElse(fail("Expected styleInfo"))
+    assertEquals(reparsedStyleInfo.name, styleInfo.name)
+    assertEquals(reparsedStyleInfo.showFirstColumn, styleInfo.showFirstColumn)
+    assertEquals(reparsedStyleInfo.showRowStripes, styleInfo.showRowStripes)
   }
 
   test("round-trip: table with totals row") {
@@ -448,7 +450,7 @@ class TableSpec extends FunSuite:
     )
 
     val xml = OoxmlTable.toXml(table)
-    val reparsed = OoxmlTable.fromXml(xml).toOption.get
+    val reparsed = OoxmlTable.fromXml(xml).fold(err => fail(s"Expected Right: $err"), identity)
 
     assertEquals(reparsed.headerRowCount, 1)
     assertEquals(reparsed.totalsRowCount, 1)
@@ -469,7 +471,7 @@ class TableSpec extends FunSuite:
     )
 
     val xml = OoxmlTable.toXml(table)
-    val reparsed = OoxmlTable.fromXml(xml).toOption.get
+    val reparsed = OoxmlTable.fromXml(xml).fold(err => fail(s"Expected Right: $err"), identity)
 
     assertEquals(reparsed.otherAttrs.get("unknownAttr"), Some("preserved"))
     assertEquals(reparsed.columns(0).otherAttrs.get("future"), Some("value"))
@@ -495,7 +497,7 @@ class TableSpec extends FunSuite:
     )
 
     val xml = OoxmlTable.toXml(table)
-    val reparsed = OoxmlTable.fromXml(xml).toOption.get
+    val reparsed = OoxmlTable.fromXml(xml).fold(err => fail(s"Expected Right: $err"), identity)
 
     assertEquals(reparsed.columns.map(_.name), table.columns.map(_.name))
   }
@@ -518,11 +520,11 @@ class TableSpec extends FunSuite:
     )
 
     val xml = OoxmlTable.toXml(table)
-    val reparsed = OoxmlTable.fromXml(xml).toOption.get
+    val reparsed = OoxmlTable.fromXml(xml).fold(err => fail(s"Expected Right: $err"), identity)
 
     assertEquals(reparsed.columns.size, 1000)
-    assertEquals(reparsed.columns.head.name, "Column1")
-    assertEquals(reparsed.columns.last.name, "Column1000")
+    assertEquals(reparsed.columns.headOption.getOrElse(fail("Expected at least one column")).name, "Column1")
+    assertEquals(reparsed.columns.lastOption.getOrElse(fail("Expected at least one column")).name, "Column1000")
   }
 
   test("round-trip: empty tables map serializes as empty") {
@@ -645,7 +647,7 @@ class TableSpec extends FunSuite:
     ) // Uses TableStyle.default
 
     val ooxml = TableConversions.toOoxml(domainTable, id = 1L)
-    assertEquals(ooxml.styleInfo.get.name, "TableStyleMedium2")
+    assertEquals(ooxml.styleInfo.getOrElse(fail("Expected styleInfo")).name, "TableStyleMedium2")
 
     val domainBack = TableConversions.fromOoxml(ooxml)
     assertEquals(domainBack.style, TableStyle.Medium(2))
@@ -704,7 +706,7 @@ class TableSpec extends FunSuite:
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
     val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
 
-    val rereadSheet = reread.sheets.head
+    val rereadSheet = reread.sheets.headOption.getOrElse(fail("Expected at least one sheet"))
     assertEquals(rereadSheet.tables.size, 2)
     assert(rereadSheet.getTable("Sales").isDefined)
     assert(rereadSheet.getTable("Products").isDefined)
@@ -751,7 +753,7 @@ class TableSpec extends FunSuite:
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
     val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
 
-    val rereadTable = reread.sheets.head.getTable("FilteredData").getOrElse(fail("Missing"))
+    val rereadTable = reread.sheets.headOption.getOrElse(fail("Expected at least one sheet")).getTable("FilteredData").getOrElse(fail("Missing"))
     assert(rereadTable.autoFilter.exists(_.enabled))
   }
 
@@ -776,7 +778,7 @@ class TableSpec extends FunSuite:
       val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
       val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
 
-      val rereadTable = reread.sheets.head.getTable(name).getOrElse(fail(s"Missing $name"))
+      val rereadTable = reread.sheets.headOption.getOrElse(fail("Expected at least one sheet")).getTable(name).getOrElse(fail(s"Missing $name"))
       assertEquals(rereadTable.style, style, s"Style mismatch for $name")
     }
   }
@@ -795,7 +797,7 @@ class TableSpec extends FunSuite:
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
     val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
 
-    val rereadTable = reread.sheets.head.getTable("WithTotals").getOrElse(fail("Missing"))
+    val rereadTable = reread.sheets.headOption.getOrElse(fail("Expected at least one sheet")).getTable("WithTotals").getOrElse(fail("Missing"))
     assert(rereadTable.showHeaderRow)
     assert(rereadTable.showTotalsRow)
   }
@@ -850,7 +852,7 @@ class TableSpec extends FunSuite:
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
     val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
 
-    val rereadSheet = reread.sheets.head
+    val rereadSheet = reread.sheets.headOption.getOrElse(fail("Expected at least one sheet"))
 
     // Table preserved
     assert(rereadSheet.getTable("Data").isDefined)
@@ -878,12 +880,13 @@ class TableSpec extends FunSuite:
     import java.io.ByteArrayInputStream
 
     val zis = new ZipInputStream(new ByteArrayInputStream(bytes))
-    var foundTableType = false
 
-    LazyList.continually(zis.getNextEntry).takeWhile(_ != null).foreach { entry =>
+    val foundTableType = LazyList.continually(zis.getNextEntry).takeWhile(_ != null).exists { entry =>
       if entry.getName == "[Content_Types].xml" then
         val content = scala.io.Source.fromInputStream(zis).mkString
-        foundTableType = content.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml")
+        content.contains("application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml")
+      else
+        false
     }
     zis.close()
 
@@ -908,7 +911,7 @@ class TableSpec extends FunSuite:
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
     val reread = XlsxReader.readFromBytes(bytes).getOrElse(fail("Read failed"))
 
-    val rereadTable = reread.sheets.head.getTable("SingleCol").getOrElse(fail("Missing"))
+    val rereadTable = reread.sheets.headOption.getOrElse(fail("Expected at least one sheet")).getTable("SingleCol").getOrElse(fail("Missing"))
     assertEquals(rereadTable.columns.size, 1)
   }
 
@@ -947,7 +950,7 @@ class TableSpec extends FunSuite:
       .withTable(table2) // Should replace table1
 
     assertEquals(sheet.tables.size, 1)
-    assertEquals(sheet.getTable("Data").get.displayName, "Second")
+    assertEquals(sheet.getTable("Data").getOrElse(fail("Expected table 'Data'")).displayName, "Second")
   }
 
   test("remove table from sheet") {
@@ -1143,7 +1146,7 @@ class TableSpec extends FunSuite:
     val reparsed = OoxmlTable.fromXml(xml)
 
     assert(reparsed.isRight, "Should handle XML special chars")
-    assertEquals(reparsed.toOption.get.columns(0).name, "Col<>&\"'")
+    assertEquals(reparsed.fold(err => fail(s"Expected Right: $err"), identity).columns(0).name, "Col<>&\"'")
   }
 
   // ========================================
@@ -1173,7 +1176,7 @@ class TableSpec extends FunSuite:
     )
 
     val xml = OoxmlTable.toXml(table)
-    val reparsed = OoxmlTable.fromXml(xml).toOption.get
+    val reparsed = OoxmlTable.fromXml(xml).fold(err => fail(s"Expected Right: $err"), identity)
 
     // Verify all UIDs preserved
     assertEquals(reparsed.tableUid, Some(tableUid), "Table UID should be preserved")

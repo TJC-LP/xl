@@ -163,7 +163,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val expr = TExpr.Div(TExpr.Lit(BigDecimal(10)), TExpr.Lit(BigDecimal(0)))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     val error = evalErr(expr, sheet)
-    assert(error.isInstanceOf[EvalError.DivByZero])
+    error match
+      case _: EvalError.DivByZero => // success
+      case other => fail(s"Expected DivByZero, got $other")
   }
 
   test("Division by zero: nested expression Sub(5, 5) = 0") {
@@ -172,7 +174,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val expr = TExpr.Div(numerator, denominator)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     val error = evalErr(expr, sheet)
-    assert(error.isInstanceOf[EvalError.DivByZero])
+    error match
+      case _: EvalError.DivByZero => // success
+      case other => fail(s"Expected DivByZero, got $other")
   }
 
   test("Division: Div(Lit(10), Lit(2)) == Right(5)") {
@@ -186,7 +190,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val expr = TExpr.Ref(ref, TExpr.decodeNumeric)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     val error = evalErr(expr, sheet)
-    assert(error.isInstanceOf[EvalError.CodecFailed])
+    error match
+      case _: EvalError.CodecFailed => // success
+      case other => fail(s"Expected CodecFailed, got $other")
   }
 
   test("Cell reference: existing numeric cell returns value") {
@@ -201,7 +207,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val sheet = sheetWith(ref -> CellValue.Text("hello"))
     val expr = TExpr.Ref(ref, TExpr.decodeNumeric)
     val error = evalErr(expr, sheet)
-    assert(error.isInstanceOf[EvalError.CodecFailed])
+    error match
+      case _: EvalError.CodecFailed => // success
+      case other => fail(s"Expected CodecFailed, got $other")
   }
 
   test("Boolean And: And(true, true) == Right(true)") {
@@ -491,7 +499,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val expr = TExpr.If(condition, TExpr.Lit("Yes"), TExpr.Lit("No"))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     val error = evalErr(expr, sheet)
-    assert(error.isInstanceOf[EvalError.CodecFailed])
+    error match
+      case _: EvalError.CodecFailed => // success
+      case other => fail(s"Expected CodecFailed, got $other")
   }
 
   test("Error: Nested error - error in IF true branch (condition=true)") {
@@ -501,7 +511,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val expr = TExpr.If(condition, trueBranch, TExpr.Lit("No"))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     val error = evalErr(expr, sheet)
-    assert(error.isInstanceOf[EvalError.CodecFailed])
+    error match
+      case _: EvalError.CodecFailed => // success
+      case other => fail(s"Expected CodecFailed, got $other")
   }
 
   test("Error: Nested error - error in IF false branch NOT evaluated (condition=true)") {
@@ -536,7 +548,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     )
     // First ref (A1) fails, error propagates
     val error = evalErr(expr, sheet)
-    assert(error.isInstanceOf[EvalError.CodecFailed])
+    error match
+      case _: EvalError.CodecFailed => // success
+      case other => fail(s"Expected CodecFailed, got $other")
   }
 
   test("Error: Division by computed zero - (B1-B1)") {
@@ -549,7 +563,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     )
     val expr = TExpr.Div(numerator, denominator)
     val error = evalErr(expr, sheet)
-    assert(error.isInstanceOf[EvalError.DivByZero])
+    error match
+      case _: EvalError.DivByZero => // success
+      case other => fail(s"Expected DivByZero, got $other")
   }
 
   test("Error: AND with error in second operand (first=true, evaluates second)") {
@@ -559,5 +575,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     // First is true, so second is evaluated and error propagates
     val error = evalErr(andExpr, sheet)
-    assert(error.isInstanceOf[EvalError.CodecFailed])
+    error match
+      case _: EvalError.CodecFailed => // success
+      case other => fail(s"Expected CodecFailed, got $other")
   }
