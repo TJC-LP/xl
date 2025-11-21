@@ -121,3 +121,60 @@
 
 - **Decision**: Replace `readAllBytes()` with `fs2.io.readInputStream` for SST + worksheet entries
 - **Outcome**: Streaming read now matches streaming write on constant memory; failure mode documented in archive only.
+
+## ADR-014: TExpr GADT for typed formulas
+**Date**: 2025-11-21 (WI-07)
+**Status**: ✅ Implemented
+
+- **Decision**: Use GADT (Generalized Algebraic Data Type) for formula AST with type parameter A capturing result type
+- **Context**: Formula parser needs to represent Excel formula syntax as typed AST for future evaluation
+- **Rationale**:
+  - **Type safety**: `TExpr[BigDecimal]` vs `TExpr[Boolean]` prevents mixing incompatible operations at compile time
+  - **Totality**: GADT structure enables exhaustive pattern matching, ensuring all cases handled
+  - **Evaluation safety**: Type parameter flows through to evaluation result
+  - **Comparison operators**: Lt, Lte, Gt, Gte, Eq, Neq integrated as first-class constructors
+- **Alternatives Considered**:
+  - **Untyped AST** (`TExpr` without type parameter): Rejected due to loss of type safety, would require runtime type checking
+  - **Separate ASTs per type** (`NumExpr`, `BoolExpr`, `StrExpr`): Rejected due to code duplication and inability to express polymorphic operations like `If[A]`
+  - **HList-based encoding**: Rejected due to complexity and poor error messages
+- **Implementation Details**:
+  - 17 constructors: Lit, Ref, If, Add/Sub/Mul/Div, Lt/Lte/Gt/Gte/Eq/Neq, And/Or/Not, FoldRange
+  - Extension methods for ergonomic construction: `expr1 + expr2`, `expr1 < expr2`, `expr1 && expr2`
+  - Smart constructors: `TExpr.sum(range)`, `TExpr.count(range)`, `TExpr.average(range)`
+- **Consequences**:
+  - ✅ Type-safe formula construction prevents `=SUM(TRUE, FALSE)` at compile time
+  - ✅ Parser/printer with round-trip verification (51 tests passing)
+  - ✅ Scientific notation support (1.5E10, 3E-5)
+  - ✅ FormulaParser produces Either[ParseError, TExpr[?]] (total function)
+  - ❌ More complex pattern matching (need asInstanceOf for Eq/Neq when type info lost in runtime parsing)
+  - ❌ Requires decode functions for Ref/FoldRange (explicit type conversions via CellCodec)
+- **Integration**: Works seamlessly with opaque ARef type (64-bit packing), CellCodec for decoding cell values
+- **Testing**: 51 tests verify round-trip laws, operator precedence, error handling
+
+## ADR-015: BigDecimal for formula numeric operations
+**Date**: 2025-11-21 (WI-07)
+**Status**: ✅ Implemented
+
+- **Decision**: Use `scala.math.BigDecimal` for all numeric formula operations (not Double)
+- **Context**: TExpr arithmetic nodes (Add, Sub, Mul, Div) and literals need numeric type
+- **Rationale**:
+  - **Financial precision**: Excel uses decimal semantics (not binary floating point)
+  - **Exact arithmetic**: No rounding errors in calculations like `0.1 + 0.2`
+  - **Consistency**: Matches ADR-002 decision (CellValue.Number uses BigDecimal)
+  - **Excel parity**: BigDecimal behavior closer to Excel's decimal arithmetic than Double
+- **Alternatives Considered**:
+  - **Double**: Rejected due to floating-point rounding errors, incompatible with financial calculations
+  - **Rational numbers**: Rejected due to complexity and performance overhead for division
+  - **Decimal128**: Not available in Scala stdlib, would require external dependency
+- **Implementation Details**:
+  - All TExpr arithmetic constructors: `case Add(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]`
+  - Literals: `TExpr.Lit(BigDecimal(42))`
+  - Scientific notation parsed to BigDecimal: `BigDecimal("1.5E10")`
+- **Consequences**:
+  - ✅ Exact precision matches Excel behavior (critical for financial models)
+  - ✅ No floating-point rounding errors
+  - ✅ Supports arbitrary precision (Excel limit: 15 significant digits)
+  - ❌ Slower than Double (~2-10x for arithmetic operations)
+  - ❌ Requires explicit BigDecimal construction (not implicit from literals)
+- **Performance Impact**: Acceptable - formula complexity in typical workbooks is low (< 100 operations per formula). For performance-critical code, consider caching evaluation results (future: WI-09b dependency graph with memoization)
+- **Testing**: Round-trip tests verify BigDecimal values preserved exactly, including scientific notation edge cases

@@ -529,6 +529,116 @@ excel.readR(path).flatMap {
 }
 ```
 
+### Formula System Patterns
+
+Formula system (`xl-evaluator/src/com/tjclp/xl/formula/`) provides typed parsing and evaluation (WI-08 in progress).
+
+#### Import Pattern for Formula Code
+
+```scala
+// Always include both:
+import com.tjclp.xl.*              // Core types, ARef, CellRange, etc.
+import com.tjclp.xl.syntax.*       // Extension methods (Sheet.get, ARef.toA1, CellRange.cells)
+import com.tjclp.xl.formula.*      // TExpr, FormulaParser, FormulaPrinter, Evaluator
+```
+
+#### Parse Formula Strings
+
+```scala
+import com.tjclp.xl.formula.{FormulaParser, ParseError}
+
+// Parse basic formula
+FormulaParser.parse("=SUM(A1:B10)") match
+  case Right(expr) => // TExpr[?] AST
+  case Left(ParseError.UnknownFunction(name, pos, suggestions)) =>
+    println(s"Unknown function '$name', did you mean: ${suggestions.mkString(", ")}")
+  case Left(error) =>
+    println(s"Parse error: $error")
+
+// Scientific notation supported
+FormulaParser.parse("=1.5E10")  // Right(TExpr.Lit(BigDecimal("1.5E10")))
+```
+
+#### Build Formulas Programmatically
+
+```scala
+import com.tjclp.xl.formula.TExpr
+
+// Type-safe construction (GADT prevents type mixing)
+val expr: TExpr[BigDecimal] = TExpr.Add(
+  TExpr.Ref(ref"A1", TExpr.decodeNumeric),
+  TExpr.Lit(BigDecimal(100))
+)
+
+// Using extension methods
+val expr2 = TExpr.Ref(ref"A1", TExpr.decodeNumeric) + TExpr.Lit(BigDecimal(100))
+
+// Convenience constructors
+val sumExpr = TExpr.sum(CellRange.parse("A1:A10").toOption.get)
+val avgExpr = TExpr.average(CellRange.parse("B1:B20").toOption.get)
+```
+
+#### Print Formulas Back to Excel Syntax
+
+```scala
+import com.tjclp.xl.formula.FormulaPrinter
+
+val formula = FormulaPrinter.print(expr, includeEquals = true)  // "=A1+100"
+val compact = FormulaPrinter.printCompact(expr)                 // "A1+100" (no =)
+val debug = FormulaPrinter.printWithTypes(expr)                 // "Add(Ref(A1), Lit(100))"
+```
+
+#### Evaluate Formulas (WI-08 - In Progress)
+
+```scala
+import com.tjclp.xl.formula.{Evaluator, EvalError}
+
+val evaluator = Evaluator.instance
+
+// Evaluate TExpr against Sheet
+evaluator.eval(expr, sheet) match
+  case Right(result: BigDecimal) =>
+    println(s"Result: $result")
+  case Left(EvalError.DivByZero(num, denom)) =>
+    println(s"Division by zero: $num / $denom")
+  case Left(EvalError.RefError(ref, reason)) =>
+    println(s"Cell reference error at ${ref.toA1}: $reason")
+  case Left(EvalError.CodecFailed(ref, codecErr)) =>
+    println(s"Type mismatch at ${ref.toA1}: $codecErr")
+  case Left(error) =>
+    println(s"Evaluation failed: $error")
+```
+
+#### Integration with fx Macro
+
+```scala
+import com.tjclp.xl.formula.FormulaParser
+
+// fx macro validates at compile time, returns CellValue.Formula
+val validated = fx"=SUM(A1:A10)"  // Compile-time validation
+
+validated match
+  case CellValue.Formula(text) =>
+    // Parse at runtime for evaluation
+    FormulaParser.parse(text).flatMap { expr =>
+      evaluator.eval(expr, sheet)
+    }
+```
+
+#### Round-Trip Verification
+
+```scala
+val original = "=IF(A1>0, \"Positive\", \"Negative\")"
+
+val roundTrip = for
+  expr <- FormulaParser.parse(original)
+  printed = FormulaPrinter.print(expr)
+  reparsed <- FormulaParser.parse(printed)
+yield (printed == FormulaPrinter.print(reparsed))  // Should be true
+
+// Property: parse(print(expr)) == Right(expr)
+```
+
 ### Codec Patterns
 
 Cell-level codecs (`xl-core/src/com/tjclp/xl/codec/`) provide type-safe encoding/decoding with auto-inferred formatting.
