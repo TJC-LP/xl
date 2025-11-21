@@ -1,9 +1,9 @@
 # Typed Formula System
 
-**Status**: ⬜ Not Started
+**Status**: ⏳ In Progress (WI-07 complete, WI-08 in progress)
 **Priority**: Medium
-**Estimated Effort**: 6-8 weeks
-**Last Updated**: 2025-11-20
+**Estimated Effort**: 6-8 weeks total (WI-07: 1 week ✅, WI-08: 2-3 weeks, WI-09+: 3-4 weeks)
+**Last Updated**: 2025-11-21
 
 ---
 
@@ -24,8 +24,8 @@
 
 | ID | Description | Type | Files | Status | PR |
 |----|-------------|------|-------|--------|----|
-| `WI-07` | Formula Parser (string → AST) | Core | `FormulaParser.scala`, `TExpr.scala` | ⏳ Not Started | - |
-| `WI-08` | Formula Evaluator (AST → value) | Core | `Evaluator.scala`, `EvalError.scala` | ⏳ Not Started | - |
+| `WI-07` | Formula Parser (string → AST) | Core | `FormulaParser.scala`, `TExpr.scala`, `FormulaPrinter.scala`, `ParseError.scala` | ✅ Complete | [#TBD](https://github.com/TJC-LP/xl/pull/TBD) |
+| `WI-08` | Formula Evaluator (AST → value) | Core | `Evaluator.scala`, `EvalError.scala` | ⏳ In Progress (skeleton exists) | - |
 | `WI-09` | Function Library (SUM, IF, etc.) | Core | `Functions.scala` | ⏳ Not Started | - |
 | `WI-09b` | Dependency Graph & Cycle Detection | Core | `DependencyGraph.scala` | ⏳ Not Started | - |
 
@@ -82,15 +82,42 @@
 
 ### Phase 2: Formula Evaluator (WI-08)
 ```
-1. Create worktree: `gtr create WI-08-evaluator`
-2. Implement Eval trait (see Design section below)
-3. Add evaluation for all TExpr cases
-4. Add EvalError ADT (DivByZero, TypeError, RefError, etc.)
-5. Add property tests for evaluation laws
-6. Run tests: `./mill xl-evaluator.test`
-7. Create PR: "feat(evaluator): add pure formula evaluator"
-8. Merge to main
-9. Update roadmap: WI-08 → ✅ Complete, WI-09/WI-09b → 🔵 Available
+1. Create worktree: `gtr create WI-08-evaluator` OR continue in WI-07 branch
+2. Fix compile issues in Evaluator.scala:
+   a. Add import: `import com.tjclp.xl.syntax.*` for Sheet.get extension
+   b. Fix variable shadowing in evalFoldRange: rename `cell` parameter to `currentCell`
+   c. Verify Sheet.get returns Option[Cell] (handle None case)
+   d. Ensure all TExpr cases (17 total) have eval implementations
+3. Implement evaluation for remaining cases:
+   - All arithmetic: Add, Sub, Mul, Div (div-by-zero detection)
+   - All comparison: Lt, Lte, Gt, Gte, Eq, Neq
+   - All logical: And (short-circuit), Or (short-circuit), Not
+   - Conditionals: If (evaluate condition, branch based on result)
+   - Ranges: FoldRange (iterate cells, aggregate with step function)
+4. Add comprehensive evaluator tests (~50 tests):
+   a. Property tests for laws:
+      - Literal identity: eval(Lit(x), _) == Right(x)
+      - Arithmetic: eval(Add(Lit(a), Lit(b)), _) == Right(a + b)
+      - Short-circuit: And(Lit(false), _) doesn't eval second arg
+   b. Unit tests for edge cases:
+      - Division by zero → EvalError.DivByZero
+      - Missing cell reference → EvalError.RefError
+      - Codec failure (text where number expected) → EvalError.CodecFailed
+      - Empty range → aggregation returns zero value
+   c. Integration tests:
+      - Complex nested expressions: IF(AND(A1>0, B1<100), SUM(C1:C10), 0)
+      - Real Excel formulas from test fixtures
+5. Add Sheet extension methods (optional, for ergonomics):
+   - sheet.evalFormula(formula: String): Either[XLError, CellValue]
+   - sheet.evalCell(ref: ARef): Either[XLError, CellValue]
+6. Run tests: `./mill xl-evaluator.test` (target: 101+ tests total = 51 parser + 50 evaluator)
+7. Update documentation:
+   - STATUS.md: Formula evaluation complete
+   - formula-system.md: WI-08 → ✅ Complete
+   - examples.md: Add evaluator examples
+8. Create PR: "feat(evaluator): implement pure formula evaluator"
+9. Merge to main
+10. Update roadmap: WI-08 → ✅ Complete, WI-09/WI-09b → 🔵 Available
 ```
 
 ### Phase 3: Function Library (WI-09)
@@ -117,6 +144,229 @@
 6. Run tests: `./mill xl-evaluator.test`
 7. Create PR: "feat(evaluator): add dependency graph and cycle detection"
 ```
+
+---
+
+## Lessons Learned from WI-07 (Parser Implementation)
+
+**Completion Date**: 2025-11-21
+**Effort**: ~1 week (5-7 days actual)
+**Deliverables**: TExpr GADT (16 constructors), FormulaParser (620 LOC), FormulaPrinter (250 LOC), ParseError ADT, 51 passing tests
+
+### Key Implementation Patterns
+
+#### 1. Opaque Type Handling
+
+**Challenge**: ARef is opaque type wrapping Long (64-bit packing: `(row << 32) | col`)
+
+**Solution Patterns**:
+```scala
+// Extract components from ARef
+val arefLong: Long = aref.asInstanceOf[Long]  // Safe: ARef is opaque type = Long
+val colIndex = (arefLong & 0xffffffffL).toInt
+val rowIndex = (arefLong >> 32).toInt
+
+// Format to A1 notation
+val col = Column.from0(colIndex)
+val colLetter = Column.toLetter(col)
+val rowNum = rowIndex + 1
+s"$colLetter$rowNum"
+```
+
+**Lesson**: Extension methods like `.toA1` use inline expansion with variable name `ref`. When using pattern matching or parameters, variable shadowing causes compile errors. **Recommendation**: Add `ARef.toA1Helper(ref: ARef): String` utility in xl-core to avoid code duplication (EvalError, FormulaPrinter, Evaluator all need this).
+
+#### 2. Extension Methods & Imports
+
+**Challenge**: Sheet.get, CellRange.cells are extension methods requiring specific imports.
+
+**Solution**:
+```scala
+// Always import at top of formula files:
+import com.tjclp.xl.*            // Gets core types + unified exports
+import com.tjclp.xl.syntax.*     // Gets Sheet.get, other extensions
+```
+
+**Key APIs**:
+- `Sheet.get(ref: ARef): Option[Cell]` — Returns None if cell doesn't exist
+- `CellRange.cells: Iterator[ARef]` — Iterates all refs in range (row-major order)
+- `ARef.toA1: String` — Formats as A1 notation (extension method, inlined)
+
+#### 3. Testing Strategy (51 Tests Achieved)
+
+**Breakdown**:
+- 7 property-based tests (round-trip laws using ScalaCheck)
+- 26 parser unit tests (literals, operators, functions, parentheses, whitespace)
+- 10 scientific notation tests (1E10, 3E-5, edge cases)
+- 5 error handling tests (empty formula, unbalanced parens, unknown functions)
+- 3 integration tests (complex expressions, nested IFs, operator precedence)
+
+**Pattern**: Generators at top of test file for reusability:
+```scala
+val genNumericLit: Gen[TExpr[BigDecimal]] = Gen.choose(-1000.0, 1000.0).map(TExpr.Lit.apply)
+val genARef: Gen[ARef] = for
+  col <- Gen.choose(0, 100)
+  row <- Gen.choose(0, 100)
+yield ARef.from0(col, row)
+```
+
+**Lesson**: Separate property tests (laws) from unit tests (specific behaviors) from error tests for clarity.
+
+#### 4. Scientific Notation Support
+
+**Challenge**: BigDecimal.toString() emits scientific notation for very small/large numbers (|x| < 1E-7 or |x| > 1E7).
+
+**Solution**: Parser must handle E notation:
+```scala
+// Added to parseNumberLiteral:
+case Some('E' | 'e') if !hasExponent =>
+  val s2 = s.advance()
+  s2.currentChar match
+    case Some('+' | '-') => // Optional sign
+      loop(s2.advance(), hasDecimal, hasExponent = true)
+    case Some(c) if c.isDigit =>
+      loop(s2, hasDecimal, hasExponent = true)
+```
+
+**Edge cases tested**: `1E10`, `1.5E-5`, `3.14e2`, `-5.2E-8`, invalid: `1E` (no digits), `1E2E3` (multiple E)
+
+#### 5. Round-Trip Property Test
+
+**Challenge**: Negative numbers print with leading `-` (e.g., `=-5`), which parser interprets as unary minus: `Sub(Lit(0), Lit(5))`, not `Lit(-5)`.
+
+**Solution**: Property test must handle both:
+```scala
+parsed.exists {
+  case TExpr.Lit(value: BigDecimal) =>
+    (value - original).abs < BigDecimal("1E-15")
+  case TExpr.Sub(TExpr.Lit(zero), TExpr.Lit(value)) if zero == BigDecimal(0) =>
+    ((-value) - original).abs < BigDecimal("1E-15")  // Unary minus case
+  case _ => false
+}
+```
+
+**Lesson**: Parser design decision (unary minus as `Sub(0, x)`) affects test design. Document in ADR.
+
+#### 6. WartRemover Compliance
+
+**Warnings encountered** (37 total, all acceptable):
+- `asInstanceOf` (Tier 2): Required for runtime parsing where GADT type info is lost
+- `return` (Tier 2): Used in early returns for readability (could refactor to nested match)
+- Fixed `head` (Tier 1): Changed `args.head` → `case head :: _` pattern
+
+**Lesson**: Runtime parsing loses compile-time type info, requiring `asInstanceOf` for Eq/Neq/If branches. This is acceptable per WartRemover policy for parsers.
+
+### Expected WI-08 Challenges
+
+#### 1. Cell Reference Resolution
+
+**Pattern** (from Evaluator.scala skeleton):
+```scala
+case TExpr.Ref(at, decode) =>
+  sheet.get(at) match
+    case Some(cell) =>
+      decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+    case None =>
+      Left(EvalError.RefError(at, "cell not found"))
+```
+
+**Key points**:
+- Sheet.get returns `Option[Cell]`, not `Cell`
+- Handle None → RefError
+- Codec errors → CodecFailed (wrap, don't throw)
+
+#### 2. Short-Circuit Evaluation
+
+**Must implement correctly**:
+```scala
+case TExpr.And(x, y) =>
+  eval(x, sheet) match
+    case Right(false) => Right(false)  // Don't evaluate y
+    case Right(true) => eval(y, sheet)
+    case Left(err) => Left(err)
+```
+
+**Test verification**:
+```scala
+test("And(Lit(false), Ref(missing)) doesn't error") {
+  // Even though missing cell would error, And short-circuits
+  val expr = TExpr.And(TExpr.Lit(false), TExpr.Ref(ref"Z999", decode))
+  evaluator.eval(expr, sheet) == Right(false)  // ✓ No error
+}
+```
+
+#### 3. Range Aggregation
+
+**Current issue**: Variable shadowing in fold:
+```scala
+// BROKEN:
+cells.foldLeft[Either[EvalError, B]](Right(zero)) { case (accEither, cell) =>
+  decode(cell) match  // 'cell' from fold parameter
+    case Left(codecErr) =>
+      Left(EvalError.CodecFailed(cell.ref, codecErr))  // Shadows outer 'cell'
+}
+
+// FIXED:
+cells.foldLeft[Either[EvalError, B]](Right(zero)) { case (accEither, currentCell) =>
+  decode(currentCell) match
+    case Left(codecErr) =>
+      Left(EvalError.CodecFailed(currentCell.ref, codecErr))
+}
+```
+
+#### 4. Division by Zero
+
+**Pattern**:
+```scala
+case TExpr.Div(x, y) =>
+  for
+    xv <- eval(x, sheet)
+    yv <- eval(y, sheet)
+    result <-
+      if yv == BigDecimal(0) then
+        Left(EvalError.DivByZero(
+          FormulaPrinter.print(x, includeEquals = false),
+          FormulaPrinter.print(y, includeEquals = false)
+        ))
+      else Right(xv / yv)
+  yield result
+```
+
+**Test cases**:
+- Direct: `Div(Lit(10), Lit(0))`
+- Nested: `Div(Lit(10), Sub(Lit(5), Lit(5)))`  — Zero from evaluation, not literal
+- Range: `Div(Lit(10), count(empty_range))` — Zero from COUNT
+
+### Design Decisions Made in WI-07
+
+#### Decision 1: BigDecimal for All Numeric Operations
+
+**Rationale**: Financial precision, matches Excel decimal semantics
+
+**Impact on WI-08**: Evaluator must use BigDecimal arithmetic (not Double). Comparison operators work naturally.
+
+#### Decision 2: Comparison Operators in GADT
+
+**Decision**: Added Lt, Lte, Gt, Gte, Eq, Neq as first-class TExpr constructors (not functions)
+
+**Alternative considered**: `Compare(op: CompareOp, x, y)` with enum `CompareOp { Lt, Lte, Gt, Gte, Eq, Neq }`
+
+**Rationale**: Direct constructors provide better type safety and clearer AST representation
+
+**Impact on WI-08**: Each comparison operator needs separate eval case (6 cases). Acceptable trade-off.
+
+#### Decision 3: FoldRange as Universal Aggregation
+
+**Decision**: Single `FoldRange[A, B]` constructor for all aggregations (SUM, COUNT, AVERAGE, MIN, MAX)
+
+**Rationale**:
+- Functional abstraction (DRY)
+- Extensible (any aggregation via step function)
+- Type-safe (decode function ensures type A)
+
+**Impact on WI-08**:
+- Single eval case handles all aggregations ✅
+- Cell iteration with decode function
+- Empty ranges → returns zero value (not error)
 
 ---
 

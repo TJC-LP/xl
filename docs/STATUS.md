@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2025-11-20
+**Last Updated**: 2025-11-21
 
 ## Current State
 
@@ -40,6 +40,8 @@
 - ✅ **Optics** module (Lens, Optional, focus DSL)
 - ✅ RichText DSL: `"Bold".bold.red + " normal " + "Italic".italic.blue`
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
+- ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
+- ⏳ **Formula Evaluation** (WI-08 in progress): Evaluator skeleton exists (EvalError ADT complete, Evaluator.scala has compile issues); needs fixes + 50 tests
 
 **Performance** (Optimized):
 - ✅ Inline hot paths (10-20% faster on cell operations)
@@ -68,7 +70,7 @@
 
 ### Test Coverage
 
-**627 tests across 4 modules** (includes P7+P8 string interpolation + WI-10 table support):
+**776 tests across 5 modules** (includes P7+P8 string interpolation + WI-07 formula parser + WI-10 table support):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -92,6 +94,12 @@
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
+- **xl-evaluator**: 51 tests
+  - 7 property-based round-trip tests (parse ∘ print = id)
+  - 26 parser unit tests (literals, operators, functions, edge cases)
+  - 10 scientific notation tests (E notation, positive/negative exponents)
+  - 5 error handling tests (invalid syntax, unknown functions)
+  - 3 integration tests (complex expressions, nested formulas)
 
 ---
 
@@ -99,9 +107,12 @@
 
 ### XML Serialization
 
-**Minor Limitations**:
-- ❌ Formula parsing stores expressions as strings only (no AST/evaluator yet).
-- ⚠️ Merged cells are fully supported in the in‑memory OOXML path, but not emitted by streaming writers.
+**Formula System**:
+- ✅ **Parsing complete** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, 51 tests
+- ⏳ **Evaluation in progress** (WI-08): Evaluator skeleton exists, needs compile fixes + comprehensive tests
+- ❌ **Function library not started** (WI-09): Planned after WI-08 (SUM, IF, AVERAGE, etc.)
+- ❌ **Dependency graph not started** (WI-09b): Circular reference detection planned
+- ⚠️ Merged cells are fully supported in the in-memory OOXML path, but not emitted by streaming writers.
 - ❌ Hyperlinks not serialized.
 - ❌ Column/row properties (width, height, hidden) are parsed and tracked in the domain model but not yet serialized back into `<cols>` / `<row>` in the regenerated XML.
 

@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2025-11-18
-**Current Phase**: Core domain + OOXML + streaming I/O complete; advanced features in progress.
+**Last Updated**: 2025-11-21 (WI-07 Parser Complete)
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula parser complete; advanced features in progress.
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -128,34 +128,46 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 ---
 
-#### 6. Formula Evaluation Not Implemented
-**Status**: Formulas stored as strings only
-**Impact**: Cannot calculate formula results
-**Plan**: [P4 - Formula System](plan/04-formula-system.md)
-**Phase**: P11 (Future - Very Complex)
+#### 6. Formula System (Partially Implemented)
+**Status**: Parser complete (WI-07), Evaluation in progress (WI-08+)
+**Impact**: Cannot calculate formula results, some operators not yet supported
+**Plan**: [Formula System](plan/formula-system.md)
+**Phase**: WI-07 Complete, WI-08-09 In Progress
 
-**Current State**:
+**Current State (WI-07 - Parser Complete)**:
 ```scala
+import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter}
+
+// Parse formulas to typed AST
+FormulaParser.parse("=SUM(A1:B10)") // Right(TExpr.FoldRange(...))
+FormulaParser.parse("=A1+B1")       // Right(TExpr.Add(...))
+
+// Store as CellValue.Formula (for Excel to evaluate)
 sheet.put(cell"C1", CellValue.Formula("=SUM(A1:B1)"))
-// Stores: "=SUM(A1:B1)" as string
-// Excel recalculates on open
-// XL cannot evaluate or validate
 ```
 
-**Not Implemented**:
-- Formula parsing to AST
-- Formula validation
-- Formula evaluation engine
-- Dependency graph for calc order
-- 400+ Excel functions
+**What Works (WI-07)**:
+- ✅ Formula parsing to typed GADT AST (TExpr)
+- ✅ Operators: +, -, *, /, <, <=, >, >=, =, <>, AND, OR, NOT
+- ✅ Functions: SUM, COUNT, AVERAGE, IF, AND, OR, NOT
+- ✅ Scientific notation (1.5E10, 2.3E-7)
+- ✅ Round-trip: parse ∘ print = id
+- ✅ 51 comprehensive tests (100% passing)
 
-**Effort**: 60-90 days (massive undertaking)
-- Parser: ~10 days
-- Evaluator: ~30 days
-- Functions: ~40 days
-- Testing: ~20 days
+**Not Yet Supported**:
+- ❌ **Concatenation operator (&)**: Returns error "concatenation operator not yet supported"
+  - Example: `="foo"&"bar"` → ParseError.InvalidOperator
+  - Reason: TExpr.Concat not yet added to GADT (planned for WI-09)
+- ❌ Formula evaluation (WI-08 in progress)
+- ❌ Dependency graph for calc order (WI-09b)
+- ❌ Extended function library (WI-09 - 50+ functions)
 
-**Workaround**: Let Excel recalculate formulas on open (standard approach)
+**Effort Remaining**:
+- Evaluator (WI-08): ~3-5 days
+- Function Library (WI-09): ~10-15 days
+- Dependency Graph (WI-09b): ~5-7 days
+
+**Workaround**: Store formulas as strings (Excel recalculates on open)
 
 ---
 

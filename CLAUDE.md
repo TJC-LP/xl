@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), macros, DSL
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, fs2-based streaming)
-xl-evaluator/    → Optional formula evaluator [future]
+xl-evaluator/    → Formula parser (TExpr GADT, FormulaParser, FormulaPrinter); evaluator planned
 xl-testkit/      → Test laws, generators, helpers [future]
 ```
 
@@ -87,6 +87,13 @@ Macros (`ref`, `fx`, money/percent/date/accounting) are bundled in `xl-core` and
 
 **HTML Export** (`xl-core/src/com/tjclp/xl/html/`):
 - `sheet.toHtml(range)` → Convert cell range to HTML table with inline CSS
+
+**Formula System** (`xl-evaluator/src/com/tjclp/xl/formula/`):
+- `TExpr[A]` → GADT representing typed formula AST (A = BigDecimal, Boolean, String)
+- `FormulaParser.parse(String)` → Pure parser: `Either[ParseError, TExpr[?]]`
+- `FormulaPrinter.print(TExpr[?])` → Inverse printer for round-trip verification
+- `ParseError` → Total error ADT with position tracking (UnexpectedChar, UnknownFunction, etc.)
+- 51 tests: 7 property-based (round-trip laws), 44 unit tests (operators, functions, scientific notation, errors)
 
 **OOXML Layer** (`xl-ooxml/src/com/tjclp/xl/ooxml/`):
 - Pure XML serialization with `XmlWritable`/`XmlReadable` traits
@@ -522,6 +529,116 @@ excel.readR(path).flatMap {
 }
 ```
 
+### Formula System Patterns
+
+Formula system (`xl-evaluator/src/com/tjclp/xl/formula/`) provides typed parsing and evaluation (WI-08 in progress).
+
+#### Import Pattern for Formula Code
+
+```scala
+// Always include both:
+import com.tjclp.xl.*              // Core types, ARef, CellRange, etc.
+import com.tjclp.xl.syntax.*       // Extension methods (Sheet.get, ARef.toA1, CellRange.cells)
+import com.tjclp.xl.formula.*      // TExpr, FormulaParser, FormulaPrinter, Evaluator
+```
+
+#### Parse Formula Strings
+
+```scala
+import com.tjclp.xl.formula.{FormulaParser, ParseError}
+
+// Parse basic formula
+FormulaParser.parse("=SUM(A1:B10)") match
+  case Right(expr) => // TExpr[?] AST
+  case Left(ParseError.UnknownFunction(name, pos, suggestions)) =>
+    println(s"Unknown function '$name', did you mean: ${suggestions.mkString(", ")}")
+  case Left(error) =>
+    println(s"Parse error: $error")
+
+// Scientific notation supported
+FormulaParser.parse("=1.5E10")  // Right(TExpr.Lit(BigDecimal("1.5E10")))
+```
+
+#### Build Formulas Programmatically
+
+```scala
+import com.tjclp.xl.formula.TExpr
+
+// Type-safe construction (GADT prevents type mixing)
+val expr: TExpr[BigDecimal] = TExpr.Add(
+  TExpr.Ref(ref"A1", TExpr.decodeNumeric),
+  TExpr.Lit(BigDecimal(100))
+)
+
+// Using extension methods
+val expr2 = TExpr.Ref(ref"A1", TExpr.decodeNumeric) + TExpr.Lit(BigDecimal(100))
+
+// Convenience constructors
+val sumExpr = TExpr.sum(CellRange.parse("A1:A10").toOption.get)
+val avgExpr = TExpr.average(CellRange.parse("B1:B20").toOption.get)
+```
+
+#### Print Formulas Back to Excel Syntax
+
+```scala
+import com.tjclp.xl.formula.FormulaPrinter
+
+val formula = FormulaPrinter.print(expr, includeEquals = true)  // "=A1+100"
+val compact = FormulaPrinter.printCompact(expr)                 // "A1+100" (no =)
+val debug = FormulaPrinter.printWithTypes(expr)                 // "Add(Ref(A1), Lit(100))"
+```
+
+#### Evaluate Formulas (WI-08 - In Progress)
+
+```scala
+import com.tjclp.xl.formula.{Evaluator, EvalError}
+
+val evaluator = Evaluator.instance
+
+// Evaluate TExpr against Sheet
+evaluator.eval(expr, sheet) match
+  case Right(result: BigDecimal) =>
+    println(s"Result: $result")
+  case Left(EvalError.DivByZero(num, denom)) =>
+    println(s"Division by zero: $num / $denom")
+  case Left(EvalError.RefError(ref, reason)) =>
+    println(s"Cell reference error at ${ref.toA1}: $reason")
+  case Left(EvalError.CodecFailed(ref, codecErr)) =>
+    println(s"Type mismatch at ${ref.toA1}: $codecErr")
+  case Left(error) =>
+    println(s"Evaluation failed: $error")
+```
+
+#### Integration with fx Macro
+
+```scala
+import com.tjclp.xl.formula.FormulaParser
+
+// fx macro validates at compile time, returns CellValue.Formula
+val validated = fx"=SUM(A1:A10)"  // Compile-time validation
+
+validated match
+  case CellValue.Formula(text) =>
+    // Parse at runtime for evaluation
+    FormulaParser.parse(text).flatMap { expr =>
+      evaluator.eval(expr, sheet)
+    }
+```
+
+#### Round-Trip Verification
+
+```scala
+val original = "=IF(A1>0, \"Positive\", \"Negative\")"
+
+val roundTrip = for
+  expr <- FormulaParser.parse(original)
+  printed = FormulaPrinter.print(expr)
+  reparsed <- FormulaParser.parse(printed)
+yield (printed == FormulaPrinter.print(reparsed))  // Should be true
+
+// Property: parse(print(expr)) == Right(expr)
+```
+
 ### Codec Patterns
 
 Cell-level codecs (`xl-core/src/com/tjclp/xl/codec/`) provide type-safe encoding/decoding with auto-inferred formatting.
@@ -676,7 +793,7 @@ Documentation is organized by purpose as a **living algorithm** (current + futur
 
 ### Reference (`docs/reference/`) - 6 files
 **Quick reference material**:
-- `testing-guide.md` → Test coverage breakdown (680+ tests)
+- `testing-guide.md` → Test coverage breakdown (731+ tests)
 - `examples.md` → Code samples
 - `implementation-scaffolds.md` → Comprehensive code patterns for AI agents
 - `ooxml-research.md` → OOXML spec research
@@ -685,7 +802,7 @@ Documentation is organized by purpose as a **living algorithm** (current + futur
 - `ai-contracts-guide.md` → AI contract patterns
 
 ### Root Docs
-- `docs/STATUS.md` → Detailed current state (680+ tests, performance)
+- `docs/STATUS.md` → Detailed current state (731+ tests, performance)
 - `docs/LIMITATIONS.md` → Current limitations and future roadmap
 - `docs/CONTRIBUTING.md` → Contribution guidelines (includes style guide)
 - `docs/FAQ-AND-GLOSSARY.md` → Questions and terminology
@@ -950,7 +1067,7 @@ property("Px to Emu round-trip") {
 
 ## Test Coverage
 
-680+ tests passing (as of Phase 1.1 completion - includes Comments, Security, Performance tests):
+731+ tests passing (as of WI-07 completion - includes Formula Parser, Comments, Security, Performance):
 - 17 addressing tests (Column, Row, ARef, CellRange laws)
 - 21 patch tests (Monoid laws, application semantics)
 - 60 style tests (units, colors, builders, canonicalization, StylePatch, StyleRegistry)
@@ -962,5 +1079,6 @@ property("Px to Emu round-trip") {
 - 24 OOXML tests (round-trip, serialization, styles)
 - 18 streaming tests (fs2-data-xml, constant-memory I/O)
 - 5 RichText tests (composition, formatting, DSL)
+- **51 formula parser tests** (round-trip laws, operator precedence, scientific notation, error handling)
 
 Target: 90%+ coverage with property-based tests for all algebras.
