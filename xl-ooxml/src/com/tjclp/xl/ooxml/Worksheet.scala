@@ -350,10 +350,12 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       .getOrElse(Map.empty)
 
     // Group cells by row
+    // Optimization: Use TreeMap for auto-sorted grouping (avoids O(n log n) sort after groupBy)
+    import scala.collection.immutable.TreeMap
     val cellsByRow = sheet.cells.values
       .groupBy(_.ref.row.index1) // 1-based row index
+      .to(TreeMap) // Auto-sorted by key
       .toSeq
-      .sortBy(_._1)
 
     // Create rows with cells (preserving attributes from original)
     val rowsWithCells = cellsByRow.map { case (rowIdx, cells) =>

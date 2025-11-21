@@ -563,9 +563,13 @@ object XlsxReader:
   /** Extension for traverse on Vector */
   extension [A](vec: Vector[A])
     private def traverse[B](f: A => XLResult[B]): XLResult[Vector[B]] =
-      vec.foldLeft[XLResult[Vector[B]]](Right(Vector.empty)) { (acc, a) =>
+      // Optimization: Use VectorBuilder instead of Vector :+ for O(1) amortized append (was O(n) per append = O(n²) total)
+      val builder = Vector.newBuilder[B]
+      vec.foldLeft[XLResult[Unit]](Right(())) { (acc, a) =>
         for
-          bs <- acc
+          _ <- acc
           b <- f(a)
-        yield bs :+ b
-      }
+        yield builder += b
+      } match
+        case Right(_) => Right(builder.result())
+        case Left(err) => Left(err)
