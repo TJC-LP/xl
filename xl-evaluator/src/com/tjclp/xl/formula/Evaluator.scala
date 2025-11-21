@@ -59,6 +59,8 @@ object Evaluator:
  * Implements all 17 TExpr cases with proper error handling and short-circuit semantics.
  */
 private class EvaluatorImpl extends Evaluator:
+  // Suppress asInstanceOf warning for FoldRange GADT type handling (required for type parameter erasure)
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def eval[A](expr: TExpr[A], sheet: Sheet): Either[EvalError, A] =
     expr match
       // ===== Literals =====
