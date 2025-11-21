@@ -18,6 +18,7 @@
  */
 
 import com.tjclp.xl.*
+import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.*
 import com.tjclp.xl.formula.SheetEvaluator.* // Extension methods
@@ -36,8 +37,8 @@ println()
 // Build a sheet with complex dependencies
 val complexSheet = Sheet(name = SheetName.unsafe("Complex"))
   // Constants
-  .put(ref"A1", CellValue.Number(BigDecimal(100)))
-  .put(ref"A2", CellValue.Number(BigDecimal(50)))
+  .put(ref"A1", 100)
+  .put(ref"A2", 50)
 
   // First level (depend on constants)
   .put(ref"B1", fx"=A1*2")        // 200
@@ -159,9 +160,9 @@ println()
 println("Test Case 4: Cycle through range (A1 → SUM(B1:B10) where B5 → A1)")
 val rangeCycle = Sheet(name = SheetName.unsafe("RangeCycle"))
   .put(ref"A1", fx"=SUM(B1:B10)")
-  .put(ref"B1", CellValue.Number(BigDecimal(10)))
+  .put(ref"B1", 10)
   .put(ref"B5", fx"=A1*2")  // Creates cycle!
-  .put(ref"B10", CellValue.Number(BigDecimal(20)))
+  .put(ref"B10", 20)
 
 val graph5 = DependencyGraph.fromSheet(rangeCycle)
 DependencyGraph.detectCycles(graph5) match
@@ -220,7 +221,7 @@ println("What if A1 = 150?")
 println()
 
 // Create modified sheet
-val modifiedSheet = complexSheet.put(ref"A1", CellValue.Number(BigDecimal(150)))
+val modifiedSheet = complexSheet.put(ref"A1", 150)
 
 // Evaluate both versions
 val originalResults = complexSheet.evaluateWithDependencyCheck().toOption.get

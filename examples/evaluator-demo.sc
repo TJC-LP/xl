@@ -19,6 +19,7 @@
  */
 
 import com.tjclp.xl.*
+import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.*
 import com.tjclp.xl.formula.SheetEvaluator.* // Extension methods
@@ -39,11 +40,11 @@ println("-" * 70)
 
 // Create test sheet with sample data
 val sheet = Sheet(name = SheetName.unsafe("Test"))
-  .put(ref"A1", CellValue.Number(BigDecimal(10)))
-  .put(ref"A2", CellValue.Number(BigDecimal(20)))
-  .put(ref"A3", CellValue.Number(BigDecimal(30)))
-  .put(ref"B1", CellValue.Number(BigDecimal(5)))
-  .put(ref"B2", CellValue.Number(BigDecimal(2)))
+  .put(ref"A1", 10)
+  .put(ref"A2", 20)
+  .put(ref"A3", 30)
+  .put(ref"B1", 5)
+  .put(ref"B2", 2)
 
 val evaluator = Evaluator.instance
 
@@ -205,8 +206,8 @@ println("🚀 Section 7: High-Level API (Sheet Extension Methods)")
 println("-" * 70)
 
 val formulaSheet = Sheet(name = SheetName.unsafe("Formulas"))
-  .put(ref"A1", CellValue.Number(BigDecimal(10)))
-  .put(ref"A2", CellValue.Number(BigDecimal(20)))
+  .put(ref"A1", 10)
+  .put(ref"A2", 20)
   .put(ref"B1", fx"=A1+A2")
   .put(ref"B2", fx"=B1*2")
   .put(ref"C1", fx"=SUM(A1:B2)")
@@ -244,9 +245,9 @@ println("-" * 70)
 
 // Create financial model sheet
 val finModel = Sheet(name = SheetName.unsafe("Finance"))
-  .put(ref"A1", CellValue.Number(BigDecimal(1000000)))  // Revenue
-  .put(ref"A2", CellValue.Number(BigDecimal(600000)))   // COGS
-  .put(ref"A3", CellValue.Number(BigDecimal(250000)))   // OpEx
+  .put(ref"A1", 1000000)  // Revenue
+  .put(ref"A2", 600000)   // COGS
+  .put(ref"A3", 250000)   // OpEx
   .put(ref"B1", CellValue.Number(BigDecimal(0.30)))     // Tax rate
 
   // Gross Profit = Revenue - COGS

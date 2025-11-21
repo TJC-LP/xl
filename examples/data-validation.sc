@@ -19,6 +19,7 @@
  */
 
 import com.tjclp.xl.*
+import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.*
 import com.tjclp.xl.formula.SheetEvaluator.*
@@ -36,10 +37,10 @@ println()
 
 val dataSheet = Sheet(name = SheetName.unsafe("Data"))
   // Product scores (should be 0-100)
-  .put(ref"A1", CellValue.Number(BigDecimal(85)))
-  .put(ref"A2", CellValue.Number(BigDecimal(92)))
-  .put(ref"A3", CellValue.Number(BigDecimal(150)))  // Invalid! Out of range
-  .put(ref"A4", CellValue.Number(BigDecimal(78)))
+  .put(ref"A1", 85)
+  .put(ref"A2", 92)
+  .put(ref"A3", 150)  // Invalid! Out of range
+  .put(ref"A4", 78)
   .put(ref"A5", CellValue.Number(BigDecimal(-5)))   // Invalid! Negative
 
   // Validation formulas
@@ -61,7 +62,7 @@ validationResults.filter(_._1.col == ref"B1".col).toSeq.sortBy(_._1.row.index1).
   val scoreRef = ARef.from1(1, validationRef.row.index1)  // Column A (index 1)
   val score = dataSheet(scoreRef).value
   val status = value match
-    case CellValue.Text("Valid") => "✓"
+    case "Valid" => "✓"
     case _ => "✗"
   println(f"  $status Row ${validationRef.row.index1}: Score = $score%-20s Status = $value")
 }
@@ -83,14 +84,14 @@ println("=" * 80)
 println()
 
 val incompleteSheet = Sheet(name = SheetName.unsafe("Incomplete"))
-  .put(ref"A1", CellValue.Number(BigDecimal(100)))
-  .put(ref"A2", CellValue.Number(BigDecimal(200)))
+  .put(ref"A1", 100)
+  .put(ref"A2", 200)
   // A3 is missing!
-  .put(ref"A4", CellValue.Number(BigDecimal(400)))
-  .put(ref"A5", CellValue.Number(BigDecimal(500)))
+  .put(ref"A4", 400)
+  .put(ref"A5", 500)
 
   // Expected count
-  .put(ref"B1", CellValue.Number(BigDecimal(5)))  // We expect 5 rows
+  .put(ref"B1", 5)  // We expect 5 rows
 
   // Actual count
   .put(ref"B2", fx"=COUNT(A1:A5)")
@@ -119,10 +120,10 @@ println()
 
 val textSheet = Sheet(name = SheetName.unsafe("Text"))
   // Raw user input (inconsistent casing, varying length)
-  .put(ref"A1", CellValue.Text("john.doe@example.com"))
-  .put(ref"A2", CellValue.Text("JANE.SMITH@EXAMPLE.COM"))
-  .put(ref"A3", CellValue.Text("Bob.Jones@Example.Com"))
-  .put(ref"A4", CellValue.Text("a@b.c"))  // Too short (< 10 chars)
+  .put(ref"A1", "john.doe@example.com")
+  .put(ref"A2", "JANE.SMITH@EXAMPLE.COM")
+  .put(ref"A3", "Bob.Jones@Example.Com")
+  .put(ref"A4", "a@b.c")  // Too short (< 10 chars)
 
   // Normalize to uppercase
   .put(ref"B1", fx"=UPPER(A1)")
@@ -156,7 +157,7 @@ if textResults.nonEmpty then
     (normalized, validation) match
       case (Some(norm), Some(valid)) =>
         val status = valid match
-          case CellValue.Text("Valid") => "✓"
+          case "Valid" => "✓"
           case _ => "✗"
 
         println(f"  $status Row $row:")
@@ -178,8 +179,8 @@ println("=" * 80)
 println()
 
 val divSheet = Sheet(name = SheetName.unsafe("Division"))
-  .put(ref"A1", CellValue.Number(BigDecimal(100)))
-  .put(ref"A2", CellValue.Number(BigDecimal(0)))    // Zero denominator
+  .put(ref"A1", 100)
+  .put(ref"A2", 0)    // Zero denominator
 
   .put(ref"B1", fx"=A1/10")        // Valid: 100/10 = 10
   .put(ref"B2", fx"=A1/A2")        // Invalid: 100/0

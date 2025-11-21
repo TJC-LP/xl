@@ -18,6 +18,7 @@
  */
 
 import com.tjclp.xl.*
+import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.*
 import com.tjclp.xl.formula.SheetEvaluator.*
@@ -37,104 +38,104 @@ println()
 // Build the financial model sheet
 val model = Sheet(name = SheetName.unsafe("P&L"))
   // ===== Year Headers =====
-  .put(ref"B1", CellValue.Text("2024"))
-  .put(ref"C1", CellValue.Text("2025"))
-  .put(ref"D1", CellValue.Text("2026"))
+  .put(ref"B1", "2024")
+  .put(ref"C1", "2025")
+  .put(ref"D1", "2026")
 
   // ===== Revenue (Base Case) =====
-  .put(ref"A3", CellValue.Text("Revenue"))
+  .put(ref"A3", "Revenue")
   .put(ref"B3", money"$$1,000,000")      // $1M in 2024 with currency formatting!
   .put(ref"C3", fx"=B3*1.25")                 // 25% growth in 2025
   .put(ref"D3", fx"=C3*1.20")                 // 20% growth in 2026
 
   // ===== Cost of Goods Sold (COGS) - 40% of Revenue =====
-  .put(ref"A4", CellValue.Text("COGS"))
+  .put(ref"A4", "COGS")
   .put(ref"B4", fx"=B3*0.4")
   .put(ref"C4", fx"=C3*0.4")
   .put(ref"D4", fx"=D3*0.4")
 
   // ===== Gross Profit = Revenue - COGS =====
-  .put(ref"A5", CellValue.Text("Gross Profit"))
+  .put(ref"A5", "Gross Profit")
   .put(ref"B5", fx"=B3-B4")
   .put(ref"C5", fx"=C3-C4")
   .put(ref"D5", fx"=D3-D4")
 
   // ===== Operating Expenses =====
   // Sales & Marketing (20% of revenue)
-  .put(ref"A7", CellValue.Text("Sales & Marketing"))
+  .put(ref"A7", "Sales & Marketing")
   .put(ref"B7", fx"=B3*0.20")
   .put(ref"C7", fx"=C3*0.20")
   .put(ref"D7", fx"=D3*0.20")
 
   // R&D (15% of revenue)
-  .put(ref"A8", CellValue.Text("R&D"))
+  .put(ref"A8", "R&D")
   .put(ref"B8", fx"=B3*0.15")
   .put(ref"C8", fx"=C3*0.15")
   .put(ref"D8", fx"=D3*0.15")
 
   // G&A (10% of revenue)
-  .put(ref"A9", CellValue.Text("G&A"))
+  .put(ref"A9", "G&A")
   .put(ref"B9", fx"=B3*0.10")
   .put(ref"C9", fx"=C3*0.10")
   .put(ref"D9", fx"=D3*0.10")
 
   // Total Operating Expenses
-  .put(ref"A10", CellValue.Text("Total OpEx"))
+  .put(ref"A10", "Total OpEx")
   .put(ref"B10", fx"=SUM(B7:B9)")
   .put(ref"C10", fx"=SUM(C7:C9)")
   .put(ref"D10", fx"=SUM(D7:D9)")
 
   // ===== EBITDA = Gross Profit - Operating Expenses =====
-  .put(ref"A12", CellValue.Text("EBITDA"))
+  .put(ref"A12", "EBITDA")
   .put(ref"B12", fx"=B5-B10")
   .put(ref"C12", fx"=C5-C10")
   .put(ref"D12", fx"=D5-D10")
 
   // ===== Depreciation & Amortization (5% of revenue) =====
-  .put(ref"A13", CellValue.Text("D&A"))
+  .put(ref"A13", "D&A")
   .put(ref"B13", fx"=B3*0.05")
   .put(ref"C13", fx"=C3*0.05")
   .put(ref"D13", fx"=D3*0.05")
 
   // ===== Operating Income (EBIT) = EBITDA - D&A =====
-  .put(ref"A14", CellValue.Text("Operating Income"))
+  .put(ref"A14", "Operating Income")
   .put(ref"B14", fx"=B12-B13")
   .put(ref"C14", fx"=C12-C13")
   .put(ref"D14", fx"=D12-D13")
 
   // ===== Tax (25% rate) =====
-  .put(ref"A15", CellValue.Text("Tax (25%)"))
+  .put(ref"A15", "Tax (25%)")
   .put(ref"B15", fx"=B14*0.25")
   .put(ref"C15", fx"=C14*0.25")
   .put(ref"D15", fx"=D14*0.25")
 
   // ===== Net Income = Operating Income - Tax =====
-  .put(ref"A16", CellValue.Text("Net Income"))
+  .put(ref"A16", "Net Income")
   .put(ref"B16", fx"=B14-B15")
   .put(ref"C16", fx"=C14-C15")
   .put(ref"D16", fx"=D14-D15")
 
   // ===== Financial Ratios =====
   // Gross Margin % = Gross Profit / Revenue
-  .put(ref"A19", CellValue.Text("Gross Margin %"))
+  .put(ref"A19", "Gross Margin %")
   .put(ref"B19", fx"=B5/B3")
   .put(ref"C19", fx"=C5/C3")
   .put(ref"D19", fx"=D5/D3")
 
   // Operating Margin % = Operating Income / Revenue
-  .put(ref"A20", CellValue.Text("Operating Margin %"))
+  .put(ref"A20", "Operating Margin %")
   .put(ref"B20", fx"=B14/B3")
   .put(ref"C20", fx"=C14/C3")
   .put(ref"D20", fx"=D14/D3")
 
   // Net Margin % = Net Income / Revenue
-  .put(ref"A21", CellValue.Text("Net Margin %"))
+  .put(ref"A21", "Net Margin %")
   .put(ref"B21", fx"=B16/B3")
   .put(ref"C21", fx"=C16/C3")
   .put(ref"D21", fx"=D16/D3")
 
   // Revenue Growth %
-  .put(ref"A22", CellValue.Text("Revenue Growth %"))
+  .put(ref"A22", "Revenue Growth %")
   .put(ref"C22", fx"=(C3-B3)/B3")  // 2025 vs 2024
   .put(ref"D22", fx"=(D3-C3)/C3")  // 2026 vs 2025
 

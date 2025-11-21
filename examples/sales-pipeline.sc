@@ -18,6 +18,7 @@
  */
 
 import com.tjclp.xl.*
+import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.*
 import com.tjclp.xl.formula.SheetEvaluator.*
@@ -40,73 +41,73 @@ val clock = Clock.fixedDate(today)
 
 val pipeline = Sheet(name = SheetName.unsafe("Pipeline"))
   // ===== Pipeline Metrics =====
-  .put(ref"A3", CellValue.Text("Pipeline Stage"))
-  .put(ref"B3", CellValue.Text("Deal Count"))
-  .put(ref"C3", CellValue.Text("Deal Value"))
-  .put(ref"D3", CellValue.Text("Conversion %"))
+  .put(ref"A3", "Pipeline Stage")
+  .put(ref"B3", "Deal Count")
+  .put(ref"C3", "Deal Value")
+  .put(ref"D3", "Conversion %")
 
   // Lead stage
-  .put(ref"A4", CellValue.Text("Leads"))
-  .put(ref"B4", CellValue.Number(BigDecimal(100)))
+  .put(ref"A4", "Leads")
+  .put(ref"B4", 100)
   .put(ref"C4", CellValue.Number(BigDecimal("500000")))    // $500k total
-  .put(ref"D4", CellValue.Text("100%"))                    // All leads = 100%
+  .put(ref"D4", "100%")                    // All leads = 100%
 
   // Qualified stage (40% conversion)
-  .put(ref"A5", CellValue.Text("Qualified"))
+  .put(ref"A5", "Qualified")
   .put(ref"B5", fx"=B4*0.40")             // 40 deals
   .put(ref"C5", fx"=C4*0.40")
   .put(ref"D5", fx"=B5/B4")               // Conversion rate
 
   // Proposal stage (60% of qualified)
-  .put(ref"A6", CellValue.Text("Proposal"))
+  .put(ref"A6", "Proposal")
   .put(ref"B6", fx"=B5*0.60")             // 24 deals
   .put(ref"C6", fx"=C5*0.60")
   .put(ref"D6", fx"=B6/B4")               // vs original leads
 
   // Negotiation stage (75% of proposal)
-  .put(ref"A7", CellValue.Text("Negotiation"))
+  .put(ref"A7", "Negotiation")
   .put(ref"B7", fx"=B6*0.75")             // 18 deals
   .put(ref"C7", fx"=C6*0.75")
   .put(ref"D7", fx"=B7/B4")
 
   // Closed Won (50% of negotiation)
-  .put(ref"A8", CellValue.Text("Closed Won"))
+  .put(ref"A8", "Closed Won")
   .put(ref"B8", fx"=B7*0.50")             // 9 deals
   .put(ref"C8", fx"=C7*0.50")
   .put(ref"D8", fx"=B8/B4")               // Final conversion
 
   // ===== Summary Metrics =====
-  .put(ref"A10", CellValue.Text("Average Deal Size"))
+  .put(ref"A10", "Average Deal Size")
   .put(ref"B10", fx"=C8/B8")              // Total value / closed deals
 
-  .put(ref"A11", CellValue.Text("Overall Conversion"))
+  .put(ref"A11", "Overall Conversion")
   .put(ref"B11", fx"=B8/B4")              // Closed / Leads
 
-  .put(ref"A12", CellValue.Text("Pipeline Value"))
+  .put(ref"A12", "Pipeline Value")
   .put(ref"B12", fx"=SUM(C4:C8)")         // Total pipeline value
 
   // ===== Commission Calculations (Tiered) =====
-  .put(ref"A15", CellValue.Text("Sales Rep"))
-  .put(ref"B15", CellValue.Text("Revenue"))
-  .put(ref"C15", CellValue.Text("Commission"))
+  .put(ref"A15", "Sales Rep")
+  .put(ref"B15", "Revenue")
+  .put(ref"C15", "Commission")
 
   // Rep 1: $80k revenue (Tier 2: 8%)
-  .put(ref"A16", CellValue.Text("Alice"))
+  .put(ref"A16", "Alice")
   .put(ref"B16", CellValue.Number(BigDecimal("80000")))
   .put(ref"C16", fx"=IF(B16<=50000, B16*0.05, IF(B16<=100000, B16*0.08, B16*0.12))")
 
   // Rep 2: $45k revenue (Tier 1: 5%)
-  .put(ref"A17", CellValue.Text("Bob"))
+  .put(ref"A17", "Bob")
   .put(ref"B17", CellValue.Number(BigDecimal("45000")))
   .put(ref"C17", fx"=IF(B17<=50000, B17*0.05, IF(B17<=100000, B17*0.08, B17*0.12))")
 
   // Rep 3: $150k revenue (Tier 3: 12%)
-  .put(ref"A18", CellValue.Text("Carol"))
+  .put(ref"A18", "Carol")
   .put(ref"B18", CellValue.Number(BigDecimal("150000")))
   .put(ref"C18", fx"=IF(B18<=50000, B18*0.05, IF(B18<=100000, B18*0.08, B18*0.12))")
 
   // Total commission
-  .put(ref"A19", CellValue.Text("Total Commission"))
+  .put(ref"A19", "Total Commission")
   .put(ref"C19", fx"=SUM(C16:C18)")
 
   // ===== Quota Attainment (vs $100k quota) =====

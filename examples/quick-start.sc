@@ -15,9 +15,10 @@
  */
 
 import com.tjclp.xl.*
+import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.*
-import com.tjclp.xl.formula.SheetEvaluator.* // Extension methods
+import com.tjclp.xl.formula.SheetEvaluator.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.SheetName
 
@@ -65,9 +66,9 @@ println("STEP 2: Create Sheet with Data")
 println("=" * 70)
 
 val sheet = Sheet(name = SheetName.unsafe("Demo"))
-  .put(ref"A1", CellValue.Number(BigDecimal(150)))
-  .put(ref"A2", CellValue.Number(BigDecimal(200)))
-  .put(ref"A3", CellValue.Number(BigDecimal(75)))
+  .put(ref"A1", 150)
+  .put(ref"A2", 200)
+  .put(ref"A3", 75)
   .put(ref"B1", fx"=SUM(A1:A3)")
   .put(ref"B2", fx"=AVERAGE(A1:A3)")
   .put(ref"C1", fx"=IF(B1>400, \"High\", \"Low\")")
