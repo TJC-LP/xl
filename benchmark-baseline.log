@@ -1,0 +1,1044 @@
+==================== xl-benchmarks.runJmh -rf json -rff benchmark-results.json ===================
+[200/202] xl-benchmarks.generateBenchmarkSources
+[200] Processing 6 classes from /Users/rcaputo3/git/worktrees/xl/feat/WI-15-benchmarks/out/xl-benchmarks/compile.dest/classes with "reflection" generator
+[200] Writing out Java source to /Users/rcaputo3/git/worktrees/xl/feat/WI-15-benchmarks/out/xl-benchmarks/generateBenchmarkSources.dest/jmh_sources and resources to /Users/rcaputo3/git/worktrees/xl/feat/WI-15-benchmarks/out/xl-benchmarks/generateBenchmarkSources.dest/jmh_resources
+[202/202] xl-benchmarks.runJmh
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PatchBenchmark.columnUpdate
+[202]
+[202] # Run progress: 0.00% complete, ETA 00:06:04
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 1285.639 us/op
+[202] # Warmup Iteration   2: 1115.035 us/op
+[202] # Warmup Iteration   3: 1104.440 us/op
+[202] Iteration   1: 1111.151 us/op
+[202] Iteration   2: 1103.224 us/op
+[202] Iteration   3: 1119.408 us/op
+[202] Iteration   4: 1105.666 us/op
+[202] Iteration   5: 1095.874 us/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PatchBenchmark.columnUpdate":
+[202]   1107.064 ±(99.9%) 33.954 us/op [Average]
+[202]   (min, avg, max) = (1095.874, 1107.064, 1119.408), stdev = 8.818
+[202]   CI (99.9%): [1073.111, 1141.018] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PatchBenchmark.patchComposition
+[202]
+[202] # Run progress: 3.57% complete, ETA 00:05:58
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 11.295 us/op
+[202] # Warmup Iteration   2: 9.327 us/op
+[202] # Warmup Iteration   3: 9.262 us/op
+[202] Iteration   1: 9.382 us/op
+[202] Iteration   2: 9.341 us/op
+[202] Iteration   3: 9.292 us/op
+[202] Iteration   4: 9.316 us/op
+[202] Iteration   5: 9.293 us/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PatchBenchmark.patchComposition":
+[202]   9.325 ±(99.9%) 0.145 us/op [Average]
+[202]   (min, avg, max) = (9.292, 9.325, 9.382), stdev = 0.038
+[202]   CI (99.9%): [9.180, 9.470] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PatchBenchmark.rowUpdate
+[202]
+[202] # Run progress: 7.14% complete, ETA 00:05:45
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 226.829 us/op
+[202] # Warmup Iteration   2: 199.435 us/op
+[202] # Warmup Iteration   3: 198.199 us/op
+[202] Iteration   1: 197.799 us/op
+[202] Iteration   2: 195.058 us/op
+[202] Iteration   3: 195.809 us/op
+[202] Iteration   4: 195.743 us/op
+[202] Iteration   5: 195.080 us/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PatchBenchmark.rowUpdate":
+[202]   195.898 ±(99.9%) 4.314 us/op [Average]
+[202]   (min, avg, max) = (195.058, 195.898, 197.799), stdev = 1.120
+[202]   CI (99.9%): [191.584, 200.212] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PatchBenchmark.singleCellUpdate
+[202]
+[202] # Run progress: 10.71% complete, ETA 00:05:31
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 0.148 us/op
+[202] # Warmup Iteration   2: 0.128 us/op
+[202] # Warmup Iteration   3: 0.127 us/op
+[202] Iteration   1: 0.126 us/op
+[202] Iteration   2: 0.126 us/op
+[202] Iteration   3: 0.126 us/op
+[202] Iteration   4: 0.126 us/op
+[202] Iteration   5: 0.126 us/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PatchBenchmark.singleCellUpdate":
+[202]   0.126 ±(99.9%) 0.001 us/op [Average]
+[202]   (min, avg, max) = (0.126, 0.126, 0.126), stdev = 0.001
+[202]   CI (99.9%): [0.125, 0.127] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiRead
+[202] # Parameters: (rows = 1000)
+[202]
+[202] # Run progress: 14.29% complete, ETA 00:05:18
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+15.769 ms/op
+[202] # Warmup Iteration   2: 10.567 ms/op
+[202] # Warmup Iteration   3: 10.061 ms/op
+[202] Iteration   1: 9.911 ms/op
+[202] Iteration   2: [202/202] =============== xl-benchmarks.runJmh -rf ...f benchmark-results.json =============== 60s
+[202] xl-benchmarks.runJmh 59s
+9.703 ms/op
+[202] Iteration   3: 25.335 ms/op
+[202] Iteration   4: 15.824 ms/op
+[202] Iteration   5: 10.162 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiRead":
+[202]   14.187 ±(99.9%) 25.943 ms/op [Average]
+[202]   (min, avg, max) = (9.703, 14.187, 25.335), stdev = 6.737
+[202]   CI (99.9%): [≈ 0, 40.130] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiRead
+[202] # Parameters: (rows = 10000)
+[202]
+[202] # Run progress: 17.86% complete, ETA 00:05:07
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+157.478 ms/op
+[202] # Warmup Iteration   2: 107.625 ms/op
+[202] # Warmup Iteration   3: 100.993 ms/op
+[202] Iteration   1: 92.261 ms/op
+[202] Iteration   2: 91.416 ms/op
+[202] Iteration   3: 92.138 ms/op
+[202] Iteration   4: 90.917 ms/op
+[202] Iteration   5: 91.098 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiRead":
+[202]   91.566 ±(99.9%) 2.336 ms/op [Average]
+[202]   (min, avg, max) = (90.917, 91.566, 92.261), stdev = 0.607
+[202]   CI (99.9%): [89.230, 93.902] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiWrite
+[202] # Parameters: (rows = 1000)
+[202]
+[202] # Run progress: 21.43% complete, ETA 00:04:56
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+7.756 ms/op
+[202] # Warmup Iteration   2: 5.482 ms/op
+[202] # Warmup Iteration   3: 5.195 ms/op
+[202] Iteration   1: 5.620 ms/op
+[202] Iteration   2: 19.058 ms/op
+[202] Iteration   3: 6.234 ms/op
+[202] Iteration   4: 5.171 ms/op
+[202] Iteration   5: 5.086 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiWrite":
+[202]   8.234 ±(99.9%) 23.365 ms/op [Average]
+[202]   (min, avg, max) = (5.086, 8.234, 19.058), stdev = 6.068
+[202]   CI (99.9%): [≈ 0, 31.599] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiWrite
+[202] # Parameters: (rows = 10000)
+[202]
+[202] # Run progress: 25.00% complete, ETA 00:04:43
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+81.511 ms/op
+[202] # Warmup Iteration   2: 55.051 ms/op
+[202] # Warmup Iteration   3: 52.069 ms/op
+[202] Iteration   1: 53.795 ms/op
+[202] Iteration   2: 51.297 ms/op
+[202] Iteration   3: 51.354 ms/op
+[202] Iteration   4: 50.927 ms/op
+[202] Iteration   5: 50.905 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiWrite":
+[202]   51.656 ±(99.9%) 4.673 ms/op [Average]
+[202]   (min, avg, max) = (50.905, 51.656, 53.795), stdev = 1.214
+[202]   CI (99.9%): [46.982, 56.329] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlRead
+[202] # Parameters: (rows = 1000)
+[202]
+[202] # Run progress: 28.57% complete, ETA 00:04:31
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+25.252 ms/op
+[202] # Warmup Iteration   2: 11.941 ms/op
+[202] # Warmup Iteration   3: 11.420 ms/op
+[202] Iteration   1: 11.269 ms/op
+[202] Iteration   2: 10.936 ms/op
+[202] Iteration   3: 10.922 ms/op
+[202] Iteration   4: [202/202] =============== xl-benchmarks.runJmh -rf...f benchmark-results.json =============== 120s
+[202] xl-benchmarks.runJmh 119s
+10.903 ms/op
+[202] Iteration   5: 10.953 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlRead":
+[202]   10.997 ±(99.9%) 0.591 ms/op [Average]
+[202]   (min, avg, max) = (10.903, 10.997, 11.269), stdev = 0.153
+[202]   CI (99.9%): [10.406, 11.587] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlRead
+[202] # Parameters: (rows = 10000)
+[202]
+[202] # Run progress: 32.14% complete, ETA 00:04:17
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+337.733 ms/op
+[202] # Warmup Iteration   2: 115.431 ms/op
+[202] # Warmup Iteration   3: 114.982 ms/op
+[202] Iteration   1: 114.068 ms/op
+[202] Iteration   2: 150.051 ms/op
+[202] Iteration   3: 118.449 ms/op
+[202] Iteration   4: 117.451 ms/op
+[202] Iteration   5: 114.876 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlRead":
+[202]   122.979 ±(99.9%) 58.683 ms/op [Average]
+[202]   (min, avg, max) = (114.068, 122.979, 150.051), stdev = 15.240
+[202]   CI (99.9%): [64.295, 181.662] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlWrite
+[202] # Parameters: (rows = 1000)
+[202]
+[202] # Run progress: 35.71% complete, ETA 00:04:05
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+10.069 ms/op
+[202] # Warmup Iteration   2: 5.747 ms/op
+[202] # Warmup Iteration   3: 5.594 ms/op
+[202] Iteration   1: 5.296 ms/op
+[202] Iteration   2: 5.357 ms/op
+[202] Iteration   3: 5.300 ms/op
+[202] Iteration   4: 5.204 ms/op
+[202] Iteration   5: 5.222 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlWrite":
+[202]   5.276 ±(99.9%) 0.240 ms/op [Average]
+[202]   (min, avg, max) = (5.204, 5.276, 5.357), stdev = 0.062
+[202]   CI (99.9%): [5.036, 5.516] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlWrite
+[202] # Parameters: (rows = 10000)
+[202]
+[202] # Run progress: 39.29% complete, ETA 00:03:52
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+94.643 ms/op
+[202] # Warmup Iteration   2: 51.894 ms/op
+[202] # Warmup Iteration   3: 51.200 ms/op
+[202] Iteration   1: 51.372 ms/op
+[202] Iteration   2: 49.468 ms/op
+[202] Iteration   3: 50.375 ms/op
+[202] Iteration   4: 47.834 ms/op
+[202] Iteration   5: 48.750 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlWrite":
+[202]   49.560 ±(99.9%) 5.304 ms/op [Average]
+[202]   (min, avg, max) = (47.834, 49.560, 51.372), stdev = 1.378
+[202]   CI (99.9%): [44.256, 54.864] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.ReadWriteBenchmark.readWorkbook
+[202] # Parameters: (rows = 1000)
+[202]
+[202] # Run progress: 42.86% complete, ETA 00:03:38
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 25.273 ms/op
+[202] # Warmup Iteration   2: 12.373 ms/op
+[202] # Warmup Iteration   3: 11.893 ms/op
+[202] Iteration   1: 11.384 ms/op
+[202] Iteration   2: 11.037 ms/op
+[202] Iteration   3: 11.092 ms/op
+[202] Iteration   4: 11.030 ms/op
+[202] Iteration   5: 11.133 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.ReadWriteBenchmark.readWorkbook":
+[202]   11.135 ±(99.9%) 0.559 ms/op [Average]
+[202]   (min, avg, max) = (11.030, 11.135, 11.384), stdev = 0.145
+[202]   CI (99.9%): [10.577, 11.694] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.ReadWriteBenchmark.readWorkbook
+[202] # Parameters: (rows = 10000)
+[202]
+[202] # Run progress: 46.43% complete, ETA 00:03:24
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 283.883 ms/op
+[202] # Warmup Iteration   2: [202/202] =============== xl-benchmarks.runJmh -rf...f benchmark-results.json =============== 180s
+[202] xl-benchmarks.runJmh 179s
+128.768 ms/op
+[202] # Warmup Iteration   3: 118.345 ms/op
+[202] Iteration   1: 113.118 ms/op
+[202] Iteration   2: 108.530 ms/op
+[202] Iteration   3: 111.498 ms/op
+[202] Iteration   4: 108.088 ms/op
+[202] Iteration   5: 108.414 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.ReadWriteBenchmark.readWorkbook":
+[202]   109.930 ±(99.9%) 8.668 ms/op [Average]
+[202]   (min, avg, max) = (108.088, 109.930, 113.118), stdev = 2.251
+[202]   CI (99.9%): [101.261, 118.598] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.ReadWriteBenchmark.readWorkbook
+[202] # Parameters: (rows = 100000)
+[202]
+[202] # Run progress: 50.00% complete, ETA 00:03:11
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 2173.806 ms/op
+[202] # Warmup Iteration   2: 1537.979 ms/op
+[202] # Warmup Iteration   3: 1531.096 ms/op
+[202] Iteration   1: 1507.929 ms/op
+[202] Iteration   2: 1380.506 ms/op
+[202] Iteration   3: 1405.709 ms/op
+[202] Iteration   4: 1453.199 ms/op
+[202] Iteration   5: 1246.135 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.ReadWriteBenchmark.readWorkbook":
+[202]   1398.696 ±(99.9%) 378.057 ms/op [Average]
+[202]   (min, avg, max) = (1246.135, 1398.696, 1507.929), stdev = 98.180
+[202]   CI (99.9%): [1020.639, 1776.752] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.ReadWriteBenchmark.roundTrip
+[202] # Parameters: (rows = 1000)
+[202]
+[202] # Run progress: 53.57% complete, ETA 00:03:03
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 23.434 ms/op
+[202] # Warmup Iteration   2: 11.972 ms/op
+[202] # Warmup Iteration   3: 11.606 ms/op
+[202] Iteration   1: 11.308 ms/op
+[202] Iteration   2: 11.058 ms/op
+[202] Iteration   3: 11.029 ms/op
+[202] Iteration   4: 10.871 ms/op
+[202] Iteration   5: 10.905 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.ReadWriteBenchmark.roundTrip":
+[202]   11.034 ±(99.9%) 0.665 ms/op [Average]
+[202]   (min, avg, max) = (10.871, 11.034, 11.308), stdev = 0.173
+[202]   CI (99.9%): [10.370, 11.699] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.ReadWriteBenchmark.roundTrip
+[202] # Parameters: (rows = 10000)
+[202]
+[202] # Run progress: 57.14% complete, ETA 00:02:48
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 280.495 ms/op
+[202] # Warmup Iteration   2: 124.681 ms/op
+[202] # Warmup Iteration   3: 113.923 ms/op
+[202] Iteration   1: 112.090 ms/op
+[202] Iteration   2: 112.160 ms/op
+[202] Iteration   3: 107.415 ms/op
+[202] Iteration   4: 106.257 ms/op
+[202] Iteration   5: 105.729 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.ReadWriteBenchmark.roundTrip":
+[202]   108.730 ±(99.9%) 12.162 ms/op [Average]
+[202]   (min, avg, max) = (105.729, 108.730, 112.160), stdev = 3.158
+[202]   CI (99.9%): [96.568, 120.892] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.ReadWriteBenchmark.roundTrip
+[202] # Parameters: (rows = 100000)
+[202]
+[202] # Run progress: 60.71% complete, ETA 00:02:34
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202/202] =============== xl-benchmarks.runJmh -rf...f benchmark-results.json =============== 240s
+[202] xl-benchmarks.runJmh 239s
+2193.560 ms/op
+[202] # Warmup Iteration   2: 1606.276 ms/op
+[202] # Warmup Iteration   3: 1304.573 ms/op
+[202] Iteration   1: 1434.204 ms/op
+[202] Iteration   2: 1328.607 ms/op
+[202] Iteration   3: 1250.660 ms/op
+[202] Iteration   4: 1240.033 ms/op
+[202] Iteration   5: 1266.562 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.ReadWriteBenchmark.roundTrip":
+[202]   1304.013 ±(99.9%) 309.834 ms/op [Average]
+[202]   (min, avg, max) = (1240.033, 1304.013, 1434.204), stdev = 80.463
+[202]   CI (99.9%): [994.179, 1613.847] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.ReadWriteBenchmark.writeWorkbook
+[202] # Parameters: (rows = 1000)
+[202]
+[202] # Run progress: 64.29% complete, ETA 00:02:22
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 10.990 ms/op
+[202] # Warmup Iteration   2: 6.161 ms/op
+[202] # Warmup Iteration   3: 5.325 ms/op
+[202] Iteration   1: 5.228 ms/op
+[202] Iteration   2: 5.236 ms/op
+[202] Iteration   3: 5.234 ms/op
+[202] Iteration   4: 5.218 ms/op
+[202] Iteration   5: 5.211 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.ReadWriteBenchmark.writeWorkbook":
+[202]   5.225 ±(99.9%) 0.041 ms/op [Average]
+[202]   (min, avg, max) = (5.211, 5.225, 5.236), stdev = 0.011
+[202]   CI (99.9%): [5.184, 5.267] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.ReadWriteBenchmark.writeWorkbook
+[202] # Parameters: (rows = 10000)
+[202]
+[202] # Run progress: 67.86% complete, ETA 00:02:08
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 93.759 ms/op
+[202] # Warmup Iteration   2: 53.846 ms/op
+[202] # Warmup Iteration   3: 50.082 ms/op
+[202] Iteration   1: 50.747 ms/op
+[202] Iteration   2: 48.656 ms/op
+[202] Iteration   3: 50.030 ms/op
+[202] Iteration   4: 46.340 ms/op
+[202] Iteration   5: 46.688 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.ReadWriteBenchmark.writeWorkbook":
+[202]   48.492 ±(99.9%) 7.546 ms/op [Average]
+[202]   (min, avg, max) = (46.340, 48.492, 50.747), stdev = 1.960
+[202]   CI (99.9%): [40.946, 56.038] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.ReadWriteBenchmark.writeWorkbook
+[202] # Parameters: (rows = 100000)
+[202]
+[202] # Run progress: 71.43% complete, ETA 00:01:53
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 1141.446 ms/op
+[202] # Warmup Iteration   2: 761.375 ms/op
+[202] # Warmup Iteration   3: 687.048 ms/op
+[202] Iteration   1: 696.376 ms/op
+[202] Iteration   2: 690.788 ms/op
+[202] Iteration   3: 653.951 ms/op
+[202] Iteration   4: 650.526 ms/op
+[202] Iteration   5: [202/202] =============== xl-benchmarks.runJmh -rf...f benchmark-results.json =============== 300s
+[202] xl-benchmarks.runJmh 299s
+640.110 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.ReadWriteBenchmark.writeWorkbook":
+[202]   666.350 ±(99.9%) 98.011 ms/op [Average]
+[202]   (min, avg, max) = (640.110, 666.350, 696.376), stdev = 25.453
+[202]   CI (99.9%): [568.339, 764.361] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.StyleBenchmark.applyStyleToRange
+[202]
+[202] # Run progress: 75.00% complete, ETA 00:01:40
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 636901.791 ns/op
+[202] # Warmup Iteration   2: 563186.111 ns/op
+[202] # Warmup Iteration   3: 563394.543 ns/op
+[202] Iteration   1: 565082.358 ns/op
+[202] Iteration   2: 563462.604 ns/op
+[202] Iteration   3: 566939.463 ns/op
+[202] Iteration   4: 562359.962 ns/op
+[202] Iteration   5: 562053.737 ns/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.StyleBenchmark.applyStyleToRange":
+[202]   563979.625 ±(99.9%) 7838.762 ns/op [Average]
+[202]   (min, avg, max) = (562053.737, 563979.625, 566939.463), stdev = 2035.702
+[202]   CI (99.9%): [556140.863, 571818.386] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.StyleBenchmark.canonicalKeyComputation
+[202]
+[202] # Run progress: 78.57% complete, ETA 00:01:25
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 0.697 ns/op
+[202] # Warmup Iteration   2: 0.686 ns/op
+[202] # Warmup Iteration   3: 0.697 ns/op
+[202] Iteration   1: 0.706 ns/op
+[202] Iteration   2: 0.698 ns/op
+[202] Iteration   3: 0.695 ns/op
+[202] Iteration   4: 0.696 ns/op
+[202] Iteration   5: 0.694 ns/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.StyleBenchmark.canonicalKeyComputation":
+[202]   0.698 ±(99.9%) 0.018 ns/op [Average]
+[202]   (min, avg, max) = (0.694, 0.698, 0.706), stdev = 0.005
+[202]   CI (99.9%): [0.680, 0.716] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.StyleBenchmark.registerDuplicateStyle
+[202]
+[202] # Run progress: 82.14% complete, ETA 00:01:11
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 28.349 ns/op
+[202] # Warmup Iteration   2: 24.972 ns/op
+[202] # Warmup Iteration   3: 24.837 ns/op
+[202] Iteration   1: 25.119 ns/op
+[202] Iteration   2: 24.573 ns/op
+[202] Iteration   3: 24.814 ns/op
+[202] Iteration   4: 25.024 ns/op
+[202] Iteration   5: 24.991 ns/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.StyleBenchmark.registerDuplicateStyle":
+[202]   24.904 ±(99.9%) 0.830 ns/op [Average]
+[202]   (min, avg, max) = (24.573, 24.904, 25.119), stdev = 0.216
+[202]   CI (99.9%): [24.074, 25.734] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.StyleBenchmark.registerManyDuplicateStyles
+[202]
+[202] # Run progress: 85.71% complete, ETA 00:00:56
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 10755.663 ns/op
+[202] # Warmup Iteration   2: 10373.423 ns/op
+[202] # Warmup Iteration   3: 9698.687 ns/op
+[202] Iteration   1: 9878.289 ns/op
+[202] Iteration   2: 9676.819 ns/op
+[202] Iteration   3: 9835.962 ns/op
+[202] Iteration   4: 9732.410 ns/op
+[202] Iteration   5: 9657.787 ns/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.StyleBenchmark.registerManyDuplicateStyles":
+[202]   9756.253 ±(99.9%) 374.424 ns/op [Average]
+[202]   (min, avg, max) = (9657.787, 9756.253, 9878.289), stdev = 97.237
+[202]   CI (99.9%): [9381.829, 10130.678] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.StyleBenchmark.registerManyUniqueStyles
+[202]
+[202] # Run progress: 89.29% complete, ETA 00:00:42
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 54556.135 ns/op
+[202] # Warmup Iteration   2: 47354.768 ns/op
+[202] # Warmup Iteration   3: 46763.857 ns/op
+[202] Iteration   1: 48480.043 ns/op
+[202] Iteration   2: [202/202] =============== xl-benchmarks.runJmh -rf...f benchmark-results.json =============== 360s
+[202] xl-benchmarks.runJmh 359s
+48827.727 ns/op
+[202] Iteration   3: 49165.256 ns/op
+[202] Iteration   4: 49401.306 ns/op
+[202] Iteration   5: 49035.875 ns/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.StyleBenchmark.registerManyUniqueStyles":
+[202]   48982.041 ±(99.9%) 1345.061 ns/op [Average]
+[202]   (min, avg, max) = (48480.043, 48982.041, 49401.306), stdev = 349.308
+[202]   CI (99.9%): [47636.981, 50327.102] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.StyleBenchmark.registerUniqueStyle
+[202]
+[202] # Run progress: 92.86% complete, ETA 00:00:28
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 340.514 ns/op
+[202] # Warmup Iteration   2: 315.572 ns/op
+[202] # Warmup Iteration   3: 294.920 ns/op
+[202] Iteration   1: 296.995 ns/op
+[202] Iteration   2: 296.301 ns/op
+[202] Iteration   3: 297.313 ns/op
+[202] Iteration   4: 296.122 ns/op
+[202] Iteration   5: 295.741 ns/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.StyleBenchmark.registerUniqueStyle":
+[202]   296.494 ±(99.9%) 2.484 ns/op [Average]
+[202]   (min, avg, max) = (295.741, 296.494, 297.313), stdev = 0.645
+[202]   CI (99.9%): [294.011, 298.978] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.StyleBenchmark.styleIndexLookup
+[202]
+[202] # Run progress: 96.43% complete, ETA 00:00:14
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: 14.107 ns/op
+[202] # Warmup Iteration   2: 11.972 ns/op
+[202] # Warmup Iteration   3: 11.548 ns/op
+[202] Iteration   1: 11.645 ns/op
+[202] Iteration   2: 11.537 ns/op
+[202] Iteration   3: 11.628 ns/op
+[202] Iteration   4: 11.592 ns/op
+[202] Iteration   5: 11.685 ns/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.StyleBenchmark.styleIndexLookup":
+[202]   11.617 ±(99.9%) 0.217 ns/op [Average]
+[202]   (min, avg, max) = (11.537, 11.617, 11.685), stdev = 0.056
+[202]   CI (99.9%): [11.401, 11.834] (assumes normal distribution)
+[202]
+[202]
+[202] # Run complete. Total time: 00:06:33
+[202]
+[202] REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+[202] why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+[202] experiments, perform baseline and negative tests that provide experimental control, make sure
+[202] the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+[202] Do not assume the numbers tell you what you want them to tell.
+[202]
+[202] NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+[202] extra caution when trusting the results, look into the generated code to check the benchmark still
+[202] works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+[202] different JVMs are already problematic, the performance difference caused by different Blackhole
+[202] modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+[202]
+[202] Benchmark                                   (rows)  Mode  Cnt       Score      Error  Units
+[202] PatchBenchmark.columnUpdate                    N/A  avgt    5    1107.064 ±   33.954  us/op
+[202] PatchBenchmark.patchComposition                N/A  avgt    5       9.325 ±    0.145  us/op
+[202] PatchBenchmark.rowUpdate                       N/A  avgt    5     195.898 ±    4.314  us/op
+[202] PatchBenchmark.singleCellUpdate                N/A  avgt    5       0.126 ±    0.001  us/op
+[202] PoiComparisonBenchmark.poiRead                1000  avgt    5      14.187 ±   25.943  ms/op
+[202] PoiComparisonBenchmark.poiRead               10000  avgt    5      91.566 ±    2.336  ms/op
+[202] PoiComparisonBenchmark.poiWrite               1000  avgt    5       8.234 ±   23.365  ms/op
+[202] PoiComparisonBenchmark.poiWrite              10000  avgt    5      51.656 ±    4.673  ms/op
+[202] PoiComparisonBenchmark.xlRead                 1000  avgt    5      10.997 ±    0.591  ms/op
+[202] PoiComparisonBenchmark.xlRead                10000  avgt    5     122.979 ±   58.683  ms/op
+[202] PoiComparisonBenchmark.xlWrite                1000  avgt    5       5.276 ±    0.240  ms/op
+[202] PoiComparisonBenchmark.xlWrite               10000  avgt    5      49.560 ±    5.304  ms/op
+[202] ReadWriteBenchmark.readWorkbook               1000  avgt    5      11.135 ±    0.559  ms/op
+[202] ReadWriteBenchmark.readWorkbook              10000  avgt    5     109.930 ±    8.668  ms/op
+[202] ReadWriteBenchmark.readWorkbook             100000  avgt    5    1398.696 ±  378.057  ms/op
+[202] ReadWriteBenchmark.roundTrip                  1000  avgt    5      11.034 ±    0.665  ms/op
+[202] ReadWriteBenchmark.roundTrip                 10000  avgt    5     108.730 ±   12.162  ms/op
+[202] ReadWriteBenchmark.roundTrip                100000  avgt    5    1304.013 ±  309.834  ms/op
+[202] ReadWriteBenchmark.writeWorkbook              1000  avgt    5       5.225 ±    0.041  ms/op
+[202] ReadWriteBenchmark.writeWorkbook             10000  avgt    5      48.492 ±    7.546  ms/op
+[202] ReadWriteBenchmark.writeWorkbook            100000  avgt    5     666.350 ±   98.011  ms/op
+[202] StyleBenchmark.applyStyleToRange               N/A  avgt    5  563979.625 ± 7838.762  ns/op
+[202] StyleBenchmark.canonicalKeyComputation         N/A  avgt    5       0.698 ±    0.018  ns/op
+[202] StyleBenchmark.registerDuplicateStyle          N/A  avgt    5      24.904 ±    0.830  ns/op
+[202] StyleBenchmark.registerManyDuplicateStyles     N/A  avgt    5    9756.253 ±  374.424  ns/op
+[202] StyleBenchmark.registerManyUniqueStyles        N/A  avgt    5   48982.041 ± 1345.061  ns/op
+[202] StyleBenchmark.registerUniqueStyle             N/A  avgt    5     296.494 ±    2.484  ns/op
+[202] StyleBenchmark.styleIndexLookup                N/A  avgt    5      11.617 ±    0.217  ns/op
+[202]
+[202] Benchmark result is saved to benchmark-results.json
+[202/202] =============== xl-benchmarks.runJmh -rf...f benchmark-results.json =============== 394s
