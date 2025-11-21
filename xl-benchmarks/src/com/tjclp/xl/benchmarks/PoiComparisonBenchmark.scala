@@ -5,6 +5,7 @@ import cats.effect.unsafe.implicits.global
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.addressing.Column
 import org.apache.poi.ss.usermodel.{
   Cell,
   CellType,
@@ -17,6 +18,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.openjdk.jmh.annotations.*
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
+import scala.jdk.CollectionConverters.*
 import scala.compiletime.uninitialized
 
 /**
@@ -43,12 +45,35 @@ class PoiComparisonBenchmark {
 
   var xlWorkbook: Workbook = uninitialized
   var poiWorkbook: PoiWorkbook = uninitialized
-  var sharedTestFile: Path = uninitialized // Shared file for fair comparison
+  var expectedSum: Double = uninitialized
+
+  // Base files (single source of truth for copies)
+  var xlBaseFile: Path = uninitialized
+  var poiBaseFile: Path = uninitialized
+
+  // In-memory read targets (copies to avoid shared OS cache)
+  var xlReadFromXl: Path = uninitialized
+  var poiReadFromXlFile: Path = uninitialized
+  var xlReadFromPoiFile: Path = uninitialized
+  var poiReadFromPoiFile: Path = uninitialized
+
+  // Streaming read targets (copies to avoid shared OS cache)
+  var xlStreamFromXl: Path = uninitialized
+  var poiStreamFromXlFile: Path = uninitialized
+  var xlStreamFromPoiFile: Path = uninitialized
+  var poiStreamFromPoiFile: Path = uninitialized
+
+  // Write targets
+  var xlWriteFile: Path = uninitialized
+  var poiWriteFile: Path = uninitialized
 
   @Setup(Level.Trial)
   def setup(): Unit = {
     // Generate verifiable workbook (cell A{i} = i for arithmetic series sum validation)
     xlWorkbook = BenchmarkUtils.createVerifiableWorkbook(rows)
+    expectedSum = BenchmarkUtils.expectedSum(rows)
+    // Validate in-memory data before writing
+    requireCloseEnough(sumFirstColumn(xlWorkbook), expectedSum, "xlWorkbook construction failed")
 
     // Generate equivalent POI workbook with same verifiable data
     poiWorkbook = new XSSFWorkbook()
@@ -60,30 +85,83 @@ class PoiComparisonBenchmark {
       row.createCell(0, CellType.NUMERIC).setCellValue(i.toDouble)
     }
 
-    // Create ONE shared temp file for fair comparison
-    sharedTestFile = Files.createTempFile("shared-benchmark-", ".xlsx")
+    // Base files
+    xlBaseFile = Files.createTempFile("xl-base-", ".xlsx")
+    ExcelIO.instance[IO].write(xlWorkbook, xlBaseFile).unsafeRunSync()
+    val xlWritten = ExcelIO.instance[IO].read(xlBaseFile).unsafeRunSync()
+    requireCloseEnough(sumFirstColumn(xlWritten), expectedSum, "xlBaseFile validation failed")
 
-    // PRE-CREATE file for read benchmarks (write cost separated from read measurements)
-    // Use XL to write (arbitrary choice - both libraries must read same file)
-    ExcelIO.instance[IO].write(xlWorkbook, sharedTestFile).unsafeRunSync()
+    poiBaseFile = Files.createTempFile("poi-base-", ".xlsx")
+    val fos = new java.io.FileOutputStream(poiBaseFile.toFile)
+    try {
+      poiWorkbook.write(fos)
+      fos.flush()
+    } finally {
+      fos.close()
+    }
+    // Validate POI base with POI
+    val poiBack = {
+      val fis = new java.io.FileInputStream(poiBaseFile.toFile)
+      try WorkbookFactory.create(fis)
+      finally fis.close()
+    }
+    try {
+      val sheet = poiBack.getSheetAt(0)
+      val sum = sheet.iterator().asScala.foldLeft(0.0) { (acc, row) =>
+        val cell = row.getCell(0)
+        if cell != null then acc + cell.getNumericCellValue else acc
+      }
+      requireCloseEnough(sum, expectedSum, "poiBaseFile validation failed")
+    } finally poiBack.close()
+
+    // Copies for in-memory read benchmarks (avoid cache contamination)
+    xlReadFromXl = copyTemp(xlBaseFile, "xl-read-from-xl-")
+    poiReadFromXlFile = copyTemp(xlBaseFile, "poi-read-from-xl-")
+    xlReadFromPoiFile = copyTemp(poiBaseFile, "xl-read-from-poi-")
+    poiReadFromPoiFile = copyTemp(poiBaseFile, "poi-read-from-poi-")
+
+    // Copies for streaming read benchmarks (avoid cache contamination)
+    xlStreamFromXl = copyTemp(xlBaseFile, "xl-stream-from-xl-")
+    poiStreamFromXlFile = copyTemp(xlBaseFile, "poi-stream-from-xl-")
+    xlStreamFromPoiFile = copyTemp(poiBaseFile, "xl-stream-from-poi-")
+    poiStreamFromPoiFile = copyTemp(poiBaseFile, "poi-stream-from-poi-")
+
+    // Dedicated targets to prevent cross-contamination between write benchmarks
+    xlWriteFile = Files.createTempFile("xl-benchmark-write-", ".xlsx")
+    poiWriteFile = Files.createTempFile("poi-benchmark-write-", ".xlsx")
   }
 
   @TearDown(Level.Trial)
   def teardown(): Unit = {
-    if (sharedTestFile != null && Files.exists(sharedTestFile)) Files.delete(sharedTestFile)
+    Seq(
+      xlBaseFile,
+      poiBaseFile,
+      xlReadFromXl,
+      poiReadFromXlFile,
+      xlReadFromPoiFile,
+      poiReadFromPoiFile,
+      xlStreamFromXl,
+      poiStreamFromXlFile,
+      xlStreamFromPoiFile,
+      poiStreamFromPoiFile,
+      xlWriteFile,
+      poiWriteFile
+    ).foreach { path =>
+      if (path != null && Files.exists(path)) Files.delete(path)
+    }
     if (poiWorkbook != null) poiWorkbook.close()
   }
 
   @Benchmark
   def xlWrite(): Unit = {
     // XL write performance
-    ExcelIO.instance[IO].write(xlWorkbook, sharedTestFile).unsafeRunSync()
+    ExcelIO.instance[IO].write(xlWorkbook, xlWriteFile).unsafeRunSync()
   }
 
   @Benchmark
   def poiWrite(): Unit = {
     // POI write performance
-    val fos = new java.io.FileOutputStream(sharedTestFile.toFile)
+    val fos = new java.io.FileOutputStream(poiWriteFile.toFile)
     try {
       poiWorkbook.write(fos)
     } finally {
@@ -92,20 +170,57 @@ class PoiComparisonBenchmark {
   }
 
   @Benchmark
-  def xlRead(): Workbook = {
+  def xlRead(): Double = {
     // XL in-memory read performance (file pre-created in setup)
-    ExcelIO.instance[IO].read(sharedTestFile).unsafeRunSync()
+    val wb = ExcelIO.instance[IO].read(xlReadFromXl).unsafeRunSync()
+    val sum = sumFirstColumn(wb)
+    requireCloseEnough(sum, expectedSum, "xlRead sum validation failed")
+    sum
   }
 
   @Benchmark
-  def poiRead(): PoiWorkbook = {
+  def xlReadFromPoi(): Double = {
+    val wb = ExcelIO.instance[IO].read(xlReadFromPoiFile).unsafeRunSync()
+    val sum = sumFirstColumn(wb)
+    requireCloseEnough(sum, expectedSum, "xlReadFromPoi sum validation failed")
+    sum
+  }
+
+  @Benchmark
+  def poiRead(): Double = {
     // POI in-memory read performance (file pre-created in setup)
-    val fis = new java.io.FileInputStream(sharedTestFile.toFile)
+    val fis = new java.io.FileInputStream(poiReadFromPoiFile.toFile)
+    val wb =
+      try WorkbookFactory.create(fis)
+      finally fis.close()
+
     try {
-      WorkbookFactory.create(fis)
-    } finally {
-      fis.close()
-    }
+      val sheet = wb.getSheetAt(0)
+      val sum = sheet.iterator().asScala.foldLeft(0.0) { (acc, row) =>
+        val cell = row.getCell(0)
+        if cell != null then acc + cell.getNumericCellValue else acc
+      }
+      requireCloseEnough(sum, expectedSum, "poiRead sum validation failed")
+      sum
+    } finally wb.close()
+  }
+
+  @Benchmark
+  def poiReadFromXl(): Double = {
+    val fis = new java.io.FileInputStream(poiReadFromXlFile.toFile)
+    val wb =
+      try WorkbookFactory.create(fis)
+      finally fis.close()
+
+    try {
+      val sheet = wb.getSheetAt(0)
+      val sum = sheet.iterator().asScala.foldLeft(0.0) { (acc, row) =>
+        val cell = row.getCell(0)
+        if cell != null then acc + cell.getNumericCellValue else acc
+      }
+      requireCloseEnough(sum, expectedSum, "poiReadFromXl sum validation failed")
+      sum
+    } finally wb.close()
   }
 
   @Benchmark
@@ -113,9 +228,9 @@ class PoiComparisonBenchmark {
     // XL streaming read performance - constant memory with verifiable sum computation
     // Computes sum of all numeric values in column A (index 0)
     // Expected sum: N × (N+1) / 2 for N rows (arithmetic series)
-    ExcelIO
+    val sum = ExcelIO
       .instance[IO]
-      .readStream(sharedTestFile)
+      .readStream(xlStreamFromXl)
       .evalMap { rowData =>
         IO.pure {
           // Extract numeric value from column A (index 0)
@@ -128,6 +243,28 @@ class PoiComparisonBenchmark {
       .compile
       .fold(0.0)(_ + _)
       .unsafeRunSync()
+    requireCloseEnough(sum, expectedSum, "xlReadStream sum validation failed")
+    sum
+  }
+
+  @Benchmark
+  def xlReadStreamFromPoi(): Double = {
+    val sum = ExcelIO
+      .instance[IO]
+      .readStream(xlStreamFromPoiFile)
+      .evalMap { rowData =>
+        IO.pure {
+          rowData.cells.get(0) match {
+            case Some(CellValue.Number(n)) => n.toDouble
+            case _ => 0.0
+          }
+        }
+      }
+      .compile
+      .fold(0.0)(_ + _)
+      .unsafeRunSync()
+    requireCloseEnough(sum, expectedSum, "xlReadStreamFromPoi sum validation failed")
+    sum
   }
 
   @Benchmark
@@ -142,7 +279,7 @@ class PoiComparisonBenchmark {
     import javax.xml.parsers.SAXParserFactory
 
     // Stream read with XSSFReader
-    val pkg = OPCPackage.open(sharedTestFile.toFile)
+    val pkg = OPCPackage.open(poiStreamFromXlFile.toFile)
     try {
       val reader = new XSSFReader(pkg)
       val sst = reader.getSharedStringsTable()
@@ -158,7 +295,7 @@ class PoiComparisonBenchmark {
           comment: org.apache.poi.xssf.usermodel.XSSFComment
         ): Unit = {
           // Only accumulate values from column A
-          if (cellReference.startsWith("A")) {
+          if (cellReference.startsWith("A") && formattedValue != null && formattedValue.nonEmpty) {
             try {
               sum += formattedValue.toDouble
             } catch {
@@ -182,9 +319,87 @@ class PoiComparisonBenchmark {
         sheetStream.close()
       }
 
+      requireCloseEnough(sum, expectedSum, "poiReadStream sum validation failed")
       sum
     } finally {
       pkg.close()
     }
+  }
+
+  @Benchmark
+  def poiReadStreamFromPoi(): Double = {
+    import org.apache.poi.xssf.eventusermodel.{XSSFReader, XSSFSheetXMLHandler}
+    import org.apache.poi.xssf.model.SharedStrings
+    import org.apache.poi.openxml4j.opc.OPCPackage
+    import org.apache.poi.xssf.eventusermodel.XSSFSheetXMLHandler.SheetContentsHandler
+    import org.xml.sax.InputSource
+    import javax.xml.parsers.SAXParserFactory
+
+    val pkg = OPCPackage.open(poiStreamFromPoiFile.toFile)
+    try {
+      val reader = new XSSFReader(pkg)
+      val sst = reader.getSharedStringsTable()
+
+      var sum = 0.0
+      val handler = new SheetContentsHandler {
+        override def startRow(rowNum: Int): Unit = ()
+        override def endRow(rowNum: Int): Unit = ()
+        override def cell(
+          cellReference: String,
+          formattedValue: String,
+          comment: org.apache.poi.xssf.usermodel.XSSFComment
+        ): Unit = {
+          if (cellReference.startsWith("A") && formattedValue != null && formattedValue.nonEmpty) {
+            try sum += formattedValue.toDouble
+            catch case _: NumberFormatException => ()
+          }
+        }
+        override def headerFooter(text: String, isHeader: Boolean, tagName: String): Unit = ()
+      }
+
+      val sheetHandler = new XSSFSheetXMLHandler(reader.getStylesTable(), sst, handler, false)
+      val parser = SAXParserFactory.newInstance().newSAXParser()
+      val xmlReader = parser.getXMLReader
+      xmlReader.setContentHandler(sheetHandler)
+
+      val sheetsIter = reader.getSheetsData()
+      while (sheetsIter.hasNext) {
+        val sheetStream = sheetsIter.next()
+        xmlReader.parse(new InputSource(sheetStream))
+        sheetStream.close()
+      }
+
+      requireCloseEnough(sum, expectedSum, "poiReadStreamFromPoi sum validation failed")
+      sum
+    } finally pkg.close()
+  }
+
+  // ----- Helpers -----
+
+  private def copyTemp(src: Path, prefix: String): Path = {
+    val target = Files.createTempFile(prefix, ".xlsx")
+    Files.copy(src, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    target
+  }
+
+  private def sumFirstColumn(wb: Workbook): Double = {
+    val colA = Column.from0(0)
+    // Find "Data" sheet specifically (Workbook.empty creates "Sheet1" first)
+    wb.sheets
+      .find(_.name.value == "Data")
+      .map { dataSheet =>
+        dataSheet.cells.valuesIterator.collect {
+          case cell if cell.ref.col == colA =>
+            cell.value match
+              case CellValue.Number(n) => n.toDouble
+              case _ => 0.0
+        }.sum
+      }
+      .getOrElse(0.0)
+  }
+
+  private def requireCloseEnough(actual: Double, expected: Double, msg: String): Unit = {
+    val tolerance = math.max(1e-6 * expected, 1e-3) // tolerate tiny floating error
+    require(math.abs(actual - expected) <= tolerance, s"$msg: expected=$expected actual=$actual")
   }
 }

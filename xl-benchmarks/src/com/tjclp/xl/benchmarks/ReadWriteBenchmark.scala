@@ -40,6 +40,9 @@ class ReadWriteBenchmark {
 
     // Initialize Excel IO
     excel = ExcelIO.instance[IO]
+
+    // Pre-create file for read benchmark so reads don't include write cost
+    excel.write(workbook, testFilePath).unsafeRunSync()
   }
 
   @TearDown(Level.Trial)
@@ -58,9 +61,6 @@ class ReadWriteBenchmark {
 
   @Benchmark
   def readWorkbook(): Workbook = {
-    // First ensure file exists (setup writes it)
-    excel.write(workbook, testFilePath).unsafeRunSync()
-
     // Measure read throughput
     excel.read(testFilePath).unsafeRunSync()
   }

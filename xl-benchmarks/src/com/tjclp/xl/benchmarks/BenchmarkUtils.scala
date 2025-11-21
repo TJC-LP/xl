@@ -2,7 +2,7 @@ package com.tjclp.xl.benchmarks
 
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.*
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.styles.{CellStyle, Color, Font, Fill, NumFmt}
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.sheets.Sheet
@@ -105,22 +105,31 @@ object BenchmarkUtils {
   /**
    * Create workbook with verifiable data for benchmark validation.
    *
-   * Pattern: Cell A{i} contains value i (1, 2, 3, ..., N) Expected sum: N × (N+1) / 2
+   * Pattern: Cell A{i} contains value i (1, 2, 3, ..., N)
    *
-   * This allows verification that benchmarks actually parse data:
+   * Expected sum: N × (N+1) / 2
+   *
+   * This allows verification that benchmarks actually parse data correctly:
    *   - 1,000 rows: sum = 500,500
    *   - 10,000 rows: sum = 50,005,000
+   *
+   * Uses direct Cell construction for clarity and to avoid varargs overhead in setup. This is safe
+   * because we're building CellValue.Number directly (no codec needed).
    */
   def createVerifiableWorkbook(rows: Int): Workbook = {
     var sheet: Sheet = Sheet(SheetName.unsafe("Data"))
 
     // Create rows with cell value = row number (verifiable arithmetic series)
     val updates: Seq[(ARef, Any)] = (1 to rows).map { i =>
-      (ARef.from1(1, i): ARef) -> (CellValue.Number(i.toDouble): Any)
+      (ARef.from1(1, i): ARef) -> (i.toDouble: Any) // Raw Double, not CellValue
     }
 
-    sheet = sheet.put(updates*).getOrElse(sheet)
-    Workbook.empty.flatMap(_.put(sheet)).getOrElse(Workbook(Vector.empty))
+    sheet = sheet.put(updates*) match {
+      case Right(s) => s
+      case Left(err) => sys.error(s"Failed to create verifiable sheet: $err")
+    }
+    // Direct construction with only the Data sheet (avoids Sheet1 issue)
+    Workbook(Vector(sheet))
   }
 
   /** Compute expected sum for verifiable workbook (arithmetic series formula) */
