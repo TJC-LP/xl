@@ -424,6 +424,9 @@ object XlsxWriter:
       idx -> VmlDrawing.generateForComments(comments, idx)
     }
 
+    // Build table data
+    val (tablesBySheet, totalTableCount, tableIdMap) = buildTablesData(workbook)
+
     // Build unified style index with per-sheet remappings
     val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
     val styles = OoxmlStyles(styleIndex)
@@ -434,7 +437,32 @@ object XlsxWriter:
     // Convert sheets to OOXML worksheets with style remapping
     val ooxmlSheets = workbook.sheets.zipWithIndex.map { case (sheet, sheetIdx) =>
       val remapping = sheetRemappings.getOrElse(sheetIdx, Map.empty)
-      OoxmlWorksheet.fromDomainWithSST(sheet, sst, remapping)
+
+      // Generate tableParts XML element if sheet has tables
+      val tablePartsXml = tablesBySheet.get(sheetIdx).flatMap { tablesForSheet =>
+        if tablesForSheet.isEmpty then None
+        else
+          val hasComments = commentsBySheet.contains(sheetIdx)
+          val rIdOffset = if hasComments then 3 else 1 // Comments use rId1-2
+
+          val tablePartElems =
+            tablesForSheet.sortBy(_._2).zipWithIndex.map { case ((_, tableId), idx) =>
+              import scala.xml.*
+              Elem(
+                prefix = null,
+                label = "tablePart",
+                attributes = new PrefixedAttribute("r", "id", s"rId${rIdOffset + idx}", Null),
+                scope = NamespaceBinding("r", XmlUtil.nsRelationships, TopScope),
+                minimizeEmpty = true
+              )
+            }
+
+          Some(
+            XmlUtil.elem("tableParts", "count" -> tablesForSheet.size.toString)(tablePartElems*)
+          )
+      }
+
+      OoxmlWorksheet.fromDomainWithSST(sheet, sst, remapping, tablePartsXml)
     }
 
     // Create content types
@@ -447,6 +475,7 @@ object XlsxWriter:
           sheetsWithComments = sheetsWithComments
         )
         .withCommentOverrides(sheetsWithComments)
+        .withTableOverrides(totalTableCount)
 
     // Create relationships
     val rootRels = Relationships.root()
@@ -470,6 +499,8 @@ object XlsxWriter:
           sst,
           commentsBySheet,
           vmlDrawings,
+          tablesBySheet,
+          tableIdMap,
           config
         )
       case OutputStreamTarget(stream) =>
@@ -484,6 +515,8 @@ object XlsxWriter:
           sst,
           commentsBySheet,
           vmlDrawings,
+          tablesBySheet,
+          tableIdMap,
           config
         )
 
@@ -499,6 +532,8 @@ object XlsxWriter:
     sst: Option[SharedStrings],
     commentsBySheet: Map[Int, OoxmlComments],
     vmlDrawings: Map[Int, String],
+    tablesBySheet: Map[Int, Seq[(TableSpec, Long)]],
+    tableIdMap: Map[String, Long],
     config: WriterConfig
   ): Unit =
     val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
@@ -522,16 +557,18 @@ object XlsxWriter:
       sheets.zipWithIndex.foreach { case (sheet, idx) =>
         writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml, config)
 
-        // Write worksheet relationships if this sheet has comments
-        commentsBySheet.get(idx).foreach { _ =>
-          val sheetRels = buildWorksheetRelationships(idx + 1)
+        // Write worksheet relationships if this sheet has comments or tables
+        val hasComments = commentsBySheet.contains(idx)
+        val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
+
+        if hasComments || tableIds.nonEmpty then
+          val sheetRels = buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
           writePart(
             zip,
             s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels",
             sheetRels.toXml,
             config
           )
-        }
       }
 
       // Write comment files and VML drawings for sheets with comments
@@ -542,6 +579,12 @@ object XlsxWriter:
         vmlDrawings.get(idx).foreach { vmlXml =>
           writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
         }
+      }
+
+      // Write table files for all sheets
+      tablesBySheet.values.flatten.foreach { case (tableSpec, tableId) =>
+        val ooxmlTable = TableConversions.toOoxml(tableSpec, tableId)
+        writePart(zip, s"xl/tables/table$tableId.xml", OoxmlTable.toXml(ooxmlTable), config)
       }
 
     finally zip.close()
@@ -558,6 +601,8 @@ object XlsxWriter:
     sst: Option[SharedStrings],
     commentsBySheet: Map[Int, OoxmlComments],
     vmlDrawings: Map[Int, String],
+    tablesBySheet: Map[Int, Seq[(TableSpec, Long)]],
+    tableIdMap: Map[String, Long],
     config: WriterConfig
   ): Unit =
     val zip = new ZipOutputStream(stream)
@@ -581,16 +626,18 @@ object XlsxWriter:
       sheets.zipWithIndex.foreach { case (sheet, idx) =>
         writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml, config)
 
-        // Write worksheet relationships if this sheet has comments
-        commentsBySheet.get(idx).foreach { _ =>
-          val sheetRels = buildWorksheetRelationships(idx + 1)
+        // Write worksheet relationships if this sheet has comments or tables
+        val hasComments = commentsBySheet.contains(idx)
+        val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
+
+        if hasComments || tableIds.nonEmpty then
+          val sheetRels = buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
           writePart(
             zip,
             s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels",
             sheetRels.toXml,
             config
           )
-        }
       }
 
       // Write comment files and VML drawings for sheets with comments
@@ -601,6 +648,12 @@ object XlsxWriter:
         vmlDrawings.get(idx).foreach { vmlXml =>
           writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
         }
+      }
+
+      // Write table files for all sheets
+      tablesBySheet.values.flatten.foreach { case (tableSpec, tableId) =>
+        val ooxmlTable = TableConversions.toOoxml(tableSpec, tableId)
+        writePart(zip, s"xl/tables/table$tableId.xml", OoxmlTable.toXml(ooxmlTable), config)
       }
 
     finally zip.close()
@@ -1018,6 +1071,9 @@ object XlsxWriter:
       idx -> VmlDrawing.generateForComments(comments, idx)
     }
 
+    // Build table data
+    val (tablesBySheet, totalTableCount, tableIdMap) = buildTablesData(workbook)
+
     // Preserve structural parts from source (or fallback to minimal)
     val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =
       sourceContext match
@@ -1041,7 +1097,9 @@ object XlsxWriter:
         sheetsWithComments = sheetsWithComments
       )
     )
-    val contentTypes = baseContentTypes.withCommentOverrides(sheetsWithComments)
+    val contentTypes = baseContentTypes
+      .withCommentOverrides(sheetsWithComments)
+      .withTableOverrides(totalTableCount)
 
     val rootRels = preservedRootRels.getOrElse(Relationships.root())
 
@@ -1090,8 +1148,45 @@ object XlsxWriter:
                 s"Failed to parse preserved worksheet $sheetPath: ${err.message}"
               )
           val remapping = sheetRemappings.getOrElse(idx, Map.empty)
+
+          // Generate tableParts XML element for modified sheet
+          val tablePartsXml = tablesBySheet.get(idx).flatMap { tablesForSheet =>
+            if tablesForSheet.isEmpty then None
+            else
+              val hasComments = commentsBySheet.contains(idx)
+              val rIdOffset = if hasComments then 3 else 1
+
+              val tablePartElems =
+                tablesForSheet.sortBy(_._2).zipWithIndex.map { case ((_, tableId), tableIdx) =>
+                  import scala.xml.*
+                  Elem(
+                    prefix = null,
+                    label = "tablePart",
+                    attributes = new PrefixedAttribute(
+                      "r",
+                      "id",
+                      s"rId${rIdOffset + tableIdx}",
+                      Null
+                    ),
+                    scope = NamespaceBinding("r", XmlUtil.nsRelationships, TopScope),
+                    minimizeEmpty = true
+                  )
+                }
+
+              Some(
+                XmlUtil
+                  .elem("tableParts", "count" -> tablesForSheet.size.toString)(tablePartElems*)
+              )
+          }
+
           val ooxmlSheet =
-            OoxmlWorksheet.fromDomainWithMetadata(sheet, sstForSheets, remapping, preservedMetadata)
+            OoxmlWorksheet.fromDomainWithMetadata(
+              sheet,
+              sstForSheets,
+              remapping,
+              preservedMetadata,
+              tablePartsXml
+            )
           writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet.toXml, config)
 
           // Comments: copy from source if available, else generate new
@@ -1106,10 +1201,17 @@ object XlsxWriter:
                 copyPreservedPart(ctx.sourcePath, relsPath, zip)
 
             case _ =>
-              // No source comments - write new ones if sheet has comments
-              commentsBySheet.get(idx).foreach { comments =>
-                val sheetRels = buildWorksheetRelationships(idx + 1)
+              // No source comments/tables - write new ones if sheet has them
+              val hasComments = commentsBySheet.contains(idx)
+              val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
+
+              if hasComments || tableIds.nonEmpty then
+                val sheetRels =
+                  buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
                 writePart(zip, relsPath, sheetRels.toXml, config)
+
+              // Write comments if present
+              commentsBySheet.get(idx).foreach { comments =>
                 writePart(zip, commentPath, OoxmlComments.toXml(comments), config)
 
                 // Write VML drawing for comment indicators
@@ -1132,6 +1234,12 @@ object XlsxWriter:
             if ctx.partManifest.contains(relsPath) then
               copyPreservedPart(ctx.sourcePath, relsPath, zip)
           }
+      }
+
+      // Write table files for all sheets (always regenerated from domain model)
+      tablesBySheet.values.flatten.foreach { case (tableSpec, tableId) =>
+        val ooxmlTable = TableConversions.toOoxml(tableSpec, tableId)
+        writePart(zip, s"xl/tables/table$tableId.xml", OoxmlTable.toXml(ooxmlTable), config)
       }
 
       // Copy preserved parts (charts, drawings, images, etc.) if source available
