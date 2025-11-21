@@ -6,13 +6,13 @@
 
 ## TL;DR (For AI Agents)
 
-**Current Status**: WI-07 complete (731+ tests passing). Core domain model, OOXML I/O, streaming, codecs, and formula parser operational.
+**Current Status**: WI-07 and WI-10 complete (776+ tests passing). Core domain model, OOXML I/O, streaming, codecs, formula parser, and Excel tables operational.
 
 **Active Work**: None (awaiting task assignment)
 
 **Next Available Work**:
 - `WI-08` — Formula Evaluator (unblocked by WI-07)
-- `WI-10` — Table Support (independent, high-value)
+- `WI-11` — Chart Model (independent, high-value)
 - `WI-15` — Benchmark Suite (enables optimizations)
 
 **Quick Start**: Jump to [Work Selection Algorithm](#work-selection-algorithm) for step-by-step work item selection.
@@ -26,10 +26,10 @@ graph TB
     %% Completed work (green)
     P0["P0-P8, P31<br/>Foundation Complete"]:::completed
     WI07["WI-07: Formula Parser<br/>(formula-system.md)"]:::completed
+    WI10["WI-10: Table Support<br/>(advanced-features.md)"]:::completed
 
     %% Available work (blue - ready to start)
     WI08["WI-08: Formula Evaluator"]:::available
-    WI10["WI-10: Table Support<br/>(advanced-features.md)"]:::available
     WI11["WI-11: Chart Model<br/>(advanced-features.md)"]:::available
     WI15["WI-15: Benchmark Suite<br/>(advanced-features.md)"]:::available
     WI20["WI-20: Query API<br/>(streaming-improvements.md)"]:::available
@@ -72,9 +72,9 @@ graph TB
 |---------|---------|--------|----------|---------|--------|-----------|------------|
 | **P0-P8** | Foundation Complete | Core | (see git history) | all | ✅ Complete | - | N/A |
 | **WI-07** | Formula Parser | Formula | `formula-system.md` §1-2 | xl-evaluator | ✅ Complete | P0-P8 | Low |
+| **WI-10** | Table Support | Advanced | `advanced-features.md` §Tables | xl-ooxml, xl-core | ✅ Complete | P0-P8 | Low |
 | **WI-08** | Formula Evaluator | Formula | `formula-system.md` §3 | xl-evaluator | 🔵 Available | WI-07 | Medium |
 | **WI-09** | Function Library | Formula | `formula-system.md` §4 | xl-evaluator | ⚪ Blocked | WI-08 | Low |
-| **WI-10** | Table Support | Advanced | `advanced-features.md` §Tables | xl-ooxml | 🔵 Available | P0-P8 | Low |
 | **WI-11** | Chart Model | Advanced | `advanced-features.md` §Charts | xl-ooxml | 🔵 Available | P0-P8 | Low |
 | **WI-12** | Drawing Layer | Advanced | `advanced-features.md` §Drawings | xl-ooxml | ⚪ Blocked | WI-11 | Medium |
 | **WI-13** | Pivot Tables | Advanced | `advanced-features.md` §Pivots | xl-ooxml | ⚪ Blocked | WI-10 | High |
