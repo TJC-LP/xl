@@ -238,6 +238,7 @@ object TExpr:
    *
    * Implementation: SUM / COUNT (requires evaluation phase)
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def average(range: CellRange): TExpr[BigDecimal] =
     // Note: This is a simplified representation
     // Full implementation requires division of sum by count

@@ -157,6 +157,7 @@ object FormulaPrinter:
    * Helper function to avoid opaque type extension method issues. Manually extracts col/row from
    * packed Long representation.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def formatARef(aref: ARef): String =
     // ARef is opaque type = Long with (row << 32) | col packing
     // Extract col (low 32 bits) and row (high 32 bits)
