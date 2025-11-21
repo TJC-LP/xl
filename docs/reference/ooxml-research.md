@@ -1,4 +1,38 @@
-Awesome brief. I took your prompt and produced a tight, evidence-based research deliverable with concrete API sketches and a “Hello World” minimal XLSX layout you can generate by hand. I’ve grouped it by the ten areas you asked for; each section has (1) an executive summary, (2) detailed findings and pitfalls, (3) design recommendations, and (4) open questions. Citations are in-line.
+# OOXML Research & Quick Reference
+
+Comprehensive research on OOXML (Office Open XML) SpreadsheetML specification with concrete API sketches and implementation guidance.
+
+---
+
+## Quick Reference: Common OOXML Paths
+
+**Required Parts** (minimum workbook):
+- `[Content_Types].xml` - Content type declarations
+- `/_rels/.rels` - Package relationships
+- `/xl/workbook.xml` - Workbook definition
+- `/xl/_rels/workbook.xml.rels` - Workbook relationships
+- `/xl/worksheets/sheet1.xml` - Worksheet data
+
+**Optional Parts**:
+- `/xl/sharedStrings.xml` - Shared strings table (SST)
+- `/xl/styles.xml` - Style definitions
+- `/xl/theme/theme1.xml` - Theme colors and fonts
+- `/xl/drawings/drawing1.xml` - Images and shapes
+- `/xl/charts/chart1.xml` - Chart definitions
+- `/xl/comments1.xml` - Cell comments
+- `/xl/tables/table1.xml` - Excel tables
+
+**Common Relationship Types** (fragments):
+```
+http://schemas.openxmlformats.org/officeDocument/2006/relationships/
+  - worksheet
+  - sharedStrings
+  - styles
+  - theme
+  - drawing
+  - chart
+  - comments
+```
 
 ---
 

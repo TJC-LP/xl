@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2025-11-19
+**Last Updated**: 2025-11-20
 
 ## Current State
 
@@ -101,7 +101,6 @@
 - ❌ Formula parsing stores expressions as strings only (no AST/evaluator yet).
 - ⚠️ Merged cells are fully supported in the in‑memory OOXML path, but not emitted by streaming writers.
 - ❌ Hyperlinks not serialized.
-- ❌ Comments not serialized.
 - ❌ Column/row properties (width, height, hidden) are parsed and tracked in the domain model but not yet serialized back into `<cols>` / `<row>` in the regenerated XML.
 
 ### Style System
@@ -264,11 +263,12 @@ xl-cats-effect/src/com/tjclp/xl/io/
 1. ~~StreamingXmlWriter compilation~~ - ✅ fs2-data-xml integration complete
 2. ~~DateTime serialization~~ - ✅ Excel serial number conversion implemented
 3. ~~Cell → CellStyle linkage~~ - ✅ StyleRegistry provides sheet-level style management
+4. ~~Comments~~ - ✅ Full OOXML round-trip (xl/commentsN.xml + VML drawings), rich text support, 12+ tests
 
 ### Remaining
 1. **Merged cells** - Serialize mergedRanges to worksheet XML
 2. **Column/row properties** - Serialize width/height/hidden
-3. **Hyperlinks & comments** - Add to worksheet relationships
+3. **Hyperlinks** - Add to worksheet relationships
 4. **Theme resolution** - Improve Theme color ARGB approximations (currently functional but not perfect)
 
 ---

@@ -11,8 +11,8 @@ XL provides two distinct I/O implementations with different performance characte
 | **< 10k rows** | Any | In-memory | In-memory | ~10MB | Excellent |
 | **10k-50k rows** | Full styling | In-memory | In-memory | ~25-50MB | Good |
 | **50k-100k rows** | Full styling | In-memory | In-memory | ~50-100MB | Fair |
-| **100k+ rows** | Minimal | In-memory | **Streaming** | ~10MB (write only) | Excellent for write |
-| **100k+ rows** | Full styling | Not supported | Not supported | N/A | See roadmap P7.5 |
+| **100k+ rows** | Minimal | **Streaming** (sequential) | **Streaming** | ~10-50MB (SST dependent) | Excellent |
+| **100k+ rows** | Full styling | In-memory for now | In-memory for now | O(n) | See roadmap P7.5 |
 
 ## I/O Modes Explained
 
@@ -319,16 +319,16 @@ for _ <- 1 to 4 do
 
 **Note**: `usedRange` is now single-pass (75% faster after lazy optimizations), but still recomputes on every call.
 
-### Pitfall 3: Using Streaming Read for Large Files
+### Pitfall 3: Using the Wrong Mode for Feature Needs
 ```scala
-// ❌ Bad: Spikes memory (known bug)
-excel.readStream(largeFile)  // Uses readAllBytes() internally
+// ✅ Good: Streaming read for sequential ETL (constant memory)
+excel.readStream(largeFile)
 
-// ✅ Good: Use in-memory read until P6.6 fix
-excel.read[IO](largeFile)  // O(n) memory but predictable
+// ✅ Good: In-memory read when you need styles/metadata
+excel.read(largeFile)
 ```
 
-**Status**: P6.6 will fix this (2-3 days)
+**Status**: Streaming read is fixed (P6.6); choose based on feature needs, not memory concerns.
 
 ---
 
@@ -372,12 +372,12 @@ excel.read[IO](largeFile)  // O(n) memory but predictable
 
 ## Performance Roadmap
 
-### Current (As of 2025-11-11)
-- ✅ Streaming write: O(1) memory, 88k rows/sec
-- ⚠️ Streaming read: O(n) memory (broken, see P6.6)
+### Current (As of 2025-11-20)
+- ✅ Streaming write: O(1) memory, ~88k rows/sec
+- ✅ Streaming read: O(1) memory via `fs2.io.readInputStream` (+ SST materialized once)
 - ✅ Lazy optimizations: 30-75% speedup (memoized canonicalKey, single-pass usedRange)
 
-### P6.6 (2-3 days)
+### P6.6 (complete)
 - ✅ Fix streaming read to O(1) memory
 - ✅ Add memory regression tests
 

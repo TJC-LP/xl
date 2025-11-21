@@ -1,32 +1,138 @@
-# P6.5: Performance & Quality Polish
+# Performance & Quality Polish
 
-**Status**: 🟡 Partially Complete (Critical issues fixed, medium-priority deferred)
+**Status**: 🟡 Partially Complete
 **Priority**: Medium
-**Estimated Effort**: 8-10 hours total (5 hours completed, 3-5 hours remaining)
-**Source**: PR #4 review feedback (chatgpt-codex-connector, claude)
-
-## Overview
-
-This phase addresses medium-priority improvements identified during PR #4 review. While not blockers for the current release, these enhancements will improve performance, code quality, observability, and test coverage.
-
-**Key Areas**:
-1. Performance optimizations (O(n²) → O(1))
-2. Code quality improvements (DRY, utilities)
-3. Observability enhancements (logging, warnings)
-4. Test coverage expansion (error paths, integration)
+**Estimated Effort**: 3-5 hours remaining (5 hours completed)
+**Last Updated**: 2025-11-20
 
 ---
 
-## Performance Improvements
+## Metadata
 
-### 1. ✅ O(n²) Style indexOf Optimization (COMPLETED)
+| Field | Value |
+|-------|-------|
+| **Owner Modules** | `xl-ooxml`, `xl-core` (XmlUtil), `xl-testkit` |
+| **Touches Files** | `Styles.scala`, `XmlUtil.scala`, test files |
+| **Dependencies** | P0-P8 complete |
+| **Enables** | WI-16 (streaming optimizations need benchmarks first) |
+| **Parallelizable With** | WI-07 (formula), WI-10 (tables), WI-11 (charts) — different modules |
+| **Merge Risk** | Low (utilities and tests, minimal core changes) |
 
-**Priority**: High (Critical for workbooks with 1000+ unique styles)
-**Estimated Effort**: 2 hours
-**Source**: PR #4 Issue #1
-**Completed**: 2025-11-11 (commit 79b3269)
+---
 
-**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/Styles.scala:185-193`
+## Work Items
+
+| ID | Description | Type | Files | Status | PR |
+|----|-------------|------|-------|--------|----|
+| `P6.5-01` | O(n²) style indexOf optimization | Perf | `Styles.scala` | ✅ Done | (79b3269) |
+| `P6.5-02` | Fix non-deterministic allFills ordering | Fix | `Styles.scala` | ✅ Done | (79b3269) |
+| `P6.5-03` | XXE security vulnerability fix | Security | `XlsxReader.scala` | ✅ Done | (79b3269) |
+| `P6.5-04` | Extract needsXmlSpacePreserve utility | Quality | `XmlUtil.scala` | ✅ Done | (commit ref) |
+| `P6.5-05` | XlsxReader error path tests | Test | `XlsxReaderErrorSpec.scala` | ✅ Done | (commit ref) |
+| `P6.5-06` | Full round-trip integration test | Test | `OoxmlRoundTripSpec.scala` | ✅ Done | (commit ref) |
+| `P6.5-07` | Logging strategy documentation | Docs | `error-model-and-safety.md` | ⏳ Deferred to P13 | - |
+
+---
+
+## Dependencies
+
+### Prerequisites (Complete)
+- ✅ P0-P8: Foundation (all core features operational)
+
+### Enables
+- WI-15: Benchmark Suite (infrastructure for measuring improvements)
+- WI-16: Streaming Optimizations (needs perf baselines first)
+
+### File Conflicts
+- None — changes are localized to utilities and tests
+
+### Safe Parallelization
+- ✅ WI-07 (Formula Parser) — different module (xl-evaluator)
+- ✅ WI-10 (Tables) — different feature area
+- ✅ WI-11 (Charts) — different feature area
+
+---
+
+## Worktree Strategy
+
+**Branch naming**: `perf-polish` or `P6.5-<item-id>`
+
+**Merge order**: Sequential for safety (small PRs, low risk)
+
+**Conflict resolution**: Minimal risk — utilities don't conflict with feature work
+
+---
+
+## Execution Algorithm
+
+### Completed Work Items (Historical)
+The following work items were completed in previous sessions:
+
+**P6.5-01 through P6.5-06** (✅ Complete):
+- Style indexOf optimization (O(n²) → O(1))
+- Non-deterministic fills ordering fix
+- XXE security hardening
+- XmlUtil.needsXmlSpacePreserve utility
+- Error path regression tests (10 tests)
+- Full round-trip integration test
+
+See git history for implementation details.
+
+### Remaining Work (Deferred to P13)
+
+**P6.5-07: Logging Strategy** (⏳ Deferred to P13):
+```
+1. Defer to P13 (comprehensive observability strategy)
+2. Document logging requirements in error-model-and-safety.md
+3. Wait for structured logging decision (not System.err)
+```
+
+---
+
+## Definition of Done
+
+### Completed ✅
+- [x] Style indexOf optimized to O(1) using Maps
+- [x] Non-deterministic allFills ordering fixed
+- [x] XXE security vulnerability fixed
+- [x] Whitespace check utility (needsXmlSpacePreserve)
+- [x] Error path tests added (10 tests in XlsxReaderErrorSpec)
+- [x] Full round-trip integration test
+- [x] All tests passing (680+ total)
+- [x] Code formatted
+- [x] Documentation updated
+
+### Deferred to P13
+- [ ] Structured logging strategy
+
+---
+
+## Module Ownership
+
+**Primary**: `xl-ooxml` (Styles.scala, XlsxReader.scala, XmlUtil.scala)
+
+**Secondary**: `xl-core` (XmlUtil extensions)
+
+**Test Files**: `xl-ooxml/test` (StylePerformanceSpec, DeterminismSpec, SecuritySpec, XlsxReaderErrorSpec, OoxmlRoundTripSpec)
+
+---
+
+## Merge Risk Assessment
+
+**Risk Level**: Low
+
+**Rationale**:
+- Most changes are utilities and tests
+- No central domain model changes
+- Additive changes only (no refactoring of existing code)
+
+---
+
+## Implementation Details (Historical)
+
+### P6.5-01: O(n²) Style indexOf Optimization
+
+**Goal**: Optimize style component lookups from O(n²) to O(1)
 
 **Problem**:
 ```scala
@@ -40,12 +146,6 @@ val cellXfsElem = elem("cellXfs", "count" -> index.cellStyles.size.toString)(
 )
 ```
 
-**Impact**:
-- Current: O(n²) where n = number of unique styles
-- Becomes problematic for workbooks with 1000+ unique cell formats
-- Typical case: 10-100 styles → minimal impact (~1ms)
-- Pathological case: 10,000 styles → could be 100ms+
-
 **Solution**:
 ```scala
 // Pre-build lookup maps once (O(n))
@@ -53,64 +153,36 @@ val fontMap = index.fonts.zipWithIndex.toMap
 val fillMap = allFills.zipWithIndex.toMap
 val borderMap = index.borders.zipWithIndex.toMap
 
-// Then O(1) lookups instead of O(n)
+// Then O(1) lookups
 val cellXfsElem = elem("cellXfs", "count" -> index.cellStyles.size.toString)(
   index.cellStyles.map { style =>
     val fontIdx = fontMap(style.font)      // O(1)
     val fillIdx = fillMap(style.fill)      // O(1)
     val borderIdx = borderMap(style.border) // O(1)
-    // ... → O(n) overall
   }*
 )
 ```
 
-**Implementation**:
-```scala
-// Pre-build lookup maps for O(1) access
-val fontMap = index.fonts.zipWithIndex.toMap
-val fillMap = allFills.zipWithIndex.toMap
-val borderMap = index.borders.zipWithIndex.toMap
-
-val cellXfsElem = elem("cellXfs", "count" -> index.cellStyles.size.toString)(
-  index.cellStyles.map { style =>
-    val fontIdx = fontMap.getOrElse(style.font, -1)    // O(1)
-    val fillIdx = fillMap.getOrElse(style.fill, -1)    // O(1)
-    val borderIdx = borderMap.getOrElse(style.border, -1) // O(1)
-    ...
-  }*
-)
-```
-
-**Tests Added**:
+**Tests**:
 - StylePerformanceSpec: 2 tests verifying linear scaling with 1000+ styles
-- Performance comparison test: 100 vs 1000 styles < 20x ratio
 
-**Result**: ✅ Complete - All tests pass, performance scales sub-quadratically
+**Result**: ✅ Complete (commit 79b3269)
 
 ---
 
-## Critical Fixes (Completed)
+### P6.5-02: Non-Deterministic allFills Ordering
 
-### 1b. ✅ Non-Deterministic allFills Ordering (COMPLETED)
-
-**Priority**: High (Architecture violation - determinism required)
-**Estimated Effort**: 30 minutes
-**Source**: PR #4 Issue #2
-**Completed**: 2025-11-11 (commit 79b3269)
-
-**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/Styles.scala:166-179`
+**Goal**: Fix non-deterministic `.distinct` causing unstable XML output
 
 **Problem**:
 ```scala
 val allFills = (defaultFills ++ index.fills.filterNot(defaultFills.contains)).distinct
 ```
-The `.distinct` method on Vector uses Set internally, which has non-deterministic iteration order. This violates the architecture principle #3 (deterministic output) and breaks byte-identical output requirement.
 
-**Impact**: Non-deterministic XML output breaks stable diffs and reproducible builds.
+The `.distinct` method uses Set internally with non-deterministic iteration order.
 
 **Solution**:
 ```scala
-// Deterministic deduplication preserving first-occurrence order
 val allFills = {
   val builder = Vector.newBuilder[Fill]
   val seen = scala.collection.mutable.Set.empty[Fill]
@@ -125,39 +197,23 @@ val allFills = {
 }
 ```
 
-**Tests Added**:
-- DeterminismSpec: 4 tests verifying fill ordering, XML stability, deduplication
-- Verifies multiple serializations produce identical output
+**Tests**:
+- DeterminismSpec: 4 tests verifying fill ordering, XML stability
 
-**Result**: ✅ Complete - All tests pass, output is deterministic
+**Result**: ✅ Complete (commit 79b3269)
 
 ---
 
-### 1c. ✅ XXE Security Vulnerability (COMPLETED)
+### P6.5-03: XXE Security Vulnerability
 
-**Priority**: High (Security - required for production)
-**Estimated Effort**: 30 minutes
-**Source**: PR #4 Issue #3
-**Completed**: 2025-11-11 (commit 79b3269)
+**Goal**: Prevent XML External Entity attacks
 
-**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/XlsxReader.scala:205-232`
-
-**Problem**:
-```scala
-try Right(XML.loadString(xmlString))
-```
-Default XML parser is vulnerable to XML External Entity (XXE) attacks. Malicious XLSX files could read arbitrary files from server or cause DoS.
-
-**Impact**: Critical security vulnerability allowing:
-- Server-side file disclosure
-- Denial of Service (billion laughs attack)
-- Internal port scanning
+**Problem**: Default XML parser allows DOCTYPE declarations and external entity references
 
 **Solution**:
 ```scala
 private def parseXml(xmlString: String, location: String): XLResult[Elem] =
   try
-    // Configure SAX parser to prevent XXE (XML External Entity) attacks
     val factory = javax.xml.parsers.SAXParserFactory.newInstance()
     factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
     factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
@@ -173,566 +229,100 @@ private def parseXml(xmlString: String, location: String): XLResult[Elem] =
       Left(XLError.ParseError(location, s"XML parse error: ${e.getMessage}"))
 ```
 
-**Tests Added**:
+**Tests**:
 - SecuritySpec: 3 tests verifying XXE rejection
-  - Rejects DOCTYPE declarations
-  - Rejects external entity references
-  - Accepts legitimate files
 
-**Result**: ✅ Complete - All XXE attack vectors blocked, legitimate files parse correctly
+**Result**: ✅ Complete (commit 79b3269)
 
 ---
 
-## Code Quality Improvements (Deferred)
+### P6.5-04: Extract needsXmlSpacePreserve Utility
 
-### 2. Extract Whitespace Check to Utility
+**Goal**: DRY — centralize whitespace check logic
 
-**Priority**: Low (Code quality, DRY principle)
-**Estimated Effort**: 30 minutes
-**Source**: PR #4 Issue 4
+**Files**: 5 occurrences → 1 utility function
 
-**Locations** (5 occurrences):
-- `SharedStrings.scala:58`
-- `Worksheet.scala:26` (plain text)
-- `Worksheet.scala:67` (RichText)
-- `StreamingXmlWriter.scala:43` (plain text)
-- `StreamingXmlWriter.scala:185` (RichText)
-
-**Current**:
+**Solution**:
 ```scala
-val needsPreserve = s.startsWith(" ") || s.endsWith(" ") || s.contains("  ")
-```
-
-**Refactored**:
-```scala
-// In xl-ooxml/src/com/tjclp/xl/ooxml/xml.scala (XmlUtil object)
-
-/**
- * Check if string needs xml:space="preserve" per OOXML spec.
- *
- * REQUIRES: s is non-null string
- * ENSURES: Returns true if s has leading/trailing/multiple consecutive spaces
- * DETERMINISTIC: Yes (pure function)
- * ERROR CASES: None (total function)
- *
- * @param s String to check
- * @return true if xml:space="preserve" should be added
- */
+// In XmlUtil object
 def needsXmlSpacePreserve(s: String): Boolean =
   s.startsWith(" ") || s.endsWith(" ") || s.contains("  ")
 ```
 
-**Then replace all 5 occurrences**:
-```scala
-val needsPreserve = XmlUtil.needsXmlSpacePreserve(s)
-```
-
-**Benefits**:
-- Single source of truth
-- Easier to maintain if logic changes
-- Self-documenting function name
-- Consistent across all modules
-
-**Test Plan**:
-- All existing whitespace tests should pass unchanged
-- No new tests needed (behavior identical)
+**Result**: ✅ Complete
 
 ---
 
-### 3. Logging for Missing styles.xml
+### P6.5-05: XlsxReader Error Path Tests
 
-**Priority**: Low (Observability)
-**Estimated Effort**: 15 minutes
-**Source**: PR #4 Issue 5
+**Goal**: Comprehensive error handling test coverage
 
-**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/XlsxReader.scala:98`
+**Tests Added** (10 new tests in `XlsxReaderErrorSpec.scala`):
+- Malformed XML
+- Missing parts
+- Corrupt ZIPs
+- Invalid relationships
+- Bad shared-string indices
 
-**Current**:
-```scala
-val styles = parts
-  .get("xl/styles.xml")
-  .flatMap(xml => WorkbookStyles.fromXml(xml.root).toOption)
-  .getOrElse(WorkbookStyles.default) // Silent fallback
-```
-
-**Improved**:
-```scala
-val styles = parts.get("xl/styles.xml") match
-  case Some(xml) =>
-    WorkbookStyles.fromXml(xml.root) match
-      case Right(s) => s
-      case Left(err) =>
-        // Log parse error, fall back to default
-        System.err.println(s"Warning: Failed to parse xl/styles.xml: $err")
-        WorkbookStyles.default
-  case None =>
-    // Log missing styles.xml
-    System.err.println("Warning: xl/styles.xml not found, using default styles")
-    WorkbookStyles.default
-```
-
-**Benefits**:
-- Helps debug malformed XLSX files
-- Makes silent failures visible
-- Aids troubleshooting for users
-
-**Considerations**:
-- May want structured logging (not System.err) for production
-- Consider making logging configurable
-- Defer to P11 (comprehensive logging strategy)
-
-**For Now**: Document this as a P11 enhancement rather than implementing immediately.
+**Result**: ✅ Complete
 
 ---
 
-## Test Coverage Improvements
+### P6.5-06: Full Round-Trip Integration Test
 
-### 4. XlsxReader Error Path Tests
+**Goal**: End-to-end round-trip verification with deterministic output
 
-✅ **Status**: Complete (see `xl-ooxml/test/src/com/tjclp/xl/ooxml/XlsxReaderErrorSpec.scala`)
+**Test**: `OoxmlRoundTripSpec.scala`
+- Builds 3-sheet workbook with all cell types, styles, merges
+- Asserts domain equality and byte-identical output
 
-- Added 10 targeted regression tests covering malformed XML, missing parts, corrupt ZIPs, invalid relationships, and bad shared-string indices.
-- Each fixture is built on the fly (no external files) and asserts precise `XLError` messages or `CellError` fallback behavior.
-- Scenarios now include:
-  - Missing/malformed `workbook.xml`
-  - Missing `sheets` node
-  - Malformed `styles.xml`
-  - Missing worksheet parts and relationship targets
-  - Missing `[Content_Types].xml`
-  - Non-ZIP / truncated ZIP payloads
-  - Invalid shared strings references producing `#REF!`
+**Result**: ✅ Complete
 
 ---
 
-### 5. Full XLSX Round-Trip Integration Test
+### P6.5-07: Logging Strategy (Deferred to P13)
 
-✅ **Status**: Complete (`xl-ooxml/test/src/com/tjclp/xl/ooxml/OoxmlRoundTripSpec.scala`)
+**Goal**: Structured logging for missing/malformed files
 
-- Builds a 3-sheet workbook exercising:
-  - All cell value variants (Text, Number, Bool, DateTime, Error)
-  - Shared strings with deduplication
-  - Rich styling (fonts, fills, borders, alignments)
-  - Merged ranges and multi-sheet relationships
-- Asserts:
-  - Domain equality between original and round-tripped workbooks (with special handling for Excel date serials).
-  - Byte-identical output across write → read → write by normalizing ZIP metadata (fixed timestamps) and preserving style registry ordering.
-- Added diagnostics to highlight offending ZIP entries if the deterministic guarantee regresses.
+**Deferred Rationale**:
+- Requires comprehensive logging strategy (not System.err)
+- Part of broader observability work in P13
+- Not blocking for current use cases
+
+**Action**: Document in `error-model-and-safety.md` as P13 work item
 
 ---
 
-## Definition of Done
+## Quick Wins (Backlog)
 
-### Completed ✅
-- [x] Style indexOf optimized to O(1) using Maps (Issue #1)
-- [x] Non-deterministic allFills ordering fixed (Issue #2)
-- [x] XXE security vulnerability fixed (Issue #3)
-- [x] Benchmark tests verify linear scaling (StylePerformanceSpec: 2 tests)
-- [x] Determinism tests verify stable output (DeterminismSpec: 4 tests)
-- [x] Security tests verify XXE protection (SecuritySpec: 3 tests)
-- [x] Whitespace preservation check centralized in `XmlUtil.needsXmlSpacePreserve`
-- [x] Error-path regression suite for XlsxReader (10 tests in `XlsxReaderErrorSpec`)
-- [x] Full-feature round-trip integration test with deterministic ZIP output
-- [x] Reader warnings surfaced via `XlsxReader.readWithWarnings` with effectful logging hook in `ExcelIO`
-- [x] All tests passing (636 total as of 2025-11-16)
-- [x] Code formatted (Scalafmt 3.10.1)
-- [x] Documentation updated (this file, roadmap.md)
-- [x] Committed (79b3269)
+These are low-effort improvements for future sessions:
 
-### Deferred (Medium Priority)
-- [ ] Logging strategy documented for P11
+### Documentation Wins
+- **Deprecate cell"..."/putMixed in docs** — update examples to use `ref"A1"` and batch `put`
+- **Tighten Quick Start** — rewrite with current API
+- **Clarify streaming trade-offs** — use io-modes.md as canonical reference
 
-### Future Work
-- [ ] Smarter SST heuristic (Issue #6 - optimization, not correctness)
+### Small Code Wins
+- **Formatted.putFormatted** — delegate to style-aware Sheet.put
+- **writeToStream helper** — avoid temp file in writeToBytes
+- **Workbook.updateEither** — reduce boilerplate for sheet operations
 
 ---
 
-## Implementation Order
+## Related Documentation
 
-**Phase 1: Quick Wins (1 hour)**
-1. Extract needsXmlSpacePreserve utility (30 min)
-2. Add round-trip integration test (30 min)
-
-**Phase 2: Performance (2 hours)**
-3. Optimize style indexOf with Maps (2 hours)
-   - Includes benchmark test
-
-**Phase 3: Robustness (2 hours)**
-4. Add XlsxReader error path tests (2 hours)
-
-**Phase 4: Deferred to P11**
-5. Structured logging for missing/malformed files
-
----
-
-## Related
-
+- **Roadmap**: `docs/plan/roadmap.md` (Phase P6.5)
 - **PR #4**: Source of feedback
-- **P11**: Security & observability enhancements
-- **Benchmarks Plan**: `docs/plan/benchmarks.md` for formal performance testing
+- **Design**: `docs/design/wartremover-policy.md`, `io-modes.md`
+- **Tests**: `xl-ooxml/test/src/com/tjclp/xl/ooxml/*Spec.scala`
 
 ---
 
 ## Notes
 
-This phase is **not blocking** for production use. The current implementation is correct and passes all tests. These are **enhancements** that improve code quality and performance at scale.
-
-**When to Tackle**:
-- Before releasing 1.0 (performance matters for large files)
-- When adding formal benchmarks (P6.5 + benchmarks.md together)
-- When contributor bandwidth allows
-
----
-
-# P6.6: Fix Streaming Reader (Critical Memory Issue)
-
-**Status**: ✅ Complete (2025-11-11)
-**Priority**: CRITICAL (violates documented O(1) claim)
-**Actual Effort**: 2 days
-**Source**: Technical review 2025-11-11
-
-## Problem (SOLVED)
-
-The streaming reader API (`readStreamTrue`, `readStream`, `readStreamByIndex`, `readSheetStream`) was using `InputStream.readAllBytes()` internally, which **materialized entire ZIP entries in memory**. This violated the constant-memory claim and made the API misleading.
-
-**Fixed**: Replaced all `readAllBytes()` calls with `fs2.io.readInputStream` for true chunked streaming.
-
-**Impact**:
-- Large files (100k+ rows) spike memory or OOM
-- Memory grows with file size (O(n), not O(1))
-- Users expect constant-memory but get linear growth
-
-**Current Broken Implementation**:
-```scala
-// xl-cats-effect/src/com/tjclp/xl/io/ExcelIO.scala
-val bytes = zipFile.getInputStream(entry).readAllBytes()  // ❌ Materializes entire entry!
-StreamingXmlReader.parseWorksheetStream(Stream.emits(bytes))
-```
-
-## Solution
-
-Replace `readAllBytes()` with `fs2.io.readInputStream` for chunked streaming:
-
-```scala
-import fs2.io.readInputStream
-
-val byteStream = readInputStream[F](
-  Sync[F].delay(zipFile.getInputStream(entry)),
-  chunkSize = 4096,
-  closeAfterUse = true
-)
-StreamingXmlReader.parseWorksheetStream(byteStream)
-```
-
-## Files to Change
-
-1. **ExcelIO.scala** (4 methods):
-   - `readStream` - worksheet entries
-   - `readStreamByIndex` - worksheet entries
-   - `readSheetStream` - specific sheet
-   - Update SST parsing in all three
-
-2. **StreamingXmlReader.scala**:
-   - Update `parseSharedStrings` to accept `Stream[F, Byte]` instead of `Array[Byte]`
-   - Update `parseWorksheetStream` if needed
-
-3. **Tests**:
-   - Add memory tests (assert heap doesn't scale with file size)
-   - Test 100k row file uses < 50MB
-   - Test 1M row file uses < 50MB
-
-## Implementation Steps
-
-### Step 1: Update StreamingXmlReader.parseSharedStrings (1 hour)
-```scala
-// Before
-def parseSharedStrings(bytes: Array[Byte]): Either[String, SharedStrings] =
-  val stream = Stream.emits(bytes)
-  // ...
-
-// After
-def parseSharedStrings[F[_]: Async](byteStream: Stream[F, Byte]): F[Either[String, SharedStrings]] =
-  byteStream
-    .through(fs2.data.xml.events.events())
-    .compile.toList
-    .map(parseEvents)
-```
-
-### Step 2: Update ExcelIO methods (2-3 hours)
-```scala
-// Before
-def readStream[F[_]: Async](path: Path): Stream[F, RowData] =
-  // ... get ZIP entry
-  val bytes = zipFile.getInputStream(entry).readAllBytes()
-  StreamingXmlReader.parseWorksheetStream(Stream.emits(bytes))
-
-// After
-def readStream[F[_]: Async](path: Path): Stream[F, RowData] =
-  // ... get ZIP entry
-  val byteStream = readInputStream[F](
-    Sync[F].delay(zipFile.getInputStream(entry)),
-    chunkSize = 4096,
-    closeAfterUse = true
-  )
-  StreamingXmlReader.parseWorksheetStream(byteStream)
-```
-
-### Step 3: Add Memory Tests (1 hour)
-```scala
-test("streaming read uses constant memory for 100k rows"):
-  val large = generateLargeFile(100_000)
-  val memBefore = currentHeapUsage()
-
-  ExcelIO.readStream[IO](large)
-    .compile.drain
-    .unsafeRunSync()
-
-  val memAfter = currentHeapUsage()
-  val memUsed = (memAfter - memBefore) / (1024 * 1024)  // MB
-
-  assert(memUsed < 50, s"Used $memUsed MB (expected < 50 MB)")
-
-test("streaming read uses constant memory for 1M rows"):
-  val huge = generateLargeFile(1_000_000)
-  val memBefore = currentHeapUsage()
-
-  ExcelIO.readStream[IO](huge)
-    .take(1000)  // Process first 1000
-    .compile.drain
-    .unsafeRunSync()
-
-  val memAfter = currentHeapUsage()
-  val memUsed = (memAfter - memBefore) / (1024 * 1024)
-
-  assert(memUsed < 50, s"Used $memUsed MB (expected < 50 MB)")
-```
-
-### Step 4: Update Documentation (30 minutes)
-- Remove ⚠️ warnings from STATUS.md
-- Update README.md streaming section
-- Update performance-guide.md
-
-## Success Criteria
-
-- ✅ Read 100k rows using < 50MB memory
-- ✅ Read 1M rows using < 50MB memory (streaming, not full materialization)
-- ✅ No `readAllBytes()` in codebase
-- ✅ All existing tests pass
-- ✅ Memory tests added (2 new tests)
-
-## Related
-
-- **ADR-013**: Acknowledges this bug and fix plan
-- **streaming-improvements.md**: Full streaming roadmap
-- **io-modes.md**: Architecture explanation
-
----
-
-# P6.7: Compression Defaults & Configuration
-
-**Status**: ✅ Complete (2025-11-11)
-**Priority**: HIGH (production readiness)
-**Actual Effort**: 1 day
-**Estimated Effort**: 1 day
-**Source**: Technical review 2025-11-11
-
-## Problem
-
-XlsxWriter currently defaults to **STORED (uncompressed) + prettyPrint=true**, which:
-- Produces files **5-10x larger** than necessary
-- Requires precomputing CRC/size for STORED entries (overhead)
-- Pretty-printed XML only useful for debugging
-- Not production-friendly
-
-## Solution
-
-Add `WriterConfig` with compression control, default to DEFLATED:
-
-```scala
-case class WriterConfig(
-  compression: Compression = Compression.Deflated,
-  prettyPrint: Boolean = false
-)
-
-enum Compression:
-  case Stored   // No compression (debug mode)
-  case Deflated // Standard ZIP compression (production)
-```
-
-## Implementation
-
-### Step 1: Add WriterConfig (1 hour)
-**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/WriterConfig.scala`
-
-```scala
-package com.tjclp.xl.ooxml
-
-/** Compression method for XLSX ZIP entries */
-enum Compression:
-  /** No compression (larger files, faster for debugging) */
-  case Stored
-  /** Standard DEFLATE compression (smaller files, production default) */
-  case Deflated
-
-/**
- * Configuration for XLSX writer.
- *
- * @param compression Compression method (default: Deflated for production)
- * @param prettyPrint Whether to pretty-print XML (default: false for compact output)
- */
-case class WriterConfig(
-  compression: Compression = Compression.Deflated,
-  prettyPrint: Boolean = false
-)
-
-object WriterConfig:
-  /** Production defaults: compressed, compact */
-  val default: WriterConfig = WriterConfig()
-
-  /** Debug defaults: uncompressed, pretty-printed for git diffs */
-  val debug: WriterConfig = WriterConfig(Compression.Stored, prettyPrint = true)
-```
-
-### Step 2: Update XlsxWriter.writeZip (2 hours)
-**Location**: `xl-ooxml/src/com/tjclp/xl/ooxml/XlsxWriter.scala`
-
-```scala
-def writeZip(
-  workbook: Workbook,
-  outputStream: OutputStream,
-  config: WriterConfig = WriterConfig.default
-): Unit =
-  val zipOut = new ZipOutputStream(outputStream)
-
-  // Set compression method based on config
-  config.compression match
-    case Compression.Stored =>
-      zipOut.setMethod(ZipOutputStream.STORED)
-    case Compression.Deflated =>
-      zipOut.setMethod(ZipOutputStream.DEFLATED)
-      zipOut.setLevel(Deflater.DEFAULT_COMPRESSION)
-
-  // ... write parts
-
-  def writePart(entryName: String, xml: Elem): Unit =
-    val entry = new ZipEntry(entryName)
-
-    config.compression match
-      case Compression.Stored =>
-        // STORED requires precomputed size and CRC
-        val xmlString = if config.prettyPrint then
-          XmlUtil.prettyPrint(xml)
-        else
-          xml.toString  // Compact
-        val bytes = xmlString.getBytes(StandardCharsets.UTF_8)
-        entry.setSize(bytes.length)
-        entry.setCrc(computeCrc(bytes))
-        zipOut.putNextEntry(entry)
-        zipOut.write(bytes)
-
-      case Compression.Deflated =>
-        // DEFLATED doesn't need precomputed size/CRC
-        zipOut.putNextEntry(entry)
-        val xmlString = if config.prettyPrint then
-          XmlUtil.prettyPrint(xml)
-        else
-          xml.toString  // Compact
-        zipOut.write(xmlString.getBytes(StandardCharsets.UTF_8))
-
-    zipOut.closeEntry()
-```
-
-### Step 3: Update ExcelIO API (30 minutes)
-**Location**: `xl-cats-effect/src/com/tjclp/xl/io/ExcelIO.scala`
-
-```scala
-def write[F[_]: Async](
-  workbook: Workbook,
-  path: Path,
-  config: WriterConfig = WriterConfig.default  // Add config parameter
-): F[Unit] =
-  Sync[F].blocking {
-    val out = Files.newOutputStream(path)
-    try XlsxWriter.writeZip(workbook, out, config)
-    finally out.close()
-  }
-```
-
-### Step 4: Add Tests (1 hour)
-```scala
-test("DEFLATED produces smaller files than STORED"):
-  val data = generateWorkbook(10_000)
-
-  val storedPath = writeWith(WriterConfig(Compression.Stored, prettyPrint = false), data)
-  val deflatedPath = writeWith(WriterConfig(Compression.Deflated, prettyPrint = false), data)
-
-  val storedSize = Files.size(storedPath)
-  val deflatedSize = Files.size(deflatedPath)
-
-  assert(deflatedSize < storedSize * 0.5, s"DEFLATED ($deflatedSize) should be < 50% of STORED ($storedSize)")
-
-test("prettyPrint increases file size"):
-  val data = generateWorkbook(10_000)
-
-  val compactPath = writeWith(WriterConfig(Compression.Deflated, prettyPrint = false), data)
-  val prettyPath = writeWith(WriterConfig(Compression.Deflated, prettyPrint = true), data)
-
-  assert(Files.size(prettyPath) > Files.size(compactPath))
-
-test("default config produces valid XLSX"):
-  val wb = generateWorkbook(1000)
-  val path = writeWith(WriterConfig.default, wb)
-
-  // Verify Excel can open it
-  val reloaded = XlsxReader.read(path)
-  assert(reloaded.isRight)
-```
-
-## Benefits
-
-- **5-10x smaller files** (typical DEFLATE compression ratio)
-- **Faster workflows** (no CRC precomputation)
-- **Configurable** (debug mode available with `WriterConfig.debug`)
-- **Backward compatible** (existing calls use new defaults)
-
-## Success Criteria
-
-- ✅ Default config uses DEFLATED + prettyPrint=false
-- ✅ Files 5-10x smaller than old STORED defaults
-- ✅ WriterConfig.debug available for debugging
-- ✅ All existing tests pass with new defaults
-- ✅ 3 new compression tests added
-
-## Related
-
-- **ADR-012**: Decision to default to DEFLATED
-- **streaming-improvements.md**: Overall streaming roadmap
-
----
-
-# P6.8: Builder Pattern for Batched Operations
-
-**Status**: 🟡 Not Started (Recommended from Lazy Evaluation Review)
-**Priority**: MEDIUM (performance enhancement)
-**Estimated Effort**: 3-4 days
-**Source**: Scoped-down lazy-evaluation.md
-
-## Overview
-
-Add `SheetBuilder` for batching operations instead of full Spark-style optimizer. Captures 80-90% of lazy evaluation benefits with 10% of complexity.
-
-**See**: `docs/plan/lazy-evaluation.md` "Recommended Scope" section for full implementation details.
-
-## Quick Summary
-
-```scala
-val builder = SheetBuilder("Sales")
-(1 to 10000).foreach(i => builder.put(cell"A$i", s"Row $i"))
-val sheet = builder.build  // Single allocation
-
-// 30-50% faster than:
-(1 to 10000).foldLeft(sheet)((s, i) => s.put(cell"A$i", s"Row $i"))
-```
-
-**Effort**: 3-4 days (vs 4-5 weeks for full optimizer)
-**Impact**: 30-50% speedup for batch operations
-**Complexity**: Low (mutable builder pattern, familiar to Scala developers)
+This phase is **not blocking** for production use. All critical fixes (performance, security, determinism) are complete. Remaining work is enhancements and documentation polish.
+
+**Status Summary**:
+- ✅ P6.5-01 through P6.5-06: Complete
+- ⏸ P6.5-07: Deferred to P13
+- 📋 Quick Wins: Backlog for future sessions

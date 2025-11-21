@@ -229,18 +229,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 10. Comments Not Supported
-**Status**: Not implemented
-**Impact**: Cannot add cell comments or notes
-**Plan**: [P8 - Comments](plan/11-ooxml-mapping.md#comments)
-**Phase**: P8 (Future)
-
-**Effort**: 2-3 days
-**LOC**: ~150 (Comment model, vmlDrawing, XML parts)
-
----
-
-#### 11. Conditional Formatting Not Supported
+#### 10. Conditional Formatting Not Supported
 **Status**: Not implemented
 **Impact**: Cannot add color scales, data bars, icon sets
 **Plan**: [P10 - Conditional Formatting](plan/08-tables-and-pivots.md#conditional-formatting)
@@ -251,7 +240,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 12. Data Validation Not Supported
+#### 11. Data Validation Not Supported
 **Status**: Not implemented
 **Impact**: Cannot add dropdown lists, input validation
 **Plan**: [P10 - Data Validation](plan/08-tables-and-pivots.md#data-validation)
@@ -262,7 +251,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 13. Charts Not Supported
+#### 12. Charts Not Supported
 **Status**: Not implemented
 **Impact**: Cannot generate charts
 **Plan**: [P9 - Charts](plan/07-charts.md)
@@ -273,7 +262,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 14. Drawings (Images, Shapes) Not Supported
+#### 13. Drawings (Images, Shapes) Not Supported
 **Status**: Not implemented
 **Impact**: Cannot embed images or shapes
 **Plan**: [P8 - Drawings](plan/06-drawings.md)
@@ -284,7 +273,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 15. Tables and Pivot Tables Not Supported
+#### 14. Tables and Pivot Tables Not Supported
 **Status**: Not implemented
 **Impact**: Cannot create Excel Tables or Pivot Tables
 **Plan**: [P10 - Tables](plan/08-tables-and-pivots.md)
@@ -295,7 +284,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 16. Named Ranges Not Supported
+#### 15. Named Ranges Not Supported
 **Status**: Not implemented
 **Impact**: Cannot define or use named ranges
 **Plan**: [P7 - Named Ranges](plan/11-ooxml-mapping.md#named-ranges)
@@ -306,7 +295,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 17. Print Settings and Page Setup Not Supported
+#### 16. Print Settings and Page Setup Not Supported
 **Status**: Not implemented
 **Impact**: Default print settings used
 **Plan**: [P10 - Page Setup](plan/11-ooxml-mapping.md#page-setup)
@@ -317,7 +306,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 18. Document Properties Not Written
+#### 17. Document Properties Not Written
 **Status**: Not implemented
 **Impact**: Missing metadata (author, title, creation date)
 **Plan**: [P10 - Document Properties](plan/11-ooxml-mapping.md#document-properties)
@@ -335,7 +324,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ### 🟣 Security & Safety (P11 - Critical for Production)
 
-#### 19. No ZIP Bomb Protection
+#### 18. No ZIP Bomb Protection
 **Status**: Not implemented
 **Impact**: Malicious XLSX could cause DoS
 **Plan**: [P11 - Security](plan/23-security.md#zip-bomb-detection)
@@ -355,7 +344,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 20. No XXE (XML External Entity) Protection
+#### 19. No XXE (XML External Entity) Protection
 **Status**: Not implemented
 **Impact**: XML files could reference external resources
 **Plan**: [P11 - Security](plan/23-security.md#xxe-prevention)
@@ -373,7 +362,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 21. No Formula Injection Guards
+#### 20. No Formula Injection Guards
 **Status**: Not implemented
 **Impact**: CSV injection risk when exporting
 **Plan**: [P11 - Security](plan/23-security.md#formula-injection)
@@ -393,7 +382,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 22. No File Size Limits
+#### 21. No File Size Limits
 **Status**: Not implemented
 **Impact**: Could process arbitrarily large files (resource exhaustion)
 **Plan**: [P11 - Security](plan/23-security.md#resource-limits)
@@ -406,7 +395,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ### 🔵 Advanced Features (P6-P10)
 
-#### 23. No Type-Class Derivation for Codecs
+#### 22. No Type-Class Derivation for Codecs
 **Status**: Not implemented
 **Impact**: Manual row/cell conversion required
 **Plan**: [P6 - Codecs](plan/09-codecs-and-named-tuples.md)
@@ -432,7 +421,7 @@ people.through(Codec[Person].encode)
 
 ---
 
-#### 24. No Path Macro for Named Cell References
+#### 23. No Path Macro for Named Cell References
 **Status**: Not implemented
 **Impact**: Cannot use symbolic names for cells
 **Plan**: [P7 - Advanced Macros](plan/17-macros-and-syntax.md#path-macro)
@@ -452,7 +441,7 @@ sheet.put(Paths.totalRevenue, formula"=SUM(${Paths.salesTable})")
 
 ---
 
-#### 25. No Style Literal for Inline Styling
+#### 24. No Style Literal for Inline Styling
 **Status**: Not implemented
 **Impact**: Verbose style definitions
 **Plan**: [P7 - Advanced Macros](plan/17-macros-and-syntax.md#style-literal)
@@ -468,7 +457,7 @@ val headerStyle = style"font-weight: bold; background: #CCCCCC; border: all thin
 
 ---
 
-#### 26. XLSM Macros Not Preserved
+#### 25. XLSM Macros Not Preserved
 **Status**: Not implemented
 **Impact**: Opening XLSM files strips macros
 **Plan**: [P11 - Security](plan/23-security.md#macro-preservation)
@@ -643,7 +632,7 @@ See: [plan/23-security.md](plan/23-security.md)
 | **Streaming Write** | ✅ | ✅ | XL: 88k rows/s, POI: ~30k rows/s |
 | **Streaming Read** | ✅ | ✅ | XL: 55k rows/s, POI: ~40k rows/s |
 | **Multi-sheet** | ✅ | ✅ | XL: Arbitrary, POI: Sequential |
-| **Styles** | ⚠️ | ✅ | XL: Tracked, not applied yet |
+| **Styles** | ✅ | ✅ | XL: Full in-memory; streaming uses minimal default styles |
 | **Formulas (eval)** | ❌ | ✅ | POI has evaluator |
 | **Charts** | ❌ | ✅ | POI: Full support |
 | **Drawings** | ❌ | ✅ | POI: Images/shapes |
@@ -662,16 +651,17 @@ See: [plan/23-security.md](plan/23-security.md)
 
 **Yes, if your use case is**:
 - Large dataset export (100k+ rows)
-- ETL pipelines (read → transform → write)
+- ETL pipelines (streaming read/write, constant memory)
 - Data generation (reports, analytics)
 - Multi-sheet workbooks
-- Basic cell types (text, numbers, booleans)
+- Core cell types and rich text
+- Styling in in-memory workflows (full styles supported)
 
-**No, if you need**:
-- Rich formatting (fonts, colors, borders) - P4 in progress
-- Charts or drawings - P8-P9 (future)
-- Formula evaluation - P11 (future)
-- Excel macros - Not planned
+**No/Not yet, if you need**:
+- Charts or drawings (planned)
+- Tables/pivots/conditional formatting/data validation (planned)
+- Formula evaluation (planned)
+- Excel macros (not planned to execute; preservation to be defined)
 
 ---
 
@@ -701,13 +691,10 @@ See: [plan/23-security.md](plan/23-security.md)
 
 ---
 
-### Q: When will P4 style application be complete?
+### Q: How should I choose between streaming and in-memory?
 
-**Estimate**: 2-3 days of focused work
-
-**Blocker**: None (just needs implementation)
-
-**Priority**: HIGH (enables most common formatting use cases)
+- **Need full styles/metadata or random access**: use in-memory read/write (`ExcelIO`).
+- **Need constant memory and sequential processing**: use streaming (`readStream`, `writeStreamTrue`); styles are minimal and strings are inline.
 
 ---
 
