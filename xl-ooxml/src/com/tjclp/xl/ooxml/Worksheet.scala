@@ -307,7 +307,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
 
   /** Create worksheet from domain Sheet (inline strings only) */
   def fromDomain(sheet: Sheet, styleRemapping: Map[Int, Int] = Map.empty): OoxmlWorksheet =
-    fromDomainWithSST(sheet, None, styleRemapping)
+    fromDomainWithSST(sheet, None, styleRemapping, None)
 
   /**
    * Create worksheet from domain Sheet with optional SST and style remapping.
@@ -318,13 +318,16 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
    *   Optional SharedStrings table for string deduplication
    * @param styleRemapping
    *   Map from sheet-local styleId to workbook-level styleId
+   * @param tableParts
+   *   Optional tableParts XML element (generated from Sheet.tables)
    */
   def fromDomainWithSST(
     sheet: Sheet,
     sst: Option[SharedStrings],
-    styleRemapping: Map[Int, Int] = Map.empty
+    styleRemapping: Map[Int, Int] = Map.empty,
+    tableParts: Option[Elem] = None
   ): OoxmlWorksheet =
-    fromDomainWithMetadata(sheet, sst, styleRemapping, None)
+    fromDomainWithMetadata(sheet, sst, styleRemapping, None, tableParts)
 
   /**
    * Create worksheet from domain Sheet, preserving metadata from original worksheet XML.
@@ -340,12 +343,15 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
    *   Map from sheet-local styleId to workbook-level styleId
    * @param preservedMetadata
    *   Optional original worksheet to extract metadata from
+   * @param tableParts
+   *   Optional tableParts XML element (takes priority over preserved metadata)
    */
   def fromDomainWithMetadata(
     sheet: Sheet,
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int] = Map.empty,
-    preservedMetadata: Option[OoxmlWorksheet] = None
+    preservedMetadata: Option[OoxmlWorksheet] = None,
+    tableParts: Option[Elem] = None
   ): OoxmlWorksheet =
     // Build a map of row indices to preserved row attributes
     val preservedRowAttrs = preservedMetadata
@@ -457,7 +463,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.picture,
           preserved.oleObjects,
           preserved.controls,
-          preserved.tableParts,
+          tableParts.orElse(preserved.tableParts), // Use parameter if provided, else preserve
           preserved.extLst,
           preserved.otherElements,
           preserved.rootAttributes,
@@ -468,7 +474,8 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         OoxmlWorksheet(
           rowsWithCells,
           sheet.mergedRanges,
-          legacyDrawing = legacyDrawingElem
+          legacyDrawing = legacyDrawingElem,
+          tableParts = tableParts
         )
 
   /** Parse worksheet from XML (XmlReadable trait compatibility) */

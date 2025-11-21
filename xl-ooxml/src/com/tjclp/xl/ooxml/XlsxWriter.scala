@@ -344,6 +344,59 @@ object XlsxWriter:
     )
 
   /**
+   * Build worksheet relationships for a sheet with comments and/or tables.
+   *
+   * Creates relationships for:
+   *   - Comments content (../commentsN.xml) - rId1 (if hasComments)
+   *   - VML drawing for visual indicators (../drawings/vmlDrawingN.vml) - rId2 (if hasComments)
+   *   - Tables (../tables/tableM.xml) - rId3+ (if hasComments), rId1+ (if tables only)
+   *
+   * N is 1-based sheet index, M is global table ID.
+   *
+   * @param sheetIndex
+   *   Sheet index (1-based) for file naming
+   * @param hasComments
+   *   Whether this sheet has comments
+   * @param tableIds
+   *   Sequence of global table IDs for this sheet
+   * @return
+   *   Relationships with sequential rId allocation
+   */
+  private def buildWorksheetRelationshipsWithTables(
+    sheetIndex: Int,
+    hasComments: Boolean,
+    tableIds: Seq[Long]
+  ): Relationships =
+    val commentRels =
+      if hasComments then
+        Seq(
+          Relationship(
+            id = "rId1",
+            `type` = XmlUtil.relTypeComments,
+            target = s"../comments$sheetIndex.xml"
+          ),
+          Relationship(
+            id = "rId2",
+            `type` = XmlUtil.relTypeVmlDrawing,
+            target = s"../drawings/vmlDrawing$sheetIndex.vml"
+          )
+        )
+      else Seq.empty
+
+    val rIdOffset = if hasComments then 3 else 1
+
+    // Table relationships (sorted for deterministic output)
+    val tableRels = tableIds.sorted.zipWithIndex.map { case (tableId, idx) =>
+      Relationship(
+        id = s"rId${rIdOffset + idx}",
+        `type` = XmlUtil.relTypeTable,
+        target = s"../tables/table$tableId.xml"
+      )
+    }
+
+    Relationships(commentRels ++ tableRels)
+
+  /**
    * Full regeneration of all XLSX parts (current behavior).
    *
    * Used when:
