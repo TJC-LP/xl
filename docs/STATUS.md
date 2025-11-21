@@ -43,12 +43,13 @@
 - ⏳ **Formula Evaluation** (WI-08 in progress): Evaluator skeleton exists (EvalError ADT complete, Evaluator.scala has compile issues); needs fixes + 50 tests
 
 **Performance** (JMH Benchmarked - WI-15):
-- ✅ **Streaming reads: 46.7% faster than POI** (46.7ms vs 87.7ms @ 10k rows)
-- ✅ **Writes: 9.5% faster than POI** (46.6ms vs 51.5ms @ 10k rows)
-- ✅ Inline hot paths (10-20% faster on cell operations)
+- ✅ **Streaming reads: 35% faster than POI for small files** (0.887ms vs 1.357ms @ 1k rows)
+- ✅ **Streaming reads: Competitive with POI for large files** (8.408ms vs 7.773ms @ 10k rows - within 8%)
+- ✅ **In-memory reads: 26% faster than POI for small files** (1.225ms vs 1.650ms @ 1k rows)
+- ✅ Inline hot paths (SAX parser: 3.8x speedup vs fs2-data-xml)
 - ✅ Zero-overhead opaque types
 - ✅ Macros compile away (no runtime parsing)
-- ⚠️ In-memory reads: 19% slower than POI (preservation features overhead - use streaming for production)
+- ⚠️ Writes: POI 49% faster (future optimization work - Phase 3)
 
 **Streaming API**:
 - ✅ Excel[F[_]] algebra trait
@@ -291,15 +292,34 @@ xl-cats-effect/src/com/tjclp/xl/io/
 
 ### JMH Benchmark Results (WI-15) - XL vs Apache POI
 
-**10k row comparison** (Apple Silicon M-series, JDK 25):
+**XL vs Apache POI** (Apple Silicon M-series, JDK 25):
 
-| Operation | POI | XL | XL Performance |
-|-----------|-----|----|----------------|
-| **Streaming Read** | 87.7 ± 5.7 ms | **46.7 ± 5.1 ms** | ✨ **46.7% faster** |
-| **Write** | 51.5 ± 3.3 ms | **46.6 ± 5.3 ms** | ✨ **9.5% faster** |
-| In-Memory Read | 88.9 ± 2.6 ms | 106.0 ± 11.3 ms | 19% slower* |
+#### Streaming Reads (SAX Parser - Production Recommendation)
+| Rows | POI | XL | Result |
+|------|-----|----|--------|
+| **1,000** | 1.357 ± 0.076 ms | **0.887 ± 0.060 ms** | ✨ **XL 35% faster** |
+| **10,000** | 7.773 ± 0.590 ms | 8.408 ± 0.153 ms | Competitive (XL within 8%) |
 
-***In-memory read overhead** due to preservation features (manifest building, style deduplication, comments parsing for surgical modification support). For production workloads, use `ExcelIO.readStream()` which is **46.7% faster than POI**.*
+#### In-Memory Reads (For Modification Workflows)
+| Rows | POI | XL | Result |
+|------|-----|----|--------|
+| **1,000** | 1.650 ± 0.055 ms | **1.225 ± 0.086 ms** | ✨ **XL 26% faster** |
+| **10,000** | 13.784 ± 0.377 ms | 14.115 ± 1.250 ms | Competitive (XL within 2%) |
+
+#### Writes
+| Rows | POI | XL | Result |
+|------|-----|----|--------|
+| **1,000** | 1.280 ± 0.041 ms | 1.906 ± 0.245 ms | POI 49% faster |
+| **10,000** | 10.228 ± 0.417 ms | 15.248 ± 1.315 ms | POI 49% faster |
+
+**Key Findings**:
+- ✨ **XL is fastest for small-medium files** (< 5k rows): 35% faster streaming, 26% faster in-memory
+- ✅ **XL competitive on large files**: Within 8% of POI on 10k row streaming reads
+- 🔧 **Write optimization**: Future work (Phase 3) - POI currently 49% faster
+- 💾 **Constant memory**: Streaming uses O(1) memory regardless of file size
+- ⚡ **SAX parser**: 3.8x speedup vs previous fs2-data-xml implementation
+
+**Recommendation**: Use `ExcelIO.readStream()` for production workloads (fastest for <5k rows, constant memory).
 
 ### Streaming Implementation (P5 + P6.6 Complete) ✅
 
@@ -309,8 +329,8 @@ xl-cats-effect/src/com/tjclp/xl/io/
 - **Scalability**: Can handle 1M+ rows without OOM ✅
 
 **Performance characteristics** (validated with JMH):
-- **2.3x faster** than in-memory for large files (46.7ms streaming vs 106ms in-memory @ 10k rows)
-- **Beats POI streaming by 46.7%** (POI has no streaming advantage: 87.7ms streaming vs 88.9ms in-memory)
+- **Streaming vs in-memory**: Streaming 1.7x faster for large files (8.4ms streaming vs 14.1ms in-memory @ 10k rows)
+- **XL vs POI**: XL is fastest for small files (35% faster @ 1k rows), competitive for large files (within 8% @ 10k rows)
 
 ### Comparison to Apache POI (True Streaming Read + Write)
 

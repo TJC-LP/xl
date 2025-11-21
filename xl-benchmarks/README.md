@@ -107,13 +107,25 @@ ReadWriteBenchmark.writeWorkbook           10000  avgt    5 123.456 ±  8.901  m
 
 ### Actual Performance Results
 
-Benchmarked on Apple Silicon (M-series), JDK 25, 10k rows:
+Benchmarked on Apple Silicon (M-series), JDK 25:
 
-| Operation | POI | XL | XL Advantage |
-|-----------|-----|----|--------------|
-| **Streaming Read** | 0.760 ± 0.087 ms | **0.057 ± 0.002 ms** | ✨ **92% faster (13x)** |
-| **In-Memory Read** | 0.317 ± 0.015 ms | **0.082 ± 0.018 ms** | ✨ **74% faster** |
-| **Write** | 10.667 ± 0.651 ms | **0.923 ± 0.048 ms** | ✨ **91% faster** |
+#### Streaming Reads (SAX Parser - Production Recommendation)
+| Rows | POI | XL | Result |
+|------|-----|----|--------|
+| **1,000** | 1.357 ± 0.076 ms | **0.887 ± 0.060 ms** | ✨ **XL 35% faster** |
+| **10,000** | 7.773 ± 0.590 ms | 8.408 ± 0.153 ms | Competitive (XL within 8%) |
+
+#### In-Memory Reads (For Modification Workflows)
+| Rows | POI | XL | Result |
+|------|-----|----|--------|
+| **1,000** | 1.650 ± 0.055 ms | **1.225 ± 0.086 ms** | ✨ **XL 26% faster** |
+| **10,000** | 13.784 ± 0.377 ms | 14.115 ± 1.250 ms | Competitive (XL within 2%) |
+
+#### Writes
+| Rows | POI | XL | Result |
+|------|-----|----|--------|
+| **1,000** | 1.280 ± 0.041 ms | 1.906 ± 0.245 ms | POI 49% faster |
+| **10,000** | 10.228 ± 0.417 ms | 15.248 ± 1.315 ms | POI 49% faster |
 
 **Validated Methodology**:
 - **Fair comparison**: Both libraries read identical shared file
@@ -122,12 +134,13 @@ Benchmarked on Apple Silicon (M-series), JDK 25, 10k rows:
 - **Write cost isolated**: Files pre-created in @Setup, not measured in read benchmarks
 
 **Key Findings**:
-- **XL is faster than POI across ALL operations** (read, write, stream)
-- **Write scales sub-linearly**: 1k→10k rows shows minimal increase (0.929ms→0.923ms vs POI's 1.277ms→10.667ms)
-- **Immutability has zero performance penalty**: In-memory reads are 74% faster despite preservation features
-- **Streaming dominates**: 13x faster than POI with constant memory (O(1))
+- ✨ **XL is fastest for small-medium files** (< 5k rows): 35% faster streaming, 26% faster in-memory
+- ✅ **XL competitive on large files**: Within 8% of POI on 10k row streaming reads
+- 🔧 **Write optimization**: Future work (Phase 3) - POI currently 49% faster
+- 💾 **Constant memory**: Streaming uses O(1) memory regardless of file size
+- ⚡ **SAX parser**: 3.8x speedup vs previous fs2-data-xml implementation
 
-**Recommendation**: Use `ExcelIO.readStream()` for production workloads (92% faster), reserve `ExcelIO.read()` for random access + modification scenarios.
+**Recommendation**: Use `ExcelIO.readStream()` for production workloads (fastest for <5k rows, constant memory). Reserve `ExcelIO.read()` for random access + modification scenarios.
 
 ## CI Integration
 
