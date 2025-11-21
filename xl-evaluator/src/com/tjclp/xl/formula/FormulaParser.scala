@@ -495,123 +495,18 @@ object FormulaParser:
           }
 
     parseArgs(s2, Nil).flatMap { case (args, finalState) =>
-      // Dispatch to specific function parser
-      name match
-        case "SUM" => parseSumFunction(args, startPos)
-        case "COUNT" => parseCountFunction(args, startPos)
-        case "AVERAGE" => parseAverageFunction(args, startPos)
-        case "IF" => parseIfFunction(args, startPos)
-        case "AND" => parseAndFunction(args, startPos)
-        case "OR" => parseOrFunction(args, startPos)
-        case "NOT" => parseNotFunction(args, startPos)
-        case _ =>
+      // Lookup function in type class registry
+      FunctionParser.lookup(name) match
+        case Some(parser) =>
+          // Parse using registered function parser
+          parser.parse(args, startPos) match
+            case Right(expr) => Right((expr, finalState))
+            case Left(err) => Left(err)
+        case None =>
           // Unknown function - provide suggestions
           val suggestions = suggestFunctions(name)
           Left(ParseError.UnknownFunction(name, startPos, suggestions))
-      match
-        case Right(expr) => Right((expr, finalState))
-        case Left(err) => Left(err)
     }
-
-  /**
-   * Parse SUM function: SUM(range) or SUM(expr1, expr2, ...)
-   */
-  private def parseSumFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case Nil =>
-        Left(ParseError.InvalidArguments("SUM", pos, "at least 1 argument", "0 arguments"))
-      case head :: _ =>
-        // For now, only support single range argument
-        // Future: support multiple arguments
-        head match
-          case fold: TExpr.FoldRange[?, ?] => Right(fold)
-          case _ =>
-            Left(ParseError.InvalidArguments("SUM", pos, "range argument", "non-range"))
-
-  /**
-   * Parse COUNT function: COUNT(range)
-   */
-  private def parseCountFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case List(fold: TExpr.FoldRange[?, ?]) =>
-        // Extract range from parsed fold and create COUNT-specific fold
-        fold match
-          case TExpr.FoldRange(range, _, _, _) => Right(TExpr.count(range))
-      case _ =>
-        Left(
-          ParseError.InvalidArguments("COUNT", pos, "1 range argument", s"${args.length} arguments")
-        )
-
-  /**
-   * Parse AVERAGE function: AVERAGE(range)
-   */
-  private def parseAverageFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case List(fold: TExpr.FoldRange[?, ?]) =>
-        // Extract range from parsed fold and create AVERAGE-specific fold
-        fold match
-          case TExpr.FoldRange(range, _, _, _) => Right(TExpr.average(range))
-      case _ =>
-        Left(
-          ParseError.InvalidArguments(
-            "AVERAGE",
-            pos,
-            "1 range argument",
-            s"${args.length} arguments"
-          )
-        )
-
-  /**
-   * Parse IF function: IF(condition, ifTrue, ifFalse)
-   */
-  private def parseIfFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case List(cond, ifTrue, ifFalse) =>
-        // Runtime parsing: ifTrue and ifFalse must have same type but we can't verify at parse time
-        Right(
-          TExpr.If(
-            cond.asInstanceOf[TExpr[Boolean]],
-            ifTrue.asInstanceOf[TExpr[Any]],
-            ifFalse.asInstanceOf[TExpr[Any]]
-          )
-        )
-      case _ =>
-        Left(ParseError.InvalidArguments("IF", pos, "3 arguments", s"${args.length} arguments"))
-
-  /**
-   * Parse AND function: AND(expr1, expr2, ...)
-   */
-  private def parseAndFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case Nil =>
-        Left(ParseError.InvalidArguments("AND", pos, "at least 1 argument", "0 arguments"))
-      case head :: tail =>
-        val result = tail.foldLeft(head.asInstanceOf[TExpr[Boolean]]) { (acc, expr) =>
-          TExpr.And(acc, expr.asInstanceOf[TExpr[Boolean]])
-        }
-        Right(result)
-
-  /**
-   * Parse OR function: OR(expr1, expr2, ...)
-   */
-  private def parseOrFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case Nil =>
-        Left(ParseError.InvalidArguments("OR", pos, "at least 1 argument", "0 arguments"))
-      case head :: tail =>
-        val result = tail.foldLeft(head.asInstanceOf[TExpr[Boolean]]) { (acc, expr) =>
-          TExpr.Or(acc, expr.asInstanceOf[TExpr[Boolean]])
-        }
-        Right(result)
-
-  /**
-   * Parse NOT function: NOT(expr)
-   */
-  private def parseNotFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case List(expr) => Right(TExpr.Not(expr.asInstanceOf[TExpr[Boolean]]))
-      case _ =>
-        Left(ParseError.InvalidArguments("NOT", pos, "1 argument", s"${args.length} arguments"))
 
   /**
    * Parse cell reference: A1, $A$1, Sheet1!A1
@@ -663,19 +558,8 @@ object FormulaParser:
    * Suggest similar function names for unknown functions.
    */
   private def suggestFunctions(name: String): List[String] =
-    val knownFunctions = List(
-      "SUM",
-      "COUNT",
-      "AVERAGE",
-      "IF",
-      "AND",
-      "OR",
-      "NOT",
-      "MIN",
-      "MAX",
-      "ROUND",
-      "ABS"
-    )
+    // Use FunctionParser registry for all available functions
+    val knownFunctions = FunctionParser.allFunctions
 
     // Simple Levenshtein distance for suggestions
     knownFunctions

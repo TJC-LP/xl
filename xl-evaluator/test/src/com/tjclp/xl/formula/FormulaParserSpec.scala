@@ -619,3 +619,163 @@ class FormulaParserSpec extends ScalaCheckSuite:
       assert(reparsed.isRight)
     }
   }
+
+  // ===== New Function Parser Tests (WI-09b) =====
+
+  test("parse MIN function") {
+    val result = FormulaParser.parse("=MIN(A1:A10)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Min(_) => assert(true)
+      case _ => fail("Expected TExpr.Min")
+    }
+  }
+
+  test("parse MAX function") {
+    val result = FormulaParser.parse("=MAX(B2:B20)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Max(_) => assert(true)
+      case _ => fail("Expected TExpr.Max")
+    }
+  }
+
+  test("parse CONCATENATE function") {
+    val result = FormulaParser.parse("=CONCATENATE(\"Hello\", \" \", \"World\")")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Concatenate(xs) => assertEquals(xs.length, 3)
+      case _ => fail("Expected TExpr.Concatenate")
+    }
+  }
+
+  test("parse LEFT function") {
+    val result = FormulaParser.parse("=LEFT(\"Hello\", 3)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Left(_, _) => assert(true)
+      case _ => fail("Expected TExpr.Left")
+    }
+  }
+
+  test("parse RIGHT function") {
+    val result = FormulaParser.parse("=RIGHT(A1, 5)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Right(_, _) => assert(true)
+      case _ => fail("Expected TExpr.Right")
+    }
+  }
+
+  test("parse LEN function") {
+    val result = FormulaParser.parse("=LEN(A1)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Len(_) => assert(true)
+      case _ => fail("Expected TExpr.Len")
+    }
+  }
+
+  test("parse UPPER function") {
+    val result = FormulaParser.parse("=UPPER(\"hello\")")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Upper(_) => assert(true)
+      case _ => fail("Expected TExpr.Upper")
+    }
+  }
+
+  test("parse LOWER function") {
+    val result = FormulaParser.parse("=LOWER(\"WORLD\")")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Lower(_) => assert(true)
+      case _ => fail("Expected TExpr.Lower")
+    }
+  }
+
+  test("parse TODAY function") {
+    val result = FormulaParser.parse("=TODAY()")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Today() => assert(true)
+      case _ => fail("Expected TExpr.Today")
+    }
+  }
+
+  test("parse NOW function") {
+    val result = FormulaParser.parse("=NOW()")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Now() => assert(true)
+      case _ => fail("Expected TExpr.Now")
+    }
+  }
+
+  test("parse DATE function") {
+    val result = FormulaParser.parse("=DATE(2025, 11, 21)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Date(_, _, _) => assert(true)
+      case _ => fail("Expected TExpr.Date")
+    }
+  }
+
+  test("parse YEAR function") {
+    val result = FormulaParser.parse("=YEAR(TODAY())")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Year(_) => assert(true)
+      case _ => fail("Expected TExpr.Year")
+    }
+  }
+
+  test("parse MONTH function") {
+    val result = FormulaParser.parse("=MONTH(A1)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Month(_) => assert(true)
+      case _ => fail("Expected TExpr.Month")
+    }
+  }
+
+  test("parse DAY function") {
+    val result = FormulaParser.parse("=DAY(DATE(2025, 11, 21))")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Day(_) => assert(true)
+      case _ => fail("Expected TExpr.Day")
+    }
+  }
+
+  test("parse nested text functions") {
+    val result = FormulaParser.parse("=UPPER(CONCATENATE(LEFT(A1, 3), RIGHT(B1, 2)))")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Upper(TExpr.Concatenate(_)) => assert(true)
+      case _ => fail("Expected nested text functions")
+    }
+  }
+
+  test("FunctionParser.allFunctions includes all 21 functions") {
+    val functions = FunctionParser.allFunctions
+    assert(functions.contains("SUM"))
+    assert(functions.contains("MIN"))
+    assert(functions.contains("MAX"))
+    assert(functions.contains("CONCATENATE"))
+    assert(functions.contains("TODAY"))
+    assert(functions.contains("DATE"))
+    assertEquals(functions.length, 21)
+  }
+
+  test("FunctionParser.lookup finds known functions") {
+    assert(FunctionParser.lookup("SUM").isDefined)
+    assert(FunctionParser.lookup("min").isDefined) // Case insensitive
+    assert(FunctionParser.lookup("CONCATENATE").isDefined)
+    assert(FunctionParser.lookup("TODAY").isDefined)
+  }
+
+  test("FunctionParser.lookup returns None for unknown functions") {
+    assert(FunctionParser.lookup("UNKNOWN").isEmpty)
+    assert(FunctionParser.lookup("FOOBAR").isEmpty)
+  }
