@@ -6,14 +6,15 @@
 
 ## TL;DR (For AI Agents)
 
-**Current Status**: WI-07, WI-08, WI-09 (a/b/c) complete (207+ tests passing). Formula system operational with 21 functions, type class parser, and evaluation API.
+**Current Status**: WI-07, WI-08, WI-09 (a/b/c/d) complete (259+ tests passing). Formula system fully operational with 21 functions, dependency graph, and cycle detection.
 
-**Active Work**: WI-09d (DependencyGraph with cycle detection) — final piece of formula system
+**Active Work**: None (formula system complete)
 
 **Next Available Work**:
-- `WI-09d` — Dependency Graph (~300 LOC, 40+ tests, 3-4 hours) — completes WI-09
 - `WI-10` — Table Support (independent, high-value)
 - `WI-15` — Benchmark Suite (enables optimizations)
+- `WI-20` — Query API (powerful spreadsheet queries)
+- `WI-30` — Security Hardening (ZIP bomb, XXE prevention)
 
 **Quick Start**: Jump to [Work Selection Algorithm](#work-selection-algorithm) for step-by-step work item selection.
 
@@ -28,9 +29,9 @@ graph TB
     WI07["WI-07: Formula Parser<br/>(formula-system.md)"]:::completed
     WI08["WI-08: Formula Evaluator<br/>(formula-system.md)"]:::completed
     WI09["WI-09a/b/c: Function Library<br/>Parser + Eval API"]:::completed
+    WI09d["WI-09d: Dependency Graph<br/>(formula-system.md §5)"]:::completed
 
     %% Available work (blue - ready to start)
-    WI09d["WI-09d: Dependency Graph<br/>(~300 LOC, 3-4hrs)"]:::available
     WI10["WI-10: Table Support<br/>(advanced-features.md)"]:::available
     WI11["WI-11: Chart Model<br/>(advanced-features.md)"]:::available
     WI15["WI-15: Benchmark Suite<br/>(advanced-features.md)"]:::available
@@ -76,7 +77,7 @@ graph TB
 | **WI-07** | Formula Parser | Formula | `formula-system.md` §1-2 | xl-evaluator | ✅ Complete | P0-P8 | Low |
 | **WI-08** | Formula Evaluator | Formula | `formula-system.md` §3 | xl-evaluator | ✅ Complete | WI-07 | Medium |
 | **WI-09a/b/c** | Function Library (Core+Parser+API) | Formula | `formula-system.md` §4 | xl-evaluator | ✅ Complete | WI-08 | Low |
-| **WI-09d** | Dependency Graph & Cycles | Formula | `formula-system.md` §5 | xl-evaluator | 🔵 Available | WI-09c | Low |
+| **WI-09d** | Dependency Graph & Cycles | Formula | `formula-system.md` §5 | xl-evaluator | ✅ Complete | WI-09c | Low |
 | **WI-10** | Table Support | Advanced | `advanced-features.md` §Tables | xl-ooxml | 🔵 Available | P0-P8 | Low |
 | **WI-11** | Chart Model | Advanced | `advanced-features.md` §Charts | xl-ooxml | 🔵 Available | P0-P8 | Low |
 | **WI-12** | Drawing Layer | Advanced | `advanced-features.md` §Drawings | xl-ooxml | ⚪ Blocked | WI-11 | Medium |

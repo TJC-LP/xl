@@ -110,12 +110,78 @@ object SheetEvaluator:
           scala.util.Right(other)
 
     /**
-     * Evaluate all formula cells in sheet.
+     * Evaluate all formula cells in sheet with dependency checking.
      *
-     * Iterates through all cells, evaluates Formula cells, leaves others unchanged.
+     * This method:
+     *   1. Builds dependency graph from all formula cells
+     *   2. Detects circular references (fails fast if found)
+     *   3. Performs topological sort to determine evaluation order
+     *   4. Evaluates formulas in dependency order (dependencies before dependents)
      *
-     * Note: Does NOT check for circular references. Use evaluateWithDependencyCheck for that.
+     * This is the safe, production-ready evaluation method that prevents infinite loops and ensures
+     * correct evaluation order.
      *
+     * @param clock
+     *   Clock for date/time functions (defaults to system clock)
+     * @return
+     *   Either CircularRef error or map of ref → evaluated value
+     *
+     * Example:
+     * {{{
+     * // Sheet with formulas: A1="=10", B1="=A1*2", C1="=B1+5"
+     * sheet.evaluateWithDependencyCheck() // Right(Map(A1 -> 10, B1 -> 20, C1 -> 25))
+     *
+     * // Sheet with cycle: A1="=B1", B1="=A1"
+     * sheet.evaluateWithDependencyCheck() // Left(XLError.FormulaError(..., CircularRef))
+     * }}}
+     */
+    def evaluateWithDependencyCheck(clock: Clock = Clock.system): XLResult[Map[ARef, CellValue]] =
+      // Build dependency graph
+      val graph = DependencyGraph.fromSheet(sheet)
+
+      // Detect cycles first (fail fast)
+      DependencyGraph.detectCycles(graph) match
+        case scala.util.Left(circularRef) =>
+          // Convert EvalError.CircularRef to XLError
+          scala.util.Left(evalErrorToXLError(circularRef, None))
+        case scala.util.Right(_) =>
+          // No cycles, get evaluation order
+          DependencyGraph.topologicalSort(graph) match
+            case scala.util.Left(circularRef) =>
+              // Topological sort found cycle (shouldn't happen after detectCycles passed)
+              scala.util.Left(evalErrorToXLError(circularRef, None))
+            case scala.util.Right(evalOrder) =>
+              // Evaluate in dependency order
+              // Create a mutable temp sheet to accumulate evaluated values
+              var tempSheet = sheet
+              var results = Map.empty[ARef, CellValue]
+
+              val evalResult = evalOrder.foldLeft[XLResult[Unit]](scala.util.Right(())) {
+                case (scala.util.Right(_), ref) =>
+                  // Evaluate this cell against the temp sheet (which has previously evaluated values)
+                  tempSheet.evaluateCell(ref, clock) match
+                    case scala.util.Right(value) =>
+                      // Update temp sheet with evaluated value (for dependent formulas to use)
+                      tempSheet = tempSheet.put(ref, value)
+                      results = results + (ref -> value)
+                      scala.util.Right(())
+                    case scala.util.Left(error) =>
+                      scala.util.Left(error)
+                case (left, _) => left
+              }
+
+              evalResult.map(_ => results)
+
+    /**
+     * Evaluate all formula cells in sheet (unsafe, no cycle detection).
+     *
+     * Iterates through all cells, evaluates Formula cells, leaves others unchanged. This method
+     * does NOT check for circular references and may result in stack overflow or incorrect results
+     * if cycles exist.
+     *
+     * @deprecated
+     *   Use evaluateWithDependencyCheck for production code. This method is kept for backwards
+     *   compatibility and simple cases where circular references are known not to exist.
      * @param clock
      *   Clock for date/time functions (defaults to system clock)
      * @return
@@ -123,20 +189,14 @@ object SheetEvaluator:
      *
      * Example:
      * {{{
-     * // Sheet has formulas in A1, B1, C1
+     * // Sheet has formulas in A1, B1, C1 (no cycles)
      * sheet.evaluateAllFormulas() // Right(Map(A1 -> CellValue.Number(10), B1 -> ...))
      * }}}
      */
     def evaluateAllFormulas(clock: Clock = Clock.system): XLResult[Map[ARef, CellValue]] =
-      sheet.cells.foldLeft[XLResult[Map[ARef, CellValue]]](scala.util.Right(Map.empty)) {
-        case (scala.util.Right(acc), (ref, cell)) =>
-          cell.value match
-            case CellValue.Formula(_) =>
-              evaluateCell(ref, clock).map(value => acc + (ref -> value))
-            case _ =>
-              scala.util.Right(acc)
-        case (left, _) => left
-      }
+      // For now, delegate to the safe method
+      // In the future, we may optimize this to skip dependency checking for known-safe cases
+      evaluateWithDependencyCheck(clock)
 
   // ========== Helper Functions ==========
 
