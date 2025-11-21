@@ -1,17 +1,17 @@
 # XL Roadmap — Living Algorithm for Parallel AI Development
 
-**Last Updated**: 2025-11-20
+**Last Updated**: 2025-11-21
 
 ---
 
 ## TL;DR (For AI Agents)
 
-**Current Status**: Phase 1.1 complete (680+ tests passing). Core domain model, OOXML I/O, streaming, and codecs operational.
+**Current Status**: WI-07 complete (731+ tests passing). Core domain model, OOXML I/O, streaming, codecs, and formula parser operational.
 
 **Active Work**: None (awaiting task assignment)
 
 **Next Available Work**:
-- `WI-07` — Formula Parser (unblocks evaluator stream)
+- `WI-08` — Formula Evaluator (unblocked by WI-07)
 - `WI-10` — Table Support (independent, high-value)
 - `WI-15` — Benchmark Suite (enables optimizations)
 
@@ -25,16 +25,16 @@
 graph TB
     %% Completed work (green)
     P0["P0-P8, P31<br/>Foundation Complete"]:::completed
+    WI07["WI-07: Formula Parser<br/>(formula-system.md)"]:::completed
 
     %% Available work (blue - ready to start)
-    WI07["WI-07: Formula Parser<br/>(formula-system.md)"]:::available
+    WI08["WI-08: Formula Evaluator"]:::available
     WI10["WI-10: Table Support<br/>(advanced-features.md)"]:::available
     WI11["WI-11: Chart Model<br/>(advanced-features.md)"]:::available
     WI15["WI-15: Benchmark Suite<br/>(advanced-features.md)"]:::available
     WI20["WI-20: Query API<br/>(streaming-improvements.md)"]:::available
 
     %% Blocked work (gray - waiting on dependencies)
-    WI08["WI-08: Formula Evaluator"]:::blocked
     WI09["WI-09: Function Library"]:::blocked
     WI12["WI-12: Drawing Layer"]:::blocked
     WI13["WI-13: Pivot Tables"]:::blocked
@@ -71,8 +71,8 @@ graph TB
 | Task ID | Summary | Stream | Plan Doc | Modules | Status | Hard Deps | Merge Risk |
 |---------|---------|--------|----------|---------|--------|-----------|------------|
 | **P0-P8** | Foundation Complete | Core | (see git history) | all | ✅ Complete | - | N/A |
-| **WI-07** | Formula Parser | Formula | `formula-system.md` §1-2 | xl-evaluator | 🔵 Available | P0-P8 | Low |
-| **WI-08** | Formula Evaluator | Formula | `formula-system.md` §3 | xl-evaluator | ⚪ Blocked | WI-07 | Medium |
+| **WI-07** | Formula Parser | Formula | `formula-system.md` §1-2 | xl-evaluator | ✅ Complete | P0-P8 | Low |
+| **WI-08** | Formula Evaluator | Formula | `formula-system.md` §3 | xl-evaluator | 🔵 Available | WI-07 | Medium |
 | **WI-09** | Function Library | Formula | `formula-system.md` §4 | xl-evaluator | ⚪ Blocked | WI-08 | Low |
 | **WI-10** | Table Support | Advanced | `advanced-features.md` §Tables | xl-ooxml | 🔵 Available | P0-P8 | Low |
 | **WI-11** | Chart Model | Advanced | `advanced-features.md` §Charts | xl-ooxml | 🔵 Available | P0-P8 | Low |

@@ -14,6 +14,7 @@ A purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7
 - **Ergonomic DSL**: Clean operators (`:=`, `++`, `.merge`) without type ascription friction
 - **Comprehensive Styling**: Colors, fonts, fills, borders, number formats, and alignment
 - **Cell-Level Codecs**: Type-safe encoding/decoding with auto-inferred formatting for 9 primitive types (including RichText)
+- **Typed Formula System**: GADT-based formula AST with type-safe parsing and printing (TExpr[A])
 - **Rich Text DSL**: Composable intra-cell formatting with String extensions (`.bold.red + " text"`)
 - **HTML Export**: Convert sheet ranges to HTML tables with inline CSS
 - **Pure Error Channels**: ExcelR[F] for explicit error handling without exceptions
@@ -25,7 +26,7 @@ A purely functional, mathematically rigorous Excel (OOXML) library for Scala 3.7
 
 ## Status
 
-XL’s core domain model, in‑memory OOXML mapping, and streaming I/O are production‑ready; advanced features like a full formula evaluator, charts, drawings, and tables are still on the roadmap.
+XL's core domain model, in-memory OOXML mapping, streaming I/O, and formula parser are production-ready; the formula evaluator, charts, drawings, and tables are still on the roadmap.
 
 - For a detailed, regularly updated status (including test coverage and performance numbers), see `docs/STATUS.md`.
 - For phase‑level planning and future work, see `docs/plan/roadmap.md`.
@@ -203,6 +204,48 @@ val result = sheet.put(
 **Supported formatting**: bold, italic, underline, colors (red/green/blue/black/white/custom), font size, font family
 
 **Why rich text?** Excel supports multiple formatting runs within a cell (OOXML `<is><r>` structure). This is essential for financial reports where values need color-coding (green for positive, red for negative) alongside descriptive text.
+
+### Formula Parsing (Typed AST for Programmatic Formulas)
+
+Parse and manipulate Excel formula strings using a type-safe AST:
+
+```scala
+import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, TExpr}
+
+// Parse formula strings to typed AST
+val parseResult = FormulaParser.parse("=SUM(A1:B10)")
+// Right(TExpr.FoldRange(...))
+
+val conditional = FormulaParser.parse("=IF(A1>0, \"Positive\", \"Negative\")")
+// Right(TExpr.If(...))
+
+// Build formulas programmatically with type safety
+val expr: TExpr[BigDecimal] = TExpr.Add(
+  TExpr.Ref(ref"A1", TExpr.decodeNumeric),
+  TExpr.Lit(BigDecimal(100))
+)
+
+// Print back to Excel formula syntax
+val formulaString = FormulaPrinter.print(expr, includeEquals = true)
+// "=A1+100"
+
+// Round-trip verification
+FormulaParser.parse(formulaString) match
+  case Right(parsed) => assert(parsed == expr)
+  case Left(error) => // Handle parse error with position info
+```
+
+**Supported syntax**:
+- **Literals**: numbers (42, 3.14, 1.5E-10), booleans (TRUE, FALSE), strings ("text")
+- **Cell references**: A1, $A$1, Sheet1!A1
+- **Ranges**: A1:B10
+- **Operators**: +, -, *, /, =, <>, <, <=, >, >=, &
+- **Functions**: SUM, COUNT, AVERAGE, IF, AND, OR, NOT
+- **Parentheses**: for grouping and precedence
+
+**Why TExpr GADT?** The GADT (Generalized Algebraic Data Type) ensures type safety at compile time - `TExpr[BigDecimal]` only contains numeric operations, `TExpr[Boolean]` only contains logical operations. This prevents type errors and enables safe formula transformations.
+
+**Note**: Formula *evaluation* (WI-08) is planned. The parser creates the AST foundation for future evaluation.
 
 ### HTML Export
 
@@ -508,8 +551,8 @@ xl/
 │   ├── src/          # Core types, addressing, patches, styles
 │   └── test/         # Property-based tests with ScalaCheck
 ├── xl-ooxml/         # Pure XML serialization (no IO)
-├── xl-cats-effect/   # IO interpreters for streaming (future)
-├── xl-evaluator/     # Formula evaluator (future)
+├── xl-cats-effect/   # IO interpreters for streaming
+├── xl-evaluator/     # Formula parser (TExpr GADT, FormulaParser, FormulaPrinter); evaluator planned
 └── xl-testkit/       # Test laws and generators (future)
 ```
 

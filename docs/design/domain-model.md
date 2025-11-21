@@ -62,13 +62,86 @@ enum CellValue derives CanEqual:
   case Number(value: BigDecimal)
   case Bool(value: Boolean)
   case DateTime(value: LocalDateTime)
-  case Formula(expression: String)        // Stored as raw string (no evaluator yet)
+  case Formula(expression: String)        // String stored; see TExpr in xl-evaluator for typed AST
   case Empty
   case Error(error: CellError)
 ```
 
-- No formula AST today; expressions are stored as strings (evaluator planned in `xl-evaluator`).
+- Formula strings stored in `CellValue.Formula`; use `TExpr` in `xl-evaluator` for typed AST manipulation.
 - `CellValue.from` provides a best-effort conversion from common JVM types.
+
+### Formula AST (xl-evaluator)
+
+For programmatic formula manipulation and future evaluation, use the typed AST:
+
+```scala
+package com.tjclp.xl.formula
+
+/**
+ * Typed expression GADT - type parameter A captures result type.
+ *
+ * Laws:
+ *   - Round-trip: parse(print(expr)) == Right(expr)
+ *   - Ring laws: Add/Mul form commutative semiring over BigDecimal
+ *   - Short-circuit: And/Or respect left-to-right evaluation
+ */
+enum TExpr[A] derives CanEqual:
+  // Core constructors
+  case Lit[A](value: A) extends TExpr[A]
+  case Ref[A](at: ARef, decode: Cell => Either[CodecError, A]) extends TExpr[A]
+  case If[A](cond: TExpr[Boolean], ifTrue: TExpr[A], ifFalse: TExpr[A]) extends TExpr[A]
+
+  // Arithmetic (TExpr[BigDecimal])
+  case Add(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+  case Sub(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+  case Mul(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+  case Div(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  // Comparison (TExpr[Boolean])
+  case Lt(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[Boolean]
+  case Lte(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[Boolean]
+  case Gt(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[Boolean]
+  case Gte(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[Boolean]
+  case Eq[A](x: TExpr[A], y: TExpr[A]) extends TExpr[Boolean]
+  case Neq[A](x: TExpr[A], y: TExpr[A]) extends TExpr[Boolean]
+
+  // Logical (TExpr[Boolean])
+  case And(x: TExpr[Boolean], y: TExpr[Boolean]) extends TExpr[Boolean]
+  case Or(x: TExpr[Boolean], y: TExpr[Boolean]) extends TExpr[Boolean]
+  case Not(x: TExpr[Boolean]) extends TExpr[Boolean]
+
+  // Range aggregation (polymorphic in result type B)
+  case FoldRange[A, B](
+    range: CellRange,
+    z: B,
+    step: (B, A) => B,
+    decode: Cell => Either[CodecError, A]
+  ) extends TExpr[B]
+
+object TExpr:
+  // Smart constructors
+  def sum(range: CellRange): TExpr[BigDecimal] = ...
+  def count(range: CellRange): TExpr[Int] = ...
+  def average(range: CellRange): TExpr[BigDecimal] = ...
+
+  // Extension methods for ergonomic construction
+  extension (x: TExpr[BigDecimal])
+    def +(y: TExpr[BigDecimal]): TExpr[BigDecimal] = Add(x, y)
+    def -(y: TExpr[BigDecimal]): TExpr[BigDecimal] = Sub(x, y)
+    def *(y: TExpr[BigDecimal]): TExpr[BigDecimal] = Mul(x, y)
+    def /(y: TExpr[BigDecimal]): TExpr[BigDecimal] = Div(x, y)
+    def <(y: TExpr[BigDecimal]): TExpr[Boolean] = Lt(x, y)
+    // ... etc
+```
+
+**Type Safety**: The GADT ensures type correctness at compile time. You cannot mix numeric and boolean operations.
+
+**Parser/Printer**:
+- `FormulaParser.parse(s: String): Either[ParseError, TExpr[?]]` — Parse formula strings
+- `FormulaPrinter.print(expr: TExpr[?]): String` — Print back to Excel syntax
+- Round-trip law: `parse(print(expr)) == Right(expr)` (verified by 51 property tests)
+
+**Future**: `Evaluator.eval(expr: TExpr[A], sheet: Sheet): Either[EvalError, A]` (WI-08)
 
 ## Cell, Sheet, Workbook
 ```scala

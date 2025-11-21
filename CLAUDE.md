@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), macros, DSL
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, fs2-based streaming)
-xl-evaluator/    → Optional formula evaluator [future]
+xl-evaluator/    → Formula parser (TExpr GADT, FormulaParser, FormulaPrinter); evaluator planned
 xl-testkit/      → Test laws, generators, helpers [future]
 ```
 
@@ -87,6 +87,13 @@ Macros (`ref`, `fx`, money/percent/date/accounting) are bundled in `xl-core` and
 
 **HTML Export** (`xl-core/src/com/tjclp/xl/html/`):
 - `sheet.toHtml(range)` → Convert cell range to HTML table with inline CSS
+
+**Formula System** (`xl-evaluator/src/com/tjclp/xl/formula/`):
+- `TExpr[A]` → GADT representing typed formula AST (A = BigDecimal, Boolean, String)
+- `FormulaParser.parse(String)` → Pure parser: `Either[ParseError, TExpr[?]]`
+- `FormulaPrinter.print(TExpr[?])` → Inverse printer for round-trip verification
+- `ParseError` → Total error ADT with position tracking (UnexpectedChar, UnknownFunction, etc.)
+- 51 tests: 7 property-based (round-trip laws), 44 unit tests (operators, functions, scientific notation, errors)
 
 **OOXML Layer** (`xl-ooxml/src/com/tjclp/xl/ooxml/`):
 - Pure XML serialization with `XmlWritable`/`XmlReadable` traits
@@ -676,7 +683,7 @@ Documentation is organized by purpose as a **living algorithm** (current + futur
 
 ### Reference (`docs/reference/`) - 6 files
 **Quick reference material**:
-- `testing-guide.md` → Test coverage breakdown (680+ tests)
+- `testing-guide.md` → Test coverage breakdown (731+ tests)
 - `examples.md` → Code samples
 - `implementation-scaffolds.md` → Comprehensive code patterns for AI agents
 - `ooxml-research.md` → OOXML spec research
@@ -685,7 +692,7 @@ Documentation is organized by purpose as a **living algorithm** (current + futur
 - `ai-contracts-guide.md` → AI contract patterns
 
 ### Root Docs
-- `docs/STATUS.md` → Detailed current state (680+ tests, performance)
+- `docs/STATUS.md` → Detailed current state (731+ tests, performance)
 - `docs/LIMITATIONS.md` → Current limitations and future roadmap
 - `docs/CONTRIBUTING.md` → Contribution guidelines (includes style guide)
 - `docs/FAQ-AND-GLOSSARY.md` → Questions and terminology
@@ -950,7 +957,7 @@ property("Px to Emu round-trip") {
 
 ## Test Coverage
 
-680+ tests passing (as of Phase 1.1 completion - includes Comments, Security, Performance tests):
+731+ tests passing (as of WI-07 completion - includes Formula Parser, Comments, Security, Performance):
 - 17 addressing tests (Column, Row, ARef, CellRange laws)
 - 21 patch tests (Monoid laws, application semantics)
 - 60 style tests (units, colors, builders, canonicalization, StylePatch, StyleRegistry)
@@ -962,5 +969,6 @@ property("Px to Emu round-trip") {
 - 24 OOXML tests (round-trip, serialization, styles)
 - 18 streaming tests (fs2-data-xml, constant-memory I/O)
 - 5 RichText tests (composition, formatting, DSL)
+- **51 formula parser tests** (round-trip laws, operator precedence, scientific notation, error handling)
 
 Target: 90%+ coverage with property-based tests for all algebras.

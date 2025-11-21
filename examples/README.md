@@ -14,9 +14,10 @@ These examples use [scala-cli](https://scala-cli.virtuslab.org/) for easy standa
    # or: curl -sSLf https://scala-cli.virtuslab.org/get | sh
    ```
 
-2. **Publish xl-core locally**:
+2. **Publish XL modules locally**:
    ```bash
    ./mill xl-core.publishLocal
+   ./mill xl-evaluator.publishLocal  # Required for formula-demo.sc
    ```
 
 ### Running demo.sc
@@ -47,6 +48,44 @@ The script showcases **Easy Mode API** (LLM-friendly ergonomics):
 - Rich text formatting (`"Error: ".red.bold + "Fix!"`)
 - Simplified IO (`Excel.read/write/modify`)
 - Structured exception handling (`XLException` wraps `XLError`)
+
+### Running formula-demo.sc
+
+```bash
+# Publish required modules
+./mill xl-core.publishLocal && ./mill xl-evaluator.publishLocal
+
+# Run formula demo
+scala-cli run examples/formula-demo.sc
+```
+
+The script showcases **Formula Parser** (WI-07):
+- Parse Excel formula strings to typed AST (`FormulaParser`)
+- Build formulas programmatically with GADT type safety (`TExpr[A]`)
+- Round-trip verification (parse ∘ print = id)
+- Scientific notation support (1.5E10, 3.14E-5, etc.)
+- Error handling with position-aware diagnostics (`ParseError`)
+- Complex nested formulas (nested IF, AND/OR combinations)
+- Type safety demo (GADT prevents type mixing at compile time)
+
+**Sections**:
+1. Basic parsing (literals, operators, functions)
+2. Programmatic construction (build TExpr manually)
+3. Round-trip verification (8 test formulas)
+4. Scientific notation (7 edge cases)
+5. Error handling (6 invalid formulas with diagnostics)
+6. Complex nested formulas (4 real-world examples)
+7. Type safety demo (GADT compile-time guarantees)
+
+**Note**: Formula evaluation (WI-08) is not yet implemented. This demo focuses on parsing and AST manipulation.
+
+### Running patch-dsl-demo.sc
+
+```bash
+scala-cli run examples/patch-dsl-demo.sc
+```
+
+Demonstrates declarative sheet updates using the Patch DSL.
 
 ## Adding New Examples
 
