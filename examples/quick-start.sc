@@ -68,9 +68,9 @@ val sheet = Sheet(name = SheetName.unsafe("Demo"))
   .put(ref"A1", CellValue.Number(BigDecimal(150)))
   .put(ref"A2", CellValue.Number(BigDecimal(200)))
   .put(ref"A3", CellValue.Number(BigDecimal(75)))
-  .put(ref"B1", CellValue.Formula("=SUM(A1:A3)"))
-  .put(ref"B2", CellValue.Formula("=AVERAGE(A1:A3)"))
-  .put(ref"C1", CellValue.Formula("=IF(B1>400, \"High\", \"Low\")"))
+  .put(ref"B1", fx"=SUM(A1:A3)")
+  .put(ref"B2", fx"=AVERAGE(A1:A3)")
+  .put(ref"C1", fx"=IF(B1>400, \"High\", \"Low\")")
 
 println("Sheet contents:")
 println("  A1: 150")
@@ -143,9 +143,9 @@ println("=" * 70)
 
 // Create a sheet with a circular reference
 val cyclicSheet = Sheet(name = SheetName.unsafe("Cyclic"))
-  .put(ref"A1", CellValue.Formula("=B1+10"))
-  .put(ref"B1", CellValue.Formula("=C1*2"))
-  .put(ref"C1", CellValue.Formula("=A1+5"))  // Cycle: A1 → B1 → C1 → A1
+  .put(ref"A1", fx"=B1+10")
+  .put(ref"B1", fx"=C1*2")
+  .put(ref"C1", fx"=A1+5")  // Cycle: A1 → B1 → C1 → A1
 
 println("Sheet with circular reference:")
 println("  A1: =B1+10")

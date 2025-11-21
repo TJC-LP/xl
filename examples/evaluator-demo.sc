@@ -207,9 +207,9 @@ println("-" * 70)
 val formulaSheet = Sheet(name = SheetName.unsafe("Formulas"))
   .put(ref"A1", CellValue.Number(BigDecimal(10)))
   .put(ref"A2", CellValue.Number(BigDecimal(20)))
-  .put(ref"B1", CellValue.Formula("=A1+A2"))
-  .put(ref"B2", CellValue.Formula("=B1*2"))
-  .put(ref"C1", CellValue.Formula("=SUM(A1:B2)"))
+  .put(ref"B1", fx"=A1+A2")
+  .put(ref"B2", fx"=B1*2")
+  .put(ref"C1", fx"=SUM(A1:B2)")
 
 // Evaluate single formula string
 formulaSheet.evaluateFormula("=A1+5") match
@@ -250,19 +250,19 @@ val finModel = Sheet(name = SheetName.unsafe("Finance"))
   .put(ref"B1", CellValue.Number(BigDecimal(0.30)))     // Tax rate
 
   // Gross Profit = Revenue - COGS
-  .put(ref"A4", CellValue.Formula("=A1-A2"))
+  .put(ref"A4", fx"=A1-A2")
 
   // Operating Income = Gross Profit - OpEx
-  .put(ref"A5", CellValue.Formula("=A4-A3"))
+  .put(ref"A5", fx"=A4-A3")
 
   // Tax = Operating Income * Tax Rate
-  .put(ref"A6", CellValue.Formula("=A5*B1"))
+  .put(ref"A6", fx"=A5*B1")
 
   // Net Income = Operating Income - Tax
-  .put(ref"A7", CellValue.Formula("=A5-A6"))
+  .put(ref"A7", fx"=A5-A6")
 
   // Net Margin % = Net Income / Revenue
-  .put(ref"A8", CellValue.Formula("=A7/A1"))
+  .put(ref"A8", fx"=A7/A1")
 
 println("Financial model structure:")
 println("  A1: Revenue = $1,000,000")

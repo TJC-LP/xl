@@ -53,37 +53,37 @@ val pipeline = Sheet(name = SheetName.unsafe("Pipeline"))
 
   // Qualified stage (40% conversion)
   .put(ref"A5", CellValue.Text("Qualified"))
-  .put(ref"B5", CellValue.Formula("=B4*0.40"))             // 40 deals
-  .put(ref"C5", CellValue.Formula("=C4*0.40"))
-  .put(ref"D5", CellValue.Formula("=B5/B4"))               // Conversion rate
+  .put(ref"B5", fx"=B4*0.40")             // 40 deals
+  .put(ref"C5", fx"=C4*0.40")
+  .put(ref"D5", fx"=B5/B4")               // Conversion rate
 
   // Proposal stage (60% of qualified)
   .put(ref"A6", CellValue.Text("Proposal"))
-  .put(ref"B6", CellValue.Formula("=B5*0.60"))             // 24 deals
-  .put(ref"C6", CellValue.Formula("=C5*0.60"))
-  .put(ref"D6", CellValue.Formula("=B6/B4"))               // vs original leads
+  .put(ref"B6", fx"=B5*0.60")             // 24 deals
+  .put(ref"C6", fx"=C5*0.60")
+  .put(ref"D6", fx"=B6/B4")               // vs original leads
 
   // Negotiation stage (75% of proposal)
   .put(ref"A7", CellValue.Text("Negotiation"))
-  .put(ref"B7", CellValue.Formula("=B6*0.75"))             // 18 deals
-  .put(ref"C7", CellValue.Formula("=C6*0.75"))
-  .put(ref"D7", CellValue.Formula("=B7/B4"))
+  .put(ref"B7", fx"=B6*0.75")             // 18 deals
+  .put(ref"C7", fx"=C6*0.75")
+  .put(ref"D7", fx"=B7/B4")
 
   // Closed Won (50% of negotiation)
   .put(ref"A8", CellValue.Text("Closed Won"))
-  .put(ref"B8", CellValue.Formula("=B7*0.50"))             // 9 deals
-  .put(ref"C8", CellValue.Formula("=C7*0.50"))
-  .put(ref"D8", CellValue.Formula("=B8/B4"))               // Final conversion
+  .put(ref"B8", fx"=B7*0.50")             // 9 deals
+  .put(ref"C8", fx"=C7*0.50")
+  .put(ref"D8", fx"=B8/B4")               // Final conversion
 
   // ===== Summary Metrics =====
   .put(ref"A10", CellValue.Text("Average Deal Size"))
-  .put(ref"B10", CellValue.Formula("=C8/B8"))              // Total value / closed deals
+  .put(ref"B10", fx"=C8/B8")              // Total value / closed deals
 
   .put(ref"A11", CellValue.Text("Overall Conversion"))
-  .put(ref"B11", CellValue.Formula("=B8/B4"))              // Closed / Leads
+  .put(ref"B11", fx"=B8/B4")              // Closed / Leads
 
   .put(ref"A12", CellValue.Text("Pipeline Value"))
-  .put(ref"B12", CellValue.Formula("=SUM(C4:C8)"))         // Total pipeline value
+  .put(ref"B12", fx"=SUM(C4:C8)")         // Total pipeline value
 
   // ===== Commission Calculations (Tiered) =====
   .put(ref"A15", CellValue.Text("Sales Rep"))
@@ -93,26 +93,26 @@ val pipeline = Sheet(name = SheetName.unsafe("Pipeline"))
   // Rep 1: $80k revenue (Tier 2: 8%)
   .put(ref"A16", CellValue.Text("Alice"))
   .put(ref"B16", CellValue.Number(BigDecimal("80000")))
-  .put(ref"C16", CellValue.Formula("=IF(B16<=50000, B16*0.05, IF(B16<=100000, B16*0.08, B16*0.12))"))
+  .put(ref"C16", fx"=IF(B16<=50000, B16*0.05, IF(B16<=100000, B16*0.08, B16*0.12))")
 
   // Rep 2: $45k revenue (Tier 1: 5%)
   .put(ref"A17", CellValue.Text("Bob"))
   .put(ref"B17", CellValue.Number(BigDecimal("45000")))
-  .put(ref"C17", CellValue.Formula("=IF(B17<=50000, B17*0.05, IF(B17<=100000, B17*0.08, B17*0.12))"))
+  .put(ref"C17", fx"=IF(B17<=50000, B17*0.05, IF(B17<=100000, B17*0.08, B17*0.12))")
 
   // Rep 3: $150k revenue (Tier 3: 12%)
   .put(ref"A18", CellValue.Text("Carol"))
   .put(ref"B18", CellValue.Number(BigDecimal("150000")))
-  .put(ref"C18", CellValue.Formula("=IF(B18<=50000, B18*0.05, IF(B18<=100000, B18*0.08, B18*0.12))"))
+  .put(ref"C18", fx"=IF(B18<=50000, B18*0.05, IF(B18<=100000, B18*0.08, B18*0.12))")
 
   // Total commission
   .put(ref"A19", CellValue.Text("Total Commission"))
-  .put(ref"C19", CellValue.Formula("=SUM(C16:C18)"))
+  .put(ref"C19", fx"=SUM(C16:C18)")
 
   // ===== Quota Attainment (vs $100k quota) =====
-  .put(ref"D16", CellValue.Formula("=B16/100000"))
-  .put(ref"D17", CellValue.Formula("=B17/100000"))
-  .put(ref"D18", CellValue.Formula("=B18/100000"))
+  .put(ref"D16", fx"=B16/100000")
+  .put(ref"D17", fx"=B17/100000")
+  .put(ref"D18", fx"=B18/100000")
 
 println("Building sales pipeline model...")
 val pipelineResults = pipeline.evaluateWithDependencyCheck(clock).toOption.get

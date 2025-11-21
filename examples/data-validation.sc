@@ -50,9 +50,9 @@ val dataSheet = Sheet(name = SheetName.unsafe("Data"))
   .put(ref"B5", CellValue.Formula("=IF(AND(A5>=0, A5<=100), \"Valid\", \"INVALID\")"))
 
   // Statistics
-  .put(ref"C1", CellValue.Formula("=MIN(A1:A5)"))
-  .put(ref"C2", CellValue.Formula("=MAX(A1:A5)"))
-  .put(ref"C3", CellValue.Formula("=AVERAGE(A1:A5)"))
+  .put(ref"C1", fx"=MIN(A1:A5)")
+  .put(ref"C2", fx"=MAX(A1:A5)")
+  .put(ref"C3", fx"=AVERAGE(A1:A5)")
 
 println("Data validation results:")
 val validationResults = dataSheet.evaluateWithDependencyCheck().toOption.get
@@ -93,7 +93,7 @@ val incompleteSheet = Sheet(name = SheetName.unsafe("Incomplete"))
   .put(ref"B1", CellValue.Number(BigDecimal(5)))  // We expect 5 rows
 
   // Actual count
-  .put(ref"B2", CellValue.Formula("=COUNT(A1:A5)"))
+  .put(ref"B2", fx"=COUNT(A1:A5)")
 
   // Validation
   .put(ref"B3", CellValue.Formula("=IF(B2=B1, \"Complete\", \"MISSING DATA\")"))
@@ -125,10 +125,10 @@ val textSheet = Sheet(name = SheetName.unsafe("Text"))
   .put(ref"A4", CellValue.Text("a@b.c"))  // Too short (< 10 chars)
 
   // Normalize to uppercase
-  .put(ref"B1", CellValue.Formula("=UPPER(A1)"))
-  .put(ref"B2", CellValue.Formula("=UPPER(A2)"))
-  .put(ref"B3", CellValue.Formula("=UPPER(A3)"))
-  .put(ref"B4", CellValue.Formula("=UPPER(A4)"))
+  .put(ref"B1", fx"=UPPER(A1)")
+  .put(ref"B2", fx"=UPPER(A2)")
+  .put(ref"B3", fx"=UPPER(A3)")
+  .put(ref"B4", fx"=UPPER(A4)")
 
   // Length validation (minimum 10 characters)
   .put(ref"C1", CellValue.Formula("=IF(LEN(A1)>=10, \"Valid\", \"TOO SHORT\")"))
@@ -181,8 +181,8 @@ val divSheet = Sheet(name = SheetName.unsafe("Division"))
   .put(ref"A1", CellValue.Number(BigDecimal(100)))
   .put(ref"A2", CellValue.Number(BigDecimal(0)))    // Zero denominator
 
-  .put(ref"B1", CellValue.Formula("=A1/10"))        // Valid: 100/10 = 10
-  .put(ref"B2", CellValue.Formula("=A1/A2"))        // Invalid: 100/0
+  .put(ref"B1", fx"=A1/10")        // Valid: 100/10 = 10
+  .put(ref"B2", fx"=A1/A2")        // Invalid: 100/0
 
 println("Division tests:")
 println("  B1 = A1/10  (100/10)")

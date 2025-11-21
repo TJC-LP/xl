@@ -40,18 +40,18 @@ val complexSheet = Sheet(name = SheetName.unsafe("Complex"))
   .put(ref"A2", CellValue.Number(BigDecimal(50)))
 
   // First level (depend on constants)
-  .put(ref"B1", CellValue.Formula("=A1*2"))        // 200
-  .put(ref"B2", CellValue.Formula("=A2+10"))       // 60
+  .put(ref"B1", fx"=A1*2")        // 200
+  .put(ref"B2", fx"=A2+10")       // 60
 
   // Second level (depend on first level)
-  .put(ref"C1", CellValue.Formula("=B1+B2"))       // 260
-  .put(ref"C2", CellValue.Formula("=B1-A1"))       // 100
+  .put(ref"C1", fx"=B1+B2")       // 260
+  .put(ref"C2", fx"=B1-A1")       // 100
 
   // Third level (depend on second level)
-  .put(ref"D1", CellValue.Formula("=C1*C2"))       // 26000
+  .put(ref"D1", fx"=C1*C2")       // 26000
 
   // Range aggregate (depends on range)
-  .put(ref"E1", CellValue.Formula("=SUM(A1:D1)"))  // Depends on A1, B1, C1, D1
+  .put(ref"E1", fx"=SUM(A1:D1)")  // Depends on A1, B1, C1, D1
 
 println("Formula structure:")
 println("  Constants: A1=100, A2=50")
@@ -108,8 +108,8 @@ println()
 // Test Case 1: Simple 2-cycle
 println("Test Case 1: Simple 2-cycle (A1 → B1 → A1)")
 val cycle2 = Sheet(name = SheetName.unsafe("Cycle2"))
-  .put(ref"A1", CellValue.Formula("=B1+10"))
-  .put(ref"B1", CellValue.Formula("=A1*2"))
+  .put(ref"A1", fx"=B1+10")
+  .put(ref"B1", fx"=A1*2")
 
 val graph2 = DependencyGraph.fromSheet(cycle2)
 DependencyGraph.detectCycles(graph2) match
@@ -124,10 +124,10 @@ println()
 // Test Case 2: Longer cycle (A1 → B1 → C1 → D1 → A1)
 println("Test Case 2: 4-node cycle (A1 → B1 → C1 → D1 → A1)")
 val cycle4 = Sheet(name = SheetName.unsafe("Cycle4"))
-  .put(ref"A1", CellValue.Formula("=B1+1"))
-  .put(ref"B1", CellValue.Formula("=C1+1"))
-  .put(ref"C1", CellValue.Formula("=D1+1"))
-  .put(ref"D1", CellValue.Formula("=A1+1"))
+  .put(ref"A1", fx"=B1+1")
+  .put(ref"B1", fx"=C1+1")
+  .put(ref"C1", fx"=D1+1")
+  .put(ref"D1", fx"=A1+1")
 
 val graph3 = DependencyGraph.fromSheet(cycle4)
 DependencyGraph.detectCycles(graph3) match
@@ -143,7 +143,7 @@ println()
 // Test Case 3: Self-loop (A1 → A1)
 println("Test Case 3: Self-loop (A1 → A1)")
 val selfLoop = Sheet(name = SheetName.unsafe("SelfLoop"))
-  .put(ref"A1", CellValue.Formula("=A1+1"))
+  .put(ref"A1", fx"=A1+1")
 
 val graph4 = DependencyGraph.fromSheet(selfLoop)
 DependencyGraph.detectCycles(graph4) match
@@ -158,9 +158,9 @@ println()
 // Test Case 4: Cycle through range (A1 → SUM(B1:B10) where B5 → A1)
 println("Test Case 4: Cycle through range (A1 → SUM(B1:B10) where B5 → A1)")
 val rangeCycle = Sheet(name = SheetName.unsafe("RangeCycle"))
-  .put(ref"A1", CellValue.Formula("=SUM(B1:B10)"))
+  .put(ref"A1", fx"=SUM(B1:B10)")
   .put(ref"B1", CellValue.Number(BigDecimal(10)))
-  .put(ref"B5", CellValue.Formula("=A1*2"))  // Creates cycle!
+  .put(ref"B5", fx"=A1*2")  // Creates cycle!
   .put(ref"B10", CellValue.Number(BigDecimal(20)))
 
 val graph5 = DependencyGraph.fromSheet(rangeCycle)
