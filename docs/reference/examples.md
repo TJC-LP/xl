@@ -22,14 +22,87 @@ val wb = Workbook(Vector(s2), styles = (), sharedStrings = (), metadata = ())
 // Excel[IO].write(wb, Paths.get("people.xlsx"))
 ```
 
-## 2) Typed formula
+## 2) Formula Parsing & Typed AST
+
 ```scala
-import com.tjclp.xl.formula.TExpr.*
-val avg: TExpr[BigDecimal] = Div(
-  FoldRange(range"A2:A10", BigDecimal(0), (acc: BigDecimal, a: BigDecimal) => acc + a, decodeNumber),
-  FoldRange(range"A2:A10", BigDecimal(0), (n: BigDecimal, _: BigDecimal) => n + 1, decodeNumber)
+import com.tjclp.xl.*
+import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, TExpr, ParseError}
+
+// ==================== Parsing Formula Strings ====================
+
+// Parse basic formulas
+val sum = FormulaParser.parse("=SUM(A2:A10)")
+// Right(TExpr.FoldRange(CellRange("A2:A10"), BigDecimal(0), sumFunc, decodeNumeric))
+
+val conditional = FormulaParser.parse("=IF(A1>100, \"High\", \"Low\")")
+// Right(TExpr.If(TExpr.Gt(...), TExpr.Lit("High"), TExpr.Lit("Low")))
+
+val arithmetic = FormulaParser.parse("=(A1+B1)*C1/D1")
+// Right(TExpr.Div(TExpr.Mul(TExpr.Add(...), ...), ...))
+
+// Scientific notation supported
+val scientific = FormulaParser.parse("=1.5E10")
+// Right(TExpr.Lit(BigDecimal("1.5E10")))
+
+// ==================== Programmatic Construction ====================
+
+// Build formulas with type safety (GADT prevents type mixing)
+val avgFormula: TExpr[BigDecimal] = TExpr.Div(
+  TExpr.sum(CellRange.parse("A2:A10").toOption.get),
+  TExpr.Lit(BigDecimal(9))
 )
+
+val nestedIf: TExpr[String] = TExpr.If(
+  TExpr.Gt(
+    TExpr.Ref(ref"A1", TExpr.decodeNumeric),
+    TExpr.Lit(BigDecimal(100))
+  ),
+  TExpr.Lit("High"),
+  TExpr.If(
+    TExpr.Gt(
+      TExpr.Ref(ref"A1", TExpr.decodeNumeric),
+      TExpr.Lit(BigDecimal(50))
+    ),
+    TExpr.Lit("Medium"),
+    TExpr.Lit("Low")
+  )
+)
+
+// ==================== Round-Trip Verification ====================
+
+// Print back to Excel syntax
+val formulaString = FormulaPrinter.print(avgFormula, includeEquals = true)
+// "=SUM(A2:A10)/9"
+
+// Verify parse → print → parse = identity
+FormulaParser.parse(formulaString) match
+  case Right(reparsed) =>
+    assert(FormulaPrinter.print(reparsed) == formulaString)
+  case Left(error) =>
+    println(s"Parse error: $error")
+
+// ==================== Error Handling ====================
+
+FormulaParser.parse("=SUMM(A1:A10)") match
+  case Right(expr) => // Success
+  case Left(ParseError.UnknownFunction(name, pos, suggestions)) =>
+    println(s"Unknown function '$name' at position $pos")
+    println(s"Did you mean: ${suggestions.mkString(", ")}")  // "SUM"
+  case Left(other) =>
+    println(s"Parse error: $other")
+
+// ==================== Integration with CellValue ====================
+
+// Store parsed formula in cell
+val parsedFormula = FormulaParser.parse("=A1+B1")
+parsedFormula.foreach { expr =>
+  val formulaStr = FormulaPrinter.print(expr, includeEquals = false)
+  val cell = Cell(ref"C1", CellValue.Formula(formulaStr))
+  // Cell contains: CellValue.Formula("A1+B1")
+}
 ```
+
+**Note**: Formula *evaluation* (WI-08) is not yet implemented. This example shows parsing and AST manipulation only.
 
 ## 3) Chart spec
 ```scala
