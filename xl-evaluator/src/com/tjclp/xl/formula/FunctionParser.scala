@@ -354,9 +354,11 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(text, n) =>
-          scala.util.Right(
-            TExpr.left(text.asInstanceOf[TExpr[String]], n.asInstanceOf[TExpr[Int]])
-          )
+          // Convert BigDecimal literal to Int if needed
+          val nInt = n match
+            case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
+            case other => other.asInstanceOf[TExpr[Int]]
+          scala.util.Right(TExpr.left(text.asInstanceOf[TExpr[String]], nInt))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("LEFT", pos, "2 arguments", s"${args.length} arguments")
@@ -370,9 +372,11 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(text, n) =>
-          scala.util.Right(
-            TExpr.right(text.asInstanceOf[TExpr[String]], n.asInstanceOf[TExpr[Int]])
-          )
+          // Convert BigDecimal literal to Int if needed
+          val nInt = n match
+            case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
+            case other => other.asInstanceOf[TExpr[Int]]
+          scala.util.Right(TExpr.right(text.asInstanceOf[TExpr[String]], nInt))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("RIGHT", pos, "2 arguments", s"${args.length} arguments")
@@ -453,11 +457,16 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(year, month, day) =>
+          // Convert BigDecimal literals to Int if needed
+          def toInt(expr: TExpr[?]): TExpr[Int] = expr match
+            case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
+            case other => other.asInstanceOf[TExpr[Int]]
+
           scala.util.Right(
             TExpr.date(
-              year.asInstanceOf[TExpr[Int]],
-              month.asInstanceOf[TExpr[Int]],
-              day.asInstanceOf[TExpr[Int]]
+              toInt(year),
+              toInt(month),
+              toInt(day)
             )
           )
         case _ =>
