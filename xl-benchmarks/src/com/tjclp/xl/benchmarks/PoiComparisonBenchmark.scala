@@ -19,7 +19,12 @@ import org.openjdk.jmh.annotations.*
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
 import scala.jdk.CollectionConverters.*
+import scala.collection.mutable
 import scala.compiletime.uninitialized
+import javax.xml.parsers.SAXParserFactory
+import org.xml.sax.InputSource
+import org.xml.sax.helpers.DefaultHandler
+import org.xml.sax.Attributes
 
 /**
  * Comparison benchmarks: XL vs Apache POI.
@@ -226,14 +231,11 @@ class PoiComparisonBenchmark {
   @Benchmark
   def xlReadStream(): Double = {
     // XL streaming read performance - constant memory with verifiable sum computation
-    // Computes sum of all numeric values in column A (index 0)
-    // Expected sum: N × (N+1) / 2 for N rows (arithmetic series)
     val sum = ExcelIO
       .instance[IO]
       .readStream(xlStreamFromXl)
       .evalMap { rowData =>
         IO.pure {
-          // Extract numeric value from column A (index 0)
           rowData.cells.get(0) match {
             case Some(CellValue.Number(n)) => n.toDouble
             case _ => 0.0
@@ -269,109 +271,30 @@ class PoiComparisonBenchmark {
 
   @Benchmark
   def poiReadStream(): Double = {
-    // POI streaming read performance - constant memory via XSSFReader (file pre-created in setup)
-    // Computes sum of all numeric values in column A
-    import org.apache.poi.xssf.eventusermodel.{XSSFReader, XSSFSheetXMLHandler}
-    import org.apache.poi.xssf.model.SharedStrings
-    import org.apache.poi.openxml4j.opc.OPCPackage
-    import org.apache.poi.xssf.eventusermodel.XSSFSheetXMLHandler.SheetContentsHandler
-    import org.xml.sax.InputSource
-    import javax.xml.parsers.SAXParserFactory
+    val sum = poiStreamingSum(poiStreamFromXlFile)
+    requireCloseEnough(sum, expectedSum, "poiReadStream sum validation failed")
+    sum
+  }
 
-    // Stream read with XSSFReader
-    val pkg = OPCPackage.open(poiStreamFromXlFile.toFile)
-    try {
-      val reader = new XSSFReader(pkg)
-      val sst = reader.getSharedStringsTable()
+  @Benchmark
+  def poiReadStreamFromXlMaterialized(): Double = {
+    val sum = poiMaterializedStreamingSum(poiStreamFromXlFile)
+    requireCloseEnough(sum, expectedSum, "poiReadStreamFromXlMaterialized sum validation failed")
+    sum
+  }
 
-      // Sum accumulator handler
-      var sum = 0.0
-      val handler = new SheetContentsHandler {
-        override def startRow(rowNum: Int): Unit = ()
-        override def endRow(rowNum: Int): Unit = ()
-        override def cell(
-          cellReference: String,
-          formattedValue: String,
-          comment: org.apache.poi.xssf.usermodel.XSSFComment
-        ): Unit = {
-          // Only accumulate values from column A
-          if (cellReference.startsWith("A") && formattedValue != null && formattedValue.nonEmpty) {
-            try {
-              sum += formattedValue.toDouble
-            } catch {
-              case _: NumberFormatException => () // Skip non-numeric values
-            }
-          }
-        }
-        override def headerFooter(text: String, isHeader: Boolean, tagName: String): Unit = ()
-      }
-
-      val sheetHandler = new XSSFSheetXMLHandler(reader.getStylesTable(), sst, handler, false)
-      val parser = SAXParserFactory.newInstance().newSAXParser()
-      val xmlReader = parser.getXMLReader
-      xmlReader.setContentHandler(sheetHandler)
-
-      val sheetsIter = reader.getSheetsData()
-      // WartRemover: while acceptable in benchmark code for POI interop
-      while (sheetsIter.hasNext) {
-        val sheetStream = sheetsIter.next()
-        xmlReader.parse(new InputSource(sheetStream))
-        sheetStream.close()
-      }
-
-      requireCloseEnough(sum, expectedSum, "poiReadStream sum validation failed")
-      sum
-    } finally {
-      pkg.close()
-    }
+  @Benchmark
+  def poiReadStreamFromPoiMaterialized(): Double = {
+    val sum = poiMaterializedStreamingSum(poiStreamFromPoiFile)
+    requireCloseEnough(sum, expectedSum, "poiReadStreamFromPoiMaterialized sum validation failed")
+    sum
   }
 
   @Benchmark
   def poiReadStreamFromPoi(): Double = {
-    import org.apache.poi.xssf.eventusermodel.{XSSFReader, XSSFSheetXMLHandler}
-    import org.apache.poi.xssf.model.SharedStrings
-    import org.apache.poi.openxml4j.opc.OPCPackage
-    import org.apache.poi.xssf.eventusermodel.XSSFSheetXMLHandler.SheetContentsHandler
-    import org.xml.sax.InputSource
-    import javax.xml.parsers.SAXParserFactory
-
-    val pkg = OPCPackage.open(poiStreamFromPoiFile.toFile)
-    try {
-      val reader = new XSSFReader(pkg)
-      val sst = reader.getSharedStringsTable()
-
-      var sum = 0.0
-      val handler = new SheetContentsHandler {
-        override def startRow(rowNum: Int): Unit = ()
-        override def endRow(rowNum: Int): Unit = ()
-        override def cell(
-          cellReference: String,
-          formattedValue: String,
-          comment: org.apache.poi.xssf.usermodel.XSSFComment
-        ): Unit = {
-          if (cellReference.startsWith("A") && formattedValue != null && formattedValue.nonEmpty) {
-            try sum += formattedValue.toDouble
-            catch case _: NumberFormatException => ()
-          }
-        }
-        override def headerFooter(text: String, isHeader: Boolean, tagName: String): Unit = ()
-      }
-
-      val sheetHandler = new XSSFSheetXMLHandler(reader.getStylesTable(), sst, handler, false)
-      val parser = SAXParserFactory.newInstance().newSAXParser()
-      val xmlReader = parser.getXMLReader
-      xmlReader.setContentHandler(sheetHandler)
-
-      val sheetsIter = reader.getSheetsData()
-      while (sheetsIter.hasNext) {
-        val sheetStream = sheetsIter.next()
-        xmlReader.parse(new InputSource(sheetStream))
-        sheetStream.close()
-      }
-
-      requireCloseEnough(sum, expectedSum, "poiReadStreamFromPoi sum validation failed")
-      sum
-    } finally pkg.close()
+    val sum = poiStreamingSum(poiStreamFromPoiFile)
+    requireCloseEnough(sum, expectedSum, "poiReadStreamFromPoi sum validation failed")
+    sum
   }
 
   // ----- Helpers -----
@@ -401,5 +324,132 @@ class PoiComparisonBenchmark {
   private def requireCloseEnough(actual: Double, expected: Double, msg: String): Unit = {
     val tolerance = math.max(1e-6 * expected, 1e-3) // tolerate tiny floating error
     require(math.abs(actual - expected) <= tolerance, s"$msg: expected=$expected actual=$actual")
+  }
+
+  private def poiStreamingSum(path: Path): Double = {
+    val pkg = org.apache.poi.openxml4j.opc.OPCPackage.open(path.toFile)
+    try {
+      val reader = new org.apache.poi.xssf.eventusermodel.XSSFReader(pkg)
+      val parser = SAXParserFactory.newInstance().newSAXParser()
+      val sheetsIter = reader.getSheetsData()
+      var total = 0.0
+      while (sheetsIter.hasNext) {
+        val sheetStream = sheetsIter.next()
+        try total += saxSumColumnA(parser, sheetStream)
+        finally sheetStream.close()
+      }
+      total
+    } finally pkg.close()
+  }
+
+  private def poiMaterializedStreamingSum(path: Path): Double = {
+    val pkg = org.apache.poi.openxml4j.opc.OPCPackage.open(path.toFile)
+    try {
+      val reader = new org.apache.poi.xssf.eventusermodel.XSSFReader(pkg)
+      val parser = SAXParserFactory.newInstance().newSAXParser()
+      val sheetsIter = reader.getSheetsData()
+      var total = 0.0
+      while (sheetsIter.hasNext) {
+        val sheetStream = sheetsIter.next()
+        try total += saxSumColumnAMaterialized(parser, sheetStream)
+        finally sheetStream.close()
+      }
+      total
+    } finally pkg.close()
+  }
+
+  private def saxSumColumnA(
+    parser: javax.xml.parsers.SAXParser,
+    stream: java.io.InputStream
+  ): Double = {
+    var sum = 0.0
+    var inValue = false
+    var cellIsA = false
+    val text = new StringBuilder
+
+    val handler = new DefaultHandler {
+      override def startElement(
+        uri: String,
+        localName: String,
+        qName: String,
+        attributes: Attributes
+      ): Unit =
+        qName match
+          case "c" =>
+            val ref = Option(attributes.getValue("r")).getOrElse("")
+            cellIsA = ref.startsWith("A")
+          case "v" =>
+            inValue = cellIsA
+            if inValue then text.setLength(0)
+          case _ =>
+
+      override def characters(ch: Array[Char], start: Int, length: Int): Unit =
+        if inValue then text.appendAll(ch, start, length)
+
+      override def endElement(uri: String, localName: String, qName: String): Unit =
+        qName match
+          case "v" if inValue =>
+            val s = text.result().trim
+            if s.nonEmpty then
+              try sum += s.toDouble
+              catch case _: NumberFormatException => ()
+            inValue = false
+          case "c" =>
+            cellIsA = false
+          case _ =>
+    }
+
+    parser.parse(InputSource(stream), handler)
+    sum
+  }
+
+  private def saxSumColumnAMaterialized(
+    parser: javax.xml.parsers.SAXParser,
+    stream: java.io.InputStream
+  ): Double = {
+    var runningSum = 0.0
+    var inValue = false
+    var cellIsA = false
+    val text = new StringBuilder
+    var currentRow: mutable.Map[Int, Double] = mutable.Map.empty
+
+    val handler = new DefaultHandler {
+      override def startElement(
+        uri: String,
+        localName: String,
+        qName: String,
+        attributes: Attributes
+      ): Unit =
+        qName match
+          case "row" =>
+            currentRow = mutable.Map.empty
+          case "c" =>
+            val ref = Option(attributes.getValue("r")).getOrElse("")
+            cellIsA = ref.startsWith("A")
+          case "v" =>
+            inValue = cellIsA
+            if inValue then text.setLength(0)
+          case _ =>
+
+      override def characters(ch: Array[Char], start: Int, length: Int): Unit =
+        if inValue then text.appendAll(ch, start, length)
+
+      override def endElement(uri: String, localName: String, qName: String): Unit =
+        qName match
+          case "v" if inValue =>
+            val s = text.result().trim
+            if s.nonEmpty then
+              try currentRow.update(0, s.toDouble)
+              catch case _: NumberFormatException => ()
+            inValue = false
+          case "c" =>
+            cellIsA = false
+          case "row" =>
+            runningSum += currentRow.values.sum
+          case _ =>
+    }
+
+    parser.parse(InputSource(stream), handler)
+    runningSum
   }
 }
