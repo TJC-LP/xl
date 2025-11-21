@@ -383,7 +383,7 @@ class TableSpec extends FunSuite:
     val table = OoxmlTable(
       id = 2L,
       name = "Filtered",
-      displayName = "Filtered Table",
+      displayName = "FilteredTable",
       ref = CellRange(ref"A1", ref"C50"),
       headerRowCount = 1,
       totalsRowCount = 0,
@@ -435,7 +435,7 @@ class TableSpec extends FunSuite:
     val table = OoxmlTable(
       id = 4L,
       name = "WithTotals",
-      displayName = "With Totals",
+      displayName = "WithTotals",
       ref = CellRange(ref"A1", ref"B11"),
       headerRowCount = 1,
       totalsRowCount = 1,
@@ -479,7 +479,7 @@ class TableSpec extends FunSuite:
     val table = OoxmlTable(
       id = 6L,
       name = "Table6",
-      displayName = "Complex Columns",
+      displayName = "ComplexColumns",
       ref = CellRange(ref"A1", ref"E100"),
       headerRowCount = 1,
       totalsRowCount = 0,
@@ -543,7 +543,7 @@ class TableSpec extends FunSuite:
   // ========================================
 
   test("convert domain TableSpec to OOXML") {
-    val domainTable = TableSpec.fromColumnNames(
+    val domainTable = TableSpec.unsafeFromColumnNames(
       name = "Sales",
       displayName = "SalesData",  // No spaces (Excel requirement)
       range = CellRange(ref"A1", ref"D100"),
@@ -564,7 +564,7 @@ class TableSpec extends FunSuite:
     val ooxmlTable = OoxmlTable(
       id = 2L,
       name = "Products",
-      displayName = "Product List",
+      displayName = "ProductList",
       ref = CellRange(ref"A1", ref"C50"),
       headerRowCount = 1,
       totalsRowCount = 0,
@@ -580,7 +580,7 @@ class TableSpec extends FunSuite:
     val domainTable = TableConversions.fromOoxml(ooxmlTable)
 
     assertEquals(domainTable.name, "Products")
-    assertEquals(domainTable.displayName, "Product List")
+    assertEquals(domainTable.displayName, "ProductList")  // No spaces
     assertEquals(domainTable.columns.size, 3)
     assert(domainTable.autoFilter.exists(_.enabled))
   }
@@ -594,7 +594,7 @@ class TableSpec extends FunSuite:
 
     styles.foreach { style =>
       val ooxml = TableConversions.toOoxml(
-        TableSpec.fromColumnNames("T", "T", CellRange(ref"A1", ref"B10"), Vector("A", "B"))
+        TableSpec.unsafeFromColumnNames("T", "T", CellRange(ref"A1", ref"B10"), Vector("A", "B"))
           .copy(style = style),
         id = 1L
       )
@@ -605,7 +605,7 @@ class TableSpec extends FunSuite:
   }
 
   test("convert table with AutoFilter enabled") {
-    val domainTable = TableSpec.fromColumnNames(
+    val domainTable = TableSpec.unsafeFromColumnNames(
       name = "Data",
       displayName = "Data",
       range = CellRange(ref"A1", ref"C100"),
@@ -620,9 +620,9 @@ class TableSpec extends FunSuite:
   }
 
   test("convert table with header and totals rows") {
-    val domainTable = TableSpec.fromColumnNames(
+    val domainTable = TableSpec.unsafeFromColumnNames(
       name = "Totals",
-      displayName = "With Totals",
+      displayName = "WithTotals",
       range = CellRange(ref"A1", ref"B11"),
       columnNames = Vector("Item", "Amount")
     ).copy(showHeaderRow = true, showTotalsRow = true)
@@ -637,9 +637,9 @@ class TableSpec extends FunSuite:
   }
 
   test("convert table with no style defaults to Medium(2)") {
-    val domainTable = TableSpec.fromColumnNames(
+    val domainTable = TableSpec.unsafeFromColumnNames(
       name = "Default",
-      displayName = "Default Style",
+      displayName = "DefaultStyle",
       range = CellRange(ref"A1", ref"B10"),
       columnNames = Vector("A", "B")
     ) // Uses TableStyle.default
@@ -656,7 +656,7 @@ class TableSpec extends FunSuite:
   // ========================================
 
   test("workbook with single table round-trips") {
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "SalesData",
       displayName = "SalesData",  // No spaces (Excel requirement)
       range = CellRange(ref"A1", ref"D100"),
@@ -683,14 +683,14 @@ class TableSpec extends FunSuite:
   }
 
   test("workbook with multiple tables on one sheet") {
-    val table1 = TableSpec.fromColumnNames(
+    val table1 = TableSpec.unsafeFromColumnNames(
       name = "Sales",
       displayName = "Sales",
       range = CellRange(ref"A1", ref"C50"),
       columnNames = Vector("Date", "Amount", "Status")
     )
 
-    val table2 = TableSpec.fromColumnNames(
+    val table2 = TableSpec.unsafeFromColumnNames(
       name = "Products",
       displayName = "Products",
       range = CellRange(ref"E1", ref"G30"),
@@ -711,16 +711,16 @@ class TableSpec extends FunSuite:
   }
 
   test("workbook with tables on multiple sheets") {
-    val table1 = TableSpec.fromColumnNames(
+    val table1 = TableSpec.unsafeFromColumnNames(
       name = "Sheet1Table",
-      displayName = "Table 1",
+      displayName = "Table1",
       range = CellRange(ref"A1", ref"B10"),
       columnNames = Vector("A", "B")
     )
 
-    val table2 = TableSpec.fromColumnNames(
+    val table2 = TableSpec.unsafeFromColumnNames(
       name = "Sheet2Table",
-      displayName = "Table 2",
+      displayName = "Table2",
       range = CellRange(ref"C1", ref"D10"),
       columnNames = Vector("C", "D")
     )
@@ -738,9 +738,9 @@ class TableSpec extends FunSuite:
   }
 
   test("table with AutoFilter round-trips correctly") {
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "FilteredData",
-      displayName = "Filtered Data",
+      displayName = "FilteredData",
       range = CellRange(ref"A1", ref"C100"),
       columnNames = Vector("Name", "Value", "Status")
     ).copy(autoFilter = Some(TableAutoFilter(enabled = true)))
@@ -763,7 +763,7 @@ class TableSpec extends FunSuite:
     )
 
     styles.foreach { case (name, style) =>
-      val table = TableSpec.fromColumnNames(
+      val table = TableSpec.unsafeFromColumnNames(
         name = name,
         displayName = name,
         range = CellRange(ref"A1", ref"B10"),
@@ -782,9 +782,9 @@ class TableSpec extends FunSuite:
   }
 
   test("table with header and totals rows round-trips") {
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "WithTotals",
-      displayName = "With Totals",
+      displayName = "WithTotals",
       range = CellRange(ref"A1", ref"B11"),
       columnNames = Vector("Item", "Amount")
     ).copy(showHeaderRow = true, showTotalsRow = true)
@@ -801,7 +801,7 @@ class TableSpec extends FunSuite:
   }
 
   test("table data range calculation is correct") {
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "Test",
       displayName = "Test",
       range = CellRange(ref"A1", ref"B11"),
@@ -816,18 +816,19 @@ class TableSpec extends FunSuite:
   }
 
   test("table validation detects column count mismatch") {
-    val table = TableSpec.fromColumnNames(
+    // Use case class constructor directly to bypass validation (testing isValid method)
+    val table = com.tjclp.xl.tables.TableSpec(
       name = "Invalid",
       displayName = "Invalid",
       range = CellRange(ref"A1", ref"D10"), // 4 columns wide
-      columnNames = Vector("A", "B", "C") // Only 3 columns defined
+      columns = Vector(TableColumn(1, "A"), TableColumn(2, "B"), TableColumn(3, "C")) // Only 3 columns
     )
 
     assert(!table.isValid, "Should detect column count mismatch")
   }
 
   test("workbook with table and cells coexist") {
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "Data",
       displayName = "Data",
       range = CellRange(ref"A1", ref"C10"),
@@ -860,9 +861,9 @@ class TableSpec extends FunSuite:
   }
 
   test("ContentTypes includes table overrides when tables present") {
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "Table1",
-      displayName = "Table 1",
+      displayName = "Table1",
       range = CellRange(ref"A1", ref"B10"),
       columnNames = Vector("A", "B")
     )
@@ -894,9 +895,9 @@ class TableSpec extends FunSuite:
   // ========================================
 
   test("table with single column") {
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "SingleCol",
-      displayName = "Single Column",
+      displayName = "SingleColumn",
       range = CellRange(ref"A1", ref"A100"),
       columnNames = Vector("OnlyOne")
     )
@@ -918,7 +919,7 @@ class TableSpec extends FunSuite:
 
     val table = com.tjclp.xl.tables.TableSpec(
       name = "Wide",
-      displayName = "Wide Table",
+      displayName = "WideTable",
       range = CellRange(ref"A1", ARef.from1(100, 10)),
       columns = columns
     )
@@ -927,14 +928,14 @@ class TableSpec extends FunSuite:
   }
 
   test("table name uniqueness within sheet") {
-    val table1 = TableSpec.fromColumnNames(
+    val table1 = TableSpec.unsafeFromColumnNames(
       name = "Data",
       displayName = "First",
       range = CellRange(ref"A1", ref"B10"),
       columnNames = Vector("A", "B")
     )
 
-    val table2 = TableSpec.fromColumnNames(
+    val table2 = TableSpec.unsafeFromColumnNames(
       name = "Data", // Same name!
       displayName = "Second",
       range = CellRange(ref"D1", ref"E10"),
@@ -950,9 +951,9 @@ class TableSpec extends FunSuite:
   }
 
   test("remove table from sheet") {
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "ToRemove",
-      displayName = "To Remove",
+      displayName = "ToRemove",  // No spaces
       range = CellRange(ref"A1", ref"B10"),
       columnNames = Vector("A", "B")
     )
@@ -965,9 +966,9 @@ class TableSpec extends FunSuite:
   }
 
   test("table with empty autoFilter (disabled) omits autoFilter element") {
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "NoFilter",
-      displayName = "No Filter",
+      displayName = "NoFilter",  // No spaces
       range = CellRange(ref"A1", ref"C10"),
       columnNames = Vector("A", "B", "C")
     ) // autoFilter = None (default)
@@ -981,7 +982,7 @@ class TableSpec extends FunSuite:
 
   test("table column IDs are sequential and 1-indexed") {
     val columns = Vector("First", "Second", "Third", "Fourth")
-    val table = TableSpec.fromColumnNames(
+    val table = TableSpec.unsafeFromColumnNames(
       name = "Test",
       displayName = "Test",
       range = CellRange(ref"A1", ref"D10"),
@@ -1143,4 +1144,40 @@ class TableSpec extends FunSuite:
 
     assert(reparsed.isRight, "Should handle XML special chars")
     assertEquals(reparsed.toOption.get.columns(0).name, "Col<>&\"'")
+  }
+
+  // ========================================
+  // Category I: UID Preservation (1 test)
+  // ========================================
+
+  test("round-trip preserves all UIDs (table, autoFilter, columns)") {
+    val tableUid = "{TEST-TABLE-UID-1234}"
+    val autoFilterUid = "{TEST-AUTOFILTER-UID-5678}"
+    val columnUids = Vector("{COL-UID-1}", "{COL-UID-2}")
+
+    val table = OoxmlTable(
+      id = 1L,
+      name = "TestTable",
+      displayName = "TestTable",
+      ref = CellRange(ref"A1", ref"B10"),
+      headerRowCount = 1,
+      totalsRowCount = 0,
+      tableUid = Some(tableUid),
+      columns = Vector(
+        OoxmlTableColumn(1, "Col1", Some(columnUids(0))),
+        OoxmlTableColumn(2, "Col2", Some(columnUids(1)))
+      ),
+      autoFilter = Some(CellRange(ref"A1", ref"B10")),
+      autoFilterUid = Some(autoFilterUid),
+      styleInfo = None
+    )
+
+    val xml = OoxmlTable.toXml(table)
+    val reparsed = OoxmlTable.fromXml(xml).toOption.get
+
+    // Verify all UIDs preserved
+    assertEquals(reparsed.tableUid, Some(tableUid), "Table UID should be preserved")
+    assertEquals(reparsed.autoFilterUid, Some(autoFilterUid), "AutoFilter UID should be preserved")
+    assertEquals(reparsed.columns(0).uid, Some(columnUids(0)), "Column 1 UID should be preserved")
+    assertEquals(reparsed.columns(1).uid, Some(columnUids(1)), "Column 2 UID should be preserved")
   }

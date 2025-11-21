@@ -164,8 +164,8 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
           if totalsShown then 1
           else getAttrOpt(elem, "totalsRowCount").flatMap(_.toIntOption).getOrElse(0)
 
-        // Parse table UID (xr:uid namespace attribute)
-        val tableUid = getNamespacedAttrOpt(elem, "xr:uid")
+        // Parse table UID (use asAttrMap for prefixed attributes)
+        val tableUid = elem.attributes.asAttrMap.get("xr:uid")
 
         // Parse columns
         val columnsElem = (elem \ "tableColumns").headOption
@@ -179,7 +179,8 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
             .collect { case af: Elem => af }
             .map { afElem =>
               val range = getAttrOpt(afElem, "ref").flatMap(CellRange.parse(_).toOption)
-              val uid = getNamespacedAttrOpt(afElem, "xr:uid")
+              val uid =
+                afElem.attributes.asAttrMap.get("xr:uid") // Use asAttrMap for prefixed attrs
               (range, uid)
             }
             .getOrElse((None, None))
@@ -236,7 +237,7 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
   private def decodeColumn(elem: Elem): OoxmlTableColumn =
     val id = getAttrOpt(elem, "id").flatMap(_.toLongOption).getOrElse(0L)
     val name = getAttrOpt(elem, "name").getOrElse("")
-    val uid = getNamespacedAttrOpt(elem, "xr3:uid")
+    val uid = elem.attributes.asAttrMap.get("xr3:uid") // Use asAttrMap for prefixed attrs
     val dataDxfId = getAttrOpt(elem, "dataDxfId").flatMap(_.toIntOption)
 
     val known = Set("id", "name", "xr3:uid", "dataDxfId")

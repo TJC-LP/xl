@@ -221,18 +221,42 @@ object TableSpec:
           )
         )
 
+  /**
+   * Convenience factory: create table from column names with validation.
+   *
+   * Auto-generates column IDs (1-indexed) from provided names. Uses TableSpec.create for validation
+   * (returns Either for explicit error handling).
+   *
+   * @return
+   *   Either[XLError, TableSpec] with validation errors
+   */
   def fromColumnNames(
     name: String,
     displayName: String,
     range: CellRange,
     columnNames: Vector[String]
-  ): TableSpec =
+  ): XLResult[TableSpec] =
     val columns = columnNames.zipWithIndex.map { case (colName, idx) =>
       TableColumn(idx.toLong + 1, colName)
     }
-    TableSpec(
+    create(
       name = name,
       displayName = displayName,
       range = range,
       columns = columns
+    )
+
+  /**
+   * Unsafe version of fromColumnNames for test convenience. Throws if validation fails.
+   *
+   * WARNING: Only use in tests. Production code should use fromColumnNames and handle Either.
+   */
+  def unsafeFromColumnNames(
+    name: String,
+    displayName: String,
+    range: CellRange,
+    columnNames: Vector[String]
+  ): TableSpec =
+    fromColumnNames(name, displayName, range, columnNames).getOrElse(
+      throw new IllegalArgumentException(s"Invalid table: $name")
     )
