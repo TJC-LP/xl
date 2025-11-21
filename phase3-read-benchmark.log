@@ -1,0 +1,173 @@
+======================== xl-benchmarks.runJmh PoiComparisonBenchmark.*Read =======================
+[200/202] xl-benchmarks.generateBenchmarkSources
+[200] Processing 6 classes from /Users/rcaputo3/git/worktrees/xl/feat/WI-15-benchmarks/out/xl-benchmarks/compile.dest/classes with "reflection" generator
+[200] Writing out Java source to /Users/rcaputo3/git/worktrees/xl/feat/WI-15-benchmarks/out/xl-benchmarks/generateBenchmarkSources.dest/jmh_sources and resources to /Users/rcaputo3/git/worktrees/xl/feat/WI-15-benchmarks/out/xl-benchmarks/generateBenchmarkSources.dest/jmh_resources
+[202/202] xl-benchmarks.runJmh
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiRead
+[202] # Parameters: (rows = 1000)
+[202]
+[202] # Run progress: 0.00% complete, ETA 00:00:52
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+15.201 ms/op
+[202] # Warmup Iteration   2: 10.515 ms/op
+[202] # Warmup Iteration   3: 10.064 ms/op
+[202] Iteration   1: 9.818 ms/op
+[202] Iteration   2: 9.464 ms/op
+[202] Iteration   3: 9.433 ms/op
+[202] Iteration   4: 9.566 ms/op
+[202] Iteration   5: 9.375 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiRead":
+[202]   9.531 ±(99.9%) 0.674 ms/op [Average]
+[202]   (min, avg, max) = (9.375, 9.531, 9.818), stdev = 0.175
+[202]   CI (99.9%): [8.858, 10.205] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiRead
+[202] # Parameters: (rows = 10000)
+[202]
+[202] # Run progress: 25.00% complete, ETA 00:00:40
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+136.654 ms/op
+[202] # Warmup Iteration   2: 95.750 ms/op
+[202] # Warmup Iteration   3: 91.053 ms/op
+[202] Iteration   1: 89.910 ms/op
+[202] Iteration   2: 89.218 ms/op
+[202] Iteration   3: 88.622 ms/op
+[202] Iteration   4: 88.229 ms/op
+[202] Iteration   5: 88.566 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.poiRead":
+[202]   88.909 ±(99.9%) 2.554 ms/op [Average]
+[202]   (min, avg, max) = (88.229, 88.909, 89.910), stdev = 0.663
+[202]   CI (99.9%): [86.355, 91.463] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlRead
+[202] # Parameters: (rows = 1000)
+[202]
+[202] # Run progress: 50.00% complete, ETA 00:00:27
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+23.058 ms/op
+[202] # Warmup Iteration   2: 11.709 ms/op
+[202] # Warmup Iteration   3: 10.549 ms/op
+[202] Iteration   1: 10.649 ms/op
+[202] Iteration   2: 10.513 ms/op
+[202] Iteration   3: 10.247 ms/op
+[202] Iteration   4: 10.162 ms/op
+[202] Iteration   5: 10.238 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlRead":
+[202]   10.362 ±(99.9%) 0.803 ms/op [Average]
+[202]   (min, avg, max) = (10.162, 10.362, 10.649), stdev = 0.208
+[202]   CI (99.9%): [9.559, 11.164] (assumes normal distribution)
+[202]
+[202]
+[202] # JMH version: 1.35
+[202] # VM version: JDK 25, OpenJDK 64-Bit Server VM, 25+36-LTS
+[202] # VM invoker: /Users/rcaputo3/.sdkman/candidates/java/25-tem/bin/java
+[202] # VM options: <none>
+[202] # Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+[202] # Warmup: 3 iterations, 1 s each
+[202] # Measurement: 5 iterations, 2 s each
+[202] # Timeout: 10 min per iteration
+[202] # Threads: 1 thread, will synchronize iterations
+[202] # Benchmark mode: Average time, time/op
+[202] # Benchmark: com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlRead
+[202] # Parameters: (rows = 10000)
+[202]
+[202] # Run progress: 75.00% complete, ETA 00:00:13
+[202] # Fork: 1 of 1
+[202] WARNING: A terminally deprecated method in sun.misc.Unsafe has been called
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset has been called by org.openjdk.jmh.util.Utils (file:/Users/rcaputo3/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/openjdk/jmh/jmh-core/1.35/jmh-core-1.35.jar)
+[202] WARNING: Please consider reporting this to the maintainers of class org.openjdk.jmh.util.Utils
+[202] WARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release
+[202] # Warmup Iteration   1: [202] ERROR StatusLogger Log4j2 could not find a logging implementation. Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+283.825 ms/op
+[202] # Warmup Iteration   2: 117.272 ms/op
+[202] # Warmup Iteration   3: 109.390 ms/op
+[202] Iteration   1: 108.855 ms/op
+[202] Iteration   2: 107.700 ms/op
+[202] Iteration   3: 103.655 ms/op
+[202] Iteration   4: 107.546 ms/op
+[202] Iteration   5: 102.088 ms/op
+[202]
+[202]
+[202] Result "com.tjclp.xl.benchmarks.PoiComparisonBenchmark.xlRead":
+[202]   105.969 ±(99.9%) 11.263 ms/op [Average]
+[202]   (min, avg, max) = (102.088, 105.969, 108.855), stdev = 2.925
+[202]   CI (99.9%): [94.705, 117.232] (assumes normal distribution)
+[202]
+[202]
+[202] # Run complete. Total time: 00:00:55
+[202]
+[202] REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+[202] why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+[202] experiments, perform baseline and negative tests that provide experimental control, make sure
+[202] the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+[202] Do not assume the numbers tell you what you want them to tell.
+[202]
+[202] NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+[202] extra caution when trusting the results, look into the generated code to check the benchmark still
+[202] works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+[202] different JVMs are already problematic, the performance difference caused by different Blackhole
+[202] modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+[202]
+[202] Benchmark                       (rows)  Mode  Cnt    Score    Error  Units
+[202] PoiComparisonBenchmark.poiRead    1000  avgt    5    9.531 ±  0.674  ms/op
+[202] PoiComparisonBenchmark.poiRead   10000  avgt    5   88.909 ±  2.554  ms/op
+[202] PoiComparisonBenchmark.xlRead     1000  avgt    5   10.362 ±  0.803  ms/op
+[202] PoiComparisonBenchmark.xlRead    10000  avgt    5  105.969 ± 11.263  ms/op
+[202/202] ================= xl-benchmarks.runJmh PoiComparisonBenchmark.*Read ================ 56s

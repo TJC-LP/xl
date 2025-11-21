@@ -20,12 +20,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4. **Law-Governed**: Monoid laws for Patch/StylePatch; round-trip laws for parsers/printers
 5. **Effect Isolation**: Core (`xl-core`, `xl-ooxml`) is 100% pure; only `xl-cats-effect` has IO
 
+## Performance (JMH Validated - WI-15)
+
+**XL vs Apache POI Benchmarks** (10k rows, Apple Silicon M-series, JDK 25):
+
+| Operation | POI | XL | XL Advantage |
+|-----------|-----|----|--------------|
+| **Streaming Read** | 87.7ms | **46.7ms** | ✨ **46.7% faster** |
+| **Write** | 51.5ms | **46.6ms** | ✨ **9.5% faster** |
+| In-Memory Read | 88.9ms | 106ms | 19% slower* |
+
+***Recommendation**: Use `ExcelIO.readStream()` for production (46.7% faster), reserve `ExcelIO.read()` for random access + modification scenarios.*
+
+**Memory**: Streaming uses ~10MB constant (O(1)) for any file size. In-memory uses ~60-70MB for 10k rows (O(n)).
+
 ## Module Architecture
 
 ```
 xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), macros, DSL
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, fs2-based streaming)
+xl-benchmarks/   → JMH performance benchmarks (XL vs POI comparison)
 xl-evaluator/    → Formula parser (TExpr GADT, FormulaParser, FormulaPrinter); evaluator planned
 xl-testkit/      → Test laws, generators, helpers [future]
 ```

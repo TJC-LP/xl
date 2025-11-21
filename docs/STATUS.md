@@ -42,10 +42,13 @@
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ⏳ **Formula Evaluation** (WI-08 in progress): Evaluator skeleton exists (EvalError ADT complete, Evaluator.scala has compile issues); needs fixes + 50 tests
 
-**Performance** (Optimized):
+**Performance** (JMH Benchmarked - WI-15):
+- ✅ **Streaming reads: 46.7% faster than POI** (46.7ms vs 87.7ms @ 10k rows)
+- ✅ **Writes: 9.5% faster than POI** (46.6ms vs 51.5ms @ 10k rows)
 - ✅ Inline hot paths (10-20% faster on cell operations)
 - ✅ Zero-overhead opaque types
 - ✅ Macros compile away (no runtime parsing)
+- ⚠️ In-memory reads: 19% slower than POI (preservation features overhead - use streaming for production)
 
 **Streaming API**:
 - ✅ Excel[F[_]] algebra trait
@@ -286,15 +289,28 @@ xl-cats-effect/src/com/tjclp/xl/io/
 
 ## Performance Results (Actual)
 
-### Streaming Implementation (P5 Partial) ⚠️
+### JMH Benchmark Results (WI-15) - XL vs Apache POI
 
-**100k row benchmark**:
-- **Write**: ~1.1s, **~10MB constant memory** (O(1)) ✅
-- **Read**: ~1.8s, **~50-100MB memory** (O(n)) ⚠️
-- **Write Scalability**: Can handle 1M+ rows without OOM ✅
-- **Read Scalability**: Can handle 1M+ rows without OOM ✅ (P6.6 Complete)
+**10k row comparison** (Apple Silicon M-series, JDK 25):
 
-**P6.6 Fix Complete**: Streaming reader now uses `fs2.io.readInputStream` for true O(1) memory. Both read and write achieve constant memory.
+| Operation | POI | XL | XL Performance |
+|-----------|-----|----|----------------|
+| **Streaming Read** | 87.7 ± 5.7 ms | **46.7 ± 5.1 ms** | ✨ **46.7% faster** |
+| **Write** | 51.5 ± 3.3 ms | **46.6 ± 5.3 ms** | ✨ **9.5% faster** |
+| In-Memory Read | 88.9 ± 2.6 ms | 106.0 ± 11.3 ms | 19% slower* |
+
+***In-memory read overhead** due to preservation features (manifest building, style deduplication, comments parsing for surgical modification support). For production workloads, use `ExcelIO.readStream()` which is **46.7% faster than POI**.*
+
+### Streaming Implementation (P5 + P6.6 Complete) ✅
+
+**Memory characteristics**:
+- **Write**: **~10MB constant memory** (O(1)) ✅
+- **Read**: **~10MB constant memory** (O(1)) ✅ (P6.6 fixed with fs2.io.readInputStream)
+- **Scalability**: Can handle 1M+ rows without OOM ✅
+
+**Performance characteristics** (validated with JMH):
+- **2.3x faster** than in-memory for large files (46.7ms streaming vs 106ms in-memory @ 10k rows)
+- **Beats POI streaming by 46.7%** (POI has no streaming advantage: 87.7ms streaming vs 88.9ms in-memory)
 
 ### Comparison to Apache POI (True Streaming Read + Write)
 
@@ -384,4 +400,4 @@ private def attr(name: String, value: String): Attr =
 4. **Zero overhead** - Opaque types, inline, compile-time macros
 5. **Real files** - Creates valid XLSX that Excel/LibreOffice opens
 6. **Type safety** - Opaque types prevent mixing units; codecs enforce type correctness
-7. **Performance** - 4.5x faster than Apache POI with 80x less memory
+7. **Performance** - 46.7% faster than Apache POI on streaming reads (JMH validated), 9.5% faster on writes, 80x less memory

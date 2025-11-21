@@ -113,7 +113,7 @@ class PoiComparisonBenchmark {
 
   @Benchmark
   def poiRead(): PoiWorkbook = {
-    // POI read performance
+    // POI read performance (in-memory)
     val fos = new java.io.FileOutputStream(poiTempFile.toFile)
     try {
       poiWorkbook.write(fos)
@@ -126,6 +126,69 @@ class PoiComparisonBenchmark {
       WorkbookFactory.create(fis)
     } finally {
       fis.close()
+    }
+  }
+
+  @Benchmark
+  def xlReadStream(): Long = {
+    // XL streaming read performance (constant memory)
+    ExcelIO.instance[IO].write(xlWorkbook, xlTempFile).unsafeRunSync()
+    ExcelIO.instance[IO].readStream(xlTempFile).compile.count.unsafeRunSync()
+  }
+
+  @Benchmark
+  def poiReadStream(): Long = {
+    // POI streaming read performance (constant memory via XSSFReader)
+    import org.apache.poi.xssf.eventusermodel.{XSSFReader, XSSFSheetXMLHandler}
+    import org.apache.poi.xssf.model.SharedStrings
+    import org.apache.poi.openxml4j.opc.OPCPackage
+    import org.apache.poi.xssf.eventusermodel.XSSFSheetXMLHandler.SheetContentsHandler
+    import org.xml.sax.InputSource
+    import javax.xml.parsers.SAXParserFactory
+
+    // Write file first
+    val fos = new java.io.FileOutputStream(poiTempFile.toFile)
+    try {
+      poiWorkbook.write(fos)
+    } finally {
+      fos.close()
+    }
+
+    // Stream read with XSSFReader
+    val pkg = OPCPackage.open(poiTempFile.toFile)
+    try {
+      val reader = new XSSFReader(pkg)
+      val sst = reader.getSharedStringsTable()
+
+      // Row counter handler
+      var rowCount = 0L
+      val handler = new SheetContentsHandler {
+        override def startRow(rowNum: Int): Unit = rowCount += 1
+        override def endRow(rowNum: Int): Unit = ()
+        override def cell(
+          cellReference: String,
+          formattedValue: String,
+          comment: org.apache.poi.xssf.usermodel.XSSFComment
+        ): Unit = ()
+        override def headerFooter(text: String, isHeader: Boolean, tagName: String): Unit = ()
+      }
+
+      val sheetHandler = new XSSFSheetXMLHandler(reader.getStylesTable(), sst, handler, false)
+      val parser = SAXParserFactory.newInstance().newSAXParser()
+      val xmlReader = parser.getXMLReader
+      xmlReader.setContentHandler(sheetHandler)
+
+      val sheetsIter = reader.getSheetsData()
+      // WartRemover: while acceptable in benchmark code for POI interop
+      while (sheetsIter.hasNext) {
+        val sheetStream = sheetsIter.next()
+        xmlReader.parse(new InputSource(sheetStream))
+        sheetStream.close()
+      }
+
+      rowCount
+    } finally {
+      pkg.close()
     }
   }
 }
