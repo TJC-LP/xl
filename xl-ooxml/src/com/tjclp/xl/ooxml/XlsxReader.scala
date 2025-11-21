@@ -5,6 +5,7 @@ import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext, SourceFingerprint}
+import com.tjclp.xl.tables.TableSpec
 
 import scala.xml.*
 import java.io.{ByteArrayInputStream, FileInputStream, InputStream}
@@ -77,6 +78,7 @@ object XlsxReader:
     knownParts.contains(path) ||
       path.matches("xl/worksheets/sheet\\d+\\.xml") ||
       path.matches("xl/comments\\d+\\.xml") ||
+      path.matches("xl/tables/table\\d+\\.xml") ||
       path.matches("xl/worksheets/_rels/sheet\\d+\\.xml\\.rels")
 
   /**
@@ -231,17 +233,20 @@ object XlsxReader:
         yield Some(sst)
 
   /**
-   * Parse worksheet relationships to find comment references.
+   * Parse worksheet relationships to find comment and table references.
    *
-   * Returns the comment target path (e.g., "../comments1.xml") if a comment relationship exists.
+   * Returns (commentPath, tableTargets) where:
+   *   - commentPath: Optional path to comments file (e.g., "../comments1.xml")
+   *   - tableTargets: Sequence of table file paths (e.g., ["../tables/table1.xml",
+   *     "../tables/table2.xml"])
    */
   private def parseWorksheetRelationships(
     parts: Map[String, String],
     sheetIndex: Int
-  ): XLResult[Option[String]] =
+  ): XLResult[(Option[String], Seq[String])] =
     val relsPath = s"xl/worksheets/_rels/sheet$sheetIndex.xml.rels"
     parts.get(relsPath) match
-      case None => Right(None) // No relationships for this sheet
+      case None => Right((None, Seq.empty)) // No relationships for this sheet
       case Some(xml) =>
         for
           elem <- parseXml(xml, relsPath)
@@ -249,11 +254,17 @@ object XlsxReader:
             .fromXml(elem)
             .left
             .map(err => XLError.ParseError(relsPath, err): XLError)
+
+          // Extract comment relationship (existing logic)
           commentTarget <- rels.relationships
             .find(_.`type` == XmlUtil.relTypeComments) match
             case None => Right(None)
             case Some(rel) => resolveCommentPath(rel.target, relsPath).map(Some(_))
-        yield commentTarget
+
+          // Extract table relationships (NEW)
+          tableRels = rels.relationships.filter(_.`type` == XmlUtil.relTypeTable)
+          tableTargets <- resolveTablePaths(tableRels, relsPath)
+        yield (commentTarget, tableTargets)
 
   private def resolveCommentPath(target: String, relsPath: String): XLResult[String] =
     val cleanedTarget = if target.startsWith("/") then target.drop(1) else target
@@ -272,6 +283,47 @@ object XlsxReader:
           s"Invalid comment relationship target outside xl/: $target"
         )
       )
+
+  /**
+   * Resolve table relationship target path.
+   *
+   * Converts relative paths (e.g., "../tables/table1.xml") to absolute paths within xl/. Validates
+   * that paths remain within xl/ directory (security check).
+   */
+  private def resolveTablePath(target: String, relsPath: String): XLResult[String] =
+    val cleanedTarget = if target.startsWith("/") then target.drop(1) else target
+    val targetPath =
+      if cleanedTarget.startsWith("xl/") || cleanedTarget.startsWith("xl\\") then
+        Paths.get(cleanedTarget)
+      else Paths.get("xl/worksheets").resolve(cleanedTarget)
+
+    val normalized = targetPath.normalize().toString.replace('\\', '/')
+
+    if normalized.startsWith("xl/") then Right(normalized)
+    else
+      Left(
+        XLError.ParseError(
+          relsPath,
+          s"Invalid table relationship target outside xl/: $target"
+        )
+      )
+
+  /**
+   * Resolve multiple table relationship targets.
+   *
+   * Processes all table relationships for a worksheet and resolves their paths. Returns sequence of
+   * normalized paths or error if any path is invalid.
+   */
+  private def resolveTablePaths(
+    tableRels: Seq[Relationship],
+    relsPath: String
+  ): XLResult[Seq[String]] =
+    tableRels.foldLeft[XLResult[Seq[String]]](Right(Seq.empty)) { (accEither, rel) =>
+      for
+        acc <- accEither
+        path <- resolveTablePath(rel.target, relsPath)
+      yield acc :+ path
+    }
 
   /**
    * Parse comments for a single sheet.
@@ -368,6 +420,32 @@ object XlsxReader:
           yield acc.updated(ooxmlComment.ref, domainComment)
       }
 
+  /**
+   * Parse tables for a single sheet.
+   *
+   * Resolves relative paths from worksheet relationships and parses all table XML files. Returns a
+   * Map[String, TableSpec] keyed by table name.
+   */
+  private def parseTablesForSheet(
+    parts: Map[String, String],
+    tablePaths: Seq[String]
+  ): XLResult[Map[String, TableSpec]] =
+    tablePaths.foldLeft[XLResult[Map[String, TableSpec]]](Right(Map.empty)) {
+      case (accEither, tablePath) =>
+        for
+          acc <- accEither
+          xml <- parts
+            .get(tablePath)
+            .toRight(XLError.ParseError(tablePath, s"Missing table file: $tablePath"))
+          elem <- parseXml(xml, tablePath)
+          ooxmlTable <- OoxmlTable
+            .fromXml(elem)
+            .left
+            .map(err => XLError.ParseError(tablePath, err): XLError)
+          domainTable = TableConversions.fromOoxml(ooxmlTable)
+        yield acc.updated(domainTable.name, domainTable)
+    }
+
   private def validateAuthorId(
     ooxmlComment: OoxmlComment,
     authorCount: Int,
@@ -432,13 +510,18 @@ object XlsxReader:
           .fromXmlWithSST(elem, sst)
           .left
           .map(err => XLError.ParseError(sheetPath, err): XLError)
-        // Parse worksheet relationships to find comment references (1-based sheet index)
-        commentTarget <- parseWorksheetRelationships(parts, idx + 1)
+        // Parse worksheet relationships to find comment/table references (1-based sheet index)
+        (commentTarget, tableTargets) <- parseWorksheetRelationships(parts, idx + 1)
+
         // Parse comments if relationship exists
         comments <- commentTarget match
           case Some(target) => parseCommentsForSheet(parts, target)
           case None => Right(Map.empty)
-        domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles, comments)
+
+        // Parse tables if relationships exist
+        tables <- parseTablesForSheet(parts, tableTargets)
+
+        domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles, comments, tables)
       yield domainSheet
     }
 
@@ -462,7 +545,8 @@ object XlsxReader:
     ooxmlSheet: OoxmlWorksheet,
     sst: Option[SharedStrings],
     styles: WorkbookStyles,
-    comments: Map[ARef, com.tjclp.xl.cells.Comment]
+    comments: Map[ARef, com.tjclp.xl.cells.Comment],
+    tables: Map[String, TableSpec]
   ): XLResult[Sheet] =
     val (preRegisteredRegistry, styleMapping) = buildStyleRegistry(styles)
 
@@ -488,7 +572,8 @@ object XlsxReader:
         cells = cellsMap,
         mergedRanges = ooxmlSheet.mergedRanges,
         styleRegistry = preRegisteredRegistry,
-        comments = comments
+        comments = comments,
+        tables = tables
       )
     )
 

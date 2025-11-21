@@ -42,6 +42,8 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
   val relTypeVmlDrawing =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing"
+  val relTypeTable =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table"
 
   /** Content type URIs */
   val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -51,6 +53,7 @@ object XmlUtil:
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
   val ctComments = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
   val ctVmlDrawing = "application/vnd.openxmlformats-officedocument.vmlDrawing"
+  val ctTable = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
 
   /** Sort attributes by name for deterministic output */

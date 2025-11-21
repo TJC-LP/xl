@@ -5,6 +5,7 @@ import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.codec.CellCodec
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
+import com.tjclp.xl.tables.TableSpec
 
 import scala.collection.immutable.{Map, Set}
 import scala.util.boundary, boundary.break
@@ -24,7 +25,8 @@ final case class Sheet(
   defaultColumnWidth: Option[Double] = None,
   defaultRowHeight: Option[Double] = None,
   styleRegistry: StyleRegistry = StyleRegistry.default,
-  comments: Map[ARef, Comment] = Map.empty
+  comments: Map[ARef, Comment] = Map.empty,
+  tables: Map[String, TableSpec] = Map.empty
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -259,6 +261,26 @@ final case class Sheet(
   def hasComment(ref: ARef): Boolean =
     comments.contains(ref)
 
+  /** Add or update table in sheet */
+  def withTable(table: TableSpec): Sheet =
+    copy(tables = tables.updated(table.name, table))
+
+  /** Get table by name */
+  def getTable(name: String): Option[TableSpec] =
+    tables.get(name)
+
+  /** Remove table by name */
+  def removeTable(name: String): Sheet =
+    copy(tables = tables.removed(name))
+
+  /** Check if table exists */
+  def hasTable(name: String): Boolean =
+    tables.contains(name)
+
+  /** Get all tables in sheet */
+  def allTables: Iterable[TableSpec] =
+    tables.values
+
   /** Set column properties */
   def setColumnProperties(col: Column, props: ColumnProperties): Sheet =
     copy(columnProperties = columnProperties.updated(col, props))
@@ -323,4 +345,15 @@ object Sheet:
 
   /** Create empty sheet with validated name */
   def apply(name: SheetName): Sheet =
-    Sheet(name, Map.empty, Set.empty, Map.empty, Map.empty, None, None, StyleRegistry.default)
+    Sheet(
+      name,
+      Map.empty,
+      Set.empty,
+      Map.empty,
+      Map.empty,
+      None,
+      None,
+      StyleRegistry.default,
+      Map.empty,
+      Map.empty
+    )
