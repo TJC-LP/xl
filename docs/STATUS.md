@@ -25,6 +25,7 @@
 - ✅ All cell types: Text, Number, Bool, Formula, Error, DateTime
 - ✅ RichText support (multiple formats within one cell)
 - ✅ DateTime serialization (Excel serial number conversion)
+- ✅ **Excel Tables** (structured data ranges with headers, AutoFilter, and styling)
 - ✅ **True streaming I/O** (constant memory, 100k+ rows)
 
 **Ergonomics & Type Safety**:
@@ -69,7 +70,7 @@
 
 ### Test Coverage
 
-**795 tests across 5 modules** (includes P7+P8 string interpolation + P6.8 surgical modification + WI-07 formula parser + WI-08 formula evaluator):
+**840 tests across 5 modules** (includes P7+P8 string interpolation + WI-07 formula parser + WI-08 formula evaluator + WI-10 table support):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -83,12 +84,13 @@
   - **+111 string interpolation Phase 1** (RefInterpolationSpec, FormattedInterpolationSpec, MacroUtilSpec)
   - **+40 string interpolation Phase 2** (RefCompileTimeOptimizationSpec, FormattedCompileTimeOptimizationSpec)
   - +200+ additional tests (range combinators, comprehensive property tests)
-- **xl-ooxml**: ~100+ tests
+- **xl-ooxml**: ~145+ tests
   - Round-trip tests (text, numbers, booleans, mixed, multi-sheet, SST, styles, RichText)
   - Compression tests (DEFLATED vs STORED, prettyPrint, defaults, debug mode)
   - Security tests (XXE, DOCTYPE rejection)
   - Error path tests (malformed XML, missing files)
   - Whitespace preservation, alignment serialization
+  - **+45 table tests** (TableSpec: XML parsing, serialization, round-trips, domain conversions, edge cases)
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)

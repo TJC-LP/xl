@@ -23,6 +23,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 - ✅ **Streaming Write**: True constant-memory writing with fs2-data-xml (100k+ rows)
 - ✅ **Streaming Read**: True constant-memory reading with fs2-data-xml (100k+ rows)
 - ✅ **Arbitrary sheet access**: Read/write any sheet by index or name
+- ✅ **Excel Tables**: Structured data ranges with headers, AutoFilter, and styling (WI-10)
 - ✅ **Elegant syntax**: Given conversions, batch put macro, formatted literals
 - ✅ **Performance optimizations**: Inline hot paths, zero-overhead abstractions
 - ✅ **Style Application**: Full end-to-end formatting with fonts, colors, fills, borders
@@ -285,14 +286,16 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 14. Tables and Pivot Tables Not Supported
+#### 14. Pivot Tables Not Supported
 **Status**: Not implemented
-**Impact**: Cannot create Excel Tables or Pivot Tables
-**Plan**: [P10 - Tables](plan/08-tables-and-pivots.md)
+**Impact**: Cannot create Pivot Tables
+**Plan**: [P10 - Advanced Features](plan/advanced-features.md)
 **Phase**: P10 (Future)
 
-**Effort**: 15-20 days
-**LOC**: ~1000
+**Note**: Excel Tables (structured data ranges with headers, AutoFilter, styling) are ✅ **fully supported** as of WI-10.
+
+**Effort**: 10-15 days (for Pivot Tables only)
+**LOC**: ~700
 
 ---
 

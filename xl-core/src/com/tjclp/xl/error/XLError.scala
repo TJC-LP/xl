@@ -73,6 +73,18 @@ enum XLError:
   /** Unsupported type in batch put operation */
   case UnsupportedType(ref: String, typeName: String)
 
+  /** Invalid table name (empty, spaces, invalid characters) */
+  case InvalidTableName(name: String, reason: String)
+
+  /** Invalid table display name (empty, spaces, invalid characters) */
+  case InvalidTableDisplayName(displayName: String, reason: String)
+
+  /** Invalid table range (too small, invalid bounds) */
+  case InvalidTableRange(range: String, reason: String)
+
+  /** Invalid table column configuration (empty, duplicates, count mismatch) */
+  case InvalidTableColumns(reason: String)
+
   /** Generic error for extensibility */
   case Other(message: String)
 
@@ -106,6 +118,11 @@ object XLError:
         s"Expected $expected values for $context but received $actual"
       case UnsupportedType(ref, typeName) =>
         s"Unsupported type at $ref: $typeName. Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText, Formatted"
+      case InvalidTableName(name, reason) => s"Invalid table name '$name': $reason"
+      case InvalidTableDisplayName(displayName, reason) =>
+        s"Invalid table displayName '$displayName': $reason"
+      case InvalidTableRange(range, reason) => s"Invalid table range '$range': $reason"
+      case InvalidTableColumns(reason) => s"Invalid table columns: $reason"
       case Other(message) => message
 
 /** Type alias for common result type */
