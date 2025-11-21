@@ -387,10 +387,53 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=SUM(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.FoldRange(range, _, _, _) =>
+      case TExpr.FoldRange(range, zero: BigDecimal, _, _) =>
         assertEquals(range, CellRange.parse("A1:B10").toOption.get)
-      case other => fail(s"Expected FoldRange, got $other")
+        assertEquals(zero, BigDecimal(0)) // SUM starts with 0
+      case other => fail(s"Expected FoldRange with BigDecimal, got $other")
     }
+  }
+
+  test("parse COUNT function") {
+    val result = FormulaParser.parse("=COUNT(A1:B10)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.FoldRange(range, zero: Int, _, _) =>
+        assertEquals(range, CellRange.parse("A1:B10").toOption.get)
+        assertEquals(zero, 0) // COUNT starts with 0
+      case other => fail(s"Expected FoldRange with Int accumulator, got $other")
+    }
+  }
+
+  test("parse AVERAGE function") {
+    val result = FormulaParser.parse("=AVERAGE(A1:B10)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.FoldRange(range, zero: (BigDecimal, Int), _, _) =>
+        assertEquals(range, CellRange.parse("A1:B10").toOption.get)
+        assertEquals(zero, (BigDecimal(0), 0)) // AVERAGE starts with (sum=0, count=0)
+      case other => fail(s"Expected FoldRange with tuple accumulator, got $other")
+    }
+  }
+
+  test("SUM/COUNT/AVERAGE create different fold types") {
+    // Verify that each function creates the correct fold type (not all SUM)
+    val sumResult = FormulaParser.parse("=SUM(A1:A10)")
+    val countResult = FormulaParser.parse("=COUNT(A1:A10)")
+    val avgResult = FormulaParser.parse("=AVERAGE(A1:A10)")
+
+    (sumResult, countResult, avgResult) match
+      case (Right(sumFold: TExpr.FoldRange[?, ?]), Right(countFold: TExpr.FoldRange[?, ?]), Right(avgFold: TExpr.FoldRange[?, ?])) =>
+        // Extract zero values to verify different fold types
+        val sumZero = sumFold.z
+        val countZero = countFold.z
+        val avgZero = avgFold.z
+
+        // SUM has BigDecimal(0), COUNT has Int(0), AVERAGE has (BigDecimal(0), Int(0))
+        assert(sumZero.isInstanceOf[BigDecimal])
+        assert(countZero.isInstanceOf[Int])
+        assert(avgZero.isInstanceOf[(BigDecimal, Int)])
+      case _ => fail("All three functions should parse successfully")
   }
 
   test("parse IF function") {
@@ -483,6 +526,17 @@ class FormulaParserSpec extends ScalaCheckSuite:
     result.left.foreach {
       case ParseError.FormulaTooLong(_, _) => ()
       case other                           => fail(s"Expected FormulaTooLong, got $other")
+    }
+  }
+
+  test("error: concatenation operator not supported") {
+    val result = FormulaParser.parse("=\"foo\"&\"bar\"")
+    assert(result.isLeft)
+    result.left.foreach {
+      case ParseError.InvalidOperator("&", _, reason) =>
+        assert(reason.contains("concatenation"))
+        assert(reason.contains("not yet supported"))
+      case other => fail(s"Expected InvalidOperator for '&', got $other")
     }
   }
 

@@ -229,12 +229,14 @@ object FormulaParser:
       val s2 = skipWhitespace(s1)
       s2.currentChar match
         case Some('&') =>
-          val s3 = skipWhitespace(s2.advance())
-          parseConcatenation(s3).map { case (right, s4) =>
-            // Concatenation not yet in TExpr - treat as string literal for now
-            // Future: Add TExpr.Concat case
-            (left, s4) // Placeholder
-          }
+          // Concatenation operator not yet supported
+          Left(
+            ParseError.InvalidOperator(
+              "&",
+              s2.pos,
+              "concatenation operator not yet supported (see LIMITATIONS.md)"
+            )
+          )
         case _ => Right((left, s2))
     }
 
@@ -531,7 +533,10 @@ object FormulaParser:
    */
   private def parseCountFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
     args match
-      case List(fold: TExpr.FoldRange[?, ?]) => Right(fold)
+      case List(fold: TExpr.FoldRange[?, ?]) =>
+        // Extract range from parsed fold and create COUNT-specific fold
+        fold match
+          case TExpr.FoldRange(range, _, _, _) => Right(TExpr.count(range))
       case _ =>
         Left(
           ParseError.InvalidArguments("COUNT", pos, "1 range argument", s"${args.length} arguments")
@@ -542,7 +547,10 @@ object FormulaParser:
    */
   private def parseAverageFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
     args match
-      case List(fold: TExpr.FoldRange[?, ?]) => Right(fold)
+      case List(fold: TExpr.FoldRange[?, ?]) =>
+        // Extract range from parsed fold and create AVERAGE-specific fold
+        fold match
+          case TExpr.FoldRange(range, _, _, _) => Right(TExpr.average(range))
       case _ =>
         Left(
           ParseError.InvalidArguments(
@@ -645,7 +653,8 @@ object FormulaParser:
 
     CellRange.parse(rangeStr) match
       case Right(range) =>
-        // Create FoldRange for SUM by default
+        // Create FoldRange for SUM by default (function parsers will re-wrap as needed)
+        // E.g., COUNT(A1:B10) will extract the range and create TExpr.count(range)
         Right((TExpr.sum(range), s3))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
