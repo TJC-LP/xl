@@ -308,14 +308,12 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
         new scala.xml.UnprefixedAttribute(k, v, acc)
     }
 
-    // Sanitize displayName: Excel does NOT allow spaces (replaces with underscores during repair)
-    val sanitizedDisplayName = table.displayName.replace(' ', '_')
-
     // Regular attributes (in reverse of target order)
+    // NOTE: displayName validation enforced in TableSpec.create smart constructor
     val attrs2 =
       new scala.xml.UnprefixedAttribute("totalsRowShown", if showTotals then "1" else "0", attrs1)
     val attrs3 = new scala.xml.UnprefixedAttribute("ref", table.ref.toA1, attrs2)
-    val attrs4 = new scala.xml.UnprefixedAttribute("displayName", sanitizedDisplayName, attrs3)
+    val attrs4 = new scala.xml.UnprefixedAttribute("displayName", table.displayName, attrs3)
     val attrs5 = new scala.xml.UnprefixedAttribute("name", table.name, attrs4)
     val attrs6 = table.tableUid match
       case Some(uid) => new scala.xml.PrefixedAttribute("xr", "uid", uid, attrs5)

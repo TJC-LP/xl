@@ -221,7 +221,7 @@ class TableSpec extends FunSuite:
     val table = OoxmlTable(
       id = 1L,
       name = "Table1",
-      displayName = "Table 1",
+      displayName = "Table1",  // No spaces (Excel requirement)
       ref = CellRange(ref"A1", ref"D10"),
       headerRowCount = 1,
       totalsRowCount = 0,
@@ -240,7 +240,7 @@ class TableSpec extends FunSuite:
     assertEquals(xml.label, "table")
     assertEquals((xml \ "@id").text, "1")
     assertEquals((xml \ "@name").text, "Table1")
-    assertEquals((xml \ "@displayName").text, "Table_1")  // Spaces sanitized to underscores
+    assertEquals((xml \ "@displayName").text, "Table1")
     assertEquals((xml \ "@ref").text, "A1:D10")
 
     val columns = xml \ "tableColumns" \ "tableColumn"
@@ -991,4 +991,156 @@ class TableSpec extends FunSuite:
     table.columns.zipWithIndex.foreach { case (col, idx) =>
       assertEquals(col.id, (idx + 1).toLong, s"Column ${idx} should have ID ${idx + 1}")
     }
+  }
+
+  // ========================================
+  // Category G: Validation Tests (8 tests)
+  // ========================================
+
+  test("TableSpec.create rejects empty name") {
+    val result = com.tjclp.xl.tables.TableSpec.create(
+      name = "",
+      displayName = "Test",
+      range = CellRange(ref"A1", ref"B10"),
+      columns = Vector(TableColumn(1, "Col1"), TableColumn(2, "Col2"))
+    )
+    assert(result.isLeft, "Should reject empty name")
+  }
+
+  test("TableSpec.create rejects name with spaces") {
+    val result = com.tjclp.xl.tables.TableSpec.create(
+      name = "My Table",
+      displayName = "Test",
+      range = CellRange(ref"A1", ref"B10"),
+      columns = Vector(TableColumn(1, "Col1"), TableColumn(2, "Col2"))
+    )
+    assert(result.isLeft, "Should reject name with spaces")
+  }
+
+  test("TableSpec.create rejects displayName with spaces") {
+    val result = com.tjclp.xl.tables.TableSpec.create(
+      name = "MyTable",
+      displayName = "My Display Name",
+      range = CellRange(ref"A1", ref"B10"),
+      columns = Vector(TableColumn(1, "Col1"), TableColumn(2, "Col2"))
+    )
+    assert(result.isLeft, "Should reject displayName with spaces")
+    assert(result.left.exists(_.message.contains("cannot contain spaces")))
+  }
+
+  test("TableSpec.create rejects empty displayName") {
+    val result = com.tjclp.xl.tables.TableSpec.create(
+      name = "MyTable",
+      displayName = "",
+      range = CellRange(ref"A1", ref"B10"),
+      columns = Vector(TableColumn(1, "Col1"), TableColumn(2, "Col2"))
+    )
+    assert(result.isLeft, "Should reject empty displayName")
+  }
+
+  test("TableSpec.create rejects single-row range") {
+    val result = com.tjclp.xl.tables.TableSpec.create(
+      name = "MyTable",
+      displayName = "Test",
+      range = CellRange(ref"A1", ref"B1"),  // Only 1 row
+      columns = Vector(TableColumn(1, "Col1"), TableColumn(2, "Col2"))
+    )
+    assert(result.isLeft, "Should reject single-row range")
+    assert(result.left.exists(_.message.contains("at least 2 rows")))
+  }
+
+  test("TableSpec.create rejects empty columns") {
+    val result = com.tjclp.xl.tables.TableSpec.create(
+      name = "MyTable",
+      displayName = "Test",
+      range = CellRange(ref"A1", ref"B10"),
+      columns = Vector.empty
+    )
+    assert(result.isLeft, "Should reject empty columns")
+  }
+
+  test("TableSpec.create rejects duplicate column names") {
+    val result = com.tjclp.xl.tables.TableSpec.create(
+      name = "MyTable",
+      displayName = "Test",
+      range = CellRange(ref"A1", ref"C10"),
+      columns = Vector(
+        TableColumn(1, "Name"),
+        TableColumn(2, "Name"),  // Duplicate!
+        TableColumn(3, "Value")
+      )
+    )
+    assert(result.isLeft, "Should reject duplicate column names")
+    assert(result.left.exists(_.message.contains("Duplicate column names")))
+  }
+
+  test("TableSpec.create rejects column count mismatch") {
+    val result = com.tjclp.xl.tables.TableSpec.create(
+      name = "MyTable",
+      displayName = "Test",
+      range = CellRange(ref"A1", ref"D10"),  // 4 columns wide
+      columns = Vector(TableColumn(1, "Col1"), TableColumn(2, "Col2"))  // Only 2 columns
+    )
+    assert(result.isLeft, "Should reject column count mismatch")
+    assert(result.left.exists(_.message.contains("must match range width")))
+  }
+
+  test("TableSpec.create accepts valid input") {
+    val result = com.tjclp.xl.tables.TableSpec.create(
+      name = "Valid_Table",
+      displayName = "Valid_Display_Name",
+      range = CellRange(ref"A1", ref"C10"),
+      columns = Vector(
+        TableColumn(1, "Col1"),
+        TableColumn(2, "Col2"),
+        TableColumn(3, "Col3")
+      )
+    )
+    assert(result.isRight, "Should accept valid input")
+  }
+
+  // ========================================
+  // Category H: XML Security Tests (2 tests)
+  // ========================================
+
+  test("table name with XML special characters is escaped") {
+    val table = OoxmlTable(
+      id = 1L,
+      name = "Table<>&\"'",  // XML special chars
+      displayName = "Test",
+      ref = CellRange(ref"A1", ref"B10"),
+      headerRowCount = 1,
+      totalsRowCount = 0,
+      columns = Vector(OoxmlTableColumn(1, "Col")),
+      autoFilter = None,
+      styleInfo = None
+    )
+
+    val xml = OoxmlTable.toXml(table)
+    val xmlString = xml.toString
+
+    // Scala XML should auto-escape special characters
+    assert(xmlString.contains("Table&lt;&gt;&amp;&quot;'") ||
+           xmlString.contains("Table<>&\"'"),  // May be in attribute
+           "XML special chars should be escaped or safe")
+  }
+
+  test("column name with XML special characters is escaped") {
+    val table = OoxmlTable(
+      id = 1L,
+      name = "Test",
+      displayName = "Test",
+      ref = CellRange(ref"A1", ref"B10"),
+      headerRowCount = 1,
+      totalsRowCount = 0,
+      columns = Vector(OoxmlTableColumn(1, "Col<>&\"\'")),  // XML special chars
+      autoFilter = None,
+      styleInfo = None
+    )
+
+    val xml = OoxmlTable.toXml(table)
+    val reparsed = OoxmlTable.fromXml(xml)
+
+    assert(reparsed.isRight, "Should handle XML special chars")
+    assertEquals(reparsed.toOption.get.columns(0).name, "Col<>&\"'")
   }

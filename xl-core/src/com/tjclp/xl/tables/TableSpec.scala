@@ -1,6 +1,7 @@
 package com.tjclp.xl.tables
 
 import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.error.{XLError, XLResult}
 
 /**
  * Column definition within an Excel table.
@@ -138,6 +139,88 @@ object TableSpec:
    * @return
    *   TableSpec with auto-generated column IDs and default settings
    */
+  /**
+   * Create validated TableSpec with explicit error handling.
+   *
+   * Validates:
+   *   - name: non-empty, alphanumeric + underscore only
+   *   - displayName: non-empty, no spaces (Excel requirement)
+   *   - range: at least 2 rows (header + data)
+   *   - columns: non-empty, no duplicates, count matches range width
+   *
+   * @return
+   *   Either[XLError, TableSpec] with validation errors
+   */
+  def create(
+    name: String,
+    displayName: String,
+    range: CellRange,
+    columns: Vector[TableColumn],
+    showHeaderRow: Boolean = true,
+    showTotalsRow: Boolean = false,
+    autoFilter: Option[TableAutoFilter] = None,
+    style: TableStyle = TableStyle.default
+  ): XLResult[TableSpec] =
+    import com.tjclp.xl.error.XLError
+
+    // Validate name
+    if name.isEmpty then Left(XLError.InvalidTableName(name, "Table name cannot be empty"))
+    else if !name.matches("^[a-zA-Z0-9_]+$") then
+      Left(XLError.InvalidTableName(name, "Table name must be alphanumeric and underscores only"))
+    // Validate displayName
+    else if displayName.isEmpty then
+      Left(XLError.InvalidTableDisplayName(displayName, "Display name cannot be empty"))
+    else if displayName.contains(' ') then
+      Left(
+        XLError.InvalidTableDisplayName(
+          displayName,
+          "Display name cannot contain spaces (Excel requirement). Use underscores instead."
+        )
+      )
+    else if !displayName.matches("^[a-zA-Z0-9_]+$") then
+      Left(
+        XLError.InvalidTableDisplayName(
+          displayName,
+          "Display name must be alphanumeric and underscores only"
+        )
+      )
+    // Validate range
+    else if range.height < 2 then
+      Left(
+        XLError.InvalidTableRange(
+          range.toA1,
+          s"Table range must have at least 2 rows (header + data), got ${range.height}"
+        )
+      )
+    // Validate columns
+    else if columns.isEmpty then
+      Left(XLError.InvalidTableColumns("Table must have at least one column"))
+    else
+      val duplicateNames = columns.groupBy(_.name).filter(_._2.size > 1).keys
+      if duplicateNames.nonEmpty then
+        Left(
+          XLError.InvalidTableColumns(s"Duplicate column names: ${duplicateNames.mkString(", ")}")
+        )
+      else if columns.size != range.width then
+        Left(
+          XLError.InvalidTableColumns(
+            s"Column count (${columns.size}) must match range width (${range.width})"
+          )
+        )
+      else
+        Right(
+          TableSpec(
+            name = name,
+            displayName = displayName,
+            range = range,
+            columns = columns,
+            showHeaderRow = showHeaderRow,
+            showTotalsRow = showTotalsRow,
+            autoFilter = autoFilter,
+            style = style
+          )
+        )
+
   def fromColumnNames(
     name: String,
     displayName: String,
