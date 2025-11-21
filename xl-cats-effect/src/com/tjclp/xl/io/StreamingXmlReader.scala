@@ -117,12 +117,12 @@ object StreamingXmlReader:
             .find(_.name match { case xml.QName(_, "r") => true; case _ => false })
             .flatMap(attr => extractText(attr.value).flatMap(_.toIntOption))
             .getOrElse(1)
-          InRow(rowIndex, Map.empty, None)
+          InRow(rowIndex, collection.mutable.Map.empty, None)
         case _ => this
 
     case class InRow(
       rowIndex: Int,
-      cells: Map[Int, CellValue],
+      cells: collection.mutable.Map[Int, CellValue], // Mutable for O(1) updates
       currentCell: Option[CellBuilder]
     ) extends RowBuilder:
       def process(event: XmlEvent, sst: Option[SharedStrings]): RowBuilder = event match
@@ -137,15 +137,15 @@ object StreamingXmlReader:
           copy(currentCell = Some(CellBuilder(cellRef, cellType, None)))
 
         case XmlEvent.EndTag(xml.QName(_, "c")) =>
-          // Complete cell and add to row
-          val updatedCells = currentCell.flatMap(_.toCellValue(sst)) match
-            case Some((colIdx, value)) => cells + (colIdx -> value)
-            case None => cells
-          copy(currentCell = None, cells = updatedCells)
+          // Complete cell and add to row (mutate in place for O(1))
+          currentCell.flatMap(_.toCellValue(sst)).foreach { case (colIdx, value) =>
+            cells(colIdx) = value
+          }
+          copy(currentCell = None)
 
         case XmlEvent.EndTag(xml.QName(_, "row")) =>
-          // Complete row
-          Complete(RowData(rowIndex, cells))
+          // Complete row (freeze to immutable)
+          Complete(RowData(rowIndex, cells.toMap))
 
         case _ =>
           // Pass event to current cell builder
@@ -161,7 +161,7 @@ object StreamingXmlReader:
             .find(_.name match { case xml.QName(_, "r") => true; case _ => false })
             .flatMap(attr => extractText(attr.value).flatMap(_.toIntOption))
             .getOrElse(1)
-          InRow(rowIndex, Map.empty, None)
+          InRow(rowIndex, collection.mutable.Map.empty, None)
         case _ => Idle
 
   /** Builder for accumulating cell data */
