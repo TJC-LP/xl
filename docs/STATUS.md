@@ -41,7 +41,7 @@
 - ✅ RichText DSL: `"Bold".bold.red + " normal " + "Italic".italic.blue`
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
-- ⏳ **Formula Evaluation** (WI-08 in progress): Evaluator skeleton exists (EvalError ADT complete, Evaluator.scala has compile issues); needs fixes + 50 tests
+- ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible SUM/COUNT/AVERAGE behavior
 
 **Performance** (Optimized):
 - ✅ Inline hot paths (10-20% faster on cell operations)
@@ -70,7 +70,7 @@
 
 ### Test Coverage
 
-**776 tests across 5 modules** (includes P7+P8 string interpolation + WI-07 formula parser + WI-10 table support):
+**840 tests across 5 modules** (includes P7+P8 string interpolation + WI-07 formula parser + WI-08 formula evaluator + WI-10 table support):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -94,12 +94,18 @@
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
-- **xl-evaluator**: 51 tests
-  - 7 property-based round-trip tests (parse ∘ print = id)
-  - 26 parser unit tests (literals, operators, functions, edge cases)
-  - 10 scientific notation tests (E notation, positive/negative exponents)
-  - 5 error handling tests (invalid syntax, unknown functions)
-  - 3 integration tests (complex expressions, nested formulas)
+- **xl-evaluator**: 115 tests (57 parser + 58 evaluator)
+  - **Parser (WI-07)**: 57 tests
+    - 7 property-based round-trip tests (parse ∘ print = id)
+    - 26 parser unit tests (literals, operators, functions, edge cases)
+    - 10 scientific notation tests (E notation, positive/negative exponents)
+    - 5 error handling tests (invalid syntax, unknown functions)
+    - 9 integration tests (complex expressions, nested formulas, operator precedence)
+  - **Evaluator (WI-08)**: 58 tests
+    - 10 property-based law tests (literal identity, arithmetic correctness, short-circuit semantics)
+    - 28 unit tests (division by zero, boolean operations, comparisons, cell references, FoldRange)
+    - 12 integration tests (IF, AND, OR, nested conditionals, SUM/COUNT, complex boolean logic)
+    - 8 error path tests (nested errors, codec failures, missing cells, propagation vs short-circuit)
 
 ---
 
@@ -108,9 +114,9 @@
 ### XML Serialization
 
 **Formula System**:
-- ✅ **Parsing complete** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, 51 tests
-- ⏳ **Evaluation in progress** (WI-08): Evaluator skeleton exists, needs compile fixes + comprehensive tests
-- ❌ **Function library not started** (WI-09): Planned after WI-08 (SUM, IF, AVERAGE, etc.)
+- ✅ **Parsing complete** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, 57 tests
+- ✅ **Evaluation complete** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
+- ⏳ **Function library ready to start** (WI-09): Depends on WI-08 (now complete); will add SUM/IF/VLOOKUP/etc
 - ❌ **Dependency graph not started** (WI-09b): Circular reference detection planned
 - ⚠️ Merged cells are fully supported in the in-memory OOXML path, but not emitted by streaming writers.
 - ❌ Hyperlinks not serialized.
