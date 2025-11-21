@@ -6,14 +6,14 @@
 
 ## TL;DR (For AI Agents)
 
-**Current Status**: WI-07 complete (731+ tests passing). Core domain model, OOXML I/O, streaming, codecs, and formula parser operational.
+**Current Status**: WI-07, WI-15 complete (731+ tests passing). Core domain model, OOXML I/O, streaming, codecs, formula parser, and performance benchmarks operational.
 
 **Active Work**: None (awaiting task assignment)
 
 **Next Available Work**:
 - `WI-08` — Formula Evaluator (unblocked by WI-07)
 - `WI-10` — Table Support (independent, high-value)
-- `WI-15` — Benchmark Suite (enables optimizations)
+- `WI-17` — SAX Streaming Write (unblocked by WI-15, design complete)
 
 **Quick Start**: Jump to [Work Selection Algorithm](#work-selection-algorithm) for step-by-step work item selection.
 
@@ -26,12 +26,13 @@ graph TB
     %% Completed work (green)
     P0["P0-P8, P31<br/>Foundation Complete"]:::completed
     WI07["WI-07: Formula Parser<br/>(formula-system.md)"]:::completed
+    WI15["WI-15: Benchmark Suite<br/>(advanced-features.md)"]:::completed
 
     %% Available work (blue - ready to start)
     WI08["WI-08: Formula Evaluator"]:::available
     WI10["WI-10: Table Support<br/>(advanced-features.md)"]:::available
     WI11["WI-11: Chart Model<br/>(advanced-features.md)"]:::available
-    WI15["WI-15: Benchmark Suite<br/>(advanced-features.md)"]:::available
+    WI17["WI-17: SAX Streaming Write<br/>(sax-streaming-write.md)"]:::available
     WI20["WI-20: Query API<br/>(streaming-improvements.md)"]:::available
 
     %% Blocked work (gray - waiting on dependencies)
@@ -52,6 +53,7 @@ graph TB
     WI11 --> WI12
     WI10 --> WI13
     WI15 --> WI16
+    WI15 --> WI17
 
     %% Style definitions
     classDef completed fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
@@ -78,8 +80,9 @@ graph TB
 | **WI-11** | Chart Model | Advanced | `advanced-features.md` §Charts | xl-ooxml | 🔵 Available | P0-P8 | Low |
 | **WI-12** | Drawing Layer | Advanced | `advanced-features.md` §Drawings | xl-ooxml | ⚪ Blocked | WI-11 | Medium |
 | **WI-13** | Pivot Tables | Advanced | `advanced-features.md` §Pivots | xl-ooxml | ⚪ Blocked | WI-10 | High |
-| **WI-15** | Benchmark Suite | Infra | `advanced-features.md` §Benchmarks | xl-testkit | 🔵 Available | P0-P8 | None |
+| **WI-15** | Benchmark Suite | Infra | `advanced-features.md` §Benchmarks | xl-benchmarks | ✅ Complete | P0-P8 | None |
 | **WI-16** | Streaming Optimizations | Core | `streaming-improvements.md` | xl-cats-effect | ⚪ Blocked | WI-15 | Medium |
+| **WI-17** | SAX Streaming Write | Performance | `sax-streaming-write.md` | xl-ooxml, xl-cats-effect | 🔵 Available | WI-15 | Medium |
 | **WI-20** | Query API | Core | `streaming-improvements.md` §Query | xl-core | 🔵 Available | P0-P8 | Medium |
 | **WI-30** | Security Hardening | Safety | `error-model-and-safety.md` | xl-ooxml | 🔵 Available | P0-P8 | Low |
 
