@@ -69,7 +69,7 @@
 
 ### Test Coverage
 
-**795 tests across 5 modules** (includes P7+P8 string interpolation + P6.8 surgical modification + WI-07 formula parser + WI-08 formula evaluator):
+**887 tests across 5 modules** (includes P7+P8 string interpolation + P6.8 surgical modification + WI-07 formula parser + WI-08 formula evaluator + WI-09 function library):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -92,7 +92,7 @@
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
-- **xl-evaluator**: 115 tests (57 parser + 58 evaluator)
+- **xl-evaluator**: 207 tests (66 parser + 63 evaluator + 48 function tests + 30 evaluation API tests)
   - **Parser (WI-07)**: 57 tests
     - 7 property-based round-trip tests (parse ∘ print = id)
     - 26 parser unit tests (literals, operators, functions, edge cases)
@@ -112,10 +112,14 @@
 ### XML Serialization
 
 **Formula System**:
-- ✅ **Parsing complete** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, 57 tests
-- ✅ **Evaluation complete** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ⏳ **Function library ready to start** (WI-09): Depends on WI-08 (now complete); will add SUM/IF/VLOOKUP/etc
-- ❌ **Dependency graph not started** (WI-09b): Circular reference detection planned
+- ✅ **Parsing complete** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, 66 tests
+- ✅ **Evaluation complete** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 63 tests
+- ✅ **Function library complete** (WI-09a/b/c): 21 functions (aggregate, logical, text, date), FunctionParser type class, evaluation API, 78 tests
+  - Functions: SUM, COUNT, AVERAGE, MIN, MAX, IF, AND, OR, NOT, CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER, TODAY, NOW, DATE, YEAR, MONTH, DAY
+  - Type class parser: FunctionParser[F] with extensible registry
+  - Evaluation API: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
+  - Clock trait for pure date/time functions (deterministic testing)
+- ⏳ **Dependency graph in progress** (WI-09d): Circular reference detection + topological sort (~300 LOC, 40+ tests remaining)
 - ⚠️ Merged cells are fully supported in the in-memory OOXML path, but not emitted by streaming writers.
 - ❌ Hyperlinks not serialized.
 - ❌ Column/row properties (width, height, hidden) are parsed and tracked in the domain model but not yet serialized back into `<cols>` / `<row>` in the regenerated XML.

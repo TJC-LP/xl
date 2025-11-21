@@ -6,12 +6,12 @@
 
 ## TL;DR (For AI Agents)
 
-**Current Status**: WI-07 complete (731+ tests passing). Core domain model, OOXML I/O, streaming, codecs, and formula parser operational.
+**Current Status**: WI-07, WI-08, WI-09 (a/b/c) complete (207+ tests passing). Formula system operational with 21 functions, type class parser, and evaluation API.
 
-**Active Work**: None (awaiting task assignment)
+**Active Work**: WI-09d (DependencyGraph with cycle detection) — final piece of formula system
 
 **Next Available Work**:
-- `WI-08` — Formula Evaluator (unblocked by WI-07)
+- `WI-09d` — Dependency Graph (~300 LOC, 40+ tests, 3-4 hours) — completes WI-09
 - `WI-10` — Table Support (independent, high-value)
 - `WI-15` — Benchmark Suite (enables optimizations)
 
@@ -26,16 +26,17 @@ graph TB
     %% Completed work (green)
     P0["P0-P8, P31<br/>Foundation Complete"]:::completed
     WI07["WI-07: Formula Parser<br/>(formula-system.md)"]:::completed
+    WI08["WI-08: Formula Evaluator<br/>(formula-system.md)"]:::completed
+    WI09["WI-09a/b/c: Function Library<br/>Parser + Eval API"]:::completed
 
     %% Available work (blue - ready to start)
-    WI08["WI-08: Formula Evaluator"]:::available
+    WI09d["WI-09d: Dependency Graph<br/>(~300 LOC, 3-4hrs)"]:::available
     WI10["WI-10: Table Support<br/>(advanced-features.md)"]:::available
     WI11["WI-11: Chart Model<br/>(advanced-features.md)"]:::available
     WI15["WI-15: Benchmark Suite<br/>(advanced-features.md)"]:::available
     WI20["WI-20: Query API<br/>(streaming-improvements.md)"]:::available
 
     %% Blocked work (gray - waiting on dependencies)
-    WI09["WI-09: Function Library"]:::blocked
     WI12["WI-12: Drawing Layer"]:::blocked
     WI13["WI-13: Pivot Tables"]:::blocked
     WI16["WI-16: Streaming Opts"]:::blocked
@@ -49,6 +50,7 @@ graph TB
 
     WI07 --> WI08
     WI08 --> WI09
+    WI09 --> WI09d
     WI11 --> WI12
     WI10 --> WI13
     WI15 --> WI16
@@ -72,8 +74,9 @@ graph TB
 |---------|---------|--------|----------|---------|--------|-----------|------------|
 | **P0-P8** | Foundation Complete | Core | (see git history) | all | ✅ Complete | - | N/A |
 | **WI-07** | Formula Parser | Formula | `formula-system.md` §1-2 | xl-evaluator | ✅ Complete | P0-P8 | Low |
-| **WI-08** | Formula Evaluator | Formula | `formula-system.md` §3 | xl-evaluator | 🔵 Available | WI-07 | Medium |
-| **WI-09** | Function Library | Formula | `formula-system.md` §4 | xl-evaluator | ⚪ Blocked | WI-08 | Low |
+| **WI-08** | Formula Evaluator | Formula | `formula-system.md` §3 | xl-evaluator | ✅ Complete | WI-07 | Medium |
+| **WI-09a/b/c** | Function Library (Core+Parser+API) | Formula | `formula-system.md` §4 | xl-evaluator | ✅ Complete | WI-08 | Low |
+| **WI-09d** | Dependency Graph & Cycles | Formula | `formula-system.md` §5 | xl-evaluator | 🔵 Available | WI-09c | Low |
 | **WI-10** | Table Support | Advanced | `advanced-features.md` §Tables | xl-ooxml | 🔵 Available | P0-P8 | Low |
 | **WI-11** | Chart Model | Advanced | `advanced-features.md` §Charts | xl-ooxml | 🔵 Available | P0-P8 | Low |
 | **WI-12** | Drawing Layer | Advanced | `advanced-features.md` §Drawings | xl-ooxml | ⚪ Blocked | WI-11 | Medium |

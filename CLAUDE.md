@@ -531,7 +531,7 @@ excel.readR(path).flatMap {
 
 ### Formula System Patterns
 
-Formula system (`xl-evaluator/src/com/tjclp/xl/formula/`) provides typed parsing and evaluation (WI-08 in progress).
+Formula system (`xl-evaluator/src/com/tjclp/xl/formula/`) provides typed parsing, evaluation, and 21 built-in functions (WI-07/08/09 complete).
 
 #### Import Pattern for Formula Code
 
@@ -588,10 +588,11 @@ val compact = FormulaPrinter.printCompact(expr)                 // "A1+100" (no 
 val debug = FormulaPrinter.printWithTypes(expr)                 // "Add(Ref(A1), Lit(100))"
 ```
 
-#### Evaluate Formulas (WI-08 - In Progress)
+#### Evaluate Formulas (WI-08/09 - Complete)
 
+**Low-level API** (programmatic formula evaluation):
 ```scala
-import com.tjclp.xl.formula.{Evaluator, EvalError}
+import com.tjclp.xl.formula.{Evaluator, EvalError, Clock}
 
 val evaluator = Evaluator.instance
 
@@ -601,28 +602,44 @@ evaluator.eval(expr, sheet) match
     println(s"Result: $result")
   case Left(EvalError.DivByZero(num, denom)) =>
     println(s"Division by zero: $num / $denom")
-  case Left(EvalError.RefError(ref, reason)) =>
-    println(s"Cell reference error at ${ref.toA1}: $reason")
   case Left(EvalError.CodecFailed(ref, codecErr)) =>
-    println(s"Type mismatch at ${ref.toA1}: $codecErr")
+    println(s"Type mismatch at $ref: $codecErr")
   case Left(error) =>
     println(s"Evaluation failed: $error")
+
+// Date/time functions with Clock
+val clock = Clock.fixedDate(LocalDate.of(2025, 11, 21))
+evaluator.eval(TExpr.today(), sheet, clock) // Right(LocalDate(2025, 11, 21))
 ```
 
-#### Integration with fx Macro
-
+**High-level API** (Sheet evaluation extensions):
 ```scala
-import com.tjclp.xl.formula.FormulaParser
+import com.tjclp.xl.formula.SheetEvaluator.*
 
-// fx macro validates at compile time, returns CellValue.Formula
-val validated = fx"=SUM(A1:A10)"  // Compile-time validation
+// Evaluate formula string
+sheet.evaluateFormula("=SUM(A1:A10)") // XLResult[CellValue]
+sheet.evaluateFormula("=TODAY()", Clock.system) // XLResult[CellValue]
 
-validated match
-  case CellValue.Formula(text) =>
-    // Parse at runtime for evaluation
-    FormulaParser.parse(text).flatMap { expr =>
-      evaluator.eval(expr, sheet)
-    }
+// Evaluate cell with formula
+sheet.evaluateCell(ref"B1") // XLResult[CellValue]
+
+// Evaluate all formulas in sheet
+sheet.evaluateAllFormulas() // XLResult[Map[ARef, CellValue]]
+```
+
+**21 Built-in Functions**:
+- **Aggregate** (5): SUM, COUNT, AVERAGE, MIN, MAX
+- **Logical** (4): IF, AND, OR, NOT
+- **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
+- **Date** (6): TODAY, NOW, DATE, YEAR, MONTH, DAY
+
+**Function Introspection**:
+```scala
+import com.tjclp.xl.formula.FunctionParser
+
+FunctionParser.allFunctions // List("AND", "AVERAGE", "CONCATENATE", ...)
+FunctionParser.lookup("MIN") // Some(minFunctionParser)
+FunctionParser.isKnown("SUM") // true
 ```
 
 #### Round-Trip Verification
