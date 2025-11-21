@@ -52,28 +52,26 @@ object FormulaParser:
     // Strip leading '=' if present
     val formula = if input.startsWith("=") then input.substring(1) else input
 
-    // Validate non-empty
-    if formula.trim.isEmpty then return Left(ParseError.EmptyFormula)
-
-    // Validate length (Excel limit: 8192 chars)
-    if formula.length > 8192 then return Left(ParseError.FormulaTooLong(formula.length, 8192))
-
-    // Create parser state and parse
-    val state = ParserState(formula, 0)
-    parseExpr(state) match
-      case Right((expr, finalState)) =>
-        // Ensure we consumed all input
-        skipWhitespace(finalState) match
-          case s if s.pos >= s.input.length => Right(expr)
-          case s =>
-            Left(
-              ParseError.UnexpectedChar(
-                s.input(s.pos),
-                s.pos,
-                "unexpected characters after expression"
+    // Validate non-empty and length (Excel limit: 8192 chars)
+    if formula.trim.isEmpty then Left(ParseError.EmptyFormula)
+    else if formula.length > 8192 then Left(ParseError.FormulaTooLong(formula.length, 8192))
+    else
+      // Create parser state and parse
+      val state = ParserState(formula, 0)
+      parseExpr(state) match
+        case Right((expr, finalState)) =>
+          // Ensure we consumed all input
+          skipWhitespace(finalState) match
+            case s if s.pos >= s.input.length => Right(expr)
+            case s =>
+              Left(
+                ParseError.UnexpectedChar(
+                  s.input(s.pos),
+                  s.pos,
+                  "unexpected characters after expression"
+                )
               )
-            )
-      case Left(err) => Left(err)
+        case Left(err) => Left(err)
 
   /**
    * Parser state - tracks position in input string.
@@ -116,6 +114,7 @@ object FormulaParser:
   /**
    * Parse logical OR (lowest precedence).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseLogicalOr(state: ParserState): ParseResult[TExpr[?]] =
     parseLogicalAnd(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
@@ -130,6 +129,7 @@ object FormulaParser:
   /**
    * Parse logical AND.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseLogicalAnd(state: ParserState): ParseResult[TExpr[?]] =
     parseComparison(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
@@ -144,6 +144,7 @@ object FormulaParser:
   /**
    * Parse comparison operators: =, <>, <, <=, >, >=
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseComparison(state: ParserState): ParseResult[TExpr[?]] =
     parseConcatenation(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
@@ -243,6 +244,7 @@ object FormulaParser:
   /**
    * Parse addition and subtraction (left-associative).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseAddSub(state: ParserState): ParseResult[TExpr[?]] =
     parseMulDiv(state).flatMap { case (left, s1) =>
       @tailrec
@@ -281,6 +283,7 @@ object FormulaParser:
   /**
    * Parse multiplication and division (left-associative).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseMulDiv(state: ParserState): ParseResult[TExpr[?]] =
     parseUnary(state).flatMap { case (left, s1) =>
       @tailrec
@@ -319,6 +322,7 @@ object FormulaParser:
   /**
    * Parse unary operators: -, NOT
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseUnary(state: ParserState): ParseResult[TExpr[?]] =
     val s = skipWhitespace(state)
     s.currentChar match
@@ -450,22 +454,21 @@ object FormulaParser:
 
     // Check for boolean literals
     ident match
-      case "TRUE" => return Right((TExpr.Lit(true), s2))
-      case "FALSE" => return Right((TExpr.Lit(false), s2))
-      case _ => // Continue parsing
-
-    // Check for function call (identifier followed by '(')
-    val s3 = skipWhitespace(s2)
-    s3.currentChar match
-      case Some('(') =>
-        // Function call
-        parseFunction(ident, s3, startPos)
-      case Some(':') =>
-        // Range (e.g., A1:B10)
-        parseRange(state.input.substring(startPos, s2.pos), s2, startPos)
+      case "TRUE" => Right((TExpr.Lit(true), s2))
+      case "FALSE" => Right((TExpr.Lit(false), s2))
       case _ =>
-        // Cell reference
-        parseCellReference(state.input.substring(startPos, s2.pos), s2, startPos)
+        // Check for function call (identifier followed by '(')
+        val s3 = skipWhitespace(s2)
+        s3.currentChar match
+          case Some('(') =>
+            // Function call
+            parseFunction(ident, s3, startPos)
+          case Some(':') =>
+            // Range (e.g., A1:B10)
+            parseRange(state.input.substring(startPos, s2.pos), s2, startPos)
+          case _ =>
+            // Cell reference
+            parseCellReference(state.input.substring(startPos, s2.pos), s2, startPos)
 
   /**
    * Parse function call: FUNC(arg1, arg2, ...)
@@ -564,6 +567,7 @@ object FormulaParser:
   /**
    * Parse IF function: IF(condition, ifTrue, ifFalse)
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseIfFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
     args match
       case List(cond, ifTrue, ifFalse) =>
@@ -581,6 +585,7 @@ object FormulaParser:
   /**
    * Parse AND function: AND(expr1, expr2, ...)
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseAndFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
     args match
       case Nil =>
@@ -594,6 +599,7 @@ object FormulaParser:
   /**
    * Parse OR function: OR(expr1, expr2, ...)
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseOrFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
     args match
       case Nil =>
@@ -607,6 +613,7 @@ object FormulaParser:
   /**
    * Parse NOT function: NOT(expr)
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseNotFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
     args match
       case List(expr) => Right(TExpr.Not(expr.asInstanceOf[TExpr[Boolean]]))
@@ -616,15 +623,18 @@ object FormulaParser:
   /**
    * Parse cell reference: A1, $A$1, Sheet1!A1
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseCellReference(
     refStr: String,
     state: ParserState,
     startPos: Int
   ): ParseResult[TExpr[?]] =
+    // Safe: ARef.parse returns Either[String, ARef], match is exhaustive
     ARef.parse(refStr) match
-      case Right(aref: ARef) =>
+      case Right(aref) =>
         // Create Ref expression with numeric decoder
-        Right((TExpr.Ref(aref, TExpr.decodeNumeric), state))
+        // Cast needed due to opaque type erasure in pattern matching
+        Right((TExpr.Ref(aref.asInstanceOf[ARef], TExpr.decodeNumeric), state))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(refStr, startPos, err))
 
