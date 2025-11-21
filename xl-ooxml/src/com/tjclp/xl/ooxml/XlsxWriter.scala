@@ -12,6 +12,7 @@ import com.tjclp.xl.api.{Workbook, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext}
 import com.tjclp.xl.richtext.RichText
+import com.tjclp.xl.tables.TableSpec
 
 /** Shared Strings Table usage policy */
 enum SstPolicy derives CanEqual:
@@ -274,6 +275,48 @@ object XlsxWriter:
     val sheetsWithComments = commentsBySheet.keySet.map(_ + 1)
 
     (commentsBySheet, sheetsWithComments)
+
+  /**
+   * Build per-sheet table data for serialization.
+   *
+   * Assigns global table IDs sequentially across all sheets (1-indexed). Tables are sorted by name
+   * within each sheet for deterministic output.
+   *
+   * Returns:
+   *   - Map[Int, Seq[(TableSpec, Long)]]: sheet index (0-based) → tables with global IDs
+   *   - Int: total table count (for content types registration)
+   *   - Map[String, Long]: table name → global table ID (for relationship targeting)
+   */
+  private def buildTablesData(
+    workbook: Workbook
+  ): (Map[Int, Seq[(TableSpec, Long)]], Int, Map[String, Long]) =
+    // Flatten all tables from all sheets with their sheet indices
+    // Sort by name within each sheet for deterministic ordering
+    val allTablesWithIndices: Seq[(TableSpec, Int)] = workbook.sheets.zipWithIndex.flatMap {
+      case (sheet, sheetIdx) =>
+        sheet.tables.values.toSeq.sortBy(_.name).map(table => (table, sheetIdx))
+    }
+
+    // Assign sequential global IDs (1-indexed: table1.xml, table2.xml, etc.)
+    val tablesWithIds: Seq[(TableSpec, Int, Long)] = allTablesWithIndices.zipWithIndex.map {
+      case ((table, sheetIdx), globalIdx) => (table, sheetIdx, (globalIdx + 1).toLong)
+    }
+
+    // Group by sheet index for per-sheet processing
+    val tablesBySheet: Map[Int, Seq[(TableSpec, Long)]] = tablesWithIds
+      .groupMap { case (_, sheetIdx, _) => sheetIdx } { case (table, _, tableId) =>
+        (table, tableId)
+      }
+
+    // Total table count for content types
+    val totalTableCount = tablesWithIds.size
+
+    // Table name → global ID mapping for lookups
+    val tableIdMap: Map[String, Long] = tablesWithIds.map { case (table, _, tableId) =>
+      table.name -> tableId
+    }.toMap
+
+    (tablesBySheet, totalTableCount, tableIdMap)
 
   /**
    * Build worksheet relationships for a sheet with comments.

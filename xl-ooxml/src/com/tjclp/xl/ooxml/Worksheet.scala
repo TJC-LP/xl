@@ -235,6 +235,8 @@ case class OoxmlWorksheet(
   picture: Option[Elem] = None,
   oleObjects: Option[Elem] = None,
   controls: Option[Elem] = None,
+  // Tables
+  tableParts: Option[Elem] = None,
   // Extensions
   extLst: Option[Elem] = None,
   otherElements: Seq[Elem] = Seq.empty,
@@ -284,6 +286,9 @@ case class OoxmlWorksheet(
     picture.foreach(e => children += cleanNamespaces(e))
     oleObjects.foreach(e => children += cleanNamespaces(e))
     controls.foreach(e => children += cleanNamespaces(e))
+
+    // Tables
+    tableParts.foreach(e => children += cleanNamespaces(e))
 
     // Extensions
     extLst.foreach(e => children += cleanNamespaces(e))
@@ -452,6 +457,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.picture,
           preserved.oleObjects,
           preserved.controls,
+          preserved.tableParts,
           preserved.extLst,
           preserved.otherElements,
           preserved.rootAttributes,
@@ -514,6 +520,8 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       picture = (elem \ "picture").headOption.collect { case e: Elem => cleanNamespaces(e) }
       oleObjects = (elem \ "oleObjects").headOption.collect { case e: Elem => cleanNamespaces(e) }
       controls = (elem \ "controls").headOption.collect { case e: Elem => cleanNamespaces(e) }
+
+      tableParts = (elem \ "tableParts").headOption.collect { case e: Elem => cleanNamespaces(e) }
 
       extLst = (elem \ "extLst").headOption.collect { case e: Elem => cleanNamespaces(e) }
 
@@ -583,6 +591,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       picture,
       oleObjects,
       controls,
+      tableParts,
       extLst,
       otherElements.toSeq,
       rootAttributes = elem.attributes,
