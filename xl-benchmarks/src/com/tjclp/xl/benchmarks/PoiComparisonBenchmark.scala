@@ -2,6 +2,7 @@ package com.tjclp.xl.benchmarks
 
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.workbooks.Workbook
 import org.apache.poi.ss.usermodel.{
@@ -42,61 +43,47 @@ class PoiComparisonBenchmark {
 
   var xlWorkbook: Workbook = uninitialized
   var poiWorkbook: PoiWorkbook = uninitialized
-  var xlTempFile: Path = uninitialized
-  var poiTempFile: Path = uninitialized
+  var sharedTestFile: Path = uninitialized // Shared file for fair comparison
 
   @Setup(Level.Trial)
   def setup(): Unit = {
-    // Generate XL workbook
-    xlWorkbook = BenchmarkUtils.generateWorkbook(rows, styled = false)
+    // Generate verifiable workbook (cell A{i} = i for arithmetic series sum validation)
+    xlWorkbook = BenchmarkUtils.createVerifiableWorkbook(rows)
 
-    // Generate equivalent POI workbook
+    // Generate equivalent POI workbook with same verifiable data
     poiWorkbook = new XSSFWorkbook()
     val sheet = poiWorkbook.createSheet("Data")
 
-    // Header row
-    val headerRow = sheet.createRow(0)
-    headerRow.createCell(0, CellType.STRING).setCellValue("ID")
-    headerRow.createCell(1, CellType.STRING).setCellValue("Name")
-    headerRow.createCell(2, CellType.STRING).setCellValue("Date")
-    headerRow.createCell(3, CellType.STRING).setCellValue("Amount")
-    headerRow.createCell(4, CellType.BOOLEAN).setCellValue("Active")
-
-    // Data rows (equivalent to BenchmarkUtils.generateSheet)
-    val random = new scala.util.Random(42)
+    // Data rows (cell A{i} = i)
     for (i <- 1 to rows) {
-      val row = sheet.createRow(i)
+      val row = sheet.createRow(i - 1) // 0-indexed in POI
       row.createCell(0, CellType.NUMERIC).setCellValue(i.toDouble)
-      row.createCell(1, CellType.STRING).setCellValue(s"User_${i % 100}")
-      row
-        .createCell(2, CellType.NUMERIC)
-        .setCellValue(java.time.LocalDate.of(2024, 1, 1).plusDays(i % 365).toEpochDay.toDouble)
-      row.createCell(3, CellType.NUMERIC).setCellValue(random.nextDouble() * 10000)
-      row.createCell(4, CellType.BOOLEAN).setCellValue(random.nextBoolean())
     }
 
-    // Create temp files
-    xlTempFile = Files.createTempFile("xl-poi-benchmark-", ".xlsx")
-    poiTempFile = Files.createTempFile("poi-benchmark-", ".xlsx")
+    // Create ONE shared temp file for fair comparison
+    sharedTestFile = Files.createTempFile("shared-benchmark-", ".xlsx")
+
+    // PRE-CREATE file for read benchmarks (write cost separated from read measurements)
+    // Use XL to write (arbitrary choice - both libraries must read same file)
+    ExcelIO.instance[IO].write(xlWorkbook, sharedTestFile).unsafeRunSync()
   }
 
   @TearDown(Level.Trial)
   def teardown(): Unit = {
-    if (xlTempFile != null && Files.exists(xlTempFile)) Files.delete(xlTempFile)
-    if (poiTempFile != null && Files.exists(poiTempFile)) Files.delete(poiTempFile)
+    if (sharedTestFile != null && Files.exists(sharedTestFile)) Files.delete(sharedTestFile)
     if (poiWorkbook != null) poiWorkbook.close()
   }
 
   @Benchmark
   def xlWrite(): Unit = {
     // XL write performance
-    ExcelIO.instance[IO].write(xlWorkbook, xlTempFile).unsafeRunSync()
+    ExcelIO.instance[IO].write(xlWorkbook, sharedTestFile).unsafeRunSync()
   }
 
   @Benchmark
   def poiWrite(): Unit = {
     // POI write performance
-    val fos = new java.io.FileOutputStream(poiTempFile.toFile)
+    val fos = new java.io.FileOutputStream(sharedTestFile.toFile)
     try {
       poiWorkbook.write(fos)
     } finally {
@@ -106,22 +93,14 @@ class PoiComparisonBenchmark {
 
   @Benchmark
   def xlRead(): Workbook = {
-    // XL read performance
-    ExcelIO.instance[IO].write(xlWorkbook, xlTempFile).unsafeRunSync()
-    ExcelIO.instance[IO].read(xlTempFile).unsafeRunSync()
+    // XL in-memory read performance (file pre-created in setup)
+    ExcelIO.instance[IO].read(sharedTestFile).unsafeRunSync()
   }
 
   @Benchmark
   def poiRead(): PoiWorkbook = {
-    // POI read performance (in-memory)
-    val fos = new java.io.FileOutputStream(poiTempFile.toFile)
-    try {
-      poiWorkbook.write(fos)
-    } finally {
-      fos.close()
-    }
-
-    val fis = new java.io.FileInputStream(poiTempFile.toFile)
+    // POI in-memory read performance (file pre-created in setup)
+    val fis = new java.io.FileInputStream(sharedTestFile.toFile)
     try {
       WorkbookFactory.create(fis)
     } finally {
@@ -130,15 +109,31 @@ class PoiComparisonBenchmark {
   }
 
   @Benchmark
-  def xlReadStream(): Long = {
-    // XL streaming read performance (constant memory)
-    ExcelIO.instance[IO].write(xlWorkbook, xlTempFile).unsafeRunSync()
-    ExcelIO.instance[IO].readStream(xlTempFile).compile.count.unsafeRunSync()
+  def xlReadStream(): Double = {
+    // XL streaming read performance - constant memory with verifiable sum computation
+    // Computes sum of all numeric values in column A (index 0)
+    // Expected sum: N × (N+1) / 2 for N rows (arithmetic series)
+    ExcelIO
+      .instance[IO]
+      .readStream(sharedTestFile)
+      .evalMap { rowData =>
+        IO.pure {
+          // Extract numeric value from column A (index 0)
+          rowData.cells.get(0) match {
+            case Some(CellValue.Number(n)) => n.toDouble
+            case _ => 0.0
+          }
+        }
+      }
+      .compile
+      .fold(0.0)(_ + _)
+      .unsafeRunSync()
   }
 
   @Benchmark
-  def poiReadStream(): Long = {
-    // POI streaming read performance (constant memory via XSSFReader)
+  def poiReadStream(): Double = {
+    // POI streaming read performance - constant memory via XSSFReader (file pre-created in setup)
+    // Computes sum of all numeric values in column A
     import org.apache.poi.xssf.eventusermodel.{XSSFReader, XSSFSheetXMLHandler}
     import org.apache.poi.xssf.model.SharedStrings
     import org.apache.poi.openxml4j.opc.OPCPackage
@@ -146,30 +141,31 @@ class PoiComparisonBenchmark {
     import org.xml.sax.InputSource
     import javax.xml.parsers.SAXParserFactory
 
-    // Write file first
-    val fos = new java.io.FileOutputStream(poiTempFile.toFile)
-    try {
-      poiWorkbook.write(fos)
-    } finally {
-      fos.close()
-    }
-
     // Stream read with XSSFReader
-    val pkg = OPCPackage.open(poiTempFile.toFile)
+    val pkg = OPCPackage.open(sharedTestFile.toFile)
     try {
       val reader = new XSSFReader(pkg)
       val sst = reader.getSharedStringsTable()
 
-      // Row counter handler
-      var rowCount = 0L
+      // Sum accumulator handler
+      var sum = 0.0
       val handler = new SheetContentsHandler {
-        override def startRow(rowNum: Int): Unit = rowCount += 1
+        override def startRow(rowNum: Int): Unit = ()
         override def endRow(rowNum: Int): Unit = ()
         override def cell(
           cellReference: String,
           formattedValue: String,
           comment: org.apache.poi.xssf.usermodel.XSSFComment
-        ): Unit = ()
+        ): Unit = {
+          // Only accumulate values from column A
+          if (cellReference.startsWith("A")) {
+            try {
+              sum += formattedValue.toDouble
+            } catch {
+              case _: NumberFormatException => () // Skip non-numeric values
+            }
+          }
+        }
         override def headerFooter(text: String, isHeader: Boolean, tagName: String): Unit = ()
       }
 
@@ -186,7 +182,7 @@ class PoiComparisonBenchmark {
         sheetStream.close()
       }
 
-      rowCount
+      sum
     } finally {
       pkg.close()
     }

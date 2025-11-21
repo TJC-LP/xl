@@ -101,4 +101,28 @@ object BenchmarkUtils {
     file.deleteOnExit()
     file
   }
+
+  /**
+   * Create workbook with verifiable data for benchmark validation.
+   *
+   * Pattern: Cell A{i} contains value i (1, 2, 3, ..., N) Expected sum: N × (N+1) / 2
+   *
+   * This allows verification that benchmarks actually parse data:
+   *   - 1,000 rows: sum = 500,500
+   *   - 10,000 rows: sum = 50,005,000
+   */
+  def createVerifiableWorkbook(rows: Int): Workbook = {
+    var sheet: Sheet = Sheet(SheetName.unsafe("Data"))
+
+    // Create rows with cell value = row number (verifiable arithmetic series)
+    val updates: Seq[(ARef, Any)] = (1 to rows).map { i =>
+      (ARef.from1(1, i): ARef) -> (CellValue.Number(i.toDouble): Any)
+    }
+
+    sheet = sheet.put(updates*).getOrElse(sheet)
+    Workbook.empty.flatMap(_.put(sheet)).getOrElse(Workbook(Vector.empty))
+  }
+
+  /** Compute expected sum for verifiable workbook (arithmetic series formula) */
+  def expectedSum(rows: Int): Double = rows.toDouble * (rows + 1) / 2
 }

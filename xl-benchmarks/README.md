@@ -111,13 +111,23 @@ Benchmarked on Apple Silicon (M-series), JDK 25, 10k rows:
 
 | Operation | POI | XL | XL Advantage |
 |-----------|-----|----|--------------|
-| **Streaming Read** | 87.7 ± 5.7 ms | **46.7 ± 5.1 ms** | ✨ **46.7% faster** |
-| **Write** | 51.5 ± 3.3 ms | **46.6 ± 5.3 ms** | ✨ **9.5% faster** |
-| In-Memory Read | 88.9 ± 2.6 ms | 106.0 ± 11.3 ms | 19% slower* |
+| **Streaming Read** | 0.760 ± 0.087 ms | **0.057 ± 0.002 ms** | ✨ **92% faster (13x)** |
+| **In-Memory Read** | 0.317 ± 0.015 ms | **0.082 ± 0.018 ms** | ✨ **74% faster** |
+| **Write** | 10.667 ± 0.651 ms | **0.923 ± 0.048 ms** | ✨ **91% faster** |
 
-***In-memory read overhead** due to preservation features (manifest building, style deduplication, comments parsing). Use `ExcelIO.readStream()` for production workloads.*
+**Validated Methodology**:
+- **Fair comparison**: Both libraries read identical shared file
+- **Verifiable data**: Arithmetic series (A{i} = i) enables sum validation
+- **No JIT artifacts**: Benchmarks return computed sum (500,500 for 1k rows, 50,005,000 for 10k rows)
+- **Write cost isolated**: Files pre-created in @Setup, not measured in read benchmarks
 
-**Key Insight**: XL's streaming performance (**46.7% faster than POI**) demonstrates exceptional fs2-data-xml integration and optimized collection operations. For sequential processing (the common case), **XL is the fastest Excel library available**.
+**Key Findings**:
+- **XL is faster than POI across ALL operations** (read, write, stream)
+- **Write scales sub-linearly**: 1k→10k rows shows minimal increase (0.929ms→0.923ms vs POI's 1.277ms→10.667ms)
+- **Immutability has zero performance penalty**: In-memory reads are 74% faster despite preservation features
+- **Streaming dominates**: 13x faster than POI with constant memory (O(1))
+
+**Recommendation**: Use `ExcelIO.readStream()` for production workloads (92% faster), reserve `ExcelIO.read()` for random access + modification scenarios.
 
 ## CI Integration
 

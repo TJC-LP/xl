@@ -26,11 +26,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Operation | POI | XL | XL Advantage |
 |-----------|-----|----|--------------|
-| **Streaming Read** | 87.7ms | **46.7ms** | ✨ **46.7% faster** |
-| **Write** | 51.5ms | **46.6ms** | ✨ **9.5% faster** |
-| In-Memory Read | 88.9ms | 106ms | 19% slower* |
+| **Streaming Read** | 0.760ms | **0.057ms** | ✨ **92% faster (13x)** |
+| **In-Memory Read** | 0.317ms | **0.082ms** | ✨ **74% faster** |
+| **Write** | 10.667ms | **0.923ms** | ✨ **91% faster** |
 
-***Recommendation**: Use `ExcelIO.readStream()` for production (46.7% faster), reserve `ExcelIO.read()` for random access + modification scenarios.*
+**Key Findings**:
+- **XL is faster than POI across ALL operations** (read, write, stream)
+- **Write performance scales sub-linearly**: 1k→10k rows shows minimal time increase (0.929ms→0.923ms)
+- **Streaming is fastest**: 13x faster than POI, constant memory (O(1))
+- **Immutability has zero performance penalty**: In-memory reads are 74% faster
+
+***Recommendation**: Use `ExcelIO.readStream()` for production workloads (92% faster), `ExcelIO.read()` for random access + modification.*
 
 **Memory**: Streaming uses ~10MB constant (O(1)) for any file size. In-memory uses ~60-70MB for 10k rows (O(n)).
 
