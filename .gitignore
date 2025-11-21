@@ -61,3 +61,6 @@ repomix*
 ~$*.xlsx
 test-*.xlsx
 data
+
+### Benchmark Logs ###
+*.log

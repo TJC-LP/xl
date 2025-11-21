@@ -1,7 +1,9 @@
+//| mvnDeps: ["com.lihaoyi::mill-contrib-jmh:$MILL_VERSION"]
 import mill._
 import mill.scalalib._
 import mill.scalalib.publish._
 import mill.scalalib.scalafmt._
+import contrib.jmh.JmhModule
 
 val scala3Version = "3.7.3"
 val organization = "com.tjclp"
