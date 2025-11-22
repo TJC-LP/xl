@@ -191,6 +191,21 @@ object FormulaPrinter:
       case TExpr.Max(range) =>
         s"MAX(${formatARef(range.start)}:${formatARef(range.end)})"
 
+      // Financial functions
+      case TExpr.Npv(rate, values) =>
+        s"NPV(${printExpr(rate, 0)}, ${formatARef(values.start)}:${formatARef(values.end)})"
+
+      case TExpr.Irr(values, guessOpt) =>
+        val rangeText = s"${formatARef(values.start)}:${formatARef(values.end)}"
+        guessOpt match
+          case Some(guess) => s"IRR($rangeText, ${printExpr(guess, 0)})"
+          case None => s"IRR($rangeText)"
+
+      case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
+        s"VLOOKUP(${printExpr(lookup, 0)}, " +
+          s"${formatARef(table.start)}:${formatARef(table.end)}, " +
+          s"${printExpr(colIndex, 0)}, ${printExpr(rangeLookup, 0)})"
+
       // Range aggregation
       case TExpr.FoldRange(range, z, step, decode) =>
         // Detect common aggregation patterns
@@ -351,5 +366,15 @@ object FormulaPrinter:
         s"Min(${formatARef(range.start)}:${formatARef(range.end)})"
       case TExpr.Max(range) =>
         s"Max(${formatARef(range.start)}:${formatARef(range.end)})"
+      case TExpr.Npv(rate, values) =>
+        s"Npv(${printWithTypes(rate)}, ${formatARef(values.start)}:${formatARef(values.end)})"
+      case TExpr.Irr(values, guessOpt) =>
+        val rangeText = s"${formatARef(values.start)}:${formatARef(values.end)}"
+        guessOpt match
+          case Some(guess) => s"Irr($rangeText, ${printWithTypes(guess)})"
+          case None => s"Irr($rangeText)"
+      case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
+        s"VLookup(${printWithTypes(lookup)}, ${formatARef(table.start)}:${formatARef(table.end)}, " +
+          s"${printWithTypes(colIndex)}, ${printWithTypes(rangeLookup)})"
       case fold @ TExpr.FoldRange(range, _, _, _) =>
         s"FoldRange(${formatARef(range.start)}:${formatARef(range.end)})"

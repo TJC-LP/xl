@@ -42,7 +42,7 @@
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
-- ✅ **Function Library** (WI-09a/b/c complete): 21 built-in functions (aggregate, logical, text, date), extensible type class parser, evaluation API
+- ✅ **Function Library** (WI-09a/b/c complete + financial functions): 24 built-in functions (aggregate, logical, text, date, financial), extensible type class parser, evaluation API
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 
 **Performance** (JMH Benchmarked - WI-15):
@@ -124,11 +124,12 @@
 **Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
 - ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function Library** (WI-09a/b/c): 21 built-in functions, extensible type class parser, evaluation API, 78 tests
+- ✅ **Function Library** (WI-09a/b/c + financial functions): 24 built-in functions, extensible type class parser, evaluation API, 78+ tests
   - **Aggregate** (5): SUM, COUNT, AVERAGE, MIN, MAX
   - **Logical** (4): IF, AND, OR, NOT
   - **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
   - **Date** (6): TODAY, NOW, DATE, YEAR, MONTH, DAY
+  - **Financial** (3): NPV, IRR, VLOOKUP
   - Type class: FunctionParser[F] with extensible registry
   - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
   - Clock trait for pure date/time functions (deterministic testing)
