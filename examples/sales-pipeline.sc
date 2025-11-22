@@ -20,10 +20,14 @@
 import com.tjclp.xl.*
 import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.error.*  // For .message extension
 import com.tjclp.xl.formula.*
 import com.tjclp.xl.formula.SheetEvaluator.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.styles.{CellStyle, numfmt}
+import numfmt.NumFmt
+import com.tjclp.xl.unsafe.*  // For .unsafe extension
 import java.time.LocalDate
 
 // ============================================================================
@@ -115,8 +119,15 @@ val pipeline = Sheet(name = SheetName.unsafe("Pipeline"))
   .put(ref"D17", fx"=B17/100000")
   .put(ref"D18", fx"=B18/100000")
 
+// Apply number formatting to formula ranges
+val percentStyle = CellStyle.default.withNumFmt(NumFmt.Percent)
+val pipelineWithFormatting = pipeline
+  .style(ref"D4:D8", percentStyle)   // Conversion rates
+  .flatMap(_.style(ref"D16:D18", percentStyle))  // Quota attainment
+  .unsafe
+
 println("Building sales pipeline model...")
-val pipelineResults = pipeline.evaluateWithDependencyCheck(clock).toOption.get
+val pipelineResults = pipelineWithFormatting.evaluateWithDependencyCheck(clock).toOption.get
 println(s"✓ ${pipelineResults.size} formulas evaluated successfully")
 println()
 
@@ -124,21 +135,26 @@ println()
 // Display Results
 // ============================================================================
 
-def formatNumber(value: CellValue): String = value match
-  case CellValue.Number(bd) => f"${bd.toDouble}%,.0f"
-  case _ => value.toString
+// Smart formatter that reads NumFmt from cell style
+def getFormattedValue(ref: ARef): String =
+  val cell = pipelineWithFormatting(ref)
+  val value = pipelineResults.getOrElse(ref, cell.value)
 
-def formatCurrency(value: CellValue): String = value match
-  case CellValue.Number(bd) => f"$$${bd.toDouble}%,.0f"
-  case _ => value.toString
+  // Get the cell's NumFmt from its style
+  val numFmt = cell.styleId
+    .flatMap(pipelineWithFormatting.styleRegistry.get)
+    .map(_.numFmt)
+    .getOrElse(NumFmt.General)
 
-def formatPercent(value: CellValue): String = value match
-  case CellValue.Number(bd) => f"${bd.toDouble * 100}%.1f%%"
-  case _ => value.toString
-
-// Helper to get value (from results if formula, from sheet if constant)
-def getValue(ref: ARef): CellValue =
-  pipelineResults.getOrElse(ref, pipeline(ref).value)
+  // Format based on the cell's NumFmt
+  value match
+    case CellValue.Number(bd) =>
+      numFmt match
+        case NumFmt.Percent => f"${bd.toDouble * 100}%.1f%%"
+        case NumFmt.Currency => f"$$${bd.toDouble}%,.0f"
+        case NumFmt.Decimal => f"${bd.toDouble}%,.2f"
+        case _ => f"${bd.toDouble}%,.0f"  // General format for numbers
+    case other => other.toString
 
 println("=" * 80)
 println("PIPELINE CONVERSION FUNNEL")
@@ -146,18 +162,18 @@ println("=" * 80)
 println()
 println(f"${"Stage"}%-15s ${"Deals"}%10s ${"Value"}%15s ${"Conversion"}%15s")
 println("-" * 80)
-println(f"${"Leads"}%-15s ${formatNumber(getValue(ref"B4"))}%10s ${formatCurrency(getValue(ref"C4"))}%15s ${"100.0%"}%15s")
-println(f"${"Qualified"}%-15s ${formatNumber(getValue(ref"B5"))}%10s ${formatCurrency(getValue(ref"C5"))}%15s ${formatPercent(getValue(ref"D5"))}%15s")
-println(f"${"Proposal"}%-15s ${formatNumber(getValue(ref"B6"))}%10s ${formatCurrency(getValue(ref"C6"))}%15s ${formatPercent(getValue(ref"D6"))}%15s")
-println(f"${"Negotiation"}%-15s ${formatNumber(getValue(ref"B7"))}%10s ${formatCurrency(getValue(ref"C7"))}%15s ${formatPercent(getValue(ref"D7"))}%15s")
-println(f"${"Closed Won"}%-15s ${formatNumber(getValue(ref"B8"))}%10s ${formatCurrency(getValue(ref"C8"))}%15s ${formatPercent(getValue(ref"D8"))}%15s")
+println(f"${"Leads"}%-15s ${getFormattedValue(ref"B4")}%10s ${getFormattedValue(ref"C4")}%15s ${"100.0%"}%15s")
+println(f"${"Qualified"}%-15s ${getFormattedValue(ref"B5")}%10s ${getFormattedValue(ref"C5")}%15s ${getFormattedValue(ref"D5")}%15s")
+println(f"${"Proposal"}%-15s ${getFormattedValue(ref"B6")}%10s ${getFormattedValue(ref"C6")}%15s ${getFormattedValue(ref"D6")}%15s")
+println(f"${"Negotiation"}%-15s ${getFormattedValue(ref"B7")}%10s ${getFormattedValue(ref"C7")}%15s ${getFormattedValue(ref"D7")}%15s")
+println(f"${"Closed Won"}%-15s ${getFormattedValue(ref"B8")}%10s ${getFormattedValue(ref"C8")}%15s ${getFormattedValue(ref"D8")}%15s")
 println()
 
 println("SUMMARY METRICS")
 println("-" * 80)
-println(f"Average Deal Size:      ${formatCurrency(getValue(ref"B10"))}")
-println(f"Overall Conversion:     ${formatPercent(getValue(ref"B11"))}")
-println(f"Total Pipeline Value:   ${formatCurrency(getValue(ref"B12"))}")
+println(f"Average Deal Size:      ${getFormattedValue(ref"B10")}")
+println(f"Overall Conversion:     ${getFormattedValue(ref"B11")}")
+println(f"Total Pipeline Value:   ${getFormattedValue(ref"B12")}")
 println()
 
 println("=" * 80)
@@ -168,11 +184,11 @@ println("Tiers: ≤$50k = 5%, ≤$100k = 8%, >$100k = 12%")
 println()
 println(f"${"Rep"}%-10s ${"Revenue"}%15s ${"Commission"}%15s ${"Quota"}%15s")
 println("-" * 80)
-println(f"${"Alice"}%-10s ${formatCurrency(getValue(ref"B16"))}%15s ${formatCurrency(getValue(ref"C16"))}%15s ${formatPercent(getValue(ref"D16"))}%15s")
-println(f"${"Bob"}%-10s ${formatCurrency(getValue(ref"B17"))}%15s ${formatCurrency(getValue(ref"C17"))}%15s ${formatPercent(getValue(ref"D17"))}%15s")
-println(f"${"Carol"}%-10s ${formatCurrency(getValue(ref"B18"))}%15s ${formatCurrency(getValue(ref"C18"))}%15s ${formatPercent(getValue(ref"D18"))}%15s")
+println(f"${"Alice"}%-10s ${getFormattedValue(ref"B16")}%15s ${getFormattedValue(ref"C16")}%15s ${getFormattedValue(ref"D16")}%15s")
+println(f"${"Bob"}%-10s ${getFormattedValue(ref"B17")}%15s ${getFormattedValue(ref"C17")}%15s ${getFormattedValue(ref"D17")}%15s")
+println(f"${"Carol"}%-10s ${getFormattedValue(ref"B18")}%15s ${getFormattedValue(ref"C18")}%15s ${getFormattedValue(ref"D18")}%15s")
 println("-" * 80)
-println(f"${"Total"}%-10s ${"-"}%15s ${formatCurrency(getValue(ref"C19"))}%15s ${"-"}%15s")
+println(f"${"Total"}%-10s ${"-"}%15s ${getFormattedValue(ref"C19")}%15s ${"-"}%15s")
 println()
 
 // ============================================================================

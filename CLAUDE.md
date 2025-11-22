@@ -529,6 +529,47 @@ excel.readR(path).flatMap {
 }
 ```
 
+**Universal `.style()` Method** (Format formula cells and ranges):
+```scala
+import com.tjclp.xl.*
+
+// Universal method works with all ref types
+val percentStyle = CellStyle.default.withNumFmt(NumFmt.Percent)
+val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
+
+// Single cell with ARef (compile-time validated)
+val sheet1 = sheet
+  .style(ref"A1", boldStyle)
+  .unsafe
+
+// Range with CellRange (compile-time validated)
+val sheet2 = sheet
+  .style(ref"B19:D21", percentStyle)  // All margin formulas as percentages
+  .unsafe
+
+// String refs (runtime validated, auto-detects cell vs range)
+val sheet3 = sheet
+  .style("A1", boldStyle)         // Single cell
+  .style("B19:D21", percentStyle) // Range
+  .unsafe
+
+// Chainable with formulas
+val sheet4 = Sheet(name = SheetName.unsafe("Finance"))
+  .put(ref"B19", fx"=B5/B3")       // Gross margin
+  .put(ref"C19", fx"=C5/C3")
+  .put(ref"D19", fx"=D5/D3")
+  .style(ref"B19:D21", percentStyle)  // Format all as percentages
+  .unsafe
+
+// Multiple ranges with flatMap chaining
+val sheet5 = sheet
+  .style(ref"B19:D21", percentStyle)   // Margins
+  .flatMap(_.style(ref"B3:D3", currencyStyle))  // Revenue
+  .unsafe
+```
+
+**Pattern**: Apply number formatting to formula cells after creation, then evaluate. Excel will display formatted results.
+
 ### Formula System Patterns
 
 Formula system (`xl-evaluator/src/com/tjclp/xl/formula/`) provides typed parsing, evaluation, 21 built-in functions, and dependency graph analysis with cycle detection (WI-07 through WI-09d complete).

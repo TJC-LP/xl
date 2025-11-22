@@ -20,10 +20,14 @@
 import com.tjclp.xl.*
 import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.error.*  // For .message extension
 import com.tjclp.xl.formula.*
 import com.tjclp.xl.formula.SheetEvaluator.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.styles.{CellStyle, numfmt}
+import numfmt.NumFmt
+import com.tjclp.xl.unsafe.*  // For .unsafe extension
 import java.time.LocalDate
 
 // ============================================================================
@@ -139,10 +143,16 @@ val model = Sheet(name = SheetName.unsafe("P&L"))
   .put(ref"C22", fx"=(C3-B3)/B3")  // 2025 vs 2024
   .put(ref"D22", fx"=(D3-C3)/C3")  // 2026 vs 2025
 
-println("✓ Financial model built with 50+ formulas")
+// Apply number formatting to formula ranges
+val percentStyle = CellStyle.default.withNumFmt(NumFmt.Percent)
+val modelWithFormatting = model
+  .style(ref"B19:D22", percentStyle)  // All margin and growth percentages
+  .unsafe
+
+println("✓ Financial model built with 50+ formulas and formatting")
 println("  - 3-year income statement (2024-2026)")
 println("  - Revenue, COGS, OpEx, EBITDA, Net Income")
-println("  - Financial ratios (Margins, Growth)")
+println("  - Financial ratios (Margins, Growth) - formatted as percentages")
 println()
 
 // ============================================================================
@@ -154,7 +164,7 @@ println("STEP 1: Evaluate All Formulas")
 println("=" * 80)
 
 val startTime = System.nanoTime()
-val results = model.evaluateWithDependencyCheck() match
+val results = modelWithFormatting.evaluateWithDependencyCheck() match
   case Right(r) =>
     val endTime = System.nanoTime()
     val duration = (endTime - startTime) / 1_000_000.0
@@ -175,42 +185,51 @@ println("INCOME STATEMENT (Evaluated Results)")
 println("=" * 80)
 println()
 
-def formatCurrency(value: CellValue): String = value match
-  case CellValue.Number(bd) => f"$$${bd.toDouble}%,.0f"
-  case _ => value.toString
+// Smart formatter that reads NumFmt from cell style
+def getFormattedValue(ref: ARef): String =
+  val cell = modelWithFormatting(ref)
+  val value = results.getOrElse(ref, cell.value)
 
-def formatPercent(value: CellValue): String = value match
-  case CellValue.Number(bd) => f"${bd.toDouble * 100}%.1f%%"
-  case _ => value.toString
+  // Get the cell's NumFmt from its style
+  val numFmt = cell.styleId
+    .flatMap(modelWithFormatting.styleRegistry.get)
+    .map(_.numFmt)
+    .getOrElse(NumFmt.General)
 
-// Helper to get value (from results if formula, from sheet if constant)
-def getValue(ref: ARef): CellValue =
-  results.getOrElse(ref, model(ref).value)
+  // Format based on the cell's NumFmt
+  value match
+    case CellValue.Number(bd) =>
+      numFmt match
+        case NumFmt.Percent => f"${bd.toDouble * 100}%.1f%%"
+        case NumFmt.Currency => f"$$${bd.toDouble}%,.0f"
+        case NumFmt.Decimal => f"${bd.toDouble}%,.2f"
+        case _ => f"${bd.toDouble}%,.0f"  // General format for numbers
+    case other => other.toString
 
 // Header
 println(f"${"Metric"}%-25s ${"2024"}%15s ${"2025"}%15s ${"2026"}%15s")
 println("-" * 80)
 
 // Revenue Section
-println(f"${"Revenue"}%-25s ${formatCurrency(getValue(ref"B3"))}%15s ${formatCurrency(getValue(ref"C3"))}%15s ${formatCurrency(getValue(ref"D3"))}%15s")
-println(f"${"COGS"}%-25s ${formatCurrency(getValue(ref"B4"))}%15s ${formatCurrency(getValue(ref"C4"))}%15s ${formatCurrency(getValue(ref"D4"))}%15s")
-println(f"${"Gross Profit"}%-25s ${formatCurrency(getValue(ref"B5"))}%15s ${formatCurrency(getValue(ref"C5"))}%15s ${formatCurrency(getValue(ref"D5"))}%15s")
+println(f"${"Revenue"}%-25s ${getFormattedValue(ref"B3")}%15s ${getFormattedValue(ref"C3")}%15s ${getFormattedValue(ref"D3")}%15s")
+println(f"${"COGS"}%-25s ${getFormattedValue(ref"B4")}%15s ${getFormattedValue(ref"C4")}%15s ${getFormattedValue(ref"D4")}%15s")
+println(f"${"Gross Profit"}%-25s ${getFormattedValue(ref"B5")}%15s ${getFormattedValue(ref"C5")}%15s ${getFormattedValue(ref"D5")}%15s")
 println()
 
 // Operating Expenses
-println(f"${"Sales & Marketing"}%-25s ${formatCurrency(getValue(ref"B7"))}%15s ${formatCurrency(getValue(ref"C7"))}%15s ${formatCurrency(getValue(ref"D7"))}%15s")
-println(f"${"R&D"}%-25s ${formatCurrency(getValue(ref"B8"))}%15s ${formatCurrency(getValue(ref"C8"))}%15s ${formatCurrency(getValue(ref"D8"))}%15s")
-println(f"${"G&A"}%-25s ${formatCurrency(getValue(ref"B9"))}%15s ${formatCurrency(getValue(ref"C9"))}%15s ${formatCurrency(getValue(ref"D9"))}%15s")
-println(f"${"Total OpEx"}%-25s ${formatCurrency(getValue(ref"B10"))}%15s ${formatCurrency(getValue(ref"C10"))}%15s ${formatCurrency(getValue(ref"D10"))}%15s")
+println(f"${"Sales & Marketing"}%-25s ${getFormattedValue(ref"B7")}%15s ${getFormattedValue(ref"C7")}%15s ${getFormattedValue(ref"D7")}%15s")
+println(f"${"R&D"}%-25s ${getFormattedValue(ref"B8")}%15s ${getFormattedValue(ref"C8")}%15s ${getFormattedValue(ref"D8")}%15s")
+println(f"${"G&A"}%-25s ${getFormattedValue(ref"B9")}%15s ${getFormattedValue(ref"C9")}%15s ${getFormattedValue(ref"D9")}%15s")
+println(f"${"Total OpEx"}%-25s ${getFormattedValue(ref"B10")}%15s ${getFormattedValue(ref"C10")}%15s ${getFormattedValue(ref"D10")}%15s")
 println()
 
 // Bottom Line
-println(f"${"EBITDA"}%-25s ${formatCurrency(getValue(ref"B12"))}%15s ${formatCurrency(getValue(ref"C12"))}%15s ${formatCurrency(getValue(ref"D12"))}%15s")
-println(f"${"D&A"}%-25s ${formatCurrency(getValue(ref"B13"))}%15s ${formatCurrency(getValue(ref"C13"))}%15s ${formatCurrency(getValue(ref"D13"))}%15s")
-println(f"${"Operating Income"}%-25s ${formatCurrency(getValue(ref"B14"))}%15s ${formatCurrency(getValue(ref"C14"))}%15s ${formatCurrency(getValue(ref"D14"))}%15s")
-println(f"${"Tax (25%)"}%-25s ${formatCurrency(getValue(ref"B15"))}%15s ${formatCurrency(getValue(ref"C15"))}%15s ${formatCurrency(getValue(ref"D15"))}%15s")
+println(f"${"EBITDA"}%-25s ${getFormattedValue(ref"B12")}%15s ${getFormattedValue(ref"C12")}%15s ${getFormattedValue(ref"D12")}%15s")
+println(f"${"D&A"}%-25s ${getFormattedValue(ref"B13")}%15s ${getFormattedValue(ref"C13")}%15s ${getFormattedValue(ref"D13")}%15s")
+println(f"${"Operating Income"}%-25s ${getFormattedValue(ref"B14")}%15s ${getFormattedValue(ref"C14")}%15s ${getFormattedValue(ref"D14")}%15s")
+println(f"${"Tax (25%)"}%-25s ${getFormattedValue(ref"B15")}%15s ${getFormattedValue(ref"C15")}%15s ${getFormattedValue(ref"D15")}%15s")
 println("-" * 80)
-println(f"${"Net Income"}%-25s ${formatCurrency(getValue(ref"B16"))}%15s ${formatCurrency(getValue(ref"C16"))}%15s ${formatCurrency(getValue(ref"D16"))}%15s")
+println(f"${"Net Income"}%-25s ${getFormattedValue(ref"B16")}%15s ${getFormattedValue(ref"C16")}%15s ${getFormattedValue(ref"D16")}%15s")
 println()
 
 // Financial Ratios
@@ -220,10 +239,10 @@ println("=" * 80)
 println()
 println(f"${"Metric"}%-25s ${"2024"}%15s ${"2025"}%15s ${"2026"}%15s")
 println("-" * 80)
-println(f"${"Gross Margin"}%-25s ${formatPercent(getValue(ref"B19"))}%15s ${formatPercent(getValue(ref"C19"))}%15s ${formatPercent(getValue(ref"D19"))}%15s")
-println(f"${"Operating Margin"}%-25s ${formatPercent(getValue(ref"B20"))}%15s ${formatPercent(getValue(ref"C20"))}%15s ${formatPercent(getValue(ref"D20"))}%15s")
-println(f"${"Net Margin"}%-25s ${formatPercent(getValue(ref"B21"))}%15s ${formatPercent(getValue(ref"C21"))}%15s ${formatPercent(getValue(ref"D21"))}%15s")
-println(f"${"Revenue Growth"}%-25s ${"N/A"}%15s ${formatPercent(getValue(ref"C22"))}%15s ${formatPercent(getValue(ref"D22"))}%15s")
+println(f"${"Gross Margin"}%-25s ${getFormattedValue(ref"B19")}%15s ${getFormattedValue(ref"C19")}%15s ${getFormattedValue(ref"D19")}%15s")
+println(f"${"Operating Margin"}%-25s ${getFormattedValue(ref"B20")}%15s ${getFormattedValue(ref"C20")}%15s ${getFormattedValue(ref"D20")}%15s")
+println(f"${"Net Margin"}%-25s ${getFormattedValue(ref"B21")}%15s ${getFormattedValue(ref"C21")}%15s ${getFormattedValue(ref"D21")}%15s")
+println(f"${"Revenue Growth"}%-25s ${"N/A"}%15s ${getFormattedValue(ref"C22")}%15s ${getFormattedValue(ref"D22")}%15s")
 println()
 
 // ============================================================================
@@ -234,7 +253,7 @@ println("=" * 80)
 println("STEP 2: Dependency Chain Analysis")
 println("=" * 80)
 
-val graph = DependencyGraph.fromSheet(model)
+val graph = DependencyGraph.fromSheet(modelWithFormatting)
 
 // Check for circular references (should be none)
 DependencyGraph.detectCycles(graph) match

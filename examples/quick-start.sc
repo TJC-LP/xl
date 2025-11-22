@@ -17,10 +17,14 @@
 import com.tjclp.xl.*
 import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.error.*  // For .message extension
 import com.tjclp.xl.formula.*
 import com.tjclp.xl.formula.SheetEvaluator.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.styles.{CellStyle, numfmt}  // For styling
+import numfmt.NumFmt
+import com.tjclp.xl.unsafe.*  // For .unsafe extension
 
 // ============================================================================
 // STEP 1: Parse Formulas
@@ -83,29 +87,46 @@ println("  C1: =IF(B1>400, \"High\", \"Low\")")
 println()
 
 // ============================================================================
-// STEP 3: Evaluate Individual Formulas
+// STEP 3: Apply Number Formatting
 // ============================================================================
 
 println("=" * 70)
-println("STEP 3: Evaluate Individual Formulas")
+println("STEP 3: Apply Number Formatting")
+println("=" * 70)
+
+// Style formula cells as decimal numbers
+val decimalStyle = CellStyle.default.withNumFmt(NumFmt.Decimal)
+val styledSheet = sheet
+  .style(ref"B1:B2", decimalStyle)  // Format SUM and AVERAGE as decimals
+  .unsafe
+
+println("✓ Applied decimal formatting to formula range B1:B2")
+println()
+
+// ============================================================================
+// STEP 4: Evaluate Individual Formulas
+// ============================================================================
+
+println("=" * 70)
+println("STEP 4: Evaluate Individual Formulas")
 println("=" * 70)
 
 // Evaluate B1 (SUM formula)
-sheet.evaluateCell(ref"B1") match
+styledSheet.evaluateCell(ref"B1") match
   case Right(value) =>
     println(s"✓ B1 = $value  // Sum of A1:A3")
   case Left(error) =>
     println(s"✗ B1 evaluation error: ${error.message}")
 
 // Evaluate B2 (AVERAGE formula)
-sheet.evaluateCell(ref"B2") match
+styledSheet.evaluateCell(ref"B2") match
   case Right(value) =>
     println(s"✓ B2 = $value  // Average of A1:A3")
   case Left(error) =>
     println(s"✗ B2 evaluation error: ${error.message}")
 
 // Evaluate C1 (IF formula)
-sheet.evaluateCell(ref"C1") match
+styledSheet.evaluateCell(ref"C1") match
   case Right(value) =>
     println(s"✓ C1 = $value  // Conditional based on B1")
   case Left(error) =>
@@ -114,14 +135,14 @@ sheet.evaluateCell(ref"C1") match
 println()
 
 // ============================================================================
-// STEP 4: Evaluate All Formulas (with Dependency Checking)
+// STEP 5: Evaluate All Formulas (with Dependency Checking)
 // ============================================================================
 
 println("=" * 70)
-println("STEP 4: Bulk Evaluation with Dependency Checking")
+println("STEP 5: Bulk Evaluation with Dependency Checking")
 println("=" * 70)
 
-sheet.evaluateWithDependencyCheck() match
+styledSheet.evaluateWithDependencyCheck() match
   case Right(results) =>
     println("✓ All formulas evaluated successfully!")
     println(s"  Total formulas: ${results.size}")
