@@ -25,6 +25,7 @@
 - ✅ All cell types: Text, Number, Bool, Formula, Error, DateTime
 - ✅ RichText support (multiple formats within one cell)
 - ✅ DateTime serialization (Excel serial number conversion)
+- ✅ **Excel Tables** (structured data ranges with headers, AutoFilter, and styling)
 - ✅ **True streaming I/O** (constant memory, 100k+ rows)
 
 **Ergonomics & Type Safety**:
@@ -42,10 +43,14 @@
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible SUM/COUNT/AVERAGE behavior
 
-**Performance** (Optimized):
-- ✅ Inline hot paths (10-20% faster on cell operations)
+**Performance** (JMH Benchmarked - WI-15):
+- ✅ **Streaming reads: 35% faster than POI for small files** (0.887ms vs 1.357ms @ 1k rows)
+- ✅ **Streaming reads: Competitive with POI for large files** (8.408ms vs 7.773ms @ 10k rows - within 8%)
+- ✅ **In-memory reads: 26% faster than POI for small files** (1.225ms vs 1.650ms @ 1k rows)
+- ✅ Inline hot paths (SAX parser: 3.8x speedup vs fs2-data-xml)
 - ✅ Zero-overhead opaque types
 - ✅ Macros compile away (no runtime parsing)
+- ⚠️ Writes: POI 49% faster (future optimization work - Phase 3)
 
 **Streaming API**:
 - ✅ Excel[F[_]] algebra trait
@@ -69,7 +74,7 @@
 
 ### Test Coverage
 
-**939 tests across 5 modules** (includes P7+P8 string interpolation + P6.8 surgical modification + WI-07 formula parser + WI-08 formula evaluator + WI-09 function library + WI-09d dependency graph):
+**~1000 tests across 6 modules** (includes P7+P8 string interpolation + WI-07 formula parser + WI-08 formula evaluator + WI-09 function library + WI-09d dependency graph + WI-10 table support + display formatting):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -83,16 +88,17 @@
   - **+111 string interpolation Phase 1** (RefInterpolationSpec, FormattedInterpolationSpec, MacroUtilSpec)
   - **+40 string interpolation Phase 2** (RefCompileTimeOptimizationSpec, FormattedCompileTimeOptimizationSpec)
   - +200+ additional tests (range combinators, comprehensive property tests)
-- **xl-ooxml**: ~100+ tests
+- **xl-ooxml**: ~145+ tests
   - Round-trip tests (text, numbers, booleans, mixed, multi-sheet, SST, styles, RichText)
   - Compression tests (DEFLATED vs STORED, prettyPrint, defaults, debug mode)
   - Security tests (XXE, DOCTYPE rejection)
   - Error path tests (malformed XML, missing files)
   - Whitespace preservation, alignment serialization
+  - **+45 table tests** (TableSpec: XML parsing, serialization, round-trips, domain conversions, edge cases)
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
-- **xl-evaluator**: 259 tests (66 parser + 63 evaluator + 48 function tests + 30 evaluation API tests + 44 dependency graph + 8 integration)
+- **xl-evaluator**: ~250 tests (parser, evaluator, function library, evaluation API, dependency graph, integration)
   - **Parser (WI-07)**: 57 tests
     - 7 property-based round-trip tests (parse ∘ print = id)
     - 26 parser unit tests (literals, operators, functions, edge cases)
@@ -100,6 +106,8 @@
     - 5 error handling tests (invalid syntax, unknown functions)
     - 9 integration tests (complex expressions, nested formulas, operator precedence)
   - **Evaluator (WI-08)**: 58 tests
+  - **Function library (WI-09a/b/c)**: 48 tests across aggregate/logical/text/date functions
+  - **Dependency graph (WI-09d)**: 44 graph tests + 8 integration/dependency tests
     - 10 property-based law tests (literal identity, arithmetic correctness, short-circuit semantics)
     - 28 unit tests (division by zero, boolean operations, comparisons, cell references, FoldRange)
     - 12 integration tests (IF, AND, OR, nested conditionals, SUM/COUNT, complex boolean logic)
@@ -112,8 +120,8 @@
 ### XML Serialization
 
 **Formula System**:
-- ✅ **Parsing complete** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, 66 tests
-- ✅ **Evaluation complete** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 63 tests
+- ✅ **Parsing complete** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, 57 tests
+- ✅ **Evaluation complete** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
 - ✅ **Function library complete** (WI-09a/b/c): 21 functions (aggregate, logical, text, date), FunctionParser type class, evaluation API, 78 tests
   - Functions: SUM, COUNT, AVERAGE, MIN, MAX, IF, AND, OR, NOT, CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER, TODAY, NOW, DATE, YEAR, MONTH, DAY
   - Type class parser: FunctionParser[F] with extensible registry
@@ -301,15 +309,47 @@ xl-cats-effect/src/com/tjclp/xl/io/
 
 ## Performance Results (Actual)
 
-### Streaming Implementation (P5 Partial) ⚠️
+### JMH Benchmark Results (WI-15) - XL vs Apache POI
 
-**100k row benchmark**:
-- **Write**: ~1.1s, **~10MB constant memory** (O(1)) ✅
-- **Read**: ~1.8s, **~50-100MB memory** (O(n)) ⚠️
-- **Write Scalability**: Can handle 1M+ rows without OOM ✅
-- **Read Scalability**: Can handle 1M+ rows without OOM ✅ (P6.6 Complete)
+**XL vs Apache POI** (Apple Silicon M-series, JDK 25):
 
-**P6.6 Fix Complete**: Streaming reader now uses `fs2.io.readInputStream` for true O(1) memory. Both read and write achieve constant memory.
+#### Streaming Reads (SAX Parser - Production Recommendation)
+| Rows | POI | XL | Result |
+|------|-----|----|--------|
+| **1,000** | 1.357 ± 0.076 ms | **0.887 ± 0.060 ms** | ✨ **XL 35% faster** |
+| **10,000** | 7.773 ± 0.590 ms | 8.408 ± 0.153 ms | Competitive (XL within 8%) |
+
+#### In-Memory Reads (For Modification Workflows)
+| Rows | POI | XL | Result |
+|------|-----|----|--------|
+| **1,000** | 1.650 ± 0.055 ms | **1.225 ± 0.086 ms** | ✨ **XL 26% faster** |
+| **10,000** | 13.784 ± 0.377 ms | 14.115 ± 1.250 ms | Competitive (XL within 2%) |
+
+#### Writes
+| Rows | POI | XL | Result |
+|------|-----|----|--------|
+| **1,000** | 1.280 ± 0.041 ms | 1.906 ± 0.245 ms | POI 49% faster |
+| **10,000** | 10.228 ± 0.417 ms | 15.248 ± 1.315 ms | POI 49% faster |
+
+**Key Findings**:
+- ✨ **XL is fastest for small-medium files** (< 5k rows): 35% faster streaming, 26% faster in-memory
+- ✅ **XL competitive on large files**: Within 8% of POI on 10k row streaming reads
+- 🔧 **Write optimization**: Future work (Phase 3) - POI currently 49% faster
+- 💾 **Constant memory**: Streaming uses O(1) memory regardless of file size
+- ⚡ **SAX parser**: 3.8x speedup vs previous fs2-data-xml implementation
+
+**Recommendation**: Use `ExcelIO.readStream()` for production workloads (fastest for <5k rows, constant memory).
+
+### Streaming Implementation (P5 + P6.6 Complete) ✅
+
+**Memory characteristics**:
+- **Write**: **~10MB constant memory** (O(1)) ✅
+- **Read**: **~10MB constant memory** (O(1)) ✅ (P6.6 fixed with fs2.io.readInputStream)
+- **Scalability**: Can handle 1M+ rows without OOM ✅
+
+**Performance characteristics** (validated with JMH):
+- **Streaming vs in-memory**: Streaming 1.7x faster for large files (8.4ms streaming vs 14.1ms in-memory @ 10k rows)
+- **XL vs POI**: XL is fastest for small files (35% faster @ 1k rows), competitive for large files (within 8% @ 10k rows)
 
 ### Comparison to Apache POI (True Streaming Read + Write)
 
@@ -399,4 +439,4 @@ private def attr(name: String, value: String): Attr =
 4. **Zero overhead** - Opaque types, inline, compile-time macros
 5. **Real files** - Creates valid XLSX that Excel/LibreOffice opens
 6. **Type safety** - Opaque types prevent mixing units; codecs enforce type correctness
-7. **Performance** - 4.5x faster than Apache POI with 80x less memory
+7. **Performance** - ~35% faster than Apache POI on streaming reads (JMH validated), writes currently ~49% slower, 80x less memory

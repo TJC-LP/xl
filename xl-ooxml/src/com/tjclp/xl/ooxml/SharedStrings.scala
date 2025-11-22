@@ -240,12 +240,15 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     }
 
     val normalized = entryVec.result()
-    val indexMap = normalized.zipWithIndex.map { case (entry, idx) =>
+    // Optimization: Use iterator.zipWithIndex.foreach with builder to avoid intermediate collections
+    val indexMapBuilder = Map.newBuilder[String, Int]
+    normalized.iterator.zipWithIndex.foreach { case (entry, idx) =>
       val key = entry match
         case Left(text) => text
         case Right(richText) => richText.toPlainText
-      normalize(key) -> idx
-    }.toMap
+      indexMapBuilder += (normalize(key) -> idx)
+    }
+    val indexMap = indexMapBuilder.result()
 
     SharedStrings(normalized, indexMap, totalCount.getOrElse(count))
 

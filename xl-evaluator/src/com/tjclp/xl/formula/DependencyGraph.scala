@@ -4,6 +4,7 @@ import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheets.Sheet
+import scala.annotation.tailrec
 
 /**
  * Dependency graph for formula cells.
@@ -68,9 +69,10 @@ object DependencyGraph:
    * }}}
    */
   def fromSheet(sheet: Sheet): DependencyGraph =
-    val formulaCells = sheet.cells.collect {
-      case (ref, cell) if cell.value.isInstanceOf[CellValue.Formula] =>
-        ref -> cell.value.asInstanceOf[CellValue.Formula].expression
+    val formulaCells = sheet.cells.flatMap { case (ref, cell) =>
+      cell.value match
+        case CellValue.Formula(expression) => Some(ref -> expression)
+        case _ => None
     }
 
     // Build forward edges (dependencies)
@@ -342,18 +344,8 @@ object DependencyGraph:
    * topologicalSort(graph) // Left(EvalError.CircularRef(List(A1, B1, A1)))
    * }}}
    */
-  @SuppressWarnings(
-    Array(
-      "org.wartremover.warts.Var",
-      "org.wartremover.warts.IterableOps"
-    )
-  )
   def topologicalSort(graph: DependencyGraph): Either[EvalError.CircularRef, List[ARef]] =
     import scala.util.boundary, boundary.break
-
-    // Kahn's algorithm: Intentional imperative implementation
-    // Rationale: Classic BFS-based algorithm uses mutable queue/result.
-    // Functional version with recursion less clear. O(V+E) performance.
 
     boundary:
       // All formula cells (only process formulas, not constants)
@@ -371,25 +363,28 @@ object DependencyGraph:
       }.toMap
 
       // Start with nodes that have in-degree 0 (no dependencies)
-      var queue = allNodes.filter(node => inDegree(node) == 0).toList
-      var result = List.empty[ARef]
-      var processedInDegree = inDegree
+      val initialQueue = allNodes.filter(node => inDegree(node) == 0).toList
 
-      while queue.nonEmpty do
-        // Remove node with in-degree 0
-        val node = queue.head
-        queue = queue.tail
-        result = result :+ node
+      @tailrec
+      def process(
+        queue: List[ARef],
+        processedInDegree: Map[ARef, Int],
+        acc: List[ARef]
+      ): (List[ARef], Map[ARef, Int]) =
+        queue match
+          case Nil => (acc, processedInDegree)
+          case node :: rest =>
+            val deps = graph.dependents.getOrElse(node, Set.empty).filter(allNodes.contains)
+            val (nextInDegree, newlyZero) = deps.foldLeft((processedInDegree, List.empty[ARef])) {
+              case ((degreeAcc, zeros), dep) =>
+                val newInDegree = degreeAcc(dep) - 1
+                val updatedDegree = degreeAcc.updated(dep, newInDegree)
+                val nextZeros = if newInDegree == 0 then zeros :+ dep else zeros
+                (updatedDegree, nextZeros)
+            }
+            process(rest ++ newlyZero, nextInDegree, acc :+ node)
 
-        // For each dependent of this node, decrease their in-degree
-        val deps = graph.dependents.getOrElse(node, Set.empty)
-        deps.foreach { dep =>
-          // Only process if dep is a formula cell (in allNodes)
-          if allNodes.contains(dep) then
-            val newInDegree = processedInDegree(dep) - 1
-            processedInDegree = processedInDegree.updated(dep, newInDegree)
-            if newInDegree == 0 then queue = queue :+ dep
-        }
+      val (result, _) = process(initialQueue, inDegree, List.empty)
 
       // If all nodes are processed, graph is acyclic
       if result.size == allNodes.size then scala.util.Right(result)
@@ -410,7 +405,7 @@ object DependencyGraph:
                   case _ => List(current)
 
             val cyclePath = findCycle(start, Set.empty)
-            cyclePath :+ cyclePath.head // Add first node again to show cycle
+            cyclePath.headOption.map(first => cyclePath :+ first).getOrElse(List.empty)
           case None => List.empty
 
         scala.util.Left(EvalError.CircularRef(cycle))

@@ -66,7 +66,6 @@ object FormulaParser:
 
       // Validate length (Excel limit: 8192 chars)
       if formula.length > 8192 then break(Left(ParseError.FormulaTooLong(formula.length, 8192)))
-
       // Create parser state and parse
       val state = ParserState(formula, 0)
       parseExpr(state) match
@@ -125,6 +124,7 @@ object FormulaParser:
   /**
    * Parse logical OR (lowest precedence).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseLogicalOr(state: ParserState): ParseResult[TExpr[?]] =
     parseLogicalAnd(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
@@ -139,6 +139,7 @@ object FormulaParser:
   /**
    * Parse logical AND.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseLogicalAnd(state: ParserState): ParseResult[TExpr[?]] =
     parseComparison(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
@@ -153,6 +154,7 @@ object FormulaParser:
   /**
    * Parse comparison operators: =, <>, <, <=, >, >=
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseComparison(state: ParserState): ParseResult[TExpr[?]] =
     parseConcatenation(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
@@ -252,6 +254,7 @@ object FormulaParser:
   /**
    * Parse addition and subtraction (left-associative).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseAddSub(state: ParserState): ParseResult[TExpr[?]] =
     parseMulDiv(state).flatMap { case (left, s1) =>
       @tailrec
@@ -290,6 +293,7 @@ object FormulaParser:
   /**
    * Parse multiplication and division (left-associative).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseMulDiv(state: ParserState): ParseResult[TExpr[?]] =
     parseUnary(state).flatMap { case (left, s1) =>
       @tailrec
@@ -328,6 +332,7 @@ object FormulaParser:
   /**
    * Parse unary operators: -, NOT
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseUnary(state: ParserState): ParseResult[TExpr[?]] =
     val s = skipWhitespace(state)
     s.currentChar match
@@ -522,15 +527,18 @@ object FormulaParser:
   /**
    * Parse cell reference: A1, $A$1, Sheet1!A1
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseCellReference(
     refStr: String,
     state: ParserState,
     startPos: Int
   ): ParseResult[TExpr[?]] =
+    // Safe: ARef.parse returns Either[String, ARef], match is exhaustive
     ARef.parse(refStr) match
-      case Right(aref: ARef) =>
+      case Right(aref) =>
         // Create Ref expression with numeric decoder
-        Right((TExpr.Ref(aref, TExpr.decodeNumeric), state))
+        // Cast needed due to opaque type erasure in pattern matching
+        Right((TExpr.Ref(aref.asInstanceOf[ARef], TExpr.decodeNumeric), state))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(refStr, startPos, err))
 

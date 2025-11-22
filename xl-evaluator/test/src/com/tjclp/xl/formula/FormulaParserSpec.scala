@@ -331,8 +331,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=A1")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Ref(at, _) => assertEquals(at, ARef.parse("A1").toOption.get)
-      case other            => fail(s"Expected Ref(A1), got $other")
+      case TExpr.Ref(at, _) =>
+        val expected = ARef.parse("A1").fold(err => fail(s"Invalid ref: $err"), identity)
+        assertEquals(at, expected)
+      case other => fail(s"Expected Ref(A1), got $other")
     }
   }
 
@@ -340,8 +342,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=Z99")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Ref(at, _) => assertEquals(at, ARef.parse("Z99").toOption.get)
-      case other            => fail(s"Expected Ref(Z99), got $other")
+      case TExpr.Ref(at, _) =>
+        val expected = ARef.parse("Z99").fold(err => fail(s"Invalid ref: $err"), identity)
+        assertEquals(at, expected)
+      case other => fail(s"Expected Ref(Z99), got $other")
     }
   }
 
@@ -388,7 +392,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.FoldRange(range, zero: BigDecimal, _, _) =>
-        assertEquals(range, CellRange.parse("A1:B10").toOption.get)
+        val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
+        assertEquals(range, expected)
         assertEquals(zero, BigDecimal(0)) // SUM starts with 0
       case other => fail(s"Expected FoldRange with BigDecimal, got $other")
     }
@@ -399,7 +404,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.FoldRange(range, zero: Int, _, _) =>
-        assertEquals(range, CellRange.parse("A1:B10").toOption.get)
+        val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
+        assertEquals(range, expected)
         assertEquals(zero, 0) // COUNT starts with 0
       case other => fail(s"Expected FoldRange with Int accumulator, got $other")
     }
@@ -409,8 +415,11 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AVERAGE(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.FoldRange(range, zero: (BigDecimal, Int), _, _) =>
-        assertEquals(range, CellRange.parse("A1:B10").toOption.get)
+      // @unchecked needed: JVM erases tuple element types at runtime
+      // Safe because FormulaParser constructs correct GADT types
+      case TExpr.FoldRange(range, zero: (BigDecimal, Int) @unchecked, _, _) =>
+        val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
+        assertEquals(range, expected)
         assertEquals(zero, (BigDecimal(0), 0)) // AVERAGE starts with (sum=0, count=0)
       case other => fail(s"Expected FoldRange with tuple accumulator, got $other")
     }
@@ -422,6 +431,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val countResult = FormulaParser.parse("=COUNT(A1:A10)")
     val avgResult = FormulaParser.parse("=AVERAGE(A1:A10)")
 
+    // @unchecked needed: JVM erases tuple element types at runtime (line 447)
+    // Safe because FormulaParser constructs correct GADT types
     (sumResult, countResult, avgResult) match
       case (Right(sumFold: TExpr.FoldRange[?, ?]), Right(countFold: TExpr.FoldRange[?, ?]), Right(avgFold: TExpr.FoldRange[?, ?])) =>
         // Extract zero values to verify different fold types
@@ -430,9 +441,15 @@ class FormulaParserSpec extends ScalaCheckSuite:
         val avgZero = avgFold.z
 
         // SUM has BigDecimal(0), COUNT has Int(0), AVERAGE has (BigDecimal(0), Int(0))
-        assert(sumZero.isInstanceOf[BigDecimal])
-        assert(countZero.isInstanceOf[Int])
-        assert(avgZero.isInstanceOf[(BigDecimal, Int)])
+        sumZero match
+          case _: BigDecimal => // success
+          case other => fail(s"Expected BigDecimal for SUM zero, got ${other.getClass}")
+        countZero match
+          case _: Int => // success
+          case other => fail(s"Expected Int for COUNT zero, got ${other.getClass}")
+        avgZero match
+          case _: (BigDecimal, Int) @unchecked => // success
+          case other => fail(s"Expected (BigDecimal, Int) for AVERAGE zero, got ${other.getClass}")
       case _ => fail("All three functions should parse successfully")
   }
 
@@ -561,7 +578,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
   }
 
   test("print cell reference") {
-    val expr = TExpr.Ref(ARef.parse("A1").toOption.get, TExpr.decodeNumeric)
+    val ref = ARef.parse("A1").fold(err => fail(s"Invalid ref: $err"), identity)
+    val expr = TExpr.Ref(ref, TExpr.decodeNumeric)
     val result = FormulaPrinter.print(expr)
     assertEquals(result, "=A1")
   }
@@ -573,7 +591,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
   }
 
   test("print SUM function") {
-    val range = CellRange.parse("A1:B10").toOption.get
+    val range = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
     val expr = TExpr.sum(range)
     val result = FormulaPrinter.print(expr)
     assertEquals(result, "=SUM(A1:B10)")

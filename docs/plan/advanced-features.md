@@ -24,7 +24,7 @@
 
 | ID | Description | Type | Files | Status | PR |
 |----|-------------|------|-------|--------|----|
-| `WI-10` | Table Support | Feature | `xl/ooxml/OoxmlTable.scala` | ⏳ Not Started | - |
+| `WI-10` | Table Support | Feature | `xl/ooxml/Table.scala`, `xl/tables/TableSpec.scala` | ✅ Complete | #26 (pending) |
 | `WI-11` | Chart Model | Feature | `xl/ooxml/OoxmlChart.scala` | ⏳ Not Started | - |
 | `WI-12` | Drawing Layer | Feature | `xl/ooxml/OoxmlDrawing.scala` | ⏳ Not Started | - |
 | `WI-13` | Pivot Tables | Feature | `xl/ooxml/OoxmlPivot.scala` | ⏳ Not Started | - |
@@ -109,19 +109,27 @@
 9. Update roadmap: WI-12 → ✅ Complete
 ```
 
-### WI-10: Table Support (Parallel with WI-12)
-```
-1. Create worktree: `gtr create WI-10-tables`
-2. Define TableSpec AST:
-   - Range, style, headers, totals row
-   - AutoFilter configuration
-3. Implement OoxmlTable serialization
-4. Add structured reference support (basic or defer to formula engine)
-5. Add round-trip tests
-6. Run tests: `./mill xl-ooxml.test`
-7. Create PR: "feat(ooxml): add Excel table support"
-8. Update roadmap: WI-10 → ✅ Complete, WI-13 → recalculate dependencies
-```
+### WI-10: Table Support ✅ COMPLETE
+
+**Status**: ✅ Merged to main (PR #26 pending)
+**Implementation**:
+- Domain model: `xl-core/src/com/tjclp/xl/tables/TableSpec.scala` (156 lines)
+- OOXML serialization: `xl-ooxml/src/com/tjclp/xl/ooxml/Table.scala` (441 lines)
+- Integration: Reader/Writer support with global table ID assignment
+- Tests: 45 comprehensive tests (parsing, serialization, round-trips, conversions, edge cases)
+- Total: ~2000 lines across 5 commits
+
+**Features Implemented**:
+- ✅ TableSpec domain model with validation
+- ✅ OoxmlTable with forwards compatibility (unknown attrs/children preserved)
+- ✅ TableConversions for bidirectional mapping
+- ✅ AutoFilter support
+- ✅ Table styles (Light/Medium/Dark variants)
+- ✅ Header/totals row configuration
+- ✅ ContentTypes registration and worksheet relationships
+- ✅ Full round-trip fidelity
+
+**Archive Note**: Execution algorithm moved to git history (commit hash: prior to merge)
 
 ### WI-11: Chart Model (After WI-12, optionally WI-10)
 ```

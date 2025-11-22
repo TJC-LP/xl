@@ -23,6 +23,12 @@ case class ContentTypes(
         )
       copy(overrides = overrides ++ overridesToAdd)
 
+  def withTableOverrides(tableCount: Int): ContentTypes =
+    if tableCount == 0 then this
+    else
+      val overridesToAdd = ContentTypes.tableOverrides(tableCount)
+      copy(overrides = overrides ++ overridesToAdd)
+
   def toXml: Elem =
     val defaultElems = defaults.toSeq.sortBy(_._1).map { (ext, ct) =>
       elem("Default", "Extension" -> ext, "ContentType" -> ct)()
@@ -115,4 +121,9 @@ object ContentTypes extends XmlReadable[ContentTypes]:
   private def vmlOverrides(sheetsWithComments: Set[Int]): Seq[(String, String)] =
     sheetsWithComments.toSeq.sorted.map { idx =>
       s"/xl/drawings/vmlDrawing$idx.vml" -> ctVmlDrawing
+    }
+
+  private def tableOverrides(tableCount: Int): Seq[(String, String)] =
+    (1 to tableCount).map { idx =>
+      s"/xl/tables/table$idx.xml" -> ctTable
     }

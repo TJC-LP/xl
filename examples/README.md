@@ -79,6 +79,36 @@ The script showcases **Formula Parser** (WI-07):
 
 **Note**: Formula evaluation (WI-08) is not yet implemented. This demo focuses on parsing and AST manipulation.
 
+### Running table-demo.sc
+
+```bash
+# Publish required modules
+./mill xl-core.publishLocal && ./mill xl-ooxml.publishLocal
+
+# Run table demo
+scala-cli run examples/table-demo.sc
+```
+
+The script showcases **Excel Table Support** (WI-10):
+- Create structured tables with `TableSpec.fromColumnNames`
+- Apply table styles (Light, Medium, Dark variants)
+- Enable AutoFilter for filterable data
+- Multiple tables on one sheet
+- Full round-trip (write → read → verify)
+- Table validation and operations
+
+**Sections**:
+1. Creating a table with TableSpec
+2. Populating table with data (header + 10 data rows)
+3. Multiple tables on one sheet
+4. Writing to XLSX file
+5. Reading tables back and accessing properties
+6. Table style examples (Light, Medium, Dark, None)
+7. Table validation (valid vs invalid configurations)
+8. Table operations (get, has, remove)
+
+**Output**: Creates a real Excel file with formatted tables, AutoFilter, and styling. Open in Excel to see the tables with drop-down filters and banded rows!
+
 ### Running patch-dsl-demo.sc
 
 ```bash

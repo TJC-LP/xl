@@ -85,7 +85,9 @@ object StyleIndex:
     import scala.collection.mutable
 
     // Build unified style index by merging all sheet registries
-    var unifiedStyles = Vector(CellStyle.default)
+    // Optimization: Use VectorBuilder instead of Vector :+ for O(1) amortized append (was O(n) per append = O(n²) total)
+    val stylesBuilder = Vector.newBuilder[CellStyle]
+    stylesBuilder += CellStyle.default
     var unifiedIndex = Map(CellStyle.default.canonicalKey -> StyleId(0))
     var nextIdx = 1
 
@@ -104,7 +106,7 @@ object StyleIndex:
             remapping(localIdx) = globalIdx.value
           case None =>
             // New style - add to unified index
-            unifiedStyles = unifiedStyles :+ style
+            stylesBuilder += style
             unifiedIndex = unifiedIndex + (key -> StyleId(nextIdx))
             remapping(localIdx) = nextIdx
             nextIdx += 1
@@ -113,23 +115,25 @@ object StyleIndex:
       sheetIdx -> remapping.toMap
     }.toMap
 
+    val unifiedStyles = stylesBuilder.result()
+
     // Deduplicate components using LinkedHashSet for O(1) deduplication (60-80% faster than .distinct)
+    // Optimization: Single-pass collection instead of three separate passes (was O(3n), now O(n))
     import scala.collection.mutable
-    val uniqueFonts = {
-      val seen = mutable.LinkedHashSet.empty[Font]
-      unifiedStyles.foreach(style => seen += style.font)
-      seen.toVector
+    val (fontSet, fillSet, borderSet) = {
+      val fonts = mutable.LinkedHashSet.empty[Font]
+      val fills = mutable.LinkedHashSet.empty[Fill]
+      val borders = mutable.LinkedHashSet.empty[Border]
+      unifiedStyles.foreach { style =>
+        fonts += style.font
+        fills += style.fill
+        borders += style.border
+      }
+      (fonts, fills, borders)
     }
-    val uniqueFills = {
-      val seen = mutable.LinkedHashSet.empty[Fill]
-      unifiedStyles.foreach(style => seen += style.fill)
-      seen.toVector
-    }
-    val uniqueBorders = {
-      val seen = mutable.LinkedHashSet.empty[Border]
-      unifiedStyles.foreach(style => seen += style.border)
-      seen.toVector
-    }
+    val uniqueFonts = fontSet.toVector
+    val uniqueFills = fillSet.toVector
+    val uniqueBorders = borderSet.toVector
 
     // Collect custom number formats (built-ins don't need entries)
     val customNumFmts = {

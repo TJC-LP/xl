@@ -61,7 +61,7 @@ object ExcelInterpolator:
         result.append(parts.next())
         if values.hasNext then
           values.next() match
-            case ref: ARef =>
+            case ref: ARef @unchecked =>
               // Apply ARef → DisplayWrapper conversion
               val conv = summon[Conversion[ARef, DisplayWrapper]]
               result.append(conv.apply(ref).formatted)

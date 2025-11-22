@@ -20,6 +20,12 @@ class DependencyGraphSpec extends FunSuite:
       s.put(ref, value)
     }
 
+  private def parseRange(range: String): CellRange =
+    CellRange.parse(range).fold(err => fail(err), identity)
+
+  private def parseRef(ref: String): ARef =
+    ARef.parse(ref).fold(err => fail(err), identity)
+
   // ===== Dependency Extraction Tests (10 tests) =====
 
   test("extractDependencies: Lit has no dependencies") {
@@ -41,7 +47,7 @@ class DependencyGraphSpec extends FunSuite:
   }
 
   test("extractDependencies: FoldRange expands to all cells in range") {
-    val range = CellRange.parse("A1:A3").toOption.get
+    val range = parseRange("A1:A3")
     val expr = TExpr.sum(range)
     val expected = Set(ref"A1", ref"A2", ref"A3")
     assertEquals(DependencyGraph.extractDependencies(expr), expected)
@@ -91,7 +97,7 @@ class DependencyGraphSpec extends FunSuite:
 
   test("extractDependencies: complex nested with ranges") {
     val expr = TExpr.Add(
-      TExpr.sum(CellRange.parse("A1:A3").toOption.get),
+      TExpr.sum(parseRange("A1:A3")),
       TExpr.Mul(TExpr.Ref(ref"B1", TExpr.decodeNumeric), TExpr.Lit(BigDecimal(2)))
     )
     val expected = Set(ref"A1", ref"A2", ref"A3", ref"B1")
@@ -244,8 +250,10 @@ class DependencyGraphSpec extends FunSuite:
     assert(result.isLeft)
     result match
       case scala.util.Left(EvalError.CircularRef(cycle)) =>
-        assertEquals(cycle.head, ref"A1")
-        assertEquals(cycle.last, ref"A1")
+        val first = cycle.headOption.getOrElse(fail("expected cycle with at least one ref"))
+        val last = cycle.lastOption.getOrElse(fail("expected cycle with at least one ref"))
+        assertEquals(first, ref"A1")
+        assertEquals(last, ref"A1")
         assert(cycle.size >= 2) // At least [A1, A1]
       case _ => fail("Expected CircularRef error")
   }
@@ -262,7 +270,9 @@ class DependencyGraphSpec extends FunSuite:
       case scala.util.Left(EvalError.CircularRef(cycle)) =>
         assert(cycle.contains(ref"A1"))
         assert(cycle.contains(ref"B1"))
-        assertEquals(cycle.head, cycle.last) // Cycle closes
+        val first = cycle.headOption.getOrElse(fail("expected cycle with at least one ref"))
+        val last = cycle.lastOption.getOrElse(fail("expected cycle with at least one ref"))
+        assertEquals(first, last) // Cycle closes
       case _ => fail("Expected CircularRef error")
   }
 
@@ -280,7 +290,9 @@ class DependencyGraphSpec extends FunSuite:
         assert(cycle.contains(ref"A1"))
         assert(cycle.contains(ref"B1"))
         assert(cycle.contains(ref"C1"))
-        assertEquals(cycle.head, cycle.last) // Cycle closes
+        val first = cycle.headOption.getOrElse(fail("expected cycle with at least one ref"))
+        val last = cycle.lastOption.getOrElse(fail("expected cycle with at least one ref"))
+        assertEquals(first, last) // Cycle closes
       case _ => fail("Expected CircularRef error")
   }
 
@@ -351,7 +363,7 @@ class DependencyGraphSpec extends FunSuite:
   test("detectCycles: large acyclic graph (performance)") {
     // Create a large linear chain: A1 -> A2 -> A3 -> ... -> A100
     val cells = (1 to 100).map { i =>
-      val ref = ARef.parse(s"A$i").toOption.get
+      val ref = parseRef(s"A$i")
       if i == 1 then ref -> CellValue.Number(BigDecimal(1))
       else ref -> CellValue.Formula(s"=A${i - 1}+1")
     }
@@ -470,7 +482,7 @@ class DependencyGraphSpec extends FunSuite:
   test("topologicalSort: large graph performance (100 nodes)") {
     // Create a large linear chain
     val cells = (1 to 100).map { i =>
-      val ref = ARef.parse(s"A$i").toOption.get
+      val ref = parseRef(s"A$i")
       if i == 1 then ref -> CellValue.Number(BigDecimal(1))
       else ref -> CellValue.Formula(s"=A${i - 1}+1")
     }
