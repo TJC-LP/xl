@@ -415,7 +415,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AVERAGE(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.FoldRange(range, zero: (BigDecimal, Int), _, _) =>
+      // @unchecked needed: JVM erases tuple element types at runtime
+      // Safe because FormulaParser constructs correct GADT types
+      case TExpr.FoldRange(range, zero: (BigDecimal, Int) @unchecked, _, _) =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
         assertEquals(zero, (BigDecimal(0), 0)) // AVERAGE starts with (sum=0, count=0)
@@ -429,6 +431,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val countResult = FormulaParser.parse("=COUNT(A1:A10)")
     val avgResult = FormulaParser.parse("=AVERAGE(A1:A10)")
 
+    // @unchecked needed: JVM erases tuple element types at runtime (line 447)
+    // Safe because FormulaParser constructs correct GADT types
     (sumResult, countResult, avgResult) match
       case (Right(sumFold: TExpr.FoldRange[?, ?]), Right(countFold: TExpr.FoldRange[?, ?]), Right(avgFold: TExpr.FoldRange[?, ?])) =>
         // Extract zero values to verify different fold types
@@ -444,7 +448,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
           case _: Int => // success
           case other => fail(s"Expected Int for COUNT zero, got ${other.getClass}")
         avgZero match
-          case _: (BigDecimal, Int) => // success
+          case _: (BigDecimal, Int) @unchecked => // success
           case other => fail(s"Expected (BigDecimal, Int) for AVERAGE zero, got ${other.getClass}")
       case _ => fail("All three functions should parse successfully")
   }

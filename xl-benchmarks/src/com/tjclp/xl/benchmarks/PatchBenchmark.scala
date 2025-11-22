@@ -60,20 +60,20 @@ class PatchBenchmark {
   @Benchmark
   def rowUpdate(): Sheet = {
     // Measure row update (1000 cells)
-    val batchPatch = rowPatches.reduce(Patch.combine)
+    val batchPatch = rowPatches.fold(Patch.empty)(Patch.combine)
     Patch.applyPatch(baseSheet, batchPatch).getOrElse(baseSheet)
   }
 
   @Benchmark
   def columnUpdate(): Sheet = {
     // Measure column update (10000 cells)
-    val batchPatch = columnPatches.reduce(Patch.combine)
+    val batchPatch = columnPatches.fold(Patch.empty)(Patch.combine)
     Patch.applyPatch(baseSheet, batchPatch).getOrElse(baseSheet)
   }
 
   @Benchmark
   def patchComposition(): Patch = {
     // Measure overhead of composing patches (Monoid operations)
-    rowPatches.reduce(Patch.combine)
+    rowPatches.fold(Patch.empty)(Patch.combine)
   }
 }

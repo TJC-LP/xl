@@ -332,13 +332,10 @@ class PoiComparisonBenchmark {
       val reader = new org.apache.poi.xssf.eventusermodel.XSSFReader(pkg)
       val parser = SAXParserFactory.newInstance().newSAXParser()
       val sheetsIter = reader.getSheetsData()
-      var total = 0.0
-      while (sheetsIter.hasNext) {
-        val sheetStream = sheetsIter.next()
-        try total += saxSumColumnA(parser, sheetStream)
+      sheetsIter.asScala.map { sheetStream =>
+        try saxSumColumnA(parser, sheetStream)
         finally sheetStream.close()
-      }
-      total
+      }.sum
     } finally pkg.close()
   }
 
@@ -348,13 +345,10 @@ class PoiComparisonBenchmark {
       val reader = new org.apache.poi.xssf.eventusermodel.XSSFReader(pkg)
       val parser = SAXParserFactory.newInstance().newSAXParser()
       val sheetsIter = reader.getSheetsData()
-      var total = 0.0
-      while (sheetsIter.hasNext) {
-        val sheetStream = sheetsIter.next()
-        try total += saxSumColumnAMaterialized(parser, sheetStream)
+      sheetsIter.asScala.map { sheetStream =>
+        try saxSumColumnAMaterialized(parser, sheetStream)
         finally sheetStream.close()
-      }
-      total
+      }.sum
     } finally pkg.close()
   }
 
