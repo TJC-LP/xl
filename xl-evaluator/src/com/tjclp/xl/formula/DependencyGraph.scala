@@ -233,8 +233,19 @@ object DependencyGraph:
    * detectCycles(graph) // Left(EvalError.CircularRef(List(A1, B1, A1)))
    * }}}
    */
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.Var",
+      "org.wartremover.warts.IterableOps",
+      "org.wartremover.warts.Return",
+      "org.wartremover.warts.IsInstanceOf",
+      "org.wartremover.warts.AsInstanceOf"
+    )
+  )
   def detectCycles(graph: DependencyGraph): Either[EvalError.CircularRef, Unit] =
-    // Tarjan's algorithm state
+    // Tarjan's SCC algorithm: Intentional imperative implementation
+    // Rationale: Classic algorithm uses mutable state for O(V+E) performance.
+    // Functional version sacrifices clarity without benefit. Compile-time only.
     var index = 0
     var stack = List.empty[ARef]
     var indices = Map.empty[ARef, Int]
@@ -331,62 +342,75 @@ object DependencyGraph:
    * topologicalSort(graph) // Left(EvalError.CircularRef(List(A1, B1, A1)))
    * }}}
    */
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.Var",
+      "org.wartremover.warts.IterableOps"
+    )
+  )
   def topologicalSort(graph: DependencyGraph): Either[EvalError.CircularRef, List[ARef]] =
-    // All formula cells (only process formulas, not constants)
-    val allNodes = graph.dependencies.keySet
+    import scala.util.boundary, boundary.break
 
-    // If no formula cells, return empty list
-    if allNodes.isEmpty then return scala.util.Right(List.empty[ARef])
+    // Kahn's algorithm: Intentional imperative implementation
+    // Rationale: Classic BFS-based algorithm uses mutable queue/result.
+    // Functional version with recursion less clear. O(V+E) performance.
 
-    // Calculate in-degree for each node (number of formula cells it depends on)
-    // Only count dependencies on other formula cells, not constants
-    val inDegree = allNodes.map { node =>
-      val deps = graph.dependencies.getOrElse(node, Set.empty)
-      val formulaDeps = deps.filter(allNodes.contains)
-      node -> formulaDeps.size
-    }.toMap
+    boundary:
+      // All formula cells (only process formulas, not constants)
+      val allNodes = graph.dependencies.keySet
 
-    // Start with nodes that have in-degree 0 (no dependencies)
-    var queue = allNodes.filter(node => inDegree(node) == 0).toList
-    var result = List.empty[ARef]
-    var processedInDegree = inDegree
+      // If no formula cells, early exit
+      if allNodes.isEmpty then break(scala.util.Right(List.empty[ARef]))
 
-    while queue.nonEmpty do
-      // Remove node with in-degree 0
-      val node = queue.head
-      queue = queue.tail
-      result = result :+ node
+      // Calculate in-degree for each node (number of formula cells it depends on)
+      // Only count dependencies on other formula cells, not constants
+      val inDegree = allNodes.map { node =>
+        val deps = graph.dependencies.getOrElse(node, Set.empty)
+        val formulaDeps = deps.filter(allNodes.contains)
+        node -> formulaDeps.size
+      }.toMap
 
-      // For each dependent of this node, decrease their in-degree
-      val deps = graph.dependents.getOrElse(node, Set.empty)
-      deps.foreach { dep =>
-        // Only process if dep is a formula cell (in allNodes)
-        if allNodes.contains(dep) then
-          val newInDegree = processedInDegree(dep) - 1
-          processedInDegree = processedInDegree.updated(dep, newInDegree)
-          if newInDegree == 0 then queue = queue :+ dep
-      }
+      // Start with nodes that have in-degree 0 (no dependencies)
+      var queue = allNodes.filter(node => inDegree(node) == 0).toList
+      var result = List.empty[ARef]
+      var processedInDegree = inDegree
 
-    // If all nodes are processed, graph is acyclic
-    if result.size == allNodes.size then scala.util.Right(result)
-    else
-      // Cycle detected: find one cycle for error reporting
-      val remainingNodes = allNodes -- result.toSet
-      val cycle = remainingNodes.headOption match
-        case Some(start) =>
-          // Follow dependencies to reconstruct cycle
-          def findCycle(current: ARef, visited: Set[ARef]): List[ARef] =
-            if visited.contains(current) then
-              // Found cycle
-              List(current)
-            else
-              graph.dependencies.getOrElse(current, Set.empty).headOption match
-                case Some(next) if remainingNodes.contains(next) =>
-                  current :: findCycle(next, visited + current)
-                case _ => List(current)
+      while queue.nonEmpty do
+        // Remove node with in-degree 0
+        val node = queue.head
+        queue = queue.tail
+        result = result :+ node
 
-          val cyclePath = findCycle(start, Set.empty)
-          cyclePath :+ cyclePath.head // Add first node again to show cycle
-        case None => List.empty
+        // For each dependent of this node, decrease their in-degree
+        val deps = graph.dependents.getOrElse(node, Set.empty)
+        deps.foreach { dep =>
+          // Only process if dep is a formula cell (in allNodes)
+          if allNodes.contains(dep) then
+            val newInDegree = processedInDegree(dep) - 1
+            processedInDegree = processedInDegree.updated(dep, newInDegree)
+            if newInDegree == 0 then queue = queue :+ dep
+        }
 
-      scala.util.Left(EvalError.CircularRef(cycle))
+      // If all nodes are processed, graph is acyclic
+      if result.size == allNodes.size then scala.util.Right(result)
+      else
+        // Cycle detected: find one cycle for error reporting
+        val remainingNodes = allNodes -- result.toSet
+        val cycle = remainingNodes.headOption match
+          case Some(start) =>
+            // Follow dependencies to reconstruct cycle
+            def findCycle(current: ARef, visited: Set[ARef]): List[ARef] =
+              if visited.contains(current) then
+                // Found cycle
+                List(current)
+              else
+                graph.dependencies.getOrElse(current, Set.empty).headOption match
+                  case Some(next) if remainingNodes.contains(next) =>
+                    current :: findCycle(next, visited + current)
+                  case _ => List(current)
+
+            val cyclePath = findCycle(start, Set.empty)
+            cyclePath :+ cyclePath.head // Add first node again to show cycle
+          case None => List.empty
+
+        scala.util.Left(EvalError.CircularRef(cycle))

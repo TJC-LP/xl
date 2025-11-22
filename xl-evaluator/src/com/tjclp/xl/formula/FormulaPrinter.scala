@@ -12,7 +12,12 @@ import com.tjclp.xl.addressing.{Column, Row}
  * Ensures proper operator precedence with minimal parentheses.
  *
  * Round-trip law: parse(print(expr)) == Right(expr)
+ *
+ * @note
+ *   Suppression rationale:
+ *   - AsInstanceOf: ARef is opaque type over Long. Cast is safe for printing.
  */
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 object FormulaPrinter:
   /**
    * Convert TExpr to Excel formula string.

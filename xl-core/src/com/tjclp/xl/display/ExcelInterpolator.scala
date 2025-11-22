@@ -43,8 +43,13 @@ object ExcelInterpolator:
      *   The formula display strategy (implicit, determines evaluation behavior)
      * @return
      *   Formatted string with Excel-style display values
+     *
+     * @note
+     *   Suppression rationale:
+     *   - While: Performance-critical string building in hot path
+     *   - Unchecked: Pattern matching on opaque types (ARef = Long) works correctly at runtime
      */
-    @SuppressWarnings(Array("org.wartremover.warts.While"))
+    @SuppressWarnings(Array("org.wartremover.warts.While", "unchecked"))
     def excel(args: Any*)(using sheet: Sheet, fds: FormulaDisplayStrategy): String =
       import DisplayConversions.given // Import conversions in interpolator scope
 

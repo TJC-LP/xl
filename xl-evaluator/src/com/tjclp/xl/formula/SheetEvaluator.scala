@@ -135,7 +135,10 @@ object SheetEvaluator:
      * sheet.evaluateWithDependencyCheck() // Left(XLError.FormulaError(..., CircularRef))
      * }}}
      */
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
     def evaluateWithDependencyCheck(clock: Clock = Clock.system): XLResult[Map[ARef, CellValue]] =
+      // Suppression rationale: Mutable accumulator for building results map during iteration.
+      // Functional fold alternative less clear for this use case.
       // Build dependency graph
       val graph = DependencyGraph.fromSheet(sheet)
 

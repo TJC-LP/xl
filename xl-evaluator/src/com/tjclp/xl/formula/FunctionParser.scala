@@ -102,6 +102,15 @@ object Arity:
           )
         case _ => scala.util.Right(())
 
+/**
+ * FunctionParser companion object and given instances.
+ *
+ * @note
+ *   Suppression rationale:
+ *   - AsInstanceOf: Type casts restore GADT type parameters lost during runtime parsing. Each cast
+ *     is safe based on parser validation context.
+ */
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 object FunctionParser:
   /**
    * Summon a parser for function type F.

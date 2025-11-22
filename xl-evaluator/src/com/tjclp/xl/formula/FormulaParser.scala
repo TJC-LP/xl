@@ -31,7 +31,13 @@ import scala.annotation.tailrec
  *   8. Comparison =, <>, <, <=, >, >=
  *   9. Logical AND
  *   10. Logical OR
+ *
+ * @note
+ *   Suppression rationale:
+ *   - AsInstanceOf: Runtime parsing loses GADT type information. Type casts safely restore type
+ *     parameters that are statically known to be correct based on parser context.
  */
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 object FormulaParser:
   /**
    * Parse a formula string into a TExpr AST.
@@ -49,31 +55,34 @@ object FormulaParser:
    * }}}
    */
   def parse(input: String): Either[ParseError, TExpr[?]] =
-    // Strip leading '=' if present
-    val formula = if input.startsWith("=") then input.substring(1) else input
+    import scala.util.boundary, boundary.break
 
-    // Validate non-empty
-    if formula.trim.isEmpty then return Left(ParseError.EmptyFormula)
+    boundary:
+      // Strip leading '=' if present
+      val formula = if input.startsWith("=") then input.substring(1) else input
 
-    // Validate length (Excel limit: 8192 chars)
-    if formula.length > 8192 then return Left(ParseError.FormulaTooLong(formula.length, 8192))
+      // Validate non-empty (early exit)
+      if formula.trim.isEmpty then break(Left(ParseError.EmptyFormula))
 
-    // Create parser state and parse
-    val state = ParserState(formula, 0)
-    parseExpr(state) match
-      case Right((expr, finalState)) =>
-        // Ensure we consumed all input
-        skipWhitespace(finalState) match
-          case s if s.pos >= s.input.length => Right(expr)
-          case s =>
-            Left(
-              ParseError.UnexpectedChar(
-                s.input(s.pos),
-                s.pos,
-                "unexpected characters after expression"
+      // Validate length (Excel limit: 8192 chars)
+      if formula.length > 8192 then break(Left(ParseError.FormulaTooLong(formula.length, 8192)))
+
+      // Create parser state and parse
+      val state = ParserState(formula, 0)
+      parseExpr(state) match
+        case Right((expr, finalState)) =>
+          // Ensure we consumed all input
+          skipWhitespace(finalState) match
+            case s if s.pos >= s.input.length => Right(expr)
+            case s =>
+              Left(
+                ParseError.UnexpectedChar(
+                  s.input(s.pos),
+                  s.pos,
+                  "unexpected characters after expression"
+                )
               )
-            )
-      case Left(err) => Left(err)
+        case Left(err) => Left(err)
 
   /**
    * Parser state - tracks position in input string.
@@ -448,24 +457,26 @@ object FormulaParser:
     val s2 = readIdent(state)
     val ident = state.input.substring(startPos, s2.pos).toUpperCase
 
+    // Note: This function is called within the boundary block from parseExpr,
+    // so we can use early returns via simple control flow
+
     // Check for boolean literals
     ident match
-      case "TRUE" => return Right((TExpr.Lit(true), s2))
-      case "FALSE" => return Right((TExpr.Lit(false), s2))
-      case _ => // Continue parsing
-
-    // Check for function call (identifier followed by '(')
-    val s3 = skipWhitespace(s2)
-    s3.currentChar match
-      case Some('(') =>
-        // Function call
-        parseFunction(ident, s3, startPos)
-      case Some(':') =>
-        // Range (e.g., A1:B10)
-        parseRange(state.input.substring(startPos, s2.pos), s2, startPos)
+      case "TRUE" => Right((TExpr.Lit(true), s2))
+      case "FALSE" => Right((TExpr.Lit(false), s2))
       case _ =>
-        // Cell reference
-        parseCellReference(state.input.substring(startPos, s2.pos), s2, startPos)
+        // Not a boolean - check for function call (identifier followed by '(')
+        val s3 = skipWhitespace(s2)
+        s3.currentChar match
+          case Some('(') =>
+            // Function call
+            parseFunction(ident, s3, startPos)
+          case Some(':') =>
+            // Range (e.g., A1:B10)
+            parseRange(state.input.substring(startPos, s2.pos), s2, startPos)
+          case _ =>
+            // Cell reference
+            parseCellReference(state.input.substring(startPos, s2.pos), s2, startPos)
 
   /**
    * Parse function call: FUNC(arg1, arg2, ...)
