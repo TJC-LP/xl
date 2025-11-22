@@ -6,14 +6,16 @@
 
 ## TL;DR (For AI Agents)
 
-**Current Status**: WI-07, WI-08, WI-10, WI-15 complete (840+ tests passing). Core domain model, OOXML I/O, streaming, codecs, formula system (parser + evaluator), Excel tables, and performance benchmarks operational.
+**Current Status**: WI-07, WI-08, WI-09 (a/b/c/d), WI-10, WI-15 complete (840+ tests passing). Formula system (21 functions + dependency graph), Excel tables, and benchmark suite operational.
 
-**Active Work**: None (awaiting task assignment)
+**Active Work**: None (formula + tables + benchmarks complete)
 
 **Next Available Work**:
-- `WI-09` — Function Library (unblocked by WI-08)
 - `WI-11` — Chart Model (independent, high-value)
+- `WI-16` — Streaming Optimizations (benchmarks complete; ready for tuning)
 - `WI-17` — SAX Streaming Write (unblocked by WI-15, design complete)
+- `WI-20` — Query API (powerful spreadsheet queries)
+- `WI-30` — Security Hardening (ZIP bomb, XXE prevention)
 
 **Quick Start**: Jump to [Work Selection Algorithm](#work-selection-algorithm) for step-by-step work item selection.
 
@@ -27,19 +29,20 @@ graph TB
     P0["P0-P8, P31<br/>Foundation Complete"]:::completed
     WI07["WI-07: Formula Parser<br/>(formula-system.md)"]:::completed
     WI08["WI-08: Formula Evaluator<br/>(formula-system.md)"]:::completed
+    WI09["WI-09a/b/c: Function Library<br/>Parser + Eval API"]:::completed
+    WI09d["WI-09d: Dependency Graph<br/>(formula-system.md §5)"]:::completed
     WI10["WI-10: Table Support<br/>(advanced-features.md)"]:::completed
     WI15["WI-15: Benchmark Suite<br/>(advanced-features.md)"]:::completed
 
     %% Available work (blue - ready to start)
-    WI09["WI-09: Function Library"]:::available
     WI11["WI-11: Chart Model<br/>(advanced-features.md)"]:::available
+    WI16["WI-16: Streaming Opts"]:::available
     WI17["WI-17: SAX Streaming Write<br/>(sax-streaming-write.md)"]:::available
     WI20["WI-20: Query API<br/>(streaming-improvements.md)"]:::available
 
     %% Blocked work (gray - waiting on dependencies)
     WI12["WI-12: Drawing Layer"]:::blocked
     WI13["WI-13: Pivot Tables"]:::blocked
-    WI16["WI-16: Streaming Opts"]:::blocked
 
     %% Dependencies
     P0 --> WI07
@@ -50,6 +53,7 @@ graph TB
 
     WI07 --> WI08
     WI08 --> WI09
+    WI09 --> WI09d
     WI11 --> WI12
     WI10 --> WI13
     WI15 --> WI16
@@ -75,13 +79,14 @@ graph TB
 | **P0-P8** | Foundation Complete | Core | (see git history) | all | ✅ Complete | - | N/A |
 | **WI-07** | Formula Parser | Formula | `formula-system.md` §1-2 | xl-evaluator | ✅ Complete | P0-P8 | Low |
 | **WI-08** | Formula Evaluator | Formula | `formula-system.md` §3 | xl-evaluator | ✅ Complete | WI-07 | Medium |
-| **WI-09** | Function Library | Formula | `formula-system.md` §4 | xl-evaluator | 🔵 Available | WI-08 | Low |
+| **WI-09a/b/c** | Function Library (Core+Parser+API) | Formula | `formula-system.md` §4 | xl-evaluator | ✅ Complete | WI-08 | Low |
+| **WI-09d** | Dependency Graph & Cycles | Formula | `formula-system.md` §5 | xl-evaluator | ✅ Complete | WI-09c | Low |
 | **WI-10** | Table Support | Advanced | `advanced-features.md` §Tables | xl-ooxml, xl-core | ✅ Complete | P0-P8 | Low |
 | **WI-11** | Chart Model | Advanced | `advanced-features.md` §Charts | xl-ooxml | 🔵 Available | P0-P8 | Low |
 | **WI-12** | Drawing Layer | Advanced | `advanced-features.md` §Drawings | xl-ooxml | ⚪ Blocked | WI-11 | Medium |
 | **WI-13** | Pivot Tables | Advanced | `advanced-features.md` §Pivots | xl-ooxml | ⚪ Blocked | WI-10 | High |
 | **WI-15** | Benchmark Suite | Infra | `advanced-features.md` §Benchmarks | xl-benchmarks | ✅ Complete | P0-P8 | None |
-| **WI-16** | Streaming Optimizations | Core | `streaming-improvements.md` | xl-cats-effect | ⚪ Blocked | WI-15 | Medium |
+| **WI-16** | Streaming Optimizations | Core | `streaming-improvements.md` | xl-cats-effect | 🔵 Available | WI-15 | Medium |
 | **WI-17** | SAX Streaming Write | Performance | `sax-streaming-write.md` | xl-ooxml, xl-cats-effect | 🔵 Available | WI-15 | Medium |
 | **WI-20** | Query API | Core | `streaming-improvements.md` §Query | xl-core | 🔵 Available | P0-P8 | Medium |
 | **WI-30** | Security Hardening | Safety | `error-model-and-safety.md` | xl-ooxml | 🔵 Available | P0-P8 | Low |

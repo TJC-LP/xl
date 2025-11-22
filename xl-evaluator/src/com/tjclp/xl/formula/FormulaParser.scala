@@ -31,7 +31,13 @@ import scala.annotation.tailrec
  *   8. Comparison =, <>, <, <=, >, >=
  *   9. Logical AND
  *   10. Logical OR
+ *
+ * @note
+ *   Suppression rationale:
+ *   - AsInstanceOf: Runtime parsing loses GADT type information. Type casts safely restore type
+ *     parameters that are statically known to be correct based on parser context.
  */
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 object FormulaParser:
   /**
    * Parse a formula string into a TExpr AST.
@@ -49,13 +55,17 @@ object FormulaParser:
    * }}}
    */
   def parse(input: String): Either[ParseError, TExpr[?]] =
-    // Strip leading '=' if present
-    val formula = if input.startsWith("=") then input.substring(1) else input
+    import scala.util.boundary, boundary.break
 
-    // Validate non-empty and length (Excel limit: 8192 chars)
-    if formula.trim.isEmpty then Left(ParseError.EmptyFormula)
-    else if formula.length > 8192 then Left(ParseError.FormulaTooLong(formula.length, 8192))
-    else
+    boundary:
+      // Strip leading '=' if present
+      val formula = if input.startsWith("=") then input.substring(1) else input
+
+      // Validate non-empty (early exit)
+      if formula.trim.isEmpty then break(Left(ParseError.EmptyFormula))
+
+      // Validate length (Excel limit: 8192 chars)
+      if formula.length > 8192 then break(Left(ParseError.FormulaTooLong(formula.length, 8192)))
       // Create parser state and parse
       val state = ParserState(formula, 0)
       parseExpr(state) match
@@ -178,8 +188,8 @@ object FormulaParser:
               parseComparison(s3).map { case (right, s4) =>
                 (
                   TExpr.Lte(
-                    left.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -189,8 +199,8 @@ object FormulaParser:
               parseComparison(s3).map { case (right, s4) =>
                 (
                   TExpr.Lt(
-                    left.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -202,8 +212,8 @@ object FormulaParser:
               parseComparison(s3).map { case (right, s4) =>
                 (
                   TExpr.Gte(
-                    left.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -213,8 +223,8 @@ object FormulaParser:
               parseComparison(s3).map { case (right, s4) =>
                 (
                   TExpr.Gt(
-                    left.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -257,8 +267,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Add(
-                    acc.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -269,8 +279,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Sub(
-                    acc.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -296,8 +306,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Mul(
-                    acc.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -308,8 +318,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Div(
-                    acc.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -331,14 +341,14 @@ object FormulaParser:
         parseUnary(s2).map { case (expr, s3) =>
           // Unary minus: 0 - expr
           (
-            TExpr.Sub(TExpr.Lit(BigDecimal(0)), expr.asInstanceOf[TExpr[BigDecimal]]),
+            TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), // Convert PolyRef
             s3
           )
         }
       case Some('N') | Some('n') if s.remaining.toUpperCase.startsWith("NOT") =>
         val s2 = skipWhitespace(s.advance(3))
         parseUnary(s2).map { case (expr, s3) =>
-          (TExpr.Not(expr.asInstanceOf[TExpr[Boolean]]), s3)
+          (TExpr.Not(TExpr.asBooleanExpr(expr)), s3) // Convert PolyRef
         }
       case _ => parsePrimary(s)
 
@@ -452,12 +462,15 @@ object FormulaParser:
     val s2 = readIdent(state)
     val ident = state.input.substring(startPos, s2.pos).toUpperCase
 
+    // Note: This function is called within the boundary block from parseExpr,
+    // so we can use early returns via simple control flow
+
     // Check for boolean literals
     ident match
       case "TRUE" => Right((TExpr.Lit(true), s2))
       case "FALSE" => Right((TExpr.Lit(false), s2))
       case _ =>
-        // Check for function call (identifier followed by '(')
+        // Not a boolean - check for function call (identifier followed by '(')
         val s3 = skipWhitespace(s2)
         s3.currentChar match
           case Some('(') =>
@@ -498,127 +511,18 @@ object FormulaParser:
           }
 
     parseArgs(s2, Nil).flatMap { case (args, finalState) =>
-      // Dispatch to specific function parser
-      name match
-        case "SUM" => parseSumFunction(args, startPos)
-        case "COUNT" => parseCountFunction(args, startPos)
-        case "AVERAGE" => parseAverageFunction(args, startPos)
-        case "IF" => parseIfFunction(args, startPos)
-        case "AND" => parseAndFunction(args, startPos)
-        case "OR" => parseOrFunction(args, startPos)
-        case "NOT" => parseNotFunction(args, startPos)
-        case _ =>
+      // Lookup function in type class registry
+      FunctionParser.lookup(name) match
+        case Some(parser) =>
+          // Parse using registered function parser
+          parser.parse(args, startPos) match
+            case Right(expr) => Right((expr, finalState))
+            case Left(err) => Left(err)
+        case None =>
           // Unknown function - provide suggestions
           val suggestions = suggestFunctions(name)
           Left(ParseError.UnknownFunction(name, startPos, suggestions))
-      match
-        case Right(expr) => Right((expr, finalState))
-        case Left(err) => Left(err)
     }
-
-  /**
-   * Parse SUM function: SUM(range) or SUM(expr1, expr2, ...)
-   */
-  private def parseSumFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case Nil =>
-        Left(ParseError.InvalidArguments("SUM", pos, "at least 1 argument", "0 arguments"))
-      case head :: _ =>
-        // For now, only support single range argument
-        // Future: support multiple arguments
-        head match
-          case fold: TExpr.FoldRange[?, ?] => Right(fold)
-          case _ =>
-            Left(ParseError.InvalidArguments("SUM", pos, "range argument", "non-range"))
-
-  /**
-   * Parse COUNT function: COUNT(range)
-   */
-  private def parseCountFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case List(fold: TExpr.FoldRange[?, ?]) =>
-        // Extract range from parsed fold and create COUNT-specific fold
-        fold match
-          case TExpr.FoldRange(range, _, _, _) => Right(TExpr.count(range))
-      case _ =>
-        Left(
-          ParseError.InvalidArguments("COUNT", pos, "1 range argument", s"${args.length} arguments")
-        )
-
-  /**
-   * Parse AVERAGE function: AVERAGE(range)
-   */
-  private def parseAverageFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case List(fold: TExpr.FoldRange[?, ?]) =>
-        // Extract range from parsed fold and create AVERAGE-specific fold
-        fold match
-          case TExpr.FoldRange(range, _, _, _) => Right(TExpr.average(range))
-      case _ =>
-        Left(
-          ParseError.InvalidArguments(
-            "AVERAGE",
-            pos,
-            "1 range argument",
-            s"${args.length} arguments"
-          )
-        )
-
-  /**
-   * Parse IF function: IF(condition, ifTrue, ifFalse)
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
-  private def parseIfFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case List(cond, ifTrue, ifFalse) =>
-        // Runtime parsing: ifTrue and ifFalse must have same type but we can't verify at parse time
-        Right(
-          TExpr.If(
-            cond.asInstanceOf[TExpr[Boolean]],
-            ifTrue.asInstanceOf[TExpr[Any]],
-            ifFalse.asInstanceOf[TExpr[Any]]
-          )
-        )
-      case _ =>
-        Left(ParseError.InvalidArguments("IF", pos, "3 arguments", s"${args.length} arguments"))
-
-  /**
-   * Parse AND function: AND(expr1, expr2, ...)
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
-  private def parseAndFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case Nil =>
-        Left(ParseError.InvalidArguments("AND", pos, "at least 1 argument", "0 arguments"))
-      case head :: tail =>
-        val result = tail.foldLeft(head.asInstanceOf[TExpr[Boolean]]) { (acc, expr) =>
-          TExpr.And(acc, expr.asInstanceOf[TExpr[Boolean]])
-        }
-        Right(result)
-
-  /**
-   * Parse OR function: OR(expr1, expr2, ...)
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
-  private def parseOrFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case Nil =>
-        Left(ParseError.InvalidArguments("OR", pos, "at least 1 argument", "0 arguments"))
-      case head :: tail =>
-        val result = tail.foldLeft(head.asInstanceOf[TExpr[Boolean]]) { (acc, expr) =>
-          TExpr.Or(acc, expr.asInstanceOf[TExpr[Boolean]])
-        }
-        Right(result)
-
-  /**
-   * Parse NOT function: NOT(expr)
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
-  private def parseNotFunction(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-    args match
-      case List(expr) => Right(TExpr.Not(expr.asInstanceOf[TExpr[Boolean]]))
-      case _ =>
-        Left(ParseError.InvalidArguments("NOT", pos, "1 argument", s"${args.length} arguments"))
 
   /**
    * Parse cell reference: A1, $A$1, Sheet1!A1
@@ -632,9 +536,9 @@ object FormulaParser:
     // Safe: ARef.parse returns Either[String, ARef], match is exhaustive
     ARef.parse(refStr) match
       case Right(aref) =>
-        // Create Ref expression with numeric decoder
+        // Create PolyRef - type will be determined by function context
         // Cast needed due to opaque type erasure in pattern matching
-        Right((TExpr.Ref(aref.asInstanceOf[ARef], TExpr.decodeNumeric), state))
+        Right((TExpr.PolyRef(aref.asInstanceOf[ARef]), state))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(refStr, startPos, err))
 
@@ -673,19 +577,8 @@ object FormulaParser:
    * Suggest similar function names for unknown functions.
    */
   private def suggestFunctions(name: String): List[String] =
-    val knownFunctions = List(
-      "SUM",
-      "COUNT",
-      "AVERAGE",
-      "IF",
-      "AND",
-      "OR",
-      "NOT",
-      "MIN",
-      "MAX",
-      "ROUND",
-      "ABS"
-    )
+    // Use FunctionParser registry for all available functions
+    val knownFunctions = FunctionParser.allFunctions
 
     // Simple Levenshtein distance for suggestions
     knownFunctions

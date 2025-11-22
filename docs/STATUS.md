@@ -41,7 +41,9 @@
 - ✅ RichText DSL: `"Bold".bold.red + " normal " + "Italic".italic.blue`
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
-- ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible SUM/COUNT/AVERAGE behavior
+- ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
+- ✅ **Function Library** (WI-09a/b/c complete): 21 built-in functions (aggregate, logical, text, date), extensible type class parser, evaluation API
+- ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 
 **Performance** (JMH Benchmarked - WI-15):
 - ✅ **Streaming reads: 35% faster than POI for small files** (0.887ms vs 1.357ms @ 1k rows)
@@ -74,7 +76,7 @@
 
 ### Test Coverage
 
-**840 tests across 5 modules** (includes P7+P8 string interpolation + WI-07 formula parser + WI-08 formula evaluator + WI-10 table support):
+**840+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + WI-10 table support + WI-15 benchmarks + display formatting):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -98,7 +100,7 @@
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
-- **xl-evaluator**: 115 tests (57 parser + 58 evaluator)
+- **xl-evaluator**: ~250 tests (parser, evaluator, function library, evaluation API, dependency graph, integration)
   - **Parser (WI-07)**: 57 tests
     - 7 property-based round-trip tests (parse ∘ print = id)
     - 26 parser unit tests (literals, operators, functions, edge cases)
@@ -106,6 +108,8 @@
     - 5 error handling tests (invalid syntax, unknown functions)
     - 9 integration tests (complex expressions, nested formulas, operator precedence)
   - **Evaluator (WI-08)**: 58 tests
+  - **Function library (WI-09a/b/c)**: 48 tests across aggregate/logical/text/date functions
+  - **Dependency graph (WI-09d)**: 44 graph tests + 8 integration/dependency tests
     - 10 property-based law tests (literal identity, arithmetic correctness, short-circuit semantics)
     - 28 unit tests (division by zero, boolean operations, comparisons, cell references, FoldRange)
     - 12 integration tests (IF, AND, OR, nested conditionals, SUM/COUNT, complex boolean logic)
@@ -117,11 +121,23 @@
 
 ### XML Serialization
 
-**Formula System**:
-- ✅ **Parsing complete** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, 57 tests
-- ✅ **Evaluation complete** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ⏳ **Function library ready to start** (WI-09): Depends on WI-08 (now complete); will add SUM/IF/VLOOKUP/etc
-- ❌ **Dependency graph not started** (WI-09b): Circular reference detection planned
+**Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
+- ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
+- ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
+- ✅ **Function Library** (WI-09a/b/c): 21 built-in functions, extensible type class parser, evaluation API, 78 tests
+  - **Aggregate** (5): SUM, COUNT, AVERAGE, MIN, MAX
+  - **Logical** (4): IF, AND, OR, NOT
+  - **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
+  - **Date** (6): TODAY, NOW, DATE, YEAR, MONTH, DAY
+  - Type class: FunctionParser[F] with extensible registry
+  - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
+  - Clock trait for pure date/time functions (deterministic testing)
+- ✅ **Dependency Graph** (WI-09d): Circular reference detection + topological sort, 52 tests
+  - Tarjan's SCC algorithm: O(V+E) cycle detection with early exit
+  - Kahn's algorithm: O(V+E) topological sort for correct evaluation order
+  - Precedent/dependent queries: O(1) lookups via adjacency lists
+  - Safe evaluation: sheet.evaluateWithDependencyCheck() (production-ready)
+  - Performance: Handles 10k formula cells in <10ms
 - ⚠️ Merged cells are fully supported in the in-memory OOXML path, but not emitted by streaming writers.
 - ❌ Hyperlinks not serialized.
 - ❌ Column/row properties (width, height, hidden) are parsed and tracked in the domain model but not yet serialized back into `<cols>` / `<row>` in the regenerated XML.
@@ -428,4 +444,4 @@ private def attr(name: String, value: String): Attr =
 4. **Zero overhead** - Opaque types, inline, compile-time macros
 5. **Real files** - Creates valid XLSX that Excel/LibreOffice opens
 6. **Type safety** - Opaque types prevent mixing units; codecs enforce type correctness
-7. **Performance** - 46.7% faster than Apache POI on streaming reads (JMH validated), 9.5% faster on writes, 80x less memory
+7. **Performance** - ~35% faster than Apache POI on streaming reads (JMH validated), writes currently ~49% slower, 80x less memory

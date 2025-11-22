@@ -99,6 +99,67 @@ val updatedSheet = sheet.put(patch) match
 // sheet.put(patch).unsafe
 ```
 
+## Examples
+
+The `/examples/` directory contains ready-to-run scripts demonstrating real-world use cases. All scripts use `scala-cli` for easy execution.
+
+### Quick Start (5 minutes)
+
+Get up and running with the formula system:
+
+```bash
+scala-cli examples/quick-start.sc
+```
+
+Demonstrates: formula parsing, evaluation, error handling, circular reference detection, and dependency-aware evaluation.
+
+### Available Example Scripts
+
+| Script | Use Case | Features Demonstrated |
+|--------|----------|----------------------|
+| **quick-start.sc** | 5-minute tutorial | Parse, evaluate, dependency checking, cycle detection |
+| **financial-model.sc** | 3-year P&L model | Complex chains, financial ratios, margins, dependency analysis |
+| **sales-pipeline.sc** | CRM analytics | Conversion funnels, tiered commissions, quota tracking |
+| **dependency-analysis.sc** | Meta-programming | Graph construction, cycle detection (4 scenarios), impact analysis |
+| **data-validation.sc** | Quality control | Range validation, missing data, text normalization, error handling |
+| **evaluator-demo.sc** | Complete API tour | Low/high-level APIs, all 21 functions, comprehensive examples |
+
+### Running Examples
+
+```bash
+# Option 1: Run directly (downloads dependencies automatically)
+scala-cli examples/quick-start.sc
+scala-cli examples/financial-model.sc
+
+# Option 2: Publish locally first (faster for multiple runs)
+./mill xl-core.publishLocal && ./mill xl-evaluator.publishLocal
+scala-cli examples/quick-start.sc
+```
+
+### Example Highlights
+
+**Financial Modeling** (`financial-model.sc`):
+- Complete income statement with Revenue → COGS → Gross Profit → OpEx → Net Income
+- Financial ratios (Gross Margin %, Operating Margin %, Net Margin %)
+- Multi-year projections with growth rates
+- Dependency chain visualization
+
+**Dependency Analysis** (`dependency-analysis.sc`):
+- Tarjan's SCC algorithm for cycle detection (O(V+E))
+- Kahn's topological sort for evaluation order (O(V+E))
+- Precedent/dependent queries (O(1) lookups)
+- Impact analysis (what cells are affected by changes?)
+- 4 circular reference scenarios (2-cycle, 4-cycle, self-loop, range cycle)
+
+**Data Validation** (`data-validation.sc`):
+- Range validation with bounds checking
+- Missing data detection (COUNT vs expected)
+- Text normalization (UPPER/LOWER)
+- Length validation (LEN constraints)
+- Division by zero handling (explicit errors, no crashes)
+
+See `docs/reference/examples.md` for detailed documentation of each script.
+
 ### Styling Example
 
 ```scala
@@ -245,7 +306,7 @@ FormulaParser.parse(formulaString) match
 
 **Why TExpr GADT?** The GADT (Generalized Algebraic Data Type) ensures type safety at compile time - `TExpr[BigDecimal]` only contains numeric operations, `TExpr[Boolean]` only contains logical operations. This prevents type errors and enables safe formula transformations.
 
-**Note**: Formula *evaluation* (WI-08) is planned. The parser creates the AST foundation for future evaluation.
+**Note**: Formula evaluation is **production-ready** (WI-07, WI-08, WI-09a/b/c/d complete) with 21 built-in functions, dependency graph analysis, and circular reference detection (250+ tests). See [Examples](#examples) section for complete demos.
 
 ### HTML Export
 

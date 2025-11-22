@@ -231,6 +231,62 @@ val html = sheet.toHtml(range"A1:B10")
 println(html)  // <table>...</table> with inline CSS
 ```
 
+### Formula Evaluation (Production Ready)
+```scala
+import com.tjclp.xl.*
+import com.tjclp.xl.formula.{FormulaParser, Evaluator}
+import com.tjclp.xl.formula.SheetEvaluator.*
+import com.tjclp.xl.unsafe.*
+
+// Build a sheet with data and formulas
+val sheet = Sheet("Finance").unsafe
+  .put(
+    ref"A1" -> "Revenue",
+    ref"A2" -> BigDecimal("1000000"),
+    ref"A3" -> BigDecimal("1500000"),
+    ref"B1" -> "Total",
+    ref"B2" -> CellValue.Formula("=SUM(A2:A3)"),  // Formula cell
+    ref"C1" -> "Average",
+    ref"C2" -> CellValue.Formula("=AVERAGE(A2:A3)")
+  )
+  .unsafe
+
+// Evaluate individual formula
+val totalResult = sheet.evaluateFormula("=SUM(A2:A3)")
+// Right(CellValue.Number(2500000))
+
+// Evaluate cell with formula
+val cellResult = sheet.evaluateCell(ref"B2")
+// Right(CellValue.Number(2500000))
+
+// Evaluate all formulas in sheet (with dependency checking)
+val allResults = sheet.evaluateWithDependencyCheck()
+// Right(Map(
+//   ARef(B2) -> CellValue.Number(2500000),
+//   ARef(C2) -> CellValue.Number(1250000)
+// ))
+
+// Handle circular references safely
+val cyclicSheet = Sheet("Cyclic").unsafe
+  .put(
+    ref"A1" -> CellValue.Formula("=B1"),
+    ref"B1" -> CellValue.Formula("=A1")  // Circular reference!
+  )
+  .unsafe
+
+cyclicSheet.evaluateWithDependencyCheck() match
+  case Left(error) =>
+    println(s"Cycle detected: ${error.message}")
+    // "Circular reference detected: A1 → B1 → A1"
+  case Right(_) => // Won't happen
+```
+
+**Available Functions** (21 total):
+- **Aggregate**: SUM, COUNT, AVERAGE, MIN, MAX
+- **Logical**: IF, AND, OR, NOT
+- **Text**: CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
+- **Date**: TODAY, NOW, DATE, YEAR, MONTH, DAY
+
 ---
 
 ## Next Steps

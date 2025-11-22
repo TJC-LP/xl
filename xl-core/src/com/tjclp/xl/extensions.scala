@@ -158,6 +158,38 @@ object extensions:
         toXLResult(ARef.parse(ref), ref, "Invalid cell reference")
           .map(aref => sheet.withCellStyle(aref, cellStyle))
 
+    /**
+     * Apply style to cell (compile-time validated ref).
+     *
+     * Universal style method that works with typed ARef from ref"A1" macro.
+     *
+     * @param ref
+     *   Cell reference (ARef from ref"A1" macro)
+     * @param cellStyle
+     *   CellStyle to apply
+     * @return
+     *   XLResult[Sheet] for chaining
+     */
+    @annotation.targetName("styleSheetARef")
+    def style(ref: com.tjclp.xl.addressing.ARef, cellStyle: CellStyle): XLResult[Sheet] =
+      Right(sheet.withCellStyle(ref, cellStyle))
+
+    /**
+     * Apply style to range (compile-time validated ref).
+     *
+     * Universal style method that works with typed CellRange from ref"A1:B10" macro.
+     *
+     * @param range
+     *   Cell range (CellRange from ref"A1:B10" macro)
+     * @param cellStyle
+     *   CellStyle to apply
+     * @return
+     *   XLResult[Sheet] for chaining
+     */
+    @annotation.targetName("styleSheetRange")
+    def style(range: com.tjclp.xl.addressing.CellRange, cellStyle: CellStyle): XLResult[Sheet] =
+      Right(sheet.withRangeStyle(range, cellStyle))
+
   // ========== Sheet Extensions: Lookup Operations (Safe) ==========
 
   extension (sheet: Sheet)
@@ -243,11 +275,25 @@ object extensions:
       result.flatMap(_.put(cellRef, value, cellStyle))
 
     /**
-     * Apply style (chainable).
+     * Apply style (chainable, string ref).
      */
     @annotation.targetName("styleSheetChainable")
     def style(ref: String, cellStyle: CellStyle): XLResult[Sheet] =
       result.flatMap(_.style(ref, cellStyle))
+
+    /**
+     * Apply style (chainable, typed ref).
+     */
+    @annotation.targetName("styleSheetARefChainable")
+    def style(ref: com.tjclp.xl.addressing.ARef, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.style(ref, cellStyle))
+
+    /**
+     * Apply style (chainable, range).
+     */
+    @annotation.targetName("styleSheetRangeChainable")
+    def style(range: com.tjclp.xl.addressing.CellRange, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.style(range, cellStyle))
 
     /** Merge range (chainable). */
     def merge(rangeRef: String): XLResult[Sheet] =
@@ -260,7 +306,10 @@ object extensions:
 
     /** Add comment to cell (chainable). */
     @annotation.targetName("commentChainable")
-    def comment(ref: ARef, cmt: Comment): XLResult[Sheet] =
+    def comment(
+      ref: com.tjclp.xl.addressing.ARef,
+      cmt: com.tjclp.xl.cells.Comment
+    ): XLResult[Sheet] =
       result.map(_.comment(ref, cmt))
 
   // ========== XLResult[Workbook] Extensions: Chainable Operations ==========

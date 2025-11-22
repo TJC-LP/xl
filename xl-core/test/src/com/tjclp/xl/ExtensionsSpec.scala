@@ -181,6 +181,60 @@ class ExtensionsSpec extends FunSuite:
     assert(result.isLeft)
   }
 
+  // ========== Typed ref style() Operations ==========
+
+  test("style applies to single cell (ARef)") {
+    val result = baseSheet.put("A1", "Text").flatMap(_.style(ref"A1", testStyle))
+    assert(result.isRight)
+    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+  }
+
+  test("style applies to range (CellRange)") {
+    val result = baseSheet
+      .put("A1", "A")
+      .put("B1", "B")
+      .flatMap(_.style(ref"A1:B1", testStyle))
+    assert(result.isRight)
+    val sheet = result.unsafe
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
+    assert(sheet.cell("B1").flatMap(_.styleId).isDefined)
+  }
+
+  test("style with ARef returns XLResult") {
+    val sheet = baseSheet.put("A1", "Text").unsafe
+    val result = sheet.style(ref"A1", testStyle)
+    assert(result.isRight)
+    assertEquals(result.unsafe.cells.get(ref"A1").flatMap(_.styleId).isDefined, true)
+  }
+
+  test("style with CellRange returns XLResult") {
+    val sheet = baseSheet.put("A1", "A").put("B1", "B").unsafe
+    val result = sheet.style(ref"A1:B1", testStyle)
+    assert(result.isRight)
+    val styled = result.unsafe
+    assert(styled.cells.get(ref"A1").flatMap(_.styleId).isDefined)
+    assert(styled.cells.get(ref"B1").flatMap(_.styleId).isDefined)
+  }
+
+  test("style chainable with ARef") {
+    val result = baseSheet
+      .put("A1", "Text")
+      .style(ref"A1", testStyle)
+    assert(result.isRight)
+    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+  }
+
+  test("style chainable with CellRange") {
+    val result = baseSheet
+      .put("A1", "A")
+      .put("B1", "B")
+      .style(ref"A1:B1", testStyle)
+    assert(result.isRight)
+    val sheet = result.unsafe
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
+    assert(sheet.cell("B1").flatMap(_.styleId).isDefined)
+  }
+
   // ========== Safe Lookup Methods ==========
 
   test("cell returns Some for existing cell") {

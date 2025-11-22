@@ -12,7 +12,12 @@ import com.tjclp.xl.addressing.{Column, Row}
  * Ensures proper operator precedence with minimal parentheses.
  *
  * Round-trip law: parse(print(expr)) == Right(expr)
+ *
+ * @note
+ *   Suppression rationale:
+ *   - AsInstanceOf: ARef is opaque type over Long. Cast is safe for printing.
  */
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 object FormulaPrinter:
   /**
    * Convert TExpr to Excel formula string.
@@ -70,6 +75,7 @@ object FormulaPrinter:
 
       // Cell reference
       case TExpr.Ref(at, _) => formatARef(at)
+      case TExpr.PolyRef(at) => formatARef(at) // PolyRef prints same as Ref
 
       // Conditional
       case TExpr.If(cond, ifTrue, ifFalse) =>
@@ -134,6 +140,56 @@ object FormulaPrinter:
         val result =
           s"${printExpr(x, Precedence.Comparison)}>=${printExpr(y, Precedence.Comparison)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
+
+      // Type conversions (print transparently - ToInt is internal)
+      case TExpr.ToInt(expr) =>
+        printExpr(expr, precedence) // Print wrapped expression without conversion syntax
+
+      // Text functions
+      case TExpr.Concatenate(xs) =>
+        val args = xs.map(x => printExpr(x, 0)).mkString(", ")
+        s"CONCATENATE($args)"
+
+      case TExpr.Left(text, n) =>
+        s"LEFT(${printExpr(text, 0)}, ${printExpr(n, 0)})"
+
+      case TExpr.Right(text, n) =>
+        s"RIGHT(${printExpr(text, 0)}, ${printExpr(n, 0)})"
+
+      case TExpr.Len(text) =>
+        s"LEN(${printExpr(text, 0)})"
+
+      case TExpr.Upper(text) =>
+        s"UPPER(${printExpr(text, 0)})"
+
+      case TExpr.Lower(text) =>
+        s"LOWER(${printExpr(text, 0)})"
+
+      // Date/Time functions
+      case TExpr.Today() =>
+        "TODAY()"
+
+      case TExpr.Now() =>
+        "NOW()"
+
+      case TExpr.Date(year, month, day) =>
+        s"DATE(${printExpr(year, 0)}, ${printExpr(month, 0)}, ${printExpr(day, 0)})"
+
+      case TExpr.Year(date) =>
+        s"YEAR(${printExpr(date, 0)})"
+
+      case TExpr.Month(date) =>
+        s"MONTH(${printExpr(date, 0)})"
+
+      case TExpr.Day(date) =>
+        s"DAY(${printExpr(date, 0)})"
+
+      // Arithmetic range functions
+      case TExpr.Min(range) =>
+        s"MIN(${formatARef(range.start)}:${formatARef(range.end)})"
+
+      case TExpr.Max(range) =>
+        s"MAX(${formatARef(range.start)}:${formatARef(range.end)})"
 
       // Range aggregation
       case TExpr.FoldRange(range, z, step, decode) =>
@@ -235,6 +291,8 @@ object FormulaPrinter:
         s"Lit($value: ${value.getClass.getSimpleName})"
       case TExpr.Ref(at, _) =>
         s"Ref($at)"
+      case TExpr.PolyRef(at) =>
+        s"PolyRef($at)"
       case TExpr.If(cond, ifTrue, ifFalse) =>
         s"If(${printWithTypes(cond)}, ${printWithTypes(ifTrue)}, ${printWithTypes(ifFalse)})"
       case TExpr.Add(x, y) =>
@@ -263,5 +321,35 @@ object FormulaPrinter:
         s"Gt(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Gte(x, y) =>
         s"Gte(${printWithTypes(x)}, ${printWithTypes(y)})"
+      case TExpr.ToInt(expr) =>
+        s"ToInt(${printWithTypes(expr)})"
+      case TExpr.Concatenate(xs) =>
+        s"Concatenate(${xs.map(printWithTypes).mkString(", ")})"
+      case TExpr.Left(text, n) =>
+        s"Left(${printWithTypes(text)}, ${printWithTypes(n)})"
+      case TExpr.Right(text, n) =>
+        s"Right(${printWithTypes(text)}, ${printWithTypes(n)})"
+      case TExpr.Len(text) =>
+        s"Len(${printWithTypes(text)})"
+      case TExpr.Upper(text) =>
+        s"Upper(${printWithTypes(text)})"
+      case TExpr.Lower(text) =>
+        s"Lower(${printWithTypes(text)})"
+      case TExpr.Today() =>
+        "Today()"
+      case TExpr.Now() =>
+        "Now()"
+      case TExpr.Date(year, month, day) =>
+        s"Date(${printWithTypes(year)}, ${printWithTypes(month)}, ${printWithTypes(day)})"
+      case TExpr.Year(date) =>
+        s"Year(${printWithTypes(date)})"
+      case TExpr.Month(date) =>
+        s"Month(${printWithTypes(date)})"
+      case TExpr.Day(date) =>
+        s"Day(${printWithTypes(date)})"
+      case TExpr.Min(range) =>
+        s"Min(${formatARef(range.start)}:${formatARef(range.end)})"
+      case TExpr.Max(range) =>
+        s"Max(${formatARef(range.start)}:${formatARef(range.end)})"
       case fold @ TExpr.FoldRange(range, _, _, _) =>
         s"FoldRange(${formatARef(range.start)}:${formatARef(range.end)})"

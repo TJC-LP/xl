@@ -563,9 +563,81 @@ excel.readR(path).flatMap {
 }
 ```
 
+**Universal `.style()` Method** (Format formula cells and ranges):
+```scala
+import com.tjclp.xl.*
+
+// Universal method works with all ref types
+val percentStyle = CellStyle.default.withNumFmt(NumFmt.Percent)
+val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
+
+// Single cell with ARef (compile-time validated)
+val sheet1 = sheet
+  .style(ref"A1", boldStyle)
+  .unsafe
+
+// Range with CellRange (compile-time validated)
+val sheet2 = sheet
+  .style(ref"B19:D21", percentStyle)  // All margin formulas as percentages
+  .unsafe
+
+// String refs (runtime validated, auto-detects cell vs range)
+val sheet3 = sheet
+  .style("A1", boldStyle)         // Single cell
+  .style("B19:D21", percentStyle) // Range
+  .unsafe
+
+// Chainable with formulas
+val sheet4 = Sheet(name = SheetName.unsafe("Finance"))
+  .put(ref"B19", fx"=B5/B3")       // Gross margin
+  .put(ref"C19", fx"=C5/C3")
+  .put(ref"D19", fx"=D5/D3")
+  .style(ref"B19:D21", percentStyle)  // Format all as percentages
+  .unsafe
+
+// Multiple ranges with flatMap chaining
+val sheet5 = sheet
+  .style(ref"B19:D21", percentStyle)   // Margins
+  .flatMap(_.style(ref"B3:D3", currencyStyle))  // Revenue
+  .unsafe
+```
+
+**Pattern**: Apply number formatting to formula cells after creation, then evaluate. Excel will display formatted results.
+
+**Display Formatting** (Python repr-style automatic formatting):
+
+XL provides **context-aware display formatting** with the `excel"..."` custom interpolator. This enables Python `repr()`-style automatic display of Excel values with their proper formatting applied:
+
+```scala
+import com.tjclp.xl.display.{*, given}
+import com.tjclp.xl.display.ExcelInterpolator.*
+import com.tjclp.xl.display.DisplayConversions.given
+
+// Set up context
+given Sheet = mySheet
+given FormulaDisplayStrategy = FormulaDisplayStrategy.default  // Or EvaluatingFormulaDisplay.evaluating
+
+// ✨ Automatic Excel-accurate formatting
+println(excel"Revenue: ${ref"A1"}")        // "Revenue: $1,000,000.00"
+println(excel"Margin: ${ref"B19"}")        // "Margin: 60.0%"
+println(excel"Date: ${ref"C1"}")           // "Date: 11/21/25"
+```
+
+**Two modes** (capability-based):
+1. **Core-only**: Formulas display as raw text `"=SUM(A1:A10)"` (import `com.tjclp.xl.display.{*, given}`)
+2. **With evaluator**: Formulas auto-evaluate `"$1,000,000"` (add `import com.tjclp.xl.formula.display.EvaluatingFormulaDisplay`)
+
+**Explicit methods** (when needed):
+```scala
+sheet.display(ref"A1")           // DisplayWrapper with formatted toString
+sheet.displayFormula(ref"A1")    // Raw formula text "=SUM(...)"
+```
+
+**Key insight**: Formatting is metadata-driven. Apply `.style()` with `NumFmt`, then `excel"..."` automatically displays formatted values matching Excel's display.
+
 ### Formula System Patterns
 
-Formula system (`xl-evaluator/src/com/tjclp/xl/formula/`) provides typed parsing and evaluation (WI-08 in progress).
+Formula system (`xl-evaluator/src/com/tjclp/xl/formula/`) provides typed parsing, evaluation, 21 built-in functions, and dependency graph analysis with cycle detection (WI-07 through WI-09d complete).
 
 #### Import Pattern for Formula Code
 
@@ -622,10 +694,11 @@ val compact = FormulaPrinter.printCompact(expr)                 // "A1+100" (no 
 val debug = FormulaPrinter.printWithTypes(expr)                 // "Add(Ref(A1), Lit(100))"
 ```
 
-#### Evaluate Formulas (WI-08 - In Progress)
+#### Evaluate Formulas (WI-08/09 - Complete)
 
+**Low-level API** (programmatic formula evaluation):
 ```scala
-import com.tjclp.xl.formula.{Evaluator, EvalError}
+import com.tjclp.xl.formula.{Evaluator, EvalError, Clock}
 
 val evaluator = Evaluator.instance
 
@@ -635,28 +708,131 @@ evaluator.eval(expr, sheet) match
     println(s"Result: $result")
   case Left(EvalError.DivByZero(num, denom)) =>
     println(s"Division by zero: $num / $denom")
-  case Left(EvalError.RefError(ref, reason)) =>
-    println(s"Cell reference error at ${ref.toA1}: $reason")
   case Left(EvalError.CodecFailed(ref, codecErr)) =>
-    println(s"Type mismatch at ${ref.toA1}: $codecErr")
+    println(s"Type mismatch at $ref: $codecErr")
   case Left(error) =>
     println(s"Evaluation failed: $error")
+
+// Date/time functions with Clock
+val clock = Clock.fixedDate(LocalDate.of(2025, 11, 21))
+evaluator.eval(TExpr.today(), sheet, clock) // Right(LocalDate(2025, 11, 21))
 ```
 
-#### Integration with fx Macro
-
+**High-level API** (Sheet evaluation extensions):
 ```scala
-import com.tjclp.xl.formula.FormulaParser
+import com.tjclp.xl.formula.SheetEvaluator.*
 
-// fx macro validates at compile time, returns CellValue.Formula
-val validated = fx"=SUM(A1:A10)"  // Compile-time validation
+// Evaluate formula string
+sheet.evaluateFormula("=SUM(A1:A10)") // XLResult[CellValue]
+sheet.evaluateFormula("=TODAY()", Clock.system) // XLResult[CellValue]
 
-validated match
-  case CellValue.Formula(text) =>
-    // Parse at runtime for evaluation
-    FormulaParser.parse(text).flatMap { expr =>
-      evaluator.eval(expr, sheet)
+// Evaluate cell with formula
+sheet.evaluateCell(ref"B1") // XLResult[CellValue]
+
+// Evaluate all formulas in sheet
+sheet.evaluateAllFormulas() // XLResult[Map[ARef, CellValue]]
+```
+
+**21 Built-in Functions**:
+- **Aggregate** (5): SUM, COUNT, AVERAGE, MIN, MAX
+- **Logical** (4): IF, AND, OR, NOT
+- **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
+- **Date** (6): TODAY, NOW, DATE, YEAR, MONTH, DAY
+
+**Function Introspection**:
+```scala
+import com.tjclp.xl.formula.FunctionParser
+
+FunctionParser.allFunctions // List("AND", "AVERAGE", "CONCATENATE", ...)
+FunctionParser.lookup("MIN") // Some(minFunctionParser)
+FunctionParser.isKnown("SUM") // true
+```
+
+#### Dependency Graph & Cycle Detection (WI-09d - Complete)
+
+**Safe Formula Evaluation** (production-ready with cycle detection):
+```scala
+import com.tjclp.xl.formula.SheetEvaluator.*
+
+// Evaluate with dependency checking (recommended for production)
+sheet.evaluateWithDependencyCheck() match
+  case Right(results) =>
+    // All formulas evaluated successfully in dependency order
+    results.foreach { (ref, value) =>
+      println(s"$ref = $value")
     }
+  case Left(error) =>
+    // Circular reference or evaluation error detected
+    println(s"Error: $error")
+
+// Default evaluateAllFormulas() now uses dependency checking
+sheet.evaluateAllFormulas() // Delegates to evaluateWithDependencyCheck
+```
+
+**Dependency Analysis** (build graph, query dependencies):
+```scala
+import com.tjclp.xl.formula.DependencyGraph
+
+// Build dependency graph from sheet
+val graph = DependencyGraph.fromSheet(sheet)
+
+// Check for circular references
+DependencyGraph.detectCycles(graph) match
+  case Right(_) => println("No cycles found")
+  case Left(circularRef) => println(s"Cycle: ${circularRef.cycle.mkString(" → ")}")
+
+// Get topological evaluation order
+DependencyGraph.topologicalSort(graph) match
+  case Right(order) =>
+    println(s"Evaluation order: ${order.mkString(", ")}")
+  case Left(circularRef) =>
+    println(s"Cannot sort due to cycle: ${circularRef.cycle.mkString(" → ")}")
+
+// Query precedents (cells this cell depends on)
+val precedents = DependencyGraph.precedents(graph, ref"C1")
+println(s"C1 depends on: ${precedents.mkString(", ")}")
+
+// Query dependents (cells that depend on this cell)
+val dependents = DependencyGraph.dependents(graph, ref"A1")
+println(s"Cells depending on A1: ${dependents.mkString(", ")}")
+```
+
+**Key Features**:
+- **Cycle Detection**: Tarjan's SCC algorithm (O(V+E)) with early exit
+- **Topological Sort**: Kahn's algorithm (O(V+E)) for correct evaluation order
+- **Dependency Queries**: O(1) precedent/dependent lookups via adjacency lists
+- **Performance**: Handles 10k formula cells in <10ms
+
+**Example: Complex Dependency Chain**:
+```scala
+val sheet = Sheet.empty
+  .put(ref"A1", CellValue.Number(BigDecimal(10)))           // Constant
+  .put(ref"B1", CellValue.Formula("=A1*2"))                 // 20
+  .put(ref"C1", CellValue.Formula("=B1+A1"))                // 30 (depends on B1 and A1)
+  .put(ref"D1", CellValue.Formula("=SUM(A1:C1)"))           // 60 (depends on range)
+
+// Evaluate with dependency checking
+val results = sheet.evaluateWithDependencyCheck().toOption.get
+// Evaluation order: B1, C1, D1 (A1 is constant, B1 before C1, C1 before D1)
+
+println(results(ref"B1")) // Number(20)
+println(results(ref"C1")) // Number(30)
+println(results(ref"D1")) // Number(60)
+```
+
+**Error Handling**:
+```scala
+// Circular reference example
+val cyclicSheet = Sheet.empty
+  .put(ref"A1", CellValue.Formula("=B1"))
+  .put(ref"B1", CellValue.Formula("=C1"))
+  .put(ref"C1", CellValue.Formula("=A1"))  // Cycle: A1 → B1 → C1 → A1
+
+cyclicSheet.evaluateWithDependencyCheck() match
+  case Left(error) =>
+    // XLError.FormulaError with CircularRef details
+    println(error.message) // "Circular reference detected: A1 → B1 → C1 → A1"
+  case Right(_) => // Won't happen
 ```
 
 #### Round-Trip Verification
