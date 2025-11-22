@@ -23,7 +23,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
   /** Create sheet with cells */
   def sheetWith(cells: (ARef, CellValue)*): Sheet =
-    val sheet = Sheet(name = SheetName.unsafe("Test"))
+    val sheet = new Sheet(name = SheetName.unsafe("Test"))
     cells.foldLeft(sheet) { case (s, (ref, value)) =>
       s.put(ref, value)
     }
