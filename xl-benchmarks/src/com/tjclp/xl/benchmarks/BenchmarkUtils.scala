@@ -27,10 +27,10 @@ object BenchmarkUtils {
     val random = new Random(42) // Fixed seed for reproducibility
 
     // Build sheet with columns: ID (Int), Name (String), Date (LocalDate), Amount (BigDecimal), Active (Boolean)
-    var sheet: Sheet = Sheet(sheetName: SheetName) // Type ascription to resolve overload
+    val emptySheet: Sheet = Sheet(sheetName: SheetName) // Type ascription to resolve overload
 
     // Headers - use batch put for cleaner code
-    sheet = sheet
+    val headerSheet = emptySheet
       .put(
         ref"A1" -> "ID",
         ref"B1" -> "Name",
@@ -38,7 +38,7 @@ object BenchmarkUtils {
         ref"D1" -> "Amount",
         ref"E1" -> "Active"
       )
-      .getOrElse(sheet)
+      .getOrElse(emptySheet)
 
     // Data rows - build list of updates then batch apply
     val dataUpdates: Seq[(ARef, Any)] = (1 to rows).flatMap { row =>
@@ -63,9 +63,7 @@ object BenchmarkUtils {
     }
 
     // Apply all data updates in one go
-    sheet = sheet.put(dataUpdates*).getOrElse(sheet)
-
-    sheet
+    headerSheet.put(dataUpdates*).getOrElse(headerSheet)
   }
 
   /** Generate patches for benchmarking patch operations */
@@ -117,14 +115,14 @@ object BenchmarkUtils {
    * because we're building CellValue.Number directly (no codec needed).
    */
   def createVerifiableWorkbook(rows: Int): Workbook = {
-    var sheet: Sheet = Sheet(SheetName.unsafe("Data"))
+    val emptySheet: Sheet = Sheet(SheetName.unsafe("Data"))
 
     // Create rows with cell value = row number (verifiable arithmetic series)
     val updates: Seq[(ARef, Any)] = (1 to rows).map { i =>
       (ARef.from1(1, i): ARef) -> (i.toDouble: Any) // Raw Double, not CellValue
     }
 
-    sheet = sheet.put(updates*) match {
+    val sheet = emptySheet.put(updates*) match {
       case Right(s) => s
       case Left(err) => sys.error(s"Failed to create verifiable sheet: $err")
     }

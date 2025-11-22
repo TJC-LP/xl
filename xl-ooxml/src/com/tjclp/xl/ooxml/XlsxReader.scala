@@ -584,17 +584,12 @@ object XlsxReader:
     // This prevents adding an extra "default" style when source style 0 differs from CellStyle.default
     val emptyRegistry = StyleRegistry(Vector.empty, Map.empty)
 
-    // Optimization: Use builder for mapping to avoid O(n log n) Map.updated() accumulation
-    var registry = emptyRegistry
-    val mappingBuilder = Map.newBuilder[Int, StyleId]
-
-    styles.cellStyles.zipWithIndex.foreach { case (style, idx) =>
-      val (nextRegistry, styleId) = registry.register(style)
-      registry = nextRegistry
-      mappingBuilder += (idx -> styleId)
+    // Use foldLeft to accumulate registry and mapping without var
+    styles.cellStyles.zipWithIndex.foldLeft((emptyRegistry, Map.empty[Int, StyleId])) {
+      case ((reg, map), (style, idx)) =>
+        val (nextRegistry, styleId) = reg.register(style)
+        (nextRegistry, map + (idx -> styleId))
     }
-
-    (registry, mappingBuilder.result())
 
   /**
    * Assemble final workbook with optional SourceContext for surgical modification.
