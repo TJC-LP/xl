@@ -117,6 +117,7 @@ object DependencyGraph:
     expr match
       // Single cell reference
       case TExpr.Ref(at, _) => Set(at)
+      case TExpr.PolyRef(at) => Set(at) // PolyRef also references a cell
 
       // Range reference (expand to all cells)
       case TExpr.FoldRange(range, _, _, _) =>
@@ -135,6 +136,8 @@ object DependencyGraph:
       case TExpr.Gte(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.And(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.Or(l, r) => extractDependencies(l) ++ extractDependencies(r)
+      case TExpr.ToInt(expr) =>
+        extractDependencies(expr) // Type conversion - extract from wrapped expr
       case TExpr.Concatenate(xs) => xs.flatMap(extractDependencies).toSet
       case TExpr.Left(text, n) => extractDependencies(text) ++ extractDependencies(n)
       case TExpr.Right(text, n) => extractDependencies(text) ++ extractDependencies(n)

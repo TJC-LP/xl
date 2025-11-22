@@ -44,6 +44,22 @@ enum TExpr[A] derives CanEqual:
   case Ref[A](at: ARef, decode: Cell => Either[CodecError, A]) extends TExpr[A]
 
   /**
+   * Polymorphic cell reference - defers type commitment until function context.
+   *
+   * This is used during parsing when the expected type of a cell reference is not yet known.
+   * Function parsers convert PolyRef to Ref with appropriate type-coercing decoder based on
+   * context.
+   *
+   * Matches Excel's type coercion semantics: A1=42 in =LEFT(A1,1) converts 42→"4".
+   *
+   * @param at
+   *   The cell address to read from
+   *
+   * Example: PolyRef(ARef("A1")) - type determined by enclosing function
+   */
+  case PolyRef(at: ARef) extends TExpr[Nothing]
+
+  /**
    * Conditional expression - if/then/else.
    *
    * @param cond
@@ -181,6 +197,20 @@ enum TExpr[A] derives CanEqual:
    */
   case Gte(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[Boolean]
 
+  // Type conversions
+
+  /**
+   * Convert BigDecimal to Int.
+   *
+   * Required for DATE(YEAR(A1), MONTH(A1), DAY(A1)) pattern where date extraction functions return
+   * BigDecimal but DATE expects Int arguments.
+   *
+   * Validates at evaluation time that value is a valid integer.
+   *
+   * Example: ToInt(YEAR(A1)) where YEAR returns BigDecimal(2025) → Int(2025)
+   */
+  case ToInt(expr: TExpr[BigDecimal]) extends TExpr[Int]
+
   // Text functions
 
   /**
@@ -217,9 +247,11 @@ enum TExpr[A] derives CanEqual:
   /**
    * Text length: LEN(text)
    *
+   * Returns BigDecimal to match Excel semantics and enable composition with arithmetic.
+   *
    * Example: LEN("Hello") = 5
    */
-  case Len(text: TExpr[String]) extends TExpr[Int]
+  case Len(text: TExpr[String]) extends TExpr[BigDecimal]
 
   /**
    * Convert to uppercase: UPPER(text)
@@ -273,23 +305,30 @@ enum TExpr[A] derives CanEqual:
   /**
    * Extract year from date: YEAR(date)
    *
+   * Returns BigDecimal to match Excel semantics (all numbers are doubles) and enable composition
+   * with arithmetic operators (e.g., YEAR(A1) + 1).
+   *
    * Example: YEAR(DATE(2025, 11, 21)) = 2025
    */
-  case Year(date: TExpr[java.time.LocalDate]) extends TExpr[Int]
+  case Year(date: TExpr[java.time.LocalDate]) extends TExpr[BigDecimal]
 
   /**
    * Extract month from date: MONTH(date)
    *
+   * Returns BigDecimal to match Excel semantics and enable composition.
+   *
    * Example: MONTH(DATE(2025, 11, 21)) = 11
    */
-  case Month(date: TExpr[java.time.LocalDate]) extends TExpr[Int]
+  case Month(date: TExpr[java.time.LocalDate]) extends TExpr[BigDecimal]
 
   /**
    * Extract day from date: DAY(date)
    *
+   * Returns BigDecimal to match Excel semantics and enable composition.
+   *
    * Example: DAY(DATE(2025, 11, 21)) = 21
    */
-  case Day(date: TExpr[java.time.LocalDate]) extends TExpr[Int]
+  case Day(date: TExpr[java.time.LocalDate]) extends TExpr[BigDecimal]
 
   // Arithmetic range functions (MIN, MAX)
 
@@ -417,9 +456,11 @@ object TExpr:
   /**
    * LEN text length.
    *
+   * Returns BigDecimal to match Excel semantics.
+   *
    * Example: TExpr.len(TExpr.Lit("Hello"))
    */
-  def len(text: TExpr[String]): TExpr[Int] = Len(text)
+  def len(text: TExpr[String]): TExpr[BigDecimal] = Len(text)
 
   /**
    * UPPER convert to uppercase.
@@ -462,23 +503,29 @@ object TExpr:
   /**
    * YEAR extract year from date.
    *
+   * Returns BigDecimal to match Excel semantics and enable arithmetic composition.
+   *
    * Example: TExpr.year(TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21)))
    */
-  def year(date: TExpr[java.time.LocalDate]): TExpr[Int] = Year(date)
+  def year(date: TExpr[java.time.LocalDate]): TExpr[BigDecimal] = Year(date)
 
   /**
    * MONTH extract month from date.
    *
+   * Returns BigDecimal to match Excel semantics and enable arithmetic composition.
+   *
    * Example: TExpr.month(TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21)))
    */
-  def month(date: TExpr[java.time.LocalDate]): TExpr[Int] = Month(date)
+  def month(date: TExpr[java.time.LocalDate]): TExpr[BigDecimal] = Month(date)
 
   /**
    * DAY extract day from date.
    *
+   * Returns BigDecimal to match Excel semantics and enable arithmetic composition.
+   *
    * Example: TExpr.day(TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21)))
    */
-  def day(date: TExpr[java.time.LocalDate]): TExpr[Int] = Day(date)
+  def day(date: TExpr[java.time.LocalDate]): TExpr[BigDecimal] = Day(date)
 
   // Decoder functions for FoldRange
 
@@ -573,6 +620,159 @@ object TExpr:
             actual = other
           )
         )
+
+  /**
+   * Decode cell as Boolean value.
+   */
+  def decodeBool(cell: Cell): Either[CodecError, Boolean] =
+    import com.tjclp.xl.cells.CellValue
+    cell.value match
+      case CellValue.Bool(value) => scala.util.Right(value)
+      case other =>
+        scala.util.Left(
+          CodecError.TypeMismatch(
+            expected = "Boolean",
+            actual = other
+          )
+        )
+
+  // ===== Type-Coercing Decoders (Excel-compatible automatic conversion) =====
+
+  /**
+   * Decode cell as String with automatic type coercion.
+   *
+   * Matches Excel semantics:
+   *   - Text → as-is
+   *   - Number → toString (42 → "42")
+   *   - Boolean → toString (true → "TRUE", false → "FALSE")
+   *   - DateTime → ISO format
+   *   - Formula → text representation
+   *   - Empty → empty string
+   */
+  def decodeAsString(cell: Cell): Either[CodecError, String] =
+    import com.tjclp.xl.cells.CellValue
+    cell.value match
+      case CellValue.Empty => scala.util.Right("")
+      case CellValue.Text(s) => scala.util.Right(s)
+      case CellValue.Number(n) => scala.util.Right(n.toString)
+      case CellValue.Bool(b) => scala.util.Right(if b then "TRUE" else "FALSE")
+      case CellValue.DateTime(dt) => scala.util.Right(dt.toString)
+      case CellValue.Formula(text) => scala.util.Right(text)
+      case CellValue.RichText(rt) => scala.util.Right(rt.toPlainText)
+      case other => scala.util.Left(CodecError.TypeMismatch("String", other))
+
+  /**
+   * Decode cell as LocalDate with automatic type coercion.
+   *
+   * Matches Excel semantics:
+   *   - DateTime → extract date component
+   *   - Number → interpret as Excel serial number (not yet implemented)
+   *   - Text → parse as ISO date (not yet implemented)
+   *   - Other → error
+   */
+  def decodeAsDate(cell: Cell): Either[CodecError, java.time.LocalDate] =
+    import com.tjclp.xl.cells.CellValue
+    cell.value match
+      case CellValue.DateTime(dt) => scala.util.Right(dt.toLocalDate)
+      case other =>
+        // Future: could add Excel serial number → date conversion for Number
+        // Future: could add ISO date string parsing for Text
+        scala.util.Left(
+          CodecError.TypeMismatch(
+            expected = "Date",
+            actual = other
+          )
+        )
+
+  /**
+   * Decode cell as Int with automatic type coercion.
+   *
+   * Matches Excel semantics:
+   *   - Number → toInt if valid
+   *   - Boolean → 1 for TRUE, 0 for FALSE
+   *   - Text → parse as number (not yet implemented)
+   *   - Other → error
+   */
+  def decodeAsInt(cell: Cell): Either[CodecError, Int] =
+    import com.tjclp.xl.cells.CellValue
+    cell.value match
+      case CellValue.Number(n) if n.isValidInt => scala.util.Right(n.toInt)
+      case CellValue.Bool(b) => scala.util.Right(if b then 1 else 0)
+      case CellValue.Number(n) =>
+        scala.util.Left(
+          CodecError.TypeMismatch(
+            expected = "Int",
+            actual = CellValue.Number(n)
+          )
+        )
+      case other =>
+        scala.util.Left(
+          CodecError.TypeMismatch(
+            expected = "Int",
+            actual = other
+          )
+        )
+
+  // ===== PolyRef Conversion Helpers =====
+
+  /**
+   * Convert any TExpr to String type with coercion.
+   *
+   * Used by text functions (LEFT, RIGHT, UPPER, etc.) to handle PolyRef arguments.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def asStringExpr(expr: TExpr[?]): TExpr[String] = expr match
+    case PolyRef(at) => Ref(at, decodeAsString)
+    case other => other.asInstanceOf[TExpr[String]] // Safe: non-PolyRef already has correct type
+
+  /**
+   * Convert any TExpr to LocalDate type with coercion.
+   *
+   * Used by date functions (YEAR, MONTH, DAY) to handle PolyRef arguments.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def asDateExpr(expr: TExpr[?]): TExpr[java.time.LocalDate] = expr match
+    case PolyRef(at) => Ref(at, decodeAsDate)
+    case other =>
+      other.asInstanceOf[TExpr[java.time.LocalDate]] // Safe: non-PolyRef already has correct type
+
+  /**
+   * Convert any TExpr to Int type with coercion.
+   *
+   * Used by functions requiring integer arguments (LEFT, RIGHT, DATE). Automatically converts
+   * BigDecimal expressions (like YEAR/MONTH/DAY) to Int.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def asIntExpr(expr: TExpr[?]): TExpr[Int] = expr match
+    case PolyRef(at) => Ref(at, decodeAsInt)
+    case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
+    // Convert BigDecimal expressions to Int (YEAR/MONTH/DAY/LEN return BigDecimal)
+    case year: TExpr.Year => ToInt(year)
+    case month: TExpr.Month => ToInt(month)
+    case day: TExpr.Day => ToInt(day)
+    case len: TExpr.Len => ToInt(len)
+    case other => other.asInstanceOf[TExpr[Int]] // Safe: non-PolyRef already has correct type
+
+  /**
+   * Convert any TExpr to BigDecimal type (numeric).
+   *
+   * Used by arithmetic functions to handle PolyRef arguments.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def asNumericExpr(expr: TExpr[?]): TExpr[BigDecimal] = expr match
+    case PolyRef(at) => Ref(at, decodeNumeric)
+    case other =>
+      other.asInstanceOf[TExpr[BigDecimal]] // Safe: non-PolyRef already has correct type
+
+  /**
+   * Convert any TExpr to Boolean type.
+   *
+   * Used by logical functions (AND, OR, NOT, IF) to handle PolyRef arguments.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def asBooleanExpr(expr: TExpr[?]): TExpr[Boolean] = expr match
+    case PolyRef(at) => Ref(at, decodeBool)
+    case other => other.asInstanceOf[TExpr[Boolean]] // Safe: non-PolyRef already has correct type
 
   // Extension methods for ergonomic formula construction
 

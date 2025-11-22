@@ -188,8 +188,8 @@ object FormulaParser:
               parseComparison(s3).map { case (right, s4) =>
                 (
                   TExpr.Lte(
-                    left.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -199,8 +199,8 @@ object FormulaParser:
               parseComparison(s3).map { case (right, s4) =>
                 (
                   TExpr.Lt(
-                    left.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -212,8 +212,8 @@ object FormulaParser:
               parseComparison(s3).map { case (right, s4) =>
                 (
                   TExpr.Gte(
-                    left.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -223,8 +223,8 @@ object FormulaParser:
               parseComparison(s3).map { case (right, s4) =>
                 (
                   TExpr.Gt(
-                    left.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -267,8 +267,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Add(
-                    acc.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -279,8 +279,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Sub(
-                    acc.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -306,8 +306,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Mul(
-                    acc.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -318,8 +318,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Div(
-                    acc.asInstanceOf[TExpr[BigDecimal]],
-                    right.asInstanceOf[TExpr[BigDecimal]]
+                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
+                    TExpr.asNumericExpr(right)
                   ),
                   s4
                 )
@@ -341,14 +341,14 @@ object FormulaParser:
         parseUnary(s2).map { case (expr, s3) =>
           // Unary minus: 0 - expr
           (
-            TExpr.Sub(TExpr.Lit(BigDecimal(0)), expr.asInstanceOf[TExpr[BigDecimal]]),
+            TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), // Convert PolyRef
             s3
           )
         }
       case Some('N') | Some('n') if s.remaining.toUpperCase.startsWith("NOT") =>
         val s2 = skipWhitespace(s.advance(3))
         parseUnary(s2).map { case (expr, s3) =>
-          (TExpr.Not(expr.asInstanceOf[TExpr[Boolean]]), s3)
+          (TExpr.Not(TExpr.asBooleanExpr(expr)), s3) // Convert PolyRef
         }
       case _ => parsePrimary(s)
 
@@ -536,9 +536,9 @@ object FormulaParser:
     // Safe: ARef.parse returns Either[String, ARef], match is exhaustive
     ARef.parse(refStr) match
       case Right(aref) =>
-        // Create Ref expression with numeric decoder
+        // Create PolyRef - type will be determined by function context
         // Cast needed due to opaque type erasure in pattern matching
-        Right((TExpr.Ref(aref.asInstanceOf[ARef], TExpr.decodeNumeric), state))
+        Right((TExpr.PolyRef(aref.asInstanceOf[ARef]), state))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(refStr, startPos, err))
 

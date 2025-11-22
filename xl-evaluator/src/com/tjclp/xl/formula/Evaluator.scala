@@ -77,6 +77,16 @@ private class EvaluatorImpl extends Evaluator:
         val cell = sheet(at)
         decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
 
+      case TExpr.PolyRef(at) =>
+        // PolyRef should never reach evaluator - function parsers must convert to typed Ref
+        // If this is hit, it's a parser bug (forgot to convert PolyRef in function parser)
+        scala.util.Left(
+          EvalError.EvalFailed(
+            "PolyRef reached evaluator - parser bug (function did not convert PolyRef to typed Ref)",
+            Some("This is an internal error - please report this issue")
+          )
+        )
+
       // ===== Conditional =====
       case TExpr.If(cond, ifTrue, ifFalse) =>
         // If: evaluate condition, then branch based on result
@@ -194,6 +204,21 @@ private class EvaluatorImpl extends Evaluator:
           yv <- eval(y, sheet, clock)
         yield xv != yv
 
+      // ===== Type Conversions =====
+      case TExpr.ToInt(expr) =>
+        // ToInt: Convert BigDecimal to Int (validates integer range)
+        eval(expr, sheet, clock).flatMap { bd =>
+          if bd.isValidInt then Right(bd.toInt)
+          else
+            Left(
+              EvalError.TypeMismatch(
+                "ToInt",
+                "valid integer",
+                s"$bd (out of Int range)"
+              )
+            )
+        }
+
       // ===== Text Functions =====
       case TExpr.Concatenate(xs) =>
         // Concatenate: evaluate all expressions, concat results
@@ -229,8 +254,8 @@ private class EvaluatorImpl extends Evaluator:
         yield result
 
       case TExpr.Len(text) =>
-        // Len: text length
-        eval(text, sheet, clock).map(_.length)
+        // Len: text length (returns BigDecimal to match Excel and enable arithmetic)
+        eval(text, sheet, clock).map(s => BigDecimal(s.length))
 
       case TExpr.Upper(text) =>
         // Upper: convert to uppercase
@@ -264,16 +289,16 @@ private class EvaluatorImpl extends Evaluator:
         yield result
 
       case TExpr.Year(date) =>
-        // Year: extract year from date
-        eval(date, sheet, clock).map(_.getYear)
+        // Year: extract year from date (returns BigDecimal to match Excel)
+        eval(date, sheet, clock).map(d => BigDecimal(d.getYear))
 
       case TExpr.Month(date) =>
-        // Month: extract month from date
-        eval(date, sheet, clock).map(_.getMonthValue)
+        // Month: extract month from date (returns BigDecimal to match Excel)
+        eval(date, sheet, clock).map(d => BigDecimal(d.getMonthValue))
 
       case TExpr.Day(date) =>
-        // Day: extract day from date
-        eval(date, sheet, clock).map(_.getDayOfMonth)
+        // Day: extract day from date (returns BigDecimal to match Excel)
+        eval(date, sheet, clock).map(d => BigDecimal(d.getDayOfMonth))
 
       // ===== Arithmetic Range Functions =====
       case TExpr.Min(range) =>

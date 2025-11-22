@@ -132,14 +132,15 @@ class FormulaParserSpec extends ScalaCheckSuite:
 
   property("round-trip: parse ∘ print = id for cell references") {
     forAll(genARef) { ref =>
-      val expr = TExpr.Ref(ref, TExpr.decodeNumeric)
+      // Parser now creates PolyRef for cell references
+      val expr = TExpr.PolyRef(ref)
       val printed = FormulaPrinter.print(expr, includeEquals = true)
       val parsed = FormulaParser.parse(printed)
 
       parsed.isRight &&
       parsed.exists {
-        case TExpr.Ref(at, _) => at == ref
-        case _                => false
+        case TExpr.PolyRef(at) => at == ref  // Updated to expect PolyRef
+        case _                 => false
       }
     }
   }
@@ -331,10 +332,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=A1")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Ref(at, _) =>
+      case TExpr.PolyRef(at) =>  // Updated to expect PolyRef (parser change)
         val expected = ARef.parse("A1").fold(err => fail(s"Invalid ref: $err"), identity)
         assertEquals(at, expected)
-      case other => fail(s"Expected Ref(A1), got $other")
+      case other => fail(s"Expected PolyRef(A1), got $other")
     }
   }
 
@@ -342,10 +343,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=Z99")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Ref(at, _) =>
+      case TExpr.PolyRef(at) =>  // Updated to expect PolyRef (parser change)
         val expected = ARef.parse("Z99").fold(err => fail(s"Invalid ref: $err"), identity)
         assertEquals(at, expected)
-      case other => fail(s"Expected Ref(Z99), got $other")
+      case other => fail(s"Expected PolyRef(Z99), got $other")
     }
   }
 

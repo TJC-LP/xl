@@ -282,8 +282,8 @@ object FunctionParser:
         case List(cond, ifTrue, ifFalse) =>
           scala.util.Right(
             TExpr.If(
-              cond.asInstanceOf[TExpr[Boolean]],
-              ifTrue.asInstanceOf[TExpr[Any]],
+              TExpr.asBooleanExpr(cond), // Convert PolyRef to Boolean
+              ifTrue.asInstanceOf[TExpr[Any]], // ifTrue/ifFalse can be any type
               ifFalse.asInstanceOf[TExpr[Any]]
             )
           )
@@ -304,8 +304,9 @@ object FunctionParser:
             ParseError.InvalidArguments("AND", pos, "at least 1 argument", "0 arguments")
           )
         case head :: tail =>
-          val result = tail.foldLeft(head.asInstanceOf[TExpr[Boolean]]) { (acc, expr) =>
-            TExpr.And(acc, expr.asInstanceOf[TExpr[Boolean]])
+          // Convert all arguments to Boolean (handles PolyRef)
+          val result = tail.foldLeft(TExpr.asBooleanExpr(head)) { (acc, expr) =>
+            TExpr.And(acc, TExpr.asBooleanExpr(expr))
           }
           scala.util.Right(result)
 
@@ -321,8 +322,9 @@ object FunctionParser:
             ParseError.InvalidArguments("OR", pos, "at least 1 argument", "0 arguments")
           )
         case head :: tail =>
-          val result = tail.foldLeft(head.asInstanceOf[TExpr[Boolean]]) { (acc, expr) =>
-            TExpr.Or(acc, expr.asInstanceOf[TExpr[Boolean]])
+          // Convert all arguments to Boolean (handles PolyRef)
+          val result = tail.foldLeft(TExpr.asBooleanExpr(head)) { (acc, expr) =>
+            TExpr.Or(acc, TExpr.asBooleanExpr(expr))
           }
           scala.util.Right(result)
 
@@ -333,7 +335,7 @@ object FunctionParser:
 
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
-        case List(expr) => scala.util.Right(TExpr.Not(expr.asInstanceOf[TExpr[Boolean]]))
+        case List(expr) => scala.util.Right(TExpr.Not(TExpr.asBooleanExpr(expr)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("NOT", pos, "1 argument", s"${args.length} arguments")
@@ -353,7 +355,8 @@ object FunctionParser:
             ParseError.InvalidArguments("CONCATENATE", pos, "at least 1 argument", "0 arguments")
           )
         case _ =>
-          scala.util.Right(TExpr.concatenate(args.map(_.asInstanceOf[TExpr[String]])))
+          // Convert all arguments to String with coercion (handles PolyRef, numbers, etc.)
+          scala.util.Right(TExpr.concatenate(args.map(TExpr.asStringExpr)))
 
   /** LEFT function: LEFT(text, n) */
   given leftFunctionParser: FunctionParser[Unit] with
@@ -363,11 +366,11 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(text, n) =>
-          // Convert BigDecimal literal to Int if needed
-          val nInt = n match
-            case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
-            case other => other.asInstanceOf[TExpr[Int]]
-          scala.util.Right(TExpr.left(text.asInstanceOf[TExpr[String]], nInt))
+          // Convert PolyRef to String with coercion (handles numeric cells, etc.)
+          val textStr = TExpr.asStringExpr(text)
+          // Convert n to Int (handles PolyRef and BigDecimal literals)
+          val nInt = TExpr.asIntExpr(n)
+          scala.util.Right(TExpr.left(textStr, nInt))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("LEFT", pos, "2 arguments", s"${args.length} arguments")
@@ -381,11 +384,11 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(text, n) =>
-          // Convert BigDecimal literal to Int if needed
-          val nInt = n match
-            case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
-            case other => other.asInstanceOf[TExpr[Int]]
-          scala.util.Right(TExpr.right(text.asInstanceOf[TExpr[String]], nInt))
+          // Convert PolyRef to String with coercion
+          val textStr = TExpr.asStringExpr(text)
+          // Convert n to Int (handles PolyRef and BigDecimal literals)
+          val nInt = TExpr.asIntExpr(n)
+          scala.util.Right(TExpr.right(textStr, nInt))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("RIGHT", pos, "2 arguments", s"${args.length} arguments")
@@ -398,7 +401,7 @@ object FunctionParser:
 
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
-        case List(text) => scala.util.Right(TExpr.len(text.asInstanceOf[TExpr[String]]))
+        case List(text) => scala.util.Right(TExpr.len(TExpr.asStringExpr(text)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("LEN", pos, "1 argument", s"${args.length} arguments")
@@ -411,7 +414,7 @@ object FunctionParser:
 
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
-        case List(text) => scala.util.Right(TExpr.upper(text.asInstanceOf[TExpr[String]]))
+        case List(text) => scala.util.Right(TExpr.upper(TExpr.asStringExpr(text)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("UPPER", pos, "1 argument", s"${args.length} arguments")
@@ -424,7 +427,7 @@ object FunctionParser:
 
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
-        case List(text) => scala.util.Right(TExpr.lower(text.asInstanceOf[TExpr[String]]))
+        case List(text) => scala.util.Right(TExpr.lower(TExpr.asStringExpr(text)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("LOWER", pos, "1 argument", s"${args.length} arguments")
@@ -466,16 +469,12 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(year, month, day) =>
-          // Convert BigDecimal literals to Int if needed
-          def toInt(expr: TExpr[?]): TExpr[Int] = expr match
-            case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
-            case other => other.asInstanceOf[TExpr[Int]]
-
+          // Convert arguments to Int (handles PolyRef, BigDecimal literals, etc.)
           scala.util.Right(
             TExpr.date(
-              toInt(year),
-              toInt(month),
-              toInt(day)
+              TExpr.asIntExpr(year),
+              TExpr.asIntExpr(month),
+              TExpr.asIntExpr(day)
             )
           )
         case _ =>
@@ -491,7 +490,8 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(date) =>
-          scala.util.Right(TExpr.year(date.asInstanceOf[TExpr[java.time.LocalDate]]))
+          // Convert PolyRef to LocalDate with coercion
+          scala.util.Right(TExpr.year(TExpr.asDateExpr(date)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("YEAR", pos, "1 argument", s"${args.length} arguments")
@@ -505,7 +505,8 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(date) =>
-          scala.util.Right(TExpr.month(date.asInstanceOf[TExpr[java.time.LocalDate]]))
+          // Convert PolyRef to LocalDate with coercion
+          scala.util.Right(TExpr.month(TExpr.asDateExpr(date)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("MONTH", pos, "1 argument", s"${args.length} arguments")
@@ -519,7 +520,8 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(date) =>
-          scala.util.Right(TExpr.day(date.asInstanceOf[TExpr[java.time.LocalDate]]))
+          // Convert PolyRef to LocalDate with coercion
+          scala.util.Right(TExpr.day(TExpr.asDateExpr(date)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("DAY", pos, "1 argument", s"${args.length} arguments")

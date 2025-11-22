@@ -96,13 +96,13 @@ class NewFunctionsSpec extends FunSuite:
   test("LEN: empty string") {
     val expr = TExpr.Len(TExpr.Lit(""))
     val result = evaluator.eval(expr, emptySheet)
-    assertEquals(result, Right(0))
+    assertEquals(result, Right(BigDecimal(0)))
   }
 
   test("LEN: normal string") {
     val expr = TExpr.Len(TExpr.Lit("Hello"))
     val result = evaluator.eval(expr, emptySheet)
-    assertEquals(result, Right(5))
+    assertEquals(result, Right(BigDecimal(5)))
   }
 
   test("UPPER: convert to uppercase") {
@@ -163,28 +163,30 @@ class NewFunctionsSpec extends FunSuite:
     val date = LocalDate.of(2025, 11, 21)
     val expr = TExpr.Year(TExpr.Lit(date))
     val result = evaluator.eval(expr, emptySheet)
-    assertEquals(result, Right(2025))
+    assertEquals(result, Right(BigDecimal(2025)))  // Now returns BigDecimal
   }
 
   test("MONTH: extract month from date") {
     val date = LocalDate.of(2025, 11, 21)
     val expr = TExpr.Month(TExpr.Lit(date))
     val result = evaluator.eval(expr, emptySheet)
-    assertEquals(result, Right(11))
+    assertEquals(result, Right(BigDecimal(11)))  // Now returns BigDecimal
   }
 
   test("DAY: extract day from date") {
     val date = LocalDate.of(2025, 11, 21)
     val expr = TExpr.Day(TExpr.Lit(date))
     val result = evaluator.eval(expr, emptySheet)
-    assertEquals(result, Right(21))
+    assertEquals(result, Right(BigDecimal(21)))  // Now returns BigDecimal
   }
 
   test("Date functions: round-trip DATE/YEAR/MONTH/DAY") {
+    // Manual ToInt wrapping for programmatic construction (parser uses asIntExpr automatically)
+    val baseDate = TExpr.Lit(LocalDate.of(2025, 11, 21))
     val expr = TExpr.Date(
-      TExpr.Year(TExpr.Lit(LocalDate.of(2025, 11, 21))),
-      TExpr.Month(TExpr.Lit(LocalDate.of(2025, 11, 21))),
-      TExpr.Day(TExpr.Lit(LocalDate.of(2025, 11, 21)))
+      TExpr.ToInt(TExpr.Year(baseDate)),
+      TExpr.ToInt(TExpr.Month(baseDate)),
+      TExpr.ToInt(TExpr.Day(baseDate))
     )
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(LocalDate.of(2025, 11, 21)))
@@ -371,13 +373,13 @@ class NewFunctionsSpec extends FunSuite:
     val month = TExpr.Month(today)
     val day = TExpr.Day(today)
 
-    // Verify each component
-    assertEquals(evaluator.eval(year, emptySheet, clock), Right(2025))
-    assertEquals(evaluator.eval(month, emptySheet, clock), Right(11))
-    assertEquals(evaluator.eval(day, emptySheet, clock), Right(21))
+    // Verify each component (now returns BigDecimal)
+    assertEquals(evaluator.eval(year, emptySheet, clock), Right(BigDecimal(2025)))
+    assertEquals(evaluator.eval(month, emptySheet, clock), Right(BigDecimal(11)))
+    assertEquals(evaluator.eval(day, emptySheet, clock), Right(BigDecimal(21)))
 
-    // Recompose into DATE
-    val reconstructed = TExpr.Date(year, month, day)
+    // Recompose into DATE (use literal Ints since DATE expects Int arguments)
+    val reconstructed = TExpr.Date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
     assertEquals(evaluator.eval(reconstructed, emptySheet, clock), Right(LocalDate.of(2025, 11, 21)))
   }
 

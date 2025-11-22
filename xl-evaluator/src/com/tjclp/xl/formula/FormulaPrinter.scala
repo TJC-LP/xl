@@ -75,6 +75,7 @@ object FormulaPrinter:
 
       // Cell reference
       case TExpr.Ref(at, _) => formatARef(at)
+      case TExpr.PolyRef(at) => formatARef(at) // PolyRef prints same as Ref
 
       // Conditional
       case TExpr.If(cond, ifTrue, ifFalse) =>
@@ -139,6 +140,10 @@ object FormulaPrinter:
         val result =
           s"${printExpr(x, Precedence.Comparison)}>=${printExpr(y, Precedence.Comparison)}"
         parenthesizeIf(result, precedence > Precedence.Comparison)
+
+      // Type conversions (print transparently - ToInt is internal)
+      case TExpr.ToInt(expr) =>
+        printExpr(expr, precedence) // Print wrapped expression without conversion syntax
 
       // Text functions
       case TExpr.Concatenate(xs) =>
@@ -286,6 +291,8 @@ object FormulaPrinter:
         s"Lit($value: ${value.getClass.getSimpleName})"
       case TExpr.Ref(at, _) =>
         s"Ref($at)"
+      case TExpr.PolyRef(at) =>
+        s"PolyRef($at)"
       case TExpr.If(cond, ifTrue, ifFalse) =>
         s"If(${printWithTypes(cond)}, ${printWithTypes(ifTrue)}, ${printWithTypes(ifFalse)})"
       case TExpr.Add(x, y) =>
@@ -314,6 +321,8 @@ object FormulaPrinter:
         s"Gt(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Gte(x, y) =>
         s"Gte(${printWithTypes(x)}, ${printWithTypes(y)})"
+      case TExpr.ToInt(expr) =>
+        s"ToInt(${printWithTypes(expr)})"
       case TExpr.Concatenate(xs) =>
         s"Concatenate(${xs.map(printWithTypes).mkString(", ")})"
       case TExpr.Left(text, n) =>
