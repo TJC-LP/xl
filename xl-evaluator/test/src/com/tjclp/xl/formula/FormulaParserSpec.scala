@@ -776,7 +776,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("FunctionParser.allFunctions includes all 21 functions") {
+  test("FunctionParser.allFunctions includes all 24 functions") {
     val functions = FunctionParser.allFunctions
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -784,7 +784,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("CONCATENATE"))
     assert(functions.contains("TODAY"))
     assert(functions.contains("DATE"))
-    assertEquals(functions.length, 21)
+    assert(functions.contains("NPV"))
+    assert(functions.contains("IRR"))
+    assert(functions.contains("VLOOKUP"))
+    assertEquals(functions.length, 24)
   }
 
   test("FunctionParser.lookup finds known functions") {
