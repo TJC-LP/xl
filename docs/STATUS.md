@@ -41,7 +41,9 @@
 - ✅ RichText DSL: `"Bold".bold.red + " normal " + "Italic".italic.blue`
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
-- ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible SUM/COUNT/AVERAGE behavior
+- ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
+- ✅ **Function Library** (WI-09a/b/c complete): 21 built-in functions (aggregate, logical, text, date), extensible type class parser, evaluation API
+- ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 
 **Performance** (JMH Benchmarked - WI-15):
 - ✅ **Streaming reads: 35% faster than POI for small files** (0.887ms vs 1.357ms @ 1k rows)
@@ -74,7 +76,7 @@
 
 ### Test Coverage
 
-**~1000 tests across 6 modules** (includes P7+P8 string interpolation + WI-07 formula parser + WI-08 formula evaluator + WI-09 function library + WI-09d dependency graph + WI-10 table support + display formatting):
+**840+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + WI-10 table support + WI-15 benchmarks + display formatting):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -119,20 +121,23 @@
 
 ### XML Serialization
 
-**Formula System**:
-- ✅ **Parsing complete** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, 57 tests
-- ✅ **Evaluation complete** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function library complete** (WI-09a/b/c): 21 functions (aggregate, logical, text, date), FunctionParser type class, evaluation API, 78 tests
-  - Functions: SUM, COUNT, AVERAGE, MIN, MAX, IF, AND, OR, NOT, CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER, TODAY, NOW, DATE, YEAR, MONTH, DAY
-  - Type class parser: FunctionParser[F] with extensible registry
-  - Evaluation API: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
+**Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
+- ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
+- ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
+- ✅ **Function Library** (WI-09a/b/c): 21 built-in functions, extensible type class parser, evaluation API, 78 tests
+  - **Aggregate** (5): SUM, COUNT, AVERAGE, MIN, MAX
+  - **Logical** (4): IF, AND, OR, NOT
+  - **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
+  - **Date** (6): TODAY, NOW, DATE, YEAR, MONTH, DAY
+  - Type class: FunctionParser[F] with extensible registry
+  - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
   - Clock trait for pure date/time functions (deterministic testing)
-- ✅ **Dependency graph complete** (WI-09d): Circular reference detection + topological sort, 52 tests
-  - DependencyGraph with Tarjan's SCC algorithm (O(V+E) cycle detection)
-  - Kahn's algorithm for topological sort (correct evaluation order)
-  - Precedent/dependent queries (O(1) lookups via adjacency lists)
-  - Safe evaluation API: sheet.evaluateWithDependencyCheck()
-  - Production-ready: handles 10k formula cells in <10ms
+- ✅ **Dependency Graph** (WI-09d): Circular reference detection + topological sort, 52 tests
+  - Tarjan's SCC algorithm: O(V+E) cycle detection with early exit
+  - Kahn's algorithm: O(V+E) topological sort for correct evaluation order
+  - Precedent/dependent queries: O(1) lookups via adjacency lists
+  - Safe evaluation: sheet.evaluateWithDependencyCheck() (production-ready)
+  - Performance: Handles 10k formula cells in <10ms
 - ⚠️ Merged cells are fully supported in the in-memory OOXML path, but not emitted by streaming writers.
 - ❌ Hyperlinks not serialized.
 - ❌ Column/row properties (width, height, hidden) are parsed and tracked in the domain model but not yet serialized back into `<cols>` / `<row>` in the regenerated XML.

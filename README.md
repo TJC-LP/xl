@@ -306,7 +306,7 @@ FormulaParser.parse(formulaString) match
 
 **Why TExpr GADT?** The GADT (Generalized Algebraic Data Type) ensures type safety at compile time - `TExpr[BigDecimal]` only contains numeric operations, `TExpr[Boolean]` only contains logical operations. This prevents type errors and enables safe formula transformations.
 
-**Note**: Formula evaluation is now **fully operational** (WI-07, WI-08, WI-09 complete) with 21 built-in functions, dependency graph analysis, and circular reference detection. See [Examples](#examples) section below.
+**Note**: Formula evaluation is **production-ready** (WI-07, WI-08, WI-09a/b/c/d complete) with 21 built-in functions, dependency graph analysis, and circular reference detection (250+ tests). See [Examples](#examples) section for complete demos.
 
 ### HTML Export
 
