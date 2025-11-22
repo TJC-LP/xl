@@ -570,6 +570,37 @@ val sheet5 = sheet
 
 **Pattern**: Apply number formatting to formula cells after creation, then evaluate. Excel will display formatted results.
 
+**Display Formatting** (Python repr-style automatic formatting):
+
+XL provides **context-aware display formatting** with the `excel"..."` custom interpolator. This enables Python `repr()`-style automatic display of Excel values with their proper formatting applied:
+
+```scala
+import com.tjclp.xl.display.{*, given}
+import com.tjclp.xl.display.ExcelInterpolator.*
+import com.tjclp.xl.display.DisplayConversions.given
+
+// Set up context
+given Sheet = mySheet
+given FormulaDisplayStrategy = FormulaDisplayStrategy.default  // Or EvaluatingFormulaDisplay.evaluating
+
+// ✨ Automatic Excel-accurate formatting
+println(excel"Revenue: ${ref"A1"}")        // "Revenue: $1,000,000.00"
+println(excel"Margin: ${ref"B19"}")        // "Margin: 60.0%"
+println(excel"Date: ${ref"C1"}")           // "Date: 11/21/25"
+```
+
+**Two modes** (capability-based):
+1. **Core-only**: Formulas display as raw text `"=SUM(A1:A10)"` (import `com.tjclp.xl.display.{*, given}`)
+2. **With evaluator**: Formulas auto-evaluate `"$1,000,000"` (add `import com.tjclp.xl.formula.display.EvaluatingFormulaDisplay`)
+
+**Explicit methods** (when needed):
+```scala
+sheet.display(ref"A1")           // DisplayWrapper with formatted toString
+sheet.displayFormula(ref"A1")    // Raw formula text "=SUM(...)"
+```
+
+**Key insight**: Formatting is metadata-driven. Apply `.style()` with `NumFmt`, then `excel"..."` automatically displays formatted values matching Excel's display.
+
 ### Formula System Patterns
 
 Formula system (`xl-evaluator/src/com/tjclp/xl/formula/`) provides typed parsing, evaluation, 21 built-in functions, and dependency graph analysis with cycle detection (WI-07 through WI-09d complete).

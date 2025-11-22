@@ -20,9 +20,13 @@
 import com.tjclp.xl.*
 import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.display.{*, given}  // Display formatting
+import com.tjclp.xl.display.ExcelInterpolator.*  // excel"..." interpolator
+import com.tjclp.xl.display.DisplayConversions.given
 import com.tjclp.xl.error.*  // For .message extension
 import com.tjclp.xl.formula.*
 import com.tjclp.xl.formula.SheetEvaluator.*
+import com.tjclp.xl.formula.display.EvaluatingFormulaDisplay  // Formula evaluation in display
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.styles.{CellStyle, numfmt}
@@ -145,8 +149,17 @@ val model = Sheet(name = SheetName.unsafe("P&L"))
 
 // Apply number formatting to formula ranges
 val percentStyle = CellStyle.default.withNumFmt(NumFmt.Percent)
+val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
+
 val modelWithFormatting = model
-  .style(ref"B19:D22", percentStyle)  // All margin and growth percentages
+  // Currency formatting for all financial values (except percentages)
+  .style(ref"B3:D3", currencyStyle)    // Revenue
+  .flatMap(_.style(ref"B4:D5", currencyStyle))    // COGS, Gross Profit
+  .flatMap(_.style(ref"B7:D10", currencyStyle))   // OpEx
+  .flatMap(_.style(ref"B12:D14", currencyStyle))  // EBITDA, D&A, Operating Income
+  .flatMap(_.style(ref"B15:D16", currencyStyle))  // Tax, Net Income
+  // Percent formatting for margins and growth
+  .flatMap(_.style(ref"B19:D22", percentStyle))  // All margin and growth percentages
   .unsafe
 
 println("✓ Financial model built with 50+ formulas and formatting")
@@ -174,6 +187,34 @@ val results = modelWithFormatting.evaluateWithDependencyCheck() match
     println(s"✗ Evaluation error: ${error.message}")
     sys.exit(1)
 
+// Replace formulas with evaluated values (for display)
+val evaluatedModel = results.foldLeft(modelWithFormatting) { (sheet, entry) =>
+  val (ref, value) = entry
+  sheet.put(ref, value)
+}
+
+println()
+
+// ============================================================================
+// Display: Excel Interpolator Showcase
+// ============================================================================
+
+println("=" * 80)
+println("KEY METRICS (Using excel\"...\" Interpolator)")
+println("=" * 80)
+
+// Enable display formatting with formula evaluation
+given Sheet = evaluatedModel  // Use evaluated model for display
+given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+
+// ✨ Clean, readable output using excel interpolator
+println(excel"2024 Revenue: ${ref"B3"}")
+println(excel"2024 Net Income: ${ref"B16"}")
+println(excel"2024 Gross Margin: ${ref"B19"}")
+println(excel"2024 Net Margin: ${ref"B21"}")
+println()
+println(excel"2025 Revenue: ${ref"C3"} (Growth: ${ref"C22"})")
+println(excel"2026 Revenue: ${ref"D3"} (Growth: ${ref"D22"})")
 println()
 
 // ============================================================================
@@ -181,55 +222,37 @@ println()
 // ============================================================================
 
 println("=" * 80)
-println("INCOME STATEMENT (Evaluated Results)")
+println("INCOME STATEMENT (Full Table)")
 println("=" * 80)
 println()
 
-// Smart formatter that reads NumFmt from cell style
-def getFormattedValue(ref: ARef): String =
-  val cell = modelWithFormatting(ref)
-  val value = results.getOrElse(ref, cell.value)
-
-  // Get the cell's NumFmt from its style
-  val numFmt = cell.styleId
-    .flatMap(modelWithFormatting.styleRegistry.get)
-    .map(_.numFmt)
-    .getOrElse(NumFmt.General)
-
-  // Format based on the cell's NumFmt
-  value match
-    case CellValue.Number(bd) =>
-      numFmt match
-        case NumFmt.Percent => f"${bd.toDouble * 100}%.1f%%"
-        case NumFmt.Currency => f"$$${bd.toDouble}%,.0f"
-        case NumFmt.Decimal => f"${bd.toDouble}%,.2f"
-        case _ => f"${bd.toDouble}%,.0f"  // General format for numbers
-    case other => other.toString
+// Helper function: Format cell value using excel interpolator
+def fmt(r: ARef): String = excel"${r}"
 
 // Header
 println(f"${"Metric"}%-25s ${"2024"}%15s ${"2025"}%15s ${"2026"}%15s")
 println("-" * 80)
 
 // Revenue Section
-println(f"${"Revenue"}%-25s ${getFormattedValue(ref"B3")}%15s ${getFormattedValue(ref"C3")}%15s ${getFormattedValue(ref"D3")}%15s")
-println(f"${"COGS"}%-25s ${getFormattedValue(ref"B4")}%15s ${getFormattedValue(ref"C4")}%15s ${getFormattedValue(ref"D4")}%15s")
-println(f"${"Gross Profit"}%-25s ${getFormattedValue(ref"B5")}%15s ${getFormattedValue(ref"C5")}%15s ${getFormattedValue(ref"D5")}%15s")
+println(f"${"Revenue"}%-25s ${fmt(ref"B3")}%15s ${fmt(ref"C3")}%15s ${fmt(ref"D3")}%15s")
+println(f"${"COGS"}%-25s ${fmt(ref"B4")}%15s ${fmt(ref"C4")}%15s ${fmt(ref"D4")}%15s")
+println(f"${"Gross Profit"}%-25s ${fmt(ref"B5")}%15s ${fmt(ref"C5")}%15s ${fmt(ref"D5")}%15s")
 println()
 
 // Operating Expenses
-println(f"${"Sales & Marketing"}%-25s ${getFormattedValue(ref"B7")}%15s ${getFormattedValue(ref"C7")}%15s ${getFormattedValue(ref"D7")}%15s")
-println(f"${"R&D"}%-25s ${getFormattedValue(ref"B8")}%15s ${getFormattedValue(ref"C8")}%15s ${getFormattedValue(ref"D8")}%15s")
-println(f"${"G&A"}%-25s ${getFormattedValue(ref"B9")}%15s ${getFormattedValue(ref"C9")}%15s ${getFormattedValue(ref"D9")}%15s")
-println(f"${"Total OpEx"}%-25s ${getFormattedValue(ref"B10")}%15s ${getFormattedValue(ref"C10")}%15s ${getFormattedValue(ref"D10")}%15s")
+println(f"${"Sales & Marketing"}%-25s ${fmt(ref"B7")}%15s ${fmt(ref"C7")}%15s ${fmt(ref"D7")}%15s")
+println(f"${"R&D"}%-25s ${fmt(ref"B8")}%15s ${fmt(ref"C8")}%15s ${fmt(ref"D8")}%15s")
+println(f"${"G&A"}%-25s ${fmt(ref"B9")}%15s ${fmt(ref"C9")}%15s ${fmt(ref"D9")}%15s")
+println(f"${"Total OpEx"}%-25s ${fmt(ref"B10")}%15s ${fmt(ref"C10")}%15s ${fmt(ref"D10")}%15s")
 println()
 
 // Bottom Line
-println(f"${"EBITDA"}%-25s ${getFormattedValue(ref"B12")}%15s ${getFormattedValue(ref"C12")}%15s ${getFormattedValue(ref"D12")}%15s")
-println(f"${"D&A"}%-25s ${getFormattedValue(ref"B13")}%15s ${getFormattedValue(ref"C13")}%15s ${getFormattedValue(ref"D13")}%15s")
-println(f"${"Operating Income"}%-25s ${getFormattedValue(ref"B14")}%15s ${getFormattedValue(ref"C14")}%15s ${getFormattedValue(ref"D14")}%15s")
-println(f"${"Tax (25%)"}%-25s ${getFormattedValue(ref"B15")}%15s ${getFormattedValue(ref"C15")}%15s ${getFormattedValue(ref"D15")}%15s")
+println(f"${"EBITDA"}%-25s ${fmt(ref"B12")}%15s ${fmt(ref"C12")}%15s ${fmt(ref"D12")}%15s")
+println(f"${"D&A"}%-25s ${fmt(ref"B13")}%15s ${fmt(ref"C13")}%15s ${fmt(ref"D13")}%15s")
+println(f"${"Operating Income"}%-25s ${fmt(ref"B14")}%15s ${fmt(ref"C14")}%15s ${fmt(ref"D14")}%15s")
+println(f"${"Tax (25%)"}%-25s ${fmt(ref"B15")}%15s ${fmt(ref"C15")}%15s ${fmt(ref"D15")}%15s")
 println("-" * 80)
-println(f"${"Net Income"}%-25s ${getFormattedValue(ref"B16")}%15s ${getFormattedValue(ref"C16")}%15s ${getFormattedValue(ref"D16")}%15s")
+println(f"${"Net Income"}%-25s ${fmt(ref"B16")}%15s ${fmt(ref"C16")}%15s ${fmt(ref"D16")}%15s")
 println()
 
 // Financial Ratios
@@ -239,10 +262,10 @@ println("=" * 80)
 println()
 println(f"${"Metric"}%-25s ${"2024"}%15s ${"2025"}%15s ${"2026"}%15s")
 println("-" * 80)
-println(f"${"Gross Margin"}%-25s ${getFormattedValue(ref"B19")}%15s ${getFormattedValue(ref"C19")}%15s ${getFormattedValue(ref"D19")}%15s")
-println(f"${"Operating Margin"}%-25s ${getFormattedValue(ref"B20")}%15s ${getFormattedValue(ref"C20")}%15s ${getFormattedValue(ref"D20")}%15s")
-println(f"${"Net Margin"}%-25s ${getFormattedValue(ref"B21")}%15s ${getFormattedValue(ref"C21")}%15s ${getFormattedValue(ref"D21")}%15s")
-println(f"${"Revenue Growth"}%-25s ${"N/A"}%15s ${getFormattedValue(ref"C22")}%15s ${getFormattedValue(ref"D22")}%15s")
+println(f"${"Gross Margin"}%-25s ${fmt(ref"B19")}%15s ${fmt(ref"C19")}%15s ${fmt(ref"D19")}%15s")
+println(f"${"Operating Margin"}%-25s ${fmt(ref"B20")}%15s ${fmt(ref"C20")}%15s ${fmt(ref"D20")}%15s")
+println(f"${"Net Margin"}%-25s ${fmt(ref"B21")}%15s ${fmt(ref"C21")}%15s ${fmt(ref"D21")}%15s")
+println(f"${"Revenue Growth"}%-25s ${"N/A"}%15s ${fmt(ref"C22")}%15s ${fmt(ref"D22")}%15s")
 println()
 
 // ============================================================================
