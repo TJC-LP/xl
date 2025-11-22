@@ -23,9 +23,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
   /** Create sheet with cells */
   def sheetWith(cells: (ARef, CellValue)*): Sheet =
-    val sheet = Sheet.empty
+    val sheet = Sheet(name = SheetName.unsafe("Test"))
     cells.foldLeft(sheet) { case (s, (ref, value)) =>
-      s.put(ref, value).toOption.get
+      s.put(ref, value)
     }
 
   /** Evaluate and unwrap Right or fail test */
@@ -126,7 +126,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
 
     val err = evalErr(expr, sheet)
-    assert(err.message.contains("division by zero"))
+    err match
+      case EvalError.EvalFailed(reason, _) => assert(reason.contains("division by zero"))
+      case other => fail(s"Expected EvalFailed, got $other")
   }
 
   test("NPV: parse and print round-trip") {
@@ -198,7 +200,10 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     val expr = TExpr.irr(CellRange.parse("A1:A3").toOption.get)
 
     val err = evalErr(expr, sheet)
-    assert(err.message.contains("at least one positive and one negative"))
+    err match
+      case EvalError.EvalFailed(reason, _) =>
+        assert(reason.contains("at least one positive and one negative"))
+      case other => fail(s"Expected EvalFailed, got $other")
   }
 
   test("IRR: ignores non-numeric cells") {
@@ -303,7 +308,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
 
     val err = evalErr(expr, sheet)
-    assert(err.message.contains("outside"))
+    err match
+      case EvalError.EvalFailed(reason, _) => assert(reason.contains("outside"))
+      case other => fail(s"Expected EvalFailed, got $other")
   }
 
   test("VLOOKUP: exact match not found") {
@@ -320,7 +327,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
 
     val err = evalErr(expr, sheet)
-    assert(err.message.contains("exact match not found"))
+    err match
+      case EvalError.EvalFailed(reason, _) => assert(reason.contains("exact match not found"))
+      case other => fail(s"Expected EvalFailed, got $other")
   }
 
   test("VLOOKUP: approximate match not found") {
@@ -338,7 +347,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
 
     val err = evalErr(expr, sheet)
-    assert(err.message.contains("approximate match not found"))
+    err match
+      case EvalError.EvalFailed(reason, _) => assert(reason.contains("approximate match not found"))
+      case other => fail(s"Expected EvalFailed, got $other")
   }
 
   test("VLOOKUP: ignores non-numeric keys") {
