@@ -5,6 +5,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.richtext.RichText
 import scala.xml.*
 import XmlUtil.*
+import SaxSupport.*
 import java.text.Normalizer
 
 /** SharedString entry: either plain text or rich text with formatting */
@@ -30,7 +31,8 @@ final case class SharedStrings(
   strings: Vector[SSTEntry],
   indexMap: Map[String, Int],
   totalCount: Int // Total instances (>= strings.size)
-) extends XmlWritable:
+) extends XmlWritable,
+      SaxSerializable:
 
   /** Get index for plain text string (returns None if not found) */
   def indexOf(s: String): Option[Int] =
@@ -149,6 +151,82 @@ final case class SharedStrings(
       "count" -> totalCount.toString, // Total instances
       "uniqueCount" -> strings.size.toString // Unique entries
     )(siElems*)
+
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startDocument()
+    writer.startElement("sst")
+    SaxWriter.withAttributes(
+      writer,
+      "xmlns" -> nsSpreadsheetML,
+      "count" -> totalCount.toString,
+      "uniqueCount" -> strings.size.toString
+    ) {
+      strings.foreach {
+        case Left(text) =>
+          writer.startElement("si")
+          writer.startElement("t")
+          if needsXmlSpacePreserve(text) then writer.writeAttribute("xml:space", "preserve")
+          writer.writeCharacters(text)
+          writer.endElement() // t
+          writer.endElement() // si
+
+        case Right(richText) =>
+          writer.startElement("si")
+          richText.runs.foreach { run =>
+            writer.startElement("r")
+
+            val preservedRpr = run.rawRPrXml.flatMap { xmlString =>
+              XmlSecurity
+                .parseSafe(xmlString, "SST richtext rPr")
+                .toOption
+                .map(XmlUtil.stripNamespaces)
+            }
+
+            preservedRpr match
+              case Some(elem) => writer.writeElem(elem)
+              case None => run.font.foreach(writeFontSax(writer, _))
+
+            writer.startElement("t")
+            if needsXmlSpacePreserve(run.text) then writer.writeAttribute("xml:space", "preserve")
+            writer.writeCharacters(run.text)
+            writer.endElement() // t
+
+            writer.endElement() // r
+          }
+          writer.endElement() // si
+      }
+    }
+    writer.endElement() // sst
+    writer.endDocument()
+    writer.flush()
+
+  private def writeFontSax(writer: SaxWriter, font: com.tjclp.xl.styles.font.Font): Unit =
+    writer.startElement("rPr")
+    if font.bold then
+      writer.startElement("b")
+      writer.endElement()
+    if font.italic then
+      writer.startElement("i")
+      writer.endElement()
+    if font.underline then
+      writer.startElement("u")
+      writer.endElement()
+
+    font.color.foreach { c =>
+      writer.startElement("color")
+      writer.writeAttribute("rgb", c.toHex.drop(1))
+      writer.endElement()
+    }
+
+    writer.startElement("sz")
+    writer.writeAttribute("val", font.sizePt.toString)
+    writer.endElement()
+
+    writer.startElement("name")
+    writer.writeAttribute("val", font.name)
+    writer.endElement()
+
+    writer.endElement() // rPr
 
 object SharedStrings extends XmlReadable[SharedStrings]:
   val empty: SharedStrings = SharedStrings(Vector.empty, Map.empty, 0)

@@ -19,7 +19,8 @@ final case class Relationship(
  */
 final case class Relationships(
   relationships: Seq[Relationship]
-) extends XmlWritable:
+) extends XmlWritable,
+      SaxSerializable:
 
   def toXml: Elem =
     val relElems = relationships.sortBy(_.id).map { rel =>
@@ -36,6 +37,23 @@ final case class Relationships(
     }
 
     elem("Relationships", "xmlns" -> nsPackageRels)(relElems*)
+
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startDocument()
+    writer.startElement("Relationships")
+    SaxWriter.withAttributes(writer, "xmlns" -> nsPackageRels) {
+      relationships.sortBy(_.id).foreach { rel =>
+        writer.startElement("Relationship")
+        writer.writeAttribute("Id", rel.id)
+        writer.writeAttribute("Target", rel.target)
+        writer.writeAttribute("Type", rel.`type`)
+        rel.targetMode.foreach(writer.writeAttribute("TargetMode", _))
+        writer.endElement()
+      }
+    }
+    writer.endElement()
+    writer.endDocument()
+    writer.flush()
 
   /** Find relationship by ID */
   def findById(id: String): Option[Relationship] =

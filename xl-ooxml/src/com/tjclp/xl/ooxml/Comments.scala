@@ -2,6 +2,7 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 import XmlUtil.*
+import SaxSupport.*
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.error.XLError
@@ -73,7 +74,16 @@ final case class OoxmlComments(
   authors: Vector[String],
   comments: Vector[OoxmlComment],
   otherChildren: Seq[Elem] = Seq.empty
-)
+) extends XmlWritable,
+      SaxSerializable:
+
+  def toXml: Elem = OoxmlComments.toXml(this)
+
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startDocument()
+    writer.writeElem(toXml)
+    writer.endDocument()
+    writer.flush()
 
 object OoxmlComments extends XmlReadable[OoxmlComments]:
 

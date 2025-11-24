@@ -2,6 +2,7 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 import XmlUtil.*
+import SaxSupport.*
 import com.tjclp.xl.api.*
 import com.tjclp.xl.context.SourceContext
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
@@ -304,7 +305,8 @@ final case class OoxmlStyles(
   rootAttributes: Option[MetaData] = None,
   rootScope: NamespaceBinding = defaultStylesScope,
   preservedDxfs: Option[Elem] = None // Differential formats for conditional formatting
-) extends XmlWritable:
+) extends XmlWritable,
+      SaxSerializable:
 
   def toXml: Elem =
     // Number formats (only custom ones; built-ins are implicit)
@@ -422,6 +424,108 @@ final case class OoxmlStyles(
         // No preserved metadata - create minimal element
         elem("styleSheet", "xmlns" -> nsSpreadsheetML)(children*)
 
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startDocument()
+    writer.startElement("styleSheet")
+
+    val attrs = rootAttributes.getOrElse(Null)
+    val scope = Option(rootScope).getOrElse(defaultStylesScope)
+    SaxWriter.withAttributes(
+      writer,
+      writer.namespaceAttributes(scope) ++ writer.metaDataAttributes(attrs)*
+    ) {
+      // numFmts
+      if index.numFmts.nonEmpty then
+        writer.startElement("numFmts")
+        writer.writeAttribute("count", index.numFmts.size.toString)
+        index.numFmts.sortBy(_._1).foreach { case (id, fmt) =>
+          writer.startElement("numFmt")
+          writer.writeAttribute("numFmtId", id.toString)
+          writer.writeAttribute(
+            "formatCode",
+            fmt match
+              case NumFmt.Custom(c) => c
+              case _ => "General"
+          )
+          writer.endElement()
+        }
+        writer.endElement() // numFmts
+
+      // Fonts
+      writer.startElement("fonts")
+      writer.writeAttribute("count", index.fonts.size.toString)
+      index.fonts.foreach(writeFontSax(writer, _))
+      writer.endElement()
+
+      // Fills (include defaults)
+      val defaultFills = Vector(
+        Fill.None,
+        Fill.Pattern(
+          foreground = Color.Rgb(0xff000000),
+          background = Color.Rgb(0xffc0c0c0),
+          pattern = PatternType.Gray125
+        )
+      )
+      val allFills = {
+        val builder = Vector.newBuilder[Fill]
+        val seen = scala.collection.mutable.Set.empty[Fill]
+        for fill <- defaultFills ++ index.fills do
+          if !seen.contains(fill) then
+            seen += fill
+            builder += fill
+        builder.result()
+      }
+
+      writer.startElement("fills")
+      writer.writeAttribute("count", allFills.size.toString)
+      allFills.foreach(writeFillSax(writer, _))
+      writer.endElement()
+
+      // Borders
+      writer.startElement("borders")
+      writer.writeAttribute("count", index.borders.size.toString)
+      index.borders.foreach(writeBorderSax(writer, _))
+      writer.endElement()
+
+      // CellXfs
+      val fontMap = index.fonts.zipWithIndex.toMap
+      val fillMap = allFills.zipWithIndex.toMap
+      val borderMap = index.borders.zipWithIndex.toMap
+
+      writer.startElement("cellXfs")
+      writer.writeAttribute("count", index.cellStyles.size.toString)
+      index.cellStyles.foreach { style =>
+        val fontIdx = fontMap.getOrElse(style.font, -1)
+        val fillIdx = fillMap.getOrElse(style.fill, -1)
+        val borderIdx = borderMap.getOrElse(style.border, -1)
+        val numFmtId = style.numFmtId.getOrElse {
+          NumFmt
+            .builtInId(style.numFmt)
+            .getOrElse(index.numFmts.find(_._2 == style.numFmt).map(_._1).getOrElse(0))
+        }
+
+        writer.startElement("xf")
+        val alignmentChild = alignmentToSax(writer, style.align)
+        val hasAlignment = alignmentChild.isDefined
+        writer.writeAttribute("applyAlignment", if hasAlignment then "1" else "0")
+        writer.writeAttribute("borderId", borderIdx.toString)
+        writer.writeAttribute("fillId", fillIdx.toString)
+        writer.writeAttribute("fontId", fontIdx.toString)
+        writer.writeAttribute("numFmtId", numFmtId.toString)
+        writer.writeAttribute("xfId", "0")
+        alignmentChild.foreach(_.apply())
+        writer.endElement()
+      }
+      writer.endElement() // cellXfs
+
+      // dxfs if preserved
+      preservedDxfs.foreach(writer.writeElem)
+    }
+
+    writer.endElement() // styleSheet
+    writer.endDocument()
+    writer.flush()
+
   private def fontToXml(font: Font): Elem =
     val children = Vector(
       Some(elem("name", "val" -> font.name)()),
@@ -528,6 +632,114 @@ final case class OoxmlStyles(
       // If no attributes, don't emit element (though this shouldn't happen since align != default)
       if attrSeq.isEmpty then None
       else Some(elem("alignment", attrSeq*)())
+
+  private def alignmentToSax(writer: SaxWriter, align: Align): Option[() => Unit] =
+    if align == Align.default then None
+    else
+      Some { () =>
+        val attrs = Seq.newBuilder[(String, String)]
+
+        if align.horizontal != Align.default.horizontal then
+          val hAlignStr = align.horizontal match
+            case HAlign.CenterContinuous => "centerContinuous"
+            case other => other.toString.toLowerCase(java.util.Locale.ROOT)
+          attrs += ("horizontal" -> hAlignStr)
+
+        if align.vertical != Align.default.vertical then
+          val vAlignStr = align.vertical match
+            case VAlign.Middle => "center"
+            case other => other.toString.toLowerCase(java.util.Locale.ROOT)
+          attrs += ("vertical" -> vAlignStr)
+
+        if align.wrapText != Align.default.wrapText then
+          attrs += ("wrapText" -> (if align.wrapText then "1" else "0"))
+
+        if align.indent != Align.default.indent then attrs += ("indent" -> align.indent.toString)
+
+        SaxWriter.withAttributes(writer, attrs.result()*) {
+          ()
+        }
+      }
+
+  private def writeFontSax(writer: SaxWriter, font: Font): Unit =
+    writer.startElement("font")
+    writer.startElement("name")
+    writer.writeAttribute("val", font.name)
+    writer.endElement()
+
+    writer.startElement("sz")
+    writer.writeAttribute("val", font.sizePt.toString)
+    writer.endElement()
+
+    if font.bold then
+      writer.startElement("b"); writer.endElement()
+    if font.italic then
+      writer.startElement("i"); writer.endElement()
+    if font.underline then
+      writer.startElement("u"); writer.endElement()
+
+    font.color.foreach { c =>
+      writer.startElement("color")
+      writeColorAttributes(writer, c)
+      writer.endElement()
+    }
+
+    writer.endElement() // font
+
+  private def writeFillSax(writer: SaxWriter, fill: Fill): Unit =
+    writer.startElement("fill")
+    fill match
+      case Fill.None =>
+        writer.startElement("patternFill")
+        writer.writeAttribute("patternType", "none")
+        writer.endElement()
+      case Fill.Solid(color) =>
+        writer.startElement("patternFill")
+        writer.writeAttribute("patternType", "solid")
+        writer.startElement("fgColor")
+        writeColorAttributes(writer, color)
+        writer.endElement()
+        writer.endElement()
+      case Fill.Pattern(fg, bg, patternType) =>
+        writer.startElement("patternFill")
+        writer.writeAttribute("patternType", patternType.toString.toLowerCase)
+        writer.startElement("fgColor")
+        writeColorAttributes(writer, fg)
+        writer.endElement()
+        writer.startElement("bgColor")
+        writeColorAttributes(writer, bg)
+        writer.endElement()
+        writer.endElement()
+    writer.endElement()
+
+  private def writeBorderSax(writer: SaxWriter, border: Border): Unit =
+    writer.startElement("border")
+    writeBorderSideSax(writer, "left", border.left)
+    writeBorderSideSax(writer, "right", border.right)
+    writeBorderSideSax(writer, "top", border.top)
+    writeBorderSideSax(writer, "bottom", border.bottom)
+    writer.endElement()
+
+  private def writeBorderSideSax(writer: SaxWriter, side: String, borderSide: BorderSide): Unit =
+    if borderSide.style == BorderStyle.None then
+      writer.startElement(side); writer.endElement()
+    else
+      writer.startElement(side)
+      writer.writeAttribute("style", borderSide.style.toString.toLowerCase)
+      borderSide.color.foreach { color =>
+        writer.startElement("color")
+        writeColorAttributes(writer, color)
+        writer.endElement()
+      }
+      writer.endElement()
+
+  private def writeColorAttributes(writer: SaxWriter, color: Color): Unit =
+    color match
+      case Color.Rgb(argb) =>
+        writer.writeAttribute("rgb", f"$argb%08X")
+      case Color.Theme(slot, tint) =>
+        writer.writeAttribute("theme", slot.ordinal.toString)
+        writer.writeAttribute("tint", tint.toString)
 
 object OoxmlStyles:
   /** Create minimal styles (default only) */
