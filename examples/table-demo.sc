@@ -8,6 +8,7 @@
 //   2. Run script: scala-cli run examples/table-demo.sc
 
 import com.tjclp.xl.*
+import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.tables.{TableSpec, TableAutoFilter, TableStyle}
 import com.tjclp.xl.ooxml.{XlsxWriter, XlsxReader}
 import java.nio.file.{Files, Path}
@@ -26,10 +27,10 @@ val salesTable = TableSpec.fromColumnNames(
   displayName = "Q4_Sales_Data",  // Excel requires no spaces (auto-sanitized to underscores)
   range = ref"A1:D11",  // Header + 10 data rows
   columnNames = Vector("Product", "Region", "Quantity", "Revenue")
-).copy(
+).map(_.copy(
   autoFilter = Some(TableAutoFilter(enabled = true)),
   style = TableStyle.Medium(9)  // Blue table style
-)
+)).unsafe
 
 println(s"Created table: ${salesTable.name}")
 println(s"  Display name: ${salesTable.displayName}")
@@ -137,10 +138,10 @@ val summaryTable = TableSpec.fromColumnNames(
   displayName = "Regional_Summary",  // Excel requires no spaces
   range = ref"F1:G5",  // Separate from main table
   columnNames = Vector("Region", "Total_Revenue")  // Column names also sanitized
-).copy(
+).map(_.copy(
   autoFilter = None,  // No filter on summary
   style = TableStyle.Light(15)  // Green table style
-)
+)).unsafe
 
 val multiTableSheetResult = for
   s <- Right(sheet)
@@ -261,20 +262,20 @@ println("## Part 7: Table Validation\n")
 // Valid table
 val validTable = TableSpec.fromColumnNames(
   name = "Valid",
-  displayName = "Valid Table",
+  displayName = "Valid_Table",  // Excel requires no spaces
   range = ref"A1:C5",
   columnNames = Vector("Col1", "Col2", "Col3")
-)
+).unsafe
 println(s"Valid table (3 cols, 3-col range): ${validTable.isValid}")
 
-// Invalid table (column count mismatch)
-val invalidTable = TableSpec.fromColumnNames(
+// Invalid table (column count mismatch) - this will fail validation
+val invalidTableResult = TableSpec.fromColumnNames(
   name = "Invalid",
-  displayName = "Invalid Table",
+  displayName = "Invalid_Table",  // Excel requires no spaces
   range = ref"A1:D5",  // 4 columns wide
   columnNames = Vector("Col1", "Col2")  // Only 2 columns defined
 )
-println(s"Invalid table (2 cols, 4-col range): ${invalidTable.isValid}")
+println(s"Invalid table (2 cols, 4-col range): ${invalidTableResult.isLeft} (expected: true - column mismatch)")
 println()
 
 // ============================================================

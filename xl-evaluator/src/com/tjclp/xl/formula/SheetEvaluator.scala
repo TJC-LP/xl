@@ -104,7 +104,7 @@ object SheetEvaluator:
     def evaluateCell(ref: ARef, clock: Clock = Clock.system): XLResult[CellValue] =
       val cell = sheet(ref)
       cell.value match
-        case CellValue.Formula(expr) =>
+        case CellValue.Formula(expr, _) =>
           evaluateFormula(expr, clock)
         case other =>
           scala.util.Right(other)

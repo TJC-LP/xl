@@ -27,6 +27,9 @@ object api:
   // Addressing types
   export addressing.{Column, Row, SheetName, ARef, CellRange, RefType}
 
+  // ARef extension methods (toA1, col, row, shift)
+  export addressing.ARef.{col, row, toA1, shift}
+
   // Rich text types
   export richtext.{TextRun, RichText}
 
@@ -96,3 +99,4 @@ object api:
       SheetName(s).left.map(err => XLError.InvalidSheetName(s, err))
 
 export api.*
+export syntax.given

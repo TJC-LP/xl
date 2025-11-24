@@ -35,7 +35,7 @@ object NumFmtFormatter:
       case CellValue.DateTime(dt) => formatDateTime(dt, numFmt)
       case CellValue.Empty => ""
       case CellValue.Error(err) => formatError(err)
-      case CellValue.Formula(expr) =>
+      case CellValue.Formula(expr, _) =>
         s"=$expr" // Fallback - should be handled by FormulaDisplayStrategy
       case CellValue.RichText(rt) => rt.toPlainText
 

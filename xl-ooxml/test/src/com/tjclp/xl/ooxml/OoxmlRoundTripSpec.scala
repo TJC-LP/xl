@@ -219,6 +219,173 @@ class OoxmlRoundTripSpec extends FunSuite:
     assertEquals(readWb.sheets(0).cellCount, 0)
   }
 
+  // ===== Formula Roundtrip Tests =====
+
+  test("Formula cell roundtrips expression without cached value") {
+    val wb = Workbook("Formulas").flatMap { initial =>
+      val sheet = initial.sheets(0)
+        .put(ref"A1", CellValue.Number(BigDecimal(100)))
+        .put(ref"B1", CellValue.Number(BigDecimal(200)))
+        .put(ref"C1", CellValue.Formula("A1+B1", None))
+
+      initial.update(initial.sheets(0).name, _ => sheet)
+    }.getOrElse(fail("Should create workbook"))
+
+    val outputPath = tempDir.resolve("formula-no-cache.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+
+    val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
+    val readSheet = readWb.sheets(0)
+
+    readSheet(ref"C1").value match
+      case CellValue.Formula(expr, _) =>
+        assertEquals(expr, "A1+B1")
+      case other =>
+        fail(s"Expected Formula, got $other")
+  }
+
+  test("Formula cell roundtrips expression with cached numeric value") {
+    val wb = Workbook("Formulas").flatMap { initial =>
+      val sheet = initial.sheets(0)
+        .put(ref"A1", CellValue.Number(BigDecimal(100)))
+        .put(ref"B1", CellValue.Number(BigDecimal(200)))
+        .put(ref"C1", CellValue.Formula("A1+B1", Some(CellValue.Number(BigDecimal(300)))))
+
+      initial.update(initial.sheets(0).name, _ => sheet)
+    }.getOrElse(fail("Should create workbook"))
+
+    val outputPath = tempDir.resolve("formula-cached-number.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+
+    val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
+    val readSheet = readWb.sheets(0)
+
+    readSheet(ref"C1").value match
+      case CellValue.Formula(expr, Some(CellValue.Number(cached))) =>
+        assertEquals(expr, "A1+B1")
+        assertEquals(cached, BigDecimal(300))
+      case CellValue.Formula(expr, None) =>
+        fail(s"Formula $expr missing cached value")
+      case other =>
+        fail(s"Expected Formula with cached Number, got $other")
+  }
+
+  test("Formula cell roundtrips expression with cached text value") {
+    val wb = Workbook("Formulas").flatMap { initial =>
+      val sheet = initial.sheets(0)
+        .put(ref"A1", CellValue.Text("Hello"))
+        .put(ref"B1", CellValue.Text(" World"))
+        .put(ref"C1", CellValue.Formula("CONCATENATE(A1,B1)", Some(CellValue.Text("Hello World"))))
+
+      initial.update(initial.sheets(0).name, _ => sheet)
+    }.getOrElse(fail("Should create workbook"))
+
+    val outputPath = tempDir.resolve("formula-cached-text.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+
+    val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
+    val readSheet = readWb.sheets(0)
+
+    readSheet(ref"C1").value match
+      case CellValue.Formula(expr, Some(CellValue.Text(cached))) =>
+        assertEquals(expr, "CONCATENATE(A1,B1)")
+        assertEquals(cached, "Hello World")
+      case CellValue.Formula(expr, cached) =>
+        fail(s"Formula $expr has unexpected cached value: $cached")
+      case other =>
+        fail(s"Expected Formula with cached Text, got $other")
+  }
+
+  test("Formula cell roundtrips expression with cached boolean value") {
+    val wb = Workbook("Formulas").flatMap { initial =>
+      val sheet = initial.sheets(0)
+        .put(ref"A1", CellValue.Number(BigDecimal(100)))
+        .put(ref"B1", CellValue.Number(BigDecimal(50)))
+        .put(ref"C1", CellValue.Formula("A1>B1", Some(CellValue.Bool(true))))
+
+      initial.update(initial.sheets(0).name, _ => sheet)
+    }.getOrElse(fail("Should create workbook"))
+
+    val outputPath = tempDir.resolve("formula-cached-bool.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+
+    val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
+    val readSheet = readWb.sheets(0)
+
+    readSheet(ref"C1").value match
+      case CellValue.Formula(expr, Some(CellValue.Bool(cached))) =>
+        assertEquals(expr, "A1>B1")
+        assertEquals(cached, true)
+      case CellValue.Formula(expr, cached) =>
+        fail(s"Formula $expr has unexpected cached value: $cached")
+      case other =>
+        fail(s"Expected Formula with cached Bool, got $other")
+  }
+
+  test("Formula cell roundtrips expression with cached error value") {
+    val wb = Workbook("Formulas").flatMap { initial =>
+      val sheet = initial.sheets(0)
+        .put(ref"A1", CellValue.Number(BigDecimal(100)))
+        .put(ref"B1", CellValue.Number(BigDecimal(0)))
+        .put(ref"C1", CellValue.Formula("A1/B1", Some(CellValue.Error(CellError.Div0))))
+
+      initial.update(initial.sheets(0).name, _ => sheet)
+    }.getOrElse(fail("Should create workbook"))
+
+    val outputPath = tempDir.resolve("formula-cached-error.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+
+    val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
+    val readSheet = readWb.sheets(0)
+
+    readSheet(ref"C1").value match
+      case CellValue.Formula(expr, Some(CellValue.Error(err))) =>
+        assertEquals(expr, "A1/B1")
+        assertEquals(err, CellError.Div0)
+      case CellValue.Formula(expr, cached) =>
+        fail(s"Formula $expr has unexpected cached value: $cached")
+      case other =>
+        fail(s"Expected Formula with cached Error, got $other")
+  }
+
+  test("Multiple formula cells roundtrip correctly") {
+    val wb = Workbook("Formulas").flatMap { initial =>
+      val sheet = initial.sheets(0)
+        .put(ref"A1", CellValue.Number(BigDecimal(10)))
+        .put(ref"A2", CellValue.Number(BigDecimal(20)))
+        .put(ref"A3", CellValue.Number(BigDecimal(30)))
+        .put(ref"B1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(20)))))
+        .put(ref"B2", CellValue.Formula("A2*2", Some(CellValue.Number(BigDecimal(40)))))
+        .put(ref"B3", CellValue.Formula("A3*2", Some(CellValue.Number(BigDecimal(60)))))
+        .put(ref"C1", CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(BigDecimal(120)))))
+
+      initial.update(initial.sheets(0).name, _ => sheet)
+    }.getOrElse(fail("Should create workbook"))
+
+    val outputPath = tempDir.resolve("formula-multiple.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+
+    val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
+    val readSheet = readWb.sheets(0)
+
+    // Verify all formulas roundtripped
+    readSheet(ref"B1").value match
+      case CellValue.Formula("A1*2", Some(CellValue.Number(n))) => assertEquals(n, BigDecimal(20))
+      case other => fail(s"B1: Expected Formula, got $other")
+
+    readSheet(ref"B2").value match
+      case CellValue.Formula("A2*2", Some(CellValue.Number(n))) => assertEquals(n, BigDecimal(40))
+      case other => fail(s"B2: Expected Formula, got $other")
+
+    readSheet(ref"B3").value match
+      case CellValue.Formula("A3*2", Some(CellValue.Number(n))) => assertEquals(n, BigDecimal(60))
+      case other => fail(s"B3: Expected Formula, got $other")
+
+    readSheet(ref"C1").value match
+      case CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(n))) => assertEquals(n, BigDecimal(120))
+      case other => fail(s"C1: Expected Formula, got $other")
+  }
+
   test("Workbook with merged cells preserves merges") {
     val wb = Workbook("Merged").flatMap { initial =>
       val sheet = initial.sheets(0)

@@ -1,20 +1,28 @@
 # XL Roadmap — Living Algorithm for Parallel AI Development
 
-**Last Updated**: 2025-11-21
+**Last Updated**: 2025-11-24
 
 ---
 
 ## TL;DR (For AI Agents)
 
-**Current Status**: WI-07, WI-08, WI-09 (a/b/c/d), WI-10, WI-15 complete (840+ tests passing). Formula system (21 functions + dependency graph), Excel tables, and benchmark suite operational.
+**Current Status**: WI-07, WI-08, WI-09 (a/b/c/d/e), WI-10, WI-15, WI-17 complete (731+ tests passing). Formula system production-ready (24 functions + dependency graph + cycle detection), Excel tables, benchmarks, and SAX streaming write operational.
 
-**Active Work**: None (formula + tables + benchmarks + SAX write complete)
+**Active Work**: None (all scheduled work complete)
 
-**Next Available Work**:
-- `WI-11` — Chart Model (independent, high-value)
-- `WI-16` — Streaming Optimizations (benchmarks complete; ready for tuning)
-- `WI-20` — Query API (powerful spreadsheet queries)
-- `WI-30` — Security Hardening (ZIP bomb, XXE prevention)
+**Next Available Work** (Prioritized):
+
+| Priority | Work Item | Value | Effort | Risk |
+|----------|-----------|-------|--------|------|
+| 🔴 **Critical** | `WI-30` Security Hardening | ZIP bomb + formula injection protection | 1-2 weeks | Low |
+| ⭐ **High** | `WI-09f` Conditional Functions | SUMIF, COUNTIF, SUMIFS (80% reporting use cases) | 3-4 days | Low |
+| ⭐ **High** | `WI-11` Chart Model | Type-safe charts (differentiator from POI) | 3-4 weeks | Medium |
+| ⭐ **High** | `WI-16` Two-Phase Writer | SST + styles in streaming (smaller files) | 3-4 weeks | Medium |
+| 🔵 **Medium** | `WI-09g` INDEX/MATCH | Complete lookup functionality | 2-3 days | Low |
+| 🔵 **Medium** | `WI-12` Drawing Layer | Images, shapes (requires WI-11) | 2-3 weeks | Medium |
+| 🔵 **Medium** | `WI-21` Named Ranges | Cross-sheet references, clarity | 1-2 days | Low |
+| 🟢 **Quick Win** | `WI-18` Merged Cells Streaming | Emit merges in streaming write | 2 hours | None |
+| 🟢 **Quick Win** | `WI-19` Column/Row Properties | Widths, heights in output | 3-4 hours | None |
 
 **Quick Start**: Jump to [Work Selection Algorithm](#work-selection-algorithm) for step-by-step work item selection.
 
@@ -26,69 +34,109 @@
 graph TB
     %% Completed work (green)
     P0["P0-P8, P31<br/>Foundation Complete"]:::completed
-    WI07["WI-07: Formula Parser<br/>(formula-system.md)"]:::completed
-    WI08["WI-08: Formula Evaluator<br/>(formula-system.md)"]:::completed
-    WI09["WI-09a/b/c: Function Library<br/>Parser + Eval API"]:::completed
-    WI09d["WI-09d: Dependency Graph<br/>(formula-system.md §5)"]:::completed
-    WI10["WI-10: Table Support<br/>(advanced-features.md)"]:::completed
-    WI15["WI-15: Benchmark Suite<br/>(advanced-features.md)"]:::completed
+    WI07["WI-07: Formula Parser"]:::completed
+    WI08["WI-08: Formula Evaluator"]:::completed
+    WI09["WI-09a/b/c/d: Functions + Graph"]:::completed
+    WI10["WI-10: Table Support"]:::completed
+    WI15["WI-15: Benchmark Suite"]:::completed
+    WI17["WI-17: SAX Streaming Write"]:::completed
 
-    %% Available work (blue - ready to start)
-    WI11["WI-11: Chart Model<br/>(advanced-features.md)"]:::available
-    WI16["WI-16: Streaming Opts"]:::available
-    WI17["WI-17: SAX Streaming Write<br/>(sax-streaming-write.md)"]:::completed
-    WI20["WI-20: Query API<br/>(streaming-improvements.md)"]:::available
+    %% Critical (red outline)
+    WI30["WI-30: Security Hardening<br/>🔴 CRITICAL"]:::critical
 
-    %% Blocked work (gray - waiting on dependencies)
+    %% High priority available (blue)
+    WI09f["WI-09f: Conditional Funcs<br/>SUMIF/COUNTIF"]:::available
+    WI11["WI-11: Chart Model"]:::available
+    WI16["WI-16: Two-Phase Writer<br/>SST + Styles"]:::available
+
+    %% Medium priority (cyan)
+    WI09g["WI-09g: INDEX/MATCH"]:::medium
+    WI21["WI-21: Named Ranges"]:::medium
+    WI20["WI-20: Query API"]:::medium
+
+    %% Quick wins (light green)
+    WI18["WI-18: Merged Cells<br/>Streaming"]:::quickwin
+    WI19["WI-19: Column/Row Props"]:::quickwin
+    WI22["WI-22: SAX Writer<br/>Benchmarks"]:::quickwin
+
+    %% Blocked (gray)
     WI12["WI-12: Drawing Layer"]:::blocked
     WI13["WI-13: Pivot Tables"]:::blocked
 
     %% Dependencies
-    P0 --> WI07
-    P0 --> WI10
+    P0 --> WI30
+    P0 --> WI09f
     P0 --> WI11
-    P0 --> WI15
-    P0 --> WI20
+    P0 --> WI16
+    P0 --> WI21
+    P0 --> WI18
+    P0 --> WI19
+    WI17 --> WI22
 
-    WI07 --> WI08
-    WI08 --> WI09
-    WI09 --> WI09d
+    WI09 --> WI09f
+    WI09f --> WI09g
     WI11 --> WI12
     WI10 --> WI13
-    WI15 --> WI16
-    WI15 --> WI17
+    WI16 --> WI20
 
     %% Style definitions
     classDef completed fill:#90EE90,stroke:#228B22,stroke-width:3px,color:#000
+    classDef critical fill:#FFB6C1,stroke:#DC143C,stroke-width:3px,color:#000
     classDef available fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
+    classDef medium fill:#E0FFFF,stroke:#20B2AA,stroke-width:2px,color:#000
+    classDef quickwin fill:#98FB98,stroke:#32CD32,stroke-width:2px,color:#000
     classDef blocked fill:#D3D3D3,stroke:#808080,stroke-width:2px,color:#000
 ```
 
 **Legend**:
-- 🟢 **Green** — Completed (merged to main)
-- 🔵 **Blue** — Available (all dependencies complete, ready to start)
+- 🟢 **Dark Green** — Completed (merged to main)
+- 🔴 **Pink/Red** — Critical (security, required before 1.0)
+- 🔵 **Blue** — High Priority Available (ready to start)
+- 🩵 **Cyan** — Medium Priority Available
+- 🟩 **Light Green** — Quick Wins (< 1 day effort)
 - ⚪ **Gray** — Blocked (waiting on hard dependencies)
 
 ---
 
 ## Work Items Table
 
-| Task ID | Summary | Stream | Plan Doc | Modules | Status | Hard Deps | Merge Risk |
-|---------|---------|--------|----------|---------|--------|-----------|------------|
-| **P0-P8** | Foundation Complete | Core | (see git history) | all | ✅ Complete | - | N/A |
-| **WI-07** | Formula Parser | Formula | `formula-system.md` §1-2 | xl-evaluator | ✅ Complete | P0-P8 | Low |
-| **WI-08** | Formula Evaluator | Formula | `formula-system.md` §3 | xl-evaluator | ✅ Complete | WI-07 | Medium |
-| **WI-09a/b/c** | Function Library (Core+Parser+API) | Formula | `formula-system.md` §4 | xl-evaluator | ✅ Complete | WI-08 | Low |
-| **WI-09d** | Dependency Graph & Cycles | Formula | `formula-system.md` §5 | xl-evaluator | ✅ Complete | WI-09c | Low |
-| **WI-10** | Table Support | Advanced | `advanced-features.md` §Tables | xl-ooxml, xl-core | ✅ Complete | P0-P8 | Low |
-| **WI-11** | Chart Model | Advanced | `advanced-features.md` §Charts | xl-ooxml | 🔵 Available | P0-P8 | Low |
-| **WI-12** | Drawing Layer | Advanced | `advanced-features.md` §Drawings | xl-ooxml | ⚪ Blocked | WI-11 | Medium |
-| **WI-13** | Pivot Tables | Advanced | `advanced-features.md` §Pivots | xl-ooxml | ⚪ Blocked | WI-10 | High |
-| **WI-15** | Benchmark Suite | Infra | `advanced-features.md` §Benchmarks | xl-benchmarks | ✅ Complete | P0-P8 | None |
-| **WI-16** | Streaming Optimizations | Core | `streaming-improvements.md` | xl-cats-effect | 🔵 Available | WI-15 | Medium |
-| **WI-17** | SAX Streaming Write | Performance | `sax-streaming-write.md` | xl-ooxml, xl-cats-effect | ✅ Complete | WI-15 | Medium |
-| **WI-20** | Query API | Core | `streaming-improvements.md` §Query | xl-core | 🔵 Available | P0-P8 | Medium |
-| **WI-30** | Security Hardening | Safety | `error-model-and-safety.md` | xl-ooxml | 🔵 Available | P0-P8 | Low |
+### Completed Work ✅
+
+| Task ID | Summary | Stream | Modules | Test Count |
+|---------|---------|--------|---------|------------|
+| **P0-P8** | Foundation Complete | Core | all | 500+ |
+| **WI-07** | Formula Parser | Formula | xl-evaluator | 57 |
+| **WI-08** | Formula Evaluator | Formula | xl-evaluator | 58 |
+| **WI-09a/b/c/d** | Function Library + Dependency Graph | Formula | xl-evaluator | 130+ |
+| **WI-10** | Table Support | Advanced | xl-ooxml, xl-core | 45 |
+| **WI-15** | Benchmark Suite (JMH) | Infra | xl-benchmarks | JMH |
+| **WI-17** | SAX Streaming Write | Performance | xl-ooxml, xl-cats-effect | Integrated |
+
+### Available Work (Prioritized)
+
+| Task ID | Summary | Priority | Effort | Modules | Hard Deps | Merge Risk |
+|---------|---------|----------|--------|---------|-----------|------------|
+| **WI-30** | Security: ZIP bomb + Formula Injection | 🔴 Critical | 1-2 weeks | xl-ooxml | None | Low |
+| **WI-09f** | SUMIF, COUNTIF, SUMIFS, COUNTIFS | ⭐ High | 3-4 days | xl-evaluator | WI-09d | Low |
+| **WI-11** | Type-Safe Chart Model | ⭐ High | 3-4 weeks | xl-ooxml | None | Low |
+| **WI-16** | Two-Phase Streaming Writer (SST+Styles) | ⭐ High | 3-4 weeks | xl-cats-effect | WI-17 | Medium |
+| **WI-09g** | HLOOKUP, INDEX, MATCH, INDIRECT | 🔵 Medium | 2-3 days | xl-evaluator | WI-09f | Low |
+| **WI-09h** | MID, FIND, SUBSTITUTE, TRIM | 🔵 Medium | 1-2 days | xl-evaluator | WI-09d | Low |
+| **WI-21** | Named Ranges (parsing + creation) | 🔵 Medium | 1-2 days | xl-core, xl-ooxml | None | Low |
+| **WI-20** | Query API (streaming transforms) | 🔵 Medium | 4-5 days | xl-core | WI-16 | Medium |
+| **WI-18** | Merged Cells in Streaming Write | 🟢 Quick | 2 hours | xl-cats-effect | None | None |
+| **WI-19** | Column/Row Properties Serialization | 🟢 Quick | 3-4 hours | xl-ooxml | None | None |
+| **WI-22** | SAX Writer Benchmarks | 🟢 Quick | 2-3 hours | xl-benchmarks | WI-17 | None |
+| **WI-09i** | Math: ROUND, ABS, SQRT, POWER, LOG | 🟢 Quick | 1 day | xl-evaluator | None | None |
+
+### Blocked Work
+
+| Task ID | Summary | Waiting On | Effort | Risk |
+|---------|---------|------------|--------|------|
+| **WI-12** | Drawing Layer (Images, Shapes) | WI-11 (Charts) | 2-3 weeks | Medium |
+| **WI-13** | Pivot Tables | WI-10 ✅ (unblocked but complex) | 2-3 weeks | High |
+| **WI-31** | Conditional Formatting | None (but lower priority) | 5-7 days | Low |
+| **WI-32** | Data Validation (Dropdowns, Rules) | None (but lower priority) | 3-4 days | Low |
 
 **Column Definitions**:
 - **Task ID**: Unique identifier matching DAG nodes
@@ -206,19 +254,24 @@ Branch names: `claude/WI-07-formula-parser`
 
 ## Priority Guidelines
 
-### High Priority (Start First)
-1. **WI-07** (Formula Parser) — Unblocks entire evaluator stream
-2. **WI-10** (Table Support) — High user value, independent
-3. **WI-30** (Security) — Production requirement
+### 🔴 Critical (Pre-1.0 Release)
+1. **WI-30** (Security) — ZIP bomb + formula injection protection required before production
 
-### Medium Priority (Next Wave)
-4. **WI-11** (Chart Model) — High value, can parallel with WI-10
-5. **WI-15** (Benchmark Suite) — Needed before optimizations
-6. **WI-20** (Query API) — DX improvement
+### ⭐ High Priority (Next Sprint)
+2. **WI-22** (SAX Writer Benchmarks) — Validate WI-17 performance vs ScalaXml
+3. **WI-09f** (Conditional Functions) — SUMIF/COUNTIF unlock 80% of reporting use cases
+4. **WI-11** (Chart Model) — Key differentiator from POI
+5. **WI-16** (Two-Phase Writer) — SST + styles in streaming = smaller files
 
-### Low Priority (After Core Features)
-7. **WI-16** (Streaming Opts) — Wait for benchmarks first
-8. **WI-13** (Pivot Tables) — Complex, requires tables + formulas
+### 🔵 Medium Priority (Backlog)
+6. **WI-09g** (INDEX/MATCH) — Complete lookup functionality
+7. **WI-21** (Named Ranges) — Cross-sheet references
+8. **WI-20** (Query API) — Ergonomic streaming transforms
+
+### 🟢 Quick Wins (Anytime)
+9. **WI-18** (Merged Cells Streaming) — 2 hours
+10. **WI-19** (Column/Row Props) — 3-4 hours
+11. **WI-09i** (Math Functions) — 1 day
 
 ### User-Driven Priorities
 If user requests specific feature:
@@ -254,6 +307,191 @@ If user requests specific feature:
 
 ---
 
+## Work Item Specifications
+
+Detailed specifications for high-priority work items. For full plan docs, see `docs/plan/`.
+
+### WI-22: SAX Writer Benchmarks
+
+**Priority**: 🟢 Quick Win
+**Effort**: 2-3 hours
+**Module**: xl-benchmarks
+**Dependencies**: WI-17 (SAX Streaming Write) ✅
+
+**Objective**: Validate SAX/StAX writer performance vs ScalaXml backend
+
+**Benchmarks to Add**:
+```scala
+// In PoiComparisonBenchmark.scala or new SaxWriterBenchmark.scala
+
+@Benchmark def xlWriteScalaXml_1k(): Unit = ...
+@Benchmark def xlWriteSaxStax_1k(): Unit = ...
+@Benchmark def xlWriteScalaXml_10k(): Unit = ...
+@Benchmark def xlWriteSaxStax_10k(): Unit = ...
+
+// Memory profiling
+@Benchmark def xlWriteSaxStax_memory_100k(): Unit = ...
+```
+
+**Expected Results**:
+- SAX/StAX should be 2-3x faster than ScalaXml
+- Memory usage should be O(1) constant for streaming
+
+**Definition of Done**:
+- [ ] Add `SaxWriterBenchmark.scala` with 6+ benchmarks
+- [ ] Compare SAX vs ScalaXml at 1k, 10k, 100k rows
+- [ ] Document results in STATUS.md Performance section
+- [ ] Update CLAUDE.md if SAX becomes recommended default
+
+---
+
+### WI-30: Security Hardening
+
+**Priority**: 🔴 Critical (Pre-1.0)
+**Effort**: 1-2 weeks
+**Module**: xl-ooxml
+**Plan Doc**: `error-model-and-safety.md`
+
+**Scope**:
+1. **ZIP Bomb Detection** (WI-30a)
+   - Compression ratio limits (max 100:1)
+   - Uncompressed size limits (max 100MB default)
+   - Entry count limits (max 10k files)
+
+2. **Formula Injection Guards** (WI-30b)
+   - Escape cells starting with `=`, `+`, `-`, `@`
+   - Add `CellValue.escape(text)` API
+   - Document risks for untrusted data
+
+3. **File Size Limits** (WI-30c)
+   - Max cell count (10M default)
+   - Max string length (32KB default)
+   - Configurable via `ReaderConfig`
+
+**Definition of Done**:
+- [ ] ZIP bomb detection with 10+ tests
+- [ ] Formula injection escaping with 10+ tests
+- [ ] File size validation with 5+ tests
+- [ ] Security documentation in LIMITATIONS.md
+
+---
+
+### WI-09f: Conditional Aggregation Functions
+
+**Priority**: ⭐ High
+**Effort**: 3-4 days
+**Module**: xl-evaluator
+**Dependencies**: WI-09d ✅
+
+**Functions to Add**:
+```scala
+// SUMIF(range, criteria, [sum_range])
+TExpr.sumIf(range: CellRange, criteria: TExpr[?], sumRange: Option[CellRange])
+
+// COUNTIF(range, criteria)
+TExpr.countIf(range: CellRange, criteria: TExpr[?])
+
+// SUMIFS(sum_range, criteria_range1, criteria1, ...)
+TExpr.sumIfs(sumRange: CellRange, conditions: List[(CellRange, TExpr[?])])
+
+// COUNTIFS(criteria_range1, criteria1, ...)
+TExpr.countIfs(conditions: List[(CellRange, TExpr[?])])
+```
+
+**Criteria Matching**:
+- Exact match: `"Apple"`
+- Wildcards: `"A*"`, `"*pple"`, `"A?ple"`
+- Numeric: `">100"`, `"<=50"`, `"<>0"`
+
+**Definition of Done**:
+- [ ] 4 new TExpr cases with smart constructors
+- [ ] FunctionParser registrations
+- [ ] Evaluator implementation with criteria matching
+- [ ] 40+ tests (normal, edge, error cases)
+- [ ] Update CLAUDE.md function count
+
+---
+
+### WI-11: Type-Safe Chart Model
+
+**Priority**: ⭐ High
+**Effort**: 3-4 weeks
+**Module**: xl-ooxml
+**Plan Doc**: `advanced-features.md`
+
+**Domain Model**:
+```scala
+enum ChartType:
+  case Column(clustered: Boolean, stacked: Boolean)
+  case Bar(clustered: Boolean, stacked: Boolean)
+  case Line(smooth: Boolean)
+  case Pie
+  case Scatter
+
+case class Series(
+  name: String,
+  values: CellRange,
+  categories: Option[CellRange],
+  color: Option[Color]
+)
+
+case class Chart(
+  chartType: ChartType,
+  series: Vector[Series],
+  title: Option[String],
+  legend: Legend,
+  xAxis: Option[Axis],
+  yAxis: Option[Axis]
+)
+```
+
+**OOXML Integration**:
+- `xl/charts/chartN.xml` serialization
+- Relationship wiring in worksheet
+- ContentTypes registration
+
+**Definition of Done**:
+- [ ] Chart domain model (ChartType, Series, Chart)
+- [ ] OoxmlChart with XmlWritable/XmlReadable
+- [ ] Sheet.withChart() API
+- [ ] 5 chart types (Column, Bar, Line, Pie, Scatter)
+- [ ] 50+ tests (round-trip, rendering)
+
+---
+
+### WI-16: Two-Phase Streaming Writer
+
+**Priority**: ⭐ High
+**Effort**: 3-4 weeks
+**Module**: xl-cats-effect
+**Plan Doc**: `streaming-improvements.md`
+
+**Design**:
+```
+Phase 1: Scan Data
+  - Consume stream once
+  - Collect unique strings → build SST
+  - Collect unique styles → build StyleRegistry
+
+Phase 2: Write with Indices
+  - Reorder ZIP: ContentTypes, Rels, SST, Styles, Worksheets
+  - Use stable indices from Phase 1
+```
+
+**Benefits**:
+- Streaming write with SST deduplication (2-5x smaller files)
+- Full style support in streaming
+- Memory still O(unique styles) + O(unique strings)
+
+**Definition of Done**:
+- [ ] Two-phase writer architecture
+- [ ] SST collection during Phase 1
+- [ ] Style collection during Phase 1
+- [ ] Benchmark comparison (file size reduction)
+- [ ] 20+ tests
+
+---
+
 ## Detailed Phase Documentation
 
 Below is the complete history of all phases. For **active work**, see plan docs in `docs/plan/`. For **completed phase details**, see git history (commit d8bb232 and earlier).
@@ -262,8 +500,8 @@ Below is the complete history of all phases. For **active work**, see plan docs 
 
 # Roadmap — From Spec to MVP and Beyond
 
-**Current Status: ~87% Complete (680/680 tests passing)**
-**Last Updated**: 2025-11-20
+**Current Status: ~87% Complete (731+ tests passing)**
+**Last Updated**: 2025-11-24
 
 > **For strategic vision and 7-phase execution framework, see [strategic-implementation-plan.md](strategic-implementation-plan.md)**
 >
@@ -551,11 +789,12 @@ Below is the complete history of all phases. For **active work**, see plan docs 
 - Chart style customization
 - xl/charts/chart#.xml serialization
 
-### ⬜ P12: Tables & Advanced Features (Future)
+### 🟡 P12: Tables & Advanced Features (Partially Complete)
 **Priority**: Low
-**Estimated Effort**: 2-3 weeks
-**Definition of Done**:
-- Excel tables (structured references)
+**Estimated Effort**: 2-3 weeks (remaining)
+**Completed**:
+- ✅ Excel tables (WI-10) - structured references, headers, AutoFilter, styling
+**Definition of Done** (Remaining):
 - Conditional formatting rules
 - Data validation
 - Named ranges
@@ -591,16 +830,19 @@ Below is the complete history of all phases. For **active work**, see plan docs 
 | P31: Optics/RichText | ✅ Complete | 39 tests | 100% |
 | P7: String Interp Phase 1 | ✅ Complete | +111 tests | 100% |
 | P8: String Interp Phase 2 | ✅ Complete | +40 tests | 100% |
-| **Total Core** | **✅** | **636/636 tests** | **~85%** |
+| **Formula System (WI-07/08/09)** | **✅ Complete** | **169+ tests** | **100%** |
+| **Tables (WI-10)** | **✅ Complete** | **Integrated** | **100%** |
+| **Benchmarks (WI-15)** | **✅ Complete** | **JMH suite** | **100%** |
+| **SAX Write (WI-17)** | **✅ Complete** | **Integrated** | **100%** |
+| **Total Core** | **✅** | **731+ tests** | **~87%** |
 | P6.5: Perf & Quality | ⬜ Future | - | 0% |
 | P6b: Full Derivation | ⬜ Future | - | 0% |
 | P9: Advanced Macros | ⬜ Future | - | 0% |
 | P10: Drawings | ⬜ Future | - | 0% |
 | P11: Charts | ⬜ Future | - | 0% |
-| P12: Tables | ⬜ Future | - | 0% |
 | P13: Safety/Docs | ⬜ Future | - | 0% |
 
-**Current State**: Production-ready for core spreadsheet operations (read, write, style, stream). Exceeds Apache POI in performance (4.5x faster, 16x less memory). Ready for real-world use in financial modeling, data export, and report generation.
+**Current State**: Production-ready for core spreadsheet operations (read, write, style, stream, formula evaluation, tables). Exceeds Apache POI in performance (4.5x faster streaming, 16x less memory). Formula system complete with 24 functions, dependency graph, and cycle detection. Ready for real-world use in financial modeling, data export, and report generation.
 
 ---
 
@@ -623,10 +865,10 @@ Plans in this directory cover **active future work** only. Completed phases are 
 
 **Core Future Work**:
 - [future-improvements.md](future-improvements.md) - P6.5 polish
-- [formula-system.md](formula-system.md) - P9+ evaluator
+- [formula-system.md](formula-system.md) - ✅ **Complete** (WI-07/08/09 - parser, evaluator, 24 functions, dependency graph)
 - [error-model-and-safety.md](error-model-and-safety.md) - P13 security
 - [streaming-improvements.md](streaming-improvements.md) - P7.5 streaming enhancements
-- [advanced-features.md](advanced-features.md) - P10-P12 (drawings, charts, tables, benchmarks)
+- [advanced-features.md](advanced-features.md) - P10-P12 (drawings, charts; tables+benchmarks ✅ complete)
 
 ### Design Docs
 `docs/design/` - Architectural decisions (timeless):

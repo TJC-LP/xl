@@ -66,10 +66,31 @@ case class OoxmlCell(
           writer.writeCharacters(if b then "1" else "0")
           writer.endElement() // v
 
-        case CellValue.Formula(expr) =>
+        case CellValue.Formula(expr, cachedValue) =>
           writer.startElement("f")
           writer.writeCharacters(expr)
           writer.endElement() // f
+          // Write cached value if present
+          cachedValue.foreach {
+            case CellValue.Number(num) =>
+              writer.startElement("v")
+              writer.writeCharacters(num.toString)
+              writer.endElement()
+            case CellValue.Text(s) =>
+              writer.startElement("v")
+              writer.writeCharacters(s)
+              writer.endElement()
+            case CellValue.Bool(b) =>
+              writer.startElement("v")
+              writer.writeCharacters(if b then "1" else "0")
+              writer.endElement()
+            case CellValue.Error(err) =>
+              import com.tjclp.xl.cells.CellError.toExcel
+              writer.startElement("v")
+              writer.writeCharacters(err.toExcel)
+              writer.endElement()
+            case _ => () // Empty, RichText, Formula, DateTime - don't write
+          }
 
         case CellValue.Error(err) =>
           import com.tjclp.xl.cells.CellError.toExcel
@@ -230,8 +251,20 @@ case class OoxmlCell(
         Seq(elem("v")(Text(num.toString)))
       case CellValue.Bool(b) =>
         Seq(elem("v")(Text(if b then "1" else "0")))
-      case CellValue.Formula(expr) =>
-        Seq(elem("f")(Text(expr))) // Simplified - full formula support later
+      case CellValue.Formula(expr, cachedValue) =>
+        // Write formula element
+        val formulaElem = elem("f")(Text(expr))
+        // Write cached value if present
+        val cachedElem = cachedValue.flatMap {
+          case CellValue.Number(num) => Some(elem("v")(Text(num.toString)))
+          case CellValue.Text(s) => Some(elem("v")(Text(s)))
+          case CellValue.Bool(b) => Some(elem("v")(Text(if b then "1" else "0")))
+          case CellValue.Error(err) =>
+            import com.tjclp.xl.cells.CellError.toExcel
+            Some(elem("v")(Text(err.toExcel)))
+          case _ => None // Empty, RichText, Formula, DateTime - don't write
+        }
+        Seq(formulaElem) ++ cachedElem.toList
       case CellValue.Error(err) =>
         import com.tjclp.xl.cells.CellError.toExcel
         Seq(elem("v")(Text(err.toExcel)))
@@ -601,7 +634,14 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
             // Convert to Excel serial number
             val serial = com.tjclp.xl.cells.CellValue.dateTimeToExcelSerial(dt)
             ("n", com.tjclp.xl.cells.CellValue.Number(BigDecimal(serial)))
-          case com.tjclp.xl.cells.CellValue.Formula(_) => ("str", cell.value) // Formula result
+          case com.tjclp.xl.cells.CellValue.Formula(_, cachedValue) =>
+            // Use cached value's type if available, otherwise "str"
+            val cellType = cachedValue match
+              case Some(com.tjclp.xl.cells.CellValue.Number(_)) => "n"
+              case Some(com.tjclp.xl.cells.CellValue.Bool(_)) => "b"
+              case Some(com.tjclp.xl.cells.CellValue.Error(_)) => "e"
+              case _ => "str"
+            (cellType, cell.value)
           case com.tjclp.xl.cells.CellValue.Error(_) => ("e", cell.value)
           case com.tjclp.xl.cells.CellValue.Empty => ("", cell.value)
 
@@ -899,6 +939,40 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     else Right(parsed.collect { case Right(cell) => cell })
 
   private def parseCellValue(
+    elem: Elem,
+    cellType: String,
+    sst: Option[SharedStrings]
+  ): Either[String, CellValue] =
+    // Check for formula element first (before cellType dispatch)
+    (elem \ "f").headOption.map(_.text.trim) match
+      case Some(formulaExpr) if formulaExpr.nonEmpty =>
+        // Formula cell - parse cached value from <v> if present
+        val cachedValue: Option[CellValue] = (elem \ "v").headOption.map(_.text).flatMap { vText =>
+          // Infer cached value type from cellType attribute
+          cellType match
+            case "n" | "" =>
+              try Some(CellValue.Number(BigDecimal(vText)))
+              catch case _: NumberFormatException => None
+            case "b" =>
+              vText match
+                case "1" | "true" => Some(CellValue.Bool(true))
+                case "0" | "false" => Some(CellValue.Bool(false))
+                case _ => None
+            case "e" =>
+              import com.tjclp.xl.cells.CellError
+              CellError.parse(vText).toOption.map(CellValue.Error.apply)
+            case "str" | "inlineStr" =>
+              Some(CellValue.Text(vText))
+            case _ => None
+        }
+        Right(CellValue.Formula(formulaExpr, cachedValue))
+
+      case _ =>
+        // No formula - dispatch on cellType as before
+        parseCellValueWithoutFormula(elem, cellType, sst)
+
+  /** Parse cell value when no formula element is present */
+  private def parseCellValueWithoutFormula(
     elem: Elem,
     cellType: String,
     sst: Option[SharedStrings]

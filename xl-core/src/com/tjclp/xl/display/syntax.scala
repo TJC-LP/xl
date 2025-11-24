@@ -63,7 +63,7 @@ object syntax:
     def displayFormula(ref: ARef)(using fds: FormulaDisplayStrategy): String =
       val cell = sheet.cells.get(ref).getOrElse(Cell.empty(ref))
       cell.value match
-        case CellValue.Formula(expr) =>
+        case CellValue.Formula(expr, _) =>
           // Expression already includes "=" prefix
           if expr.startsWith("=") then expr else s"=$expr"
         case _ => display(ref).formatted

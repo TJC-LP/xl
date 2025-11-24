@@ -200,22 +200,22 @@ DependencyGraph.detectCycles(graph) match
   case Right(_) =>
     println("✓ No circular references detected")
   case Left(error) =>
-    println(s"✗ Circular reference: ${error.cycle.mkString(" → ")}")
+    println(s"✗ Circular reference: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 // Get topological evaluation order
 DependencyGraph.topologicalSort(graph) match
   case Right(order) =>
-    println(s"✓ Evaluation order: ${order.mkString(" → ")}")
+    println(s"✓ Evaluation order: ${order.map(_.toA1).mkString(" → ")}")
   case Left(error) =>
     println(s"✗ Cannot sort due to cycle")
 
 // Query precedents (cells B1 depends on)
 val b1Precedents = DependencyGraph.precedents(graph, ref"B1")
-println(s"✓ B1 depends on: ${b1Precedents.mkString(", ")}")
+println(s"✓ B1 depends on: ${b1Precedents.map(_.toA1).mkString(", ")}")
 
 // Query dependents (cells that depend on A1)
 val a1Dependents = DependencyGraph.dependents(graph, ref"A1")
-println(s"✓ Cells depending on A1: ${a1Dependents.mkString(", ")}")
+println(s"✓ Cells depending on A1: ${a1Dependents.map(_.toA1).mkString(", ")}")
 
 println()
 

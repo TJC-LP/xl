@@ -166,3 +166,14 @@ object CellCodec:
         case other => Left(CodecError.TypeMismatch("RichText", other)),
     rt => (CellValue.RichText(rt), None) // No cell-level style, formatting is in runs
   )
+
+  // ========== CellValue Pass-Through ==========
+
+  /**
+   * CellValue writer - allows using CellValue directly with string-ref put() methods.
+   *
+   * This enables: `sheet.put("A1", fx"=SUM(B1:B10)")` where fx returns CellValue.Formula. No style
+   * inference - CellValue is already the raw value type.
+   */
+  inline given CellWriter[CellValue] with
+    def write(cv: CellValue): (CellValue, Option[CellStyle]) = (cv, None)

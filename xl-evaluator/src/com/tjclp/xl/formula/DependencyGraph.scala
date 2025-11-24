@@ -71,7 +71,7 @@ object DependencyGraph:
   def fromSheet(sheet: Sheet): DependencyGraph =
     val formulaCells = sheet.cells.flatMap { case (ref, cell) =>
       cell.value match
-        case CellValue.Formula(expression) => Some(ref -> expression)
+        case CellValue.Formula(expression, _) => Some(ref -> expression)
         case _ => None
     }
 

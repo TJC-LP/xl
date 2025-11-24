@@ -283,14 +283,14 @@ DependencyGraph.detectCycles(graph) match
   case Right(_) =>
     println("✓ No circular references detected (model is valid)")
   case Left(error) =>
-    println(s"✗ Circular reference: ${error.cycle.mkString(" → ")}")
+    println(s"✗ Circular reference: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 // Get evaluation order
 DependencyGraph.topologicalSort(graph) match
   case Right(order) =>
     println(s"✓ Evaluation order: ${order.size} formulas in dependency order")
-    println(s"  First 5: ${order.take(5).mkString(" → ")}")
-    println(s"  Last 5: ${order.takeRight(5).mkString(" → ")}")
+    println(s"  First 5: ${order.take(5).map(_.toA1).mkString(" → ")}")
+    println(s"  Last 5: ${order.takeRight(5).map(_.toA1).mkString(" → ")}")
   case Left(error) =>
     println(s"✗ Cannot sort due to cycle")
 
@@ -299,12 +299,12 @@ println()
 // Analyze Net Income dependencies
 println("Net Income (B16) dependency chain:")
 val b16Precedents = DependencyGraph.precedents(graph, ref"B16")
-println(s"  Direct dependencies: ${b16Precedents.mkString(", ")}")
+println(s"  Direct dependencies: ${b16Precedents.map(_.toA1).mkString(", ")}")
 
 // Show which cells would be affected if revenue changed
 val revenueImpact = DependencyGraph.dependents(graph, ref"B3")
 println(s"\nCells impacted by B3 (2024 Revenue): ${revenueImpact.size} cells")
-println(s"  Examples: ${revenueImpact.take(5).mkString(", ")}")
+println(s"  Examples: ${revenueImpact.take(5).map(_.toA1).mkString(", ")}")
 
 println()
 

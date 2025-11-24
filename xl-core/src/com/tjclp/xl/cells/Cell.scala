@@ -60,7 +60,7 @@ final case class Cell(
 
   /** Check if cell contains a formula */
   def isFormula: Boolean = value match
-    case CellValue.Formula(_) => true
+    case CellValue.Formula(_, _) => true
     case _ => false
 
   /** Check if cell contains an error */

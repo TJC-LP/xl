@@ -281,7 +281,7 @@ finModel.evaluateWithDependencyCheck() match
     println("✓ All formulas evaluated successfully:")
     println(f"  Gross Profit:     ${results(ref"A4")}%-15s // Revenue - COGS")
     println(f"  Operating Income: ${results(ref"A5")}%-15s // Gross Profit - OpEx")
-    println(f"  Tax:              ${results(ref"A6")}%-15s // Operating Income * 30%")
+    println(f"  Tax:              ${results(ref"A6")}%-15s // Operating Income * 30%%")
     println(f"  Net Income:       ${results(ref"A7")}%-15s // Operating Income - Tax")
 
     results(ref"A8") match
@@ -306,17 +306,17 @@ val graph = DependencyGraph.fromSheet(finModel)
 DependencyGraph.topologicalSort(graph) match
   case Right(order) =>
     println(s"Evaluation order (${order.size} formulas):")
-    println(s"  ${order.mkString(" → ")}")
+    println(s"  ${order.map(_.toA1).mkString(" → ")}")
   case Left(error) =>
-    println(s"✗ Cycle detected: ${error.cycle.mkString(" → ")}")
+    println(s"✗ Cycle detected: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 // Show Net Income dependencies
 val netIncomeDeps = DependencyGraph.precedents(graph, ref"A7")
-println(s"\nNet Income (A7) depends on: ${netIncomeDeps.mkString(", ")}")
+println(s"\nNet Income (A7) depends on: ${netIncomeDeps.map(_.toA1).mkString(", ")}")
 
 // Show Revenue impact
 val revenueImpact = DependencyGraph.dependents(graph, ref"A1")
-println(s"Revenue (A1) impacts: ${revenueImpact.mkString(", ")}")
+println(s"Revenue (A1) impacts: ${revenueImpact.map(_.toA1).mkString(", ")}")
 
 println()
 
@@ -338,6 +338,8 @@ formula match
         println(s"Evaluation result: $result")  // 15 (A1=10, B1=5)
       case Left(error) =>
         println(s"Evaluation error: ${error.message}")
+  case other =>
+    println(s"Unexpected value type: $other")
 
 println()
 

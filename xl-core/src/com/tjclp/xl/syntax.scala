@@ -49,6 +49,11 @@ object syntax:
   // RichText string extensions (.red, .bold, etc.)
   export richtext.RichText.{given, *}
 
+  // CellCodec given instances for type class-based put() methods
+  // Note: Scala 3's export doesn't transitively propagate givens from re-exports,
+  // so we need a direct export here even though extensions.scala also exports them.
+  export codec.CellCodec.given
+
   // Compile-time validated literals (macros)
   export macros.RefLiteral.*
   export macros.CellRangeLiterals.fx

@@ -67,6 +67,24 @@ object EasyExcel:
     excel.write(workbook, Paths.get(path)).unsafeRunSync()
 
   /**
+   * Write workbook result to file path (unwraps XLResult).
+   *
+   * Convenience overload that handles XLResult[Workbook] directly, allowing seamless chaining from
+   * operations that return results.
+   *
+   * @param result
+   *   XLResult[Workbook] to write (calls .unsafe internally)
+   * @param path
+   *   File path (string)
+   * @throws XLException
+   *   if result is Left (contains error)
+   * @throws java.io.IOException
+   *   if file cannot be written
+   */
+  def write(result: com.tjclp.xl.error.XLResult[Workbook], path: String): Unit =
+    write(result.fold(e => throw XLException(e), identity), path)
+
+  /**
    * Modify workbook in-place (read → transform → write).
    *
    * Uses atomic file replacement to avoid ZIP corruption when writing to the source file. Writes to

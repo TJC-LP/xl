@@ -81,14 +81,16 @@ object CellRangeLiterals:
   )(using Quotes): Expr[CellValue] =
     import quotes.reflect.report
     val parts = sc.valueOrAbort.parts
-    val fullString = MacroUtil.reconstructString(parts, literals)
+    // Process escape sequences before reconstruction
+    val processedParts = parts.map(processEscapes)
+    val fullString = MacroUtil.reconstructString(processedParts, literals)
 
     // Call runtime parser at compile-time to ensure validation consistency
     com.tjclp.xl.cells.FormulaParser.parse(fullString) match
       case Right(cellValue) =>
         // Valid - emit constant
         cellValue match
-          case CellValue.Formula(expr) =>
+          case CellValue.Formula(expr, _) =>
             '{ CellValue.Formula(${ Expr(expr) }) }
           case _ =>
             report.errorAndAbort("Unexpected cell value type in formula literal")
@@ -108,7 +110,33 @@ object CellRangeLiterals:
     val parts = sc.valueOrAbort.parts
     if parts.lengthCompare(1) != 0 then
       quotes.reflect.report.errorAndAbort("literal must be a single part")
-    parts(0) // Safe: length == 1 verified above
+    // Process escape sequences (custom interpolators receive raw escapes)
+    processEscapes(parts(0))
+
+  /**
+   * Process standard string escape sequences.
+   *
+   * Custom string interpolators in Scala 3 receive the raw source string including escape sequences
+   * like `\"`, `\\`, `\n`, etc. This function converts them to their actual character values.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.While", "org.wartremover.warts.Var"))
+  private def processEscapes(s: String): String =
+    val sb = new StringBuilder(s.length)
+    var i = 0
+    while i < s.length do
+      if s.charAt(i) == '\\' && i + 1 < s.length then
+        s.charAt(i + 1) match
+          case 'n' => sb.append('\n'); i += 2
+          case 'r' => sb.append('\r'); i += 2
+          case 't' => sb.append('\t'); i += 2
+          case '\\' => sb.append('\\'); i += 2
+          case '"' => sb.append('"'); i += 2
+          case '\'' => sb.append('\''); i += 2
+          case _ => sb.append(s.charAt(i)); i += 1 // Keep unknown escapes as-is
+      else
+        sb.append(s.charAt(i))
+        i += 1
+    sb.toString
 
 end CellRangeLiterals
 

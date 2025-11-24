@@ -106,16 +106,48 @@ object StreamingXmlWriter:
           )
         )
 
-      case CellValue.Formula(expr) =>
-        // <c r="A1"><f>SUM(A1:A10)</f></c>
-        (
-          "",
-          List(
-            XmlEvent.StartTag(QName("f"), Nil, false),
-            XmlEvent.XmlString(expr, false),
-            XmlEvent.EndTag(QName("f"))
-          )
+      case CellValue.Formula(expr, cachedValue) =>
+        // <c r="A1"><f>SUM(A1:A10)</f><v>100</v></c>
+        val formulaEvents = List(
+          XmlEvent.StartTag(QName("f"), Nil, false),
+          XmlEvent.XmlString(expr, false),
+          XmlEvent.EndTag(QName("f"))
         )
+        val cachedEvents = cachedValue.toList.flatMap {
+          case CellValue.Number(num) =>
+            List(
+              XmlEvent.StartTag(QName("v"), Nil, false),
+              XmlEvent.XmlString(num.toString, false),
+              XmlEvent.EndTag(QName("v"))
+            )
+          case CellValue.Text(s) =>
+            List(
+              XmlEvent.StartTag(QName("v"), Nil, false),
+              XmlEvent.XmlString(s, false),
+              XmlEvent.EndTag(QName("v"))
+            )
+          case CellValue.Bool(b) =>
+            List(
+              XmlEvent.StartTag(QName("v"), Nil, false),
+              XmlEvent.XmlString(if b then "1" else "0", false),
+              XmlEvent.EndTag(QName("v"))
+            )
+          case CellValue.Error(err) =>
+            import com.tjclp.xl.cells.CellError.toExcel
+            List(
+              XmlEvent.StartTag(QName("v"), Nil, false),
+              XmlEvent.XmlString(err.toExcel, false),
+              XmlEvent.EndTag(QName("v"))
+            )
+          case _ => Nil // Empty, RichText, Formula, DateTime - don't write
+        }
+        // Cell type based on cached value
+        val cellType = cachedValue match
+          case Some(CellValue.Number(_)) => "n"
+          case Some(CellValue.Bool(_)) => "b"
+          case Some(CellValue.Error(_)) => "e"
+          case _ => ""
+        (cellType, formulaEvents ++ cachedEvents)
 
       case CellValue.Error(err) =>
         import com.tjclp.xl.cells.CellError.toExcel

@@ -62,7 +62,7 @@ validationResults.filter(_._1.col == ref"B1".col).toSeq.sortBy(_._1.row.index1).
   val scoreRef = ARef.from1(1, validationRef.row.index1)  // Column A (index 1)
   val score = dataSheet(scoreRef).value
   val status = value match
-    case "Valid" => "✓"
+    case CellValue.Text("Valid") => "✓"
     case _ => "✗"
   println(f"  $status Row ${validationRef.row.index1}: Score = $score%-20s Status = $value")
 }
@@ -104,9 +104,12 @@ println("  Expected rows: 5")
 println("  Data cells: A1=100, A2=200, A3=(empty), A4=400, A5=500")
 println()
 
-val missingResults = incompleteSheet.evaluateWithDependencyCheck().toOption.get
-println(s"  Actual count: ${missingResults(ref"B2")}")
-println(s"  Status: ${missingResults(ref"B3")}")
+incompleteSheet.evaluateWithDependencyCheck() match
+  case Right(missingResults) =>
+    println(s"  Actual count: ${missingResults(ref"B2")}")
+    println(s"  Status: ${missingResults(ref"B3")}")
+  case Left(error) =>
+    println(s"  Evaluation error: ${error.message}")
 println()
 
 // ============================================================================
@@ -157,7 +160,7 @@ if textResults.nonEmpty then
     (normalized, validation) match
       case (Some(norm), Some(valid)) =>
         val status = valid match
-          case "Valid" => "✓"
+          case CellValue.Text("Valid") => "✓"
           case _ => "✗"
 
         println(f"  $status Row $row:")
