@@ -3,7 +3,12 @@ package com.tjclp.xl.ooxml
 import javax.xml.stream.{XMLOutputFactory, XMLStreamWriter}
 import java.io.OutputStream
 
-/** SAX writer interpreter backed by javax.xml.stream.XMLStreamWriter (StAX) */
+/**
+ * SAX writer interpreter backed by javax.xml.stream.XMLStreamWriter (StAX)
+ *
+ * @note
+ *   Not thread-safe. Create separate instances for concurrent use.
+ */
 class StaxSaxWriter(underlying: XMLStreamWriter) extends SaxWriter:
   def startDocument(): Unit = underlying.writeStartDocument("UTF-8", "1.0")
   def endDocument(): Unit = underlying.writeEndDocument()

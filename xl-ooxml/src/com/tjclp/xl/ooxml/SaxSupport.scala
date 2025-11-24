@@ -45,6 +45,7 @@ trait SaxSupport:
   protected def emitElem(writer: SaxWriter, elem: Elem): Unit =
     val qName =
       Option(elem.prefix).filter(_.nonEmpty).map(p => s"$p:${elem.label}").getOrElse(elem.label)
+    // getURI returns null for undefined prefixes; Option() wrapper handles this safely
     val nsUri = Option(elem.prefix)
       .flatMap(p => Option(elem.scope).flatMap(sc => Option(sc.getURI(p))))
       .filter(_.nonEmpty)

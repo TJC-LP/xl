@@ -59,6 +59,7 @@
 - ✅ ExcelIO[IO] interpreter
 - ✅ `readStream` / `readSheetStream` / `readStreamByIndex` – constant‑memory streaming read (fs2.io.readInputStream + fs2‑data‑xml)
 - ✅ `writeStreamTrue` / `writeStreamsSeqTrue` – constant‑memory streaming write (fs2‑data‑xml)
+- ✅ **`writeFast`** – SAX/StAX streaming write (opt-in via `ExcelIO.writeFast()` or `WriterConfig(backend = XmlBackend.SaxStax)`)
 - ✅ Benchmark: 100k rows in ~1.8s read (~10MB constant memory) / ~1.1s write (~10MB constant memory)
 
 **Output Configuration** (P6.7 Complete):

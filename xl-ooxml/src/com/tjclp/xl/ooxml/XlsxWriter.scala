@@ -47,7 +47,7 @@ enum Compression derives CanEqual:
 case class WriterConfig(
   sstPolicy: SstPolicy = SstPolicy.Auto,
   compression: Compression = Compression.Deflated,
-  prettyPrint: Boolean = false, // Compact XML for production
+  prettyPrint: Boolean = false, // Compact XML for production (only applies to ScalaXml backend)
   backend: XmlBackend = XmlBackend.ScalaXml // Serialization backend (Scala XML or SAX/StAX)
 )
 
