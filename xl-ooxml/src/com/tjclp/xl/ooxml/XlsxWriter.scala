@@ -47,7 +47,8 @@ enum Compression derives CanEqual:
 case class WriterConfig(
   sstPolicy: SstPolicy = SstPolicy.Auto,
   compression: Compression = Compression.Deflated,
-  prettyPrint: Boolean = false // Compact XML for production
+  prettyPrint: Boolean = false, // Compact XML for production
+  backend: XmlBackend = XmlBackend.ScalaXml // Serialization backend (Scala XML or SAX/StAX)
 )
 
 object WriterConfig:
@@ -59,6 +60,11 @@ object WriterConfig:
     compression = Compression.Stored,
     prettyPrint = true
   )
+
+/** XML serialization backend */
+enum XmlBackend derives CanEqual:
+  case ScalaXml
+  case SaxStax
 
 /**
  * Target for XLSX output (file path or output stream).
@@ -555,7 +561,7 @@ object XlsxWriter:
 
       // Write worksheets
       sheets.zipWithIndex.foreach { case (sheet, idx) =>
-        writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml, config)
+        writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet, config)
 
         // Write worksheet relationships if this sheet has comments or tables
         val hasComments = commentsBySheet.contains(idx)
@@ -624,7 +630,7 @@ object XlsxWriter:
 
       // Write worksheets
       sheets.zipWithIndex.foreach { case (sheet, idx) =>
-        writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet.toXml, config)
+        writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet, config)
 
         // Write worksheet relationships if this sheet has comments or tables
         val hasComments = commentsBySheet.contains(idx)
@@ -713,6 +719,52 @@ object XlsxWriter:
     zip.putNextEntry(entry)
     zip.write(bytes)
     zip.closeEntry()
+
+  /** Write worksheet using selected backend */
+  private def writeWorksheet(
+    zip: ZipOutputStream,
+    entryName: String,
+    sheet: OoxmlWorksheet,
+    config: WriterConfig
+  ): Unit =
+    config.backend match
+      case XmlBackend.ScalaXml =>
+        writePart(zip, entryName, sheet.toXml, config)
+      case XmlBackend.SaxStax =>
+        writeWorksheetSax(zip, entryName, sheet, config)
+
+  private def writeWorksheetSax(
+    zip: ZipOutputStream,
+    entryName: String,
+    sheet: OoxmlWorksheet,
+    config: WriterConfig
+  ): Unit =
+    val entry = new ZipEntry(entryName)
+    entry.setTime(0L)
+    entry.setMethod(config.compression.zipMethod)
+
+    config.compression match
+      case Compression.Stored =>
+        val baos = new ByteArrayOutputStream()
+        val saxWriter = StaxSaxWriter.create(baos)
+        sheet.writeSax(saxWriter)
+        saxWriter.flush()
+        val bytes = baos.toByteArray
+
+        entry.setSize(bytes.length)
+        entry.setCompressedSize(bytes.length)
+        entry.setCrc(calculateCrc(bytes))
+
+        zip.putNextEntry(entry)
+        zip.write(bytes)
+        zip.closeEntry()
+
+      case Compression.Deflated =>
+        zip.putNextEntry(entry)
+        val saxWriter = StaxSaxWriter.create(zip)
+        sheet.writeSax(saxWriter)
+        saxWriter.flush()
+        zip.closeEntry()
 
   /** Calculate CRC32 checksum for ZIP entry */
   private def calculateCrc(bytes: Array[Byte]): Long =
@@ -1187,7 +1239,7 @@ object XlsxWriter:
               preservedMetadata,
               tablePartsXml
             )
-          writePart(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet.toXml, config)
+          writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
 
           // Comments: copy from source if available, else generate new
           val commentPath = s"xl/comments${idx + 1}.xml"

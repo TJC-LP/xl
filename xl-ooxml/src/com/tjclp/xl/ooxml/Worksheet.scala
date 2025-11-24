@@ -382,7 +382,8 @@ case class OoxmlWorksheet(
   otherElements: Seq[Elem] = Seq.empty,
   rootAttributes: MetaData = Null,
   rootScope: NamespaceBinding = defaultWorksheetScope
-) extends XmlWritable:
+) extends XmlWritable,
+      SaxSerializable:
 
   def writeSax(writer: SaxWriter): Unit =
     writer.startDocument()
