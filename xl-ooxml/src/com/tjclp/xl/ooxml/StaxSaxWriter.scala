@@ -9,12 +9,23 @@ class StaxSaxWriter(underlying: XMLStreamWriter) extends SaxWriter:
   def endDocument(): Unit = underlying.writeEndDocument()
   def startElement(name: String): Unit = underlying.writeStartElement(name)
   def startElement(name: String, namespace: String): Unit =
-    underlying.writeStartElement("", name, namespace)
-  def writeAttribute(name: String, value: String): Unit =
-    // Handle prefixed attributes like xml:space
+    // Parse prefix from element name (e.g., "r:id" → prefix="r", local="id")
+    // StAX API: writeStartElement(prefix, localName, namespaceURI)
     name.split(":", 2) match
       case Array(prefix, local) =>
-        val ns = if prefix == "xml" then "http://www.w3.org/XML/1998/namespace" else ""
+        underlying.writeStartElement(prefix, local, namespace)
+      case _ =>
+        underlying.writeStartElement("", name, namespace)
+  def writeAttribute(name: String, value: String): Unit =
+    // Handle prefixed attributes with proper namespace URIs
+    name.split(":", 2) match
+      case Array(prefix, local) =>
+        val ns = prefix match
+          case "xml" => "http://www.w3.org/XML/1998/namespace"
+          case "r" => "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+          case "xr" => "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+          case "mc" => "http://schemas.openxmlformats.org/markup-compatibility/2006"
+          case _ => ""
         underlying.writeAttribute(prefix, ns, local, value)
       case _ => underlying.writeAttribute(name, value)
   def writeCharacters(text: String): Unit = underlying.writeCharacters(text)

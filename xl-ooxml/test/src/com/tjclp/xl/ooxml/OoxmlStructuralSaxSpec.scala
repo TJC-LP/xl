@@ -111,3 +111,31 @@ class OoxmlStructuralSaxSpec extends FunSuite:
     assertEquals((sax \ "comment" \ "@ref").map(_.text), (dom \ "comment" \ "@ref").map(_.text))
     assertEquals((sax \ "t").map(_.text), (dom \ "t").map(_.text))
   }
+
+  test("Relationships.writeSax handles prefixed elements correctly (Issue #34-1)") {
+    // Regression test for PR #34 Issue 1: StAX namespace handling bug
+    // Verifies that prefixed elements like "r:Id" are properly parsed and emitted
+    val rels = Relationships(
+      Seq(
+        Relationship("rId1", "http://example.com/type", "target1.xml"),
+        Relationship("rId2", "http://example.com/type2", "target2.xml", Some("External"))
+      )
+    )
+
+    val sax = roundTrip(rels)
+
+    // Verify well-formed XML with proper namespace handling
+    assert(sax != null, "SAX output should not be null")
+    assert((sax \ "Relationship").nonEmpty, "Should have Relationship elements")
+
+    // Verify all relationships are present
+    val relIds = (sax \ "Relationship").map(_ \ "@Id").map(_.text)
+    assertEquals(relIds.toSet, Set("rId1", "rId2"))
+
+    // Verify attributes are properly set
+    val types = (sax \ "Relationship").map(_ \ "@Type").map(_.text)
+    assert(types.forall(_.nonEmpty), "Type attributes should be present")
+
+    val targets = (sax \ "Relationship").map(_ \ "@Target").map(_.text)
+    assertEquals(targets.toSet, Set("target1.xml", "target2.xml"))
+  }
