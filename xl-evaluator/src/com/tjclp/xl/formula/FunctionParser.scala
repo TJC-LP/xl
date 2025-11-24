@@ -179,7 +179,10 @@ object FunctionParser:
       dateFunctionParser,
       yearFunctionParser,
       monthFunctionParser,
-      dayFunctionParser
+      dayFunctionParser,
+      npvFunctionParser,
+      irrFunctionParser,
+      vlookupFunctionParser
     ).map(p => p.name -> p).toMap
 
   // ========== Given Instances for All Functions ==========
@@ -525,4 +528,108 @@ object FunctionParser:
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("DAY", pos, "1 argument", s"${args.length} arguments")
+          )
+
+  // === Financial Functions ===
+
+  /** NPV function: NPV(rate, range) */
+  given npvFunctionParser: FunctionParser[Unit] with
+    def name: String = "NPV"
+    def arity: Arity = Arity.two // rate + range
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case rateExpr :: (fold: TExpr.FoldRange[?, ?]) :: Nil =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              // Coerce rate to numeric; range becomes CellRange
+              scala.util.Right(
+                TExpr.npv(
+                  TExpr.asNumericExpr(rateExpr),
+                  range
+                )
+              )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "NPV",
+              pos,
+              "2 arguments (rate, range)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** IRR function: IRR(range, [guess]) */
+  given irrFunctionParser: FunctionParser[Unit] with
+    def name: String = "IRR"
+    def arity: Arity = Arity.Range(1, 2)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(fold: TExpr.FoldRange[?, ?]) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.irr(range, None))
+
+        case List(fold: TExpr.FoldRange[?, ?], guessExpr) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(
+                TExpr.irr(
+                  range,
+                  Some(TExpr.asNumericExpr(guessExpr))
+                )
+              )
+
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "IRR",
+              pos,
+              "1 or 2 arguments (range, [guess])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** VLOOKUP function: VLOOKUP(lookup, table, colIndex, [rangeLookup]) */
+  given vlookupFunctionParser: FunctionParser[Unit] with
+    def name: String = "VLOOKUP"
+    def arity: Arity = Arity.Range(3, 4)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        // No explicit range_lookup → default TRUE
+        case List(lookupExpr, fold: TExpr.FoldRange[?, ?], colIndexExpr) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(
+                TExpr.vlookup(
+                  TExpr.asNumericExpr(lookupExpr),
+                  range,
+                  TExpr.asIntExpr(colIndexExpr),
+                  TExpr.Lit(true)
+                )
+              )
+
+        // All four arguments provided
+        case List(lookupExpr, fold: TExpr.FoldRange[?, ?], colIndexExpr, rangeLookupExpr) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(
+                TExpr.vlookup(
+                  TExpr.asNumericExpr(lookupExpr),
+                  range,
+                  TExpr.asIntExpr(colIndexExpr),
+                  TExpr.asBooleanExpr(rangeLookupExpr)
+                )
+              )
+
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "VLOOKUP",
+              pos,
+              "3 or 4 arguments (lookup_value, table_array, col_index_num, [range_lookup])",
+              s"${args.length} arguments"
+            )
           )

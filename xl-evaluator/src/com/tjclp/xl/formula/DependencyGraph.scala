@@ -147,6 +147,17 @@ object DependencyGraph:
       case TExpr.Month(date) => extractDependencies(date)
       case TExpr.Day(date) => extractDependencies(date)
 
+      // Financial functions
+      case TExpr.Npv(rate, values) =>
+        extractDependencies(rate) ++ values.cells.toSet
+      case TExpr.Irr(values, guessOpt) =>
+        values.cells.toSet ++ guessOpt.map(extractDependencies).getOrElse(Set.empty)
+      case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
+        extractDependencies(lookup) ++
+          table.cells.toSet ++
+          extractDependencies(colIndex) ++
+          extractDependencies(rangeLookup)
+
       // Ternary operator
       case TExpr.If(cond, thenBranch, elseBranch) =>
         extractDependencies(cond) ++ extractDependencies(thenBranch) ++ extractDependencies(

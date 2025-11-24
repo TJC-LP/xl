@@ -4,6 +4,7 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
 import scala.math.BigDecimal
+import scala.annotation.tailrec
 
 /**
  * Pure functional formula evaluator.
@@ -299,6 +300,164 @@ private class EvaluatorImpl extends Evaluator:
       case TExpr.Day(date) =>
         // Day: extract day from date (returns BigDecimal to match Excel)
         eval(date, sheet, clock).map(d => BigDecimal(d.getDayOfMonth))
+
+      // ===== Financial Functions =====
+      case TExpr.Npv(rateExpr, range) =>
+        // Evaluate discount rate
+        eval(rateExpr, sheet, clock).flatMap { rate =>
+          val one = BigDecimal(1)
+          val onePlusR = one + rate
+
+          if onePlusR == BigDecimal(0) then
+            Left(
+              EvalError.EvalFailed(
+                "NPV: rate = -1 would require division by zero",
+                Some("NPV(rate, values)")
+              )
+            )
+          else
+            // Collect numeric cash flows from the range (skip non-numeric, Excel-style)
+            val cashFlows: List[BigDecimal] =
+              range.cells
+                .map(ref => sheet(ref))
+                .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+                .toList
+
+            // Excel's NPV treats the first value as period 1
+            val npv =
+              cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
+                val period = idx + 1 // t = 1 for first cash flow
+                val discount = onePlusR.pow(period)
+                acc + (cf / discount)
+              }
+
+            Right(npv)
+        }
+
+      case TExpr.Irr(range, guessExprOpt) =>
+        // Collect numeric cash flows from range (including t0)
+        val cashFlows: List[BigDecimal] =
+          range.cells
+            .map(ref => sheet(ref))
+            .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+            .toList
+
+        // Need at least one positive and one negative for IRR to make sense
+        if cashFlows.isEmpty || !cashFlows.exists(_ < 0) || !cashFlows.exists(_ > 0) then
+          Left(
+            EvalError.EvalFailed(
+              "IRR requires at least one positive and one negative cash flow",
+              Some("IRR(values[, guess])")
+            )
+          )
+        else
+          val guessEither: Either[EvalError, BigDecimal] =
+            guessExprOpt match
+              case Some(guessExpr) => eval(guessExpr, sheet, clock)
+              case None => Right(BigDecimal("0.1"))
+
+          guessEither.flatMap { guess0 =>
+            val maxIter = 50
+            val tolerance = BigDecimal("1e-7")
+            val one = BigDecimal(1)
+
+            def npvAt(rate: BigDecimal): BigDecimal =
+              val onePlusR = one + rate
+              cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
+                if idx == 0 then acc + cf
+                else acc + cf / onePlusR.pow(idx) // t = idx for remaining flows
+              }
+
+            def dNpvAt(rate: BigDecimal): BigDecimal =
+              val onePlusR = one + rate
+              cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
+                if idx == 0 then acc
+                else acc - (idx * cf) / onePlusR.pow(idx + 1)
+              }
+
+            @tailrec
+            def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
+              if iter >= maxIter then
+                Left(
+                  EvalError.EvalFailed(
+                    s"IRR did not converge after $maxIter iterations",
+                    Some("IRR(values[, guess])")
+                  )
+                )
+              else
+                val f = npvAt(r)
+                val df = dNpvAt(r)
+                if df == BigDecimal(0) then
+                  Left(
+                    EvalError.EvalFailed(
+                      "IRR derivative is zero; cannot continue iteration",
+                      Some("IRR(values[, guess])")
+                    )
+                  )
+                else
+                  val next = r - f / df
+                  if (next - r).abs <= tolerance then Right(next)
+                  else loop(iter + 1, next)
+
+            loop(0, guess0)
+          }
+
+      case TExpr.VLookup(lookupExpr, table, colIndexExpr, rangeLookupExpr) =>
+        for
+          lookup <- eval(lookupExpr, sheet, clock)
+          colIndex <- eval(colIndexExpr, sheet, clock)
+          rangeMatch <- eval(rangeLookupExpr, sheet, clock)
+          result <-
+            if colIndex < 1 || colIndex > table.width then
+              Left(
+                EvalError.EvalFailed(
+                  s"VLOOKUP: col_index_num $colIndex is outside 1..${table.width}",
+                  Some(s"VLOOKUP(…, ${table.toA1})")
+                )
+              )
+            else
+              val rowIndices = 0 until table.height
+              val keyCol0 = table.colStart.index0
+              val rowStart0 = table.rowStart.index0
+              val resultCol0 = keyCol0 + (colIndex - 1)
+
+              // Collect (rowIndex, key) pairs for numeric keys
+              val keyedRows: List[(Int, BigDecimal)] =
+                rowIndices.toList.flatMap { i =>
+                  val keyRef = ARef.from0(keyCol0, rowStart0 + i)
+                  val keyCell = sheet(keyRef)
+                  TExpr.decodeNumeric(keyCell).toOption.map(k => (i, k))
+                }
+
+              val chosenRowOpt: Option[Int] =
+                if rangeMatch then
+                  // Approximate match: largest key <= lookup
+                  keyedRows
+                    .filter(_._2 <= lookup)
+                    .sortBy(_._2)
+                    .lastOption
+                    .map(_._1)
+                else
+                  // Exact match
+                  keyedRows.find { case (_, k) => k == lookup }.map(_._1)
+
+              chosenRowOpt match
+                case Some(rowIndex) =>
+                  val resultRef = ARef.from0(resultCol0, rowStart0 + rowIndex)
+                  val resultCell = sheet(resultRef)
+                  TExpr
+                    .decodeNumeric(resultCell)
+                    .left
+                    .map(err => EvalError.CodecFailed(resultRef, err))
+                case None =>
+                  Left(
+                    EvalError.EvalFailed(
+                      if rangeMatch then "VLOOKUP approximate match not found"
+                      else "VLOOKUP exact match not found",
+                      Some(s"VLOOKUP($lookup, ${table.toA1}, $colIndex, $rangeMatch)")
+                    )
+                  )
+        yield result
 
       // ===== Arithmetic Range Functions =====
       case TExpr.Min(range) =>

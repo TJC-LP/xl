@@ -129,10 +129,10 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 ---
 
 #### 6. Formula System ✅ **PRODUCTION READY**
-**Status**: Complete (WI-07, WI-08, WI-09a/b/c/d)
-**Features**: Parser, evaluator, 21 functions, dependency graph, cycle detection
+**Status**: Complete (WI-07, WI-08, WI-09a/b/c/d + financial functions)
+**Features**: Parser, evaluator, 24 functions (including NPV, IRR, VLOOKUP), dependency graph, cycle detection
 **Plan**: [Formula System](plan/formula-system.md)
-**Phase**: WI-07, WI-08, WI-09a/b/c/d Complete
+**Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions
 
 **What Works** (Production Ready - 250+ tests):
 ```scala
@@ -156,11 +156,12 @@ sheet.evaluateWithDependencyCheck() match
 **Capabilities**:
 - ✅ **Parsing** (WI-07): Typed GADT AST (TExpr), FormulaParser, FormulaPrinter, round-trip laws (57 tests)
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics (58 tests)
-- ✅ **21 Built-in Functions** (WI-09a/b/c - 78 tests):
+- ✅ **24 Built-in Functions** (WI-09a/b/c + financial functions - 78+ tests):
   - **Aggregate** (5): SUM, COUNT, AVERAGE, MIN, MAX
   - **Logical** (4): IF, AND, OR, NOT
   - **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
   - **Date** (6): TODAY, NOW, DATE, YEAR, MONTH, DAY
+  - **Financial** (3): NPV, IRR, VLOOKUP
 - ✅ **Dependency Graph** (WI-09d - 52 tests):
   - Tarjan's SCC algorithm: O(V+E) cycle detection
   - Kahn's algorithm: O(V+E) topological sort

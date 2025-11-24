@@ -346,6 +346,48 @@ enum TExpr[A] derives CanEqual:
    */
   case Max(range: CellRange) extends TExpr[BigDecimal]
 
+  // Financial functions
+
+  /**
+   * Net Present Value: NPV(rate, range)
+   *
+   * Semantics (v1):
+   *   - `rate` is a numeric expression (BigDecimal)
+   *   - `range` is a cell range of future cash flows at regular intervals
+   *   - Non-numeric cells in the range are ignored (Excel-style)
+   *   - First numeric value is treated as period 1 (t = 1), consistent with Excel NPV
+   */
+  case Npv(rate: TExpr[BigDecimal], values: CellRange) extends TExpr[BigDecimal]
+
+  /**
+   * Internal Rate of Return: IRR(values, [guess])
+   *
+   * Semantics (v1):
+   *   - `values` is a range of cash flows including the initial investment (t0)
+   *   - Non-numeric cells ignored
+   *   - Requires at least one positive and one negative flow
+   *   - Optional `guess` is a numeric expression; default is 0.1 (10%)
+   */
+  case Irr(values: CellRange, guess: Option[TExpr[BigDecimal]]) extends TExpr[BigDecimal]
+
+  /**
+   * Vertical lookup: VLOOKUP(lookup, table, colIndex, [rangeLookup])
+   *
+   * Semantics (v1):
+   *   - `lookup` is numeric (BigDecimal)
+   *   - `table` is a rectangular CellRange; first column is the key
+   *   - `colIndex` is 1-based column index into the table
+   *   - `rangeLookup` = TRUE → approximate match (largest key <= lookup)
+   *   - `rangeLookup` = FALSE → exact match
+   *   - Result column is decoded as numeric; non-numeric cells cause a CodecFailed error
+   */
+  case VLookup(
+    lookup: TExpr[BigDecimal],
+    table: CellRange,
+    colIndex: TExpr[Int],
+    rangeLookup: TExpr[Boolean]
+  ) extends TExpr[BigDecimal]
+
 object TExpr:
   /**
    * Smart constructor for literals.
@@ -429,6 +471,37 @@ object TExpr:
    * Example: TExpr.max(CellRange("A1:A10"))
    */
   def max(range: CellRange): TExpr[BigDecimal] = Max(range)
+
+  // Financial function smart constructors
+
+  /**
+   * Smart constructor for NPV over a range of cash flows.
+   *
+   * Example: TExpr.npv(TExpr.Lit(BigDecimal("0.1")), CellRange("A2:A6"))
+   */
+  def npv(rate: TExpr[BigDecimal], values: CellRange): TExpr[BigDecimal] =
+    Npv(rate, values)
+
+  /**
+   * Smart constructor for IRR with optional guess.
+   *
+   * Example: TExpr.irr(CellRange("A1:A6"), Some(TExpr.Lit(BigDecimal("0.15"))))
+   */
+  def irr(values: CellRange, guess: Option[TExpr[BigDecimal]] = None): TExpr[BigDecimal] =
+    Irr(values, guess)
+
+  /**
+   * Smart constructor for VLOOKUP.
+   *
+   * Example: TExpr.vlookup(TExpr.Ref(...), CellRange("B1:D10"), TExpr.Lit(2), TExpr.Lit(true))
+   */
+  def vlookup(
+    lookup: TExpr[BigDecimal],
+    table: CellRange,
+    colIndex: TExpr[Int],
+    rangeLookup: TExpr[Boolean] = Lit(true)
+  ): TExpr[BigDecimal] =
+    VLookup(lookup, table, colIndex, rangeLookup)
 
   // Text function smart constructors
 
