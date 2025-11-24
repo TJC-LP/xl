@@ -43,6 +43,22 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       case Left(err) => Async[F].raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
     }
 
+  /** Write workbook using SAX/StAX backend for faster writes */
+  def writeFast(wb: Workbook, path: Path): F[Unit] =
+    val saxConfig = com.tjclp.xl.ooxml.WriterConfig.default.copy(
+      backend = com.tjclp.xl.ooxml.XmlBackend.SaxStax
+    )
+    writeWith(wb, path, saxConfig)
+
+  /** Write workbook with custom config but forcing SAX/StAX backend */
+  def writeFastWith(
+    wb: Workbook,
+    path: Path,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): F[Unit] =
+    val saxConfig = config.copy(backend = com.tjclp.xl.ooxml.XmlBackend.SaxStax)
+    writeWith(wb, path, saxConfig)
+
   /**
    * Stream rows from first sheet with constant memory.
    *
