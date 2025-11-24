@@ -2,6 +2,7 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 import XmlUtil.*
+import SaxSupport.*
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.tables.{
@@ -95,7 +96,16 @@ final case class OoxmlTable(
   tableUid: Option[String] = None, // xr:uid for table element
   otherAttrs: Map[String, String] = Map.empty,
   otherChildren: Seq[Elem] = Seq.empty
-)
+) extends XmlWritable,
+      SaxSerializable:
+
+  def toXml: Elem = OoxmlTable.toXml(this)
+
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startDocument()
+    writer.writeElem(toXml)
+    writer.endDocument()
+    writer.flush()
 
 /**
  * OOXML table style information.
@@ -128,7 +138,7 @@ final case class OoxmlTableStyleInfo(
   otherAttrs: Map[String, String] = Map.empty
 )
 
-object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
+object OoxmlTable extends XmlReadable[OoxmlTable]:
 
   /**
    * Parse table from XML.
@@ -441,9 +451,6 @@ object OoxmlTable extends XmlReadable[OoxmlTable] with XmlWritable:
     val finalAttrs = new scala.xml.UnprefixedAttribute("name", info.name, attrs5)
 
     scala.xml.Elem(null, "tableStyleInfo", finalAttrs, scala.xml.TopScope, minimizeEmpty = true)
-
-  override def toXml: Elem =
-    throw new UnsupportedOperationException("Use toXml(table: OoxmlTable) instead")
 
 /**
  * Conversion between domain TableSpec and OOXML representation.

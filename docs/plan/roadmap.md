@@ -8,12 +8,11 @@
 
 **Current Status**: WI-07, WI-08, WI-09 (a/b/c/d), WI-10, WI-15 complete (840+ tests passing). Formula system (21 functions + dependency graph), Excel tables, and benchmark suite operational.
 
-**Active Work**: None (formula + tables + benchmarks complete)
+**Active Work**: None (formula + tables + benchmarks + SAX write complete)
 
 **Next Available Work**:
 - `WI-11` — Chart Model (independent, high-value)
 - `WI-16` — Streaming Optimizations (benchmarks complete; ready for tuning)
-- `WI-17` — SAX Streaming Write (unblocked by WI-15, design complete)
 - `WI-20` — Query API (powerful spreadsheet queries)
 - `WI-30` — Security Hardening (ZIP bomb, XXE prevention)
 
@@ -37,7 +36,7 @@ graph TB
     %% Available work (blue - ready to start)
     WI11["WI-11: Chart Model<br/>(advanced-features.md)"]:::available
     WI16["WI-16: Streaming Opts"]:::available
-    WI17["WI-17: SAX Streaming Write<br/>(sax-streaming-write.md)"]:::available
+    WI17["WI-17: SAX Streaming Write<br/>(sax-streaming-write.md)"]:::completed
     WI20["WI-20: Query API<br/>(streaming-improvements.md)"]:::available
 
     %% Blocked work (gray - waiting on dependencies)
@@ -87,7 +86,7 @@ graph TB
 | **WI-13** | Pivot Tables | Advanced | `advanced-features.md` §Pivots | xl-ooxml | ⚪ Blocked | WI-10 | High |
 | **WI-15** | Benchmark Suite | Infra | `advanced-features.md` §Benchmarks | xl-benchmarks | ✅ Complete | P0-P8 | None |
 | **WI-16** | Streaming Optimizations | Core | `streaming-improvements.md` | xl-cats-effect | 🔵 Available | WI-15 | Medium |
-| **WI-17** | SAX Streaming Write | Performance | `sax-streaming-write.md` | xl-ooxml, xl-cats-effect | 🔵 Available | WI-15 | Medium |
+| **WI-17** | SAX Streaming Write | Performance | `sax-streaming-write.md` | xl-ooxml, xl-cats-effect | ✅ Complete | WI-15 | Medium |
 | **WI-20** | Query API | Core | `streaming-improvements.md` §Query | xl-core | 🔵 Available | P0-P8 | Medium |
 | **WI-30** | Security Hardening | Safety | `error-model-and-safety.md` | xl-ooxml | 🔵 Available | P0-P8 | Low |
 

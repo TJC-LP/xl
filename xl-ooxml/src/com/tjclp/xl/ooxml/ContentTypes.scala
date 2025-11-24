@@ -12,7 +12,8 @@ import XmlUtil.*
 case class ContentTypes(
   defaults: Map[String, String], // extension → contentType
   overrides: Map[String, String] // partName → contentType
-) extends XmlWritable:
+) extends XmlWritable,
+      SaxSerializable:
 
   def withCommentOverrides(sheetsWithComments: Set[Int]): ContentTypes =
     if sheetsWithComments.isEmpty then this
@@ -39,6 +40,28 @@ case class ContentTypes(
     }
 
     elem("Types", "xmlns" -> nsContentTypes)(defaultElems ++ overrideElems*)
+
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startDocument()
+    writer.startElement("Types")
+    SaxWriter.withAttributes(writer, "xmlns" -> nsContentTypes) {
+      defaults.toSeq.sortBy(_._1).foreach { case (ext, ct) =>
+        writer.startElement("Default")
+        writer.writeAttribute("ContentType", ct)
+        writer.writeAttribute("Extension", ext)
+        writer.endElement()
+      }
+
+      overrides.toSeq.sortBy(_._1).foreach { case (partName, ct) =>
+        writer.startElement("Override")
+        writer.writeAttribute("ContentType", ct)
+        writer.writeAttribute("PartName", partName)
+        writer.endElement()
+      }
+    }
+    writer.endElement()
+    writer.endDocument()
+    writer.flush()
 
 object ContentTypes extends XmlReadable[ContentTypes]:
   /** Create minimal content types for a workbook */

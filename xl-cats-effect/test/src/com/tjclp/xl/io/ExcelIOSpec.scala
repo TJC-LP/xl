@@ -57,6 +57,24 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
+  tempDir.test("writeFast: creates valid XLSX file using SAX backend") { dir =>
+    val wb = Workbook("OutputFast").flatMap { initial =>
+      val sheet = initial.sheets(0)
+        .put(ref"A1", CellValue.Text("Fast"))
+        .put(ref"B1", CellValue.Number(BigDecimal(84)))
+      initial.update(initial.sheets(0).name, _ => sheet)
+    }.getOrElse(fail("Failed to create workbook"))
+
+    val path = dir.resolve("output-fast.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    excel.writeFast(wb, path).flatMap { _ =>
+      IO(Files.exists(path)).map { exists =>
+        assert(exists, "File should exist")
+      }
+    }
+  }
+
   tempDir.test("readStream: streams rows from sheet") { dir =>
     // Create test file with multiple rows
     val wb = Workbook("Data").flatMap { initial =>

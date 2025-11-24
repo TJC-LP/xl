@@ -2,6 +2,7 @@ package com.tjclp.xl.ooxml
 
 import scala.xml.*
 import XmlUtil.*
+import SaxSupport.*
 
 // Default namespace bindings for generated workbook parts. When reading from an existing workbook
 // we capture the original scope (which may include mc/xr/x15, etc.) and reuse it to avoid Excel
@@ -71,7 +72,8 @@ case class OoxmlWorkbook(
   otherElements: Seq[Elem] = Seq.empty,
   rootAttributes: MetaData = Null,
   rootScope: NamespaceBinding = defaultWorkbookScope
-) extends XmlWritable:
+) extends XmlWritable,
+      SaxSerializable:
 
   /**
    * Update sheets while preserving all workbook metadata.
@@ -138,6 +140,47 @@ case class OoxmlWorkbook(
     val attrs = Option(rootAttributes).getOrElse(Null)
 
     Elem(null, "workbook", attrs, scope, minimizeEmpty = false, children.result()*)
+
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startDocument()
+    writer.startElement("workbook")
+
+    val scope = Option(rootScope).getOrElse(defaultWorkbookScope)
+    val attrs = Option(rootAttributes).getOrElse(Null)
+    val rootAttrs = writer.namespaceAttributes(scope) ++ writer.metaDataAttributes(attrs)
+
+    SaxWriter.withAttributes(writer, rootAttrs*) {
+      fileVersion.foreach(writer.writeElem)
+      workbookPr.foreach(writer.writeElem)
+      alternateContent.foreach(writer.writeElem)
+      revisionPtr.foreach(writer.writeElem)
+      bookViews.foreach(writer.writeElem)
+
+      writer.startElement("sheets")
+      sheets.foreach { ref =>
+        writer.startElement("sheet")
+        val baseAttrs = Seq(
+          "name" -> ref.name.value,
+          "sheetId" -> ref.sheetId.toString
+        )
+        val stateAttrs = ref.state.map("state" -> _).toList
+        val sheetAttrs = baseAttrs ++ stateAttrs
+        SaxWriter.withAttributes(writer, sheetAttrs*) {
+          writer.writeAttribute("r:id", ref.relationshipId)
+        }
+        writer.endElement()
+      }
+      writer.endElement() // sheets
+
+      definedNames.foreach(writer.writeElem)
+      calcPr.foreach(writer.writeElem)
+      extLst.foreach(writer.writeElem)
+      otherElements.foreach(writer.writeElem)
+    }
+
+    writer.endElement()
+    writer.endDocument()
+    writer.flush()
 
 object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   /** Create minimal workbook with one sheet */

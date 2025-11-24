@@ -5,6 +5,7 @@ import XmlUtil.*
 import com.tjclp.xl.addressing.* // For ARef, Column, Row types and extension methods
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheets.Sheet
+import SaxSupport.*
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
 // avoid redundant declarations and preserve mc/x14/xr bindings from the source sheet.
@@ -26,6 +27,122 @@ case class OoxmlCell(
   cellType: String = "inlineStr" // "s" for SST, "inlineStr" for inline, "n" for number, etc.
 ):
   def toA1: String = ref.toA1
+
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startElement("c")
+
+    val attrs = Seq.newBuilder[(String, String)]
+    attrs += ("r" -> toA1)
+    styleIndex.foreach(s => attrs += ("s" -> s.toString))
+    if cellType.nonEmpty then attrs += ("t" -> cellType)
+
+    SaxWriter.withAttributes(writer, attrs.result()*) {
+      value match
+        case CellValue.Empty => ()
+
+        case CellValue.Text(text) if cellType == "inlineStr" =>
+          writer.startElement("is")
+          writer.startElement("t")
+          if needsXmlSpacePreserve(text) then writer.writeAttribute("xml:space", "preserve")
+          writer.writeCharacters(text)
+          writer.endElement() // t
+          writer.endElement() // is
+
+        case CellValue.Text(text) =>
+          writer.startElement("v")
+          writer.writeCharacters(text)
+          writer.endElement() // v
+
+        case CellValue.RichText(richText) =>
+          writeRichTextSax(writer, richText)
+
+        case CellValue.Number(num) =>
+          writer.startElement("v")
+          writer.writeCharacters(num.toString)
+          writer.endElement() // v
+
+        case CellValue.Bool(b) =>
+          writer.startElement("v")
+          writer.writeCharacters(if b then "1" else "0")
+          writer.endElement() // v
+
+        case CellValue.Formula(expr) =>
+          writer.startElement("f")
+          writer.writeCharacters(expr)
+          writer.endElement() // f
+
+        case CellValue.Error(err) =>
+          import com.tjclp.xl.cells.CellError.toExcel
+          writer.startElement("v")
+          writer.writeCharacters(err.toExcel)
+          writer.endElement() // v
+
+        case CellValue.DateTime(dt) =>
+          val serial = CellValue.dateTimeToExcelSerial(dt)
+          writer.startElement("v")
+          writer.writeCharacters(serial.toString)
+          writer.endElement() // v
+    }
+
+    writer.endElement() // c
+
+  private def writeRichTextSax(writer: SaxWriter, richText: com.tjclp.xl.richtext.RichText): Unit =
+    writer.startElement("is")
+
+    richText.runs.foreach { run =>
+      writer.startElement("r")
+
+      // Write rPr either from preserved raw XML or constructed from Font
+      val preservedRpr = run.rawRPrXml.flatMap { xmlString =>
+        XmlSecurity
+          .parseSafe(xmlString, "worksheet richtext rPr")
+          .toOption
+          .map(XmlUtil.stripNamespaces)
+      }
+
+      preservedRpr match
+        case Some(elem) =>
+          writer.writeElem(elem)
+        case None =>
+          run.font.foreach(writeFontRPrSax(writer, _))
+
+      writer.startElement("t")
+      if needsXmlSpacePreserve(run.text) then writer.writeAttribute("xml:space", "preserve")
+      writer.writeCharacters(run.text)
+      writer.endElement() // t
+
+      writer.endElement() // r
+    }
+
+    writer.endElement() // is
+
+  private def writeFontRPrSax(writer: SaxWriter, font: com.tjclp.xl.styles.Font): Unit =
+    writer.startElement("rPr")
+    if font.bold then
+      writer.startElement("b")
+      writer.endElement()
+    if font.italic then
+      writer.startElement("i")
+      writer.endElement()
+    if font.underline then
+      writer.startElement("u")
+      writer.endElement()
+
+    font.color.foreach { c =>
+      writer.startElement("color")
+      writer.writeAttribute("rgb", c.toHex.drop(1))
+      writer.endElement()
+    }
+
+    writer.startElement("sz")
+    writer.writeAttribute("val", font.sizePt.toString)
+    writer.endElement()
+
+    writer.startElement("name")
+    writer.writeAttribute("val", font.name)
+    writer.endElement()
+
+    writer.endElement() // rPr
 
   def toXml: Elem =
     // Excel expects attributes in specific order: r, s, t
@@ -146,6 +263,29 @@ case class OoxmlRow(
   thickTop: Boolean = false, // thickTop="1" (thick top border)
   dyDescent: Option[Double] = None // x14ac:dyDescent="0.25" (font descent adjustment)
 ):
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startElement("row")
+
+    val attrs = Seq.newBuilder[(String, String)]
+    attrs += ("r" -> rowIndex.toString)
+    spans.foreach(s => attrs += ("spans" -> s))
+    style.foreach(s => attrs += ("s" -> s.toString))
+    if customFormat then attrs += ("customFormat" -> "1")
+    height.foreach(h => attrs += ("ht" -> h.toString))
+    if customHeight then attrs += ("customHeight" -> "1")
+    if hidden then attrs += ("hidden" -> "1")
+    outlineLevel.foreach(l => attrs += ("outlineLevel" -> l.toString))
+    if collapsed then attrs += ("collapsed" -> "1")
+    if thickBot then attrs += ("thickBot" -> "1")
+    if thickTop then attrs += ("thickTop" -> "1")
+    dyDescent.foreach(d => attrs += ("x14ac:dyDescent" -> d.toString))
+
+    SaxWriter.withAttributes(writer, attrs.result()*) {
+      cells.sortBy(_.ref.col.index0).foreach(_.writeSax(writer))
+    }
+
+    writer.endElement() // row
+
   def toXml: Elem =
     // Excel expects attributes in specific order (not alphabetical!)
     // Order: r, spans, s, customFormat, ht, customHeight, hidden, outlineLevel, collapsed, thickBot, thickTop, x14ac:dyDescent
@@ -242,7 +382,74 @@ case class OoxmlWorksheet(
   otherElements: Seq[Elem] = Seq.empty,
   rootAttributes: MetaData = Null,
   rootScope: NamespaceBinding = defaultWorksheetScope
-) extends XmlWritable:
+) extends XmlWritable,
+      SaxSerializable:
+
+  def writeSax(writer: SaxWriter): Unit =
+    writer.startDocument()
+
+    val scope = Option(rootScope).getOrElse(defaultWorksheetScope)
+    val rootAttrs = Option(rootAttributes).getOrElse(Null)
+
+    writer.startElement("worksheet")
+
+    // Namespace declarations (deterministic order)
+    SaxWriter.withAttributes(
+      writer,
+      writer.namespaceAttributes(scope) ++ writer.metaDataAttributes(rootAttrs)*
+    ) {
+      // Emit metadata in OOXML order
+      sheetPr.foreach(writer.writeElem)
+      dimension.foreach(writer.writeElem)
+      sheetViews.foreach(writer.writeElem)
+      sheetFormatPr.foreach(writer.writeElem)
+      cols.foreach(writer.writeElem) // Column definitions BEFORE sheetData
+
+      // sheetData
+      writer.startElement("sheetData")
+      rows.sortBy(_.rowIndex).foreach(_.writeSax(writer))
+      writer.endElement() // sheetData
+
+      // mergeCells
+      if mergedRanges.nonEmpty then
+        writer.startElement("mergeCells")
+        writer.writeAttribute("count", mergedRanges.size.toString)
+        mergedRanges.toSeq
+          .sortBy(r => (r.start.row.index0, r.start.col.index0))
+          .foreach { range =>
+            writer.startElement("mergeCell")
+            writer.writeAttribute("ref", range.toA1)
+            writer.endElement()
+          }
+        writer.endElement() // mergeCells
+
+      conditionalFormatting.foreach(writer.writeElem)
+
+      printOptions.foreach(writer.writeElem)
+      pageMargins.foreach(writer.writeElem)
+      pageSetup.foreach(writer.writeElem)
+      headerFooter.foreach(writer.writeElem)
+
+      rowBreaks.foreach(writer.writeElem)
+      colBreaks.foreach(writer.writeElem)
+      customPropertiesWs.foreach(writer.writeElem)
+
+      drawing.foreach(writer.writeElem)
+      legacyDrawing.foreach(writer.writeElem)
+      picture.foreach(writer.writeElem)
+      oleObjects.foreach(writer.writeElem)
+      controls.foreach(writer.writeElem)
+
+      tableParts.foreach(writer.writeElem)
+
+      extLst.foreach(writer.writeElem)
+
+      otherElements.foreach(writer.writeElem)
+    }
+
+    writer.endElement() // worksheet
+    writer.endDocument()
+    writer.flush()
 
   def toXml: Elem =
     val children = Seq.newBuilder[Node]
