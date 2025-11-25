@@ -55,6 +55,18 @@ object Format:
     s"Saved: $path ($sheetCount sheets, $cellCount cells)"
 
   /**
+   * Format an eval success message.
+   */
+  def evalSuccess(formula: String, result: CellValue, overrides: List[String]): String =
+    val resultStr = formatValue(result)
+    val typeStr = valueType(result)
+    val overridesStr =
+      if overrides.isEmpty then ""
+      else s"\nWith: ${overrides.mkString(", ")}"
+    s"""Formula: $formula
+       |Result: $resultStr ($typeStr)$overridesStr""".stripMargin
+
+  /**
    * Format a sheet select success message.
    */
   def selectSuccess(

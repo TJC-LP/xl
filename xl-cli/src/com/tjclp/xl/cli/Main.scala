@@ -12,6 +12,7 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.output.{Format, Markdown}
+import com.tjclp.xl.formula.SheetEvaluator
 
 /**
  * XL CLI - LLM-friendly Excel operations.
@@ -33,7 +34,7 @@ object Main
   override def main: Opts[IO[ExitCode]] =
     (openCmd orElse createCmd orElse closeCmd orElse
       sheetsCmd orElse selectCmd orElse boundsCmd orElse
-      viewCmd orElse cellCmd orElse searchCmd orElse
+      viewCmd orElse cellCmd orElse searchCmd orElse evalCmd orElse
       putCmd orElse putfCmd orElse
       saveCmd orElse saveasCmd).map(run)
 
@@ -95,6 +96,15 @@ object Main
 
   val searchCmd: Opts[Command] = Opts.subcommand("search", "Search for cells") {
     (patternArg, limitOpt).mapN(Command.Search.apply)
+  }
+
+  // --- Analyze ---
+
+  private val formulaArg = Opts.argument[String]("formula")
+  private val withOpt = Opts.options[String]("with", "Temporary cell override (ref=value)").orEmpty
+
+  val evalCmd: Opts[Command] = Opts.subcommand("eval", "Evaluate formula without modifying sheet") {
+    (formulaArg, withOpt).mapN(Command.Eval.apply)
   }
 
   // --- Mutate ---
@@ -237,6 +247,19 @@ object Main
           }
       yield Markdown.renderSearchResults(results)
 
+    case Command.Eval(formulaStr, overrides) =>
+      for
+        sheet <- getCurrentSheet
+        // Apply temporary overrides to create a hypothetical sheet
+        tempSheet <- applyOverrides(sheet, overrides)
+        // Normalize formula (add = if missing)
+        formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
+        // Evaluate against the (possibly modified) sheet
+        result <- IO.fromEither(
+          SheetEvaluator.evaluateFormula(tempSheet)(formula).left.map(e => new Exception(e.message))
+        )
+      yield Format.evalSuccess(formula, result, overrides)
+
     case Command.Put(refStr, valueStr) =>
       for
         sheet <- getCurrentSheet
@@ -308,6 +331,23 @@ object Main
       val newEndRow = range.start.row.index0 + maxRows - 1
       CellRange(range.start, ARef.from0(range.end.col.index0, newEndRow))
 
+  private def applyOverrides(sheet: Sheet, overrides: List[String]): IO[Sheet] =
+    overrides.foldLeft(IO.pure(sheet)) { (sheetIO, override_) =>
+      sheetIO.flatMap { s =>
+        override_.split("=", 2) match
+          case Array(refStr, valueStr) =>
+            IO.fromEither(ARef.parse(refStr.trim).left.map(e => new Exception(e.toString)))
+              .map { ref =>
+                val value = parseValue(valueStr.trim)
+                s.put(ref, value)
+              }
+          case _ =>
+            IO.raiseError(
+              new Exception(s"Invalid override format: $override_. Use ref=value (e.g., B5=1000)")
+            )
+      }
+    }
+
   private def parseValue(s: String): CellValue =
     // Try parsing as number
     scala.util.Try(BigDecimal(s)).toOption.map(CellValue.Number.apply).getOrElse {
@@ -351,6 +391,8 @@ enum Command:
   case View(range: String, showFormulas: Boolean, limit: Int)
   case Cell(ref: String)
   case Search(pattern: String, limit: Int)
+  // Analyze
+  case Eval(formula: String, overrides: List[String])
   // Mutate
   case Put(ref: String, value: String)
   case PutFormula(ref: String, formula: String)
