@@ -264,7 +264,7 @@ object SvgRenderer:
   private def cellStyleToSvg(cell: Cell, sheet: Sheet): Option[(String, String)] =
     cell.styleId.flatMap(sheet.styleRegistry.get).map { style =>
       val fill = style.fill match
-        case Fill.Solid(color) => s"""fill="${colorToSvgHex(color)}""""
+        case Fill.Solid(color) => colorToSvgFillAttrs(color)
         case _ => """fill="#FFFFFF""""
 
       val stroke = borderToStroke(style.border)
@@ -387,3 +387,16 @@ object SvgRenderer:
     val hex = c.toHex
     if hex.length == 9 && hex.startsWith("#") then "#" + hex.drop(3) // #AARRGGBB -> #RRGGBB
     else hex
+
+  /**
+   * Convert Color to SVG fill attributes with opacity support. Returns both fill and fill-opacity
+   * for translucent ARGB colors, just fill for fully opaque colors.
+   */
+  private def colorToSvgFillAttrs(c: Color): String =
+    val hex = c.toHex
+    if hex.length == 9 && hex.startsWith("#") then
+      val alpha = Integer.parseInt(hex.substring(1, 3), 16) / 255.0
+      val rgb = "#" + hex.drop(3)
+      if alpha >= 1.0 then s"""fill="$rgb""""
+      else s"""fill="$rgb" fill-opacity="$alpha""""
+    else s"""fill="$hex""""
