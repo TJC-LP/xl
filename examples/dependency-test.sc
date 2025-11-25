@@ -36,11 +36,11 @@ val sheet = Sheet(name = SheetName.unsafe("Dependencies"))
   .put(ref"A7", "C1 should show dependencies: A1, B1")
   .put(ref"A8", "D1 should show dependencies: C1, C2, C3")
 
-val wb = Workbook(Vector(sheet))
+val wb = Workbook(Vector(sheet)).withCachedFormulas()
 val outPath = "data/dependency-test.xlsx"
 
 Excel.write(wb, outPath)
-println(s"Created: $outPath")
+println(s"Created: $outPath (with cached formula values)")
 
 // Also show the dependency graph
 val graph = DependencyGraph.fromSheet(sheet)

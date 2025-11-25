@@ -36,6 +36,10 @@ object formulaExports:
   export formula.SheetEvaluator
   export formula.SheetEvaluator.*
 
+  // WorkbookEvaluator extension methods (withCachedFormulas)
+  export formula.WorkbookEvaluator
+  export formula.WorkbookEvaluator.*
+
   // Display strategy with formula evaluation
   // The evaluating given has higher priority than default due to LowPriority pattern
   export formula.display.EvaluatingFormulaDisplay
