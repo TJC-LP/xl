@@ -243,6 +243,66 @@ class HtmlRendererSpec extends FunSuite:
     assert(html.contains("Plain text"), "Plain text should be included")
   }
 
+  // ========== CSS Escaping (Regression tests for PR #44 feedback) ==========
+
+  test("toHtml: CSS escapes newlines in font names") {
+    // Malicious font name with newline - without escaping, the newline would break out of the string
+    val maliciousFont = Font("Arial\nEvil", 11.0)
+    val style = CellStyle.default.withFont(maliciousFont)
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .put(ref"A1" -> "Test")
+      .unsafe
+      .withCellStyle(ref"A1", style)
+
+    val html = sheet.toHtml(ref"A1:A1")
+    // Newline should be escaped as CSS escape sequence \A (not literal newline)
+    assert(!html.contains("Arial\nEvil"), "Literal newline should not appear in CSS")
+    assert(html.contains("\\A "), "Newline should be escaped as \\A")
+    assert(html.contains("font-family:"), "Should contain font-family property")
+  }
+
+  test("toHtml: CSS escapes carriage returns in font names") {
+    val fontWithCR = Font("Arial\rEvil", 11.0)
+    val style = CellStyle.default.withFont(fontWithCR)
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .put(ref"A1" -> "Test")
+      .unsafe
+      .withCellStyle(ref"A1", style)
+
+    val html = sheet.toHtml(ref"A1:A1")
+    assert(!html.contains("Arial\rEvil"), "Literal CR should not appear in CSS")
+    assert(html.contains("\\D "), "Carriage return should be escaped as \\D")
+  }
+
+  test("toHtml: CSS removes null bytes from font names") {
+    val fontWithNull = Font("Ari\u0000al", 11.0)
+    val style = CellStyle.default.withFont(fontWithNull)
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .put(ref"A1" -> "Test")
+      .unsafe
+      .withCellStyle(ref"A1", style)
+
+    val html = sheet.toHtml(ref"A1:A1")
+    assert(!html.contains("\u0000"), "Null bytes should be removed")
+    assert(html.contains("Arial"), "Font name should be preserved minus null")
+  }
+
+  test("toHtml: CSS escapes quotes in font names") {
+    // Single quote in font name should be escaped to prevent breaking out of quoted string
+    val fontWithQuotes = Font("Arial's Best", 11.0)
+    val style = CellStyle.default.withFont(fontWithQuotes)
+    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .put(ref"A1" -> "Test")
+      .unsafe
+      .withCellStyle(ref"A1", style)
+
+    val html = sheet.toHtml(ref"A1:A1")
+    // The quote should be escaped, so we shouldn't see an unescaped single quote
+    // that could terminate the CSS string early
+    assert(html.contains("\\'"), "Single quote should be escaped")
+    assert(html.contains("font-family:"), "Should contain font-family property")
+  }
+
   //========== Real-World Use Case ==========
 
   test("toHtml: complete financial report with rich text and styles") {

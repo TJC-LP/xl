@@ -231,18 +231,26 @@ object Main
       yield Format.cellInfo(ref, value, formatted, deps, dependents)
 
     case Command.Search(pattern, limit) =>
-      val regex = pattern.r
-      val results = sheet.cells.toVector
-        .filter { case (_, cell) =>
-          val text = formatCellValue(cell.value)
-          regex.findFirstIn(text).isDefined
-        }
-        .take(limit)
-        .map { case (ref, cell) =>
-          val value = formatCellValue(cell.value)
-          (ref, value, value)
-        }
-      IO.pure(Markdown.renderSearchResults(results))
+      IO.fromEither(
+        scala.util
+          .Try(pattern.r)
+          .toEither
+          .left
+          .map(e => new Exception(s"Invalid regex pattern: ${e.getMessage}"))
+      ).map { regex =>
+        val results = sheet.cells.iterator
+          .filter { case (_, cell) =>
+            val text = formatCellValue(cell.value)
+            regex.findFirstIn(text).isDefined
+          }
+          .take(limit)
+          .map { case (ref, cell) =>
+            val value = formatCellValue(cell.value)
+            (ref, value, value)
+          }
+          .toVector
+        Markdown.renderSearchResults(results)
+      }
 
     case Command.Eval(formulaStr, overrides) =>
       for
@@ -295,12 +303,18 @@ object Main
     overrides.foldLeft(IO.pure(sheet)) { (sheetIO, override_) =>
       sheetIO.flatMap { s =>
         override_.split("=", 2) match
-          case Array(refStr, valueStr) =>
+          case Array(refStr, valueStr) if valueStr.trim.nonEmpty =>
             IO.fromEither(ARef.parse(refStr.trim).left.map(e => new Exception(e.toString)))
               .map { ref =>
                 val value = parseValue(valueStr.trim)
                 s.put(ref, value)
               }
+          case Array(refStr, _) =>
+            IO.raiseError(
+              new Exception(
+                s"Empty value for override: ${refStr.trim}. Use ref=value (e.g., B5=1000)"
+              )
+            )
           case _ =>
             IO.raiseError(
               new Exception(s"Invalid override format: $override_. Use ref=value (e.g., B5=1000)")

@@ -229,6 +229,9 @@ $tableRows
     s.replace("\\", "\\\\")
       .replace("'", "\\'")
       .replace("\"", "\\\"")
+      .replace("\n", "\\A ")
+      .replace("\r", "\\D ")
+      .replace("\u0000", "")
 
   /**
    * Convert Color to CSS-compatible RGB hex (strips alpha from ARGB).
