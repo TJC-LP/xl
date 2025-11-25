@@ -9,7 +9,7 @@ import com.monovore.decline.effect.*
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
-import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.output.{Format, Markdown}
 import com.tjclp.xl.display.NumFmtFormatter
@@ -178,6 +178,35 @@ object Main
       case None =>
         IO.fromOption(wb.sheets.headOption)(new Exception("Workbook has no sheets"))
 
+  /**
+   * Resolve a reference string to a (Sheet, Either[ARef, CellRange]).
+   *
+   * Supports qualified refs like `Sheet1!A1` which override the default sheet context. This mirrors
+   * Excel's behavior: you can be "on" Sheet1 while referencing Sheet2!A1.
+   */
+  private def resolveRef(
+    wb: Workbook,
+    defaultSheet: Sheet,
+    refStr: String
+  ): IO[(Sheet, Either[ARef, CellRange])] =
+    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+      case RefType.Cell(ref) =>
+        IO.pure((defaultSheet, Left(ref)))
+      case RefType.Range(range) =>
+        IO.pure((defaultSheet, Right(range)))
+      case RefType.QualifiedCell(sheetName, ref) =>
+        findSheet(wb, sheetName).map(s => (s, Left(ref)))
+      case RefType.QualifiedRange(sheetName, range) =>
+        findSheet(wb, sheetName).map(s => (s, Right(range)))
+    }
+
+  private def findSheet(wb: Workbook, name: SheetName): IO[Sheet] =
+    IO.fromOption(wb.sheets.find(_.name == name))(
+      new Exception(
+        s"Sheet not found: ${name.value}. Available: ${wb.sheets.map(_.name.value).mkString(", ")}"
+      )
+    )
+
   private def executeCommand(
     wb: Workbook,
     sheet: Sheet,
@@ -215,20 +244,29 @@ object Main
     case Command.View(rangeStr, showFormulas, limit, format) =>
       import com.tjclp.xl.sheets.styleSyntax.*
       for
-        range <- IO.fromEither(CellRange.parse(rangeStr).left.map(e => new Exception(e.toString)))
+        resolved <- resolveRef(wb, sheet, rangeStr)
+        (targetSheet, refOrRange) = resolved
+        range = refOrRange match
+          case Right(r) => r
+          case Left(ref) => CellRange(ref, ref) // Single cell as range
         limitedRange = limitRange(range, limit)
       yield format match
-        case ViewFormat.Markdown => Markdown.renderRange(sheet, limitedRange, showFormulas)
-        case ViewFormat.Html => sheet.toHtml(limitedRange)
-        case ViewFormat.Svg => sheet.toSvg(limitedRange)
+        case ViewFormat.Markdown => Markdown.renderRange(targetSheet, limitedRange, showFormulas)
+        case ViewFormat.Html => targetSheet.toHtml(limitedRange)
+        case ViewFormat.Svg => targetSheet.toSvg(limitedRange)
 
     case Command.Cell(refStr) =>
       for
-        ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
-        cell = sheet.cells.get(ref)
+        resolved <- resolveRef(wb, sheet, refStr)
+        (targetSheet, refOrRange) = resolved
+        ref <- refOrRange match
+          case Left(r) => IO.pure(r)
+          case Right(_) =>
+            IO.raiseError(new Exception("cell command requires single cell, not range"))
+        cell = targetSheet.cells.get(ref)
         value = cell.map(_.value).getOrElse(CellValue.Empty)
         // Get style from registry for NumFmt formatting
-        style = cell.flatMap(_.styleId).flatMap(sheet.styleRegistry.get)
+        style = cell.flatMap(_.styleId).flatMap(targetSheet.styleRegistry.get)
         numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
         // For formulas with cached values, format the cached value
         valueToFormat = value match
@@ -236,11 +274,11 @@ object Main
           case other => other
         formatted = NumFmtFormatter.formatValue(valueToFormat, numFmt)
         // Get comment from sheet (sheet.getComment, not cell.comment)
-        comment = sheet.getComment(ref)
+        comment = targetSheet.getComment(ref)
         // Get hyperlink from cell
         hyperlink = cell.flatMap(_.hyperlink)
         // Build dependency graph for dependencies/dependents
-        graph = DependencyGraph.fromSheet(sheet)
+        graph = DependencyGraph.fromSheet(targetSheet)
         deps = graph.dependencies.getOrElse(ref, Set.empty).toVector.sortBy(_.toA1)
         dependents = graph.dependents.getOrElse(ref, Set.empty).toVector.sortBy(_.toA1)
       yield Format.cellInfo(ref, value, formatted, style, comment, hyperlink, deps, dependents)
@@ -281,9 +319,14 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
+            resolved <- resolveRef(wb, sheet, refStr)
+            (targetSheet, refOrRange) = resolved
+            ref <- refOrRange match
+              case Left(r) => IO.pure(r)
+              case Right(_) =>
+                IO.raiseError(new Exception("put command requires single cell, not range"))
             value = parseValue(valueStr)
-            updatedSheet = sheet.put(ref, value)
+            updatedSheet = targetSheet.put(ref, value)
             updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
             _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
           yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
@@ -294,10 +337,15 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
+            resolved <- resolveRef(wb, sheet, refStr)
+            (targetSheet, refOrRange) = resolved
+            ref <- refOrRange match
+              case Left(r) => IO.pure(r)
+              case Right(_) =>
+                IO.raiseError(new Exception("putf command requires single cell, not range"))
             formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
             value = CellValue.Formula(formula)
-            updatedSheet = sheet.put(ref, value)
+            updatedSheet = targetSheet.put(ref, value)
             updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
             _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
           yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
@@ -319,11 +367,26 @@ object Main
       sheetIO.flatMap { s =>
         override_.split("=", 2) match
           case Array(refStr, valueStr) if valueStr.trim.nonEmpty =>
-            IO.fromEither(ARef.parse(refStr.trim).left.map(e => new Exception(e.toString)))
-              .map { ref =>
+            IO.fromEither(RefType.parse(refStr.trim).left.map(e => new Exception(e))).flatMap {
+              case RefType.Cell(ref) =>
                 val value = parseValue(valueStr.trim)
-                s.put(ref, value)
-              }
+                IO.pure(s.put(ref, value))
+              case RefType.QualifiedCell(sheetName, ref) =>
+                if sheetName == sheet.name then
+                  val value = parseValue(valueStr.trim)
+                  IO.pure(s.put(ref, value))
+                else
+                  IO.raiseError(
+                    new Exception(
+                      s"Cross-sheet override not supported: ${refStr.trim}. " +
+                        s"Eval operates on ${sheet.name.value}, not ${sheetName.value}"
+                    )
+                  )
+              case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+                IO.raiseError(
+                  new Exception(s"Override requires single cell, not range: ${refStr.trim}")
+                )
+            }
           case Array(refStr, _) =>
             IO.raiseError(
               new Exception(
