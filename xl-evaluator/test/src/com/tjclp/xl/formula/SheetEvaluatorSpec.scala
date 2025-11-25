@@ -1,9 +1,9 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.*
+import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.SheetEvaluator.* // Extension methods
+// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
 import munit.FunSuite
 import java.time.{LocalDate, LocalDateTime}

@@ -18,8 +18,7 @@
  *   2. Run script: scala-cli run examples/formula-demo.sc
  */
 
-import com.tjclp.xl.*
-import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, TExpr, ParseError}
+import com.tjclp.xl.{*, given}
 import scala.math.BigDecimal
 
 println("=" * 70)

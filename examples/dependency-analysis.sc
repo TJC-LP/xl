@@ -1,6 +1,7 @@
 //> using scala 3.7.3
 //> using dep com.tjclp::xl-core:0.1.0-SNAPSHOT
 //> using dep com.tjclp::xl-evaluator:0.1.0-SNAPSHOT
+//> using repository ivy2Local
 
 /**
  * XL Formula System - Dependency Analysis Example
@@ -17,13 +18,9 @@
  * Run with: scala-cli examples/dependency-analysis.sc
  */
 
-import com.tjclp.xl.*
-import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
-import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.*
-import com.tjclp.xl.formula.SheetEvaluator.* // Extension methods
-import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.unsafe.*
+// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 
 // ============================================================================
 // Scenario 1: Complex Dependency Chain

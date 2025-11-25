@@ -41,12 +41,21 @@ xl-testkit/      → Test laws, generators, helpers [future]
 ## Import Patterns
 
 ```scala
-import com.tjclp.xl.{*, given}     // Core API + Excel IO + type class instances
+import com.tjclp.xl.{*, given}     // Everything: core + formula + display + type class instances
 import com.tjclp.xl.unsafe.*       // .unsafe boundary (explicit opt-in)
 
-// Now Excel is available directly:
-val wb = Excel.read("data.xlsx")
-Excel.write(wb, "output.xlsx")
+// Core API
+val sheet = Sheet("Demo").put(ref"A1", 100).unsafe
+Excel.write(Workbook(sheet), "output.xlsx")
+
+// Formula evaluation (when xl-evaluator is a dependency)
+sheet.evaluateFormula("=A1*2")     // SheetEvaluator extension method
+FormulaParser.parse("=SUM(A1:A10)") // Parser at package level
+
+// Display formatting
+given Sheet = sheet
+println(excel"Value: ${ref"A1"}")  // excel interpolator
+sheet.displayCell(ref"A1")         // explicit display method
 ```
 
 Note: `{*, given}` is required because Scala 3's `*` doesn't include given instances by default.
@@ -151,7 +160,7 @@ sheet.style(ref"B19:D21", CellStyle.default.withNumFmt(NumFmt.Percent))
 
 ### Formula Evaluation
 ```scala
-import com.tjclp.xl.formula.SheetEvaluator.*
+// SheetEvaluator extension methods available from com.tjclp.xl.{*, given}
 sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
 sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
 ```

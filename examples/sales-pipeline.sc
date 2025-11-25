@@ -1,6 +1,7 @@
 //> using scala 3.7.3
 //> using dep com.tjclp::xl-core:0.1.0-SNAPSHOT
 //> using dep com.tjclp::xl-evaluator:0.1.0-SNAPSHOT
+//> using repository ivy2Local
 
 /**
  * XL Formula System - Sales Pipeline Analytics Example
@@ -17,17 +18,9 @@
  * Run with: scala-cli examples/sales-pipeline.sc
  */
 
-import com.tjclp.xl.*
-import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
-import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.error.*  // For .message extension
-import com.tjclp.xl.formula.*
-import com.tjclp.xl.formula.SheetEvaluator.*
-import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.styles.{CellStyle, numfmt}
-import numfmt.NumFmt
-import com.tjclp.xl.unsafe.*  // For .unsafe extension
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.unsafe.*
+// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 import java.time.LocalDate
 
 // ============================================================================

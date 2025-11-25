@@ -6,7 +6,7 @@
 //   1. Publish locally: ./mill xl-core.publishLocal
 //   2. Run script: scala-cli run examples/demo.sc
 
-import com.tjclp.xl.*
+import com.tjclp.xl.{*, given}
 
 println("=== XL - Pure Scala 3.7 Excel Library Demo ===\n")
 

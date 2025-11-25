@@ -7,7 +7,7 @@
 //   1. Publish locally: ./mill xl-core.publishLocal xl-ooxml.publishLocal
 //   2. Run script: scala-cli run examples/table-demo.sc
 
-import com.tjclp.xl.*
+import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.tables.{TableSpec, TableAutoFilter, TableStyle}
 import com.tjclp.xl.ooxml.{XlsxWriter, XlsxReader}

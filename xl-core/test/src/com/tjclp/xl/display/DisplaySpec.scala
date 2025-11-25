@@ -259,7 +259,7 @@ class DisplaySpec extends FunSuite:
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
-    val result = mySheet.display(ref"A1")
+    val result = mySheet.displayCell(ref"A1")
     assertEquals(result.formatted, "85%")
   }
 

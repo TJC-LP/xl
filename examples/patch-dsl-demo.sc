@@ -7,10 +7,10 @@
 //   1. Publish locally: ./mill xl-core.publishLocal xl-cats-effect.publishLocal
 //   2. Run script: scala-cli run examples/patch-dsl-demo.sc
 
-import com.tjclp.xl.*  // Unified import includes DSL, macros, domain model
+import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.{IO, IOApp}
-import cats.effect.unsafe.implicits.global  // Demo only - use IOApp in production
+import cats.effect.unsafe.implicits.global
 import java.nio.file.Paths
 
 println("=== XL Patch DSL Demo ===\n")

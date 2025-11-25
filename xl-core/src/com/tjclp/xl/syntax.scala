@@ -54,6 +54,24 @@ object syntax:
   // so we need a direct export here even though extensions.scala also exports them.
   export codec.CellCodec.given
 
+  // Auto-conversions (String→Text, Int→Number, Double→Number, Boolean→Bool, etc.)
+  // Enables: sheet.put("A1", "Hello") without explicit CellValue.Text wrapper
+  export conversions.given
+
+  // Display module: formatted display with string interpolation
+  // Enables: given Sheet = mySheet; println(excel"Revenue: ${ref"A1"}")
+  // Note: Uses type aliases and re-exports to avoid package name conflict
+  type DisplayWrapper = com.tjclp.xl.display.DisplayWrapper
+  val DisplayWrapper = com.tjclp.xl.display.DisplayWrapper
+  type FormulaDisplayStrategy = com.tjclp.xl.display.FormulaDisplayStrategy
+  val NumFmtFormatter = com.tjclp.xl.display.NumFmtFormatter
+
+  // Re-export givens and extension methods from display module
+  export com.tjclp.xl.display.DisplayConversions.given
+  export com.tjclp.xl.display.ExcelInterpolator.excel
+  export com.tjclp.xl.display.FormulaDisplayStrategy.given
+  export com.tjclp.xl.display.syntax.{displayCell, displayFormula}
+
   // Compile-time validated literals (macros)
   export macros.RefLiteral.*
   export macros.CellRangeLiterals.fx

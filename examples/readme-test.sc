@@ -11,12 +11,10 @@
  * Run with: scala-cli run examples/readme-test.sc
  */
 
-// Unified imports - core API + Excel IO + type class instances
+// Unified import - everything from core + formula + IO + display
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
-// Formula system (separate module)
-import com.tjclp.xl.formula.*
-import com.tjclp.xl.formula.SheetEvaluator.*
+// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 
 var passed = 0
 var failed = 0
