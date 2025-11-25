@@ -326,7 +326,7 @@ println("-" * 70)
 val formula = fx"=A1+B1" // Returns CellValue.Formula
 
 formula match
-  case CellValue.Formula(text) =>
+  case CellValue.Formula(text, _) =>
     println(s"fx macro validated: $text")
 
     // Evaluate using high-level API

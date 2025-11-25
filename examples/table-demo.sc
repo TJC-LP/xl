@@ -54,17 +54,17 @@ println("## Part 2: Populating Table with Data\n")
 // Create sheet and add table
 val sheetResult = for
   sheet <- Sheet("Q4 Sales")
-  // Add table metadata
-  sheetWithTable = sheet.withTable(salesTable)
+yield sheet
+  .withTable(salesTable)
   // Populate header row
-  withHeaders <- sheetWithTable.put(
+  .put(
     ref"A1" -> "Product",
     ref"B1" -> "Region",
     ref"C1" -> "Quantity",
     ref"D1" -> "Revenue"
   )
   // Populate data rows
-  withData <- withHeaders.put(
+  .put(
     // Row 2
     ref"A2" -> "Widget",
     ref"B2" -> "North",
@@ -116,7 +116,6 @@ val sheetResult = for
     ref"C11" -> 140,
     ref"D11" -> BigDecimal("3500.00")
   )
-yield withData
 
 val sheet = sheetResult match
   case Right(s) =>
@@ -143,10 +142,9 @@ val summaryTable = TableSpec.fromColumnNames(
   style = TableStyle.Light(15)  // Green table style
 )).unsafe
 
-val multiTableSheetResult = for
-  s <- Right(sheet)
-  withSummaryTable = s.withTable(summaryTable)
-  withSummaryData <- withSummaryTable.put(
+val multiTableSheet = sheet
+  .withTable(summaryTable)
+  .put(
     // Headers
     ref"F1" -> "Region",
     ref"G1" -> "Total_Revenue",
@@ -160,16 +158,9 @@ val multiTableSheetResult = for
     ref"F5" -> "West",
     ref"G5" -> BigDecimal("13050.00")
   )
-yield withSummaryData
 
-val multiTableSheet = multiTableSheetResult match
-  case Right(s) =>
-    println(s"✓ Added second table: ${summaryTable.name}")
-    println(s"✓ Sheet now has ${s.tables.size} tables\n")
-    s
-  case Left(err) =>
-    println(s"✗ Error: $err")
-    sys.exit(1)
+println(s"✓ Added second table: ${summaryTable.name}")
+println(s"✓ Sheet now has ${multiTableSheet.tables.size} tables\n")
 
 // ============================================================
 // PART 4: Writing to XLSX File

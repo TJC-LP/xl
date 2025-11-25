@@ -37,8 +37,9 @@ object formulaExports:
   export formula.SheetEvaluator.*
 
   // Display strategy with formula evaluation
-  // Enables: given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+  // The evaluating given has higher priority than default due to LowPriority pattern
   export formula.display.EvaluatingFormulaDisplay
+  export formula.display.EvaluatingFormulaDisplay.given
 
 // Make available at com.tjclp.xl.*
 export formulaExports.*

@@ -193,8 +193,8 @@ println("KEY METRICS (Using excel\"...\" Interpolator)")
 println("=" * 80)
 
 // Enable display formatting with formula evaluation
-given Sheet = evaluatedModel  // Use evaluated model for display
-given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+// The evaluating strategy is automatically active when xl-evaluator is imported
+given Sheet = evaluatedModel
 
 // ✨ Clean, readable output using excel interpolator
 println(excel"2024 Revenue: ${ref"B3"}")

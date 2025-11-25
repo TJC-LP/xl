@@ -149,7 +149,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     import DisplayConversions.given
 
     val clock = Clock.fixedDate(LocalDate.of(2025, 11, 21))
-    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating(using clock)
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.withClock(clock)
 
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", CellValue.Formula("=TODAY()"))
