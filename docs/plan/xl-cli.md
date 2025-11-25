@@ -18,6 +18,26 @@ The `xl` CLI provides a command-line interface for Excel operations, designed sp
 
 ---
 
+## Installation
+
+```bash
+git clone https://github.com/TJC-LP/xl.git
+cd xl
+make install
+```
+
+This builds a fat JAR and installs `xl` to `~/.local/bin/`. Ensure it's in your PATH:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+**Uninstall**: `make uninstall`
+
+**Update**: After `git pull`, run `make build` — the wrapper auto-picks up the new JAR.
+
+---
+
 ## Quick Reference
 
 ```bash

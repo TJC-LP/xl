@@ -204,6 +204,24 @@ scala-cli run examples/table-demo.sc
 | `easy-mode-demo.sc` | Easy Mode showcase |
 | `dependency-analysis.sc` | Formula dependency graph |
 
+## CLI
+
+Install the `xl` command-line tool for LLM-friendly Excel operations:
+
+```bash
+make install   # Installs to ~/.local/bin/xl
+```
+
+```bash
+xl open model.xlsx           # Load workbook
+xl view A1:D20               # View range as markdown table
+xl eval "=SUM(A1:A10)"       # Evaluate formula (what-if analysis)
+xl put B5 1000000            # Write value
+xl save                      # Save changes
+```
+
+See [docs/plan/xl-cli.md](docs/plan/xl-cli.md) for full command reference.
+
 ## Project Status
 
 | Feature | Status | Tests |
