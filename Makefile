@@ -27,7 +27,12 @@ build:
 install: build
 	@mkdir -p $(BINDIR)
 	@echo '#!/usr/bin/env bash' > $(BINDIR)/xl
-	@echo 'exec java -jar "$(CURDIR)/$(JAR_PATH)" "$$@"' >> $(BINDIR)/xl
+	@echo 'exec java \' >> $(BINDIR)/xl
+	@echo '  -Dcats.effect.warnOnNonMainThreadDetected=false \' >> $(BINDIR)/xl
+	@echo '  --add-opens java.base/java.lang=ALL-UNNAMED \' >> $(BINDIR)/xl
+	@echo '  -XX:+IgnoreUnrecognizedVMOptions \' >> $(BINDIR)/xl
+	@echo '  -jar "$(CURDIR)/$(JAR_PATH)" "$$@" \' >> $(BINDIR)/xl
+	@echo '  2> >(grep -vE "(sun.misc.Unsafe|terminally deprecated|LazyVals|will be removed)" >&2)' >> $(BINDIR)/xl
 	@chmod +x $(BINDIR)/xl
 	@echo "Installed xl to $(BINDIR)/xl"
 	@echo ""
