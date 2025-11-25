@@ -3,23 +3,37 @@
 
 ## 1) Export a simple table
 ```scala
-import com.tjclp.xl.api.Excel
-import com.tjclp.xl.core.*, com.tjclp.xl.core.addr.*
-import com.tjclp.xl.dsl.cell
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.unsafe.*
+import com.tjclp.xl.io.ExcelIO
+import cats.effect.IO
+import cats.effect.unsafe.implicits.global
+import java.nio.file.Path
 
 final case class Person(name: String, age: Int, email: String) derives CanEqual
 val people = Vector(Person("Ada", 34, "ada@ex.com"), Person("Linus", 55, "linus@ex.com"))
 
-val s0 = Sheet(addr.SheetName("People"), Map.empty, Set.empty, Map.empty, Map.empty)
-val s1 = s0.put(cell"A1" -> "Name", cell"B1" -> "Age", cell"C1" -> "Email")
-val s2 = people.zipWithIndex.foldLeft(s1) { case (sh, (p, i)) =>
-  val r = addr.Row.from0(i + 1)
-  sh.updateCell(ARef(Column.from0(0), r))(_ => Cell(ARef(Column.from0(0), r), CellValue.Text(p.name)))
-    .updateCell(ARef(Column.from0(1), r))(_ => Cell(ARef(Column.from0(1), r), CellValue.Number(BigDecimal(p.age))))
-    .updateCell(ARef(Column.from0(2), r))(_ => Cell(ARef(Column.from0(2), r), CellValue.Text(p.email)))
+// Build sheet with headers
+val sheet = Sheet("People").unsafe
+  .put(
+    ref"A1" -> "Name",
+    ref"B1" -> "Age",
+    ref"C1" -> "Email"
+  )
+  .unsafe
+
+// Add data rows
+val sheetWithData = people.zipWithIndex.foldLeft(sheet) { case (sh, (p, i)) =>
+  val row = i + 2  // Row 2, 3, ...
+  sh.put(
+    ref"A$row" -> p.name,
+    ref"B$row" -> p.age,
+    ref"C$row" -> p.email
+  ).unsafe
 }
-val wb = Workbook(Vector(s2), styles = (), sharedStrings = (), metadata = ())
-// Excel[IO].write(wb, Paths.get("people.xlsx"))
+
+val workbook = Workbook(Vector(sheetWithData))
+ExcelIO.instance[IO].write(workbook, Path.of("people.xlsx")).unsafeRunSync()
 ```
 
 ## 2) Formula Parsing & Typed AST
@@ -240,16 +254,18 @@ scala-cli examples/sales-pipeline.sc
 scala-cli examples/evaluator-demo.sc
 ```
 
-## 4) Chart spec
+## 4) Chart spec (Future - WI-11)
 ```scala
-import com.tjclp.xl.chart.*, com.tjclp.xl.dsl.range
+// Note: Chart support is planned for WI-11. This is a design preview.
+import com.tjclp.xl.{*, given}
+// import com.tjclp.xl.chart.*  // Future module
 
-val revenue = ChartSpec(
-  title  = Some("Revenue by Quarter"),
-  series = Vector(Series(MarkType.Column(true, false), Encoding(Field.Range(range"A2:A5"), Field.Range(range"B2:B5")), Some("2025"))),
-  xAxis  = Axis(AxisType.Category, Scale.Linear, Some("Quarter")),
-  yAxis  = Axis(AxisType.Value, Scale.Linear, Some("USD (mm)")),
-  legend = Legend(true, "right"),
-  plotAreaFill = None
-)
+// val revenue = ChartSpec(
+//   title  = Some("Revenue by Quarter"),
+//   series = Vector(Series(MarkType.Column(true, false), Encoding(Field.Range(ref"A2:A5"), Field.Range(ref"B2:B5")), Some("2025"))),
+//   xAxis  = Axis(AxisType.Category, Scale.Linear, Some("Quarter")),
+//   yAxis  = Axis(AxisType.Value, Scale.Linear, Some("USD (mm)")),
+//   legend = Legend(true, "right"),
+//   plotAreaFill = None
+// )
 ```
