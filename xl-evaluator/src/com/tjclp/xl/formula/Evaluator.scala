@@ -78,16 +78,6 @@ private class EvaluatorImpl extends Evaluator:
         val cell = sheet(at)
         decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
 
-      case TExpr.PolyRef(at) =>
-        // PolyRef should never reach evaluator - function parsers must convert to typed Ref
-        // If this is hit, it's a parser bug (forgot to convert PolyRef in function parser)
-        scala.util.Left(
-          EvalError.EvalFailed(
-            "PolyRef reached evaluator - parser bug (function did not convert PolyRef to typed Ref)",
-            Some("This is an internal error - please report this issue")
-          )
-        )
-
       // ===== Conditional =====
       case TExpr.If(cond, ifTrue, ifFalse) =>
         // If: evaluate condition, then branch based on result
@@ -503,3 +493,12 @@ private class EvaluatorImpl extends Evaluator:
           }
         }
         result.asInstanceOf[Either[EvalError, A]]
+
+      // PolyRef should be converted to typed Ref by function parsers before evaluation
+      case TExpr.PolyRef(_) =>
+        Left(
+          EvalError.EvalFailed(
+            "PolyRef reached evaluator - this is a parser bug",
+            Some("Please report this issue")
+          )
+        )

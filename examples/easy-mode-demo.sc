@@ -173,7 +173,7 @@ println(s"  ✓ Found ${range.size} cells in range")
 println()
 
 // ========== Example 8: Excel IO ==========
-println("💾 Example 8: Excel IO (EasyExcel)")
+println("💾 Example 8: Excel IO")
 
 val workbook = Workbook.empty
   .put(report)

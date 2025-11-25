@@ -117,7 +117,6 @@ object DependencyGraph:
     expr match
       // Single cell reference
       case TExpr.Ref(at, _) => Set(at)
-      case TExpr.PolyRef(at) => Set(at) // PolyRef also references a cell
 
       // Range reference (expand to all cells)
       case TExpr.FoldRange(range, _, _, _) =>
@@ -178,6 +177,9 @@ object DependencyGraph:
       case TExpr.Lit(_) => Set.empty
       case TExpr.Today() => Set.empty
       case TExpr.Now() => Set.empty
+
+      // PolyRef is converted to typed Ref by function parsers; if it reaches here, treat as cell ref
+      case TExpr.PolyRef(at) => Set(at)
 
   /**
    * Get cells this cell depends on (precedents).

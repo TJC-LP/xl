@@ -12,4 +12,4 @@ package com.tjclp.xl
  * Excel.write(wb, "output.xlsx")
  * }}}
  */
-val Excel: io.EasyExcel.type = io.EasyExcel
+val Excel: io.Excel.type = io.Excel

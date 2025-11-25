@@ -74,32 +74,23 @@ final case class Sheet(
   /**
    * Batch put with mixed value types and automatic style inference.
    *
-   * @deprecated
-   *   This method uses runtime type inspection which is un-Scala-like and loses type safety. Prefer
-   *   one of these alternatives:
-   *   - Multiple chained `.put()` calls: `sheet.put("A1", "Revenue").put("B1", 1000).unsafe`
-   *   - Patch DSL with `++` composition: `sheet.put((ref"A1" := "Revenue") ++ (ref"B1" := 1000))`
-   *   - `putTyped[A]` for homogeneous batches: `sheet.putTyped(values: Seq[(ARef, A)])`
-   *
    * Accepts (ARef, Any) pairs and uses runtime pattern matching to resolve the appropriate codec
    * for each value. Auto-infers styles based on value types (dates get date format, decimals get
    * number format, etc.). Formatted literals (money"", date"", percent"") preserve their NumFmt.
    *
-   * Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime,
-   * RichText, Formatted. Unsupported types return Left with error.
-   *
-   * Example:
+   * This is the recommended API for large batch upserts due to its clean, token-efficient syntax:
    * {{{
    * sheet.put(
    *   ref"A1" -> "Revenue",
    *   ref"B1" -> LocalDate.of(2025, 11, 10),
    *   ref"C1" -> money"$$1,234.56"
-   * ) match
-   *   case Right(updated) => updated
-   *   case Left(err) => handleError(err)
+   * ).unsafe
    * }}}
    *
-   * For demos/REPLs, you can use .unsafe (requires explicit import):
+   * Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime,
+   * RichText, Formatted. Unsupported types return Left with error.
+   *
+   * For demos/REPLs, use .unsafe (requires explicit import):
    * {{{
    * import com.tjclp.xl.unsafe.*
    * sheet.put(ref"A1" -> "Hello").unsafe
@@ -110,7 +101,6 @@ final case class Sheet(
    * @return
    *   Either error (if unsupported type) or updated sheet
    */
-  @deprecated("Use Patch DSL or chained put() calls instead", since = "0.4.0")
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def put(updates: (ARef, Any)*): XLResult[Sheet] =
     import com.tjclp.xl.codec.{CellCodec, given}
