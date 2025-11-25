@@ -60,16 +60,122 @@ final case class Sheet(
   def contains(ref: ARef): Boolean =
     cells.contains(ref)
 
-  /** Put cell at reference */
+  /** Put cell at reference (always succeeds - Cell is pre-validated) */
   def put(cell: Cell): Sheet =
     copy(cells = cells.updated(cell.ref, cell))
 
-  /** Put value at reference (preserves existing cell metadata) */
+  /** Put CellValue at reference (always succeeds - CellValue is pre-validated) */
   def put(ref: ARef, value: CellValue): Sheet =
     val updatedCell = cells.get(ref) match
-      case Some(existing) => existing.withValue(value) // Preserve styleId, comment, hyperlink
-      case None => Cell(ref, value) // New cell with no metadata
+      case Some(existing) => existing.withValue(value)
+      case None => Cell(ref, value)
     put(updatedCell)
+
+  /**
+   * Put a single value at reference.
+   *
+   * Accepts any supported type: String, Int, Long, Double, BigDecimal, Boolean, LocalDate,
+   * LocalDateTime, RichText, Formatted, CellValue. Returns XLResult for consistent error handling.
+   *
+   * Examples:
+   * {{{
+   * sheet.put(ref"A1", "Hello")           // String
+   * sheet.put(ref"A1", 42)                // Int
+   * sheet.put(ref"A1", money"$$100")      // Formatted
+   * sheet.put(ref"A1", fx"=SUM(B1:B10)")  // Formula
+   * }}}
+   */
+  def put(ref: ARef, value: Any): XLResult[Sheet] =
+    putSingle(ref, value)
+
+  /**
+   * Put a single value at string reference (runtime parsing).
+   *
+   * Same as put(ARef, Any) but accepts string A1 notation for refs.
+   *
+   * Examples:
+   * {{{
+   * sheet.put("A1", "Hello")
+   * sheet.put("B2", 42)
+   * }}}
+   */
+  @annotation.targetName("putString")
+  def put(ref: String, value: Any): XLResult[Sheet] =
+    ARef.parse(ref) match
+      case Left(err) => Left(XLError.InvalidCellRef(ref, err))
+      case Right(aref) => putSingle(aref, value)
+
+  /**
+   * Put a single value at reference with explicit style.
+   *
+   * The style is applied after the value, overriding any auto-inferred style.
+   */
+  def put(ref: ARef, value: Any, style: CellStyle): XLResult[Sheet] =
+    putSingle(ref, value).map { s =>
+      import com.tjclp.xl.sheets.styleSyntax.withCellStyle
+      s.withCellStyle(ref, style)
+    }
+
+  /**
+   * Put a single value at string reference with explicit style.
+   */
+  @annotation.targetName("putStringStyled")
+  def put(ref: String, value: Any, style: CellStyle): XLResult[Sheet] =
+    ARef.parse(ref) match
+      case Left(err) => Left(XLError.InvalidCellRef(ref, err))
+      case Right(aref) => put(aref, value, style)
+
+  // Internal helper for single-cell put with type matching
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def putSingle(ref: ARef, value: Any): XLResult[Sheet] =
+    import com.tjclp.xl.codec.{CellCodec, given}
+    import java.time.{LocalDate, LocalDateTime}
+
+    // Helper to process a typed value with codec
+    def processTyped[A: CellCodec](v: A): XLResult[Sheet] =
+      val (cellValue, styleOpt) = CellCodec[A].write(v)
+      val cell = Cell(ref, cellValue)
+      val sheetWithCell = copy(cells = cells.updated(ref, cell))
+      styleOpt match
+        case Some(style) =>
+          val (newRegistry, _) = styleRegistry.register(style)
+          import com.tjclp.xl.sheets.styleSyntax.withCellStyle
+          Right(sheetWithCell.copy(styleRegistry = newRegistry).withCellStyle(ref, style))
+        case None =>
+          Right(sheetWithCell)
+
+    value match
+      // Direct CellValue - no codec needed
+      case cv: CellValue =>
+        val updatedCell = cells.get(ref) match
+          case Some(existing) => existing.withValue(cv)
+          case None => Cell(ref, cv)
+        Right(copy(cells = cells.updated(ref, updatedCell)))
+
+      // Formatted values (money"", date"", percent"") - preserve NumFmt
+      case formatted: com.tjclp.xl.formatted.Formatted =>
+        val cell = Cell(ref, formatted.value)
+        val style = CellStyle.default.withNumFmt(formatted.numFmt)
+        val (newRegistry, _) = styleRegistry.register(style)
+        import com.tjclp.xl.sheets.styleSyntax.withCellStyle
+        Right(
+          copy(cells = cells.updated(ref, cell), styleRegistry = newRegistry)
+            .withCellStyle(ref, style)
+        )
+
+      // Codec-supported types
+      case v: String => processTyped(v)
+      case v: Int => processTyped(v)
+      case v: Long => processTyped(v)
+      case v: Double => processTyped(v)
+      case v: BigDecimal => processTyped(v)
+      case v: Boolean => processTyped(v)
+      case v: LocalDate => processTyped(v)
+      case v: LocalDateTime => processTyped(v)
+      case v: com.tjclp.xl.richtext.RichText => processTyped(v)
+
+      case unsupported =>
+        Left(XLError.UnsupportedType(ref.toA1, unsupported.getClass.getName))
 
   /**
    * Batch put with mixed value types and automatic style inference.
@@ -132,6 +238,10 @@ final case class Sheet(
       // Pattern match on runtime type and delegate to helper
       updates.foreach { (ref, value) =>
         value match
+          // Direct CellValue - no codec needed (handles Formula, Text, Number, etc.)
+          case cv: CellValue =>
+            cells += Cell(ref, cv)
+
           // Handle Formatted values (money"", date"", etc.) - preserve NumFmt metadata
           case formatted: com.tjclp.xl.formatted.Formatted =>
             cells += Cell(ref, formatted.value)
@@ -162,7 +272,7 @@ final case class Sheet(
    * ensuring zero-overhead writes when the value type is known statically.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def putTyped[A](updates: (ARef, A)*)(using CellCodec[A]): Sheet =
+  def putTyped[A](updates: (ARef, A)*)(using CellCodec[A]): XLResult[Sheet] =
     val cells = scala.collection.mutable.ArrayBuffer[Cell]()
     val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
     var registry = styleRegistry
@@ -178,7 +288,7 @@ final case class Sheet(
       }
     }
 
-    applyBulkCells(cells, cellsWithStyles, registry)
+    Right(applyBulkCells(cells, cellsWithStyles, registry))
 
   private def applyBulkCells(
     builtCells: Iterable[Cell],

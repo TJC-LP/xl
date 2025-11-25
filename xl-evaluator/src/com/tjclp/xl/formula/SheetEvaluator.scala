@@ -165,6 +165,7 @@ object SheetEvaluator:
                   tempSheet.evaluateCell(ref, clock) match
                     case scala.util.Right(value) =>
                       // Update temp sheet with evaluated value (for dependent formulas to use)
+                      // put(ref, CellValue) returns Sheet directly - it cannot fail
                       tempSheet = tempSheet.put(ref, value)
                       results = results + (ref -> value)
                       scala.util.Right(())

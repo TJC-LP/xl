@@ -4,7 +4,8 @@ import cats.effect.IO
 import munit.CatsEffectSuite
 
 import java.nio.file.{Files, Path}
-import com.tjclp.xl.api.*
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.macros.ref

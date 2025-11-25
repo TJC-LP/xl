@@ -282,6 +282,7 @@ class DisplaySpec extends FunSuite:
 
     val mySheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", BigDecimal("100"))
+      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 

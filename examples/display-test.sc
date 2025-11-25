@@ -18,13 +18,15 @@ println("=" * 70)
 println("TEST 1: Core-only Display (formulas show as raw text)")
 println("=" * 70)
 
-val sheet1 = Sheet(name = SheetName.unsafe("Test1"))
-  .put(ref"A1", 1000000)
-  .put(ref"A2", 0.6)
-  .put(ref"A3", fx"=A1+A2")
-  .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
-  .flatMap(_.style(ref"A2", CellStyle.default.withNumFmt(NumFmt.Percent)))
+val sheet1 = Sheet("Test1")
+  .put(
+    ref"A1" -> money"$$1000000",
+    ref"A2" -> percent"60%",
+    ref"A3" -> fx"=A1+A2"
+  )
   .unsafe
+  // .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
+  // .flatMap(_.style(ref"A2", CellStyle.default.withNumFmt(NumFmt.Percent)))
 
 locally {
   given Sheet = sheet1

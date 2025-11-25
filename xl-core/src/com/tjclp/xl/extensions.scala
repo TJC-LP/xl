@@ -74,24 +74,8 @@ object extensions:
      *   XLResult[Sheet] for chaining
      */
     def put[A: CellWriter](cellRef: String, value: A): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").map { ref =>
-        val (cellValue, styleOpt) = summon[CellWriter[A]].write(value)
-        val updated = sheet.put(ref, cellValue)
-
-        styleOpt.fold(updated) { autoStyle =>
-          // Preserve existing template styles; only add NumFmt if the cell is unstyled or General.
-          val existingStyle =
-            updated.cells.get(ref).flatMap(_.styleId).flatMap(updated.styleRegistry.get)
-
-          existingStyle match
-            case None =>
-              updated.withCellStyle(ref, autoStyle)
-            case Some(style) if style.numFmt == com.tjclp.xl.styles.numfmt.NumFmt.General =>
-              val merged = style.copy(numFmt = autoStyle.numFmt)
-              updated.withCellStyle(ref, merged)
-            case Some(_) =>
-              updated
-        }
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").flatMap { ref =>
+        sheet.put(ref, value)
       }
 
   // ========== Sheet Extensions: Styled Data Operations ==========
@@ -120,20 +104,8 @@ object extensions:
      *   XLResult[Sheet] for chaining
      */
     def put[A: CellWriter](cellRef: String, value: A, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").map { ref =>
-        val (cellValue, autoStyleOpt) = summon[CellWriter[A]].write(value)
-        val updated = sheet.put(ref, cellValue)
-
-        // Merge auto-inferred style with explicit style (explicit wins)
-        val finalStyle = autoStyleOpt match
-          case Some(autoStyle) =>
-            // Preserve NumFmt from auto-inference if explicit style uses default General format
-            if cellStyle.numFmt == com.tjclp.xl.styles.numfmt.NumFmt.General then
-              cellStyle.copy(numFmt = autoStyle.numFmt)
-            else cellStyle
-          case None => cellStyle
-
-        updated.withCellStyle(ref, finalStyle)
+      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").flatMap { ref =>
+        sheet.put(ref, value).map(_.withCellStyle(ref, cellStyle))
       }
 
   // ========== Sheet Extensions: Style Operations ==========
@@ -275,6 +247,22 @@ object extensions:
       result.flatMap(_.put(cellRef, value, cellStyle))
 
     /**
+     * Put value at ARef (chainable).
+     *
+     * Universal put that accepts any supported type at compile-time validated ref.
+     */
+    @annotation.targetName("putARefChainable")
+    def put(ref: com.tjclp.xl.addressing.ARef, value: Any): XLResult[Sheet] =
+      result.flatMap(_.put(ref, value))
+
+    /**
+     * Put value at ARef with style (chainable).
+     */
+    @annotation.targetName("putARefStyledChainable")
+    def put(ref: com.tjclp.xl.addressing.ARef, value: Any, cellStyle: CellStyle): XLResult[Sheet] =
+      result.flatMap(_.put(ref, value).map(_.withCellStyle(ref, cellStyle)))
+
+    /**
      * Apply style (chainable, string ref).
      */
     @annotation.targetName("styleSheetChainable")
@@ -303,6 +291,15 @@ object extensions:
     @annotation.targetName("putPatchChainable")
     def put(patch: com.tjclp.xl.patch.Patch): XLResult[Sheet] =
       result.flatMap(_.put(patch))
+
+    /**
+     * Batch put (chainable).
+     *
+     * Chain batch puts after XLResult[Sheet] operations.
+     */
+    @annotation.targetName("putBatchChainable")
+    def put(updates: (com.tjclp.xl.addressing.ARef, Any)*): XLResult[Sheet] =
+      result.flatMap(_.put(updates*))
 
     /** Add comment to cell (chainable). */
     @annotation.targetName("commentChainable")
