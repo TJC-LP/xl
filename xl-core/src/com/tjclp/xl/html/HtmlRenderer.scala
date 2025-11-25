@@ -103,7 +103,7 @@ $tableRows
 
     case CellValue.Empty => ""
 
-    case CellValue.Formula(expr) => escapeHtml(s"=$expr")
+    case CellValue.Formula(expr, _) => escapeHtml(s"=$expr")
 
     case CellValue.Error(err) => escapeHtml(err.toExcel)
 

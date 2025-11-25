@@ -22,7 +22,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated: Sheet = sheet.put(ref, "Hello")  // String auto-converts
+    val updated = sheet.put(ref, "Hello").unsafe  // String auto-converts
     assertEquals(updated(ref).value, CellValue.Text("Hello"))
   }
 
@@ -32,7 +32,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, 42)  // Int auto-converts
+    val updated = sheet.put(ref, 42).unsafe  // Int auto-converts
     assertEquals(updated(ref).value, CellValue.Number(BigDecimal(42)))
   }
 
@@ -42,7 +42,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, 3.14159)  // Double auto-converts
+    val updated = sheet.put(ref, 3.14159).unsafe  // Double auto-converts
     assertEquals(updated(ref).value, CellValue.Number(BigDecimal(3.14159)))
   }
 
@@ -52,7 +52,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, true)  // Boolean auto-converts
+    val updated = sheet.put(ref, true).unsafe  // Boolean auto-converts
     assertEquals(updated(ref).value, CellValue.Bool(true))
   }
 
@@ -67,6 +67,7 @@ class ElegantSyntaxSpec extends FunSuite:
       .put(ref"A2", "Laptop")
       .put(ref"B2", 999.99)
       .put(ref"C2", true)
+      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Product"))
     assertEquals(sheet(ref"B2").value, CellValue.Number(BigDecimal(999.99)))
@@ -215,13 +216,11 @@ class ElegantSyntaxSpec extends FunSuite:
 
   // ========== Integration Tests ==========
 
-  test("Formatted.putFormatted extension works") {
+  test("Unified put handles Formatted values") {
     import com.tjclp.xl.macros.ref
     import com.tjclp.xl.macros.money
-    import Formatted.putFormatted
 
-    val formatted = money"$$1,234.56"
-    val sheet = emptySheet.putFormatted(ref"A1", formatted)
+    val sheet = emptySheet.put(ref"A1", money"$$1,234.56").unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("1234.56")))
   }

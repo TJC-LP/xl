@@ -87,6 +87,9 @@ object syntax:
     /** Create a RemoveRange patch to clear all cells in the range */
     def remove: Patch = Patch.RemoveRange(range)
 
+    /** Create a SetRangeStyle patch to apply style to all cells in range */
+    def styled(style: CellStyle): Patch = Patch.SetRangeStyle(range, style)
+
   // ========== RefType Extensions (Runtime Interpolation Support) ==========
 
   /**
@@ -183,12 +186,13 @@ object syntax:
       case RefType.QualifiedCell(_, aref) => aref := value
       case _ => Patch.empty
 
-    /** Apply style to RefType (only works for cells, returns empty for ranges) */
+    /** Apply style to RefType (works for both cells and ranges) */
     @annotation.targetName("refTypeStyled")
     def styled(style: CellStyle): Patch = refType match
       case RefType.Cell(aref) => aref.styled(style)
       case RefType.QualifiedCell(_, aref) => aref.styled(style)
-      case _ => Patch.empty // Ranges require batch styling (not supported via single patch)
+      case RefType.Range(range) => range.styled(style)
+      case RefType.QualifiedRange(_, range) => range.styled(style)
 
     /** Merge RefType (only works for ranges, returns empty for cells) */
     @annotation.targetName("refTypeMerge")

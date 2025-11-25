@@ -244,3 +244,95 @@ object Excel:
 
   /** Create ExcelIO interpreter for cats-effect IO */
   def forIO: Excel[cats.effect.IO] = ExcelIO.instance
+
+  // ===== Easy Mode API (synchronous, for scripts/REPL) =====
+
+  import cats.effect.{IO, Sync}
+  import cats.effect.unsafe.implicits.global
+  import com.tjclp.xl.error.XLException
+  import java.nio.file.{Files, Paths, StandardCopyOption}
+
+  private lazy val excel = ExcelIO.instance[IO]
+
+  /**
+   * Read workbook from file path (Easy Mode).
+   *
+   * @param path
+   *   File path (string)
+   * @return
+   *   Workbook
+   * @throws XLException
+   *   if workbook cannot be parsed
+   * @throws java.io.IOException
+   *   if file cannot be read
+   */
+  def read(path: String): Workbook =
+    excel.read(Paths.get(path)).unsafeRunSync()
+
+  /**
+   * Write workbook to file path (Easy Mode).
+   *
+   * @param workbook
+   *   Workbook to write
+   * @param path
+   *   File path (string)
+   * @throws java.io.IOException
+   *   if file cannot be written
+   */
+  def write(workbook: Workbook, path: String): Unit =
+    excel.write(workbook, Paths.get(path)).unsafeRunSync()
+
+  /**
+   * Write workbook result to file path (Easy Mode).
+   *
+   * Convenience overload that handles XLResult[Workbook] directly.
+   *
+   * @param result
+   *   XLResult[Workbook] to write (calls .unsafe internally)
+   * @param path
+   *   File path (string)
+   * @throws XLException
+   *   if result is Left (contains error)
+   * @throws java.io.IOException
+   *   if file cannot be written
+   */
+  def write(result: XLResult[Workbook], path: String): Unit =
+    write(result.fold(e => throw XLException(e), identity), path)
+
+  /**
+   * Modify workbook in-place (Easy Mode: read → transform → write).
+   *
+   * Uses atomic file replacement to avoid ZIP corruption.
+   *
+   * @param path
+   *   File path (string)
+   * @param f
+   *   Transformation function
+   * @throws XLException
+   *   if workbook cannot be parsed
+   * @throws java.io.IOException
+   *   if file cannot be read/written
+   */
+  def modify(path: String)(f: Workbook => Workbook): Unit =
+    val targetPath = Paths.get(path)
+    val result = for
+      wb <- excel.read(targetPath)
+      modified = f(wb)
+      parent = Option(targetPath.getParent).getOrElse(Paths.get("."))
+      tempFile <- Sync[IO].delay(Files.createTempFile(parent, ".xl-modify-", ".tmp"))
+      writeResult <- excel.write(modified, tempFile).attempt
+      _ <- writeResult match
+        case scala.util.Right(_) =>
+          Sync[IO].delay(
+            Files.move(
+              tempFile,
+              targetPath,
+              StandardCopyOption.REPLACE_EXISTING,
+              StandardCopyOption.ATOMIC_MOVE
+            )
+          )
+        case scala.util.Left(err) =>
+          Sync[IO].delay(Files.deleteIfExists(tempFile)) >>
+            IO.raiseError(err)
+    yield ()
+    result.unsafeRunSync()

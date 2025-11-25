@@ -1,6 +1,7 @@
 //> using scala 3.7.3
 //> using dep com.tjclp::xl-core:0.1.0-SNAPSHOT
 //> using dep com.tjclp::xl-evaluator:0.1.0-SNAPSHOT
+//> using repository ivy2Local
 
 /**
  * Formula Evaluator Demo (WI-08, WI-09 Complete)
@@ -18,13 +19,9 @@
  *   2. Run: scala-cli run examples/evaluator-demo.sc
  */
 
-import com.tjclp.xl.*
-import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
-import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.*
-import com.tjclp.xl.formula.SheetEvaluator.* // Extension methods
-import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.unsafe.*
+// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 import java.time.LocalDate
 import scala.math.BigDecimal
 
@@ -281,7 +278,7 @@ finModel.evaluateWithDependencyCheck() match
     println("✓ All formulas evaluated successfully:")
     println(f"  Gross Profit:     ${results(ref"A4")}%-15s // Revenue - COGS")
     println(f"  Operating Income: ${results(ref"A5")}%-15s // Gross Profit - OpEx")
-    println(f"  Tax:              ${results(ref"A6")}%-15s // Operating Income * 30%")
+    println(f"  Tax:              ${results(ref"A6")}%-15s // Operating Income * 30%%")
     println(f"  Net Income:       ${results(ref"A7")}%-15s // Operating Income - Tax")
 
     results(ref"A8") match
@@ -306,17 +303,17 @@ val graph = DependencyGraph.fromSheet(finModel)
 DependencyGraph.topologicalSort(graph) match
   case Right(order) =>
     println(s"Evaluation order (${order.size} formulas):")
-    println(s"  ${order.mkString(" → ")}")
+    println(s"  ${order.map(_.toA1).mkString(" → ")}")
   case Left(error) =>
-    println(s"✗ Cycle detected: ${error.cycle.mkString(" → ")}")
+    println(s"✗ Cycle detected: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 // Show Net Income dependencies
 val netIncomeDeps = DependencyGraph.precedents(graph, ref"A7")
-println(s"\nNet Income (A7) depends on: ${netIncomeDeps.mkString(", ")}")
+println(s"\nNet Income (A7) depends on: ${netIncomeDeps.map(_.toA1).mkString(", ")}")
 
 // Show Revenue impact
 val revenueImpact = DependencyGraph.dependents(graph, ref"A1")
-println(s"Revenue (A1) impacts: ${revenueImpact.mkString(", ")}")
+println(s"Revenue (A1) impacts: ${revenueImpact.map(_.toA1).mkString(", ")}")
 
 println()
 
@@ -329,7 +326,7 @@ println("-" * 70)
 val formula = fx"=A1+B1" // Returns CellValue.Formula
 
 formula match
-  case CellValue.Formula(text) =>
+  case CellValue.Formula(text, _) =>
     println(s"fx macro validated: $text")
 
     // Evaluate using high-level API
@@ -338,6 +335,8 @@ formula match
         println(s"Evaluation result: $result")  // 15 (A1=10, B1=5)
       case Left(error) =>
         println(s"Evaluation error: ${error.message}")
+  case other =>
+    println(s"Unexpected value type: $other")
 
 println()
 

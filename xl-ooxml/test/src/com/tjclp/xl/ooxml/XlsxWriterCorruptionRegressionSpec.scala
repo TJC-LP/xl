@@ -7,6 +7,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.styles.{CellStyle, Color, Fill}
@@ -44,7 +45,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -104,7 +105,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -156,7 +157,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A3" -> "Modified")
+      updatedSheet = sheet.put(ref"A3" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -212,7 +213,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "New String")
+      updatedSheet = sheet.put(ref"A1" -> "New String")
       updated <- wb.put(updatedSheet)
     yield updated
 

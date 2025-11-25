@@ -26,7 +26,16 @@ trait FormulaDisplayStrategy:
    */
   def format(formula: String, sheet: Sheet): String
 
-object FormulaDisplayStrategy:
+/**
+ * Low-priority given instances for FormulaDisplayStrategy.
+ *
+ * This trait provides the default (non-evaluating) strategy at low priority. Objects that extend
+ * this trait can provide higher-priority givens that override the default.
+ *
+ * This pattern (used by Cats, Scalaz) resolves ambiguity via inheritance depth: givens defined in
+ * more-specific objects win over givens in parent traits.
+ */
+trait LowPriorityFormulaDisplay:
   /**
    * Default strategy: Show raw formula text (no evaluation).
    *
@@ -36,3 +45,5 @@ object FormulaDisplayStrategy:
     def format(formula: String, sheet: Sheet): String =
       // Formula expression already includes "=" prefix
       if formula.startsWith("=") then formula else s"=$formula"
+
+object FormulaDisplayStrategy extends LowPriorityFormulaDisplay

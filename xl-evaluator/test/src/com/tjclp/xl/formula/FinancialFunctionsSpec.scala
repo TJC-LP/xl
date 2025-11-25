@@ -52,7 +52,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val expr = TExpr.npv(
       TExpr.Lit(BigDecimal("0.1")),
-      CellRange.parse("A1:A3").toOption.get
+      CellRange.parse("A1:A3").getOrElse(fail("Invalid range"))
     )
 
     val result = evalOk(expr, sheet)
@@ -79,7 +79,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val expr = TExpr.npv(
       TExpr.Lit(BigDecimal("0.08")),
-      CellRange.parse("A1:A4").toOption.get
+      CellRange.parse("A1:A4").getOrElse(fail("Invalid range"))
     )
 
     val result = evalOk(expr, sheet)
@@ -103,7 +103,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val expr = TExpr.npv(
       TExpr.Lit(BigDecimal("0.1")),
-      CellRange.parse("A1:A4").toOption.get
+      CellRange.parse("A1:A4").getOrElse(fail("Invalid range"))
     )
 
     val result = evalOk(expr, sheet)
@@ -122,7 +122,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val expr = TExpr.npv(
       TExpr.Lit(BigDecimal("-1")),
-      CellRange.parse("A1:A1").toOption.get
+      CellRange.parse("A1:A1").getOrElse(fail("Invalid range"))
     )
 
     val err = evalErr(expr, sheet)
@@ -133,7 +133,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
   test("NPV: parse and print round-trip") {
     val formula = "=NPV(0.1, A1:A10)"
-    val parsed = FormulaParser.parse(formula).toOption.get
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
     val printed = FormulaPrinter.print(parsed)
     assertEquals(printed, formula)
   }
@@ -149,7 +149,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       ARef.from0(0, 3) -> CellValue.Number(BigDecimal("400"))
     )
 
-    val expr = TExpr.irr(CellRange.parse("A1:A4").toOption.get)
+    val expr = TExpr.irr(CellRange.parse("A1:A4").getOrElse(fail("Invalid range")))
 
     val result = evalOk(expr, sheet)
 
@@ -173,7 +173,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
 
     val expr = TExpr.irr(
-      CellRange.parse("A1:A4").toOption.get,
+      CellRange.parse("A1:A4").getOrElse(fail("Invalid range")),
       Some(TExpr.Lit(BigDecimal("0.15")))
     )
 
@@ -197,7 +197,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       ARef.from0(0, 2) -> CellValue.Number(BigDecimal("300"))
     )
 
-    val expr = TExpr.irr(CellRange.parse("A1:A3").toOption.get)
+    val expr = TExpr.irr(CellRange.parse("A1:A3").getOrElse(fail("Invalid range")))
 
     val err = evalErr(expr, sheet)
     err match
@@ -214,7 +214,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       ARef.from0(0, 3) -> CellValue.Number(BigDecimal("600"))
     )
 
-    val expr = TExpr.irr(CellRange.parse("A1:A4").toOption.get)
+    val expr = TExpr.irr(CellRange.parse("A1:A4").getOrElse(fail("Invalid range")))
 
     val result = evalOk(expr, sheet)
 
@@ -229,14 +229,14 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
   test("IRR: parse and print round-trip (no guess)") {
     val formula = "=IRR(A1:A10)"
-    val parsed = FormulaParser.parse(formula).toOption.get
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
     val printed = FormulaPrinter.print(parsed)
     assertEquals(printed, formula)
   }
 
   test("IRR: parse and print round-trip (with guess)") {
     val formula = "=IRR(A1:A10, 0.15)"
-    val parsed = FormulaParser.parse(formula).toOption.get
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
     val printed = FormulaPrinter.print(parsed)
     assertEquals(printed, formula)
   }
@@ -262,7 +262,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val expr = TExpr.vlookup(
       TExpr.Lit(BigDecimal("200")),
-      CellRange.parse("A1:C3").toOption.get,
+      CellRange.parse("A1:C3").getOrElse(fail("Invalid range")),
       TExpr.Lit(2), // Column 2
       TExpr.Lit(false) // Exact match
     )
@@ -285,7 +285,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     // Lookup 250 (should match 200, the largest key <= 250)
     val expr = TExpr.vlookup(
       TExpr.Lit(BigDecimal("250")),
-      CellRange.parse("A1:B3").toOption.get,
+      CellRange.parse("A1:B3").getOrElse(fail("Invalid range")),
       TExpr.Lit(2),
       TExpr.Lit(true) // Approximate match
     )
@@ -302,7 +302,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val expr = TExpr.vlookup(
       TExpr.Lit(BigDecimal("100")),
-      CellRange.parse("A1:B1").toOption.get,
+      CellRange.parse("A1:B1").getOrElse(fail("Invalid range")),
       TExpr.Lit(5), // Out of range (only 2 columns)
       TExpr.Lit(false)
     )
@@ -321,7 +321,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val expr = TExpr.vlookup(
       TExpr.Lit(BigDecimal("999")), // Not in table
-      CellRange.parse("A1:B1").toOption.get,
+      CellRange.parse("A1:B1").getOrElse(fail("Invalid range")),
       TExpr.Lit(2),
       TExpr.Lit(false) // Exact match
     )
@@ -341,7 +341,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     // Lookup 50 (no key <= 50)
     val expr = TExpr.vlookup(
       TExpr.Lit(BigDecimal("50")),
-      CellRange.parse("A1:B1").toOption.get,
+      CellRange.parse("A1:B1").getOrElse(fail("Invalid range")),
       TExpr.Lit(2),
       TExpr.Lit(true) // Approximate match
     )
@@ -362,7 +362,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val expr = TExpr.vlookup(
       TExpr.Lit(BigDecimal("200")),
-      CellRange.parse("A1:B2").toOption.get,
+      CellRange.parse("A1:B2").getOrElse(fail("Invalid range")),
       TExpr.Lit(2),
       TExpr.Lit(false)
     )
@@ -373,7 +373,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
   test("VLOOKUP: parse and print round-trip (3 args)") {
     val formula = "=VLOOKUP(A1, B1:D10, 2, TRUE)"
-    val parsed = FormulaParser.parse(formula).toOption.get
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
     val printed = FormulaPrinter.print(parsed)
     // Note: 3-arg form will print as 4-arg with TRUE
     assert(printed.contains("VLOOKUP"))
@@ -383,7 +383,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
   test("VLOOKUP: parse and print round-trip (4 args)") {
     val formula = "=VLOOKUP(100, A1:C5, 3, FALSE)"
-    val parsed = FormulaParser.parse(formula).toOption.get
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
     val printed = FormulaPrinter.print(parsed)
     assertEquals(printed, formula)
   }
@@ -398,7 +398,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       ARef.from0(0, 3) -> CellValue.Number(BigDecimal("200"))
     )
 
-    val range = CellRange.parse("A1:A4").toOption.get
+    val range = CellRange.parse("A1:A4").getOrElse(fail("Invalid range"))
 
     // Compute IRR
     val irrExpr = TExpr.irr(range)
@@ -422,7 +422,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val vlookup = TExpr.vlookup(
       TExpr.Lit(BigDecimal("200")),
-      CellRange.parse("A1:B2").toOption.get,
+      CellRange.parse("A1:B2").getOrElse(fail("Invalid range")),
       TExpr.Lit(2),
       TExpr.Lit(false)
     )

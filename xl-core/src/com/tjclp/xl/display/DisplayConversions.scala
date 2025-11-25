@@ -88,7 +88,7 @@ object DisplayConversions:
 
     // Format based on value type
     val formatted = cell.value match
-      case CellValue.Formula(expr) =>
+      case CellValue.Formula(expr, _) =>
         // Use formula display strategy (raw text or evaluation)
         fds.format(expr, sheet)
 

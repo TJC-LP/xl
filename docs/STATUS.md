@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2025-11-21
+**Last Updated**: 2025-11-24
 
 ## Current State
 
@@ -77,7 +77,7 @@
 
 ### Test Coverage
 
-**840+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + WI-10 table support + WI-15 benchmarks + display formatting):
+**731+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -196,19 +196,23 @@
 
 ### Advanced Features
 
-**Completed** (P6, P7, P8, P31):
+**Completed** (P6, P7, P8, P31, WI-07/08/09, WI-10, WI-15, WI-17):
 - ✅ P6: CellCodec primitives (9 types with auto-formatting)
 - ✅ P7: String interpolation Phase 1 (runtime validation for all macros)
 - ✅ P8: String interpolation Phase 2 (compile-time optimization)
 - ✅ P31: Optics, RichText, HTML export, enhanced ergonomics
+- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 24 functions, dependency graph, cycle detection
+- ✅ **Excel Tables** (WI-10): Structured data with headers, AutoFilter, styling
+- ✅ **Benchmarks** (WI-15): JMH performance suite (XL vs POI)
+- ✅ **SAX Write** (WI-17): Fast SAX/StAX streaming write path
 
-**Not Started** (P9-P13):
+**Not Started** (Future):
 - ❌ P6b: Full case class codec derivation (Magnolia/Shapeless)
 - ❌ P9: Advanced macros (path macro, style literal)
 - ❌ P10: Drawings (images, shapes)
 - ❌ P11: Charts
-- ❌ P12: Tables & pivots
-- ❌ P13: Formula evaluator & security hardening
+- ❌ Pivot Tables (remaining part of P12)
+- ❌ P13: Security hardening (ZIP bomb, XXE prevention)
 
 ---
 
@@ -290,8 +294,11 @@ xl-cats-effect/src/com/tjclp/xl/io/
 └── StreamingXmlReader.scala  ✅ Event-based read (fs2-data-xml)
 ```
 
+### Completed Modules (Additional)
+- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 24 functions, dependency graph)
+- `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)
+
 ### Not Started (Future Phases)
-- `xl-evaluator/` (P11 - formula evaluation)
 - `xl-testkit/` (law helpers, golden test framework)
 - `xl-drawings/` (P8 - images, shapes)
 - `xl-charts/` (P9 - chart generation)

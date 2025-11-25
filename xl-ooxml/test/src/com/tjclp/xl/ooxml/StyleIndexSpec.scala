@@ -3,6 +3,7 @@ package com.tjclp.xl.ooxml
 import munit.FunSuite
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.styles.{CellStyle, Font, Fill, Color}
 import com.tjclp.xl.macros.ref

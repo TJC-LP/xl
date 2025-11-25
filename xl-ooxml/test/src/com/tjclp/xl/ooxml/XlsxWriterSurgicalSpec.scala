@@ -7,6 +7,7 @@ import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 import com.tjclp.xl.context.SourceContext
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.unsafe.*
 import munit.FunSuite
@@ -78,7 +79,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -131,7 +132,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Changed")
+      updatedSheet = sheet.put(ref"A1" -> "Changed")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -181,7 +182,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val result = for
       wb <- Workbook("TestSheet")
       sheet <- wb("TestSheet")
-      updatedSheet <- sheet.put(ref"A1" -> "Test")
+      updatedSheet = sheet.put(ref"A1" -> "Test")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -215,7 +216,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"B2" -> "Modified")
+      updatedSheet = sheet.put(ref"B2" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -252,7 +253,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Updated Text")
+      updatedSheet = sheet.put(ref"A1" -> "Updated Text")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -309,7 +310,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val withContext = XlsxReader.read(sourcePath).fold(err => fail(s"Read failed: $err"), identity)
     val modified = for
       s2 <- withContext("Sheet2")
-      updatedS2 <- s2.put(ref"B1" -> "Modified")
+      updatedS2 = s2.put(ref"B1" -> "Modified")
       wb2 <- withContext.put(updatedS2)
     yield wb2
     val modifiedWb = modified.fold(err => fail(s"Modification failed: $err"), identity)

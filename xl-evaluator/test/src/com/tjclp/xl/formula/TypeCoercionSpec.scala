@@ -1,11 +1,10 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.*
+import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.conversions.given
-import com.tjclp.xl.formula.SheetEvaluator.* // Extension methods for evaluateFormula
+// conversions.given and SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 import java.time.{LocalDate, LocalDateTime}
 import munit.FunSuite
 

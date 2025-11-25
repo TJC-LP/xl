@@ -730,7 +730,7 @@ object TExpr:
       case CellValue.Number(n) => scala.util.Right(n.toString)
       case CellValue.Bool(b) => scala.util.Right(if b then "TRUE" else "FALSE")
       case CellValue.DateTime(dt) => scala.util.Right(dt.toString)
-      case CellValue.Formula(text) => scala.util.Right(text)
+      case CellValue.Formula(text, _) => scala.util.Right(text)
       case CellValue.RichText(rt) => scala.util.Right(rt.toPlainText)
       case other => scala.util.Left(CodecError.TypeMismatch("String", other))
 

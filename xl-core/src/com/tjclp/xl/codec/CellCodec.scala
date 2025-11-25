@@ -6,8 +6,17 @@ import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
 import java.time.{LocalDate, LocalDateTime}
 
-/** Bidirectional codec for cell values */
-trait CellCodec[A] extends CellReader[A], CellWriter[A]
+/**
+ * Bidirectional codec for cell values.
+ *
+ * Note: CellCodec does NOT extend CellWriter to avoid ambiguous given instances. For write
+ * operations, use CellWriter[CellWritable] which handles all built-in types via contravariance.
+ * This separation enables:
+ *   - CellCodec for read + write of specific types
+ *   - CellWriter for write-only with user extensibility
+ */
+trait CellCodec[A] extends CellReader[A]:
+  def write(a: A): (CellValue, Option[CellStyle])
 
 object CellCodec:
   def apply[A](using cc: CellCodec[A]): CellCodec[A] = cc
@@ -166,3 +175,35 @@ object CellCodec:
         case other => Left(CodecError.TypeMismatch("RichText", other)),
     rt => (CellValue.RichText(rt), None) // No cell-level style, formatting is in runs
   )
+
+  // ========== Union Type Master Writer ==========
+
+  /**
+   * Master writer for the CellWritable union type.
+   *
+   * This single instance handles all supported types via pattern matching. Due to contravariance of
+   * `CellWriter[-A]`, this instance satisfies `CellWriter[T]` for any `T <: CellWritable`.
+   *
+   * This enables type-safe heterogeneous batch operations like:
+   * {{{
+   * sheet.put(ref"A1" -> "hello", ref"B1" -> 42, ref"C1" -> LocalDate.now)
+   * // Inferred type: A = String | Int | LocalDate <: CellWritable ✓
+   * }}}
+   */
+  given CellWriter[CellWritable] with
+    def write(value: CellWritable): (CellValue, Option[CellStyle]) = value match
+      case s: String => summon[CellCodec[String]].write(s)
+      case i: Int => summon[CellCodec[Int]].write(i)
+      case l: Long => summon[CellCodec[Long]].write(l)
+      case d: Double => summon[CellCodec[Double]].write(d)
+      case bd: BigDecimal => summon[CellCodec[BigDecimal]].write(bd)
+      case b: Boolean => summon[CellCodec[Boolean]].write(b)
+      case ld: LocalDate => summon[CellCodec[LocalDate]].write(ld)
+      case ldt: LocalDateTime => summon[CellCodec[LocalDateTime]].write(ldt)
+      case rt: RichText => summon[CellCodec[RichText]].write(rt)
+      case tr: com.tjclp.xl.richtext.TextRun =>
+        // TextRun from RichText DSL - convert to single-run RichText
+        (CellValue.RichText(RichText(Vector(tr))), None)
+      case cv: CellValue => (cv, None)
+      case f: com.tjclp.xl.formatted.Formatted =>
+        (f.value, Some(CellStyle.default.withNumFmt(f.numFmt)))

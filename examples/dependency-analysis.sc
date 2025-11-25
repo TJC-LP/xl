@@ -1,6 +1,7 @@
 //> using scala 3.7.3
 //> using dep com.tjclp::xl-core:0.1.0-SNAPSHOT
 //> using dep com.tjclp::xl-evaluator:0.1.0-SNAPSHOT
+//> using repository ivy2Local
 
 /**
  * XL Formula System - Dependency Analysis Example
@@ -17,13 +18,9 @@
  * Run with: scala-cli examples/dependency-analysis.sc
  */
 
-import com.tjclp.xl.*
-import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
-import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.*
-import com.tjclp.xl.formula.SheetEvaluator.* // Extension methods
-import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.unsafe.*
+// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 
 // ============================================================================
 // Scenario 1: Complex Dependency Chain
@@ -74,24 +71,33 @@ println()
 DependencyGraph.topologicalSort(graph1) match
   case Right(order) =>
     println(s"✓ Evaluation order (${order.size} formulas):")
-    println(s"  ${order.mkString(" → ")}")
+    println(s"  ${order.map(_.toA1).mkString(" → ")}")
   case Left(error) =>
-    println(s"✗ Cycle detected: ${error.cycle.mkString(" → ")}")
+    println(s"✗ Cycle detected: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 println()
 
 // Impact analysis: What happens if A1 changes?
 val a1Impact = DependencyGraph.dependents(graph1, ref"A1")
 println(s"Impact of changing A1:")
-println(s"  Direct dependents: ${a1Impact.mkString(", ")}")
+println(s"  Direct dependents: ${a1Impact.map(_.toA1).mkString(", ")}")
 
-// Find all transitive dependents (cells that ultimately depend on A1)
-def findTransitiveDependents(graph: DependencyGraph, start: ARef): Set[ARef] =
-  val direct = DependencyGraph.dependents(graph, start)
-  if direct.isEmpty then Set.empty
-  else direct ++ direct.flatMap(d => findTransitiveDependents(graph, d))
-
-val transitiveImpact = findTransitiveDependents(graph1, ref"A1")
+// Find all transitive dependents using iterative BFS (avoids scala-cli opaque type issues)
+val transitiveImpact: Set[String] = {
+  var visited = Set.empty[String]
+  var queue = a1Impact.map(_.toA1).toList
+  while queue.nonEmpty do
+    val current = queue.head
+    queue = queue.tail
+    if !visited.contains(current) then
+      visited = visited + current
+      // Get next level of dependents
+      ARef.parse(current).toOption.foreach { ref =>
+        val nextLevel = DependencyGraph.dependents(graph1, ref)
+        queue = queue ++ nextLevel.map(_.toA1).filterNot(visited.contains)
+      }
+  visited
+}
 println(s"  Transitive dependents: ${transitiveImpact.mkString(", ")}")
 println(s"  Total cells affected: ${transitiveImpact.size}")
 
@@ -118,7 +124,7 @@ DependencyGraph.detectCycles(graph2) match
     println("  ✗ No cycle detected (unexpected)")
   case Left(error) =>
     println(s"  ✓ Circular reference detected!")
-    println(s"    Cycle path: ${error.cycle.mkString(" → ")}")
+    println(s"    Cycle path: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 println()
 
@@ -136,7 +142,7 @@ DependencyGraph.detectCycles(graph3) match
     println("  ✗ No cycle detected (unexpected)")
   case Left(error) =>
     println(s"  ✓ Circular reference detected!")
-    println(s"    Cycle path: ${error.cycle.mkString(" → ")}")
+    println(s"    Cycle path: ${error.cycle.map(_.toA1).mkString(" → ")}")
     println(s"    Cycle length: ${error.cycle.size - 1} nodes")
 
 println()
@@ -152,7 +158,7 @@ DependencyGraph.detectCycles(graph4) match
     println("  ✗ No cycle detected (unexpected)")
   case Left(error) =>
     println(s"  ✓ Self-reference detected!")
-    println(s"    Cycle: ${error.cycle.mkString(" → ")}")
+    println(s"    Cycle: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 println()
 
@@ -170,7 +176,7 @@ DependencyGraph.detectCycles(graph5) match
     println("  ✗ No cycle detected (unexpected)")
   case Left(error) =>
     println(s"  ✓ Cycle through range detected!")
-    println(s"    Cycle path: ${error.cycle.mkString(" → ")}")
+    println(s"    Cycle path: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 println()
 
@@ -185,15 +191,15 @@ println()
 
 // Use the complex sheet from Scenario 1
 println("Analyzing precedents (cells this cell depends on):")
-println(s"  D1 precedents: ${DependencyGraph.precedents(graph1, ref"D1")}")
-println(s"  C1 precedents: ${DependencyGraph.precedents(graph1, ref"C1")}")
-println(s"  B1 precedents: ${DependencyGraph.precedents(graph1, ref"B1")}")
+println(s"  D1 precedents: ${DependencyGraph.precedents(graph1, ref"D1").map(_.toA1)}")
+println(s"  C1 precedents: ${DependencyGraph.precedents(graph1, ref"C1").map(_.toA1)}")
+println(s"  B1 precedents: ${DependencyGraph.precedents(graph1, ref"B1").map(_.toA1)}")
 println()
 
 println("Analyzing dependents (cells that depend on this cell):")
-println(s"  B1 dependents: ${DependencyGraph.dependents(graph1, ref"B1")}")
-println(s"  C1 dependents: ${DependencyGraph.dependents(graph1, ref"C1")}")
-println(s"  D1 dependents: ${DependencyGraph.dependents(graph1, ref"D1")}")
+println(s"  B1 dependents: ${DependencyGraph.dependents(graph1, ref"B1").map(_.toA1)}")
+println(s"  C1 dependents: ${DependencyGraph.dependents(graph1, ref"C1").map(_.toA1)}")
+println(s"  D1 dependents: ${DependencyGraph.dependents(graph1, ref"D1").map(_.toA1)}")
 println()
 
 // Find cells with most dependents (potential bottlenecks)
@@ -229,14 +235,17 @@ val modifiedResults = modifiedSheet.evaluateWithDependencyCheck().toOption.get
 
 // Show changes
 println("Impact of changing A1 from 100 to 150:")
-transitiveImpact.toSeq.sortBy(_.toString).foreach { ref =>
-  val oldVal = originalResults.get(ref)
-  val newVal = modifiedResults.get(ref)
-  (oldVal, newVal) match
-    case (Some(CellValue.Number(o)), Some(CellValue.Number(n))) =>
-      val delta = n - o
-      println(f"  $ref: ${o.toDouble}%.0f → ${n.toDouble}%.0f (Δ ${delta.toDouble}%+.0f)")
-    case _ => ()
+transitiveImpact.toSeq.sorted.foreach { refStr =>
+  // Parse string back to ARef for map lookup
+  ARef.parse(refStr).toOption.foreach { ref =>
+    val oldVal = originalResults.get(ref)
+    val newVal = modifiedResults.get(ref)
+    (oldVal, newVal) match
+      case (Some(CellValue.Number(o)), Some(CellValue.Number(n))) =>
+        val delta = n - o
+        println(f"  $refStr: ${o.toDouble}%.0f → ${n.toDouble}%.0f (Δ ${delta.toDouble}%+.0f)")
+      case _ => ()
+  }
 }
 
 println()
@@ -256,7 +265,7 @@ val deps = DependencyGraph.extractDependencies(complexExpr)
 
 println("Formula: =IF(SUM(A1:A10)>100, MAX(B1:B10), MIN(C1:C10))")
 println(s"  Total cell dependencies: ${deps.size}")
-println(s"  Cells referenced: ${deps.toSeq.sortBy(_.toString).take(10).mkString(", ")}${if deps.size > 10 then ", ..." else ""}")
+println(s"  Cells referenced: ${deps.toSeq.sortBy(_.toString).take(10).map(_.toA1).mkString(", ")}${if deps.size > 10 then ", ..." else ""}")
 println()
 
 // Show all available functions

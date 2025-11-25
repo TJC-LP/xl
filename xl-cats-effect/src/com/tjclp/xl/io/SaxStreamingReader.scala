@@ -148,9 +148,14 @@ object SaxStreamingReader:
           // Complete cell - decide which value to use
           for colIdx <- currentCellColIdx do
             val cellValue = (formulaText, cachedValue) match
-              case (Some(formula), _) =>
-                // Formula takes precedence
-                CellValue.Formula(formula)
+              case (Some(formula), Some(cached)) =>
+                // Formula with cached value
+                val parsedCached = interpretCellValue(cached, currentCellType, sst)
+                val cachedOpt = if parsedCached == CellValue.Empty then None else Some(parsedCached)
+                CellValue.Formula(formula, cachedOpt)
+              case (Some(formula), None) =>
+                // Formula without cached value
+                CellValue.Formula(formula, None)
               case (None, Some(value)) =>
                 // No formula, use cached value
                 interpretCellValue(value, currentCellType, sst)

@@ -1,6 +1,7 @@
 //> using scala 3.7.3
 //> using dep com.tjclp::xl-core:0.1.0-SNAPSHOT
 //> using dep com.tjclp::xl-evaluator:0.1.0-SNAPSHOT
+//> using repository ivy2Local
 
 /**
  * XL Formula System - Quick Start Guide
@@ -14,17 +15,9 @@
  * Run with: scala-cli examples/quick-start.sc
  */
 
-import com.tjclp.xl.*
-import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
-import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.error.*  // For .message extension
-import com.tjclp.xl.formula.*
-import com.tjclp.xl.formula.SheetEvaluator.*
-import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.styles.{CellStyle, numfmt}  // For styling
-import numfmt.NumFmt
-import com.tjclp.xl.unsafe.*  // For .unsafe extension
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.unsafe.*
+// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 
 // ============================================================================
 // STEP 1: Parse Formulas
@@ -200,22 +193,22 @@ DependencyGraph.detectCycles(graph) match
   case Right(_) =>
     println("✓ No circular references detected")
   case Left(error) =>
-    println(s"✗ Circular reference: ${error.cycle.mkString(" → ")}")
+    println(s"✗ Circular reference: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 // Get topological evaluation order
 DependencyGraph.topologicalSort(graph) match
   case Right(order) =>
-    println(s"✓ Evaluation order: ${order.mkString(" → ")}")
+    println(s"✓ Evaluation order: ${order.map(_.toA1).mkString(" → ")}")
   case Left(error) =>
     println(s"✗ Cannot sort due to cycle")
 
 // Query precedents (cells B1 depends on)
 val b1Precedents = DependencyGraph.precedents(graph, ref"B1")
-println(s"✓ B1 depends on: ${b1Precedents.mkString(", ")}")
+println(s"✓ B1 depends on: ${b1Precedents.map(_.toA1).mkString(", ")}")
 
 // Query dependents (cells that depend on A1)
 val a1Dependents = DependencyGraph.dependents(graph, ref"A1")
-println(s"✓ Cells depending on A1: ${a1Dependents.mkString(", ")}")
+println(s"✓ Cells depending on A1: ${a1Dependents.map(_.toA1).mkString(", ")}")
 
 println()
 

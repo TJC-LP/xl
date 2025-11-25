@@ -1,9 +1,11 @@
 # Typed Formula System
 
-**Status**: ⏳ In Progress (WI-07 complete, WI-08 in progress)
-**Priority**: Medium
-**Estimated Effort**: 6-8 weeks total (WI-07: 1 week ✅, WI-08: 2-3 weeks, WI-09+: 3-4 weeks)
-**Last Updated**: 2025-11-21
+**Status**: ✅ Complete (WI-07, WI-08, WI-09a/b/c/d all complete)
+**Priority**: Delivered
+**Actual Effort**: ~4 weeks (WI-07: 1 week, WI-08: 1.5 weeks, WI-09a/b/c/d: 1.5 weeks)
+**Last Updated**: 2025-11-24
+
+> **Archive Notice**: This plan has been fully implemented. The formula system is production-ready with 169+ tests, 24 built-in functions, dependency graph with cycle detection, and safe evaluation APIs. This document is retained for historical reference.
 
 ---
 
@@ -24,10 +26,13 @@
 
 | ID | Description | Type | Files | Status | PR |
 |----|-------------|------|-------|--------|----|
-| `WI-07` | Formula Parser (string → AST) | Core | `FormulaParser.scala`, `TExpr.scala`, `FormulaPrinter.scala`, `ParseError.scala` | ✅ Complete | [#TBD](https://github.com/TJC-LP/xl/pull/TBD) |
-| `WI-08` | Formula Evaluator (AST → value) | Core | `Evaluator.scala`, `EvalError.scala` | ⏳ In Progress (skeleton exists) | - |
-| `WI-09` | Function Library (SUM, IF, etc.) | Core | `Functions.scala` | ⏳ Not Started | - |
-| `WI-09b` | Dependency Graph & Cycle Detection | Core | `DependencyGraph.scala` | ⏳ Not Started | - |
+| `WI-07` | Formula Parser (string → AST) | Core | `FormulaParser.scala`, `TExpr.scala`, `FormulaPrinter.scala`, `ParseError.scala` | ✅ Complete | Merged |
+| `WI-08` | Formula Evaluator (AST → value) | Core | `Evaluator.scala`, `EvalError.scala`, `SheetEvaluator.scala` | ✅ Complete | Merged |
+| `WI-09a` | Aggregate Functions (SUM, COUNT, etc.) | Core | `FunctionParser.scala` | ✅ Complete | Merged |
+| `WI-09b` | Logical Functions (IF, AND, OR, NOT) | Core | `FunctionParser.scala` | ✅ Complete | Merged |
+| `WI-09c` | Text & Date Functions | Core | `FunctionParser.scala` | ✅ Complete | Merged |
+| `WI-09d` | Dependency Graph & Cycle Detection | Core | `DependencyGraph.scala` | ✅ Complete | Merged |
+| `WI-09e` | Financial Functions (NPV, IRR, VLOOKUP) | Core | `FunctionParser.scala` | ✅ Complete | Merged |
 
 ---
 

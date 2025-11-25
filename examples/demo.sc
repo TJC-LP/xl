@@ -6,7 +6,7 @@
 //   1. Publish locally: ./mill xl-core.publishLocal
 //   2. Run script: scala-cli run examples/demo.sc
 
-import com.tjclp.xl.*
+import com.tjclp.xl.{*, given}
 
 println("=== XL - Pure Scala 3.7 Excel Library Demo ===\n")
 
@@ -89,15 +89,14 @@ qualifiedRange match
 println("\n=== Formatted Literals ===")
 val priceSheetResult = for
   sheet <- Sheet("Prices")
-  withData <- sheet.put(
-    ref"A1" -> "Item",
-    ref"B1" -> "Price",
-    ref"C1" -> "Discount",
-    ref"A2" -> "Widget",
-    ref"B2" -> money"$$19.99",  // Now preserves Currency format!
-    ref"C2" -> percent"15%"     // Now preserves Percent format!
-  )
-yield withData
+yield sheet.put(
+  ref"A1" -> "Item",
+  ref"B1" -> "Price",
+  ref"C1" -> "Discount",
+  ref"A2" -> "Widget",
+  ref"B2" -> money"$$19.99",  // Now preserves Currency format!
+  ref"C2" -> percent"15%"     // Now preserves Percent format!
+)
 
 priceSheetResult match
   case Right(priceSheet) =>

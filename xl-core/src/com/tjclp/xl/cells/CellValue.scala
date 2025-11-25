@@ -20,8 +20,17 @@ enum CellValue:
   /** Date/time value */
   case DateTime(value: LocalDateTime)
 
-  /** Formula expression (stored as string, can be typed later) */
-  case Formula(expression: String)
+  /**
+   * Formula expression with optional cached result value.
+   *
+   * @param expression
+   *   The formula string (e.g., "=A1+B1")
+   * @param cachedValue
+   *   Optional cached result value from Excel (preserved during roundtrip). This is the last
+   *   calculated value stored in the XLSX file. Can be Number, Text, Bool, Error, or Empty. Should
+   *   never be another Formula.
+   */
+  case Formula(expression: String, cachedValue: Option[CellValue] = None)
 
   /** Empty cell */
   case Empty

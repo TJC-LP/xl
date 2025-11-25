@@ -1,9 +1,9 @@
 # Advanced Features (Drawings, Charts, Tables, Benchmarks)
 
-**Status**: ⬜ Not Started
+**Status**: 🟡 Partially Complete (WI-10 Tables ✅, WI-15 Benchmarks ✅)
 **Priority**: Medium-High
-**Estimated Effort**: 10-15 weeks total
-**Last Updated**: 2025-11-20
+**Estimated Effort**: 8-12 weeks remaining (Charts, Drawings, Pivots)
+**Last Updated**: 2025-11-24
 
 ---
 
@@ -24,11 +24,11 @@
 
 | ID | Description | Type | Files | Status | PR |
 |----|-------------|------|-------|--------|----|
-| `WI-10` | Table Support | Feature | `xl/ooxml/Table.scala`, `xl/tables/TableSpec.scala` | ✅ Complete | #26 (pending) |
+| `WI-10` | Table Support | Feature | `xl-ooxml/Table.scala`, `xl-core/tables/TableSpec.scala` | ✅ Complete | Merged |
 | `WI-11` | Chart Model | Feature | `xl/ooxml/OoxmlChart.scala` | ⏳ Not Started | - |
 | `WI-12` | Drawing Layer | Feature | `xl/ooxml/OoxmlDrawing.scala` | ⏳ Not Started | - |
 | `WI-13` | Pivot Tables | Feature | `xl/ooxml/OoxmlPivot.scala` | ⏳ Not Started | - |
-| `WI-15` | Benchmark Suite | Infra | `xl-benchmarks/` (new module) | ⏳ Not Started | - |
+| `WI-15` | Benchmark Suite | Infra | `xl-benchmarks/` module | ✅ Complete | Merged |
 
 ---
 

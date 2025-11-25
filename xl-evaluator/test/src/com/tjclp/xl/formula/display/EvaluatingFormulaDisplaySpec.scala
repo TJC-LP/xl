@@ -3,6 +3,7 @@ package com.tjclp.xl.formula.display
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.conversions.given
 import com.tjclp.xl.display.{DisplayConversions, ExcelInterpolator, FormulaDisplayStrategy}
 import com.tjclp.xl.formula.Clock
@@ -23,6 +24,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     val sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", 100)
       .put(ref"A2", 200)
+      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     val result = summon[FormulaDisplayStrategy].format("=A1+A2", sheet)
@@ -34,6 +36,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
       .put(ref"A1", 10)
       .put(ref"A2", 20)
       .put(ref"A3", 30)
+      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     val result = summon[FormulaDisplayStrategy].format("=SUM(A1:A3)", sheet)
@@ -44,11 +47,12 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     val sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", 1)
       .put(ref"A2", 2)
+      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     val result = summon[FormulaDisplayStrategy].format("=A1/A2", sheet)
     // Result is 0.5, should be formatted as percent (heuristic)
-    assertEquals(result.contains("%") || result == "0.5", true)
+    assert(result.contains("%") || result == "0.5")
   }
 
   test("Evaluating strategy falls back to raw formula on error") {
@@ -63,6 +67,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     val sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", 100)
       .put(ref"A2", 0)
+      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     val result = summon[FormulaDisplayStrategy].format("=A1/A2", sheet)
@@ -80,6 +85,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
       .put(ref"A1", 100)
       .put(ref"A2", 200)
       .put(ref"B1", CellValue.Formula("=SUM(A1:A2)"))
+      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 
@@ -113,6 +119,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
       .put(ref"A2", 20)
       .put(ref"A3", 30)
       .put(ref"B1", CellValue.Formula("=AVERAGE(A1:A3)"))
+      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 
@@ -129,6 +136,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", 500)
       .put(ref"B1", CellValue.Formula("=IF(A1>400, \"High\", \"Low\")"))
+      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 
@@ -141,7 +149,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     import DisplayConversions.given
 
     val clock = Clock.fixedDate(LocalDate.of(2025, 11, 21))
-    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating(using clock)
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.withClock(clock)
 
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", CellValue.Formula("=TODAY()"))
@@ -159,6 +167,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
       .put(ref"A2", 200)
       .put(ref"B1", CellValue.Formula("=A1+A2"))
       .put(ref"C1", "Total")
+      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 

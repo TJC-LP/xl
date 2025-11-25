@@ -65,7 +65,21 @@ private class EvaluatorImpl extends Evaluator:
   // Suppress asInstanceOf warning for FoldRange GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def eval[A](expr: TExpr[A], sheet: Sheet, clock: Clock = Clock.system): Either[EvalError, A] =
-    expr match
+    // @unchecked: GADT exhaustivity - PolyRef should be resolved before evaluation
+    (expr: @unchecked) match
+      // ===== Defensive PolyRef Handling =====
+      // PolyRef should be converted to typed Ref during parsing, but if it reaches
+      // evaluation unconverted, provide a clear error instead of MatchError
+      case TExpr.PolyRef(at) =>
+        // Cast to ARef to workaround Scala 3 inline method issue with pattern-matched values
+        val refStr = (at: ARef).toA1
+        Left(
+          EvalError.EvalFailed(
+            s"Unresolved cell reference $refStr. This indicates a parser bug - PolyRef should be resolved before evaluation.",
+            None
+          )
+        )
+
       // ===== Literals =====
       case TExpr.Lit(value) =>
         // Literal: return value directly (identity law)
@@ -77,16 +91,6 @@ private class EvaluatorImpl extends Evaluator:
         // Note: sheet(at) returns empty cell if not present, decode handles empty cells
         val cell = sheet(at)
         decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
-
-      case TExpr.PolyRef(at) =>
-        // PolyRef should never reach evaluator - function parsers must convert to typed Ref
-        // If this is hit, it's a parser bug (forgot to convert PolyRef in function parser)
-        scala.util.Left(
-          EvalError.EvalFailed(
-            "PolyRef reached evaluator - parser bug (function did not convert PolyRef to typed Ref)",
-            Some("This is an internal error - please report this issue")
-          )
-        )
 
       // ===== Conditional =====
       case TExpr.If(cond, ifTrue, ifFalse) =>

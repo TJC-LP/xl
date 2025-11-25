@@ -7,6 +7,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import munit.FunSuite
 
@@ -39,7 +40,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -97,7 +98,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -149,7 +150,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -225,7 +226,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 

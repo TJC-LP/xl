@@ -104,7 +104,7 @@ object SheetEvaluator:
     def evaluateCell(ref: ARef, clock: Clock = Clock.system): XLResult[CellValue] =
       val cell = sheet(ref)
       cell.value match
-        case CellValue.Formula(expr) =>
+        case CellValue.Formula(expr, _) =>
           evaluateFormula(expr, clock)
         case other =>
           scala.util.Right(other)
@@ -165,6 +165,7 @@ object SheetEvaluator:
                   tempSheet.evaluateCell(ref, clock) match
                     case scala.util.Right(value) =>
                       // Update temp sheet with evaluated value (for dependent formulas to use)
+                      // put(ref, CellValue) returns Sheet directly - it cannot fail
                       tempSheet = tempSheet.put(ref, value)
                       results = results + (ref -> value)
                       scala.util.Right(())

@@ -3,6 +3,7 @@ package com.tjclp.xl.display
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, CellError}
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.conversions.given  // For put(ARef, value)
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
@@ -259,7 +260,7 @@ class DisplaySpec extends FunSuite:
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
-    val result = mySheet.display(ref"A1")
+    val result = mySheet.displayCell(ref"A1")
     assertEquals(result.formatted, "85%")
   }
 
@@ -282,9 +283,10 @@ class DisplaySpec extends FunSuite:
 
     val mySheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", BigDecimal("100"))
+      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
     val result = mySheet.displayFormula(ref"A1")
-    assertEquals(result, "100")
+    assertEquals(result, "100.00")  // BigDecimal auto-applies Decimal format
   }

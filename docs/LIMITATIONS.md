@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2025-11-22 (WI-07/08/09/09d Formula System Complete)
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (parser + evaluator + 21 functions + dependency graph); tables + benchmarks complete.
+**Last Updated**: 2025-11-24 (Formula System Production Ready, Tables + Benchmarks Complete)
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (parser + evaluator + 24 functions + dependency graph + cycle detection); tables + benchmarks complete.
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -658,7 +658,8 @@ See: [plan/23-security.md](plan/23-security.md)
 | **Streaming Read** | ✅ | ✅ | XL: 55k rows/s, POI: ~40k rows/s |
 | **Multi-sheet** | ✅ | ✅ | XL: Arbitrary, POI: Sequential |
 | **Styles** | ✅ | ✅ | XL: Full in-memory; streaming uses minimal default styles |
-| **Formulas (eval)** | ❌ | ✅ | POI has evaluator |
+| **Formulas (eval)** | ✅ | ✅ | XL: 24 functions, dependency graph, cycle detection |
+| **Tables** | ✅ | ✅ | XL: Full table support with AutoFilter, structured refs |
 | **Charts** | ❌ | ✅ | POI: Full support |
 | **Drawings** | ❌ | ✅ | POI: Images/shapes |
 | **Memory (100k rows)** | ✅ 50MB | ❌ 800MB | XL: 16x better |
@@ -681,12 +682,14 @@ See: [plan/23-security.md](plan/23-security.md)
 - Multi-sheet workbooks
 - Core cell types and rich text
 - Styling in in-memory workflows (full styles supported)
+- Formula evaluation (24 functions, dependency graph, cycle detection)
+- Excel Tables (structured data with AutoFilter, headers, styling)
+- Performance-critical workloads (benchmarked vs POI)
 
 **No/Not yet, if you need**:
 - Charts or drawings (planned)
-- Tables/pivots/conditional formatting/data validation (planned)
-- Formula evaluation (planned)
-- Excel macros (not planned to execute; preservation to be defined)
+- Pivot tables/conditional formatting/data validation (planned)
+- Excel macros (not planned to execute; preservation planned)
 
 ---
 
@@ -723,17 +726,22 @@ See: [plan/23-security.md](plan/23-security.md)
 
 ---
 
-### Q: Why defer formula evaluation to P11?
+### Q: How complete is formula evaluation?
 
-**Complexity**: Extremely high (60-90 days estimated)
-- 400+ Excel functions to implement
-- Complex precedence and associativity rules
-- Circular reference detection
-- Dependency graph management
+**Status**: ✅ Production Ready (as of WI-07/08/09)
 
-**Alternative**: Let Excel recalculate on open (standard practice)
+**What's implemented**:
+- 24 built-in functions (SUM, IF, VLOOKUP, NPV, IRR, etc.)
+- Full dependency graph with cycle detection
+- Safe evaluation with `evaluateWithDependencyCheck()`
+- Type coercion and error handling
 
-**Verdict**: Focus on streaming performance and data I/O first
+**What's planned for future**:
+- Extended function library (300+ Excel functions)
+- Array formulas
+- Structured references (Table[@Column])
+
+**For most use cases**, the current implementation is sufficient. Let Excel recalculate for unsupported functions.
 
 ---
 

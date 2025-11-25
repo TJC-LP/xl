@@ -6,6 +6,7 @@ import com.tjclp.xl.Workbook
 import com.tjclp.xl.context.{SourceContext, SourceFingerprint}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.PartManifest
 import com.tjclp.xl.sheets.Sheet
@@ -54,7 +55,7 @@ class WorkbookModificationSpec extends FunSuite:
   }
 
   test("put marks sheet as modified when replacing existing sheet") {
-    val modifiedSheet = baseSheet.put(ref"A1" -> "New Value").fold(err => fail(s"Failed to modify sheet: $err"), identity)
+    val modifiedSheet = baseSheet.put(ref"A1" -> "New Value")
     val updated = workbook.put(modifiedSheet).fold(err => fail(s"Put failed: $err"), identity)
     val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assertEquals(tracker.modifiedSheets, Set(0))

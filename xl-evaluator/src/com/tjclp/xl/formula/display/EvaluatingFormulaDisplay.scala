@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.display
 
-import com.tjclp.xl.display.{FormulaDisplayStrategy, NumFmtFormatter}
+import com.tjclp.xl.display.{FormulaDisplayStrategy, LowPriorityFormulaDisplay, NumFmtFormatter}
 import com.tjclp.xl.formula.{Clock, SheetEvaluator}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -8,20 +8,22 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 /**
  * Formula display strategy with automatic evaluation.
  *
- * When this given is imported, formula cells are automatically evaluated and formatted for display:
+ * When xl-evaluator is imported via `import com.tjclp.xl.{*, given}`, formula cells are
+ * automatically evaluated and formatted for display. The `evaluating` given has higher priority
+ * than the `default` strategy due to inheritance depth (LowPriority pattern).
+ *
  * {{{
- * import com.tjclp.xl.display.{*, given}
- * import com.tjclp.xl.formula.display.given  // ← Enables evaluation!
+ * import com.tjclp.xl.{*, given}  // Brings in evaluating strategy automatically!
  *
  * given Sheet = mySheet
- * println(s"Total: \${ref"B1"}")  // Shows "$1,000,000" (evaluated!)
+ * println(excel"Total: \${ref"B1"}")  // Shows "$1,000,000" (evaluated!)
  * }}}
  *
- * Without this import, formulas display as raw text: `"=SUM(A1:A10)"`.
+ * Without xl-evaluator, formulas display as raw text: `"=SUM(A1:A10)"`.
  *
  * @since 0.2.0
  */
-object EvaluatingFormulaDisplay:
+object EvaluatingFormulaDisplay extends LowPriorityFormulaDisplay:
 
   /**
    * Evaluating formula display strategy.
@@ -29,17 +31,32 @@ object EvaluatingFormulaDisplay:
    * Parses and evaluates formulas, then formats the result according to cell NumFmt. Falls back to
    * raw formula text if evaluation fails.
    *
-   * @param clock
-   *   Clock for date/time functions (defaults to system clock)
+   * Uses Clock.system for date/time functions.
    */
-  given evaluating(using clock: Clock = Clock.system): FormulaDisplayStrategy with
+  given evaluating: FormulaDisplayStrategy = withClock(Clock.system)
+
+  /**
+   * Create an evaluating strategy with a custom clock.
+   *
+   * Useful for testing date/time functions with deterministic results:
+   * {{{
+   * val clock = Clock.fixedDate(LocalDate.of(2025, 1, 15))
+   * given FormulaDisplayStrategy = EvaluatingFormulaDisplay.withClock(clock)
+   * }}}
+   *
+   * @param clock
+   *   The clock to use for date/time functions (TODAY, NOW, etc.)
+   * @return
+   *   A FormulaDisplayStrategy that evaluates formulas using the given clock
+   */
+  def withClock(clock: Clock): FormulaDisplayStrategy = new FormulaDisplayStrategy:
     def format(formula: String, sheet: Sheet): String =
       import SheetEvaluator.*
 
       // Ensure formula has "=" prefix for evaluator
       val formulaWithEquals = if formula.startsWith("=") then formula else s"=$formula"
 
-      // Evaluate the formula
+      // Evaluate the formula using provided clock
       sheet.evaluateFormula(formulaWithEquals, clock) match
         case Right(result) =>
           // Successfully evaluated - format the result

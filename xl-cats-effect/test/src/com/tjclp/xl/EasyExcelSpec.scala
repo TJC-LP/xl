@@ -2,8 +2,8 @@ package com.tjclp.xl
 
 import cats.effect.IO
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.extensions.given // For CellWriter given instances
-import com.tjclp.xl.io.EasyExcel as Excel
+import com.tjclp.xl.codec.CellCodec.given // For CellWriter given instances
+import com.tjclp.xl.io.Excel
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.unsafe.* // For .unsafe extension
@@ -13,9 +13,9 @@ import java.nio.file.{Files, Paths}
 import munit.CatsEffectSuite
 
 /**
- * Tests for EasyExcel synchronous IO operations.
+ * Tests for Excel Easy Mode synchronous IO operations.
  *
- * Covers all methods in xl-cats-effect/src/com/tjclp/xl/io/EasyExcel.scala:
+ * Covers Easy Mode methods in xl-cats-effect/src/com/tjclp/xl/io/Excel.scala:
  *   - Excel.read() - Synchronous file reading
  *   - Excel.write() - Synchronous file writing
  *   - Excel.modify() - In-place modification
@@ -27,7 +27,7 @@ class EasyExcelSpec extends CatsEffectSuite:
   // ========== Read Operations ==========
 
   test("read throws Exception for missing file") {
-    // Note: EasyExcel wraps IO exceptions in generic Exception
+    // Note: Excel Easy Mode wraps IO exceptions in generic Exception
     intercept[Exception] {
       Excel.read("/nonexistent/path/missing.xlsx")
     }

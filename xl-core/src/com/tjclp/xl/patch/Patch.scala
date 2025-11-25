@@ -3,6 +3,7 @@ package com.tjclp.xl.patch
 import cats.Monoid
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
 import com.tjclp.xl.sheets.syntax.*
@@ -29,6 +30,9 @@ enum Patch:
 
   /** Set style for a cell using CellStyle object (auto-registers in styleRegistry) */
   case SetCellStyle(ref: ARef, style: CellStyle)
+
+  /** Set style for a range of cells (auto-registers in styleRegistry) */
+  case SetRangeStyle(range: CellRange, style: CellStyle)
 
   /** Clear style for a cell */
   case ClearStyle(ref: ARef)
@@ -99,6 +103,10 @@ object Patch:
     case SetCellStyle(ref, style) =>
       // Register style and apply to cell automatically
       Right(sheet.withCellStyle(ref, style))
+
+    case SetRangeStyle(range, style) =>
+      // Register style and apply to all cells in range
+      Right(sheet.withRangeStyle(range, style))
 
     case ClearStyle(ref) =>
       val cell = sheet(ref).clearStyle

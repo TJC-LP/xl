@@ -5,6 +5,7 @@ import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import munit.FunSuite
 
@@ -48,7 +49,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"B1" -> "Modified by XL") // B1 has no comment, so A1's comment preserved
+      updatedSheet = sheet.put(ref"B1" -> "Modified by XL") // B1 has no comment, so A1's comment preserved
       updated <- wb.put(updatedSheet)
     yield updated
 

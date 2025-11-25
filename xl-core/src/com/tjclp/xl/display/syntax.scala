@@ -11,14 +11,14 @@ import scala.language.implicitConversions
  *
  * Provides both automatic (via implicit conversion) and explicit display methods:
  * {{{
- * import com.tjclp.xl.display.{*, given}
+ * import com.tjclp.xl.{*, given}
  * given Sheet = mySheet
  *
- * // Automatic (via implicit conversion)
- * println(s"Revenue: \${ref"A1"}")
+ * // Automatic (via implicit conversion with excel interpolator)
+ * println(excel"Revenue: \${ref"A1"}")
  *
  * // Explicit (via extension method)
- * println(s"Revenue: \${mySheet.display(ref"A1")}")
+ * println(s"Revenue: \${mySheet.displayCell(ref"A1")}")
  *
  * // Force raw formula display
  * println(s"Formula: \${mySheet.displayFormula(ref"A1")}")
@@ -42,7 +42,7 @@ object syntax:
      * @return
      *   DisplayWrapper with formatted string
      */
-    def display(ref: ARef)(using fds: FormulaDisplayStrategy): DisplayWrapper =
+    def displayCell(ref: ARef)(using fds: FormulaDisplayStrategy): DisplayWrapper =
       // Use the implicit conversion - sheet is provided by extension context
       import DisplayConversions.given
       given Sheet = sheet
@@ -63,7 +63,7 @@ object syntax:
     def displayFormula(ref: ARef)(using fds: FormulaDisplayStrategy): String =
       val cell = sheet.cells.get(ref).getOrElse(Cell.empty(ref))
       cell.value match
-        case CellValue.Formula(expr) =>
+        case CellValue.Formula(expr, _) =>
           // Expression already includes "=" prefix
           if expr.startsWith("=") then expr else s"=$expr"
-        case _ => display(ref).formatted
+        case _ => displayCell(ref).formatted

@@ -1,6 +1,7 @@
 //> using scala 3.7.3
 //> using dep com.tjclp::xl-core:0.1.0-SNAPSHOT
 //> using dep com.tjclp::xl-evaluator:0.1.0-SNAPSHOT
+//> using repository ivy2Local
 
 /**
  * XL Formula System - Financial Model Example
@@ -17,21 +18,9 @@
  * Run with: scala-cli examples/financial-model.sc
  */
 
-import com.tjclp.xl.*
-import com.tjclp.xl.conversions.given  // Enables put(ref, primitiveValue) syntax
-import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.display.{*, given}  // Display formatting
-import com.tjclp.xl.display.ExcelInterpolator.*  // excel"..." interpolator
-import com.tjclp.xl.display.DisplayConversions.given
-import com.tjclp.xl.error.*  // For .message extension
-import com.tjclp.xl.formula.*
-import com.tjclp.xl.formula.SheetEvaluator.*
-import com.tjclp.xl.formula.display.EvaluatingFormulaDisplay  // Formula evaluation in display
-import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.styles.{CellStyle, numfmt}
-import numfmt.NumFmt
-import com.tjclp.xl.unsafe.*  // For .unsafe extension
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.unsafe.*
+// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 import java.time.LocalDate
 
 // ============================================================================
@@ -204,8 +193,8 @@ println("KEY METRICS (Using excel\"...\" Interpolator)")
 println("=" * 80)
 
 // Enable display formatting with formula evaluation
-given Sheet = evaluatedModel  // Use evaluated model for display
-given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+// The evaluating strategy is automatically active when xl-evaluator is imported
+given Sheet = evaluatedModel
 
 // ✨ Clean, readable output using excel interpolator
 println(excel"2024 Revenue: ${ref"B3"}")
@@ -283,14 +272,14 @@ DependencyGraph.detectCycles(graph) match
   case Right(_) =>
     println("✓ No circular references detected (model is valid)")
   case Left(error) =>
-    println(s"✗ Circular reference: ${error.cycle.mkString(" → ")}")
+    println(s"✗ Circular reference: ${error.cycle.map(_.toA1).mkString(" → ")}")
 
 // Get evaluation order
 DependencyGraph.topologicalSort(graph) match
   case Right(order) =>
     println(s"✓ Evaluation order: ${order.size} formulas in dependency order")
-    println(s"  First 5: ${order.take(5).mkString(" → ")}")
-    println(s"  Last 5: ${order.takeRight(5).mkString(" → ")}")
+    println(s"  First 5: ${order.take(5).map(_.toA1).mkString(" → ")}")
+    println(s"  Last 5: ${order.takeRight(5).map(_.toA1).mkString(" → ")}")
   case Left(error) =>
     println(s"✗ Cannot sort due to cycle")
 
@@ -299,12 +288,12 @@ println()
 // Analyze Net Income dependencies
 println("Net Income (B16) dependency chain:")
 val b16Precedents = DependencyGraph.precedents(graph, ref"B16")
-println(s"  Direct dependencies: ${b16Precedents.mkString(", ")}")
+println(s"  Direct dependencies: ${b16Precedents.map(_.toA1).mkString(", ")}")
 
 // Show which cells would be affected if revenue changed
 val revenueImpact = DependencyGraph.dependents(graph, ref"B3")
 println(s"\nCells impacted by B3 (2024 Revenue): ${revenueImpact.size} cells")
-println(s"  Examples: ${revenueImpact.take(5).mkString(", ")}")
+println(s"  Examples: ${revenueImpact.take(5).map(_.toA1).mkString(", ")}")
 
 println()
 

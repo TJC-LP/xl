@@ -2,6 +2,7 @@ package com.tjclp.xl.codec
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.codec.syntax.*
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.cells.{Cell, CellValue}
@@ -127,49 +128,36 @@ class BatchUpdateSpec extends FunSuite:
     assertEquals(sheet(ref"A1").value, CellValue.Text("New"))
   }
 
-  test("put: unsupported types return Left (pure)") {
-    // Unsupported types should return Left[XLError.UnsupportedType] (pure behavior)
-    case class UnsupportedType(value: String)
+  // ========== Type Safety Tests ==========
+  // Note: Unsupported types now cause COMPILE-TIME errors, not runtime errors.
+  // The following tests document the type-safe behavior introduced by CellWriter[CellWritable]:
+  //
+  // This code would NOT compile:
+  //   case class UnsupportedType(value: String)
+  //   sheet.put(ref"A1" -> UnsupportedType("Invalid"))
+  //   // Error: No given instance of type CellWriter[UnsupportedType]
+  //
+  // To support custom types, users define a CellWriter instance:
+  //   given CellWriter[MyType] with
+  //     def write(value: MyType) = (CellValue.Text(value.toString), None)
 
+  test("put: type-safe API accepts CellWritable types") {
+    // All CellWritable types compile and work correctly
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+      .put(
+        ref"A1" -> "String",
+        ref"B1" -> 42,
+        ref"C1" -> 3.14,
+        ref"D1" -> true,
+        ref"E1" -> BigDecimal("99.99")
+      )
+      .unsafe
 
-    // Should return Left for unsupported type
-    val result = sheet.put(
-      ref"A1" -> "Valid",
-      ref"B1" -> UnsupportedType("Invalid") // Unsupported type
-    )
-
-    result match
-      case Left(XLError.UnsupportedType(ref, typeName)) =>
-        assertEquals(ref, "B1")
-        assert(typeName.contains("UnsupportedType"))
-      case Left(other) =>
-        fail(s"Expected UnsupportedType error, got: $other")
-      case Right(_) =>
-        fail("Expected Left, got Right")
-  }
-
-  test("put: unsupported types throw with .unsafe") {
-    // When using .unsafe, should throw XLException (wrapping XLError)
-    case class UnsupportedType(value: String)
-
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
-
-    // Should throw XLException when using .unsafe on error result
-    val exception = intercept[XLException] {
-      sheet.put(
-        ref"A1" -> "Valid",
-        ref"B1" -> UnsupportedType("Invalid")
-      ).unsafe
-    }
-
-    // Verify exception message contains helpful information
-    assert(exception.getMessage.contains("Unsupported type"))
-    assert(exception.getMessage.contains("B1"))
-
-    // Verify we can access the underlying XLError for structured error handling
-    exception.error match
-      case _: XLError => // Success - error is structured
+    assertEquals(sheet(ref"A1").value, CellValue.Text("String"))
+    assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal(42)))
+    assertEquals(sheet(ref"C1").value, CellValue.Number(BigDecimal(3.14)))
+    assertEquals(sheet(ref"D1").value, CellValue.Bool(true))
+    assertEquals(sheet(ref"E1").value, CellValue.Number(BigDecimal("99.99")))
   }
 
   test("put: writes single typed value with auto-inferred style") {
