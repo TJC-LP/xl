@@ -77,6 +77,17 @@ object Main
 
   private val formulasOpt = Opts.flag("formulas", "Show formulas instead of values").orFalse
   private val limitOpt = Opts.option[Int]("limit", "Maximum rows to display").withDefault(50)
+  private val formatOpt = Opts
+    .option[String]("format", "Output format: markdown, html, or svg")
+    .withDefault("markdown")
+    .mapValidated { s =>
+      s.toLowerCase match
+        case "markdown" | "md" => cats.data.Validated.valid(ViewFormat.Markdown)
+        case "html" => cats.data.Validated.valid(ViewFormat.Html)
+        case "svg" => cats.data.Validated.valid(ViewFormat.Svg)
+        case other =>
+          cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown, html, or svg")
+    }
 
   // --- Read-only commands ---
 
@@ -88,8 +99,8 @@ object Main
     Opts(Command.Bounds)
   }
 
-  val viewCmd: Opts[Command] = Opts.subcommand("view", "View range as markdown table") {
-    (rangeArg, formulasOpt, limitOpt).mapN(Command.View.apply)
+  val viewCmd: Opts[Command] = Opts.subcommand("view", "View range (markdown, html, or svg)") {
+    (rangeArg, formulasOpt, limitOpt, formatOpt).mapN(Command.View.apply)
   }
 
   val cellCmd: Opts[Command] = Opts.subcommand("cell", "Get cell details") {
@@ -199,11 +210,15 @@ object Main
              |Used range: (empty)
              |Non-empty: 0 cells""".stripMargin)
 
-    case Command.View(rangeStr, showFormulas, limit) =>
+    case Command.View(rangeStr, showFormulas, limit, format) =>
+      import com.tjclp.xl.sheets.styleSyntax.*
       for
         range <- IO.fromEither(CellRange.parse(rangeStr).left.map(e => new Exception(e.toString)))
         limitedRange = limitRange(range, limit)
-      yield Markdown.renderRange(sheet, limitedRange, showFormulas)
+      yield format match
+        case ViewFormat.Markdown => Markdown.renderRange(sheet, limitedRange, showFormulas)
+        case ViewFormat.Html => sheet.toHtml(limitedRange)
+        case ViewFormat.Svg => sheet.toSvg(limitedRange)
 
     case Command.Cell(refStr) =>
       for
@@ -324,7 +339,7 @@ enum Command:
   // Read-only
   case Sheets
   case Bounds
-  case View(range: String, showFormulas: Boolean, limit: Int)
+  case View(range: String, showFormulas: Boolean, limit: Int, format: ViewFormat)
   case Cell(ref: String)
   case Search(pattern: String, limit: Int)
   // Analyze
@@ -332,3 +347,9 @@ enum Command:
   // Mutate (require -o)
   case Put(ref: String, value: String)
   case PutFormula(ref: String, formula: String)
+
+/**
+ * Output format for view command.
+ */
+enum ViewFormat:
+  case Markdown, Html, Svg
