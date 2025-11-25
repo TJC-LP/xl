@@ -17,82 +17,62 @@ import com.tjclp.xl.formula.SheetEvaluator
 /**
  * XL CLI - LLM-friendly Excel operations.
  *
- * Designed for incremental exploration following Claude Code patterns: don't dump everything at
- * once, explore on demand.
+ * Stateless by design: each command is self-contained. Use global flags:
+ *   - `-f, --file` — Input file (required)
+ *   - `-s, --sheet` — Sheet name (optional, defaults to first)
+ *   - `-o, --output` — Output file for mutations (required for put/putf)
  */
 object Main
     extends CommandIOApp(
       name = "xl",
-      header = "LLM-friendly Excel operations",
+      header = "LLM-friendly Excel operations (stateless)",
       version = "0.1.0"
     ):
 
-  // Session state - held across REPL interactions
-  // For single-command invocations, this starts fresh each time
-  private var session: Session = Session.empty
-
   override def main: Opts[IO[ExitCode]] =
-    val subcommands = openCmd orElse createCmd orElse closeCmd orElse
-      sheetsCmd orElse selectCmd orElse boundsCmd orElse
-      viewCmd orElse cellCmd orElse searchCmd orElse evalCmd orElse
-      putCmd orElse putfCmd orElse
-      saveCmd orElse saveasCmd
+    val subcommands =
+      sheetsCmd orElse boundsCmd orElse
+        viewCmd orElse cellCmd orElse searchCmd orElse evalCmd orElse
+        putCmd orElse putfCmd
 
-    (fileOpt, sheetOpt, subcommands).mapN { (filePathOpt, sheetNameOpt, cmd) =>
-      runWithFile(filePathOpt, sheetNameOpt, cmd)
+    (fileOpt, sheetOpt, outputOpt, subcommands).mapN { (filePath, sheetName, outputPath, cmd) =>
+      run(filePath, sheetName, outputPath, cmd)
     }
+
+  // ==========================================================================
+  // Global options
+  // ==========================================================================
+
+  private val fileOpt =
+    Opts.option[Path]("file", "Excel file to operate on (required)", "f")
+
+  private val sheetOpt =
+    Opts.option[String]("sheet", "Sheet to select (optional, defaults to first)", "s").orNone
+
+  private val outputOpt =
+    Opts.option[Path]("output", "Output file for mutations (required for put/putf)", "o").orNone
 
   // ==========================================================================
   // Command definitions
   // ==========================================================================
 
-  private val pathArg = Opts.argument[Path]("path")
   private val rangeArg = Opts.argument[String]("range")
   private val refArg = Opts.argument[String]("ref")
   private val valueArg = Opts.argument[String]("value")
-  private val sheetArg = Opts.argument[String]("sheet")
   private val patternArg = Opts.argument[String]("pattern")
 
-  private val readonlyOpt = Opts.flag("readonly", "Open in read-only mode").orFalse
   private val formulasOpt = Opts.flag("formulas", "Show formulas instead of values").orFalse
   private val limitOpt = Opts.option[Int]("limit", "Maximum rows to display").withDefault(50)
 
-  // Global options (auto-opens workbook and selects sheet before command)
-  private val fileOpt = Opts.option[Path]("file", "Excel file to operate on", "f").orNone
-  private val sheetOpt = Opts.option[String]("sheet", "Sheet to select", "s").orNone
-
-  // --- Open/Initialize ---
-
-  val openCmd: Opts[Command] = Opts.subcommand("open", "Open an Excel file") {
-    (pathArg, readonlyOpt).mapN(Command.Open.apply)
-  }
-
-  val createCmd: Opts[Command] = Opts.subcommand("create", "Create new workbook") {
-    Opts
-      .option[String]("sheets", "Comma-separated sheet names")
-      .withDefault("Sheet1")
-      .map(s => Command.Create(s.split(",").toVector.map(_.trim)))
-  }
-
-  val closeCmd: Opts[Command] = Opts.subcommand("close", "Close current workbook") {
-    Opts.flag("discard", "Discard unsaved changes").orFalse.map(Command.Close.apply)
-  }
-
-  // --- Navigate ---
+  // --- Read-only commands ---
 
   val sheetsCmd: Opts[Command] = Opts.subcommand("sheets", "List all sheets") {
     Opts(Command.Sheets)
   }
 
-  val selectCmd: Opts[Command] = Opts.subcommand("select", "Set active sheet") {
-    sheetArg.map(Command.Select.apply)
+  val boundsCmd: Opts[Command] = Opts.subcommand("bounds", "Show used range of current sheet") {
+    Opts(Command.Bounds)
   }
-
-  val boundsCmd: Opts[Command] = Opts.subcommand("bounds", "Show used range") {
-    sheetArg.orNone.map(Command.Bounds.apply)
-  }
-
-  // --- Explore ---
 
   val viewCmd: Opts[Command] = Opts.subcommand("view", "View range as markdown table") {
     (rangeArg, formulasOpt, limitOpt).mapN(Command.View.apply)
@@ -119,123 +99,79 @@ object Main
     }
   }
 
-  // --- Mutate ---
+  // --- Mutate (require -o) ---
 
-  val putCmd: Opts[Command] = Opts.subcommand("put", "Write value to cell") {
+  val putCmd: Opts[Command] = Opts.subcommand("put", "Write value to cell (requires -o)") {
     (refArg, valueArg).mapN(Command.Put.apply)
   }
 
-  val putfCmd: Opts[Command] = Opts.subcommand("putf", "Write formula to cell") {
+  val putfCmd: Opts[Command] = Opts.subcommand("putf", "Write formula to cell (requires -o)") {
     (refArg, valueArg).mapN(Command.PutFormula.apply)
-  }
-
-  // --- Persist ---
-
-  val saveCmd: Opts[Command] = Opts.subcommand("save", "Save workbook") {
-    Opts(Command.Save)
-  }
-
-  val saveasCmd: Opts[Command] = Opts.subcommand("saveas", "Save workbook to new path") {
-    pathArg.map(Command.SaveAs.apply)
   }
 
   // ==========================================================================
   // Command execution
   // ==========================================================================
 
-  private def runWithFile(
-    fileOpt: Option[Path],
-    sheetOpt: Option[String],
+  private def run(
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    outputOpt: Option[Path],
     cmd: Command
   ): IO[ExitCode] =
-    val openFile: IO[Unit] = fileOpt match
-      case Some(path) =>
-        ExcelIO.instance[IO].read(path).flatMap { wb =>
-          IO.delay { session = Session.withWorkbook(wb, path, readOnly = false) }
-        }
-      case None => IO.unit
-
-    val selectSheet: IO[Unit] = sheetOpt match
-      case Some(name) =>
-        IO.fromEither(SheetName.apply(name).left.map(e => new Exception(e))).flatMap { sheetName =>
-          IO.delay { session = session.selectSheet(sheetName) }
-        }
-      case None => IO.unit
-
-    (openFile *> selectSheet).attempt.flatMap {
-      case Left(err) =>
-        IO.println(Format.errorSimple(s"Setup failed: ${err.getMessage}")).as(ExitCode.Error)
-      case Right(_) =>
-        run(cmd)
-    }
-
-  private def run(cmd: Command): IO[ExitCode] =
-    execute(cmd).attempt.flatMap {
+    execute(filePath, sheetNameOpt, outputOpt, cmd).attempt.flatMap {
       case Right(output) =>
         IO.println(output).as(ExitCode.Success)
       case Left(err) =>
         IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
     }
 
-  private def execute(cmd: Command): IO[String] = cmd match
-    case Command.Open(path, readonly) =>
-      for
-        _ <- requireNoWorkbook
-        wb <- ExcelIO.instance[IO].read(path)
-        _ = session = Session.withWorkbook(wb, path, readonly)
-      yield Format.openSuccess(path.toString, wb.sheets.map(_.name.value))
+  private def execute(
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    outputOpt: Option[Path],
+    cmd: Command
+  ): IO[String] =
+    for
+      wb <- ExcelIO.instance[IO].read(filePath)
+      sheet <- resolveSheet(wb, sheetNameOpt)
+      result <- executeCommand(wb, sheet, outputOpt, cmd)
+    yield result
 
-    case Command.Create(sheetNames) =>
-      for
-        _ <- requireNoWorkbook
-        sheets = sheetNames.map(name => Sheet(SheetName.apply(name).toOption.get))
-        wb = Workbook(sheets)
-        _ = session = Session.newWorkbook(wb)
-      yield Format.createSuccess(sheetNames)
+  private def resolveSheet(wb: Workbook, sheetNameOpt: Option[String]): IO[Sheet] =
+    sheetNameOpt match
+      case Some(name) =>
+        IO.fromEither(SheetName.apply(name).left.map(e => new Exception(e))).flatMap { sheetName =>
+          IO.fromOption(wb.sheets.find(_.name == sheetName))(
+            new Exception(
+              s"Sheet not found: $name. Available: ${wb.sheets.map(_.name.value).mkString(", ")}"
+            )
+          )
+        }
+      case None =>
+        IO.fromOption(wb.sheets.headOption)(new Exception("Workbook has no sheets"))
 
-    case Command.Close(discard) =>
-      for
-        _ <- requireWorkbook
-        _ <-
-          if session.isDirty && !discard
-          then IO.raiseError(new Exception("Unsaved changes. Use --discard to force close."))
-          else IO.unit
-        path = session.path.map(_.toString).getOrElse("(unsaved)")
-        _ = session = Session.empty
-      yield s"Closed: $path"
+  private def executeCommand(
+    wb: Workbook,
+    sheet: Sheet,
+    outputOpt: Option[Path],
+    cmd: Command
+  ): IO[String] = cmd match
 
     case Command.Sheets =>
-      for
-        wb <- requireWorkbook
-        sheetStats = wb.sheets.map { sheet =>
-          val usedRange = sheet.usedRange
-          val cellCount = sheet.cells.size
-          val formulaCount = sheet.cells.values.count(_.isFormula)
-          (sheet.name.value, usedRange, cellCount, formulaCount)
-        }
-      yield Markdown.renderSheetList(sheetStats)
+      val sheetStats = wb.sheets.map { s =>
+        val usedRange = s.usedRange
+        val cellCount = s.cells.size
+        val formulaCount = s.cells.values.count(_.isFormula)
+        (s.name.value, usedRange, cellCount, formulaCount)
+      }
+      IO.pure(Markdown.renderSheetList(sheetStats))
 
-    case Command.Select(name) =>
-      for
-        wb <- requireWorkbook
-        sheetName <- IO.fromEither(SheetName.apply(name).left.map(e => new Exception(e)))
-        sheet <- IO.fromOption(wb.sheets.find(_.name == sheetName))(
-          new Exception(s"Sheet not found: $name")
-        )
-        _ = session = session.selectSheet(sheetName)
-        usedRange = sheet.usedRange.map(_.toA1)
-        cellCount = sheet.cells.size
-        formulaCount = sheet.cells.values.count(_.isFormula)
-      yield Format.selectSuccess(name, usedRange, cellCount, formulaCount)
-
-    case Command.Bounds(sheetOpt) =>
-      for
-        wb <- requireWorkbook
-        sheet <- getSheet(sheetOpt)
-        name = sheet.name.value
-        usedRange = sheet.usedRange
-        cellCount = sheet.cells.size
-      yield usedRange match
+    case Command.Bounds =>
+      val name = sheet.name.value
+      val usedRange = sheet.usedRange
+      val cellCount = sheet.cells.size
+      IO.pure(usedRange match
         case Some(range) =>
           val rowCount = range.end.row.index0 - range.start.row.index0 + 1
           val colCount = range.end.col.index0 - range.start.col.index0 + 1
@@ -247,52 +183,42 @@ object Main
         case None =>
           s"""Sheet: $name
              |Used range: (empty)
-             |Non-empty: 0 cells""".stripMargin
+             |Non-empty: 0 cells""".stripMargin)
 
     case Command.View(rangeStr, showFormulas, limit) =>
       for
-        sheet <- getCurrentSheet
         range <- IO.fromEither(CellRange.parse(rangeStr).left.map(e => new Exception(e.toString)))
         limitedRange = limitRange(range, limit)
       yield Markdown.renderRange(sheet, limitedRange, showFormulas)
 
     case Command.Cell(refStr) =>
       for
-        sheet <- getCurrentSheet
         ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
         cell = sheet.cells.get(ref)
         value = cell.map(_.value).getOrElse(CellValue.Empty)
         formatted = formatCellValue(value)
-        // TODO: Add dependency analysis when integrated with evaluator
         deps = Vector.empty[ARef]
         dependents = Vector.empty[ARef]
       yield Format.cellInfo(ref, value, formatted, deps, dependents)
 
     case Command.Search(pattern, limit) =>
-      for
-        sheet <- getCurrentSheet
-        regex = pattern.r
-        results = sheet.cells.toVector
-          .filter { case (_, cell) =>
-            val text = formatCellValue(cell.value)
-            regex.findFirstIn(text).isDefined
-          }
-          .take(limit)
-          .map { case (ref, cell) =>
-            val value = formatCellValue(cell.value)
-            // Simple context: just the value for now
-            (ref, value, value)
-          }
-      yield Markdown.renderSearchResults(results)
+      val regex = pattern.r
+      val results = sheet.cells.toVector
+        .filter { case (_, cell) =>
+          val text = formatCellValue(cell.value)
+          regex.findFirstIn(text).isDefined
+        }
+        .take(limit)
+        .map { case (ref, cell) =>
+          val value = formatCellValue(cell.value)
+          (ref, value, value)
+        }
+      IO.pure(Markdown.renderSearchResults(results))
 
     case Command.Eval(formulaStr, overrides) =>
       for
-        sheet <- getCurrentSheet
-        // Apply temporary overrides to create a hypothetical sheet
         tempSheet <- applyOverrides(sheet, overrides)
-        // Normalize formula (add = if missing)
         formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
-        // Evaluate against the (possibly modified) sheet
         result <- IO.fromEither(
           SheetEvaluator.evaluateFormula(tempSheet)(formula).left.map(e => new Exception(e.message))
         )
@@ -300,67 +226,32 @@ object Main
 
     case Command.Put(refStr, valueStr) =>
       for
-        sheet <- getCurrentSheet
+        outputPath <- IO.fromOption(outputOpt)(
+          new Exception("Missing required flag: --output (-o). Mutations require an output file.")
+        )
         ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
         value = parseValue(valueStr)
         updatedSheet = sheet.put(ref, value)
-        _ = session = session.updateSheet(updatedSheet)
-      yield Format.putSuccess(ref, value)
+        updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
+        _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
 
     case Command.PutFormula(refStr, formulaStr) =>
       for
-        sheet <- getCurrentSheet
+        outputPath <- IO.fromOption(outputOpt)(
+          new Exception("Missing required flag: --output (-o). Mutations require an output file.")
+        )
         ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
         formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
         value = CellValue.Formula(formula)
         updatedSheet = sheet.put(ref, value)
-        _ = session = session.updateSheet(updatedSheet)
-      yield Format.putSuccess(ref, value)
-
-    case Command.Save =>
-      for
-        wb <- requireWorkbook
-        path <- IO.fromOption(session.path)(new Exception("No file path. Use 'saveas' instead."))
-        _ <- ExcelIO.instance[IO].write(wb, path)
-        _ = session = session.markClean
-        cellCount = wb.sheets.map(_.cells.size).sum
-      yield Format.saveSuccess(path.toString, wb.sheets.size, cellCount)
-
-    case Command.SaveAs(path) =>
-      for
-        wb <- requireWorkbook
-        _ <- ExcelIO.instance[IO].write(wb, path)
-        _ = session = session.copy(path = Some(path)).markClean
-        cellCount = wb.sheets.map(_.cells.size).sum
-      yield Format.saveSuccess(path.toString, wb.sheets.size, cellCount)
+        updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
+        _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
 
   // ==========================================================================
   // Helpers
   // ==========================================================================
-
-  private def requireWorkbook: IO[Workbook] =
-    IO.fromOption(session.workbook)(new Exception("No workbook open. Use 'xl open <path>' first."))
-
-  private def requireNoWorkbook: IO[Unit] =
-    if session.isOpen then
-      IO.raiseError(new Exception("A workbook is already open. Use 'xl close' first."))
-    else IO.unit
-
-  private def getCurrentSheet: IO[Sheet] =
-    IO.fromOption(session.currentSheet)(new Exception("No sheet available."))
-
-  private def getSheet(nameOpt: Option[String]): IO[Sheet] =
-    nameOpt match
-      case Some(name) =>
-        for
-          wb <- requireWorkbook
-          sheetName <- IO.fromEither(SheetName.apply(name).left.map(e => new Exception(e)))
-          sheet <- IO.fromOption(wb.sheets.find(_.name == sheetName))(
-            new Exception(s"Sheet not found: $name")
-          )
-        yield sheet
-      case None =>
-        getCurrentSheet
 
   private def limitRange(range: CellRange, maxRows: Int): CellRange =
     val rowCount = range.end.row.index0 - range.start.row.index0 + 1
@@ -387,14 +278,11 @@ object Main
     }
 
   private def parseValue(s: String): CellValue =
-    // Try parsing as number
     scala.util.Try(BigDecimal(s)).toOption.map(CellValue.Number.apply).getOrElse {
-      // Try parsing as boolean
       s.toLowerCase match
         case "true" => CellValue.Bool(true)
         case "false" => CellValue.Bool(false)
         case _ =>
-          // Default to text (strip quotes if present)
           val text = if s.startsWith("\"") && s.endsWith("\"") then s.drop(1).dropRight(1) else s
           CellValue.Text(text)
     }
@@ -417,23 +305,14 @@ object Main
  * Command ADT representing all CLI operations.
  */
 enum Command:
-  // Open/Initialize
-  case Open(path: Path, readonly: Boolean)
-  case Create(sheets: Vector[String])
-  case Close(discard: Boolean)
-  // Navigate
+  // Read-only
   case Sheets
-  case Select(name: String)
-  case Bounds(sheet: Option[String])
-  // Explore
+  case Bounds
   case View(range: String, showFormulas: Boolean, limit: Int)
   case Cell(ref: String)
   case Search(pattern: String, limit: Int)
   // Analyze
   case Eval(formula: String, overrides: List[String])
-  // Mutate
+  // Mutate (require -o)
   case Put(ref: String, value: String)
   case PutFormula(ref: String, formula: String)
-  // Persist
-  case Save
-  case SaveAs(path: Path)

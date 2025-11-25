@@ -1,6 +1,6 @@
 # XL CLI — LLM-Friendly Excel Operations
 
-**Status**: Design Spec
+**Status**: Implemented (Phase 1 - Stateless)
 **Target**: `xl-cli` module
 **Priority**: High — Core ergonomics for AI/LLM use cases
 
@@ -11,9 +11,9 @@
 The `xl` CLI provides a command-line interface for Excel operations, designed specifically for LLM agents. It follows Claude Code's incremental exploration pattern: don't dump everything at once, explore on demand.
 
 **Design Philosophy**:
-- **Incremental exploration** — Start with summaries, drill into details
+- **Stateless by default** — Each command is self-contained, no session state
 - **Explicit cell refs** — Always use `A1`, `B5:D10` over "smart" inference
-- **Session state** — Single workbook active, with sheet context
+- **Global flags** — `-f` for file, `-s` for sheet, `-o` for output
 - **LLM-optimized output** — Markdown tables, token-efficient, always include refs
 
 ---
@@ -41,66 +41,70 @@ export PATH="$HOME/.local/bin:$PATH"
 ## Quick Reference
 
 ```bash
-# Open and navigate
-xl open model.xlsx           # Load workbook
-xl sheets                    # List all sheets
-xl select "Assumptions"      # Set active sheet
+# Global flags (used with all commands)
+-f, --file <path>     # Input file (required)
+-s, --sheet <name>    # Sheet to operate on (optional, defaults to first)
+-o, --output <path>   # Output file for mutations (required for put/putf)
 
-# Explore
-xl view A1:D20               # View range as markdown table
-xl cell B5                   # Get single cell details
-xl search "Revenue"          # Find cells by content
+# Read-only operations
+xl -f model.xlsx sheets                    # List all sheets
+xl -f model.xlsx bounds                    # Show used range
+xl -f model.xlsx -s "P&L" view A1:D20      # View range as markdown
+xl -f model.xlsx cell B5                   # Get single cell details
+xl -f model.xlsx search "Revenue"          # Find cells by content
+xl -f model.xlsx eval "=SUM(B1:B10)"       # Evaluate formula (what-if)
 
-# Modify
-xl put B5 1000000            # Write value
-xl putf C5 "=B5*1.1"         # Write formula
-xl batch A1=Revenue B1=1000  # Multiple cells
+# Mutations (require -o)
+xl -f model.xlsx -o output.xlsx put B5 1000000       # Write value
+xl -f model.xlsx -o output.xlsx putf C5 "=B5*1.1"    # Write formula
 
-# Save
-xl save                      # Save to original path
-xl saveas output.xlsx        # Save to new path
+# What-if analysis with overrides
+xl -f model.xlsx eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary values
 ```
 
 ---
 
 ## 1. Tool Taxonomy
 
-### 1.1 Operation Categories
+### 1.1 Operation Categories (Stateless Mode)
 
 | Category | Commands | Purpose |
 |----------|----------|---------|
-| **Open** | `open`, `create`, `close` | Load/create/close workbooks |
-| **Navigate** | `info`, `sheets`, `select`, `bounds` | Find your way around |
-| **Explore** | `view`, `cell`, `search`, `describe` | Read data incrementally |
-| **Analyze** | `labels`, `regions`, `flow` | Understand structure |
-| **Mutate** | `put`, `putf`, `batch`, `style`, `delete` | Make changes |
-| **Persist** | `save`, `saveas`, `export` | Save and export |
+| **Navigate** | `sheets`, `bounds` | Find your way around |
+| **Explore** | `view`, `cell`, `search` | Read data incrementally |
+| **Analyze** | `eval` | What-if formula evaluation |
+| **Mutate** | `put`, `putf` | Make changes (requires `-o`) |
 
-### 1.2 Command Summary
+### 1.2 Command Summary (Currently Implemented)
+
+| Command | Arguments | Description |
+|---------|-----------|-------------|
+| `sheets` | | List all sheets with stats |
+| `bounds` | | Show used range of current sheet |
+| `view` | `<range>` | Render range as markdown |
+| `cell` | `<ref>` | Get single cell details |
+| `search` | `<pattern>` | Find cells matching pattern |
+| `eval` | `<formula> [--with overrides]` | Evaluate formula without modifying |
+| `put` | `<ref> <value>` | Write value to cell (requires `-o`) |
+| `putf` | `<ref> <formula>` | Write formula to cell (requires `-o`) |
+
+### 1.3 Future Commands (REPL Mode - Phase 2)
 
 | Command | Arguments | Description |
 |---------|-----------|-------------|
 | `open` | `<path>` | Load Excel file into session |
 | `create` | `[--sheets names]` | Create new empty workbook |
 | `close` | `[--discard]` | Close current workbook |
-| `info` | | Show workbook summary |
-| `sheets` | | List all sheets with stats |
 | `select` | `<name>` | Set active sheet |
-| `bounds` | `[sheet]` | Show used range |
-| `view` | `<range>` | Render range as markdown |
-| `cell` | `<ref>` | Get single cell details |
-| `search` | `<pattern>` | Find cells matching pattern |
+| `save` | | Save to original path |
+| `saveas` | `<path>` | Save to new path |
 | `describe` | `[sheet]` | Detailed sheet description |
 | `labels` | `[range]` | Detect label-value pairs |
 | `regions` | `[range]` | Detect data regions |
 | `flow` | `[ref]` | Show formula dependencies |
-| `put` | `<ref> <value>` | Write value to cell |
-| `putf` | `<ref> <formula>` | Write formula to cell |
 | `batch` | `<ref=value>...` | Write multiple cells |
 | `style` | `<range> [options]` | Apply styling |
 | `delete` | `<range>` | Clear cell contents |
-| `save` | | Save to original path |
-| `saveas` | `<path>` | Save to new path |
 | `export` | `<range> --format <fmt>` | Export range |
 
 ---

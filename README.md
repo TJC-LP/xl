@@ -212,12 +212,18 @@ Install the `xl` command-line tool for LLM-friendly Excel operations:
 make install   # Installs to ~/.local/bin/xl
 ```
 
+Stateless by design — each command is self-contained:
+
 ```bash
-xl open model.xlsx           # Load workbook
-xl view A1:D20               # View range as markdown table
-xl eval "=SUM(A1:A10)"       # Evaluate formula (what-if analysis)
-xl put B5 1000000            # Write value
-xl save                      # Save changes
+# Read operations
+xl -f model.xlsx sheets                    # List all sheets
+xl -f model.xlsx -s "P&L" view A1:D20      # View range as markdown
+xl -f model.xlsx eval "=SUM(A1:A10)"       # Evaluate formula (what-if)
+xl -f model.xlsx eval "=A1*1.1" -w "A1=100"  # With temporary overrides
+
+# Write operations (require -o for output)
+xl -f model.xlsx -o output.xlsx put B5 1000000       # Write value
+xl -f model.xlsx -o output.xlsx putf C5 "=B5*1.1"    # Write formula
 ```
 
 See [docs/plan/xl-cli.md](docs/plan/xl-cli.md) for full command reference.
