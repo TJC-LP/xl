@@ -10,7 +10,11 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.{XLError, XLResult}
 
 /**
- * Session state for the xl CLI.
+ * Session state for the xl CLI (Phase 2 - REPL mode).
+ *
+ * NOTE: This module is scaffolding for future REPL mode implementation. The current CLI (Phase 1)
+ * is stateless - each command specifies --file/--sheet. This will be used when we add interactive
+ * session support with commands like `open`, `select`, `save`, etc.
  *
  * Tracks the currently open workbook, active sheet context, and whether there are unsaved changes.
  */

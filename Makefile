@@ -26,6 +26,11 @@ build:
 
 install: build
 	@mkdir -p $(BINDIR)
+# Generate wrapper script with JVM flags:
+#   -Dcats.effect.warnOnNonMainThreadDetected=false : CLI runs synchronously on main thread
+#   --add-opens java.base/java.lang=ALL-UNNAMED     : Required for Scala 3 reflection on JDK 17+
+#   -XX:+IgnoreUnrecognizedVMOptions                : Cross-JDK compatibility (older JDKs ignore --add-opens)
+#   stderr filter: Suppress Scala 3.5+ LazyVals deprecation warnings from transitive dependencies
 	@echo '#!/usr/bin/env bash' > $(BINDIR)/xl
 	@echo 'exec java \' >> $(BINDIR)/xl
 	@echo '  -Dcats.effect.warnOnNonMainThreadDetected=false \' >> $(BINDIR)/xl
