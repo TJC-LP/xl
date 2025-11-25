@@ -5,6 +5,7 @@ import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipOutputStream}
 
 import com.tjclp.xl.api.*
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import munit.FunSuite
 

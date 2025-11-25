@@ -4,12 +4,9 @@ import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.codec.CellWriter
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.workbooks.Workbook
-
-import java.time.{LocalDate, LocalDateTime}
 
 /**
  * String-based extensions for ergonomic Easy Mode API.
@@ -48,65 +45,6 @@ object extensions:
     errorType: String
   ): XLResult[A] =
     either.left.map(msg => XLError.InvalidCellRef(ref, s"$errorType: $msg"))
-
-  // ========== Sheet Extensions: Data Operations ==========
-
-  extension (sheet: Sheet)
-    /**
-     * Put typed value at cell reference.
-     *
-     * Supports: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime, RichText.
-     * Auto-infers NumFmt based on type (LocalDate → Date, BigDecimal → Decimal, etc.).
-     *
-     * @note
-     *   This method parses the cell reference at runtime (~1-2 μs overhead per call). For
-     *   performance-critical loops with known references, prefer the compile-time validated
-     *   `ref"A1"` macro combined with direct `sheet.put(ref, value)` calls to avoid repeated
-     *   parsing.
-     *
-     * @tparam A
-     *   The value type (must have CellWriter instance)
-     * @param cellRef
-     *   Cell reference like "A1"
-     * @param value
-     *   Typed value to write
-     * @return
-     *   XLResult[Sheet] for chaining
-     */
-    def put[A: CellWriter](cellRef: String, value: A): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").flatMap { ref =>
-        sheet.put(ref, value)
-      }
-
-  // ========== Sheet Extensions: Styled Data Operations ==========
-
-  extension (sheet: Sheet)
-    /**
-     * Put typed value with inline styling.
-     *
-     * Merges auto-inferred style (from type) with explicit CellStyle. Explicit style takes
-     * precedence for conflicting properties.
-     *
-     * @note
-     *   NumFmt merging behavior: If explicit style has General format, auto-inferred NumFmt is
-     *   applied (e.g., Date for LocalDate). To force General format for typed values, apply styling
-     *   after put() instead: `sheet.put("A1", date).style("A1", style)`.
-     *
-     * @tparam A
-     *   The value type (must have CellWriter instance)
-     * @param cellRef
-     *   Cell reference like "A1"
-     * @param value
-     *   Typed value to write
-     * @param cellStyle
-     *   Explicit cell style to apply
-     * @return
-     *   XLResult[Sheet] for chaining
-     */
-    def put[A: CellWriter](cellRef: String, value: A, cellStyle: CellStyle): XLResult[Sheet] =
-      toXLResult(ARef.parse(cellRef), cellRef, "Invalid cell reference").flatMap { ref =>
-        sheet.put(ref, value).map(_.withCellStyle(ref, cellStyle))
-      }
 
   // ========== Sheet Extensions: Style Operations ==========
 
@@ -252,15 +190,19 @@ object extensions:
      * Universal put that accepts any supported type at compile-time validated ref.
      */
     @annotation.targetName("putARefChainable")
-    def put(ref: com.tjclp.xl.addressing.ARef, value: Any): XLResult[Sheet] =
+    def put[A: CellWriter](ref: com.tjclp.xl.addressing.ARef, value: A): XLResult[Sheet] =
       result.flatMap(_.put(ref, value))
 
     /**
      * Put value at ARef with style (chainable).
      */
     @annotation.targetName("putARefStyledChainable")
-    def put(ref: com.tjclp.xl.addressing.ARef, value: Any, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.put(ref, value).map(_.withCellStyle(ref, cellStyle)))
+    def put[A: CellWriter](
+      ref: com.tjclp.xl.addressing.ARef,
+      value: A,
+      cellStyle: CellStyle
+    ): XLResult[Sheet] =
+      result.flatMap(_.put(ref, value, cellStyle))
 
     /**
      * Apply style (chainable, string ref).
@@ -298,7 +240,7 @@ object extensions:
      * Chain batch puts after XLResult[Sheet] operations.
      */
     @annotation.targetName("putBatchChainable")
-    def put(updates: (com.tjclp.xl.addressing.ARef, Any)*): XLResult[Sheet] =
+    def put[A: CellWriter](updates: (com.tjclp.xl.addressing.ARef, A)*): XLResult[Sheet] =
       result.flatMap(_.put(updates*))
 
     /** Add comment to cell (chainable). */

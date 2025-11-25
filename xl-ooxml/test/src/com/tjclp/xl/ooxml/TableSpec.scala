@@ -4,6 +4,7 @@ import munit.FunSuite
 import scala.xml.*
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.api.*
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.tables.{TableSpec, TableColumn, TableAutoFilter, TableStyle}
 import com.tjclp.xl.cells.CellValue

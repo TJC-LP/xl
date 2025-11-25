@@ -3,6 +3,7 @@ package com.tjclp.xl.formula.display
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.conversions.given
 import com.tjclp.xl.display.{DisplayConversions, ExcelInterpolator, FormulaDisplayStrategy}
 import com.tjclp.xl.formula.Clock

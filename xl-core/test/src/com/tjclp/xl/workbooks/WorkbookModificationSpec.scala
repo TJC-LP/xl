@@ -6,6 +6,7 @@ import com.tjclp.xl.Workbook
 import com.tjclp.xl.context.{SourceContext, SourceFingerprint}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.*
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.PartManifest
 import com.tjclp.xl.sheets.Sheet

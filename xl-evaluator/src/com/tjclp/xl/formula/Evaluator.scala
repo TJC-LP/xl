@@ -65,7 +65,8 @@ private class EvaluatorImpl extends Evaluator:
   // Suppress asInstanceOf warning for FoldRange GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def eval[A](expr: TExpr[A], sheet: Sheet, clock: Clock = Clock.system): Either[EvalError, A] =
-    expr match
+    // @unchecked: GADT exhaustivity - PolyRef is resolved before evaluation
+    (expr: @unchecked) match
       // ===== Literals =====
       case TExpr.Lit(value) =>
         // Literal: return value directly (identity law)
@@ -493,12 +494,3 @@ private class EvaluatorImpl extends Evaluator:
           }
         }
         result.asInstanceOf[Either[EvalError, A]]
-
-      // PolyRef should be converted to typed Ref by function parsers before evaluation
-      case TExpr.PolyRef(_) =>
-        Left(
-          EvalError.EvalFailed(
-            "PolyRef reached evaluator - this is a parser bug",
-            Some("Please report this issue")
-          )
-        )

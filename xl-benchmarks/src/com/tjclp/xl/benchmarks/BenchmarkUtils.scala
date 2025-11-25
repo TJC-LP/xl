@@ -3,6 +3,7 @@ package com.tjclp.xl.benchmarks
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.*
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.styles.{CellStyle, Color, Font, Fill, NumFmt}
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.sheets.Sheet
@@ -41,7 +42,8 @@ object BenchmarkUtils {
       .getOrElse(emptySheet)
 
     // Data rows - build list of updates then batch apply
-    val dataUpdates: Seq[(ARef, Any)] = (1 to rows).flatMap { row =>
+    // Note: CellValue used for type-safe heterogeneous batch operations
+    val dataUpdates: Seq[(ARef, CellValue)] = (1 to rows).flatMap { row =>
       val rowNum = row + 1 // +1 for header
 
       // Generate realistic data
@@ -52,13 +54,13 @@ object BenchmarkUtils {
         BigDecimal(random.nextDouble() * 10000).setScale(2, BigDecimal.RoundingMode.HALF_UP)
       val active = random.nextBoolean()
 
-      // Return sequence of (ARef, Any) tuples
-      Seq[(ARef, Any)](
-        (ARef.from1(1, rowNum), id),
-        (ARef.from1(2, rowNum), name),
-        (ARef.from1(3, rowNum), date),
-        (ARef.from1(4, rowNum), amount),
-        (ARef.from1(5, rowNum), active)
+      // Return sequence of (ARef, CellValue) tuples
+      Seq[(ARef, CellValue)](
+        (ARef.from1(1, rowNum), CellValue.Number(BigDecimal(id))),
+        (ARef.from1(2, rowNum), CellValue.Text(name)),
+        (ARef.from1(3, rowNum), CellValue.DateTime(date.atStartOfDay)),
+        (ARef.from1(4, rowNum), CellValue.Number(amount)),
+        (ARef.from1(5, rowNum), CellValue.Bool(active))
       )
     }
 
@@ -118,8 +120,8 @@ object BenchmarkUtils {
     val emptySheet: Sheet = Sheet(SheetName.unsafe("Data"))
 
     // Create rows with cell value = row number (verifiable arithmetic series)
-    val updates: Seq[(ARef, Any)] = (1 to rows).map { i =>
-      (ARef.from1(1, i): ARef) -> (i.toDouble: Any) // Raw Double, not CellValue
+    val updates: Seq[(ARef, Double)] = (1 to rows).map { i =>
+      (ARef.from1(1, i): ARef) -> i.toDouble
     }
 
     val sheet = emptySheet.put(updates*) match {

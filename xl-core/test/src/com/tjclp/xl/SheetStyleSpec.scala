@@ -2,6 +2,7 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.conversions.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.syntax.*
@@ -195,4 +196,64 @@ class SheetStyleSpec extends FunSuite:
     assertEquals(sheet(ref"A1").comment, Some("Important note"), "Comment should be preserved")
     assertEquals(sheet(ref"A1").hyperlink, Some("https://example.com"), "Hyperlink should be preserved")
     assertEquals(sheet(ref"A1").value, CellValue.Text("Updated Link"), "Value should be updated")
+  }
+
+  // ========== Regression Tests for Metadata Preservation (PR #37 Fix) ==========
+
+  test("put via Any preserves existing styleId (template pattern)") {
+    import java.time.LocalDate
+    val style = CellStyle.default.bold
+    val sheet = Sheet("Test").unsafe
+      .withCellStyle(ref"A1", style)
+    val updated = sheet.put(ref"A1", "Value").unsafe
+
+    assert(updated(ref"A1").styleId.isDefined, "styleId should be preserved")
+  }
+
+  test("put via Any preserves comment metadata") {
+    val sheet = Sheet("Test").unsafe
+      .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")).withComment("Note"))
+    val updated = sheet.put(ref"A1", "New").unsafe
+
+    assertEquals(updated(ref"A1").comment, Some("Note"))
+  }
+
+  test("put via Any preserves hyperlink metadata") {
+    val sheet = Sheet("Test").unsafe
+      .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")).withHyperlink("https://example.com"))
+    val updated = sheet.put(ref"A1", "New").unsafe
+
+    assertEquals(updated(ref"A1").hyperlink, Some("https://example.com"))
+  }
+
+  test("style merge: template bold + codec Date format") {
+    import java.time.LocalDate
+    val template = CellStyle.default.bold
+    val sheet = Sheet("Test").unsafe
+      .withCellStyle(ref"A1", template)
+    val updated = sheet.put(ref"A1", LocalDate.of(2025, 1, 1)).unsafe
+
+    val style = updated.getCellStyle(ref"A1").getOrElse(fail("Missing style"))
+    assert(style.font.bold, "Template bold should be preserved")
+    assertEquals(style.numFmt, NumFmt.Date, "Codec Date format should be applied")
+  }
+
+  test("batch put preserves existing metadata") {
+    val style = CellStyle.default.bold
+    val sheet = Sheet("Test").unsafe
+      .withCellStyle(ref"A1", style)
+    val updated = sheet.put(ref"A1" -> "Value", ref"B1" -> "Other").unsafe
+
+    assert(updated(ref"A1").styleId.isDefined, "Batch put should preserve styleId")
+  }
+
+  test("style merge: preserves explicit NumFmt over codec General") {
+    // If cell has Currency format, putting a String (which has General NumFmt) should keep Currency
+    val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
+    val sheet = Sheet("Test").unsafe
+      .withCellStyle(ref"A1", currencyStyle)
+    val updated = sheet.put(ref"A1", "Label").unsafe  // String codec returns General NumFmt
+
+    val style = updated.getCellStyle(ref"A1").getOrElse(fail("Missing style"))
+    assertEquals(style.numFmt, NumFmt.Currency, "Explicit Currency should be preserved over General")
   }

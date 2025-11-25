@@ -4,6 +4,7 @@ import munit.FunSuite
 import scala.xml.*
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.api.*
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.richtext.RichText.* // Import DSL extensions

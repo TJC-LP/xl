@@ -4,7 +4,7 @@ import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheets.Sheet
-import scala.annotation.tailrec
+import scala.annotation.{nowarn, tailrec}
 
 /**
  * Dependency graph for formula cells.
@@ -113,10 +113,15 @@ object DependencyGraph:
    * extractDependencies(sumExpr) // Set(B1, B2, ..., B10)
    * }}}
    */
+  // nowarn: Compiler incorrectly reports PolyRef as unreachable, but tests confirm it IS reached at runtime
+  @nowarn("msg=Unreachable case")
   def extractDependencies[A](expr: TExpr[A]): Set[ARef] =
     expr match
       // Single cell reference
       case TExpr.Ref(at, _) => Set(at)
+
+      // Polymorphic reference (type resolved at evaluation time)
+      case TExpr.PolyRef(at) => Set(at)
 
       // Range reference (expand to all cells)
       case TExpr.FoldRange(range, _, _, _) =>
@@ -177,9 +182,6 @@ object DependencyGraph:
       case TExpr.Lit(_) => Set.empty
       case TExpr.Today() => Set.empty
       case TExpr.Now() => Set.empty
-
-      // PolyRef is converted to typed Ref by function parsers; if it reaches here, treat as cell ref
-      case TExpr.PolyRef(at) => Set(at)
 
   /**
    * Get cells this cell depends on (precedents).

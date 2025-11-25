@@ -7,6 +7,7 @@ import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 import com.tjclp.xl.context.SourceContext
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.unsafe.*
 import munit.FunSuite

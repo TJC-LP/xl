@@ -3,6 +3,7 @@ package com.tjclp.xl.ooxml
 import munit.FunSuite
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 
 /** Tests for SharedStrings count vs uniqueCount */

@@ -7,6 +7,7 @@ import java.nio.file.{Files, Path}
 import java.time.{Duration, LocalDate, LocalDateTime}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.api.*
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.macros.ref

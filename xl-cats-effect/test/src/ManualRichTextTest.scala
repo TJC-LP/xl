@@ -1,5 +1,6 @@
 import cats.effect.{IO, IOApp}
 import com.tjclp.xl.api.*
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.io.Excel
 import com.tjclp.xl.richtext.RichText.{*, given}
 import com.tjclp.xl.codec.syntax.*

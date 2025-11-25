@@ -3,6 +3,7 @@ package com.tjclp.xl
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue}
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.context.ModificationTracker
 import org.scalacheck.{Arbitrary, Gen}
 

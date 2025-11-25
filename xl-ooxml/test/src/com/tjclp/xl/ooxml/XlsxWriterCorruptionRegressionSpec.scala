@@ -7,6 +7,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.styles.{CellStyle, Color, Fill}

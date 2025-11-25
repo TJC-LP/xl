@@ -2,7 +2,7 @@ package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, Comment}
-import com.tjclp.xl.codec.CellCodec
+import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
 import com.tjclp.xl.tables.TableSpec
@@ -77,6 +77,9 @@ final case class Sheet(
    * Accepts any supported type: String, Int, Long, Double, BigDecimal, Boolean, LocalDate,
    * LocalDateTime, RichText, Formatted, CellValue. Returns XLResult for consistent error handling.
    *
+   * '''Type safety''': Uses compile-time checked `CellWriter` type class. Unsupported types fail at
+   * compile time, not runtime.
+   *
    * Examples:
    * {{{
    * sheet.put(ref"A1", "Hello")           // String
@@ -85,13 +88,13 @@ final case class Sheet(
    * sheet.put(ref"A1", fx"=SUM(B1:B10)")  // Formula
    * }}}
    */
-  def put(ref: ARef, value: Any): XLResult[Sheet] =
+  def put[A: CellWriter](ref: ARef, value: A): XLResult[Sheet] =
     putSingle(ref, value)
 
   /**
    * Put a single value at string reference (runtime parsing).
    *
-   * Same as put(ARef, Any) but accepts string A1 notation for refs.
+   * Same as put(ARef, A) but accepts string A1 notation for refs.
    *
    * Examples:
    * {{{
@@ -100,7 +103,7 @@ final case class Sheet(
    * }}}
    */
   @annotation.targetName("putString")
-  def put(ref: String, value: Any): XLResult[Sheet] =
+  def put[A: CellWriter](ref: String, value: A): XLResult[Sheet] =
     ARef.parse(ref) match
       case Left(err) => Left(XLError.InvalidCellRef(ref, err))
       case Right(aref) => putSingle(aref, value)
@@ -108,81 +111,72 @@ final case class Sheet(
   /**
    * Put a single value at reference with explicit style.
    *
-   * The style is applied after the value, overriding any auto-inferred style.
+   * Merges explicit style with codec-inferred style: explicit properties take precedence, but if
+   * explicit has General NumFmt and codec provides non-General, codec's NumFmt is used.
    */
-  def put(ref: ARef, value: Any, style: CellStyle): XLResult[Sheet] =
+  def put[A: CellWriter](ref: ARef, value: A, style: CellStyle): XLResult[Sheet] =
     putSingle(ref, value).map { s =>
+      // Get the codec-inferred style (if any) from the cell after putSingle
+      val codecStyle = s.cells.get(ref).flatMap(_.styleId).flatMap(s.styleRegistry.get)
+      // Merge: explicit style properties take precedence, but use codec NumFmt if explicit is General
+      val mergedStyle = codecStyle match
+        case Some(cs)
+            if style.numFmt == com.tjclp.xl.styles.numfmt.NumFmt.General && cs.numFmt != com.tjclp.xl.styles.numfmt.NumFmt.General =>
+          style.copy(numFmt = cs.numFmt)
+        case _ => style
       import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-      s.withCellStyle(ref, style)
+      s.withCellStyle(ref, mergedStyle)
     }
 
   /**
    * Put a single value at string reference with explicit style.
    */
   @annotation.targetName("putStringStyled")
-  def put(ref: String, value: Any, style: CellStyle): XLResult[Sheet] =
+  def put[A: CellWriter](ref: String, value: A, style: CellStyle): XLResult[Sheet] =
     ARef.parse(ref) match
       case Left(err) => Left(XLError.InvalidCellRef(ref, err))
       case Right(aref) => put(aref, value, style)
 
-  // Internal helper for single-cell put with type matching
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private def putSingle(ref: ARef, value: Any): XLResult[Sheet] =
-    import com.tjclp.xl.codec.{CellCodec, given}
-    import java.time.{LocalDate, LocalDateTime}
+  // Merge existing style with codec-inferred style
+  // Preserves existing properties; codec NumFmt overrides only when existing is General
+  // Rationale: If user explicitly set Currency format, keep it. If just Bold (General), apply type-appropriate format.
+  private def mergeStyles(existing: CellStyle, codec: CellStyle): CellStyle =
+    import com.tjclp.xl.styles.numfmt.NumFmt
+    if existing.numFmt == NumFmt.General && codec.numFmt != NumFmt.General then
+      existing.copy(numFmt = codec.numFmt)
+    else existing
 
-    // Helper to process a typed value with codec
-    def processTyped[A: CellCodec](v: A): XLResult[Sheet] =
-      val (cellValue, styleOpt) = CellCodec[A].write(v)
-      val cell = Cell(ref, cellValue)
-      val sheetWithCell = copy(cells = cells.updated(ref, cell))
-      styleOpt match
-        case Some(style) =>
-          val (newRegistry, _) = styleRegistry.register(style)
-          import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-          Right(sheetWithCell.copy(styleRegistry = newRegistry).withCellStyle(ref, style))
-        case None =>
-          Right(sheetWithCell)
-
-    value match
-      // Direct CellValue - no codec needed
-      case cv: CellValue =>
-        val updatedCell = cells.get(ref) match
-          case Some(existing) => existing.withValue(cv)
-          case None => Cell(ref, cv)
-        Right(copy(cells = cells.updated(ref, updatedCell)))
-
-      // Formatted values (money"", date"", percent"") - preserve NumFmt
-      case formatted: com.tjclp.xl.formatted.Formatted =>
-        val cell = Cell(ref, formatted.value)
-        val style = CellStyle.default.withNumFmt(formatted.numFmt)
-        val (newRegistry, _) = styleRegistry.register(style)
+  // Internal helper for single-cell put with CellWriter type class
+  // Uses the CellWriter[CellWritable] instance which handles all supported types via pattern matching
+  private def putSingle[A: CellWriter](ref: ARef, value: A): XLResult[Sheet] =
+    import com.tjclp.xl.codec.given
+    val (cellValue, styleOpt) = CellWriter[A].write(value)
+    val existingCell = cells.get(ref)
+    val updatedCell = existingCell match
+      case Some(existing) => existing.withValue(cellValue)
+      case None => Cell(ref, cellValue)
+    val sheetWithCell = copy(cells = cells.updated(ref, updatedCell))
+    styleOpt match
+      case Some(codecStyle) =>
+        val mergedStyle = existingCell.flatMap(_.styleId).flatMap(styleRegistry.get) match
+          case Some(existingStyle) => mergeStyles(existingStyle, codecStyle)
+          case None => codecStyle
+        val (newRegistry, _) = styleRegistry.register(mergedStyle)
         import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-        Right(
-          copy(cells = cells.updated(ref, cell), styleRegistry = newRegistry)
-            .withCellStyle(ref, style)
-        )
-
-      // Codec-supported types
-      case v: String => processTyped(v)
-      case v: Int => processTyped(v)
-      case v: Long => processTyped(v)
-      case v: Double => processTyped(v)
-      case v: BigDecimal => processTyped(v)
-      case v: Boolean => processTyped(v)
-      case v: LocalDate => processTyped(v)
-      case v: LocalDateTime => processTyped(v)
-      case v: com.tjclp.xl.richtext.RichText => processTyped(v)
-
-      case unsupported =>
-        Left(XLError.UnsupportedType(ref.toA1, unsupported.getClass.getName))
+        Right(sheetWithCell.copy(styleRegistry = newRegistry).withCellStyle(ref, mergedStyle))
+      case None =>
+        Right(sheetWithCell)
 
   /**
    * Batch put with mixed value types and automatic style inference.
    *
-   * Accepts (ARef, Any) pairs and uses runtime pattern matching to resolve the appropriate codec
-   * for each value. Auto-infers styles based on value types (dates get date format, decimals get
-   * number format, etc.). Formatted literals (money"", date"", percent"") preserve their NumFmt.
+   * Accepts (ARef, A) pairs where A is any type with a CellWriter instance. Auto-infers styles
+   * based on value types (dates get date format, decimals get number format, etc.). Formatted
+   * literals (money"", date"", percent"") preserve their NumFmt.
+   *
+   * '''Type safety''': Due to contravariance of `CellWriter[-A]` and the master
+   * `CellWriter[CellWritable]` instance, heterogeneous types like `String | Int | LocalDate` are
+   * accepted and checked at compile time.
    *
    * This is the recommended API for large batch upserts due to its clean, token-efficient syntax:
    * {{{
@@ -194,7 +188,7 @@ final case class Sheet(
    * }}}
    *
    * Supported types: String, Int, Long, Double, BigDecimal, Boolean, LocalDate, LocalDateTime,
-   * RichText, Formatted. Unsupported types return Left with error.
+   * RichText, Formatted, CellValue. Unsupported types fail at compile time.
    *
    * For demos/REPLs, use .unsafe (requires explicit import):
    * {{{
@@ -203,67 +197,45 @@ final case class Sheet(
    * }}}
    *
    * @param updates
-   *   Varargs of (ARef, Any) pairs
+   *   Varargs of (ARef, A) pairs
    * @return
-   *   Either error (if unsupported type) or updated sheet
+   *   Updated sheet (always succeeds - type safety is enforced at compile time)
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def put(updates: (ARef, Any)*): XLResult[Sheet] =
-    import com.tjclp.xl.codec.{CellCodec, given}
-    import java.time.{LocalDate, LocalDateTime}
+  def put[A: CellWriter](updates: (ARef, A)*): XLResult[Sheet] =
+    import com.tjclp.xl.codec.given
 
-    boundary:
-      // NOTE: Local mutation for performance - buffers are private to this method
-      // and never escape. The function remains pure (referentially transparent) because:
-      // 1. All mutations are confined to this scope
-      // 2. No shared mutable state is accessed
-      // 3. Output depends only on inputs (deterministic)
-      // This is a common FP optimization pattern for bulk operations (similar to Scala stdlib).
+    // NOTE: Local mutation for performance - buffers are private to this method
+    // and never escape. The function remains pure (referentially transparent) because:
+    // 1. All mutations are confined to this scope
+    // 2. No shared mutable state is accessed
+    // 3. Output depends only on inputs (deterministic)
+    // This is a common FP optimization pattern for bulk operations (similar to Scala stdlib).
 
-      // Single-pass: build cells and collect styles simultaneously
-      val cells = scala.collection.mutable.ArrayBuffer[Cell]()
-      val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
-      var registry = styleRegistry
+    // Single-pass: build cells and collect styles simultaneously
+    val builtCells = scala.collection.mutable.ArrayBuffer[Cell]()
+    val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
+    var registry = styleRegistry
+    val writer = CellWriter[A]
 
-      // Helper to process a typed value (DRY)
-      def processValue[A: CellCodec](ref: ARef, value: A): Unit =
-        val (cellValue, styleOpt) = CellCodec[A].write(value)
-        cells += Cell(ref, cellValue)
-        styleOpt.foreach { style =>
-          val (newRegistry, _) = registry.register(style)
-          registry = newRegistry
-          cellsWithStyles += ((ref, style))
-        }
-
-      // Pattern match on runtime type and delegate to helper
-      updates.foreach { (ref, value) =>
-        value match
-          // Direct CellValue - no codec needed (handles Formula, Text, Number, etc.)
-          case cv: CellValue =>
-            cells += Cell(ref, cv)
-
-          // Handle Formatted values (money"", date"", etc.) - preserve NumFmt metadata
-          case formatted: com.tjclp.xl.formatted.Formatted =>
-            cells += Cell(ref, formatted.value)
-            val style = CellStyle.default.withNumFmt(formatted.numFmt)
-            val (newRegistry, _) = registry.register(style)
-            registry = newRegistry
-            cellsWithStyles += ((ref, style))
-
-          case v: String => processValue(ref, v)
-          case v: Int => processValue(ref, v)
-          case v: Long => processValue(ref, v)
-          case v: Double => processValue(ref, v)
-          case v: BigDecimal => processValue(ref, v)
-          case v: Boolean => processValue(ref, v)
-          case v: LocalDate => processValue(ref, v)
-          case v: LocalDateTime => processValue(ref, v)
-          case v: com.tjclp.xl.richtext.RichText => processValue(ref, v)
-          case unsupported =>
-            break(Left(XLError.UnsupportedType(ref.toA1, unsupported.getClass.getName)))
+    updates.foreach { (ref, value) =>
+      val (cellValue, styleOpt) = writer.write(value)
+      val existingCell = this.cells.get(ref)
+      val updatedCell = existingCell match
+        case Some(existing) => existing.withValue(cellValue)
+        case None => Cell(ref, cellValue)
+      builtCells += updatedCell
+      styleOpt.foreach { codecStyle =>
+        val mergedStyle = existingCell.flatMap(_.styleId).flatMap(this.styleRegistry.get) match
+          case Some(existingStyle) => mergeStyles(existingStyle, codecStyle)
+          case None => codecStyle
+        val (newRegistry, _) = registry.register(mergedStyle)
+        registry = newRegistry
+        cellsWithStyles += ((ref, mergedStyle))
       }
+    }
 
-      Right(applyBulkCells(cells, cellsWithStyles, registry))
+    Right(applyBulkCells(builtCells, cellsWithStyles, registry))
 
   /**
    * Type-safe variant of [[put]] that requires a single `CellCodec` for all values.
@@ -273,22 +245,29 @@ final case class Sheet(
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def putTyped[A](updates: (ARef, A)*)(using CellCodec[A]): XLResult[Sheet] =
-    val cells = scala.collection.mutable.ArrayBuffer[Cell]()
+    val builtCells = scala.collection.mutable.ArrayBuffer[Cell]()
     val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
     var registry = styleRegistry
     val codec = summon[CellCodec[A]]
 
     updates.foreach { (ref, value) =>
       val (cellValue, styleOpt) = codec.write(value)
-      cells += Cell(ref, cellValue)
-      styleOpt.foreach { style =>
-        val (newRegistry, _) = registry.register(style)
+      val existingCell = this.cells.get(ref)
+      val updatedCell = existingCell match
+        case Some(existing) => existing.withValue(cellValue)
+        case None => Cell(ref, cellValue)
+      builtCells += updatedCell
+      styleOpt.foreach { codecStyle =>
+        val mergedStyle = existingCell.flatMap(_.styleId).flatMap(this.styleRegistry.get) match
+          case Some(existingStyle) => mergeStyles(existingStyle, codecStyle)
+          case None => codecStyle
+        val (newRegistry, _) = registry.register(mergedStyle)
         registry = newRegistry
-        cellsWithStyles += ((ref, style))
+        cellsWithStyles += ((ref, mergedStyle))
       }
     }
 
-    Right(applyBulkCells(cells, cellsWithStyles, registry))
+    Right(applyBulkCells(builtCells, cellsWithStyles, registry))
 
   private def applyBulkCells(
     builtCells: Iterable[Cell],

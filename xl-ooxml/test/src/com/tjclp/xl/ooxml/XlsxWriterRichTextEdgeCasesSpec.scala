@@ -5,6 +5,7 @@ import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import munit.FunSuite
 

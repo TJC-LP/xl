@@ -2,7 +2,7 @@ package com.tjclp.xl
 
 import cats.effect.IO
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.extensions.given // For CellWriter given instances
+import com.tjclp.xl.codec.CellCodec.given // For CellWriter given instances
 import com.tjclp.xl.io.Excel
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
