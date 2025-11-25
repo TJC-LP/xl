@@ -101,10 +101,14 @@ object Main
   // --- Analyze ---
 
   private val formulaArg = Opts.argument[String]("formula")
-  private val withOpt = Opts.options[String]("with", "Temporary cell override (ref=value)").orEmpty
+  private val withOpt =
+    Opts.option[String]("with", "Comma-separated overrides (e.g., A1=100,B2=200)", "w").orNone
 
   val evalCmd: Opts[Command] = Opts.subcommand("eval", "Evaluate formula without modifying sheet") {
-    (formulaArg, withOpt).mapN(Command.Eval.apply)
+    (formulaArg, withOpt).mapN { (formula, withStr) =>
+      val overrides = withStr.toList.flatMap(_.split(",").map(_.trim).filter(_.nonEmpty))
+      Command.Eval(formula, overrides)
+    }
   }
 
   // --- Mutate ---
