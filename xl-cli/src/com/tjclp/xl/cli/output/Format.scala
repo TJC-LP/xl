@@ -1,8 +1,13 @@
 package com.tjclp.xl.cli.output
 
-import com.tjclp.xl.error.XLError
-import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.cells.{CellValue, Comment}
+import com.tjclp.xl.error.XLError
+import com.tjclp.xl.styles.{CellStyle, StyleId}
+import com.tjclp.xl.styles.alignment.Align
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Output formatting utilities for xl CLI.
@@ -96,32 +101,111 @@ object Format:
     s"Error: $message"
 
   /**
-   * Format cell info output.
+   * Format cell info output with full details.
+   *
+   * Shows raw value, formatted value (using NumFmt), style info (non-default only), comment,
+   * hyperlink, and formula dependencies.
    */
   def cellInfo(
     ref: ARef,
     value: CellValue,
     formatted: String,
+    style: Option[CellStyle],
+    comment: Option[Comment],
+    hyperlink: Option[String],
     dependencies: Vector[ARef],
     dependents: Vector[ARef]
   ): String =
-    val typeStr = valueType(value)
-    val depsStr =
-      if dependencies.isEmpty then "(none)"
-      else dependencies.map(_.toA1).mkString(", ")
-    val deptsStr =
-      if dependents.isEmpty then "(none)"
-      else dependents.map(_.toA1).mkString(", ")
+    val sb = new StringBuilder
+    sb.append(s"Cell: ${ref.toA1}\n")
+    sb.append(s"Type: ${valueType(value)}\n")
 
-    val formulaLine = value match
-      case CellValue.Formula(expr, _) => s"Formula: =$expr\n"
-      case _ => ""
+    // For formulas, show expression and cached value separately
+    value match
+      case CellValue.Formula(expr, cached) =>
+        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+        sb.append(s"Formula: $displayExpr\n")
+        cached.foreach { v =>
+          sb.append(s"Cached: ${formatValue(v)}\n")
+          // Only show Formatted for cached value if different from raw
+          val cachedRaw = formatValue(v)
+          if formatted != cachedRaw && formatted != cachedRaw.stripPrefix("\"").stripSuffix("\"")
+          then sb.append(s"Formatted: $formatted\n")
+        }
+      case CellValue.Empty =>
+        sb.append("Value: (empty)\n")
+      case _ =>
+        sb.append(s"Raw: ${formatValue(value)}\n")
+        // Only show Formatted if different from Raw
+        val rawStr = formatValue(value)
+        if formatted != rawStr && formatted != rawStr.stripPrefix("\"").stripSuffix("\"") then
+          sb.append(s"Formatted: $formatted\n")
 
-    s"""Cell: ${ref.toA1}
-       |Type: $typeStr
-       |${formulaLine}Value: $formatted
-       |Dependencies: $depsStr
-       |Dependents: $deptsStr""".stripMargin
+    // Style (non-default properties only)
+    formatStyle(style).foreach(s => sb.append(s).append("\n"))
+
+    // Comment
+    comment.foreach { c =>
+      val authorStr = c.author.map(a => s" (Author: $a)").getOrElse("")
+      sb.append(s"""Comment: "${c.text.toPlainText}"$authorStr\n""")
+    }
+
+    // Hyperlink
+    hyperlink.foreach(h => sb.append(s"Hyperlink: $h\n"))
+
+    // Dependencies and dependents
+    val depsStr = if dependencies.isEmpty then "(none)" else dependencies.map(_.toA1).mkString(", ")
+    val deptsStr = if dependents.isEmpty then "(none)" else dependents.map(_.toA1).mkString(", ")
+    sb.append(s"Dependencies: $depsStr\n")
+    sb.append(s"Dependents: $deptsStr")
+
+    sb.toString
+
+  /**
+   * Format style properties (non-default only).
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def formatStyle(style: Option[CellStyle]): Option[String] =
+    style.flatMap { s =>
+      val parts = Vector.newBuilder[String]
+
+      // Font (if non-default)
+      if s.font != Font.default then
+        var fontDesc = Vector(s.font.name, s"${s.font.sizePt}pt")
+        if s.font.bold then fontDesc = fontDesc :+ "bold"
+        if s.font.italic then fontDesc = fontDesc :+ "italic"
+        if s.font.underline then fontDesc = fontDesc :+ "underline"
+        s.font.color.foreach { c =>
+          val hex = c.toHex
+          // For RGB colors like #AARRGGBB, drop the # and alpha; for Theme colors, keep as-is
+          val colorStr = if hex.startsWith("#") then hex.drop(3) else hex
+          fontDesc = fontDesc :+ colorStr
+        }
+        parts += s"Font: ${fontDesc.mkString(" ")}"
+
+      // Fill (if non-default)
+      s.fill match
+        case Fill.Solid(color) => parts += s"Fill: ${color.toHex.drop(3)} (solid)"
+        case Fill.Pattern(_, _, _) => parts += "Fill: (pattern)"
+        case Fill.None => ()
+
+      // NumFmt (if non-General)
+      if s.numFmt != NumFmt.General then
+        val idStr = s.numFmtId.map(id => s" (id: $id)").getOrElse("")
+        val codeStr = s.numFmt match
+          case NumFmt.Custom(code) => code
+          case other => other.toString
+        parts += s"NumFmt: $codeStr$idStr"
+
+      // Alignment (if non-default)
+      if s.align != Align.default then
+        val wrapStr = if s.align.wrapText then ", wrap" else ""
+        parts += s"Align: ${s.align.horizontal}, ${s.align.vertical}$wrapStr"
+
+      val result = parts.result()
+      if result.isEmpty then None
+      else Some(result.map("  " + _).mkString("Style:\n", "\n", ""))
+    }
 
   private def valueType(value: CellValue): String =
     value match

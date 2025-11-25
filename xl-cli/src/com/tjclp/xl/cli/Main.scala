@@ -12,7 +12,9 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.output.{Format, Markdown}
-import com.tjclp.xl.formula.SheetEvaluator
+import com.tjclp.xl.display.NumFmtFormatter
+import com.tjclp.xl.formula.{DependencyGraph, SheetEvaluator}
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * XL CLI - LLM-friendly Excel operations.
@@ -225,10 +227,23 @@ object Main
         ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
         cell = sheet.cells.get(ref)
         value = cell.map(_.value).getOrElse(CellValue.Empty)
-        formatted = formatCellValue(value)
-        deps = Vector.empty[ARef]
-        dependents = Vector.empty[ARef]
-      yield Format.cellInfo(ref, value, formatted, deps, dependents)
+        // Get style from registry for NumFmt formatting
+        style = cell.flatMap(_.styleId).flatMap(sheet.styleRegistry.get)
+        numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
+        // For formulas with cached values, format the cached value
+        valueToFormat = value match
+          case CellValue.Formula(_, Some(cached)) => cached
+          case other => other
+        formatted = NumFmtFormatter.formatValue(valueToFormat, numFmt)
+        // Get comment from sheet (sheet.getComment, not cell.comment)
+        comment = sheet.getComment(ref)
+        // Get hyperlink from cell
+        hyperlink = cell.flatMap(_.hyperlink)
+        // Build dependency graph for dependencies/dependents
+        graph = DependencyGraph.fromSheet(sheet)
+        deps = graph.dependencies.getOrElse(ref, Set.empty).toVector.sortBy(_.toA1)
+        dependents = graph.dependents.getOrElse(ref, Set.empty).toVector.sortBy(_.toA1)
+      yield Format.cellInfo(ref, value, formatted, style, comment, hyperlink, deps, dependents)
 
     case Command.Search(pattern, limit) =>
       IO.fromEither(
