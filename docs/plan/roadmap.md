@@ -1,6 +1,6 @@
 # XL Roadmap — Living Algorithm for Parallel AI Development
 
-**Last Updated**: 2025-11-24
+**Last Updated**: 2025-11-25
 
 ---
 
@@ -865,10 +865,14 @@ Plans in this directory cover **active future work** only. Completed phases are 
 
 **Core Future Work**:
 - [future-improvements.md](future-improvements.md) - P6.5 polish
-- [formula-system.md](formula-system.md) - ✅ **Complete** (WI-07/08/09 - parser, evaluator, 24 functions, dependency graph)
 - [error-model-and-safety.md](error-model-and-safety.md) - P13 security
 - [streaming-improvements.md](streaming-improvements.md) - P7.5 streaming enhancements
 - [advanced-features.md](advanced-features.md) - P10-P12 (drawings, charts; tables+benchmarks ✅ complete)
+- [llm-exploration-apis.md](llm-exploration-apis.md) - LLM-friendly exploration & output APIs
+
+### Archived Plans (Completed)
+- [../archive/plan/formula-system.md](../archive/plan/formula-system.md) - ✅ **Complete** (WI-07/08/09 - parser, evaluator, 24 functions, dependency graph)
+- [../archive/plan/sax-streaming-write.md](../archive/plan/sax-streaming-write.md) - ✅ **Complete** (WI-17 - SAX streaming write)
 
 ### Design Docs
 `docs/design/` - Architectural decisions (timeless):
