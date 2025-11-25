@@ -32,11 +32,15 @@ object Main
   private var session: Session = Session.empty
 
   override def main: Opts[IO[ExitCode]] =
-    (openCmd orElse createCmd orElse closeCmd orElse
+    val subcommands = openCmd orElse createCmd orElse closeCmd orElse
       sheetsCmd orElse selectCmd orElse boundsCmd orElse
       viewCmd orElse cellCmd orElse searchCmd orElse evalCmd orElse
       putCmd orElse putfCmd orElse
-      saveCmd orElse saveasCmd).map(run)
+      saveCmd orElse saveasCmd
+
+    (fileOpt, sheetOpt, subcommands).mapN { (filePathOpt, sheetNameOpt, cmd) =>
+      runWithFile(filePathOpt, sheetNameOpt, cmd)
+    }
 
   // ==========================================================================
   // Command definitions
@@ -52,6 +56,10 @@ object Main
   private val readonlyOpt = Opts.flag("readonly", "Open in read-only mode").orFalse
   private val formulasOpt = Opts.flag("formulas", "Show formulas instead of values").orFalse
   private val limitOpt = Opts.option[Int]("limit", "Maximum rows to display").withDefault(50)
+
+  // Global options (auto-opens workbook and selects sheet before command)
+  private val fileOpt = Opts.option[Path]("file", "Excel file to operate on", "f").orNone
+  private val sheetOpt = Opts.option[String]("sheet", "Sheet to select", "s").orNone
 
   // --- Open/Initialize ---
 
@@ -134,6 +142,32 @@ object Main
   // ==========================================================================
   // Command execution
   // ==========================================================================
+
+  private def runWithFile(
+    fileOpt: Option[Path],
+    sheetOpt: Option[String],
+    cmd: Command
+  ): IO[ExitCode] =
+    val openFile: IO[Unit] = fileOpt match
+      case Some(path) =>
+        ExcelIO.instance[IO].read(path).flatMap { wb =>
+          IO.delay { session = Session.withWorkbook(wb, path, readOnly = false) }
+        }
+      case None => IO.unit
+
+    val selectSheet: IO[Unit] = sheetOpt match
+      case Some(name) =>
+        IO.fromEither(SheetName.apply(name).left.map(e => new Exception(e))).flatMap { sheetName =>
+          IO.delay { session = session.selectSheet(sheetName) }
+        }
+      case None => IO.unit
+
+    (openFile *> selectSheet).attempt.flatMap {
+      case Left(err) =>
+        IO.println(Format.errorSimple(s"Setup failed: ${err.getMessage}")).as(ExitCode.Error)
+      case Right(_) =>
+        run(cmd)
+    }
 
   private def run(cmd: Command): IO[ExitCode] =
     execute(cmd).attempt.flatMap {
