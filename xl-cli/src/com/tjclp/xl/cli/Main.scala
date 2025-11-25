@@ -30,14 +30,28 @@ object Main
     ):
 
   override def main: Opts[IO[ExitCode]] =
-    val subcommands =
-      sheetsCmd orElse boundsCmd orElse
-        viewCmd orElse cellCmd orElse searchCmd orElse evalCmd orElse
-        putCmd orElse putfCmd
-
-    (fileOpt, sheetOpt, outputOpt, subcommands).mapN { (filePath, sheetName, outputPath, cmd) =>
-      run(filePath, sheetName, outputPath, cmd)
+    // Workbook-level: only --file (no --sheet)
+    val workbookOpts = (fileOpt, sheetsCmd).mapN { (file, cmd) =>
+      run(file, None, None, cmd)
     }
+
+    // Sheet-level read-only: --file and --sheet (no --output)
+    val sheetReadOnlySubcmds =
+      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse evalCmd
+
+    val sheetReadOnlyOpts = (fileOpt, sheetOpt, sheetReadOnlySubcmds).mapN { (file, sheet, cmd) =>
+      run(file, sheet, None, cmd)
+    }
+
+    // Sheet-level write: --file, --sheet, and --output (required)
+    val sheetWriteSubcmds = putCmd orElse putfCmd
+
+    val sheetWriteOpts =
+      (fileOpt, sheetOpt, outputOpt, sheetWriteSubcmds).mapN { (file, sheet, out, cmd) =>
+        run(file, sheet, Some(out), cmd)
+      }
+
+    workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
 
   // ==========================================================================
   // Global options
@@ -50,7 +64,7 @@ object Main
     Opts.option[String]("sheet", "Sheet to select (optional, defaults to first)", "s").orNone
 
   private val outputOpt =
-    Opts.option[Path]("output", "Output file for mutations (required for put/putf)", "o").orNone
+    Opts.option[Path]("output", "Output file (required)", "o")
 
   // ==========================================================================
   // Command definitions
@@ -101,11 +115,11 @@ object Main
 
   // --- Mutate (require -o) ---
 
-  val putCmd: Opts[Command] = Opts.subcommand("put", "Write value to cell (requires -o)") {
+  val putCmd: Opts[Command] = Opts.subcommand("put", "Write value to cell") {
     (refArg, valueArg).mapN(Command.Put.apply)
   }
 
-  val putfCmd: Opts[Command] = Opts.subcommand("putf", "Write formula to cell (requires -o)") {
+  val putfCmd: Opts[Command] = Opts.subcommand("putf", "Write formula to cell") {
     (refArg, valueArg).mapN(Command.PutFormula.apply)
   }
 
@@ -225,29 +239,31 @@ object Main
       yield Format.evalSuccess(formula, result, overrides)
 
     case Command.Put(refStr, valueStr) =>
-      for
-        outputPath <- IO.fromOption(outputOpt)(
-          new Exception("Missing required flag: --output (-o). Mutations require an output file.")
-        )
-        ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
-        value = parseValue(valueStr)
-        updatedSheet = sheet.put(ref, value)
-        updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
-        _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
-      yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
+      // outputOpt guaranteed Some by CLI parsing for write commands
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
+            value = parseValue(valueStr)
+            updatedSheet = sheet.put(ref, value)
+            updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+          yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
+      }
 
     case Command.PutFormula(refStr, formulaStr) =>
-      for
-        outputPath <- IO.fromOption(outputOpt)(
-          new Exception("Missing required flag: --output (-o). Mutations require an output file.")
-        )
-        ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
-        formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
-        value = CellValue.Formula(formula)
-        updatedSheet = sheet.put(ref, value)
-        updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
-        _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
-      yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
+      // outputOpt guaranteed Some by CLI parsing for write commands
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            ref <- IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e.toString)))
+            formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+            value = CellValue.Formula(formula)
+            updatedSheet = sheet.put(ref, value)
+            updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+          yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
+      }
 
   // ==========================================================================
   // Helpers
