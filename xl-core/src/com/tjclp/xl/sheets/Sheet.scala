@@ -88,7 +88,7 @@ final case class Sheet(
    * sheet.put(ref"A1", fx"=SUM(B1:B10)")  // Formula
    * }}}
    */
-  def put[A: CellWriter](ref: ARef, value: A): XLResult[Sheet] =
+  def put[A: CellWriter](ref: ARef, value: A): Sheet =
     putSingle(ref, value)
 
   /**
@@ -106,7 +106,7 @@ final case class Sheet(
   def put[A: CellWriter](ref: String, value: A): XLResult[Sheet] =
     ARef.parse(ref) match
       case Left(err) => Left(XLError.InvalidCellRef(ref, err))
-      case Right(aref) => putSingle(aref, value)
+      case Right(aref) => Right(putSingle(aref, value))
 
   /**
    * Put a single value at reference with explicit style.
@@ -114,19 +114,18 @@ final case class Sheet(
    * Merges explicit style with codec-inferred style: explicit properties take precedence, but if
    * explicit has General NumFmt and codec provides non-General, codec's NumFmt is used.
    */
-  def put[A: CellWriter](ref: ARef, value: A, style: CellStyle): XLResult[Sheet] =
-    putSingle(ref, value).map { s =>
-      // Get the codec-inferred style (if any) from the cell after putSingle
-      val codecStyle = s.cells.get(ref).flatMap(_.styleId).flatMap(s.styleRegistry.get)
-      // Merge: explicit style properties take precedence, but use codec NumFmt if explicit is General
-      val mergedStyle = codecStyle match
-        case Some(cs)
-            if style.numFmt == com.tjclp.xl.styles.numfmt.NumFmt.General && cs.numFmt != com.tjclp.xl.styles.numfmt.NumFmt.General =>
-          style.copy(numFmt = cs.numFmt)
-        case _ => style
-      import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-      s.withCellStyle(ref, mergedStyle)
-    }
+  def put[A: CellWriter](ref: ARef, value: A, style: CellStyle): Sheet =
+    val s = putSingle(ref, value)
+    // Get the codec-inferred style (if any) from the cell after putSingle
+    val codecStyle = s.cells.get(ref).flatMap(_.styleId).flatMap(s.styleRegistry.get)
+    // Merge: explicit style properties take precedence, but use codec NumFmt if explicit is General
+    val mergedStyle = codecStyle match
+      case Some(cs)
+          if style.numFmt == com.tjclp.xl.styles.numfmt.NumFmt.General && cs.numFmt != com.tjclp.xl.styles.numfmt.NumFmt.General =>
+        style.copy(numFmt = cs.numFmt)
+      case _ => style
+    import com.tjclp.xl.sheets.styleSyntax.withCellStyle
+    s.withCellStyle(ref, mergedStyle)
 
   /**
    * Put a single value at string reference with explicit style.
@@ -135,7 +134,7 @@ final case class Sheet(
   def put[A: CellWriter](ref: String, value: A, style: CellStyle): XLResult[Sheet] =
     ARef.parse(ref) match
       case Left(err) => Left(XLError.InvalidCellRef(ref, err))
-      case Right(aref) => put(aref, value, style)
+      case Right(aref) => Right(put(aref, value, style))
 
   // Merge existing style with codec-inferred style
   // Preserves existing properties; codec NumFmt overrides only when existing is General
@@ -148,7 +147,8 @@ final case class Sheet(
 
   // Internal helper for single-cell put with CellWriter type class
   // Uses the CellWriter[CellWritable] instance which handles all supported types via pattern matching
-  private def putSingle[A: CellWriter](ref: ARef, value: A): XLResult[Sheet] =
+  // Returns Sheet directly (infallible) since CellWriter.write cannot fail
+  private def putSingle[A: CellWriter](ref: ARef, value: A): Sheet =
     import com.tjclp.xl.codec.given
     val (cellValue, styleOpt) = CellWriter[A].write(value)
     val existingCell = cells.get(ref)
@@ -163,9 +163,9 @@ final case class Sheet(
           case None => codecStyle
         val (newRegistry, _) = styleRegistry.register(mergedStyle)
         import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-        Right(sheetWithCell.copy(styleRegistry = newRegistry).withCellStyle(ref, mergedStyle))
+        sheetWithCell.copy(styleRegistry = newRegistry).withCellStyle(ref, mergedStyle)
       case None =>
-        Right(sheetWithCell)
+        sheetWithCell
 
   /**
    * Batch put with mixed value types and automatic style inference.
@@ -202,7 +202,7 @@ final case class Sheet(
    *   Updated sheet (always succeeds - type safety is enforced at compile time)
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def put[A: CellWriter](updates: (ARef, A)*): XLResult[Sheet] =
+  def put[A: CellWriter](updates: (ARef, A)*): Sheet =
     import com.tjclp.xl.codec.given
 
     // NOTE: Local mutation for performance - buffers are private to this method
@@ -235,7 +235,7 @@ final case class Sheet(
       }
     }
 
-    Right(applyBulkCells(builtCells, cellsWithStyles, registry))
+    applyBulkCells(builtCells, cellsWithStyles, registry)
 
   /**
    * Type-safe variant of [[put]] that requires a single `CellCodec` for all values.
@@ -244,7 +244,7 @@ final case class Sheet(
    * ensuring zero-overhead writes when the value type is known statically.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def putTyped[A](updates: (ARef, A)*)(using CellCodec[A]): XLResult[Sheet] =
+  def putTyped[A](updates: (ARef, A)*)(using CellCodec[A]): Sheet =
     val builtCells = scala.collection.mutable.ArrayBuffer[Cell]()
     val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
     var registry = styleRegistry
@@ -267,7 +267,7 @@ final case class Sheet(
       }
     }
 
-    Right(applyBulkCells(builtCells, cellsWithStyles, registry))
+    applyBulkCells(builtCells, cellsWithStyles, registry)
 
   private def applyBulkCells(
     builtCells: Iterable[Cell],

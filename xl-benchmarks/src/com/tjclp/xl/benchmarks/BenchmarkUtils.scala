@@ -39,7 +39,6 @@ object BenchmarkUtils {
         ref"D1" -> "Amount",
         ref"E1" -> "Active"
       )
-      .getOrElse(emptySheet)
 
     // Data rows - build list of updates then batch apply
     // Note: CellValue used for type-safe heterogeneous batch operations
@@ -65,7 +64,7 @@ object BenchmarkUtils {
     }
 
     // Apply all data updates in one go
-    headerSheet.put(dataUpdates*).getOrElse(headerSheet)
+    headerSheet.put(dataUpdates*)
   }
 
   /** Generate patches for benchmarking patch operations */
@@ -124,10 +123,7 @@ object BenchmarkUtils {
       (ARef.from1(1, i): ARef) -> i.toDouble
     }
 
-    val sheet = emptySheet.put(updates*) match {
-      case Right(s) => s
-      case Left(err) => sys.error(s"Failed to create verifiable sheet: $err")
-    }
+    val sheet = emptySheet.put(updates*)
     // Direct construction with only the Data sheet (avoids Sheet1 issue)
     Workbook(Vector(sheet))
   }

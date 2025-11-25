@@ -94,7 +94,7 @@ object Patch:
    */
   def applyPatch(sheet: Sheet, patch: Patch): XLResult[Sheet] = patch match
     case Put(ref, value) =>
-      sheet.put(ref, value)
+      Right(sheet.put(ref, value))
 
     case SetStyle(ref, styleId) =>
       val cell = sheet(ref).withStyle(styleId)

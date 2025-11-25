@@ -40,7 +40,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"B1" -> "Modified")
+      updatedSheet = sheet.put(ref"B1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -99,7 +99,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"C1" -> "Modified")
+      updatedSheet = sheet.put(ref"C1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -164,7 +164,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A3" -> "Modified")
+      updatedSheet = sheet.put(ref"A3" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -240,7 +240,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A2" -> "Modified")
+      updatedSheet = sheet.put(ref"A2" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 

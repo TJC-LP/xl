@@ -93,3 +93,15 @@ object unsafe:
      *   The wrapped value if Right, otherwise default
      */
     def getOrElse(default: => A): A = result.toOption.getOrElse(default)
+
+  // Identity extension for Sheet - allows .unsafe chaining to work when put returns Sheet directly
+  // This is a backwards compatibility measure: code written for XLResult[Sheet] continues to work
+  extension (sheet: com.tjclp.xl.sheets.Sheet)
+    /**
+     * Identity operation for backwards compatibility.
+     *
+     * When Sheet.put returns Sheet directly (infallible), calling .unsafe is a no-op. This allows
+     * existing code to work unchanged after the API evolved to return Sheet for validated refs.
+     */
+    @annotation.targetName("unsafeSheet")
+    def unsafe: com.tjclp.xl.sheets.Sheet = sheet

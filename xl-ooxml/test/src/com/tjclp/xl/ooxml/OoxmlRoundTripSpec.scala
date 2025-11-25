@@ -477,8 +477,8 @@ class OoxmlRoundTripSpec extends FunSuite:
     yield Workbook(Vector(summary, detail, timeline))
 
   private def buildSummarySheet: XLResult[Sheet] =
-    Sheet("Summary").flatMap { base =>
-      base
+    Sheet("Summary").map { base =>
+      val populated = base
         .put(
           ref"A1" -> "Quarterly Report",
           ref"A2" -> "Revenue",
@@ -498,24 +498,22 @@ class OoxmlRoundTripSpec extends FunSuite:
           ref"E6" -> "dup-string",
           ref"E7" -> "dup-string"
         )
-        .map { populated =>
-          val enriched = populated.put(ref"E2", CellValue.Error(CellError.Div0))
-          val header = CellStyle.default.bold.size(16.0).white.bgBlue.center.middle
-          val currency = CellStyle.default.bold.size(12.0).right
-          val warning = CellStyle.default.red.bgYellow
-          val rich = CellStyle.default.italic
-          enriched
-            .withCellStyle(ref"A1", header)
-            .withRangeStyle(ref"A2:C4", currency)
-            .withCellStyle(ref"E2", warning)
-            .withCellStyle(ref"A6", rich)
-            .merge(ref"A1:E1")
-        }
+      val enriched = populated.put(ref"E2", CellValue.Error(CellError.Div0))
+      val header = CellStyle.default.bold.size(16.0).white.bgBlue.center.middle
+      val currency = CellStyle.default.bold.size(12.0).right
+      val warning = CellStyle.default.red.bgYellow
+      val rich = CellStyle.default.italic
+      enriched
+        .withCellStyle(ref"A1", header)
+        .withRangeStyle(ref"A2:C4", currency)
+        .withCellStyle(ref"E2", warning)
+        .withCellStyle(ref"A6", rich)
+        .merge(ref"A1:E1")
     }
 
   private def buildDetailSheet: XLResult[Sheet] =
-    Sheet("Detail").flatMap { base =>
-      base
+    Sheet("Detail").map { base =>
+      val populated = base
         .put(
           ref"A1" -> "Region",
           ref"B1" -> "Units",
@@ -540,20 +538,18 @@ class OoxmlRoundTripSpec extends FunSuite:
           ref"A6" -> "Notes",
           ref"B6" -> "Use xml:space to keep double spaces"
         )
-        .map { populated =>
-          val header = CellStyle.default.bold.bgGray.center
-          val number = CellStyle.default.right
-          val noteStyle = CellStyle.default.italic.wrap
-          populated
-            .withRangeStyle(ref"A1:E1", header)
-            .withRangeStyle(ref"B2:D4", number)
-            .withCellStyle(ref"B6", noteStyle)
-        }
+      val header = CellStyle.default.bold.bgGray.center
+      val number = CellStyle.default.right
+      val noteStyle = CellStyle.default.italic.wrap
+      populated
+        .withRangeStyle(ref"A1:E1", header)
+        .withRangeStyle(ref"B2:D4", number)
+        .withCellStyle(ref"B6", noteStyle)
     }
 
   private def buildTimelineSheet: XLResult[Sheet] =
-    Sheet("Timeline").flatMap { base =>
-      base
+    Sheet("Timeline").map { base =>
+      val populated = base
         .put(
           ref"A1" -> "Milestone",
           ref"B1" -> "Date",
@@ -568,15 +564,13 @@ class OoxmlRoundTripSpec extends FunSuite:
           ref"C3" -> "At Risk",
           ref"D3" -> false
         )
-        .map { populated =>
-          val header = CellStyle.default.bold.bgBlue.white.center
-          val dateStyle = CellStyle.default.right
-          val warning = CellStyle.default.bold.bgYellow
-          populated
-            .withRangeStyle(ref"A1:D1", header)
-            .withRangeStyle(ref"B2:B3", dateStyle)
-            .withCellStyle(ref"C3", warning)
-        }
+      val header = CellStyle.default.bold.bgBlue.white.center
+      val dateStyle = CellStyle.default.right
+      val warning = CellStyle.default.bold.bgYellow
+      populated
+        .withRangeStyle(ref"A1:D1", header)
+        .withRangeStyle(ref"B2:B3", dateStyle)
+        .withCellStyle(ref"C3", warning)
     }
 
   private def assertWorkbookEquality(expected: Workbook, actual: Workbook): Unit =

@@ -40,7 +40,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -98,7 +98,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -150,7 +150,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 
@@ -226,7 +226,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet <- sheet.put(ref"A1" -> "Modified")
+      updatedSheet = sheet.put(ref"A1" -> "Modified")
       updated <- wb.put(updatedSheet)
     yield updated
 

@@ -16,6 +16,7 @@ object formulaExports:
   // Parser and printer
   export formula.FormulaParser
   export formula.FormulaPrinter
+  export formula.FunctionParser
 
   // Typed expression AST
   export formula.TExpr

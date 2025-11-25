@@ -55,7 +55,7 @@ class WorkbookModificationSpec extends FunSuite:
   }
 
   test("put marks sheet as modified when replacing existing sheet") {
-    val modifiedSheet = baseSheet.put(ref"A1" -> "New Value").fold(err => fail(s"Failed to modify sheet: $err"), identity)
+    val modifiedSheet = baseSheet.put(ref"A1" -> "New Value")
     val updated = workbook.put(modifiedSheet).fold(err => fail(s"Put failed: $err"), identity)
     val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assertEquals(tracker.modifiedSheets, Set(0))

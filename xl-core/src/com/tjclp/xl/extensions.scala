@@ -191,7 +191,7 @@ object extensions:
      */
     @annotation.targetName("putARefChainable")
     def put[A: CellWriter](ref: com.tjclp.xl.addressing.ARef, value: A): XLResult[Sheet] =
-      result.flatMap(_.put(ref, value))
+      result.map(_.put(ref, value))
 
     /**
      * Put value at ARef with style (chainable).
@@ -202,7 +202,7 @@ object extensions:
       value: A,
       cellStyle: CellStyle
     ): XLResult[Sheet] =
-      result.flatMap(_.put(ref, value, cellStyle))
+      result.map(_.put(ref, value, cellStyle))
 
     /**
      * Apply style (chainable, string ref).
@@ -241,7 +241,7 @@ object extensions:
      */
     @annotation.targetName("putBatchChainable")
     def put[A: CellWriter](updates: (com.tjclp.xl.addressing.ARef, A)*): XLResult[Sheet] =
-      result.flatMap(_.put(updates*))
+      result.map(_.put(updates*))
 
     /** Add comment to cell (chainable). */
     @annotation.targetName("commentChainable")
