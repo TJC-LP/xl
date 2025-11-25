@@ -2,7 +2,9 @@ package com.tjclp.xl.cli.output
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Markdown table rendering for xl CLI output.
@@ -35,7 +37,7 @@ object Markdown:
       val maxContent = (startRow to endRow)
         .map { row =>
           val ref = ARef.from0(col, row)
-          sheet.cells.get(ref).map(c => formatCell(c, showFormulas).length).getOrElse(0)
+          sheet.cells.get(ref).map(c => formatCell(c, sheet, showFormulas).length).getOrElse(0)
         }
         .maxOption
         .getOrElse(0)
@@ -64,7 +66,7 @@ object Markdown:
       sb.append(s"| ${rowNum.padTo(2, ' ')}|")
       colWidths.zip(startCol to endCol).foreach { case (width, col) =>
         val ref = ARef.from0(col, row)
-        val value = sheet.cells.get(ref).map(c => formatCell(c, showFormulas)).getOrElse("")
+        val value = sheet.cells.get(ref).map(c => formatCell(c, sheet, showFormulas)).getOrElse("")
         val escaped = escapeMarkdown(value)
         sb.append(s" ${escaped.padTo(width, ' ')} |")
       }
@@ -110,31 +112,24 @@ object Markdown:
     s"Found ${results.size} matches:\n\n${renderTable(headers, rows)}"
 
   /**
-   * Format a cell value for display.
+   * Format a cell value for display with Excel-style number formatting.
    */
-  private def formatCell(cell: Cell, showFormulas: Boolean): String =
+  private def formatCell(cell: Cell, sheet: Sheet, showFormulas: Boolean): String =
+    // Extract NumFmt from cell's style
+    val numFmt = cell.styleId
+      .flatMap(sheet.styleRegistry.get)
+      .map(_.numFmt)
+      .getOrElse(NumFmt.General)
+
     cell.value match
       case CellValue.Formula(expr, cached) =>
         if showFormulas then s"=$expr"
-        else cached.map(formatValue).getOrElse(s"=$expr")
-      case other => formatValue(other)
-
-  private def formatValue(value: CellValue): String =
-    value match
-      case CellValue.Text(s) => s
-      case CellValue.Number(n) => formatNumber(n)
-      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-      case CellValue.DateTime(dt) => dt.toLocalDate.toString
-      case CellValue.Error(err) => err.toExcel
-      case CellValue.RichText(rt) => rt.toPlainText
+        else cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(s"=$expr")
+      case CellValue.RichText(rt) =>
+        // Rich text has its own formatting, don't apply NumFmt
+        rt.toPlainText
       case CellValue.Empty => ""
-      case CellValue.Formula(_, Some(cached)) => formatValue(cached)
-      case CellValue.Formula(expr, None) => s"=$expr"
-
-  private def formatNumber(n: BigDecimal): String =
-    // Simple formatting - could be enhanced with style-based formatting
-    if n.isWhole then n.toBigInt.toString
-    else n.underlying.stripTrailingZeros.toPlainString
+      case other => NumFmtFormatter.formatValue(other, numFmt)
 
   private def escapeMarkdown(s: String): String =
     s.replace("|", "\\|").replace("\n", " ").replace("\r", "")

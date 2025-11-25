@@ -106,8 +106,15 @@ object NumFmtFormatter:
         n.toString
 
       case NumFmt.Custom(code) =>
-        // TODO: Parse custom format codes (complex)
-        formatGeneral(n)
+        FormatCodeParser.parse(code) match
+          case Right(fmt) if FormatCodeParser.hasDateTokens(fmt) =>
+            // Custom date format: convert serial number to LocalDateTime
+            val dt = excelSerialToDateTime(n)
+            FormatCodeParser.applyDateFormat(dt, fmt)
+          case Right(fmt) =>
+            FormatCodeParser.applyFormat(n, fmt)._1
+          case Left(_) =>
+            formatGeneral(n) // Fallback for unparseable formats
 
   /**
    * Format in General style (Excel's default number format).
@@ -147,11 +154,37 @@ object NumFmtFormatter:
         dt.toLocalTime.format(DateTimeFormatter.ofPattern("H:mm:ss")) // 24-hour format
 
       case NumFmt.Custom(code) =>
-        // TODO: Parse custom date format codes
-        dt.toString
+        FormatCodeParser.parse(code) match
+          case Right(fmt) if FormatCodeParser.hasDateTokens(fmt) =>
+            FormatCodeParser.applyDateFormat(dt, fmt)
+          case _ => dt.toString // Fallback for non-date formats or parse errors
 
       case _ =>
         dt.toString
+
+  /**
+   * Convert Excel date serial number to LocalDateTime.
+   *
+   * @param serial
+   *   Excel date serial number (days since 1899-12-30)
+   * @return
+   *   LocalDateTime
+   */
+  private def excelSerialToDateTime(serial: BigDecimal): LocalDateTime =
+    import java.time.LocalDate
+    // Excel serial date: 1 = 1900-01-01 (with 1900 leap year bug)
+    val baseDate = LocalDate.of(1899, 12, 30) // Adjusted for Excel's bug
+    val days = serial.toLong
+    val date = baseDate.plusDays(days)
+
+    // Handle time component if present
+    val timeFraction = (serial % 1).toDouble
+    if timeFraction > 0 then
+      val hours = (timeFraction * 24).toInt
+      val minutes = ((timeFraction * 24 * 60) % 60).toInt
+      val seconds = (((timeFraction * 24 * 60 * 60) % 60)).toInt
+      date.atTime(hours, minutes, seconds)
+    else date.atStartOfDay()
 
   /**
    * Format Excel date serial number (days since 1900-01-01).
@@ -164,21 +197,7 @@ object NumFmtFormatter:
    *   Formatted date string
    */
   private def formatExcelDateSerial(serial: BigDecimal, pattern: String): String =
-    import java.time.LocalDate
-    // Excel serial date: 1 = 1900-01-01 (with 1900 leap year bug)
-    // We'll use Java's epoch for simplicity
-    val baseDate = LocalDate.of(1899, 12, 30) // Adjusted for Excel's bug
-    val days = serial.toLong
-    val date = baseDate.plusDays(days)
-
-    // Handle time component if present
-    val timeFraction = (serial % 1).toDouble
-    if timeFraction > 0 then
-      val hours = (timeFraction * 24).toInt
-      val minutes = ((timeFraction * 24 * 60) % 60).toInt
-      val dateTime = date.atTime(hours, minutes)
-      dateTime.format(DateTimeFormatter.ofPattern(pattern))
-    else date.format(DateTimeFormatter.ofPattern(pattern))
+    excelSerialToDateTime(serial).format(DateTimeFormatter.ofPattern(pattern))
 
   /**
    * Format error values in Excel style.

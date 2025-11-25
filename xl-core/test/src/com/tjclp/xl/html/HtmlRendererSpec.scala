@@ -25,8 +25,9 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: empty ref") {
     val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
     val html = sheet.toHtml(ref"A1:A1")
-    assert(html.contains("<table>"), "Should contain table tag")
-    assert(html.contains("<td></td>"), "Empty cell should render as empty td")
+    assert(html.contains("<table"), "Should contain table tag")
+    assert(html.contains("border-collapse"), "Should have border-collapse styling")
+    assert(html.contains("background-color: #FFFFFF"), "Empty cell should have white background")
   }
 
   test("toHtml: single cell with text") {
@@ -34,7 +35,7 @@ class HtmlRendererSpec extends FunSuite:
       .put(ref"A1", CellValue.Text("Hello"))
 
     val html = sheet.toHtml(ref"A1:A1")
-    assert(html.contains("<table>"), "Should contain table tag")
+    assert(html.contains("<table"), "Should contain table tag")
     assert(html.contains("Hello"), "Should contain cell text")
   }
 
@@ -49,7 +50,7 @@ class HtmlRendererSpec extends FunSuite:
       .unsafe
 
     val html = sheet.toHtml(ref"A1:B2")
-    assert(html.contains("<table>"))
+    assert(html.contains("<table"))
     assert(html.contains("A1"))
     assert(html.contains("B2"))
     // Should have 2 rows
@@ -131,7 +132,9 @@ class HtmlRendererSpec extends FunSuite:
       .withCellStyle(ref"A1", boldStyle)
 
     val html = sheet.toHtml(ref"A1:A1", includeStyles = false)
-    assert(!html.contains("style="), "Should not include inline styles")
+    // Table still has wrapper style, but cells should not have style attributes
+    assert(!html.contains("<td style="), "Cells should not include inline styles")
+    assert(!html.contains("font-weight"), "Should not include font styling")
   }
 
   // ========== HTML Escaping ==========
@@ -190,7 +193,7 @@ class HtmlRendererSpec extends FunSuite:
       .unsafe
 
     val html = sheet.toHtml(ref"A1:A1")
-    assert(html.contains("true"))
+    assert(html.contains("TRUE"), "Excel uses uppercase TRUE/FALSE")
   }
 
   test("toHtml: date cells") {
@@ -199,7 +202,8 @@ class HtmlRendererSpec extends FunSuite:
       .unsafe
 
     val html = sheet.toHtml(ref"A1:A1")
-    assert(html.contains("2025"))
+    // Date is formatted with NumFmt.Date style (M/d/yy format)
+    assert(html.contains("11/10/25"), s"Expected Excel date format, got: $html")
   }
 
   test("toHtml: formula cells") {
@@ -265,7 +269,7 @@ class HtmlRendererSpec extends FunSuite:
     val html = sheet.toHtml(ref"A1:B3")
 
     // Verify structure
-    assert(html.contains("<table>"))
+    assert(html.contains("<table"))
     assert(html.contains("Metric"))
     assert(html.contains("Change"))
 

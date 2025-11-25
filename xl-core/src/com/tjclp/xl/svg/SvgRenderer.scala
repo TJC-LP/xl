@@ -6,12 +6,14 @@ import java.awt.image.BufferedImage
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.border.{BorderStyle, BorderSide}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Renders Excel sheets to SVG images with styled cells.
@@ -166,6 +168,11 @@ object SvgRenderer:
         cellOpt.foreach { cell =>
           val (textX, anchor) = textAlignment(cell, sheet, xOffset, width)
           val textY = y + DefaultCellHeight / 2 + 4
+          // Extract NumFmt from cell's style for proper value formatting
+          val numFmt = cell.styleId
+            .flatMap(sheet.styleRegistry.get)
+            .map(_.numFmt)
+            .getOrElse(NumFmt.General)
 
           cell.value match
             case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
@@ -180,7 +187,7 @@ object SvgRenderer:
               sb.append("</text>\n")
 
             case other =>
-              val text = cellValueToText(other)
+              val text = cellValueToText(other, numFmt)
               if text.nonEmpty then
                 val textStyle = if includeStyles then cellTextStyle(cell, sheet) else ""
                 val escapedText = escapeXml(text)
@@ -226,25 +233,30 @@ object SvgRenderer:
     case CellValue.Formula(_, Some(cached)) =>
       measureCellValueWidth(cached)
     case other =>
-      measureTextWidth(cellValueToText(other), None)
+      // Use General format for measurement (actual format unknown here)
+      measureTextWidth(cellValueToText(other, NumFmt.General), None)
 
   /**
-   * Convert cell value to plain text for display.
+   * Convert cell value to text with Excel-style number formatting.
    */
-  private def cellValueToText(value: CellValue): String = value match
-    case CellValue.Text(s) => s
-    case CellValue.RichText(rt) => rt.toPlainText
-    case CellValue.Number(n) => formatNumber(n)
-    case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-    case CellValue.DateTime(dt) => dt.toLocalDate.toString
-    case CellValue.Empty => ""
-    case CellValue.Formula(_, Some(cv)) => cellValueToText(cv)
-    case CellValue.Formula(expr, None) => s"=$expr"
-    case CellValue.Error(err) => err.toExcel
+  private def cellValueToText(value: CellValue, numFmt: NumFmt): String = value match
+    case CellValue.RichText(rt) =>
+      // Rich text has its own formatting, don't apply NumFmt
+      rt.toPlainText
 
-  private def formatNumber(n: BigDecimal): String =
-    if n.isWhole then n.toBigInt.toString
-    else n.underlying.stripTrailingZeros.toPlainString
+    case CellValue.Empty => ""
+
+    case CellValue.Formula(_, Some(cached)) =>
+      // Show cached result formatted with NumFmt (matches Excel display)
+      NumFmtFormatter.formatValue(cached, numFmt)
+
+    case CellValue.Formula(expr, None) =>
+      // No cached value, show raw formula
+      s"=$expr"
+
+    case other =>
+      // Use NumFmtFormatter for Text, Number, Bool, DateTime, Error
+      NumFmtFormatter.formatValue(other, numFmt)
 
   /**
    * Get SVG fill and stroke attributes for a cell's background.
