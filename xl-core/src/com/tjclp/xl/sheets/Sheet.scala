@@ -92,21 +92,22 @@ final case class Sheet(
     putSingle(ref, value)
 
   /**
-   * Put a single value at string reference (runtime parsing).
+   * Put a single value at string reference.
    *
-   * Same as put(ARef, A) but accepts string A1 notation for refs.
+   * For string literals ("A1"), validates at compile time and returns `Sheet` directly. For runtime
+   * strings, validates at runtime and returns `XLResult[Sheet]`.
    *
    * Examples:
    * {{{
-   * sheet.put("A1", "Hello")
-   * sheet.put("B2", 42)
+   * sheet.put("A1", "Hello")      // Literal → Sheet (compile-time validated)
+   * sheet.put(userInput, 42)      // Variable → XLResult[Sheet] (runtime)
    * }}}
    */
   @annotation.targetName("putString")
-  def put[A: CellWriter](ref: String, value: A): XLResult[Sheet] =
-    ARef.parse(ref) match
-      case Left(err) => Left(XLError.InvalidCellRef(ref, err))
-      case Right(aref) => Right(putSingle(aref, value))
+  transparent inline def put[A](inline ref: String, value: A)(using
+    inline cw: CellWriter[A]
+  ): Sheet | XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.PutLiteral.putImpl('{ this }, 'ref, 'value, 'cw) }
 
   /**
    * Put a single value at reference with explicit style.
@@ -129,12 +130,15 @@ final case class Sheet(
 
   /**
    * Put a single value at string reference with explicit style.
+   *
+   * For string literals, validates at compile time and returns `Sheet` directly. For runtime
+   * strings, validates at runtime and returns `XLResult[Sheet]`.
    */
   @annotation.targetName("putStringStyled")
-  def put[A: CellWriter](ref: String, value: A, style: CellStyle): XLResult[Sheet] =
-    ARef.parse(ref) match
-      case Left(err) => Left(XLError.InvalidCellRef(ref, err))
-      case Right(aref) => Right(put(aref, value, style))
+  transparent inline def put[A](inline ref: String, value: A, style: CellStyle)(using
+    inline cw: CellWriter[A]
+  ): Sheet | XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.PutLiteral.putStyledImpl('{ this }, 'ref, 'value, 'style, 'cw) }
 
   // Merge existing style with codec-inferred style
   // Preserves existing properties; codec NumFmt overrides only when existing is General

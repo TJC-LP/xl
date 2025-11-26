@@ -31,75 +31,69 @@ class ExtensionsSpec extends FunSuite:
 
   // ========== String-Based put() - Unstyled (9 types) ==========
 
-  test("put String with valid ref succeeds") {
-    val result = baseSheet.put("A1", "Hello")
-    assert(result.isRight)
-    assertEquals(result.unsafe.cell("A1").map(_.value), Some(CellValue.Text("Hello")))
+  test("put String with valid ref succeeds (string literal returns Sheet)") {
+    // String literals now return Sheet directly (compile-time validated)
+    val sheet = baseSheet.put("A1", "Hello")
+    assertEquals(sheet.cell("A1").map(_.value), Some(CellValue.Text("Hello")))
   }
 
   test("put Int with valid ref succeeds") {
-    val result = baseSheet.put("B1", 42)
-    assert(result.isRight)
-    assertEquals(result.unsafe.cell("B1").map(_.value), Some(CellValue.Number(BigDecimal(42))))
+    val sheet = baseSheet.put("B1", 42)
+    assertEquals(sheet.cell("B1").map(_.value), Some(CellValue.Number(BigDecimal(42))))
   }
 
   test("put Long with valid ref succeeds") {
-    val result = baseSheet.put("C1", 42L)
-    assert(result.isRight)
-    assertEquals(result.unsafe.cell("C1").map(_.value), Some(CellValue.Number(BigDecimal(42))))
+    val sheet = baseSheet.put("C1", 42L)
+    assertEquals(sheet.cell("C1").map(_.value), Some(CellValue.Number(BigDecimal(42))))
   }
 
   test("put Double with valid ref succeeds") {
-    val result = baseSheet.put("D1", 3.14)
-    assert(result.isRight)
-    assertEquals(result.unsafe.cell("D1").map(_.value), Some(CellValue.Number(BigDecimal(3.14))))
+    val sheet = baseSheet.put("D1", 3.14)
+    assertEquals(sheet.cell("D1").map(_.value), Some(CellValue.Number(BigDecimal(3.14))))
   }
 
   test("put BigDecimal with valid ref succeeds") {
-    val result = baseSheet.put("E1", BigDecimal("123.45"))
-    assert(result.isRight)
+    val sheet = baseSheet.put("E1", BigDecimal("123.45"))
     assertEquals(
-      result.unsafe.cell("E1").map(_.value),
+      sheet.cell("E1").map(_.value),
       Some(CellValue.Number(BigDecimal("123.45")))
     )
   }
 
   test("put Boolean with valid ref succeeds") {
-    val result = baseSheet.put("F1", true)
-    assert(result.isRight)
-    assertEquals(result.unsafe.cell("F1").map(_.value), Some(CellValue.Bool(true)))
+    val sheet = baseSheet.put("F1", true)
+    assertEquals(sheet.cell("F1").map(_.value), Some(CellValue.Bool(true)))
   }
 
   test("put LocalDate with valid ref succeeds") {
     val date = LocalDate.of(2025, 11, 19)
-    val result = baseSheet.put("G1", date)
-    assert(result.isRight)
+    val sheet = baseSheet.put("G1", date)
     assertEquals(
-      result.unsafe.cell("G1").map(_.value),
+      sheet.cell("G1").map(_.value),
       Some(CellValue.DateTime(date.atStartOfDay))
     )
   }
 
   test("put LocalDateTime with valid ref succeeds") {
     val dt = LocalDateTime.of(2025, 11, 19, 14, 30)
-    val result = baseSheet.put("H1", dt)
-    assert(result.isRight)
-    assertEquals(result.unsafe.cell("H1").map(_.value), Some(CellValue.DateTime(dt)))
+    val sheet = baseSheet.put("H1", dt)
+    assertEquals(sheet.cell("H1").map(_.value), Some(CellValue.DateTime(dt)))
   }
 
   test("put RichText with valid ref succeeds") {
     val richText = "Bold".bold + " normal"
-    val result = baseSheet.put("I1", richText)
-    assert(result.isRight)
-    val cellValue = result.unsafe.cell("I1").map(_.value)
+    val sheet = baseSheet.put("I1", richText)
+    val cellValue = sheet.cell("I1").map(_.value)
     assert(cellValue.exists {
       case _: CellValue.RichText => true
       case _ => false
     })
   }
 
-  test("put with invalid ref returns Left") {
-    val result = baseSheet.put("INVALID", "value")
+  test("put with invalid ref returns Left (runtime string)") {
+    // Use variable to force runtime string evaluation
+    val invalidRef = "INVALID"
+    val result = baseSheet.put(invalidRef, "value")
     assert(result.isLeft)
     result match
       case Left(XLError.InvalidCellRef(ref, _)) =>
@@ -107,126 +101,123 @@ class ExtensionsSpec extends FunSuite:
       case _ => fail("Expected InvalidCellRef error")
   }
 
-  test("put with out-of-range column returns Left") {
-    val result = baseSheet.put("XFE1", "value") // XFE > XFD (max column)
+  test("put with out-of-range column returns Left (runtime string)") {
+    val outOfRangeRef = "XFE1" // XFE > XFD (max column)
+    val result = baseSheet.put(outOfRangeRef, "value")
     assert(result.isLeft)
   }
 
-  test("put with out-of-range row returns Left") {
-    val result = baseSheet.put("A1048577", "value") // Row > 1048576 (max row)
+  test("put with out-of-range row returns Left (runtime string)") {
+    val outOfRangeRef = "A1048577" // Row > 1048576 (max row)
+    val result = baseSheet.put(outOfRangeRef, "value")
     assert(result.isLeft)
   }
 
   // ========== String-Based put() - Styled (9 types) ==========
 
   test("put String with style applies both value and style") {
-    val result = baseSheet.put("A1", "Bold Text", testStyle)
-    assert(result.isRight)
-    val sheet = result.unsafe
+    val sheet = baseSheet.put("A1", "Bold Text", testStyle)
     assertEquals(sheet.cell("A1").map(_.value), Some(CellValue.Text("Bold Text")))
     // Verify style applied (styleId should be set)
     assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
   }
 
   test("put Int with style applies both") {
-    val result = baseSheet.put("A1", 42, testStyle)
-    assert(result.isRight)
-    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+    val sheet = baseSheet.put("A1", 42, testStyle)
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
   }
 
   test("put BigDecimal with style applies both") {
-    val result = baseSheet.put("A1", BigDecimal("123.45"), testStyle)
-    assert(result.isRight)
-    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+    val sheet = baseSheet.put("A1", BigDecimal("123.45"), testStyle)
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
   }
 
   test("put LocalDate with style applies both") {
-    val result = baseSheet.put("A1", LocalDate.of(2025, 11, 19), testStyle)
-    assert(result.isRight)
-    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+    val sheet = baseSheet.put("A1", LocalDate.of(2025, 11, 19), testStyle)
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
   }
 
-  test("put styled with invalid ref returns Left") {
-    val result = baseSheet.put("INVALID", 42, testStyle)
+  test("put styled with invalid ref returns Left (runtime string)") {
+    val invalidRef = "INVALID"
+    val result = baseSheet.put(invalidRef, 42, testStyle)
     assert(result.isLeft)
   }
 
   // ========== Template style() Operations ==========
 
-  test("style applies to single cell") {
-    val result = baseSheet.put("A1", "Text").style("A1", testStyle)
-    assert(result.isRight)
-    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+  test("style applies to single cell (string literal returns Sheet)") {
+    // String literals are compile-time validated, returns Sheet directly
+    val sheet = baseSheet.put("A1", "Text").style("A1", testStyle)
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
   }
 
-  test("style applies to range") {
-    val result = baseSheet
+  test("style applies to range (string literal returns Sheet)") {
+    // String literals are compile-time validated
+    val sheet = baseSheet
       .put("A1", "A")
       .put("B1", "B")
       .style("A1:B1", testStyle)
-    assert(result.isRight)
-    val sheet = result.unsafe
     assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
     assert(sheet.cell("B1").flatMap(_.styleId).isDefined)
   }
 
-  test("style with invalid cell ref returns Left") {
-    val result = baseSheet.style("INVALID", testStyle)
+  test("style with invalid cell ref returns Left (runtime string)") {
+    // Use variable to force runtime string evaluation
+    val invalidRef = "INVALID"
+    val result = baseSheet.style(invalidRef, testStyle)
     assert(result.isLeft)
   }
 
-  test("style with invalid range returns Left") {
-    val result = baseSheet.style("A1:INVALID", testStyle)
+  test("style with invalid range returns Left (runtime string)") {
+    // Use variable to force runtime string evaluation
+    val invalidRange = "A1:INVALID"
+    val result = baseSheet.style(invalidRange, testStyle)
     assert(result.isLeft)
   }
 
   // ========== Typed ref style() Operations ==========
 
   test("style applies to single cell (ARef)") {
-    val result = baseSheet.put("A1", "Text").map(_.style(ref"A1", testStyle))
-    assert(result.isRight)
-    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+    // put("A1", ...) now returns Sheet directly, so just chain style
+    val sheet = baseSheet.put("A1", "Text").style(ref"A1", testStyle)
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
   }
 
   test("style applies to range (CellRange)") {
-    val result = baseSheet
+    val sheet = baseSheet
       .put("A1", "A")
       .put("B1", "B")
-      .map(_.style(ref"A1:B1", testStyle))
-    assert(result.isRight)
-    val sheet = result.unsafe
+      .style(ref"A1:B1", testStyle)
     assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
     assert(sheet.cell("B1").flatMap(_.styleId).isDefined)
   }
 
   test("style with ARef returns Sheet directly") {
-    val sheet = baseSheet.put("A1", "Text").unsafe
-    val result = sheet.style(ref"A1", testStyle)
-    assertEquals(result.cells.get(ref"A1").flatMap(_.styleId).isDefined, true)
+    val sheet = baseSheet.put("A1", "Text")
+    val styled = sheet.style(ref"A1", testStyle)
+    assertEquals(styled.cells.get(ref"A1").flatMap(_.styleId).isDefined, true)
   }
 
   test("style with CellRange returns Sheet directly") {
-    val sheet = baseSheet.put("A1", "A").put("B1", "B").unsafe
+    val sheet = baseSheet.put("A1", "A").put("B1", "B")
     val styled = sheet.style(ref"A1:B1", testStyle)
     assert(styled.cells.get(ref"A1").flatMap(_.styleId).isDefined)
     assert(styled.cells.get(ref"B1").flatMap(_.styleId).isDefined)
   }
 
-  test("style chainable with ARef") {
-    val result = baseSheet
+  test("style chainable with ARef on Sheet") {
+    // put("A1", ...) returns Sheet, style(ARef) returns Sheet
+    val sheet = baseSheet
       .put("A1", "Text")
       .style(ref"A1", testStyle)
-    assert(result.isRight)
-    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
   }
 
-  test("style chainable with CellRange") {
-    val result = baseSheet
+  test("style chainable with CellRange on Sheet") {
+    val sheet = baseSheet
       .put("A1", "A")
       .put("B1", "B")
       .style(ref"A1:B1", testStyle)
-    assert(result.isRight)
-    val sheet = result.unsafe
     assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
     assert(sheet.cell("B1").flatMap(_.styleId).isDefined)
   }
@@ -234,7 +225,7 @@ class ExtensionsSpec extends FunSuite:
   // ========== Safe Lookup Methods ==========
 
   test("cell returns Some for existing cell") {
-    val sheet = baseSheet.put("A1", "Value").unsafe
+    val sheet = baseSheet.put("A1", "Value")
     val cell = sheet.cell("A1")
     assert(cell.isDefined)
     assertEquals(cell.map(_.value), Some(CellValue.Text("Value")))
@@ -253,7 +244,6 @@ class ExtensionsSpec extends FunSuite:
       .put("A1", "A")
       .put("B1", "B")
       .put("C1", "C")
-      .unsafe
     val cells = sheet.range("A1:C1")
     assertEquals(cells.length, 3)
   }
@@ -267,7 +257,7 @@ class ExtensionsSpec extends FunSuite:
   }
 
   test("get auto-detects single cell") {
-    val sheet = baseSheet.put("A1", "Value").unsafe
+    val sheet = baseSheet.put("A1", "Value")
     val cells = sheet.get("A1")
     assertEquals(cells.length, 1)
     cells.headOption match
@@ -276,7 +266,7 @@ class ExtensionsSpec extends FunSuite:
   }
 
   test("get auto-detects range") {
-    val sheet = baseSheet.put("A1", "A").put("B1", "B").unsafe
+    val sheet = baseSheet.put("A1", "A").put("B1", "B")
     val cells = sheet.get("A1:B1")
     assertEquals(cells.length, 2)
   }
@@ -287,39 +277,43 @@ class ExtensionsSpec extends FunSuite:
 
   // ========== Merge Operations ==========
 
-  test("merge with valid range succeeds") {
-    val result = baseSheet.put("A1", "Merged").merge("A1:B1")
-    assert(result.isRight)
-    val sheet = result.unsafe
+  test("merge with valid range succeeds (string literal returns Sheet)") {
+    // String literals are compile-time validated, returns Sheet directly
+    val sheet = baseSheet.put("A1", "Merged").merge("A1:B1")
     assert(sheet.mergedRanges.nonEmpty)
   }
 
-  test("merge with invalid range returns Left") {
-    val result = baseSheet.merge("A1:INVALID")
+  test("merge with invalid range returns Left (runtime string)") {
+    // Use variable to force runtime string evaluation
+    val invalidRange = "A1:INVALID"
+    val result = baseSheet.merge(invalidRange)
     assert(result.isLeft)
   }
 
-  // ========== Chainable XLResult[Sheet] Operations (CRITICAL) ==========
+  // ========== Chainable Operations (CRITICAL) ==========
 
-  test("chain multiple put operations") {
-    val result = baseSheet
+  test("chain multiple put operations (string literals return Sheet)") {
+    // All literal strings - returns Sheet directly
+    val sheet = baseSheet
       .put("A1", "Title")
       .put("A2", 42)
       .put("A3", true)
       .put("A4", LocalDate.of(2025, 11, 19))
 
-    assert(result.isRight)
-    val sheet = result.unsafe
     assertEquals(sheet.cells.size, 4)
     assertEquals(sheet.cell("A1").map(_.value), Some(CellValue.Text("Title")))
     assertEquals(sheet.cell("A2").map(_.value), Some(CellValue.Number(BigDecimal(42))))
   }
 
-  test("chain short-circuits on first error") {
+  test("chain short-circuits on first error (runtime strings)") {
+    // Use variables to force runtime evaluation
+    val validRef = "A1"
+    val invalidRef = "INVALID"
+    val ref3 = "A3"
     val result = baseSheet
-      .put("A1", "Valid")
-      .put("INVALID", "Fail")
-      .put("A3", "Never reached")
+      .put(validRef, "Valid")
+      .flatMap(_.put(invalidRef, "Fail"))
+      .flatMap(_.put(ref3, "Never reached"))
 
     assert(result.isLeft)
     result match
@@ -327,56 +321,54 @@ class ExtensionsSpec extends FunSuite:
       case _ => fail("Expected InvalidCellRef for INVALID")
   }
 
-  test("chain style after put") {
-    val result = baseSheet
+  test("chain style after put (string literals return Sheet)") {
+    // All literals - chain returns Sheet directly
+    val sheet = baseSheet
       .put("A1", "Bold Text")
       .style("A1", testStyle)
 
-    assert(result.isRight)
-    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
   }
 
-  test("chain put with style") {
-    val result = baseSheet
+  test("chain put with style (string literals)") {
+    // String literals return Sheet directly
+    val sheet = baseSheet
       .put("A1", "First")
       .put("A2", "Styled", testStyle)
 
-    assert(result.isRight)
-    val sheet = result.unsafe
     assertEquals(sheet.cells.size, 2)
     assert(sheet.cell("A2").flatMap(_.styleId).isDefined)
   }
 
-  test("chain merge after puts") {
-    val result = baseSheet
+  test("chain merge after puts (string literals return Sheet)") {
+    // All literals - chain returns Sheet directly
+    val sheet = baseSheet
       .put("A1", "Start")
       .put("B1", "End")
       .merge("A1:B1")
 
-    assert(result.isRight)
-    assert(result.unsafe.mergedRanges.nonEmpty)
+    assert(sheet.mergedRanges.nonEmpty)
   }
 
-  test("chain mixed operations") {
-    val result = baseSheet
+  test("chain mixed operations (string literals return Sheet)") {
+    // All literals - chain returns Sheet directly
+    val sheet = baseSheet
       .put("A1", "Title")
       .style("A1", testStyle)
       .put("A2", 100)
       .put("A3", "Footer")
 
-    assert(result.isRight)
-    assertEquals(result.unsafe.cells.size, 3)
+    assertEquals(sheet.cells.size, 3)
   }
 
   // ========== Template Pattern (style before data) ==========
 
   test("style before put preserves style (template pattern)") {
-    val result = baseSheet
+    // All literals - chain returns Sheet directly
+    val sheet = baseSheet
       .style("A1", testStyle)
       .put("A1", "Data")
 
-    assert(result.isRight)
-    val sheet = result.unsafe
     sheet.cell("A1") match
       case Some(cell) =>
         // Verify data added and style preserved
@@ -386,13 +378,12 @@ class ExtensionsSpec extends FunSuite:
   }
 
   test("style range then put individual cells preserves formatting") {
-    val result = baseSheet
+    // All literals - chain returns Sheet directly
+    val sheet = baseSheet
       .style("A1:B1", testStyle)
       .put("A1", "First")
       .put("B1", "Second")
 
-    assert(result.isRight)
-    val sheet = result.unsafe
     // Both cells should have style
     assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
     assert(sheet.cell("B1").flatMap(_.styleId).isDefined)
@@ -400,37 +391,31 @@ class ExtensionsSpec extends FunSuite:
 
   // ========== Edge Cases ==========
 
-  test("put empty string succeeds") {
-    val result = baseSheet.put("A1", "")
-    assert(result.isRight)
-    assertEquals(result.unsafe.cell("A1").map(_.value), Some(CellValue.Text("")))
+  test("put empty string succeeds (string literal returns Sheet)") {
+    val sheet = baseSheet.put("A1", "")
+    assertEquals(sheet.cell("A1").map(_.value), Some(CellValue.Text("")))
   }
 
-  test("put overwrites existing cell") {
-    val result = baseSheet
+  test("put overwrites existing cell (string literal returns Sheet)") {
+    val sheet = baseSheet
       .put("A1", "First")
       .put("A1", "Second")
 
-    assert(result.isRight)
-    assertEquals(result.unsafe.cell("A1").map(_.value), Some(CellValue.Text("Second")))
+    assertEquals(sheet.cell("A1").map(_.value), Some(CellValue.Text("Second")))
   }
 
-  test("put preserves other cells") {
-    val result = baseSheet
+  test("put preserves other cells (string literal returns Sheet)") {
+    val sheet = baseSheet
       .put("A1", "Keep")
       .put("B1", "This")
 
-    assert(result.isRight)
-    val sheet = result.unsafe
     assertEquals(sheet.cells.size, 2)
     assert(sheet.cell("A1").isDefined)
     assert(sheet.cell("B1").isDefined)
   }
 
-  test("style on empty cell creates styled empty cell") {
-    val result = baseSheet.style("A1", testStyle)
-    assert(result.isRight)
-    val sheet = result.unsafe
+  test("style on empty cell creates styled empty cell (string literal returns Sheet)") {
+    val sheet = baseSheet.style("A1", testStyle)
     val cell = sheet.cell("A1")
     assert(cell.isDefined)
     assert(cell.flatMap(_.styleId).isDefined)
@@ -441,7 +426,6 @@ class ExtensionsSpec extends FunSuite:
       .put("A1", "A")
       .put("A2", "B")
       .put("A3", "C")
-      .unsafe
 
     val cells = sheet.range("A1:A3")
     assertEquals(cells.length, 3)
@@ -456,7 +440,6 @@ class ExtensionsSpec extends FunSuite:
     val sheet = baseSheet
       .put("A1", "First")
       .put("A3", "Third") // A2 missing
-      .unsafe
 
     val cells = sheet.range("A1:A3")
     assertEquals(cells.length, 2) // Only A1 and A3
@@ -464,66 +447,68 @@ class ExtensionsSpec extends FunSuite:
 
   // ========== String-Based put() - Styled (Representative Tests) ==========
 
-  test("put styled String applies both value and style") {
-    val result = baseSheet.put("A1", "Styled", testStyle)
-    assert(result.isRight)
-    result.unsafe.cell("A1") match
+  test("put styled String applies both value and style (string literal returns Sheet)") {
+    val sheet = baseSheet.put("A1", "Styled", testStyle)
+    sheet.cell("A1") match
       case Some(cell) =>
         assertEquals(cell.value, CellValue.Text("Styled"))
         assert(cell.styleId.isDefined)
       case None => fail("Expected styled cell at A1")
   }
 
-  test("put styled Int applies both") {
-    val result = baseSheet.put("A1", 999, testStyle)
-    assert(result.isRight)
-    result.unsafe.cell("A1") match
+  test("put styled Int applies both (string literal returns Sheet)") {
+    val sheet = baseSheet.put("A1", 999, testStyle)
+    sheet.cell("A1") match
       case Some(cell) =>
         assertEquals(cell.value, CellValue.Number(BigDecimal(999)))
         assert(cell.styleId.isDefined)
       case None => fail("Expected styled cell at A1")
   }
 
-  test("put styled LocalDate applies both") {
+  test("put styled LocalDate applies both (string literal returns Sheet)") {
     val date = LocalDate.of(2025, 11, 19)
-    val result = baseSheet.put("A1", date, testStyle)
-    assert(result.isRight)
-    assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
+    val sheet = baseSheet.put("A1", date, testStyle)
+    assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
   }
 
-  test("put styled with invalid ref returns Left") {
-    val result = baseSheet.put("INVALID", "value", testStyle)
+  test("put styled with invalid ref returns Left (runtime string)") {
+    // Use variable to force runtime string evaluation
+    val invalidRef = "INVALID"
+    val result = baseSheet.put(invalidRef, "value", testStyle)
     assert(result.isLeft)
   }
 
   // ========== Chainable put(Patch) Extension ==========
 
-  test("chainable put(Patch) applies patch") {
+  test("put(Patch) applies patch (string literal returns Sheet)") {
     import com.tjclp.xl.patch.Patch
     val bRef = ARef.parse("B1").toOption.fold(fail("Failed to parse B1"))(identity)
     val patch = Patch.Put(bRef, CellValue.Text("Patched"))
-    val result = baseSheet
+    // put("A1", ...) returns Sheet (literal), .put(patch) returns Sheet (infallible)
+    val sheet = baseSheet
       .put("A1", "First")
       .put(patch)
 
-    assert(result.isRight)
-    val sheet = result.unsafe
     assertEquals(sheet.cells.size, 2)
     assertEquals(sheet.cell("B1").map(_.value), Some(CellValue.Text("Patched")))
   }
 
   // ========== Error Message Quality ==========
 
-  test("invalid ref error message is clear") {
-    val result = baseSheet.put("123ABC", "value")
+  test("invalid ref error message is clear (runtime string)") {
+    // Use variable to force runtime string evaluation
+    val invalidRef = "123ABC"
+    val result = baseSheet.put(invalidRef, "value")
     result match
       case Left(XLError.InvalidCellRef(ref, _)) =>
         assertEquals(ref, "123ABC")
       case _ => fail("Expected InvalidCellRef")
   }
 
-  test("invalid range error message is clear") {
-    val result = baseSheet.style("A1:XYZ", testStyle)
+  test("invalid range error message is clear (runtime string)") {
+    // Use variable to force runtime string evaluation
+    val invalidRange = "A1:XYZ"
+    val result = baseSheet.style(invalidRange, testStyle)
     result match
       case Left(XLError.InvalidCellRef(ref, msg)) =>
         assertEquals(ref, "A1:XYZ")
@@ -533,8 +518,9 @@ class ExtensionsSpec extends FunSuite:
 
   // ========== Integration: Complex Chains ==========
 
-  test("complex chain with all operation types") {
-    val result = baseSheet
+  test("complex chain with all operation types (string literals return Sheet)") {
+    // All literals - chain returns Sheet directly
+    val sheet = baseSheet
       .put("A1", "Title")
       .style("A1", testStyle)
       .put("A2", 100)
@@ -542,15 +528,14 @@ class ExtensionsSpec extends FunSuite:
       .put("A4", "Footer", CellStyle.default.italic)
       .merge("A1:B1")
 
-    assert(result.isRight)
-    val sheet = result.unsafe
     assertEquals(sheet.cells.size, 4)
     assert(sheet.mergedRanges.nonEmpty)
   }
 
-  test("real-world example: financial report header") {
+  test("real-world example: financial report header (string literals return Sheet)") {
     val headerStyle = CellStyle.default.bold.size(14.0).center
-    val result = baseSheet
+    // All literals - chain returns Sheet directly
+    val sheet = baseSheet
       .style("A1:D1", headerStyle)
       .put("A1", "Q1 2025 Sales Report")
       .put("A2", "Product")
@@ -558,69 +543,61 @@ class ExtensionsSpec extends FunSuite:
       .put("C2", "Units")
       .put("D2", "Profit")
 
-    assert(result.isRight)
     // 8 cells: A1,B1,C1,D1 (styled from range) + A2,B2,C2,D2 (data)
-    assertEquals(result.unsafe.cells.size, 8)
+    assertEquals(sheet.cells.size, 8)
   }
 
   // ========== NumFmt Auto-Application Tests (Bug Fix Verification) ==========
 
   test("put LocalDate auto-applies Date format (BUG FIX)") {
-    val result = baseSheet.put("A1", LocalDate.of(2025, 11, 19))
+    // String literals return Sheet directly
+    val sheet = baseSheet.put("A1", LocalDate.of(2025, 11, 19))
 
-    result match
-      case Right(updated) =>
-        val ref = ARef.parse("A1").fold(err => fail(s"parse failed: $err"), identity)
-        val cell = updated.cells(ref)
-        assert(cell.styleId.isDefined, "Cell should have style")
-        val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
-        val style = updated.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
-        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Date)
-      case Left(err) => fail(s"Unexpected error: $err")
+    val aRef = ref"A1"
+    val cell = sheet.cells(aRef)
+    assert(cell.styleId.isDefined, "Cell should have style")
+    val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
+    val style = sheet.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
+    assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Date)
   }
 
   test("put BigDecimal auto-applies Decimal format") {
-    val result = baseSheet.put("A1", BigDecimal("123.45"))
+    // String literals return Sheet directly
+    val sheet = baseSheet.put("A1", BigDecimal("123.45"))
 
-    result match
-      case Right(updated) =>
-        val ref = ARef.parse("A1").fold(err => fail(s"parse failed: $err"), identity)
-        val cell = updated.cells(ref)
-        assert(cell.styleId.isDefined)
-        val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
-        val style = updated.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
-        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Decimal)
-      case Left(err) => fail(s"Unexpected error: $err")
+    val aRef = ref"A1"
+    val cell = sheet.cells(aRef)
+    assert(cell.styleId.isDefined)
+    val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
+    val style = sheet.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
+    assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Decimal)
   }
 
   test("put LocalDate with style merges auto NumFmt") {
     val boldStyle = CellStyle.default.bold
-    val result = baseSheet.put("A1", LocalDate.of(2025, 11, 19), boldStyle)
+    // String literals return Sheet directly
+    val sheet = baseSheet.put("A1", LocalDate.of(2025, 11, 19), boldStyle)
 
-    result match
-      case Right(updated) =>
-        val ref = ARef.parse("A1").fold(err => fail(s"parse failed: $err"), identity)
-        val cell = updated.cells(ref)
-        val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
-        val style = updated.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
-        // Verify both bold and Date format applied
-        assert(style.font.bold)
-        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Date)
-      case Left(err) => fail(s"Unexpected error: $err")
+    val aRef = ref"A1"
+    val cell = sheet.cells(aRef)
+    val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
+    val style = sheet.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
+    // Verify both bold and Date format applied
+    assert(style.font.bold)
+    assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Date)
   }
 
   test("put preserves template style while applying auto NumFmt") {
     val templateStyle = CellStyle.default.bold
-    val templated = baseSheet.style("A1", templateStyle).unsafe
-    val result = templated.put("A1", BigDecimal("123.45"))
+    // style("A1", ...) returns Sheet directly for literals
+    val templated = baseSheet.style("A1", templateStyle)
+    // put("A1", ...) returns Sheet directly for literals
+    val sheet = templated.put("A1", BigDecimal("123.45"))
 
-    result match
-      case Right(updated) =>
-        val ref = ARef.parse("A1").fold(err => fail(s"parse failed: $err"), identity)
-        val cell = updated.cells(ref)
-        val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
-        val style = updated.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
-        assert(style.font.bold, "Template bold style should remain")
-        assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Decimal)
-      case Left(err) => fail(s"Unexpected error: $err")
+    val aRef = ref"A1"
+    val cell = sheet.cells(aRef)
+    val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
+    val style = sheet.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
+    assert(style.font.bold, "Template bold style should remain")
+    assertEquals(style.numFmt, com.tjclp.xl.styles.numfmt.NumFmt.Decimal)
   }

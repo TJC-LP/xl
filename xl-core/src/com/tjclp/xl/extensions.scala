@@ -52,21 +52,23 @@ object extensions:
     /**
      * Apply style to cell or range (template pattern).
      *
+     * When called with a string literal, the reference is validated at compile time and returns
+     * `Sheet` directly. When called with a runtime string, validation is deferred and returns
+     * `XLResult[Sheet]`.
+     *
      * @param ref
      *   Cell ("A1") or range ("A1:B10")
      * @param cellStyle
      *   CellStyle to apply
      * @return
-     *   XLResult[Sheet] for chaining
+     *   `Sheet` for literal refs (compile-time validated), `XLResult[Sheet]` for runtime refs
      */
     @annotation.targetName("styleSheet")
-    def style(ref: String, cellStyle: CellStyle): XLResult[Sheet] =
-      if ref.contains(":") then
-        toXLResult(CellRange.parse(ref), ref, "Invalid range")
-          .map(range => sheet.withRangeStyle(range, cellStyle))
-      else
-        toXLResult(ARef.parse(ref), ref, "Invalid cell reference")
-          .map(aref => sheet.withCellStyle(aref, cellStyle))
+    transparent inline def style(
+      inline ref: String,
+      cellStyle: CellStyle
+    ): Sheet | XLResult[Sheet] =
+      ${ com.tjclp.xl.macros.PutLiteral.styleImpl('{ sheet }, 'ref, 'cellStyle) }
 
     /**
      * Apply style to cell (compile-time validated ref).
@@ -156,14 +158,18 @@ object extensions:
     /**
      * Merge cells in range.
      *
+     * When called with a string literal, the reference is validated at compile time and returns
+     * `Sheet` directly. When called with a runtime string, validation is deferred and returns
+     * `XLResult[Sheet]`.
+     *
      * @param rangeRef
      *   Range like "A1:B1"
      * @return
-     *   XLResult[Sheet] for chaining
+     *   `Sheet` for literal refs (compile-time validated), `XLResult[Sheet]` for runtime refs
      */
-    def merge(rangeRef: String): XLResult[Sheet] =
-      toXLResult(CellRange.parse(rangeRef), rangeRef, "Invalid range")
-        .map(range => sheet.merge(range))
+    @annotation.targetName("mergeSheet")
+    transparent inline def merge(inline rangeRef: String): Sheet | XLResult[Sheet] =
+      ${ com.tjclp.xl.macros.PutLiteral.mergeImpl('{ sheet }, 'rangeRef) }
 
   // ========== XLResult[Sheet] Extensions: Chainable Operations ==========
 
