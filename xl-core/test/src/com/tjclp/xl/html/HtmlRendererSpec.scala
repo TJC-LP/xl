@@ -550,3 +550,122 @@ class HtmlRendererSpec extends FunSuite:
     assert(!html.contains("colspan"), "No colspan for unmerged cells")
     assert(!html.contains("rowspan"), "No rowspan for unmerged cells")
   }
+
+  // ========== Text Overflow Tests ==========
+
+  test("toHtml: long text overflows into adjacent empty cells") {
+    // Column A is narrow (30px), B and C are empty
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "This is a long text that should overflow into adjacent cells")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // ~33px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // ~75px
+      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(10.0))) // ~75px
+
+    val html = sheet.toHtml(ref"A1:C1")
+    // Should have colspan due to overflow
+    assert(html.contains("colspan="), s"Long text should overflow with colspan, got: $html")
+    // Should NOT have overflow: hidden when spanning
+    val cellMatch = """<td colspan="\d+"[^>]*>""".r.findFirstIn(html)
+    assert(
+      cellMatch.exists(!_.contains("overflow: hidden")),
+      s"Spanning cell should not have overflow: hidden, got: $html"
+    )
+  }
+
+  test("toHtml: overflow stops at non-empty cell") {
+    // A1 has long text, B1 is empty, C1 has content
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "This is a very long text that could overflow")
+      .put(ref"C1" -> "Blocker")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // ~33px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // ~75px
+      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(10.0))) // ~75px
+
+    val html = sheet.toHtml(ref"A1:C1")
+    // Should still have colspan, but limited to A1:B1 (colspan=2, not 3)
+    assert(html.contains("""colspan="2""""), s"Should overflow into B1 only (colspan=2), got: $html")
+    assert(html.contains("Blocker"), "Blocker cell should still appear")
+  }
+
+  test("toHtml: overflow stops at range boundary") {
+    // A1 has long text but range ends at B1
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "This is a very long text that could overflow past range")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val html = sheet.toHtml(ref"A1:B1")
+    // Overflow should not go past B1 even if text is longer
+    val maxColspan = """colspan="(\d+)"""".r.findFirstMatchIn(html).map(_.group(1).toInt).getOrElse(1)
+    assert(maxColspan <= 2, s"Colspan should not exceed range width (2), got colspan=$maxColspan")
+  }
+
+  test("toHtml: wrapText prevents overflow") {
+    // Even with long text, wrapText=true should not overflow
+    val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "This is a long text that would normally overflow")
+      .unsafe
+      .withCellStyle(ref"A1", wrapStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val html = sheet.toHtml(ref"A1:C1")
+    // With wrapText, should NOT have colspan (text wraps instead)
+    assert(!html.contains("colspan="), s"wrapText should prevent overflow, got: $html")
+    // Should have white-space: pre-wrap for wrapping
+    assert(html.contains("white-space: pre-wrap"), s"Should have pre-wrap for wrapText, got: $html")
+  }
+
+  test("toHtml: short text does not overflow") {
+    // Short text should not get colspan even if adjacent cells are empty
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Hi")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // ~75px, enough for "Hi"
+
+    val html = sheet.toHtml(ref"A1:C1")
+    // No colspan needed for short text
+    assert(!html.contains("colspan="), s"Short text should not overflow, got: $html")
+    // Should have overflow: hidden since it's not spanning
+    assert(html.contains("overflow: hidden"), s"Non-spanning cell should have overflow: hidden, got: $html")
+  }
+
+  test("toHtml: merged cells take priority over overflow") {
+    // A1:B1 is merged, overflow should use merge colspan, not calculate new one
+    val mergeRange = CellRange.parse("A1:B1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Merged long text here")
+      .merge(mergeRange)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(2.0))) // very narrow
+
+    val html = sheet.toHtml(ref"A1:C1")
+    // Should have colspan=2 from merge, not more from overflow calculation
+    assert(html.contains("""colspan="2""""), s"Should use merge colspan, got: $html")
+    // Should have exactly one td with colspan=2 for the merged cell, and one for C1
+    val tdCount = "<td".r.findAllIn(html).length
+    assertEquals(tdCount, 2, s"Should have 2 <td> elements (merged + C1), got: $html")
+  }
+
+  test("toHtml: overflow does not affect empty source cells") {
+    // Empty cells should not generate overflow
+    val sheet = Sheet("Test")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val html = sheet.toHtml(ref"A1:C1")
+    // All cells are empty, no colspan expected
+    assert(!html.contains("colspan="), s"Empty cells should not overflow, got: $html")
+  }
+
+  test("toHtml: multiple rows handle overflow independently") {
+    // Row 1: A1 has long text, overflow into B1
+    // Row 2: A2 is short, no overflow
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "This is a long text that will overflow")
+      .put(ref"A2" -> "Short")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+
+    val html = sheet.toHtml(ref"A1:B2")
+    // Row 1 should have colspan
+    assert(html.contains("colspan="), s"Row 1 should have overflow colspan, got: $html")
+    // Should have 3 total td elements: 1 spanning td in row 1, 2 normal tds in row 2
+    val tdCount = "<td".r.findAllIn(html).length
+    assertEquals(tdCount, 3, s"Should have 3 <td> elements (1 spanning + 2 normal), got: $html")
+  }
