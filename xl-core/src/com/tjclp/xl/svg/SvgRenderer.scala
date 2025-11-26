@@ -172,48 +172,95 @@ object SvgRenderer:
         val xOffset = colXPositions(colIdx)
         val ref = ARef.from0(col, row)
         val width = colWidths(colIdx)
-        val cellOpt = sheet.cells.get(ref)
 
-        // Cell background and border
-        val (fillAttr, strokeAttr) = cellOpt
-          .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet) else None)
-          .getOrElse(("fill=\"#FFFFFF\"", ""))
+        // Check if this cell is part of a merged region
+        val mergeRange = sheet.getMergedRange(ref)
+        val isInteriorMergeCell = mergeRange.exists(_.start != ref)
 
-        sb.append(s"""    <rect x="$xOffset" y="$y" width="$width" height="$rowHeight" """)
-        sb.append(s"""$fillAttr class="cell" $strokeAttr/>\n""")
+        // Skip interior cells of merged regions (they're covered by the anchor cell's rect)
+        if !isInteriorMergeCell then
+          val cellOpt = sheet.cells.get(ref)
 
-        // Cell text
-        cellOpt.foreach { cell =>
-          val (textX, anchor) = textAlignment(cell, sheet, xOffset, width)
-          val textY = y + rowHeight / 2 + 4
-          // Extract NumFmt from cell's style for proper value formatting
-          val numFmt = cell.styleId
-            .flatMap(sheet.styleRegistry.get)
-            .map(_.numFmt)
-            .getOrElse(NumFmt.General)
+          // Calculate effective dimensions (expanded for merged cells)
+          val (effectiveWidth, effectiveHeight) = mergeRange match
+            case Some(range) =>
+              // Sum widths of merged columns (clamped to visible range)
+              val mergeEndCol = math.min(range.end.col.index0, endCol)
+              val mergedWidth = (colIdx to (mergeEndCol - startCol)).map(colWidths).sum
+              // Sum heights of merged rows (clamped to visible range)
+              val mergeEndRow = math.min(range.end.row.index0, endRow)
+              val mergedHeight = (rowIdx to (mergeEndRow - startRow)).map(rowHeights).sum
+              (mergedWidth, mergedHeight)
+            case None =>
+              (width, rowHeight)
 
-          cell.value match
-            case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
-              // Rich text: render each run as a tspan with explicit x positioning
-              sb.append(s"""    <text y="$textY" class="cell-text">""")
-              rt.runs.foldLeft(textX) { (currentX, run) =>
-                val runStyle = runToSvgStyle(run)
-                val escapedText = escapeXml(run.text)
-                sb.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
-                currentX + measureTextWidth(run.text, run.font)
-              }
-              sb.append("</text>\n")
+          // Cell background and border
+          val (fillAttr, strokeAttr) = cellOpt
+            .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet) else None)
+            .getOrElse(("fill=\"#FFFFFF\"", ""))
 
-            case other =>
-              val text = cellValueToText(other, numFmt)
-              if text.nonEmpty then
-                val textStyle = if includeStyles then cellTextStyle(cell, sheet) else ""
-                val escapedText = escapeXml(text)
-                sb.append(
-                  s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle>"""
-                )
-                sb.append(s"""$escapedText</text>\n""")
-        }
+          sb.append(
+            s"""    <rect x="$xOffset" y="$y" width="$effectiveWidth" height="$effectiveHeight" """
+          )
+          sb.append(s"""$fillAttr class="cell" $strokeAttr/>\n""")
+
+          // Cell text (positioned within effective bounds for merged cells)
+          cellOpt.foreach { cell =>
+            val (textX, anchor) = textAlignment(cell, sheet, xOffset, effectiveWidth)
+            val textY = textYPosition(cell, sheet, y, effectiveHeight)
+            // Extract NumFmt from cell's style for proper value formatting
+            val numFmt = cell.styleId
+              .flatMap(sheet.styleRegistry.get)
+              .map(_.numFmt)
+              .getOrElse(NumFmt.General)
+
+            cell.value match
+              case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
+                // Rich text: render each run as a tspan with explicit x positioning
+                sb.append(s"""    <text y="$textY" class="cell-text">""")
+                rt.runs.foldLeft(textX) { (currentX, run) =>
+                  val runStyle = runToSvgStyle(run)
+                  val escapedText = escapeXml(run.text)
+                  sb.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
+                  currentX + measureTextWidth(run.text, run.font)
+                }
+                sb.append("</text>\n")
+
+              case other =>
+                val text = cellValueToText(other, numFmt)
+                if text.nonEmpty then
+                  val textStyle = if includeStyles then cellTextStyle(cell, sheet) else ""
+                  val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+                  val shouldWrap = style.exists(_.align.wrapText)
+
+                  if shouldWrap then
+                    // Calculate available width for text (cell width minus padding)
+                    val availableWidth = effectiveWidth - CellPaddingX * 2
+                    val font = style.map(_.font)
+                    val lines = wrapText(text, availableWidth, font)
+                    val lh = lineHeight(font)
+
+                    // Adjust y position for multi-line text based on vertical alignment
+                    val firstLineY =
+                      textYPositionWrapped(cell, sheet, y, effectiveHeight, lines.size, lh)
+
+                    sb.append(
+                      s"""    <text x="$textX" text-anchor="$anchor" class="cell-text"$textStyle>"""
+                    )
+                    lines.zipWithIndex.foreach { (line, idx) =>
+                      val lineY = firstLineY + idx * lh
+                      val escapedLine = escapeXml(line)
+                      sb.append(s"""<tspan x="$textX" y="$lineY">$escapedLine</tspan>""")
+                    }
+                    sb.append("</text>\n")
+                  else
+                    // Single-line rendering (original behavior)
+                    val escapedText = escapeXml(text)
+                    sb.append(
+                      s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle>"""
+                    )
+                    sb.append(s"""$escapedText</text>\n""")
+          }
       }
     }
     sb.append("  </g>\n")
@@ -417,22 +464,126 @@ object SvgRenderer:
 
         if attrs.nonEmpty then " " + attrs.mkString(" ") else ""
 
+  // ========== Text Wrapping Utilities ==========
+
   /**
-   * Calculate text x position and anchor based on alignment.
+   * Wrap text to fit within a given width.
+   *
+   * @param text
+   *   The text to wrap
+   * @param maxWidth
+   *   Maximum width in pixels
+   * @param font
+   *   Font for measuring text
+   * @return
+   *   List of lines
+   */
+  private def wrapText(text: String, maxWidth: Int, font: Option[Font]): List[String] =
+    if maxWidth <= 0 || text.isEmpty then List(text)
+    else
+      val words = text.split("\\s+").toList
+      if words.isEmpty then List("")
+      else wrapWords(words, maxWidth, font)
+
+  @scala.annotation.tailrec
+  private def wrapWords(
+    words: List[String],
+    maxWidth: Int,
+    font: Option[Font],
+    lines: List[String] = Nil,
+    currentLine: String = ""
+  ): List[String] =
+    words match
+      case Nil =>
+        if currentLine.isEmpty then lines.reverse
+        else (currentLine :: lines).reverse
+      case word :: rest =>
+        val testLine = if currentLine.isEmpty then word else s"$currentLine $word"
+        if measureTextWidth(testLine, font) <= maxWidth then
+          wrapWords(rest, maxWidth, font, lines, testLine)
+        else if currentLine.isEmpty then
+          // Word is too long to fit on a line, force it
+          wrapWords(rest, maxWidth, font, word :: lines, "")
+        else
+          // Start a new line with this word
+          wrapWords(rest, maxWidth, font, currentLine :: lines, word)
+
+  /**
+   * Calculate line height for wrapped text.
+   */
+  private def lineHeight(font: Option[Font]): Int =
+    val fontSize = font.map(_.sizePt.toInt).getOrElse(DefaultFontSize)
+    (fontSize * 1.4).toInt // Standard line height multiplier
+
+  /**
+   * Calculate text y position based on vertical alignment.
+   *
+   * SVG text baseline is at the y coordinate, so we need to adjust for font metrics. Approximation:
+   * ascender ~ 80% of font size.
+   */
+  private def textYPosition(cell: Cell, sheet: Sheet, cellY: Int, cellHeight: Int): Int =
+    textYPositionWrapped(cell, sheet, cellY, cellHeight, lineCount = 1, lh = 0)
+
+  /**
+   * Calculate y position for the first line of wrapped text.
+   *
+   * Accounts for vertical alignment and total text height (lineCount * lineHeight).
+   */
+  private def textYPositionWrapped(
+    cell: Cell,
+    sheet: Sheet,
+    cellY: Int,
+    cellHeight: Int,
+    lineCount: Int,
+    lh: Int
+  ): Int =
+    val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+    val vAlign = style.map(_.align.vertical).getOrElse(VAlign.Bottom)
+    val fontSize = style.map(_.font.sizePt.toInt).getOrElse(DefaultFontSize)
+
+    // Text baseline adjustment (SVG places text at baseline, not top)
+    val baselineOffset = (fontSize * 0.8).toInt // Approximate ascender height
+
+    // Total height of wrapped text (lineCount - 1 because first line doesn't have spacing above it)
+    val totalTextHeight = if lineCount > 1 then (lineCount - 1) * lh + fontSize else fontSize
+
+    vAlign match
+      case VAlign.Top =>
+        cellY + baselineOffset + 4 // Small padding from top
+      case VAlign.Middle =>
+        // Center the text block vertically
+        if lineCount > 1 then cellY + (cellHeight - totalTextHeight) / 2 + baselineOffset
+        else cellY + cellHeight / 2 + baselineOffset / 3
+      case VAlign.Bottom =>
+        // Position last line near bottom, calculate where first line should start
+        if lineCount > 1 then cellY + cellHeight - 4 - (lineCount - 1) * lh
+        else cellY + cellHeight - 4
+      case VAlign.Justify | VAlign.Distributed =>
+        // Same as Middle for wrapped text
+        if lineCount > 1 then cellY + (cellHeight - totalTextHeight) / 2 + baselineOffset
+        else cellY + cellHeight / 2 + baselineOffset / 3
+
+  /**
+   * Calculate text x position and anchor based on alignment and indentation.
+   *
+   * Indentation adds ~21px per level (Excel uses ~3 characters per level).
    */
   private def textAlignment(cell: Cell, sheet: Sheet, cellX: Int, cellWidth: Int): (Int, String) =
-    val align = cell.styleId
-      .flatMap(sheet.styleRegistry.get)
-      .map(_.align.horizontal)
-      .getOrElse(HAlign.Left)
+    val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+    val align = style.map(_.align.horizontal).getOrElse(HAlign.Left)
+    val indent = style.map(_.align.indent).getOrElse(0)
+    val indentPx = indent * 21 // ~3 chars * 7px
 
     align match
       case HAlign.Center | HAlign.CenterContinuous =>
-        (cellX + cellWidth / 2, "middle")
+        // Center alignment: indent shifts content slightly right
+        (cellX + cellWidth / 2 + indentPx / 2, "middle")
       case HAlign.Right =>
+        // Right alignment: indent typically ignored (Excel behavior)
         (cellX + cellWidth - CellPaddingX, "end")
       case _ =>
-        (cellX + CellPaddingX, "start")
+        // Left alignment: indent adds to left padding
+        (cellX + CellPaddingX + indentPx, "start")
 
   /**
    * Escape XML special characters.

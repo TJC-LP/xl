@@ -451,3 +451,102 @@ class HtmlRendererSpec extends FunSuite:
     // Column C uses default
     assert(html.contains("width: 64px"), s"Column C should use default 64px, got: $html")
   }
+
+  // ========== Indentation Tests ==========
+
+  test("toHtml: cell with indent renders padding-left") {
+    val indentStyle = CellStyle.default.withAlign(Align(indent = 2))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Indented")
+      .unsafe
+      .withCellStyle(ref"A1", indentStyle)
+
+    val html = sheet.toHtml(ref"A1:A1")
+    // 2 levels * 21px = 42px padding-left
+    assert(html.contains("padding-left: 42px"), s"Should have padding-left for indent=2, got: $html")
+  }
+
+  test("toHtml: indent 0 does not add padding") {
+    val noIndent = CellStyle.default.withAlign(Align(indent = 0))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Normal")
+      .unsafe
+      .withCellStyle(ref"A1", noIndent)
+
+    val html = sheet.toHtml(ref"A1:A1")
+    assert(!html.contains("padding-left:"), s"Should not have padding-left for indent=0, got: $html")
+  }
+
+  test("toHtml: large indent value works") {
+    // Excel max indent is 15 levels
+    val maxIndent = CellStyle.default.withAlign(Align(indent = 15))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Max indent")
+      .unsafe
+      .withCellStyle(ref"A1", maxIndent)
+
+    val html = sheet.toHtml(ref"A1:A1")
+    // 15 levels * 21px = 315px
+    assert(html.contains("padding-left: 315px"), s"Should have padding-left for indent=15, got: $html")
+  }
+
+  // ========== Merged Cells Tests ==========
+
+  test("toHtml: merged cells render with colspan") {
+    val range = CellRange.parse("A1:C1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Merged")
+      .merge(range)
+
+    val html = sheet.toHtml(ref"A1:C1")
+    assert(html.contains("""colspan="3""""), s"Should have colspan=3 for 3-column merge, got: $html")
+    // Should only have 1 td element (interior cells skipped)
+    val tdCount = "<td".r.findAllIn(html).length
+    assertEquals(tdCount, 1, s"Merged row should have only 1 <td>, got: $html")
+  }
+
+  test("toHtml: merged cells render with rowspan") {
+    val range = CellRange.parse("A1:A3").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Merged")
+      .merge(range)
+
+    val html = sheet.toHtml(ref"A1:A3")
+    assert(html.contains("""rowspan="3""""), s"Should have rowspan=3 for 3-row merge, got: $html")
+  }
+
+  test("toHtml: merged cells with both colspan and rowspan") {
+    val range = CellRange.parse("A1:B2").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Big Merge")
+      .merge(range)
+
+    val html = sheet.toHtml(ref"A1:B2")
+    assert(html.contains("""colspan="2""""), s"Should have colspan=2, got: $html")
+    assert(html.contains("""rowspan="2""""), s"Should have rowspan=2, got: $html")
+  }
+
+  test("toHtml: non-anchor merged cells are skipped") {
+    val range = CellRange.parse("A1:B1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Anchor")
+      .put(ref"B1" -> "Should be hidden")
+      .merge(range)
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assert(html.contains("Anchor"), "Anchor cell content should appear")
+    assert(!html.contains("Should be hidden"), s"Interior cell content should not appear, got: $html")
+  }
+
+  test("toHtml: unmerged cells not affected by merge logic") {
+    val range = CellRange.parse("A1:A1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Normal")
+      .put(ref"B1" -> "Also Normal")
+
+    val html = sheet.toHtml(ref"A1:B1")
+    assert(html.contains("Normal"), "Normal cell should appear")
+    assert(html.contains("Also Normal"), "Other cell should appear")
+    assert(!html.contains("colspan"), "No colspan for unmerged cells")
+    assert(!html.contains("rowspan"), "No rowspan for unmerged cells")
+  }

@@ -100,46 +100,64 @@ object HtmlRenderer:
 
         val cellsHtml = rowCells
           .sortBy(_._1.col.index0)
-          .map { (ref, cellOpt) =>
-            cellOpt match
-              case None =>
-                if includeStyles then
-                  """<td style="background-color: #FFFFFF; overflow: hidden"></td>"""
-                else "<td></td>"
-              case Some(cell) =>
-                val style = if includeStyles then cellStyleToInlineCss(cell, sheet) else ""
-                // Extract NumFmt from cell's style for proper value formatting
-                val numFmt = cell.styleId
-                  .flatMap(sheet.styleRegistry.get)
-                  .map(_.numFmt)
-                  .getOrElse(NumFmt.General)
-                val content = cellValueToHtml(cell.value, numFmt)
-                // Add default white background if no fill is specified (only when includeStyles)
-                // Also add overflow: hidden to clip content to cell width
-                val styleAttr =
-                  if !includeStyles then ""
-                  else
-                    val hasBackground = style.contains("background-color")
-                    val baseStyle =
-                      if hasBackground then style
-                      else if style.isEmpty then "background-color: #FFFFFF"
-                      else s"background-color: #FFFFFF; $style"
-                    s""" style="$baseStyle; overflow: hidden""""
+          .flatMap { (ref, cellOpt) =>
+            // Check if this cell is an interior cell of a merged region (skip it)
+            val mergeRange = sheet.getMergedRange(ref)
+            val isInteriorMergeCell = mergeRange.exists(_.start != ref)
+            if isInteriorMergeCell then None
+            else
+              // Check for colspan/rowspan if this is a merge anchor
+              val mergeAttrs = mergeRange match
+                case Some(range) =>
+                  // Clamp merge region to visible range
+                  val visibleColspan = math.min(range.end.col.index0, endCol) - ref.col.index0 + 1
+                  val visibleRowspan = math.min(range.end.row.index0, endRow) - ref.row.index0 + 1
+                  val colAttr = if visibleColspan > 1 then s""" colspan="$visibleColspan"""" else ""
+                  val rowAttr = if visibleRowspan > 1 then s""" rowspan="$visibleRowspan"""" else ""
+                  colAttr + rowAttr
+                case None => ""
 
-                // Add comment as title attribute (tooltip) if present
-                val commentAttr =
-                  if includeComments then
-                    sheet
-                      .getComment(ref)
-                      .map { comment =>
-                        val commentText = comment.text.toPlainText
-                        val authorPrefix = comment.author.map(a => s"$a: ").getOrElse("")
-                        s""" title="${escapeHtml(authorPrefix + commentText)}""""
-                      }
-                      .getOrElse("")
-                  else ""
+              cellOpt match
+                case None =>
+                  if includeStyles then
+                    Some(
+                      s"""<td$mergeAttrs style="background-color: #FFFFFF; overflow: hidden"></td>"""
+                    )
+                  else Some(s"<td$mergeAttrs></td>")
+                case Some(cell) =>
+                  val style = if includeStyles then cellStyleToInlineCss(cell, sheet) else ""
+                  // Extract NumFmt from cell's style for proper value formatting
+                  val numFmt = cell.styleId
+                    .flatMap(sheet.styleRegistry.get)
+                    .map(_.numFmt)
+                    .getOrElse(NumFmt.General)
+                  val content = cellValueToHtml(cell.value, numFmt)
+                  // Add default white background if no fill is specified (only when includeStyles)
+                  // Also add overflow: hidden to clip content to cell width
+                  val styleAttr =
+                    if !includeStyles then ""
+                    else
+                      val hasBackground = style.contains("background-color")
+                      val baseStyle =
+                        if hasBackground then style
+                        else if style.isEmpty then "background-color: #FFFFFF"
+                        else s"background-color: #FFFFFF; $style"
+                      s""" style="$baseStyle; overflow: hidden""""
 
-                s"<td$styleAttr$commentAttr>$content</td>"
+                  // Add comment as title attribute (tooltip) if present
+                  val commentAttr =
+                    if includeComments then
+                      sheet
+                        .getComment(ref)
+                        .map { comment =>
+                          val commentText = comment.text.toPlainText
+                          val authorPrefix = comment.author.map(a => s"$a: ").getOrElse("")
+                          s""" title="${escapeHtml(authorPrefix + commentText)}""""
+                        }
+                        .getOrElse("")
+                    else ""
+
+                  Some(s"<td$mergeAttrs$styleAttr$commentAttr>$content</td>")
           }
           .mkString
 
@@ -264,6 +282,11 @@ $tableRows
           case VAlign.Justify | VAlign.Distributed => () // No direct CSS equivalent
 
         if style.align.wrapText then css += "white-space: pre-wrap"
+
+        // Indentation (Excel uses ~3 characters per indent level, ~21px at 11pt)
+        if style.align.indent > 0 then
+          val indentPx = style.align.indent * 21
+          css += s"padding-left: ${indentPx}px"
 
         css.mkString("; ")
       }

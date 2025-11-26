@@ -171,3 +171,330 @@ class SvgRendererSpec extends FunSuite:
     assert(sheet.contains("""width="110""""), s"DSL column width should apply, got: $sheet")
     assert(sheet.contains("""height="32""""), s"DSL row height should apply, got: $sheet")
   }
+
+  // ========== Indentation Tests ==========
+
+  test("toSvg: cell with indent shifts text x-position") {
+    val indentStyle = CellStyle.default.withAlign(Align(indent = 1))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Indented")
+      .unsafe
+      .withCellStyle(ref"A1", indentStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Default left padding is 6 (CellPaddingX), indent adds 21px
+    // HeaderWidth = 40, so text x should be 40 + 6 + 21 = 67
+    assert(svg.contains("""x="67""""), s"Text should be at x=67 with indent=1, got: $svg")
+  }
+
+  test("toSvg: indent 0 uses default padding") {
+    val noIndent = CellStyle.default.withAlign(Align(indent = 0))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Normal")
+      .unsafe
+      .withCellStyle(ref"A1", noIndent)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // HeaderWidth (40) + CellPaddingX (6) = 46
+    assert(svg.contains("""x="46""""), s"Text should be at x=46 with no indent, got: $svg")
+  }
+
+  test("toSvg: large indent value works") {
+    val largeIndent = CellStyle.default.withAlign(Align(indent = 3))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Indented")
+      .unsafe
+      .withCellStyle(ref"A1", largeIndent)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // HeaderWidth (40) + CellPaddingX (6) + indent (3 * 21 = 63) = 109
+    assert(svg.contains("""x="109""""), s"Text should be at x=109 with indent=3, got: $svg")
+  }
+
+  test("toSvg: center alignment with indent shifts slightly right") {
+    val centerIndent = CellStyle.default.withAlign(Align(horizontal = HAlign.Center, indent = 2))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Centered")
+      .unsafe
+      .withCellStyle(ref"A1", centerIndent)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Center position: HeaderWidth (40) + colWidth/2 (37.5) + indentPx/2 (21) = ~98
+    // Cell center: 40 + 75/2 = 77.5, plus indent/2 = 21, total ~98
+    assert(svg.contains("text-anchor=\"middle\""), s"Should have middle anchor, got: $svg")
+  }
+
+  test("toSvg: right alignment ignores indent") {
+    val rightIndent = CellStyle.default.withAlign(Align(horizontal = HAlign.Right, indent = 2))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Right")
+      .unsafe
+      .withCellStyle(ref"A1", rightIndent)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Right alignment: HeaderWidth (40) + colWidth (75) - CellPaddingX (6) = 109
+    // Indent is ignored for right alignment (Excel behavior)
+    assert(svg.contains("""x="109""""), s"Right-aligned text should ignore indent, got: $svg")
+    assert(svg.contains("text-anchor=\"end\""), s"Should have end anchor, got: $svg")
+  }
+
+  // ========== Vertical Alignment Tests ==========
+
+  test("toSvg: VAlign.Top positions text near top of cell") {
+    val topStyle = CellStyle.default.withAlign(Align(vertical = VAlign.Top))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "TopText")
+      .unsafe
+      .withCellStyle(ref"A1", topStyle)
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Find the text element containing our cell text (not header text)
+    val yMatch = """<text[^>]*y="(\d+)"[^>]*>TopText</text>""".r.findFirstMatchIn(svg)
+    yMatch match
+      case Some(m) =>
+        val textY = m.group(1).toInt
+        // Top-aligned: cellY + baselineOffset + padding = 24 + ~9 + 4 ≈ 37
+        assert(textY < 50, s"Top-aligned text y=$textY should be < 50 (near top of cell)")
+      case None => fail(s"Could not find cell text y position in: $svg")
+  }
+
+  test("toSvg: VAlign.Bottom positions text near bottom of cell") {
+    val bottomStyle = CellStyle.default.withAlign(Align(vertical = VAlign.Bottom))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "BottomText")
+      .unsafe
+      .withCellStyle(ref"A1", bottomStyle)
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    val yMatch = """<text[^>]*y="(\d+)"[^>]*>BottomText</text>""".r.findFirstMatchIn(svg)
+    yMatch match
+      case Some(m) =>
+        val textY = m.group(1).toInt
+        // Cell at y=24, height=60, bottom = 84, text should be near 80 (84 - 4 padding)
+        assert(textY > 70, s"Bottom-aligned text y=$textY should be > 70 (near bottom of cell)")
+      case None => fail(s"Could not find cell text y position in: $svg")
+  }
+
+  test("toSvg: VAlign.Middle positions text in center") {
+    val middleStyle = CellStyle.default.withAlign(Align(vertical = VAlign.Middle))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "MiddleText")
+      .unsafe
+      .withCellStyle(ref"A1", middleStyle)
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    val yMatch = """<text[^>]*y="(\d+)"[^>]*>MiddleText</text>""".r.findFirstMatchIn(svg)
+    yMatch match
+      case Some(m) =>
+        val textY = m.group(1).toInt
+        // Cell at y=24, height=60, middle should be around y=54 (24 + 30)
+        assert(textY > 45 && textY < 65, s"Middle-aligned text y=$textY should be 45-65 (center)")
+      case None => fail(s"Could not find cell text y position in: $svg")
+  }
+
+  test("toSvg: default alignment is Bottom") {
+    // No explicit VAlign set - should default to Bottom (Excel default)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "DefaultText")
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    val yMatch = """<text[^>]*y="(\d+)"[^>]*>DefaultText</text>""".r.findFirstMatchIn(svg)
+    yMatch match
+      case Some(m) =>
+        val textY = m.group(1).toInt
+        // Default is Bottom: cell at y=24, height=60, bottom ≈ 80
+        assert(textY > 70, s"Default (Bottom) text y=$textY should be > 70")
+      case None => fail(s"Could not find cell text y position in: $svg")
+  }
+
+  // ========== Merged Cells Tests ==========
+
+  test("toSvg: merged cells render as single rect spanning columns") {
+    val range = CellRange.parse("A1:B1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Merged")
+      .merge(range)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // 75px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+
+    // Merged rect should span both columns (75 + 75 = 150px)
+    assert(svg.contains("""width="150""""), s"Merged rect should be 150px wide, got: $svg")
+    // Should only have one rect with width=150 (the merged cell), not two separate rects
+    val width150Count = """width="150"""".r.findAllIn(svg).length
+    assertEquals(width150Count, 1, s"Should have exactly 1 merged rect with width=150, got: $svg")
+  }
+
+  test("toSvg: merged cells render as single rect spanning rows") {
+    val range = CellRange.parse("A1:A2").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Merged")
+      .merge(range)
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(30.0))) // 40px
+      .setRowProperties(Row.from0(1), RowProperties(height = Some(30.0))) // 40px
+
+    val svg = sheet.toSvg(ref"A1:A2")
+
+    // Merged rect should span both rows (40 + 40 = 80px)
+    assert(svg.contains("""height="80""""), s"Merged rect should be 80px tall, got: $svg")
+  }
+
+  test("toSvg: interior merge cells are not rendered") {
+    val range = CellRange.parse("A1:B1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Anchor")
+      .put(ref"B1" -> "Hidden")
+      .merge(range)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // 75px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+
+    assert(svg.contains("Anchor"), "Anchor cell text should appear")
+    assert(!svg.contains("Hidden"), s"Interior cell text should not appear, got: $svg")
+  }
+
+  test("toSvg: merged cell text is centered in merged area") {
+    val range = CellRange.parse("A1:C1").toOption.get
+    val centerStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Center))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "CenterMerged")
+      .unsafe
+      .withCellStyle(ref"A1", centerStyle)
+      .merge(range)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // 75px
+      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(10.0))) // 75px
+
+    val svg = sheet.toSvg(ref"A1:C1")
+
+    // Text should have middle anchor for centered merged cell
+    assert(svg.contains("text-anchor=\"middle\""), s"Should have middle anchor, got: $svg")
+    assert(svg.contains("CenterMerged"), "Merged text should appear")
+  }
+
+  test("toSvg: unmerged cells not affected by merge logic") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Normal")
+      .put(ref"B1" -> "Also Normal")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // 75px
+
+    val svg = sheet.toSvg(ref"A1:B1")
+
+    // Both cells should appear with their text
+    assert(svg.contains("Normal"), "First cell should appear")
+    assert(svg.contains("Also Normal"), "Second cell should appear")
+    // Should have exactly 2 text elements for cells (not counting headers)
+    val cellTextCount = """class="cell-text"""".r.findAllIn(svg).length
+    assertEquals(cellTextCount, 2, s"Should have 2 cell text elements, got: $svg")
+  }
+
+  // ==================== Text Wrapping Tests ====================
+
+  test("toSvg: wrapText=true renders multiple tspan elements for long text") {
+    // Create a narrow column with wrapping enabled
+    val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "This is a long sentence that should wrap")
+      .unsafe
+      .withCellStyle(ref"A1", wrapStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(8.0))) // ~61px, narrow
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // With wrapping, should have multiple tspan elements
+    val tspanCount = "<tspan".r.findAllIn(svg).length
+    assert(tspanCount > 1, s"Wrapped text should have multiple tspans, got $tspanCount: $svg")
+  }
+
+  test("toSvg: wrapText=false renders single text element") {
+    // Default alignment (no wrapText)
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "This is a long sentence that should NOT wrap")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(8.0))) // narrow
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Without wrapping, should have a single text element (no tspan with y attribute)
+    val tspanCount = """<tspan x=""".r.findAllIn(svg).length
+    assertEquals(tspanCount, 0, s"Non-wrapped text should not have tspan elements, got: $svg")
+  }
+
+  test("toSvg: wrapped text tspans have increasing y values") {
+    val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "First Second Third Fourth Fifth")
+      .unsafe
+      .withCellStyle(ref"A1", wrapStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(6.0))) // very narrow ~47px
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(60.0))) // tall row for wrapped text
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Extract y values from tspans
+    val yPattern = """<tspan[^>]*y="(\d+)"[^>]*>""".r
+    val yValues = yPattern.findAllMatchIn(svg).map(_.group(1).toInt).toList
+
+    assert(yValues.length > 1, s"Should have multiple tspans, got $yValues")
+    // Each y should be greater than the previous (lines go down)
+    yValues.sliding(2).foreach {
+      case List(y1, y2) =>
+        assert(y2 > y1, s"y values should increase: $y1 -> $y2, full: $yValues")
+      case _ => ()
+    }
+  }
+
+  test("toSvg: wrapped text with VAlign.Top positions first line near top") {
+    val topWrapStyle = CellStyle.default.withAlign(Align(wrapText = true, vertical = VAlign.Top))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Line one Line two")
+      .unsafe
+      .withCellStyle(ref"A1", topWrapStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(6.0)))
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(80.0)))
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // First tspan should be near top of cell (header is 24px, so cell starts at y=24)
+    val yPattern = """<tspan[^>]*y="(\d+)"[^>]*>""".r
+    val yValues = yPattern.findAllMatchIn(svg).map(_.group(1).toInt).toList
+
+    yValues.headOption.foreach { firstY =>
+      // Top-aligned text should be in upper portion of cell (within first ~30px of 80px tall cell)
+      // Cell starts at y=24, so first line should be around 24 + baselineOffset + padding ≈ 37
+      assert(firstY < 50, s"First line should be near top, got y=$firstY")
+    }
+  }
+
+  test("toSvg: single short word does not wrap even with wrapText=true") {
+    val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Hi")
+      .unsafe
+      .withCellStyle(ref"A1", wrapStyle)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0)))
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Short text that fits should only have one tspan
+    val tspanCount = "<tspan".r.findAllIn(svg).length
+    assertEquals(tspanCount, 1, s"Short text should have one tspan: $svg")
+    assert(svg.contains("Hi"), "Text content should be preserved")
+  }
