@@ -4,7 +4,7 @@ import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.addressing.* // For ARef, Column, Row types and extension methods
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
 import SaxSupport.*
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
@@ -18,6 +18,65 @@ private def cleanNamespaces(elem: Elem): Elem =
     case other => other
   }
   elem.copy(scope = TopScope, child = cleanedChildren)
+
+/**
+ * Group consecutive columns with identical properties into spans.
+ *
+ * Excel's `<col>` element supports min/max attributes to apply the same properties to a range of
+ * columns. This reduces file size by avoiding repeated `<col>` elements.
+ *
+ * @return
+ *   Sequence of (minCol, maxCol, properties) tuples for span generation
+ */
+private def groupConsecutiveColumns(
+  props: Map[Column, ColumnProperties]
+): Seq[(Column, Column, ColumnProperties)] =
+  if props.isEmpty then Seq.empty
+  else
+    props.toSeq
+      .sortBy(_._1.index0)
+      .foldLeft(Vector.empty[(Column, Column, ColumnProperties)]) { case (acc, (col, p)) =>
+        acc.lastOption match
+          case Some((minCol, maxCol, lastProps))
+              if maxCol.index0 + 1 == col.index0 && lastProps == p =>
+            // Extend current span
+            acc.dropRight(1) :+ (minCol, col, p)
+          case _ =>
+            // Start new span
+            acc :+ (col, col, p)
+      }
+
+/**
+ * Build `<cols>` XML element from domain column properties.
+ *
+ * Generates OOXML-compliant column definitions: {{{<cols> <col min="1" max="3" width="15.5"
+ * customWidth="1" hidden="1"/> </cols>}}}
+ *
+ * @return
+ *   Some(cols element) if there are column properties, None otherwise
+ */
+private def buildColsElement(sheet: Sheet): Option[Elem] =
+  val props = sheet.columnProperties
+  if props.isEmpty then None
+  else
+    val spans = groupConsecutiveColumns(props)
+    val colElems = spans.map { case (minCol, maxCol, p) =>
+      // Build attribute sequence (only include non-default values)
+      val attrs = Seq.newBuilder[(String, String)]
+      attrs += ("min" -> (minCol.index0 + 1).toString) // OOXML is 1-based
+      attrs += ("max" -> (maxCol.index0 + 1).toString)
+      p.width.foreach { w =>
+        attrs += ("width" -> w.toString)
+        attrs += ("customWidth" -> "1")
+      }
+      if p.hidden then attrs += ("hidden" -> "1")
+      p.outlineLevel.foreach(l => attrs += ("outlineLevel" -> l.toString))
+      if p.collapsed then attrs += ("collapsed" -> "1")
+      // Note: styleId would need remapping to workbook-level index (deferred)
+
+      XmlUtil.elem("col", attrs.result()*)( /* no children */ )
+    }
+    Some(XmlUtil.elem("cols")(colElems*))
 
 /** Cell data for worksheet - maps domain Cell to XML representation */
 case class OoxmlCell(
@@ -687,6 +746,9 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         }
       else preservedMetadata.flatMap(_.legacyDrawing)
 
+    // Generate cols from domain properties if not preserved
+    val generatedCols = buildColsElement(sheet)
+
     // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
     preservedMetadata match
       case Some(preserved) =>
@@ -698,7 +760,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.dimension,
           preserved.sheetViews,
           preserved.sheetFormatPr,
-          preserved.cols,
+          preserved.cols.orElse(generatedCols), // Fallback to domain props if not preserved
           preserved.conditionalFormatting,
           preserved.printOptions,
           preserved.rowBreaks,
@@ -719,10 +781,11 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.rootScope
         )
       case None =>
-        // No preserved metadata - create minimal worksheet with legacyDrawing if comments exist
+        // No preserved metadata - create minimal worksheet with cols from domain
         OoxmlWorksheet(
           rowsWithCells,
           sheet.mergedRanges,
+          cols = generatedCols,
           legacyDrawing = legacyDrawingElem,
           tableParts = tableParts
         )
