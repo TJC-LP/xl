@@ -12,6 +12,8 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 import java.awt.{Font as AwtFont, Graphics2D}
 import java.awt.image.BufferedImage
 
+import scala.util.boundary, boundary.break
+
 /**
  * Shared utilities for rendering.
  *
@@ -121,31 +123,31 @@ object RenderUtils:
    * @return
    *   true if cell is empty and has no styling (allows overflow)
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Return"))
   private def isCellEmptyAndUnstyled(ref: ARef, sheet: Sheet): Boolean =
-    import com.tjclp.xl.styles.border.Border
-    import com.tjclp.xl.styles.fill.Fill
+    boundary:
+      import com.tjclp.xl.styles.border.Border
+      import com.tjclp.xl.styles.fill.Fill
 
-    val cellOpt = sheet.cells.get(ref)
+      val cellOpt = sheet.cells.get(ref)
 
-    // Check if cell has content
-    val isEmpty = cellOpt.forall { c =>
-      c.value match
-        case CellValue.Empty => true
-        case _ => false
-    }
-    if !isEmpty then return false
+      // Check if cell has content
+      val isEmpty = cellOpt.forall { c =>
+        c.value match
+          case CellValue.Empty => true
+          case _ => false
+      }
+      if !isEmpty then break(false)
 
-    // Check if cell has styling (borders or fills) - Excel blocks overflow into styled cells
-    val hasNoStyle = cellOpt.flatMap(_.styleId).flatMap(sheet.styleRegistry.get).forall { style =>
-      style.border == Border.none && style.fill == Fill.None
-    }
-    if !hasNoStyle then return false
+      // Check if cell has styling (borders or fills) - Excel blocks overflow into styled cells
+      val hasNoStyle = cellOpt.flatMap(_.styleId).flatMap(sheet.styleRegistry.get).forall { style =>
+        style.border == Border.none && style.fill == Fill.None
+      }
+      if !hasNoStyle then break(false)
 
-    // Check if cell is part of a merged region
-    val notMerged = sheet.getMergedRange(ref).isEmpty
+      // Check if cell is part of a merged region
+      val notMerged = sheet.getMergedRange(ref).isEmpty
 
-    isEmpty && hasNoStyle && notMerged
+      isEmpty && hasNoStyle && notMerged
 
   /**
    * Calculate overflow colspan for a cell with text that exceeds its width.
