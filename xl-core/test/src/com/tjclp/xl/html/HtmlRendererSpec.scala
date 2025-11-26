@@ -402,15 +402,17 @@ class HtmlRendererSpec extends FunSuite:
     assert(html.contains("width: 0px"), s"Hidden column should be 0px, got: $html")
   }
 
-  test("toHtml: hidden row renders as 0px") {
+  test("toHtml: hidden row is excluded from output") {
     val sheet = Sheet("Test")
-      .put(ref"A1" -> "Data")
-      .setRowProperties(Row.from0(0), RowProperties(hidden = true))
+      .put(ref"A1" -> "Row1", ref"A2" -> "Row2", ref"A3" -> "Row3")
+      .setRowProperties(Row.from0(1), RowProperties(hidden = true)) // Hide row 2
 
-    val html = sheet.toHtml(ref"A1:A1")
+    val html = sheet.toHtml(ref"A1:A3")
 
-    // Hidden row should have 0 height
-    assert(html.contains("height: 0px"), s"Hidden row should be 0px, got: $html")
+    // Hidden row should be completely excluded
+    assert(!html.contains("Row2"), s"Hidden row content should not appear, got: $html")
+    assert(html.contains("Row1"), s"Visible row 1 should appear")
+    assert(html.contains("Row3"), s"Visible row 3 should appear")
   }
 
   test("toHtml: overflow hidden is applied to cells") {

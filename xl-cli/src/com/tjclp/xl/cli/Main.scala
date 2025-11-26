@@ -242,7 +242,6 @@ object Main
              |Non-empty: 0 cells""".stripMargin)
 
     case Command.View(rangeStr, showFormulas, limit, format) =>
-      import com.tjclp.xl.sheets.styleSyntax.*
       for
         resolved <- resolveRef(wb, sheet, rangeStr)
         (targetSheet, refOrRange) = resolved
@@ -250,10 +249,11 @@ object Main
           case Right(r) => r
           case Left(ref) => CellRange(ref, ref) // Single cell as range
         limitedRange = limitRange(range, limit)
+        theme = wb.metadata.theme // Use workbook's parsed theme
       yield format match
         case ViewFormat.Markdown => Markdown.renderRange(targetSheet, limitedRange, showFormulas)
-        case ViewFormat.Html => targetSheet.toHtml(limitedRange)
-        case ViewFormat.Svg => targetSheet.toSvg(limitedRange)
+        case ViewFormat.Html => targetSheet.toHtml(limitedRange, theme = theme)
+        case ViewFormat.Svg => targetSheet.toSvg(limitedRange, theme = theme)
 
     case Command.Cell(refStr) =>
       for

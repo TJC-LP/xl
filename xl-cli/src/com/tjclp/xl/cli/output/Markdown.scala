@@ -31,10 +31,20 @@ object Markdown:
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
 
-    // Calculate column widths for better formatting
-    val colWidths = (startCol to endCol).map { col =>
+    // Filter out hidden columns
+    val visibleCols = (startCol to endCol).filterNot { col =>
+      sheet.getColumnProperties(Column.from0(col)).hidden
+    }
+
+    // Filter out hidden rows
+    val visibleRows = (startRow to endRow).filterNot { row =>
+      sheet.getRowProperties(Row.from0(row)).hidden
+    }
+
+    // Calculate column widths for better formatting (only visible rows/cols)
+    val colWidths = visibleCols.map { col =>
       val header = Column.from0(col).toLetter
-      val maxContent = (startRow to endRow)
+      val maxContent = visibleRows
         .map { row =>
           val ref = ARef.from0(col, row)
           sheet.cells.get(ref).map(c => formatCell(c, sheet, showFormulas).length).getOrElse(0)
@@ -46,7 +56,7 @@ object Markdown:
 
     // Header row with column letters
     sb.append("|   |")
-    colWidths.zip(startCol to endCol).foreach { case (width, col) =>
+    colWidths.zip(visibleCols).foreach { case (width, col) =>
       val header = Column.from0(col).toLetter
       sb.append(s" ${header.padTo(width, ' ')} |")
     }
@@ -60,11 +70,11 @@ object Markdown:
     }
     sb.append("\n")
 
-    // Data rows with row numbers
-    for row <- startRow to endRow do
+    // Data rows with row numbers (only visible rows)
+    for row <- visibleRows do
       val rowNum = (row + 1).toString
       sb.append(s"| ${rowNum.padTo(2, ' ')}|")
-      colWidths.zip(startCol to endCol).foreach { case (width, col) =>
+      colWidths.zip(visibleCols).foreach { case (width, col) =>
         val ref = ARef.from0(col, row)
         val value = sheet.cells.get(ref).map(c => formatCell(c, sheet, showFormulas)).getOrElse("")
         val escaped = escapeMarkdown(value)

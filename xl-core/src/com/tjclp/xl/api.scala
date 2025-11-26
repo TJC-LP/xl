@@ -65,7 +65,7 @@ object api:
   export styles.border.{BorderStyle, BorderSide, Border}
 
   // Style types - color
-  export styles.color.{ThemeSlot, Color}
+  export styles.color.{ThemeSlot, Color, ThemePalette}
 
   // Style types - fill
   export styles.fill.{PatternType, Fill}
@@ -84,6 +84,10 @@ object api:
 
   // Surface Column helpers at the root package for single-import ergonomics
   export addressing.Column.toLetter
+
+  // Export renderers and render syntax
+  export render.{HtmlRenderer, SvgRenderer}
+  export render.syntax.*
 
   // ========== String Parsing Helpers ==========
   extension (s: String)

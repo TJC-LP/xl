@@ -1,19 +1,20 @@
-package com.tjclp.xl.html
+package com.tjclp.xl.render
 
-import java.awt.{Font as AwtFont, Graphics2D}
-import java.awt.image.BufferedImage
-
-import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.richtext.TextRun
+import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.border.{BorderStyle, BorderSide}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.styles.CellStyle
+
+import java.awt.{Font as AwtFont, Graphics2D}
+import java.awt.image.BufferedImage
 
 /** Renders Excel sheets to HTML tables with inline CSS styling */
 object HtmlRenderer:
@@ -239,27 +240,26 @@ object HtmlRenderer:
       .map(w => s"""  <col style="width: ${w}px">""")
       .mkString("<colgroup>\n", "\n", "\n</colgroup>")
 
-    // Group cells by row for table structure
+    // Group cells by row for table structure, filtering out hidden rows
     val cellsByRow = range.cells.toSeq
       .map(ref => (ref, sheet.cells.get(ref)))
       .groupBy(_._1.row)
       .toSeq
       .sortBy(_._1.index0)
+      .filterNot { (rowObj, _) => sheet.getRowProperties(rowObj).hidden }
 
     val tableRows = cellsByRow
       .map { (rowObj, rowCells) =>
         // Calculate row height
         val props = sheet.getRowProperties(rowObj)
         val rowHeight =
-          if props.hidden then 0
-          else
-            props.height
-              .map(excelRowHeightToPixels)
-              .getOrElse(
-                sheet.defaultRowHeight
-                  .map(excelRowHeightToPixels)
-                  .getOrElse(DefaultCellHeightPx)
-              )
+          props.height
+            .map(excelRowHeightToPixels)
+            .getOrElse(
+              sheet.defaultRowHeight
+                .map(excelRowHeightToPixels)
+                .getOrElse(DefaultCellHeightPx)
+            )
 
         // Track columns covered by text overflow from previous cells in this row
         val overflowSkipCols = scala.collection.mutable.Set[Int]()
