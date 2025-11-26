@@ -3,11 +3,13 @@ package com.tjclp.xl.html
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.border.{BorderStyle, BorderSide}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /** Renders Excel sheets to HTML tables with inline CSS styling */
 object HtmlRenderer:
@@ -51,11 +53,26 @@ object HtmlRenderer:
           .map { (ref, cellOpt) =>
             cellOpt match
               case None =>
-                "<td></td>" // Empty cell
+                if includeStyles then """<td style="background-color: #FFFFFF"></td>"""
+                else "<td></td>"
               case Some(cell) =>
                 val style = if includeStyles then cellStyleToInlineCss(cell, sheet) else ""
-                val content = cellValueToHtml(cell.value)
-                val styleAttr = if style.nonEmpty then s""" style="$style"""" else ""
+                // Extract NumFmt from cell's style for proper value formatting
+                val numFmt = cell.styleId
+                  .flatMap(sheet.styleRegistry.get)
+                  .map(_.numFmt)
+                  .getOrElse(NumFmt.General)
+                val content = cellValueToHtml(cell.value, numFmt)
+                // Add default white background if no fill is specified (only when includeStyles)
+                val styleAttr =
+                  if !includeStyles then ""
+                  else
+                    val hasBackground = style.contains("background-color")
+                    val fullStyle =
+                      if hasBackground then style
+                      else if style.isEmpty then "background-color: #FFFFFF"
+                      else s"background-color: #FFFFFF; $style"
+                    s""" style="$fullStyle""""
 
                 // Add comment as title attribute (tooltip) if present
                 val commentAttr =
@@ -77,35 +94,39 @@ object HtmlRenderer:
       }
       .mkString("\n")
 
-    s"""<table>
+    val tableStyle =
+      """style="border-collapse: collapse; font-family: Calibri, sans-serif; font-size: 11pt;""""
+    s"""<table $tableStyle>
 $tableRows
 </table>"""
 
   /**
-   * Convert a CellValue to HTML content.
+   * Convert a CellValue to HTML content with Excel-style number formatting.
    *
    *   - Text: Escaped HTML
    *   - RichText: HTML with <b>, <i>, <u>, <span> tags
-   *   - Number/DateTime/Bool: String representation
-   *   - Formula/Error: Escaped string
+   *   - Number/DateTime/Bool: Formatted according to NumFmt, then escaped
+   *   - Formula: Shows cached value formatted, or raw formula if no cache
+   *   - Error: Excel error code
    */
-  private def cellValueToHtml(value: CellValue): String = value match
-    case CellValue.Text(s) => escapeHtml(s)
-
+  private def cellValueToHtml(value: CellValue, numFmt: NumFmt): String = value match
     case CellValue.RichText(richText) =>
+      // Rich text has its own formatting, don't apply NumFmt
       richText.runs.map(runToHtml).mkString
-
-    case CellValue.Number(n) => escapeHtml(n.toString)
-
-    case CellValue.Bool(b) => escapeHtml(b.toString)
-
-    case CellValue.DateTime(dt) => escapeHtml(dt.toString)
 
     case CellValue.Empty => ""
 
-    case CellValue.Formula(expr, _) => escapeHtml(s"=$expr")
+    case CellValue.Formula(_, Some(cached)) =>
+      // Show cached result formatted with NumFmt (matches Excel display)
+      escapeHtml(NumFmtFormatter.formatValue(cached, numFmt))
 
-    case CellValue.Error(err) => escapeHtml(err.toExcel)
+    case CellValue.Formula(expr, None) =>
+      // No cached value, show raw formula
+      escapeHtml(s"=$expr")
+
+    case other =>
+      // Use NumFmtFormatter for Text, Number, Bool, DateTime, Error
+      escapeHtml(NumFmtFormatter.formatValue(other, numFmt))
 
   /**
    * Convert a TextRun to HTML with formatting.
@@ -122,7 +143,7 @@ $tableRows
 
         // Apply color as innermost wrapper
         f.color.foreach { c =>
-          html = s"""<span style="color: ${c.toHex}">$html</span>"""
+          html = s"""<span style="color: ${colorToRgbHex(c)}">$html</span>"""
         }
 
         // Font size (if different from default)
@@ -143,8 +164,8 @@ $tableRows
   /**
    * Convert cell-level style to inline CSS.
    *
-   * Generates CSS properties for font, fill, alignment, etc. Returns empty string if cell has no
-   * style.
+   * Generates CSS properties for font, fill, borders, alignment, etc. Returns empty string if cell
+   * has no style.
    */
   private def cellStyleToInlineCss(cell: Cell, sheet: Sheet): String =
     cell.styleId
@@ -156,7 +177,7 @@ $tableRows
         if style.font.bold then css += "font-weight: bold"
         if style.font.italic then css += "font-style: italic"
         if style.font.underline then css += "text-decoration: underline"
-        style.font.color.foreach(c => css += s"color: ${c.toHex}")
+        style.font.color.foreach(c => css += s"color: ${colorToRgbHex(c)}")
         if style.font.sizePt != Font.default.sizePt then css += s"font-size: ${style.font.sizePt}pt"
         if style.font.name != Font.default.name then
           css += s"font-family: '${escapeCss(style.font.name)}'"
@@ -164,8 +185,14 @@ $tableRows
         // Fill (background color)
         style.fill match
           case Fill.Solid(color) =>
-            css += s"background-color: ${color.toHex}"
+            css += s"background-color: ${colorToRgbHex(color)}"
           case _ => () // Pattern fill not supported in HTML
+
+        // Borders
+        borderSideToCss(style.border.top, "border-top").foreach(css += _)
+        borderSideToCss(style.border.right, "border-right").foreach(css += _)
+        borderSideToCss(style.border.bottom, "border-bottom").foreach(css += _)
+        borderSideToCss(style.border.left, "border-left").foreach(css += _)
 
         // Alignment
         style.align.horizontal match
@@ -202,3 +229,47 @@ $tableRows
     s.replace("\\", "\\\\")
       .replace("'", "\\'")
       .replace("\"", "\\\"")
+      .replace("\n", "\\A ")
+      .replace("\r", "\\D ")
+      .replace("\u0000", "")
+
+  /**
+   * Convert Color to CSS-compatible RGB hex (strips alpha from ARGB).
+   *
+   * Color.toHex returns #AARRGGBB, CSS needs #RRGGBB.
+   */
+  private def colorToRgbHex(c: Color): String =
+    val hex = c.toHex
+    if hex.length == 9 && hex.startsWith("#") then "#" + hex.drop(3) // #AARRGGBB -> #RRGGBB
+    else hex
+
+  /**
+   * Convert a border side to CSS border property.
+   */
+  private def borderSideToCss(side: BorderSide, cssProperty: String): Option[String] =
+    if side.style == BorderStyle.None then None
+    else
+      val width = side.style match
+        case BorderStyle.Thin => "1px"
+        case BorderStyle.Medium => "2px"
+        case BorderStyle.Thick => "3px"
+        case BorderStyle.Dashed => "1px"
+        case BorderStyle.Dotted => "1px"
+        case BorderStyle.Double => "3px"
+        case BorderStyle.Hair => "1px"
+        case BorderStyle.MediumDashed => "2px"
+        case BorderStyle.DashDot => "1px"
+        case BorderStyle.MediumDashDot => "2px"
+        case BorderStyle.DashDotDot => "1px"
+        case BorderStyle.SlantDashDot => "2px"
+        case _ => "1px"
+      val cssStyle = side.style match
+        case BorderStyle.Dashed | BorderStyle.MediumDashed => "dashed"
+        case BorderStyle.Dotted | BorderStyle.Hair => "dotted"
+        case BorderStyle.Double => "double"
+        case BorderStyle.DashDot | BorderStyle.MediumDashDot | BorderStyle.DashDotDot |
+            BorderStyle.SlantDashDot =>
+          "dashed" // CSS doesn't support dash-dot, use dashed as fallback
+        case _ => "solid"
+      val color = side.color.map(colorToRgbHex).getOrElse("#000000")
+      Some(s"$cssProperty: $width $cssStyle $color")

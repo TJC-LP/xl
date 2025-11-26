@@ -65,3 +65,24 @@ object styleSyntax:
       includeComments: Boolean = true
     ): String =
       com.tjclp.xl.html.HtmlRenderer.toHtml(sheet, range, includeStyles, includeComments)
+
+    /**
+     * Export a cell range to SVG image.
+     *
+     * Generates an SVG image with cells rendered as rectangles with text. Cell styles (colors,
+     * fonts, borders) are preserved as SVG attributes. SVG output can be viewed directly by Claude
+     * as images.
+     *
+     * @param range
+     *   The cell range to export
+     * @param includeStyles
+     *   Whether to include cell styling (colors, fonts, borders)
+     * @return
+     *   SVG string
+     */
+    @annotation.targetName("toSvgExt")
+    def toSvg(
+      range: CellRange,
+      includeStyles: Boolean = true
+    ): String =
+      com.tjclp.xl.svg.SvgRenderer.toSvg(sheet, range, includeStyles)
