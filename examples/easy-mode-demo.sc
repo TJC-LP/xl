@@ -27,7 +27,6 @@ val report = Sheet("Q1 Report")
   .put("B2", "Units")
   .put("A3", "Widget")
   .put("B3", 150)
-  .unsafe  // Single unwrap at end
 
 println(s"  ✓ Used string refs for ${report.cells.size} cells")
 println()
@@ -38,7 +37,6 @@ println("🎨 Example 2: Inline Styling")
 val quickSheet = Sheet("Quick")
   .put("A1", "Alert", CellStyle.default.bold.red)
   .put("A2", "Success", CellStyle.default.bold.green)
-  .unsafe
 
 println(s"  ✓ Applied inline styles")
 println()
@@ -49,7 +47,6 @@ println("💬 Example 3: Rich Text")
 val richSheet = Sheet("RichText")
   .put("A1", "Status: ".bold + "ACTIVE".green.bold)
   .put("A2", "Error: ".red.bold + "Fix immediately!")
-  .unsafe
 
 println(s"  ✓ Created rich text cells")
 println()
@@ -70,7 +67,6 @@ val patchSheet = Sheet("Patch Demo")
     (ref"B4" := 19.99) ++
     (ref"C4" := 100)
   )
-  .unsafe
 
 println(s"  ✓ Built sheet with Patch DSL (${patchSheet.cells.size} cells, ${patchSheet.mergedRanges.size} merge)")
 println()
@@ -115,7 +111,6 @@ val dynamicSheet = Sheet("Dynamic")
   .put(ref"B3" := "Price")
   .put(ref"C3" := "Quantity")
   .put(dynamicPatch)
-  .unsafe
 
 println(s"  ✓ Generated ${products.size} rows dynamically with interpolated refs")
 println(s"  ✓ Applied conditional styling (green if price > $$25, red otherwise)")
@@ -146,7 +141,6 @@ val commentedSheet = Sheet("Commented Data")
     text = "Net profit: ".bold + "$37,500".green.bold + " (30% margin)".italic,
     author = Some("CEO")
   ))
-  .unsafe
 
 println(s"  ✓ Created sheet with ${commentedSheet.comments.size} comments")
 commentedSheet.comments.foreach { (ref, comment) =>
@@ -193,19 +187,22 @@ println(s"  ✓ Read back (${loaded.sheets.size} sheets)")
 
 // Demonstrate in-memory modification
 val firstSheet = loaded.sheets.headOption.getOrElse(throw new Exception("No sheets"))
-val modifiedSheet = firstSheet.put("A5", "Updated: " + LocalDate.now.toString).unsafe
+val modifiedSheet = firstSheet.put("A5", "Updated: " + LocalDate.now.toString)
 println(s"  ✓ Modified sheet in-memory (${modifiedSheet.cells.size} cells)")
 println()
 
 // ========== Example 9: Error Handling ==========
 println("⚠️  Example 9: Structured Errors")
 
-try {
-  Sheet("Test").unsafe.put("INVALID!!!!", "fail")
-} catch {
-  case ex: XLException =>
-    println(s"  ✓ Caught: ${ex.getMessage.take(50)}...")
-    println(s"  ✓ Error type: ${ex.error.getClass.getSimpleName}")
+// Note: Invalid literals like "INVALID!!!!" now fail at compile time!
+// To demonstrate runtime error handling, we use a runtime string:
+val invalidRef = "INVALID!!!!"  // Runtime string bypasses compile-time check
+Sheet("Test").put(invalidRef, "fail") match {
+  case Left(error) =>
+    println(s"  ✓ Caught: ${error.message.take(50)}...")
+    println(s"  ✓ Error type: ${error.getClass.getSimpleName}")
+  case Right(_) =>
+    println("  ✗ Should have failed!")
 }
 println()
 

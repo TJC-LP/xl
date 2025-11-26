@@ -32,7 +32,7 @@ println("=" * 80)
 println()
 
 // Build a sheet with complex dependencies
-val complexSheet = Sheet(name = SheetName.unsafe("Complex"))
+val complexSheet = Sheet("Complex")
   // Constants
   .put(ref"A1", 100)
   .put(ref"A2", 50)
@@ -114,7 +114,7 @@ println()
 
 // Test Case 1: Simple 2-cycle
 println("Test Case 1: Simple 2-cycle (A1 → B1 → A1)")
-val cycle2 = Sheet(name = SheetName.unsafe("Cycle2"))
+val cycle2 = Sheet("Cycle2")
   .put(ref"A1", fx"=B1+10")
   .put(ref"B1", fx"=A1*2")
 
@@ -130,7 +130,7 @@ println()
 
 // Test Case 2: Longer cycle (A1 → B1 → C1 → D1 → A1)
 println("Test Case 2: 4-node cycle (A1 → B1 → C1 → D1 → A1)")
-val cycle4 = Sheet(name = SheetName.unsafe("Cycle4"))
+val cycle4 = Sheet("Cycle4")
   .put(ref"A1", fx"=B1+1")
   .put(ref"B1", fx"=C1+1")
   .put(ref"C1", fx"=D1+1")
@@ -149,7 +149,7 @@ println()
 
 // Test Case 3: Self-loop (A1 → A1)
 println("Test Case 3: Self-loop (A1 → A1)")
-val selfLoop = Sheet(name = SheetName.unsafe("SelfLoop"))
+val selfLoop = Sheet("SelfLoop")
   .put(ref"A1", fx"=A1+1")
 
 val graph4 = DependencyGraph.fromSheet(selfLoop)
@@ -164,7 +164,7 @@ println()
 
 // Test Case 4: Cycle through range (A1 → SUM(B1:B10) where B5 → A1)
 println("Test Case 4: Cycle through range (A1 → SUM(B1:B10) where B5 → A1)")
-val rangeCycle = Sheet(name = SheetName.unsafe("RangeCycle"))
+val rangeCycle = Sheet("RangeCycle")
   .put(ref"A1", fx"=SUM(B1:B10)")
   .put(ref"B1", 10)
   .put(ref"B5", fx"=A1*2")  // Creates cycle!

@@ -50,8 +50,7 @@ class XlsxWriterRealWorldSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"B1" -> "Modified by XL") // B1 has no comment, so A1's comment preserved
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 

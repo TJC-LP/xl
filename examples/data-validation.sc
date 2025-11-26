@@ -32,7 +32,7 @@ println("SCENARIO 1: Data Range Validation")
 println("=" * 80)
 println()
 
-val dataSheet = Sheet(name = SheetName.unsafe("Data"))
+val dataSheet = Sheet("Data")
   // Product scores (should be 0-100)
   .put(ref"A1", 85)
   .put(ref"A2", 92)
@@ -80,7 +80,7 @@ println("SCENARIO 2: Missing Data Detection")
 println("=" * 80)
 println()
 
-val incompleteSheet = Sheet(name = SheetName.unsafe("Incomplete"))
+val incompleteSheet = Sheet("Incomplete")
   .put(ref"A1", 100)
   .put(ref"A2", 200)
   // A3 is missing!
@@ -118,7 +118,7 @@ println("SCENARIO 3: Text Normalization & Length Validation")
 println("=" * 80)
 println()
 
-val textSheet = Sheet(name = SheetName.unsafe("Text"))
+val textSheet = Sheet("Text")
   // Raw user input (inconsistent casing, varying length)
   .put(ref"A1", "john.doe@example.com")
   .put(ref"A2", "JANE.SMITH@EXAMPLE.COM")
@@ -178,7 +178,7 @@ println("SCENARIO 4: Division by Zero Handling")
 println("=" * 80)
 println()
 
-val divSheet = Sheet(name = SheetName.unsafe("Division"))
+val divSheet = Sheet("Division")
   .put(ref"A1", 100)
   .put(ref"A2", 0)    // Zero denominator
 

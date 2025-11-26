@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - High-Fidelity Rendering
+
+**Theme Color Resolution** (`xl-ooxml/src/com/tjclp/xl/ooxml/ThemeParser.scala`)
+- Parse OOXML theme XML for accurate color rendering in exports
+- Resolve theme color indices (Dark1, Light1, Accent1-6) to actual hex values
+- Fix ECMA-376 spec compliance: theme="0" → Light1, theme="1" → Dark1
+
+**SVG Renderer** (`xl-core/src/com/tjclp/xl/render/SvgRenderer.scala`)
+- Two-pass rendering: backgrounds first, then text layer (prevents overlap)
+- All 14 Excel border styles with per-side rendering
+- Optional gridlines (default: off)
+- Row/column sizing from sheet metadata
+- Text overflow into adjacent empty cells
+- Rich text with proper font size conversion (pt to px)
+- Hidden row/column filtering
+
+**HTML Renderer** (`xl-core/src/com/tjclp/xl/render/HtmlRenderer.scala`)
+- `HAlign.General` for content-aware alignment (numbers right, text left)
+- Text overflow into adjacent empty cells
+- Print scaling support for PDF-matching output
+- Row/column sizing from sheet metadata
+
+**Shared Utilities** (`xl-core/src/com/tjclp/xl/render/RenderUtils.scala`)
+- Extracted common rendering logic (color resolution, sizing, overflow)
+- `showLabels` parameter for row/column headers
+
+### Added - Row/Column Properties
+
+**Core Properties** (`xl-core/src/com/tjclp/xl/sheets/`)
+- `RowProperties(height, hidden, outlineLevel, collapsed)`
+- `ColumnProperties(width, hidden, outlineLevel, collapsed)`
+- `col"A"` compile-time column macro
+
+**Builder DSL** (`xl-core/src/com/tjclp/xl/dsl/RowColumnDsl.scala`)
+- Fluent builders: `row(1).height(20).hidden`, `column("A").width(15)`
+- Integration with Sheet API
+
+**OOXML Serialization** (`xl-ooxml/src/com/tjclp/xl/ooxml/`)
+- `<cols>` element serialization for column properties
+- `<row>` attributes for height, hidden, outline, collapsed
+
+### Added - Compile-Time API Validation
+
+**Macros** (`xl-core/src/com/tjclp/xl/macros/`)
+- `PutLiteral.scala`: Compile-time validation for `sheet.put("A1", value)`
+- `SheetLiteral.scala`: Compile-time validation for Sheet/Workbook construction
+- String-ref variants: `put`, `style`, `merge` with compile-time ref parsing
+
+### Changed - API & Rendering
+
+- `Sheet.put(ref, value)` and similar methods now support string refs with compile-time validation
+- Removed unnecessary `XLResult` wrappers from infallible operations (cleaner API)
+- Renderers moved from `html/` and `svg/` to unified `render/` package
+
+### Fixed
+
+- `AVERAGE` formula returning `Text("(a, b)")` tuple instead of `Number(mean)`
+- Theme color index mapping (ECMA-376 spec compliance)
+- Font size conversion in SVG (Excel pt to CSS px)
+- Rich text rendering with proper text wrapping
+
+### Breaking Changes - API Simplification
+
+**Compile-time safe migration**:
+- `sheet.put(ref"A1", value)` now returns `Sheet` directly (was `XLResult[Sheet]`)
+- Most `.unsafe` calls no longer needed for infallible operations
+- Migration: Remove `.unsafe` calls that now compile without them
+
+### Internal Changes
+
+- `HtmlRenderer` and `SvgRenderer` moved to `xl-core/src/com/tjclp/xl/render/`
+- New `RenderUtils` for shared rendering logic
+- `ThemeParser` added to xl-ooxml for theme color extraction
+
+### Testing
+
+- 698 tests (was ~660)
+- New regression tests for font rendering
+- SVG renderer tests: 754+ lines of coverage
+- HTML renderer tests: 386+ lines of coverage
+- Row/column operations tests: 386 lines
+
+---
+
 ### Added - P6: Cell-level Codecs
 
 **Type-Safe Cell Operations** (`xl-core/src/com/tjclp/xl/codec/`)

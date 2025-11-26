@@ -17,6 +17,7 @@ import com.tjclp.xl.macros.ref
  *   - Invalid regex patterns in search command
  *   - Empty override values in eval command
  */
+@SuppressWarnings(Array("org.wartremover.warts.Var"))
 class MainSpec extends CatsEffectSuite:
 
   // Create a temporary Excel file for testing
@@ -26,7 +27,7 @@ class MainSpec extends CatsEffectSuite:
       tempFile.toFile.deleteOnExit()
       tempFile
     }.flatMap { tempFile =>
-      val sheet = Sheet("Test").getOrElse(throw new Exception("Sheet creation failed"))
+      val sheet = Sheet("Test")
         .put(ref"A1", CellValue.Text("Hello"))
         .put(ref"A2", CellValue.Number(BigDecimal(42)))
         .put(ref"A3", CellValue.Text("World"))

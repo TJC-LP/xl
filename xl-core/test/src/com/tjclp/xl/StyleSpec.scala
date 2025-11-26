@@ -319,7 +319,7 @@ class StyleSpec extends ScalaCheckSuite:
   }
 
   test("Align.default has correct values") {
-    assertEquals(Align.default.horizontal, HAlign.Left)
+    assertEquals(Align.default.horizontal, HAlign.General)
     assertEquals(Align.default.vertical, VAlign.Bottom)
     assertEquals(Align.default.wrapText, false)
     assertEquals(Align.default.indent, 0)

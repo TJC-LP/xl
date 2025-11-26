@@ -51,10 +51,8 @@ println(s"  Height: ${salesTable.dataRange.height} rows\n")
 
 println("## Part 2: Populating Table with Data\n")
 
-// Create sheet and add table
-val sheetResult = for
-  sheet <- Sheet("Q4 Sales")
-yield sheet
+// Create sheet and add table - Sheet.apply returns Sheet directly (infallible)
+val sheet = Sheet("Q4 Sales")
   .withTable(salesTable)
   // Populate header row
   .put(
@@ -117,14 +115,8 @@ yield sheet
     ref"D11" -> BigDecimal("3500.00")
   )
 
-val sheet = sheetResult match
-  case Right(s) =>
-    println(s"✓ Sheet created with ${s.cellCount} cells")
-    println(s"✓ Table '${salesTable.name}' attached\n")
-    s
-  case Left(err) =>
-    println(s"✗ Error: $err")
-    sys.exit(1)
+println(s"✓ Sheet created with ${sheet.cellCount} cells")
+println(s"✓ Table '${salesTable.name}' attached\n")
 
 // ============================================================
 // PART 3: Multiple Tables on One Sheet

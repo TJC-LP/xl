@@ -5,6 +5,7 @@ import com.tjclp.xl.addressing.*
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.styles.{CellStyle, Color, Font, Fill, NumFmt}
+import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.patch.Patch
@@ -17,18 +18,15 @@ object BenchmarkUtils {
   /** Generate a workbook with N rows of mixed data types */
   def generateWorkbook(rows: Int, styled: Boolean = false): Workbook = {
     val sheet = generateSheet("Data", rows, styled)
-    Workbook.empty
-      .flatMap(_.put(sheet))
-      .getOrElse(Workbook(Vector.empty)) // Fallback to empty workbook
+    Workbook.empty.put(sheet)
   }
 
   /** Generate a sheet with N rows of realistic data */
   def generateSheet(name: String, rows: Int, styled: Boolean = false): Sheet = {
-    val sheetName = SheetName.unsafe(name) // Safe: controlled input
     val random = new Random(42) // Fixed seed for reproducibility
 
     // Build sheet with columns: ID (Int), Name (String), Date (LocalDate), Amount (BigDecimal), Active (Boolean)
-    val emptySheet: Sheet = Sheet(sheetName: SheetName) // Type ascription to resolve overload
+    val emptySheet: Sheet = Sheet(name).unsafe
 
     // Headers - use batch put for cleaner code
     val headerSheet = emptySheet
@@ -116,7 +114,7 @@ object BenchmarkUtils {
    * because we're building CellValue.Number directly (no codec needed).
    */
   def createVerifiableWorkbook(rows: Int): Workbook = {
-    val emptySheet: Sheet = Sheet(SheetName.unsafe("Data"))
+    val emptySheet: Sheet = Sheet("Data")
 
     // Create rows with cell value = row number (verifiable arithmetic series)
     val updates: Seq[(ARef, Double)] = (1 to rows).map { i =>

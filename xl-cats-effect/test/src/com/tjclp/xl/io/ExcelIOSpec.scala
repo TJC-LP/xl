@@ -23,10 +23,9 @@ class ExcelIOSpec extends CatsEffectSuite:
 
   tempDir.test("read: loads workbook into memory") { dir =>
     // Create test file using current writer
-    val wb = Workbook("Test").flatMap { initial =>
-      val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Hello"))
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    val initial = Workbook("Test")
+    val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Hello"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("test.xlsx")
     IO(com.tjclp.xl.ooxml.XlsxWriter.write(wb, path)).flatMap { _ =>
@@ -40,12 +39,11 @@ class ExcelIOSpec extends CatsEffectSuite:
   }
 
   tempDir.test("write: creates valid XLSX file") { dir =>
-    val wb = Workbook("Output").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Text("Written"))
-        .put(ref"B1", CellValue.Number(BigDecimal(42)))
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    val initial = Workbook("Output")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Text("Written"))
+      .put(ref"B1", CellValue.Number(BigDecimal(42)))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("output.xlsx")
     val excel = ExcelIO.instance[IO]
@@ -59,12 +57,11 @@ class ExcelIOSpec extends CatsEffectSuite:
   }
 
   tempDir.test("writeFast: creates valid XLSX file using SAX backend") { dir =>
-    val wb = Workbook("OutputFast").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Text("Fast"))
-        .put(ref"B1", CellValue.Number(BigDecimal(84)))
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    val initial = Workbook("OutputFast")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Text("Fast"))
+      .put(ref"B1", CellValue.Number(BigDecimal(84)))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("output-fast.xlsx")
     val excel = ExcelIO.instance[IO]
@@ -78,12 +75,11 @@ class ExcelIOSpec extends CatsEffectSuite:
 
   tempDir.test("readStream: streams rows from sheet") { dir =>
     // Create test file with multiple rows
-    val wb = Workbook("Data").flatMap { initial =>
-      val sheet = (1 to 10).foldLeft(initial.sheets(0)) { (s, i) =>
-        s.put(ARef(Column.from0(0), Row.from1(i)), CellValue.Number(BigDecimal(i)))
-      }
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    val initial = Workbook("Data")
+    val sheet = (1 to 10).foldLeft(initial.sheets(0)) { (s, i) =>
+      s.put(ARef(Column.from0(0), Row.from1(i)), CellValue.Number(BigDecimal(i)))
+    }
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("stream-test.xlsx")
     IO(com.tjclp.xl.ooxml.XlsxWriter.write(wb, path)).flatMap { _ =>

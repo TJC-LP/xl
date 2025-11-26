@@ -1,8 +1,9 @@
 package com.tjclp.xl.ooxml
 
-import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
+import com.tjclp.xl.sheets.{ColumnProperties, PageSetup, RowProperties}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext, SourceFingerprint}
 import com.tjclp.xl.tables.TableSpec
@@ -16,6 +17,8 @@ import scala.collection.mutable
 import scala.collection.immutable.ArraySeq
 import com.tjclp.xl.styles.StyleRegistry
 import com.tjclp.xl.styles.units.StyleId
+import com.tjclp.xl.styles.color.ThemePalette
+import com.tjclp.xl.workbooks.WorkbookMetadata
 
 /**
  * Reader for XLSX files (ZIP parsing)
@@ -61,7 +64,8 @@ object XlsxReader:
     "xl/workbook.xml",
     "xl/_rels/workbook.xml.rels",
     "xl/styles.xml",
-    "xl/sharedStrings.xml"
+    "xl/sharedStrings.xml",
+    "xl/theme/theme1.xml"
   )
 
   /**
@@ -212,11 +216,14 @@ object XlsxReader:
       // Parse workbook relationships
       workbookRels <- parseWorkbookRelationships(parts)
 
+      // Parse theme (optional, falls back to Office theme)
+      theme = parseTheme(parts)
+
       // Parse sheets
       sheets <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
 
       // Assemble workbook with optional SourceContext
-      workbook <- assembleWorkbook(sheets, source, manifest, fingerprint)
+      workbook <- assembleWorkbook(sheets, source, manifest, fingerprint, theme)
     yield ReadResult(workbook, styleWarnings)
 
   /** Parse optional shared strings table */
@@ -486,6 +493,20 @@ object XlsxReader:
             .map(err => XLError.ParseError("xl/_rels/workbook.xml.rels", err): XLError)
         yield rels
 
+  /**
+   * Parse theme from xl/theme/theme1.xml.
+   *
+   * Falls back to Office theme if theme is missing or cannot be parsed. Theme parsing errors are
+   * non-fatal since the default Office theme is a reasonable fallback.
+   */
+  private def parseTheme(parts: Map[String, String]): ThemePalette =
+    parts.get("xl/theme/theme1.xml") match
+      case None => ThemePalette.office
+      case Some(xml) =>
+        ThemeParser.parse(xml) match
+          case Right(palette) => palette
+          case Left(_) => ThemePalette.office
+
   /** Parse all worksheets */
   private def parseSheets(
     parts: Map[String, String],
@@ -566,6 +587,17 @@ object XlsxReader:
 
     val cellsMap = builder.result()
 
+    // Parse column properties from <cols> element
+    val columnProperties = ooxmlSheet.cols match
+      case Some(colsElem) => parseColumnProperties(colsElem)
+      case None => Map.empty[Column, ColumnProperties]
+
+    // Extract row properties from OoxmlRow data
+    val rowProperties = extractRowProperties(ooxmlSheet.rows)
+
+    // Parse page setup (print scale, orientation, etc.)
+    val pageSetup = parsePageSetup(ooxmlSheet.pageSetup)
+
     Right(
       Sheet(
         name = name,
@@ -573,7 +605,10 @@ object XlsxReader:
         mergedRanges = ooxmlSheet.mergedRanges,
         styleRegistry = preRegisteredRegistry,
         comments = comments,
-        tables = tables
+        tables = tables,
+        columnProperties = columnProperties,
+        rowProperties = rowProperties,
+        pageSetup = pageSetup
       )
     )
 
@@ -592,6 +627,67 @@ object XlsxReader:
     }
 
   /**
+   * Parse column properties from <cols> XML element.
+   *
+   * Each <col> element has min/max (1-indexed) and optional width, hidden, outlineLevel, collapsed.
+   * A single <col> can cover multiple columns (min="1" max="3" applies to columns A-C).
+   */
+  private def parseColumnProperties(colsElem: Elem): Map[Column, ColumnProperties] =
+    val builder = Map.newBuilder[Column, ColumnProperties]
+    for colElem <- colsElem.child.collect { case e: Elem if e.label == "col" => e } do
+      val attrs = colElem.attributes.asAttrMap
+      for
+        minStr <- attrs.get("min")
+        maxStr <- attrs.get("max")
+        min <- minStr.toIntOption
+        max <- maxStr.toIntOption
+      do
+        val props = ColumnProperties(
+          width = attrs.get("width").flatMap(_.toDoubleOption),
+          hidden = attrs.get("hidden").contains("1"),
+          outlineLevel = attrs.get("outlineLevel").flatMap(_.toIntOption),
+          collapsed = attrs.get("collapsed").contains("1")
+        )
+        // Expand range: min and max are 1-indexed, Column is 0-indexed
+        for colIdx <- min to max do builder += (Column.from1(colIdx) -> props)
+    builder.result()
+
+  /**
+   * Extract row properties from parsed OoxmlRow data.
+   *
+   * Only includes rows that have non-default properties (height, hidden, outlineLevel, collapsed).
+   */
+  private def extractRowProperties(rows: Seq[OoxmlRow]): Map[Row, RowProperties] =
+    val builder = Map.newBuilder[Row, RowProperties]
+    for row <- rows do
+      val props = RowProperties(
+        height = row.height,
+        hidden = row.hidden,
+        outlineLevel = row.outlineLevel,
+        collapsed = row.collapsed
+      )
+      // Only include if not all defaults
+      if props.height.isDefined || props.hidden || props.outlineLevel.isDefined || props.collapsed
+      then builder += (Row.from1(row.rowIndex) -> props)
+    builder.result()
+
+  /**
+   * Parse page setup from <pageSetup> XML element.
+   *
+   * Extracts print settings like scale, orientation, fitToWidth, fitToHeight.
+   */
+  private def parsePageSetup(pageSetupElem: Option[Elem]): Option[PageSetup] =
+    pageSetupElem.map { elem =>
+      val attrs = elem.attributes.asAttrMap
+      PageSetup(
+        scale = attrs.get("scale").flatMap(_.toIntOption).getOrElse(100),
+        orientation = attrs.get("orientation"),
+        fitToWidth = attrs.get("fitToWidth").flatMap(_.toIntOption),
+        fitToHeight = attrs.get("fitToHeight").flatMap(_.toIntOption)
+      )
+    }
+
+  /**
    * Assemble final workbook with optional SourceContext for surgical modification.
    *
    * If a source handle is provided, creates a SourceContext that enables surgical writes by
@@ -603,6 +699,8 @@ object XlsxReader:
    *   Optional source handle (path to original file)
    * @param manifest
    *   Manifest of all ZIP entries (known + unknown)
+   * @param theme
+   *   Theme palette parsed from xl/theme/theme1.xml
    * @return
    *   Workbook with optional SourceContext
    */
@@ -610,7 +708,8 @@ object XlsxReader:
     sheets: Vector[Sheet],
     source: Option[SourceHandle],
     manifest: PartManifest,
-    fingerprint: Option[SourceFingerprint]
+    fingerprint: Option[SourceFingerprint],
+    theme: ThemePalette
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -624,7 +723,10 @@ object XlsxReader:
           case (None, Some(_)) =>
             Left(XLError.IOError("Unexpected source fingerprint without source handle"))
 
-      sourceContextEither.map(ctx => Workbook(sheets = sheets, sourceContext = ctx))
+      val metadata = WorkbookMetadata(theme = theme)
+      sourceContextEither.map(ctx =>
+        Workbook(sheets = sheets, metadata = metadata, sourceContext = ctx)
+      )
 
   /**
    * Parse XML string to Elem with XXE protection

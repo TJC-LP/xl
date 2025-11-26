@@ -16,7 +16,7 @@ class StyleIndexSpec extends FunSuite:
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
 
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Bold"))
       .withCellStyle(ref"A1", boldStyle)
       .put(ref"A2", CellValue.Text("Red"))
@@ -43,11 +43,11 @@ class StyleIndexSpec extends FunSuite:
   test("fromWorkbook with multiple sheets shares identical styles") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
 
-    val sheet1 = Sheet("Sheet1").getOrElse(fail(""))
+    val sheet1 = Sheet("Sheet1")
       .put(ref"A1", CellValue.Text("Bold1"))
       .withCellStyle(ref"A1", boldStyle)
 
-    val sheet2 = Sheet("Sheet2").getOrElse(fail(""))
+    val sheet2 = Sheet("Sheet2")
       .put(ref"B1", CellValue.Text("Bold2"))
       .withCellStyle(ref"B1", boldStyle)
 
@@ -69,12 +69,12 @@ class StyleIndexSpec extends FunSuite:
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
 
     // Sheet1: localId=1 is bold
-    val sheet1 = Sheet("Sheet1").getOrElse(fail(""))
+    val sheet1 = Sheet("Sheet1")
       .put(ref"A1", CellValue.Text("Bold"))
       .withCellStyle(ref"A1", boldStyle)
 
     // Sheet2: localId=1 is red (different style)
-    val sheet2 = Sheet("Sheet2").getOrElse(fail(""))
+    val sheet2 = Sheet("Sheet2")
       .put(ref"A1", CellValue.Text("Red"))
       .withCellStyle(ref"A1", redStyle)
 
@@ -96,7 +96,7 @@ class StyleIndexSpec extends FunSuite:
   }
 
   test("fromWorkbook with empty styleRegistry uses default only") {
-    val sheet = Sheet("Plain").getOrElse(fail(""))
+    val sheet = Sheet("Plain")
       .put(ref"A1", CellValue.Text("No Style"))
     // Don't apply any styles - registry is default
 
@@ -118,7 +118,7 @@ class StyleIndexSpec extends FunSuite:
     val style2 = CellStyle.default.withFont(Font("Arial", 12.0, bold = true)).withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
     // Both use same font
 
-    val sheet = Sheet("Test").getOrElse(fail(""))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Style1"))
       .withCellStyle(ref"A1", style1)
       .put(ref"A2", CellValue.Text("Style2"))
@@ -138,11 +138,11 @@ class StyleIndexSpec extends FunSuite:
     // Two structurally equal styles in different sheets
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
 
-    val sheet1 = Sheet("Sheet1").getOrElse(fail(""))
+    val sheet1 = Sheet("Sheet1")
       .put(ref"A1", CellValue.Text("Bold"))
       .withCellStyle(ref"A1", boldStyle)
 
-    val sheet2 = Sheet("Sheet2").getOrElse(fail(""))
+    val sheet2 = Sheet("Sheet2")
       .put(ref"A1", CellValue.Text("Also Bold"))
       .withCellStyle(ref"A1", boldStyle)
 

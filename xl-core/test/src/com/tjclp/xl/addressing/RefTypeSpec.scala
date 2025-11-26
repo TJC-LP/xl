@@ -286,9 +286,9 @@ class RefTypeSpec extends ScalaCheckSuite:
   // ========== Workbook Integration Tests ==========
 
   test("Workbook.apply(RefType) - qualified cell reference") {
-    val wb = Workbook("Sales").toOption.get
+    val wb = Workbook("Sales")
     val sheet = wb.sheets(0).put(ARef.from1(1, 1), CellValue.Text("Test"))
-    val updatedWb = wb.put(sheet).toOption.get
+    val updatedWb = wb.put(sheet)
 
     val ref = RefType.QualifiedCell(SheetName.unsafe("Sales"), ARef.from1(1, 1))
     updatedWb(ref) match
@@ -298,11 +298,11 @@ class RefTypeSpec extends ScalaCheckSuite:
   }
 
   test("Workbook.apply(RefType) - qualified range reference") {
-    val wb = Workbook("Data").toOption.get
+    val wb = Workbook("Data")
     val sheet = wb.sheets(0)
       .put(ARef.from1(1, 1), CellValue.Text("A"))
       .put(ARef.from1(1, 2), CellValue.Text("B"))
-    val updatedWb = wb.put(sheet).toOption.get
+    val updatedWb = wb.put(sheet)
 
     val ref = RefType.QualifiedRange(SheetName.unsafe("Data"), CellRange(ARef.from1(1, 1), ARef.from1(1, 2)))
     updatedWb(ref) match
@@ -314,7 +314,7 @@ class RefTypeSpec extends ScalaCheckSuite:
   }
 
   test("Workbook.apply(RefType) - unqualified ref returns error") {
-    val wb = Workbook("Sheet1").toOption.get
+    val wb = Workbook("Sheet1")
     val unqualifiedCell = RefType.Cell(ARef.from1(1, 1))
 
     assert(wb(unqualifiedCell).isLeft, "Unqualified cell ref should return Left")
@@ -324,7 +324,7 @@ class RefTypeSpec extends ScalaCheckSuite:
   }
 
   test("Workbook.apply(RefType) - nonexistent sheet returns error") {
-    val wb = Workbook("Sheet1").toOption.get
+    val wb = Workbook("Sheet1")
     val ref = RefType.QualifiedCell(SheetName.unsafe("NonExistent"), ARef.from1(1, 1))
 
     assert(wb(ref).isLeft, "Reference to nonexistent sheet should return Left")

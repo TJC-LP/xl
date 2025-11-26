@@ -482,9 +482,7 @@ class CommentsSpec extends FunSuite:
 
   test("round-trip preserves very long author names") {
     val longAuthor = "L" * 300
-    val baseSheet = Sheet("Sheet1") match
-      case Right(s) => s
-      case Left(err) => fail(s"Failed to build sheet: $err")
+    val baseSheet = Sheet("Sheet1")
 
     val sheet = baseSheet.comment(
       ref"A1",
@@ -509,9 +507,7 @@ class CommentsSpec extends FunSuite:
   }
 
   test("comments on merged cells survive round-trip") {
-    val baseSheet = Sheet("Sheet1") match
-      case Right(s) => s
-      case Left(err) => fail(s"Failed to build sheet: $err")
+    val baseSheet = Sheet("Sheet1")
 
     val mergedRange = CellRange(ref"A1", ref"B1")
     val withMerge = baseSheet.copy(mergedRanges = baseSheet.mergedRanges + mergedRange)

@@ -244,3 +244,6 @@ object syntax:
     def apply(patches: Patch*): Patch = Patch.Batch(patches.toVector)
 
 export syntax.*
+
+// Re-export all of RowColumnDsl (builders, entry points, and extension methods)
+export RowColumnDsl.*

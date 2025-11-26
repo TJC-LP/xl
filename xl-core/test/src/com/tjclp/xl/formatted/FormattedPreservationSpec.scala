@@ -15,7 +15,7 @@ import munit.FunSuite
 class FormattedPreservationSpec extends FunSuite:
 
   test("money literal preserves Currency format in batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test")
 
     // Use batch put with money literal
     val updated = sheet.put(ref"A1" -> money"$$1,234.56").unsafe
@@ -44,7 +44,7 @@ class FormattedPreservationSpec extends FunSuite:
   }
 
   test("date literal preserves Date format in batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test")
 
     val updated = sheet.put(ref"A1" -> date"2025-11-10").unsafe
 
@@ -64,7 +64,7 @@ class FormattedPreservationSpec extends FunSuite:
   }
 
   test("percent literal preserves Percent format in batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test")
 
     val updated = sheet.put(ref"A1" -> percent"15.5%").unsafe
 
@@ -90,7 +90,7 @@ class FormattedPreservationSpec extends FunSuite:
   }
 
   test("mixed formatted and plain values in single batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test")
 
     val updated = sheet.put(
       ref"A1" -> "Product",               // Plain String
@@ -135,7 +135,7 @@ class FormattedPreservationSpec extends FunSuite:
   }
 
   test("accounting literal preserves Currency format") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test")
 
     // Test accounting format (negative shown as parentheses)
     val updated = sheet.put(ref"A1" -> accounting"$$(999.99)").unsafe
@@ -156,7 +156,7 @@ class FormattedPreservationSpec extends FunSuite:
   }
 
   test("Formatted variables preserve format in batch put") {
-    val sheet = Sheet("Test").getOrElse(fail("Should create sheet"))
+    val sheet = Sheet("Test")
 
     // Store formatted values in variables (not inline literals)
     val revenue = money"$$10,000.00"

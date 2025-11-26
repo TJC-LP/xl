@@ -4,7 +4,8 @@ import scala.xml.*
 import XmlUtil.*
 import com.tjclp.xl.addressing.* // For ARef, Column, Row types and extension methods
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
+import com.tjclp.xl.styles.color.Color
 import SaxSupport.*
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
@@ -18,6 +19,81 @@ private def cleanNamespaces(elem: Elem): Elem =
     case other => other
   }
   elem.copy(scope = TopScope, child = cleanedChildren)
+
+/**
+ * Group consecutive columns with identical properties into spans.
+ *
+ * Excel's `<col>` element supports min/max attributes to apply the same properties to a range of
+ * columns. This reduces file size by avoiding repeated `<col>` elements.
+ *
+ * @return
+ *   Sequence of (minCol, maxCol, properties) tuples for span generation
+ */
+private def groupConsecutiveColumns(
+  props: Map[Column, ColumnProperties]
+): Seq[(Column, Column, ColumnProperties)] =
+  if props.isEmpty then Seq.empty
+  else
+    props.toSeq
+      .sortBy(_._1.index0)
+      .foldLeft(Vector.empty[(Column, Column, ColumnProperties)]) { case (acc, (col, p)) =>
+        acc.lastOption match
+          case Some((minCol, maxCol, lastProps))
+              if maxCol.index0 + 1 == col.index0 && lastProps == p =>
+            // Extend current span
+            acc.dropRight(1) :+ (minCol, col, p)
+          case _ =>
+            // Start new span
+            acc :+ (col, col, p)
+      }
+
+/**
+ * Build `<cols>` XML element from domain column properties.
+ *
+ * Generates OOXML-compliant column definitions: {{{<cols> <col min="1" max="3" width="15.5"
+ * customWidth="1" hidden="1"/> </cols>}}}
+ *
+ * @return
+ *   Some(cols element) if there are column properties, None otherwise
+ */
+private def buildColsElement(sheet: Sheet): Option[Elem] =
+  val props = sheet.columnProperties
+  if props.isEmpty then None
+  else
+    val spans = groupConsecutiveColumns(props)
+    val colElems = spans.map { case (minCol, maxCol, p) =>
+      // Build attribute sequence (only include non-default values)
+      val attrs = Seq.newBuilder[(String, String)]
+      attrs += ("min" -> (minCol.index0 + 1).toString) // OOXML is 1-based
+      attrs += ("max" -> (maxCol.index0 + 1).toString)
+      p.width.foreach { w =>
+        attrs += ("width" -> w.toString)
+        attrs += ("customWidth" -> "1")
+      }
+      if p.hidden then attrs += ("hidden" -> "1")
+      p.outlineLevel.foreach(l => attrs += ("outlineLevel" -> l.toString))
+      if p.collapsed then attrs += ("collapsed" -> "1")
+      // Note: styleId would need remapping to workbook-level index (deferred)
+
+      XmlUtil.elem("col", attrs.result()*)( /* no children */ )
+    }
+    Some(XmlUtil.elem("cols")(colElems*))
+
+/**
+ * Apply domain RowProperties to an OoxmlRow.
+ *
+ * Domain properties override existing row attributes (if any). This allows setting row height,
+ * hidden state, and outline level from the domain model.
+ */
+private def applyDomainRowProps(row: OoxmlRow, props: RowProperties): OoxmlRow =
+  row.copy(
+    height = props.height.orElse(row.height),
+    customHeight = props.height.isDefined || row.customHeight,
+    hidden = props.hidden || row.hidden,
+    outlineLevel = props.outlineLevel.orElse(row.outlineLevel),
+    collapsed = props.collapsed || row.collapsed
+    // Note: styleId would need remapping to workbook-level index (deferred)
+  )
 
 /** Cell data for worksheet - maps domain Cell to XML representation */
 case class OoxmlCell(
@@ -149,10 +225,16 @@ case class OoxmlCell(
       writer.startElement("u")
       writer.endElement()
 
-    font.color.foreach { c =>
-      writer.startElement("color")
-      writer.writeAttribute("rgb", c.toHex.drop(1))
-      writer.endElement()
+    font.color.foreach {
+      case Color.Rgb(argb) =>
+        writer.startElement("color")
+        writer.writeAttribute("rgb", f"$argb%08X")
+        writer.endElement()
+      case Color.Theme(slot, tint) =>
+        writer.startElement("color")
+        writer.writeAttribute("theme", slot.ordinal.toString)
+        writer.writeAttribute("tint", tint.toString)
+        writer.endElement()
     }
 
     writer.startElement("sz")
@@ -216,8 +298,15 @@ case class OoxmlCell(
                 if f.underline then fontProps += elem("u")()
 
                 // Font color
-                f.color.foreach { c =>
-                  fontProps += elem("color", "rgb" -> c.toHex.drop(1))() // Attributes then children
+                f.color.foreach {
+                  case Color.Rgb(argb) =>
+                    fontProps += elem("color", "rgb" -> f"$argb%08X")()
+                  case Color.Theme(slot, tint) =>
+                    fontProps += elem(
+                      "color",
+                      "theme" -> slot.ordinal.toString,
+                      "tint" -> tint.toString
+                    )()
                 }
 
                 // Font size and name
@@ -657,9 +746,12 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           // New row - create with defaults
           OoxmlRow(rowIdx, ooxmlCells)
 
-      // Preserve row-level style exactly as-is from original (even if "invalid" per spec)
-      // Excel expects these preserved, removing them causes corruption warnings
-      baseRow
+      // Apply domain row properties (height, hidden, outlineLevel, collapsed)
+      val rowWithDomainProps = sheet.rowProperties.get(Row.from1(rowIdx)) match
+        case Some(domainProps) => applyDomainRowProps(baseRow, domainProps)
+        case None => baseRow
+
+      rowWithDomainProps
     }
 
     // Preserve empty rows from original (critical for Row 1!)
@@ -667,8 +759,18 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       preserved.rows.filter(_.cells.isEmpty)
     }
 
-    // Combine rows with cells + empty rows, sort by index
-    val allRows = (rowsWithCells ++ emptyRowsFromOriginal).sortBy(_.rowIndex)
+    // Generate empty rows for domain row properties not already represented
+    val existingRowIndices =
+      cellsByRow.map(_._1).toSet ++ emptyRowsFromOriginal.map(_.rowIndex).toSet
+    val emptyRowsFromDomain = sheet.rowProperties
+      .filterNot { case (row, _) => existingRowIndices.contains(row.index1) }
+      .map { case (row, props) =>
+        applyDomainRowProps(OoxmlRow(row.index1, Seq.empty), props)
+      }
+      .toSeq
+
+    // Combine rows with cells + empty rows from original + empty rows from domain, sort by index
+    val allRows = (rowsWithCells ++ emptyRowsFromOriginal ++ emptyRowsFromDomain).sortBy(_.rowIndex)
 
     // Generate legacyDrawing element if sheet has comments but no preserved legacyDrawing
     val legacyDrawingElem =
@@ -687,6 +789,9 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         }
       else preservedMetadata.flatMap(_.legacyDrawing)
 
+    // Generate cols from domain properties if not preserved
+    val generatedCols = buildColsElement(sheet)
+
     // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
     preservedMetadata match
       case Some(preserved) =>
@@ -698,7 +803,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.dimension,
           preserved.sheetViews,
           preserved.sheetFormatPr,
-          preserved.cols,
+          preserved.cols.orElse(generatedCols), // Fallback to domain props if not preserved
           preserved.conditionalFormatting,
           preserved.printOptions,
           preserved.rowBreaks,
@@ -719,10 +824,11 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           preserved.rootScope
         )
       case None =>
-        // No preserved metadata - create minimal worksheet with legacyDrawing if comments exist
+        // No preserved metadata - create minimal worksheet with cols from domain
         OoxmlWorksheet(
           rowsWithCells,
           sheet.mergedRanges,
+          cols = generatedCols,
           legacyDrawing = legacyDrawingElem,
           tableParts = tableParts
         )

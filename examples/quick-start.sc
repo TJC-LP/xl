@@ -62,7 +62,7 @@ println("=" * 70)
 println("STEP 2: Create Sheet with Data")
 println("=" * 70)
 
-val sheet = Sheet(name = SheetName.unsafe("Demo"))
+val sheet = Sheet("Demo")
   .put(ref"A1", 150)
   .put(ref"A2", 200)
   .put(ref"A3", 75)
@@ -91,7 +91,6 @@ println("=" * 70)
 val decimalStyle = CellStyle.default.withNumFmt(NumFmt.Decimal)
 val styledSheet = sheet
   .style(ref"B1:B2", decimalStyle)  // Format SUM and AVERAGE as decimals
-  .unsafe
 
 println("✓ Applied decimal formatting to formula range B1:B2")
 println()
@@ -118,12 +117,15 @@ styledSheet.evaluateCell(ref"B2") match
   case Left(error) =>
     println(s"✗ B2 evaluation error: ${error.message}")
 
-// Evaluate C1 (IF formula)
+// Evaluate C1 (IF formula) - references B1 which is still a Formula
+// Note: evaluateCell() doesn't evaluate dependencies - B1 is still unevaluated
+// This demonstrates the need for bulk evaluation with dependency checking (Step 5)
 styledSheet.evaluateCell(ref"C1") match
   case Right(value) =>
     println(s"✓ C1 = $value  // Conditional based on B1")
   case Left(error) =>
-    println(s"✗ C1 evaluation error: ${error.message}")
+    println(s"⚠️  C1 needs dependency evaluation (expected): ${error.message.take(80)}...")
+    println(s"    Use evaluateWithDependencyCheck() for formulas with formula dependencies")
 
 println()
 
@@ -157,7 +159,7 @@ println("STEP 5: Circular Reference Detection")
 println("=" * 70)
 
 // Create a sheet with a circular reference
-val cyclicSheet = Sheet(name = SheetName.unsafe("Cyclic"))
+val cyclicSheet = Sheet("Cyclic")
   .put(ref"A1", fx"=B1+10")
   .put(ref"B1", fx"=C1*2")
   .put(ref"C1", fx"=A1+5")  // Cycle: A1 → B1 → C1 → A1

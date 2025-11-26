@@ -74,6 +74,7 @@ object syntax:
 
   // Compile-time validated literals (macros)
   export macros.RefLiteral.*
+  export macros.ColumnLiteral.col
   export macros.CellRangeLiterals.fx
   export macros.FormattedLiterals.{money, percent, date, accounting}
   // BatchPutMacro.put removed - dead code (shadowed by Sheet.put member)

@@ -103,7 +103,9 @@ object Generators:
       width <- Gen.option(Gen.choose(1.0, 255.0))
       hidden <- Gen.oneOf(true, false)
       styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
-    yield ColumnProperties(width, hidden, styleId)
+      outlineLevel <- Gen.option(Gen.choose(0, 7))
+      collapsed <- Gen.oneOf(true, false)
+    yield ColumnProperties(width, hidden, styleId, outlineLevel, collapsed)
 
   /** Generate row properties */
   val genRowProperties: Gen[RowProperties] =
@@ -111,7 +113,9 @@ object Generators:
       height <- Gen.option(Gen.choose(1.0, 409.0))
       hidden <- Gen.oneOf(true, false)
       styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
-    yield RowProperties(height, hidden, styleId)
+      outlineLevel <- Gen.option(Gen.choose(0, 7))
+      collapsed <- Gen.oneOf(true, false)
+    yield RowProperties(height, hidden, styleId, outlineLevel, collapsed)
 
   /** Generate sheet with small number of cells */
   val genSheet: Gen[Sheet] =

@@ -28,7 +28,7 @@ class StyleIntegrationSpec extends FunSuite:
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
 
-    val sheet = Sheet("Styled").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Styled")
       .put(ref"A1", CellValue.Text("Bold Text"))
       .withCellStyle(ref"A1", boldStyle)
       .put(ref"A2", CellValue.Text("Red Background"))
@@ -81,11 +81,11 @@ class StyleIntegrationSpec extends FunSuite:
   tempDir.test("multi-sheet workbook deduplicates shared styles") { dir =>
     val headerStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
 
-    val sheet1 = Sheet("Sales").getOrElse(fail(""))
+    val sheet1 = Sheet("Sales")
       .put(ref"A1", CellValue.Text("Product"))
       .withCellStyle(ref"A1", headerStyle)
 
-    val sheet2 = Sheet("Inventory").getOrElse(fail(""))
+    val sheet2 = Sheet("Inventory")
       .put(ref"A1", CellValue.Text("Item"))
       .withCellStyle(ref"A1", headerStyle)
 
@@ -122,7 +122,7 @@ class StyleIntegrationSpec extends FunSuite:
   }
 
   tempDir.test("unstyled cells do not have s= attribute") { dir =>
-    val sheet = Sheet("Plain").getOrElse(fail(""))
+    val sheet = Sheet("Plain")
       .put(ref"A1", CellValue.Text("No Style"))
       .put(ref"A2", CellValue.Text("Also No Style"))
     // No styles applied
@@ -151,7 +151,7 @@ class StyleIntegrationSpec extends FunSuite:
   tempDir.test("round-trip with styles preserves formatting") { dir =>
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
 
-    val sheet = Sheet("Test").getOrElse(fail(""))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Bold"))
       .withCellStyle(ref"A1", boldStyle)
 

@@ -11,7 +11,7 @@ import com.tjclp.xl.macros.ref
 class RangeCombinatorsSpec extends FunSuite:
 
   private def newSheet: Sheet =
-    Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    Sheet("Test")
 
   test("putRange populates all cells when counts match") {
     val targetRange = ref"A1:B2"

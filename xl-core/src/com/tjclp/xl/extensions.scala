@@ -52,53 +52,57 @@ object extensions:
     /**
      * Apply style to cell or range (template pattern).
      *
+     * When called with a string literal, the reference is validated at compile time and returns
+     * `Sheet` directly. When called with a runtime string, validation is deferred and returns
+     * `XLResult[Sheet]`.
+     *
      * @param ref
      *   Cell ("A1") or range ("A1:B10")
      * @param cellStyle
      *   CellStyle to apply
      * @return
-     *   XLResult[Sheet] for chaining
+     *   `Sheet` for literal refs (compile-time validated), `XLResult[Sheet]` for runtime refs
      */
     @annotation.targetName("styleSheet")
-    def style(ref: String, cellStyle: CellStyle): XLResult[Sheet] =
-      if ref.contains(":") then
-        toXLResult(CellRange.parse(ref), ref, "Invalid range")
-          .map(range => sheet.withRangeStyle(range, cellStyle))
-      else
-        toXLResult(ARef.parse(ref), ref, "Invalid cell reference")
-          .map(aref => sheet.withCellStyle(aref, cellStyle))
+    transparent inline def style(
+      inline ref: String,
+      cellStyle: CellStyle
+    ): Sheet | XLResult[Sheet] =
+      ${ com.tjclp.xl.macros.PutLiteral.styleImpl('{ sheet }, 'ref, 'cellStyle) }
 
     /**
      * Apply style to cell (compile-time validated ref).
      *
-     * Universal style method that works with typed ARef from ref"A1" macro.
+     * Universal style method that works with typed ARef from ref"A1" macro. This operation is
+     * infallible since the reference is already validated.
      *
      * @param ref
      *   Cell reference (ARef from ref"A1" macro)
      * @param cellStyle
      *   CellStyle to apply
      * @return
-     *   XLResult[Sheet] for chaining
+     *   Updated Sheet
      */
     @annotation.targetName("styleSheetARef")
-    def style(ref: com.tjclp.xl.addressing.ARef, cellStyle: CellStyle): XLResult[Sheet] =
-      Right(sheet.withCellStyle(ref, cellStyle))
+    def style(ref: com.tjclp.xl.addressing.ARef, cellStyle: CellStyle): Sheet =
+      sheet.withCellStyle(ref, cellStyle)
 
     /**
      * Apply style to range (compile-time validated ref).
      *
-     * Universal style method that works with typed CellRange from ref"A1:B10" macro.
+     * Universal style method that works with typed CellRange from ref"A1:B10" macro. This operation
+     * is infallible since the range is already validated.
      *
      * @param range
      *   Cell range (CellRange from ref"A1:B10" macro)
      * @param cellStyle
      *   CellStyle to apply
      * @return
-     *   XLResult[Sheet] for chaining
+     *   Updated Sheet
      */
     @annotation.targetName("styleSheetRange")
-    def style(range: com.tjclp.xl.addressing.CellRange, cellStyle: CellStyle): XLResult[Sheet] =
-      Right(sheet.withRangeStyle(range, cellStyle))
+    def style(range: com.tjclp.xl.addressing.CellRange, cellStyle: CellStyle): Sheet =
+      sheet.withRangeStyle(range, cellStyle)
 
   // ========== Sheet Extensions: Lookup Operations (Safe) ==========
 
@@ -106,47 +110,49 @@ object extensions:
     /**
      * Get cell at reference (safe lookup).
      *
-     * Returns None for invalid references or missing cells. No exceptions thrown.
+     * When called with a string literal, the reference is validated at compile time. Invalid
+     * literals like "INVALID" fail to compile. When called with a runtime string, validation is
+     * deferred and returns None for invalid refs.
      *
      * @param cellRef
      *   Cell reference like "A1"
      * @return
      *   Some(cell) if valid ref and exists, None otherwise
      */
-    def cell(cellRef: String): Option[Cell] =
-      ARef.parse(cellRef).toOption.flatMap(ref => sheet.cells.get(ref))
+    @annotation.targetName("cellString")
+    transparent inline def cell(inline cellRef: String): Option[Cell] =
+      ${ com.tjclp.xl.macros.CellLookupMacros.cellImpl('{ sheet }, 'cellRef) }
 
     /**
      * Get cells in range (safe lookup).
      *
-     * Returns empty list for invalid ranges. Only includes existing cells.
+     * When called with a string literal, the range is validated at compile time. Invalid literals
+     * fail to compile. When called with a runtime string, validation is deferred and returns empty
+     * list for invalid ranges.
      *
      * @param rangeRef
      *   Range like "A1:B10"
      * @return
      *   List of cells (only existing cells)
      */
-    def range(rangeRef: String): List[Cell] =
-      CellRange
-        .parse(rangeRef)
-        .toOption
-        .map(r => r.cells.flatMap(sheet.cells.get).toList)
-        .getOrElse(List.empty)
+    @annotation.targetName("rangeString")
+    transparent inline def range(inline rangeRef: String): List[Cell] =
+      ${ com.tjclp.xl.macros.CellLookupMacros.rangeImpl('{ sheet }, 'rangeRef) }
 
     /**
      * Get cell(s) at reference (auto-detects cell vs range).
      *
-     * Convenience method that handles both single cells and ranges uniformly. Returns List[Cell]
-     * for consistent handling.
+     * When called with a string literal, the reference is validated at compile time and
+     * auto-detected as cell or range. Invalid literals fail to compile.
      *
      * @param ref
      *   Cell ("A1") or range ("A1:B10")
      * @return
      *   List of cells (empty if invalid ref or no cells exist)
      */
-    def get(ref: String): List[Cell] =
-      if ref.contains(":") then range(ref) // Range → List[Cell]
-      else cell(ref).toList // Cell → List[0 or 1]
+    @annotation.targetName("getString")
+    transparent inline def get(inline ref: String): List[Cell] =
+      ${ com.tjclp.xl.macros.CellLookupMacros.getImpl('{ sheet }, 'ref) }
 
   // ========== Sheet Extensions: Merge Operations ==========
 
@@ -154,14 +160,18 @@ object extensions:
     /**
      * Merge cells in range.
      *
+     * When called with a string literal, the reference is validated at compile time and returns
+     * `Sheet` directly. When called with a runtime string, validation is deferred and returns
+     * `XLResult[Sheet]`.
+     *
      * @param rangeRef
      *   Range like "A1:B1"
      * @return
-     *   XLResult[Sheet] for chaining
+     *   `Sheet` for literal refs (compile-time validated), `XLResult[Sheet]` for runtime refs
      */
-    def merge(rangeRef: String): XLResult[Sheet] =
-      toXLResult(CellRange.parse(rangeRef), rangeRef, "Invalid range")
-        .map(range => sheet.merge(range))
+    @annotation.targetName("mergeSheet")
+    transparent inline def merge(inline rangeRef: String): Sheet | XLResult[Sheet] =
+      ${ com.tjclp.xl.macros.PutLiteral.mergeImpl('{ sheet }, 'rangeRef) }
 
   // ========== XLResult[Sheet] Extensions: Chainable Operations ==========
 
@@ -216,14 +226,14 @@ object extensions:
      */
     @annotation.targetName("styleSheetARefChainable")
     def style(ref: com.tjclp.xl.addressing.ARef, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.style(ref, cellStyle))
+      result.map(_.style(ref, cellStyle))
 
     /**
      * Apply style (chainable, range).
      */
     @annotation.targetName("styleSheetRangeChainable")
     def style(range: com.tjclp.xl.addressing.CellRange, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.style(range, cellStyle))
+      result.map(_.style(range, cellStyle))
 
     /** Merge range (chainable). */
     def merge(rangeRef: String): XLResult[Sheet] =
@@ -232,7 +242,7 @@ object extensions:
     /** Apply patch (chainable). */
     @annotation.targetName("putPatchChainable")
     def put(patch: com.tjclp.xl.patch.Patch): XLResult[Sheet] =
-      result.flatMap(_.put(patch))
+      result.map(_.put(patch))
 
     /**
      * Batch put (chainable).
@@ -257,19 +267,27 @@ object extensions:
     /** Put sheet (add-or-replace, chainable). */
     @annotation.targetName("putSheetChainable")
     def put(sheet: Sheet): XLResult[Workbook] =
-      result.flatMap(_.put(sheet))
+      result.map(_.put(sheet))
 
-    /** Update sheet by name (chainable). */
+    /**
+     * Update sheet by name (chainable).
+     *
+     * When called with a string literal, the name format is validated at compile time. Invalid
+     * literals fail to compile.
+     */
     @annotation.targetName("updateSheetChainable")
-    def update(name: String, f: Sheet => Sheet): XLResult[Workbook] =
+    inline def update(inline name: String, f: Sheet => Sheet): XLResult[Workbook] =
       result.flatMap(_.update(name, f))
 
-    /** Remove sheet by name (chainable). */
+    /**
+     * Remove sheet by name (chainable).
+     *
+     * When called with a string literal, the name format is validated at compile time. Invalid
+     * literals fail to compile.
+     */
     @annotation.targetName("removeSheetChainable")
-    def remove(name: String): XLResult[Workbook] =
-      result.flatMap(wb =>
-        toXLResult(SheetName(name), name, "Invalid sheet name").flatMap(wb.remove)
-      )
+    inline def remove(inline name: String): XLResult[Workbook] =
+      result.flatMap(_.remove(name))
 
   // ========== Workbook Extensions: String-Based Lookups ==========
 
@@ -277,12 +295,14 @@ object extensions:
     /**
      * Get sheet by name (safe lookup).
      *
-     * Returns None if sheet not found. No exceptions thrown.
+     * When called with a string literal, the name format is validated at compile time. Invalid
+     * literals like "Invalid:Name" fail to compile. Returns None if sheet not found.
      *
      * @param name
      *   Sheet name
      * @return
      *   Some(sheet) if found, None otherwise
      */
-    def get(name: String): Option[Sheet] =
-      workbook(name).toOption
+    @annotation.targetName("getSheetByName")
+    transparent inline def get(inline name: String): Option[Sheet] =
+      ${ com.tjclp.xl.macros.WorkbookMacros.getImpl('{ workbook }, 'name) }

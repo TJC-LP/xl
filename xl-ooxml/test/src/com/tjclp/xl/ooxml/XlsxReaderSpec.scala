@@ -17,7 +17,7 @@ class XlsxReaderSpec extends FunSuite:
   test("XlsxReader preserves cell styles when reading") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
 
-    val sheet = Sheet("Styled").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Styled")
       .put(ref"A1", CellValue.Text("styled"))
       .withCellStyle(ref"A1", boldStyle)
 
@@ -33,7 +33,7 @@ class XlsxReaderSpec extends FunSuite:
   }
 
   test("XlsxReader resolves worksheet paths via relationships") {
-    val sheet = Sheet("Rel").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Rel")
       .put(ref"A1", CellValue.Text("ok"))
 
     val wb = Workbook(Vector(sheet))

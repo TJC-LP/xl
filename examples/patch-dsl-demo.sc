@@ -15,166 +15,143 @@ import java.nio.file.Paths
 
 println("=== XL Patch DSL Demo ===\n")
 
-// Create a base sheet
-val sheetResult = Sheet("Demo")
+// Create a base sheet - infallible for compile-time validated names
+val sheet = Sheet("Demo")
+println("✓ Created empty sheet\n")
 
-sheetResult match
-  case Right(sheet) =>
-    println("✓ Created empty sheet\n")
+// === OLD WAY: Verbose with type ascription ===
+println("=== OLD WAY (Verbose, requires type ascription with Cats) ===")
+println("""import cats.syntax.all.*
+  |
+  |val patch =
+  |  (Patch.Put(ref"A1", CellValue.Text("Hello")): Patch) |+|
+  |  (Patch.Put(ref"B1", CellValue.Number(42)): Patch) |+|
+  |  (Patch.Put(ref"C1", CellValue.Text("World")): Patch)
+  |""".stripMargin)
 
-    // === OLD WAY: Verbose with type ascription ===
-    println("=== OLD WAY (Verbose, requires type ascription with Cats) ===")
-    println("""import cats.syntax.all.*
-      |
-      |val patch =
-      |  (Patch.Put(ref"A1", CellValue.Text("Hello")): Patch) |+|
-      |  (Patch.Put(ref"B1", CellValue.Number(42)): Patch) |+|
-      |  (Patch.Put(ref"C1", CellValue.Text("World")): Patch)
-      |""".stripMargin)
+// === NEW WAY: Clean DSL syntax ===
+println("\n=== NEW WAY (Clean DSL syntax, no type ascription!) ===")
+val cleanPatch =
+  (ref"A1" := "Hello") ++
+  (ref"B1" := 42) ++
+  (ref"C1" := "World")
 
-    // === NEW WAY: Clean DSL syntax ===
-    println("\n=== NEW WAY (Clean DSL syntax, no type ascription!) ===")
-    val cleanPatch =
-      (ref"A1" := "Hello") ++
-      (ref"B1" := 42) ++
-      (ref"C1" := "World")
+println("""import com.tjclp.xl.*
+  |
+  |val patch =
+  |  (ref"A1" := "Hello") ++
+  |  (ref"B1" := 42) ++
+  |  (ref"C1" := "World")
+  |""".stripMargin)
 
-    println("""import com.tjclp.xl.*
-      |
-      |val patch =
-      |  (ref"A1" := "Hello") ++
-      |  (ref"B1" := 42) ++
-      |  (ref"C1" := "World")
-      |""".stripMargin)
+// Apply the clean patch - Patch.applyPatch returns Sheet directly (infallible)
+val updated = Patch.applyPatch(sheet, cleanPatch)
+println(s"\n✓ Applied patch! Sheet now has ${updated.cellCount} cells:")
+updated.nonEmptyCells.foreach { cell =>
+  println(s"  ${cell.toA1}: ${cell.value}")
+}
 
-    // Apply the clean patch
-    Patch.applyPatch(sheet, cleanPatch) match
-      case Right(updated) =>
-        println(s"\n✓ Applied patch! Sheet now has ${updated.cellCount} cells:")
-        updated.nonEmptyCells.foreach { cell =>
-          println(s"  ${cell.toA1}: ${cell.value}")
-        }
-      case Left(err) =>
-        println(s"✗ Error: ${err.message}")
+// === Complex patch with styles and merges ===
+println("\n=== Complex Patch Example ===")
 
-    // === Complex patch with styles and merges ===
-    println("\n=== Complex Patch Example ===")
+// Create a header style with fluent DSL (compare to verbose constructor!)
+val headerStyle = CellStyle.default.bold.size(14.0).white.bgBlue.center.middle
 
-    // Create a header style with fluent DSL (compare to verbose constructor!)
-    val headerStyle = CellStyle.default.bold.size(14.0).white.bgBlue.center.middle
+val complexPatch =
+  (ref"A1" := "Product Report") ++
+  (ref"A1".styled(headerStyle)) ++
+  ref"A1:C1".merge ++
+  (ref"A3" := "Product") ++
+  (ref"B3" := "Price") ++
+  (ref"C3" := "Quantity") ++
+  (ref"A4" := "Widget") ++
+  (ref"B4" := 19.99) ++
+  (ref"C4" := 100)
 
-    val complexPatch =
-      (ref"A1" := "Product Report") ++
-      (ref"A1".styled(headerStyle)) ++
-      ref"A1:C1".merge ++
-      (ref"A3" := "Product") ++
-      (ref"B3" := "Price") ++
-      (ref"C3" := "Quantity") ++
-      (ref"A4" := "Widget") ++
-      (ref"B4" := 19.99) ++
-      (ref"C4" := 100)
+println("""val patch =
+  |  (ref"A1" := "Product Report") ++
+  |  (ref"A1".styled(headerStyle)) ++
+  |  ref"A1:C1".merge ++
+  |  (ref"A3" := "Product") ++
+  |  (ref"B3" := "Price") ++
+  |  (ref"C3" := "Quantity") ++
+  |  (ref"A4" := "Widget") ++
+  |  (ref"B4" := 19.99) ++
+  |  (ref"C4" := 100)
+  |""".stripMargin)
 
-    println("""val patch =
-      |  (ref"A1" := "Product Report") ++
-      |  (ref"A1".styled(headerStyle)) ++
-      |  ref"A1:C1".merge ++
-      |  (ref"A3" := "Product") ++
-      |  (ref"B3" := "Price") ++
-      |  (ref"C3" := "Quantity") ++
-      |  (ref"A4" := "Widget") ++
-      |  (ref"B4" := 19.99) ++
-      |  (ref"C4" := 100)
-      |""".stripMargin)
+val report = Patch.applyPatch(Sheet("Report"), complexPatch)
 
-    val sheet2Result = for
-      emptySheet <- Sheet("Report")
-      populated <- Patch.applyPatch(emptySheet, complexPatch)
-    yield populated
+println(s"\n✓ Created report with ${report.cellCount} cells:")
+report.nonEmptyCells.foreach { cell =>
+  val styleInfo = if cell.styleId.isDefined then " [styled]" else ""
+  println(s"  ${cell.toA1}: ${cell.value}${styleInfo}")
+}
 
-    sheet2Result match
-      case Right(report) =>
-        println(s"\n✓ Created report with ${report.cellCount} cells:")
-        report.nonEmptyCells.foreach { cell =>
-          val styleInfo = if cell.styleId.isDefined then " [styled]" else ""
-          println(s"  ${cell.toA1}: ${cell.value}${styleInfo}")
-        }
+val mergedRanges = report.mergedRanges
+if mergedRanges.nonEmpty then
+  println(s"\nMerged ranges:")
+  mergedRanges.foreach(r => println(s"  ${r.toA1}"))
 
-        val mergedRanges = report.mergedRanges
-        if mergedRanges.nonEmpty then
-          println(s"\nMerged ranges:")
-          mergedRanges.foreach(r => println(s"  ${r.toA1}"))
-      case Left(err) =>
-        println(s"✗ Error: ${err.message}")
+// === Range operations ===
+println("\n=== Range Operations ===")
 
-    // === Range operations ===
-    println("\n=== Range Operations ===")
+val rangePatch =
+  (ref"A10" := "Start") ++
+  (ref"B10" := "End") ++
+  ref"A10:B10".merge ++
+  ref"A12:C14".remove
 
-    val rangePatch =
-      (ref"A10" := "Start") ++
-      (ref"B10" := "End") ++
-      ref"A10:B10".merge ++
-      ref"A12:C14".remove
+println("""val patch =
+  |  (ref"A10" := "Start") ++
+  |  (ref"B10" := "End") ++
+  |  ref"A10:B10".merge ++
+  |  ref"A12:C14".remove  // Remove entire range
+  |""".stripMargin)
 
-    println("""val patch =
-      |  (ref"A10" := "Start") ++
-      |  (ref"B10" := "End") ++
-      |  ref"A10:B10".merge ++
-      |  ref"A12:C14".remove  // Remove entire range
-      |""".stripMargin)
+// === Batch operations ===
+println("\n=== Batch Patch Construction ===")
 
-    // === Batch operations ===
-    println("\n=== Batch Patch Construction ===")
+val batchPatch = PatchBatch(
+  ref"E1" := "Batch",
+  ref"E2" := "Operations",
+  ref"E3" := "Rock!",
+  ref"E1:E3".merge
+)
 
-    val batchPatch = PatchBatch(
-      ref"E1" := "Batch",
-      ref"E2" := "Operations",
-      ref"E3" := "Rock!",
-      ref"E1:E3".merge
-    )
+println("""val patch = PatchBatch(
+  |  ref"E1" := "Batch",
+  |  ref"E2" := "Operations",
+  |  ref"E3" := "Rock!",
+  |  ref"E1:E3".merge
+  |)
+  |""".stripMargin)
 
-    println("""val patch = PatchBatch(
-      |  ref"E1" := "Batch",
-      |  ref"E2" := "Operations",
-      |  ref"E3" := "Rock!",
-      |  ref"E1:E3".merge
-      |)
-      |""".stripMargin)
+println("\n✓ All patches composed without type ascription!")
 
-    println("\n✓ All patches composed without type ascription!")
+// === Write to Excel file ===
+println("\n=== Write to Excel File ===")
 
-    // === Write to Excel file ===
-    println("\n=== Write to Excel File ===")
+// Build a complete workbook with the complex patch - all operations are infallible
+val reportSheet = Patch.applyPatch(Sheet("Sales Report"), complexPatch)
+val workbook = Workbook(Vector(reportSheet))
 
-    // Build a complete workbook with the complex patch
-    val finalWorkbookResult = for
-      reportSheet <- Sheet("Sales Report")
-      populatedSheet <- Patch.applyPatch(reportSheet, complexPatch)
-    yield Workbook(Vector(populatedSheet))
+val outputPath = Paths.get("patch-demo-output.xlsx")
+val excel = ExcelIO.instance[IO]
 
-    finalWorkbookResult match
-      case Right(workbook) =>
-        val outputPath = Paths.get("patch-demo-output.xlsx")
-        val excel = ExcelIO.instance[IO]
+println(s"Writing workbook to: ${outputPath.toAbsolutePath}")
 
-        println(s"Writing workbook to: ${outputPath.toAbsolutePath}")
+// Write the file using Cats Effect IO
+val writeResult = excel.write(workbook, outputPath).attempt.unsafeRunSync()
 
-        // Write the file using Cats Effect IO
-        val writeResult = excel.write(workbook, outputPath).attempt.unsafeRunSync()
-
-        writeResult match
-          case Right(_) =>
-            println(s"✓ Successfully wrote Excel file!")
-            println(s"  Location: ${outputPath.toAbsolutePath}")
-            println(s"  Sheets: ${workbook.sheets.size}")
-            println(s"  Cells: ${workbook.sheets.head.cellCount}")
-          case Left(err) =>
-            println(s"✗ Error writing file: ${err.getMessage}")
-
-      case Left(err) =>
-        println(s"✗ Error creating workbook: ${err.message}")
-
+writeResult match
+  case Right(_) =>
+    println(s"✓ Successfully wrote Excel file!")
+    println(s"  Location: ${outputPath.toAbsolutePath}")
+    println(s"  Sheets: ${workbook.sheets.size}")
+    println(s"  Cells: ${workbook.sheets.head.cellCount}")
   case Left(err) =>
-    println(s"✗ Error creating sheet: ${err.message}")
+    println(s"✗ Error writing file: ${err.getMessage}")
 
 println("\n=== Key Takeaways ===")
 println("1. Import com.tjclp.xl.* (unified import includes DSL, macros, domain model)")

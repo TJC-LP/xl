@@ -33,7 +33,7 @@ println("=" * 80)
 println()
 
 // Build the financial model sheet
-val model = Sheet(name = SheetName.unsafe("P&L"))
+val model = Sheet("P&L")
   // ===== Year Headers =====
   .put(ref"B1", "2024")
   .put(ref"C1", "2025")
@@ -143,13 +143,12 @@ val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
 val modelWithFormatting = model
   // Currency formatting for all financial values (except percentages)
   .style(ref"B3:D3", currencyStyle)    // Revenue
-  .flatMap(_.style(ref"B4:D5", currencyStyle))    // COGS, Gross Profit
-  .flatMap(_.style(ref"B7:D10", currencyStyle))   // OpEx
-  .flatMap(_.style(ref"B12:D14", currencyStyle))  // EBITDA, D&A, Operating Income
-  .flatMap(_.style(ref"B15:D16", currencyStyle))  // Tax, Net Income
+  .style(ref"B4:D5", currencyStyle)    // COGS, Gross Profit
+  .style(ref"B7:D10", currencyStyle)   // OpEx
+  .style(ref"B12:D14", currencyStyle)  // EBITDA, D&A, Operating Income
+  .style(ref"B15:D16", currencyStyle)  // Tax, Net Income
   // Percent formatting for margins and growth
-  .flatMap(_.style(ref"B19:D22", percentStyle))  // All margin and growth percentages
-  .unsafe
+  .style(ref"B19:D22", percentStyle)   // All margin and growth percentages
 
 println("✓ Financial model built with 50+ formulas and formatting")
 println("  - 3-year income statement (2024-2026)")
@@ -172,8 +171,8 @@ val results = modelWithFormatting.evaluateWithDependencyCheck() match
     val duration = (endTime - startTime) / 1_000_000.0
     println(s"✓ All ${r.size} formulas evaluated successfully in ${duration}ms")
     r
-  case Left(error) =>
-    println(s"✗ Evaluation error: ${error.message}")
+  case Left(err) =>
+    println(s"✗ Evaluation error: ${err.message}")
     sys.exit(1)
 
 // Replace formulas with evaluated values (for display)

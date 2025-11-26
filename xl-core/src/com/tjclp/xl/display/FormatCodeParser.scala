@@ -5,6 +5,7 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 import scala.collection.mutable.ArrayBuffer
+import scala.util.boundary, boundary.break
 
 /**
  * Parser for Excel custom number format codes.
@@ -24,6 +25,12 @@ import scala.collection.mutable.ArrayBuffer
  *
  * @since 0.2.0
  */
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.Var",
+    "org.wartremover.warts.While"
+  )
+)
 object FormatCodeParser:
 
   // ========== AST Types ==========
@@ -140,26 +147,27 @@ object FormatCodeParser:
    *   Either a parse error message or the parsed FormatCode
    */
   def parse(code: String): Either[String, FormatCode] =
-    if code.isEmpty then return Left("Empty format code")
+    boundary:
+      if code.isEmpty then break(Left("Empty format code"))
 
-    val sections = splitSections(code)
-    if sections.isEmpty then return Left("No format sections found")
+      val sections = splitSections(code)
+      if sections.isEmpty then break(Left("No format sections found"))
 
-    // Parse each section
-    val parsedSections = sections.map(parseSection)
-    val errors = parsedSections.collect { case Left(e) => e }
-    if errors.nonEmpty then return Left(errors.mkString("; "))
+      // Parse each section
+      val parsedSections = sections.map(parseSection)
+      val errors = parsedSections.collect { case Left(e) => e }
+      if errors.nonEmpty then break(Left(errors.mkString("; ")))
 
-    val validSections = parsedSections.collect { case Right(s) => s }
+      val validSections = parsedSections.collect { case Right(s) => s }
 
-    // Build FormatCode from 1-4 sections
-    validSections match
-      case Vector(pos) => Right(FormatCode(pos))
-      case Vector(pos, neg) => Right(FormatCode(pos, Some(neg)))
-      case Vector(pos, neg, zero) => Right(FormatCode(pos, Some(neg), Some(zero)))
-      case Vector(pos, neg, zero, txt) =>
-        Right(FormatCode(pos, Some(neg), Some(zero), Some(txt)))
-      case _ => Left(s"Invalid number of sections: ${validSections.size}")
+      // Build FormatCode from 1-4 sections
+      validSections match
+        case Vector(pos) => Right(FormatCode(pos))
+        case Vector(pos, neg) => Right(FormatCode(pos, Some(neg)))
+        case Vector(pos, neg, zero) => Right(FormatCode(pos, Some(neg), Some(zero)))
+        case Vector(pos, neg, zero, txt) =>
+          Right(FormatCode(pos, Some(neg), Some(zero), Some(txt)))
+        case _ => Left(s"Invalid number of sections: ${validSections.size}")
 
   /**
    * Split format code into sections by semicolon. Respects quoted strings and brackets.
@@ -197,28 +205,29 @@ object FormatCodeParser:
    * Parse a single format section.
    */
   private def parseSection(section: String): Either[String, FormatSection] =
-    var remaining = section
-    var condition: Option[Condition] = None
+    boundary:
+      var remaining = section
+      var condition: Option[Condition] = None
 
-    // Extract leading conditions like [Red], [>100], [$-409]
-    while remaining.startsWith("[") do
-      val endBracket = remaining.indexOf(']')
-      if endBracket < 0 then return Left(s"Unclosed bracket in: $section")
+      // Extract leading conditions like [Red], [>100], [$-409]
+      while remaining.startsWith("[") do
+        val endBracket = remaining.indexOf(']')
+        if endBracket < 0 then break(Left(s"Unclosed bracket in: $section"))
 
-      val bracketContent = remaining.substring(1, endBracket)
-      parseCondition(bracketContent) match
-        case Some(cond) =>
-          condition = Some(cond)
-        case None =>
-          // Unknown bracket content - might be elapsed time [h], [m], [s]
-          // Pass through as part of pattern
-          val pattern = parsePattern(remaining)
-          return Right(FormatSection(condition, pattern))
+        val bracketContent = remaining.substring(1, endBracket)
+        parseCondition(bracketContent) match
+          case Some(cond) =>
+            condition = Some(cond)
+          case None =>
+            // Unknown bracket content - might be elapsed time [h], [m], [s]
+            // Pass through as part of pattern
+            val pattern = parsePattern(remaining)
+            break(Right(FormatSection(condition, pattern)))
 
-      remaining = remaining.substring(endBracket + 1)
+        remaining = remaining.substring(endBracket + 1)
 
-    val pattern = parsePattern(remaining)
-    Right(FormatSection(condition, pattern))
+      val pattern = parsePattern(remaining)
+      Right(FormatSection(condition, pattern))
 
   /**
    * Parse a condition from bracket content.
@@ -229,28 +238,29 @@ object FormatCodeParser:
    *   Some(condition) if recognized, None if unknown
    */
   private def parseCondition(content: String): Option[Condition] =
-    val lower = content.toLowerCase
-    // Colors
-    val colors = Set("red", "blue", "green", "yellow", "cyan", "magenta", "black", "white")
-    if colors.contains(lower) then return Some(Condition.Color(content.capitalize))
+    boundary:
+      val lower = content.toLowerCase
+      // Colors
+      val colors = Set("red", "blue", "green", "yellow", "cyan", "magenta", "black", "white")
+      if colors.contains(lower) then break(Some(Condition.Color(content.capitalize)))
 
-    // Comparisons: >100, <0, =5, >=0, <=100, <>0
-    val compPattern = "^([<>=]{1,2})(-?[0-9.]+)$".r
-    content match
-      case compPattern(op, num) =>
-        scala.util.Try(BigDecimal(num)).toOption.map(n => Condition.Compare(op, n))
-      case _ =>
-        // Locale codes: $-409, $€-407
-        if content.startsWith("$") then
-          val rest = content.drop(1)
-          val dashIdx = rest.indexOf('-')
-          if dashIdx >= 0 then
-            val symbol = if dashIdx > 0 then Some(rest.substring(0, dashIdx)) else None
-            val code = rest.substring(dashIdx + 1)
-            Some(Condition.Locale(code, symbol))
-          else if rest.nonEmpty then Some(Condition.Locale(rest, None))
+      // Comparisons: >100, <0, =5, >=0, <=100, <>0
+      val compPattern = "^([<>=]{1,2})(-?[0-9.]+)$".r
+      content match
+        case compPattern(op, num) =>
+          scala.util.Try(BigDecimal(num)).toOption.map(n => Condition.Compare(op, n))
+        case _ =>
+          // Locale codes: $-409, $€-407
+          if content.startsWith("$") then
+            val rest = content.drop(1)
+            val dashIdx = rest.indexOf('-')
+            if dashIdx >= 0 then
+              val symbol = if dashIdx > 0 then Some(rest.substring(0, dashIdx)) else None
+              val code = rest.substring(dashIdx + 1)
+              Some(Condition.Locale(code, symbol))
+            else if rest.nonEmpty then Some(Condition.Locale(rest, None))
+            else None
           else None
-        else None
 
   /**
    * Parse the pattern portion of a format section.

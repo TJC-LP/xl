@@ -79,10 +79,7 @@ class PatchSpec extends ScalaCheckSuite:
       val leftResult = Patch.applyPatch(sheet, left)
       val rightResult = Patch.applyPatch(sheet, right)
 
-      (leftResult, rightResult) match
-        case (Right(s1), Right(s2)) =>
-          assertEquals(s1.cells, s2.cells)
-        case _ => fail("Both should succeed")
+      assertEquals(leftResult.cells, rightResult.cells)
 
       true
     }
@@ -96,10 +93,7 @@ class PatchSpec extends ScalaCheckSuite:
     val value = CellValue.Text("Hello")
     val patch = Patch.Put(ref, value)
 
-    val result = Patch.applyPatch(sheet, patch)
-    assert(result.isRight)
-
-    val updated = result.getOrElse(fail("Should succeed"))
+    val updated = Patch.applyPatch(sheet, patch)
     assertEquals(updated(ref).value, value)
   }
 
@@ -110,10 +104,8 @@ class PatchSpec extends ScalaCheckSuite:
 
     // First put a cell, then style it
     val patch = (Patch.Put(ref, CellValue.Text("Test")): Patch) |+| (Patch.SetStyle(ref, styleId): Patch)
-    val result = Patch.applyPatch(sheet, patch)
+    val updated = Patch.applyPatch(sheet, patch)
 
-    assert(result.isRight)
-    val updated = result.getOrElse(fail("Should succeed"))
     assertEquals(updated(ref).styleId, Some(styleId))
   }
 
@@ -124,10 +116,8 @@ class PatchSpec extends ScalaCheckSuite:
 
     val ref = ARef.from1(1, 1)
     val patch = Patch.ClearStyle(ref)
-    val result = Patch.applyPatch(sheet, patch)
+    val updated = Patch.applyPatch(sheet, patch)
 
-    assert(result.isRight)
-    val updated = result.getOrElse(fail("Should succeed"))
     assertEquals(updated(ref).styleId, None)
   }
 
@@ -136,19 +126,16 @@ class PatchSpec extends ScalaCheckSuite:
     val sheet = emptySheet.put(ref"A1", CellValue.Text("Header"))
 
     val patch = Patch.SetCellStyle(ref"A1", boldStyle)
-    val result = sheet.put(patch)
+    val updated = sheet.put(patch)
 
-    assert(result.isRight)
-    result.foreach { updated =>
-      // Style should be registered
-      assertEquals(updated.styleRegistry.size, 2) // default + bold
+    // Style should be registered
+    assertEquals(updated.styleRegistry.size, 2) // default + bold
 
-      // Cell should have styleId
-      assert(updated(ref"A1").styleId.isDefined)
+    // Cell should have styleId
+    assert(updated(ref"A1").styleId.isDefined)
 
-      // Can retrieve original style
-      assertEquals(updated.getCellStyle(ref"A1"), Some(boldStyle))
-    }
+    // Can retrieve original style
+    assertEquals(updated.getCellStyle(ref"A1"), Some(boldStyle))
   }
 
   test("SetCellStyle deduplicates identical styles") {
@@ -161,17 +148,15 @@ class PatchSpec extends ScalaCheckSuite:
       (Patch.SetCellStyle(ref"A1", redStyle): Patch) |+|
         (Patch.SetCellStyle(ref"A2", redStyle): Patch)
 
-    val result = sheet.put(patch)
-    result.foreach { updated =>
-      // Should only have 2 styles (default + red)
-      assertEquals(updated.styleRegistry.size, 2)
+    val updated = sheet.put(patch)
+    // Should only have 2 styles (default + red)
+    assertEquals(updated.styleRegistry.size, 2)
 
-      // Both cells should reference same style index
-      assertEquals(
-        updated(ref"A1").styleId,
-        updated(ref"A2").styleId
-      )
-    }
+    // Both cells should reference same style index
+    assertEquals(
+      updated(ref"A1").styleId,
+      updated(ref"A2").styleId
+    )
   }
 
   test("Merge patch adds merged range") {
@@ -179,10 +164,7 @@ class PatchSpec extends ScalaCheckSuite:
     val range = CellRange(ARef.from1(1, 1), ARef.from1(2, 2))
     val patch = Patch.Merge(range)
 
-    val result = Patch.applyPatch(sheet, patch)
-    assert(result.isRight)
-
-    val updated = result.getOrElse(fail("Should succeed"))
+    val updated = Patch.applyPatch(sheet, patch)
     assert(updated.mergedRanges.contains(range))
   }
 
@@ -191,10 +173,7 @@ class PatchSpec extends ScalaCheckSuite:
     val sheet = emptySheet.merge(range)
     val patch = Patch.Unmerge(range)
 
-    val result = Patch.applyPatch(sheet, patch)
-    assert(result.isRight)
-
-    val updated = result.getOrElse(fail("Should succeed"))
+    val updated = Patch.applyPatch(sheet, patch)
     assert(!updated.mergedRanges.contains(range))
   }
 
@@ -203,10 +182,7 @@ class PatchSpec extends ScalaCheckSuite:
     val sheet = emptySheet.put(ref, CellValue.Text("Test"))
     val patch = Patch.Remove(ref)
 
-    val result = Patch.applyPatch(sheet, patch)
-    assert(result.isRight)
-
-    val updated = result.getOrElse(fail("Should succeed"))
+    val updated = Patch.applyPatch(sheet, patch)
     assert(!updated.contains(ref))
   }
 
@@ -216,10 +192,7 @@ class PatchSpec extends ScalaCheckSuite:
     val props = ColumnProperties(width = Some(20.0), hidden = false)
     val patch = Patch.SetColumnProperties(col, props)
 
-    val result = Patch.applyPatch(sheet, patch)
-    assert(result.isRight)
-
-    val updated = result.getOrElse(fail("Should succeed"))
+    val updated = Patch.applyPatch(sheet, patch)
     assertEquals(updated.getColumnProperties(col), props)
   }
 
@@ -229,10 +202,7 @@ class PatchSpec extends ScalaCheckSuite:
     val props = RowProperties(height = Some(30.0), hidden = true)
     val patch = Patch.SetRowProperties(row, props)
 
-    val result = Patch.applyPatch(sheet, patch)
-    assert(result.isRight)
-
-    val updated = result.getOrElse(fail("Should succeed"))
+    val updated = Patch.applyPatch(sheet, patch)
     assertEquals(updated.getRowProperties(row), props)
   }
 
@@ -248,10 +218,7 @@ class PatchSpec extends ScalaCheckSuite:
     )
 
     val batch = Patch.Batch(patches)
-    val result = Patch.applyPatch(sheet, batch)
-
-    assert(result.isRight)
-    val updated = result.getOrElse(fail("Should succeed"))
+    val updated = Patch.applyPatch(sheet, batch)
 
     assertEquals(updated(r1).value, CellValue.Text("A1"))
     assertEquals(updated(r1).styleId, Some(StyleId(1)))
@@ -265,8 +232,8 @@ class PatchSpec extends ScalaCheckSuite:
       val sheet = emptySheet
       val patch = Patch.Put(ref, value)
 
-      val once = Patch.applyPatch(sheet, patch).getOrElse(fail("Should succeed"))
-      val twice = Patch.applyPatch(once, patch).getOrElse(fail("Should succeed"))
+      val once = Patch.applyPatch(sheet, patch)
+      val twice = Patch.applyPatch(once, patch)
 
       assertEquals(once.cells, twice.cells)
       true
@@ -278,8 +245,8 @@ class PatchSpec extends ScalaCheckSuite:
       val sheet = emptySheet.put(ref, CellValue.Empty)
       val patch = Patch.SetStyle(ref, StyleId(styleId))
 
-      val once = Patch.applyPatch(sheet, patch).getOrElse(fail("Should succeed"))
-      val twice = Patch.applyPatch(once, patch).getOrElse(fail("Should succeed"))
+      val once = Patch.applyPatch(sheet, patch)
+      val twice = Patch.applyPatch(once, patch)
 
       assertEquals(once.cells, twice.cells)
       true
@@ -291,8 +258,8 @@ class PatchSpec extends ScalaCheckSuite:
       val sheet = emptySheet
       val patch = Patch.Merge(range)
 
-      val once = Patch.applyPatch(sheet, patch).getOrElse(fail("Should succeed"))
-      val twice = Patch.applyPatch(once, patch).getOrElse(fail("Should succeed"))
+      val once = Patch.applyPatch(sheet, patch)
+      val twice = Patch.applyPatch(once, patch)
 
       assertEquals(once.mergedRanges, twice.mergedRanges)
       true
@@ -306,10 +273,8 @@ class PatchSpec extends ScalaCheckSuite:
     val ref = ARef.from1(1, 1)
 
     val patch = (Patch.Put(ref, CellValue.Text("First")): Patch) |+| (Patch.Put(ref, CellValue.Text("Second")): Patch)
-    val result = Patch.applyPatch(sheet, patch)
+    val updated = Patch.applyPatch(sheet, patch)
 
-    assert(result.isRight)
-    val updated = result.getOrElse(fail("Should succeed"))
     assertEquals(updated(ref).value, CellValue.Text("Second"))
   }
 
@@ -318,10 +283,8 @@ class PatchSpec extends ScalaCheckSuite:
     val ref = ARef.from1(1, 1)
 
     val patch = (Patch.SetStyle(ref, StyleId(1)): Patch) |+| (Patch.SetStyle(ref, StyleId(2)): Patch)
-    val result = Patch.applyPatch(sheet, patch)
+    val updated = Patch.applyPatch(sheet, patch)
 
-    assert(result.isRight)
-    val updated = result.getOrElse(fail("Should succeed"))
     assertEquals(updated(ref).styleId, Some(StyleId(2)))
   }
 
@@ -332,10 +295,7 @@ class PatchSpec extends ScalaCheckSuite:
     val ref = ARef.from1(1, 1)
     val patch = Patch.Put(ref, CellValue.Text("Test"))
 
-    val result = sheet.put(patch)
-    assert(result.isRight)
-
-    val updated = result.getOrElse(fail("Should succeed"))
+    val updated = sheet.put(patch)
     assertEquals(updated(ref).value, CellValue.Text("Test"))
   }
 
@@ -344,7 +304,7 @@ class PatchSpec extends ScalaCheckSuite:
     val r1 = ARef.from1(1, 1)
     val r2 = ARef.from1(2, 1)
 
-    val result = sheet.put(
+    val updated = sheet.put(
       Patch.Batch(
         Vector(
           Patch.Put(r1, CellValue.Text("A1")),
@@ -353,8 +313,6 @@ class PatchSpec extends ScalaCheckSuite:
       )
     )
 
-    assert(result.isRight)
-    val updated = result.getOrElse(fail("Should succeed"))
     assertEquals(updated(r1).value, CellValue.Text("A1"))
     assertEquals(updated(r2).value, CellValue.Number(42))
   }

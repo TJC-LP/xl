@@ -17,7 +17,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.unsafe.*
 
-val sheet = Sheet(name = SheetName.unsafe("Dependencies"))
+val sheet = Sheet("Dependencies")
   // Data cells (these will show as dependents of formulas)
   .put(ref"A1", 100)
   .put(ref"A2", 200)

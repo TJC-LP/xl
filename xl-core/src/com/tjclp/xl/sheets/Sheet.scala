@@ -26,7 +26,8 @@ final case class Sheet(
   defaultRowHeight: Option[Double] = None,
   styleRegistry: StyleRegistry = StyleRegistry.default,
   comments: Map[ARef, Comment] = Map.empty,
-  tables: Map[String, TableSpec] = Map.empty
+  tables: Map[String, TableSpec] = Map.empty,
+  pageSetup: Option[PageSetup] = None
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -92,21 +93,22 @@ final case class Sheet(
     putSingle(ref, value)
 
   /**
-   * Put a single value at string reference (runtime parsing).
+   * Put a single value at string reference.
    *
-   * Same as put(ARef, A) but accepts string A1 notation for refs.
+   * For string literals ("A1"), validates at compile time and returns `Sheet` directly. For runtime
+   * strings, validates at runtime and returns `XLResult[Sheet]`.
    *
    * Examples:
    * {{{
-   * sheet.put("A1", "Hello")
-   * sheet.put("B2", 42)
+   * sheet.put("A1", "Hello")      // Literal → Sheet (compile-time validated)
+   * sheet.put(userInput, 42)      // Variable → XLResult[Sheet] (runtime)
    * }}}
    */
   @annotation.targetName("putString")
-  def put[A: CellWriter](ref: String, value: A): XLResult[Sheet] =
-    ARef.parse(ref) match
-      case Left(err) => Left(XLError.InvalidCellRef(ref, err))
-      case Right(aref) => Right(putSingle(aref, value))
+  transparent inline def put[A](inline ref: String, value: A)(using
+    inline cw: CellWriter[A]
+  ): Sheet | XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.PutLiteral.putImpl('{ this }, 'ref, 'value, 'cw) }
 
   /**
    * Put a single value at reference with explicit style.
@@ -129,12 +131,15 @@ final case class Sheet(
 
   /**
    * Put a single value at string reference with explicit style.
+   *
+   * For string literals, validates at compile time and returns `Sheet` directly. For runtime
+   * strings, validates at runtime and returns `XLResult[Sheet]`.
    */
   @annotation.targetName("putStringStyled")
-  def put[A: CellWriter](ref: String, value: A, style: CellStyle): XLResult[Sheet] =
-    ARef.parse(ref) match
-      case Left(err) => Left(XLError.InvalidCellRef(ref, err))
-      case Right(aref) => Right(put(aref, value, style))
+  transparent inline def put[A](inline ref: String, value: A, style: CellStyle)(using
+    inline cw: CellWriter[A]
+  ): Sheet | XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.PutLiteral.putStyledImpl('{ this }, 'ref, 'value, 'style, 'cw) }
 
   // Merge existing style with codec-inferred style
   // Preserves existing properties; codec NumFmt overrides only when existing is General
@@ -284,23 +289,21 @@ final case class Sheet(
   /**
    * Apply a patch to this sheet.
    *
-   * Patches enable declarative composition of updates (Put, SetStyle, Merge, etc.). Returns Either
-   * for operations that can fail (e.g., merge overlaps, invalid ranges).
+   * Patches enable declarative composition of updates (Put, SetStyle, Merge, etc.). This operation
+   * is infallible since patches contain only validated references.
    *
    * Example:
    * {{{
    * val patch = (ref"A1" := "Title") ++ range"A1:C1".merge
-   * sheet.put(patch) match
-   *   case Right(updated) => updated
-   *   case Left(err) => handleError(err)
+   * val updated = sheet.put(patch)
    * }}}
    *
    * @param patch
    *   The patch to apply
    * @return
-   *   Either an updated sheet or an error
+   *   The updated sheet
    */
-  def put(patch: com.tjclp.xl.patch.Patch): XLResult[Sheet] =
+  def put(patch: com.tjclp.xl.patch.Patch): Sheet =
     com.tjclp.xl.patch.Patch.applyPatch(this, patch)
 
   /** Remove cell at reference */
@@ -335,6 +338,16 @@ final case class Sheet(
   /** Add comment to cell */
   def comment(ref: ARef, comment: Comment): Sheet =
     copy(comments = comments.updated(ref, comment))
+
+  /**
+   * Add comment to cell (string variant).
+   *
+   * When called with a string literal, the cell reference is validated at compile time and returns
+   * `Sheet` directly. Invalid literals fail to compile. Runtime strings return `XLResult[Sheet]`.
+   */
+  @annotation.targetName("commentString")
+  transparent inline def comment(inline ref: String, cmt: Comment): Sheet | XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.PutLiteral.commentImpl('{ this }, 'ref, 'cmt) }
 
   /** Get comment at cell reference */
   def getComment(ref: ARef): Option[Comment] =
@@ -424,13 +437,28 @@ final case class Sheet(
     copy(mergedRanges = Set.empty)
 
 object Sheet:
-  /** Create empty sheet with name */
-  def apply(name: String): XLResult[Sheet] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .map(sn => Sheet(sn))
+  /**
+   * Create empty sheet with name.
+   *
+   * When called with a string literal, the name is validated at compile time and returns `Sheet`
+   * directly. When called with a runtime expression, validation occurs at runtime and returns
+   * `XLResult[Sheet]`.
+   *
+   * Validation rules (Excel sheet name constraints):
+   *   - Cannot be empty
+   *   - Maximum 31 characters
+   *   - Cannot contain: : \ / ? * [ ]
+   *
+   * Examples:
+   *   - `Sheet("Sales")` → `Sheet` (compile-time validated)
+   *   - `Sheet(userInput)` → `XLResult[Sheet]` (runtime validated)
+   */
+  @annotation.targetName("applyStringLiteral")
+  transparent inline def apply(inline name: String): Sheet | XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.SheetLiteral.sheetImpl('name) }
 
   /** Create empty sheet with validated name */
+  @annotation.targetName("applySheetName")
   def apply(name: SheetName): Sheet =
     Sheet(
       name,

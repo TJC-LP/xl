@@ -47,9 +47,8 @@ test("Hero Example - Financial Report") {
     .put("A4", "Margin")       .put("B4", fx"=B3/B1")
     .style("A1:A4", CellStyle.default.bold)
     .style("B4", CellStyle.default.percent)
-    .unsafe
 
-  Excel.write(Workbook.empty.put(report).unsafe, "/tmp/readme-hero.xlsx")
+  Excel.write(Workbook.empty.put(report), "/tmp/readme-hero.xlsx")
   assert(report.cells.size >= 8, s"Expected at least 8 cells, got ${report.cells.size}")
   assert(report.cell("A1").isDefined, "A1 should exist")
 }
@@ -62,8 +61,7 @@ test("Easy Mode - Read/Modify/Write") {
   val sheet = Sheet("Sheet1")
     .put("A1", "Test")
     .put("B1", 42)
-    .unsafe
-  val workbook = Workbook.empty.put(sheet).unsafe
+  val workbook = Workbook.empty.put(sheet)
   Excel.write(workbook, "/tmp/readme-easymode-input.xlsx")
 
   // Now test read/modify/write cycle (the README example)
@@ -74,7 +72,6 @@ test("Easy Mode - Read/Modify/Write") {
       .put("A1", "Updated!")
       .put("B1", 42)
       .style("A1:B1", CellStyle.default.bold)
-      .unsafe
   )
 
   Excel.write(updated, "/tmp/readme-easymode-output.xlsx")
@@ -93,7 +90,6 @@ test("Patch DSL - Declarative Sheet") {
       (ref"D1" := "Total")     ++ (ref"D2" := fx"=B2*C2") ++ (ref"D3" := fx"=B3*C3") ++
       ref"A1:D1".styled(CellStyle.default.bold)
     )
-    .unsafe
 
   assert(sheet.cells.size >= 11, s"Expected at least 11 cells, got ${sheet.cells.size}")
   assert(sheet.cell("D2").map(_.value).exists(_.isInstanceOf[CellValue.Formula]), "D2 should be a formula")
@@ -162,7 +158,7 @@ test("Fluent Style DSL") {
 test("Rich Text - Multi-Format Cell") {
   val sheet = Sheet("RichText")
   val text = "Error: ".bold.red + "Fix this!".underline
-  val richSheet = sheet.put("A1", text).unsafe
+  val richSheet = sheet.put("A1", text)
 
   assert(richSheet.cell("A1").isDefined, "A1 should exist")
 }
@@ -179,7 +175,7 @@ test("Patch Composition") {
     ref"A1".styled(headerStyle) ++
     ref"A1:C1".merge
 
-  val result = sheet.put(patch).unsafe
+  val result = sheet.put(patch)
 
   assert(result.cell("A1").isDefined, "A1 should exist")
   assert(result.mergedRanges.nonEmpty, "Should have merged range")
@@ -198,11 +194,10 @@ test("Formula System - Parsing") {
 }
 
 test("Formula System - Evaluation with Dependency Check") {
-  val sheet = Sheet(SheetName.unsafe("FormulaTest"))
+  val sheet = Sheet("FormulaTest")
     .put("A1", 100)
     .put("B1", 200)
     .put("C1", fx"=A1+B1")
-    .unsafe
 
   // Evaluate with cycle detection
   sheet.evaluateWithDependencyCheck() match
@@ -213,11 +208,10 @@ test("Formula System - Evaluation with Dependency Check") {
 }
 
 test("Formula System - Dependency Analysis") {
-  val sheet = Sheet(SheetName.unsafe("DepTest"))
+  val sheet = Sheet("DepTest")
     .put("A1", 100)
     .put("B1", fx"=A1*2")
     .put("C1", fx"=B1+A1")
-    .unsafe
 
   val graph = DependencyGraph.fromSheet(sheet)
   val precedents = DependencyGraph.precedents(graph, ref"B1")
@@ -237,7 +231,6 @@ test("Formula Roundtrip - Write and Read Back") {
     .put("B1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(200)))))
     .put("B2", CellValue.Formula("A2*2", Some(CellValue.Number(BigDecimal(400)))))
     .put("B3", CellValue.Formula("SUM(A1:A3)", Some(CellValue.Number(BigDecimal(600)))))
-    .unsafe
 
   val workbook = Workbook.empty.put(sheet).remove("Sheet1").unsafe
 
@@ -290,7 +283,6 @@ test("Final Workbook Write") {
     .put("A4", "Margin")       .put("B4", fx"=B3/B1")
     .style("A1:A4", CellStyle.default.bold)
     .style("B4", CellStyle.default.percent)
-    .unsafe
 
   val salesSheet = Sheet("Sales")
     .put(
@@ -299,7 +291,6 @@ test("Final Workbook Write") {
       (ref"A3" := "Gadget")    ++ (ref"B3" := 29.99)     ++ (ref"C3" := 50) ++
       (ref"D1" := "Total")     ++ (ref"D2" := fx"=B2*C2") ++ (ref"D3" := fx"=B3*C3")
     )
-    .unsafe
 
   val workbook = Workbook.empty
     .put(heroSheet)

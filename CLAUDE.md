@@ -98,7 +98,10 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 ./mill __.reformat         # Format (Scalafmt 3.10.1)
 ./mill __.checkFormat      # CI check
 ./mill clean               # Clean artifacts
+make install               # Install xl CLI to ~/.local/bin/xl
 ```
+
+**IMPORTANT**: After modifying CLI code, always run `make install` to update the installed CLI. Do NOT manually copy jars.
 
 ## Code Style
 

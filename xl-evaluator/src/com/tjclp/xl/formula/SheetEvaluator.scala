@@ -82,8 +82,11 @@ object SheetEvaluator:
     /**
      * Evaluate cell at ref (if it contains formula).
      *
-     * If cell contains CellValue.Formula, parses and evaluates it. Otherwise returns cell value
-     * unchanged.
+     * If cell contains CellValue.Formula, parses and evaluates it against the current sheet state.
+     * Formula dependencies that are themselves formulas will be referenced as-is (unevaluated).
+     *
+     * For formulas with dependencies on other formulas, use evaluateWithDependencyCheck() instead,
+     * which evaluates all dependencies in correct order.
      *
      * @param ref
      *   Cell reference to evaluate
@@ -94,8 +97,8 @@ object SheetEvaluator:
      *
      * Example:
      * {{{
-     * // A1 contains "=B1+C1"
-     * sheet.evaluateCell(ref"A1") // Right(CellValue.Number(result))
+     * // A1 contains "=B1+C1" where B1=10, C1=20
+     * sheet.evaluateCell(ref"A1") // Right(CellValue.Number(30))
      *
      * // D1 contains plain number
      * sheet.evaluateCell(ref"D1") // Right(CellValue.Number(42)) - unchanged
@@ -207,7 +210,8 @@ object SheetEvaluator:
   /**
    * Convert typed TExpr evaluation result to CellValue.
    *
-   * Handles all result types: BigDecimal, String, Boolean, Int, LocalDate, LocalDateTime.
+   * Handles all result types: BigDecimal, String, Boolean, Int, LocalDate, LocalDateTime. Special
+   * case: (BigDecimal, Int) tuple from AVERAGE (sum, count) → computes division.
    */
   private def toCellValue(result: Any): CellValue =
     result match
@@ -217,6 +221,10 @@ object SheetEvaluator:
       case i: Int => CellValue.Number(BigDecimal(i))
       case ld: LocalDate => CellValue.DateTime(ld.atStartOfDay())
       case ldt: LocalDateTime => CellValue.DateTime(ldt)
+      case (sum: BigDecimal, count: Int) =>
+        // AVERAGE function returns (sum, count) tuple - compute the average
+        if count == 0 then CellValue.Number(BigDecimal(0))
+        else CellValue.Number(sum / count)
       case other =>
         // Fallback for unexpected types (should never happen with well-typed TExpr)
         CellValue.Text(other.toString)

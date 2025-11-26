@@ -80,8 +80,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -133,8 +132,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Changed")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -179,12 +177,11 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
   test("workbook without SourceContext uses full regeneration") {
     // Create workbook programmatically (no SourceContext)
+    val initial = Workbook("TestSheet")
     val result = for
-      wb <- Workbook("TestSheet")
-      sheet <- wb("TestSheet")
+      sheet <- initial("TestSheet")
       updatedSheet = sheet.put(ref"A1" -> "Test")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield initial.put(updatedSheet)
 
     val wb = result.fold(err => fail(s"Failed to create workbook: $err"), identity)
 
@@ -217,8 +214,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"B2" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed: $err"), identity)
 
@@ -254,8 +250,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Updated Text")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -296,9 +291,9 @@ class XlsxWriterSurgicalSpec extends FunSuite:
   }
 
   test("comments are preserved byte-for-byte on unmodified sheets during surgical write") {
-    val sheet1 = Sheet("Sheet1").getOrElse(fail("Sheet1 creation failed"))
+    val sheet1 = Sheet("Sheet1")
       .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Note", Some("Author")))
-    val sheet2 = Sheet("Sheet2").getOrElse(fail("Sheet2 creation failed"))
+    val sheet2 = Sheet("Sheet2")
       .put(ref"A1" -> "Data")
       .unsafe
 
@@ -311,8 +306,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val modified = for
       s2 <- withContext("Sheet2")
       updatedS2 = s2.put(ref"B1" -> "Modified")
-      wb2 <- withContext.put(updatedS2)
-    yield wb2
+    yield withContext.put(updatedS2)
     val modifiedWb = modified.fold(err => fail(s"Modification failed: $err"), identity)
 
     val outputPath = Files.createTempFile("comments-output", ".xlsx")

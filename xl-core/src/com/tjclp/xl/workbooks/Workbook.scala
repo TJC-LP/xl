@@ -29,12 +29,17 @@ final case class Workbook(
       .find(_.name == name)
       .toRight(XLError.SheetNotFound(name.value))
 
-  /** Get sheet by name string */
+  /**
+   * Get sheet by name string.
+   *
+   * When called with a string literal, the name format is validated at compile time. Invalid
+   * literals like "Invalid:Name" fail to compile. Runtime strings are validated at runtime.
+   *
+   * Always returns XLResult[Sheet] since sheet existence is runtime-dependent.
+   */
   @annotation.targetName("applyByString")
-  def apply(name: String): XLResult[Sheet] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err): XLError)
-      .flatMap((sheetName: SheetName) => apply(sheetName))
+  transparent inline def apply(inline name: String): XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.applyImpl('{ this }, 'name) }
 
   /**
    * Access cell(s) using unified reference type.
@@ -62,58 +67,57 @@ final case class Workbook(
    * If a sheet with the same name exists, replaces it in-place and marks as modified for surgical
    * writes. Otherwise, adds at end. This is the preferred method for adding/updating sheets.
    *
+   * This operation is infallible - it always succeeds for valid Sheet inputs.
+   *
    * Example:
    * {{{
-   * val sales = Sheet("Sales").map(_.put(ref"A1" -> "Revenue"))
-   * val wb2 = wb.put(sales).unsafe  // Add or replace "Sales" sheet
+   * val sales = Sheet("Sales").put(ref"A1" -> "Revenue")
+   * val wb2 = wb.put(sales)  // Add or replace "Sales" sheet
    * }}}
    */
-  def put(sheet: Sheet): XLResult[Workbook] =
+  def put(sheet: Sheet): Workbook =
     sheets.indexWhere(_.name == sheet.name) match
       case -1 =>
         // Sheet doesn't exist → add at end (no tracking needed for new sheets)
-        Right(copy(sheets = sheets :+ sheet))
+        copy(sheets = sheets :+ sheet)
       case index =>
         // Sheet exists → replace in-place and track modification
         val updatedContext = sourceContext.map(_.markSheetModified(index))
-        Right(copy(sheets = sheets.updated(index, sheet), sourceContext = updatedContext))
+        copy(sheets = sheets.updated(index, sheet), sourceContext = updatedContext)
 
   /**
    * Put sheet with explicit name (rename if needed, then add-or-replace).
    *
    * Useful for renaming sheets during updates.
    */
-  def put(name: SheetName, sheet: Sheet): XLResult[Workbook] =
+  def put(name: SheetName, sheet: Sheet): Workbook =
     put(sheet.copy(name = name))
 
   /**
    * Put sheet with explicit name (string variant).
+   *
+   * When called with a string literal, the name format is validated at compile time and returns
+   * Workbook directly. Invalid literals like "Invalid:Name" fail to compile. Runtime strings return
+   * XLResult[Workbook].
    */
   @annotation.targetName("putWithStringName")
-  def put(name: String, sheet: Sheet): XLResult[Workbook] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(sn => put(sn, sheet))
+  transparent inline def put(inline name: String, sheet: Sheet): Workbook | XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.putStringNameImpl('{ this }, 'name, 'sheet) }
 
   /**
-   * Put multiple sheets atomically (batch operation).
+   * Put multiple sheets (batch operation).
    *
-   * Transactional semantics: All sheets must be added successfully or the operation fails. If any
-   * sheet cannot be added (e.g., validation error), the entire batch fails and the workbook is
-   * unchanged. This ensures consistency - you never get a workbook with partial updates.
+   * Adds or replaces each sheet by name. This operation is infallible since each individual put is
+   * infallible.
    *
    * Example:
    * {{{
-   * wb.put(Sheet("Sales"), Sheet("Marketing"), Sheet("Finance")) match
-   *   case Right(updated) => updated  // All 3 sheets added
-   *   case Left(err) => original      // None added, workbook unchanged
+   * val updated = wb.put(Sheet("Sales"), Sheet("Marketing"), Sheet("Finance"))
    * }}}
-   *
-   * For partial success semantics, add sheets individually and accumulate results.
    */
-  def put(firstSheet: Sheet, restSheets: Sheet*): XLResult[Workbook] =
-    (firstSheet +: restSheets).foldLeft(Right(this): XLResult[Workbook]) { (acc, sheet) =>
-      acc.flatMap(_.put(sheet))
+  def put(firstSheet: Sheet, restSheets: Sheet*): Workbook =
+    (firstSheet +: restSheets).foldLeft(this) { (acc, sheet) =>
+      acc.put(sheet)
     }
 
   /** Add sheet at end */
@@ -128,12 +132,15 @@ final case class Workbook(
       case -1 => Left(XLError.SheetNotFound(name.value))
       case index => removeAt(index)
 
-  /** Remove sheet by name (string variant) */
+  /**
+   * Remove sheet by name (string variant).
+   *
+   * When called with a string literal, the name format is validated at compile time. Invalid
+   * literals fail to compile. Always returns XLResult since sheet existence is runtime-dependent.
+   */
   @annotation.targetName("removeByString")
-  def remove(name: String): XLResult[Workbook] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(remove)
+  transparent inline def remove(inline name: String): XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.removeImpl('{ this }, 'name) }
 
   /** Remove sheet by index (Excel requires at least one sheet to remain). */
   def removeAt(index: Int): XLResult[Workbook] =
@@ -178,12 +185,13 @@ final case class Workbook(
 
   /**
    * Update sheet by applying a function (string variant).
+   *
+   * When called with a string literal, the name format is validated at compile time. Invalid
+   * literals fail to compile. Always returns XLResult since sheet existence is runtime-dependent.
    */
   @annotation.targetName("updateByString")
-  def update(name: String, f: Sheet => Sheet): XLResult[Workbook] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(sn => update(sn, f))
+  transparent inline def update(inline name: String, f: Sheet => Sheet): XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.updateImpl('{ this }, 'name, 'f) }
 
   /** Update sheet by index while tracking modification state. */
   def updateAt(idx: Int, f: Sheet => Sheet): XLResult[Workbook] =
@@ -201,12 +209,15 @@ final case class Workbook(
       case -1 => Left(XLError.SheetNotFound(name.value))
       case idx => removeAt(idx)
 
-  /** Delete sheet by name (string variant). */
+  /**
+   * Delete sheet by name (string variant).
+   *
+   * When called with a string literal, the name format is validated at compile time. Invalid
+   * literals fail to compile. Always returns XLResult since sheet existence is runtime-dependent.
+   */
   @annotation.targetName("deleteByString")
-  def delete(name: String): XLResult[Workbook] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(sn => delete(sn))
+  transparent inline def delete(inline name: String): XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.deleteImpl('{ this }, 'name) }
 
   /** Reorder sheets to the provided order while tracking modifications. */
   def reorder(newOrder: Vector[SheetName]): XLResult[Workbook] =
@@ -272,11 +283,34 @@ final case class Workbook(
   def sheetCount: Int = sheets.size
 
 object Workbook:
-  /** Create workbook with a single empty sheet */
-  def apply(sheetName: String): XLResult[Workbook] =
-    for sheet <- Sheet(sheetName)
-    yield Workbook(Vector(sheet))
+  /**
+   * Create workbook with a single empty sheet.
+   *
+   * When called with a string literal, the name is validated at compile time and returns `Workbook`
+   * directly. When called with a runtime expression, validation occurs at runtime and returns
+   * `XLResult[Workbook]`.
+   *
+   * Examples:
+   *   - `Workbook("Sales")` → `Workbook` (compile-time validated)
+   *   - `Workbook(userInput)` → `XLResult[Workbook]` (runtime validated)
+   */
+  transparent inline def apply(inline sheetName: String): Workbook | XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.createSingleImpl('sheetName) }
 
-  /** Create empty workbook (requires at least one sheet) */
-  def empty: XLResult[Workbook] =
-    Workbook("Sheet1")
+  /**
+   * Create workbook with multiple empty sheets.
+   *
+   * When called with all string literals, the names are validated at compile time and returns
+   * `Workbook` directly. When any name is a runtime expression, validation occurs at runtime and
+   * returns `XLResult[Workbook]`.
+   */
+  transparent inline def apply(
+    inline first: String,
+    inline second: String,
+    inline rest: String*
+  ): Workbook | XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.createMultiImpl('first, 'second, 'rest) }
+
+  /** Create empty workbook with a single sheet named "Sheet1" */
+  def empty: Workbook =
+    Workbook(Vector(Sheet(SheetName.unsafe("Sheet1"))))

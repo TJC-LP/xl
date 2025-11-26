@@ -998,6 +998,7 @@ object WorkbookStyles:
 
   private def parseHAlign(value: String): Option[HAlign] =
     value.toLowerCase match
+      case "general" => Some(HAlign.General)
       case "left" => Some(HAlign.Left)
       case "center" => Some(HAlign.Center)
       case "right" => Some(HAlign.Right)
@@ -1048,11 +1049,13 @@ object WorkbookStyles:
       catch case _: NumberFormatException => None
     }
 
+  // OOXML theme color indices (ECMA-376 Part 1, 18.8.3):
+  // 0=lt1, 1=dk1, 2=lt2, 3=dk2, 4-9=accent1-6, 10=hlink, 11=folHlink
   private def themeSlotFromIndex(idx: Int): Option[ThemeSlot] = idx match
-    case 0 => Some(ThemeSlot.Dark1)
-    case 1 => Some(ThemeSlot.Light1)
-    case 2 => Some(ThemeSlot.Dark2)
-    case 3 => Some(ThemeSlot.Light2)
+    case 0 => Some(ThemeSlot.Light1)
+    case 1 => Some(ThemeSlot.Dark1)
+    case 2 => Some(ThemeSlot.Light2)
+    case 3 => Some(ThemeSlot.Dark2)
     case 4 => Some(ThemeSlot.Accent1)
     case 5 => Some(ThemeSlot.Accent2)
     case 6 => Some(ThemeSlot.Accent3)

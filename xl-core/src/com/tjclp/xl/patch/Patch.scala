@@ -85,56 +85,58 @@ object Patch:
    * Patches are applied left-to-right. Later patches override earlier ones for conflicting
    * operations (e.g., two Puts to the same reference).
    *
+   * This operation is infallible - all patch types are pure transformations on validated data.
+   *
    * @param sheet
    *   The sheet to modify
    * @param patch
    *   The patch to apply
    * @return
-   *   Either an error or the modified sheet
+   *   The modified sheet
    */
-  def applyPatch(sheet: Sheet, patch: Patch): XLResult[Sheet] = patch match
+  def applyPatch(sheet: Sheet, patch: Patch): Sheet = patch match
     case Put(ref, value) =>
-      Right(sheet.put(ref, value))
+      sheet.put(ref, value)
 
     case SetStyle(ref, styleId) =>
       val cell = sheet(ref).withStyle(styleId)
-      Right(sheet.put(cell))
+      sheet.put(cell)
 
     case SetCellStyle(ref, style) =>
       // Register style and apply to cell automatically
-      Right(sheet.withCellStyle(ref, style))
+      sheet.withCellStyle(ref, style)
 
     case SetRangeStyle(range, style) =>
       // Register style and apply to all cells in range
-      Right(sheet.withRangeStyle(range, style))
+      sheet.withRangeStyle(range, style)
 
     case ClearStyle(ref) =>
       val cell = sheet(ref).clearStyle
-      Right(sheet.put(cell))
+      sheet.put(cell)
 
     case Merge(range) =>
-      Right(sheet.merge(range))
+      sheet.merge(range)
 
     case Unmerge(range) =>
-      Right(sheet.unmerge(range))
+      sheet.unmerge(range)
 
     case SetColumnProperties(col, props) =>
-      Right(sheet.setColumnProperties(col, props))
+      sheet.setColumnProperties(col, props)
 
     case SetRowProperties(row, props) =>
-      Right(sheet.setRowProperties(row, props))
+      sheet.setRowProperties(row, props)
 
     case Remove(ref) =>
-      Right(sheet.remove(ref))
+      sheet.remove(ref)
 
     case RemoveRange(range) =>
-      Right(sheet.removeRange(range))
+      sheet.removeRange(range)
 
     case Batch(patches) =>
-      patches.foldLeft[XLResult[Sheet]](Right(sheet)) { (result, p) =>
-        result.flatMap(s => applyPatch(s, p))
+      patches.foldLeft(sheet) { (acc, p) =>
+        applyPatch(acc, p)
       }
 
   /** Apply multiple patches in sequence */
-  def applyPatches(sheet: Sheet, patches: Iterable[Patch]): XLResult[Sheet] =
+  def applyPatches(sheet: Sheet, patches: Iterable[Patch]): Sheet =
     applyPatch(sheet, Batch(patches.toVector))

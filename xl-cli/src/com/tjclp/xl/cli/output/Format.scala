@@ -5,6 +5,7 @@ import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.styles.{CellStyle, StyleId}
 import com.tjclp.xl.styles.alignment.Align
+import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -175,17 +176,26 @@ object Format:
         if s.font.bold then fontDesc = fontDesc :+ "bold"
         if s.font.italic then fontDesc = fontDesc :+ "italic"
         if s.font.underline then fontDesc = fontDesc :+ "underline"
-        s.font.color.foreach { c =>
-          val hex = c.toHex
-          // For RGB colors like #AARRGGBB, drop the # and alpha; for Theme colors, keep as-is
-          val colorStr = if hex.startsWith("#") then hex.drop(3) else hex
-          fontDesc = fontDesc :+ colorStr
+        s.font.color.foreach {
+          case Color.Rgb(argb) =>
+            // Show RGB color as 6-digit hex (drop alpha)
+            fontDesc = fontDesc :+ f"${argb & 0xffffff}%06X"
+          case Color.Theme(slot, tint) =>
+            // Show theme color as descriptive string
+            val tintStr = if tint == 0.0 then "" else f" tint=$tint%.2f"
+            fontDesc = fontDesc :+ s"$slot$tintStr"
         }
         parts += s"Font: ${fontDesc.mkString(" ")}"
 
       // Fill (if non-default)
       s.fill match
-        case Fill.Solid(color) => parts += s"Fill: ${color.toHex.drop(3)} (solid)"
+        case Fill.Solid(color) =>
+          val colorStr = color match
+            case Color.Rgb(argb) => f"${argb & 0xffffff}%06X"
+            case Color.Theme(slot, tint) =>
+              val tintStr = if tint == 0.0 then "" else f" tint=$tint%.2f"
+              s"$slot$tintStr"
+          parts += s"Fill: $colorStr (solid)"
         case Fill.Pattern(_, _, _) => parts += "Fill: (pattern)"
         case Fill.None => ()
 

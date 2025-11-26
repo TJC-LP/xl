@@ -19,6 +19,7 @@ import scala.math.BigDecimal
  *
  * Target: ~50 tests (7-10 property, 20-25 unit, 15-20 integration, 5-8 error)
  */
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 class EvaluatorSpec extends ScalaCheckSuite:
 
   val evaluator = Evaluator.instance
@@ -489,6 +490,26 @@ class EvaluatorSpec extends ScalaCheckSuite:
     // For now, just test sum and count separately
     assert(evalOk(sumExpr, sheet) == BigDecimal(60))
     assert(evalOk(countExpr, sheet) == 3)
+  }
+
+  test("Regression: AVERAGE returns (sum, count) tuple at eval level") {
+    // Bug fix: AVERAGE was returning Text("(sum,count)") after toCellValue conversion
+    // At eval level, it correctly returns (BigDecimal, Int) tuple
+    val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(150)),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(200)),
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(75))
+    )
+    val avgExpr = TExpr.average(range)
+
+    // evalOk returns Any (runtime type is (BigDecimal, Int))
+    val result: Any = evalOk(avgExpr, sheet)
+
+    // Verify it's a tuple with correct values
+    val (sum, count) = result.asInstanceOf[(BigDecimal, Int)]
+    assert(sum == BigDecimal(425), s"Sum should be 425, got $sum")
+    assert(count == 3, s"Count should be 3, got $count")
   }
 
   // ==================== Error Path Tests ====================

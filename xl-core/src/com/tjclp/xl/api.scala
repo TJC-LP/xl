@@ -27,8 +27,9 @@ object api:
   // Addressing types
   export addressing.{Column, Row, SheetName, ARef, CellRange, RefType}
 
-  // ARef extension methods (toA1, col, row, shift)
-  export addressing.ARef.{col, row, toA1, shift}
+  // ARef extension methods (toA1, row, shift)
+  // Note: col/row extension methods work via extension syntax (aref.col), not direct import
+  export addressing.ARef.{toA1, shift}
 
   // Rich text types
   export richtext.{TextRun, RichText}
@@ -64,7 +65,7 @@ object api:
   export styles.border.{BorderStyle, BorderSide, Border}
 
   // Style types - color
-  export styles.color.{ThemeSlot, Color}
+  export styles.color.{ThemeSlot, Color, ThemePalette}
 
   // Style types - fill
   export styles.fill.{PatternType, Fill}
@@ -83,6 +84,10 @@ object api:
 
   // Surface Column helpers at the root package for single-import ergonomics
   export addressing.Column.toLetter
+
+  // Export renderers and render syntax
+  export render.{HtmlRenderer, SvgRenderer}
+  export render.syntax.*
 
   // ========== String Parsing Helpers ==========
   extension (s: String)

@@ -529,7 +529,7 @@ class TableSpec extends FunSuite:
   }
 
   test("round-trip: empty tables map serializes as empty") {
-    val baseSheet = Sheet("Empty").getOrElse(fail("Failed to create sheet"))
+    val baseSheet = Sheet("Empty")
     assert(baseSheet.tables.isEmpty)
 
     val workbook = Workbook(Vector(baseSheet))
@@ -666,7 +666,7 @@ class TableSpec extends FunSuite:
       columnNames = Vector("Date", "Product", "Amount", "Status")
     )
 
-    val baseSheet = Sheet("Q1 Sales").getOrElse(fail("Failed to create sheet"))
+    val baseSheet = Sheet("Q1 Sales")
     val sheet = baseSheet.withTable(table)
     val workbook = Workbook(Vector(sheet))
 
@@ -700,7 +700,7 @@ class TableSpec extends FunSuite:
       columnNames = Vector("Name", "Price", "Stock")
     )
 
-    val baseSheet = Sheet("Data").getOrElse(fail("Failed"))
+    val baseSheet = Sheet("Data")
     val sheet = baseSheet.withTable(table1).withTable(table2)
     val workbook = Workbook(Vector(sheet))
 
@@ -728,8 +728,8 @@ class TableSpec extends FunSuite:
       columnNames = Vector("C", "D")
     )
 
-    val sheet1 = Sheet("Sheet1").getOrElse(fail("Failed")).withTable(table1)
-    val sheet2 = Sheet("Sheet2").getOrElse(fail("Failed")).withTable(table2)
+    val sheet1 = Sheet("Sheet1").withTable(table1)
+    val sheet2 = Sheet("Sheet2").withTable(table2)
     val workbook = Workbook(Vector(sheet1, sheet2))
 
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
@@ -748,7 +748,7 @@ class TableSpec extends FunSuite:
       columnNames = Vector("Name", "Value", "Status")
     ).copy(autoFilter = Some(TableAutoFilter(enabled = true)))
 
-    val sheet = Sheet("Data").getOrElse(fail("Failed")).withTable(table)
+    val sheet = Sheet("Data").withTable(table)
     val workbook = Workbook(Vector(sheet))
 
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
@@ -773,7 +773,7 @@ class TableSpec extends FunSuite:
         columnNames = Vector("A", "B")
       ).copy(style = style)
 
-      val sheet = Sheet("Test").getOrElse(fail("Failed")).withTable(table)
+      val sheet = Sheet("Test").withTable(table)
       val workbook = Workbook(Vector(sheet))
 
       val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
@@ -792,7 +792,7 @@ class TableSpec extends FunSuite:
       columnNames = Vector("Item", "Amount")
     ).copy(showHeaderRow = true, showTotalsRow = true)
 
-    val sheet = Sheet("Data").getOrElse(fail("Failed")).withTable(table)
+    val sheet = Sheet("Data").withTable(table)
     val workbook = Workbook(Vector(sheet))
 
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
@@ -838,7 +838,7 @@ class TableSpec extends FunSuite:
       columnNames = Vector("Name", "Value", "Status")
     )
 
-    val baseSheet = Sheet("Sheet1").getOrElse(fail("Failed"))
+    val baseSheet = Sheet("Sheet1")
     val sheet = baseSheet
       .withTable(table)
       .put(ref"A1", CellValue.Text("Name"))
@@ -871,7 +871,7 @@ class TableSpec extends FunSuite:
       columnNames = Vector("A", "B")
     )
 
-    val sheet = Sheet("Data").getOrElse(fail("Failed")).withTable(table)
+    val sheet = Sheet("Data").withTable(table)
     val workbook = Workbook(Vector(sheet))
 
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
@@ -906,7 +906,7 @@ class TableSpec extends FunSuite:
       columnNames = Vector("OnlyOne")
     )
 
-    val sheet = Sheet("Data").getOrElse(fail("Failed")).withTable(table)
+    val sheet = Sheet("Data").withTable(table)
     val workbook = Workbook(Vector(sheet))
 
     val bytes = XlsxWriter.writeToBytes(workbook).getOrElse(fail("Write failed"))
@@ -946,7 +946,7 @@ class TableSpec extends FunSuite:
       columnNames = Vector("D", "E")
     )
 
-    val sheet = Sheet("Test").getOrElse(fail("Failed"))
+    val sheet = Sheet("Test")
       .withTable(table1)
       .withTable(table2) // Should replace table1
 
@@ -962,7 +962,7 @@ class TableSpec extends FunSuite:
       columnNames = Vector("A", "B")
     )
 
-    val sheet = Sheet("Test").getOrElse(fail("Failed"))
+    val sheet = Sheet("Test")
       .withTable(table)
       .removeTable("ToRemove")
 

@@ -24,7 +24,6 @@ val sheet1 = Sheet("Test1")
     ref"A2" -> percent"60%",
     ref"A3" -> fx"=A1+A2"
   )
-  .unsafe
   // .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
   // .flatMap(_.style(ref"A2", CellStyle.default.withNumFmt(NumFmt.Percent)))
 
@@ -44,13 +43,12 @@ println("TEST 2: With Evaluator (formulas evaluate automatically)")
 println("=" * 70)
 
 // EvaluatingFormulaDisplay is now available from com.tjclp.xl.{*, given}
-val sheet2 = Sheet(name = SheetName.unsafe("Test2"))
+val sheet2 = Sheet("Test2")
   .put(ref"A1", 100)
   .put(ref"A2", 200)
   .put(ref"B1", fx"=SUM(A1:A2)")
   .put(ref"B2", fx"=A1/A2")
   .style(ref"B2", CellStyle.default.withNumFmt(NumFmt.Percent))
-  .unsafe
 
 locally {
   given Sheet = sheet2

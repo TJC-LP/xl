@@ -10,7 +10,7 @@ import com.tjclp.xl.macros.ref
 class SharedStringsSpec extends FunSuite:
 
   test("fromWorkbook counts total instances correctly") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Hello"))
       .put(ref"A2", CellValue.Text("World"))
       .put(ref"A3", CellValue.Text("Hello")) // Duplicate
@@ -27,7 +27,7 @@ class SharedStringsSpec extends FunSuite:
   }
 
   test("toXml emits correct count and uniqueCount") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Alpha"))
       .put(ref"A2", CellValue.Text("Beta"))
       .put(ref"A3", CellValue.Text("Alpha")) // Duplicate
@@ -46,7 +46,7 @@ class SharedStringsSpec extends FunSuite:
   }
 
   test("workbook with duplicate strings has count > uniqueCount") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Duplicate"))
       .put(ref"A2", CellValue.Text("Duplicate"))
       .put(ref"A3", CellValue.Text("Duplicate"))
@@ -62,7 +62,7 @@ class SharedStringsSpec extends FunSuite:
   }
 
   test("workbook with no duplicates has count == uniqueCount") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("One"))
       .put(ref"A2", CellValue.Text("Two"))
       .put(ref"A3", CellValue.Text("Three"))

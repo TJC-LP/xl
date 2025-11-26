@@ -29,20 +29,19 @@ class CompressionSpec extends FunSuite:
 
   tempDir.test("DEFLATED produces smaller files than STORED") { dir =>
     // Create workbook with repetitive data (compresses well)
-    val wb = Workbook("Data").flatMap { initial =>
-      val cells = (1 to 1000).flatMap { row =>
-        val aRef = ARef(Column.from1(1), Row.from1(row))
-        val bRef = ARef(Column.from1(2), Row.from1(row))
-        val cRef = ARef(Column.from1(3), Row.from1(row))
-        Seq(
-          aRef -> "Repeated text content that should compress well",
-          bRef -> BigDecimal(row),
-          cRef -> s"Row $row with more repetitive content"
-        )
-      }
-      val sheet = initial.sheets(0).put(cells*).unsafe
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    val initial = Workbook("Data")
+    val cells = (1 to 1000).flatMap { row =>
+      val aRef = ARef(Column.from1(1), Row.from1(row))
+      val bRef = ARef(Column.from1(2), Row.from1(row))
+      val cRef = ARef(Column.from1(3), Row.from1(row))
+      Seq(
+        aRef -> "Repeated text content that should compress well",
+        bRef -> BigDecimal(row),
+        cRef -> s"Row $row with more repetitive content"
+      )
+    }
+    val sheet = initial.sheets(0).put(cells*).unsafe
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
 
     // Write with DEFLATED (default)
     val deflatedPath = dir.resolve("deflated.xlsx")
@@ -71,10 +70,9 @@ class CompressionSpec extends FunSuite:
   }
 
   tempDir.test("prettyPrint increases file size") { dir =>
-    val wb = Workbook("Simple").flatMap { initial =>
-      val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Test"))
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    val initial = Workbook("Simple")
+    val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Test"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
 
     // Write with compact XML
     val compactPath = dir.resolve("compact.xlsx")
@@ -99,13 +97,12 @@ class CompressionSpec extends FunSuite:
   }
 
   tempDir.test("default config produces valid XLSX with DEFLATED compression") { dir =>
-    val wb = Workbook("DefaultTest").flatMap { initial =>
-      val cells = (1 to 100).map { row =>
-        ARef(Column.from1(1), Row.from1(row)) -> s"Row $row"
-      }
-      val sheet = initial.sheets(0).put(cells*).unsafe
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    val initial = Workbook("DefaultTest")
+    val cells = (1 to 100).map { row =>
+      ARef(Column.from1(1), Row.from1(row)) -> s"Row $row"
+    }
+    val sheet = initial.sheets(0).put(cells*).unsafe
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("default.xlsx")
 
@@ -131,10 +128,9 @@ class CompressionSpec extends FunSuite:
   }
 
   tempDir.test("WriterConfig.debug uses STORED + prettyPrint") { dir =>
-    val wb = Workbook("Debug").flatMap { initial =>
-      val sheet = initial.sheets(0).put(ref"A1", CellValue.Number(42))
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Failed to create workbook"))
+    val initial = Workbook("Debug")
+    val sheet = initial.sheets(0).put(ref"A1", CellValue.Number(42))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("debug.xlsx")
     XlsxWriter.writeWith(wb, path, WriterConfig.debug) match
