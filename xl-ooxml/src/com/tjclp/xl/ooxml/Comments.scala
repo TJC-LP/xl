@@ -5,6 +5,7 @@ import XmlUtil.*
 import SaxSupport.*
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.richtext.RichText
+import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.error.XLError
 
 /**
@@ -302,8 +303,11 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
         if f.italic then props += elem("i")()
         if f.underline then props += elem("u")()
 
-        f.color.foreach { c =>
-          props += elem("color", "rgb" -> c.toHex.drop(1))()
+        f.color.foreach {
+          case Color.Rgb(argb) =>
+            props += elem("color", "rgb" -> f"$argb%08X")()
+          case Color.Theme(slot, tint) =>
+            props += elem("color", "theme" -> slot.ordinal.toString, "tint" -> tint.toString)()
         }
 
         props += elem("sz", "val" -> f.sizePt.toString)()

@@ -5,6 +5,7 @@ import XmlUtil.*
 import com.tjclp.xl.addressing.* // For ARef, Column, Row types and extension methods
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
+import com.tjclp.xl.styles.color.Color
 import SaxSupport.*
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
@@ -224,10 +225,16 @@ case class OoxmlCell(
       writer.startElement("u")
       writer.endElement()
 
-    font.color.foreach { c =>
-      writer.startElement("color")
-      writer.writeAttribute("rgb", c.toHex.drop(1))
-      writer.endElement()
+    font.color.foreach {
+      case Color.Rgb(argb) =>
+        writer.startElement("color")
+        writer.writeAttribute("rgb", f"$argb%08X")
+        writer.endElement()
+      case Color.Theme(slot, tint) =>
+        writer.startElement("color")
+        writer.writeAttribute("theme", slot.ordinal.toString)
+        writer.writeAttribute("tint", tint.toString)
+        writer.endElement()
     }
 
     writer.startElement("sz")
@@ -291,8 +298,15 @@ case class OoxmlCell(
                 if f.underline then fontProps += elem("u")()
 
                 // Font color
-                f.color.foreach { c =>
-                  fontProps += elem("color", "rgb" -> c.toHex.drop(1))() // Attributes then children
+                f.color.foreach {
+                  case Color.Rgb(argb) =>
+                    fontProps += elem("color", "rgb" -> f"$argb%08X")()
+                  case Color.Theme(slot, tint) =>
+                    fontProps += elem(
+                      "color",
+                      "theme" -> slot.ordinal.toString,
+                      "tint" -> tint.toString
+                    )()
                 }
 
                 // Font size and name

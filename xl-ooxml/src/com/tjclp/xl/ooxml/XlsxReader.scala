@@ -17,6 +17,8 @@ import scala.collection.mutable
 import scala.collection.immutable.ArraySeq
 import com.tjclp.xl.styles.StyleRegistry
 import com.tjclp.xl.styles.units.StyleId
+import com.tjclp.xl.styles.color.ThemePalette
+import com.tjclp.xl.workbooks.WorkbookMetadata
 
 /**
  * Reader for XLSX files (ZIP parsing)
@@ -62,7 +64,8 @@ object XlsxReader:
     "xl/workbook.xml",
     "xl/_rels/workbook.xml.rels",
     "xl/styles.xml",
-    "xl/sharedStrings.xml"
+    "xl/sharedStrings.xml",
+    "xl/theme/theme1.xml"
   )
 
   /**
@@ -213,11 +216,14 @@ object XlsxReader:
       // Parse workbook relationships
       workbookRels <- parseWorkbookRelationships(parts)
 
+      // Parse theme (optional, falls back to Office theme)
+      theme = parseTheme(parts)
+
       // Parse sheets
       sheets <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
 
       // Assemble workbook with optional SourceContext
-      workbook <- assembleWorkbook(sheets, source, manifest, fingerprint)
+      workbook <- assembleWorkbook(sheets, source, manifest, fingerprint, theme)
     yield ReadResult(workbook, styleWarnings)
 
   /** Parse optional shared strings table */
@@ -487,6 +493,20 @@ object XlsxReader:
             .map(err => XLError.ParseError("xl/_rels/workbook.xml.rels", err): XLError)
         yield rels
 
+  /**
+   * Parse theme from xl/theme/theme1.xml.
+   *
+   * Falls back to Office theme if theme is missing or cannot be parsed. Theme parsing errors are
+   * non-fatal since the default Office theme is a reasonable fallback.
+   */
+  private def parseTheme(parts: Map[String, String]): ThemePalette =
+    parts.get("xl/theme/theme1.xml") match
+      case None => ThemePalette.office
+      case Some(xml) =>
+        ThemeParser.parse(xml) match
+          case Right(palette) => palette
+          case Left(_) => ThemePalette.office
+
   /** Parse all worksheets */
   private def parseSheets(
     parts: Map[String, String],
@@ -659,6 +679,8 @@ object XlsxReader:
    *   Optional source handle (path to original file)
    * @param manifest
    *   Manifest of all ZIP entries (known + unknown)
+   * @param theme
+   *   Theme palette parsed from xl/theme/theme1.xml
    * @return
    *   Workbook with optional SourceContext
    */
@@ -666,7 +688,8 @@ object XlsxReader:
     sheets: Vector[Sheet],
     source: Option[SourceHandle],
     manifest: PartManifest,
-    fingerprint: Option[SourceFingerprint]
+    fingerprint: Option[SourceFingerprint],
+    theme: ThemePalette
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -680,7 +703,10 @@ object XlsxReader:
           case (None, Some(_)) =>
             Left(XLError.IOError("Unexpected source fingerprint without source handle"))
 
-      sourceContextEither.map(ctx => Workbook(sheets = sheets, sourceContext = ctx))
+      val metadata = WorkbookMetadata(theme = theme)
+      sourceContextEither.map(ctx =>
+        Workbook(sheets = sheets, metadata = metadata, sourceContext = ctx)
+      )
 
   /**
    * Parse XML string to Elem with XXE protection

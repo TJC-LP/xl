@@ -3,6 +3,7 @@ package com.tjclp.xl.ooxml
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.richtext.RichText
+import com.tjclp.xl.styles.color.Color
 import scala.xml.*
 import XmlUtil.*
 import SaxSupport.*
@@ -115,8 +116,15 @@ final case class SharedStrings(
                 if f.italic then fontProps += elem("i")()
                 if f.underline then fontProps += elem("u")()
 
-                f.color.foreach { c =>
-                  fontProps += elem("color", "rgb" -> c.toHex.drop(1))() // Drop # prefix
+                f.color.foreach {
+                  case Color.Rgb(argb) =>
+                    fontProps += elem("color", "rgb" -> f"$argb%08X")()
+                  case Color.Theme(slot, tint) =>
+                    fontProps += elem(
+                      "color",
+                      "theme" -> slot.ordinal.toString,
+                      "tint" -> tint.toString
+                    )()
                 }
 
                 fontProps += elem("sz", "val" -> f.sizePt.toString)()
@@ -212,10 +220,16 @@ final case class SharedStrings(
       writer.startElement("u")
       writer.endElement()
 
-    font.color.foreach { c =>
-      writer.startElement("color")
-      writer.writeAttribute("rgb", c.toHex.drop(1))
-      writer.endElement()
+    font.color.foreach {
+      case Color.Rgb(argb) =>
+        writer.startElement("color")
+        writer.writeAttribute("rgb", f"$argb%08X")
+        writer.endElement()
+      case Color.Theme(slot, tint) =>
+        writer.startElement("color")
+        writer.writeAttribute("theme", slot.ordinal.toString)
+        writer.writeAttribute("tint", tint.toString)
+        writer.endElement()
     }
 
     writer.startElement("sz")

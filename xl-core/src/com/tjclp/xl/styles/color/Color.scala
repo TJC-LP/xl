@@ -37,12 +37,30 @@ object Color:
     else Left(s"Tint must be in [-1.0, 1.0], got: $tint")
 
   extension (color: Color)
-    /** Convert to ARGB integer */
+    /** Convert to ARGB integer. For theme colors, use toResolvedArgb. */
     def toArgb: Int = color match
       case Rgb(argb) => argb
-      case Theme(_, _) => 0 // Needs theme resolution at IO boundary
+      case Theme(slot, tint) =>
+        throw IllegalStateException(
+          s"Theme color $slot (tint=$tint) requires resolution via toResolvedArgb(theme)"
+        )
 
-    /** Get hex string representation (#AARRGGBB) */
+    /** Resolve to ARGB integer using the provided theme palette */
+    def toResolvedArgb(theme: ThemePalette): Int = color match
+      case Rgb(argb) => argb
+      case Theme(slot, tint) => ThemePalette.resolve(theme, slot, tint)
+
+    /** Get hex string (#AARRGGBB). For theme colors, use toResolvedHex. */
     def toHex: String = color match
       case Rgb(argb) => f"#$argb%08X"
-      case Theme(slot, tint) => s"Theme($slot, $tint)"
+      case Theme(slot, tint) =>
+        throw IllegalStateException(
+          s"Theme color $slot (tint=$tint) requires resolution via toResolvedHex(theme)"
+        )
+
+    /** Resolve to RGB hex string (#RRGGBB) using the provided theme palette */
+    def toResolvedHex(theme: ThemePalette): String = color match
+      case Rgb(argb) => f"#${argb & 0xffffff}%06X"
+      case Theme(slot, tint) =>
+        val resolved = ThemePalette.resolve(theme, slot, tint)
+        f"#${resolved & 0xffffff}%06X"

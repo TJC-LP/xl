@@ -10,7 +10,7 @@ import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.border.{BorderStyle, BorderSide}
-import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -87,7 +87,8 @@ object SvgRenderer:
   def toSvg(
     sheet: Sheet,
     range: CellRange,
-    includeStyles: Boolean = true
+    includeStyles: Boolean = true,
+    theme: ThemePalette = ThemePalette.office
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -196,7 +197,7 @@ object SvgRenderer:
 
           // Cell background and border
           val (fillAttr, strokeAttr) = cellOpt
-            .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet) else None)
+            .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet, theme) else None)
             .getOrElse(("fill=\"#FFFFFF\"", ""))
 
           sb.append(
@@ -219,7 +220,7 @@ object SvgRenderer:
                 // Rich text: render each run as a tspan with explicit x positioning
                 sb.append(s"""    <text y="$textY" class="cell-text">""")
                 rt.runs.foldLeft(textX) { (currentX, run) =>
-                  val runStyle = runToSvgStyle(run)
+                  val runStyle = runToSvgStyle(run, theme)
                   val escapedText = escapeXml(run.text)
                   sb.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
                   currentX + measureTextWidth(run.text, run.font)
@@ -229,7 +230,7 @@ object SvgRenderer:
               case other =>
                 val text = cellValueToText(other, numFmt)
                 if text.nonEmpty then
-                  val textStyle = if includeStyles then cellTextStyle(cell, sheet) else ""
+                  val textStyle = if includeStyles then cellTextStyle(cell, sheet, theme) else ""
                   val style = cell.styleId.flatMap(sheet.styleRegistry.get)
                   val shouldWrap = style.exists(_.align.wrapText)
 
@@ -378,20 +379,27 @@ object SvgRenderer:
   /**
    * Get SVG fill and stroke attributes for a cell's background.
    */
-  private def cellStyleToSvg(cell: Cell, sheet: Sheet): Option[(String, String)] =
+  private def cellStyleToSvg(
+    cell: Cell,
+    sheet: Sheet,
+    theme: ThemePalette
+  ): Option[(String, String)] =
     cell.styleId.flatMap(sheet.styleRegistry.get).map { style =>
       val fill = style.fill match
-        case Fill.Solid(color) => colorToSvgFillAttrs(color)
+        case Fill.Solid(color) => colorToSvgFillAttrs(color, theme)
         case _ => """fill="#FFFFFF""""
 
-      val stroke = borderToStroke(style.border)
+      val stroke = borderToStroke(style.border, theme)
       (fill, stroke)
     }
 
   /**
    * Convert border to SVG stroke attributes.
    */
-  private def borderToStroke(border: com.tjclp.xl.styles.border.Border): String =
+  private def borderToStroke(
+    border: com.tjclp.xl.styles.border.Border,
+    theme: ThemePalette
+  ): String =
     // For simplicity, use the bottom border style for all borders
     // A more complete implementation would draw each side separately
     val side = border.bottom
@@ -402,20 +410,20 @@ object SvgRenderer:
         case BorderStyle.Medium => 2
         case BorderStyle.Thick => 3
         case _ => 1
-      val color = side.color.map(colorToSvgHex).getOrElse("#000000")
+      val color = side.color.map(c => colorToSvgHex(c, theme)).getOrElse("#000000")
       s"""stroke="$color" stroke-width="$width""""
 
   /**
    * Get SVG text style attributes for a cell.
    */
-  private def cellTextStyle(cell: Cell, sheet: Sheet): String =
+  private def cellTextStyle(cell: Cell, sheet: Sheet, theme: ThemePalette): String =
     cell.styleId
       .flatMap(sheet.styleRegistry.get)
       .map { style =>
         val attrs = scala.collection.mutable.ArrayBuffer[String]()
 
         // Font color
-        style.font.color.foreach(c => attrs += s"""fill="${colorToSvgHex(c)}"""")
+        style.font.color.foreach(c => attrs += s"""fill="${colorToSvgHex(c, theme)}"""")
 
         // Font weight
         if style.font.bold then attrs += """font-weight="bold""""
@@ -438,14 +446,14 @@ object SvgRenderer:
   /**
    * Convert a TextRun to SVG tspan style attributes.
    */
-  private def runToSvgStyle(run: TextRun): String =
+  private def runToSvgStyle(run: TextRun, theme: ThemePalette): String =
     run.font match
       case None => ""
       case Some(f) =>
         val attrs = scala.collection.mutable.ArrayBuffer[String]()
 
         // Font color
-        f.color.foreach(c => attrs += s"""fill="${colorToSvgHex(c)}"""")
+        f.color.foreach(c => attrs += s"""fill="${colorToSvgHex(c, theme)}"""")
 
         // Font weight
         if f.bold then attrs += """font-weight="bold""""
@@ -601,23 +609,19 @@ object SvgRenderer:
       .replace("\"", "\\\"")
 
   /**
-   * Convert Color to SVG-compatible RGB hex (strips alpha from ARGB). Color.toHex returns
-   * #AARRGGBB, SVG needs #RRGGBB.
+   * Convert Color to SVG-compatible RGB hex using theme for theme color resolution. Returns #RRGGBB
+   * format.
    */
-  private def colorToSvgHex(c: Color): String =
-    val hex = c.toHex
-    if hex.length == 9 && hex.startsWith("#") then "#" + hex.drop(3) // #AARRGGBB -> #RRGGBB
-    else hex
+  private def colorToSvgHex(c: Color, theme: ThemePalette): String =
+    c.toResolvedHex(theme)
 
   /**
    * Convert Color to SVG fill attributes with opacity support. Returns both fill and fill-opacity
    * for translucent ARGB colors, just fill for fully opaque colors.
    */
-  private def colorToSvgFillAttrs(c: Color): String =
-    val hex = c.toHex
-    if hex.length == 9 && hex.startsWith("#") then
-      val alpha = Integer.parseInt(hex.substring(1, 3), 16) / 255.0
-      val rgb = "#" + hex.drop(3)
-      if alpha >= 1.0 then s"""fill="$rgb""""
-      else s"""fill="$rgb" fill-opacity="$alpha""""
-    else s"""fill="$hex""""
+  private def colorToSvgFillAttrs(c: Color, theme: ThemePalette): String =
+    val argb = c.toResolvedArgb(theme)
+    val alpha = ((argb >> 24) & 0xff) / 255.0
+    val hex = f"#${argb & 0xffffff}%06X"
+    if alpha >= 1.0 then s"""fill="$hex""""
+    else s"""fill="$hex" fill-opacity="${alpha}""""
