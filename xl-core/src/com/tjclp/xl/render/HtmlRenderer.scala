@@ -13,181 +13,9 @@ import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.CellStyle
 
-import java.awt.{Font as AwtFont, Graphics2D}
-import java.awt.image.BufferedImage
-
 /** Renders Excel sheets to HTML tables with inline CSS styling */
 object HtmlRenderer:
-  // Default dimensions
-  private val DefaultCellHeightPx = 20 // Excel default ~15pt = 20px
-  private val DefaultColumnWidthPx = 64 // Excel default ~8.43 chars = 64px
-
-  // Unit conversion helpers (Excel → pixels)
-  /** Convert Excel column width (character units) to pixels. */
-  private def excelColWidthToPixels(width: Double): Int =
-    (width * 7 + 5).toInt
-
-  /** Convert Excel row height (points) to pixels. 1pt = 4/3 pixels. */
-  private def excelRowHeightToPixels(height: Double): Int =
-    (height * 4.0 / 3.0).toInt
-
-  // Default font size for measurements
-  private val DefaultFontSize = 11
-
-  // Graphics context for text measurement (lazy, with headless fallback)
-  private lazy val graphics: Option[Graphics2D] =
-    try
-      val img = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
-      Some(img.createGraphics())
-    catch case _: Exception => None // Headless environment
-
-  /** Measure text width using AWT FontMetrics, with fallback estimation. */
-  private def measureTextWidth(text: String, font: Option[Font]): Int =
-    graphics match
-      case Some(g) =>
-        val awtFont = toAwtFont(font)
-        g.setFont(awtFont)
-        g.getFontMetrics.stringWidth(text)
-      case None =>
-        // Fallback: simple estimation for headless environments
-        val baseCharWidth = 7
-        val sizeFactor = font.map(f => f.sizePt / DefaultFontSize).getOrElse(1.0)
-        val boldFactor = if font.exists(_.bold) then 1.1 else 1.0
-        (text.length * baseCharWidth * sizeFactor * boldFactor).toInt
-
-  /** Convert our Font to AWT Font. */
-  private def toAwtFont(font: Option[Font]): AwtFont =
-    font match
-      case Some(f) =>
-        val style =
-          (if f.bold then AwtFont.BOLD else 0) | (if f.italic then AwtFont.ITALIC else 0)
-        new AwtFont(f.name, style, f.sizePt.toInt)
-      case None =>
-        new AwtFont("Calibri", AwtFont.PLAIN, DefaultFontSize)
-
-  /** Measure text width for a CellValue, handling rich text runs. */
-  private def measureCellValueWidth(value: CellValue, font: Option[Font]): Int = value match
-    case CellValue.RichText(rt) =>
-      rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(font))).sum
-    case CellValue.Formula(_, Some(cached)) =>
-      measureCellValueWidth(cached, font)
-    case CellValue.Empty => 0
-    case CellValue.Text(s) => measureTextWidth(s, font)
-    case CellValue.Number(n) => measureTextWidth(n.toString, font)
-    case CellValue.Bool(b) => measureTextWidth(if b then "TRUE" else "FALSE", font)
-    case CellValue.DateTime(dt) => measureTextWidth(dt.toString, font)
-    case CellValue.Error(e) => measureTextWidth(e.toString, font)
-    case _ => 0
-
-  /**
-   * Calculate overflow colspan for a cell with text that exceeds its width.
-   *
-   * For left-aligned/general cells, counts empty cells to the right until:
-   *   - A non-empty cell is reached
-   *   - The accumulated width covers the text overflow
-   *   - The range boundary is reached
-   *
-   * @param cell
-   *   The cell to check for overflow
-   * @param cellRef
-   *   The cell reference
-   * @param cellWidth
-   *   The width of the cell in pixels
-   * @param colWidths
-   *   Vector of column widths (indexed from startCol)
-   * @param sheet
-   *   The sheet containing the data
-   * @param startCol
-   *   The starting column index of the range
-   * @param endCol
-   *   The ending column index of the range
-   * @return
-   *   The colspan (1 if no overflow, >1 if overflowing into adjacent cells)
-   */
-  private def calculateOverflowColspan(
-    cell: Cell,
-    cellRef: ARef,
-    cellWidth: Int,
-    colWidths: IndexedSeq[Int],
-    sheet: Sheet,
-    startCol: Int,
-    endCol: Int
-  ): Int =
-    val style = cell.styleId.flatMap(sheet.styleRegistry.get)
-
-    // If wrapText is true, text wraps instead of overflowing
-    if style.exists(_.align.wrapText) then return 1
-
-    val font = style.map(_.font)
-    val textWidth = measureCellValueWidth(cell.value, font)
-
-    // If text fits within cell, no overflow needed
-    if textWidth <= cellWidth then return 1
-
-    // Determine overflow direction based on alignment
-    // General alignment behaves like Left for text overflow in Excel
-    val align = style.map(_.align.horizontal).getOrElse(HAlign.General)
-    align match
-      case HAlign.Left | HAlign.General =>
-        // Overflow to the right (General alignment for text behaves like Left)
-        countEmptyToRight(cellRef, cellWidth, colWidths, sheet, startCol, endCol, textWidth)
-      case HAlign.Right =>
-        // For right-aligned, we'd need to overflow left - more complex
-        // For now, just use colspan=1 (text clips)
-        1
-      case HAlign.Center | HAlign.CenterContinuous =>
-        // Center alignment would overflow both ways - complex
-        // For now, just use colspan=1 (text clips)
-        1
-      case _ =>
-        1
-
-  /**
-   * Count how many adjacent empty cells to the right can accommodate text overflow.
-   *
-   * @return
-   *   colspan (1 + number of empty cells needed to fit overflow)
-   */
-  private def countEmptyToRight(
-    cellRef: ARef,
-    cellWidth: Int,
-    colWidths: IndexedSeq[Int],
-    sheet: Sheet,
-    startCol: Int,
-    endCol: Int,
-    textWidth: Int
-  ): Int =
-    val colIdx = cellRef.col.index0
-    var colspan = 1
-    var accumulatedWidth = cellWidth
-
-    // Check cells to the right
-    var nextCol = colIdx + 1
-    while nextCol <= endCol && accumulatedWidth < textWidth do
-      val nextRef = ARef.from0(nextCol, cellRef.row.index0)
-
-      // Check if next cell is empty (no content, not part of merge)
-      val nextCellOpt = sheet.cells.get(nextRef)
-      val nextHasContent = nextCellOpt.exists { c =>
-        c.value match
-          case CellValue.Empty => false
-          case _ => true
-      }
-
-      // Check if next cell is part of a merged region
-      val nextIsMerged = sheet.getMergedRange(nextRef).isDefined
-
-      if nextHasContent || nextIsMerged then
-        // Stop - can't overflow into non-empty or merged cell
-        return colspan
-      else
-        // Include this empty cell in the overflow span
-        val widthIdx = nextCol - startCol
-        if widthIdx >= 0 && widthIdx < colWidths.length then accumulatedWidth += colWidths(widthIdx)
-        colspan += 1
-        nextCol += 1
-
-    colspan
+  import RenderUtils.*
 
   /**
    * Export a sheet range to an HTML table.
@@ -205,8 +33,12 @@ object HtmlRenderer:
    *   Whether to include inline CSS for cell styles (default: true)
    * @param includeComments
    *   Whether to include comments as HTML title attributes (default: true)
+   * @param theme
+   *   Theme palette for resolving theme colors (default: Office theme)
    * @param applyPrintScale
    *   Whether to apply the sheet's print scale setting (default: false)
+   * @param showLabels
+   *   Whether to show column letters (A, B, C...) and row numbers (1, 2, 3...) (default: false)
    * @return
    *   HTML table string
    */
@@ -216,7 +48,8 @@ object HtmlRenderer:
     includeStyles: Boolean = true,
     includeComments: Boolean = true,
     theme: ThemePalette = ThemePalette.office,
-    applyPrintScale: Boolean = false
+    applyPrintScale: Boolean = false,
+    showLabels: Boolean = false
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -245,9 +78,27 @@ object HtmlRenderer:
     }
 
     // Generate <colgroup> element
-    val colgroup = colWidths
-      .map(w => s"""  <col style="width: ${w}px">""")
-      .mkString("<colgroup>\n", "\n", "\n</colgroup>")
+    val colgroupCols =
+      if showLabels then
+        // Include row number column first
+        s"""  <col style="width: ${HeaderWidth}px">""" +:
+          colWidths.map(w => s"""  <col style="width: ${w}px">""")
+      else colWidths.map(w => s"""  <col style="width: ${w}px">""")
+    val colgroup = colgroupCols.mkString("<colgroup>\n", "\n", "\n</colgroup>")
+
+    val sb = new StringBuilder
+
+    // Header row with column letters (if showLabels)
+    val headerRow =
+      if showLabels then
+        val headerCells = (startCol to endCol).map { colIdx =>
+          val colLetter = Column.from0(colIdx).toLetter
+          s"""<td class="xl-header">$colLetter</td>"""
+        }
+        val cornerCell = """<td class="xl-header"></td>""" // Top-left corner
+        val scaledHeaderHeight = (HeaderHeight * scaleFactor).toInt
+        s"""  <tr style="height: ${scaledHeaderHeight}px">$cornerCell${headerCells.mkString}</tr>\n"""
+      else ""
 
     // Group cells by row for table structure, filtering out hidden rows
     val cellsByRow = range.cells.toSeq
@@ -270,6 +121,11 @@ object HtmlRenderer:
                 .getOrElse(DefaultCellHeightPx)
             )
         val rowHeight = (baseRowHeight * scaleFactor).toInt
+
+        // Row number cell (if showLabels)
+        val rowNumCell =
+          if showLabels then s"""<td class="xl-header">${rowObj.index1}</td>"""
+          else ""
 
         // Track columns covered by text overflow from previous cells in this row
         val overflowSkipCols = scala.collection.mutable.Set[Int]()
@@ -402,16 +258,32 @@ object HtmlRenderer:
           .mkString
 
         // Add height style to <tr>
-        s"""  <tr style="height: ${rowHeight}px">$cellsHtml</tr>"""
+        s"""  <tr style="height: ${rowHeight}px">$rowNumCell$cellsHtml</tr>"""
       }
       .mkString("\n")
 
     // table-layout: fixed ensures column widths from colgroup are respected
     val tableStyle =
       """style="border-collapse: collapse; table-layout: fixed; font-family: Calibri, sans-serif; font-size: 11pt;""""
-    s"""<table $tableStyle>
+
+    // Header style (embedded in <style> tag when showLabels)
+    val headerStyles =
+      if showLabels then """
+<style>
+  .xl-header {
+    background-color: #E0E0E0;
+    border: 1px solid #999999;
+    text-align: center;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 11px;
+    color: #333333;
+  }
+</style>"""
+      else ""
+
+    s"""$headerStyles<table $tableStyle>
 $colgroup
-$tableRows
+$headerRow$tableRows
 </table>"""
 
   /**
@@ -458,7 +330,7 @@ $tableRows
 
         // Apply color as innermost wrapper
         f.color.foreach { c =>
-          html = s"""<span style="color: ${colorToRgbHex(c, theme)}">$html</span>"""
+          html = s"""<span style="color: ${colorToHex(c, theme)}">$html</span>"""
         }
 
         // Font size (if different from default)
@@ -498,7 +370,7 @@ $tableRows
       if style.font.bold then css += "font-weight: bold"
       if style.font.italic then css += "font-style: italic"
       if style.font.underline then css += "text-decoration: underline"
-      style.font.color.foreach(c => css += s"color: ${colorToRgbHex(c, theme)}")
+      style.font.color.foreach(c => css += s"color: ${colorToHex(c, theme)}")
       if style.font.sizePt != Font.default.sizePt then css += s"font-size: ${style.font.sizePt}pt"
       if style.font.name != Font.default.name then
         css += s"font-family: '${escapeCss(style.font.name)}'"
@@ -506,7 +378,7 @@ $tableRows
       // Fill (background color)
       style.fill match
         case Fill.Solid(color) =>
-          css += s"background-color: ${colorToRgbHex(color, theme)}"
+          css += s"background-color: ${colorToHex(color, theme)}"
         case _ => () // Pattern fill not supported in HTML
 
       // Borders
@@ -550,32 +422,6 @@ $tableRows
     css.mkString("; ")
 
   /**
-   * Escape HTML special characters.
-   *
-   * Converts <, >, &, " to HTML entities to prevent XSS and rendering issues.
-   */
-  private def escapeHtml(s: String): String =
-    s.replace("&", "&amp;")
-      .replace("<", "&lt;")
-      .replace(">", "&gt;")
-      .replace("\"", "&quot;")
-      .replace("'", "&#39;")
-
-  private def escapeCss(s: String): String =
-    s.replace("\\", "\\\\")
-      .replace("'", "\\'")
-      .replace("\"", "\\\"")
-      .replace("\n", "\\A ")
-      .replace("\r", "\\D ")
-      .replace("\u0000", "")
-
-  /**
-   * Convert Color to CSS-compatible RGB hex using theme for resolution. Returns #RRGGBB format.
-   */
-  private def colorToRgbHex(c: Color, theme: ThemePalette): String =
-    c.toResolvedHex(theme)
-
-  /**
    * Convert a border side to CSS border property.
    */
   private def borderSideToCss(
@@ -607,5 +453,5 @@ $tableRows
             BorderStyle.SlantDashDot =>
           "dashed" // CSS doesn't support dash-dot, use dashed as fallback
         case _ => "solid"
-      val color = side.color.map(c => colorToRgbHex(c, theme)).getOrElse("#000000")
+      val color = side.color.map(c => colorToHex(c, theme)).getOrElse("#000000")
       Some(s"$cssProperty: $width $cssStyle $color")

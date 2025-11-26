@@ -2,19 +2,14 @@ package com.tjclp.xl.render
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
-import com.tjclp.xl.styles.border.{BorderStyle, BorderSide}
+import com.tjclp.xl.styles.border.BorderStyle
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
-import com.tjclp.xl.styles.CellStyle
-
-import java.awt.{Font as AwtFont, Graphics2D}
-import java.awt.image.BufferedImage
 
 /**
  * Renders Excel sheets to SVG images with styled cells.
@@ -23,55 +18,7 @@ import java.awt.image.BufferedImage
  * Excel data including colors, fonts, and borders.
  */
 object SvgRenderer:
-
-  // Default dimensions
-  private val DefaultCellHeight = 24
-  private val DefaultRowHeightPt = 15.0 // Excel default row height in points
-  private val HeaderWidth = 40 // Row number column width
-  private val HeaderHeight = 24 // Column letter row height
-  private val MinCellWidth = 60
-  private val CellPaddingX = 6
-  private val DefaultFontSize = 11
-
-  // Unit conversion helpers (Excel → pixels)
-  /** Convert Excel column width (character units) to pixels. */
-  private def excelColWidthToPixels(width: Double): Int =
-    (width * 7 + 5).toInt
-
-  /** Convert Excel row height (points) to pixels. 1pt = 4/3 pixels. */
-  private def excelRowHeightToPixels(height: Double): Int =
-    (height * 4.0 / 3.0).toInt
-
-  // Graphics context for text measurement (lazy, with headless fallback)
-  private lazy val graphics: Option[Graphics2D] =
-    try
-      val img = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
-      Some(img.createGraphics())
-    catch case _: Exception => None // Headless environment
-
-  /** Measure text width using AWT FontMetrics, with fallback estimation. */
-  private def measureTextWidth(text: String, font: Option[Font]): Int =
-    graphics match
-      case Some(g) =>
-        val awtFont = toAwtFont(font)
-        g.setFont(awtFont)
-        g.getFontMetrics.stringWidth(text)
-      case None =>
-        // Fallback: simple estimation for headless environments
-        val baseCharWidth = 7
-        val sizeFactor = font.map(f => f.sizePt / DefaultFontSize).getOrElse(1.0)
-        val boldFactor = if font.exists(_.bold) then 1.1 else 1.0
-        (text.length * baseCharWidth * sizeFactor * boldFactor).toInt
-
-  /** Convert our Font to AWT Font. */
-  private def toAwtFont(font: Option[Font]): AwtFont =
-    font match
-      case Some(f) =>
-        val style =
-          (if f.bold then AwtFont.BOLD else 0) | (if f.italic then AwtFont.ITALIC else 0)
-        new AwtFont(f.name, style, f.sizePt.toInt)
-      case None =>
-        new AwtFont("Calibri", AwtFont.PLAIN, DefaultFontSize)
+  import RenderUtils.*
 
   /**
    * Export a sheet range to an SVG image.
@@ -82,6 +29,10 @@ object SvgRenderer:
    *   The cell range to export
    * @param includeStyles
    *   Whether to include cell styling (colors, fonts, borders)
+   * @param theme
+   *   Theme palette for resolving theme colors (default: Office theme)
+   * @param showLabels
+   *   Whether to show column letters (A, B, C...) and row numbers (1, 2, 3...) (default: false)
    * @return
    *   SVG string
    */
@@ -89,23 +40,29 @@ object SvgRenderer:
     sheet: Sheet,
     range: CellRange,
     includeStyles: Boolean = true,
-    theme: ThemePalette = ThemePalette.office
+    theme: ThemePalette = ThemePalette.office,
+    showLabels: Boolean = false
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
 
-    // Calculate column widths and row heights
+    // Calculate column widths and row heights using shared utilities
     val colWidths = calculateColumnWidths(sheet, range)
     val rowHeights = calculateRowHeights(sheet, range)
 
-    // Pre-calculate row y positions (cumulative heights)
-    val rowYPositions = rowHeights.scanLeft(HeaderHeight)(_ + _).dropRight(1)
+    // Calculate x/y offsets based on whether labels are shown
+    val xOffset = if showLabels then HeaderWidth else 0
+    val yOffset = if showLabels then HeaderHeight else 0
+
+    // Pre-calculate positions
+    val colXPositions = colWidths.scanLeft(xOffset)(_ + _).dropRight(1)
+    val rowYPositions = rowHeights.scanLeft(yOffset)(_ + _).dropRight(1)
 
     // Calculate total dimensions
-    val totalWidth = HeaderWidth + colWidths.sum
-    val totalHeight = HeaderHeight + rowHeights.sum
+    val totalWidth = xOffset + colWidths.sum
+    val totalHeight = yOffset + rowHeights.sum
 
     val sb = new StringBuilder
 
@@ -124,258 +81,179 @@ object SvgRenderer:
   </style>
 """)
 
-    // Pre-calculate column x positions (cumulative widths)
-    val colXPositions = colWidths.scanLeft(HeaderWidth)(_ + _).dropRight(1)
+    // Column headers (A, B, C...) - only if showLabels
+    if showLabels then
+      sb.append("  <g class=\"col-headers\">\n")
+      (startCol to endCol).foreach { col =>
+        val colIdx = col - startCol
+        val colLetter = Column.from0(col).toLetter
+        val width = colWidths(colIdx)
+        val xPos = colXPositions(colIdx)
+        sb.append(
+          s"""    <rect x="$xPos" y="0" width="$width" height="$HeaderHeight" class="header"/>\n"""
+        )
+        val textX = xPos + width / 2
+        val textY = HeaderHeight / 2 + 4
+        sb.append(
+          s"""    <text x="$textX" y="$textY" text-anchor="middle" class="header-text">$colLetter</text>\n"""
+        )
+      }
+      sb.append("  </g>\n")
 
-    // Column headers (A, B, C...)
-    sb.append("  <g class=\"col-headers\">\n")
-    (startCol to endCol).foreach { col =>
-      val colIdx = col - startCol
-      val colLetter = Column.from0(col).toLetter
-      val width = colWidths(colIdx)
-      val xOffset = colXPositions(colIdx)
-      sb.append(
-        s"""    <rect x="$xOffset" y="0" width="$width" height="$HeaderHeight" class="header"/>\n"""
-      )
-      val textX = xOffset + width / 2
-      val textY = HeaderHeight / 2 + 4
-      sb.append(
-        s"""    <text x="$textX" y="$textY" text-anchor="middle" class="header-text">$colLetter</text>\n"""
-      )
-    }
-    sb.append("  </g>\n")
+      // Row headers (1, 2, 3...)
+      sb.append("  <g class=\"row-headers\">\n")
+      (startRow to endRow).foreach { row =>
+        val rowIdx = row - startRow
+        val rowNum = row + 1
+        val y = rowYPositions(rowIdx)
+        val rowHeight = rowHeights(rowIdx)
+        sb.append(
+          s"""    <rect x="0" y="$y" width="$HeaderWidth" height="$rowHeight" class="header"/>\n"""
+        )
+        val textX = HeaderWidth / 2
+        val textY = y + rowHeight / 2 + 4
+        sb.append(
+          s"""    <text x="$textX" y="$textY" text-anchor="middle" class="header-text">$rowNum</text>\n"""
+        )
+      }
+      sb.append("  </g>\n")
+    end if
 
-    // Row headers (1, 2, 3...)
-    sb.append("  <g class=\"row-headers\">\n")
-    (startRow to endRow).foreach { row =>
-      val rowIdx = row - startRow
-      val rowNum = row + 1
-      val y = rowYPositions(rowIdx)
-      val rowHeight = rowHeights(rowIdx)
-      sb.append(
-        s"""    <rect x="0" y="$y" width="$HeaderWidth" height="$rowHeight" class="header"/>\n"""
-      )
-      val textX = HeaderWidth / 2
-      val textY = y + rowHeight / 2 + 4
-      sb.append(
-        s"""    <text x="$textX" y="$textY" text-anchor="middle" class="header-text">$rowNum</text>\n"""
-      )
-    }
-    sb.append("  </g>\n")
-
-    // Cells
+    // Cells - iterate by row for proper overflow tracking
     sb.append("  <g class=\"cells\">\n")
     (startRow to endRow).foreach { row =>
       val rowIdx = row - startRow
       val y = rowYPositions(rowIdx)
       val rowHeight = rowHeights(rowIdx)
+
+      // Track columns covered by text overflow from previous cells in this row
+      val overflowSkipCols = scala.collection.mutable.Set[Int]()
+
       (startCol to endCol).foreach { col =>
         val colIdx = col - startCol
-        val xOffset = colXPositions(colIdx)
+        val xPos = colXPositions(colIdx)
         val ref = ARef.from0(col, row)
         val width = colWidths(colIdx)
 
-        // Check if this cell is part of a merged region
-        val mergeRange = sheet.getMergedRange(ref)
-        val isInteriorMergeCell = mergeRange.exists(_.start != ref)
+        // Skip if this cell is covered by a previous cell's text overflow
+        if !overflowSkipCols.contains(col) then
+          // Check if this cell is part of a merged region
+          val mergeRange = sheet.getMergedRange(ref)
+          val isInteriorMergeCell = mergeRange.exists(_.start != ref)
 
-        // Skip interior cells of merged regions (they're covered by the anchor cell's rect)
-        if !isInteriorMergeCell then
-          val cellOpt = sheet.cells.get(ref)
+          // Skip interior cells of merged regions (they're covered by the anchor cell's rect)
+          if !isInteriorMergeCell then
+            val cellOpt = sheet.cells.get(ref)
 
-          // Calculate effective dimensions (expanded for merged cells)
-          val (effectiveWidth, effectiveHeight) = mergeRange match
-            case Some(range) =>
-              // Sum widths of merged columns (clamped to visible range)
-              val mergeEndCol = math.min(range.end.col.index0, endCol)
-              val mergedWidth = (colIdx to (mergeEndCol - startCol)).map(colWidths).sum
-              // Sum heights of merged rows (clamped to visible range)
-              val mergeEndRow = math.min(range.end.row.index0, endRow)
-              val mergedHeight = (rowIdx to (mergeEndRow - startRow)).map(rowHeights).sum
-              (mergedWidth, mergedHeight)
-            case None =>
-              (width, rowHeight)
+            // Calculate effective dimensions (expanded for merged cells)
+            val (mergeWidth, mergeHeight) = mergeRange match
+              case Some(range) =>
+                // Sum widths of merged columns (clamped to visible range)
+                val mergeEndCol = math.min(range.end.col.index0, endCol)
+                val mergedWidth = (colIdx to (mergeEndCol - startCol)).map(colWidths).sum
+                // Sum heights of merged rows (clamped to visible range)
+                val mergeEndRow = math.min(range.end.row.index0, endRow)
+                val mergedHeight = (rowIdx to (mergeEndRow - startRow)).map(rowHeights).sum
+                (mergedWidth, mergedHeight)
+              case None =>
+                (width, rowHeight)
 
-          // Cell background and border
-          val (fillAttr, strokeAttr) = cellOpt
-            .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet, theme) else None)
-            .getOrElse(("fill=\"#FFFFFF\"", ""))
+            // Calculate overflow colspan (only if no merge)
+            val overflowColspan = cellOpt match
+              case Some(cell) if mergeRange.isEmpty =>
+                calculateOverflowColspan(cell, ref, width, colWidths, sheet, startCol, endCol)
+              case _ => 1
 
-          sb.append(
-            s"""    <rect x="$xOffset" y="$y" width="$effectiveWidth" height="$effectiveHeight" """
-          )
-          sb.append(s"""$fillAttr class="cell" $strokeAttr/>\n""")
+            // Mark subsequent columns to skip due to overflow
+            if overflowColspan > 1 then
+              (1 until overflowColspan).foreach(i => overflowSkipCols += (col + i))
 
-          // Cell text (positioned within effective bounds for merged cells)
-          cellOpt.foreach { cell =>
-            val (textX, anchor) = textAlignment(cell, sheet, xOffset, effectiveWidth)
-            val textY = textYPosition(cell, sheet, y, effectiveHeight)
-            // Extract NumFmt from cell's style for proper value formatting
-            val numFmt = cell.styleId
-              .flatMap(sheet.styleRegistry.get)
-              .map(_.numFmt)
-              .getOrElse(NumFmt.General)
+            // Calculate effective width (merge or overflow)
+            val effectiveWidth =
+              if mergeRange.isDefined then mergeWidth
+              else if overflowColspan > 1 then
+                (0 until overflowColspan).map { i =>
+                  val widthIdx = colIdx + i
+                  if widthIdx >= 0 && widthIdx < colWidths.length then colWidths(widthIdx)
+                  else DefaultColumnWidthPx
+                }.sum
+              else width
 
-            cell.value match
-              case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
-                // Rich text: render each run as a tspan with explicit x positioning
-                sb.append(s"""    <text y="$textY" class="cell-text">""")
-                rt.runs.foldLeft(textX) { (currentX, run) =>
-                  val runStyle = runToSvgStyle(run, theme)
-                  val escapedText = escapeXml(run.text)
-                  sb.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
-                  currentX + measureTextWidth(run.text, run.font)
-                }
-                sb.append("</text>\n")
+            val effectiveHeight = if mergeRange.isDefined then mergeHeight else rowHeight
 
-              case other =>
-                val text = cellValueToText(other, numFmt)
-                if text.nonEmpty then
-                  val textStyle = if includeStyles then cellTextStyle(cell, sheet, theme) else ""
-                  val style = cell.styleId.flatMap(sheet.styleRegistry.get)
-                  val shouldWrap = style.exists(_.align.wrapText)
+            // Cell background and border
+            val (fillAttr, strokeAttr) = cellOpt
+              .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet, theme) else None)
+              .getOrElse(("fill=\"#FFFFFF\"", ""))
 
-                  if shouldWrap then
-                    // Calculate available width for text (cell width minus padding)
-                    val availableWidth = effectiveWidth - CellPaddingX * 2
-                    val font = style.map(_.font)
-                    val lines = wrapText(text, availableWidth, font)
-                    val lh = lineHeight(font)
+            sb.append(
+              s"""    <rect x="$xPos" y="$y" width="$effectiveWidth" height="$effectiveHeight" """
+            )
+            sb.append(s"""$fillAttr class="cell" $strokeAttr/>\n""")
 
-                    // Adjust y position for multi-line text based on vertical alignment
-                    val firstLineY =
-                      textYPositionWrapped(cell, sheet, y, effectiveHeight, lines.size, lh)
+            // Cell text (positioned within effective bounds for merged cells)
+            cellOpt.foreach { cell =>
+              val (textX, anchor) = textAlignment(cell, sheet, xPos, effectiveWidth)
+              val textY = textYPosition(cell, sheet, y, effectiveHeight)
+              // Extract NumFmt from cell's style for proper value formatting
+              val numFmt = cell.styleId
+                .flatMap(sheet.styleRegistry.get)
+                .map(_.numFmt)
+                .getOrElse(NumFmt.General)
 
-                    sb.append(
-                      s"""    <text x="$textX" text-anchor="$anchor" class="cell-text"$textStyle>"""
-                    )
-                    lines.zipWithIndex.foreach { (line, idx) =>
-                      val lineY = firstLineY + idx * lh
-                      val escapedLine = escapeXml(line)
-                      sb.append(s"""<tspan x="$textX" y="$lineY">$escapedLine</tspan>""")
-                    }
-                    sb.append("</text>\n")
-                  else
-                    // Single-line rendering (original behavior)
-                    val escapedText = escapeXml(text)
-                    sb.append(
-                      s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle>"""
-                    )
-                    sb.append(s"""$escapedText</text>\n""")
-          }
+              cell.value match
+                case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
+                  // Rich text: render each run as a tspan with explicit x positioning
+                  sb.append(s"""    <text y="$textY" class="cell-text">""")
+                  rt.runs.foldLeft(textX) { (currentX, run) =>
+                    val runStyle = runToSvgStyle(run, theme)
+                    val escapedText = escapeXml(run.text)
+                    sb.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
+                    currentX + measureTextWidth(run.text, run.font)
+                  }
+                  sb.append("</text>\n")
+
+                case other =>
+                  val text = cellValueToText(other, numFmt)
+                  if text.nonEmpty then
+                    val textStyle = if includeStyles then cellTextStyle(cell, sheet, theme) else ""
+                    val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+                    val shouldWrap = style.exists(_.align.wrapText)
+
+                    if shouldWrap then
+                      // Calculate available width for text (cell width minus padding)
+                      val availableWidth = effectiveWidth - CellPaddingX * 2
+                      val font = style.map(_.font)
+                      val lines = wrapText(text, availableWidth, font)
+                      val lh = lineHeight(font)
+
+                      // Adjust y position for multi-line text based on vertical alignment
+                      val firstLineY =
+                        textYPositionWrapped(cell, sheet, y, effectiveHeight, lines.size, lh)
+
+                      sb.append(
+                        s"""    <text x="$textX" text-anchor="$anchor" class="cell-text"$textStyle>"""
+                      )
+                      lines.zipWithIndex.foreach { (line, idx) =>
+                        val lineY = firstLineY + idx * lh
+                        val escapedLine = escapeXml(line)
+                        sb.append(s"""<tspan x="$textX" y="$lineY">$escapedLine</tspan>""")
+                      }
+                      sb.append("</text>\n")
+                    else
+                      // Single-line rendering
+                      val escapedText = escapeXml(text)
+                      sb.append(
+                        s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle>"""
+                      )
+                      sb.append(s"""$escapedText</text>\n""")
+            }
       }
     }
     sb.append("  </g>\n")
 
     sb.append("</svg>")
     sb.toString
-
-  /**
-   * Calculate column widths based on sheet.columnProperties, falling back to content-based sizing.
-   *
-   * Priority:
-   *   1. If column is hidden → 0px
-   *   2. If explicit width in columnProperties → use it
-   *   3. Otherwise → max(content width, header width, MinCellWidth)
-   */
-  private def calculateColumnWidths(sheet: Sheet, range: CellRange): Vector[Int] =
-    val startCol = range.start.col.index0
-    val endCol = range.end.col.index0
-    val startRow = range.start.row.index0
-    val endRow = range.end.row.index0
-
-    (startCol to endCol).map { colIdx =>
-      val col = Column.from0(colIdx)
-      val props = sheet.getColumnProperties(col)
-
-      // Hidden columns render as 0px
-      if props.hidden then 0
-      else
-        props.width match
-          case Some(w) =>
-            // Explicit width set - use it (matches Excel behavior)
-            excelColWidthToPixels(w)
-          case None =>
-            // Fall back to content-based sizing
-            val headerWidth = measureTextWidth(col.toLetter, None) + CellPaddingX * 2
-            val maxContentWidth = (startRow to endRow)
-              .map { row =>
-                val ref = ARef.from0(colIdx, row)
-                sheet.cells.get(ref) match
-                  case Some(cell) => measureCellValueWidth(cell.value) + CellPaddingX * 2
-                  case None => 0
-              }
-              .maxOption
-              .getOrElse(0)
-
-            // Use sheet default if available, otherwise MinCellWidth
-            val minWidth = sheet.defaultColumnWidth
-              .map(excelColWidthToPixels)
-              .getOrElse(MinCellWidth)
-            math.max(minWidth, math.max(headerWidth, maxContentWidth))
-    }.toVector
-
-  /**
-   * Calculate row heights based on sheet.rowProperties.
-   *
-   * Priority:
-   *   1. If row is hidden → 0px
-   *   2. If explicit height in rowProperties → use it
-   *   3. Otherwise → sheet.defaultRowHeight or DefaultCellHeight
-   */
-  private def calculateRowHeights(sheet: Sheet, range: CellRange): Vector[Int] =
-    val startRow = range.start.row.index0
-    val endRow = range.end.row.index0
-
-    (startRow to endRow).map { rowIdx =>
-      val row = Row.from0(rowIdx)
-      getRowHeight(sheet, row)
-    }.toVector
-
-  /** Get the height of a single row in pixels. */
-  private def getRowHeight(sheet: Sheet, row: Row): Int =
-    val props = sheet.getRowProperties(row)
-    if props.hidden then 0
-    else
-      props.height
-        .map(excelRowHeightToPixels)
-        .getOrElse(
-          sheet.defaultRowHeight
-            .map(excelRowHeightToPixels)
-            .getOrElse(DefaultCellHeight)
-        )
-
-  /** Measure the width of a cell value, handling rich text runs. */
-  private def measureCellValueWidth(value: CellValue): Int = value match
-    case CellValue.RichText(rt) =>
-      rt.runs.map(run => measureTextWidth(run.text, run.font)).sum
-    case CellValue.Formula(_, Some(cached)) =>
-      measureCellValueWidth(cached)
-    case other =>
-      // Use General format for measurement (actual format unknown here)
-      measureTextWidth(cellValueToText(other, NumFmt.General), None)
-
-  /**
-   * Convert cell value to text with Excel-style number formatting.
-   */
-  private def cellValueToText(value: CellValue, numFmt: NumFmt): String = value match
-    case CellValue.RichText(rt) =>
-      // Rich text has its own formatting, don't apply NumFmt
-      rt.toPlainText
-
-    case CellValue.Empty => ""
-
-    case CellValue.Formula(_, Some(cached)) =>
-      // Show cached result formatted with NumFmt (matches Excel display)
-      NumFmtFormatter.formatValue(cached, numFmt)
-
-    case CellValue.Formula(expr, None) =>
-      // No cached value, show raw formula
-      s"=$expr"
-
-    case other =>
-      // Use NumFmtFormatter for Text, Number, Bool, DateTime, Error
-      NumFmtFormatter.formatValue(other, numFmt)
 
   /**
    * Get SVG fill and stroke attributes for a cell's background.
@@ -387,7 +265,7 @@ object SvgRenderer:
   ): Option[(String, String)] =
     cell.styleId.flatMap(sheet.styleRegistry.get).map { style =>
       val fill = style.fill match
-        case Fill.Solid(color) => colorToSvgFillAttrs(color, theme)
+        case Fill.Solid(color) => colorToFillAttrsWithOpacity(color, theme)
         case _ => """fill="#FFFFFF""""
 
       val stroke = borderToStroke(style.border, theme)
@@ -411,7 +289,7 @@ object SvgRenderer:
         case BorderStyle.Medium => 2
         case BorderStyle.Thick => 3
         case _ => 1
-      val color = side.color.map(c => colorToSvgHex(c, theme)).getOrElse("#000000")
+      val color = side.color.map(c => colorToHex(c, theme)).getOrElse("#000000")
       s"""stroke="$color" stroke-width="$width""""
 
   /**
@@ -424,7 +302,7 @@ object SvgRenderer:
         val attrs = scala.collection.mutable.ArrayBuffer[String]()
 
         // Font color
-        style.font.color.foreach(c => attrs += s"""fill="${colorToSvgHex(c, theme)}"""")
+        style.font.color.foreach(c => attrs += s"""fill="${colorToHex(c, theme)}"""")
 
         // Font weight
         if style.font.bold then attrs += """font-weight="bold""""
@@ -454,7 +332,7 @@ object SvgRenderer:
         val attrs = scala.collection.mutable.ArrayBuffer[String]()
 
         // Font color
-        f.color.foreach(c => attrs += s"""fill="${colorToSvgHex(c, theme)}"""")
+        f.color.foreach(c => attrs += s"""fill="${colorToHex(c, theme)}"""")
 
         // Font weight
         if f.bold then attrs += """font-weight="bold""""
@@ -579,11 +457,16 @@ object SvgRenderer:
    */
   private def textAlignment(cell: Cell, sheet: Sheet, cellX: Int, cellWidth: Int): (Int, String) =
     val style = cell.styleId.flatMap(sheet.styleRegistry.get)
-    val align = style.map(_.align.horizontal).getOrElse(HAlign.Left)
+    val align = style.map(_.align.horizontal).getOrElse(HAlign.General)
     val indent = style.map(_.align.indent).getOrElse(0)
     val indentPx = indent * 21 // ~3 chars * 7px
 
-    align match
+    // For General alignment, use content-based alignment
+    val effectiveAlign = align match
+      case HAlign.General => contentBasedAlignment(cell.value)
+      case other => other
+
+    effectiveAlign match
       case HAlign.Center | HAlign.CenterContinuous =>
         // Center alignment: indent shifts content slightly right
         (cellX + cellWidth / 2 + indentPx / 2, "middle")
@@ -593,36 +476,3 @@ object SvgRenderer:
       case _ =>
         // Left alignment: indent adds to left padding
         (cellX + CellPaddingX + indentPx, "start")
-
-  /**
-   * Escape XML special characters.
-   */
-  private def escapeXml(s: String): String =
-    s.replace("&", "&amp;")
-      .replace("<", "&lt;")
-      .replace(">", "&gt;")
-      .replace("\"", "&quot;")
-      .replace("'", "&apos;")
-
-  private def escapeCss(s: String): String =
-    s.replace("\\", "\\\\")
-      .replace("'", "\\'")
-      .replace("\"", "\\\"")
-
-  /**
-   * Convert Color to SVG-compatible RGB hex using theme for theme color resolution. Returns #RRGGBB
-   * format.
-   */
-  private def colorToSvgHex(c: Color, theme: ThemePalette): String =
-    c.toResolvedHex(theme)
-
-  /**
-   * Convert Color to SVG fill attributes with opacity support. Returns both fill and fill-opacity
-   * for translucent ARGB colors, just fill for fully opaque colors.
-   */
-  private def colorToSvgFillAttrs(c: Color, theme: ThemePalette): String =
-    val argb = c.toResolvedArgb(theme)
-    val alpha = ((argb >> 24) & 0xff) / 255.0
-    val hex = f"#${argb & 0xffffff}%06X"
-    if alpha >= 1.0 then s"""fill="$hex""""
-    else s"""fill="$hex" fill-opacity="${alpha}""""

@@ -154,6 +154,18 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
+    // With showLabels=false (default), viewBox is just column (215) x row (60)
+    assert(svg.contains("viewBox=\"0 0 215 60\""), s"viewBox should be 215x60, got: $svg")
+  }
+
+  test("toSvg: viewBox includes headers when showLabels=true") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Data")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(30.0))) // 215px
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
+
+    val svg = sheet.toSvg(ref"A1:A1", showLabels = true)
+
     // viewBox should include HeaderWidth (40) + column (215) = 255 total width
     // viewBox should include HeaderHeight (24) + row (60) = 84 total height
     assert(svg.contains("viewBox=\"0 0 255 84\""), s"viewBox should be 255x84, got: $svg")
@@ -183,9 +195,21 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // Default left padding is 6 (CellPaddingX), indent adds 21px
-    // HeaderWidth = 40, so text x should be 40 + 6 + 21 = 67
-    assert(svg.contains("""x="67""""), s"Text should be at x=67 with indent=1, got: $svg")
+    // With showLabels=false: CellPaddingX (6) + indent (21) = 27
+    assert(svg.contains("""x="27""""), s"Text should be at x=27 with indent=1, got: $svg")
+  }
+
+  test("toSvg: cell with indent and showLabels=true") {
+    val indentStyle = CellStyle.default.withAlign(Align(indent = 1))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Indented")
+      .unsafe
+      .withCellStyle(ref"A1", indentStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1", showLabels = true)
+
+    // With showLabels=true: HeaderWidth (40) + CellPaddingX (6) + indent (21) = 67
+    assert(svg.contains("""x="67""""), s"Text should be at x=67 with indent=1 and labels, got: $svg")
   }
 
   test("toSvg: indent 0 uses default padding") {
@@ -197,8 +221,8 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // HeaderWidth (40) + CellPaddingX (6) = 46
-    assert(svg.contains("""x="46""""), s"Text should be at x=46 with no indent, got: $svg")
+    // With showLabels=false: CellPaddingX (6) = 6
+    assert(svg.contains("""x="6""""), s"Text should be at x=6 with no indent, got: $svg")
   }
 
   test("toSvg: large indent value works") {
@@ -210,8 +234,8 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // HeaderWidth (40) + CellPaddingX (6) + indent (3 * 21 = 63) = 109
-    assert(svg.contains("""x="109""""), s"Text should be at x=109 with indent=3, got: $svg")
+    // With showLabels=false: CellPaddingX (6) + indent (3 * 21 = 63) = 69
+    assert(svg.contains("""x="69""""), s"Text should be at x=69 with indent=3, got: $svg")
   }
 
   test("toSvg: center alignment with indent shifts slightly right") {
@@ -224,8 +248,7 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // Center position: HeaderWidth (40) + colWidth/2 (37.5) + indentPx/2 (21) = ~98
-    // Cell center: 40 + 75/2 = 77.5, plus indent/2 = 21, total ~98
+    // With showLabels=false: colWidth/2 (37) + indentPx/2 (21) = 58
     assert(svg.contains("text-anchor=\"middle\""), s"Should have middle anchor, got: $svg")
   }
 
@@ -239,9 +262,9 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // Right alignment: HeaderWidth (40) + colWidth (75) - CellPaddingX (6) = 109
+    // With showLabels=false: colWidth (75) - CellPaddingX (6) = 69
     // Indent is ignored for right alignment (Excel behavior)
-    assert(svg.contains("""x="109""""), s"Right-aligned text should ignore indent, got: $svg")
+    assert(svg.contains("""x="69""""), s"Right-aligned text should ignore indent, got: $svg")
     assert(svg.contains("text-anchor=\"end\""), s"Should have end anchor, got: $svg")
   }
 
@@ -257,13 +280,13 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // Find the text element containing our cell text (not header text)
+    // Find the text element containing our cell text
     val yMatch = """<text[^>]*y="(\d+)"[^>]*>TopText</text>""".r.findFirstMatchIn(svg)
     yMatch match
       case Some(m) =>
         val textY = m.group(1).toInt
-        // Top-aligned: cellY + baselineOffset + padding = 24 + ~9 + 4 ≈ 37
-        assert(textY < 50, s"Top-aligned text y=$textY should be < 50 (near top of cell)")
+        // With showLabels=false: cellY=0, Top-aligned: baselineOffset + padding ≈ 13
+        assert(textY < 25, s"Top-aligned text y=$textY should be < 25 (near top of cell)")
       case None => fail(s"Could not find cell text y position in: $svg")
   }
 
@@ -281,8 +304,8 @@ class SvgRendererSpec extends FunSuite:
     yMatch match
       case Some(m) =>
         val textY = m.group(1).toInt
-        // Cell at y=24, height=60, bottom = 84, text should be near 80 (84 - 4 padding)
-        assert(textY > 70, s"Bottom-aligned text y=$textY should be > 70 (near bottom of cell)")
+        // With showLabels=false: cellY=0, height=60, bottom = 60, text should be near 56 (60 - 4 padding)
+        assert(textY > 45, s"Bottom-aligned text y=$textY should be > 45 (near bottom of cell)")
       case None => fail(s"Could not find cell text y position in: $svg")
   }
 
@@ -300,8 +323,8 @@ class SvgRendererSpec extends FunSuite:
     yMatch match
       case Some(m) =>
         val textY = m.group(1).toInt
-        // Cell at y=24, height=60, middle should be around y=54 (24 + 30)
-        assert(textY > 45 && textY < 65, s"Middle-aligned text y=$textY should be 45-65 (center)")
+        // With showLabels=false: cellY=0, height=60, middle should be around y=30
+        assert(textY > 20 && textY < 40, s"Middle-aligned text y=$textY should be 20-40 (center)")
       case None => fail(s"Could not find cell text y position in: $svg")
   }
 
@@ -317,8 +340,8 @@ class SvgRendererSpec extends FunSuite:
     yMatch match
       case Some(m) =>
         val textY = m.group(1).toInt
-        // Default is Bottom: cell at y=24, height=60, bottom ≈ 80
-        assert(textY > 70, s"Default (Bottom) text y=$textY should be > 70")
+        // With showLabels=false: cellY=0, Default is Bottom: height=60, bottom ≈ 56
+        assert(textY > 45, s"Default (Bottom) text y=$textY should be > 45")
       case None => fail(s"Could not find cell text y position in: $svg")
   }
 
@@ -336,9 +359,9 @@ class SvgRendererSpec extends FunSuite:
 
     // Merged rect should span both columns (75 + 75 = 150px)
     assert(svg.contains("""width="150""""), s"Merged rect should be 150px wide, got: $svg")
-    // Should only have one rect with width=150 (the merged cell), not two separate rects
-    val width150Count = """width="150"""".r.findAllIn(svg).length
-    assertEquals(width150Count, 1, s"Should have exactly 1 merged rect with width=150, got: $svg")
+    // Count cell rect elements (not the svg element itself)
+    val cellRectCount = """<rect[^>]*class="cell"[^>]*>""".r.findAllIn(svg).length
+    assertEquals(cellRectCount, 1, s"Should have exactly 1 cell rect (merged), got: $svg")
   }
 
   test("toSvg: merged cells render as single rect spanning rows") {
@@ -472,14 +495,14 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // First tspan should be near top of cell (header is 24px, so cell starts at y=24)
+    // First tspan should be near top of cell (with showLabels=false, cell starts at y=0)
     val yPattern = """<tspan[^>]*y="(\d+)"[^>]*>""".r
     val yValues = yPattern.findAllMatchIn(svg).map(_.group(1).toInt).toList
 
     yValues.headOption.foreach { firstY =>
-      // Top-aligned text should be in upper portion of cell (within first ~30px of 80px tall cell)
-      // Cell starts at y=24, so first line should be around 24 + baselineOffset + padding ≈ 37
-      assert(firstY < 50, s"First line should be near top, got y=$firstY")
+      // Top-aligned text should be in upper portion of cell (within first ~20px of 80px tall cell)
+      // Cell starts at y=0, so first line should be around baselineOffset + padding ≈ 13
+      assert(firstY < 25, s"First line should be near top, got y=$firstY")
     }
   }
 

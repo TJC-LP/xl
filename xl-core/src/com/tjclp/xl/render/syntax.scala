@@ -26,6 +26,8 @@ object syntax:
      *   Theme palette for resolving theme colors (default: Office theme)
      * @param applyPrintScale
      *   Apply print scaling from pageSetup (default: false)
+     * @param showLabels
+     *   Show column letters (A, B, C...) and row numbers (1, 2, 3...) (default: false)
      * @return
      *   HTML string
      */
@@ -35,9 +37,18 @@ object syntax:
       includeStyles: Boolean = true,
       includeComments: Boolean = true,
       theme: ThemePalette = ThemePalette.office,
-      applyPrintScale: Boolean = false
+      applyPrintScale: Boolean = false,
+      showLabels: Boolean = false
     ): String =
-      HtmlRenderer.toHtml(sheet, range, includeStyles, includeComments, theme, applyPrintScale)
+      HtmlRenderer.toHtml(
+        sheet,
+        range,
+        includeStyles,
+        includeComments,
+        theme,
+        applyPrintScale,
+        showLabels
+      )
 
     /**
      * Export sheet range to SVG.
@@ -48,6 +59,8 @@ object syntax:
      *   Include cell styling (colors, fonts, borders) (default: true)
      * @param theme
      *   Theme palette for resolving theme colors (default: Office theme)
+     * @param showLabels
+     *   Show column letters (A, B, C...) and row numbers (1, 2, 3...) (default: false)
      * @return
      *   SVG string
      */
@@ -55,6 +68,7 @@ object syntax:
     def toSvg(
       range: CellRange,
       includeStyles: Boolean = true,
-      theme: ThemePalette = ThemePalette.office
+      theme: ThemePalette = ThemePalette.office,
+      showLabels: Boolean = false
     ): String =
-      SvgRenderer.toSvg(sheet, range, includeStyles, theme)
+      SvgRenderer.toSvg(sheet, range, includeStyles, theme, showLabels)
