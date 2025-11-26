@@ -72,12 +72,12 @@ object SvgRenderer:
     )
     sb.append(s"""width="$totalWidth" height="$totalHeight">\n""")
 
-    // Embedded styles
+    // Embedded styles - note: 11pt = ~15px (11 * 4/3)
     sb.append("""  <style>
     .header { fill: #E0E0E0; stroke: #999999; stroke-width: 1; }
-    .header-text { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11px; fill: #333333; }
+    .header-text { font-family: 'Segoe UI', Arial, sans-serif; font-size: 15px; fill: #333333; }
     .cell { stroke: #D0D0D0; stroke-width: 0.5; }
-    .cell-text { font-family: 'Calibri', 'Segoe UI', Arial, sans-serif; font-size: 11px; }
+    .cell-text { font-family: 'Calibri', 'Segoe UI', Arial, sans-serif; font-size: 15px; }
   </style>
 """)
 
@@ -310,13 +310,14 @@ object SvgRenderer:
         // Font style
         if style.font.italic then attrs += """font-style="italic""""
 
-        // Font size (if different from default)
+        // Font size (if different from default) - convert pt to px (pt * 4/3)
         if style.font.sizePt != Font.default.sizePt then
-          attrs += s"""font-size="${style.font.sizePt}px""""
+          val fontSizePx = (style.font.sizePt * 4.0 / 3.0).toInt
+          attrs += s"""font-size="${fontSizePx}px""""
 
-        // Font family (if different from default)
+        // Font family (if different from default) - quote font names for SVG
         if style.font.name != Font.default.name then
-          attrs += s"""font-family="${escapeCss(style.font.name)}""""
+          attrs += s"""font-family="'${escapeCss(style.font.name)}'""""
 
         if attrs.nonEmpty then " " + attrs.mkString(" ") else ""
       }
@@ -343,11 +344,13 @@ object SvgRenderer:
         // Underline (SVG uses text-decoration)
         if f.underline then attrs += """text-decoration="underline""""
 
-        // Font size (if different from default)
-        if f.sizePt != Font.default.sizePt then attrs += s"""font-size="${f.sizePt}px""""
+        // Font size (if different from default) - convert pt to px (pt * 4/3)
+        if f.sizePt != Font.default.sizePt then
+          val fontSizePx = (f.sizePt * 4.0 / 3.0).toInt
+          attrs += s"""font-size="${fontSizePx}px""""
 
-        // Font family (if different from default)
-        if f.name != Font.default.name then attrs += s"""font-family="${escapeCss(f.name)}""""
+        // Font family (if different from default) - quote font names for SVG
+        if f.name != Font.default.name then attrs += s"""font-family="'${escapeCss(f.name)}'""""
 
         if attrs.nonEmpty then " " + attrs.mkString(" ") else ""
 
@@ -396,11 +399,12 @@ object SvgRenderer:
           wrapWords(rest, maxWidth, font, currentLine :: lines, word)
 
   /**
-   * Calculate line height for wrapped text.
+   * Calculate line height for wrapped text in pixels.
    */
   private def lineHeight(font: Option[Font]): Int =
-    val fontSize = font.map(_.sizePt.toInt).getOrElse(DefaultFontSize)
-    (fontSize * 1.4).toInt // Standard line height multiplier
+    val fontSizePt = font.map(_.sizePt).getOrElse(DefaultFontSize.toDouble)
+    val fontSizePx = (fontSizePt * 4.0 / 3.0).toInt // Convert pt to px
+    (fontSizePx * 1.4).toInt // Standard line height multiplier
 
   /**
    * Calculate text y position based on vertical alignment.
@@ -426,13 +430,14 @@ object SvgRenderer:
   ): Int =
     val style = cell.styleId.flatMap(sheet.styleRegistry.get)
     val vAlign = style.map(_.align.vertical).getOrElse(VAlign.Bottom)
-    val fontSize = style.map(_.font.sizePt.toInt).getOrElse(DefaultFontSize)
+    val fontSizePt = style.map(_.font.sizePt).getOrElse(DefaultFontSize.toDouble)
+    val fontSizePx = (fontSizePt * 4.0 / 3.0).toInt // Convert pt to px
 
     // Text baseline adjustment (SVG places text at baseline, not top)
-    val baselineOffset = (fontSize * 0.8).toInt // Approximate ascender height
+    val baselineOffset = (fontSizePx * 0.8).toInt // Approximate ascender height
 
     // Total height of wrapped text (lineCount - 1 because first line doesn't have spacing above it)
-    val totalTextHeight = if lineCount > 1 then (lineCount - 1) * lh + fontSize else fontSize
+    val totalTextHeight = if lineCount > 1 then (lineCount - 1) * lh + fontSizePx else fontSizePx
 
     vAlign match
       case VAlign.Top =>
