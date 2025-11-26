@@ -622,3 +622,27 @@ class SvgRendererSpec extends FunSuite:
       s"Rich text font should be quoted, got: $svg"
     )
   }
+
+  // ========== Gridlines Tests ==========
+
+  test("toSvg: gridlines hidden by default") {
+    val sheet = Sheet("Test").put(ref"A1" -> "Data")
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Without showGridlines, .cell class should have no stroke
+    assert(svg.contains(".cell {  }"), s"Cell class should be empty (no gridlines), got: $svg")
+    assert(!svg.contains("stroke: #D0D0D0"), s"Should not have gridline stroke, got: $svg")
+  }
+
+  test("toSvg: gridlines shown when showGridlines=true") {
+    val sheet = Sheet("Test").put(ref"A1" -> "Data")
+
+    val svg = sheet.toSvg(ref"A1:A1", showGridlines = true)
+
+    // With showGridlines, .cell class should have stroke
+    assert(
+      svg.contains("stroke: #D0D0D0; stroke-width: 0.5;"),
+      s"Cell class should have gridline stroke, got: $svg"
+    )
+  }

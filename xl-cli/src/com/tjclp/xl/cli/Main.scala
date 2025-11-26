@@ -92,6 +92,8 @@ object Main
     }
   private val printScaleOpt =
     Opts.flag("print-scale", "Apply print scaling (for PDF-like output)").orFalse
+  private val gridlinesOpt =
+    Opts.flag("gridlines", "Show cell gridlines in SVG output").orFalse
 
   // --- Read-only commands ---
 
@@ -104,7 +106,9 @@ object Main
   }
 
   val viewCmd: Opts[Command] = Opts.subcommand("view", "View range (markdown, html, or svg)") {
-    (rangeArg, formulasOpt, limitOpt, formatOpt, printScaleOpt).mapN(Command.View.apply)
+    (rangeArg, formulasOpt, limitOpt, formatOpt, printScaleOpt, gridlinesOpt).mapN(
+      Command.View.apply
+    )
   }
 
   val cellCmd: Opts[Command] = Opts.subcommand("cell", "Get cell details") {
@@ -243,7 +247,7 @@ object Main
              |Used range: (empty)
              |Non-empty: 0 cells""".stripMargin)
 
-    case Command.View(rangeStr, showFormulas, limit, format, printScale) =>
+    case Command.View(rangeStr, showFormulas, limit, format, printScale, showGridlines) =>
       for
         resolved <- resolveRef(wb, sheet, rangeStr)
         (targetSheet, refOrRange) = resolved
@@ -256,7 +260,8 @@ object Main
         case ViewFormat.Markdown => Markdown.renderRange(targetSheet, limitedRange, showFormulas)
         case ViewFormat.Html =>
           targetSheet.toHtml(limitedRange, theme = theme, applyPrintScale = printScale)
-        case ViewFormat.Svg => targetSheet.toSvg(limitedRange, theme = theme)
+        case ViewFormat.Svg =>
+          targetSheet.toSvg(limitedRange, theme = theme, showGridlines = showGridlines)
 
     case Command.Cell(refStr) =>
       for
@@ -439,7 +444,8 @@ enum Command:
     showFormulas: Boolean,
     limit: Int,
     format: ViewFormat,
-    printScale: Boolean
+    printScale: Boolean,
+    showGridlines: Boolean
   )
   case Cell(ref: String)
   case Search(pattern: String, limit: Int)

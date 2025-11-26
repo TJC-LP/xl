@@ -33,6 +33,8 @@ object SvgRenderer:
    *   Theme palette for resolving theme colors (default: Office theme)
    * @param showLabels
    *   Whether to show column letters (A, B, C...) and row numbers (1, 2, 3...) (default: false)
+   * @param showGridlines
+   *   Whether to show cell gridlines (default: false, matches HTML behavior)
    * @return
    *   SVG string
    */
@@ -41,7 +43,8 @@ object SvgRenderer:
     range: CellRange,
     includeStyles: Boolean = true,
     theme: ThemePalette = ThemePalette.office,
-    showLabels: Boolean = false
+    showLabels: Boolean = false,
+    showGridlines: Boolean = false
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -73,10 +76,12 @@ object SvgRenderer:
     sb.append(s"""width="$totalWidth" height="$totalHeight">\n""")
 
     // Embedded styles - note: 11pt = ~15px (11 * 4/3)
-    sb.append("""  <style>
+    // Gridlines are optional (default: off, like HTML)
+    val gridlineStyle = if showGridlines then "stroke: #D0D0D0; stroke-width: 0.5;" else ""
+    sb.append(s"""  <style>
     .header { fill: #E0E0E0; stroke: #999999; stroke-width: 1; }
     .header-text { font-family: 'Segoe UI', Arial, sans-serif; font-size: 15px; fill: #333333; }
-    .cell { stroke: #D0D0D0; stroke-width: 0.5; }
+    .cell { $gridlineStyle }
     .cell-text { font-family: 'Calibri', 'Segoe UI', Arial, sans-serif; font-size: 15px; }
   </style>
 """)
