@@ -69,7 +69,6 @@ val sheet = Sheet("Demo")
   .put(ref"B1", fx"=SUM(A1:A3)")
   .put(ref"B2", fx"=AVERAGE(A1:A3)")
   .put(ref"C1", fx"=IF(B1>400, \"High\", \"Low\")")
-  .unsafe
 
 println("Sheet contents:")
 println("  A1: 150")
@@ -161,7 +160,6 @@ val cyclicSheet = Sheet("Cyclic")
   .put(ref"A1", fx"=B1+10")
   .put(ref"B1", fx"=C1*2")
   .put(ref"C1", fx"=A1+5")  // Cycle: A1 → B1 → C1 → A1
-  .unsafe
 
 println("Sheet with circular reference:")
 println("  A1: =B1+10")
