@@ -34,7 +34,7 @@ xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), ma
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
 xl-benchmarks/   → JMH performance benchmarks
-xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 21 functions, dependency graphs)
+xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 28 functions, dependency graphs)
 xl-testkit/      → Test laws, generators, helpers [future]
 ```
 
@@ -168,7 +168,7 @@ sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
 sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
 ```
 
-**21 Functions**: SUM, COUNT, AVERAGE, MIN, MAX, IF, AND, OR, NOT, CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER, TODAY, NOW, DATE, YEAR, MONTH, DAY
+**28 Functions**: SUM, COUNT, AVERAGE, MIN, MAX, IF, AND, OR, NOT, CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER, TODAY, NOW, DATE, YEAR, MONTH, DAY, NPV, IRR, VLOOKUP, SUMIF, COUNTIF, SUMIFS, COUNTIFS
 
 ### Rich Text
 ```scala

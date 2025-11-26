@@ -388,6 +388,71 @@ enum TExpr[A] derives CanEqual:
     rangeLookup: TExpr[Boolean]
   ) extends TExpr[BigDecimal]
 
+  // Conditional aggregation functions (SUMIF/COUNTIF family)
+
+  /**
+   * Sum cells where criteria matches: SUMIF(range, criteria, [sum_range])
+   *
+   * Semantics:
+   *   - `range` is the range to test against criteria
+   *   - `criteria` is evaluated at runtime to determine matching rule
+   *   - `sumRange` is the range to sum (defaults to `range` if None)
+   *   - Non-numeric cells in sumRange are skipped (Excel behavior)
+   *   - Criteria supports: exact match, wildcards (*,?), comparisons (>,>=,<,<=,<>)
+   *
+   * Example: SUMIF(A1:A10, "Apple", B1:B10) sums B values where A equals "Apple"
+   */
+  case SumIf(
+    range: CellRange,
+    criteria: TExpr[?],
+    sumRange: Option[CellRange]
+  ) extends TExpr[BigDecimal]
+
+  /**
+   * Count cells where criteria matches: COUNTIF(range, criteria)
+   *
+   * Semantics:
+   *   - `range` is the range to test against criteria
+   *   - `criteria` is evaluated at runtime to determine matching rule
+   *   - Returns count as BigDecimal (Excel convention)
+   *
+   * Example: COUNTIF(A1:A10, ">100") counts cells greater than 100
+   */
+  case CountIf(
+    range: CellRange,
+    criteria: TExpr[?]
+  ) extends TExpr[BigDecimal]
+
+  /**
+   * Sum with multiple criteria (AND logic): SUMIFS(sum_range, criteria_range1, criteria1, ...)
+   *
+   * Semantics:
+   *   - `sumRange` is the range to sum
+   *   - `conditions` is a list of (range, criteria) pairs - ALL must match
+   *   - All ranges must have same dimensions
+   *   - Non-numeric cells in sumRange are skipped
+   *
+   * Example: SUMIFS(C1:C10, A1:A10, "Apple", B1:B10, ">100") sums C where A="Apple" AND B>100
+   */
+  case SumIfs(
+    sumRange: CellRange,
+    conditions: List[(CellRange, TExpr[?])]
+  ) extends TExpr[BigDecimal]
+
+  /**
+   * Count with multiple criteria (AND logic): COUNTIFS(criteria_range1, criteria1, ...)
+   *
+   * Semantics:
+   *   - `conditions` is a list of (range, criteria) pairs - ALL must match
+   *   - All ranges must have same dimensions
+   *   - Returns count as BigDecimal (Excel convention)
+   *
+   * Example: COUNTIFS(A1:A10, "Apple", B1:B10, ">100") counts where A="Apple" AND B>100
+   */
+  case CountIfs(
+    conditions: List[(CellRange, TExpr[?])]
+  ) extends TExpr[BigDecimal]
+
 object TExpr:
   /**
    * Smart constructor for literals.
@@ -502,6 +567,47 @@ object TExpr:
     rangeLookup: TExpr[Boolean] = Lit(true)
   ): TExpr[BigDecimal] =
     VLookup(lookup, table, colIndex, rangeLookup)
+
+  // Conditional aggregation function smart constructors
+
+  /**
+   * SUMIF: sum cells where criteria matches.
+   *
+   * Example: TExpr.sumIf(CellRange("A1:A10"), TExpr.Lit("Apple"), Some(CellRange("B1:B10")))
+   */
+  def sumIf(
+    range: CellRange,
+    criteria: TExpr[?],
+    sumRange: Option[CellRange] = None
+  ): TExpr[BigDecimal] =
+    SumIf(range, criteria, sumRange)
+
+  /**
+   * COUNTIF: count cells where criteria matches.
+   *
+   * Example: TExpr.countIf(CellRange("A1:A10"), TExpr.Lit(">100"))
+   */
+  def countIf(range: CellRange, criteria: TExpr[?]): TExpr[BigDecimal] =
+    CountIf(range, criteria)
+
+  /**
+   * SUMIFS: sum with multiple criteria (AND logic).
+   *
+   * Example: TExpr.sumIfs(CellRange("C1:C10"), List((CellRange("A1:A10"), TExpr.Lit("Apple"))))
+   */
+  def sumIfs(
+    sumRange: CellRange,
+    conditions: List[(CellRange, TExpr[?])]
+  ): TExpr[BigDecimal] =
+    SumIfs(sumRange, conditions)
+
+  /**
+   * COUNTIFS: count with multiple criteria (AND logic).
+   *
+   * Example: TExpr.countIfs(List((CellRange("A1:A10"), TExpr.Lit("Apple"))))
+   */
+  def countIfs(conditions: List[(CellRange, TExpr[?])]): TExpr[BigDecimal] =
+    CountIfs(conditions)
 
   // Text function smart constructors
 
