@@ -121,6 +121,7 @@ object RenderUtils:
    * @return
    *   true if cell is empty and has no styling (allows overflow)
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Return"))
   private def isCellEmptyAndUnstyled(ref: ARef, sheet: Sheet): Boolean =
     import com.tjclp.xl.styles.border.Border
     import com.tjclp.xl.styles.fill.Fill

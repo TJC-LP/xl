@@ -16,6 +16,7 @@ import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
  * - Row/Column builder DSL
  * - Round-trip serialization of row/column properties
  */
+@SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 class RowColumnOperationsSpec extends FunSuite:
 
   val tempDir: Path = Files.createTempDirectory("xl-rowcol-test-")

@@ -6,6 +6,7 @@ import FormatCodeParser.*
 /**
  * Tests for Excel custom number format code parser.
  */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class FormatCodeParserSpec extends FunSuite:
 
   // ========== Parsing Tests ==========

@@ -16,6 +16,7 @@ import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.unsafe.*
 
 /** Tests for SVG export functionality */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class SvgRendererSpec extends FunSuite:
 
   test("toSvg: basic SVG structure") {

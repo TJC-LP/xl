@@ -19,6 +19,7 @@ import scala.math.BigDecimal
  *
  * Target: ~50 tests (7-10 property, 20-25 unit, 15-20 integration, 5-8 error)
  */
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 class EvaluatorSpec extends ScalaCheckSuite:
 
   val evaluator = Evaluator.instance

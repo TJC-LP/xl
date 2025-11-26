@@ -22,6 +22,7 @@ import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.unsafe.*
 
 /** Tests for HTML export functionality */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class HtmlRendererSpec extends FunSuite:
 
   // ========== Basic HTML Export ==========

@@ -17,6 +17,7 @@ import com.tjclp.xl.macros.ref
  *   - Invalid regex patterns in search command
  *   - Empty override values in eval command
  */
+@SuppressWarnings(Array("org.wartremover.warts.Var"))
 class MainSpec extends CatsEffectSuite:
 
   // Create a temporary Excel file for testing

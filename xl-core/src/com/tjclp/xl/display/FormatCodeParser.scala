@@ -24,6 +24,13 @@ import scala.collection.mutable.ArrayBuffer
  *
  * @since 0.2.0
  */
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.Var",
+    "org.wartremover.warts.While",
+    "org.wartremover.warts.Return"
+  )
+)
 object FormatCodeParser:
 
   // ========== AST Types ==========
