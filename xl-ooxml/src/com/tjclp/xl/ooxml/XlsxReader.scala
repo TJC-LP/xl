@@ -3,7 +3,7 @@ package com.tjclp.xl.ooxml
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
-import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
+import com.tjclp.xl.sheets.{ColumnProperties, PageSetup, RowProperties}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext, SourceFingerprint}
 import com.tjclp.xl.tables.TableSpec
@@ -595,6 +595,9 @@ object XlsxReader:
     // Extract row properties from OoxmlRow data
     val rowProperties = extractRowProperties(ooxmlSheet.rows)
 
+    // Parse page setup (print scale, orientation, etc.)
+    val pageSetup = parsePageSetup(ooxmlSheet.pageSetup)
+
     Right(
       Sheet(
         name = name,
@@ -604,7 +607,8 @@ object XlsxReader:
         comments = comments,
         tables = tables,
         columnProperties = columnProperties,
-        rowProperties = rowProperties
+        rowProperties = rowProperties,
+        pageSetup = pageSetup
       )
     )
 
@@ -666,6 +670,22 @@ object XlsxReader:
       if props.height.isDefined || props.hidden || props.outlineLevel.isDefined || props.collapsed
       then builder += (Row.from1(row.rowIndex) -> props)
     builder.result()
+
+  /**
+   * Parse page setup from <pageSetup> XML element.
+   *
+   * Extracts print settings like scale, orientation, fitToWidth, fitToHeight.
+   */
+  private def parsePageSetup(pageSetupElem: Option[Elem]): Option[PageSetup] =
+    pageSetupElem.map { elem =>
+      val attrs = elem.attributes.asAttrMap
+      PageSetup(
+        scale = attrs.get("scale").flatMap(_.toIntOption).getOrElse(100),
+        orientation = attrs.get("orientation"),
+        fitToWidth = attrs.get("fitToWidth").flatMap(_.toIntOption),
+        fitToHeight = attrs.get("fitToHeight").flatMap(_.toIntOption)
+      )
+    }
 
   /**
    * Assemble final workbook with optional SourceContext for surgical modification.

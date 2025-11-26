@@ -26,7 +26,8 @@ final case class Sheet(
   defaultRowHeight: Option[Double] = None,
   styleRegistry: StyleRegistry = StyleRegistry.default,
   comments: Map[ARef, Comment] = Map.empty,
-  tables: Map[String, TableSpec] = Map.empty
+  tables: Map[String, TableSpec] = Map.empty,
+  pageSetup: Option[PageSetup] = None
 ):
 
   /** Get cell at reference (returns empty cell if not present) */

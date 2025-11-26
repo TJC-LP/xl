@@ -205,6 +205,8 @@ object HtmlRenderer:
    *   Whether to include inline CSS for cell styles (default: true)
    * @param includeComments
    *   Whether to include comments as HTML title attributes (default: true)
+   * @param applyPrintScale
+   *   Whether to apply the sheet's print scale setting (default: false)
    * @return
    *   HTML table string
    */
@@ -213,12 +215,18 @@ object HtmlRenderer:
     range: CellRange,
     includeStyles: Boolean = true,
     includeComments: Boolean = true,
-    theme: ThemePalette = ThemePalette.office
+    theme: ThemePalette = ThemePalette.office,
+    applyPrintScale: Boolean = false
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
+
+    // Calculate print scale factor (100 = 100% = 1.0)
+    val scaleFactor =
+      if applyPrintScale then sheet.pageSetup.map(_.scale / 100.0).getOrElse(1.0)
+      else 1.0
 
     // Calculate column widths for <colgroup>
     val colWidths = (startCol to endCol).map { colIdx =>
@@ -226,13 +234,14 @@ object HtmlRenderer:
       val props = sheet.getColumnProperties(col)
       if props.hidden then 0
       else
-        props.width
+        val baseWidth = props.width
           .map(excelColWidthToPixels)
           .getOrElse(
             sheet.defaultColumnWidth
               .map(excelColWidthToPixels)
               .getOrElse(DefaultColumnWidthPx)
           )
+        (baseWidth * scaleFactor).toInt
     }
 
     // Generate <colgroup> element
@@ -252,7 +261,7 @@ object HtmlRenderer:
       .map { (rowObj, rowCells) =>
         // Calculate row height
         val props = sheet.getRowProperties(rowObj)
-        val rowHeight =
+        val baseRowHeight =
           props.height
             .map(excelRowHeightToPixels)
             .getOrElse(
@@ -260,6 +269,7 @@ object HtmlRenderer:
                 .map(excelRowHeightToPixels)
                 .getOrElse(DefaultCellHeightPx)
             )
+        val rowHeight = (baseRowHeight * scaleFactor).toInt
 
         // Track columns covered by text overflow from previous cells in this row
         val overflowSkipCols = scala.collection.mutable.Set[Int]()

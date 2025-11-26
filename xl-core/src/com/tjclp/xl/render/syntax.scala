@@ -24,6 +24,8 @@ object syntax:
      *   Include comments as HTML tooltips (default: true)
      * @param theme
      *   Theme palette for resolving theme colors (default: Office theme)
+     * @param applyPrintScale
+     *   Apply print scaling from pageSetup (default: false)
      * @return
      *   HTML string
      */
@@ -32,9 +34,10 @@ object syntax:
       range: CellRange,
       includeStyles: Boolean = true,
       includeComments: Boolean = true,
-      theme: ThemePalette = ThemePalette.office
+      theme: ThemePalette = ThemePalette.office,
+      applyPrintScale: Boolean = false
     ): String =
-      HtmlRenderer.toHtml(sheet, range, includeStyles, includeComments, theme)
+      HtmlRenderer.toHtml(sheet, range, includeStyles, includeComments, theme, applyPrintScale)
 
     /**
      * Export sheet range to SVG.

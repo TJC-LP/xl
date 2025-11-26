@@ -90,6 +90,8 @@ object Main
         case other =>
           cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown, html, or svg")
     }
+  private val printScaleOpt =
+    Opts.flag("print-scale", "Apply print scaling (for PDF-like output)").orFalse
 
   // --- Read-only commands ---
 
@@ -102,7 +104,7 @@ object Main
   }
 
   val viewCmd: Opts[Command] = Opts.subcommand("view", "View range (markdown, html, or svg)") {
-    (rangeArg, formulasOpt, limitOpt, formatOpt).mapN(Command.View.apply)
+    (rangeArg, formulasOpt, limitOpt, formatOpt, printScaleOpt).mapN(Command.View.apply)
   }
 
   val cellCmd: Opts[Command] = Opts.subcommand("cell", "Get cell details") {
@@ -241,7 +243,7 @@ object Main
              |Used range: (empty)
              |Non-empty: 0 cells""".stripMargin)
 
-    case Command.View(rangeStr, showFormulas, limit, format) =>
+    case Command.View(rangeStr, showFormulas, limit, format, printScale) =>
       for
         resolved <- resolveRef(wb, sheet, rangeStr)
         (targetSheet, refOrRange) = resolved
@@ -252,7 +254,8 @@ object Main
         theme = wb.metadata.theme // Use workbook's parsed theme
       yield format match
         case ViewFormat.Markdown => Markdown.renderRange(targetSheet, limitedRange, showFormulas)
-        case ViewFormat.Html => targetSheet.toHtml(limitedRange, theme = theme)
+        case ViewFormat.Html =>
+          targetSheet.toHtml(limitedRange, theme = theme, applyPrintScale = printScale)
         case ViewFormat.Svg => targetSheet.toSvg(limitedRange, theme = theme)
 
     case Command.Cell(refStr) =>
@@ -431,7 +434,13 @@ enum Command:
   // Read-only
   case Sheets
   case Bounds
-  case View(range: String, showFormulas: Boolean, limit: Int, format: ViewFormat)
+  case View(
+    range: String,
+    showFormulas: Boolean,
+    limit: Int,
+    format: ViewFormat,
+    printScale: Boolean
+  )
   case Cell(ref: String)
   case Search(pattern: String, limit: Int)
   // Analyze
