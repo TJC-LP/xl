@@ -1,6 +1,8 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.cells.CellValue
+import scala.util.boundary
+import boundary.break
 import scala.util.matching.Regex
 
 /**
@@ -115,32 +117,39 @@ object CriteriaMatcher:
    *
    * Escaped wildcards (~* or ~?) don't count as wildcards.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def hasUnescapedWildcard(s: String): Boolean =
-    var i = 0
-    while i < s.length do
-      val c = s.charAt(i)
-      if c == '~' && i + 1 < s.length then
-        // Skip escaped character
-        i += 2
-      else if c == '*' || c == '?' then return true
-      else i += 1
-    false
+    boundary {
+      var i = 0
+      while i < s.length do
+        val c = s.charAt(i)
+        if c == '~' && i + 1 < s.length then
+          // Skip escaped character
+          i += 2
+        else if c == '*' || c == '?' then break(true)
+        else i += 1
+      false
+    }
 
   /**
    * Check if string contains escape sequences (~*, ~?, or ~~).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def hasEscapeSequence(s: String): Boolean =
-    var i = 0
-    while i < s.length - 1 do
-      if s.charAt(i) == '~' then
-        val next = s.charAt(i + 1)
-        if next == '*' || next == '?' || next == '~' then return true
-      i += 1
-    false
+    boundary {
+      var i = 0
+      while i < s.length - 1 do
+        if s.charAt(i) == '~' then
+          val next = s.charAt(i + 1)
+          if next == '*' || next == '?' || next == '~' then break(true)
+        i += 1
+      false
+    }
 
   /**
    * Remove escape characters from pattern (unescape ~* ~? ~~).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def unescapePattern(s: String): String =
     val sb = new StringBuilder
     var i = 0
@@ -328,6 +337,7 @@ object CriteriaMatcher:
    *   - Other regex metacharacters are escaped
    *   - Matching is case-insensitive
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def wildcardToRegex(pattern: String): Regex =
     val sb = new StringBuilder("(?i)^") // (?i) for case-insensitive
     var i = 0

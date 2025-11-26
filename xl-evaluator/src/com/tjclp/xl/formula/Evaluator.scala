@@ -616,28 +616,32 @@ private class EvaluatorImpl extends Evaluator:
                 (range, CriteriaMatcher.parse(criteriaValue))
               }
 
-            // Get first range to determine dimension (conditions is never empty per parser validation)
-            val firstRange = conditions.headOption.map(_._1).getOrElse(parsedConditions.head._1)
-            val refCount = firstRange.cells.toList.length
+            // Pattern match to safely extract first range (non-empty per parser validation)
+            parsedConditions match
+              case (firstRange, _) :: _ =>
+                val refCount = firstRange.cells.toList.length
 
-            // Validate all ranges have same dimensions
-            val dimensionError = parsedConditions.collectFirst {
-              case (range, _) if range.cells.toList.length != refCount =>
-                EvalError.EvalFailed(
-                  s"COUNTIFS: all ranges must have same dimensions (first has $refCount, this has ${range.cells.toList.length})",
-                  Some(s"COUNTIFS(${firstRange.toA1}, ..., ${range.toA1}, ...)")
-                )
-            }
-
-            dimensionError match
-              case Some(err) => Left(err)
-              case None =>
-                val count = (0 until refCount).count { idx =>
-                  // Check if ALL criteria match for this row
-                  parsedConditions.forall { case (criteriaRange, criterion) =>
-                    val testRef = criteriaRange.cells.toList(idx)
-                    CriteriaMatcher.matches(sheet(testRef).value, criterion)
-                  }
+                // Validate all ranges have same dimensions
+                val dimensionError = parsedConditions.collectFirst {
+                  case (range, _) if range.cells.toList.length != refCount =>
+                    EvalError.EvalFailed(
+                      s"COUNTIFS: all ranges must have same dimensions (first has $refCount, this has ${range.cells.toList.length})",
+                      Some(s"COUNTIFS(${firstRange.toA1}, ..., ${range.toA1}, ...)")
+                    )
                 }
-                Right(BigDecimal(count))
+
+                dimensionError match
+                  case Some(err) => Left(err)
+                  case None =>
+                    val count = (0 until refCount).count { idx =>
+                      // Check if ALL criteria match for this row
+                      parsedConditions.forall { case (criteriaRange, criterion) =>
+                        val testRef = criteriaRange.cells.toList(idx)
+                        CriteriaMatcher.matches(sheet(testRef).value, criterion)
+                      }
+                    }
+                    Right(BigDecimal(count))
+              case Nil =>
+                // Should never happen per parser validation, but handle gracefully
+                Right(BigDecimal(0))
           }
