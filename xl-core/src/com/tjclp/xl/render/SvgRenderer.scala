@@ -5,7 +5,7 @@ import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
-import com.tjclp.xl.styles.border.BorderStyle
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
@@ -124,9 +124,10 @@ object SvgRenderer:
       sb.append("  </g>\n")
     end if
 
-    // Two-pass rendering: backgrounds first, then text on top
+    // Three-pass rendering: backgrounds first, then borders, then text on top
     // This ensures text overflow is visible and not covered by adjacent cell backgrounds
     val textBuffer = new StringBuilder
+    val borderBuffer = new StringBuilder
 
     // Pass 1: Cell backgrounds
     sb.append("  <g class=\"cells\">\n")
@@ -190,15 +191,24 @@ object SvgRenderer:
 
             val effectiveHeight = if mergeRange.isDefined then mergeHeight else rowHeight
 
-            // Cell background and border
-            val (fillAttr, strokeAttr) = cellOpt
+            // Cell background (borders rendered separately as line elements)
+            val fillAttr = cellOpt
               .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet, theme) else None)
-              .getOrElse(("fill=\"#FFFFFF\"", ""))
+              .getOrElse("""fill="#FFFFFF"""")
 
             sb.append(
               s"""    <rect x="$xPos" y="$y" width="$effectiveWidth" height="$effectiveHeight" """
             )
-            sb.append(s"""$fillAttr class="cell" $strokeAttr/>\n""")
+            sb.append(s"""$fillAttr class="cell"/>\n""")
+
+            // Collect borders for second pass
+            if includeStyles then
+              cellOpt.flatMap(_.styleId).flatMap(sheet.styleRegistry.get).foreach { style =>
+                if style.border != Border.none then
+                  borderBuffer.append(
+                    renderBorders(style.border, xPos, y, effectiveWidth, effectiveHeight, theme)
+                  )
+              }
 
             // Collect text for second pass (skip hidden rows/cols)
             if effectiveHeight > 0 && effectiveWidth > 0 then
@@ -259,7 +269,12 @@ object SvgRenderer:
     }
     sb.append("  </g>\n")
 
-    // Pass 2: Cell text (rendered on top of all backgrounds)
+    // Pass 2: Cell borders (rendered above backgrounds, below text)
+    sb.append("  <g class=\"cell-borders\">\n")
+    sb.append(borderBuffer)
+    sb.append("  </g>\n")
+
+    // Pass 3: Cell text (rendered on top of all backgrounds and borders)
     sb.append("  <g class=\"cell-text-layer\">\n")
     sb.append(textBuffer)
     sb.append("  </g>\n")
@@ -268,41 +283,129 @@ object SvgRenderer:
     sb.toString
 
   /**
-   * Get SVG fill and stroke attributes for a cell's background.
+   * Get SVG fill attribute for a cell's background. Borders are rendered separately as line
+   * elements.
    */
   private def cellStyleToSvg(
     cell: Cell,
     sheet: Sheet,
     theme: ThemePalette
-  ): Option[(String, String)] =
+  ): Option[String] =
     cell.styleId.flatMap(sheet.styleRegistry.get).map { style =>
-      val fill = style.fill match
+      style.fill match
         case Fill.Solid(color) => colorToFillAttrsWithOpacity(color, theme)
         case _ => """fill="#FFFFFF""""
-
-      val stroke = borderToStroke(style.border, theme)
-      (fill, stroke)
     }
 
   /**
-   * Convert border to SVG stroke attributes.
+   * Render cell borders as individual line elements for each side.
+   *
+   * Unlike the rect stroke approach, this allows different styles/colors per side and supports
+   * dashed, dotted, and double borders.
    */
-  private def borderToStroke(
-    border: com.tjclp.xl.styles.border.Border,
+  private def renderBorders(
+    border: Border,
+    x: Double,
+    y: Double,
+    width: Double,
+    height: Double,
     theme: ThemePalette
   ): String =
-    // For simplicity, use the bottom border style for all borders
-    // A more complete implementation would draw each side separately
-    val side = border.bottom
-    if side.style == BorderStyle.None then ""
+    val sb = new StringBuilder
+
+    // Top border
+    if border.top.style != BorderStyle.None then
+      sb.append(renderBorderLine("top", border.top, x, y, x + width, y, theme))
+
+    // Bottom border
+    if border.bottom.style != BorderStyle.None then
+      sb.append(
+        renderBorderLine("bottom", border.bottom, x, y + height, x + width, y + height, theme)
+      )
+
+    // Left border
+    if border.left.style != BorderStyle.None then
+      sb.append(renderBorderLine("left", border.left, x, y, x, y + height, theme))
+
+    // Right border
+    if border.right.style != BorderStyle.None then
+      sb.append(renderBorderLine("right", border.right, x + width, y, x + width, y + height, theme))
+
+    sb.toString
+
+  /**
+   * Render a single border line. Handles double borders specially.
+   */
+  private def renderBorderLine(
+    side: String,
+    borderSide: BorderSide,
+    x1: Double,
+    y1: Double,
+    x2: Double,
+    y2: Double,
+    theme: ThemePalette
+  ): String =
+    if borderSide.style == BorderStyle.Double then
+      renderDoubleBorder(side, borderSide, x1, y1, x2, y2, theme)
     else
-      val width = side.style match
-        case BorderStyle.Thin => 1
-        case BorderStyle.Medium => 2
-        case BorderStyle.Thick => 3
-        case _ => 1
-      val color = side.color.map(c => colorToHex(c, theme)).getOrElse("#000000")
-      s"""stroke="$color" stroke-width="$width""""
+      val (strokeWidth, dashArray) = borderStyleToSvg(borderSide.style)
+      val color = borderSide.color.map(c => colorToHex(c, theme)).getOrElse("#000000")
+      val dashAttr = dashArray.map(d => s""" stroke-dasharray="$d"""").getOrElse("")
+      s"""      <line x1="$x1" y1="$y1" x2="$x2" y2="$y2" stroke="$color" stroke-width="$strokeWidth"$dashAttr/>\n"""
+
+  /**
+   * Render a double border as two parallel lines.
+   */
+  private def renderDoubleBorder(
+    side: String,
+    borderSide: BorderSide,
+    x1: Double,
+    y1: Double,
+    x2: Double,
+    y2: Double,
+    theme: ThemePalette
+  ): String =
+    val color = borderSide.color.map(c => colorToHex(c, theme)).getOrElse("#000000")
+    val offset = 2.0 // Gap between double lines
+
+    side match
+      case "top" =>
+        s"""      <line x1="$x1" y1="$y1" x2="$x2" y2="$y1" stroke="$color" stroke-width="1"/>
+      <line x1="$x1" y1="${y1 + offset}" x2="$x2" y2="${y1 + offset}" stroke="$color" stroke-width="1"/>
+"""
+      case "bottom" =>
+        s"""      <line x1="$x1" y1="${y1 - offset}" x2="$x2" y2="${y1 - offset}" stroke="$color" stroke-width="1"/>
+      <line x1="$x1" y1="$y1" x2="$x2" y2="$y1" stroke="$color" stroke-width="1"/>
+"""
+      case "left" =>
+        s"""      <line x1="$x1" y1="$y1" x2="$x1" y2="$y2" stroke="$color" stroke-width="1"/>
+      <line x1="${x1 + offset}" y1="$y1" x2="${x1 + offset}" y2="$y2" stroke="$color" stroke-width="1"/>
+"""
+      case "right" =>
+        s"""      <line x1="${x1 - offset}" y1="$y1" x2="${x1 - offset}" y2="$y2" stroke="$color" stroke-width="1"/>
+      <line x1="$x1" y1="$y1" x2="$x1" y2="$y2" stroke="$color" stroke-width="1"/>
+"""
+      case _ => ""
+
+  /**
+   * Map BorderStyle to SVG stroke attributes (width and dash pattern).
+   */
+  private def borderStyleToSvg(style: BorderStyle): (Int, Option[String]) =
+    style match
+      case BorderStyle.None => (0, None)
+      case BorderStyle.Thin => (1, None)
+      case BorderStyle.Medium => (2, None)
+      case BorderStyle.Thick => (3, None)
+      case BorderStyle.Hair => (1, Some("1,1")) // Very fine dotted
+      case BorderStyle.Dotted => (1, Some("2,2")) // Dotted
+      case BorderStyle.Dashed => (1, Some("4,2")) // Dashed
+      case BorderStyle.MediumDashed => (2, Some("4,2")) // Medium dashed
+      case BorderStyle.DashDot => (1, Some("4,2,1,2")) // Dash-dot
+      case BorderStyle.MediumDashDot => (2, Some("4,2,1,2"))
+      case BorderStyle.DashDotDot => (1, Some("4,2,1,2,1,2"))
+      case BorderStyle.MediumDashDotDot => (2, Some("4,2,1,2,1,2"))
+      case BorderStyle.SlantDashDot => (1, Some("4,2,1,2"))
+      case BorderStyle.Double => (1, None) // Handled separately
 
   /**
    * Get SVG text style attributes for a cell.

@@ -646,3 +646,179 @@ class SvgRendererSpec extends FunSuite:
       s"Cell class should have gridline stroke, got: $svg"
     )
   }
+
+  // ========== Border Rendering Tests ==========
+
+  test("toSvg: cell with bottom border renders as line element") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    val borderStyle = CellStyle.default.withBorder(
+      Border.none.withBottom(BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Underlined")
+      .unsafe
+      .withCellStyle(ref"A1", borderStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Border should be rendered as <line> element, not rect stroke
+    assert(svg.contains("<line"), s"Border should render as <line> element, got: $svg")
+    assert(svg.contains("""stroke="#000000""""), s"Border should have black stroke, got: $svg")
+    assert(svg.contains("""stroke-width="1""""), s"Thin border should have width 1, got: $svg")
+  }
+
+  test("toSvg: cell with medium border has stroke-width 2") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    val borderStyle = CellStyle.default.withBorder(
+      Border.none.withBottom(BorderSide(BorderStyle.Medium, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Medium border")
+      .unsafe
+      .withCellStyle(ref"A1", borderStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(svg.contains("""stroke-width="2""""), s"Medium border should have width 2, got: $svg")
+  }
+
+  test("toSvg: cell with thick border has stroke-width 3") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    val borderStyle = CellStyle.default.withBorder(
+      Border.none.withBottom(BorderSide(BorderStyle.Thick, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Thick border")
+      .unsafe
+      .withCellStyle(ref"A1", borderStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(svg.contains("""stroke-width="3""""), s"Thick border should have width 3, got: $svg")
+  }
+
+  test("toSvg: dashed border has stroke-dasharray") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    val borderStyle = CellStyle.default.withBorder(
+      Border.none.withBottom(BorderSide(BorderStyle.Dashed, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Dashed")
+      .unsafe
+      .withCellStyle(ref"A1", borderStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(svg.contains("stroke-dasharray"), s"Dashed border should have dasharray, got: $svg")
+    assert(svg.contains(""""4,2""""), s"Dashed pattern should be 4,2, got: $svg")
+  }
+
+  test("toSvg: dotted border has stroke-dasharray with small pattern") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    val borderStyle = CellStyle.default.withBorder(
+      Border.none.withBottom(BorderSide(BorderStyle.Dotted, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Dotted")
+      .unsafe
+      .withCellStyle(ref"A1", borderStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(svg.contains("stroke-dasharray"), s"Dotted border should have dasharray, got: $svg")
+    assert(svg.contains(""""2,2""""), s"Dotted pattern should be 2,2, got: $svg")
+  }
+
+  test("toSvg: double border renders as two parallel lines") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    val borderStyle = CellStyle.default.withBorder(
+      Border.none.withBottom(BorderSide(BorderStyle.Double, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Double")
+      .unsafe
+      .withCellStyle(ref"A1", borderStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Double border should have two <line> elements
+    val lineCount = "<line".r.findAllIn(svg).length
+    assert(lineCount >= 2, s"Double border should have at least 2 lines, got $lineCount: $svg")
+  }
+
+  test("toSvg: all four borders render independently") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    val allBorders = CellStyle.default.withBorder(
+      Border(
+        left = BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 0))),
+        right = BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 0))),
+        top = BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 0))),
+        bottom = BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 0)))
+      )
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Boxed")
+      .unsafe
+      .withCellStyle(ref"A1", allBorders)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Should have 4 line elements (one per side)
+    val lineCount = "<line".r.findAllIn(svg).length
+    assertEquals(lineCount, 4, s"Box border should have 4 lines, got: $svg")
+  }
+
+  test("toSvg: border color from theme is resolved") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    import com.tjclp.xl.styles.color.{ThemePalette, ThemeSlot}
+    // Use a theme color (accent1 = blue in default theme)
+    val blueColor = Color.Theme(ThemeSlot.Accent1, 0.0)
+    val borderStyle = CellStyle.default.withBorder(
+      Border.none.withBottom(BorderSide(BorderStyle.Thin, Some(blueColor)))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Blue border")
+      .unsafe
+      .withCellStyle(ref"A1", borderStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1", theme = ThemePalette.office)
+
+    // Theme color should be resolved to actual hex color (accent1 in office theme is blue)
+    assert(svg.contains("stroke=\"#"), s"Theme color should resolve to hex, got: $svg")
+    // Should NOT contain "theme" in the output
+    assert(!svg.contains("theme("), s"Should not have raw theme reference, got: $svg")
+  }
+
+  test("toSvg: cell without border has no border lines") {
+    val sheet = Sheet("Test").put(ref"A1" -> "No border")
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Should have cell-borders group but it should be empty (or minimal)
+    assert(svg.contains("""class="cell-borders""""), s"Should have borders group, got: $svg")
+    // Should not have any <line> elements in borders group (only in cell rect as stroke if gridlines)
+    val bordersSection = svg.split("cell-borders")(1).split("</g>")(0)
+    val lineCount = "<line".r.findAllIn(bordersSection).length
+    assertEquals(lineCount, 0, s"Cell without border should have no border lines, got: $svg")
+  }
+
+  test("toSvg: borders rendered in separate layer above backgrounds") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    val borderStyle = CellStyle.default.withBorder(
+      Border.none.withBottom(BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Test")
+      .unsafe
+      .withCellStyle(ref"A1", borderStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Verify rendering order: cells -> cell-borders -> cell-text-layer
+    val cellsIdx = svg.indexOf("""class="cells"""")
+    val bordersIdx = svg.indexOf("""class="cell-borders"""")
+    val textIdx = svg.indexOf("""class="cell-text-layer"""")
+
+    assert(cellsIdx < bordersIdx, "Cells should come before borders")
+    assert(bordersIdx < textIdx, "Borders should come before text")
+  }
