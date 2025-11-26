@@ -124,7 +124,11 @@ object SvgRenderer:
       sb.append("  </g>\n")
     end if
 
-    // Cells - iterate by row for proper overflow tracking
+    // Two-pass rendering: backgrounds first, then text on top
+    // This ensures text overflow is visible and not covered by adjacent cell backgrounds
+    val textBuffer = new StringBuilder
+
+    // Pass 1: Cell backgrounds
     sb.append("  <g class=\"cells\">\n")
     (startRow to endRow).foreach { row =>
       val rowIdx = row - startRow
@@ -196,65 +200,68 @@ object SvgRenderer:
             )
             sb.append(s"""$fillAttr class="cell" $strokeAttr/>\n""")
 
-            // Cell text (positioned within effective bounds for merged cells)
-            cellOpt.foreach { cell =>
-              val (textX, anchor) = textAlignment(cell, sheet, xPos, effectiveWidth)
-              val textY = textYPosition(cell, sheet, y, effectiveHeight)
-              // Extract NumFmt from cell's style for proper value formatting
-              val numFmt = cell.styleId
-                .flatMap(sheet.styleRegistry.get)
-                .map(_.numFmt)
-                .getOrElse(NumFmt.General)
+            // Collect text for second pass (skip hidden rows/cols)
+            if effectiveHeight > 0 && effectiveWidth > 0 then
+              cellOpt.foreach { cell =>
+                val (textX, anchor) = textAlignment(cell, sheet, xPos, effectiveWidth)
+                val textY = textYPosition(cell, sheet, y, effectiveHeight)
+                val numFmt = cell.styleId
+                  .flatMap(sheet.styleRegistry.get)
+                  .map(_.numFmt)
+                  .getOrElse(NumFmt.General)
 
-              cell.value match
-                case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
-                  // Rich text: render each run as a tspan with explicit x positioning
-                  sb.append(s"""    <text y="$textY" class="cell-text">""")
-                  rt.runs.foldLeft(textX) { (currentX, run) =>
-                    val runStyle = runToSvgStyle(run, theme)
-                    val escapedText = escapeXml(run.text)
-                    sb.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
-                    currentX + measureTextWidth(run.text, run.font)
-                  }
-                  sb.append("</text>\n")
+                cell.value match
+                  case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
+                    textBuffer.append(s"""    <text y="$textY" class="cell-text">""")
+                    rt.runs.foldLeft(textX) { (currentX, run) =>
+                      val runStyle = runToSvgStyle(run, theme)
+                      val escapedText = escapeXml(run.text)
+                      textBuffer.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
+                      currentX + measureTextWidth(run.text, run.font)
+                    }
+                    textBuffer.append("</text>\n")
 
-                case other =>
-                  val text = cellValueToText(other, numFmt)
-                  if text.nonEmpty then
-                    val textStyle = if includeStyles then cellTextStyle(cell, sheet, theme) else ""
-                    val style = cell.styleId.flatMap(sheet.styleRegistry.get)
-                    val shouldWrap = style.exists(_.align.wrapText)
+                  case other =>
+                    val text = cellValueToText(other, numFmt)
+                    if text.nonEmpty then
+                      val textStyle =
+                        if includeStyles then cellTextStyle(cell, sheet, theme) else ""
+                      val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+                      val shouldWrap = style.exists(_.align.wrapText)
 
-                    if shouldWrap then
-                      // Calculate available width for text (cell width minus padding)
-                      val availableWidth = effectiveWidth - CellPaddingX * 2
-                      val font = style.map(_.font)
-                      val lines = wrapText(text, availableWidth, font)
-                      val lh = lineHeight(font)
+                      if shouldWrap then
+                        val availableWidth = effectiveWidth - CellPaddingX * 2
+                        val font = style.map(_.font)
+                        val lines = wrapText(text, availableWidth, font)
+                        val lh = lineHeight(font)
+                        val firstLineY =
+                          textYPositionWrapped(cell, sheet, y, effectiveHeight, lines.size, lh)
 
-                      // Adjust y position for multi-line text based on vertical alignment
-                      val firstLineY =
-                        textYPositionWrapped(cell, sheet, y, effectiveHeight, lines.size, lh)
-
-                      sb.append(
-                        s"""    <text x="$textX" text-anchor="$anchor" class="cell-text"$textStyle>"""
-                      )
-                      lines.zipWithIndex.foreach { (line, idx) =>
-                        val lineY = firstLineY + idx * lh
-                        val escapedLine = escapeXml(line)
-                        sb.append(s"""<tspan x="$textX" y="$lineY">$escapedLine</tspan>""")
-                      }
-                      sb.append("</text>\n")
-                    else
-                      // Single-line rendering
-                      val escapedText = escapeXml(text)
-                      sb.append(
-                        s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle>"""
-                      )
-                      sb.append(s"""$escapedText</text>\n""")
-            }
+                        textBuffer.append(
+                          s"""    <text x="$textX" text-anchor="$anchor" class="cell-text"$textStyle>"""
+                        )
+                        lines.zipWithIndex.foreach { (line, idx) =>
+                          val lineY = firstLineY + idx * lh
+                          val escapedLine = escapeXml(line)
+                          textBuffer.append(
+                            s"""<tspan x="$textX" y="$lineY">$escapedLine</tspan>"""
+                          )
+                        }
+                        textBuffer.append("</text>\n")
+                      else
+                        val escapedText = escapeXml(text)
+                        textBuffer.append(
+                          s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle>"""
+                        )
+                        textBuffer.append(s"""$escapedText</text>\n""")
+              }
       }
     }
+    sb.append("  </g>\n")
+
+    // Pass 2: Cell text (rendered on top of all backgrounds)
+    sb.append("  <g class=\"cell-text-layer\">\n")
+    sb.append(textBuffer)
     sb.append("  </g>\n")
 
     sb.append("</svg>")
