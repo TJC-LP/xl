@@ -78,6 +78,22 @@ private def buildColsElement(sheet: Sheet): Option[Elem] =
     }
     Some(XmlUtil.elem("cols")(colElems*))
 
+/**
+ * Apply domain RowProperties to an OoxmlRow.
+ *
+ * Domain properties override existing row attributes (if any). This allows setting row height,
+ * hidden state, and outline level from the domain model.
+ */
+private def applyDomainRowProps(row: OoxmlRow, props: RowProperties): OoxmlRow =
+  row.copy(
+    height = props.height.orElse(row.height),
+    customHeight = props.height.isDefined || row.customHeight,
+    hidden = props.hidden || row.hidden,
+    outlineLevel = props.outlineLevel.orElse(row.outlineLevel),
+    collapsed = props.collapsed || row.collapsed
+    // Note: styleId would need remapping to workbook-level index (deferred)
+  )
+
 /** Cell data for worksheet - maps domain Cell to XML representation */
 case class OoxmlCell(
   ref: ARef,
@@ -716,9 +732,12 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           // New row - create with defaults
           OoxmlRow(rowIdx, ooxmlCells)
 
-      // Preserve row-level style exactly as-is from original (even if "invalid" per spec)
-      // Excel expects these preserved, removing them causes corruption warnings
-      baseRow
+      // Apply domain row properties (height, hidden, outlineLevel, collapsed)
+      val rowWithDomainProps = sheet.rowProperties.get(Row.from1(rowIdx)) match
+        case Some(domainProps) => applyDomainRowProps(baseRow, domainProps)
+        case None => baseRow
+
+      rowWithDomainProps
     }
 
     // Preserve empty rows from original (critical for Row 1!)
@@ -726,8 +745,18 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
       preserved.rows.filter(_.cells.isEmpty)
     }
 
-    // Combine rows with cells + empty rows, sort by index
-    val allRows = (rowsWithCells ++ emptyRowsFromOriginal).sortBy(_.rowIndex)
+    // Generate empty rows for domain row properties not already represented
+    val existingRowIndices =
+      cellsByRow.map(_._1).toSet ++ emptyRowsFromOriginal.map(_.rowIndex).toSet
+    val emptyRowsFromDomain = sheet.rowProperties
+      .filterNot { case (row, _) => existingRowIndices.contains(row.index1) }
+      .map { case (row, props) =>
+        applyDomainRowProps(OoxmlRow(row.index1, Seq.empty), props)
+      }
+      .toSeq
+
+    // Combine rows with cells + empty rows from original + empty rows from domain, sort by index
+    val allRows = (rowsWithCells ++ emptyRowsFromOriginal ++ emptyRowsFromDomain).sortBy(_.rowIndex)
 
     // Generate legacyDrawing element if sheet has comments but no preserved legacyDrawing
     val legacyDrawingElem =
