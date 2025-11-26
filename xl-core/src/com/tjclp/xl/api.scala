@@ -27,8 +27,9 @@ object api:
   // Addressing types
   export addressing.{Column, Row, SheetName, ARef, CellRange, RefType}
 
-  // ARef extension methods (toA1, col, row, shift)
-  export addressing.ARef.{col, row, toA1, shift}
+  // ARef extension methods (toA1, row, shift)
+  // Note: col/row extension methods work via extension syntax (aref.col), not direct import
+  export addressing.ARef.{toA1, shift}
 
   // Rich text types
   export richtext.{TextRun, RichText}
