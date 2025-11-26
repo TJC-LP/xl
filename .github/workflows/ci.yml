@@ -32,7 +32,6 @@ jobs:
         with:
           path: |
             ~/.mill
-            out
           key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
           restore-keys: |
             ${{ runner.os }}-mill-
