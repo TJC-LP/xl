@@ -117,12 +117,15 @@ styledSheet.evaluateCell(ref"B2") match
   case Left(error) =>
     println(s"✗ B2 evaluation error: ${error.message}")
 
-// Evaluate C1 (IF formula)
+// Evaluate C1 (IF formula) - references B1 which is still a Formula
+// Note: evaluateCell() doesn't evaluate dependencies - B1 is still unevaluated
+// This demonstrates the need for bulk evaluation with dependency checking (Step 5)
 styledSheet.evaluateCell(ref"C1") match
   case Right(value) =>
     println(s"✓ C1 = $value  // Conditional based on B1")
   case Left(error) =>
-    println(s"✗ C1 evaluation error: ${error.message}")
+    println(s"⚠️  C1 needs dependency evaluation (expected): ${error.message.take(80)}...")
+    println(s"    Use evaluateWithDependencyCheck() for formulas with formula dependencies")
 
 println()
 

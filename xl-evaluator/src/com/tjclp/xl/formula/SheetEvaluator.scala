@@ -82,8 +82,11 @@ object SheetEvaluator:
     /**
      * Evaluate cell at ref (if it contains formula).
      *
-     * If cell contains CellValue.Formula, parses and evaluates it. Otherwise returns cell value
-     * unchanged.
+     * If cell contains CellValue.Formula, parses and evaluates it against the current sheet state.
+     * Formula dependencies that are themselves formulas will be referenced as-is (unevaluated).
+     *
+     * For formulas with dependencies on other formulas, use evaluateWithDependencyCheck() instead,
+     * which evaluates all dependencies in correct order.
      *
      * @param ref
      *   Cell reference to evaluate
@@ -94,8 +97,8 @@ object SheetEvaluator:
      *
      * Example:
      * {{{
-     * // A1 contains "=B1+C1"
-     * sheet.evaluateCell(ref"A1") // Right(CellValue.Number(result))
+     * // A1 contains "=B1+C1" where B1=10, C1=20
+     * sheet.evaluateCell(ref"A1") // Right(CellValue.Number(30))
      *
      * // D1 contains plain number
      * sheet.evaluateCell(ref"D1") // Right(CellValue.Number(42)) - unchanged
