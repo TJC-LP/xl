@@ -188,4 +188,38 @@ object PutLiteral:
             case Right(range) => Right($sheet.merge(range))
         }
 
+  /**
+   * Macro impl for comment(String, Comment) - validates literal cell refs at compile time.
+   *
+   * Returns `Sheet` for literal refs (compile-time validated), `XLResult[Sheet]` for runtime refs.
+   */
+  def commentImpl(
+    sheet: Expr[Sheet],
+    ref: Expr[String],
+    cmt: Expr[com.tjclp.xl.cells.Comment]
+  )(using Quotes): Expr[Sheet | XLResult[Sheet]] =
+    import quotes.reflect.*
+
+    ref.value match
+      case Some(literalRef) =>
+        // Compile-time literal - validate now
+        RefParser.parse(literalRef) match
+          case Right(RefParser.ParsedRef.Cell(None, col0, row0)) =>
+            // Valid cell ref - emit direct comment call (returns Sheet)
+            '{ $sheet.comment(ARef.from0(${ Expr(col0) }, ${ Expr(row0) }), $cmt) }
+          case Right(RefParser.ParsedRef.Cell(Some(_), _, _)) =>
+            report.errorAndAbort(s"Sheet-qualified refs not supported in comment: '$literalRef'")
+          case Right(RefParser.ParsedRef.Range(_, _, _, _, _)) =>
+            report.errorAndAbort(s"Range refs not supported in comment: '$literalRef'")
+          case Left(err) =>
+            report.errorAndAbort(s"Invalid cell reference '$literalRef': $err")
+
+      case None =>
+        // Runtime expression - defer to runtime parsing (returns XLResult[Sheet])
+        '{
+          ARef.parse($ref) match
+            case Left(err) => Left(XLError.InvalidCellRef($ref, err))
+            case Right(aref) => Right($sheet.comment(aref, $cmt))
+        }
+
 end PutLiteral

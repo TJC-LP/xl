@@ -29,12 +29,17 @@ final case class Workbook(
       .find(_.name == name)
       .toRight(XLError.SheetNotFound(name.value))
 
-  /** Get sheet by name string */
+  /**
+   * Get sheet by name string.
+   *
+   * When called with a string literal, the name format is validated at compile time. Invalid
+   * literals like "Invalid:Name" fail to compile. Runtime strings are validated at runtime.
+   *
+   * Always returns XLResult[Sheet] since sheet existence is runtime-dependent.
+   */
   @annotation.targetName("applyByString")
-  def apply(name: String): XLResult[Sheet] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err): XLError)
-      .flatMap((sheetName: SheetName) => apply(sheetName))
+  transparent inline def apply(inline name: String): XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.applyImpl('{ this }, 'name) }
 
   /**
    * Access cell(s) using unified reference type.
@@ -91,13 +96,13 @@ final case class Workbook(
   /**
    * Put sheet with explicit name (string variant).
    *
-   * Returns XLResult because string name validation may fail at runtime.
+   * When called with a string literal, the name format is validated at compile time and returns
+   * Workbook directly. Invalid literals like "Invalid:Name" fail to compile. Runtime strings return
+   * XLResult[Workbook].
    */
   @annotation.targetName("putWithStringName")
-  def put(name: String, sheet: Sheet): XLResult[Workbook] =
-    SheetName(name) match
-      case Right(sn) => Right(put(sn, sheet))
-      case Left(err) => Left(XLError.InvalidSheetName(name, err))
+  transparent inline def put(inline name: String, sheet: Sheet): Workbook | XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.putStringNameImpl('{ this }, 'name, 'sheet) }
 
   /**
    * Put multiple sheets (batch operation).
@@ -127,12 +132,15 @@ final case class Workbook(
       case -1 => Left(XLError.SheetNotFound(name.value))
       case index => removeAt(index)
 
-  /** Remove sheet by name (string variant) */
+  /**
+   * Remove sheet by name (string variant).
+   *
+   * When called with a string literal, the name format is validated at compile time. Invalid
+   * literals fail to compile. Always returns XLResult since sheet existence is runtime-dependent.
+   */
   @annotation.targetName("removeByString")
-  def remove(name: String): XLResult[Workbook] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(remove)
+  transparent inline def remove(inline name: String): XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.removeImpl('{ this }, 'name) }
 
   /** Remove sheet by index (Excel requires at least one sheet to remain). */
   def removeAt(index: Int): XLResult[Workbook] =
@@ -177,12 +185,13 @@ final case class Workbook(
 
   /**
    * Update sheet by applying a function (string variant).
+   *
+   * When called with a string literal, the name format is validated at compile time. Invalid
+   * literals fail to compile. Always returns XLResult since sheet existence is runtime-dependent.
    */
   @annotation.targetName("updateByString")
-  def update(name: String, f: Sheet => Sheet): XLResult[Workbook] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(sn => update(sn, f))
+  transparent inline def update(inline name: String, f: Sheet => Sheet): XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.updateImpl('{ this }, 'name, 'f) }
 
   /** Update sheet by index while tracking modification state. */
   def updateAt(idx: Int, f: Sheet => Sheet): XLResult[Workbook] =
@@ -200,12 +209,15 @@ final case class Workbook(
       case -1 => Left(XLError.SheetNotFound(name.value))
       case idx => removeAt(idx)
 
-  /** Delete sheet by name (string variant). */
+  /**
+   * Delete sheet by name (string variant).
+   *
+   * When called with a string literal, the name format is validated at compile time. Invalid
+   * literals fail to compile. Always returns XLResult since sheet existence is runtime-dependent.
+   */
   @annotation.targetName("deleteByString")
-  def delete(name: String): XLResult[Workbook] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(sn => delete(sn))
+  transparent inline def delete(inline name: String): XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.deleteImpl('{ this }, 'name) }
 
   /** Reorder sheets to the provided order while tracking modifications. */
   def reorder(newOrder: Vector[SheetName]): XLResult[Workbook] =

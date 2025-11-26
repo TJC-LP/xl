@@ -235,8 +235,10 @@ class ExtensionsSpec extends FunSuite:
     assertEquals(baseSheet.cell("Z99"), None)
   }
 
-  test("cell returns None for invalid ref") {
-    assertEquals(baseSheet.cell("INVALID"), None)
+  test("cell returns None for invalid ref (runtime string)") {
+    // Invalid literals now fail at compile time; use runtime string for testing
+    val invalidRef = "INVALID"
+    assertEquals(baseSheet.cell(invalidRef), None)
   }
 
   test("range returns all cells in range") {
@@ -248,8 +250,10 @@ class ExtensionsSpec extends FunSuite:
     assertEquals(cells.length, 3)
   }
 
-  test("range returns empty for invalid range") {
-    assertEquals(baseSheet.range("A1:INVALID"), List.empty)
+  test("range returns empty for invalid range (runtime string)") {
+    // Invalid literals now fail at compile time; use runtime string for testing
+    val invalidRange = "A1:INVALID"
+    assertEquals(baseSheet.range(invalidRange), List.empty)
   }
 
   test("range returns empty for range with no cells") {
@@ -271,8 +275,10 @@ class ExtensionsSpec extends FunSuite:
     assertEquals(cells.length, 2)
   }
 
-  test("get returns empty for invalid ref") {
-    assertEquals(baseSheet.get("INVALID"), List.empty)
+  test("get returns empty for invalid ref (runtime string)") {
+    // Invalid literals now fail at compile time; use runtime string for testing
+    val invalidRef = "INVALID"
+    assertEquals(baseSheet.get(invalidRef), List.empty)
   }
 
   // ========== Merge Operations ==========

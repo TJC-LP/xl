@@ -338,6 +338,16 @@ final case class Sheet(
   def comment(ref: ARef, comment: Comment): Sheet =
     copy(comments = comments.updated(ref, comment))
 
+  /**
+   * Add comment to cell (string variant).
+   *
+   * When called with a string literal, the cell reference is validated at compile time and returns
+   * `Sheet` directly. Invalid literals fail to compile. Runtime strings return `XLResult[Sheet]`.
+   */
+  @annotation.targetName("commentString")
+  transparent inline def comment(inline ref: String, cmt: Comment): Sheet | XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.PutLiteral.commentImpl('{ this }, 'ref, 'cmt) }
+
   /** Get comment at cell reference */
   def getComment(ref: ARef): Option[Comment] =
     comments.get(ref)
