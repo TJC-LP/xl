@@ -13,6 +13,18 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 
 /** Renders Excel sheets to HTML tables with inline CSS styling */
 object HtmlRenderer:
+  // Default dimensions
+  private val DefaultCellHeightPx = 20 // Excel default ~15pt = 20px
+  private val DefaultColumnWidthPx = 64 // Excel default ~8.43 chars = 64px
+
+  // Unit conversion helpers (Excel → pixels)
+  /** Convert Excel column width (character units) to pixels. */
+  private def excelColWidthToPixels(width: Double): Int =
+    (width * 7 + 5).toInt
+
+  /** Convert Excel row height (points) to pixels. 1pt = 4/3 pixels. */
+  private def excelRowHeightToPixels(height: Double): Int =
+    (height * 4.0 / 3.0).toInt
 
   /**
    * Export a sheet range to an HTML table.
@@ -39,6 +51,31 @@ object HtmlRenderer:
     includeStyles: Boolean = true,
     includeComments: Boolean = true
   ): String =
+    val startCol = range.start.col.index0
+    val endCol = range.end.col.index0
+    val startRow = range.start.row.index0
+    val endRow = range.end.row.index0
+
+    // Calculate column widths for <colgroup>
+    val colWidths = (startCol to endCol).map { colIdx =>
+      val col = Column.from0(colIdx)
+      val props = sheet.getColumnProperties(col)
+      if props.hidden then 0
+      else
+        props.width
+          .map(excelColWidthToPixels)
+          .getOrElse(
+            sheet.defaultColumnWidth
+              .map(excelColWidthToPixels)
+              .getOrElse(DefaultColumnWidthPx)
+          )
+    }
+
+    // Generate <colgroup> element
+    val colgroup = colWidths
+      .map(w => s"""  <col style="width: ${w}px">""")
+      .mkString("<colgroup>\n", "\n", "\n</colgroup>")
+
     // Group cells by row for table structure
     val cellsByRow = range.cells.toSeq
       .map(ref => (ref, sheet.cells.get(ref)))
@@ -47,13 +84,27 @@ object HtmlRenderer:
       .sortBy(_._1.index0)
 
     val tableRows = cellsByRow
-      .map { (rowNum, rowCells) =>
+      .map { (rowObj, rowCells) =>
+        // Calculate row height
+        val props = sheet.getRowProperties(rowObj)
+        val rowHeight =
+          if props.hidden then 0
+          else
+            props.height
+              .map(excelRowHeightToPixels)
+              .getOrElse(
+                sheet.defaultRowHeight
+                  .map(excelRowHeightToPixels)
+                  .getOrElse(DefaultCellHeightPx)
+              )
+
         val cellsHtml = rowCells
           .sortBy(_._1.col.index0)
           .map { (ref, cellOpt) =>
             cellOpt match
               case None =>
-                if includeStyles then """<td style="background-color: #FFFFFF"></td>"""
+                if includeStyles then
+                  """<td style="background-color: #FFFFFF; overflow: hidden"></td>"""
                 else "<td></td>"
               case Some(cell) =>
                 val style = if includeStyles then cellStyleToInlineCss(cell, sheet) else ""
@@ -64,15 +115,16 @@ object HtmlRenderer:
                   .getOrElse(NumFmt.General)
                 val content = cellValueToHtml(cell.value, numFmt)
                 // Add default white background if no fill is specified (only when includeStyles)
+                // Also add overflow: hidden to clip content to cell width
                 val styleAttr =
                   if !includeStyles then ""
                   else
                     val hasBackground = style.contains("background-color")
-                    val fullStyle =
+                    val baseStyle =
                       if hasBackground then style
                       else if style.isEmpty then "background-color: #FFFFFF"
                       else s"background-color: #FFFFFF; $style"
-                    s""" style="$fullStyle""""
+                    s""" style="$baseStyle; overflow: hidden""""
 
                 // Add comment as title attribute (tooltip) if present
                 val commentAttr =
@@ -90,13 +142,17 @@ object HtmlRenderer:
                 s"<td$styleAttr$commentAttr>$content</td>"
           }
           .mkString
-        s"  <tr>$cellsHtml</tr>"
+
+        // Add height style to <tr>
+        s"""  <tr style="height: ${rowHeight}px">$cellsHtml</tr>"""
       }
       .mkString("\n")
 
+    // table-layout: fixed ensures column widths from colgroup are respected
     val tableStyle =
-      """style="border-collapse: collapse; font-family: Calibri, sans-serif; font-size: 11pt;""""
+      """style="border-collapse: collapse; table-layout: fixed; font-family: Calibri, sans-serif; font-size: 11pt;""""
     s"""<table $tableStyle>
+$colgroup
 $tableRows
 </table>"""
 

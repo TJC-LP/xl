@@ -2,12 +2,16 @@ package com.tjclp.xl.html
 
 import munit.FunSuite
 import com.tjclp.xl.api.*
+import com.tjclp.xl.addressing.{Column, Row}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given
+import com.tjclp.xl.dsl.{*, given}
 import com.tjclp.xl.richtext.RichText.{*, given}
-import com.tjclp.xl.macros.ref
+import com.tjclp.xl.macros.{ref, col}
+import com.tjclp.xl.patch.Patch
 // Removed: BatchPutMacro is dead code (shadowed by Sheet.put member)  // For batch put extension
 import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
@@ -53,8 +57,8 @@ class HtmlRendererSpec extends FunSuite:
     assert(html.contains("<table"))
     assert(html.contains("A1"))
     assert(html.contains("B2"))
-    // Should have 2 rows
-    val rowCount = html.split("<tr>").length - 1
+    // Should have 2 data rows (tr elements with height style)
+    val rowCount = "<tr style=\"height:".r.findAllIn(html).length
     assertEquals(rowCount, 2, "Should have 2 rows")
   }
 
@@ -340,4 +344,110 @@ class HtmlRendererSpec extends FunSuite:
     // Verify rich text
     assert(html.contains("+12.5%"), "Should include percentage")
     assert(html.contains("-5.2%"))
+  }
+
+  // ========== Row/Column Sizing Tests ==========
+
+  test("toHtml: includes colgroup with column widths") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Data")
+
+    val html = sheet.toHtml(ref"A1:A1")
+
+    // Should have colgroup element with col elements
+    assert(html.contains("<colgroup>"), "Should have colgroup element")
+    assert(html.contains("<col style=\"width:"), "Should have col elements with width")
+  }
+
+  test("toHtml: table-layout fixed is used") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Data")
+
+    val html = sheet.toHtml(ref"A1:A1")
+
+    assert(html.contains("table-layout: fixed"), "Should use table-layout: fixed")
+  }
+
+  test("toHtml: explicit column width is used") {
+    // Column width 20 chars → (20 * 7 + 5) = 145 pixels
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Data")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(20.0)))
+
+    val html = sheet.toHtml(ref"A1:A1")
+
+    assert(html.contains("width: 145px"), s"Column width should be 145px (20 chars), got: $html")
+  }
+
+  test("toHtml: explicit row height is used") {
+    // Row height 30 points → (30 * 4/3) = 40 pixels
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Data")
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(30.0)))
+
+    val html = sheet.toHtml(ref"A1:A1")
+
+    // tr should have height style
+    assert(html.contains("height: 40px"), s"Row height should be 40px (30pt), got: $html")
+  }
+
+  test("toHtml: hidden column renders as 0px") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Data")
+      .setColumnProperties(Column.from0(0), ColumnProperties(hidden = true))
+
+    val html = sheet.toHtml(ref"A1:A1")
+
+    // Hidden column should have 0 width in colgroup
+    assert(html.contains("width: 0px"), s"Hidden column should be 0px, got: $html")
+  }
+
+  test("toHtml: hidden row renders as 0px") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Data")
+      .setRowProperties(Row.from0(0), RowProperties(hidden = true))
+
+    val html = sheet.toHtml(ref"A1:A1")
+
+    // Hidden row should have 0 height
+    assert(html.contains("height: 0px"), s"Hidden row should be 0px, got: $html")
+  }
+
+  test("toHtml: overflow hidden is applied to cells") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Data")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0)))
+
+    val html = sheet.toHtml(ref"A1:A1", includeStyles = true)
+
+    // Cells should have overflow: hidden to clip content
+    assert(html.contains("overflow: hidden"), s"Cells should have overflow: hidden, got: $html")
+  }
+
+  test("toHtml: DSL-based sizing works") {
+    // Use the row/column DSL
+    val patch = col"A".width(15.0).toPatch ++ row(0).height(24.0).toPatch
+
+    val html = Patch
+      .applyPatch(Sheet("Test").put(ref"A1" -> "Data"), patch)
+      .toHtml(ref"A1:A1")
+
+    // Column A: 15 chars → 110px, Row 0: 24pt → 32px
+    assert(html.contains("width: 110px"), s"DSL column width should apply, got: $html")
+    assert(html.contains("height: 32px"), s"DSL row height should apply, got: $html")
+  }
+
+  test("toHtml: multiple columns with different widths") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "A", ref"B1" -> "B", ref"C1" -> "C")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(20.0))) // 145px
+
+    val html = sheet.toHtml(ref"A1:C1")
+
+    // Check colgroup has different widths
+    assert(html.contains("width: 75px"), s"Column A should be 75px, got: $html")
+    assert(html.contains("width: 145px"), s"Column B should be 145px, got: $html")
+    // Column C uses default
+    assert(html.contains("width: 64px"), s"Column C should use default 64px, got: $html")
   }

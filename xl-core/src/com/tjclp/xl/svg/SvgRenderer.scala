@@ -25,11 +25,21 @@ object SvgRenderer:
 
   // Default dimensions
   private val DefaultCellHeight = 24
+  private val DefaultRowHeightPt = 15.0 // Excel default row height in points
   private val HeaderWidth = 40 // Row number column width
   private val HeaderHeight = 24 // Column letter row height
   private val MinCellWidth = 60
   private val CellPaddingX = 6
   private val DefaultFontSize = 11
+
+  // Unit conversion helpers (Excel → pixels)
+  /** Convert Excel column width (character units) to pixels. */
+  private def excelColWidthToPixels(width: Double): Int =
+    (width * 7 + 5).toInt
+
+  /** Convert Excel row height (points) to pixels. 1pt = 4/3 pixels. */
+  private def excelRowHeightToPixels(height: Double): Int =
+    (height * 4.0 / 3.0).toInt
 
   // Graphics context for text measurement (lazy, with headless fallback)
   private lazy val graphics: Option[Graphics2D] =
@@ -84,12 +94,16 @@ object SvgRenderer:
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
 
-    // Calculate column widths based on content
+    // Calculate column widths and row heights
     val colWidths = calculateColumnWidths(sheet, range)
+    val rowHeights = calculateRowHeights(sheet, range)
+
+    // Pre-calculate row y positions (cumulative heights)
+    val rowYPositions = rowHeights.scanLeft(HeaderHeight)(_ + _).dropRight(1)
 
     // Calculate total dimensions
     val totalWidth = HeaderWidth + colWidths.sum
-    val totalHeight = HeaderHeight + (endRow - startRow + 1) * DefaultCellHeight
+    val totalHeight = HeaderHeight + rowHeights.sum
 
     val sb = new StringBuilder
 
@@ -132,13 +146,15 @@ object SvgRenderer:
     // Row headers (1, 2, 3...)
     sb.append("  <g class=\"row-headers\">\n")
     (startRow to endRow).foreach { row =>
+      val rowIdx = row - startRow
       val rowNum = row + 1
-      val y = HeaderHeight + (row - startRow) * DefaultCellHeight
+      val y = rowYPositions(rowIdx)
+      val rowHeight = rowHeights(rowIdx)
       sb.append(
-        s"""    <rect x="0" y="$y" width="$HeaderWidth" height="$DefaultCellHeight" class="header"/>\n"""
+        s"""    <rect x="0" y="$y" width="$HeaderWidth" height="$rowHeight" class="header"/>\n"""
       )
       val textX = HeaderWidth / 2
-      val textY = y + DefaultCellHeight / 2 + 4
+      val textY = y + rowHeight / 2 + 4
       sb.append(
         s"""    <text x="$textX" y="$textY" text-anchor="middle" class="header-text">$rowNum</text>\n"""
       )
@@ -148,7 +164,9 @@ object SvgRenderer:
     // Cells
     sb.append("  <g class=\"cells\">\n")
     (startRow to endRow).foreach { row =>
-      val y = HeaderHeight + (row - startRow) * DefaultCellHeight
+      val rowIdx = row - startRow
+      val y = rowYPositions(rowIdx)
+      val rowHeight = rowHeights(rowIdx)
       (startCol to endCol).foreach { col =>
         val colIdx = col - startCol
         val xOffset = colXPositions(colIdx)
@@ -161,13 +179,13 @@ object SvgRenderer:
           .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet) else None)
           .getOrElse(("fill=\"#FFFFFF\"", ""))
 
-        sb.append(s"""    <rect x="$xOffset" y="$y" width="$width" height="$DefaultCellHeight" """)
+        sb.append(s"""    <rect x="$xOffset" y="$y" width="$width" height="$rowHeight" """)
         sb.append(s"""$fillAttr class="cell" $strokeAttr/>\n""")
 
         // Cell text
         cellOpt.foreach { cell =>
           val (textX, anchor) = textAlignment(cell, sheet, xOffset, width)
-          val textY = y + DefaultCellHeight / 2 + 4
+          val textY = y + rowHeight / 2 + 4
           // Extract NumFmt from cell's style for proper value formatting
           val numFmt = cell.styleId
             .flatMap(sheet.styleRegistry.get)
@@ -204,7 +222,12 @@ object SvgRenderer:
     sb.toString
 
   /**
-   * Calculate column widths based on cell content.
+   * Calculate column widths based on sheet.columnProperties, falling back to content-based sizing.
+   *
+   * Priority:
+   *   1. If column is hidden → 0px
+   *   2. If explicit width in columnProperties → use it
+   *   3. Otherwise → max(content width, header width, MinCellWidth)
    */
   private def calculateColumnWidths(sheet: Sheet, range: CellRange): Vector[Int] =
     val startCol = range.start.col.index0
@@ -212,19 +235,66 @@ object SvgRenderer:
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
 
-    (startCol to endCol).map { col =>
-      val headerWidth = measureTextWidth(Column.from0(col).toLetter, None) + CellPaddingX * 2
-      val maxContentWidth = (startRow to endRow)
-        .map { row =>
-          val ref = ARef.from0(col, row)
-          sheet.cells.get(ref) match
-            case Some(cell) => measureCellValueWidth(cell.value) + CellPaddingX * 2
-            case None => 0
-        }
-        .maxOption
-        .getOrElse(0)
-      math.max(MinCellWidth, math.max(headerWidth, maxContentWidth))
+    (startCol to endCol).map { colIdx =>
+      val col = Column.from0(colIdx)
+      val props = sheet.getColumnProperties(col)
+
+      // Hidden columns render as 0px
+      if props.hidden then 0
+      else
+        props.width match
+          case Some(w) =>
+            // Explicit width set - use it (matches Excel behavior)
+            excelColWidthToPixels(w)
+          case None =>
+            // Fall back to content-based sizing
+            val headerWidth = measureTextWidth(col.toLetter, None) + CellPaddingX * 2
+            val maxContentWidth = (startRow to endRow)
+              .map { row =>
+                val ref = ARef.from0(colIdx, row)
+                sheet.cells.get(ref) match
+                  case Some(cell) => measureCellValueWidth(cell.value) + CellPaddingX * 2
+                  case None => 0
+              }
+              .maxOption
+              .getOrElse(0)
+
+            // Use sheet default if available, otherwise MinCellWidth
+            val minWidth = sheet.defaultColumnWidth
+              .map(excelColWidthToPixels)
+              .getOrElse(MinCellWidth)
+            math.max(minWidth, math.max(headerWidth, maxContentWidth))
     }.toVector
+
+  /**
+   * Calculate row heights based on sheet.rowProperties.
+   *
+   * Priority:
+   *   1. If row is hidden → 0px
+   *   2. If explicit height in rowProperties → use it
+   *   3. Otherwise → sheet.defaultRowHeight or DefaultCellHeight
+   */
+  private def calculateRowHeights(sheet: Sheet, range: CellRange): Vector[Int] =
+    val startRow = range.start.row.index0
+    val endRow = range.end.row.index0
+
+    (startRow to endRow).map { rowIdx =>
+      val row = Row.from0(rowIdx)
+      getRowHeight(sheet, row)
+    }.toVector
+
+  /** Get the height of a single row in pixels. */
+  private def getRowHeight(sheet: Sheet, row: Row): Int =
+    val props = sheet.getRowProperties(row)
+    if props.hidden then 0
+    else
+      props.height
+        .map(excelRowHeightToPixels)
+        .getOrElse(
+          sheet.defaultRowHeight
+            .map(excelRowHeightToPixels)
+            .getOrElse(DefaultCellHeight)
+        )
 
   /** Measure the width of a cell value, handling rich text runs. */
   private def measureCellValueWidth(value: CellValue): Int = value match
