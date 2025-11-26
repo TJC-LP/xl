@@ -80,8 +80,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -133,8 +132,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Changed")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -183,8 +181,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val result = for
       sheet <- initial("TestSheet")
       updatedSheet = sheet.put(ref"A1" -> "Test")
-      updated <- initial.put(updatedSheet)
-    yield updated
+    yield initial.put(updatedSheet)
 
     val wb = result.fold(err => fail(s"Failed to create workbook: $err"), identity)
 
@@ -217,8 +214,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"B2" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed: $err"), identity)
 
@@ -254,8 +250,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Updated Text")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -311,8 +306,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val modified = for
       s2 <- withContext("Sheet2")
       updatedS2 = s2.put(ref"B1" -> "Modified")
-      wb2 <- withContext.put(updatedS2)
-    yield wb2
+    yield withContext.put(updatedS2)
     val modifiedWb = modified.fold(err => fail(s"Modification failed: $err"), identity)
 
     val outputPath = Files.createTempFile("comments-output", ".xlsx")

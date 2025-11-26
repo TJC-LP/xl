@@ -327,7 +327,7 @@ object Main
                 IO.raiseError(new Exception("put command requires single cell, not range"))
             value = parseValue(valueStr)
             updatedSheet = targetSheet.put(ref, value)
-            updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
+            updatedWb = wb.put(updatedSheet)
             _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
           yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
       }
@@ -346,7 +346,7 @@ object Main
             formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
             value = CellValue.Formula(formula)
             updatedSheet = targetSheet.put(ref, value)
-            updatedWb <- IO.fromEither(wb.put(updatedSheet).left.map(e => new Exception(e.message)))
+            updatedWb = wb.put(updatedSheet)
             _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
           yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
       }

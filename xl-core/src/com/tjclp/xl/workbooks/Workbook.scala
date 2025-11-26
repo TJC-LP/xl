@@ -62,58 +62,57 @@ final case class Workbook(
    * If a sheet with the same name exists, replaces it in-place and marks as modified for surgical
    * writes. Otherwise, adds at end. This is the preferred method for adding/updating sheets.
    *
+   * This operation is infallible - it always succeeds for valid Sheet inputs.
+   *
    * Example:
    * {{{
    * val sales = Sheet("Sales").put(ref"A1" -> "Revenue")
-   * val wb2 = wb.put(sales).unsafe  // Add or replace "Sales" sheet
+   * val wb2 = wb.put(sales)  // Add or replace "Sales" sheet
    * }}}
    */
-  def put(sheet: Sheet): XLResult[Workbook] =
+  def put(sheet: Sheet): Workbook =
     sheets.indexWhere(_.name == sheet.name) match
       case -1 =>
         // Sheet doesn't exist → add at end (no tracking needed for new sheets)
-        Right(copy(sheets = sheets :+ sheet))
+        copy(sheets = sheets :+ sheet)
       case index =>
         // Sheet exists → replace in-place and track modification
         val updatedContext = sourceContext.map(_.markSheetModified(index))
-        Right(copy(sheets = sheets.updated(index, sheet), sourceContext = updatedContext))
+        copy(sheets = sheets.updated(index, sheet), sourceContext = updatedContext)
 
   /**
    * Put sheet with explicit name (rename if needed, then add-or-replace).
    *
    * Useful for renaming sheets during updates.
    */
-  def put(name: SheetName, sheet: Sheet): XLResult[Workbook] =
+  def put(name: SheetName, sheet: Sheet): Workbook =
     put(sheet.copy(name = name))
 
   /**
    * Put sheet with explicit name (string variant).
+   *
+   * Returns XLResult because string name validation may fail at runtime.
    */
   @annotation.targetName("putWithStringName")
   def put(name: String, sheet: Sheet): XLResult[Workbook] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .flatMap(sn => put(sn, sheet))
+    SheetName(name) match
+      case Right(sn) => Right(put(sn, sheet))
+      case Left(err) => Left(XLError.InvalidSheetName(name, err))
 
   /**
-   * Put multiple sheets atomically (batch operation).
+   * Put multiple sheets (batch operation).
    *
-   * Transactional semantics: All sheets must be added successfully or the operation fails. If any
-   * sheet cannot be added (e.g., validation error), the entire batch fails and the workbook is
-   * unchanged. This ensures consistency - you never get a workbook with partial updates.
+   * Adds or replaces each sheet by name. This operation is infallible since each individual put is
+   * infallible.
    *
    * Example:
    * {{{
-   * wb.put(Sheet("Sales"), Sheet("Marketing"), Sheet("Finance")) match
-   *   case Right(updated) => updated  // All 3 sheets added
-   *   case Left(err) => original      // None added, workbook unchanged
+   * val updated = wb.put(Sheet("Sales"), Sheet("Marketing"), Sheet("Finance"))
    * }}}
-   *
-   * For partial success semantics, add sheets individually and accumulate results.
    */
-  def put(firstSheet: Sheet, restSheets: Sheet*): XLResult[Workbook] =
-    (firstSheet +: restSheets).foldLeft(Right(this): XLResult[Workbook]) { (acc, sheet) =>
-      acc.flatMap(_.put(sheet))
+  def put(firstSheet: Sheet, restSheets: Sheet*): Workbook =
+    (firstSheet +: restSheets).foldLeft(this) { (acc, sheet) =>
+      acc.put(sheet)
     }
 
   /** Add sheet at end */

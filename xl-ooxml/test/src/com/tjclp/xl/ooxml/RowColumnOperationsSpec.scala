@@ -356,13 +356,9 @@ class RowColumnOperationsSpec extends FunSuite:
       row(0).height(30.0).toPatch ++
         col"A".width(20.0).toPatch
 
-    val result = sheet.put(patch)
-    assert(result.isRight, s"Apply failed: $result")
-
-    result.foreach { updated =>
-      assertEquals(updated.getRowProperties(Row.from0(0)).height, Some(30.0))
-      assertEquals(updated.getColumnProperties(col"A").width, Some(20.0))
-    }
+    val updated = sheet.put(patch)
+    assertEquals(updated.getRowProperties(Row.from0(0)).height, Some(30.0))
+    assertEquals(updated.getColumnProperties(col"A").width, Some(20.0))
   }
 
   // ========== Validation Tests ==========

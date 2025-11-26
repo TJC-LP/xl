@@ -41,8 +41,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -99,8 +98,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -151,8 +149,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -227,8 +224,7 @@ class XlsxWriterStyleMetadataSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 

@@ -472,10 +472,8 @@ class OpticsSpec extends FunSuite:
       .modifyValue(ref"A1") { _ => CellValue.Text("before patch") }
 
     val patch = ref"A1" := "after patch"
-    val result = Patch.applyPatch(sheet, patch)
+    val updated = Patch.applyPatch(sheet, patch)
 
-    assert(result.isRight)
-    val updated = result.getOrElse(fail("Patch failed"))
     assertEquals(updated(ref"A1").value, CellValue.Text("after patch"))
   }
 

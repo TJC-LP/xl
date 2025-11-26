@@ -17,7 +17,7 @@ object BenchmarkUtils {
   /** Generate a workbook with N rows of mixed data types */
   def generateWorkbook(rows: Int, styled: Boolean = false): Workbook = {
     val sheet = generateSheet("Data", rows, styled)
-    Workbook.empty.put(sheet).getOrElse(Workbook.empty)
+    Workbook.empty.put(sheet)
   }
 
   /** Generate a sheet with N rows of realistic data */

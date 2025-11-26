@@ -43,7 +43,7 @@ class EasyExcelSpec extends CatsEffectSuite:
     val tempFile = Files.createTempFile("test-read", ".xlsx")
     try {
       // Write a valid workbook
-      val original = Workbook.empty.put(Sheet("Sales")).unsafe
+      val original = Workbook.empty.put(Sheet("Sales"))
       Excel.write(original, tempFile.toString)
 
       // Read it back
@@ -62,7 +62,7 @@ class EasyExcelSpec extends CatsEffectSuite:
     Files.delete(tempFile) // Delete so we test creation
 
     try {
-      val workbook = Workbook.empty.put(Sheet("Test")).unsafe
+      val workbook = Workbook.empty.put(Sheet("Test"))
       Excel.write(workbook, tempFile.toString)
 
       assert(Files.exists(tempFile))
@@ -76,11 +76,11 @@ class EasyExcelSpec extends CatsEffectSuite:
     val tempFile = Files.createTempFile("test-overwrite", ".xlsx")
     try {
       // Write initial
-      val original = Workbook.empty.put(Sheet("First")).unsafe
+      val original = Workbook.empty.put(Sheet("First"))
       Excel.write(original, tempFile.toString)
 
       // Overwrite
-      val updated = Workbook.empty.put(Sheet("Second")).unsafe
+      val updated = Workbook.empty.put(Sheet("Second"))
       Excel.write(updated, tempFile.toString)
 
       // Verify overwritten
@@ -99,7 +99,6 @@ class EasyExcelSpec extends CatsEffectSuite:
     try {
       val original = Workbook.empty
         .put(Sheet("Sales").put("A1", "Revenue").put("B1", 1000).unsafe)
-        .unsafe
 
       Excel.write(original, tempFile.toString)
       val loaded = Excel.read(tempFile.toString)
@@ -118,7 +117,6 @@ class EasyExcelSpec extends CatsEffectSuite:
       val boldStyle = CellStyle.default.bold
       val original = Workbook.empty
         .put(Sheet("Styled").put("A1", "Bold", boldStyle).unsafe)
-        .unsafe
 
       Excel.write(original, tempFile.toString)
       val loaded = Excel.read(tempFile.toString)
@@ -139,7 +137,6 @@ class EasyExcelSpec extends CatsEffectSuite:
         .put(Sheet("First").put("A1", "1").unsafe)
         .put(Sheet("Second").put("A1", "2").unsafe)
         .put(Sheet("Third").put("A1", "3").unsafe)
-        .unsafe
 
       Excel.write(original, tempFile.toString)
       val loaded = Excel.read(tempFile.toString)
@@ -184,7 +181,6 @@ class EasyExcelSpec extends CatsEffectSuite:
       // Setup with 2 sheets
       val initial = Workbook.empty
         .put(Sheet("Preserve").put("A1", "Original").unsafe)
-        .unsafe
 
       Excel.write(initial, tempFile.toString)
 

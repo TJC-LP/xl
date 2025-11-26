@@ -284,23 +284,21 @@ final case class Sheet(
   /**
    * Apply a patch to this sheet.
    *
-   * Patches enable declarative composition of updates (Put, SetStyle, Merge, etc.). Returns Either
-   * for operations that can fail (e.g., merge overlaps, invalid ranges).
+   * Patches enable declarative composition of updates (Put, SetStyle, Merge, etc.). This operation
+   * is infallible since patches contain only validated references.
    *
    * Example:
    * {{{
    * val patch = (ref"A1" := "Title") ++ range"A1:C1".merge
-   * sheet.put(patch) match
-   *   case Right(updated) => updated
-   *   case Left(err) => handleError(err)
+   * val updated = sheet.put(patch)
    * }}}
    *
    * @param patch
    *   The patch to apply
    * @return
-   *   Either an updated sheet or an error
+   *   The updated sheet
    */
-  def put(patch: com.tjclp.xl.patch.Patch): XLResult[Sheet] =
+  def put(patch: com.tjclp.xl.patch.Patch): Sheet =
     com.tjclp.xl.patch.Patch.applyPatch(this, patch)
 
   /** Remove cell at reference */

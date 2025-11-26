@@ -54,21 +54,21 @@ class PatchBenchmark {
   @Benchmark
   def singleCellUpdate(): Sheet = {
     // Measure single cell update overhead
-    Patch.applyPatch(baseSheet, singleCellPatch).getOrElse(baseSheet)
+    Patch.applyPatch(baseSheet, singleCellPatch)
   }
 
   @Benchmark
   def rowUpdate(): Sheet = {
     // Measure row update (1000 cells)
     val batchPatch = rowPatches.fold(Patch.empty)(Patch.combine)
-    Patch.applyPatch(baseSheet, batchPatch).getOrElse(baseSheet)
+    Patch.applyPatch(baseSheet, batchPatch)
   }
 
   @Benchmark
   def columnUpdate(): Sheet = {
     // Measure column update (10000 cells)
     val batchPatch = columnPatches.fold(Patch.empty)(Patch.combine)
-    Patch.applyPatch(baseSheet, batchPatch).getOrElse(baseSheet)
+    Patch.applyPatch(baseSheet, batchPatch)
   }
 
   @Benchmark

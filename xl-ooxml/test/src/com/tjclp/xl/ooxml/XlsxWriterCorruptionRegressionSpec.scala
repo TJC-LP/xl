@@ -46,8 +46,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -106,8 +105,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -158,8 +156,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A3" -> "Modified")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 
@@ -214,8 +211,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
       updatedSheet = sheet.put(ref"A1" -> "New String")
-      updated <- wb.put(updatedSheet)
-    yield updated
+    yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
 

@@ -4,6 +4,9 @@ import scala.util.boundary, boundary.break
 
 /** Unified reference parser shared by macros and runtime code. */
 object RefParser:
+  // Excel limits (0-indexed)
+  val MaxColumn: Int = 16383 // XFD (column 16384 in 1-indexed)
+  val MaxRow: Int = 1048575 // Row 1048576 in 1-indexed
 
   enum ParsedRef:
     case Cell(sheet: Option[String], col0: Int, row0: Int)
@@ -84,13 +87,17 @@ object RefParser:
       else if ch >= 'a' && ch <= 'z' then { col = col * 26 + (ch - 'a' + 1); i += 1 }
       else parsing = false
     if col == 0 then fail("missing column letters")
+    val col0 = col - 1
+    if col0 > MaxColumn then fail(s"column out of range (max XFD)")
     var row = 0; var sawDigit = false
     while i < n && s.charAt(i).isDigit do
       row = row * 10 + (s.charAt(i) - '0'); i += 1; sawDigit = true
     if !sawDigit then fail("missing row digits")
     if i != n then fail("trailing junk")
     if row < 1 then fail("row must be ≥ 1")
-    (col - 1, row - 1)
+    val row0 = row - 1
+    if row0 > MaxRow then fail(s"row out of range (max 1048576)")
+    (col0, row0)
 
   private def parseRangeLit(s: String): ((Int, Int), (Int, Int)) =
     val i = s.indexOf(':')

@@ -71,34 +71,36 @@ object extensions:
     /**
      * Apply style to cell (compile-time validated ref).
      *
-     * Universal style method that works with typed ARef from ref"A1" macro.
+     * Universal style method that works with typed ARef from ref"A1" macro. This operation is
+     * infallible since the reference is already validated.
      *
      * @param ref
      *   Cell reference (ARef from ref"A1" macro)
      * @param cellStyle
      *   CellStyle to apply
      * @return
-     *   XLResult[Sheet] for chaining
+     *   Updated Sheet
      */
     @annotation.targetName("styleSheetARef")
-    def style(ref: com.tjclp.xl.addressing.ARef, cellStyle: CellStyle): XLResult[Sheet] =
-      Right(sheet.withCellStyle(ref, cellStyle))
+    def style(ref: com.tjclp.xl.addressing.ARef, cellStyle: CellStyle): Sheet =
+      sheet.withCellStyle(ref, cellStyle)
 
     /**
      * Apply style to range (compile-time validated ref).
      *
-     * Universal style method that works with typed CellRange from ref"A1:B10" macro.
+     * Universal style method that works with typed CellRange from ref"A1:B10" macro. This operation
+     * is infallible since the range is already validated.
      *
      * @param range
      *   Cell range (CellRange from ref"A1:B10" macro)
      * @param cellStyle
      *   CellStyle to apply
      * @return
-     *   XLResult[Sheet] for chaining
+     *   Updated Sheet
      */
     @annotation.targetName("styleSheetRange")
-    def style(range: com.tjclp.xl.addressing.CellRange, cellStyle: CellStyle): XLResult[Sheet] =
-      Right(sheet.withRangeStyle(range, cellStyle))
+    def style(range: com.tjclp.xl.addressing.CellRange, cellStyle: CellStyle): Sheet =
+      sheet.withRangeStyle(range, cellStyle)
 
   // ========== Sheet Extensions: Lookup Operations (Safe) ==========
 
@@ -216,14 +218,14 @@ object extensions:
      */
     @annotation.targetName("styleSheetARefChainable")
     def style(ref: com.tjclp.xl.addressing.ARef, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.style(ref, cellStyle))
+      result.map(_.style(ref, cellStyle))
 
     /**
      * Apply style (chainable, range).
      */
     @annotation.targetName("styleSheetRangeChainable")
     def style(range: com.tjclp.xl.addressing.CellRange, cellStyle: CellStyle): XLResult[Sheet] =
-      result.flatMap(_.style(range, cellStyle))
+      result.map(_.style(range, cellStyle))
 
     /** Merge range (chainable). */
     def merge(rangeRef: String): XLResult[Sheet] =
@@ -232,7 +234,7 @@ object extensions:
     /** Apply patch (chainable). */
     @annotation.targetName("putPatchChainable")
     def put(patch: com.tjclp.xl.patch.Patch): XLResult[Sheet] =
-      result.flatMap(_.put(patch))
+      result.map(_.put(patch))
 
     /**
      * Batch put (chainable).
@@ -257,7 +259,7 @@ object extensions:
     /** Put sheet (add-or-replace, chainable). */
     @annotation.targetName("putSheetChainable")
     def put(sheet: Sheet): XLResult[Workbook] =
-      result.flatMap(_.put(sheet))
+      result.map(_.put(sheet))
 
     /** Update sheet by name (chainable). */
     @annotation.targetName("updateSheetChainable")

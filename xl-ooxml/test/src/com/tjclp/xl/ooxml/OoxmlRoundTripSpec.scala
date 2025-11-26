@@ -154,11 +154,9 @@ class OoxmlRoundTripSpec extends FunSuite:
     val initial = Workbook("Sheet1")
     val sheet1 = initial.sheets(0).put(ref"A1", CellValue.Text("First"))
 
-    val wb = (for
-      wb2 <- initial.put(Sheet("Sheet2"))
-      wb3 <- wb2.update(wb2.sheets(0).name, _ => sheet1)
-      wb4 <- wb3.update(wb3.sheets(1).name, _ => wb3.sheets(1).put(ref"A1", CellValue.Text("Second")))
-    yield wb4).getOrElse(fail("Should create workbook"))
+    val wb2 = initial.put(Sheet("Sheet2"))
+    val wb3 = wb2.update(wb2.sheets(0).name, _ => sheet1).getOrElse(fail("Should update sheet1"))
+    val wb = wb3.update(wb3.sheets(1).name, _ => wb3.sheets(1).put(ref"A1", CellValue.Text("Second"))).getOrElse(fail("Should update sheet2"))
 
     // Round-trip
     val outputPath = tempDir.resolve("multi-sheet.xlsx")

@@ -183,7 +183,7 @@ class ExtensionsSpec extends FunSuite:
   // ========== Typed ref style() Operations ==========
 
   test("style applies to single cell (ARef)") {
-    val result = baseSheet.put("A1", "Text").flatMap(_.style(ref"A1", testStyle))
+    val result = baseSheet.put("A1", "Text").map(_.style(ref"A1", testStyle))
     assert(result.isRight)
     assert(result.unsafe.cell("A1").flatMap(_.styleId).isDefined)
   }
@@ -192,25 +192,22 @@ class ExtensionsSpec extends FunSuite:
     val result = baseSheet
       .put("A1", "A")
       .put("B1", "B")
-      .flatMap(_.style(ref"A1:B1", testStyle))
+      .map(_.style(ref"A1:B1", testStyle))
     assert(result.isRight)
     val sheet = result.unsafe
     assert(sheet.cell("A1").flatMap(_.styleId).isDefined)
     assert(sheet.cell("B1").flatMap(_.styleId).isDefined)
   }
 
-  test("style with ARef returns XLResult") {
+  test("style with ARef returns Sheet directly") {
     val sheet = baseSheet.put("A1", "Text").unsafe
     val result = sheet.style(ref"A1", testStyle)
-    assert(result.isRight)
-    assertEquals(result.unsafe.cells.get(ref"A1").flatMap(_.styleId).isDefined, true)
+    assertEquals(result.cells.get(ref"A1").flatMap(_.styleId).isDefined, true)
   }
 
-  test("style with CellRange returns XLResult") {
+  test("style with CellRange returns Sheet directly") {
     val sheet = baseSheet.put("A1", "A").put("B1", "B").unsafe
-    val result = sheet.style(ref"A1:B1", testStyle)
-    assert(result.isRight)
-    val styled = result.unsafe
+    val styled = sheet.style(ref"A1:B1", testStyle)
     assert(styled.cells.get(ref"A1").flatMap(_.styleId).isDefined)
     assert(styled.cells.get(ref"B1").flatMap(_.styleId).isDefined)
   }
