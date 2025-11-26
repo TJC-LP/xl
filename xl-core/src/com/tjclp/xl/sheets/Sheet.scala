@@ -424,13 +424,24 @@ final case class Sheet(
     copy(mergedRanges = Set.empty)
 
 object Sheet:
-  /** Create empty sheet with name */
-  def apply(name: String): XLResult[Sheet] =
-    SheetName(name).left
-      .map(err => XLError.InvalidSheetName(name, err))
-      .map(sn => Sheet(sn))
+  /**
+   * Create empty sheet with name.
+   *
+   * When called with a string literal, the name is validated at compile time. When called with a
+   * runtime expression, validation is deferred to the OOXML write boundary where invalid names
+   * would actually cause problems.
+   *
+   * Validation rules (Excel sheet name constraints):
+   *   - Cannot be empty
+   *   - Maximum 31 characters
+   *   - Cannot contain: : \ / ? * [ ]
+   */
+  @annotation.targetName("applyStringLiteral")
+  inline def apply(inline name: String): Sheet =
+    ${ com.tjclp.xl.macros.SheetLiteral.sheetImpl('name) }
 
   /** Create empty sheet with validated name */
+  @annotation.targetName("applySheetName")
   def apply(name: SheetName): Sheet =
     Sheet(
       name,

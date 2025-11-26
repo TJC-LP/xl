@@ -245,5 +245,5 @@ object syntax:
 
 export syntax.*
 
-// Re-export RowColumnDsl for convenience
-export RowColumnDsl.{RowBuilder, ColumnBuilder, row, rows}
+// Re-export all of RowColumnDsl (builders, entry points, and extension methods)
+export RowColumnDsl.*

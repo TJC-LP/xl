@@ -32,7 +32,7 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Minimal workbook: write and read back") {
     // Create minimal workbook
-    val wb = Workbook("Test").getOrElse(fail("Should create workbook"))
+    val wb = Workbook("Test")
 
     // Write to file
     val outputPath = tempDir.resolve("minimal.xlsx")
@@ -51,15 +51,14 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Workbook with text cells") {
-    val wb = Workbook("Data").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Text("Hello"))
-        .put(ref"B1", CellValue.Text("World"))
-        .put(ref"A2", CellValue.Text("Scala"))
-        .put(ref"B2", CellValue.Text("Excel"))
+    val initial = Workbook("Data")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Text("Hello"))
+      .put(ref"B1", CellValue.Text("World"))
+      .put(ref"A2", CellValue.Text("Scala"))
+      .put(ref"B2", CellValue.Text("Excel"))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Round-trip
     val outputPath = tempDir.resolve("text-cells.xlsx")
@@ -76,14 +75,13 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Workbook with number cells") {
-    val wb = Workbook("Numbers").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Number(BigDecimal(42)))
-        .put(ref"A2", CellValue.Number(BigDecimal(3.14159)))
-        .put(ref"A3", CellValue.Number(BigDecimal(-100)))
+    val initial = Workbook("Numbers")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Number(BigDecimal(42)))
+      .put(ref"A2", CellValue.Number(BigDecimal(3.14159)))
+      .put(ref"A3", CellValue.Number(BigDecimal(-100)))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Round-trip
     val outputPath = tempDir.resolve("numbers.xlsx")
@@ -101,13 +99,12 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Workbook with boolean cells") {
-    val wb = Workbook("Bools").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Bool(true))
-        .put(ref"A2", CellValue.Bool(false))
+    val initial = Workbook("Bools")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Bool(true))
+      .put(ref"A2", CellValue.Bool(false))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Round-trip
     val outputPath = tempDir.resolve("booleans.xlsx")
@@ -124,20 +121,19 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Workbook with mixed cell types") {
-    val wb = Workbook("Mixed").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Text("Name"))
-        .put(ref"B1", CellValue.Text("Age"))
-        .put(ref"C1", CellValue.Text("Active"))
-        .put(ref"A2", CellValue.Text("Alice"))
-        .put(ref"B2", CellValue.Number(BigDecimal(30)))
-        .put(ref"C2", CellValue.Bool(true))
-        .put(ref"A3", CellValue.Text("Bob"))
-        .put(ref"B3", CellValue.Number(BigDecimal(25)))
-        .put(ref"C3", CellValue.Bool(false))
+    val initial = Workbook("Mixed")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Text("Name"))
+      .put(ref"B1", CellValue.Text("Age"))
+      .put(ref"C1", CellValue.Text("Active"))
+      .put(ref"A2", CellValue.Text("Alice"))
+      .put(ref"B2", CellValue.Number(BigDecimal(30)))
+      .put(ref"C2", CellValue.Bool(true))
+      .put(ref"A3", CellValue.Text("Bob"))
+      .put(ref"B3", CellValue.Number(BigDecimal(25)))
+      .put(ref"C3", CellValue.Bool(false))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Round-trip
     val outputPath = tempDir.resolve("mixed.xlsx")
@@ -155,15 +151,14 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Multi-sheet workbook") {
-    val wb = Workbook("Sheet1").flatMap { initial =>
-      val sheet1 = initial.sheets(0).put(ref"A1", CellValue.Text("First"))
+    val initial = Workbook("Sheet1")
+    val sheet1 = initial.sheets(0).put(ref"A1", CellValue.Text("First"))
 
-      for
-        wb2 <- Sheet("Sheet2").flatMap(initial.put)
-        wb3 <- wb2.update(wb2.sheets(0).name, _ => sheet1)
-        wb4 <- wb3.update(wb3.sheets(1).name, _ => wb3.sheets(1).put(ref"A1", CellValue.Text("Second")))
-      yield wb4
-    }.getOrElse(fail("Should create workbook"))
+    val wb = (for
+      wb2 <- initial.put(Sheet("Sheet2"))
+      wb3 <- wb2.update(wb2.sheets(0).name, _ => sheet1)
+      wb4 <- wb3.update(wb3.sheets(1).name, _ => wb3.sheets(1).put(ref"A1", CellValue.Text("Second")))
+    yield wb4).getOrElse(fail("Should create workbook"))
 
     // Round-trip
     val outputPath = tempDir.resolve("multi-sheet.xlsx")
@@ -181,14 +176,13 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Workbook with repeated strings triggers SST") {
     // Create workbook with many repeated strings
-    val wb = Workbook("SST Test").flatMap { initial =>
-      val sheet = (1 to 20).foldLeft(initial.sheets(0)) { (s, i) =>
-        val row = Row.from1(i)
-        s.put(ARef(Column.from0(0), row), CellValue.Text("Repeated"))
-          .put(ARef(Column.from0(1), row), CellValue.Text("Value"))
-      }
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val initial = Workbook("SST Test")
+    val sheet = (1 to 20).foldLeft(initial.sheets(0)) { (s, i) =>
+      val row = Row.from1(i)
+      s.put(ARef(Column.from0(0), row), CellValue.Text("Repeated"))
+        .put(ARef(Column.from0(1), row), CellValue.Text("Value"))
+    }
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Verify SST would be used
     assert(SharedStrings.shouldUseSST(wb), "SST should be beneficial")
@@ -209,7 +203,7 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Empty workbook round-trips correctly") {
-    val wb = Workbook("Empty").getOrElse(fail("Should create workbook"))
+    val wb = Workbook("Empty")
 
     val outputPath = tempDir.resolve("empty.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -223,14 +217,13 @@ class OoxmlRoundTripSpec extends FunSuite:
   // ===== Formula Roundtrip Tests =====
 
   test("Formula cell roundtrips expression without cached value") {
-    val wb = Workbook("Formulas").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Number(BigDecimal(100)))
-        .put(ref"B1", CellValue.Number(BigDecimal(200)))
-        .put(ref"C1", CellValue.Formula("A1+B1", None))
+    val initial = Workbook("Formulas")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Number(BigDecimal(100)))
+      .put(ref"B1", CellValue.Number(BigDecimal(200)))
+      .put(ref"C1", CellValue.Formula("A1+B1", None))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-no-cache.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -246,14 +239,13 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Formula cell roundtrips expression with cached numeric value") {
-    val wb = Workbook("Formulas").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Number(BigDecimal(100)))
-        .put(ref"B1", CellValue.Number(BigDecimal(200)))
-        .put(ref"C1", CellValue.Formula("A1+B1", Some(CellValue.Number(BigDecimal(300)))))
+    val initial = Workbook("Formulas")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Number(BigDecimal(100)))
+      .put(ref"B1", CellValue.Number(BigDecimal(200)))
+      .put(ref"C1", CellValue.Formula("A1+B1", Some(CellValue.Number(BigDecimal(300)))))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-cached-number.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -272,14 +264,13 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Formula cell roundtrips expression with cached text value") {
-    val wb = Workbook("Formulas").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Text("Hello"))
-        .put(ref"B1", CellValue.Text(" World"))
-        .put(ref"C1", CellValue.Formula("CONCATENATE(A1,B1)", Some(CellValue.Text("Hello World"))))
+    val initial = Workbook("Formulas")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Text("Hello"))
+      .put(ref"B1", CellValue.Text(" World"))
+      .put(ref"C1", CellValue.Formula("CONCATENATE(A1,B1)", Some(CellValue.Text("Hello World"))))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-cached-text.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -298,14 +289,13 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Formula cell roundtrips expression with cached boolean value") {
-    val wb = Workbook("Formulas").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Number(BigDecimal(100)))
-        .put(ref"B1", CellValue.Number(BigDecimal(50)))
-        .put(ref"C1", CellValue.Formula("A1>B1", Some(CellValue.Bool(true))))
+    val initial = Workbook("Formulas")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Number(BigDecimal(100)))
+      .put(ref"B1", CellValue.Number(BigDecimal(50)))
+      .put(ref"C1", CellValue.Formula("A1>B1", Some(CellValue.Bool(true))))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-cached-bool.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -324,14 +314,13 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Formula cell roundtrips expression with cached error value") {
-    val wb = Workbook("Formulas").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Number(BigDecimal(100)))
-        .put(ref"B1", CellValue.Number(BigDecimal(0)))
-        .put(ref"C1", CellValue.Formula("A1/B1", Some(CellValue.Error(CellError.Div0))))
+    val initial = Workbook("Formulas")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Number(BigDecimal(100)))
+      .put(ref"B1", CellValue.Number(BigDecimal(0)))
+      .put(ref"C1", CellValue.Formula("A1/B1", Some(CellValue.Error(CellError.Div0))))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-cached-error.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -350,18 +339,17 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Multiple formula cells roundtrip correctly") {
-    val wb = Workbook("Formulas").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Number(BigDecimal(10)))
-        .put(ref"A2", CellValue.Number(BigDecimal(20)))
-        .put(ref"A3", CellValue.Number(BigDecimal(30)))
-        .put(ref"B1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(20)))))
-        .put(ref"B2", CellValue.Formula("A2*2", Some(CellValue.Number(BigDecimal(40)))))
-        .put(ref"B3", CellValue.Formula("A3*2", Some(CellValue.Number(BigDecimal(60)))))
-        .put(ref"C1", CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(BigDecimal(120)))))
+    val initial = Workbook("Formulas")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Number(BigDecimal(10)))
+      .put(ref"A2", CellValue.Number(BigDecimal(20)))
+      .put(ref"A3", CellValue.Number(BigDecimal(30)))
+      .put(ref"B1", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(20)))))
+      .put(ref"B2", CellValue.Formula("A2*2", Some(CellValue.Number(BigDecimal(40)))))
+      .put(ref"B3", CellValue.Formula("A3*2", Some(CellValue.Number(BigDecimal(60)))))
+      .put(ref"C1", CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(BigDecimal(120)))))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-multiple.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -388,13 +376,12 @@ class OoxmlRoundTripSpec extends FunSuite:
   }
 
   test("Workbook with merged cells preserves merges") {
-    val wb = Workbook("Merged").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.Text("Merged Header"))
-        .merge(ref"A1:C1")
+    val initial = Workbook("Merged")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Text("Merged Header"))
+      .merge(ref"A1:C1")
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("merged.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -419,13 +406,12 @@ class OoxmlRoundTripSpec extends FunSuite:
     val dt1 = LocalDateTime.of(2025, 11, 10, 0, 0, 0) // Nov 10, 2025 midnight
     val dt2 = LocalDateTime.of(2000, 1, 1, 12, 0, 0)   // Jan 1, 2000 noon
 
-    val wb = Workbook("Dates").flatMap { initial =>
-      val sheet = initial.sheets(0)
-        .put(ref"A1", CellValue.DateTime(dt1))
-        .put(ref"A2", CellValue.DateTime(dt2))
+    val initial = Workbook("Dates")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.DateTime(dt1))
+      .put(ref"A2", CellValue.DateTime(dt2))
 
-      initial.update(initial.sheets(0).name, _ => sheet)
-    }.getOrElse(fail("Should create workbook"))
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("dates.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -477,7 +463,8 @@ class OoxmlRoundTripSpec extends FunSuite:
     yield Workbook(Vector(summary, detail, timeline))
 
   private def buildSummarySheet: XLResult[Sheet] =
-    Sheet("Summary").map { base =>
+    Right {
+      val base = Sheet("Summary")
       val populated = base
         .put(
           ref"A1" -> "Quarterly Report",
@@ -512,7 +499,8 @@ class OoxmlRoundTripSpec extends FunSuite:
     }
 
   private def buildDetailSheet: XLResult[Sheet] =
-    Sheet("Detail").map { base =>
+    Right {
+      val base = Sheet("Detail")
       val populated = base
         .put(
           ref"A1" -> "Region",
@@ -548,7 +536,8 @@ class OoxmlRoundTripSpec extends FunSuite:
     }
 
   private def buildTimelineSheet: XLResult[Sheet] =
-    Sheet("Timeline").map { base =>
+    Right {
+      val base = Sheet("Timeline")
       val populated = base
         .put(
           ref"A1" -> "Milestone",

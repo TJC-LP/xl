@@ -19,7 +19,7 @@ import java.time.{LocalDate, LocalDateTime}
 class BatchUpdateSpec extends FunSuite:
 
   test("put: single string value") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Hello")
       .unsafe
 
@@ -28,7 +28,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("put: single int value with auto-style") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> 42)
       .unsafe
 
@@ -38,7 +38,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("put: single BigDecimal with decimal format") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> BigDecimal("123.45"))
       .unsafe
 
@@ -49,7 +49,7 @@ class BatchUpdateSpec extends FunSuite:
 
   test("put: single LocalDate with date format") {
     val date = LocalDate.of(2025, 11, 10)
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> date)
       .unsafe
 
@@ -63,7 +63,7 @@ class BatchUpdateSpec extends FunSuite:
 
   test("put: single LocalDateTime with datetime format") {
     val dt = LocalDateTime.of(2025, 11, 10, 14, 30)
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> dt)
       .unsafe
 
@@ -73,7 +73,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("put: multiple values with mixed types") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(
         ref"A1" -> "Title",
         ref"B1" -> 42,
@@ -99,7 +99,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("put: batch semantics equivalent to individual puts") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
 
     // Manual individual puts
     val manual = sheet
@@ -119,7 +119,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("put: overwrites existing cells") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Old")
       .unsafe
       .put(ref"A1" -> "New")
@@ -143,7 +143,7 @@ class BatchUpdateSpec extends FunSuite:
 
   test("put: type-safe API accepts CellWritable types") {
     // All CellWritable types compile and work correctly
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(
         ref"A1" -> "String",
         ref"B1" -> 42,
@@ -161,7 +161,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("put: writes single typed value with auto-inferred style") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> BigDecimal("123.45"))
       .unsafe
 
@@ -170,7 +170,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("readTyped: reads existing ref") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Number(BigDecimal(42)))
 
     val result = sheet.readTyped[Int](ref"A1")
@@ -178,14 +178,14 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("readTyped: returns None for empty ref") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
 
     val result = sheet.readTyped[Int](ref"A1")
     assertEquals(result, Right(None))
   }
 
   test("readTyped: returns error for type mismatch") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("not a number"))
 
     val result = sheet.readTyped[Int](ref"A1")
@@ -193,7 +193,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("putMixed + readTyped: round-trip") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(
         ref"A1" -> 42,
         ref"B1" -> BigDecimal("123.45"),
@@ -207,7 +207,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("put: StyleRegistry size increases correctly") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(
         ref"A1" -> "No style", // Strings don't add styles
         ref"B1" -> BigDecimal("123.45"), // Adds decimal style
@@ -220,7 +220,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("put: deduplicates identical styles") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(
         ref"A1" -> BigDecimal("123.45"),
         ref"A2" -> BigDecimal("678.90") // Same type, should reuse style
@@ -239,7 +239,7 @@ class BatchUpdateSpec extends FunSuite:
 
   test("put: RichText value") {
     val richText = "Bold".bold + " normal"
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> richText)
       .unsafe
 
@@ -252,7 +252,7 @@ class BatchUpdateSpec extends FunSuite:
 
   test("put: mix RichText with other types") {
     val richText = "Error: ".red.bold + "File not found"
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(
         ref"A1" -> "Plain text",
         ref"A2" -> richText,
@@ -267,7 +267,7 @@ class BatchUpdateSpec extends FunSuite:
 
   test("readTyped: read RichText from ref") {
     val richText = "Bold".bold
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.RichText(richText))
 
     val result = sheet.readTyped[RichText](ref"A1")
@@ -277,7 +277,7 @@ class BatchUpdateSpec extends FunSuite:
   }
 
   test("readTyped: convert plain Text to RichText") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Hello"))
 
     val result = sheet.readTyped[RichText](ref"A1")

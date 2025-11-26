@@ -21,7 +21,7 @@ class SheetStyleSpec extends FunSuite:
 
   test("withCellStyle registers and applies style") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Header"))
       .withCellStyle(ref"A1", boldStyle)
 
@@ -37,7 +37,7 @@ class SheetStyleSpec extends FunSuite:
 
   test("withCellStyle deduplicates same style applied twice") {
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Text1", ref"A2" -> "Text2")
       .unsafe
       .withCellStyle(ref"A1", redStyle)
@@ -55,7 +55,7 @@ class SheetStyleSpec extends FunSuite:
 
   test("withRangeStyle applies to all cells in ref") {
     val headerStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Col1", ref"B1" -> "Col2", ref"C1" -> "Col3")
       .unsafe
       .withRangeStyle(ref"A1:C1", headerStyle)
@@ -77,14 +77,14 @@ class SheetStyleSpec extends FunSuite:
   }
 
   test("getCellStyle returns None for unstyled ref") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Text"))
 
     assert(sheet.getCellStyle(ref"A1") == None)
   }
 
   test("getCellStyle returns None for empty ref") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
 
     assert(sheet.getCellStyle(ref"A1") == None)
   }
@@ -94,7 +94,7 @@ class SheetStyleSpec extends FunSuite:
     val red = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
     val bordered = CellStyle.default.withBorder(Border.all(BorderStyle.Thin))
 
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Bold"))
       .put(ref"A2", CellValue.Text("Red"))
       .put(ref"A3", CellValue.Text("Bordered"))
@@ -112,7 +112,7 @@ class SheetStyleSpec extends FunSuite:
 
   test("withCellStyle creates cell if it doesn't exist") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .withCellStyle(ref"A1", boldStyle) // No put() first
 
     // Cell should exist with style
@@ -131,7 +131,7 @@ class SheetStyleSpec extends FunSuite:
       .withFont(Font("Calibri", 11.0))
       .withNumFmt(NumFmt.Decimal)
 
-    val sheet = Sheet("Report").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Report")
       // Header row
       .put(ref"A1", CellValue.Text("Name"))
       .put(ref"B1", CellValue.Text("Amount"))
@@ -156,7 +156,7 @@ class SheetStyleSpec extends FunSuite:
       .withFill(Fill.Solid(Color.Rgb(0xFF0000FF)))
 
     // Style first, then put value (template pattern)
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .withCellStyle(ref"A1", titleStyle)
       .put(ref"A1", CellValue.Text("Title"))
 
@@ -170,7 +170,7 @@ class SheetStyleSpec extends FunSuite:
     val style = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
 
     // Style once, update value multiple times
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .withCellStyle(ref"A1", style)
       .put(ref"A1", CellValue.Text("Version 1"))
       .put(ref"A1", CellValue.Text("Version 2"))
@@ -182,7 +182,7 @@ class SheetStyleSpec extends FunSuite:
   }
 
   test("put() preserves comment and hyperlink metadata") {
-    val sheet = Sheet("Test").getOrElse(fail("Failed to create sheet"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Link"))
       .copy(cells = {
         val cell = Sheet("Test").unsafe(ref"A1")

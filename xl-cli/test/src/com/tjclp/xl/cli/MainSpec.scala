@@ -26,7 +26,7 @@ class MainSpec extends CatsEffectSuite:
       tempFile.toFile.deleteOnExit()
       tempFile
     }.flatMap { tempFile =>
-      val sheet = Sheet("Test").getOrElse(throw new Exception("Sheet creation failed"))
+      val sheet = Sheet("Test")
         .put(ref"A1", CellValue.Text("Hello"))
         .put(ref"A2", CellValue.Number(BigDecimal(42)))
         .put(ref"A3", CellValue.Text("World"))

@@ -23,7 +23,7 @@ class HtmlRendererSpec extends FunSuite:
   // ========== Basic HTML Export ==========
 
   test("toHtml: empty ref") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
     val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("<table"), "Should contain table tag")
     assert(html.contains("border-collapse"), "Should have border-collapse styling")
@@ -31,7 +31,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: single cell with text") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Hello"))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -40,7 +40,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: 2x2 grid") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(
         ref"A1" -> "A1",
         ref"B1" -> "B1",
@@ -61,7 +61,7 @@ class HtmlRendererSpec extends FunSuite:
   // ========== Rich Text Export ==========
 
   test("toHtml: rich text with bold") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.RichText("Bold".bold + " normal"))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -70,7 +70,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: rich text with italic") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.RichText("Italic".italic))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -78,7 +78,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: rich text with underline") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.RichText("Underline".underline))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -86,7 +86,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: rich text with colors") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.RichText("Red".red + " and " + "Green".green))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -96,7 +96,7 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: rich text with mixed formatting") {
     val text = "Error: ".red.bold + "File not found".underline
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.RichText(text))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -113,7 +113,7 @@ class HtmlRendererSpec extends FunSuite:
       .withFill(Fill.Solid(Color.fromRgb(200, 200, 200)))
       .withAlign(Align(HAlign.Center, VAlign.Middle))
 
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Header")
       .unsafe
       .withCellStyle(ref"A1", headerStyle)
@@ -126,7 +126,7 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: includeStyles=false omits CSS") {
     val boldStyle = CellStyle.default.withFont(Font.default.withBold(true))
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Bold")
       .unsafe
       .withCellStyle(ref"A1", boldStyle)
@@ -140,7 +140,7 @@ class HtmlRendererSpec extends FunSuite:
   // ========== HTML Escaping ==========
 
   test("toHtml: escapes HTML special characters") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("<script>alert('xss')</script>"))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -149,7 +149,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: escapes ampersands") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("A & B"))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -157,7 +157,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: escapes quotes") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("""Say "Hello""""))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -165,7 +165,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: escapes comment tooltip content (HTML + quotes)") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "value").unsafe
       .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("""<b onload="x" data='y'>&test</b>""", Some("""Auth"or'&""")))
 
@@ -179,7 +179,7 @@ class HtmlRendererSpec extends FunSuite:
   // ========== Different Cell Types ==========
 
   test("toHtml: number cells") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> BigDecimal("123.45"))
       .unsafe
 
@@ -188,7 +188,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: boolean cells") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> true)
       .unsafe
 
@@ -197,7 +197,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: date cells") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> java.time.LocalDate.of(2025, 11, 10))
       .unsafe
 
@@ -207,7 +207,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: formula cells") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Formula("SUM(B1:B10)"))
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -217,7 +217,7 @@ class HtmlRendererSpec extends FunSuite:
   // ========== Integration with putMixed ==========
 
   test("toHtml: financial model example") {
-    val sheet = Sheet("Q1 Report").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Q1 Report")
       .put(
         ref"A1" -> "Revenue",
         ref"B1" -> BigDecimal("1000000"),
@@ -234,7 +234,7 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: mixed rich text and plain cells") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.RichText("Bold".bold + " text"))
       .put(ref"A2", CellValue.Text("Plain text"))
 
@@ -249,7 +249,7 @@ class HtmlRendererSpec extends FunSuite:
     // Malicious font name with newline - without escaping, the newline would break out of the string
     val maliciousFont = Font("Arial\nEvil", 11.0)
     val style = CellStyle.default.withFont(maliciousFont)
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
       .unsafe
       .withCellStyle(ref"A1", style)
@@ -264,7 +264,7 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: CSS escapes carriage returns in font names") {
     val fontWithCR = Font("Arial\rEvil", 11.0)
     val style = CellStyle.default.withFont(fontWithCR)
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
       .unsafe
       .withCellStyle(ref"A1", style)
@@ -277,7 +277,7 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: CSS removes null bytes from font names") {
     val fontWithNull = Font("Ari\u0000al", 11.0)
     val style = CellStyle.default.withFont(fontWithNull)
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
       .unsafe
       .withCellStyle(ref"A1", style)
@@ -291,7 +291,7 @@ class HtmlRendererSpec extends FunSuite:
     // Single quote in font name should be escaped to prevent breaking out of quoted string
     val fontWithQuotes = Font("Arial's Best", 11.0)
     val style = CellStyle.default.withFont(fontWithQuotes)
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
       .unsafe
       .withCellStyle(ref"A1", style)
@@ -314,7 +314,7 @@ class HtmlRendererSpec extends FunSuite:
     val positive = "+12.5%".green.bold
     val negative = "-5.2%".red.bold
 
-    val sheet = Sheet("Report").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Report")
       .put(
         ref"A1" -> "Metric",
         ref"B1" -> "Change"

@@ -15,7 +15,7 @@ import com.tjclp.xl.unsafe.*
 class SvgRendererSpec extends FunSuite:
 
   test("toSvg: basic SVG structure") {
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Hello"))
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -30,7 +30,7 @@ class SvgRendererSpec extends FunSuite:
     val semiTransparentRed = Color.fromRgb(255, 0, 0, 128)
     val style = CellStyle.default.withFill(Fill.Solid(semiTransparentRed))
 
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
       .unsafe
       .withCellStyle(ref"A1", style)
@@ -50,7 +50,7 @@ class SvgRendererSpec extends FunSuite:
     val solidRed = Color.fromRgb(255, 0, 0)
     val style = CellStyle.default.withFill(Fill.Solid(solidRed))
 
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
       .unsafe
       .withCellStyle(ref"A1", style)
@@ -69,7 +69,7 @@ class SvgRendererSpec extends FunSuite:
     val transparent = Color.fromRgb(255, 0, 0, 0)
     val style = CellStyle.default.withFill(Fill.Solid(transparent))
 
-    val sheet = Sheet("Test").getOrElse(fail("Sheet creation failed"))
+    val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
       .unsafe
       .withCellStyle(ref"A1", style)

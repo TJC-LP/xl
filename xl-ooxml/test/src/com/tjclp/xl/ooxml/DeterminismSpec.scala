@@ -51,9 +51,7 @@ class DeterminismSpec extends FunSuite:
 
   test("workbook styles serialize deterministically across writes") {
     // Create workbook with styled cells
-    val sheet1 = Sheet("Sheet1") match
-      case Right(s) => s
-      case Left(err) => fail(s"Failed to create sheet: $err")
+    val sheet1 = Sheet("Sheet1")
 
     val styledSheet = sheet1
       .put(ref"A1", CellValue.Text("Hello"))

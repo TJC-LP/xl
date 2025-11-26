@@ -20,7 +20,7 @@ class WorkbookModificationSpec extends FunSuite:
     Files.deleteIfExists(path)
 
   private val ctx = SourceContext.fromFile(path, PartManifest.empty, SourceFingerprint.fromPath(path))
-  private val baseSheet = Sheet("Sheet1").fold(err => fail(s"Failed to create sheet: $err"), identity)
+  private val baseSheet = Sheet("Sheet1")
   private val workbook = Workbook(Vector(baseSheet), sourceContext = Some(ctx))
 
   test("update marks tracker") {
@@ -30,7 +30,7 @@ class WorkbookModificationSpec extends FunSuite:
   }
 
   test("delete tracks deletions") {
-    val sheet2 = Sheet("Sheet2").fold(err => fail(s"Failed to create sheet: $err"), identity)
+    val sheet2 = Sheet("Sheet2")
     val wb = workbook.copy(sheets = Vector(baseSheet, sheet2))
     val updated = wb.delete(SheetName.unsafe("Sheet2")).fold(err => fail(s"Delete failed: $err"), identity)
     val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
@@ -38,7 +38,7 @@ class WorkbookModificationSpec extends FunSuite:
   }
 
   test("reorder marks reorder flag without marking sheets modified") {
-    val sheet2 = Sheet("Sheet2").fold(err => fail(s"Failed to create sheet: $err"), identity)
+    val sheet2 = Sheet("Sheet2")
     val wb = workbook.copy(sheets = Vector(baseSheet, sheet2))
     val reordered = wb.reorder(Vector(SheetName.unsafe("Sheet2"), SheetName.unsafe("Sheet1"))).fold(err => fail(s"Reorder failed: $err"), identity)
     val tracker = reordered.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
@@ -62,7 +62,7 @@ class WorkbookModificationSpec extends FunSuite:
   }
 
   test("put does not mark as modified when adding new sheet") {
-    val newSheet = Sheet("Sheet2").fold(err => fail(s"Failed to create sheet: $err"), identity)
+    val newSheet = Sheet("Sheet2")
     val updated = workbook.put(newSheet).fold(err => fail(s"Put failed: $err"), identity)
     val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assertEquals(tracker.modifiedSheets, Set.empty)

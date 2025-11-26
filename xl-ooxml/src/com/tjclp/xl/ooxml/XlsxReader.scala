@@ -1,8 +1,9 @@
 package com.tjclp.xl.ooxml
 
-import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext, SourceFingerprint}
 import com.tjclp.xl.tables.TableSpec
@@ -566,6 +567,14 @@ object XlsxReader:
 
     val cellsMap = builder.result()
 
+    // Parse column properties from <cols> element
+    val columnProperties = ooxmlSheet.cols match
+      case Some(colsElem) => parseColumnProperties(colsElem)
+      case None => Map.empty[Column, ColumnProperties]
+
+    // Extract row properties from OoxmlRow data
+    val rowProperties = extractRowProperties(ooxmlSheet.rows)
+
     Right(
       Sheet(
         name = name,
@@ -573,7 +582,9 @@ object XlsxReader:
         mergedRanges = ooxmlSheet.mergedRanges,
         styleRegistry = preRegisteredRegistry,
         comments = comments,
-        tables = tables
+        tables = tables,
+        columnProperties = columnProperties,
+        rowProperties = rowProperties
       )
     )
 
@@ -590,6 +601,51 @@ object XlsxReader:
         val (nextRegistry, styleId) = reg.register(style)
         (nextRegistry, map + (idx -> styleId))
     }
+
+  /**
+   * Parse column properties from <cols> XML element.
+   *
+   * Each <col> element has min/max (1-indexed) and optional width, hidden, outlineLevel, collapsed.
+   * A single <col> can cover multiple columns (min="1" max="3" applies to columns A-C).
+   */
+  private def parseColumnProperties(colsElem: Elem): Map[Column, ColumnProperties] =
+    val builder = Map.newBuilder[Column, ColumnProperties]
+    for colElem <- colsElem.child.collect { case e: Elem if e.label == "col" => e } do
+      val attrs = colElem.attributes.asAttrMap
+      for
+        minStr <- attrs.get("min")
+        maxStr <- attrs.get("max")
+        min <- minStr.toIntOption
+        max <- maxStr.toIntOption
+      do
+        val props = ColumnProperties(
+          width = attrs.get("width").flatMap(_.toDoubleOption),
+          hidden = attrs.get("hidden").contains("1"),
+          outlineLevel = attrs.get("outlineLevel").flatMap(_.toIntOption),
+          collapsed = attrs.get("collapsed").contains("1")
+        )
+        // Expand range: min and max are 1-indexed, Column is 0-indexed
+        for colIdx <- min to max do builder += (Column.from1(colIdx) -> props)
+    builder.result()
+
+  /**
+   * Extract row properties from parsed OoxmlRow data.
+   *
+   * Only includes rows that have non-default properties (height, hidden, outlineLevel, collapsed).
+   */
+  private def extractRowProperties(rows: Seq[OoxmlRow]): Map[Row, RowProperties] =
+    val builder = Map.newBuilder[Row, RowProperties]
+    for row <- rows do
+      val props = RowProperties(
+        height = row.height,
+        hidden = row.hidden,
+        outlineLevel = row.outlineLevel,
+        collapsed = row.collapsed
+      )
+      // Only include if not all defaults
+      if props.height.isDefined || props.hidden || props.outlineLevel.isDefined || props.collapsed
+      then builder += (Row.from1(row.rowIndex) -> props)
+    builder.result()
 
   /**
    * Assemble final workbook with optional SourceContext for surgical modification.

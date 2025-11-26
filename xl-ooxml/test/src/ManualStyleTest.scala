@@ -42,7 +42,7 @@ object ManualStyleTest:
     val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
 
     // Build worksheet
-    val sheet = Sheet("StyleDemo").getOrElse(sys.error("Failed to create sheet"))
+    val sheet = Sheet("StyleDemo")
       // Row 1: Individual styles
       .put(ref"A1", CellValue.Text("BOLD"))
       .withCellStyle(ref"A1", boldStyle)

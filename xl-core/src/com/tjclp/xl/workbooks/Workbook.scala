@@ -64,7 +64,7 @@ final case class Workbook(
    *
    * Example:
    * {{{
-   * val sales = Sheet("Sales").map(_.put(ref"A1" -> "Revenue"))
+   * val sales = Sheet("Sales").put(ref"A1" -> "Revenue")
    * val wb2 = wb.put(sales).unsafe  // Add or replace "Sales" sheet
    * }}}
    */
@@ -273,10 +273,13 @@ final case class Workbook(
 
 object Workbook:
   /** Create workbook with a single empty sheet */
-  def apply(sheetName: String): XLResult[Workbook] =
-    for sheet <- Sheet(sheetName)
-    yield Workbook(Vector(sheet))
+  def apply(sheetName: String): Workbook =
+    Workbook(Vector(Sheet(sheetName)))
+
+  /** Create workbook with multiple empty sheets */
+  def apply(first: String, second: String, rest: String*): Workbook =
+    Workbook(Vector(Sheet(first), Sheet(second)) ++ rest.map(Sheet(_)))
 
   /** Create empty workbook (requires at least one sheet) */
-  def empty: XLResult[Workbook] =
+  def empty: Workbook =
     Workbook("Sheet1")

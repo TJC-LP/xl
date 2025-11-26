@@ -179,11 +179,11 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
   test("workbook without SourceContext uses full regeneration") {
     // Create workbook programmatically (no SourceContext)
+    val initial = Workbook("TestSheet")
     val result = for
-      wb <- Workbook("TestSheet")
-      sheet <- wb("TestSheet")
+      sheet <- initial("TestSheet")
       updatedSheet = sheet.put(ref"A1" -> "Test")
-      updated <- wb.put(updatedSheet)
+      updated <- initial.put(updatedSheet)
     yield updated
 
     val wb = result.fold(err => fail(s"Failed to create workbook: $err"), identity)
@@ -296,9 +296,9 @@ class XlsxWriterSurgicalSpec extends FunSuite:
   }
 
   test("comments are preserved byte-for-byte on unmodified sheets during surgical write") {
-    val sheet1 = Sheet("Sheet1").getOrElse(fail("Sheet1 creation failed"))
+    val sheet1 = Sheet("Sheet1")
       .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Note", Some("Author")))
-    val sheet2 = Sheet("Sheet2").getOrElse(fail("Sheet2 creation failed"))
+    val sheet2 = Sheet("Sheet2")
       .put(ref"A1" -> "Data")
       .unsafe
 

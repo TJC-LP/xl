@@ -43,7 +43,7 @@ class EasyExcelSpec extends CatsEffectSuite:
     val tempFile = Files.createTempFile("test-read", ".xlsx")
     try {
       // Write a valid workbook
-      val original = Workbook.empty.put(Sheet("Sales").unsafe).unsafe
+      val original = Workbook.empty.put(Sheet("Sales")).unsafe
       Excel.write(original, tempFile.toString)
 
       // Read it back
@@ -62,7 +62,7 @@ class EasyExcelSpec extends CatsEffectSuite:
     Files.delete(tempFile) // Delete so we test creation
 
     try {
-      val workbook = Workbook.empty.put(Sheet("Test").unsafe).unsafe
+      val workbook = Workbook.empty.put(Sheet("Test")).unsafe
       Excel.write(workbook, tempFile.toString)
 
       assert(Files.exists(tempFile))
@@ -76,11 +76,11 @@ class EasyExcelSpec extends CatsEffectSuite:
     val tempFile = Files.createTempFile("test-overwrite", ".xlsx")
     try {
       // Write initial
-      val original = Workbook.empty.put(Sheet("First").unsafe).unsafe
+      val original = Workbook.empty.put(Sheet("First")).unsafe
       Excel.write(original, tempFile.toString)
 
       // Overwrite
-      val updated = Workbook.empty.put(Sheet("Second").unsafe).unsafe
+      val updated = Workbook.empty.put(Sheet("Second")).unsafe
       Excel.write(updated, tempFile.toString)
 
       // Verify overwritten
@@ -161,7 +161,7 @@ class EasyExcelSpec extends CatsEffectSuite:
     val tempFile = Files.createTempFile("test-modify", ".xlsx")
     try {
       // Setup - note: Workbook.empty creates Sheet1 by default
-      val initial = Workbook.empty.unsafe
+      val initial = Workbook.empty
       Excel.write(initial, tempFile.toString)
 
       // Modify - update the default Sheet1
