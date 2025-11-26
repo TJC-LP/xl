@@ -521,3 +521,104 @@ class SvgRendererSpec extends FunSuite:
     assertEquals(tspanCount, 1, s"Short text should have one tspan: $svg")
     assert(svg.contains("Hi"), "Text content should be preserved")
   }
+
+  // ========== Font Rendering Tests ==========
+
+  test("toSvg: default font-size in CSS is 15px (11pt converted)") {
+    val sheet = Sheet("Test").put(ref"A1" -> "Text")
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Default CSS class should use 15px (11pt * 4/3 ≈ 14.67, rounded to 15)
+    assert(
+      svg.contains("font-size: 15px"),
+      s"Default CSS should have font-size: 15px (11pt converted), got: $svg"
+    )
+  }
+
+  test("toSvg: non-default font size converts pt to px") {
+    import com.tjclp.xl.styles.font.Font
+    // 14pt should become ~19px (14 * 4/3 = 18.67)
+    val largeFont = CellStyle.default.withFont(Font(sizePt = 14.0))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Large")
+      .unsafe
+      .withCellStyle(ref"A1", largeFont)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // 14pt * 4/3 = 18.67 → 18px (truncated)
+    assert(svg.contains("""font-size="18px""""), s"14pt should be 18px, got: $svg")
+  }
+
+  test("toSvg: small font size converts correctly") {
+    import com.tjclp.xl.styles.font.Font
+    // 9pt should become 12px (9 * 4/3 = 12)
+    val smallFont = CellStyle.default.withFont(Font(sizePt = 9.0))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Small")
+      .unsafe
+      .withCellStyle(ref"A1", smallFont)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(svg.contains("""font-size="12px""""), s"9pt should be 12px, got: $svg")
+  }
+
+  test("toSvg: font-family with spaces is quoted") {
+    import com.tjclp.xl.styles.font.Font
+    val timesFont = CellStyle.default.withFont(Font(name = "Times New Roman"))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Serif")
+      .unsafe
+      .withCellStyle(ref"A1", timesFont)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Font name should be quoted to handle spaces
+    assert(
+      svg.contains("""font-family="'Times New Roman'""""),
+      s"Font with spaces should be quoted, got: $svg"
+    )
+  }
+
+  test("toSvg: simple font-family is also quoted") {
+    import com.tjclp.xl.styles.font.Font
+    val arialFont = CellStyle.default.withFont(Font(name = "Arial"))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Sans")
+      .unsafe
+      .withCellStyle(ref"A1", arialFont)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Even simple font names should be quoted for consistency
+    assert(svg.contains("""font-family="'Arial'""""), s"Font should be quoted, got: $svg")
+  }
+
+  test("toSvg: rich text font size converts pt to px") {
+    import com.tjclp.xl.richtext.{RichText, TextRun}
+    import com.tjclp.xl.styles.font.Font
+    // Rich text with 16pt font should become ~21px (16 * 4/3 = 21.33)
+    val richText = RichText(TextRun("Big", Some(Font(sizePt = 16.0))))
+    val sheet = Sheet("Test").put(ref"A1", CellValue.RichText(richText))
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // 16pt * 4/3 = 21.33 → 21px (truncated)
+    assert(svg.contains("""font-size="21px""""), s"Rich text 16pt should be 21px, got: $svg")
+  }
+
+  test("toSvg: rich text font-family is quoted") {
+    import com.tjclp.xl.richtext.{RichText, TextRun}
+    import com.tjclp.xl.styles.font.Font
+    val richText = RichText(TextRun("Styled", Some(Font(name = "Comic Sans MS"))))
+    val sheet = Sheet("Test").put(ref"A1", CellValue.RichText(richText))
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(
+      svg.contains("""font-family="'Comic Sans MS'""""),
+      s"Rich text font should be quoted, got: $svg"
+    )
+  }
