@@ -5,6 +5,7 @@ import com.tjclp.xl.addressing.*
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.styles.{CellStyle, Color, Font, Fill, NumFmt}
+import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.patch.Patch
@@ -25,7 +26,7 @@ object BenchmarkUtils {
     val random = new Random(42) // Fixed seed for reproducibility
 
     // Build sheet with columns: ID (Int), Name (String), Date (LocalDate), Amount (BigDecimal), Active (Boolean)
-    val emptySheet: Sheet = Sheet(name)
+    val emptySheet: Sheet = Sheet(name).unsafe
 
     // Headers - use batch put for cleaner code
     val headerSheet = emptySheet

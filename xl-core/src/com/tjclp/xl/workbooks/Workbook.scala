@@ -283,14 +283,34 @@ final case class Workbook(
   def sheetCount: Int = sheets.size
 
 object Workbook:
-  /** Create workbook with a single empty sheet */
-  def apply(sheetName: String): Workbook =
-    Workbook(Vector(Sheet(sheetName)))
+  /**
+   * Create workbook with a single empty sheet.
+   *
+   * When called with a string literal, the name is validated at compile time and returns `Workbook`
+   * directly. When called with a runtime expression, validation occurs at runtime and returns
+   * `XLResult[Workbook]`.
+   *
+   * Examples:
+   *   - `Workbook("Sales")` → `Workbook` (compile-time validated)
+   *   - `Workbook(userInput)` → `XLResult[Workbook]` (runtime validated)
+   */
+  transparent inline def apply(inline sheetName: String): Workbook | XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.createSingleImpl('sheetName) }
 
-  /** Create workbook with multiple empty sheets */
-  def apply(first: String, second: String, rest: String*): Workbook =
-    Workbook(Vector(Sheet(first), Sheet(second)) ++ rest.map(Sheet(_)))
+  /**
+   * Create workbook with multiple empty sheets.
+   *
+   * When called with all string literals, the names are validated at compile time and returns
+   * `Workbook` directly. When any name is a runtime expression, validation occurs at runtime and
+   * returns `XLResult[Workbook]`.
+   */
+  transparent inline def apply(
+    inline first: String,
+    inline second: String,
+    inline rest: String*
+  ): Workbook | XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.createMultiImpl('first, 'second, 'rest) }
 
-  /** Create empty workbook (requires at least one sheet) */
+  /** Create empty workbook with a single sheet named "Sheet1" */
   def empty: Workbook =
-    Workbook("Sheet1")
+    Workbook(Vector(Sheet(SheetName.unsafe("Sheet1"))))

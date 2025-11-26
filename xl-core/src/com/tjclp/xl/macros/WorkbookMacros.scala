@@ -211,4 +211,110 @@ object WorkbookMacros:
         // Runtime expression - defer validation
         '{ $workbook.apply($name).toOption }
 
+  /**
+   * Macro impl for Workbook(sheetName: String) factory method.
+   *
+   * Returns Workbook for literal names (validated at compile time), XLResult[Workbook] for runtime
+   * names.
+   */
+  def createSingleImpl(
+    name: Expr[String]
+  )(using Quotes): Expr[Workbook | XLResult[Workbook]] =
+    import quotes.reflect.*
+
+    name.value match
+      case Some(literal) =>
+        // Compile-time literal - validate name format now
+        validateSheetName(literal) match
+          case Some(err) =>
+            report.errorAndAbort(s"Invalid sheet name '$literal': $err")
+          case None =>
+            // Valid name format - create workbook directly
+            '{ Workbook(Vector(Sheet(SheetName.unsafe(${ Expr(literal) })))) }
+
+      case None =>
+        // Runtime expression - validate at runtime
+        '{
+          val result: XLResult[Workbook] = SheetName($name) match
+            case Right(validName) => Right(Workbook(Vector(Sheet(validName))))
+            case Left(err) => Left(XLError.InvalidSheetName($name, err))
+          result
+        }
+
+  /**
+   * Macro impl for Workbook(first, second, rest*) factory method.
+   *
+   * Returns Workbook for all literal names (validated at compile time), XLResult[Workbook] if any
+   * name is a runtime expression.
+   */
+  def createMultiImpl(
+    first: Expr[String],
+    second: Expr[String],
+    rest: Expr[Seq[String]]
+  )(using Quotes): Expr[Workbook | XLResult[Workbook]] =
+    import quotes.reflect.*
+
+    // Check if first two are literals
+    (first.value, second.value) match
+      case (Some(lit1), Some(lit2)) =>
+        // Both are literals - validate at compile time
+        validateSheetName(lit1).foreach(err =>
+          report.errorAndAbort(s"Invalid sheet name '$lit1': $err")
+        )
+        validateSheetName(lit2).foreach(err =>
+          report.errorAndAbort(s"Invalid sheet name '$lit2': $err")
+        )
+
+        // Check if rest is a known empty sequence or contains only literals
+        rest match
+          case '{ Seq() } | '{ Nil } | '{ Seq.empty } | '{ List() } | '{ List.empty } =>
+            // No additional sheets - create directly
+            '{
+              Workbook(
+                Vector(
+                  Sheet(SheetName.unsafe(${ Expr(lit1) })),
+                  Sheet(SheetName.unsafe(${ Expr(lit2) }))
+                )
+              )
+            }
+          case _ =>
+            // Has varargs - need runtime handling for rest
+            '{
+              val validated = $rest.map(n => SheetName(n).left.map(_ => n))
+              val firstError = validated.collectFirst { case Left(name) => name }
+              val result: XLResult[Workbook] = firstError match
+                case Some(invalidName) =>
+                  SheetName(invalidName) match
+                    case Left(err) => Left(XLError.InvalidSheetName(invalidName, err))
+                    case Right(_) => Left(XLError.InvalidSheetName(invalidName, "Unknown error"))
+                case None =>
+                  val restSheets = validated.collect { case Right(name) => Sheet(name) }.toVector
+                  Right(
+                    Workbook(
+                      Vector(
+                        Sheet(SheetName.unsafe(${ Expr(lit1) })),
+                        Sheet(SheetName.unsafe(${ Expr(lit2) }))
+                      ) ++ restSheets
+                    )
+                  )
+              result
+            }
+
+      case _ =>
+        // At least one is runtime - full runtime validation
+        '{
+          val allNames = $first +: $second +: $rest
+          val validated = allNames.map(n => SheetName(n).left.map(_ => n))
+          val firstError = validated.collectFirst { case Left(name) => name }
+          val result: XLResult[Workbook] = firstError match
+            case Some(invalidName) =>
+              SheetName(invalidName) match
+                case Left(err) => Left(XLError.InvalidSheetName(invalidName, err))
+                case Right(_) => Left(XLError.InvalidSheetName(invalidName, "Unknown error"))
+            case None =>
+              val sheets = validated.collect { case Right(name) => Sheet(name) }.toVector
+              Right(Workbook(sheets))
+          result
+        }
+
 end WorkbookMacros

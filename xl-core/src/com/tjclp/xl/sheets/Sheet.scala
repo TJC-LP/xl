@@ -440,17 +440,21 @@ object Sheet:
   /**
    * Create empty sheet with name.
    *
-   * When called with a string literal, the name is validated at compile time. When called with a
-   * runtime expression, validation is deferred to the OOXML write boundary where invalid names
-   * would actually cause problems.
+   * When called with a string literal, the name is validated at compile time and returns `Sheet`
+   * directly. When called with a runtime expression, validation occurs at runtime and returns
+   * `XLResult[Sheet]`.
    *
    * Validation rules (Excel sheet name constraints):
    *   - Cannot be empty
    *   - Maximum 31 characters
    *   - Cannot contain: : \ / ? * [ ]
+   *
+   * Examples:
+   *   - `Sheet("Sales")` → `Sheet` (compile-time validated)
+   *   - `Sheet(userInput)` → `XLResult[Sheet]` (runtime validated)
    */
   @annotation.targetName("applyStringLiteral")
-  inline def apply(inline name: String): Sheet =
+  transparent inline def apply(inline name: String): Sheet | XLResult[Sheet] =
     ${ com.tjclp.xl.macros.SheetLiteral.sheetImpl('name) }
 
   /** Create empty sheet with validated name */
