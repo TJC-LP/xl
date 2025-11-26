@@ -21,19 +21,19 @@ println(
 )
 
 // Create a workbook and update sheet with convenience method
-val workbookResult = for
-    workbook <- Workbook("Sales")
-    // Update sheet by name with function (clean one-liner!)
-    finalWorkbook <- workbook.update("Sales", sheet =>
-      sheet
-        .put(ref"A1", CellValue.Text("Product"))
-        .put(ref"B1", CellValue.Text("Price"))
-        .put(ref"A2", CellValue.Text("Widget"))
-        .put(ref"B2", CellValue.Number(19.99))
-        .put(ref"A3", CellValue.Text("Gadget"))
-        .put(ref"B3", CellValue.Number(29.99))
-    )
-  yield finalWorkbook
+// Workbook.apply("Sales") returns Workbook directly (infallible for compile-time names)
+val workbook = Workbook("Sales")
+
+// Update sheet by name - returns XLResult[Workbook] since sheet might not exist
+val workbookResult = workbook.update("Sales", sheet =>
+  sheet
+    .put(ref"A1", CellValue.Text("Product"))
+    .put(ref"B1", CellValue.Text("Price"))
+    .put(ref"A2", CellValue.Text("Widget"))
+    .put(ref"B2", CellValue.Number(19.99))
+    .put(ref"A3", CellValue.Text("Gadget"))
+    .put(ref"B3", CellValue.Number(29.99))
+)
 
 workbookResult match
   case Right(wb) =>
@@ -87,9 +87,7 @@ qualifiedRange match
 
 // Demonstrate formatted literals
 println("\n=== Formatted Literals ===")
-val priceSheetResult = for
-  sheet <- Sheet("Prices")
-yield sheet.put(
+val priceSheet = Sheet("Prices").put(
   ref"A1" -> "Item",
   ref"B1" -> "Price",
   ref"C1" -> "Discount",
@@ -98,32 +96,22 @@ yield sheet.put(
   ref"C2" -> percent"15%"     // Now preserves Percent format!
 )
 
-priceSheetResult match
-  case Right(priceSheet) =>
-    println(s"Created sheet with ${priceSheet.cellCount} cells")
-    priceSheet.nonEmptyCells.take(6).foreach { cell =>
-      println(s"  ${cell.toA1}: ${cell.value}")
-    }
-  case Left(err) =>
-    println(s"Error: ${err.message}")
+println(s"Created sheet with ${priceSheet.cellCount} cells")
+priceSheet.nonEmptyCells.take(6).foreach { cell =>
+  println(s"  ${cell.toA1}: ${cell.value}")
+}
 
 // Demonstrate RichText
 println("\n=== Rich Text ===")
-val richTextSheetResult = for
-  sheet <- Sheet("Report")
-yield sheet
+val richTextSheet = Sheet("Report")
   .put(ref"A1", CellValue.RichText("Error: ".red.bold + "Fix this!"))
   .put(ref"A2", CellValue.RichText("Q1 ".size(18.0).bold + "Report".italic))
 
-richTextSheetResult match
-  case Right(richTextSheet) =>
-    richTextSheet.nonEmptyCells.foreach { cell =>
-      cell.value match
-        case CellValue.RichText(rt) =>
-          println(s"  ${cell.toA1}: ${rt.runs.size} formatted runs")
-        case _ => ()
-    }
-  case Left(err) =>
-    println(s"Error: ${err.message}")
+richTextSheet.nonEmptyCells.foreach { cell =>
+  cell.value match
+    case CellValue.RichText(rt) =>
+      println(s"  ${cell.toA1}: ${rt.runs.size} formatted runs")
+    case _ => ()
+}
 
 println("\n=== Demo Complete ===")

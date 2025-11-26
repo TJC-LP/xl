@@ -36,7 +36,7 @@ println("📊 Section 1: Basic Formula Evaluation (Low-Level API)")
 println("-" * 70)
 
 // Create test sheet with sample data
-val sheet = Sheet(name = SheetName.unsafe("Test"))
+val sheet = Sheet("Test")
   .put(ref"A1", 10)
   .put(ref"A2", 20)
   .put(ref"A3", 30)
@@ -202,7 +202,7 @@ println()
 println("🚀 Section 7: High-Level API (Sheet Extension Methods)")
 println("-" * 70)
 
-val formulaSheet = Sheet(name = SheetName.unsafe("Formulas"))
+val formulaSheet = Sheet("Formulas")
   .put(ref"A1", 10)
   .put(ref"A2", 20)
   .put(ref"B1", fx"=A1+A2")
@@ -241,7 +241,7 @@ println("🏗️  Section 8: Complex Real-World Formula (Financial Model)")
 println("-" * 70)
 
 // Create financial model sheet
-val finModel = Sheet(name = SheetName.unsafe("Finance"))
+val finModel = Sheet("Finance")
   .put(ref"A1", 1000000)  // Revenue
   .put(ref"A2", 600000)   // COGS
   .put(ref"A3", 250000)   // OpEx

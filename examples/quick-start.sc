@@ -62,13 +62,14 @@ println("=" * 70)
 println("STEP 2: Create Sheet with Data")
 println("=" * 70)
 
-val sheet = Sheet(name = SheetName.unsafe("Demo"))
+val sheet = Sheet("Demo")
   .put(ref"A1", 150)
   .put(ref"A2", 200)
   .put(ref"A3", 75)
   .put(ref"B1", fx"=SUM(A1:A3)")
   .put(ref"B2", fx"=AVERAGE(A1:A3)")
   .put(ref"C1", fx"=IF(B1>400, \"High\", \"Low\")")
+  .unsafe
 
 println("Sheet contents:")
 println("  A1: 150")
@@ -91,7 +92,6 @@ println("=" * 70)
 val decimalStyle = CellStyle.default.withNumFmt(NumFmt.Decimal)
 val styledSheet = sheet
   .style(ref"B1:B2", decimalStyle)  // Format SUM and AVERAGE as decimals
-  .unsafe
 
 println("✓ Applied decimal formatting to formula range B1:B2")
 println()
@@ -157,10 +157,11 @@ println("STEP 5: Circular Reference Detection")
 println("=" * 70)
 
 // Create a sheet with a circular reference
-val cyclicSheet = Sheet(name = SheetName.unsafe("Cyclic"))
+val cyclicSheet = Sheet("Cyclic")
   .put(ref"A1", fx"=B1+10")
   .put(ref"B1", fx"=C1*2")
   .put(ref"C1", fx"=A1+5")  // Cycle: A1 → B1 → C1 → A1
+  .unsafe
 
 println("Sheet with circular reference:")
 println("  A1: =B1+10")

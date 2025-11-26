@@ -49,7 +49,7 @@ test("Hero Example - Financial Report") {
     .style("B4", CellStyle.default.percent)
     .unsafe
 
-  Excel.write(Workbook.empty.put(report).unsafe, "/tmp/readme-hero.xlsx")
+  Excel.write(Workbook.empty.put(report), "/tmp/readme-hero.xlsx")
   assert(report.cells.size >= 8, s"Expected at least 8 cells, got ${report.cells.size}")
   assert(report.cell("A1").isDefined, "A1 should exist")
 }
@@ -63,7 +63,7 @@ test("Easy Mode - Read/Modify/Write") {
     .put("A1", "Test")
     .put("B1", 42)
     .unsafe
-  val workbook = Workbook.empty.put(sheet).unsafe
+  val workbook = Workbook.empty.put(sheet)
   Excel.write(workbook, "/tmp/readme-easymode-input.xlsx")
 
   // Now test read/modify/write cycle (the README example)
@@ -198,7 +198,7 @@ test("Formula System - Parsing") {
 }
 
 test("Formula System - Evaluation with Dependency Check") {
-  val sheet = Sheet(SheetName.unsafe("FormulaTest"))
+  val sheet = Sheet("FormulaTest")
     .put("A1", 100)
     .put("B1", 200)
     .put("C1", fx"=A1+B1")
@@ -213,7 +213,7 @@ test("Formula System - Evaluation with Dependency Check") {
 }
 
 test("Formula System - Dependency Analysis") {
-  val sheet = Sheet(SheetName.unsafe("DepTest"))
+  val sheet = Sheet("DepTest")
     .put("A1", 100)
     .put("B1", fx"=A1*2")
     .put("C1", fx"=B1+A1")

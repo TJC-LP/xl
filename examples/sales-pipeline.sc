@@ -36,7 +36,7 @@ println()
 val today = LocalDate.of(2025, 11, 21)
 val clock = Clock.fixedDate(today)
 
-val pipeline = Sheet(name = SheetName.unsafe("Pipeline"))
+val pipeline = Sheet("Pipeline")
   // ===== Pipeline Metrics =====
   .put(ref"A3", "Pipeline Stage")
   .put(ref"B3", "Deal Count")
@@ -116,8 +116,7 @@ val pipeline = Sheet(name = SheetName.unsafe("Pipeline"))
 val percentStyle = CellStyle.default.withNumFmt(NumFmt.Percent)
 val pipelineWithFormatting = pipeline
   .style(ref"D4:D8", percentStyle)   // Conversion rates
-  .flatMap(_.style(ref"D16:D18", percentStyle))  // Quota attainment
-  .unsafe
+  .style(ref"D16:D18", percentStyle)  // Quota attainment
 
 println("Building sales pipeline model...")
 val pipelineResults = pipelineWithFormatting.evaluateWithDependencyCheck(clock).toOption.get
@@ -141,12 +140,13 @@ def getFormattedValue(ref: ARef): String =
 
   // Format based on the cell's NumFmt
   value match
-    case CellValue.Number(bd) =>
+    case CellValue.Number(num) =>
+      val d = num.toDouble
       numFmt match
-        case NumFmt.Percent => f"${bd.toDouble * 100}%.1f%%"
-        case NumFmt.Currency => f"$$${bd.toDouble}%,.0f"
-        case NumFmt.Decimal => f"${bd.toDouble}%,.2f"
-        case _ => f"${bd.toDouble}%,.0f"  // General format for numbers
+        case NumFmt.Percent => f"${d * 100}%.1f%%"
+        case NumFmt.Currency => f"$$${d}%,.0f"
+        case NumFmt.Decimal => f"${d}%,.2f"
+        case _ => f"${d}%,.0f"  // General format for numbers
     case other => other.toString
 
 println("=" * 80)

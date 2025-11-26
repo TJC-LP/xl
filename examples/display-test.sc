@@ -44,7 +44,7 @@ println("TEST 2: With Evaluator (formulas evaluate automatically)")
 println("=" * 70)
 
 // EvaluatingFormulaDisplay is now available from com.tjclp.xl.{*, given}
-val sheet2 = Sheet(name = SheetName.unsafe("Test2"))
+val sheet2 = Sheet("Test2")
   .put(ref"A1", 100)
   .put(ref"A2", 200)
   .put(ref"B1", fx"=SUM(A1:A2)")

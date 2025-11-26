@@ -200,12 +200,15 @@ println()
 // ========== Example 9: Error Handling ==========
 println("⚠️  Example 9: Structured Errors")
 
-try {
-  Sheet("Test").unsafe.put("INVALID!!!!", "fail")
-} catch {
-  case ex: XLException =>
-    println(s"  ✓ Caught: ${ex.getMessage.take(50)}...")
-    println(s"  ✓ Error type: ${ex.error.getClass.getSimpleName}")
+// Note: Invalid literals like "INVALID!!!!" now fail at compile time!
+// To demonstrate runtime error handling, we use a runtime string:
+val invalidRef = "INVALID!!!!"  // Runtime string bypasses compile-time check
+Sheet("Test").put(invalidRef, "fail") match {
+  case Left(error) =>
+    println(s"  ✓ Caught: ${error.message.take(50)}...")
+    println(s"  ✓ Error type: ${error.getClass.getSimpleName}")
+  case Right(_) =>
+    println("  ✗ Should have failed!")
 }
 println()
 
