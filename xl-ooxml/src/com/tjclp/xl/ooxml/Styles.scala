@@ -998,6 +998,7 @@ object WorkbookStyles:
 
   private def parseHAlign(value: String): Option[HAlign] =
     value.toLowerCase match
+      case "general" => Some(HAlign.General)
       case "left" => Some(HAlign.Left)
       case "center" => Some(HAlign.Center)
       case "right" => Some(HAlign.Right)

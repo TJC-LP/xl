@@ -125,11 +125,11 @@ object HtmlRenderer:
     if textWidth <= cellWidth then return 1
 
     // Determine overflow direction based on alignment
-    // Default to Left alignment (Excel's "General" behaves like Left for text)
-    val align = style.map(_.align.horizontal).getOrElse(HAlign.Left)
+    // General alignment behaves like Left for text overflow in Excel
+    val align = style.map(_.align.horizontal).getOrElse(HAlign.General)
     align match
-      case HAlign.Left =>
-        // Overflow to the right
+      case HAlign.Left | HAlign.General =>
+        // Overflow to the right (General alignment for text behaves like Left)
         countEmptyToRight(cellRef, cellWidth, colWidths, sheet, startCol, endCol, textWidth)
       case HAlign.Right =>
         // For right-aligned, we'd need to overflow left - more complex
@@ -294,9 +294,15 @@ object HtmlRenderer:
                     val mergeAttrs =
                       (if mergeColspan > 1 then s""" colspan="$mergeColspan"""" else "") +
                         (if mergeRowspan > 1 then s""" rowspan="$mergeRowspan"""" else "")
+                    // Calculate cell width (sum of column widths for colspan)
+                    val cellWidthPx = (0 until mergeColspan).map { i =>
+                      val widthIdx = colIdx - startCol + i
+                      if widthIdx >= 0 && widthIdx < colWidths.length then colWidths(widthIdx)
+                      else DefaultColumnWidthPx
+                    }.sum
                     if includeStyles then
                       Some(
-                        s"""<td$mergeAttrs style="background-color: #FFFFFF; white-space: nowrap; overflow: hidden"></td>"""
+                        s"""<td$mergeAttrs style="width: ${cellWidthPx}px; background-color: #FFFFFF; white-space: nowrap; overflow: hidden"></td>"""
                       )
                     else Some(s"<td$mergeAttrs></td>")
 
@@ -338,6 +344,12 @@ object HtmlRenderer:
                       .map(_.numFmt)
                       .getOrElse(NumFmt.General)
                     val content = cellValueToHtml(cell.value, numFmt, theme)
+                    // Calculate cell width (sum of column widths for colspan)
+                    val cellWidthPx = (0 until effectiveColspan).map { i =>
+                      val widthIdx = colIdx - startCol + i
+                      if widthIdx >= 0 && widthIdx < colWidths.length then colWidths(widthIdx)
+                      else DefaultColumnWidthPx
+                    }.sum
                     // Add default white background if no fill is specified (only when includeStyles)
                     // Add overflow: hidden only when not spanning (colspan=1)
                     // And white-space: nowrap if not explicitly wrapping (Excel default)
@@ -346,10 +358,12 @@ object HtmlRenderer:
                       else
                         val hasBackground = style.contains("background-color")
                         val hasWhitespace = style.contains("white-space")
+                        // Start with explicit width to match colgroup
+                        val withWidth = s"width: ${cellWidthPx}px"
                         val baseStyle =
-                          if hasBackground then style
-                          else if style.isEmpty then "background-color: #FFFFFF"
-                          else s"background-color: #FFFFFF; $style"
+                          if hasBackground then s"$withWidth; $style"
+                          else if style.isEmpty then s"$withWidth; background-color: #FFFFFF"
+                          else s"$withWidth; background-color: #FFFFFF; $style"
                         // Add nowrap default if cell has no explicit white-space setting
                         val withWhitespace =
                           if hasWhitespace then baseStyle
@@ -458,58 +472,72 @@ $tableRows
    * Generates CSS properties for font, fill, borders, alignment, etc. Returns empty string if cell
    * has no style.
    */
+  /** Determine default horizontal alignment based on cell value type (Excel's General behavior) */
+  private def contentBasedAlignment(value: CellValue): HAlign = value match
+    case CellValue.Number(_) | CellValue.DateTime(_) => HAlign.Right
+    case CellValue.Bool(_) => HAlign.Center
+    case CellValue.Formula(_, Some(cached)) => contentBasedAlignment(cached)
+    case _ => HAlign.Left
+
   private def cellStyleToInlineCss(cell: Cell, sheet: Sheet, theme: ThemePalette): String =
-    cell.styleId
-      .flatMap(sheet.styleRegistry.get)
-      .map { style =>
-        val css = scala.collection.mutable.ArrayBuffer[String]()
+    val styleOpt = cell.styleId.flatMap(sheet.styleRegistry.get)
+    val css = scala.collection.mutable.ArrayBuffer[String]()
 
-        // Font properties (apply only if not default)
-        if style.font.bold then css += "font-weight: bold"
-        if style.font.italic then css += "font-style: italic"
-        if style.font.underline then css += "text-decoration: underline"
-        style.font.color.foreach(c => css += s"color: ${colorToRgbHex(c, theme)}")
-        if style.font.sizePt != Font.default.sizePt then css += s"font-size: ${style.font.sizePt}pt"
-        if style.font.name != Font.default.name then
-          css += s"font-family: '${escapeCss(style.font.name)}'"
+    styleOpt.foreach { style =>
+      // Font properties (apply only if not default)
+      if style.font.bold then css += "font-weight: bold"
+      if style.font.italic then css += "font-style: italic"
+      if style.font.underline then css += "text-decoration: underline"
+      style.font.color.foreach(c => css += s"color: ${colorToRgbHex(c, theme)}")
+      if style.font.sizePt != Font.default.sizePt then css += s"font-size: ${style.font.sizePt}pt"
+      if style.font.name != Font.default.name then
+        css += s"font-family: '${escapeCss(style.font.name)}'"
 
-        // Fill (background color)
-        style.fill match
-          case Fill.Solid(color) =>
-            css += s"background-color: ${colorToRgbHex(color, theme)}"
-          case _ => () // Pattern fill not supported in HTML
+      // Fill (background color)
+      style.fill match
+        case Fill.Solid(color) =>
+          css += s"background-color: ${colorToRgbHex(color, theme)}"
+        case _ => () // Pattern fill not supported in HTML
 
-        // Borders
-        borderSideToCss(style.border.top, "border-top", theme).foreach(css += _)
-        borderSideToCss(style.border.right, "border-right", theme).foreach(css += _)
-        borderSideToCss(style.border.bottom, "border-bottom", theme).foreach(css += _)
-        borderSideToCss(style.border.left, "border-left", theme).foreach(css += _)
+      // Borders
+      borderSideToCss(style.border.top, "border-top", theme).foreach(css += _)
+      borderSideToCss(style.border.right, "border-right", theme).foreach(css += _)
+      borderSideToCss(style.border.bottom, "border-bottom", theme).foreach(css += _)
+      borderSideToCss(style.border.left, "border-left", theme).foreach(css += _)
+    }
 
-        // Alignment
-        style.align.horizontal match
-          case HAlign.Left => css += "text-align: left"
-          case HAlign.Center => css += "text-align: center"
-          case HAlign.Right => css += "text-align: right"
-          case _ => ()
+    // Alignment - always emit to ensure proper alignment
+    // Use explicit alignment from style if set, otherwise use content-based default (General behavior)
+    val effectiveHAlign = styleOpt.map(_.align.horizontal).getOrElse(HAlign.General) match
+      case HAlign.General => contentBasedAlignment(cell.value)
+      case explicit => explicit
 
-        style.align.vertical match
-          case VAlign.Top => css += "vertical-align: top"
-          case VAlign.Middle => css += "vertical-align: middle"
-          case VAlign.Bottom => css += "vertical-align: bottom"
-          case VAlign.Justify | VAlign.Distributed => () // No direct CSS equivalent
+    effectiveHAlign match
+      case HAlign.Left => css += "text-align: left"
+      case HAlign.Center => css += "text-align: center"
+      case HAlign.Right => css += "text-align: right"
+      case _ => css += "text-align: left" // Fallback for Justify, Fill, etc.
 
-        // Excel default is no-wrap; explicit wrapText enables wrapping
-        if style.align.wrapText then css += "white-space: pre-wrap"
-        else css += "white-space: nowrap"
+    val effectiveVAlign = styleOpt.map(_.align.vertical).getOrElse(VAlign.Bottom)
+    effectiveVAlign match
+      case VAlign.Top => css += "vertical-align: top"
+      case VAlign.Middle => css += "vertical-align: middle"
+      case VAlign.Bottom => css += "vertical-align: bottom"
+      case VAlign.Justify | VAlign.Distributed => () // No direct CSS equivalent
 
-        // Indentation (Excel uses ~3 characters per indent level, ~21px at 11pt)
-        if style.align.indent > 0 then
-          val indentPx = style.align.indent * 21
-          css += s"padding-left: ${indentPx}px"
+    // Excel default is no-wrap; explicit wrapText enables wrapping
+    val wrapText = styleOpt.map(_.align.wrapText).getOrElse(false)
+    if wrapText then css += "white-space: pre-wrap"
+    else css += "white-space: nowrap"
 
-        css.mkString("; ")
-      }
-      .getOrElse("")
+    // Indentation (Excel uses ~3 characters per indent level, ~21px at 11pt)
+    styleOpt.foreach { style =>
+      if style.align.indent > 0 then
+        val indentPx = style.align.indent * 21
+        css += s"padding-left: ${indentPx}px"
+    }
+
+    css.mkString("; ")
 
   /**
    * Escape HTML special characters.
