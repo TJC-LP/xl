@@ -658,11 +658,11 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: multiple rows handle overflow independently") {
     // Row 1: A1 has long text, overflow into B1
-    // Row 2: A2 is short, no overflow
+    // Row 2: A2 is short, no overflow (using wider column to ensure Short fits)
     val sheet = Sheet("Test")
       .put(ref"A1" -> "This is a long text that will overflow")
       .put(ref"A2" -> "Short")
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(8.0))) // ~61px, fits "Short"
 
     val html = sheet.toHtml(ref"A1:B2")
     // Row 1 should have colspan

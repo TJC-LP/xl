@@ -222,12 +222,34 @@ object SvgRenderer:
 
                 cell.value match
                   case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
-                    textBuffer.append(s"""    <text y="$textY" class="cell-text">""")
-                    rt.runs.foldLeft(textX) { (currentX, run) =>
-                      val runStyle = runToSvgStyle(run, theme)
+                    // Get cell's base font for inheritance by unstyled runs
+                    val baseFont = cell.styleId.flatMap(sheet.styleRegistry.get).map(_.font)
+
+                    // Inter-run gap to account for AWT vs SVG font metric differences
+                    // SVG renders slightly wider than AWT measures, so add extra spacing
+                    val interRunGap = 4
+
+                    // Calculate total width of all runs (including gaps) for proper alignment
+                    val runWidths =
+                      rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(baseFont)))
+                    val totalGaps = interRunGap * math.max(0, rt.runs.size - 1)
+                    val totalWidth = runWidths.sum + totalGaps
+
+                    // Adjust starting x based on alignment (anchor doesn't work with explicit tspan x)
+                    val adjustedTextX = anchor match
+                      case "middle" => textX - totalWidth / 2
+                      case "end" => textX - totalWidth
+                      case _ => textX // "start"
+
+                    textBuffer.append(
+                      s"""    <text y="$textY" class="cell-text">"""
+                    )
+                    rt.runs.zipWithIndex.foldLeft(adjustedTextX) { case (currentX, (run, idx)) =>
+                      val runStyle = runToSvgStyle(run, baseFont, theme)
                       val escapedText = escapeXml(run.text)
                       textBuffer.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
-                      currentX + measureTextWidth(run.text, run.font)
+                      val gap = if idx < rt.runs.size - 1 then interRunGap else 0
+                      currentX + measureTextWidth(run.text, run.font.orElse(baseFont)) + gap
                     }
                     textBuffer.append("</text>\n")
 
@@ -409,6 +431,8 @@ object SvgRenderer:
 
   /**
    * Get SVG text style attributes for a cell.
+   *
+   * ALWAYS includes font properties explicitly for exact fidelity (don't rely on CSS defaults).
    */
   private def cellTextStyle(cell: Cell, sheet: Sheet, theme: ThemePalette): String =
     cell.styleId
@@ -416,8 +440,9 @@ object SvgRenderer:
       .map { style =>
         val attrs = scala.collection.mutable.ArrayBuffer[String]()
 
-        // Font color
-        style.font.color.foreach(c => attrs += s"""fill="${colorToHex(c, theme)}"""")
+        // ALWAYS include font color (even if default black) for exact fidelity
+        val fontColor = style.font.color.map(c => colorToHex(c, theme)).getOrElse("#000000")
+        attrs += s"""fill="$fontColor""""
 
         // Font weight
         if style.font.bold then attrs += """font-weight="bold""""
@@ -425,30 +450,38 @@ object SvgRenderer:
         // Font style
         if style.font.italic then attrs += """font-style="italic""""
 
-        // Font size (if different from default) - convert pt to px (pt * 4/3)
-        if style.font.sizePt != Font.default.sizePt then
-          val fontSizePx = (style.font.sizePt * 4.0 / 3.0).toInt
-          attrs += s"""font-size="${fontSizePx}px""""
+        // ALWAYS include font size (don't rely on CSS defaults) - convert pt to px (pt * 4/3)
+        val fontSizePx = (style.font.sizePt * 4.0 / 3.0).toInt
+        attrs += s"""font-size="${fontSizePx}px""""
 
-        // Font family (if different from default) - quote font names for SVG
-        if style.font.name != Font.default.name then
-          attrs += s"""font-family="'${escapeCss(style.font.name)}'""""
+        // ALWAYS include font family (even if default) - quote font names for SVG
+        attrs += s"""font-family="'${escapeCss(style.font.name)}'""""
 
-        if attrs.nonEmpty then " " + attrs.mkString(" ") else ""
+        " " + attrs.mkString(" ")
       }
-      .getOrElse("")
+      .getOrElse {
+        // No style - use explicit defaults for exact fidelity
+        """ fill="#000000" font-size="15px" font-family="'Calibri'""""
+      }
 
   /**
    * Convert a TextRun to SVG tspan style attributes.
+   *
+   * When a run has no explicit font, inherits from the cell's base font. This ensures rich text
+   * runs without explicit formatting still display with the cell's styling.
    */
-  private def runToSvgStyle(run: TextRun, theme: ThemePalette): String =
-    run.font match
+  private def runToSvgStyle(run: TextRun, baseFont: Option[Font], theme: ThemePalette): String =
+    // Use run's font if present, otherwise fall back to base font
+    val effectiveFont = run.font.orElse(baseFont)
+
+    effectiveFont match
       case None => ""
       case Some(f) =>
         val attrs = scala.collection.mutable.ArrayBuffer[String]()
 
-        // Font color
-        f.color.foreach(c => attrs += s"""fill="${colorToHex(c, theme)}"""")
+        // Font color - always include for exact fidelity
+        val colorAttr = f.color.map(c => colorToHex(c, theme)).getOrElse("#000000")
+        attrs += s"""fill="$colorAttr""""
 
         // Font weight
         if f.bold then attrs += """font-weight="bold""""
@@ -459,13 +492,12 @@ object SvgRenderer:
         // Underline (SVG uses text-decoration)
         if f.underline then attrs += """text-decoration="underline""""
 
-        // Font size (if different from default) - convert pt to px (pt * 4/3)
-        if f.sizePt != Font.default.sizePt then
-          val fontSizePx = (f.sizePt * 4.0 / 3.0).toInt
-          attrs += s"""font-size="${fontSizePx}px""""
+        // Font size - always include for exact fidelity - convert pt to px (pt * 4/3)
+        val fontSizePx = (f.sizePt * 4.0 / 3.0).toInt
+        attrs += s"""font-size="${fontSizePx}px""""
 
-        // Font family (if different from default) - quote font names for SVG
-        if f.name != Font.default.name then attrs += s"""font-family="'${escapeCss(f.name)}'""""
+        // Font family - always include for exact fidelity - quote font names for SVG
+        attrs += s"""font-family="'${escapeCss(f.name)}'""""
 
         if attrs.nonEmpty then " " + attrs.mkString(" ") else ""
 

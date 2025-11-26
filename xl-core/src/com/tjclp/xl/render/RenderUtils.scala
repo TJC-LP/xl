@@ -73,15 +73,24 @@ object RenderUtils:
         val boldFactor = if font.exists(_.bold) then 1.1 else 1.0
         (text.length * baseCharWidth * sizeFactor * boldFactor).toInt
 
-  /** Convert our Font to AWT Font. */
+  /**
+   * Convert our Font to AWT Font for text measurement.
+   *
+   * Uses pixel-equivalent sizes (pt * 4/3) to match SVG rendering, which uses pixel sizes. This
+   * ensures text measurements match actual SVG output widths for accurate wrapping.
+   */
   def toAwtFont(font: Option[Font]): AwtFont =
     font match
       case Some(f) =>
         val style =
           (if f.bold then AwtFont.BOLD else 0) | (if f.italic then AwtFont.ITALIC else 0)
-        new AwtFont(f.name, style, f.sizePt.toInt)
+        // Convert pt to px (pt * 4/3) to match SVG rendering
+        val fontSizePx = (f.sizePt * 4.0 / 3.0).toInt
+        new AwtFont(f.name, style, fontSizePx)
       case None =>
-        new AwtFont("Calibri", AwtFont.PLAIN, DefaultFontSize)
+        // DefaultFontSize is 11pt = ~15px
+        val defaultSizePx = (DefaultFontSize * 4.0 / 3.0).toInt
+        new AwtFont("Calibri", AwtFont.PLAIN, defaultSizePx)
 
   /** Measure text width for a CellValue, handling rich text runs. */
   def measureCellValueWidth(value: CellValue, font: Option[Font]): Int = value match
@@ -98,6 +107,44 @@ object RenderUtils:
     case _ => 0
 
   // ========== Text Overflow Calculation ==========
+
+  /**
+   * Check if a cell is both empty (no content) and unstyled (no borders/fills).
+   *
+   * Excel prevents text overflow into cells with styling even if they're empty. This helper checks
+   * both content and styling to match Excel's overflow behavior.
+   *
+   * @param ref
+   *   Cell reference to check
+   * @param sheet
+   *   Sheet containing the cell
+   * @return
+   *   true if cell is empty and has no styling (allows overflow)
+   */
+  private def isCellEmptyAndUnstyled(ref: ARef, sheet: Sheet): Boolean =
+    import com.tjclp.xl.styles.border.Border
+    import com.tjclp.xl.styles.fill.Fill
+
+    val cellOpt = sheet.cells.get(ref)
+
+    // Check if cell has content
+    val isEmpty = cellOpt.forall { c =>
+      c.value match
+        case CellValue.Empty => true
+        case _ => false
+    }
+    if !isEmpty then return false
+
+    // Check if cell has styling (borders or fills) - Excel blocks overflow into styled cells
+    val hasNoStyle = cellOpt.flatMap(_.styleId).flatMap(sheet.styleRegistry.get).forall { style =>
+      style.border == Border.none && style.fill == Fill.None
+    }
+    if !hasNoStyle then return false
+
+    // Check if cell is part of a merged region
+    val notMerged = sheet.getMergedRange(ref).isEmpty
+
+    isEmpty && hasNoStyle && notMerged
 
   /**
    * Calculate overflow colspan for a cell with text that exceeds its width.
@@ -154,13 +201,13 @@ object RenderUtils:
         case HAlign.Left | HAlign.General =>
           // Overflow to the right (General alignment for text behaves like Left)
           countEmptyToRight(cellRef, cellWidth, colWidths, sheet, startCol, endCol, textWidth)
-        case HAlign.Right =>
-          // For right-aligned, we'd need to overflow left - more complex
-          // For now, just use colspan=1 (text clips)
-          1
         case HAlign.Center | HAlign.CenterContinuous =>
-          // Center alignment would overflow both ways - complex
-          // For now, just use colspan=1 (text clips)
+          // Center-aligned text can overflow right (like Excel)
+          // Excel allows center text to bleed into empty cells on the right
+          countEmptyToRight(cellRef, cellWidth, colWidths, sheet, startCol, endCol, textWidth)
+        case HAlign.Right =>
+          // Right-aligned text clips in Excel (doesn't overflow left)
+          // This matches Excel's actual behavior
           1
         case _ =>
           1
@@ -189,22 +236,12 @@ object RenderUtils:
       else
         val nextRef = ARef.from0(nextCol, cellRef.row.index0)
 
-        // Check if next cell is empty (no content, not part of merge)
-        val nextCellOpt = sheet.cells.get(nextRef)
-        val nextHasContent = nextCellOpt.exists { c =>
-          c.value match
-            case CellValue.Empty => false
-            case _ => true
-        }
-
-        // Check if next cell is part of a merged region
-        val nextIsMerged = sheet.getMergedRange(nextRef).isDefined
-
-        if nextHasContent || nextIsMerged then
-          // Stop - can't overflow into non-empty or merged cell
+        // Use helper to check if cell allows overflow (empty AND unstyled)
+        if !isCellEmptyAndUnstyled(nextRef, sheet) then
+          // Stop - can't overflow into non-empty, styled, or merged cell
           colspan
         else
-          // Include this empty cell in the overflow span
+          // Include this empty unstyled cell in the overflow span
           val widthIdx = nextCol - startCol
           val newWidth =
             if widthIdx >= 0 && widthIdx < colWidths.length then
@@ -245,7 +282,14 @@ object RenderUtils:
 
   /** Convert Color to CSS/SVG-compatible RGB hex using theme for resolution. Returns #RRGGBB. */
   def colorToHex(c: Color, theme: ThemePalette): String =
-    c.toResolvedHex(theme)
+    try c.toResolvedHex(theme)
+    catch
+      case e: Exception =>
+        // Fallback to black if theme color resolution fails
+        System.err.println(
+          s"Warning: Color resolution failed for $c, using black. Error: ${e.getMessage}"
+        )
+        "#000000"
 
   /**
    * Convert Color to SVG fill attributes with opacity support. Returns both fill and fill-opacity
