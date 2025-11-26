@@ -491,6 +491,26 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(countExpr, sheet) == 3)
   }
 
+  test("Regression: AVERAGE returns (sum, count) tuple at eval level") {
+    // Bug fix: AVERAGE was returning Text("(sum,count)") after toCellValue conversion
+    // At eval level, it correctly returns (BigDecimal, Int) tuple
+    val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(150)),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(200)),
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(75))
+    )
+    val avgExpr = TExpr.average(range)
+
+    // evalOk returns Any (runtime type is (BigDecimal, Int))
+    val result: Any = evalOk(avgExpr, sheet)
+
+    // Verify it's a tuple with correct values
+    val (sum, count) = result.asInstanceOf[(BigDecimal, Int)]
+    assert(sum == BigDecimal(425), s"Sum should be 425, got $sum")
+    assert(count == 3, s"Count should be 3, got $count")
+  }
+
   // ==================== Error Path Tests ====================
 
   test("Error: Nested error - error in IF condition propagates") {

@@ -101,6 +101,17 @@ class SheetEvaluatorSpec extends FunSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(10))))
   }
 
+  test("Regression: AVERAGE returns Number, not Text tuple") {
+    // Bug: AVERAGE was returning Text("(425,3)") instead of computing 425/3
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(150)),
+      ref"A2" -> CellValue.Number(BigDecimal(200)),
+      ref"A3" -> CellValue.Number(BigDecimal(75))
+    )
+    val result = sheet.evaluateFormula("=AVERAGE(A1:A3)")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(425) / 3)))
+  }
+
   test("evaluateFormula: CONCATENATE function") {
     val result = emptySheet.evaluateFormula("=CONCATENATE(\"Hello\", \" \", \"World\")")
     assertEquals(result, Right(CellValue.Text("Hello World")))
