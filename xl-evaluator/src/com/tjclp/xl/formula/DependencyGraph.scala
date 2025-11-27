@@ -162,6 +162,23 @@ object DependencyGraph:
           extractDependencies(colIndex) ++
           extractDependencies(rangeLookup)
 
+      // Conditional aggregation functions
+      case TExpr.SumIf(range, criteria, sumRangeOpt) =>
+        range.cells.toSet ++
+          extractDependencies(criteria) ++
+          sumRangeOpt.map(_.cells.toSet).getOrElse(Set.empty)
+      case TExpr.CountIf(range, criteria) =>
+        range.cells.toSet ++ extractDependencies(criteria)
+      case TExpr.SumIfs(sumRange, conditions) =>
+        sumRange.cells.toSet ++
+          conditions.flatMap { case (range, criteria) =>
+            range.cells.toSet ++ extractDependencies(criteria)
+          }.toSet
+      case TExpr.CountIfs(conditions) =>
+        conditions.flatMap { case (range, criteria) =>
+          range.cells.toSet ++ extractDependencies(criteria)
+        }.toSet
+
       // Ternary operator
       case TExpr.If(cond, thenBranch, elseBranch) =>
         extractDependencies(cond) ++ extractDependencies(thenBranch) ++ extractDependencies(

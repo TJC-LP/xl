@@ -2,6 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
 import scala.math.BigDecimal
 import scala.annotation.tailrec
@@ -507,3 +508,143 @@ private class EvaluatorImpl extends Evaluator:
           }
         }
         result.asInstanceOf[Either[EvalError, A]]
+
+      // ===== Conditional Aggregation Functions =====
+
+      case TExpr.SumIf(range, criteriaExpr, sumRangeOpt) =>
+        // SUMIF: Sum cells in sumRange where corresponding cells in range match criteria
+        eval(criteriaExpr, sheet, clock).flatMap { criteriaValue =>
+          val criterion = CriteriaMatcher.parse(criteriaValue)
+          val effectiveRange = sumRangeOpt.getOrElse(range)
+          val rangeRefsList = range.cells.toList
+          val sumRefsList = effectiveRange.cells.toList
+
+          // Validate dimensions match (both width and height, not just total count)
+          if range.width != effectiveRange.width || range.height != effectiveRange.height then
+            Left(
+              EvalError.EvalFailed(
+                s"SUMIF: range and sum_range must have same dimensions (${range.height}×${range.width} vs ${effectiveRange.height}×${effectiveRange.width})",
+                Some(s"SUMIF(${range.toA1}, ..., ${effectiveRange.toA1})")
+              )
+            )
+          else
+            val pairs = rangeRefsList.zip(sumRefsList)
+            val sum = pairs.foldLeft(BigDecimal(0)) { case (acc, (testRef, sumRef)) =>
+              val testCell = sheet(testRef)
+              if CriteriaMatcher.matches(testCell.value, criterion) then
+                sheet(sumRef).value match
+                  case CellValue.Number(n) => acc + n
+                  case _ => acc // Skip non-numeric (Excel behavior)
+              else acc
+            }
+            Right(sum)
+        }
+
+      case TExpr.CountIf(range, criteriaExpr) =>
+        // COUNTIF: Count cells in range matching criteria
+        eval(criteriaExpr, sheet, clock).map { criteriaValue =>
+          val criterion = CriteriaMatcher.parse(criteriaValue)
+          val count = range.cells.count { ref =>
+            CriteriaMatcher.matches(sheet(ref).value, criterion)
+          }
+          BigDecimal(count)
+        }
+
+      case TExpr.SumIfs(sumRange, conditions) =>
+        // SUMIFS: Sum cells where ALL criteria match (AND logic)
+        // First evaluate all criteria expressions
+        val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
+          eval(criteriaExpr, sheet, clock)
+        }
+
+        // Collect all results or return first error (use :: prepend for O(1), reverse at end)
+        criteriaEithers
+          .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
+            acc.flatMap(list => either.map(v => v :: list))
+          }
+          .map(_.reverse)
+          .flatMap { criteriaValues =>
+            val parsedConditions = conditions
+              .zip(criteriaValues)
+              .map { case ((range, _), criteriaValue) =>
+                (range, CriteriaMatcher.parse(criteriaValue))
+              }
+
+            // Validate all ranges have same dimensions as sumRange (both width and height)
+            val sumRefsList = sumRange.cells.toList
+            val dimensionError = parsedConditions.collectFirst {
+              case (range, _) if range.width != sumRange.width || range.height != sumRange.height =>
+                EvalError.EvalFailed(
+                  s"SUMIFS: all ranges must have same dimensions (sum_range is ${sumRange.height}×${sumRange.width}, criteria_range is ${range.height}×${range.width})",
+                  Some(s"SUMIFS(${sumRange.toA1}, ${range.toA1}, ...)")
+                )
+            }
+
+            dimensionError match
+              case Some(err) => Left(err)
+              case None =>
+                val sum = sumRefsList.indices.foldLeft(BigDecimal(0)) { (acc, idx) =>
+                  // Check if ALL criteria match for this row
+                  val allMatch = parsedConditions.forall { case (criteriaRange, criterion) =>
+                    val testRef = criteriaRange.cells.toList(idx)
+                    CriteriaMatcher.matches(sheet(testRef).value, criterion)
+                  }
+                  if allMatch then
+                    sheet(sumRefsList(idx)).value match
+                      case CellValue.Number(n) => acc + n
+                      case _ => acc
+                  else acc
+                }
+                Right(sum)
+          }
+
+      case TExpr.CountIfs(conditions) =>
+        // COUNTIFS: Count cells where ALL criteria match (AND logic)
+        // First evaluate all criteria expressions
+        val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
+          eval(criteriaExpr, sheet, clock)
+        }
+
+        // Collect all results or return first error (use :: prepend for O(1), reverse at end)
+        criteriaEithers
+          .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
+            acc.flatMap(list => either.map(v => v :: list))
+          }
+          .map(_.reverse)
+          .flatMap { criteriaValues =>
+            val parsedConditions = conditions
+              .zip(criteriaValues)
+              .map { case ((range, _), criteriaValue) =>
+                (range, CriteriaMatcher.parse(criteriaValue))
+              }
+
+            // Pattern match to safely extract first range (non-empty per parser validation)
+            parsedConditions match
+              case (firstRange, _) :: _ =>
+                val refCount = firstRange.cells.toList.length
+
+                // Validate all ranges have same dimensions (both width and height)
+                val dimensionError = parsedConditions.collectFirst {
+                  case (range, _)
+                      if range.width != firstRange.width || range.height != firstRange.height =>
+                    EvalError.EvalFailed(
+                      s"COUNTIFS: all ranges must have same dimensions (first is ${firstRange.height}×${firstRange.width}, this is ${range.height}×${range.width})",
+                      Some(s"COUNTIFS(${firstRange.toA1}, ..., ${range.toA1}, ...)")
+                    )
+                }
+
+                dimensionError match
+                  case Some(err) => Left(err)
+                  case None =>
+                    val count = (0 until refCount).count { idx =>
+                      // Check if ALL criteria match for this row
+                      parsedConditions.forall { case (criteriaRange, criterion) =>
+                        val testRef = criteriaRange.cells.toList(idx)
+                        CriteriaMatcher.matches(sheet(testRef).value, criterion)
+                      }
+                    }
+                    Right(BigDecimal(count))
+              case Nil =>
+                // Should never happen per parser validation, but handle gracefully
+                Right(BigDecimal(0))
+          }

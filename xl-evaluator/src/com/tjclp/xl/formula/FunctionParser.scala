@@ -1,6 +1,8 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.addressing.CellRange
+import scala.util.boundary
+import boundary.break
 
 /**
  * Type class for parsing Excel formula functions.
@@ -182,7 +184,11 @@ object FunctionParser:
       dayFunctionParser,
       npvFunctionParser,
       irrFunctionParser,
-      vlookupFunctionParser
+      vlookupFunctionParser,
+      sumIfFunctionParser,
+      countIfFunctionParser,
+      sumIfsFunctionParser,
+      countIfsFunctionParser
     ).map(p => p.name -> p).toMap
 
   // ========== Given Instances for All Functions ==========
@@ -633,3 +639,162 @@ object FunctionParser:
               s"${args.length} arguments"
             )
           )
+
+  // === Conditional Aggregation Functions ===
+
+  /** SUMIF function: SUMIF(range, criteria, [sum_range]) */
+  given sumIfFunctionParser: FunctionParser[Unit] with
+    def name: String = "SUMIF"
+    def arity: Arity = Arity.Range(2, 3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        // 2 arguments: SUMIF(range, criteria) - sum range is same as criteria range
+        case List(fold: TExpr.FoldRange[?, ?], criteriaExpr) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.sumIf(range, criteriaExpr, None))
+
+        // 3 arguments: SUMIF(range, criteria, sum_range)
+        case List(fold: TExpr.FoldRange[?, ?], criteriaExpr, sumFold: TExpr.FoldRange[?, ?]) =>
+          (fold, sumFold) match
+            case (TExpr.FoldRange(range, _, _, _), TExpr.FoldRange(sumRange, _, _, _)) =>
+              scala.util.Right(TExpr.sumIf(range, criteriaExpr, Some(sumRange)))
+
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "SUMIF",
+              pos,
+              "2 or 3 arguments (range, criteria, [sum_range])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** COUNTIF function: COUNTIF(range, criteria) */
+  given countIfFunctionParser: FunctionParser[Unit] with
+    def name: String = "COUNTIF"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(fold: TExpr.FoldRange[?, ?], criteriaExpr) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.countIf(range, criteriaExpr))
+
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "COUNTIF",
+              pos,
+              "2 arguments (range, criteria)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** SUMIFS function: SUMIFS(sum_range, criteria_range1, criteria1, ...) */
+  given sumIfsFunctionParser: FunctionParser[Unit] with
+    def name: String = "SUMIFS"
+    def arity: Arity = Arity.AtLeast(3) // At least sum_range + one (range, criteria) pair
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      boundary {
+        // Validate: need odd number of args >= 3 (sum_range + pairs of range,criteria)
+        if args.length < 3 || args.length % 2 == 0 then
+          break(
+            scala.util.Left(
+              ParseError.InvalidArguments(
+                "SUMIFS",
+                pos,
+                "odd number of arguments >= 3 (sum_range, range1, criteria1, ...)",
+                s"${args.length} arguments"
+              )
+            )
+          )
+
+        args.headOption match
+          case Some(sumFold: TExpr.FoldRange[?, ?]) =>
+            sumFold match
+              case TExpr.FoldRange(sumRange, _, _, _) =>
+                // Parse pairs of (range, criteria) from remaining args
+                val pairs = args.drop(1).grouped(2).toList
+                val conditions: Either[ParseError, List[(CellRange, TExpr[?])]] =
+                  pairs.zipWithIndex.foldLeft[Either[ParseError, List[(CellRange, TExpr[?])]]](
+                    scala.util.Right(List.empty)
+                  ) { case (acc, (pair, idx)) =>
+                    acc.flatMap { list =>
+                      pair match
+                        case List(fold: TExpr.FoldRange[?, ?], criteria) =>
+                          fold match
+                            case TExpr.FoldRange(range, _, _, _) =>
+                              scala.util.Right(list :+ (range, criteria))
+                        case _ =>
+                          scala.util.Left(
+                            ParseError.InvalidArguments(
+                              "SUMIFS",
+                              pos,
+                              s"range at position ${2 + idx * 2}",
+                              "non-range expression"
+                            )
+                          )
+                    }
+                  }
+                conditions.map(conds => TExpr.sumIfs(sumRange, conds))
+
+          case _ =>
+            scala.util.Left(
+              ParseError.InvalidArguments(
+                "SUMIFS",
+                pos,
+                "first argument must be a range",
+                "non-range expression"
+              )
+            )
+      }
+
+  /** COUNTIFS function: COUNTIFS(criteria_range1, criteria1, ...) */
+  given countIfsFunctionParser: FunctionParser[Unit] with
+    def name: String = "COUNTIFS"
+    def arity: Arity = Arity.AtLeast(2) // At least one (range, criteria) pair
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      boundary {
+        // Validate: need even number of args >= 2 (pairs of range,criteria)
+        if args.length < 2 || args.length % 2 != 0 then
+          break(
+            scala.util.Left(
+              ParseError.InvalidArguments(
+                "COUNTIFS",
+                pos,
+                "even number of arguments >= 2 (range1, criteria1, ...)",
+                s"${args.length} arguments"
+              )
+            )
+          )
+
+        // Parse pairs of (range, criteria)
+        val pairs = args.grouped(2).toList
+        val conditions: Either[ParseError, List[(CellRange, TExpr[?])]] =
+          pairs.zipWithIndex.foldLeft[Either[ParseError, List[(CellRange, TExpr[?])]]](
+            scala.util.Right(List.empty)
+          ) { case (acc, (pair, idx)) =>
+            acc.flatMap { list =>
+              pair match
+                case List(fold: TExpr.FoldRange[?, ?], criteria) =>
+                  fold match
+                    case TExpr.FoldRange(range, _, _, _) =>
+                      scala.util.Right(list :+ (range, criteria))
+                case _ =>
+                  scala.util.Left(
+                    ParseError.InvalidArguments(
+                      "COUNTIFS",
+                      pos,
+                      s"range at position ${1 + idx * 2}",
+                      "non-range expression"
+                    )
+                  )
+            }
+          }
+        conditions.map(conds => TExpr.countIfs(conds))
+      }

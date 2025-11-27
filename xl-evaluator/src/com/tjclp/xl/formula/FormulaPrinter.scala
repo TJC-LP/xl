@@ -206,6 +206,40 @@ object FormulaPrinter:
           s"${formatARef(table.start)}:${formatARef(table.end)}, " +
           s"${printExpr(colIndex, 0)}, ${printExpr(rangeLookup, 0)})"
 
+      // Conditional aggregation functions
+      case TExpr.SumIf(range, criteria, sumRangeOpt) =>
+        val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
+        val criteriaStr = printExpr(criteria, 0)
+        sumRangeOpt match
+          case Some(sumRange) =>
+            val sumRangeStr = s"${formatARef(sumRange.start)}:${formatARef(sumRange.end)}"
+            s"SUMIF($rangeStr, $criteriaStr, $sumRangeStr)"
+          case None =>
+            s"SUMIF($rangeStr, $criteriaStr)"
+
+      case TExpr.CountIf(range, criteria) =>
+        val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
+        s"COUNTIF($rangeStr, ${printExpr(criteria, 0)})"
+
+      case TExpr.SumIfs(sumRange, conditions) =>
+        val sumRangeStr = s"${formatARef(sumRange.start)}:${formatARef(sumRange.end)}"
+        val condStrs = conditions
+          .map { case (range, criteria) =>
+            val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
+            s"$rangeStr, ${printExpr(criteria, 0)}"
+          }
+          .mkString(", ")
+        s"SUMIFS($sumRangeStr, $condStrs)"
+
+      case TExpr.CountIfs(conditions) =>
+        val condStrs = conditions
+          .map { case (range, criteria) =>
+            val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
+            s"$rangeStr, ${printExpr(criteria, 0)}"
+          }
+          .mkString(", ")
+        s"COUNTIFS($condStrs)"
+
       // Range aggregation
       case TExpr.FoldRange(range, z, step, decode) =>
         // Detect common aggregation patterns
@@ -376,5 +410,33 @@ object FormulaPrinter:
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLookup(${printWithTypes(lookup)}, ${formatARef(table.start)}:${formatARef(table.end)}, " +
           s"${printWithTypes(colIndex)}, ${printWithTypes(rangeLookup)})"
+      case TExpr.SumIf(range, criteria, sumRangeOpt) =>
+        val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
+        sumRangeOpt match
+          case Some(sumRange) =>
+            val sumRangeStr = s"${formatARef(sumRange.start)}:${formatARef(sumRange.end)}"
+            s"SumIf($rangeStr, ${printWithTypes(criteria)}, $sumRangeStr)"
+          case None =>
+            s"SumIf($rangeStr, ${printWithTypes(criteria)})"
+      case TExpr.CountIf(range, criteria) =>
+        val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
+        s"CountIf($rangeStr, ${printWithTypes(criteria)})"
+      case TExpr.SumIfs(sumRange, conditions) =>
+        val sumRangeStr = s"${formatARef(sumRange.start)}:${formatARef(sumRange.end)}"
+        val condStrs = conditions
+          .map { case (range, criteria) =>
+            val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
+            s"($rangeStr, ${printWithTypes(criteria)})"
+          }
+          .mkString(", ")
+        s"SumIfs($sumRangeStr, $condStrs)"
+      case TExpr.CountIfs(conditions) =>
+        val condStrs = conditions
+          .map { case (range, criteria) =>
+            val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
+            s"($rangeStr, ${printWithTypes(criteria)})"
+          }
+          .mkString(", ")
+        s"CountIfs($condStrs)"
       case fold @ TExpr.FoldRange(range, _, _, _) =>
         s"FoldRange(${formatARef(range.start)}:${formatARef(range.end)})"
