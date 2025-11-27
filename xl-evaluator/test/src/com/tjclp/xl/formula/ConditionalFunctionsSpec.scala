@@ -511,3 +511,67 @@ class ConditionalFunctionsSpec extends FunSuite:
         assertEquals(deps.size, 6)
       case Left(err) => fail(s"Parse error: $err")
   }
+
+  // ===== Shape Validation Tests (P1 Fix) =====
+
+  test("SUMIF: shape mismatch error (same count, different dimensions)") {
+    // A1:A3 is 3×1, B1:D1 is 1×3 - same cell count but different shape
+    val sheet = sheetWith(
+      ref"A1" -> "X",
+      ref"A2" -> "Y",
+      ref"A3" -> "X",
+      ref"B1" -> 10,
+      ref"C1" -> 20,
+      ref"D1" -> 30
+    )
+
+    val result = sheet.evaluateFormula("=SUMIF(A1:A3, \"X\", B1:D1)")
+    assert(result.isLeft, "Should fail with shape mismatch")
+    result.left.foreach { err =>
+      assert(err.toString.contains("dimensions"), s"Error should mention dimensions: $err")
+    }
+  }
+
+  test("SUMIFS: shape mismatch error in criteria range") {
+    // sum_range 3×1, criteria_range 1×3
+    val sheet = sheetWith(
+      ref"A1" -> 10,
+      ref"A2" -> 20,
+      ref"A3" -> 30,
+      ref"B1" -> "X",
+      ref"C1" -> "Y",
+      ref"D1" -> "X"
+    )
+
+    val result = sheet.evaluateFormula("=SUMIFS(A1:A3, B1:D1, \"X\")")
+    assert(result.isLeft, "Should fail with shape mismatch")
+  }
+
+  test("COUNTIFS: shape mismatch error between criteria ranges") {
+    val sheet = sheetWith(
+      ref"A1" -> "X",
+      ref"A2" -> "X",
+      ref"A3" -> "X",
+      ref"B1" -> 1,
+      ref"C1" -> 2,
+      ref"D1" -> 3
+    )
+
+    val result = sheet.evaluateFormula("=COUNTIFS(A1:A3, \"X\", B1:D1, \">0\")")
+    assert(result.isLeft, "Should fail with shape mismatch")
+  }
+
+  test("SUMIF: matching shapes work correctly") {
+    // Both 3×1 - should work
+    val sheet = sheetWith(
+      ref"A1" -> "X",
+      ref"A2" -> "Y",
+      ref"A3" -> "X",
+      ref"B1" -> 10,
+      ref"B2" -> 20,
+      ref"B3" -> 30
+    )
+
+    val result = sheet.evaluateFormula("=SUMIF(A1:A3, \"X\", B1:B3)")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(40))))
+  }

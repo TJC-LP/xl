@@ -243,6 +243,19 @@ object CriteriaMatcher:
       case CellValue.DateTime(dt) =>
         expected match
           case s: String => dt.toString == s || dt.toLocalDate.toString == s
+          case ld: java.time.LocalDate =>
+            // DATE() returns LocalDate - compare date portion
+            dt.toLocalDate == ld
+          case n: BigDecimal =>
+            // Excel serial number comparison (e.g., from numeric criteria)
+            val cellSerial = BigDecimal(CellValue.dateTimeToExcelSerial(dt))
+            // Compare with tolerance for floating point (dates are integers, times add fractions)
+            if n.scale <= 0 then
+              // Integer serial = date only, compare date portion
+              cellSerial.setScale(0, BigDecimal.RoundingMode.FLOOR) == n
+            else
+              // Fractional serial includes time
+              (cellSerial - n).abs < BigDecimal("0.00001")
           case _ => false
 
       case CellValue.Formula(_, Some(cached)) =>

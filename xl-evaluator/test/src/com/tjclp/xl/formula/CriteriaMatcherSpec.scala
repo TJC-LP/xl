@@ -332,3 +332,43 @@ class CriteriaMatcherSpec extends FunSuite:
     val matchingCount = products.count(cell => matches(cell, criterion))
     assertEquals(matchingCount, 3)
   }
+
+  // ===== DateTime Matching Tests (P1 Fix) =====
+
+  test("matches: DateTime with LocalDate criterion") {
+    val dt = java.time.LocalDateTime.of(2024, 1, 15, 10, 30, 0)
+    val dateCell = CellValue.DateTime(dt)
+
+    // LocalDate criterion (e.g., from DATE() function)
+    val localDateCrit = parse(java.time.LocalDate.of(2024, 1, 15))
+    assert(matches(dateCell, localDateCrit))
+
+    // Different date should not match
+    val wrongDateCrit = parse(java.time.LocalDate.of(2024, 1, 16))
+    assert(!matches(dateCell, wrongDateCrit))
+  }
+
+  test("matches: DateTime with Excel serial number criterion") {
+    // 2024-01-15 = Excel serial 45306
+    val dt = java.time.LocalDateTime.of(2024, 1, 15, 0, 0, 0)
+    val dateCell = CellValue.DateTime(dt)
+
+    // Integer serial (date only)
+    val serial = BigDecimal(CellValue.dateTimeToExcelSerial(dt).toLong)
+    val serialCrit = parse(serial)
+    assert(matches(dateCell, serialCrit))
+  }
+
+  test("matches: DateTime comparison with serial numbers") {
+    val dt = java.time.LocalDateTime.of(2024, 1, 15, 0, 0, 0)
+    val dateCell = CellValue.DateTime(dt)
+    val serial = CellValue.dateTimeToExcelSerial(dt)
+
+    // Greater than comparison
+    val gtCrit = parse(s">${(serial - 1).toLong}")
+    assert(matches(dateCell, gtCrit))
+
+    // Less than comparison
+    val ltCrit = parse(s"<${(serial + 1).toLong}")
+    assert(matches(dateCell, ltCrit))
+  }
