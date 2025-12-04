@@ -7,16 +7,18 @@ BINDIR ?= $(PREFIX)/bin
 SHAREDIR ?= $(PREFIX)/share/xl
 JAR_PATH = out/xl-cli/assembly.dest/out.jar
 
-.PHONY: build install uninstall clean help
+.PHONY: build install uninstall clean help package-skill package-dist
 
 help:
 	@echo "XL CLI Makefile"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make install    Build and install xl to $(BINDIR)"
-	@echo "  make uninstall  Remove xl from $(BINDIR)"
-	@echo "  make build      Build the fat JAR only"
-	@echo "  make clean      Remove build artifacts"
+	@echo "  make install       Build and install xl to $(BINDIR)"
+	@echo "  make uninstall     Remove xl from $(BINDIR)"
+	@echo "  make build         Build the fat JAR only"
+	@echo "  make package-skill Package skill files only for Anthropic API (<1MB)"
+	@echo "  make package-dist  Full distribution with JAR (~30MB)"
+	@echo "  make clean         Remove build artifacts"
 	@echo ""
 	@echo "Options:"
 	@echo "  PREFIX=<path>   Install prefix (default: ~/.local)"
@@ -61,3 +63,43 @@ uninstall:
 
 clean:
 	./mill clean
+	@rm -rf dist/
+
+# Package skill files only for Anthropic Skills API (<1MB)
+# Does NOT include JAR - CLI must be pre-installed in container
+package-skill:
+	@echo "Packaging skill files for Anthropic API..."
+	@rm -rf dist/xl-skill
+	@mkdir -p dist/xl-skill/reference
+	@cp .claude/skills/xl-cli/SKILL.md dist/xl-skill/
+	@cp .claude/skills/xl-cli/reference/*.md dist/xl-skill/reference/
+	@cd dist && zip -r xl-skill.zip xl-skill
+	@echo ""
+	@echo "Created dist/xl-skill.zip"
+	@unzip -l dist/xl-skill.zip
+	@du -h dist/xl-skill.zip
+	@echo ""
+	@echo "Upload to Anthropic Skills API:"
+	@echo "  - Upload .claude/skills/xl-cli/ directory, OR"
+	@echo "  - Upload dist/xl-skill.zip"
+	@echo ""
+	@echo "Note: xl CLI must be pre-installed in the container."
+	@echo "Use 'make package-dist' for full distribution with JAR."
+
+# Full distribution with JAR for local/container install (~30MB)
+package-dist: build
+	@echo "Packaging full distribution with JAR..."
+	@rm -rf dist/xl-dist
+	@mkdir -p dist/xl-dist/reference
+	@cp $(JAR_PATH) dist/xl-dist/xl.jar
+	@cp .claude/skills/xl-cli/SKILL.md dist/xl-dist/
+	@cp .claude/skills/xl-cli/reference/*.md dist/xl-dist/reference/
+	@cp scripts/install.sh dist/xl-dist/
+	@chmod +x dist/xl-dist/install.sh
+	@cd dist && tar czf xl-cli.tar.gz xl-dist
+	@echo ""
+	@echo "Created dist/xl-cli.tar.gz"
+	@du -h dist/xl-cli.tar.gz
+	@echo ""
+	@echo "Install:"
+	@echo "  tar xzf xl-cli.tar.gz && cd xl-dist && ./install.sh"

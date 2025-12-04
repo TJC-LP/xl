@@ -2,6 +2,8 @@ package com.tjclp.xl.cli
 
 import java.nio.file.Path
 
+import scala.util.chaining.*
+
 import cats.effect.{ExitCode, IO, IOApp}
 import cats.implicits.*
 import com.monovore.decline.*
@@ -9,11 +11,18 @@ import com.monovore.decline.effect.*
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
-import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.output.{Format, Markdown}
+import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
+import com.tjclp.xl.cli.raster.ImageMagick
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.{DependencyGraph, SheetEvaluator}
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, styleSyntax}
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -46,7 +55,7 @@ object Main
     }
 
     // Sheet-level write: --file, --sheet, and --output (required)
-    val sheetWriteSubcmds = putCmd orElse putfCmd
+    val sheetWriteSubcmds = putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, sheetWriteSubcmds).mapN { (file, sheet, out, cmd) =>
@@ -80,20 +89,41 @@ object Main
   private val formulasOpt = Opts.flag("formulas", "Show formulas instead of values").orFalse
   private val limitOpt = Opts.option[Int]("limit", "Maximum rows to display").withDefault(50)
   private val formatOpt = Opts
-    .option[String]("format", "Output format: markdown, html, or svg")
+    .option[String]("format", "Output format: markdown, html, svg, json, csv, png, jpeg, webp, pdf")
     .withDefault("markdown")
     .mapValidated { s =>
       s.toLowerCase match
         case "markdown" | "md" => cats.data.Validated.valid(ViewFormat.Markdown)
         case "html" => cats.data.Validated.valid(ViewFormat.Html)
         case "svg" => cats.data.Validated.valid(ViewFormat.Svg)
+        case "json" => cats.data.Validated.valid(ViewFormat.Json)
+        case "csv" => cats.data.Validated.valid(ViewFormat.Csv)
+        case "png" => cats.data.Validated.valid(ViewFormat.Png)
+        case "jpeg" | "jpg" => cats.data.Validated.valid(ViewFormat.Jpeg)
+        case "webp" => cats.data.Validated.valid(ViewFormat.WebP)
+        case "pdf" => cats.data.Validated.valid(ViewFormat.Pdf)
         case other =>
-          cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown, html, or svg")
+          cats.data.Validated.invalidNel(
+            s"Unknown format: $other. Use markdown, html, svg, json, csv, png, jpeg, webp, or pdf"
+          )
     }
   private val printScaleOpt =
     Opts.flag("print-scale", "Apply print scaling (for PDF-like output)").orFalse
   private val gridlinesOpt =
     Opts.flag("gridlines", "Show cell gridlines in SVG output").orFalse
+  private val showLabelsOpt =
+    Opts.flag("show-labels", "Include column letters (A, B, C) and row numbers (1, 2, 3)").orFalse
+  private val dpiOpt =
+    Opts.option[Int]("dpi", "DPI for raster output (default: 144 for retina)").withDefault(144)
+  private val qualityOpt =
+    Opts.option[Int]("quality", "JPEG quality 1-100 (default: 90)").withDefault(90)
+  private val rasterOutputOpt =
+    Opts
+      .option[Path](
+        "raster-output",
+        "Output file for raster formats (required for png/jpeg/webp/pdf)"
+      )
+      .orNone
 
   // --- Read-only commands ---
 
@@ -105,11 +135,22 @@ object Main
     Opts(Command.Bounds)
   }
 
-  val viewCmd: Opts[Command] = Opts.subcommand("view", "View range (markdown, html, or svg)") {
-    (rangeArg, formulasOpt, limitOpt, formatOpt, printScaleOpt, gridlinesOpt).mapN(
-      Command.View.apply
-    )
-  }
+  val viewCmd: Opts[Command] =
+    Opts.subcommand("view", "View range (markdown, html, svg, json, csv, png, jpeg, webp, pdf)") {
+      (
+        rangeArg,
+        formulasOpt,
+        limitOpt,
+        formatOpt,
+        printScaleOpt,
+        gridlinesOpt,
+        showLabelsOpt,
+        dpiOpt,
+        qualityOpt,
+        rasterOutputOpt
+      )
+        .mapN(Command.View.apply)
+    }
 
   val cellCmd: Opts[Command] = Opts.subcommand("cell", "Get cell details") {
     refArg.map(Command.Cell.apply)
@@ -140,6 +181,61 @@ object Main
 
   val putfCmd: Opts[Command] = Opts.subcommand("putf", "Write formula to cell") {
     (refArg, valueArg).mapN(Command.PutFormula.apply)
+  }
+
+  // --- Style command options ---
+  private val boldOpt = Opts.flag("bold", "Bold text").orFalse
+  private val italicOpt = Opts.flag("italic", "Italic text").orFalse
+  private val underlineOpt = Opts.flag("underline", "Underline text").orFalse
+  private val bgOpt =
+    Opts.option[String]("bg", "Background color (name, #hex, or rgb(r,g,b))").orNone
+  private val fgOpt = Opts.option[String]("fg", "Text color (name, #hex, or rgb(r,g,b))").orNone
+  private val fontSizeOpt = Opts.option[Double]("font-size", "Font size in points").orNone
+  private val fontNameOpt = Opts.option[String]("font-name", "Font family name").orNone
+  private val alignOpt = Opts.option[String]("align", "Horizontal: left, center, right").orNone
+  private val valignOpt = Opts.option[String]("valign", "Vertical: top, middle, bottom").orNone
+  private val wrapOpt = Opts.flag("wrap", "Enable text wrapping").orFalse
+  private val numFormatOpt =
+    Opts
+      .option[String]("format", "Number format: general, number, currency, percent, date, text")
+      .orNone
+  private val borderOpt =
+    Opts.option[String]("border", "Border style: none, thin, medium, thick").orNone
+  private val borderColorOpt = Opts.option[String]("border-color", "Border color").orNone
+
+  val styleCmd: Opts[Command] = Opts.subcommand("style", "Apply styling to cells") {
+    (
+      rangeArg,
+      boldOpt,
+      italicOpt,
+      underlineOpt,
+      bgOpt,
+      fgOpt,
+      fontSizeOpt,
+      fontNameOpt,
+      alignOpt,
+      valignOpt,
+      wrapOpt,
+      numFormatOpt,
+      borderOpt,
+      borderColorOpt
+    ).mapN(Command.Style.apply)
+  }
+
+  // --- Row/Column command options ---
+  private val rowArg = Opts.argument[Int]("row")
+  private val colArg = Opts.argument[String]("col")
+  private val heightOpt = Opts.option[Double]("height", "Row height in points").orNone
+  private val widthOpt = Opts.option[Double]("width", "Column width in character units").orNone
+  private val hideOpt = Opts.flag("hide", "Hide row/column").orFalse
+  private val showOpt = Opts.flag("show", "Show (unhide) row/column").orFalse
+
+  val rowCmd: Opts[Command] = Opts.subcommand("row", "Set row properties (height, hide/show)") {
+    (rowArg, heightOpt, hideOpt, showOpt).mapN(Command.RowOp.apply)
+  }
+
+  val colCmd: Opts[Command] = Opts.subcommand("col", "Set column properties (width, hide/show)") {
+    (colArg, widthOpt, hideOpt, showOpt).mapN(Command.ColOp.apply)
   }
 
   // ==========================================================================
@@ -247,7 +343,18 @@ object Main
              |Used range: (empty)
              |Non-empty: 0 cells""".stripMargin)
 
-    case Command.View(rangeStr, showFormulas, limit, format, printScale, showGridlines) =>
+    case Command.View(
+          rangeStr,
+          showFormulas,
+          limit,
+          format,
+          printScale,
+          showGridlines,
+          showLabels,
+          dpi,
+          quality,
+          rasterOutput
+        ) =>
       for
         resolved <- resolveRef(wb, sheet, rangeStr)
         (targetSheet, refOrRange) = resolved
@@ -256,12 +363,56 @@ object Main
           case Left(ref) => CellRange(ref, ref) // Single cell as range
         limitedRange = limitRange(range, limit)
         theme = wb.metadata.theme // Use workbook's parsed theme
-      yield format match
-        case ViewFormat.Markdown => Markdown.renderRange(targetSheet, limitedRange, showFormulas)
-        case ViewFormat.Html =>
-          targetSheet.toHtml(limitedRange, theme = theme, applyPrintScale = printScale)
-        case ViewFormat.Svg =>
-          targetSheet.toSvg(limitedRange, theme = theme, showGridlines = showGridlines)
+        result <- format match
+          case ViewFormat.Markdown =>
+            IO.pure(Markdown.renderRange(targetSheet, limitedRange, showFormulas))
+          case ViewFormat.Html =>
+            IO.pure(
+              targetSheet.toHtml(
+                limitedRange,
+                theme = theme,
+                applyPrintScale = printScale,
+                showLabels = showLabels
+              )
+            )
+          case ViewFormat.Svg =>
+            IO.pure(
+              targetSheet.toSvg(
+                limitedRange,
+                theme = theme,
+                showGridlines = showGridlines,
+                showLabels = showLabels
+              )
+            )
+          case ViewFormat.Json =>
+            IO.pure(JsonRenderer.renderRange(targetSheet, limitedRange, showFormulas))
+          case ViewFormat.Csv =>
+            IO.pure(CsvRenderer.renderRange(targetSheet, limitedRange, showFormulas, showLabels))
+          case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
+            rasterOutput match
+              case None =>
+                IO.raiseError(
+                  new Exception(
+                    s"--raster-output required for ${format.toString.toLowerCase} format (binary output cannot go to stdout)"
+                  )
+                )
+              case Some(outputPath) =>
+                val svg = targetSheet.toSvg(
+                  limitedRange,
+                  theme = theme,
+                  showGridlines = showGridlines,
+                  showLabels = showLabels
+                )
+                val rasterFormat = format match
+                  case ViewFormat.Png => ImageMagick.Format.Png
+                  case ViewFormat.Jpeg => ImageMagick.Format.Jpeg(quality)
+                  case ViewFormat.WebP => ImageMagick.Format.WebP
+                  case ViewFormat.Pdf => ImageMagick.Format.Pdf
+                  case _ => ImageMagick.Format.Png // unreachable
+                ImageMagick.convertSvgToRaster(svg, outputPath, rasterFormat, dpi).map { _ =>
+                  s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI)"
+                }
+      yield result
 
     case Command.Cell(refStr) =>
       for
@@ -359,6 +510,108 @@ object Main
           yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
       }
 
+    case Command.Style(
+          rangeStr,
+          bold,
+          italic,
+          underline,
+          bg,
+          fg,
+          fontSize,
+          fontName,
+          align,
+          valign,
+          wrap,
+          numFormat,
+          border,
+          borderColor
+        ) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            resolved <- resolveRef(wb, sheet, rangeStr)
+            (targetSheet, refOrRange) = resolved
+            range = refOrRange match
+              case Right(r) => r
+              case Left(ref) => CellRange(ref, ref)
+            style <- buildCellStyle(
+              bold,
+              italic,
+              underline,
+              bg,
+              fg,
+              fontSize,
+              fontName,
+              align,
+              valign,
+              wrap,
+              numFormat,
+              border,
+              borderColor
+            )
+            updatedSheet = styleSyntax.withRangeStyle(targetSheet)(range, style)
+            updatedWb = wb.put(updatedSheet)
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+            appliedList = buildStyleDescription(
+              bold,
+              italic,
+              underline,
+              bg,
+              fg,
+              fontSize,
+              fontName,
+              align,
+              valign,
+              wrap,
+              numFormat,
+              border
+            )
+          yield s"Styled: ${range.toA1}\nApplied: ${appliedList.mkString(", ")}\nSaved: $outputPath"
+      }
+
+    case Command.RowOp(rowNum, height, hide, show) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          val row = Row.from1(rowNum)
+          val currentProps = sheet.getRowProperties(row)
+          val newProps = currentProps.copy(
+            height = height.orElse(currentProps.height),
+            hidden = if hide then true else if show then false else currentProps.hidden
+          )
+          val updatedSheet = sheet.setRowProperties(row, newProps)
+          val updatedWb = wb.put(updatedSheet)
+          ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
+            val changes = List(
+              height.map(h => s"height=$h"),
+              if hide then Some("hidden=true") else None,
+              if show then Some("hidden=false") else None
+            ).flatten
+            s"Row $rowNum: ${changes.mkString(", ")}\nSaved: $outputPath"
+          }
+      }
+
+    case Command.ColOp(colStr, width, hide, show) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e))).flatMap { col =>
+            val currentProps = sheet.getColumnProperties(col)
+            val newProps = currentProps.copy(
+              width = width.orElse(currentProps.width),
+              hidden = if hide then true else if show then false else currentProps.hidden
+            )
+            val updatedSheet = sheet.setColumnProperties(col, newProps)
+            val updatedWb = wb.put(updatedSheet)
+            ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
+              val changes = List(
+                width.map(w => s"width=$w"),
+                if hide then Some("hidden=true") else None,
+                if show then Some("hidden=false") else None
+              ).flatten
+              s"Column $colStr: ${changes.mkString(", ")}\nSaved: $outputPath"
+            }
+          }
+      }
+
   // ==========================================================================
   // Helpers
   // ==========================================================================
@@ -430,7 +683,130 @@ object Main
       case CellValue.RichText(rt) => rt.toPlainText
       case CellValue.Empty => ""
       case CellValue.Formula(expr, cached) =>
-        cached.map(formatCellValue).getOrElse(s"=$expr")
+        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+        cached.map(formatCellValue).getOrElse(displayExpr)
+
+  private def buildCellStyle(
+    bold: Boolean,
+    italic: Boolean,
+    underline: Boolean,
+    bg: Option[String],
+    fg: Option[String],
+    fontSize: Option[Double],
+    fontName: Option[String],
+    align: Option[String],
+    valign: Option[String],
+    wrap: Boolean,
+    numFormat: Option[String],
+    border: Option[String],
+    borderColor: Option[String]
+  ): IO[CellStyle] =
+    for
+      bgColor <- bg.traverse(s => IO.fromEither(ColorParser.parse(s).left.map(new Exception(_))))
+      fgColor <- fg.traverse(s => IO.fromEither(ColorParser.parse(s).left.map(new Exception(_))))
+      bdrColor <- borderColor.traverse(s =>
+        IO.fromEither(ColorParser.parse(s).left.map(new Exception(_)))
+      )
+      hAlign <- align.traverse(s => IO.fromEither(parseHAlign(s).left.map(new Exception(_))))
+      vAlign <- valign.traverse(s => IO.fromEither(parseVAlign(s).left.map(new Exception(_))))
+      bdrStyle <- border.traverse(s =>
+        IO.fromEither(parseBorderStyle(s).left.map(new Exception(_)))
+      )
+      nFmt <- numFormat.traverse(s => IO.fromEither(parseNumFmt(s).left.map(new Exception(_))))
+    yield
+      val font = Font.default
+        .withBold(bold)
+        .withItalic(italic)
+        .withUnderline(underline)
+        .pipe(f => fgColor.fold(f)(c => f.withColor(c)))
+        .pipe(f => fontSize.fold(f)(s => f.withSize(s)))
+        .pipe(f => fontName.fold(f)(n => f.withName(n)))
+
+      val fill = bgColor.map(Fill.Solid.apply).getOrElse(Fill.None)
+
+      val cellBorder = bdrStyle
+        .map(style => Border.all(style, bdrColor))
+        .getOrElse(Border.none)
+
+      val alignment = Align.default
+        .pipe(a => hAlign.fold(a)(h => a.withHAlign(h)))
+        .pipe(a => vAlign.fold(a)(v => a.withVAlign(v)))
+        .pipe(a => if wrap then a.withWrap() else a)
+
+      CellStyle(
+        font = font,
+        fill = fill,
+        border = cellBorder,
+        numFmt = nFmt.getOrElse(NumFmt.General),
+        align = alignment
+      )
+
+  private def parseHAlign(s: String): Either[String, HAlign] =
+    s.toLowerCase match
+      case "left" => Right(HAlign.Left)
+      case "center" => Right(HAlign.Center)
+      case "right" => Right(HAlign.Right)
+      case "justify" => Right(HAlign.Justify)
+      case "general" => Right(HAlign.General)
+      case other => Left(s"Unknown horizontal alignment: $other. Use left, center, right, justify")
+
+  private def parseVAlign(s: String): Either[String, VAlign] =
+    s.toLowerCase match
+      case "top" => Right(VAlign.Top)
+      case "middle" | "center" => Right(VAlign.Middle)
+      case "bottom" => Right(VAlign.Bottom)
+      case other => Left(s"Unknown vertical alignment: $other. Use top, middle, bottom")
+
+  private def parseBorderStyle(s: String): Either[String, BorderStyle] =
+    s.toLowerCase match
+      case "none" => Right(BorderStyle.None)
+      case "thin" => Right(BorderStyle.Thin)
+      case "medium" => Right(BorderStyle.Medium)
+      case "thick" => Right(BorderStyle.Thick)
+      case "dashed" => Right(BorderStyle.Dashed)
+      case "dotted" => Right(BorderStyle.Dotted)
+      case "double" => Right(BorderStyle.Double)
+      case other => Left(s"Unknown border style: $other. Use none, thin, medium, thick")
+
+  private def parseNumFmt(s: String): Either[String, NumFmt] =
+    s.toLowerCase match
+      case "general" => Right(NumFmt.General)
+      case "number" => Right(NumFmt.Decimal)
+      case "currency" => Right(NumFmt.Currency)
+      case "percent" => Right(NumFmt.Percent)
+      case "date" => Right(NumFmt.Date)
+      case "text" => Right(NumFmt.Text)
+      case other =>
+        Left(s"Unknown number format: $other. Use general, number, currency, percent, date, text")
+
+  private def buildStyleDescription(
+    bold: Boolean,
+    italic: Boolean,
+    underline: Boolean,
+    bg: Option[String],
+    fg: Option[String],
+    fontSize: Option[Double],
+    fontName: Option[String],
+    align: Option[String],
+    valign: Option[String],
+    wrap: Boolean,
+    numFormat: Option[String],
+    border: Option[String]
+  ): List[String] =
+    List(
+      if bold then Some("bold") else None,
+      if italic then Some("italic") else None,
+      if underline then Some("underline") else None,
+      bg.map(c => s"bg=$c"),
+      fg.map(c => s"fg=$c"),
+      fontSize.map(s => s"font-size=$s"),
+      fontName.map(n => s"font-name=$n"),
+      align.map(a => s"align=$a"),
+      valign.map(v => s"valign=$v"),
+      if wrap then Some("wrap") else None,
+      numFormat.map(f => s"format=$f"),
+      border.map(b => s"border=$b")
+    ).flatten
 
 /**
  * Command ADT representing all CLI operations.
@@ -445,7 +821,11 @@ enum Command:
     limit: Int,
     format: ViewFormat,
     printScale: Boolean,
-    showGridlines: Boolean
+    showGridlines: Boolean,
+    showLabels: Boolean,
+    dpi: Int,
+    quality: Int,
+    rasterOutput: Option[Path]
   )
   case Cell(ref: String)
   case Search(pattern: String, limit: Int)
@@ -454,9 +834,28 @@ enum Command:
   // Mutate (require -o)
   case Put(ref: String, value: String)
   case PutFormula(ref: String, formula: String)
+  case Style(
+    range: String,
+    bold: Boolean,
+    italic: Boolean,
+    underline: Boolean,
+    bg: Option[String],
+    fg: Option[String],
+    fontSize: Option[Double],
+    fontName: Option[String],
+    align: Option[String],
+    valign: Option[String],
+    wrap: Boolean,
+    numFormat: Option[String],
+    border: Option[String],
+    borderColor: Option[String]
+  )
+  case RowOp(row: Int, height: Option[Double], hide: Boolean, show: Boolean)
+  case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean)
 
 /**
  * Output format for view command.
  */
 enum ViewFormat:
-  case Markdown, Html, Svg
+  case Markdown, Html, Svg, Json, Csv
+  case Png, Jpeg, WebP, Pdf
