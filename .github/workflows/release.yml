@@ -72,11 +72,7 @@ jobs:
           PUBLISH_VERSION: ${{ steps.version.outputs.version }}
 
       - name: Publish to Maven Central
-        run: |
-          ./mill -i mill.scalalib.PublishModule/publishAll \
-            --publishArtifacts __.publishArtifacts \
-            --release true \
-            --signed true
+        run: ./mill -i mill.javalib.SonatypeCentralPublishModule/
         env:
           PUBLISH_VERSION: ${{ steps.version.outputs.version }}
           MILL_SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
