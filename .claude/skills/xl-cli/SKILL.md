@@ -10,6 +10,8 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 Check if installed: `which xl || echo "not installed"`
 
 **If not installed**, download native binary (no JDK required):
+
+**macOS/Linux:**
 ```bash
 # Detect platform and install
 PLATFORM="$(uname -s)-$(uname -m)"
@@ -21,6 +23,12 @@ case "$PLATFORM" in
 esac
 curl -sL "https://github.com/TJC-LP/xl/releases/latest/download/$BINARY" -o ~/.local/bin/xl
 chmod +x ~/.local/bin/xl
+```
+
+**Windows (PowerShell):**
+```powershell
+Invoke-WebRequest -Uri "https://github.com/TJC-LP/xl/releases/latest/download/xl-windows-amd64.exe" -OutFile "$env:LOCALAPPDATA\xl.exe"
+# Add to PATH or move to a directory in PATH
 ```
 
 **Alternative** (requires JDK 17+):

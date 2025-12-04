@@ -22,10 +22,16 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: xl-linux-amd64
+            extension: ""
           - os: macos-latest
             artifact: xl-darwin-amd64
+            extension: ""
           - os: macos-14
             artifact: xl-darwin-arm64
+            extension: ""
+          - os: windows-latest
+            artifact: xl-windows-amd64
+            extension: ".exe"
     runs-on: ${{ matrix.os }}
     # Only run on the main repository, not forks
     if: github.repository == 'TJC-LP/xl'
@@ -58,17 +64,29 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mill-
 
-      - name: Build native image
+      - name: Build native image (Unix)
+        if: runner.os != 'Windows'
         run: ./mill xl-cli.nativeImage
 
-      - name: Rename binary
+      - name: Build native image (Windows)
+        if: runner.os == 'Windows'
+        run: .\mill.bat xl-cli.nativeImage
+        shell: cmd
+
+      - name: Rename binary (Unix)
+        if: runner.os != 'Windows'
         run: mv out/xl-cli/nativeImage.dest/native-executable ${{ matrix.artifact }}
+
+      - name: Rename binary (Windows)
+        if: runner.os == 'Windows'
+        run: move out\xl-cli\nativeImage.dest\native-executable.exe ${{ matrix.artifact }}.exe
+        shell: cmd
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}${{ matrix.extension }}
 
   # Publish to Maven Central and create GitHub release
   release:
@@ -175,12 +193,14 @@ jobs:
           mkdir -p release-assets
           # Copy JAR tarball
           cp xl-cli-${{ steps.version.outputs.version }}.tar.gz release-assets/
-          # Copy and rename native binaries with version
+          # Copy native binaries (Unix)
           cp native-binaries/xl-linux-amd64/xl-linux-amd64 release-assets/xl-linux-amd64
           cp native-binaries/xl-darwin-amd64/xl-darwin-amd64 release-assets/xl-darwin-amd64
           cp native-binaries/xl-darwin-arm64/xl-darwin-arm64 release-assets/xl-darwin-arm64
-          # Make binaries executable
-          chmod +x release-assets/xl-*
+          # Copy Windows binary
+          cp native-binaries/xl-windows-amd64/xl-windows-amd64.exe release-assets/xl-windows-amd64.exe
+          # Make Unix binaries executable
+          chmod +x release-assets/xl-linux-amd64 release-assets/xl-darwin-amd64 release-assets/xl-darwin-arm64
           ls -la release-assets/
 
       - name: Create GitHub Release
@@ -193,5 +213,6 @@ jobs:
             release-assets/xl-linux-amd64
             release-assets/xl-darwin-amd64
             release-assets/xl-darwin-arm64
+            release-assets/xl-windows-amd64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
