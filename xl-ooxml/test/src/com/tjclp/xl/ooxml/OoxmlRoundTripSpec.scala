@@ -469,6 +469,83 @@ class OoxmlRoundTripSpec extends FunSuite:
     assertZipBytesEqual(bytes1, bytes2)
   }
 
+  test("Chained writes to same file succeed (regression test for atomic write)") {
+    // This test verifies that writing to the same file multiple times works correctly.
+    // Previously, this would fail with "zip END header not found" because the output
+    // file was opened (and truncated) before the source file was fully read.
+    val outputPath = tempDir.resolve("chained-write.xlsx")
+
+    // First write: create initial file
+    val initial = Workbook("Test").sheets(0).put(ref"A1", CellValue.Text("First"))
+    val wb1 = Workbook(Vector(initial))
+    val write1 = XlsxWriter.write(wb1, outputPath)
+    assert(write1.isRight, s"First write failed: $write1")
+
+    // Read back the first file
+    val read1 = XlsxReader.read(outputPath)
+    assert(read1.isRight, s"First read failed: $read1")
+    val wb1Read = read1.toOption.get
+
+    // Second write: modify and write back to SAME file using put() for proper tracking
+    val modified = wb1Read.sheets(0).put(ref"A2", CellValue.Text("Second"))
+    val wb2 = wb1Read.put(modified) // Uses put() to properly track modification
+    val write2 = XlsxWriter.write(wb2, outputPath)
+    assert(write2.isRight, s"Second write (chained) failed: $write2")
+
+    // Third write: another chained write to verify stability
+    val read2 = XlsxReader.read(outputPath)
+    assert(read2.isRight, s"Second read failed: $read2")
+    val wb2Read = read2.toOption.get
+
+    val modified2 = wb2Read.sheets(0).put(ref"A3", CellValue.Text("Third"))
+    val wb3 = wb2Read.put(modified2) // Uses put() to properly track modification
+    val write3 = XlsxWriter.write(wb3, outputPath)
+    assert(write3.isRight, s"Third write (chained) failed: $write3")
+
+    // Verify final contents
+    val finalRead = XlsxReader.read(outputPath)
+    assert(finalRead.isRight, s"Final read failed: $finalRead")
+    finalRead.foreach { wb =>
+      val sheet = wb.sheets(0)
+      assertEquals(sheet.cells.get(ref"A1").map(_.value), Some(CellValue.Text("First")))
+      assertEquals(sheet.cells.get(ref"A2").map(_.value), Some(CellValue.Text("Second")))
+      assertEquals(sheet.cells.get(ref"A3").map(_.value), Some(CellValue.Text("Third")))
+    }
+  }
+
+  test("Sheet elements have r namespace bound for r:id attribute (openpyxl compatibility)") {
+    // This test verifies that r:id attributes on sheet elements have the "r" namespace
+    // properly bound. Previously, files created by openpyxl (which use different namespace
+    // declarations) would fail on re-read with "prefix 'r' not bound" error.
+    val outputPath = tempDir.resolve("namespace-test.xlsx")
+
+    // Create and write a workbook
+    val wb = Workbook("Test").sheets(0).put(ref"A1", CellValue.Text("Hello"))
+    val write1 = XlsxWriter.write(Workbook(Vector(wb)), outputPath)
+    assert(write1.isRight, s"First write failed: $write1")
+
+    // Read it back
+    val read1 = XlsxReader.read(outputPath)
+    assert(read1.isRight, s"First read failed: $read1")
+
+    // Modify and write again (this exercises the workbook.xml regeneration)
+    val modified = read1.toOption.get.sheets(0).put(ref"A2", CellValue.Text("World"))
+    val wb2 = read1.toOption.get.put(modified)
+    val write2 = XlsxWriter.write(wb2, outputPath)
+    assert(write2.isRight, s"Second write failed: $write2")
+
+    // Re-read the modified file - this would fail if r namespace isn't bound
+    val read2 = XlsxReader.read(outputPath)
+    assert(read2.isRight, s"Re-read after modification failed: $read2")
+
+    // Verify contents
+    read2.foreach { wb =>
+      assertEquals(wb.sheets.size, 1)
+      assertEquals(wb.sheets(0).cells.get(ref"A1").map(_.value), Some(CellValue.Text("Hello")))
+      assertEquals(wb.sheets(0).cells.get(ref"A2").map(_.value), Some(CellValue.Text("World")))
+    }
+  }
+
   // ---------- Helpers ----------
 
   private def buildComprehensiveWorkbook(): XLResult[Workbook] =
