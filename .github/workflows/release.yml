@@ -183,6 +183,50 @@ jobs:
           chmod +x dist/install.sh
           tar -czvf xl-cli-${{ steps.version.outputs.version }}.tar.gz -C dist .
 
+      - name: Package skill with version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p skill-dist/reference
+
+          # Copy skill files
+          cp .claude/skills/xl-cli/SKILL.md skill-dist/
+          cp .claude/skills/xl-cli/reference/*.md skill-dist/reference/ 2>/dev/null || true
+
+          # Create version manifest
+          cat > skill-dist/VERSION << EOF
+          version=$VERSION
+          released=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          EOF
+
+          # Create install script that pins to this version
+          cat > skill-dist/install-cli.sh << 'INSTALL_EOF'
+          #!/bin/bash
+          set -e
+          VERSION="__VERSION__"
+          PLATFORM="$(uname -s)-$(uname -m)"
+          case "$PLATFORM" in
+            Linux-x86_64)  BINARY="xl-linux-amd64" ;;
+            Darwin-x86_64) BINARY="xl-darwin-amd64" ;;
+            Darwin-arm64)  BINARY="xl-darwin-arm64" ;;
+            MINGW*|MSYS*|CYGWIN*) BINARY="xl-windows-amd64.exe" ;;
+            *) echo "Unsupported platform: $PLATFORM" && exit 1 ;;
+          esac
+          INSTALL_DIR="${HOME}/.local/bin"
+          mkdir -p "$INSTALL_DIR"
+          echo "Installing xl $VERSION for $PLATFORM..."
+          curl -sL "https://github.com/TJC-LP/xl/releases/download/v${VERSION}/${BINARY}" -o "$INSTALL_DIR/xl"
+          chmod +x "$INSTALL_DIR/xl"
+          echo "Installed xl $VERSION to $INSTALL_DIR/xl"
+          INSTALL_EOF
+
+          # Substitute version into install script
+          sed -i "s/__VERSION__/$VERSION/g" skill-dist/install-cli.sh || \
+            sed -i '' "s/__VERSION__/$VERSION/g" skill-dist/install-cli.sh
+          chmod +x skill-dist/install-cli.sh
+
+          # Create zip
+          cd skill-dist && zip -r ../xl-skill-$VERSION.zip . && cd ..
+
       - name: Download native binaries
         uses: actions/download-artifact@v4
         with:
@@ -193,6 +237,8 @@ jobs:
           mkdir -p release-assets
           # Copy JAR tarball
           cp xl-cli-${{ steps.version.outputs.version }}.tar.gz release-assets/
+          # Copy skill zip
+          cp xl-skill-${{ steps.version.outputs.version }}.zip release-assets/
           # Copy native binaries (Unix)
           cp native-binaries/xl-linux-amd64/xl-linux-amd64 release-assets/xl-linux-amd64
           cp native-binaries/xl-darwin-amd64/xl-darwin-amd64 release-assets/xl-darwin-amd64
@@ -210,6 +256,7 @@ jobs:
           draft: false
           files: |
             release-assets/xl-cli-${{ steps.version.outputs.version }}.tar.gz
+            release-assets/xl-skill-${{ steps.version.outputs.version }}.zip
             release-assets/xl-linux-amd64
             release-assets/xl-darwin-amd64
             release-assets/xl-darwin-arm64
