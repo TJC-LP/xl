@@ -648,3 +648,247 @@ private class EvaluatorImpl extends Evaluator:
                 // Should never happen per parser validation, but handle gracefully
                 Right(BigDecimal(0))
           }
+
+      // ===== Array and Advanced Lookup Functions =====
+
+      case TExpr.SumProduct(arrays) =>
+        // SUMPRODUCT: multiply corresponding elements across arrays and sum
+        arrays match
+          case Nil =>
+            // Empty arrays case - return 0 (should not happen per parser validation)
+            Right(BigDecimal(0))
+          case first :: rest =>
+            val firstWidth = first.width
+            val firstHeight = first.height
+
+            // Validate all arrays have same dimensions
+            val dimensionError = rest.collectFirst {
+              case range if range.width != firstWidth || range.height != firstHeight =>
+                EvalError.EvalFailed(
+                  s"SUMPRODUCT: all arrays must have same dimensions (first is ${firstHeight}×${firstWidth}, got ${range.height}×${range.width})",
+                  Some(s"SUMPRODUCT(${first.toA1}, ${range.toA1}, ...)")
+                )
+            }
+
+            dimensionError match
+              case Some(err) => Left(err)
+              case None =>
+                // Get all cell references as parallel lists
+                val cellLists = arrays.map(_.cells.toList)
+                val cellCount = cellLists.headOption.map(_.length).getOrElse(0)
+
+                // For each position, multiply corresponding values across all arrays
+                val sum = (0 until cellCount).foldLeft(BigDecimal(0)) { (acc, idx) =>
+                  // Get values at position idx from each array, coerce to numeric
+                  val values = cellLists.map { cells =>
+                    val ref = cells(idx)
+                    coerceToNumeric(sheet(ref).value)
+                  }
+                  // Product of all values at this position
+                  val product = values.foldLeft(BigDecimal(1))(_ * _)
+                  acc + product
+                }
+
+                Right(sum)
+
+      case TExpr.XLookup(
+            lookupValueExpr,
+            lookupArray,
+            returnArray,
+            ifNotFoundOpt,
+            matchModeExpr,
+            searchModeExpr
+          ) =>
+        // XLOOKUP: advanced lookup with flexible matching
+        // Validate dimensions first
+        if lookupArray.width != returnArray.width || lookupArray.height != returnArray.height then
+          Left(
+            EvalError.EvalFailed(
+              s"XLOOKUP: lookup_array and return_array must have same dimensions (${lookupArray.height}×${lookupArray.width} vs ${returnArray.height}×${returnArray.width})",
+              Some(s"XLOOKUP(..., ${lookupArray.toA1}, ${returnArray.toA1}, ...)")
+            )
+          )
+        else
+          for
+            lookupValue <- evalAny(lookupValueExpr, sheet, clock)
+            matchModeRaw <- evalAny(matchModeExpr, sheet, clock)
+            searchModeRaw <- evalAny(searchModeExpr, sheet, clock)
+            matchMode = toInt(matchModeRaw)
+            searchMode = toInt(searchModeRaw)
+            result <- performXLookup(
+              lookupValue,
+              lookupArray,
+              returnArray,
+              ifNotFoundOpt,
+              matchMode,
+              searchMode,
+              sheet,
+              clock
+            )
+          yield result
+
+  // ===== Helper Methods =====
+
+  /**
+   * Coerce CellValue to BigDecimal for SUMPRODUCT.
+   *
+   * Excel semantics:
+   *   - Number → as-is
+   *   - TRUE → 1
+   *   - FALSE → 0
+   *   - Text/Empty/Error → 0
+   *   - Formula with cached value → coerce cached value
+   */
+  private def coerceToNumeric(value: CellValue): BigDecimal =
+    value match
+      case CellValue.Number(n) => n
+      case CellValue.Bool(true) => BigDecimal(1)
+      case CellValue.Bool(false) => BigDecimal(0)
+      case CellValue.Formula(_, Some(cached)) => coerceToNumeric(cached)
+      case _ => BigDecimal(0)
+
+  /**
+   * Evaluate any TExpr to its runtime value (type-erased).
+   *
+   * Used for polymorphic lookup values in XLOOKUP.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalAny(expr: TExpr[?], sheet: Sheet, clock: Clock): Either[EvalError, Any] =
+    eval(expr.asInstanceOf[TExpr[Any]], sheet, clock)
+
+  /**
+   * Convert runtime value to Int for match_mode/search_mode parameters.
+   *
+   * Parser produces BigDecimal literals, but these parameters need Int.
+   */
+  private def toInt(value: Any): Int =
+    value match
+      case i: Int => i
+      case bd: BigDecimal => bd.toInt
+      case n: Number => n.intValue()
+      case _ => 0
+
+  /**
+   * Perform XLOOKUP search with specified match and search modes.
+   */
+  private def performXLookup(
+    lookupValue: Any,
+    lookupArray: CellRange,
+    returnArray: CellRange,
+    ifNotFoundOpt: Option[TExpr[?]],
+    matchMode: Int,
+    searchMode: Int,
+    sheet: Sheet,
+    clock: Clock
+  ): Either[EvalError, CellValue] =
+    val lookupCells = lookupArray.cells.toList
+    val returnCells = returnArray.cells.toList
+
+    // Determine search order based on searchMode
+    val indices: List[Int] = searchMode match
+      case -1 => lookupCells.indices.reverse.toList // last-to-first
+      case _ => lookupCells.indices.toList // first-to-last (default, including binary modes)
+
+    // Find matching index based on matchMode
+    val matchingIndexOpt: Option[Int] = matchMode match
+      case 0 => // Exact match
+        indices.find { idx =>
+          val cellValue = sheet(lookupCells(idx)).value
+          matchesExactForXLookup(cellValue, lookupValue)
+        }
+
+      case 2 => // Wildcard match (only for string lookups)
+        lookupValue match
+          case pattern: String =>
+            val criterion = CriteriaMatcher.parse(pattern)
+            indices.find { idx =>
+              CriteriaMatcher.matches(sheet(lookupCells(idx)).value, criterion)
+            }
+          case _ => None
+
+      case -1 => // Next smaller (exact or next smaller)
+        findNextSmaller(lookupValue, lookupCells, sheet, indices)
+
+      case 1 => // Next larger (exact or next larger)
+        findNextLarger(lookupValue, lookupCells, sheet, indices)
+
+      case _ => None // Invalid match mode
+
+    matchingIndexOpt match
+      case Some(idx) =>
+        Right(sheet(returnCells(idx)).value)
+      case None =>
+        // No match found - return if_not_found or #N/A
+        ifNotFoundOpt match
+          case Some(expr) =>
+            evalAny(expr, sheet, clock).map(convertToXLookupResult)
+          case None =>
+            Right(CellValue.Error(com.tjclp.xl.cells.CellError.NA))
+
+  /**
+   * Check if cell value matches lookup value for exact matching.
+   */
+  private def matchesExactForXLookup(cellValue: CellValue, lookupValue: Any): Boolean =
+    // Reuse CriteriaMatcher's Exact matching logic
+    CriteriaMatcher.matches(cellValue, CriteriaMatcher.Exact(lookupValue))
+
+  /**
+   * Find the largest value ≤ lookup value (next smaller match mode).
+   */
+  private def findNextSmaller(
+    lookupValue: Any,
+    lookupCells: List[ARef],
+    sheet: Sheet,
+    indices: List[Int]
+  ): Option[Int] =
+    lookupValue match
+      case targetNum: BigDecimal =>
+        val candidates = indices
+          .flatMap { idx =>
+            extractNumericValue(sheet(lookupCells(idx)).value).map(n => (idx, n))
+          }
+          .filter(_._2 <= targetNum)
+        candidates.sortBy(-_._2).headOption.map(_._1) // Largest value <= target
+      case _ => None
+
+  /**
+   * Find the smallest value ≥ lookup value (next larger match mode).
+   */
+  private def findNextLarger(
+    lookupValue: Any,
+    lookupCells: List[ARef],
+    sheet: Sheet,
+    indices: List[Int]
+  ): Option[Int] =
+    lookupValue match
+      case targetNum: BigDecimal =>
+        val candidates = indices
+          .flatMap { idx =>
+            extractNumericValue(sheet(lookupCells(idx)).value).map(n => (idx, n))
+          }
+          .filter(_._2 >= targetNum)
+        candidates.sortBy(_._2).headOption.map(_._1) // Smallest value >= target
+      case _ => None
+
+  /**
+   * Extract numeric value from CellValue.
+   */
+  private def extractNumericValue(value: CellValue): Option[BigDecimal] =
+    value match
+      case CellValue.Number(n) => Some(n)
+      case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+      case _ => None
+
+  /**
+   * Convert any evaluated value to CellValue for XLOOKUP result.
+   */
+  private def convertToXLookupResult(value: Any): CellValue =
+    value match
+      case cv: CellValue => cv
+      case s: String => CellValue.Text(s)
+      case n: BigDecimal => CellValue.Number(n)
+      case b: Boolean => CellValue.Bool(b)
+      case n: Int => CellValue.Number(BigDecimal(n))
+      case n: Long => CellValue.Number(BigDecimal(n))
+      case n: Double => CellValue.Number(BigDecimal(n))
+      case other => CellValue.Text(other.toString)

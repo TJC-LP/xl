@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{ARef, CellRange}
-import com.tjclp.xl.cells.Cell
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec.CodecError
 
 import scala.math.BigDecimal
@@ -453,6 +453,41 @@ enum TExpr[A] derives CanEqual:
     conditions: List[(CellRange, TExpr[?])]
   ) extends TExpr[BigDecimal]
 
+  // Array and advanced lookup functions
+
+  /**
+   * Multiply corresponding elements across arrays and sum: SUMPRODUCT(array1, [array2], ...)
+   *
+   * Semantics:
+   *   - All arrays must have same dimensions (width and height)
+   *   - Non-numeric cells coerced: TRUE→1, FALSE→0, text/empty→0
+   *   - Returns sum of element-wise products
+   *
+   * Example: SUMPRODUCT(A1:A3, B1:B3) = A1*B1 + A2*B2 + A3*B3
+   */
+  case SumProduct(arrays: List[CellRange]) extends TExpr[BigDecimal]
+
+  /**
+   * Advanced lookup: XLOOKUP(lookup_value, lookup_array, return_array, [if_not_found],
+   * [match_mode], [search_mode])
+   *
+   * Semantics:
+   *   - lookup_array and return_array must have same dimensions
+   *   - match_mode: 0=exact (default), -1=next smaller, 1=next larger, 2=wildcard
+   *   - search_mode: 1=first-to-last (default), -1=last-to-first, 2=binary asc, -2=binary desc
+   *   - if_not_found: expression to return if no match (default #N/A)
+   *
+   * Example: XLOOKUP("Apple", A1:A10, B1:B10) returns corresponding B value
+   */
+  case XLookup(
+    lookupValue: TExpr[?],
+    lookupArray: CellRange,
+    returnArray: CellRange,
+    ifNotFound: Option[TExpr[?]],
+    matchMode: TExpr[Int],
+    searchMode: TExpr[Int]
+  ) extends TExpr[CellValue]
+
 object TExpr:
   /**
    * Smart constructor for literals.
@@ -608,6 +643,45 @@ object TExpr:
    */
   def countIfs(conditions: List[(CellRange, TExpr[?])]): TExpr[BigDecimal] =
     CountIfs(conditions)
+
+  // Array and advanced lookup function smart constructors
+
+  /**
+   * SUMPRODUCT: multiply corresponding elements and sum.
+   *
+   * Example: TExpr.sumProduct(List(CellRange.parse("A1:A3").toOption.get,
+   * CellRange.parse("B1:B3").toOption.get))
+   */
+  def sumProduct(arrays: List[CellRange]): TExpr[BigDecimal] =
+    SumProduct(arrays)
+
+  /**
+   * XLOOKUP: advanced lookup with flexible matching.
+   *
+   * @param lookupValue
+   *   The value to search for
+   * @param lookupArray
+   *   The range to search in
+   * @param returnArray
+   *   The range to return values from (same dimensions as lookupArray)
+   * @param ifNotFound
+   *   Optional value to return if no match (default: #N/A error)
+   * @param matchMode
+   *   0=exact (default), -1=next smaller, 1=next larger, 2=wildcard
+   * @param searchMode
+   *   1=first-to-last (default), -1=last-to-first, 2=binary asc, -2=binary desc
+   *
+   * Example: TExpr.xlookup(TExpr.Lit("Apple"), lookupRange, returnRange)
+   */
+  def xlookup(
+    lookupValue: TExpr[?],
+    lookupArray: CellRange,
+    returnArray: CellRange,
+    ifNotFound: Option[TExpr[?]] = None,
+    matchMode: TExpr[Int] = Lit(0),
+    searchMode: TExpr[Int] = Lit(1)
+  ): TExpr[CellValue] =
+    XLookup(lookupValue, lookupArray, returnArray, ifNotFound, matchMode, searchMode)
 
   // Text function smart constructors
 

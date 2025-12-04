@@ -188,7 +188,9 @@ object FunctionParser:
       sumIfFunctionParser,
       countIfFunctionParser,
       sumIfsFunctionParser,
-      countIfsFunctionParser
+      countIfsFunctionParser,
+      sumProductFunctionParser,
+      xlookupFunctionParser
     ).map(p => p.name -> p).toMap
 
   // ========== Given Instances for All Functions ==========
@@ -798,3 +800,134 @@ object FunctionParser:
           }
         conditions.map(conds => TExpr.countIfs(conds))
       }
+
+  // === Array and Advanced Lookup Functions ===
+
+  /** SUMPRODUCT function: SUMPRODUCT(array1, [array2], ...) */
+  given sumProductFunctionParser: FunctionParser[Unit] with
+    def name: String = "SUMPRODUCT"
+    def arity: Arity = Arity.AtLeast(1) // At least one array
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      boundary {
+        if args.isEmpty then
+          break(
+            scala.util.Left(
+              ParseError.InvalidArguments(
+                "SUMPRODUCT",
+                pos,
+                "at least 1 array argument",
+                "0 arguments"
+              )
+            )
+          )
+
+        // All arguments must be ranges
+        val ranges: Either[ParseError, List[CellRange]] =
+          args.zipWithIndex.foldLeft[Either[ParseError, List[CellRange]]](
+            scala.util.Right(List.empty)
+          ) { case (acc, (arg, idx)) =>
+            acc.flatMap { list =>
+              arg match
+                case fold: TExpr.FoldRange[?, ?] =>
+                  fold match
+                    case TExpr.FoldRange(range, _, _, _) =>
+                      scala.util.Right(list :+ range)
+                case _ =>
+                  scala.util.Left(
+                    ParseError.InvalidArguments(
+                      "SUMPRODUCT",
+                      pos,
+                      s"range at position ${idx + 1}",
+                      "non-range expression"
+                    )
+                  )
+            }
+          }
+
+        ranges.map(TExpr.sumProduct)
+      }
+
+  /**
+   * XLOOKUP function: XLOOKUP(lookup_value, lookup_array, return_array, [if_not_found],
+   * [match_mode], [search_mode])
+   */
+  given xlookupFunctionParser: FunctionParser[Unit] with
+    def name: String = "XLOOKUP"
+    def arity: Arity = Arity.Range(3, 6)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      // Extract CellRange from FoldRange
+      def extractRange(expr: TExpr[?], argName: String): Either[ParseError, CellRange] =
+        expr match
+          case fold: TExpr.FoldRange[?, ?] =>
+            fold match
+              case TExpr.FoldRange(range, _, _, _) => scala.util.Right(range)
+          case _ =>
+            scala.util.Left(
+              ParseError.InvalidArguments(
+                "XLOOKUP",
+                pos,
+                s"$argName must be a range",
+                "non-range expression"
+              )
+            )
+
+      args match
+        // 3 args: XLOOKUP(lookup_value, lookup_array, return_array)
+        case List(lookupValue, lookupArrayExpr, returnArrayExpr) =>
+          for
+            lookupArray <- extractRange(lookupArrayExpr, "lookup_array")
+            returnArray <- extractRange(returnArrayExpr, "return_array")
+          yield TExpr.xlookup(lookupValue, lookupArray, returnArray)
+
+        // 4 args: with if_not_found
+        case List(lookupValue, lookupArrayExpr, returnArrayExpr, ifNotFound) =>
+          for
+            lookupArray <- extractRange(lookupArrayExpr, "lookup_array")
+            returnArray <- extractRange(returnArrayExpr, "return_array")
+          yield TExpr.xlookup(lookupValue, lookupArray, returnArray, Some(ifNotFound))
+
+        // 5 args: with if_not_found and match_mode
+        case List(lookupValue, lookupArrayExpr, returnArrayExpr, ifNotFound, matchMode) =>
+          for
+            lookupArray <- extractRange(lookupArrayExpr, "lookup_array")
+            returnArray <- extractRange(returnArrayExpr, "return_array")
+          yield TExpr.xlookup(
+            lookupValue,
+            lookupArray,
+            returnArray,
+            Some(ifNotFound),
+            TExpr.asIntExpr(matchMode)
+          )
+
+        // 6 args: all parameters
+        case List(
+              lookupValue,
+              lookupArrayExpr,
+              returnArrayExpr,
+              ifNotFound,
+              matchMode,
+              searchMode
+            ) =>
+          for
+            lookupArray <- extractRange(lookupArrayExpr, "lookup_array")
+            returnArray <- extractRange(returnArrayExpr, "return_array")
+          yield TExpr.xlookup(
+            lookupValue,
+            lookupArray,
+            returnArray,
+            Some(ifNotFound),
+            TExpr.asIntExpr(matchMode),
+            TExpr.asIntExpr(searchMode)
+          )
+
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "XLOOKUP",
+              pos,
+              "3 to 6 arguments (lookup_value, lookup_array, return_array, [if_not_found], [match_mode], [search_mode])",
+              s"${args.length} arguments"
+            )
+          )
