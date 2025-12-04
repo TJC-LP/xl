@@ -8,20 +8,10 @@ import contrib.jmh.JmhModule
 val scala3Version = "3.7.3"
 val organization = "com.tjclp"
 
-trait XLModule extends ScalaModule with PublishModule with ScalafmtModule {
+/** Base trait for all XL modules - shared compiler settings and formatting */
+trait XLModuleBase extends ScalaModule with ScalafmtModule {
   override def scalaVersion: Task.Simple[String] = scala3Version
-  override def javacOptions = Seq("--release", "25")
-
-  override def publishVersion = "0.1.0-SNAPSHOT"
-
-  override def pomSettings: Task.Simple[PomSettings] = PomSettings(
-    description = "Pure Scala 3.7 Excel (OOXML) Library",
-    organization = organization,
-    url = "https://github.com/TJC-LP/xl",
-    licenses = Seq(License.MIT),
-    versionControl = VersionControl.github("tjclp", "xl"),
-    developers = Seq()
-  )
+  override def javacOptions = Seq("--release", "25") // JDK 25 LTS
 
   // WartRemover compiler plugin for enhanced code quality
   def scalacPluginMvnDeps = Seq(
@@ -56,3 +46,28 @@ trait XLModule extends ScalaModule with PublishModule with ScalafmtModule {
     "-P:wartremover:only-warn-traverser:org.wartremover.warts.IsInstanceOf"
   )
 }
+
+/** Trait for publishable library modules - publishes to Maven Central via Sonatype */
+trait XLModule extends XLModuleBase with PublishModule {
+
+  /** Version derived from PUBLISH_VERSION env var (set by CI), or SNAPSHOT for local dev */
+  override def publishVersion: T[String] =
+    sys.env.getOrElse("PUBLISH_VERSION", "0.1.0-SNAPSHOT")
+
+  override def pomSettings: T[PomSettings] = PomSettings(
+    description = artifactDescription,
+    organization = organization,
+    url = "https://github.com/TJC-LP/xl",
+    licenses = Seq(License.`Apache-2.0`),
+    versionControl = VersionControl.github("TJC-LP", "xl"),
+    developers = Seq(
+      Developer("arcaputo3", "Richie Caputo", "https://github.com/arcaputo3")
+    )
+  )
+
+  /** Override in each module to provide module-specific description */
+  def artifactDescription: String = "Pure Scala 3.7 Excel (OOXML) Library"
+}
+
+/** Trait for internal modules that should not be published (CLI, benchmarks, testkit) */
+trait XLInternalModule extends XLModuleBase

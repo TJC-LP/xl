@@ -3,7 +3,7 @@ package build.`xl-benchmarks`
 import mill._
 import mill.scalalib._
 
-object `package` extends build.XLModule with contrib.jmh.JmhModule {
+object `package` extends build.XLInternalModule with contrib.jmh.JmhModule {
   def jmhCoreVersion = "1.35"
 
   override def moduleDeps = Seq(

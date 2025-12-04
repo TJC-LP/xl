@@ -3,7 +3,7 @@ package build.`xl-testkit`
 import mill._
 import mill.scalalib._
 
-object `package` extends build.XLModule {
+object `package` extends build.XLInternalModule {
   override def moduleDeps = Seq(build.`xl-core`, build.`xl-ooxml`)
 
   override def mvnDeps = Seq(
