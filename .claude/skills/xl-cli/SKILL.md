@@ -5,7 +5,9 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
-**Binary**: `~/.local/bin/xl`
+**Prerequisite**: `xl` CLI must be installed. Check with: `which xl`
+
+---
 
 ## Contents
 
