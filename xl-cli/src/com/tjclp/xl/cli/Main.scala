@@ -11,7 +11,8 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.{ARef, CellRange, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.output.{Format, Markdown}
+import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
+import com.tjclp.xl.cli.raster.ImageMagick
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.{DependencyGraph, SheetEvaluator}
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -80,20 +81,41 @@ object Main
   private val formulasOpt = Opts.flag("formulas", "Show formulas instead of values").orFalse
   private val limitOpt = Opts.option[Int]("limit", "Maximum rows to display").withDefault(50)
   private val formatOpt = Opts
-    .option[String]("format", "Output format: markdown, html, or svg")
+    .option[String]("format", "Output format: markdown, html, svg, json, csv, png, jpeg, webp, pdf")
     .withDefault("markdown")
     .mapValidated { s =>
       s.toLowerCase match
         case "markdown" | "md" => cats.data.Validated.valid(ViewFormat.Markdown)
         case "html" => cats.data.Validated.valid(ViewFormat.Html)
         case "svg" => cats.data.Validated.valid(ViewFormat.Svg)
+        case "json" => cats.data.Validated.valid(ViewFormat.Json)
+        case "csv" => cats.data.Validated.valid(ViewFormat.Csv)
+        case "png" => cats.data.Validated.valid(ViewFormat.Png)
+        case "jpeg" | "jpg" => cats.data.Validated.valid(ViewFormat.Jpeg)
+        case "webp" => cats.data.Validated.valid(ViewFormat.WebP)
+        case "pdf" => cats.data.Validated.valid(ViewFormat.Pdf)
         case other =>
-          cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown, html, or svg")
+          cats.data.Validated.invalidNel(
+            s"Unknown format: $other. Use markdown, html, svg, json, csv, png, jpeg, webp, or pdf"
+          )
     }
   private val printScaleOpt =
     Opts.flag("print-scale", "Apply print scaling (for PDF-like output)").orFalse
   private val gridlinesOpt =
     Opts.flag("gridlines", "Show cell gridlines in SVG output").orFalse
+  private val showLabelsOpt =
+    Opts.flag("show-labels", "Include column letters (A, B, C) and row numbers (1, 2, 3)").orFalse
+  private val dpiOpt =
+    Opts.option[Int]("dpi", "DPI for raster output (default: 144 for retina)").withDefault(144)
+  private val qualityOpt =
+    Opts.option[Int]("quality", "JPEG quality 1-100 (default: 90)").withDefault(90)
+  private val rasterOutputOpt =
+    Opts
+      .option[Path](
+        "raster-output",
+        "Output file for raster formats (required for png/jpeg/webp/pdf)"
+      )
+      .orNone
 
   // --- Read-only commands ---
 
@@ -105,11 +127,22 @@ object Main
     Opts(Command.Bounds)
   }
 
-  val viewCmd: Opts[Command] = Opts.subcommand("view", "View range (markdown, html, or svg)") {
-    (rangeArg, formulasOpt, limitOpt, formatOpt, printScaleOpt, gridlinesOpt).mapN(
-      Command.View.apply
-    )
-  }
+  val viewCmd: Opts[Command] =
+    Opts.subcommand("view", "View range (markdown, html, svg, json, csv, png, jpeg, webp, pdf)") {
+      (
+        rangeArg,
+        formulasOpt,
+        limitOpt,
+        formatOpt,
+        printScaleOpt,
+        gridlinesOpt,
+        showLabelsOpt,
+        dpiOpt,
+        qualityOpt,
+        rasterOutputOpt
+      )
+        .mapN(Command.View.apply)
+    }
 
   val cellCmd: Opts[Command] = Opts.subcommand("cell", "Get cell details") {
     refArg.map(Command.Cell.apply)
@@ -247,7 +280,18 @@ object Main
              |Used range: (empty)
              |Non-empty: 0 cells""".stripMargin)
 
-    case Command.View(rangeStr, showFormulas, limit, format, printScale, showGridlines) =>
+    case Command.View(
+          rangeStr,
+          showFormulas,
+          limit,
+          format,
+          printScale,
+          showGridlines,
+          showLabels,
+          dpi,
+          quality,
+          rasterOutput
+        ) =>
       for
         resolved <- resolveRef(wb, sheet, rangeStr)
         (targetSheet, refOrRange) = resolved
@@ -256,12 +300,56 @@ object Main
           case Left(ref) => CellRange(ref, ref) // Single cell as range
         limitedRange = limitRange(range, limit)
         theme = wb.metadata.theme // Use workbook's parsed theme
-      yield format match
-        case ViewFormat.Markdown => Markdown.renderRange(targetSheet, limitedRange, showFormulas)
-        case ViewFormat.Html =>
-          targetSheet.toHtml(limitedRange, theme = theme, applyPrintScale = printScale)
-        case ViewFormat.Svg =>
-          targetSheet.toSvg(limitedRange, theme = theme, showGridlines = showGridlines)
+        result <- format match
+          case ViewFormat.Markdown =>
+            IO.pure(Markdown.renderRange(targetSheet, limitedRange, showFormulas))
+          case ViewFormat.Html =>
+            IO.pure(
+              targetSheet.toHtml(
+                limitedRange,
+                theme = theme,
+                applyPrintScale = printScale,
+                showLabels = showLabels
+              )
+            )
+          case ViewFormat.Svg =>
+            IO.pure(
+              targetSheet.toSvg(
+                limitedRange,
+                theme = theme,
+                showGridlines = showGridlines,
+                showLabels = showLabels
+              )
+            )
+          case ViewFormat.Json =>
+            IO.pure(JsonRenderer.renderRange(targetSheet, limitedRange, showFormulas))
+          case ViewFormat.Csv =>
+            IO.pure(CsvRenderer.renderRange(targetSheet, limitedRange, showFormulas, showLabels))
+          case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
+            rasterOutput match
+              case None =>
+                IO.raiseError(
+                  new Exception(
+                    s"--raster-output required for ${format.toString.toLowerCase} format (binary output cannot go to stdout)"
+                  )
+                )
+              case Some(outputPath) =>
+                val svg = targetSheet.toSvg(
+                  limitedRange,
+                  theme = theme,
+                  showGridlines = showGridlines,
+                  showLabels = showLabels
+                )
+                val rasterFormat = format match
+                  case ViewFormat.Png => ImageMagick.Format.Png
+                  case ViewFormat.Jpeg => ImageMagick.Format.Jpeg(quality)
+                  case ViewFormat.WebP => ImageMagick.Format.WebP
+                  case ViewFormat.Pdf => ImageMagick.Format.Pdf
+                  case _ => ImageMagick.Format.Png // unreachable
+                ImageMagick.convertSvgToRaster(svg, outputPath, rasterFormat, dpi).map { _ =>
+                  s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI)"
+                }
+      yield result
 
     case Command.Cell(refStr) =>
       for
@@ -430,7 +518,8 @@ object Main
       case CellValue.RichText(rt) => rt.toPlainText
       case CellValue.Empty => ""
       case CellValue.Formula(expr, cached) =>
-        cached.map(formatCellValue).getOrElse(s"=$expr")
+        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+        cached.map(formatCellValue).getOrElse(displayExpr)
 
 /**
  * Command ADT representing all CLI operations.
@@ -445,7 +534,11 @@ enum Command:
     limit: Int,
     format: ViewFormat,
     printScale: Boolean,
-    showGridlines: Boolean
+    showGridlines: Boolean,
+    showLabels: Boolean,
+    dpi: Int,
+    quality: Int,
+    rasterOutput: Option[Path]
   )
   case Cell(ref: String)
   case Search(pattern: String, limit: Int)
@@ -459,4 +552,5 @@ enum Command:
  * Output format for view command.
  */
 enum ViewFormat:
-  case Markdown, Html, Svg
+  case Markdown, Html, Svg, Json, Csv
+  case Png, Jpeg, WebP, Pdf

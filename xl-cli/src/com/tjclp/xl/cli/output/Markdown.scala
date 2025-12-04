@@ -133,8 +133,9 @@ object Markdown:
 
     cell.value match
       case CellValue.Formula(expr, cached) =>
-        if showFormulas then s"=$expr"
-        else cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(s"=$expr")
+        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+        if showFormulas then displayExpr
+        else cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
       case CellValue.RichText(rt) =>
         // Rich text has its own formatting, don't apply NumFmt
         rt.toPlainText

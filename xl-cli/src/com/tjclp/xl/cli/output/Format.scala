@@ -240,7 +240,8 @@ object Format:
       case CellValue.RichText(rt) => s"\"${rt.toPlainText}\""
       case CellValue.Empty => "(empty)"
       case CellValue.Formula(expr, cached) =>
-        cached.map(formatValue).getOrElse(s"=$expr")
+        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+        cached.map(formatValue).getOrElse(displayExpr)
 
   private def errorDetails(err: XLError): (String, String, String) =
     err match
