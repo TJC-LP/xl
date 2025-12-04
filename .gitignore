@@ -65,3 +65,4 @@ data
 ### Benchmark Logs ###
 *.log
 dist/
+tmp/
