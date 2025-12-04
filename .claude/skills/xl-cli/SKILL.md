@@ -5,7 +5,17 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
-**Prerequisite**: `xl` CLI must be installed. Check with: `which xl`
+## Installation
+
+Check if installed: `which xl || echo "not installed"`
+
+**If not installed**, download from GitHub releases:
+```bash
+curl -sL https://github.com/TJC-LP/xl/releases/latest/download/xl-cli.tar.gz | tar xz -C /tmp
+/tmp/xl-dist/install.sh
+```
+
+Requires: JDK 17+
 
 ---
 
