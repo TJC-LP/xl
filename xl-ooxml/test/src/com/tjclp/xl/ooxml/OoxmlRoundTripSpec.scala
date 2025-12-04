@@ -513,6 +513,39 @@ class OoxmlRoundTripSpec extends FunSuite:
     }
   }
 
+  test("Sheet elements have r namespace bound for r:id attribute (openpyxl compatibility)") {
+    // This test verifies that r:id attributes on sheet elements have the "r" namespace
+    // properly bound. Previously, files created by openpyxl (which use different namespace
+    // declarations) would fail on re-read with "prefix 'r' not bound" error.
+    val outputPath = tempDir.resolve("namespace-test.xlsx")
+
+    // Create and write a workbook
+    val wb = Workbook("Test").sheets(0).put(ref"A1", CellValue.Text("Hello"))
+    val write1 = XlsxWriter.write(Workbook(Vector(wb)), outputPath)
+    assert(write1.isRight, s"First write failed: $write1")
+
+    // Read it back
+    val read1 = XlsxReader.read(outputPath)
+    assert(read1.isRight, s"First read failed: $read1")
+
+    // Modify and write again (this exercises the workbook.xml regeneration)
+    val modified = read1.toOption.get.sheets(0).put(ref"A2", CellValue.Text("World"))
+    val wb2 = read1.toOption.get.put(modified)
+    val write2 = XlsxWriter.write(wb2, outputPath)
+    assert(write2.isRight, s"Second write failed: $write2")
+
+    // Re-read the modified file - this would fail if r namespace isn't bound
+    val read2 = XlsxReader.read(outputPath)
+    assert(read2.isRight, s"Re-read after modification failed: $read2")
+
+    // Verify contents
+    read2.foreach { wb =>
+      assertEquals(wb.sheets.size, 1)
+      assertEquals(wb.sheets(0).cells.get(ref"A1").map(_.value), Some(CellValue.Text("Hello")))
+      assertEquals(wb.sheets(0).cells.get(ref"A2").map(_.value), Some(CellValue.Text("World")))
+    }
+  }
+
   // ---------- Helpers ----------
 
   private def buildComprehensiveWorkbook(): XLResult[Workbook] =

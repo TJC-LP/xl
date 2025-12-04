@@ -106,6 +106,8 @@ case class OoxmlWorkbook(
     bookViews.foreach(children += _)
 
     // Sheets element (regenerated with current names/order/visibility)
+    // Use a scope with "r" namespace bound for r:id attributes
+    val sheetScope = NamespaceBinding("r", nsRelationships, TopScope)
     val sheetElems = sheets.map { ref =>
       val baseAttrs = Seq(
         "name" -> ref.name.value,
@@ -120,7 +122,7 @@ case class OoxmlWorkbook(
       val attrs = allAttrs.foldRight(rId: MetaData) { case ((k, v), acc) =>
         new UnprefixedAttribute(k, v, acc)
       }
-      Elem(null, "sheet", attrs, TopScope, minimizeEmpty = true)
+      Elem(null, "sheet", attrs, sheetScope, minimizeEmpty = true)
     }
     children += Elem(null, "sheets", Null, TopScope, minimizeEmpty = false, sheetElems*)
 
