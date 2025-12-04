@@ -83,10 +83,36 @@ jobs:
           MILL_PGP_SECRET_BASE64: ${{ secrets.PGP_SECRET }}
           MILL_PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
 
+      - name: Build CLI distribution
+        run: |
+          ./mill xl-cli.assembly
+          mkdir -p dist
+          cp out/xl-cli/assembly.dest/out.jar dist/xl.jar
+          # Create tarball with jar and install script
+          cat > dist/install.sh << 'EOF'
+          #!/bin/bash
+          set -e
+          INSTALL_DIR="${HOME}/.local/bin"
+          JAR_DIR="${HOME}/.local/share/xl"
+          mkdir -p "$INSTALL_DIR" "$JAR_DIR"
+          cp xl.jar "$JAR_DIR/"
+          cat > "$INSTALL_DIR/xl" << 'WRAPPER'
+          #!/bin/bash
+          exec java -jar "${HOME}/.local/share/xl/xl.jar" "$@"
+          WRAPPER
+          chmod +x "$INSTALL_DIR/xl"
+          echo "Installed xl to $INSTALL_DIR/xl"
+          echo "Ensure $INSTALL_DIR is in your PATH"
+          EOF
+          chmod +x dist/install.sh
+          tar -czvf xl-cli-${{ steps.version.outputs.version }}.tar.gz -C dist .
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           generate_release_notes: true
           draft: false
+          files: |
+            xl-cli-${{ steps.version.outputs.version }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
