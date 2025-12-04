@@ -792,7 +792,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("COUNTIF"))
     assert(functions.contains("SUMIFS"))
     assert(functions.contains("COUNTIFS"))
-    assertEquals(functions.length, 28)
+    // Array and advanced lookup functions
+    assert(functions.contains("SUMPRODUCT"))
+    assert(functions.contains("XLOOKUP"))
+    assertEquals(functions.length, 30)
   }
 
   test("FunctionParser.lookup finds known functions") {

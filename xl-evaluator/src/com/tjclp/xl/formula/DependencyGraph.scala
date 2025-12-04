@@ -179,6 +179,25 @@ object DependencyGraph:
           range.cells.toSet ++ extractDependencies(criteria)
         }.toSet
 
+      // Array and advanced lookup functions
+      case TExpr.SumProduct(arrays) =>
+        arrays.flatMap(_.cells.toSet).toSet
+
+      case TExpr.XLookup(
+            lookupValue,
+            lookupArray,
+            returnArray,
+            ifNotFound,
+            matchMode,
+            searchMode
+          ) =>
+        extractDependencies(lookupValue) ++
+          lookupArray.cells.toSet ++
+          returnArray.cells.toSet ++
+          ifNotFound.map(extractDependencies).getOrElse(Set.empty) ++
+          extractDependencies(matchMode) ++
+          extractDependencies(searchMode)
+
       // Ternary operator
       case TExpr.If(cond, thenBranch, elseBranch) =>
         extractDependencies(cond) ++ extractDependencies(thenBranch) ++ extractDependencies(

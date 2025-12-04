@@ -86,6 +86,11 @@ object FormulaPrinter:
         val result = s"${printExpr(x, Precedence.AddSub)}+${printExpr(y, Precedence.AddSub)}"
         parenthesizeIf(result, precedence > Precedence.AddSub)
 
+      case TExpr.Sub(TExpr.Lit(n: BigDecimal), y) if n == BigDecimal(0) =>
+        // Unary minus: 0-x prints as -x
+        val result = s"-${printExpr(y, Precedence.Unary)}"
+        parenthesizeIf(result, precedence > Precedence.Unary)
+
       case TExpr.Sub(x, y) =>
         val result = s"${printExpr(x, Precedence.AddSub)}-${printExpr(y, Precedence.AddSub)}"
         parenthesizeIf(result, precedence > Precedence.AddSub)
@@ -239,6 +244,45 @@ object FormulaPrinter:
           }
           .mkString(", ")
         s"COUNTIFS($condStrs)"
+
+      // Array and advanced lookup functions
+      case TExpr.SumProduct(arrays) =>
+        val rangeStrs = arrays.map { range =>
+          s"${formatARef(range.start)}:${formatARef(range.end)}"
+        }
+        s"SUMPRODUCT(${rangeStrs.mkString(", ")})"
+
+      case TExpr.XLookup(
+            lookupValue,
+            lookupArray,
+            returnArray,
+            ifNotFound,
+            matchMode,
+            searchMode
+          ) =>
+        val lookupStr = printExpr(lookupValue, 0)
+        val lookupArrayStr = s"${formatARef(lookupArray.start)}:${formatARef(lookupArray.end)}"
+        val returnArrayStr = s"${formatARef(returnArray.start)}:${formatARef(returnArray.end)}"
+
+        // Determine which optional args to include based on non-default values
+        val hasNonDefaultMatchMode = matchMode match
+          case TExpr.Lit(0) => false
+          case _ => true
+        val hasNonDefaultSearchMode = searchMode match
+          case TExpr.Lit(1) => false
+          case _ => true
+
+        (ifNotFound, hasNonDefaultMatchMode || hasNonDefaultSearchMode) match
+          case (None, false) =>
+            // 3-arg form: just lookup, lookupArray, returnArray
+            s"XLOOKUP($lookupStr, $lookupArrayStr, $returnArrayStr)"
+          case (Some(notFound), false) =>
+            // 4-arg form: with if_not_found only
+            s"XLOOKUP($lookupStr, $lookupArrayStr, $returnArrayStr, ${printExpr(notFound, 0)})"
+          case (ifNotFoundOpt, _) =>
+            // Full form: include all args
+            val notFoundStr = ifNotFoundOpt.map(nf => printExpr(nf, 0)).getOrElse("\"\"")
+            s"XLOOKUP($lookupStr, $lookupArrayStr, $returnArrayStr, $notFoundStr, ${printExpr(matchMode, 0)}, ${printExpr(searchMode, 0)})"
 
       // Range aggregation
       case TExpr.FoldRange(range, z, step, decode) =>
@@ -438,5 +482,22 @@ object FormulaPrinter:
           }
           .mkString(", ")
         s"CountIfs($condStrs)"
+      case TExpr.SumProduct(arrays) =>
+        val rangeStrs = arrays.map { range =>
+          s"${formatARef(range.start)}:${formatARef(range.end)}"
+        }
+        s"SumProduct(${rangeStrs.mkString(", ")})"
+      case TExpr.XLookup(
+            lookupValue,
+            lookupArray,
+            returnArray,
+            ifNotFound,
+            matchMode,
+            searchMode
+          ) =>
+        val lookupArrayStr = s"${formatARef(lookupArray.start)}:${formatARef(lookupArray.end)}"
+        val returnArrayStr = s"${formatARef(returnArray.start)}:${formatARef(returnArray.end)}"
+        val ifNotFoundStr = ifNotFound.map(nf => s", ${printWithTypes(nf)}").getOrElse("")
+        s"XLookup(${printWithTypes(lookupValue)}, $lookupArrayStr, $returnArrayStr$ifNotFoundStr, ${printWithTypes(matchMode)}, ${printWithTypes(searchMode)})"
       case fold @ TExpr.FoldRange(range, _, _, _) =>
         s"FoldRange(${formatARef(range.start)}:${formatARef(range.end)})"
