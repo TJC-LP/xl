@@ -17,8 +17,10 @@ Configure these in `Settings > Secrets and variables > Actions`:
 |--------|-------------|
 | `SONATYPE_USERNAME` | Sonatype Central username or user token |
 | `SONATYPE_PASSWORD` | Sonatype Central password or user token |
-| `PGP_SECRET` | GPG private key (ASCII-armored or base64-encoded) |
+| `PGP_SECRET` | Base64-encoded GPG private key |
 | `PGP_PASSPHRASE` | GPG key passphrase |
+
+Mill auto-imports these as `MILL_*` prefixed environment variables.
 
 ## Published Modules
 

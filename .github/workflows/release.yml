@@ -35,7 +35,7 @@ jobs:
           path: |
             ~/.cache/coursier
             ~/.ivy2/cache
-          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/*.mill') }}
+          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/package.mill') }}
           restore-keys: |
             ${{ runner.os }}-coursier-
 
@@ -63,20 +63,26 @@ jobs:
       - name: Run Tests
         run: ./mill -i __.test
 
+      - name: Verify Publishing Setup
+        run: |
+          echo "Version: $PUBLISH_VERSION"
+          ./mill show xl-core.publishVersion
+          ./mill show __.publishArtifacts 2>&1 | grep -E '"xl-[^"]+\.publishArtifacts"' || true
+        env:
+          PUBLISH_VERSION: ${{ steps.version.outputs.version }}
+
       - name: Publish to Maven Central
         run: |
           ./mill -i mill.scalalib.PublishModule/publishAll \
-            --sonatypeCreds "$SONATYPE_USERNAME:$SONATYPE_PASSWORD" \
-            --gpgArgs "--passphrase=$PGP_PASSPHRASE,--batch,--yes,-a,-b" \
             --publishArtifacts __.publishArtifacts \
             --release true \
             --signed true
         env:
           PUBLISH_VERSION: ${{ steps.version.outputs.version }}
-          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
-          PGP_SECRET: ${{ secrets.PGP_SECRET }}
+          MILL_SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          MILL_SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+          MILL_PGP_SECRET_BASE64: ${{ secrets.PGP_SECRET }}
+          MILL_PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
