@@ -512,6 +512,23 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(count == 3, s"Count should be 3, got $count")
   }
 
+  test("AVERAGE returns Number via evaluateFormula (regression)") {
+    // Regression test: AVERAGE formula should return CellValue.Number, not tuple/text
+    // Uses sheet.evaluateFormula which includes toCellValue conversion
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)),
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(30))
+    )
+    sheet.evaluateFormula("=AVERAGE(A1:A3)") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(20))
+      case Right(other) =>
+        fail(s"Expected CellValue.Number(20), got $other")
+      case Left(err) =>
+        fail(s"Evaluation failed: $err")
+  }
+
   // ==================== Error Path Tests ====================
 
   test("Error: Nested error - error in IF condition propagates") {

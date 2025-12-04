@@ -27,6 +27,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-coursier-
 
+      # Note: out/ intentionally not cached - stale artifacts cause
+      # build issues and cache invalidation problems between Mill versions
       - name: Cache Mill
         uses: actions/cache@v4
         with:
