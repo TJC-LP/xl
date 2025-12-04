@@ -1,21 +1,25 @@
 # XL CLI Installation
-# Usage: make install    (installs to ~/.local/bin/xl)
+# Usage: make install    (installs native binary to ~/.local/bin/xl)
+#        make install-jar (installs JAR-based version requiring JDK)
 #        make uninstall  (removes ~/.local/bin/xl)
 
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 SHAREDIR ?= $(PREFIX)/share/xl
 JAR_PATH = out/xl-cli/assembly.dest/out.jar
+NATIVE_PATH = out/xl-cli/nativeImage.dest/native-executable
 
-.PHONY: build install uninstall clean help package-skill package-dist
+.PHONY: build build-native install install-jar uninstall clean help package-skill package-dist
 
 help:
 	@echo "XL CLI Makefile"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make install       Build and install xl to $(BINDIR)"
+	@echo "  make install       Build and install native binary to $(BINDIR) (recommended)"
+	@echo "  make install-jar   Build and install JAR version (requires JDK 17+)"
 	@echo "  make uninstall     Remove xl from $(BINDIR)"
 	@echo "  make build         Build the fat JAR only"
+	@echo "  make build-native  Build the native binary only"
 	@echo "  make package-skill Package skill files only for Anthropic API (<1MB)"
 	@echo "  make package-dist  Full distribution with JAR (~30MB)"
 	@echo "  make clean         Remove build artifacts"
@@ -27,7 +31,21 @@ help:
 build:
 	./mill xl-cli.assembly
 
-install: build
+build-native:
+	./mill xl-cli.nativeImage
+
+# Default install: native binary (no JDK required, instant startup)
+install: build-native
+	@mkdir -p $(BINDIR)
+	@cp $(NATIVE_PATH) $(BINDIR)/xl
+	@chmod +x $(BINDIR)/xl
+	@echo "Installed xl native binary to $(BINDIR)/xl"
+	@echo ""
+	@echo "Ensure $(BINDIR) is in your PATH:"
+	@echo '  export PATH="$$HOME/.local/bin:$$PATH"'
+
+# JAR-based install (requires JDK 17+)
+install-jar: build
 	@mkdir -p $(BINDIR)
 	@mkdir -p $(SHAREDIR)
 	@cp $(JAR_PATH) $(SHAREDIR)/xl.jar

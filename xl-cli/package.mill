@@ -2,8 +2,9 @@ package build.`xl-cli`
 
 import mill._
 import mill.scalalib._
+import mill.javalib.NativeImageModule
 
-object `package` extends build.XLInternalModule {
+object `package` extends build.XLInternalModule with NativeImageModule {
   override def moduleDeps = Seq(build.`xl-cats-effect`, build.`xl-evaluator`)
 
   override def mvnDeps = Seq(
@@ -13,6 +14,15 @@ object `package` extends build.XLInternalModule {
 
   // Make it runnable as an application
   override def mainClass = Some("com.tjclp.xl.cli.Main")
+
+  // GraalVM Native Image configuration
+  def jvmId = "graalvm-community:23.0.1"
+
+  def nativeImageOptions = Seq(
+    "--no-fallback",
+    "-Os", // Optimize for size
+    "-H:+ReportExceptionStackTraces"
+  )
 
   object test extends ScalaTests with TestModule.Munit {
     override def mvnDeps = Seq(

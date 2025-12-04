@@ -14,9 +14,67 @@ permissions:
   contents: write  # Required for creating GitHub releases
 
 jobs:
+  # Build native binaries for multiple platforms in parallel
+  build-native:
+    name: Build Native (${{ matrix.artifact }})
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: xl-linux-amd64
+          - os: macos-latest
+            artifact: xl-darwin-amd64
+          - os: macos-14
+            artifact: xl-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    # Only run on the main repository, not forks
+    if: github.repository == 'TJC-LP/xl'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up GraalVM
+        uses: coursier/setup-action@v1
+        with:
+          jvm: graalvm-community:23.0.1
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: ${{ runner.os }}-coursier-native-${{ hashFiles('**/build.mill', '**/package.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-coursier-native-
+
+      - name: Cache Mill
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
+
+      - name: Build native image
+        run: ./mill xl-cli.nativeImage
+
+      - name: Rename binary
+        run: mv out/xl-cli/nativeImage.dest/native-executable ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  # Publish to Maven Central and create GitHub release
   release:
     name: Publish to Maven Central
     runs-on: ubuntu-latest
+    needs: build-native
     # Only run on the main repository, not forks
     if: github.repository == 'TJC-LP/xl'
 
@@ -83,7 +141,7 @@ jobs:
           MILL_PGP_SECRET_BASE64: ${{ secrets.PGP_SECRET }}
           MILL_PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
 
-      - name: Build CLI distribution
+      - name: Build CLI JAR distribution
         run: |
           ./mill xl-cli.assembly
           mkdir -p dist
@@ -107,12 +165,33 @@ jobs:
           chmod +x dist/install.sh
           tar -czvf xl-cli-${{ steps.version.outputs.version }}.tar.gz -C dist .
 
+      - name: Download native binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: native-binaries
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          # Copy JAR tarball
+          cp xl-cli-${{ steps.version.outputs.version }}.tar.gz release-assets/
+          # Copy and rename native binaries with version
+          cp native-binaries/xl-linux-amd64/xl-linux-amd64 release-assets/xl-linux-amd64
+          cp native-binaries/xl-darwin-amd64/xl-darwin-amd64 release-assets/xl-darwin-amd64
+          cp native-binaries/xl-darwin-arm64/xl-darwin-arm64 release-assets/xl-darwin-arm64
+          # Make binaries executable
+          chmod +x release-assets/xl-*
+          ls -la release-assets/
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           generate_release_notes: true
           draft: false
           files: |
-            xl-cli-${{ steps.version.outputs.version }}.tar.gz
+            release-assets/xl-cli-${{ steps.version.outputs.version }}.tar.gz
+            release-assets/xl-linux-amd64
+            release-assets/xl-darwin-amd64
+            release-assets/xl-darwin-arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -9,13 +9,25 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 Check if installed: `which xl || echo "not installed"`
 
-**If not installed**, download from GitHub releases:
+**If not installed**, download native binary (no JDK required):
 ```bash
-curl -sL https://github.com/TJC-LP/xl/releases/latest/download/xl-cli.tar.gz | tar xz -C /tmp
-/tmp/xl-dist/install.sh
+# Detect platform and install
+PLATFORM="$(uname -s)-$(uname -m)"
+case "$PLATFORM" in
+  Linux-x86_64)  BINARY="xl-linux-amd64" ;;
+  Darwin-x86_64) BINARY="xl-darwin-amd64" ;;
+  Darwin-arm64)  BINARY="xl-darwin-arm64" ;;
+  *) echo "Unsupported platform: $PLATFORM" && exit 1 ;;
+esac
+curl -sL "https://github.com/TJC-LP/xl/releases/latest/download/$BINARY" -o ~/.local/bin/xl
+chmod +x ~/.local/bin/xl
 ```
 
-Requires: JDK 17+
+**Alternative** (requires JDK 17+):
+```bash
+curl -sL https://github.com/TJC-LP/xl/releases/latest/download/xl-cli.tar.gz | tar xz -C /tmp
+cd /tmp && ./install.sh
+```
 
 ---
 
