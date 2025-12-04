@@ -4,7 +4,7 @@ import scala.xml.*
 import java.io.{ByteArrayOutputStream, FileOutputStream, OutputStream}
 import java.security.MessageDigest
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, StandardCopyOption}
 import java.nio.charset.StandardCharsets
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try, Using}
@@ -129,11 +129,17 @@ object XlsxWriter:
    *
    * Strategy selection:
    *   1. SourceContext + clean + file target → verbatim copy (fastest)
-   *   1. All other cases → unified write (surgical if source available, else full regeneration)
+   *   2. File target with source → atomic temp file + rename (prevents corruption)
+   *   3. All other cases → unified write (surgical if source available, else full regeneration)
    *
    * Unified write automatically optimizes:
    *   - With source: regenerate modified, copy unmodified (surgical)
    *   - Without source: regenerate all (graceful degradation)
+   *
+   * **Atomic Write Safety**: When writing to a file with SourceContext (surgical mode), we always
+   * write to a temp file first, then atomically rename. This prevents:
+   *   - Corruption when source == destination (chained writes)
+   *   - Partial writes on failure leaving broken files
    */
   private def writeToTarget(
     workbook: Workbook,
@@ -151,13 +157,59 @@ object XlsxWriter:
               // Can't copy to stream, use unified write (will copy all parts)
               unifiedWrite(workbook, workbook.sourceContext, target, config)
 
-        case _ =>
-          // All other cases: unified write (surgical if source, else full regeneration)
-          unifiedWrite(workbook, workbook.sourceContext, target, config)
+        case Some(ctx) =>
+          // Surgical mode with source: use atomic temp file to prevent corruption
+          target match
+            case OutputPath(destPath) =>
+              writeAtomically(workbook, Some(ctx), destPath, config)
+            case _ =>
+              unifiedWrite(workbook, workbook.sourceContext, target, config)
+
+        case None =>
+          // No source context: safe to write directly (no surgical preservation)
+          unifiedWrite(workbook, None, target, config)
 
       Right(())
 
     catch case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
+
+  /**
+   * Write to file atomically via temp file + rename.
+   *
+   * This prevents corruption when:
+   *   - Source and destination are the same file (chained writes)
+   *   - Write fails partway through (partial file corruption)
+   *
+   * Process:
+   *   1. Create temp file in same directory as destination
+   *   2. Write complete XLSX to temp file
+   *   3. Atomically rename temp → destination
+   *   4. Clean up temp file on failure
+   */
+  private def writeAtomically(
+    workbook: Workbook,
+    sourceContext: Option[SourceContext],
+    destPath: Path,
+    config: WriterConfig
+  ): Unit =
+    val parent = Option(destPath.getParent).getOrElse(Path.of("."))
+    val tempPath = Files.createTempFile(parent, ".xl-", ".tmp")
+
+    try
+      unifiedWrite(workbook, sourceContext, OutputPath(tempPath), config)
+      Files.move(
+        tempPath,
+        destPath,
+        StandardCopyOption.REPLACE_EXISTING,
+        StandardCopyOption.ATOMIC_MOVE
+      )
+    catch
+      case e: java.nio.file.AtomicMoveNotSupportedException =>
+        // Fallback for filesystems that don't support atomic move
+        Files.move(tempPath, destPath, StandardCopyOption.REPLACE_EXISTING)
+      case e: Exception =>
+        Files.deleteIfExists(tempPath)
+        throw e
 
   /**
    * Copy source file verbatim to destination (for clean workbooks).

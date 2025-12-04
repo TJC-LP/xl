@@ -469,6 +469,50 @@ class OoxmlRoundTripSpec extends FunSuite:
     assertZipBytesEqual(bytes1, bytes2)
   }
 
+  test("Chained writes to same file succeed (regression test for atomic write)") {
+    // This test verifies that writing to the same file multiple times works correctly.
+    // Previously, this would fail with "zip END header not found" because the output
+    // file was opened (and truncated) before the source file was fully read.
+    val outputPath = tempDir.resolve("chained-write.xlsx")
+
+    // First write: create initial file
+    val initial = Workbook("Test").sheets(0).put(ref"A1", CellValue.Text("First"))
+    val wb1 = Workbook(Vector(initial))
+    val write1 = XlsxWriter.write(wb1, outputPath)
+    assert(write1.isRight, s"First write failed: $write1")
+
+    // Read back the first file
+    val read1 = XlsxReader.read(outputPath)
+    assert(read1.isRight, s"First read failed: $read1")
+    val wb1Read = read1.toOption.get
+
+    // Second write: modify and write back to SAME file using put() for proper tracking
+    val modified = wb1Read.sheets(0).put(ref"A2", CellValue.Text("Second"))
+    val wb2 = wb1Read.put(modified) // Uses put() to properly track modification
+    val write2 = XlsxWriter.write(wb2, outputPath)
+    assert(write2.isRight, s"Second write (chained) failed: $write2")
+
+    // Third write: another chained write to verify stability
+    val read2 = XlsxReader.read(outputPath)
+    assert(read2.isRight, s"Second read failed: $read2")
+    val wb2Read = read2.toOption.get
+
+    val modified2 = wb2Read.sheets(0).put(ref"A3", CellValue.Text("Third"))
+    val wb3 = wb2Read.put(modified2) // Uses put() to properly track modification
+    val write3 = XlsxWriter.write(wb3, outputPath)
+    assert(write3.isRight, s"Third write (chained) failed: $write3")
+
+    // Verify final contents
+    val finalRead = XlsxReader.read(outputPath)
+    assert(finalRead.isRight, s"Final read failed: $finalRead")
+    finalRead.foreach { wb =>
+      val sheet = wb.sheets(0)
+      assertEquals(sheet.cells.get(ref"A1").map(_.value), Some(CellValue.Text("First")))
+      assertEquals(sheet.cells.get(ref"A2").map(_.value), Some(CellValue.Text("Second")))
+      assertEquals(sheet.cells.get(ref"A3").map(_.value), Some(CellValue.Text("Third")))
+    }
+  }
+
   // ---------- Helpers ----------
 
   private def buildComprehensiveWorkbook(): XLResult[Workbook] =
