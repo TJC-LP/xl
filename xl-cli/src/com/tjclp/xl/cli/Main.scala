@@ -25,6 +25,14 @@ import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
 
+/** Read version from generated resource, fallback to dev */
+private object BuildInfo:
+  val version: String =
+    val props = new java.util.Properties()
+    val stream = Option(getClass.getResourceAsStream("/version.properties"))
+    stream.foreach(props.load)
+    Option(props.getProperty("version")).getOrElse("dev")
+
 /**
  * XL CLI - LLM-friendly Excel operations.
  *
@@ -37,7 +45,7 @@ object Main
     extends CommandIOApp(
       name = "xl",
       header = "LLM-friendly Excel operations (stateless)",
-      version = "0.1.0"
+      version = BuildInfo.version
     ):
 
   override def main: Opts[IO[ExitCode]] =

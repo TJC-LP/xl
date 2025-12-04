@@ -15,6 +15,21 @@ object `package` extends build.XLInternalModule with NativeImageModule {
   // Make it runnable as an application
   override def mainClass = Some("com.tjclp.xl.cli.Main")
 
+  // Version from PUBLISH_VERSION env var (set by CI), or dev for local
+  // Evaluated at build file load time (when mill starts with the env var set)
+  val cliVersion: String = sys.env.getOrElse("PUBLISH_VERSION", "dev")
+
+  // Generate version.properties resource at build time
+  def generatedVersionResource: T[PathRef] = Task {
+    val dest = Task.dest / "version.properties"
+    os.write(dest, s"version=$cliVersion\n")
+    PathRef(Task.dest)
+  }
+
+  override def resources: T[Seq[PathRef]] = Task {
+    super.resources() ++ Seq(generatedVersionResource())
+  }
+
   // GraalVM Native Image configuration
   def jvmId = "graalvm-community:23.0.1"
 
