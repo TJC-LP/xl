@@ -373,6 +373,24 @@ class OoxmlRoundTripSpec extends FunSuite:
       case other => fail(s"C1: Expected Formula, got $other")
   }
 
+  test("Formula cached value roundtrip preserves exact value (explicit regression)") {
+    // Explicit regression test per GitHub issue #42
+    val formula = CellValue.Formula("=A1*2", Some(CellValue.Number(BigDecimal(42))))
+    val initial = Workbook("Formulas")
+    val sheet = initial.sheets(0).put(ref"B1", formula)
+    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("update"))
+
+    val outputPath = tempDir.resolve("formula-cached-explicit.xlsx")
+    XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
+    val readWb = XlsxReader.read(outputPath).getOrElse(fail("Read failed"))
+
+    readWb.sheets(0)(ref"B1").value match
+      case CellValue.Formula(expr, Some(CellValue.Number(n))) =>
+        assertEquals(expr, "=A1*2")
+        assertEquals(n, BigDecimal(42))
+      case other => fail(s"Unexpected: $other")
+  }
+
   test("Workbook with merged cells preserves merges") {
     val initial = Workbook("Merged")
     val sheet = initial.sheets(0)

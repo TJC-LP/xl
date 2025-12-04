@@ -126,7 +126,7 @@ Create a new `.sc` script file with scala-cli directives:
 //> using dep com.tjclp::xl-core:0.1.0-SNAPSHOT
 //> using repository ivy2Local
 
-import com.tjclp.xl.*
+import com.tjclp.xl.{*, given}
 
 @main def myExample(): Unit =
   // Your code here
