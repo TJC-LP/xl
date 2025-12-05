@@ -527,6 +527,30 @@ class EvaluatorSpec extends ScalaCheckSuite:
         fail(s"Evaluation failed: $err")
   }
 
+  test("AVERAGE in nested arithmetic (regression for asInstanceOf crash)") {
+    // Regression test: Original bug caused "Tuple2 cannot be cast to BigDecimal" crash
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(100)),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(200)),
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(10)),
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(20))
+    )
+    sheet.evaluateFormula("=SUM(A1:A2)+AVERAGE(B1:B2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(315))
+      case Right(other) => fail(s"Expected Number, got $other")
+      case Left(err) => fail(s"Evaluation failed: $err")
+  }
+
+  test("AVERAGE on empty range returns DivByZero error (Excel-compliant)") {
+    val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    val avgExpr = TExpr.average(range)
+
+    Evaluator.instance.eval(avgExpr, sheet) match
+      case Left(_: EvalError.DivByZero) => () // Expected
+      case other => fail(s"Expected DivByZero error, got $other")
+  }
+
   // ==================== Error Path Tests ====================
 
   test("Error: Nested error - error in IF condition propagates") {

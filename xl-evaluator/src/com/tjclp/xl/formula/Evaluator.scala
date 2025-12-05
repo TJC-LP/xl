@@ -489,15 +489,16 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.Average(range) =>
         // Average: compute sum/count of numeric values in range
-        // Note: Must collect to List since range.cells returns Iterator (single-use)
-        val values = range.cells.flatMap { cellRef =>
-          TExpr.decodeNumeric(sheet(cellRef)).toOption
-        }.toList
+        val cells = range.cells.map(cellRef => sheet(cellRef))
+        val values = cells.flatMap { cell =>
+          TExpr.decodeNumeric(cell).toOption
+        }
         if values.isEmpty then
-          // Excel behavior: AVERAGE of empty range returns #DIV/0! error
-          // We return 0 for consistency with SUM/COUNT behavior on empty ranges
-          Right(BigDecimal(0))
-        else Right(values.sum / values.size)
+          // Excel behavior: AVERAGE of empty range returns #DIV/0!
+          Left(EvalError.DivByZero("SUM(empty)", "COUNT(0)"))
+        else
+          val list = values.toList
+          Right(list.sum / list.size)
 
       // ===== Range Aggregation =====
       case foldExpr: TExpr.FoldRange[a, b] =>
