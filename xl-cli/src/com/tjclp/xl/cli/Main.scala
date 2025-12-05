@@ -86,7 +86,9 @@ object Main
     Opts.option[Path]("file", "Excel file to operate on (required)", "f")
 
   private val sheetOpt =
-    Opts.option[String]("sheet", "Sheet to select (optional, defaults to first)", "s").orNone
+    Opts
+      .option[String]("sheet", "Sheet to select (required for sheet-level operations)", "s")
+      .orNone
 
   private val outputOpt =
     Opts.option[Path]("output", "Output file (required)", "o")
@@ -147,8 +149,10 @@ object Main
         "Use values from this row as keys in JSON output (1-based row number)"
       )
       .orNone
-  private val allSheetsOpt =
-    Opts.flag("all-sheets", "Search across all sheets in the workbook").orFalse
+  private val sheetsFilterOpt =
+    Opts
+      .option[String]("sheets", "Comma-separated list of sheets to search (default: all)")
+      .orNone
 
   // --- Standalone commands (no --file required) ---
 
@@ -193,9 +197,10 @@ object Main
     refArg.map(Command.Cell.apply)
   }
 
-  val searchCmd: Opts[Command] = Opts.subcommand("search", "Search for cells") {
-    (patternArg, limitOpt, allSheetsOpt).mapN(Command.Search.apply)
-  }
+  val searchCmd: Opts[Command] =
+    Opts.subcommand("search", "Search for cells (all sheets by default)") {
+      (patternArg, limitOpt, sheetsFilterOpt).mapN(Command.Search.apply)
+    }
 
   // --- Analyze ---
 
@@ -323,7 +328,7 @@ object Main
       result <- executeCommand(wb, sheet, outputOpt, cmd)
     yield result
 
-  private def resolveSheet(wb: Workbook, sheetNameOpt: Option[String]): IO[Sheet] =
+  private def resolveSheet(wb: Workbook, sheetNameOpt: Option[String]): IO[Option[Sheet]] =
     sheetNameOpt match
       case Some(name) =>
         IO.fromEither(SheetName.apply(name).left.map(e => new Exception(e))).flatMap { sheetName =>
@@ -331,27 +336,38 @@ object Main
             new Exception(
               s"Sheet not found: $name. Available: ${wb.sheets.map(_.name.value).mkString(", ")}"
             )
-          )
+          ).map(Some(_))
         }
       case None =>
-        IO.fromOption(wb.sheets.headOption)(new Exception("Workbook has no sheets"))
+        IO.pure(None)
+
+  private def requireSheet(wb: Workbook, sheetOpt: Option[Sheet], context: String): IO[Sheet] =
+    IO.fromOption(sheetOpt)(
+      new Exception(
+        s"$context requires --sheet or qualified ref (e.g., Sheet1!A1). " +
+          s"Available sheets: ${wb.sheets.map(_.name.value).mkString(", ")}"
+      )
+    )
 
   /**
    * Resolve a reference string to a (Sheet, Either[ARef, CellRange]).
    *
-   * Supports qualified refs like `Sheet1!A1` which override the default sheet context. This mirrors
-   * Excel's behavior: you can be "on" Sheet1 while referencing Sheet2!A1.
+   * Supports qualified refs like `Sheet1!A1` which override the default sheet context. For
+   * unqualified refs, requires a default sheet or fails with helpful error.
    */
   private def resolveRef(
     wb: Workbook,
-    defaultSheet: Sheet,
-    refStr: String
+    defaultSheetOpt: Option[Sheet],
+    refStr: String,
+    context: String
   ): IO[(Sheet, Either[ARef, CellRange])] =
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>
-        IO.pure((defaultSheet, Left(ref)))
+        requireSheet(wb, defaultSheetOpt, s"$context with unqualified ref '$refStr'")
+          .map(s => (s, Left(ref)))
       case RefType.Range(range) =>
-        IO.pure((defaultSheet, Right(range)))
+        requireSheet(wb, defaultSheetOpt, s"$context with unqualified range '$refStr'")
+          .map(s => (s, Right(range)))
       case RefType.QualifiedCell(sheetName, ref) =>
         findSheet(wb, sheetName).map(s => (s, Left(ref)))
       case RefType.QualifiedRange(sheetName, range) =>
@@ -367,7 +383,7 @@ object Main
 
   private def executeCommand(
     wb: Workbook,
-    sheet: Sheet,
+    sheetOpt: Option[Sheet],
     outputOpt: Option[Path],
     cmd: Command
   ): IO[String] = cmd match
@@ -382,22 +398,24 @@ object Main
       IO.pure(Markdown.renderSheetList(sheetStats))
 
     case Command.Bounds =>
-      val name = sheet.name.value
-      val usedRange = sheet.usedRange
-      val cellCount = sheet.cells.size
-      IO.pure(usedRange match
-        case Some(range) =>
-          val rowCount = range.end.row.index0 - range.start.row.index0 + 1
-          val colCount = range.end.col.index0 - range.start.col.index0 + 1
-          s"""Sheet: $name
-             |Used range: ${range.toA1}
-             |Rows: ${range.start.row.index1}-${range.end.row.index1} ($rowCount total)
-             |Columns: ${range.start.col.toLetter}-${range.end.col.toLetter} ($colCount total)
-             |Non-empty: $cellCount cells""".stripMargin
-        case None =>
-          s"""Sheet: $name
-             |Used range: (empty)
-             |Non-empty: 0 cells""".stripMargin)
+      requireSheet(wb, sheetOpt, "bounds").map { sheet =>
+        val name = sheet.name.value
+        val usedRange = sheet.usedRange
+        val cellCount = sheet.cells.size
+        usedRange match
+          case Some(range) =>
+            val rowCount = range.end.row.index0 - range.start.row.index0 + 1
+            val colCount = range.end.col.index0 - range.start.col.index0 + 1
+            s"""Sheet: $name
+               |Used range: ${range.toA1}
+               |Rows: ${range.start.row.index1}-${range.end.row.index1} ($rowCount total)
+               |Columns: ${range.start.col.toLetter}-${range.end.col.toLetter} ($colCount total)
+               |Non-empty: $cellCount cells""".stripMargin
+          case None =>
+            s"""Sheet: $name
+               |Used range: (empty)
+               |Non-empty: 0 cells""".stripMargin
+      }
 
     case Command.View(
           rangeStr,
@@ -414,7 +432,7 @@ object Main
           headerRow
         ) =>
       for
-        resolved <- resolveRef(wb, sheet, rangeStr)
+        resolved <- resolveRef(wb, sheetOpt, rangeStr, "view")
         (targetSheet, refOrRange) = resolved
         range = refOrRange match
           case Right(r) => r
@@ -490,7 +508,7 @@ object Main
 
     case Command.Cell(refStr) =>
       for
-        resolved <- resolveRef(wb, sheet, refStr)
+        resolved <- resolveRef(wb, sheetOpt, refStr, "cell")
         (targetSheet, refOrRange) = resolved
         ref <- refOrRange match
           case Left(r) => IO.pure(r)
@@ -516,17 +534,40 @@ object Main
         dependents = graph.dependents.getOrElse(ref, Set.empty).toVector.sortBy(_.toA1)
       yield Format.cellInfo(ref, value, formatted, style, comment, hyperlink, deps, dependents)
 
-    case Command.Search(pattern, limit, allSheets) =>
+    case Command.Search(pattern, limit, sheetsFilter) =>
       IO.fromEither(
         scala.util
           .Try(pattern.r)
           .toEither
           .left
           .map(e => new Exception(s"Invalid regex pattern: ${e.getMessage}"))
-      ).map { regex =>
-        if allSheets then
-          // Search across all sheets, return qualified refs
-          val results = wb.sheets.iterator
+      ).flatMap { regex =>
+        // Determine which sheets to search:
+        // 1. If --sheets provided, use those
+        // 2. Else if --sheet provided, use that
+        // 3. Else search all sheets
+        val targetSheets: IO[Vector[Sheet]] = (sheetsFilter, sheetOpt) match
+          case (Some(filterStr), _) =>
+            // --sheets=Sheet1,Sheet2
+            val names = filterStr.split(",").map(_.trim).toVector
+            names.traverse { name =>
+              IO.fromEither(SheetName(name).left.map(e => new Exception(e))).flatMap { sn =>
+                IO.fromOption(wb.sheets.find(_.name == sn))(
+                  new Exception(
+                    s"Sheet not found: $name. Available: ${wb.sheets.map(_.name.value).mkString(", ")}"
+                  )
+                )
+              }
+            }
+          case (None, Some(sheet)) =>
+            // --sheet provided, use that single sheet
+            IO.pure(Vector(sheet))
+          case (None, None) =>
+            // No filter, search all sheets
+            IO.pure(wb.sheets)
+
+        targetSheets.map { sheets =>
+          val results = sheets.iterator
             .flatMap { s =>
               s.cells.iterator
                 .filter { case (_, cell) =>
@@ -535,30 +576,22 @@ object Main
                 }
                 .map { case (ref, cell) =>
                   val value = formatCellValue(cell.value)
+                  // Always use qualified refs for clarity
                   (s"${s.name.value}!${ref.toA1}", value)
                 }
             }
             .take(limit)
             .toVector
-          s"Found ${results.size} matches across ${wb.sheets.size} sheets:\n\n${Markdown.renderSearchResultsWithRef(results)}"
-        else
-          // Search single sheet, return regular refs
-          val results = sheet.cells.iterator
-            .filter { case (_, cell) =>
-              val text = formatCellValue(cell.value)
-              regex.findFirstIn(text).isDefined
-            }
-            .take(limit)
-            .map { case (ref, cell) =>
-              val value = formatCellValue(cell.value)
-              (ref, value, value)
-            }
-            .toVector
-          Markdown.renderSearchResults(results)
+          val sheetDesc =
+            if sheets.size == 1 then sheets.headOption.map(_.name.value).getOrElse("sheet")
+            else s"${sheets.size} sheets"
+          s"Found ${results.size} matches in $sheetDesc:\n\n${Markdown.renderSearchResultsWithRef(results)}"
+        }
       }
 
     case Command.Eval(formulaStr, overrides) =>
       for
+        sheet <- requireSheet(wb, sheetOpt, "eval")
         tempSheet <- applyOverrides(sheet, overrides)
         formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
         result <- IO.fromEither(
@@ -571,7 +604,7 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            resolved <- resolveRef(wb, sheet, refStr)
+            resolved <- resolveRef(wb, sheetOpt, refStr, "put")
             (targetSheet, refOrRange) = resolved
             ref <- refOrRange match
               case Left(r) => IO.pure(r)
@@ -589,7 +622,7 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            resolved <- resolveRef(wb, sheet, refStr)
+            resolved <- resolveRef(wb, sheetOpt, refStr, "putf")
             (targetSheet, refOrRange) = resolved
             ref <- refOrRange match
               case Left(r) => IO.pure(r)
@@ -622,7 +655,7 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            resolved <- resolveRef(wb, sheet, rangeStr)
+            resolved <- resolveRef(wb, sheetOpt, rangeStr, "style")
             (targetSheet, refOrRange) = resolved
             range = refOrRange match
               case Right(r) => r
@@ -665,42 +698,47 @@ object Main
     case Command.RowOp(rowNum, height, hide, show) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
-          val row = Row.from1(rowNum)
-          val currentProps = sheet.getRowProperties(row)
-          val newProps = currentProps.copy(
-            height = height.orElse(currentProps.height),
-            hidden = if hide then true else if show then false else currentProps.hidden
-          )
-          val updatedSheet = sheet.setRowProperties(row, newProps)
-          val updatedWb = wb.put(updatedSheet)
-          ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
-            val changes = List(
-              height.map(h => s"height=$h"),
-              if hide then Some("hidden=true") else None,
-              if show then Some("hidden=false") else None
-            ).flatten
-            s"Row $rowNum: ${changes.mkString(", ")}\nSaved: $outputPath"
+          requireSheet(wb, sheetOpt, "row").flatMap { sheet =>
+            val row = Row.from1(rowNum)
+            val currentProps = sheet.getRowProperties(row)
+            val newProps = currentProps.copy(
+              height = height.orElse(currentProps.height),
+              hidden = if hide then true else if show then false else currentProps.hidden
+            )
+            val updatedSheet = sheet.setRowProperties(row, newProps)
+            val updatedWb = wb.put(updatedSheet)
+            ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
+              val changes = List(
+                height.map(h => s"height=$h"),
+                if hide then Some("hidden=true") else None,
+                if show then Some("hidden=false") else None
+              ).flatten
+              s"Row $rowNum: ${changes.mkString(", ")}\nSaved: $outputPath"
+            }
           }
       }
 
     case Command.ColOp(colStr, width, hide, show) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
-          IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e))).flatMap { col =>
-            val currentProps = sheet.getColumnProperties(col)
-            val newProps = currentProps.copy(
-              width = width.orElse(currentProps.width),
-              hidden = if hide then true else if show then false else currentProps.hidden
-            )
-            val updatedSheet = sheet.setColumnProperties(col, newProps)
-            val updatedWb = wb.put(updatedSheet)
-            ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
-              val changes = List(
-                width.map(w => s"width=$w"),
-                if hide then Some("hidden=true") else None,
-                if show then Some("hidden=false") else None
-              ).flatten
-              s"Column $colStr: ${changes.mkString(", ")}\nSaved: $outputPath"
+          requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
+            IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e))).flatMap {
+              col =>
+                val currentProps = sheet.getColumnProperties(col)
+                val newProps = currentProps.copy(
+                  width = width.orElse(currentProps.width),
+                  hidden = if hide then true else if show then false else currentProps.hidden
+                )
+                val updatedSheet = sheet.setColumnProperties(col, newProps)
+                val updatedWb = wb.put(updatedSheet)
+                ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
+                  val changes = List(
+                    width.map(w => s"width=$w"),
+                    if hide then Some("hidden=true") else None,
+                    if show then Some("hidden=false") else None
+                  ).flatten
+                  s"Column $colStr: ${changes.mkString(", ")}\nSaved: $outputPath"
+                }
             }
           }
       }
@@ -710,7 +748,7 @@ object Main
         outputPath =>
           readBatchInput(source).flatMap { input =>
             parseBatchOperations(input).flatMap { ops =>
-              applyBatchOperations(wb, sheet, ops).flatMap { updatedWb =>
+              applyBatchOperations(wb, sheetOpt, ops).flatMap { updatedWb =>
                 ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
                   val summary = ops
                     .map {
@@ -786,26 +824,33 @@ object Main
 
   private def applyBatchOperations(
     wb: Workbook,
-    sheet: Sheet,
+    defaultSheetOpt: Option[Sheet],
     ops: Vector[BatchOp]
   ): IO[Workbook] =
-    ops
-      .foldLeft(IO.pure(sheet)) { (sheetIO, op) =>
-        sheetIO.flatMap { s =>
-          op match
-            case BatchOp.Put(refStr, value) =>
-              IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e))).map { ref =>
+    ops.foldLeft(IO.pure(wb)) { (wbIO, op) =>
+      wbIO.flatMap { currentWb =>
+        op match
+          case BatchOp.Put(refStr, value) =>
+            resolveRef(currentWb, defaultSheetOpt, refStr, "batch put").map {
+              case (targetSheet, Left(ref)) =>
                 val cellValue = parseValue(value)
-                s.put(ref, cellValue)
-              }
-            case BatchOp.PutFormula(refStr, formula) =>
-              IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e))).map { ref =>
+                val updatedSheet = targetSheet.put(ref, cellValue)
+                currentWb.put(updatedSheet)
+              case (_, Right(_)) =>
+                // This shouldn't happen for single refs, but handle gracefully
+                currentWb
+            }
+          case BatchOp.PutFormula(refStr, formula) =>
+            resolveRef(currentWb, defaultSheetOpt, refStr, "batch putf").map {
+              case (targetSheet, Left(ref)) =>
                 val normalizedFormula = if formula.startsWith("=") then formula.drop(1) else formula
-                s.put(ref, CellValue.Formula(normalizedFormula, None))
-              }
-        }
+                val updatedSheet = targetSheet.put(ref, CellValue.Formula(normalizedFormula, None))
+                currentWb.put(updatedSheet)
+              case (_, Right(_)) =>
+                currentWb
+            }
       }
-      .map(updatedSheet => wb.put(updatedSheet))
+    }
 
   // ==========================================================================
   // Helpers
@@ -1025,7 +1070,7 @@ enum Command:
     headerRow: Option[Int]
   )
   case Cell(ref: String)
-  case Search(pattern: String, limit: Int, allSheets: Boolean)
+  case Search(pattern: String, limit: Int, sheetsFilter: Option[String])
   // Analyze
   case Eval(formula: String, overrides: List[String])
   // Mutate (require -o)
