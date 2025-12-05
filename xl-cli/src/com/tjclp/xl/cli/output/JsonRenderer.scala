@@ -3,6 +3,7 @@ package com.tjclp.xl.cli.output
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
+import com.tjclp.xl.formula.SheetEvaluator
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.numfmt.NumFmt
 
@@ -59,13 +60,14 @@ object JsonRenderer:
     range: CellRange,
     showFormulas: Boolean = false,
     skipEmpty: Boolean = false,
-    headerRow: Option[Int] = None
+    headerRow: Option[Int] = None,
+    evalFormulas: Boolean = false
   ): String =
     headerRow match
       case Some(headerRowNum) =>
-        renderAsRecords(sheet, range, showFormulas, skipEmpty, headerRowNum)
+        renderAsRecords(sheet, range, showFormulas, skipEmpty, headerRowNum, evalFormulas)
       case None =>
-        renderAsRows(sheet, range, showFormulas, skipEmpty)
+        renderAsRows(sheet, range, showFormulas, skipEmpty, evalFormulas)
 
   /**
    * Render range as array of records with header row values as keys.
@@ -75,7 +77,8 @@ object JsonRenderer:
     range: CellRange,
     showFormulas: Boolean,
     skipEmpty: Boolean,
-    headerRowNum: Int
+    headerRowNum: Int,
+    evalFormulas: Boolean
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -121,7 +124,7 @@ object JsonRenderer:
             if skipEmpty && isEmpty then None
             else
               Some(
-                s"${escapeJsonString(headerName)}: ${renderCellValue(cell, sheet, showFormulas)}"
+                s"${escapeJsonString(headerName)}: ${renderCellValue(cell, sheet, showFormulas, evalFormulas)}"
               )
           case None =>
             if skipEmpty then None
@@ -148,7 +151,8 @@ object JsonRenderer:
     sheet: Sheet,
     range: CellRange,
     showFormulas: Boolean,
-    skipEmpty: Boolean
+    skipEmpty: Boolean,
+    evalFormulas: Boolean
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -183,7 +187,7 @@ object JsonRenderer:
               case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
               case _ => false
             if skipEmpty && isEmpty then None
-            else Some(renderCell(ref, cell, sheet, showFormulas))
+            else Some(renderCell(ref, cell, sheet, showFormulas, evalFormulas))
           case None =>
             if skipEmpty then None
             else Some(renderEmptyCell(ref))
@@ -226,7 +230,13 @@ object JsonRenderer:
     sb.append("}")
     sb.toString
 
-  private def renderCell(ref: ARef, cell: Cell, sheet: Sheet, showFormulas: Boolean): String =
+  private def renderCell(
+    ref: ARef,
+    cell: Cell,
+    sheet: Sheet,
+    showFormulas: Boolean,
+    evalFormulas: Boolean
+  ): String =
     val numFmt = cell.styleId
       .flatMap(sheet.styleRegistry.get)
       .map(_.numFmt)
@@ -267,6 +277,14 @@ object JsonRenderer:
         val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
         if showFormulas then
           ("formula", escapeJsonString(displayExpr), escapeJsonString(displayExpr))
+        else if evalFormulas then
+          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
+            case Right(result) =>
+              val formatted = NumFmtFormatter.formatValue(result, numFmt)
+              ("formula", escapeJsonString(displayExpr), escapeJsonString(formatted))
+            case Left(err) =>
+              val errStr = formatEvalError(err.message)
+              ("formula", escapeJsonString(displayExpr), escapeJsonString(errStr))
         else
           val cachedValue =
             cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
@@ -338,7 +356,12 @@ object JsonRenderer:
       case CellValue.Formula(_, _) => "" // Shouldn't happen
 
   /** Render cell value as JSON value (unquoted for numbers/booleans) */
-  private def renderCellValue(cell: Cell, sheet: Sheet, showFormulas: Boolean): String =
+  private def renderCellValue(
+    cell: Cell,
+    sheet: Sheet,
+    showFormulas: Boolean,
+    evalFormulas: Boolean
+  ): String =
     val numFmt = cell.styleId
       .flatMap(sheet.styleRegistry.get)
       .map(_.numFmt)
@@ -355,15 +378,16 @@ object JsonRenderer:
       case CellValue.Error(err) => escapeJsonString(err.toExcel)
       case CellValue.Empty => "null"
       case CellValue.Formula(expr, cached) =>
-        if showFormulas then
-          val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
-          escapeJsonString(displayExpr)
+        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+        if showFormulas then escapeJsonString(displayExpr)
+        else if evalFormulas then
+          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
+            case Right(result) => renderCellValueFromCellValue(result, numFmt)
+            case Left(err) => escapeJsonString(formatEvalError(err.message))
         else
           cached match
             case Some(cv) => renderCellValueFromCellValue(cv, numFmt)
-            case None =>
-              val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
-              escapeJsonString(displayExpr)
+            case None => escapeJsonString(displayExpr)
 
   private def renderCellValueFromCellValue(value: CellValue, numFmt: NumFmt): String =
     value match
@@ -377,3 +401,13 @@ object JsonRenderer:
       case CellValue.Error(err) => escapeJsonString(err.toExcel)
       case CellValue.Empty => "null"
       case CellValue.Formula(_, _) => "null" // Shouldn't happen
+
+  /** Format evaluation errors as Excel-style error codes. */
+  private def formatEvalError(message: String): String =
+    if message.toLowerCase.contains("circular") then "#CIRC!"
+    else if message.toLowerCase.contains("division") || message.toLowerCase.contains("div") then
+      "#DIV/0!"
+    else if message.toLowerCase.contains("parse") || message.toLowerCase.contains("unknown") then
+      "#NAME?"
+    else if message.toLowerCase.contains("ref") then "#REF!"
+    else s"#ERROR!"

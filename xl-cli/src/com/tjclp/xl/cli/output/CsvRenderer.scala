@@ -3,6 +3,7 @@ package com.tjclp.xl.cli.output
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
+import com.tjclp.xl.formula.SheetEvaluator
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.numfmt.NumFmt
 
@@ -34,7 +35,8 @@ object CsvRenderer:
     range: CellRange,
     showFormulas: Boolean = false,
     showLabels: Boolean = false,
-    skipEmpty: Boolean = false
+    skipEmpty: Boolean = false,
+    evalFormulas: Boolean = false
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -95,7 +97,7 @@ object CsvRenderer:
       val cellValues = nonEmptyCols.map { colIdx =>
         val ref = ARef.from0(colIdx, rowIdx)
         sheet.cells.get(ref) match
-          case Some(cell) => formatCell(cell, sheet, showFormulas)
+          case Some(cell) => formatCell(cell, sheet, showFormulas, evalFormulas)
           case None => ""
       }
       sb.append(cellValues.mkString(","))
@@ -106,7 +108,12 @@ object CsvRenderer:
 
     sb.toString
 
-  private def formatCell(cell: Cell, sheet: Sheet, showFormulas: Boolean): String =
+  private def formatCell(
+    cell: Cell,
+    sheet: Sheet,
+    showFormulas: Boolean,
+    evalFormulas: Boolean
+  ): String =
     val numFmt = cell.styleId
       .flatMap(sheet.styleRegistry.get)
       .map(_.numFmt)
@@ -136,6 +143,10 @@ object CsvRenderer:
       case CellValue.Formula(expr, cached) =>
         val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
         if showFormulas then displayExpr
+        else if evalFormulas then
+          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
+            case Right(result) => NumFmtFormatter.formatValue(result, numFmt)
+            case Left(err) => formatEvalError(err.message)
         else cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
 
     escapeCsv(raw)
@@ -153,3 +164,13 @@ object CsvRenderer:
       val escaped = s.replace("\"", "\"\"")
       s"\"$escaped\""
     else s
+
+  /** Format evaluation errors as Excel-style error codes. */
+  private def formatEvalError(message: String): String =
+    if message.toLowerCase.contains("circular") then "#CIRC!"
+    else if message.toLowerCase.contains("division") || message.toLowerCase.contains("div") then
+      "#DIV/0!"
+    else if message.toLowerCase.contains("parse") || message.toLowerCase.contains("unknown") then
+      "#NAME?"
+    else if message.toLowerCase.contains("ref") then "#REF!"
+    else s"#ERROR!"

@@ -112,6 +112,7 @@ object Main
   private val patternArg = Opts.argument[String]("pattern")
 
   private val formulasOpt = Opts.flag("formulas", "Show formulas instead of values").orFalse
+  private val evalOpt = Opts.flag("eval", "Evaluate formulas (compute live values)").orFalse
   private val limitOpt = Opts.option[Int]("limit", "Maximum rows to display").withDefault(50)
   private val formatOpt = Opts
     .option[String]("format", "Output format: markdown, html, svg, json, csv, png, jpeg, webp, pdf")
@@ -192,6 +193,7 @@ object Main
       (
         rangeArg,
         formulasOpt,
+        evalOpt,
         limitOpt,
         formatOpt,
         printScaleOpt,
@@ -507,6 +509,7 @@ object Main
     case Command.View(
           rangeStr,
           showFormulas,
+          evalFormulas,
           limit,
           format,
           printScale,
@@ -528,7 +531,9 @@ object Main
         theme = wb.metadata.theme // Use workbook's parsed theme
         result <- format match
           case ViewFormat.Markdown =>
-            IO.pure(Markdown.renderRange(targetSheet, limitedRange, showFormulas, skipEmpty))
+            IO.pure(
+              Markdown.renderRange(targetSheet, limitedRange, showFormulas, skipEmpty, evalFormulas)
+            )
           case ViewFormat.Html =>
             IO.pure(
               targetSheet.toHtml(
@@ -554,7 +559,8 @@ object Main
                 limitedRange,
                 showFormulas,
                 skipEmpty,
-                headerRow
+                headerRow,
+                evalFormulas
               )
             )
           case ViewFormat.Csv =>
@@ -564,7 +570,8 @@ object Main
                 limitedRange,
                 showFormulas,
                 showLabels,
-                skipEmpty
+                skipEmpty,
+                evalFormulas
               )
             )
           case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
@@ -755,8 +762,9 @@ object Main
             // Apply formula with Excel-style dragging
             (updatedSheet, cellCount) = refOrRange match
               case Left(ref) =>
-                // Single cell: apply formula as-is
-                (targetSheet.put(ref, CellValue.Formula(formula)), 1)
+                // Single cell: apply formula as-is, evaluate and cache result
+                val cachedValue = SheetEvaluator.evaluateFormula(targetSheet)(fullFormula).toOption
+                (targetSheet.put(ref, CellValue.Formula(formula, cachedValue)), 1)
               case Right(range) =>
                 // Range: apply formula with shifting based on anchor modes
                 val startRef = range.start
@@ -768,7 +776,10 @@ object Main
                   val rowDelta = Row.index0(targetRef.row) - startRow
                   val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
                   val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
-                  s.put(targetRef, CellValue.Formula(shiftedFormula))
+                  // Evaluate against current sheet state and cache result
+                  val fullShiftedFormula = s"=$shiftedFormula"
+                  val cachedValue = SheetEvaluator.evaluateFormula(s)(fullShiftedFormula).toOption
+                  s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
                 }
                 (sheet, cells.size)
             updatedWb = wb.put(updatedSheet)
@@ -1409,6 +1420,7 @@ enum Command:
   case View(
     range: String,
     showFormulas: Boolean,
+    evalFormulas: Boolean,
     limit: Int,
     format: ViewFormat,
     printScale: Boolean,

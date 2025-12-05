@@ -3,6 +3,7 @@ package com.tjclp.xl.cli.output
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
+import com.tjclp.xl.formula.SheetEvaluator
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.numfmt.NumFmt
 
@@ -32,7 +33,8 @@ object Markdown:
     sheet: Sheet,
     range: CellRange,
     showFormulas: Boolean = false,
-    skipEmpty: Boolean = false
+    skipEmpty: Boolean = false,
+    evalFormulas: Boolean = false
   ): String =
     val sb = new StringBuilder
     val startCol = range.start.col.index0
@@ -79,7 +81,10 @@ object Markdown:
       val maxContent = nonEmptyRows
         .map { row =>
           val ref = ARef.from0(col, row)
-          sheet.cells.get(ref).map(c => formatCell(c, sheet, showFormulas).length).getOrElse(0)
+          sheet.cells
+            .get(ref)
+            .map(c => formatCell(c, sheet, showFormulas, evalFormulas).length)
+            .getOrElse(0)
         }
         .maxOption
         .getOrElse(0)
@@ -108,7 +113,11 @@ object Markdown:
       sb.append(s"| ${rowNum.padTo(2, ' ')}|")
       colWidths.zip(nonEmptyCols).foreach { case (width, col) =>
         val ref = ARef.from0(col, row)
-        val value = sheet.cells.get(ref).map(c => formatCell(c, sheet, showFormulas)).getOrElse("")
+        val value =
+          sheet.cells
+            .get(ref)
+            .map(c => formatCell(c, sheet, showFormulas, evalFormulas))
+            .getOrElse("")
         val escaped = escapeMarkdown(value)
         sb.append(s" ${escaped.padTo(width, ' ')} |")
       }
@@ -165,8 +174,16 @@ object Markdown:
 
   /**
    * Format a cell value for display with Excel-style number formatting.
+   *
+   * @param evalFormulas
+   *   If true, evaluate formulas live (compute values). Takes precedence over cached values.
    */
-  private def formatCell(cell: Cell, sheet: Sheet, showFormulas: Boolean): String =
+  private def formatCell(
+    cell: Cell,
+    sheet: Sheet,
+    showFormulas: Boolean,
+    evalFormulas: Boolean
+  ): String =
     // Extract NumFmt from cell's style
     val numFmt = cell.styleId
       .flatMap(sheet.styleRegistry.get)
@@ -177,12 +194,27 @@ object Markdown:
       case CellValue.Formula(expr, cached) =>
         val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
         if showFormulas then displayExpr
+        else if evalFormulas then
+          // Evaluate formula live
+          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
+            case Right(result) => NumFmtFormatter.formatValue(result, numFmt)
+            case Left(err) => formatEvalError(err.message)
         else cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
       case CellValue.RichText(rt) =>
         // Rich text has its own formatting, don't apply NumFmt
         rt.toPlainText
       case CellValue.Empty => ""
       case other => NumFmtFormatter.formatValue(other, numFmt)
+
+  /** Format evaluation errors as Excel-style error codes. */
+  private def formatEvalError(message: String): String =
+    if message.toLowerCase.contains("circular") then "#CIRC!"
+    else if message.toLowerCase.contains("division") || message.toLowerCase.contains("div") then
+      "#DIV/0!"
+    else if message.toLowerCase.contains("parse") || message.toLowerCase.contains("unknown") then
+      "#NAME?"
+    else if message.toLowerCase.contains("ref") then "#REF!"
+    else s"#ERROR!"
 
   private def escapeMarkdown(s: String): String =
     s.replace("|", "\\|").replace("\n", " ").replace("\r", "")
