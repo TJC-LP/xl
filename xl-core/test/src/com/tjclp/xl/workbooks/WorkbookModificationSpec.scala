@@ -61,9 +61,10 @@ class WorkbookModificationSpec extends FunSuite:
     assertEquals(tracker.modifiedSheets, Set(0))
   }
 
-  test("put does not mark as modified when adding new sheet") {
+  test("put marks metadata as modified when adding new sheet") {
     val newSheet = Sheet("Sheet2")
     val updated = workbook.put(newSheet)
     val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
-    assertEquals(tracker.modifiedSheets, Set.empty)
+    assert(tracker.modifiedMetadata, "Adding new sheet should mark metadata as modified")
+    assertEquals(tracker.modifiedSheets, Set.empty) // Individual sheets not modified, just workbook.xml
   }

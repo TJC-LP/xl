@@ -2,7 +2,7 @@ package com.tjclp.xl.workbooks
 
 import com.tjclp.xl.styles.color.ThemePalette
 
-/** Workbook metadata including document properties and theme palette */
+/** Workbook metadata including document properties, theme palette, and defined names */
 final case class WorkbookMetadata(
   creator: Option[String] = None,
   created: Option[java.time.LocalDateTime] = None,
@@ -10,5 +10,6 @@ final case class WorkbookMetadata(
   lastModifiedBy: Option[String] = None,
   application: Option[String] = Some("XL - Pure Scala 3.7 Excel Library"),
   appVersion: Option[String] = Some("0.1.0-SNAPSHOT"),
-  theme: ThemePalette = ThemePalette.office
+  theme: ThemePalette = ThemePalette.office,
+  definedNames: Vector[DefinedName] = Vector.empty
 )

@@ -23,8 +23,17 @@ object Markdown:
    * | 1 | Revenue |         | $1,000,000 |
    * | 2 | COGS    |         | $400,000   |
    * }}}
+   *
+   * @param skipEmpty
+   *   If true, skip entirely empty rows and columns from output (reduces table size for sparse
+   *   ranges)
    */
-  def renderRange(sheet: Sheet, range: CellRange, showFormulas: Boolean = false): String =
+  def renderRange(
+    sheet: Sheet,
+    range: CellRange,
+    showFormulas: Boolean = false,
+    skipEmpty: Boolean = false
+  ): String =
     val sb = new StringBuilder
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -41,10 +50,33 @@ object Markdown:
       sheet.getRowProperties(Row.from0(row)).hidden
     }
 
+    // Helper to check if a cell is empty
+    def isCellEmpty(col: Int, row: Int): Boolean =
+      sheet.cells.get(ARef.from0(col, row)) match
+        case None => true
+        case Some(cell) =>
+          cell.value match
+            case CellValue.Empty => true
+            case CellValue.Text(s) if s.trim.isEmpty => true
+            case CellValue.Formula(_, Some(CellValue.Empty)) => true
+            case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
+            case _ => false
+
+    // Filter empty columns if skipEmpty is true
+    val nonEmptyCols =
+      if skipEmpty then visibleCols.filter(col => visibleRows.exists(row => !isCellEmpty(col, row)))
+      else visibleCols
+
+    // Filter empty rows if skipEmpty is true
+    val nonEmptyRows =
+      if skipEmpty then
+        visibleRows.filter(row => nonEmptyCols.exists(col => !isCellEmpty(col, row)))
+      else visibleRows
+
     // Calculate column widths for better formatting (only visible rows/cols)
-    val colWidths = visibleCols.map { col =>
+    val colWidths = nonEmptyCols.map { col =>
       val header = Column.from0(col).toLetter
-      val maxContent = visibleRows
+      val maxContent = nonEmptyRows
         .map { row =>
           val ref = ARef.from0(col, row)
           sheet.cells.get(ref).map(c => formatCell(c, sheet, showFormulas).length).getOrElse(0)
@@ -56,7 +88,7 @@ object Markdown:
 
     // Header row with column letters
     sb.append("|   |")
-    colWidths.zip(visibleCols).foreach { case (width, col) =>
+    colWidths.zip(nonEmptyCols).foreach { case (width, col) =>
       val header = Column.from0(col).toLetter
       sb.append(s" ${header.padTo(width, ' ')} |")
     }
@@ -71,10 +103,10 @@ object Markdown:
     sb.append("\n")
 
     // Data rows with row numbers (only visible rows)
-    for row <- visibleRows do
+    for row <- nonEmptyRows do
       val rowNum = (row + 1).toString
       sb.append(s"| ${rowNum.padTo(2, ' ')}|")
-      colWidths.zip(visibleCols).foreach { case (width, col) =>
+      colWidths.zip(nonEmptyCols).foreach { case (width, col) =>
         val ref = ARef.from0(col, row)
         val value = sheet.cells.get(ref).map(c => formatCell(c, sheet, showFormulas)).getOrElse("")
         val escaped = escapeMarkdown(value)
@@ -120,6 +152,16 @@ object Markdown:
       Vector(ref.toA1, value, context)
     }
     s"Found ${results.size} matches:\n\n${renderTable(headers, rows)}"
+
+  /**
+   * Render search results with qualified refs (for --all-sheets mode).
+   */
+  def renderSearchResultsWithRef(results: Vector[(String, String)]): String =
+    val headers = Vector("Ref", "Value")
+    val rows = results.map { case (ref, value) =>
+      Vector(ref, value)
+    }
+    renderTable(headers, rows)
 
   /**
    * Format a cell value for display with Excel-style number formatting.

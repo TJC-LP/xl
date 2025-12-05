@@ -24,6 +24,8 @@ object CsvRenderer:
    *   If true, show formulas instead of computed values
    * @param showLabels
    *   If true, include column letters as header row and row numbers as first column
+   * @param skipEmpty
+   *   If true, skip entirely empty rows and columns from output
    * @return
    *   CSV string
    */
@@ -31,7 +33,8 @@ object CsvRenderer:
     sheet: Sheet,
     range: CellRange,
     showFormulas: Boolean = false,
-    showLabels: Boolean = false
+    showLabels: Boolean = false,
+    skipEmpty: Boolean = false
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -46,11 +49,34 @@ object CsvRenderer:
       sheet.getRowProperties(Row.from0(row)).hidden
     }
 
+    // Helper to check if a cell is empty
+    def isCellEmpty(col: Int, row: Int): Boolean =
+      sheet.cells.get(ARef.from0(col, row)) match
+        case None => true
+        case Some(cell) =>
+          cell.value match
+            case CellValue.Empty => true
+            case CellValue.Text(s) if s.trim.isEmpty => true
+            case CellValue.Formula(_, Some(CellValue.Empty)) => true
+            case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
+            case _ => false
+
+    // Filter empty columns if skipEmpty is true
+    val nonEmptyCols =
+      if skipEmpty then visibleCols.filter(col => visibleRows.exists(row => !isCellEmpty(col, row)))
+      else visibleCols
+
+    // Filter empty rows if skipEmpty is true
+    val nonEmptyRows =
+      if skipEmpty then
+        visibleRows.filter(row => nonEmptyCols.exists(col => !isCellEmpty(col, row)))
+      else visibleRows
+
     val sb = new StringBuilder
 
     // Header row with column letters (if showLabels)
     if showLabels then
-      val headerCells = visibleCols.map { colIdx =>
+      val headerCells = nonEmptyCols.map { colIdx =>
         Column.from0(colIdx).toLetter
       }
       sb.append(",") // Empty cell for row number column
@@ -58,15 +84,15 @@ object CsvRenderer:
       sb.append("\n")
 
     // Data rows
-    val lastRowIdx = visibleRows.lastOption
-    visibleRows.foreach { rowIdx =>
+    val lastRowIdx = nonEmptyRows.lastOption
+    nonEmptyRows.foreach { rowIdx =>
       val rowNum = rowIdx + 1
 
       if showLabels then
         sb.append(rowNum.toString)
         sb.append(",")
 
-      val cellValues = visibleCols.map { colIdx =>
+      val cellValues = nonEmptyCols.map { colIdx =>
         val ref = ARef.from0(colIdx, rowIdx)
         sheet.cells.get(ref) match
           case Some(cell) => formatCell(cell, sheet, showFormulas)

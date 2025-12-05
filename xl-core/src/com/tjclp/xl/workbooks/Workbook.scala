@@ -78,8 +78,9 @@ final case class Workbook(
   def put(sheet: Sheet): Workbook =
     sheets.indexWhere(_.name == sheet.name) match
       case -1 =>
-        // Sheet doesn't exist → add at end (no tracking needed for new sheets)
-        copy(sheets = sheets :+ sheet)
+        // Sheet doesn't exist → add at end and mark metadata as modified (workbook.xml changes)
+        val updatedContext = sourceContext.map(_.markMetadataModified)
+        copy(sheets = sheets :+ sheet, sourceContext = updatedContext)
       case index =>
         // Sheet exists → replace in-place and track modification
         val updatedContext = sourceContext.map(_.markSheetModified(index))
@@ -248,7 +249,8 @@ final case class Workbook(
     else if sheets.exists(_.name == sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
     else
       val (before, after) = sheets.splitAt(index)
-      Right(copy(sheets = before ++ (sheet +: after)))
+      val updatedContext = sourceContext.map(_.markMetadataModified)
+      Right(copy(sheets = before ++ (sheet +: after), sourceContext = updatedContext))
 
   // ========== Deprecated Methods (Removed in v0.3.0) ==========
 

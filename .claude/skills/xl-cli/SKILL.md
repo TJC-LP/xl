@@ -44,6 +44,8 @@ cd /tmp && ./install.sh
 
 - [Quick Reference](#quick-reference)
 - [Sheet Handling](#sheet-handling)
+- [Sheet Management](#sheet-management)
+- [Cell Operations](#cell-operations)
 - [Styling](#styling)
 - [Row/Column Operations](#rowcolumn-operations)
 - [Output Formats](#output-formats)
@@ -56,29 +58,42 @@ cd /tmp && ./install.sh
 
 ```bash
 # Read operations
-xl -f <file> sheets                    # List sheets
-xl -f <file> bounds                    # Used range
-xl -f <file> view <range>              # View as table
-xl -f <file> cell <ref>                # Cell details + dependencies
-xl -f <file> search <pattern>          # Find cells
-xl -f <file> eval <formula>            # Evaluate formula
+xl -f <file> sheets                    # List sheets with stats
+xl -f <file> names                     # List defined names (named ranges)
+xl -f <file> -s <sheet> bounds         # Used range
+xl -f <file> -s <sheet> view <range>   # View as table
+xl -f <file> -s <sheet> cell <ref>     # Cell details + dependencies
+xl -f <file> -s <sheet> search <pattern>  # Find cells
+xl -f <file> -s <sheet> stats <range>  # Calculate statistics (count, sum, min, max, mean)
+xl -f <file> -s <sheet> eval <formula> # Evaluate formula
 
 # Output formats
-xl -f <file> view <range> --format json
-xl -f <file> view <range> --format csv --show-labels
-xl -f <file> view <range> --format png --raster-output out.png
+xl -f <file> -s <sheet> view <range> --format json
+xl -f <file> -s <sheet> view <range> --format csv --show-labels
+xl -f <file> -s <sheet> view <range> --format png --raster-output out.png
 
 # Write operations (require -o)
-xl -f <file> -o <out> put <ref> <value>
-xl -f <file> -o <out> putf <ref> <formula>
+xl -f <file> -s <sheet> -o <out> put <ref> <value>
+xl -f <file> -s <sheet> -o <out> putf <ref> <formula>
 
 # Style operations (require -o)
-xl -f <file> -o <out> style <range> --bold --bg yellow
-xl -f <file> -o <out> style <range> --bg "#FF6600" --fg white
+xl -f <file> -s <sheet> -o <out> style <range> --bold --bg yellow
+xl -f <file> -s <sheet> -o <out> style <range> --bg "#FF6600" --fg white
 
 # Row/Column operations (require -o)
-xl -f <file> -o <out> row <n> --height 30
-xl -f <file> -o <out> col <letter> --width 20 --hide
+xl -f <file> -s <sheet> -o <out> row <n> --height 30
+xl -f <file> -s <sheet> -o <out> col <letter> --width 20 --hide
+
+# Sheet management (require -o)
+xl -f <file> -o <out> add-sheet "NewSheet"
+xl -f <file> -o <out> remove-sheet "OldSheet"
+xl -f <file> -o <out> rename-sheet "Old" "New"
+xl -f <file> -o <out> move-sheet "Sheet1" --to 0
+xl -f <file> -o <out> copy-sheet "Template" "Copy"
+
+# Cell operations (require -o and -s)
+xl -f <file> -s <sheet> -o <out> merge A1:C1
+xl -f <file> -s <sheet> -o <out> unmerge A1:C1
 ```
 
 ---
@@ -97,6 +112,78 @@ xl -f data.xlsx eval "=SUM(Revenue!A1:A10)"
 ```
 
 **Workflow**: Always start with `xl -f file.xlsx sheets` to discover sheet names.
+
+---
+
+## Sheet Management
+
+Modify workbook structure with these commands (all require `-o` for output):
+
+### Add / Remove Sheets
+
+```bash
+# Add new empty sheet (appends to end)
+xl -f data.xlsx -o out.xlsx add-sheet "NewSheet"
+
+# Add sheet at specific position
+xl -f data.xlsx -o out.xlsx add-sheet "Summary" --before "Sheet1"
+xl -f data.xlsx -o out.xlsx add-sheet "Notes" --after "Data"
+
+# Remove sheet
+xl -f data.xlsx -o out.xlsx remove-sheet "Scratch"
+```
+
+### Rename / Move / Copy Sheets
+
+```bash
+# Rename
+xl -f data.xlsx -o out.xlsx rename-sheet "Sheet1" "Summary"
+
+# Move to position (0-based index)
+xl -f data.xlsx -o out.xlsx move-sheet "Notes" --to 0
+
+# Move relative to another sheet
+xl -f data.xlsx -o out.xlsx move-sheet "Notes" --after "Summary"
+xl -f data.xlsx -o out.xlsx move-sheet "Notes" --before "Data"
+
+# Copy (duplicate with new name)
+xl -f data.xlsx -o out.xlsx copy-sheet "Template" "Q1 Report"
+```
+
+| Command | Description |
+|---------|-------------|
+| `add-sheet <name>` | Add empty sheet (`--after`/`--before` for position) |
+| `remove-sheet <name>` | Remove sheet from workbook |
+| `rename-sheet <old> <new>` | Rename a sheet |
+| `move-sheet <name>` | Move sheet (`--to`/`--after`/`--before`) |
+| `copy-sheet <src> <dest>` | Duplicate sheet with new name |
+
+---
+
+## Cell Operations
+
+### Merge / Unmerge Cells
+
+Merge combines cells into one; unmerge separates them.
+
+```bash
+# Merge header row
+xl -f data.xlsx -s Sheet1 -o out.xlsx merge A1:D1
+
+# Unmerge
+xl -f data.xlsx -s Sheet1 -o out.xlsx unmerge A1:D1
+```
+
+**Note**: HTML output shows merged cells with `colspan`/`rowspan`. Markdown tables cannot represent merges.
+
+### Statistics
+
+Calculate statistics for numeric values in a range:
+
+```bash
+xl -f data.xlsx -s Sheet1 stats B2:B100
+# Output: count: 99, sum: 12345.00, min: 10.00, max: 500.00, mean: 124.70
+```
 
 ---
 
@@ -180,17 +267,19 @@ xl -f data.xlsx view A1:F20 --format png --raster-output /tmp/sheet.png --show-l
 ### Explore Unknown Spreadsheet
 
 ```bash
-xl -f data.xlsx sheets                     # List sheets
-xl -f data.xlsx --sheet "Sheet1" bounds    # Get range
-xl -f data.xlsx --sheet "Sheet1" view A1:E20
+xl -f data.xlsx sheets                     # List sheets with cell counts
+xl -f data.xlsx names                      # List defined names (named ranges)
+xl -f data.xlsx -s "Sheet1" bounds         # Get used range
+xl -f data.xlsx -s "Sheet1" view A1:E20    # View data
+xl -f data.xlsx -s "Sheet1" stats B2:B100  # Quick statistics
 ```
 
 ### Formula Analysis
 
 ```bash
-xl -f data.xlsx view --formulas A1:D10     # Show formulas
-xl -f data.xlsx cell C5                    # Dependencies
-xl -f data.xlsx eval "=SUM(A1:A10)" --with "A1=500"  # What-if
+xl -f data.xlsx -s Sheet1 view --formulas A1:D10     # Show formulas
+xl -f data.xlsx -s Sheet1 cell C5                    # Dependencies
+xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500"  # What-if
 ```
 
 See [reference/FORMULAS.md](reference/FORMULAS.md) for supported functions.
@@ -198,10 +287,21 @@ See [reference/FORMULAS.md](reference/FORMULAS.md) for supported functions.
 ### Create Formatted Report
 
 ```bash
-xl -f template.xlsx -o report.xlsx put A1 "Sales Report"
-xl -f report.xlsx -o report.xlsx style A1:E1 --bold --bg navy --fg white
-xl -f report.xlsx -o report.xlsx style B2:B100 --format currency
-xl -f report.xlsx -o report.xlsx col A --width 25
+xl -f template.xlsx -s Sheet1 -o report.xlsx put A1 "Sales Report"
+xl -f report.xlsx -s Sheet1 -o report.xlsx style A1:E1 --bold --bg navy --fg white
+xl -f report.xlsx -s Sheet1 -o report.xlsx style B2:B100 --format currency
+xl -f report.xlsx -s Sheet1 -o report.xlsx col A --width 25
+```
+
+### Multi-Sheet Workbook Setup
+
+```bash
+# Create workbook and add sheets
+xl new output.xlsx
+xl -f output.xlsx -o output.xlsx add-sheet "Data"
+xl -f output.xlsx -o output.xlsx add-sheet "Summary" --before "Data"
+xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
+xl -f output.xlsx -o output.xlsx rename-sheet "Sheet1" "Overview"
 ```
 
 ---
@@ -220,22 +320,51 @@ xl -f report.xlsx -o report.xlsx col A --width 25
 
 | Option | Description |
 |--------|-------------|
-| `--format <fmt>` | Output format |
-| `--formulas` | Show formulas |
+| `--format <fmt>` | Output format (markdown, json, csv, html, svg, png, jpeg, webp, pdf) |
+| `--formulas` | Show formulas instead of values |
 | `--limit <n>` | Max rows (default: 50) |
-| `--show-labels` | Row/column headers |
-| `--raster-output <path>` | Image output path |
+| `--skip-empty` | Skip empty cells (JSON) or empty rows/columns (tabular) |
+| `--header-row <n>` | Use row N as JSON keys (1-based) |
+| `--show-labels` | Include row/column headers |
+| `--raster-output <path>` | Image output path (required for png/jpeg/webp/pdf) |
 | `--dpi <n>` | Resolution (default: 144) |
 | `--quality <n>` | JPEG quality (default: 90) |
+| `--gridlines` | Show cell gridlines in SVG |
+| `--print-scale` | Apply print scaling |
 
 ### Search Options
 
 | Option | Description |
 |--------|-------------|
 | `--limit <n>` | Max matches |
+| `--sheets <list>` | Comma-separated sheet names to search (default: all) |
 
 ### Eval Options
 
 | Option | Alias | Description |
 |--------|-------|-------------|
 | `--with <overrides>` | `-w` | Cell overrides (e.g., `A1=100,B2=200`) |
+
+### Cell Options
+
+| Option | Description |
+|--------|-------------|
+| `--no-style` | Omit style info from output |
+
+### Sheet Management Commands
+
+| Command | Options | Description |
+|---------|---------|-------------|
+| `add-sheet <name>` | `--after <sheet>`, `--before <sheet>` | Add empty sheet |
+| `remove-sheet <name>` | | Remove sheet |
+| `rename-sheet <old> <new>` | | Rename sheet |
+| `move-sheet <name>` | `--to <idx>`, `--after <sheet>`, `--before <sheet>` | Move sheet |
+| `copy-sheet <src> <dest>` | | Duplicate sheet |
+
+### Cell Operation Commands
+
+| Command | Description |
+|---------|-------------|
+| `merge <range>` | Merge cells in range |
+| `unmerge <range>` | Unmerge cells in range |
+| `stats <range>` | Calculate statistics for numeric values |
