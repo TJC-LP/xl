@@ -136,6 +136,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mill-
 
+      - name: Fetch annotated tags
+        run: git fetch --tags --force
+
       - name: Extract version and tag message
         id: version
         run: |
@@ -151,8 +154,12 @@ jobs:
           # Extract annotated tag message (if any) for release notes
           TAG_MESSAGE=$(git tag -l --format='%(contents)' "v$TAG_VERSION" 2>/dev/null || echo "")
           if [ -n "$TAG_MESSAGE" ]; then
-            # Write to file for multi-line support
-            echo "$TAG_MESSAGE" > /tmp/release-notes.md
+            # Output multi-line tag message using heredoc syntax
+            {
+              echo 'body<<EOF'
+              echo "$TAG_MESSAGE"
+              echo 'EOF'
+            } >> $GITHUB_OUTPUT
             echo "has_notes=true" >> $GITHUB_OUTPUT
           else
             echo "has_notes=false" >> $GITHUB_OUTPUT
@@ -276,7 +283,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           # Use tag message if available, otherwise generate notes
-          body_path: ${{ steps.version.outputs.has_notes == 'true' && '/tmp/release-notes.md' || '' }}
+          body: ${{ steps.version.outputs.body }}
           generate_release_notes: ${{ steps.version.outputs.has_notes != 'true' }}
           draft: false
           files: |
