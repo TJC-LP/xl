@@ -1,7 +1,10 @@
 package com.tjclp.xl.cli.helpers
 
 import cats.effect.IO
+import cats.syntax.traverse.*
 import com.tjclp.xl.{*, given}
+import com.tjclp.xl.addressing.{ARef, RefType, SheetName}
+import com.tjclp.xl.cells.CellValue
 
 /**
  * Batch operation parsing and execution for CLI.
@@ -83,7 +86,15 @@ object BatchParser:
       case None => Right(ops.collect { case Right(op) => op })
 
   /**
+   * Resolved operation with parsed ref and target sheet name.
+   */
+  private case class ResolvedOp(sheetName: SheetName, ref: ARef, value: CellValue)
+
+  /**
    * Apply batch operations to a workbook.
+   *
+   * Optimized: Groups operations by sheet and uses batch put for O(N) instead of O(N²). Uses
+   * Sheet.put((ARef, CellValue)*) varargs for single-pass accumulation with style deduplication.
    *
    * @param wb
    *   Workbook to modify
@@ -99,27 +110,53 @@ object BatchParser:
     defaultSheetOpt: Option[Sheet],
     ops: Vector[BatchOp]
   ): IO[Workbook] =
-    ops.foldLeft(IO.pure(wb)) { (wbIO, op) =>
-      wbIO.flatMap { currentWb =>
-        op match
-          case BatchOp.Put(refStr, value) =>
-            SheetResolver.resolveRef(currentWb, defaultSheetOpt, refStr, "batch put").map {
-              case (targetSheet, Left(ref)) =>
-                val cellValue = ValueParser.parseValue(value)
-                val updatedSheet = targetSheet.put(ref, cellValue)
-                currentWb.put(updatedSheet)
-              case (_, Right(_)) =>
-                // This shouldn't happen for single refs, but handle gracefully
-                currentWb
-            }
-          case BatchOp.PutFormula(refStr, formula) =>
-            SheetResolver.resolveRef(currentWb, defaultSheetOpt, refStr, "batch putf").map {
-              case (targetSheet, Left(ref)) =>
-                val normalizedFormula = if formula.startsWith("=") then formula.drop(1) else formula
-                val updatedSheet = targetSheet.put(ref, CellValue.Formula(normalizedFormula, None))
-                currentWb.put(updatedSheet)
-              case (_, Right(_)) =>
-                currentWb
-            }
+    val defaultSheetName = defaultSheetOpt.map(_.name)
+
+    // Phase 1: Resolve all refs upfront, validating and extracting sheet names
+    val resolvedOpsIO: IO[Vector[ResolvedOp]] = ops.traverse { op =>
+      val (refStr, value) = op match
+        case BatchOp.Put(r, v) =>
+          (r, ValueParser.parseValue(v))
+        case BatchOp.PutFormula(r, f) =>
+          val formula = if f.startsWith("=") then f.drop(1) else f
+          (r, CellValue.Formula(formula, None))
+
+      IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+        case RefType.Cell(ref) =>
+          // Unqualified ref - use default sheet
+          defaultSheetName match
+            case Some(name) => IO.pure(ResolvedOp(name, ref, value))
+            case None =>
+              IO.raiseError(new Exception(s"batch requires --sheet for unqualified ref '$refStr'"))
+        case RefType.QualifiedCell(sheetName, ref) =>
+          // Qualified ref - use specified sheet
+          IO.pure(ResolvedOp(sheetName, ref, value))
+        case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+          IO.raiseError(new Exception(s"batch put requires single cell ref, not range: $refStr"))
+      }
+    }
+
+    resolvedOpsIO.flatMap { resolvedOps =>
+      // Phase 2: Group by sheet name
+      val bySheet: Map[SheetName, Vector[ResolvedOp]] = resolvedOps.groupBy(_.sheetName)
+
+      // Phase 3: Apply batch puts per sheet (O(1) workbook update per sheet)
+      bySheet.foldLeft(IO.pure(wb)) { case (wbIO, (sheetName, sheetOps)) =>
+        wbIO.flatMap { currentWb =>
+          currentWb.sheets.find(_.name == sheetName) match
+            case None =>
+              IO.raiseError(
+                new Exception(
+                  s"Sheet '${sheetName.value}' not found. " +
+                    s"Available: ${currentWb.sheetNames.map(_.value).mkString(", ")}"
+                )
+              )
+            case Some(sheet) =>
+              // Build (ARef, CellValue)* for batch put
+              val updates: Seq[(ARef, CellValue)] = sheetOps.map(op => (op.ref, op.value))
+              // Single batch put - O(N) with style deduplication
+              val updatedSheet = sheet.put(updates*)
+              IO.pure(currentWb.put(updatedSheet))
+        }
       }
     }
