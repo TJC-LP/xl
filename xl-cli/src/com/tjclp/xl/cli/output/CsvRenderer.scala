@@ -1,6 +1,6 @@
 package com.tjclp.xl.cli.output
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.SheetEvaluator
@@ -43,35 +43,17 @@ object CsvRenderer:
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
 
-    // Filter hidden rows/cols (same as other renderers)
-    val visibleCols = (startCol to endCol).filterNot { col =>
-      sheet.getColumnProperties(Column.from0(col)).hidden
-    }
-    val visibleRows = (startRow to endRow).filterNot { row =>
-      sheet.getRowProperties(Row.from0(row)).hidden
-    }
+    // Filter out hidden columns and rows
+    val visibleCols = RendererCommon.visibleColumns(sheet, startCol, endCol)
+    val visibleRows = RendererCommon.visibleRows(sheet, startRow, endRow)
 
-    // Helper to check if a cell is empty
-    def isCellEmpty(col: Int, row: Int): Boolean =
-      sheet.cells.get(ARef.from0(col, row)) match
-        case None => true
-        case Some(cell) =>
-          cell.value match
-            case CellValue.Empty => true
-            case CellValue.Text(s) if s.trim.isEmpty => true
-            case CellValue.Formula(_, Some(CellValue.Empty)) => true
-            case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
-            case _ => false
-
-    // Filter empty columns if skipEmpty is true
+    // Filter empty columns/rows if skipEmpty is true
     val nonEmptyCols =
-      if skipEmpty then visibleCols.filter(col => visibleRows.exists(row => !isCellEmpty(col, row)))
+      if skipEmpty then RendererCommon.nonEmptyColumns(sheet, visibleCols, visibleRows)
       else visibleCols
 
-    // Filter empty rows if skipEmpty is true
     val nonEmptyRows =
-      if skipEmpty then
-        visibleRows.filter(row => nonEmptyCols.exists(col => !isCellEmpty(col, row)))
+      if skipEmpty then RendererCommon.nonEmptyRows(sheet, visibleRows, nonEmptyCols)
       else visibleRows
 
     val sb = new StringBuilder
@@ -146,7 +128,7 @@ object CsvRenderer:
         else if evalFormulas then
           SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
             case Right(result) => NumFmtFormatter.formatValue(result, numFmt)
-            case Left(err) => formatEvalError(err.message)
+            case Left(err) => RendererCommon.formatEvalError(err.message)
         else cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
 
     escapeCsv(raw)
@@ -164,13 +146,3 @@ object CsvRenderer:
       val escaped = s.replace("\"", "\"\"")
       s"\"$escaped\""
     else s
-
-  /** Format evaluation errors as Excel-style error codes. */
-  private def formatEvalError(message: String): String =
-    if message.toLowerCase.contains("circular") then "#CIRC!"
-    else if message.toLowerCase.contains("division") || message.toLowerCase.contains("div") then
-      "#DIV/0!"
-    else if message.toLowerCase.contains("parse") || message.toLowerCase.contains("unknown") then
-      "#NAME?"
-    else if message.toLowerCase.contains("ref") then "#REF!"
-    else s"#ERROR!"
