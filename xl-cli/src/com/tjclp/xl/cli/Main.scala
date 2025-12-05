@@ -63,14 +63,20 @@ object Main
     }
 
     // Sheet-level write: --file, --sheet, and --output (required)
-    val sheetWriteSubcmds = putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd
+    val sheetWriteSubcmds =
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, sheetWriteSubcmds).mapN { (file, sheet, out, cmd) =>
         run(file, sheet, Some(out), cmd)
       }
 
-    workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
+    // Standalone: no --file required (creates new files)
+    val standaloneOpts = newCmd.map { case (outPath, sheetName) =>
+      runStandalone(outPath, sheetName)
+    }
+
+    standaloneOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
 
   // ==========================================================================
   // Global options
@@ -132,6 +138,27 @@ object Main
         "Output file for raster formats (required for png/jpeg/webp/pdf)"
       )
       .orNone
+  private val skipEmptyOpt =
+    Opts.flag("skip-empty", "Skip empty cells (JSON) or empty rows/columns (tabular)").orFalse
+  private val headerRowOpt =
+    Opts
+      .option[Int](
+        "header-row",
+        "Use values from this row as keys in JSON output (1-based row number)"
+      )
+      .orNone
+  private val allSheetsOpt =
+    Opts.flag("all-sheets", "Search across all sheets in the workbook").orFalse
+
+  // --- Standalone commands (no --file required) ---
+
+  private val outputArg = Opts.argument[Path]("output")
+  private val sheetNameOpt =
+    Opts.option[String]("sheet-name", "Sheet name (defaults to 'Sheet1')").withDefault("Sheet1")
+
+  val newCmd: Opts[(Path, String)] = Opts.subcommand("new", "Create a blank xlsx file") {
+    (outputArg, sheetNameOpt).tupled
+  }
 
   // --- Read-only commands ---
 
@@ -155,7 +182,9 @@ object Main
         showLabelsOpt,
         dpiOpt,
         qualityOpt,
-        rasterOutputOpt
+        rasterOutputOpt,
+        skipEmptyOpt,
+        headerRowOpt
       )
         .mapN(Command.View.apply)
     }
@@ -165,7 +194,7 @@ object Main
   }
 
   val searchCmd: Opts[Command] = Opts.subcommand("search", "Search for cells") {
-    (patternArg, limitOpt).mapN(Command.Search.apply)
+    (patternArg, limitOpt, allSheetsOpt).mapN(Command.Search.apply)
   }
 
   // --- Analyze ---
@@ -246,6 +275,13 @@ object Main
     (colArg, widthOpt, hideOpt, showOpt).mapN(Command.ColOp.apply)
   }
 
+  // --- Batch command ---
+  private val batchArg = Opts.argument[String]("operations").withDefault("-")
+  val batchCmd: Opts[Command] =
+    Opts.subcommand("batch", "Apply multiple operations atomically (JSON from stdin or file)") {
+      batchArg.map(Command.Batch.apply)
+    }
+
   // ==========================================================================
   // Command execution
   // ==========================================================================
@@ -257,6 +293,18 @@ object Main
     cmd: Command
   ): IO[ExitCode] =
     execute(filePath, sheetNameOpt, outputOpt, cmd).attempt.flatMap {
+      case Right(output) =>
+        IO.println(output).as(ExitCode.Success)
+      case Left(err) =>
+        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+    }
+
+  private def runStandalone(outPath: Path, sheetName: String): IO[ExitCode] =
+    (for
+      name <- IO.fromEither(SheetName(sheetName).left.map(e => new Exception(e)))
+      wb = Workbook(Vector(Sheet(name)))
+      _ <- ExcelIO.instance[IO].write(wb, outPath)
+    yield s"Created ${outPath.toAbsolutePath} with sheet '$sheetName'").attempt.flatMap {
       case Right(output) =>
         IO.println(output).as(ExitCode.Success)
       case Left(err) =>
@@ -361,7 +409,9 @@ object Main
           showLabels,
           dpi,
           quality,
-          rasterOutput
+          rasterOutput,
+          skipEmpty,
+          headerRow
         ) =>
       for
         resolved <- resolveRef(wb, sheet, rangeStr)
@@ -373,7 +423,7 @@ object Main
         theme = wb.metadata.theme // Use workbook's parsed theme
         result <- format match
           case ViewFormat.Markdown =>
-            IO.pure(Markdown.renderRange(targetSheet, limitedRange, showFormulas))
+            IO.pure(Markdown.renderRange(targetSheet, limitedRange, showFormulas, skipEmpty))
           case ViewFormat.Html =>
             IO.pure(
               targetSheet.toHtml(
@@ -393,9 +443,25 @@ object Main
               )
             )
           case ViewFormat.Json =>
-            IO.pure(JsonRenderer.renderRange(targetSheet, limitedRange, showFormulas))
+            IO.pure(
+              JsonRenderer.renderRange(
+                targetSheet,
+                limitedRange,
+                showFormulas,
+                skipEmpty,
+                headerRow
+              )
+            )
           case ViewFormat.Csv =>
-            IO.pure(CsvRenderer.renderRange(targetSheet, limitedRange, showFormulas, showLabels))
+            IO.pure(
+              CsvRenderer.renderRange(
+                targetSheet,
+                limitedRange,
+                showFormulas,
+                showLabels,
+                skipEmpty
+              )
+            )
           case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
             rasterOutput match
               case None =>
@@ -450,7 +516,7 @@ object Main
         dependents = graph.dependents.getOrElse(ref, Set.empty).toVector.sortBy(_.toA1)
       yield Format.cellInfo(ref, value, formatted, style, comment, hyperlink, deps, dependents)
 
-    case Command.Search(pattern, limit) =>
+    case Command.Search(pattern, limit, allSheets) =>
       IO.fromEither(
         scala.util
           .Try(pattern.r)
@@ -458,18 +524,37 @@ object Main
           .left
           .map(e => new Exception(s"Invalid regex pattern: ${e.getMessage}"))
       ).map { regex =>
-        val results = sheet.cells.iterator
-          .filter { case (_, cell) =>
-            val text = formatCellValue(cell.value)
-            regex.findFirstIn(text).isDefined
-          }
-          .take(limit)
-          .map { case (ref, cell) =>
-            val value = formatCellValue(cell.value)
-            (ref, value, value)
-          }
-          .toVector
-        Markdown.renderSearchResults(results)
+        if allSheets then
+          // Search across all sheets, return qualified refs
+          val results = wb.sheets.iterator
+            .flatMap { s =>
+              s.cells.iterator
+                .filter { case (_, cell) =>
+                  val text = formatCellValue(cell.value)
+                  regex.findFirstIn(text).isDefined
+                }
+                .map { case (ref, cell) =>
+                  val value = formatCellValue(cell.value)
+                  (s"${s.name.value}!${ref.toA1}", value)
+                }
+            }
+            .take(limit)
+            .toVector
+          s"Found ${results.size} matches across ${wb.sheets.size} sheets:\n\n${Markdown.renderSearchResultsWithRef(results)}"
+        else
+          // Search single sheet, return regular refs
+          val results = sheet.cells.iterator
+            .filter { case (_, cell) =>
+              val text = formatCellValue(cell.value)
+              regex.findFirstIn(text).isDefined
+            }
+            .take(limit)
+            .map { case (ref, cell) =>
+              val value = formatCellValue(cell.value)
+              (ref, value, value)
+            }
+            .toVector
+          Markdown.renderSearchResults(results)
       }
 
     case Command.Eval(formulaStr, overrides) =>
@@ -619,6 +704,108 @@ object Main
             }
           }
       }
+
+    case Command.Batch(source) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          readBatchInput(source).flatMap { input =>
+            parseBatchOperations(input).flatMap { ops =>
+              applyBatchOperations(wb, sheet, ops).flatMap { updatedWb =>
+                ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
+                  val summary = ops
+                    .map {
+                      case BatchOp.Put(ref, value) => s"  PUT $ref = $value"
+                      case BatchOp.PutFormula(ref, formula) => s"  PUTF $ref = $formula"
+                    }
+                    .mkString("\n")
+                  s"Applied ${ops.size} operations:\n$summary\nSaved: $outputPath"
+                }
+              }
+            }
+          }
+      }
+
+  // ==========================================================================
+  // Batch operations
+  // ==========================================================================
+
+  private enum BatchOp:
+    case Put(ref: String, value: String)
+    case PutFormula(ref: String, formula: String)
+
+  private def readBatchInput(source: String): IO[String] =
+    if source == "-" then IO.blocking(scala.io.Source.stdin.mkString)
+    else IO.blocking(scala.io.Source.fromFile(source).mkString)
+
+  /**
+   * Parse batch JSON input. Expects format:
+   * {{{
+   * [
+   *   {"op": "put", "ref": "A1", "value": "Hello"},
+   *   {"op": "putf", "ref": "B1", "value": "=A1*2"}
+   * ]
+   * }}}
+   */
+  private def parseBatchOperations(input: String): IO[Vector[BatchOp]] =
+    IO.fromEither {
+      val trimmed = input.trim
+      if !trimmed.startsWith("[") then Left(new Exception("Batch input must be a JSON array"))
+      else parseBatchJson(trimmed)
+    }
+
+  /**
+   * Simple JSON parser for batch operations. Handles: [{"op":"put"|"putf", "ref":"A1",
+   * "value":"..."}]
+   */
+  private def parseBatchJson(json: String): Either[Exception, Vector[BatchOp]] =
+    // Very simple JSON parsing - handles the specific format we need
+    val objPattern = """\{[^}]+\}""".r
+    val opPattern = """"op"\s*:\s*"(\w+)"""".r
+    val refPattern = """"ref"\s*:\s*"([^"]+)"""".r
+    val valuePattern = """"value"\s*:\s*"((?:[^"\\]|\\.)*)"""".r
+
+    val ops = objPattern.findAllIn(json).toVector.map { obj =>
+      val op = opPattern.findFirstMatchIn(obj).map(_.group(1))
+      val ref = refPattern.findFirstMatchIn(obj).map(_.group(1))
+      val value = valuePattern
+        .findFirstMatchIn(obj)
+        .map(_.group(1))
+        .map(_.replace("\\\"", "\"").replace("\\n", "\n").replace("\\\\", "\\"))
+
+      (op, ref, value) match
+        case (Some("put"), Some(r), Some(v)) => Right(BatchOp.Put(r, v))
+        case (Some("putf"), Some(r), Some(v)) => Right(BatchOp.PutFormula(r, v))
+        case (Some(unknown), _, _) => Left(new Exception(s"Unknown operation: $unknown"))
+        case _ => Left(new Exception(s"Invalid batch operation: $obj"))
+    }
+
+    val errors = ops.collect { case Left(e) => e }
+    errors.headOption match
+      case Some(e) => Left(e)
+      case None => Right(ops.collect { case Right(op) => op })
+
+  private def applyBatchOperations(
+    wb: Workbook,
+    sheet: Sheet,
+    ops: Vector[BatchOp]
+  ): IO[Workbook] =
+    ops
+      .foldLeft(IO.pure(sheet)) { (sheetIO, op) =>
+        sheetIO.flatMap { s =>
+          op match
+            case BatchOp.Put(refStr, value) =>
+              IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e))).map { ref =>
+                val cellValue = parseValue(value)
+                s.put(ref, cellValue)
+              }
+            case BatchOp.PutFormula(refStr, formula) =>
+              IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e))).map { ref =>
+                val normalizedFormula = if formula.startsWith("=") then formula.drop(1) else formula
+                s.put(ref, CellValue.Formula(normalizedFormula, None))
+              }
+        }
+      }
+      .map(updatedSheet => wb.put(updatedSheet))
 
   // ==========================================================================
   // Helpers
@@ -833,10 +1020,12 @@ enum Command:
     showLabels: Boolean,
     dpi: Int,
     quality: Int,
-    rasterOutput: Option[Path]
+    rasterOutput: Option[Path],
+    skipEmpty: Boolean,
+    headerRow: Option[Int]
   )
   case Cell(ref: String)
-  case Search(pattern: String, limit: Int)
+  case Search(pattern: String, limit: Int, allSheets: Boolean)
   // Analyze
   case Eval(formula: String, overrides: List[String])
   // Mutate (require -o)
@@ -860,6 +1049,7 @@ enum Command:
   )
   case RowOp(row: Int, height: Option[Double], hide: Boolean, show: Boolean)
   case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean)
+  case Batch(source: String) // "-" for stdin or file path
 
 /**
  * Output format for view command.

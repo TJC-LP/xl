@@ -20,7 +20,7 @@ object JsonRenderer:
   /**
    * Render a range as JSON.
    *
-   * Output format:
+   * Output format (default):
    * {{{
    * {
    *   "sheet": "Sheet1",
@@ -36,8 +36,120 @@ object JsonRenderer:
    *   ]
    * }
    * }}}
+   *
+   * Output format (with headerRow):
+   * {{{
+   * {
+   *   "sheet": "Sheet1",
+   *   "range": "A1:D5",
+   *   "records": [
+   *     {"Name": "Widget", "Price": 19.99, "Quantity": 100},
+   *     {"Name": "Gadget", "Price": 29.99, "Quantity": 50}
+   *   ]
+   * }
+   * }}}
+   *
+   * @param skipEmpty
+   *   If true, omit cells where type is "empty" from output (reduces token usage for sparse ranges)
+   * @param headerRow
+   *   If provided, use values from this row (1-based) as object keys in JSON output
    */
-  def renderRange(sheet: Sheet, range: CellRange, showFormulas: Boolean = false): String =
+  def renderRange(
+    sheet: Sheet,
+    range: CellRange,
+    showFormulas: Boolean = false,
+    skipEmpty: Boolean = false,
+    headerRow: Option[Int] = None
+  ): String =
+    headerRow match
+      case Some(headerRowNum) =>
+        renderAsRecords(sheet, range, showFormulas, skipEmpty, headerRowNum)
+      case None =>
+        renderAsRows(sheet, range, showFormulas, skipEmpty)
+
+  /**
+   * Render range as array of records with header row values as keys.
+   */
+  private def renderAsRecords(
+    sheet: Sheet,
+    range: CellRange,
+    showFormulas: Boolean,
+    skipEmpty: Boolean,
+    headerRowNum: Int
+  ): String =
+    val startCol = range.start.col.index0
+    val endCol = range.end.col.index0
+    val startRow = range.start.row.index0
+    val endRow = range.end.row.index0
+    val headerRowIdx = headerRowNum - 1 // Convert to 0-based
+
+    // Filter hidden columns
+    val visibleCols = (startCol to endCol).filterNot { col =>
+      sheet.getColumnProperties(Column.from0(col)).hidden
+    }
+
+    // Get header values
+    val headers: Map[Int, String] = visibleCols.flatMap { colIdx =>
+      val ref = ARef.from0(colIdx, headerRowIdx)
+      sheet.cells.get(ref).map { cell =>
+        val headerName = getCellTextValue(cell, sheet)
+        // Use column letter as fallback if header is empty
+        val name = if headerName.trim.isEmpty then Column.from0(colIdx).toLetter else headerName
+        colIdx -> name
+      }
+    }.toMap
+
+    // Filter out hidden rows and header row itself
+    val dataRows = (startRow to endRow).filterNot { row =>
+      row == headerRowIdx || sheet.getRowProperties(Row.from0(row)).hidden
+    }
+
+    val sb = new StringBuilder
+    sb.append("{\n")
+    sb.append(s"""  "sheet": ${escapeJsonString(sheet.name.value)},\n""")
+    sb.append(s"""  "range": "${range.toA1}",\n""")
+    sb.append("""  "records": [""")
+
+    val recordJsons = dataRows.flatMap { rowIdx =>
+      val fields = visibleCols.flatMap { colIdx =>
+        val ref = ARef.from0(colIdx, rowIdx)
+        val headerName = headers.getOrElse(colIdx, Column.from0(colIdx).toLetter)
+
+        sheet.cells.get(ref) match
+          case Some(cell) =>
+            val isEmpty = isCellEmpty(cell)
+            if skipEmpty && isEmpty then None
+            else
+              Some(
+                s"${escapeJsonString(headerName)}: ${renderCellValue(cell, sheet, showFormulas)}"
+              )
+          case None =>
+            if skipEmpty then None
+            else Some(s"${escapeJsonString(headerName)}: null")
+      }
+      // Skip entire record if all fields are empty
+      if skipEmpty && fields.isEmpty then None
+      else Some(s"    {${fields.mkString(", ")}}")
+    }
+
+    if recordJsons.nonEmpty then
+      sb.append("\n")
+      sb.append(recordJsons.mkString(",\n"))
+      sb.append("\n  ")
+
+    sb.append("]\n")
+    sb.append("}")
+    sb.toString
+
+  /**
+   * Original row-based rendering.
+   */
+  private def renderAsRows(
+    sheet: Sheet,
+    range: CellRange,
+    showFormulas: Boolean,
+    skipEmpty: Boolean
+  ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
@@ -57,15 +169,28 @@ object JsonRenderer:
     sb.append(s"""  "range": "${range.toA1}",\n""")
     sb.append("""  "rows": [""")
 
-    val rowJsons = visibleRows.map { rowIdx =>
+    val rowJsons = visibleRows.flatMap { rowIdx =>
       val rowNum = rowIdx + 1
-      val cellJsons = visibleCols.map { colIdx =>
+      val cellJsons = visibleCols.flatMap { colIdx =>
         val ref = ARef.from0(colIdx, rowIdx)
         sheet.cells.get(ref) match
-          case Some(cell) => renderCell(ref, cell, sheet, showFormulas)
-          case None => renderEmptyCell(ref)
+          case Some(cell) =>
+            // Check if cell is effectively empty (including formulas returning empty)
+            val isEmpty = cell.value match
+              case CellValue.Empty => true
+              case CellValue.Text(s) if s.trim.isEmpty => true
+              case CellValue.Formula(_, Some(CellValue.Empty)) => true
+              case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
+              case _ => false
+            if skipEmpty && isEmpty then None
+            else Some(renderCell(ref, cell, sheet, showFormulas))
+          case None =>
+            if skipEmpty then None
+            else Some(renderEmptyCell(ref))
       }
-      s"""    {"row": $rowNum, "cells": [${cellJsons.mkString(", ")}]}"""
+      // Skip entire row if all cells are empty (when skipEmpty is true)
+      if skipEmpty && cellJsons.isEmpty then None
+      else Some(s"""    {"row": $rowNum, "cells": [${cellJsons.mkString(", ")}]}""")
     }
 
     if rowJsons.nonEmpty then
@@ -173,3 +298,82 @@ object JsonRenderer:
     }
     sb.append('"')
     sb.toString
+
+  /** Check if a cell is effectively empty */
+  private def isCellEmpty(cell: Cell): Boolean =
+    cell.value match
+      case CellValue.Empty => true
+      case CellValue.Text(s) if s.trim.isEmpty => true
+      case CellValue.Formula(_, Some(CellValue.Empty)) => true
+      case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
+      case _ => false
+
+  /** Get text value from cell for use as header */
+  private def getCellTextValue(cell: Cell, sheet: Sheet): String =
+    val numFmt = cell.styleId
+      .flatMap(sheet.styleRegistry.get)
+      .map(_.numFmt)
+      .getOrElse(NumFmt.General)
+
+    cell.value match
+      case CellValue.Text(s) => s
+      case CellValue.Number(n) => NumFmtFormatter.formatValue(cell.value, numFmt)
+      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
+      case CellValue.DateTime(dt) => NumFmtFormatter.formatValue(cell.value, numFmt)
+      case CellValue.RichText(rt) => rt.toPlainText
+      case CellValue.Formula(_, Some(cached)) => getCellTextValueFromCellValue(cached, numFmt)
+      case CellValue.Formula(expr, None) => expr
+      case CellValue.Error(err) => err.toExcel
+      case CellValue.Empty => ""
+
+  private def getCellTextValueFromCellValue(value: CellValue, numFmt: NumFmt): String =
+    value match
+      case CellValue.Text(s) => s
+      case CellValue.Number(n) => NumFmtFormatter.formatValue(value, numFmt)
+      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
+      case CellValue.DateTime(dt) => NumFmtFormatter.formatValue(value, numFmt)
+      case CellValue.RichText(rt) => rt.toPlainText
+      case CellValue.Error(err) => err.toExcel
+      case CellValue.Empty => ""
+      case CellValue.Formula(_, _) => "" // Shouldn't happen
+
+  /** Render cell value as JSON value (unquoted for numbers/booleans) */
+  private def renderCellValue(cell: Cell, sheet: Sheet, showFormulas: Boolean): String =
+    val numFmt = cell.styleId
+      .flatMap(sheet.styleRegistry.get)
+      .map(_.numFmt)
+      .getOrElse(NumFmt.General)
+
+    cell.value match
+      case CellValue.Text(s) => escapeJsonString(s)
+      case CellValue.Number(n) =>
+        if n.isWhole then n.toBigInt.toString
+        else n.underlying.stripTrailingZeros.toPlainString
+      case CellValue.Bool(b) => if b then "true" else "false"
+      case CellValue.DateTime(dt) => escapeJsonString(dt.toString)
+      case CellValue.RichText(rt) => escapeJsonString(rt.toPlainText)
+      case CellValue.Error(err) => escapeJsonString(err.toExcel)
+      case CellValue.Empty => "null"
+      case CellValue.Formula(expr, cached) =>
+        if showFormulas then
+          val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+          escapeJsonString(displayExpr)
+        else
+          cached match
+            case Some(cv) => renderCellValueFromCellValue(cv, numFmt)
+            case None =>
+              val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+              escapeJsonString(displayExpr)
+
+  private def renderCellValueFromCellValue(value: CellValue, numFmt: NumFmt): String =
+    value match
+      case CellValue.Text(s) => escapeJsonString(s)
+      case CellValue.Number(n) =>
+        if n.isWhole then n.toBigInt.toString
+        else n.underlying.stripTrailingZeros.toPlainString
+      case CellValue.Bool(b) => if b then "true" else "false"
+      case CellValue.DateTime(dt) => escapeJsonString(dt.toString)
+      case CellValue.RichText(rt) => escapeJsonString(rt.toPlainText)
+      case CellValue.Error(err) => escapeJsonString(err.toExcel)
+      case CellValue.Empty => "null"
+      case CellValue.Formula(_, _) => "null" // Shouldn't happen
