@@ -9,7 +9,7 @@ final case class WorkbookMetadata(
   modified: Option[java.time.LocalDateTime] = None,
   lastModifiedBy: Option[String] = None,
   application: Option[String] = Some("XL - Pure Scala 3.7 Excel Library"),
-  appVersion: Option[String] = Some("0.1.0-SNAPSHOT"),
+  appVersion: Option[String] = Some("0.2.0"),
   theme: ThemePalette = ThemePalette.office,
   definedNames: Vector[DefinedName] = Vector.empty
 )

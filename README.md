@@ -8,8 +8,8 @@
 ```scala 3 raw
 //> using scala 3.7.3
 //> using repository ivy2Local
-//> using dep com.tjclp::xl-core:0.1.5-SNAPSHOT
-//> using dep com.tjclp::xl-cats-effect:0.1.5-SNAPSHOT
+//> using dep com.tjclp::xl-core:0.2.0
+//> using dep com.tjclp::xl-cats-effect:0.2.0
 
 import com.tjclp.xl.{*, given}
 
@@ -48,9 +48,9 @@ import com.tjclp.xl.{*, given}
 ```scala 3 ignore
 // build.mill
 def ivyDeps = Agg(
-  ivy"com.tjclp::xl-core:0.1.5-SNAPSHOT",
-  ivy"com.tjclp::xl-ooxml:0.1.5-SNAPSHOT",
-  ivy"com.tjclp::xl-cats-effect:0.1.5-SNAPSHOT"  // For IO
+  ivy"com.tjclp::xl-core:0.2.0",
+  ivy"com.tjclp::xl-ooxml:0.2.0",
+  ivy"com.tjclp::xl-cats-effect:0.2.0"  // For IO
 )
 ```
 

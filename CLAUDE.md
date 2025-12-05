@@ -144,6 +144,8 @@ xl -f data.xlsx view "Sheet1"!A1:B4
 
 See `docs/plan/xl-cli.md` for full command reference.
 
+**Note on CLI Skill Documentation**: The file `.claude/skills/xl-cli/SKILL.md` uses `__XL_VERSION__` placeholders for version strings. These are intentionally **not** hardcoded—CI replaces them at build/release time. Do not replace these placeholders during version bumps.
+
 ## Code Style
 
 All code must pass `./mill __.checkFormat`. See `docs/design/style-guide.md`.

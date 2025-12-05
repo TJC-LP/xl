@@ -18,9 +18,9 @@ object myproject extends ScalaModule {
   def scalaVersion = "3.7.3"
 
   def ivyDeps = Agg(
-    ivy"com.tjclp::xl-core:0.1.0",
-    ivy"com.tjclp::xl-ooxml:0.1.0",
-    ivy"com.tjclp::xl-cats-effect:0.1.0"
+    ivy"com.tjclp::xl-core:0.2.0",
+    ivy"com.tjclp::xl-ooxml:0.2.0",
+    ivy"com.tjclp::xl-cats-effect:0.2.0"
   )
 }
 ```
@@ -30,9 +30,9 @@ object myproject extends ScalaModule {
 scalaVersion := "3.7.3"
 
 libraryDependencies ++= Seq(
-  "com.tjclp" %% "xl-core"       % "0.1.0",
-  "com.tjclp" %% "xl-ooxml"      % "0.1.0",
-  "com.tjclp" %% "xl-cats-effect"% "0.1.0"
+  "com.tjclp" %% "xl-core"       % "0.2.0",
+  "com.tjclp" %% "xl-ooxml"      % "0.2.0",
+  "com.tjclp" %% "xl-cats-effect"% "0.2.0"
 )
 ```
 
