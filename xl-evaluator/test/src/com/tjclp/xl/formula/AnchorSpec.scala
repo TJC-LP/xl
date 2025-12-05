@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import munit.FunSuite
-import com.tjclp.xl.{ARef, Anchor}
+import com.tjclp.xl.{ARef, Anchor, CellRange}
 
 /**
  * Tests for Excel-style formula anchoring ($) support.
@@ -97,10 +97,7 @@ class AnchorSpec extends FunSuite:
     assert(result.isRight, s"Parse failed: $result")
     // Should parse without error, contains both relative and absolute refs
 
-  test("FormulaParser: parse anchored range reference (known limitation)".ignore):
-    // Note: Anchored ranges like $A$1:B10 aren't fully supported yet.
-    // The range boundaries themselves don't track individual anchors.
-    // This is marked as a future enhancement in the plan.
+  test("FormulaParser: parse anchored range reference"):
     val result = FormulaParser.parse("=SUM($A$1:B10)")
     assert(result.isRight, s"Parse failed: $result")
 
@@ -246,3 +243,111 @@ class AnchorSpec extends FunSuite:
 
   test("Anchor.isRowAbsolute: false for AbsCol"):
     assert(!Anchor.AbsCol.isRowAbsolute)
+
+  // ===== CellRange anchor tests =====
+
+  test("CellRange.parse: anchored range $A$1:B10"):
+    val result = CellRange.parse("$A$1:B10")
+    assert(result.isRight, s"Parse failed: $result")
+    result.foreach { range =>
+      assertEquals(range.startAnchor, Anchor.Absolute)
+      assertEquals(range.endAnchor, Anchor.Relative)
+    }
+
+  test("CellRange.parse: mixed anchors $A1:B$10"):
+    val result = CellRange.parse("$A1:B$10")
+    assert(result.isRight, s"Parse failed: $result")
+    result.foreach { range =>
+      assertEquals(range.startAnchor, Anchor.AbsCol)
+      assertEquals(range.endAnchor, Anchor.AbsRow)
+    }
+
+  test("CellRange.parse: both endpoints absolute $A$1:$B$10"):
+    val result = CellRange.parse("$A$1:$B$10")
+    assert(result.isRight, s"Parse failed: $result")
+    result.foreach { range =>
+      assertEquals(range.startAnchor, Anchor.Absolute)
+      assertEquals(range.endAnchor, Anchor.Absolute)
+    }
+
+  test("CellRange.parse: both endpoints relative A1:B10"):
+    val result = CellRange.parse("A1:B10")
+    assert(result.isRight, s"Parse failed: $result")
+    result.foreach { range =>
+      assertEquals(range.startAnchor, Anchor.Relative)
+      assertEquals(range.endAnchor, Anchor.Relative)
+    }
+
+  test("CellRange.parse: single cell with anchor $A$1"):
+    val result = CellRange.parse("$A$1")
+    assert(result.isRight, s"Parse failed: $result")
+    result.foreach { range =>
+      assertEquals(range.startAnchor, Anchor.Absolute)
+      assertEquals(range.endAnchor, Anchor.Absolute)
+    }
+
+  test("CellRange.toA1Anchored: formats with anchors"):
+    val result = CellRange.parse("$A$1:B10")
+    assert(result.isRight)
+    result.foreach { range =>
+      assertEquals(range.toA1Anchored, "$A$1:B10")
+    }
+
+  test("CellRange.toA1: formats without anchors (backward compatible)"):
+    val result = CellRange.parse("$A$1:B10")
+    assert(result.isRight)
+    result.foreach { range =>
+      assertEquals(range.toA1, "A1:B10")
+    }
+
+  // ===== FormulaShifter anchored range tests =====
+
+  test("FormulaShifter: shift anchored range $A$1:B10 - start fixed, end shifts"):
+    val parsed = FormulaParser.parse("=SUM($A$1:B10)").toOption.get
+    val shifted = FormulaShifter.shift(parsed, colDelta = 2, rowDelta = 3)
+    // $A$1 stays fixed (Absolute), B10 → D13 (Relative)
+    assertEquals(FormulaPrinter.print(shifted), "=SUM($A$1:D13)")
+
+  test("FormulaShifter: shift mixed anchors $A1:B$10"):
+    val parsed = FormulaParser.parse("=SUM($A1:B$10)").toOption.get
+    val shifted = FormulaShifter.shift(parsed, colDelta = 2, rowDelta = 3)
+    // $A1 → $A4 (col fixed, row shifts), B$10 → D$10 (col shifts, row fixed)
+    assertEquals(FormulaPrinter.print(shifted), "=SUM($A4:D$10)")
+
+  test("FormulaShifter: shift all-absolute range $A$1:$B$10 - nothing shifts"):
+    val parsed = FormulaParser.parse("=SUM($A$1:$B$10)").toOption.get
+    val shifted = FormulaShifter.shift(parsed, colDelta = 5, rowDelta = 5)
+    // Both endpoints are Absolute, so nothing shifts
+    assertEquals(FormulaPrinter.print(shifted), "=SUM($A$1:$B$10)")
+
+  test("FormulaShifter: shift all-relative range A1:B10 - both endpoints shift"):
+    val parsed = FormulaParser.parse("=SUM(A1:B10)").toOption.get
+    val shifted = FormulaShifter.shift(parsed, colDelta = 2, rowDelta = 3)
+    // Both endpoints are Relative
+    assertEquals(FormulaPrinter.print(shifted), "=SUM(C4:D13)")
+
+  // ===== Round-trip tests for anchored ranges =====
+
+  test("round-trip: anchored range $A$1:B10"):
+    val original = "=SUM($A$1:B10)"
+    val parsed = FormulaParser.parse(original)
+    assert(parsed.isRight, s"Parse failed: $parsed")
+    assertEquals(FormulaPrinter.print(parsed.toOption.get), original)
+
+  test("round-trip: mixed anchors $A1:B$10"):
+    val original = "=SUM($A1:B$10)"
+    val parsed = FormulaParser.parse(original)
+    assert(parsed.isRight, s"Parse failed: $parsed")
+    assertEquals(FormulaPrinter.print(parsed.toOption.get), original)
+
+  test("round-trip: all absolute $A$1:$B$10"):
+    val original = "=SUM($A$1:$B$10)"
+    val parsed = FormulaParser.parse(original)
+    assert(parsed.isRight, s"Parse failed: $parsed")
+    assertEquals(FormulaPrinter.print(parsed.toOption.get), original)
+
+  test("round-trip: AbsRow start, AbsCol end A$1:$B10"):
+    val original = "=SUM(A$1:$B10)"
+    val parsed = FormulaParser.parse(original)
+    assert(parsed.isRight, s"Parse failed: $parsed")
+    assertEquals(FormulaPrinter.print(parsed.toOption.get), original)

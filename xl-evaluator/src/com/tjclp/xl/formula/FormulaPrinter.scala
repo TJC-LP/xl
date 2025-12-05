@@ -191,66 +191,58 @@ object FormulaPrinter:
 
       // Arithmetic range functions
       case TExpr.Min(range) =>
-        s"MIN(${formatARef(range.start)}:${formatARef(range.end)})"
+        s"MIN(${formatRange(range)})"
 
       case TExpr.Max(range) =>
-        s"MAX(${formatARef(range.start)}:${formatARef(range.end)})"
+        s"MAX(${formatRange(range)})"
 
       // Financial functions
       case TExpr.Npv(rate, values) =>
-        s"NPV(${printExpr(rate, 0)}, ${formatARef(values.start)}:${formatARef(values.end)})"
+        s"NPV(${printExpr(rate, 0)}, ${formatRange(values)})"
 
       case TExpr.Irr(values, guessOpt) =>
-        val rangeText = s"${formatARef(values.start)}:${formatARef(values.end)}"
+        val rangeText = formatRange(values)
         guessOpt match
           case Some(guess) => s"IRR($rangeText, ${printExpr(guess, 0)})"
           case None => s"IRR($rangeText)"
 
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLOOKUP(${printExpr(lookup, 0)}, " +
-          s"${formatARef(table.start)}:${formatARef(table.end)}, " +
+          s"${formatRange(table)}, " +
           s"${printExpr(colIndex, 0)}, ${printExpr(rangeLookup, 0)})"
 
       // Conditional aggregation functions
       case TExpr.SumIf(range, criteria, sumRangeOpt) =>
-        val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
+        val rangeStr = formatRange(range)
         val criteriaStr = printExpr(criteria, 0)
         sumRangeOpt match
           case Some(sumRange) =>
-            val sumRangeStr = s"${formatARef(sumRange.start)}:${formatARef(sumRange.end)}"
-            s"SUMIF($rangeStr, $criteriaStr, $sumRangeStr)"
+            s"SUMIF($rangeStr, $criteriaStr, ${formatRange(sumRange)})"
           case None =>
             s"SUMIF($rangeStr, $criteriaStr)"
 
       case TExpr.CountIf(range, criteria) =>
-        val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
-        s"COUNTIF($rangeStr, ${printExpr(criteria, 0)})"
+        s"COUNTIF(${formatRange(range)}, ${printExpr(criteria, 0)})"
 
       case TExpr.SumIfs(sumRange, conditions) =>
-        val sumRangeStr = s"${formatARef(sumRange.start)}:${formatARef(sumRange.end)}"
         val condStrs = conditions
-          .map { case (range, criteria) =>
-            val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
-            s"$rangeStr, ${printExpr(criteria, 0)}"
+          .map { case (r, criteria) =>
+            s"${formatRange(r)}, ${printExpr(criteria, 0)}"
           }
           .mkString(", ")
-        s"SUMIFS($sumRangeStr, $condStrs)"
+        s"SUMIFS(${formatRange(sumRange)}, $condStrs)"
 
       case TExpr.CountIfs(conditions) =>
         val condStrs = conditions
-          .map { case (range, criteria) =>
-            val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
-            s"$rangeStr, ${printExpr(criteria, 0)}"
+          .map { case (r, criteria) =>
+            s"${formatRange(r)}, ${printExpr(criteria, 0)}"
           }
           .mkString(", ")
         s"COUNTIFS($condStrs)"
 
       // Array and advanced lookup functions
       case TExpr.SumProduct(arrays) =>
-        val rangeStrs = arrays.map { range =>
-          s"${formatARef(range.start)}:${formatARef(range.end)}"
-        }
-        s"SUMPRODUCT(${rangeStrs.mkString(", ")})"
+        s"SUMPRODUCT(${arrays.map(formatRange).mkString(", ")})"
 
       case TExpr.XLookup(
             lookupValue,
@@ -261,8 +253,8 @@ object FormulaPrinter:
             searchMode
           ) =>
         val lookupStr = printExpr(lookupValue, 0)
-        val lookupArrayStr = s"${formatARef(lookupArray.start)}:${formatARef(lookupArray.end)}"
-        val returnArrayStr = s"${formatARef(returnArray.start)}:${formatARef(returnArray.end)}"
+        val lookupArrayStr = formatRange(lookupArray)
+        val returnArrayStr = formatRange(returnArray)
 
         // Determine which optional args to include based on non-default values
         val hasNonDefaultMatchMode = matchMode match
@@ -293,19 +285,24 @@ object FormulaPrinter:
    * Detect and print common aggregation patterns (SUM, COUNT, AVERAGE).
    */
   private def detectAggregation(fold: TExpr.FoldRange[?, ?]): String =
-    val range = fold.range
-    val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
-
     // For now, assume SUM (most common)
     // Future: analyze step function to detect COUNT, AVERAGE, etc.
-    s"SUM($rangeStr)"
+    s"SUM(${formatRange(fold.range)})"
 
   /**
    * Format ARef to A1 notation with default Relative anchor.
    *
-   * Used for range endpoints where anchor info isn't tracked.
+   * Used for standalone cell refs where anchor info isn't available.
    */
   private def formatARef(aref: ARef): String = formatARef(aref, Anchor.Relative)
+
+  /**
+   * Format CellRange to A1:B2 notation with per-endpoint anchor support.
+   *
+   * Uses the anchor info stored in the CellRange (e.g., $A$1:B10).
+   */
+  private def formatRange(range: CellRange): String =
+    s"${formatARef(range.start, range.startAnchor)}:${formatARef(range.end, range.endAnchor)}"
 
   /**
    * Format ARef to A1 notation with anchor support.
@@ -451,52 +448,42 @@ object FormulaPrinter:
       case TExpr.Day(date) =>
         s"Day(${printWithTypes(date)})"
       case TExpr.Min(range) =>
-        s"Min(${formatARef(range.start)}:${formatARef(range.end)})"
+        s"Min(${formatRange(range)})"
       case TExpr.Max(range) =>
-        s"Max(${formatARef(range.start)}:${formatARef(range.end)})"
+        s"Max(${formatRange(range)})"
       case TExpr.Npv(rate, values) =>
-        s"Npv(${printWithTypes(rate)}, ${formatARef(values.start)}:${formatARef(values.end)})"
+        s"Npv(${printWithTypes(rate)}, ${formatRange(values)})"
       case TExpr.Irr(values, guessOpt) =>
-        val rangeText = s"${formatARef(values.start)}:${formatARef(values.end)}"
         guessOpt match
-          case Some(guess) => s"Irr($rangeText, ${printWithTypes(guess)})"
-          case None => s"Irr($rangeText)"
+          case Some(guess) => s"Irr(${formatRange(values)}, ${printWithTypes(guess)})"
+          case None => s"Irr(${formatRange(values)})"
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
-        s"VLookup(${printWithTypes(lookup)}, ${formatARef(table.start)}:${formatARef(table.end)}, " +
+        s"VLookup(${printWithTypes(lookup)}, ${formatRange(table)}, " +
           s"${printWithTypes(colIndex)}, ${printWithTypes(rangeLookup)})"
       case TExpr.SumIf(range, criteria, sumRangeOpt) =>
-        val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
         sumRangeOpt match
           case Some(sumRange) =>
-            val sumRangeStr = s"${formatARef(sumRange.start)}:${formatARef(sumRange.end)}"
-            s"SumIf($rangeStr, ${printWithTypes(criteria)}, $sumRangeStr)"
+            s"SumIf(${formatRange(range)}, ${printWithTypes(criteria)}, ${formatRange(sumRange)})"
           case None =>
-            s"SumIf($rangeStr, ${printWithTypes(criteria)})"
+            s"SumIf(${formatRange(range)}, ${printWithTypes(criteria)})"
       case TExpr.CountIf(range, criteria) =>
-        val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
-        s"CountIf($rangeStr, ${printWithTypes(criteria)})"
+        s"CountIf(${formatRange(range)}, ${printWithTypes(criteria)})"
       case TExpr.SumIfs(sumRange, conditions) =>
-        val sumRangeStr = s"${formatARef(sumRange.start)}:${formatARef(sumRange.end)}"
         val condStrs = conditions
-          .map { case (range, criteria) =>
-            val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
-            s"($rangeStr, ${printWithTypes(criteria)})"
+          .map { case (r, criteria) =>
+            s"(${formatRange(r)}, ${printWithTypes(criteria)})"
           }
           .mkString(", ")
-        s"SumIfs($sumRangeStr, $condStrs)"
+        s"SumIfs(${formatRange(sumRange)}, $condStrs)"
       case TExpr.CountIfs(conditions) =>
         val condStrs = conditions
-          .map { case (range, criteria) =>
-            val rangeStr = s"${formatARef(range.start)}:${formatARef(range.end)}"
-            s"($rangeStr, ${printWithTypes(criteria)})"
+          .map { case (r, criteria) =>
+            s"(${formatRange(r)}, ${printWithTypes(criteria)})"
           }
           .mkString(", ")
         s"CountIfs($condStrs)"
       case TExpr.SumProduct(arrays) =>
-        val rangeStrs = arrays.map { range =>
-          s"${formatARef(range.start)}:${formatARef(range.end)}"
-        }
-        s"SumProduct(${rangeStrs.mkString(", ")})"
+        s"SumProduct(${arrays.map(formatRange).mkString(", ")})"
       case TExpr.XLookup(
             lookupValue,
             lookupArray,
@@ -505,9 +492,7 @@ object FormulaPrinter:
             matchMode,
             searchMode
           ) =>
-        val lookupArrayStr = s"${formatARef(lookupArray.start)}:${formatARef(lookupArray.end)}"
-        val returnArrayStr = s"${formatARef(returnArray.start)}:${formatARef(returnArray.end)}"
         val ifNotFoundStr = ifNotFound.map(nf => s", ${printWithTypes(nf)}").getOrElse("")
-        s"XLookup(${printWithTypes(lookupValue)}, $lookupArrayStr, $returnArrayStr$ifNotFoundStr, ${printWithTypes(matchMode)}, ${printWithTypes(searchMode)})"
+        s"XLookup(${printWithTypes(lookupValue)}, ${formatRange(lookupArray)}, ${formatRange(returnArray)}$ifNotFoundStr, ${printWithTypes(matchMode)}, ${printWithTypes(searchMode)})"
       case fold @ TExpr.FoldRange(range, _, _, _) =>
-        s"FoldRange(${formatARef(range.start)}:${formatARef(range.end)})"
+        s"FoldRange(${formatRange(range)})"

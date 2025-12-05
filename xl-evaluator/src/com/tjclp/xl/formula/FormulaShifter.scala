@@ -243,15 +243,16 @@ object FormulaShifter:
     ARef.from0(newCol, newRow)
 
   /**
-   * Shift a cell range by the given deltas.
+   * Shift a cell range by the given deltas, respecting per-endpoint anchors.
    *
-   * Ranges don't have individual anchor information in the current model, so both start and end are
-   * shifted as Relative references.
+   * Each endpoint shifts according to its own anchor mode:
+   *   - `$A$1:B10` → start ($A$1) is Absolute (fixed), end (B10) is Relative (shifts)
+   *   - `$A1:B$10` → start has AbsCol (col fixed), end has AbsRow (row fixed)
    */
   private def shiftRange(range: CellRange, colDelta: Int, rowDelta: Int): CellRange =
-    val newStart = shiftARef(range.start, Anchor.Relative, colDelta, rowDelta)
-    val newEnd = shiftARef(range.end, Anchor.Relative, colDelta, rowDelta)
-    CellRange(newStart, newEnd)
+    val newStart = shiftARef(range.start, range.startAnchor, colDelta, rowDelta)
+    val newEnd = shiftARef(range.end, range.endAnchor, colDelta, rowDelta)
+    new CellRange(newStart, newEnd, range.startAnchor, range.endAnchor)
 
   /**
    * Helper to shift TExpr[?] (wildcard type).
