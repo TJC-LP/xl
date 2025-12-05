@@ -57,9 +57,12 @@ object BatchParser:
    * Simple JSON parser for batch operations.
    *
    * Handles: [{"op":"put"|"putf", "ref":"A1", "value":"..."}]
+   *
+   * Note: Does not handle nested braces in values (e.g., {"value": "foo{bar}"}). This is acceptable
+   * for CLI batch operations where such cases are rare. See issue #67 for circe migration.
    */
   def parseBatchJson(json: String): Either[Exception, Vector[BatchOp]] =
-    // Very simple JSON parsing - handles the specific format we need
+    // Simple JSON parsing - handles the specific format we need
     val objPattern = """\{[^}]+\}""".r
     val opPattern = """"op"\s*:\s*"(\w+)"""".r
     val refPattern = """"ref"\s*:\s*"([^"]+)"""".r
