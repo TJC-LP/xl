@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.{ARef, CellRange}
+import com.tjclp.xl.{ARef, Anchor, CellRange}
 import com.tjclp.xl.cells.Cell
 import com.tjclp.xl.codec
 
@@ -379,6 +379,9 @@ object FormulaParser:
       case Some(c) if c.isLetter =>
         // Function call, cell reference, or boolean literal
         parseFunctionOrRef(s)
+      case Some('$') =>
+        // Anchored cell reference (e.g., $A$1, $A1)
+        parseAnchoredCellRef(s)
       case Some(c) =>
         Left(ParseError.UnexpectedChar(c, s.pos, "expected expression"))
 
@@ -451,11 +454,11 @@ object FormulaParser:
   private def parseFunctionOrRef(state: ParserState): ParseResult[TExpr[?]] =
     val startPos = state.pos
 
-    // Read identifier (letters, digits, underscores)
+    // Read identifier (letters, digits, underscores, $ for anchored refs like A$1)
     @tailrec
     def readIdent(s: ParserState): ParserState =
       s.currentChar match
-        case Some(c) if c.isLetterOrDigit || c == '_' => readIdent(s.advance())
+        case Some(c) if c.isLetterOrDigit || c == '_' || c == '$' => readIdent(s.advance())
         case Some('!') => s // Sheet reference separator
         case _ => s
 
@@ -525,7 +528,7 @@ object FormulaParser:
     }
 
   /**
-   * Parse cell reference: A1, $A$1, Sheet1!A1
+   * Parse cell reference with anchor support: A1, $A$1, $A1, A$1, Sheet1!A1
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseCellReference(
@@ -533,14 +536,42 @@ object FormulaParser:
     state: ParserState,
     startPos: Int
   ): ParseResult[TExpr[?]] =
+    // Parse anchor from refStr: "$A$1" → ("A1", Anchor.Absolute)
+    val (cleanRef, anchor) = Anchor.parse(refStr)
+
     // Safe: ARef.parse returns Either[String, ARef], match is exhaustive
-    ARef.parse(refStr) match
+    ARef.parse(cleanRef) match
       case Right(aref) =>
-        // Create PolyRef - type will be determined by function context
+        // Create PolyRef with anchor - type will be determined by function context
         // Cast needed due to opaque type erasure in pattern matching
-        Right((TExpr.PolyRef(aref.asInstanceOf[ARef]), state))
+        Right((TExpr.PolyRef(aref.asInstanceOf[ARef], anchor), state))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(refStr, startPos, err))
+
+  /**
+   * Parse anchored cell reference starting with $.
+   *
+   * This handles references like $A$1, $A1 that start with $.
+   */
+  private def parseAnchoredCellRef(state: ParserState): ParseResult[TExpr[?]] =
+    val startPos = state.pos
+
+    // Read the full reference including $ signs
+    @tailrec
+    def readRef(s: ParserState): ParserState =
+      s.currentChar match
+        case Some(c) if c.isLetterOrDigit || c == '$' => readRef(s.advance())
+        case _ => s
+
+    val s2 = readRef(state)
+    val refStr = state.input.substring(startPos, s2.pos)
+
+    // Check if followed by ':' for range
+    s2.currentChar match
+      case Some(':') =>
+        parseRange(refStr, s2, startPos)
+      case _ =>
+        parseCellReference(refStr, s2, startPos)
 
   /**
    * Parse range: A1:B10

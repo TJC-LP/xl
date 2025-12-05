@@ -25,7 +25,7 @@ object api:
   export cells.{Cell, CellValue, CellError, Comment}
 
   // Addressing types
-  export addressing.{Column, Row, SheetName, ARef, CellRange, RefType}
+  export addressing.{Column, Row, SheetName, ARef, CellRange, RefType, Anchor}
 
   // ARef extension methods (toA1, row, shift)
   // Note: col/row extension methods work via extension syntax (aref.col), not direct import

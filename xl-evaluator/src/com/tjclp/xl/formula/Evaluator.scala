@@ -71,7 +71,7 @@ private class EvaluatorImpl extends Evaluator:
       // ===== Defensive PolyRef Handling =====
       // PolyRef should be converted to typed Ref during parsing, but if it reaches
       // evaluation unconverted, provide a clear error instead of MatchError
-      case TExpr.PolyRef(at) =>
+      case TExpr.PolyRef(at, _) =>
         // Cast to ARef to workaround Scala 3 inline method issue with pattern-matched values
         val refStr = (at: ARef).toA1
         Left(
@@ -87,7 +87,7 @@ private class EvaluatorImpl extends Evaluator:
         Right(value)
 
       // ===== Cell References =====
-      case TExpr.Ref(at, decode) =>
+      case TExpr.Ref(at, _, decode) =>
         // Ref: resolve cell, decode value with codec
         // Note: sheet(at) returns empty cell if not present, decode handles empty cells
         val cell = sheet(at)

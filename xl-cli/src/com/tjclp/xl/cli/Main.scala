@@ -17,7 +17,14 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
 import com.tjclp.xl.cli.raster.ImageMagick
 import com.tjclp.xl.display.NumFmtFormatter
-import com.tjclp.xl.formula.{DependencyGraph, SheetEvaluator}
+import com.tjclp.xl.formula.{
+  DependencyGraph,
+  FormulaParser,
+  FormulaPrinter,
+  FormulaShifter,
+  ParseError,
+  SheetEvaluator
+}
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, styleSyntax}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
@@ -712,15 +719,22 @@ object Main
           for
             resolved <- resolveRef(wb, sheetOpt, refStr, "put")
             (targetSheet, refOrRange) = resolved
-            ref <- refOrRange match
-              case Left(r) => IO.pure(r)
-              case Right(_) =>
-                IO.raiseError(new Exception("put command requires single cell, not range"))
             value = parseValue(valueStr)
-            updatedSheet = targetSheet.put(ref, value)
+            // Support both single cells and ranges
+            (updatedSheet, cellCount) = refOrRange match
+              case Left(ref) =>
+                (targetSheet.put(ref, value), 1)
+              case Right(range) =>
+                // Fill all cells in range with same value
+                val cells = range.cells.toList
+                val sheet = cells.foldLeft(targetSheet)((s, ref) => s.put(ref, value))
+                (sheet, cells.size)
             updatedWb = wb.put(updatedSheet)
             _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
-          yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
+          yield refOrRange match
+            case Left(ref) => s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
+            case Right(range) =>
+              s"Applied value to $cellCount cells in ${range.toA1}\nSaved: $outputPath"
       }
 
     case Command.PutFormula(refStr, formulaStr) =>
@@ -730,16 +744,40 @@ object Main
           for
             resolved <- resolveRef(wb, sheetOpt, refStr, "putf")
             (targetSheet, refOrRange) = resolved
-            ref <- refOrRange match
-              case Left(r) => IO.pure(r)
-              case Right(_) =>
-                IO.raiseError(new Exception("putf command requires single cell, not range"))
             formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
-            value = CellValue.Formula(formula)
-            updatedSheet = targetSheet.put(ref, value)
+            // Parse formula to AST for dragging support
+            fullFormula = s"=$formula"
+            parsedExpr <- IO.fromEither(
+              FormulaParser.parse(fullFormula).left.map { e =>
+                new Exception(ParseError.formatWithContext(e, fullFormula))
+              }
+            )
+            // Apply formula with Excel-style dragging
+            (updatedSheet, cellCount) = refOrRange match
+              case Left(ref) =>
+                // Single cell: apply formula as-is
+                (targetSheet.put(ref, CellValue.Formula(formula)), 1)
+              case Right(range) =>
+                // Range: apply formula with shifting based on anchor modes
+                val startRef = range.start
+                val startCol = Column.index0(startRef.col)
+                val startRow = Row.index0(startRef.row)
+                val cells = range.cells.toList
+                val sheet = cells.foldLeft(targetSheet) { (s, targetRef) =>
+                  val colDelta = Column.index0(targetRef.col) - startCol
+                  val rowDelta = Row.index0(targetRef.row) - startRow
+                  val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
+                  val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+                  s.put(targetRef, CellValue.Formula(shiftedFormula))
+                }
+                (sheet, cells.size)
             updatedWb = wb.put(updatedSheet)
             _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
-          yield s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
+          yield refOrRange match
+            case Left(ref) =>
+              s"${Format.putSuccess(ref, CellValue.Formula(formula))}\nSaved: $outputPath"
+            case Right(range) =>
+              s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\nSaved: $outputPath"
       }
 
     case Command.Style(

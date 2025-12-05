@@ -1,7 +1,23 @@
 package com.tjclp.xl.addressing
 
-/** Cell range from start to end (inclusive) */
-final case class CellRange(start: ARef, end: ARef):
+/**
+ * Cell range from start to end (inclusive).
+ *
+ * @param start
+ *   Top-left cell reference
+ * @param end
+ *   Bottom-right cell reference
+ * @param startAnchor
+ *   Anchor mode for start reference (for formula dragging)
+ * @param endAnchor
+ *   Anchor mode for end reference (for formula dragging)
+ */
+final case class CellRange(
+  start: ARef,
+  end: ARef,
+  startAnchor: Anchor = Anchor.Relative,
+  endAnchor: Anchor = Anchor.Relative
+):
   /** Top-left column */
   inline def colStart: Column = start.col
 
@@ -47,11 +63,22 @@ final case class CellRange(start: ARef, end: ARef):
       ARef(
         Column.from0(math.max(colEnd.index0, ref.col.index0)),
         Row.from0(math.max(rowEnd.index0, ref.row.index0))
-      )
+      ),
+      startAnchor,
+      endAnchor
     )
 
-  /** Convert to A1:B2 notation */
+  /** Convert to A1:B2 notation (without anchors) */
   def toA1: String = s"${start.toA1}:${end.toA1}"
+
+  /** Convert to A1:B2 notation with anchors (e.g., $A$1:B10) */
+  def toA1Anchored: String =
+    s"${formatRefWithAnchor(start, startAnchor)}:${formatRefWithAnchor(end, endAnchor)}"
+
+  private def formatRefWithAnchor(ref: ARef, anchor: Anchor): String =
+    val colStr = if anchor.isColAbsolute then s"$$${ref.col.toLetter}" else ref.col.toLetter
+    val rowStr = if anchor.isRowAbsolute then s"$$${ref.row.index1}" else ref.row.index1.toString
+    colStr + rowStr
 
   /** Iterate over all cell references in range (row-major order) */
   def cells: Iterator[ARef] =
@@ -61,24 +88,57 @@ final case class CellRange(start: ARef, end: ARef):
     yield ARef.from0(col, row)
 
 object CellRange:
-  /** Create range from two references (order doesn't matter) */
+  /**
+   * Create range from two references (order doesn't matter).
+   *
+   * Normalizes so start is top-left and end is bottom-right. Anchor modes default to Relative.
+   */
   def apply(ref1: ARef, ref2: ARef): CellRange =
     val minCol = Column.from0(math.min(ref1.col.index0, ref2.col.index0))
     val maxCol = Column.from0(math.max(ref1.col.index0, ref2.col.index0))
     val minRow = Row.from0(math.min(ref1.row.index0, ref2.row.index0))
     val maxRow = Row.from0(math.max(ref1.row.index0, ref2.row.index0))
-    new CellRange(ARef(minCol, minRow), ARef(maxCol, maxRow))
+    new CellRange(ARef(minCol, minRow), ARef(maxCol, maxRow), Anchor.Relative, Anchor.Relative)
 
-  /** Parse range from A1:B2 notation */
+  /**
+   * Create range from two references with explicit anchors.
+   *
+   * Note: Anchors are preserved even when refs are swapped for normalization.
+   */
+  def apply(
+    ref1: ARef,
+    ref2: ARef,
+    startAnchor: Anchor,
+    endAnchor: Anchor
+  ): CellRange =
+    val minCol = Column.from0(math.min(ref1.col.index0, ref2.col.index0))
+    val maxCol = Column.from0(math.max(ref1.col.index0, ref2.col.index0))
+    val minRow = Row.from0(math.min(ref1.row.index0, ref2.row.index0))
+    val maxRow = Row.from0(math.max(ref1.row.index0, ref2.row.index0))
+    // Determine which ref became start vs end after normalization
+    val ref1IsStart = ref1.col.index0 == minCol.index0 && ref1.row.index0 == minRow.index0
+    val (finalStartAnchor, finalEndAnchor) =
+      if ref1IsStart then (startAnchor, endAnchor) else (endAnchor, startAnchor)
+    new CellRange(ARef(minCol, minRow), ARef(maxCol, maxRow), finalStartAnchor, finalEndAnchor)
+
+  /**
+   * Parse range from A1:B2 notation, preserving anchors.
+   *
+   * Supports anchored references like $A$1:B10, $A1:B$10, etc.
+   */
   def parse(s: String): Either[String, CellRange] =
     if s.contains(':') then
       s.split(':') match
-        case Array(start, end) if start.nonEmpty && end.nonEmpty =>
+        case Array(startStr, endStr) if startStr.nonEmpty && endStr.nonEmpty =>
+          val (cleanStart, startAnchor) = Anchor.parse(startStr)
+          val (cleanEnd, endAnchor) = Anchor.parse(endStr)
           for
-            startRef <- ARef.parse(start)
-            endRef <- ARef.parse(end)
-          yield CellRange(startRef, endRef)
+            startRef <- ARef.parse(cleanStart)
+            endRef <- ARef.parse(cleanEnd)
+          yield CellRange(startRef, endRef, startAnchor, endAnchor)
         case _ =>
           Left(s"Invalid range format: $s")
-    else if s.nonEmpty then ARef.parse(s).map(ref => CellRange(ref, ref))
+    else if s.nonEmpty then
+      val (clean, anchor) = Anchor.parse(s)
+      ARef.parse(clean).map(ref => new CellRange(ref, ref, anchor, anchor))
     else Left(s"Invalid range format: $s")
