@@ -15,12 +15,11 @@
  *
  * Perfect for meta-programming, formula auditing, and impact analysis.
  *
- * Run with: scala-cli examples/dependency-analysis.sc
+ * Run with: scala-cli examples/dependency_analysis.sc
  */
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.unsafe.*
-// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
+// Note: No unsafe import needed - all refs are compile-time validated literals
 
 // ============================================================================
 // Scenario 1: Complex Dependency Chain

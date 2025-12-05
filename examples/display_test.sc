@@ -10,8 +10,7 @@
  */
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.unsafe.*
-// All display functionality now available from com.tjclp.xl.{*, given}
+// Note: No unsafe import needed - all refs are compile-time validated literals
 
 // Test 1: Core-only display (no evaluation)
 println("=" * 70)

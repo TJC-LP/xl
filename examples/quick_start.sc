@@ -12,12 +12,11 @@
  * - Handle errors gracefully
  * - Detect circular references automatically
  *
- * Run with: scala-cli examples/quick-start.sc
+ * Run with: scala-cli examples/quick_start.sc
  */
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.unsafe.*
-// SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
+// Note: No unsafe import needed - all refs are compile-time validated literals
 
 // ============================================================================
 // STEP 1: Parse Formulas
@@ -230,9 +229,9 @@ println("""
 ✓ Analyze dependencies (precedents/dependents) with DependencyGraph
 
 Next Steps:
-- Explore financial-model.sc for business use cases
-- See dependency-analysis.sc for advanced graph features
-- Check data-validation.sc for error detection patterns
+- Explore financial_model.sc for business use cases
+- See dependency_analysis.sc for advanced graph features
+- Check data_validation.sc for error detection patterns
 - Read CLAUDE.md for comprehensive API documentation
 
 🎉 You're ready to build spreadsheet applications with XL!

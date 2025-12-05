@@ -15,7 +15,7 @@
  *
  * Perfect for finance teams, FP&A analysts, and business applications.
  *
- * Run with: scala-cli examples/financial-model.sc
+ * Run with: scala-cli examples/financial_model.sc
  */
 
 import com.tjclp.xl.{*, given}

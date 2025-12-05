@@ -16,7 +16,7 @@
  *
  * Perfect for ETL pipelines, data quality checks, and validation rules.
  *
- * Run with: scala-cli examples/data-validation.sc
+ * Run with: scala-cli examples/data_validation.sc
  */
 
 import com.tjclp.xl.{*, given}

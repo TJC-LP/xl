@@ -15,7 +15,7 @@
  *
  * Perfect for sales teams, CRM applications, and revenue operations.
  *
- * Run with: scala-cli examples/sales-pipeline.sc
+ * Run with: scala-cli examples/sales_pipeline.sc
  */
 
 import com.tjclp.xl.{*, given}

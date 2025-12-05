@@ -5,7 +5,7 @@
 
 // Excel Table Support Demo - run with:
 //   1. Publish locally: ./mill xl-core.publishLocal xl-ooxml.publishLocal
-//   2. Run script: scala-cli run examples/table-demo.sc
+//   2. Run script: scala-cli run examples/table_demo.sc
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
