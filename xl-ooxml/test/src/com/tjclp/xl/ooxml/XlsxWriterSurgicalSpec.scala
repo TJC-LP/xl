@@ -667,6 +667,220 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     path
 
+  // ========== Regression Tests for Sheet Addition/Removal (Issue: surgical write bug) ==========
+
+  test("add new sheet creates valid XLSX with all sheets (regression #add-sheet-bug)") {
+    // This test validates the fix for the surgical write bug where adding sheets
+    // would fail with "Entry missing from source" because:
+    // 1. New sheets weren't being regenerated (modifiedSheets didn't include new indices)
+    // 2. Structural parts (relationships, content types) weren't being regenerated
+
+    val source = createWorkbookWith2Sheets()
+
+    // Read workbook and add a new sheet
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+    val newSheet = Sheet("NewSheet").put(ref"A1" -> "New Data").unsafe
+    val withNewSheet = wb.put(newSheet)
+
+    // Verify metadata is marked as modified (fix #1)
+    val tracker = requireContext(withNewSheet).modificationTracker
+    assert(tracker.modifiedMetadata, "Adding sheet should mark metadata as modified")
+
+    // Write should succeed (fix #2 and #3)
+    val output = Files.createTempFile("add-sheet-test", ".xlsx")
+    XlsxWriter
+      .write(withNewSheet, output)
+      .fold(err => fail(s"Write failed: $err"), identity)
+
+    // Verify all 3 sheets are in output
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(reloaded.sheets.size, 3, "Should have 3 sheets")
+    assertEquals(reloaded.sheetNames.map(_.value), Seq("Sheet1", "Sheet2", "NewSheet"))
+
+    // Verify new sheet has content
+    val newSheetContent = reloaded("NewSheet")
+      .flatMap(s => Right(s.cells.get(ref"A1")))
+      .fold(err => fail(s"Get cell failed: $err"), identity)
+    assertEquals(newSheetContent.map(_.value), Some(CellValue.Text("New Data")))
+
+    // Verify original sheets are intact
+    val sheet1Content = reloaded("Sheet1")
+      .flatMap(s => Right(s.cells.get(ref"A1")))
+      .fold(err => fail(s"Get cell failed: $err"), identity)
+    assertEquals(sheet1Content.map(_.value), Some(CellValue.Text("Sheet1 Data")))
+
+    // Clean up
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("remove sheet creates valid XLSX without removed sheet (regression #remove-sheet-bug)") {
+    val source = createWorkbookWith2Sheets()
+
+    // Read workbook and remove a sheet
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+    val withoutSheet = wb.remove(com.tjclp.xl.addressing.SheetName.unsafe("Sheet2"))
+      .fold(err => fail(s"Remove failed: $err"), identity)
+
+    // Verify metadata is marked as modified
+    val tracker = requireContext(withoutSheet).modificationTracker
+    assert(tracker.modifiedMetadata || tracker.deletedSheets.nonEmpty, "Removing sheet should mark tracker")
+
+    // Write should succeed
+    val output = Files.createTempFile("remove-sheet-test", ".xlsx")
+    XlsxWriter
+      .write(withoutSheet, output)
+      .fold(err => fail(s"Write failed: $err"), identity)
+
+    // Verify only 1 sheet remains
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(reloaded.sheets.size, 1, "Should have 1 sheet")
+    assertEquals(reloaded.sheetNames.map(_.value), Seq("Sheet1"))
+
+    // Verify remaining sheet is intact
+    val sheet1Content = reloaded("Sheet1")
+      .flatMap(s => Right(s.cells.get(ref"A1")))
+      .fold(err => fail(s"Get cell failed: $err"), identity)
+    assertEquals(sheet1Content.map(_.value), Some(CellValue.Text("Sheet1 Data")))
+
+    // Clean up
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("chained sheet additions work correctly (regression #chained-add-bug)") {
+    val source = createMinimalWorkbookWithChart()
+
+    // Read, add sheet, write, read, add another sheet, write
+    val wb1 = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+    val withFirst = wb1.put(Sheet("Second").put(ref"A1" -> "Second Sheet").unsafe)
+
+    val temp1 = Files.createTempFile("chained-1", ".xlsx")
+    XlsxWriter.write(withFirst, temp1).fold(err => fail(s"Write 1 failed: $err"), identity)
+
+    val wb2 = XlsxReader.read(temp1).fold(err => fail(s"Read 2 failed: $err"), identity)
+    val withSecond = wb2.put(Sheet("Third").put(ref"A1" -> "Third Sheet").unsafe)
+
+    val temp2 = Files.createTempFile("chained-2", ".xlsx")
+    XlsxWriter.write(withSecond, temp2).fold(err => fail(s"Write 2 failed: $err"), identity)
+
+    // Verify final result has all 3 sheets
+    val final_ = XlsxReader.read(temp2).fold(err => fail(s"Final read failed: $err"), identity)
+    assertEquals(final_.sheets.size, 3)
+    assertEquals(final_.sheetNames.map(_.value), Seq("Sheet1", "Second", "Third"))
+
+    // Clean up
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(temp1)
+    Files.deleteIfExists(temp2)
+  }
+
+  test("add sheet with insertAt at beginning works (regression #insert-at-bug)") {
+    val source = createWorkbookWith2Sheets()
+
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+    val newSheet = Sheet("First").put(ref"A1" -> "I'm first now").unsafe
+    val withInsert = wb.insertAt(0, newSheet).fold(err => fail(s"Insert failed: $err"), identity)
+
+    val output = Files.createTempFile("insert-at-test", ".xlsx")
+    XlsxWriter.write(withInsert, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(reloaded.sheets.size, 3)
+    assertEquals(reloaded.sheetNames.map(_.value), Seq("First", "Sheet1", "Sheet2"))
+
+    // Verify inserted sheet content
+    val firstContent = reloaded("First")
+      .flatMap(s => Right(s.cells.get(ref"A1")))
+      .fold(err => fail(s"Get cell failed: $err"), identity)
+    assertEquals(firstContent.map(_.value), Some(CellValue.Text("I'm first now")))
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("workbook relationships are regenerated when adding sheet (regression #relationships-bug)") {
+    // This specifically tests that xl/_rels/workbook.xml.rels gets the new sheet relationship
+    val source = createMinimalWorkbookWithChart()
+
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+    val withNew = wb.put(Sheet("NewSheet"))
+
+    val output = Files.createTempFile("rels-test", ".xlsx")
+    XlsxWriter.write(withNew, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    // Verify relationships file has entries for both sheets
+    val outputZip = new ZipFile(output.toFile)
+    val relsEntry = outputZip.getEntry("xl/_rels/workbook.xml.rels")
+    assert(relsEntry != null, "Workbook relationships should exist")
+
+    val relsContent = new String(readEntryBytes(outputZip, relsEntry), "UTF-8")
+    assert(relsContent.contains("worksheets/sheet1.xml"), "Should reference sheet1")
+    assert(relsContent.contains("worksheets/sheet2.xml"), "Should reference sheet2 (new sheet)")
+
+    // Verify workbook.xml has both sheets
+    val wbEntry = outputZip.getEntry("xl/workbook.xml")
+    val wbContent = new String(readEntryBytes(outputZip, wbEntry), "UTF-8")
+    assert(wbContent.contains("Sheet1"), "Workbook should have Sheet1")
+    assert(wbContent.contains("NewSheet"), "Workbook should have NewSheet")
+
+    outputZip.close()
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("content types are regenerated when adding sheet (regression #content-types-bug)") {
+    val source = createMinimalWorkbookWithChart()
+
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+    val withNew = wb.put(Sheet("NewSheet"))
+
+    val output = Files.createTempFile("content-types-test", ".xlsx")
+    XlsxWriter.write(withNew, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    // Verify [Content_Types].xml has override for new sheet
+    val outputZip = new ZipFile(output.toFile)
+    val ctEntry = outputZip.getEntry("[Content_Types].xml")
+    val ctContent = new String(readEntryBytes(outputZip, ctEntry), "UTF-8")
+
+    assert(ctContent.contains("/xl/worksheets/sheet1.xml"), "Content types should have sheet1")
+    assert(ctContent.contains("/xl/worksheets/sheet2.xml"), "Content types should have sheet2 (new)")
+
+    outputZip.close()
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("add empty sheet and modify existing sheet in same operation") {
+    val source = createWorkbookWith2Sheets()
+
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    // Add new sheet AND modify existing sheet
+    val modified = for
+      sheet1 <- wb("Sheet1")
+      updatedSheet1 = sheet1.put(ref"B1" -> "Modified")
+      newSheet = Sheet("NewSheet")
+    yield wb.put(updatedSheet1).put(newSheet)
+
+    val result = modified.fold(err => fail(s"Modification failed: $err"), identity)
+
+    val output = Files.createTempFile("combined-ops-test", ".xlsx")
+    XlsxWriter.write(result, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(reloaded.sheets.size, 3)
+
+    // Verify modification persisted
+    val modifiedCell = reloaded("Sheet1")
+      .flatMap(s => Right(s.cells.get(ref"B1")))
+      .fold(err => fail(s"Get cell failed: $err"), identity)
+    assertEquals(modifiedCell.map(_.value), Some(CellValue.Text("Modified")))
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
   // Helper: Write ZIP entry with deterministic timestamp
   private def writeEntry(out: ZipOutputStream, name: String, content: String): Unit =
     val entry = new ZipEntry(name)

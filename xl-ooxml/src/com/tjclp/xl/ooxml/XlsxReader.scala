@@ -18,7 +18,7 @@ import scala.collection.immutable.ArraySeq
 import com.tjclp.xl.styles.StyleRegistry
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.color.ThemePalette
-import com.tjclp.xl.workbooks.WorkbookMetadata
+import com.tjclp.xl.workbooks.{DefinedName, WorkbookMetadata}
 
 /**
  * Reader for XLSX files (ZIP parsing)
@@ -222,8 +222,11 @@ object XlsxReader:
       // Parse sheets
       sheets <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
 
+      // Parse defined names from workbook.xml
+      definedNames = parseDefinedNames(ooxmlWb.definedNames)
+
       // Assemble workbook with optional SourceContext
-      workbook <- assembleWorkbook(sheets, source, manifest, fingerprint, theme)
+      workbook <- assembleWorkbook(sheets, source, manifest, fingerprint, theme, definedNames)
     yield ReadResult(workbook, styleWarnings)
 
   /** Parse optional shared strings table */
@@ -709,7 +712,8 @@ object XlsxReader:
     source: Option[SourceHandle],
     manifest: PartManifest,
     fingerprint: Option[SourceFingerprint],
-    theme: ThemePalette
+    theme: ThemePalette,
+    definedNames: Vector[DefinedName]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -723,7 +727,7 @@ object XlsxReader:
           case (None, Some(_)) =>
             Left(XLError.IOError("Unexpected source fingerprint without source handle"))
 
-      val metadata = WorkbookMetadata(theme = theme)
+      val metadata = WorkbookMetadata(theme = theme, definedNames = definedNames)
       sourceContextEither.map(ctx =>
         Workbook(sheets = sheets, metadata = metadata, sourceContext = ctx)
       )
@@ -741,6 +745,36 @@ object XlsxReader:
    */
   private def parseXml(xmlString: String, location: String): XLResult[Elem] =
     XmlSecurity.parseSafe(xmlString, location)
+
+  /**
+   * Parse defined names from the raw XML element.
+   *
+   * OOXML structure:
+   * {{{
+   * <definedNames>
+   *   <definedName name="SalesTotal" localSheetId="0">Sheet1!$A$1:$A$10</definedName>
+   *   <definedName name="TaxRate" hidden="1">0.08</definedName>
+   * </definedNames>
+   * }}}
+   */
+  private def parseDefinedNames(rawElem: Option[Elem]): Vector[DefinedName] =
+    rawElem match
+      case None => Vector.empty
+      case Some(elem) =>
+        (elem \ "definedName").collect { case e: Elem =>
+          val name = (e \@ "name")
+          val formula = e.text.trim
+          val localSheetId = Option(e \@ "localSheetId").filter(_.nonEmpty).flatMap(_.toIntOption)
+          val hidden = (e \@ "hidden") == "1"
+          val comment = Option(e \@ "comment").filter(_.nonEmpty)
+          DefinedName(
+            name = name,
+            formula = formula,
+            localSheetId = localSheetId,
+            hidden = hidden,
+            comment = comment
+          )
+        }.toVector
 
   /** Extension for traverse on Vector */
   extension [A](vec: Vector[A])

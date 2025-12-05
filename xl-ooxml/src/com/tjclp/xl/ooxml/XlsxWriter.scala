@@ -939,21 +939,33 @@ object XlsxWriter:
       "xl/_rels/workbook.xml.rels"
     )
 
-    // Regenerate styles if any sheet modified (style indices may change)
-    if tracker.modifiedSheets.nonEmpty then regenerate += "xl/styles.xml"
+    // Regenerate styles if any sheet modified or metadata changed (style indices may change)
+    if tracker.modifiedSheets.nonEmpty || tracker.modifiedMetadata then
+      regenerate += "xl/styles.xml"
 
-    // Regenerate SST if any sheet modified (string indices may change)
-    if tracker.modifiedSheets.nonEmpty then regenerate += "xl/sharedStrings.xml"
+    // Regenerate SST if any sheet modified or metadata changed (string indices may change)
+    if tracker.modifiedSheets.nonEmpty || tracker.modifiedMetadata then
+      regenerate += "xl/sharedStrings.xml"
 
-    // Regenerate modified sheets
-    tracker.modifiedSheets.foreach { idx =>
-      regenerate += s"xl/worksheets/sheet${idx + 1}.xml"
-    }
+    // When metadata is modified (add/remove/rename/reorder), regenerate ALL sheets.
+    // New sheets don't exist in source ZIP, and removed sheets change indices.
+    // This is the correct behavior - metadata changes are structural.
+    if tracker.modifiedMetadata then
+      // Metadata modified → regenerate all sheets and their relationships
+      wb.sheets.indices.foreach { idx =>
+        regenerate += s"xl/worksheets/sheet${idx + 1}.xml"
+        regenerate += s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+      }
+    else
+      // No metadata change → only regenerate modified sheets (surgical)
+      tracker.modifiedSheets.foreach { idx =>
+        regenerate += s"xl/worksheets/sheet${idx + 1}.xml"
+      }
 
-    // Regenerate relationships for modified/deleted sheets
-    (tracker.modifiedSheets ++ tracker.deletedSheets).foreach { idx =>
-      regenerate += s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
-    }
+      // Regenerate relationships for modified/deleted sheets
+      (tracker.modifiedSheets ++ tracker.deletedSheets).foreach { idx =>
+        regenerate += s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+      }
 
     regenerate.toSet
 
@@ -1238,10 +1250,12 @@ object XlsxWriter:
     val (tablesBySheet, totalTableCount, tableIdMap) = buildTablesData(workbook)
 
     // Preserve structural parts from source (or fallback to minimal)
+    // IMPORTANT: When metadata is modified (add/remove/rename/reorder sheets),
+    // we MUST regenerate the structural parts since sheet count/order changed.
     val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =
       sourceContext match
-        case Some(ctx) => parsePreservedStructure(ctx.sourcePath)
-        case None => (None, None, None, None)
+        case Some(ctx) if !tracker.modifiedMetadata => parsePreservedStructure(ctx.sourcePath)
+        case _ => (None, None, None, None)
 
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
@@ -1250,6 +1264,7 @@ object XlsxWriter:
         preserved.updateSheets(workbook.sheets)
       case None =>
         // Fallback to minimal for programmatically created workbooks
+        // (or when metadata modified - we need fresh workbook structure)
         OoxmlWorkbook.fromDomain(workbook)
 
     val baseContentTypes = preservedContentTypes.getOrElse(
@@ -1305,9 +1320,15 @@ object XlsxWriter:
       else if sourceHasSharedStrings then
         sourceContext.foreach(ctx => copyPreservedPart(ctx.sourcePath, sharedStringsPath, zip))
 
+      // When metadata is modified (add/remove/rename/reorder), we must regenerate ALL sheets
+      // because new sheets don't exist in source and sheet indices may have changed.
+      val sheetsToRegenerate =
+        if tracker.modifiedMetadata then workbook.sheets.indices.toSet
+        else tracker.modifiedSheets
+
       // Write sheets: regenerate modified, copy unmodified (if source available)
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
-        if tracker.modifiedSheets.contains(idx) then
+        if sheetsToRegenerate.contains(idx) then
           // Regenerate modified sheet with preserved metadata (if available)
           val sheetPath = graph.pathForSheet(idx)
           val preservedMetadata = sourceContext

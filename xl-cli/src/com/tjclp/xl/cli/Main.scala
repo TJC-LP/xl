@@ -12,6 +12,7 @@ import com.monovore.decline.effect.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
+import com.tjclp.xl.error.XLError
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
 import com.tjclp.xl.cli.raster.ImageMagick
@@ -50,13 +51,14 @@ object Main
 
   override def main: Opts[IO[ExitCode]] =
     // Workbook-level: only --file (no --sheet)
-    val workbookOpts = (fileOpt, sheetsCmd).mapN { (file, cmd) =>
+    val workbookSubcmds = sheetsCmd orElse namesCmd
+    val workbookOpts = (fileOpt, workbookSubcmds).mapN { (file, cmd) =>
       run(file, None, None, cmd)
     }
 
     // Sheet-level read-only: --file and --sheet (no --output)
     val sheetReadOnlySubcmds =
-      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse evalCmd
+      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd orElse evalCmd
 
     val sheetReadOnlyOpts = (fileOpt, sheetOpt, sheetReadOnlySubcmds).mapN { (file, sheet, cmd) =>
       run(file, sheet, None, cmd)
@@ -64,7 +66,7 @@ object Main
 
     // Sheet-level write: --file, --sheet, and --output (required)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse addSheetCmd orElse removeSheetCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, sheetWriteSubcmds).mapN { (file, sheet, out, cmd) =>
@@ -170,6 +172,10 @@ object Main
     Opts(Command.Sheets)
   }
 
+  val namesCmd: Opts[Command] = Opts.subcommand("names", "List defined names (named ranges)") {
+    Opts(Command.Names)
+  }
+
   val boundsCmd: Opts[Command] = Opts.subcommand("bounds", "Show used range of current sheet") {
     Opts(Command.Bounds)
   }
@@ -193,13 +199,21 @@ object Main
         .mapN(Command.View.apply)
     }
 
+  private val noStyleOpt =
+    Opts.flag("no-style", "Omit style information from output").orFalse
+
   val cellCmd: Opts[Command] = Opts.subcommand("cell", "Get cell details") {
-    refArg.map(Command.Cell.apply)
+    (refArg, noStyleOpt).mapN(Command.Cell.apply)
   }
 
   val searchCmd: Opts[Command] =
     Opts.subcommand("search", "Search for cells (all sheets by default)") {
       (patternArg, limitOpt, sheetsFilterOpt).mapN(Command.Search.apply)
+    }
+
+  val statsCmd: Opts[Command] =
+    Opts.subcommand("stats", "Calculate statistics for numeric values in range") {
+      rangeArg.map(Command.Stats.apply)
     }
 
   // --- Analyze ---
@@ -285,6 +299,23 @@ object Main
   val batchCmd: Opts[Command] =
     Opts.subcommand("batch", "Apply multiple operations atomically (JSON from stdin or file)") {
       batchArg.map(Command.Batch.apply)
+    }
+
+  // --- Sheet management commands ---
+  private val sheetNameArg = Opts.argument[String]("name")
+  private val afterOpt =
+    Opts.option[String]("after", "Insert new sheet after this sheet").orNone
+  private val beforeOpt =
+    Opts.option[String]("before", "Insert new sheet before this sheet").orNone
+
+  val addSheetCmd: Opts[Command] =
+    Opts.subcommand("add-sheet", "Add new empty sheet to workbook") {
+      (sheetNameArg, afterOpt, beforeOpt).mapN(Command.AddSheet.apply)
+    }
+
+  val removeSheetCmd: Opts[Command] =
+    Opts.subcommand("remove-sheet", "Remove sheet from workbook") {
+      sheetNameArg.map(Command.RemoveSheet.apply)
     }
 
   // ==========================================================================
@@ -397,6 +428,25 @@ object Main
       }
       IO.pure(Markdown.renderSheetList(sheetStats))
 
+    case Command.Names =>
+      val names = wb.metadata.definedNames
+      if names.isEmpty then IO.pure("No defined names in workbook")
+      else
+        // Filter out hidden names unless user explicitly wants them
+        val visibleNames = names.filterNot(_.hidden)
+        if visibleNames.isEmpty then IO.pure("No visible defined names in workbook")
+        else
+          val maxNameLen = visibleNames.map(_.name.length).foldLeft(0)(_ max _)
+          val lines = visibleNames.map { dn =>
+            val scope = dn.localSheetId match
+              case Some(idx) =>
+                wb.sheets.lift(idx).map(s => s" (${s.name.value})").getOrElse(s" (sheet $idx)")
+              case None => ""
+            val paddedName = dn.name.padTo(maxNameLen, ' ')
+            s"$paddedName  ${dn.formula}$scope"
+          }
+          IO.pure(lines.mkString("\n"))
+
     case Command.Bounds =>
       requireSheet(wb, sheetOpt, "bounds").map { sheet =>
         val name = sheet.name.value
@@ -506,7 +556,7 @@ object Main
                 }
       yield result
 
-    case Command.Cell(refStr) =>
+    case Command.Cell(refStr, noStyle) =>
       for
         resolved <- resolveRef(wb, sheetOpt, refStr, "cell")
         (targetSheet, refOrRange) = resolved
@@ -516,8 +566,9 @@ object Main
             IO.raiseError(new Exception("cell command requires single cell, not range"))
         cell = targetSheet.cells.get(ref)
         value = cell.map(_.value).getOrElse(CellValue.Empty)
-        // Get style from registry for NumFmt formatting
-        style = cell.flatMap(_.styleId).flatMap(targetSheet.styleRegistry.get)
+        // Get style from registry for NumFmt formatting (unless --no-style)
+        style =
+          if noStyle then None else cell.flatMap(_.styleId).flatMap(targetSheet.styleRegistry.get)
         numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
         // For formulas with cached values, format the cached value
         valueToFormat = value match
@@ -588,6 +639,31 @@ object Main
           s"Found ${results.size} matches in $sheetDesc:\n\n${Markdown.renderSearchResultsWithRef(results)}"
         }
       }
+
+    case Command.Stats(refStr) =>
+      for
+        resolved <- resolveRef(wb, sheetOpt, refStr, "stats")
+        (sheet, refOrRange) = resolved
+        range = refOrRange match
+          case Right(r) => r
+          case Left(ref) => CellRange(ref, ref) // Single cell as 1x1 range
+        cells = sheet.getRange(range)
+        numbers = cells.flatMap { cell =>
+          cell.value match
+            case CellValue.Number(n) => Some(n)
+            case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+            case _ => None
+        }.toVector
+        _ <- IO
+          .raiseError(new Exception(s"No numeric values in range ${range.toA1}"))
+          .whenA(numbers.isEmpty)
+      yield
+        val count = numbers.size
+        val sum = numbers.sum
+        val min = numbers.foldLeft(BigDecimal(Double.MaxValue))(_ min _)
+        val max = numbers.foldLeft(BigDecimal(Double.MinValue))(_ max _)
+        val mean = sum / count
+        f"count: $count, sum: $sum%.2f, min: $min%.2f, max: $max%.2f, mean: $mean%.2f"
 
     case Command.Eval(formulaStr, overrides) =>
       for
@@ -761,6 +837,80 @@ object Main
               }
             }
           }
+      }
+
+    case Command.AddSheet(name, afterOpt, beforeOpt) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
+            _ <- IO
+              .raiseError(
+                new Exception(
+                  s"Sheet '$name' already exists. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+                )
+              )
+              .whenA(wb.sheets.exists(_.name == sheetName))
+            newSheet = Sheet(sheetName)
+            updatedWb <- (afterOpt, beforeOpt) match
+              case (Some(after), _) =>
+                // Insert after specified sheet
+                for
+                  afterName <- IO.fromEither(SheetName(after).left.map(e => new Exception(e)))
+                  idx = wb.sheets.indexWhere(_.name == afterName)
+                  _ <- IO
+                    .raiseError(
+                      new Exception(
+                        s"Sheet '$after' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+                      )
+                    )
+                    .whenA(idx < 0)
+                  result <- IO.fromEither(
+                    wb.insertAt(idx + 1, newSheet).left.map(e => new Exception(e.message))
+                  )
+                yield result
+              case (_, Some(before)) =>
+                // Insert before specified sheet
+                for
+                  beforeName <- IO.fromEither(SheetName(before).left.map(e => new Exception(e)))
+                  idx = wb.sheets.indexWhere(_.name == beforeName)
+                  _ <- IO
+                    .raiseError(
+                      new Exception(
+                        s"Sheet '$before' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+                      )
+                    )
+                    .whenA(idx < 0)
+                  result <- IO.fromEither(
+                    wb.insertAt(idx, newSheet).left.map(e => new Exception(e.message))
+                  )
+                yield result
+              case (None, None) =>
+                // Append at end (use put for simplicity - adds if not exists)
+                IO.pure(wb.put(newSheet))
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+            position = (afterOpt, beforeOpt) match
+              case (Some(after), _) => s" (after '$after')"
+              case (_, Some(before)) => s" (before '$before')"
+              case _ => " (at end)"
+          yield s"Added sheet: $name$position\nSaved: $outputPath"
+      }
+
+    case Command.RemoveSheet(name) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
+            updatedWb <- IO.fromEither(wb.remove(sheetName).left.map {
+              case XLError.SheetNotFound(_) =>
+                new Exception(
+                  s"Sheet '$name' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+                )
+              case XLError.InvalidWorkbook(reason) => new Exception(reason)
+              case e => new Exception(e.message)
+            })
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+          yield s"Removed sheet: $name\nSaved: $outputPath"
       }
 
   // ==========================================================================
@@ -1052,8 +1202,10 @@ object Main
  * Command ADT representing all CLI operations.
  */
 enum Command:
-  // Read-only
+  // Read-only (workbook-level)
   case Sheets
+  case Names
+  // Read-only (sheet-level)
   case Bounds
   case View(
     range: String,
@@ -1069,8 +1221,9 @@ enum Command:
     skipEmpty: Boolean,
     headerRow: Option[Int]
   )
-  case Cell(ref: String)
+  case Cell(ref: String, noStyle: Boolean)
   case Search(pattern: String, limit: Int, sheetsFilter: Option[String])
+  case Stats(ref: String)
   // Analyze
   case Eval(formula: String, overrides: List[String])
   // Mutate (require -o)
@@ -1095,6 +1248,9 @@ enum Command:
   case RowOp(row: Int, height: Option[Double], hide: Boolean, show: Boolean)
   case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean)
   case Batch(source: String) // "-" for stdin or file path
+  // Sheet management
+  case AddSheet(name: String, after: Option[String], before: Option[String])
+  case RemoveSheet(name: String)
 
 /**
  * Output format for view command.
