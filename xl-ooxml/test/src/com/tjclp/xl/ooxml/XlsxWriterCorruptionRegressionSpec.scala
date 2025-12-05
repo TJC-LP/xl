@@ -10,6 +10,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.richtext.RichText
+import com.tjclp.xl.sheets.styleSyntax.withCellStyle
 import com.tjclp.xl.styles.{CellStyle, Color, Fill}
 import munit.FunSuite
 
@@ -628,3 +629,364 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     out.putNextEntry(entry)
     out.write(content.getBytes("UTF-8"))
     out.closeEntry()
+
+  // ===== New Regression Tests for v0.1.5 Corruption Fixes =====
+
+  test("styles.xml has no negative fontId/fillId/borderIdx (prevents OOXML schema violation)") {
+    // Regression test for: fontMap.getOrElse(style.font, -1) -> 0
+    // Bug: Styles with unrecognized fonts wrote fontId="-1" which is invalid OOXML
+    // Impact: Excel shows repair dialog, styles render incorrectly
+
+    // Create a workbook with custom styles
+    import com.tjclp.xl.styles.{CellStyle, Font, Fill}
+    import com.tjclp.xl.styles.color.Color
+
+    val boldRedStyle = CellStyle.default
+      .withFont(Font("Arial", 12.0, bold = true))
+      .withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Styled")
+      .withCellStyle(ref"A1", boldRedStyle)
+
+    val wb = Workbook(Vector(sheet))
+
+    val output = Files.createTempFile("styles-no-negative", ".xlsx")
+    XlsxWriter
+      .write(wb, output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    // Verify styles.xml has no negative indices
+    val outputZip = new ZipFile(output.toFile)
+    val stylesXml = readEntryString(outputZip, outputZip.getEntry("xl/styles.xml"))
+
+    // CRITICAL: Must not have negative indices
+    assert(
+      !stylesXml.contains("fontId=\"-"),
+      "fontId contains negative value - OOXML violation!"
+    )
+    assert(
+      !stylesXml.contains("fillId=\"-"),
+      "fillId contains negative value - OOXML violation!"
+    )
+    assert(
+      !stylesXml.contains("borderId=\"-"),
+      "borderId contains negative value - OOXML violation!"
+    )
+
+    // Clean up
+    outputZip.close()
+    Files.deleteIfExists(output)
+  }
+
+  test("styles.xml includes required cellStyleXfs and cellStyles elements (ECMA-376 compliance)") {
+    // Regression test for missing required OOXML elements
+    // Bug: Generated styles.xml omitted <cellStyleXfs> and <cellStyles>
+    // Impact: Excel repair dialog, strict OOXML validators fail
+
+    val sheet = Sheet("Test").put(ref"A1" -> "Data")
+    val wb = Workbook(Vector(sheet))
+
+    val output = Files.createTempFile("styles-required-elements", ".xlsx")
+    XlsxWriter
+      .write(wb, output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    // Verify styles.xml has required elements
+    val outputZip = new ZipFile(output.toFile)
+    val stylesXml = readEntryString(outputZip, outputZip.getEntry("xl/styles.xml"))
+
+    // REQUIRED: cellStyleXfs (master cell formatting records)
+    assert(
+      stylesXml.contains("<cellStyleXfs"),
+      "Missing <cellStyleXfs> element - required per ECMA-376 §18.8.9"
+    )
+
+    // REQUIRED: cellStyles (named styles, at least "Normal")
+    assert(
+      stylesXml.contains("<cellStyles"),
+      "Missing <cellStyles> element - required per ECMA-376 §18.8.8"
+    )
+    assert(
+      stylesXml.contains("name=\"Normal\""),
+      "Missing default 'Normal' cellStyle"
+    )
+
+    // Verify correct OOXML element order: cellStyleXfs before cellXfs, cellStyles after cellXfs
+    val cellStyleXfsPos = stylesXml.indexOf("<cellStyleXfs")
+    val cellXfsPos = stylesXml.indexOf("<cellXfs")
+    val cellStylesPos = stylesXml.indexOf("<cellStyles")
+
+    assert(
+      cellStyleXfsPos < cellXfsPos,
+      "OOXML order violation: cellStyleXfs must come before cellXfs"
+    )
+    assert(
+      cellXfsPos < cellStylesPos,
+      "OOXML order violation: cellXfs must come before cellStyles"
+    )
+
+    // Clean up
+    outputZip.close()
+    Files.deleteIfExists(output)
+  }
+
+  test("theme1.xml is preserved from source during surgical modification") {
+    // Regression test for missing theme file
+    // Bug: xl/theme/theme1.xml was parsed but never written back
+    // Impact: Excel shows corruption warning, theme colors unresolvable
+
+    val source = createWorkbookWithThemeFile()
+
+    // Read and modify
+    val modified = for
+      wb <- XlsxReader.read(source)
+      sheet <- wb("Sheet1")
+      updatedSheet = sheet.put(ref"A2" -> "New Data")
+    yield wb.put(updatedSheet)
+
+    val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
+
+    // Write back
+    val output = Files.createTempFile("theme-preserved", ".xlsx")
+    XlsxWriter
+      .write(wb, output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    // CRITICAL: theme1.xml must be preserved
+    val outputZip = new ZipFile(output.toFile)
+    val themeEntry = outputZip.getEntry("xl/theme/theme1.xml")
+
+    assert(
+      themeEntry != null,
+      "xl/theme/theme1.xml missing - causes Excel corruption warning!"
+    )
+
+    // Verify theme content is valid XML
+    val themeXml = readEntryString(outputZip, themeEntry)
+    assert(themeXml.contains("<a:clrScheme"), "Theme file missing color scheme")
+
+    // Clean up
+    outputZip.close()
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("dimension element reflects actual cell range after put operations") {
+    // Regression test for dimension not updated after cell modifications
+    // Bug: preserved.dimension used directly without recalculating
+    // Impact: Excel may not recognize all data rows
+
+    val source = createWorkbookWithDimension()
+
+    // Read and add cells OUTSIDE original dimension
+    val modified = for
+      wb <- XlsxReader.read(source)
+      sheet <- wb("Sheet1")
+      // Original dimension is A1:C3, add cell at E5
+      updatedSheet = sheet.put(ref"E5" -> "Extended")
+    yield wb.put(updatedSheet)
+
+    val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
+
+    // Write back
+    val output = Files.createTempFile("dimension-updated", ".xlsx")
+    XlsxWriter
+      .write(wb, output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    // Verify dimension was updated to include new cell
+    val outputZip = new ZipFile(output.toFile)
+    val sheetXml = readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
+
+    // Extract dimension ref attribute
+    val dimMatch = """<dimension ref="([^"]+)"""".r.findFirstMatchIn(sheetXml)
+    assert(dimMatch.isDefined, "dimension element missing")
+
+    val dimRef = dimMatch.get.group(1)
+    // Should now extend to at least E5
+    assert(
+      dimRef.contains("E") && dimRef.contains("5"),
+      s"Dimension '$dimRef' should include E5 after put operation"
+    )
+
+    // Verify the actual cell E5 exists
+    assert(sheetXml.contains("""r="E5""""), "Cell E5 missing from sheetData")
+    assert(sheetXml.contains("Extended"), "Cell E5 content missing")
+
+    // Clean up
+    outputZip.close()
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  // ===== Additional Test File Creators =====
+
+  private def createWorkbookWithThemeFile(): Path =
+    val path = Files.createTempFile("test-with-theme", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1)
+
+    try
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+</Types>"""
+      )
+
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
+</Relationships>"""
+      )
+
+      // Minimal theme file
+      writeEntry(
+        out,
+        "xl/theme/theme1.xml",
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
+  <a:themeElements>
+    <a:clrScheme name="Office">
+      <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>
+      <a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
+      <a:dk2><a:srgbClr val="44546A"/></a:dk2>
+      <a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>
+      <a:accent1><a:srgbClr val="4472C4"/></a:accent1>
+      <a:accent2><a:srgbClr val="ED7D31"/></a:accent2>
+      <a:accent3><a:srgbClr val="A5A5A5"/></a:accent3>
+      <a:accent4><a:srgbClr val="FFC000"/></a:accent4>
+      <a:accent5><a:srgbClr val="5B9BD5"/></a:accent5>
+      <a:accent6><a:srgbClr val="70AD47"/></a:accent6>
+      <a:hlink><a:srgbClr val="0563C1"/></a:hlink>
+      <a:folHlink><a:srgbClr val="954F72"/></a:folHlink>
+    </a:clrScheme>
+    <a:fontScheme name="Office">
+      <a:majorFont><a:latin typeface="Calibri Light"/></a:majorFont>
+      <a:minorFont><a:latin typeface="Calibri"/></a:minorFont>
+    </a:fontScheme>
+  </a:themeElements>
+</a:theme>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>Original Data</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>"""
+      )
+
+    finally out.close()
+
+    path
+
+  private def createWorkbookWithDimension(): Path =
+    val path = Files.createTempFile("test-with-dimension", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1)
+
+    try
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"""
+      )
+
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+      )
+
+      // Worksheet with explicit dimension A1:C3
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:C3"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>A1</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>B1</t></is></c>
+      <c r="C1" t="inlineStr"><is><t>C1</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>A2</t></is></c>
+    </row>
+    <row r="3">
+      <c r="A3" t="inlineStr"><is><t>A3</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>"""
+      )
+
+    finally out.close()
+
+    path
