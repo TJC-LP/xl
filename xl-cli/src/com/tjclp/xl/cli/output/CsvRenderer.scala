@@ -1,8 +1,9 @@
 package com.tjclp.xl.cli.output
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
+import com.tjclp.xl.formula.SheetEvaluator
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.numfmt.NumFmt
 
@@ -34,42 +35,25 @@ object CsvRenderer:
     range: CellRange,
     showFormulas: Boolean = false,
     showLabels: Boolean = false,
-    skipEmpty: Boolean = false
+    skipEmpty: Boolean = false,
+    evalFormulas: Boolean = false
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
 
-    // Filter hidden rows/cols (same as other renderers)
-    val visibleCols = (startCol to endCol).filterNot { col =>
-      sheet.getColumnProperties(Column.from0(col)).hidden
-    }
-    val visibleRows = (startRow to endRow).filterNot { row =>
-      sheet.getRowProperties(Row.from0(row)).hidden
-    }
+    // Filter out hidden columns and rows
+    val visibleCols = RendererCommon.visibleColumns(sheet, startCol, endCol)
+    val visibleRows = RendererCommon.visibleRows(sheet, startRow, endRow)
 
-    // Helper to check if a cell is empty
-    def isCellEmpty(col: Int, row: Int): Boolean =
-      sheet.cells.get(ARef.from0(col, row)) match
-        case None => true
-        case Some(cell) =>
-          cell.value match
-            case CellValue.Empty => true
-            case CellValue.Text(s) if s.trim.isEmpty => true
-            case CellValue.Formula(_, Some(CellValue.Empty)) => true
-            case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
-            case _ => false
-
-    // Filter empty columns if skipEmpty is true
+    // Filter empty columns/rows if skipEmpty is true
     val nonEmptyCols =
-      if skipEmpty then visibleCols.filter(col => visibleRows.exists(row => !isCellEmpty(col, row)))
+      if skipEmpty then RendererCommon.nonEmptyColumns(sheet, visibleCols, visibleRows)
       else visibleCols
 
-    // Filter empty rows if skipEmpty is true
     val nonEmptyRows =
-      if skipEmpty then
-        visibleRows.filter(row => nonEmptyCols.exists(col => !isCellEmpty(col, row)))
+      if skipEmpty then RendererCommon.nonEmptyRows(sheet, visibleRows, nonEmptyCols)
       else visibleRows
 
     val sb = new StringBuilder
@@ -95,7 +79,7 @@ object CsvRenderer:
       val cellValues = nonEmptyCols.map { colIdx =>
         val ref = ARef.from0(colIdx, rowIdx)
         sheet.cells.get(ref) match
-          case Some(cell) => formatCell(cell, sheet, showFormulas)
+          case Some(cell) => formatCell(cell, sheet, showFormulas, evalFormulas)
           case None => ""
       }
       sb.append(cellValues.mkString(","))
@@ -106,7 +90,12 @@ object CsvRenderer:
 
     sb.toString
 
-  private def formatCell(cell: Cell, sheet: Sheet, showFormulas: Boolean): String =
+  private def formatCell(
+    cell: Cell,
+    sheet: Sheet,
+    showFormulas: Boolean,
+    evalFormulas: Boolean
+  ): String =
     val numFmt = cell.styleId
       .flatMap(sheet.styleRegistry.get)
       .map(_.numFmt)
@@ -136,6 +125,10 @@ object CsvRenderer:
       case CellValue.Formula(expr, cached) =>
         val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
         if showFormulas then displayExpr
+        else if evalFormulas then
+          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
+            case Right(result) => NumFmtFormatter.formatValue(result, numFmt)
+            case Left(err) => RendererCommon.formatEvalError(err.message)
         else cached.map(cv => NumFmtFormatter.formatValue(cv, numFmt)).getOrElse(displayExpr)
 
     escapeCsv(raw)

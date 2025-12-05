@@ -7,6 +7,8 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cli.helpers.BatchParser
+import com.tjclp.xl.cli.helpers.BatchParser.BatchOp
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 
@@ -139,5 +141,88 @@ class MainSpec extends CatsEffectSuite:
       // With lazy evaluation, we should only filter ~10 elements to get 5 matches
       // (not all 1 million)
       assert(filterCount < 100, s"Filter should be lazy, but ran $filterCount times")
+    }
+  }
+
+  // ========== Batch Operations (PR #65 - CLI refactor) ==========
+
+  test("batch: multiple put operations all persist (regression for stale sheet bug)") {
+    // This test ensures that batch operations don't use a stale sheet reference,
+    // which would cause earlier operations to be overwritten by later ones.
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(
+      BatchOp.Put("A1", "First"),
+      BatchOp.Put("B1", "Second"),
+      BatchOp.Put("C1", "Third")
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+
+      // All three cells should have values - not just the last one
+      val a1 = updatedSheet.cells.get(ref"A1").map(_.value)
+      val b1 = updatedSheet.cells.get(ref"B1").map(_.value)
+      val c1 = updatedSheet.cells.get(ref"C1").map(_.value)
+
+      assertEquals(a1, Some(CellValue.Text("First")), "A1 should have 'First'")
+      assertEquals(b1, Some(CellValue.Text("Second")), "B1 should have 'Second'")
+      assertEquals(c1, Some(CellValue.Text("Third")), "C1 should have 'Third'")
+    }
+  }
+
+  test("batch: mixed put and putf operations all persist") {
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(
+      BatchOp.Put("A1", "100"),
+      BatchOp.Put("B1", "200"),
+      BatchOp.PutFormula("C1", "=A1+B1")
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+
+      val a1 = updatedSheet.cells.get(ref"A1").map(_.value)
+      val b1 = updatedSheet.cells.get(ref"B1").map(_.value)
+      val c1 = updatedSheet.cells.get(ref"C1").map(_.value)
+
+      assertEquals(a1, Some(CellValue.Number(BigDecimal(100))))
+      assertEquals(b1, Some(CellValue.Number(BigDecimal(200))))
+      assert(c1.exists(_.isInstanceOf[CellValue.Formula]), "C1 should be a formula")
+    }
+  }
+
+  test("batch: operations grouped by sheet are applied correctly") {
+    // Test that operations targeting different sheets via qualified refs work
+    val sheet1 = Sheet("Sheet1")
+    val sheet2 = Sheet("Sheet2")
+    val wb = Workbook(Vector(sheet1, sheet2))
+
+    val ops = Vector(
+      BatchOp.Put("Sheet1!A1", "InSheet1"),
+      BatchOp.Put("Sheet2!A1", "InSheet2"),
+      BatchOp.Put("Sheet1!B1", "AlsoInSheet1")
+    )
+
+    // No default sheet - all refs are qualified
+    BatchParser.applyBatchOperations(wb, None, ops).map { updatedWb =>
+      val s1 = updatedWb.sheets.find(_.name.value == "Sheet1").get
+      val s2 = updatedWb.sheets.find(_.name.value == "Sheet2").get
+
+      assertEquals(
+        s1.cells.get(ref"A1").map(_.value),
+        Some(CellValue.Text("InSheet1"))
+      )
+      assertEquals(
+        s1.cells.get(ref"B1").map(_.value),
+        Some(CellValue.Text("AlsoInSheet1"))
+      )
+      assertEquals(
+        s2.cells.get(ref"A1").map(_.value),
+        Some(CellValue.Text("InSheet2"))
+      )
     }
   }
