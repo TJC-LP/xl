@@ -66,7 +66,7 @@ object Main
 
     // Sheet-level write: --file, --sheet, and --output (required)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse addSheetCmd orElse removeSheetCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, sheetWriteSubcmds).mapN { (file, sheet, out, cmd) =>
@@ -316,6 +316,36 @@ object Main
   val removeSheetCmd: Opts[Command] =
     Opts.subcommand("remove-sheet", "Remove sheet from workbook") {
       sheetNameArg.map(Command.RemoveSheet.apply)
+    }
+
+  private val newNameArg = Opts.argument[String]("new-name")
+
+  val renameSheetCmd: Opts[Command] =
+    Opts.subcommand("rename-sheet", "Rename a sheet") {
+      (sheetNameArg, newNameArg).mapN(Command.RenameSheet.apply)
+    }
+
+  private val toIndexOpt =
+    Opts.option[Int]("to", "Move to index (0-based)").orNone
+
+  val moveSheetCmd: Opts[Command] =
+    Opts.subcommand("move-sheet", "Move sheet to new position") {
+      (sheetNameArg, toIndexOpt, afterOpt, beforeOpt).mapN(Command.MoveSheet.apply)
+    }
+
+  val copySheetCmd: Opts[Command] =
+    Opts.subcommand("copy-sheet", "Copy sheet to new name") {
+      (sheetNameArg, newNameArg).mapN(Command.CopySheet.apply)
+    }
+
+  val mergeCmd: Opts[Command] =
+    Opts.subcommand("merge", "Merge cells in range") {
+      rangeArg.map(Command.Merge.apply)
+    }
+
+  val unmergeCmd: Opts[Command] =
+    Opts.subcommand("unmerge", "Unmerge cells in range") {
+      rangeArg.map(Command.Unmerge.apply)
     }
 
   // ==========================================================================
@@ -913,6 +943,137 @@ object Main
           yield s"Removed sheet: $name\nSaved: $outputPath"
       }
 
+    case Command.RenameSheet(oldName, newName) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            oldSheetName <- IO.fromEither(SheetName(oldName).left.map(e => new Exception(e)))
+            newSheetName <- IO.fromEither(SheetName(newName).left.map(e => new Exception(e)))
+            updatedWb <- IO.fromEither(wb.rename(oldSheetName, newSheetName).left.map {
+              case XLError.SheetNotFound(_) =>
+                new Exception(
+                  s"Sheet '$oldName' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+                )
+              case XLError.DuplicateSheet(_) =>
+                new Exception(s"Sheet '$newName' already exists")
+              case e => new Exception(e.message)
+            })
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+          yield s"Renamed: $oldName → $newName\nSaved: $outputPath"
+      }
+
+    case Command.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
+            currentIdx = wb.sheets.indexWhere(_.name == sheetName)
+            _ <- IO
+              .raiseError(
+                new Exception(
+                  s"Sheet '$name' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+                )
+              )
+              .whenA(currentIdx < 0)
+            targetIdx <- (toIndexOpt, afterOpt, beforeOpt) match
+              case (Some(idx), _, _) => IO.pure(idx)
+              case (_, Some(after), _) =>
+                for
+                  afterName <- IO.fromEither(SheetName(after).left.map(e => new Exception(e)))
+                  afterIdx = wb.sheets.indexWhere(_.name == afterName)
+                  _ <- IO
+                    .raiseError(
+                      new Exception(
+                        s"Sheet '$after' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+                      )
+                    )
+                    .whenA(afterIdx < 0)
+                yield afterIdx + 1
+              case (_, _, Some(before)) =>
+                for
+                  beforeName <- IO.fromEither(SheetName(before).left.map(e => new Exception(e)))
+                  beforeIdx = wb.sheets.indexWhere(_.name == beforeName)
+                  _ <- IO
+                    .raiseError(
+                      new Exception(
+                        s"Sheet '$before' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+                      )
+                    )
+                    .whenA(beforeIdx < 0)
+                yield beforeIdx
+              case (None, None, None) =>
+                IO.raiseError(
+                  new Exception("move-sheet requires --to, --after, or --before option")
+                )
+            // Build new order: remove sheet from current position, insert at target
+            currentNames = wb.sheetNames.toVector
+            withoutSheet = currentNames.patch(currentIdx, Nil, 1)
+            // Adjust target index if we removed from before the target
+            adjustedIdx = if currentIdx < targetIdx then targetIdx - 1 else targetIdx
+            clampedIdx = adjustedIdx.max(0).min(withoutSheet.size)
+            newOrder = withoutSheet.patch(clampedIdx, Vector(sheetName), 0)
+            updatedWb <- IO.fromEither(wb.reorder(newOrder).left.map(e => new Exception(e.message)))
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+            position = s"to position $clampedIdx"
+          yield s"Moved: $name $position\nSaved: $outputPath"
+      }
+
+    case Command.CopySheet(sourceName, targetName) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            sourceSheetName <- IO.fromEither(SheetName(sourceName).left.map(e => new Exception(e)))
+            targetSheetName <- IO.fromEither(SheetName(targetName).left.map(e => new Exception(e)))
+            sourceSheet <- IO.fromOption(wb.sheets.find(_.name == sourceSheetName))(
+              new Exception(
+                s"Sheet '$sourceName' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+              )
+            )
+            _ <- IO
+              .raiseError(new Exception(s"Sheet '$targetName' already exists"))
+              .whenA(wb.sheets.exists(_.name == targetSheetName))
+            copiedSheet = sourceSheet.copy(name = targetSheetName)
+            updatedWb = wb.put(copiedSheet)
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+          yield s"Copied: $sourceName → $targetName\nSaved: $outputPath"
+      }
+
+    case Command.Merge(rangeStr) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            resolved <- resolveRef(wb, sheetOpt, rangeStr, "merge")
+            (targetSheet, refOrRange) = resolved
+            range <- refOrRange match
+              case Right(r) => IO.pure(r)
+              case Left(_) =>
+                IO.raiseError(
+                  new Exception("merge requires a range (e.g., A1:C1), not a single cell")
+                )
+            updatedSheet = targetSheet.merge(range)
+            updatedWb = wb.put(updatedSheet)
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+          yield s"Merged: ${range.toA1}\nSaved: $outputPath"
+      }
+
+    case Command.Unmerge(rangeStr) =>
+      outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
+        outputPath =>
+          for
+            resolved <- resolveRef(wb, sheetOpt, rangeStr, "unmerge")
+            (targetSheet, refOrRange) = resolved
+            range <- refOrRange match
+              case Right(r) => IO.pure(r)
+              case Left(_) =>
+                IO.raiseError(
+                  new Exception("unmerge requires a range (e.g., A1:C1), not a single cell")
+                )
+            updatedSheet = targetSheet.unmerge(range)
+            updatedWb = wb.put(updatedSheet)
+            _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+          yield s"Unmerged: ${range.toA1}\nSaved: $outputPath"
+      }
+
   // ==========================================================================
   // Batch operations
   // ==========================================================================
@@ -1251,6 +1412,12 @@ enum Command:
   // Sheet management
   case AddSheet(name: String, after: Option[String], before: Option[String])
   case RemoveSheet(name: String)
+  case RenameSheet(oldName: String, newName: String)
+  case MoveSheet(name: String, toIndex: Option[Int], after: Option[String], before: Option[String])
+  case CopySheet(sourceName: String, targetName: String)
+  // Cell operations
+  case Merge(range: String)
+  case Unmerge(range: String)
 
 /**
  * Output format for view command.
