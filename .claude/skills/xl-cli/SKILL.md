@@ -46,6 +46,7 @@ cd /tmp && ./install.sh
 - [Sheet Handling](#sheet-handling)
 - [Sheet Management](#sheet-management)
 - [Cell Operations](#cell-operations)
+- [Batch Operations](#batch-operations)
 - [Styling](#styling)
 - [Row/Column Operations](#rowcolumn-operations)
 - [Output Formats](#output-formats)
@@ -94,6 +95,13 @@ xl -f <file> -o <out> copy-sheet "Template" "Copy"
 # Cell operations (require -o and -s)
 xl -f <file> -s <sheet> -o <out> merge A1:C1
 xl -f <file> -s <sheet> -o <out> unmerge A1:C1
+
+# Batch operations (require -o)
+xl -f <file> -s <sheet> -o <out> batch <json-file>
+xl -f <file> -s <sheet> -o <out> batch -              # Read from stdin
+
+# Formula dragging (putf with range)
+xl -f <file> -s <sheet> -o <out> putf <range> <formula>  # Drags formula over range
 ```
 
 ---
@@ -184,6 +192,68 @@ Calculate statistics for numeric values in a range:
 xl -f data.xlsx -s Sheet1 stats B2:B100
 # Output: count: 99, sum: 12345.00, min: 10.00, max: 500.00, mean: 124.70
 ```
+
+### Formula Dragging
+
+When `putf` receives a range, it drags the formula Excel-style:
+
+```bash
+# Fill B2:B10 with formulas, shifting references
+xl -f data.xlsx -s Sheet1 -o out.xlsx putf B2:B10 "=A2*1.1"
+
+# Result:
+# B2: =A2*1.1
+# B3: =A3*1.1
+# ...
+
+# Use $ to anchor references
+xl -f data.xlsx -s Sheet1 -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)"
+
+# Result:
+# B2: =SUM($A$1:A2)
+# B3: =SUM($A$1:A3)
+# ...
+```
+
+**Anchor modes**:
+
+| Syntax | Behavior |
+|--------|----------|
+| `$A$1` | Absolute (never shifts) |
+| `$A1` | Column absolute, row relative |
+| `A$1` | Column relative, row absolute |
+| `A1` | Fully relative (shifts both ways) |
+
+---
+
+## Batch Operations
+
+Apply multiple cell operations atomically from JSON input:
+
+```bash
+# From file
+xl -f data.xlsx -s Sheet1 -o out.xlsx batch operations.json
+
+# From stdin
+echo '[{"op":"put","ref":"A1","value":"Hello"},{"op":"putf","ref":"B1","value":"=A1&\" World\""}]' \
+  | xl -f data.xlsx -s Sheet1 -o out.xlsx batch -
+```
+
+**JSON Format**:
+```json
+[
+  {"op": "put", "ref": "A1", "value": "Hello"},
+  {"op": "put", "ref": "A2", "value": "123"},
+  {"op": "putf", "ref": "B1", "value": "=A1*2"},
+  {"op": "put", "ref": "Sheet2!C1", "value": "Cross-sheet"}
+]
+```
+
+| Field | Description |
+|-------|-------------|
+| `op` | Operation: `put` (value) or `putf` (formula) |
+| `ref` | Cell reference (supports qualified `Sheet!Ref`) |
+| `value` | Value or formula string |
 
 ---
 
@@ -296,9 +366,13 @@ xl -f report.xlsx -s Sheet1 -o report.xlsx col A --width 25
 ### Multi-Sheet Workbook Setup
 
 ```bash
-# Create workbook and add sheets
+# Create workbook (default sheet: Sheet1)
 xl new output.xlsx
-xl -f output.xlsx -o output.xlsx add-sheet "Data"
+
+# Create with custom sheet name
+xl new output.xlsx --sheet-name "Data"
+
+# Add more sheets
 xl -f output.xlsx -o output.xlsx add-sheet "Summary" --before "Data"
 xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
 xl -f output.xlsx -o output.xlsx rename-sheet "Sheet1" "Overview"
@@ -322,6 +396,7 @@ xl -f output.xlsx -o output.xlsx rename-sheet "Sheet1" "Overview"
 |--------|-------------|
 | `--format <fmt>` | Output format (markdown, json, csv, html, svg, png, jpeg, webp, pdf) |
 | `--formulas` | Show formulas instead of values |
+| `--eval` | Evaluate formulas (compute live values) |
 | `--limit <n>` | Max rows (default: 50) |
 | `--skip-empty` | Skip empty cells (JSON) or empty rows/columns (tabular) |
 | `--header-row <n>` | Use row N as JSON keys (1-based) |
@@ -368,3 +443,4 @@ xl -f output.xlsx -o output.xlsx rename-sheet "Sheet1" "Overview"
 | `merge <range>` | Merge cells in range |
 | `unmerge <range>` | Unmerge cells in range |
 | `stats <range>` | Calculate statistics for numeric values |
+| `batch [<file>]` | Apply JSON operations (`-` for stdin) |
