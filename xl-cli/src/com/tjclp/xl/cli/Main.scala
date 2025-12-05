@@ -176,19 +176,19 @@ object Main
 
   // --- Read-only commands ---
 
-  val sheetsCmd: Opts[Command] = Opts.subcommand("sheets", "List all sheets") {
-    Opts(Command.Sheets)
+  val sheetsCmd: Opts[CliCommand] = Opts.subcommand("sheets", "List all sheets") {
+    Opts(CliCommand.Sheets)
   }
 
-  val namesCmd: Opts[Command] = Opts.subcommand("names", "List defined names (named ranges)") {
-    Opts(Command.Names)
+  val namesCmd: Opts[CliCommand] = Opts.subcommand("names", "List defined names (named ranges)") {
+    Opts(CliCommand.Names)
   }
 
-  val boundsCmd: Opts[Command] = Opts.subcommand("bounds", "Show used range of current sheet") {
-    Opts(Command.Bounds)
+  val boundsCmd: Opts[CliCommand] = Opts.subcommand("bounds", "Show used range of current sheet") {
+    Opts(CliCommand.Bounds)
   }
 
-  val viewCmd: Opts[Command] =
+  val viewCmd: Opts[CliCommand] =
     Opts.subcommand("view", "View range (markdown, html, svg, json, csv, png, jpeg, webp, pdf)") {
       (
         rangeArg,
@@ -205,24 +205,24 @@ object Main
         skipEmptyOpt,
         headerRowOpt
       )
-        .mapN(Command.View.apply)
+        .mapN(CliCommand.View.apply)
     }
 
   private val noStyleOpt =
     Opts.flag("no-style", "Omit style information from output").orFalse
 
-  val cellCmd: Opts[Command] = Opts.subcommand("cell", "Get cell details") {
-    (refArg, noStyleOpt).mapN(Command.Cell.apply)
+  val cellCmd: Opts[CliCommand] = Opts.subcommand("cell", "Get cell details") {
+    (refArg, noStyleOpt).mapN(CliCommand.Cell.apply)
   }
 
-  val searchCmd: Opts[Command] =
+  val searchCmd: Opts[CliCommand] =
     Opts.subcommand("search", "Search for cells (all sheets by default)") {
-      (patternArg, limitOpt, sheetsFilterOpt).mapN(Command.Search.apply)
+      (patternArg, limitOpt, sheetsFilterOpt).mapN(CliCommand.Search.apply)
     }
 
-  val statsCmd: Opts[Command] =
+  val statsCmd: Opts[CliCommand] =
     Opts.subcommand("stats", "Calculate statistics for numeric values in range") {
-      rangeArg.map(Command.Stats.apply)
+      rangeArg.map(CliCommand.Stats.apply)
     }
 
   // --- Analyze ---
@@ -231,21 +231,22 @@ object Main
   private val withOpt =
     Opts.option[String]("with", "Comma-separated overrides (e.g., A1=100,B2=200)", "w").orNone
 
-  val evalCmd: Opts[Command] = Opts.subcommand("eval", "Evaluate formula without modifying sheet") {
-    (formulaArg, withOpt).mapN { (formula, withStr) =>
-      val overrides = withStr.toList.flatMap(_.split(",").map(_.trim).filter(_.nonEmpty))
-      Command.Eval(formula, overrides)
+  val evalCmd: Opts[CliCommand] =
+    Opts.subcommand("eval", "Evaluate formula without modifying sheet") {
+      (formulaArg, withOpt).mapN { (formula, withStr) =>
+        val overrides = withStr.toList.flatMap(_.split(",").map(_.trim).filter(_.nonEmpty))
+        CliCommand.Eval(formula, overrides)
+      }
     }
-  }
 
   // --- Mutate (require -o) ---
 
-  val putCmd: Opts[Command] = Opts.subcommand("put", "Write value to cell") {
-    (refArg, valueArg).mapN(Command.Put.apply)
+  val putCmd: Opts[CliCommand] = Opts.subcommand("put", "Write value to cell") {
+    (refArg, valueArg).mapN(CliCommand.Put.apply)
   }
 
-  val putfCmd: Opts[Command] = Opts.subcommand("putf", "Write formula to cell") {
-    (refArg, valueArg).mapN(Command.PutFormula.apply)
+  val putfCmd: Opts[CliCommand] = Opts.subcommand("putf", "Write formula to cell") {
+    (refArg, valueArg).mapN(CliCommand.PutFormula.apply)
   }
 
   // --- Style command options ---
@@ -268,7 +269,7 @@ object Main
     Opts.option[String]("border", "Border style: none, thin, medium, thick").orNone
   private val borderColorOpt = Opts.option[String]("border-color", "Border color").orNone
 
-  val styleCmd: Opts[Command] = Opts.subcommand("style", "Apply styling to cells") {
+  val styleCmd: Opts[CliCommand] = Opts.subcommand("style", "Apply styling to cells") {
     (
       rangeArg,
       boldOpt,
@@ -284,7 +285,7 @@ object Main
       numFormatOpt,
       borderOpt,
       borderColorOpt
-    ).mapN(Command.Style.apply)
+    ).mapN(CliCommand.Style.apply)
   }
 
   // --- Row/Column command options ---
@@ -295,19 +296,20 @@ object Main
   private val hideOpt = Opts.flag("hide", "Hide row/column").orFalse
   private val showOpt = Opts.flag("show", "Show (unhide) row/column").orFalse
 
-  val rowCmd: Opts[Command] = Opts.subcommand("row", "Set row properties (height, hide/show)") {
-    (rowArg, heightOpt, hideOpt, showOpt).mapN(Command.RowOp.apply)
+  val rowCmd: Opts[CliCommand] = Opts.subcommand("row", "Set row properties (height, hide/show)") {
+    (rowArg, heightOpt, hideOpt, showOpt).mapN(CliCommand.RowOp.apply)
   }
 
-  val colCmd: Opts[Command] = Opts.subcommand("col", "Set column properties (width, hide/show)") {
-    (colArg, widthOpt, hideOpt, showOpt).mapN(Command.ColOp.apply)
-  }
+  val colCmd: Opts[CliCommand] =
+    Opts.subcommand("col", "Set column properties (width, hide/show)") {
+      (colArg, widthOpt, hideOpt, showOpt).mapN(CliCommand.ColOp.apply)
+    }
 
   // --- Batch command ---
   private val batchArg = Opts.argument[String]("operations").withDefault("-")
-  val batchCmd: Opts[Command] =
+  val batchCmd: Opts[CliCommand] =
     Opts.subcommand("batch", "Apply multiple operations atomically (JSON from stdin or file)") {
-      batchArg.map(Command.Batch.apply)
+      batchArg.map(CliCommand.Batch.apply)
     }
 
   // --- Sheet management commands ---
@@ -317,44 +319,44 @@ object Main
   private val beforeOpt =
     Opts.option[String]("before", "Insert new sheet before this sheet").orNone
 
-  val addSheetCmd: Opts[Command] =
+  val addSheetCmd: Opts[CliCommand] =
     Opts.subcommand("add-sheet", "Add new empty sheet to workbook") {
-      (sheetNameArg, afterOpt, beforeOpt).mapN(Command.AddSheet.apply)
+      (sheetNameArg, afterOpt, beforeOpt).mapN(CliCommand.AddSheet.apply)
     }
 
-  val removeSheetCmd: Opts[Command] =
+  val removeSheetCmd: Opts[CliCommand] =
     Opts.subcommand("remove-sheet", "Remove sheet from workbook") {
-      sheetNameArg.map(Command.RemoveSheet.apply)
+      sheetNameArg.map(CliCommand.RemoveSheet.apply)
     }
 
   private val newNameArg = Opts.argument[String]("new-name")
 
-  val renameSheetCmd: Opts[Command] =
+  val renameSheetCmd: Opts[CliCommand] =
     Opts.subcommand("rename-sheet", "Rename a sheet") {
-      (sheetNameArg, newNameArg).mapN(Command.RenameSheet.apply)
+      (sheetNameArg, newNameArg).mapN(CliCommand.RenameSheet.apply)
     }
 
   private val toIndexOpt =
     Opts.option[Int]("to", "Move to index (0-based)").orNone
 
-  val moveSheetCmd: Opts[Command] =
+  val moveSheetCmd: Opts[CliCommand] =
     Opts.subcommand("move-sheet", "Move sheet to new position") {
-      (sheetNameArg, toIndexOpt, afterOpt, beforeOpt).mapN(Command.MoveSheet.apply)
+      (sheetNameArg, toIndexOpt, afterOpt, beforeOpt).mapN(CliCommand.MoveSheet.apply)
     }
 
-  val copySheetCmd: Opts[Command] =
+  val copySheetCmd: Opts[CliCommand] =
     Opts.subcommand("copy-sheet", "Copy sheet to new name") {
-      (sheetNameArg, newNameArg).mapN(Command.CopySheet.apply)
+      (sheetNameArg, newNameArg).mapN(CliCommand.CopySheet.apply)
     }
 
-  val mergeCmd: Opts[Command] =
+  val mergeCmd: Opts[CliCommand] =
     Opts.subcommand("merge", "Merge cells in range") {
-      rangeArg.map(Command.Merge.apply)
+      rangeArg.map(CliCommand.Merge.apply)
     }
 
-  val unmergeCmd: Opts[Command] =
+  val unmergeCmd: Opts[CliCommand] =
     Opts.subcommand("unmerge", "Unmerge cells in range") {
-      rangeArg.map(Command.Unmerge.apply)
+      rangeArg.map(CliCommand.Unmerge.apply)
     }
 
   // ==========================================================================
@@ -365,7 +367,7 @@ object Main
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
-    cmd: Command
+    cmd: CliCommand
   ): IO[ExitCode] =
     execute(filePath, sheetNameOpt, outputOpt, cmd).attempt.flatMap {
       case Right(output) =>
@@ -390,7 +392,7 @@ object Main
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
-    cmd: Command
+    cmd: CliCommand
   ): IO[String] =
     for
       wb <- ExcelIO.instance[IO].read(filePath)
@@ -455,10 +457,10 @@ object Main
     wb: Workbook,
     sheetOpt: Option[Sheet],
     outputOpt: Option[Path],
-    cmd: Command
+    cmd: CliCommand
   ): IO[String] = cmd match
 
-    case Command.Sheets =>
+    case CliCommand.Sheets =>
       val sheetStats = wb.sheets.map { s =>
         val usedRange = s.usedRange
         val cellCount = s.cells.size
@@ -467,7 +469,7 @@ object Main
       }
       IO.pure(Markdown.renderSheetList(sheetStats))
 
-    case Command.Names =>
+    case CliCommand.Names =>
       val names = wb.metadata.definedNames
       if names.isEmpty then IO.pure("No defined names in workbook")
       else
@@ -486,7 +488,7 @@ object Main
           }
           IO.pure(lines.mkString("\n"))
 
-    case Command.Bounds =>
+    case CliCommand.Bounds =>
       requireSheet(wb, sheetOpt, "bounds").map { sheet =>
         val name = sheet.name.value
         val usedRange = sheet.usedRange
@@ -506,7 +508,7 @@ object Main
                |Non-empty: 0 cells""".stripMargin
       }
 
-    case Command.View(
+    case CliCommand.View(
           rangeStr,
           showFormulas,
           evalFormulas,
@@ -600,7 +602,7 @@ object Main
                 }
       yield result
 
-    case Command.Cell(refStr, noStyle) =>
+    case CliCommand.Cell(refStr, noStyle) =>
       for
         resolved <- resolveRef(wb, sheetOpt, refStr, "cell")
         (targetSheet, refOrRange) = resolved
@@ -629,7 +631,7 @@ object Main
         dependents = graph.dependents.getOrElse(ref, Set.empty).toVector.sortBy(_.toA1)
       yield Format.cellInfo(ref, value, formatted, style, comment, hyperlink, deps, dependents)
 
-    case Command.Search(pattern, limit, sheetsFilter) =>
+    case CliCommand.Search(pattern, limit, sheetsFilter) =>
       IO.fromEither(
         scala.util
           .Try(pattern.r)
@@ -684,7 +686,7 @@ object Main
         }
       }
 
-    case Command.Stats(refStr) =>
+    case CliCommand.Stats(refStr) =>
       for
         resolved <- resolveRef(wb, sheetOpt, refStr, "stats")
         (sheet, refOrRange) = resolved
@@ -709,7 +711,7 @@ object Main
         val mean = sum / count
         f"count: $count, sum: $sum%.2f, min: $min%.2f, max: $max%.2f, mean: $mean%.2f"
 
-    case Command.Eval(formulaStr, overrides) =>
+    case CliCommand.Eval(formulaStr, overrides) =>
       for
         sheet <- requireSheet(wb, sheetOpt, "eval")
         tempSheet <- applyOverrides(sheet, overrides)
@@ -719,7 +721,7 @@ object Main
         )
       yield Format.evalSuccess(formula, result, overrides)
 
-    case Command.Put(refStr, valueStr) =>
+    case CliCommand.Put(refStr, valueStr) =>
       // outputOpt guaranteed Some by CLI parsing for write commands
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
@@ -744,7 +746,7 @@ object Main
               s"Applied value to $cellCount cells in ${range.toA1}\nSaved: $outputPath"
       }
 
-    case Command.PutFormula(refStr, formulaStr) =>
+    case CliCommand.PutFormula(refStr, formulaStr) =>
       // outputOpt guaranteed Some by CLI parsing for write commands
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
@@ -791,7 +793,7 @@ object Main
               s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\nSaved: $outputPath"
       }
 
-    case Command.Style(
+    case CliCommand.Style(
           rangeStr,
           bold,
           italic,
@@ -850,7 +852,7 @@ object Main
           yield s"Styled: ${range.toA1}\nApplied: ${appliedList.mkString(", ")}\nSaved: $outputPath"
       }
 
-    case Command.RowOp(rowNum, height, hide, show) =>
+    case CliCommand.RowOp(rowNum, height, hide, show) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           requireSheet(wb, sheetOpt, "row").flatMap { sheet =>
@@ -873,7 +875,7 @@ object Main
           }
       }
 
-    case Command.ColOp(colStr, width, hide, show) =>
+    case CliCommand.ColOp(colStr, width, hide, show) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
@@ -898,7 +900,7 @@ object Main
           }
       }
 
-    case Command.Batch(source) =>
+    case CliCommand.Batch(source) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           readBatchInput(source).flatMap { input =>
@@ -918,7 +920,7 @@ object Main
           }
       }
 
-    case Command.AddSheet(name, afterOpt, beforeOpt) =>
+    case CliCommand.AddSheet(name, afterOpt, beforeOpt) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
@@ -975,7 +977,7 @@ object Main
           yield s"Added sheet: $name$position\nSaved: $outputPath"
       }
 
-    case Command.RemoveSheet(name) =>
+    case CliCommand.RemoveSheet(name) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
@@ -992,7 +994,7 @@ object Main
           yield s"Removed sheet: $name\nSaved: $outputPath"
       }
 
-    case Command.RenameSheet(oldName, newName) =>
+    case CliCommand.RenameSheet(oldName, newName) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
@@ -1011,7 +1013,7 @@ object Main
           yield s"Renamed: $oldName → $newName\nSaved: $outputPath"
       }
 
-    case Command.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>
+    case CliCommand.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
@@ -1067,7 +1069,7 @@ object Main
           yield s"Moved: $name $position\nSaved: $outputPath"
       }
 
-    case Command.CopySheet(sourceName, targetName) =>
+    case CliCommand.CopySheet(sourceName, targetName) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
@@ -1087,7 +1089,7 @@ object Main
           yield s"Copied: $sourceName → $targetName\nSaved: $outputPath"
       }
 
-    case Command.Merge(rangeStr) =>
+    case CliCommand.Merge(rangeStr) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
@@ -1105,7 +1107,7 @@ object Main
           yield s"Merged: ${range.toA1}\nSaved: $outputPath"
       }
 
-    case Command.Unmerge(rangeStr) =>
+    case CliCommand.Unmerge(rangeStr) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
@@ -1407,71 +1409,3 @@ object Main
       numFormat.map(f => s"format=$f"),
       border.map(b => s"border=$b")
     ).flatten
-
-/**
- * Command ADT representing all CLI operations.
- */
-enum Command:
-  // Read-only (workbook-level)
-  case Sheets
-  case Names
-  // Read-only (sheet-level)
-  case Bounds
-  case View(
-    range: String,
-    showFormulas: Boolean,
-    evalFormulas: Boolean,
-    limit: Int,
-    format: ViewFormat,
-    printScale: Boolean,
-    showGridlines: Boolean,
-    showLabels: Boolean,
-    dpi: Int,
-    quality: Int,
-    rasterOutput: Option[Path],
-    skipEmpty: Boolean,
-    headerRow: Option[Int]
-  )
-  case Cell(ref: String, noStyle: Boolean)
-  case Search(pattern: String, limit: Int, sheetsFilter: Option[String])
-  case Stats(ref: String)
-  // Analyze
-  case Eval(formula: String, overrides: List[String])
-  // Mutate (require -o)
-  case Put(ref: String, value: String)
-  case PutFormula(ref: String, formula: String)
-  case Style(
-    range: String,
-    bold: Boolean,
-    italic: Boolean,
-    underline: Boolean,
-    bg: Option[String],
-    fg: Option[String],
-    fontSize: Option[Double],
-    fontName: Option[String],
-    align: Option[String],
-    valign: Option[String],
-    wrap: Boolean,
-    numFormat: Option[String],
-    border: Option[String],
-    borderColor: Option[String]
-  )
-  case RowOp(row: Int, height: Option[Double], hide: Boolean, show: Boolean)
-  case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean)
-  case Batch(source: String) // "-" for stdin or file path
-  // Sheet management
-  case AddSheet(name: String, after: Option[String], before: Option[String])
-  case RemoveSheet(name: String)
-  case RenameSheet(oldName: String, newName: String)
-  case MoveSheet(name: String, toIndex: Option[Int], after: Option[String], before: Option[String])
-  case CopySheet(sourceName: String, targetName: String)
-  // Cell operations
-  case Merge(range: String)
-  case Unmerge(range: String)
-
-/**
- * Output format for view command.
- */
-enum ViewFormat:
-  case Markdown, Html, Svg, Json, Csv
-  case Png, Jpeg, WebP, Pdf
