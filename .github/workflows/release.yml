@@ -64,9 +64,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mill-
 
-      - name: Build native image
+      - name: Build native image (Unix)
+        if: runner.os != 'Windows'
         run: ./mill xl-cli.nativeImage
-        shell: bash
+
+      - name: Build native image (Windows)
+        if: runner.os == 'Windows'
+        run: .\mill.bat xl-cli.nativeImage
+        shell: cmd
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
