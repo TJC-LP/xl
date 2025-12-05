@@ -493,12 +493,14 @@ private class EvaluatorImpl extends Evaluator:
         val values = cells.flatMap { cell =>
           TExpr.decodeNumeric(cell).toOption
         }
-        if values.isEmpty then
+        // Single-pass sum and count (avoids .toList materialization)
+        val (sum, count) = values.foldLeft((BigDecimal(0), 0)) { case ((s, c), v) =>
+          (s + v, c + 1)
+        }
+        if count == 0 then
           // Excel behavior: AVERAGE of empty range returns #DIV/0!
-          Left(EvalError.DivByZero("SUM(empty)", "COUNT(0)"))
-        else
-          val list = values.toList
-          Right(list.sum / list.size)
+          Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
+        else Right(sum / count)
 
       // ===== Range Aggregation =====
       case foldExpr: TExpr.FoldRange[a, b] =>
