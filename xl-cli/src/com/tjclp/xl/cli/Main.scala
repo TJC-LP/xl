@@ -2,9 +2,7 @@ package com.tjclp.xl.cli
 
 import java.nio.file.Path
 
-import scala.util.chaining.*
-
-import cats.effect.{ExitCode, IO, IOApp}
+import cats.effect.{ExitCode, IO}
 import cats.implicits.*
 import com.monovore.decline.*
 import com.monovore.decline.effect.*
