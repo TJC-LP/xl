@@ -58,12 +58,11 @@ def ivyDeps = Agg(
 
 ```scala 3 ignore
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.unsafe.*
 
 // Read
 val workbook = Excel.read("data.xlsx")
 
-// Modify
+// Modify — string literals are validated at compile time
 val updated = workbook.update("Sheet1", sheet =>
   sheet
     .put("A1" -> "Updated!", "B1" -> 42)
@@ -78,7 +77,6 @@ Excel.write(updated, "output.xlsx")
 
 ```scala 3 ignore
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.unsafe.*
 
 val sheet = Sheet("Sales")
   .put(
@@ -102,6 +100,27 @@ val qualified = ref"Sheet1!A1:C100"   // With sheet name
 val col = "A"; val row = "1"
 val dynamic = ref"$col$row"           // Either[XLError, RefType]
 ```
+
+### Runtime References (Pure FP)
+
+When cell references come from user input or configuration, XL returns `Either` to ensure errors are handled:
+
+```scala 3 ignore
+import com.tjclp.xl.{*, given}
+
+val userInput = "B5"  // From config, CLI, etc.
+
+// Pure approach: pattern match on result
+sheet.put(userInput -> 100) match
+  case Right(updated) => Excel.write(Workbook(updated), "out.xlsx")
+  case Left(error)    => println(s"Invalid ref: ${error.message}")
+
+// Escape hatch: .unsafe throws on invalid refs (for scripts/demos)
+import com.tjclp.xl.unsafe.*
+val updated = sheet.put(userInput -> 100).unsafe  // Throws if invalid
+```
+
+This design catches errors like `"ZZZ999999"` at the appropriate boundary — compile time for literals, explicit handling for runtime values.
 
 ### Formatted Literals
 
@@ -133,7 +152,7 @@ val percent = CellStyle.default.percent
 
 ```scala 3 ignore
 val text = "Error: ".bold.red + "Fix this!".underline
-sheet.put("A1", text).unsafe
+sheet.put("A1" -> text)  // Literal ref → no .unsafe needed
 ```
 
 ### Patch Composition
@@ -141,13 +160,13 @@ sheet.put("A1", text).unsafe
 ```scala 3 ignore
 val headerStyle = CellStyle.default.bold.size(14.0)
 
-// Patches can still use := syntax when needed for complex composition
+// Patches use := syntax for complex composition
 val patch =
   (ref"A1" := "Title") ++
   ref"A1".styled(headerStyle) ++
   ref"A1:C1".merge
 
-sheet.put(patch).unsafe
+sheet.put(patch)  // Patch application is infallible
 ```
 
 ## Formula System
