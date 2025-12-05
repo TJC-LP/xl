@@ -14,6 +14,7 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cli.helpers.{BatchParser, SheetResolver, StyleBuilder, ValueParser}
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
 import com.tjclp.xl.cli.raster.ImageMagick
 import com.tjclp.xl.display.NumFmtFormatter
@@ -396,62 +397,9 @@ object Main
   ): IO[String] =
     for
       wb <- ExcelIO.instance[IO].read(filePath)
-      sheet <- resolveSheet(wb, sheetNameOpt)
+      sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
       result <- executeCommand(wb, sheet, outputOpt, cmd)
     yield result
-
-  private def resolveSheet(wb: Workbook, sheetNameOpt: Option[String]): IO[Option[Sheet]] =
-    sheetNameOpt match
-      case Some(name) =>
-        IO.fromEither(SheetName.apply(name).left.map(e => new Exception(e))).flatMap { sheetName =>
-          IO.fromOption(wb.sheets.find(_.name == sheetName))(
-            new Exception(
-              s"Sheet not found: $name. Available: ${wb.sheets.map(_.name.value).mkString(", ")}"
-            )
-          ).map(Some(_))
-        }
-      case None =>
-        IO.pure(None)
-
-  private def requireSheet(wb: Workbook, sheetOpt: Option[Sheet], context: String): IO[Sheet] =
-    IO.fromOption(sheetOpt)(
-      new Exception(
-        s"$context requires --sheet or qualified ref (e.g., Sheet1!A1). " +
-          s"Available sheets: ${wb.sheets.map(_.name.value).mkString(", ")}"
-      )
-    )
-
-  /**
-   * Resolve a reference string to a (Sheet, Either[ARef, CellRange]).
-   *
-   * Supports qualified refs like `Sheet1!A1` which override the default sheet context. For
-   * unqualified refs, requires a default sheet or fails with helpful error.
-   */
-  private def resolveRef(
-    wb: Workbook,
-    defaultSheetOpt: Option[Sheet],
-    refStr: String,
-    context: String
-  ): IO[(Sheet, Either[ARef, CellRange])] =
-    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
-      case RefType.Cell(ref) =>
-        requireSheet(wb, defaultSheetOpt, s"$context with unqualified ref '$refStr'")
-          .map(s => (s, Left(ref)))
-      case RefType.Range(range) =>
-        requireSheet(wb, defaultSheetOpt, s"$context with unqualified range '$refStr'")
-          .map(s => (s, Right(range)))
-      case RefType.QualifiedCell(sheetName, ref) =>
-        findSheet(wb, sheetName).map(s => (s, Left(ref)))
-      case RefType.QualifiedRange(sheetName, range) =>
-        findSheet(wb, sheetName).map(s => (s, Right(range)))
-    }
-
-  private def findSheet(wb: Workbook, name: SheetName): IO[Sheet] =
-    IO.fromOption(wb.sheets.find(_.name == name))(
-      new Exception(
-        s"Sheet not found: ${name.value}. Available: ${wb.sheets.map(_.name.value).mkString(", ")}"
-      )
-    )
 
   private def executeCommand(
     wb: Workbook,
@@ -489,7 +437,7 @@ object Main
           IO.pure(lines.mkString("\n"))
 
     case CliCommand.Bounds =>
-      requireSheet(wb, sheetOpt, "bounds").map { sheet =>
+      SheetResolver.requireSheet(wb, sheetOpt, "bounds").map { sheet =>
         val name = sheet.name.value
         val usedRange = sheet.usedRange
         val cellCount = sheet.cells.size
@@ -524,7 +472,7 @@ object Main
           headerRow
         ) =>
       for
-        resolved <- resolveRef(wb, sheetOpt, rangeStr, "view")
+        resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "view")
         (targetSheet, refOrRange) = resolved
         range = refOrRange match
           case Right(r) => r
@@ -604,7 +552,7 @@ object Main
 
     case CliCommand.Cell(refStr, noStyle) =>
       for
-        resolved <- resolveRef(wb, sheetOpt, refStr, "cell")
+        resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "cell")
         (targetSheet, refOrRange) = resolved
         ref <- refOrRange match
           case Left(r) => IO.pure(r)
@@ -668,11 +616,11 @@ object Main
             .flatMap { s =>
               s.cells.iterator
                 .filter { case (_, cell) =>
-                  val text = formatCellValue(cell.value)
+                  val text = ValueParser.formatCellValue(cell.value)
                   regex.findFirstIn(text).isDefined
                 }
                 .map { case (ref, cell) =>
-                  val value = formatCellValue(cell.value)
+                  val value = ValueParser.formatCellValue(cell.value)
                   // Always use qualified refs for clarity
                   (s"${s.name.value}!${ref.toA1}", value)
                 }
@@ -688,7 +636,7 @@ object Main
 
     case CliCommand.Stats(refStr) =>
       for
-        resolved <- resolveRef(wb, sheetOpt, refStr, "stats")
+        resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "stats")
         (sheet, refOrRange) = resolved
         range = refOrRange match
           case Right(r) => r
@@ -713,7 +661,7 @@ object Main
 
     case CliCommand.Eval(formulaStr, overrides) =>
       for
-        sheet <- requireSheet(wb, sheetOpt, "eval")
+        sheet <- SheetResolver.requireSheet(wb, sheetOpt, "eval")
         tempSheet <- applyOverrides(sheet, overrides)
         formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
         result <- IO.fromEither(
@@ -726,9 +674,9 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            resolved <- resolveRef(wb, sheetOpt, refStr, "put")
+            resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "put")
             (targetSheet, refOrRange) = resolved
-            value = parseValue(valueStr)
+            value = ValueParser.parseValue(valueStr)
             // Support both single cells and ranges
             (updatedSheet, cellCount) = refOrRange match
               case Left(ref) =>
@@ -751,7 +699,7 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            resolved <- resolveRef(wb, sheetOpt, refStr, "putf")
+            resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "putf")
             (targetSheet, refOrRange) = resolved
             formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
             // Parse formula to AST for dragging support
@@ -812,12 +760,12 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            resolved <- resolveRef(wb, sheetOpt, rangeStr, "style")
+            resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "style")
             (targetSheet, refOrRange) = resolved
             range = refOrRange match
               case Right(r) => r
               case Left(ref) => CellRange(ref, ref)
-            style <- buildCellStyle(
+            style <- StyleBuilder.buildCellStyle(
               bold,
               italic,
               underline,
@@ -835,7 +783,7 @@ object Main
             updatedSheet = styleSyntax.withRangeStyle(targetSheet)(range, style)
             updatedWb = wb.put(updatedSheet)
             _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
-            appliedList = buildStyleDescription(
+            appliedList = StyleBuilder.buildStyleDescription(
               bold,
               italic,
               underline,
@@ -855,7 +803,7 @@ object Main
     case CliCommand.RowOp(rowNum, height, hide, show) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
-          requireSheet(wb, sheetOpt, "row").flatMap { sheet =>
+          SheetResolver.requireSheet(wb, sheetOpt, "row").flatMap { sheet =>
             val row = Row.from1(rowNum)
             val currentProps = sheet.getRowProperties(row)
             val newProps = currentProps.copy(
@@ -878,7 +826,7 @@ object Main
     case CliCommand.ColOp(colStr, width, hide, show) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
-          requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
+          SheetResolver.requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
             IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e))).flatMap {
               col =>
                 val currentProps = sheet.getColumnProperties(col)
@@ -903,14 +851,14 @@ object Main
     case CliCommand.Batch(source) =>
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
-          readBatchInput(source).flatMap { input =>
-            parseBatchOperations(input).flatMap { ops =>
-              applyBatchOperations(wb, sheetOpt, ops).flatMap { updatedWb =>
+          BatchParser.readBatchInput(source).flatMap { input =>
+            BatchParser.parseBatchOperations(input).flatMap { ops =>
+              BatchParser.applyBatchOperations(wb, sheetOpt, ops).flatMap { updatedWb =>
                 ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
                   val summary = ops
                     .map {
-                      case BatchOp.Put(ref, value) => s"  PUT $ref = $value"
-                      case BatchOp.PutFormula(ref, formula) => s"  PUTF $ref = $formula"
+                      case BatchParser.BatchOp.Put(ref, value) => s"  PUT $ref = $value"
+                      case BatchParser.BatchOp.PutFormula(ref, formula) => s"  PUTF $ref = $formula"
                     }
                     .mkString("\n")
                   s"Applied ${ops.size} operations:\n$summary\nSaved: $outputPath"
@@ -1093,7 +1041,7 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            resolved <- resolveRef(wb, sheetOpt, rangeStr, "merge")
+            resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "merge")
             (targetSheet, refOrRange) = resolved
             range <- refOrRange match
               case Right(r) => IO.pure(r)
@@ -1111,7 +1059,7 @@ object Main
       outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required"))) {
         outputPath =>
           for
-            resolved <- resolveRef(wb, sheetOpt, rangeStr, "unmerge")
+            resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "unmerge")
             (targetSheet, refOrRange) = resolved
             range <- refOrRange match
               case Right(r) => IO.pure(r)
@@ -1124,95 +1072,6 @@ object Main
             _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
           yield s"Unmerged: ${range.toA1}\nSaved: $outputPath"
       }
-
-  // ==========================================================================
-  // Batch operations
-  // ==========================================================================
-
-  private enum BatchOp:
-    case Put(ref: String, value: String)
-    case PutFormula(ref: String, formula: String)
-
-  private def readBatchInput(source: String): IO[String] =
-    if source == "-" then IO.blocking(scala.io.Source.stdin.mkString)
-    else IO.blocking(scala.io.Source.fromFile(source).mkString)
-
-  /**
-   * Parse batch JSON input. Expects format:
-   * {{{
-   * [
-   *   {"op": "put", "ref": "A1", "value": "Hello"},
-   *   {"op": "putf", "ref": "B1", "value": "=A1*2"}
-   * ]
-   * }}}
-   */
-  private def parseBatchOperations(input: String): IO[Vector[BatchOp]] =
-    IO.fromEither {
-      val trimmed = input.trim
-      if !trimmed.startsWith("[") then Left(new Exception("Batch input must be a JSON array"))
-      else parseBatchJson(trimmed)
-    }
-
-  /**
-   * Simple JSON parser for batch operations. Handles: [{"op":"put"|"putf", "ref":"A1",
-   * "value":"..."}]
-   */
-  private def parseBatchJson(json: String): Either[Exception, Vector[BatchOp]] =
-    // Very simple JSON parsing - handles the specific format we need
-    val objPattern = """\{[^}]+\}""".r
-    val opPattern = """"op"\s*:\s*"(\w+)"""".r
-    val refPattern = """"ref"\s*:\s*"([^"]+)"""".r
-    val valuePattern = """"value"\s*:\s*"((?:[^"\\]|\\.)*)"""".r
-
-    val ops = objPattern.findAllIn(json).toVector.map { obj =>
-      val op = opPattern.findFirstMatchIn(obj).map(_.group(1))
-      val ref = refPattern.findFirstMatchIn(obj).map(_.group(1))
-      val value = valuePattern
-        .findFirstMatchIn(obj)
-        .map(_.group(1))
-        .map(_.replace("\\\"", "\"").replace("\\n", "\n").replace("\\\\", "\\"))
-
-      (op, ref, value) match
-        case (Some("put"), Some(r), Some(v)) => Right(BatchOp.Put(r, v))
-        case (Some("putf"), Some(r), Some(v)) => Right(BatchOp.PutFormula(r, v))
-        case (Some(unknown), _, _) => Left(new Exception(s"Unknown operation: $unknown"))
-        case _ => Left(new Exception(s"Invalid batch operation: $obj"))
-    }
-
-    val errors = ops.collect { case Left(e) => e }
-    errors.headOption match
-      case Some(e) => Left(e)
-      case None => Right(ops.collect { case Right(op) => op })
-
-  private def applyBatchOperations(
-    wb: Workbook,
-    defaultSheetOpt: Option[Sheet],
-    ops: Vector[BatchOp]
-  ): IO[Workbook] =
-    ops.foldLeft(IO.pure(wb)) { (wbIO, op) =>
-      wbIO.flatMap { currentWb =>
-        op match
-          case BatchOp.Put(refStr, value) =>
-            resolveRef(currentWb, defaultSheetOpt, refStr, "batch put").map {
-              case (targetSheet, Left(ref)) =>
-                val cellValue = parseValue(value)
-                val updatedSheet = targetSheet.put(ref, cellValue)
-                currentWb.put(updatedSheet)
-              case (_, Right(_)) =>
-                // This shouldn't happen for single refs, but handle gracefully
-                currentWb
-            }
-          case BatchOp.PutFormula(refStr, formula) =>
-            resolveRef(currentWb, defaultSheetOpt, refStr, "batch putf").map {
-              case (targetSheet, Left(ref)) =>
-                val normalizedFormula = if formula.startsWith("=") then formula.drop(1) else formula
-                val updatedSheet = targetSheet.put(ref, CellValue.Formula(normalizedFormula, None))
-                currentWb.put(updatedSheet)
-              case (_, Right(_)) =>
-                currentWb
-            }
-      }
-    }
 
   // ==========================================================================
   // Helpers
@@ -1232,11 +1091,11 @@ object Main
           case Array(refStr, valueStr) if valueStr.trim.nonEmpty =>
             IO.fromEither(RefType.parse(refStr.trim).left.map(e => new Exception(e))).flatMap {
               case RefType.Cell(ref) =>
-                val value = parseValue(valueStr.trim)
+                val value = ValueParser.parseValue(valueStr.trim)
                 IO.pure(s.put(ref, value))
               case RefType.QualifiedCell(sheetName, ref) =>
                 if sheetName == sheet.name then
-                  val value = parseValue(valueStr.trim)
+                  val value = ValueParser.parseValue(valueStr.trim)
                   IO.pure(s.put(ref, value))
                 else
                   IO.raiseError(
@@ -1262,150 +1121,3 @@ object Main
             )
       }
     }
-
-  private def parseValue(s: String): CellValue =
-    scala.util.Try(BigDecimal(s)).toOption.map(CellValue.Number.apply).getOrElse {
-      s.toLowerCase match
-        case "true" => CellValue.Bool(true)
-        case "false" => CellValue.Bool(false)
-        case _ =>
-          val text = if s.startsWith("\"") && s.endsWith("\"") then s.drop(1).dropRight(1) else s
-          CellValue.Text(text)
-    }
-
-  private def formatCellValue(value: CellValue): String =
-    value match
-      case CellValue.Text(s) => s
-      case CellValue.Number(n) =>
-        if n.isWhole then n.toBigInt.toString
-        else n.underlying.stripTrailingZeros.toPlainString
-      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-      case CellValue.DateTime(dt) => dt.toString
-      case CellValue.Error(err) => err.toExcel
-      case CellValue.RichText(rt) => rt.toPlainText
-      case CellValue.Empty => ""
-      case CellValue.Formula(expr, cached) =>
-        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
-        cached.map(formatCellValue).getOrElse(displayExpr)
-
-  private def buildCellStyle(
-    bold: Boolean,
-    italic: Boolean,
-    underline: Boolean,
-    bg: Option[String],
-    fg: Option[String],
-    fontSize: Option[Double],
-    fontName: Option[String],
-    align: Option[String],
-    valign: Option[String],
-    wrap: Boolean,
-    numFormat: Option[String],
-    border: Option[String],
-    borderColor: Option[String]
-  ): IO[CellStyle] =
-    for
-      bgColor <- bg.traverse(s => IO.fromEither(ColorParser.parse(s).left.map(new Exception(_))))
-      fgColor <- fg.traverse(s => IO.fromEither(ColorParser.parse(s).left.map(new Exception(_))))
-      bdrColor <- borderColor.traverse(s =>
-        IO.fromEither(ColorParser.parse(s).left.map(new Exception(_)))
-      )
-      hAlign <- align.traverse(s => IO.fromEither(parseHAlign(s).left.map(new Exception(_))))
-      vAlign <- valign.traverse(s => IO.fromEither(parseVAlign(s).left.map(new Exception(_))))
-      bdrStyle <- border.traverse(s =>
-        IO.fromEither(parseBorderStyle(s).left.map(new Exception(_)))
-      )
-      nFmt <- numFormat.traverse(s => IO.fromEither(parseNumFmt(s).left.map(new Exception(_))))
-    yield
-      val font = Font.default
-        .withBold(bold)
-        .withItalic(italic)
-        .withUnderline(underline)
-        .pipe(f => fgColor.fold(f)(c => f.withColor(c)))
-        .pipe(f => fontSize.fold(f)(s => f.withSize(s)))
-        .pipe(f => fontName.fold(f)(n => f.withName(n)))
-
-      val fill = bgColor.map(Fill.Solid.apply).getOrElse(Fill.None)
-
-      val cellBorder = bdrStyle
-        .map(style => Border.all(style, bdrColor))
-        .getOrElse(Border.none)
-
-      val alignment = Align.default
-        .pipe(a => hAlign.fold(a)(h => a.withHAlign(h)))
-        .pipe(a => vAlign.fold(a)(v => a.withVAlign(v)))
-        .pipe(a => if wrap then a.withWrap() else a)
-
-      CellStyle(
-        font = font,
-        fill = fill,
-        border = cellBorder,
-        numFmt = nFmt.getOrElse(NumFmt.General),
-        align = alignment
-      )
-
-  private def parseHAlign(s: String): Either[String, HAlign] =
-    s.toLowerCase match
-      case "left" => Right(HAlign.Left)
-      case "center" => Right(HAlign.Center)
-      case "right" => Right(HAlign.Right)
-      case "justify" => Right(HAlign.Justify)
-      case "general" => Right(HAlign.General)
-      case other => Left(s"Unknown horizontal alignment: $other. Use left, center, right, justify")
-
-  private def parseVAlign(s: String): Either[String, VAlign] =
-    s.toLowerCase match
-      case "top" => Right(VAlign.Top)
-      case "middle" | "center" => Right(VAlign.Middle)
-      case "bottom" => Right(VAlign.Bottom)
-      case other => Left(s"Unknown vertical alignment: $other. Use top, middle, bottom")
-
-  private def parseBorderStyle(s: String): Either[String, BorderStyle] =
-    s.toLowerCase match
-      case "none" => Right(BorderStyle.None)
-      case "thin" => Right(BorderStyle.Thin)
-      case "medium" => Right(BorderStyle.Medium)
-      case "thick" => Right(BorderStyle.Thick)
-      case "dashed" => Right(BorderStyle.Dashed)
-      case "dotted" => Right(BorderStyle.Dotted)
-      case "double" => Right(BorderStyle.Double)
-      case other => Left(s"Unknown border style: $other. Use none, thin, medium, thick")
-
-  private def parseNumFmt(s: String): Either[String, NumFmt] =
-    s.toLowerCase match
-      case "general" => Right(NumFmt.General)
-      case "number" => Right(NumFmt.Decimal)
-      case "currency" => Right(NumFmt.Currency)
-      case "percent" => Right(NumFmt.Percent)
-      case "date" => Right(NumFmt.Date)
-      case "text" => Right(NumFmt.Text)
-      case other =>
-        Left(s"Unknown number format: $other. Use general, number, currency, percent, date, text")
-
-  private def buildStyleDescription(
-    bold: Boolean,
-    italic: Boolean,
-    underline: Boolean,
-    bg: Option[String],
-    fg: Option[String],
-    fontSize: Option[Double],
-    fontName: Option[String],
-    align: Option[String],
-    valign: Option[String],
-    wrap: Boolean,
-    numFormat: Option[String],
-    border: Option[String]
-  ): List[String] =
-    List(
-      if bold then Some("bold") else None,
-      if italic then Some("italic") else None,
-      if underline then Some("underline") else None,
-      bg.map(c => s"bg=$c"),
-      fg.map(c => s"fg=$c"),
-      fontSize.map(s => s"font-size=$s"),
-      fontName.map(n => s"font-name=$n"),
-      align.map(a => s"align=$a"),
-      valign.map(v => s"valign=$v"),
-      if wrap then Some("wrap") else None,
-      numFormat.map(f => s"format=$f"),
-      border.map(b => s"border=$b")
-    ).flatten
