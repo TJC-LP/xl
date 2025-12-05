@@ -1,6 +1,6 @@
 package com.tjclp.xl.cli.helpers
 
-import cats.effect.IO
+import cats.effect.{IO, Resource}
 import cats.syntax.traverse.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, RefType, SheetName}
@@ -30,7 +30,10 @@ object BatchParser:
    */
   def readBatchInput(source: String): IO[String] =
     if source == "-" then IO.blocking(scala.io.Source.stdin.mkString)
-    else IO.blocking(scala.io.Source.fromFile(source).mkString)
+    else
+      Resource
+        .fromAutoCloseable(IO.blocking(scala.io.Source.fromFile(source)))
+        .use(src => IO.blocking(src.mkString))
 
   /**
    * Parse batch JSON input. Expects format:
