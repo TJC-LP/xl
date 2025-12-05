@@ -792,15 +792,30 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
     // Generate cols from domain properties if not preserved
     val generatedCols = buildColsElement(sheet)
 
+    // Calculate actual dimension from all rows (recalculate to reflect any new cells)
+    val calculatedDimension: Option[Elem] =
+      val allCells = allRows.flatMap(_.cells)
+      for
+        minCol <- allCells.map(_.ref.col.index0).minOption
+        maxCol <- allCells.map(_.ref.col.index0).maxOption
+        minRow <- allCells.map(_.ref.row.index0).minOption
+        maxRow <- allCells.map(_.ref.row.index0).maxOption
+      yield
+        val startRef = ARef.from0(minCol, minRow)
+        val endRef = ARef.from0(maxCol, maxRow)
+        elem("dimension", "ref" -> s"${startRef.toA1}:${endRef.toA1}")()
+
     // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
     preservedMetadata match
       case Some(preserved) =>
         OoxmlWorksheet(
           allRows, // Use merged rows (with cells + empty rows)
           sheet.mergedRanges,
-          // Preserve all metadata from original
+          // Preserve all metadata from original, but use recalculated dimension
           preserved.sheetPr,
-          preserved.dimension,
+          calculatedDimension.orElse(
+            preserved.dimension
+          ), // Use calculated dimension, fallback to preserved
           preserved.sheetViews,
           preserved.sheetFormatPr,
           preserved.cols.orElse(generatedCols), // Fallback to domain props if not preserved
@@ -828,6 +843,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         OoxmlWorksheet(
           rowsWithCells,
           sheet.mergedRanges,
+          dimension = calculatedDimension,
           cols = generatedCols,
           legacyDrawing = legacyDrawingElem,
           tableParts = tableParts

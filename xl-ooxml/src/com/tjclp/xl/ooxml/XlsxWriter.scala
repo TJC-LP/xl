@@ -1290,6 +1290,14 @@ object XlsxWriter:
       writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels, config)
       writeStyles(zip, "xl/styles.xml", styles, config)
 
+      // Preserve theme file from source if available
+      // Theme is parsed (in "known parts") but not regenerated, so we must copy it explicitly
+      val themePath = "xl/theme/theme1.xml"
+      sourceContext.foreach { ctx =>
+        if ctx.partManifest.contains(themePath) then
+          copyPreservedPart(ctx.sourcePath, themePath, zip)
+      }
+
       if regenerateSharedStrings then
         sst.foreach { sharedStrings =>
           writeSharedStrings(zip, sharedStringsPath, sharedStrings, config)

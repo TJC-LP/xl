@@ -378,9 +378,10 @@ final case class OoxmlStyles(
 
     val cellXfsElem = elem("cellXfs", "count" -> index.cellStyles.size.toString)(
       index.cellStyles.map { style =>
-        val fontIdx = fontMap.getOrElse(style.font, -1)
-        val fillIdx = fillMap.getOrElse(style.fill, -1)
-        val borderIdx = borderMap.getOrElse(style.border, -1)
+        // Use 0 (default style) as fallback - OOXML requires non-negative indices
+        val fontIdx = fontMap.getOrElse(style.font, 0)
+        val fillIdx = fillMap.getOrElse(style.fill, 0)
+        val borderIdx = borderMap.getOrElse(style.border, 0)
         val numFmtId = style.numFmtId.getOrElse {
           // No raw ID → derive from NumFmt enum (programmatic creation)
           NumFmt
@@ -406,13 +407,38 @@ final case class OoxmlStyles(
       }*
     )
 
+    // cellStyleXfs: Master formatting records (required per ECMA-376 §18.8.9)
+    // At minimum, need one default entry that cellXfs can reference via xfId
+    val cellStyleXfsElem = elem("cellStyleXfs", "count" -> "1")(
+      elem(
+        "xf",
+        "numFmtId" -> "0",
+        "fontId" -> "0",
+        "fillId" -> "0",
+        "borderId" -> "0"
+      )()
+    )
+
+    // cellStyles: Named styles (required per ECMA-376 §18.8.8)
+    // At minimum, need the default "Normal" style
+    val cellStylesElem = elem("cellStyles", "count" -> "1")(
+      elem(
+        "cellStyle",
+        "name" -> "Normal",
+        "xfId" -> "0",
+        "builtinId" -> "0"
+      )()
+    )
+
     // Assemble styles.xml with preserved namespaces and differential formats
-    // OOXML order: numFmts, fonts, fills, borders, cellXfs, dxfs
+    // OOXML order: numFmts, fonts, fills, borders, cellStyleXfs, cellXfs, cellStyles, dxfs
     val children = numFmtsElem.toList ++ Seq(
       fontsElem,
       fillsElem,
       bordersElem,
-      cellXfsElem
+      cellStyleXfsElem,
+      cellXfsElem,
+      cellStylesElem
     ) ++ preservedDxfs.toList
 
     // Use preserved attributes if available, otherwise create minimal xmlns
@@ -487,6 +513,17 @@ final case class OoxmlStyles(
       index.borders.foreach(writeBorderSax(writer, _))
       writer.endElement()
 
+      // cellStyleXfs: Master formatting records (required per ECMA-376 §18.8.9)
+      writer.startElement("cellStyleXfs")
+      writer.writeAttribute("count", "1")
+      writer.startElement("xf")
+      writer.writeAttribute("numFmtId", "0")
+      writer.writeAttribute("fontId", "0")
+      writer.writeAttribute("fillId", "0")
+      writer.writeAttribute("borderId", "0")
+      writer.endElement() // xf
+      writer.endElement() // cellStyleXfs
+
       // CellXfs
       val fontMap = index.fonts.zipWithIndex.toMap
       val fillMap = allFills.zipWithIndex.toMap
@@ -495,9 +532,10 @@ final case class OoxmlStyles(
       writer.startElement("cellXfs")
       writer.writeAttribute("count", index.cellStyles.size.toString)
       index.cellStyles.foreach { style =>
-        val fontIdx = fontMap.getOrElse(style.font, -1)
-        val fillIdx = fillMap.getOrElse(style.fill, -1)
-        val borderIdx = borderMap.getOrElse(style.border, -1)
+        // Use 0 (default style) as fallback - OOXML requires non-negative indices
+        val fontIdx = fontMap.getOrElse(style.font, 0)
+        val fillIdx = fillMap.getOrElse(style.fill, 0)
+        val borderIdx = borderMap.getOrElse(style.border, 0)
         val numFmtId = style.numFmtId.getOrElse {
           NumFmt
             .builtInId(style.numFmt)
@@ -517,6 +555,16 @@ final case class OoxmlStyles(
         writer.endElement()
       }
       writer.endElement() // cellXfs
+
+      // cellStyles: Named styles (required per ECMA-376 §18.8.8)
+      writer.startElement("cellStyles")
+      writer.writeAttribute("count", "1")
+      writer.startElement("cellStyle")
+      writer.writeAttribute("name", "Normal")
+      writer.writeAttribute("xfId", "0")
+      writer.writeAttribute("builtinId", "0")
+      writer.endElement() // cellStyle
+      writer.endElement() // cellStyles
 
       // dxfs if preserved
       preservedDxfs.foreach(writer.writeElem)

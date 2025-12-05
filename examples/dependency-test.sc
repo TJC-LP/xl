@@ -1,7 +1,7 @@
 //> using scala 3.7.3
-//> using dep com.tjclp::xl-core:0.1.0-SNAPSHOT
-//> using dep com.tjclp::xl-evaluator:0.1.0-SNAPSHOT
-//> using dep com.tjclp::xl-cats-effect:0.1.0-SNAPSHOT
+//> using dep com.tjclp::xl-core:0.1.5-SNAPSHOT
+//> using dep com.tjclp::xl-evaluator:0.1.5-SNAPSHOT
+//> using dep com.tjclp::xl-cats-effect:0.1.5-SNAPSHOT
 //> using repository ivy2Local
 
 /**
