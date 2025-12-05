@@ -45,7 +45,7 @@ import com.tjclp.xl.{*, given}     // Everything: core + formula + display + typ
 import com.tjclp.xl.unsafe.*       // .unsafe boundary (explicit opt-in)
 
 // Core API
-val sheet = Sheet("Demo").put(ref"A1", 100).unsafe
+val sheet = Sheet("Demo").put("A1" -> 100)
 Excel.write(Workbook(sheet), "output.xlsx")
 
 // Formula evaluation (when xl-evaluator is a dependency)
@@ -103,6 +103,47 @@ make install               # Install xl CLI to ~/.local/bin/xl
 
 **IMPORTANT**: After modifying CLI code, always run `make install` to update the installed CLI. Do NOT manually copy jars.
 
+## CLI Usage
+
+The `xl` CLI is stateless by design. Key patterns:
+
+```bash
+# Global flags (used with all commands)
+-f, --file <path>     # Input file (required)
+-s, --sheet <name>    # Sheet to operate on
+-o, --output <path>   # Output file for mutations
+
+# Sheet selection is REQUIRED for unqualified ranges
+xl -f data.xlsx --sheet "Q1 Report" view A1:D20    # Using --sheet flag
+xl -f data.xlsx view "Q1 Report"!A1:D20            # Using qualified ref
+
+# Commands that work without sheet (operate on all sheets)
+xl -f data.xlsx sheets                              # List all sheets
+xl -f data.xlsx search "Revenue"                    # Search all sheets
+
+# Single cell ops auto-detect sheet if unambiguous
+xl -f data.xlsx cell A1                             # Works if only one sheet
+
+# Mutations require -o
+xl -f in.xlsx -o out.xlsx put B5 1000              # Write value
+xl -f in.xlsx -o out.xlsx putf C5 "=B5*1.1"        # Write formula
+
+# Formula dragging with $ anchoring
+xl -f in.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
+```
+
+**Common mistake**: Using unqualified range without `--sheet`:
+```bash
+# ❌ Wrong - will error
+xl -f data.xlsx view A1:B4
+
+# ✅ Correct options
+xl -f data.xlsx --sheet "Sheet1" view A1:B4
+xl -f data.xlsx view "Sheet1"!A1:B4
+```
+
+See `docs/plan/xl-cli.md` for full command reference.
+
 ## Code Style
 
 All code must pass `./mill __.checkFormat`. See `docs/design/style-guide.md`.
@@ -151,14 +192,14 @@ property("parse . print = id") { forAll { (ref: ARef) => ARef.parse(ref.toA1) ==
 
 ### Sheet Operations
 ```scala
-// Batch put with type inference
-sheet.put(ref"A1" -> "Revenue", ref"B1" -> LocalDate.now, ref"C1" -> BigDecimal("1000.50"))
+// Batch put with type inference (string refs validated at compile time)
+sheet.put("A1" -> "Revenue", "B1" -> LocalDate.now, "C1" -> BigDecimal("1000.50"))
 
 // Type-safe reading
 sheet.readTyped[BigDecimal](ref"C1") // Either[CodecError, Option[A]]
 
 // Styling
-sheet.style(ref"B19:D21", CellStyle.default.withNumFmt(NumFmt.Percent))
+sheet.style("B19:D21", CellStyle.default.withNumFmt(NumFmt.Percent))
 ```
 
 ### Formula Evaluation
@@ -173,7 +214,7 @@ sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
 ### Rich Text
 ```scala
 val text = "Bold".bold.red + " normal " + "Italic".italic.blue
-sheet.put(ref"A1" -> text)
+sheet.put("A1" -> text)
 ```
 
 ### Comments & HTML Export

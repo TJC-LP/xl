@@ -104,6 +104,37 @@ object extensions:
     def style(range: com.tjclp.xl.addressing.CellRange, cellStyle: CellStyle): Sheet =
       sheet.withRangeStyle(range, cellStyle)
 
+    /**
+     * Apply styles to multiple cells/ranges (batch operation with map syntax).
+     *
+     * When called with all string literals, the references are validated at compile time and
+     * returns `Sheet` directly. When any ref is a runtime expression, validation is deferred and
+     * returns `XLResult[Sheet]`.
+     *
+     * @param updates
+     *   Varargs of (String, CellStyle) tuples using map syntax
+     * @return
+     *   `Sheet` for literal refs (compile-time validated), `XLResult[Sheet]` for runtime refs
+     *
+     * '''Example:'''
+     * {{{
+     * val bold = CellStyle.default.bold
+     * val currency = CellStyle.default.currency
+     *
+     * // All literals - returns Sheet directly
+     * sheet.style(
+     *   "A1" -> bold,
+     *   "B1:B10" -> currency,
+     *   "C1" -> CellStyle.default.percent
+     * )
+     * }}}
+     */
+    @annotation.targetName("styleStringTuples")
+    transparent inline def style(
+      inline updates: (String, CellStyle)*
+    ): Sheet | XLResult[Sheet] =
+      ${ com.tjclp.xl.macros.PutLiteral.styleTuplesImpl('{ sheet }, 'updates) }
+
   // ========== Sheet Extensions: Lookup Operations (Safe) ==========
 
   extension (sheet: Sheet)
