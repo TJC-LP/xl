@@ -210,8 +210,7 @@ object SheetEvaluator:
   /**
    * Convert typed TExpr evaluation result to CellValue.
    *
-   * Handles all result types: BigDecimal, String, Boolean, Int, LocalDate, LocalDateTime. Special
-   * case: (BigDecimal, Int) tuple from AVERAGE (sum, count) → computes division.
+   * Handles all result types: BigDecimal, String, Boolean, Int, LocalDate, LocalDateTime.
    */
   private def toCellValue(result: Any): CellValue =
     result match
@@ -221,10 +220,6 @@ object SheetEvaluator:
       case i: Int => CellValue.Number(BigDecimal(i))
       case ld: LocalDate => CellValue.DateTime(ld.atStartOfDay())
       case ldt: LocalDateTime => CellValue.DateTime(ldt)
-      case (sum: BigDecimal, count: Int) =>
-        // AVERAGE function returns (sum, count) tuple - compute the average
-        if count == 0 then CellValue.Number(BigDecimal(0))
-        else CellValue.Number(sum / count)
       case other =>
         // Fallback for unexpected types (should never happen with well-typed TExpr)
         CellValue.Text(other.toString)

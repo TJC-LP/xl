@@ -487,6 +487,18 @@ private class EvaluatorImpl extends Evaluator:
           Right(BigDecimal(0))
         else Right(values.max)
 
+      case TExpr.Average(range) =>
+        // Average: compute sum/count of numeric values in range
+        // Note: Must collect to List since range.cells returns Iterator (single-use)
+        val values = range.cells.flatMap { cellRef =>
+          TExpr.decodeNumeric(sheet(cellRef)).toOption
+        }.toList
+        if values.isEmpty then
+          // Excel behavior: AVERAGE of empty range returns #DIV/0! error
+          // We return 0 for consistency with SUM/COUNT behavior on empty ranges
+          Right(BigDecimal(0))
+        else Right(values.sum / values.size)
+
       // ===== Range Aggregation =====
       case foldExpr: TExpr.FoldRange[a, b] =>
         // FoldRange: iterate cells in range, apply step function with accumulator

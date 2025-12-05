@@ -492,9 +492,8 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(countExpr, sheet) == 3)
   }
 
-  test("Regression: AVERAGE returns (sum, count) tuple at eval level") {
-    // Bug fix: AVERAGE was returning Text("(sum,count)") after toCellValue conversion
-    // At eval level, it correctly returns (BigDecimal, Int) tuple
+  test("AVERAGE returns BigDecimal directly at eval level") {
+    // AVERAGE now has dedicated TExpr case, returns BigDecimal directly
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(150)),
@@ -503,13 +502,12 @@ class EvaluatorSpec extends ScalaCheckSuite:
     )
     val avgExpr = TExpr.average(range)
 
-    // evalOk returns Any (runtime type is (BigDecimal, Int))
-    val result: Any = evalOk(avgExpr, sheet)
+    // evalOk returns BigDecimal directly (sum / count = 425 / 3)
+    val result = evalOk(avgExpr, sheet)
 
-    // Verify it's a tuple with correct values
-    val (sum, count) = result.asInstanceOf[(BigDecimal, Int)]
-    assert(sum == BigDecimal(425), s"Sum should be 425, got $sum")
-    assert(count == 3, s"Count should be 3, got $count")
+    // Verify it's the correct average: (150 + 200 + 75) / 3 = 425 / 3
+    val expected = BigDecimal(425) / 3
+    assert(result == expected, s"Expected $expected, got $result")
   }
 
   test("AVERAGE returns Number via evaluateFormula (regression)") {

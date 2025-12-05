@@ -124,6 +124,8 @@ object FormulaShifter:
         Min(shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case Max(range) =>
         Max(shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Average(range) =>
+        Average(shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
       // Text functions
       case Concatenate(xs) =>
