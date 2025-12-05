@@ -64,14 +64,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mill-
 
-      - name: Build native image (Unix)
-        if: runner.os != 'Windows'
+      - name: Build native image
         run: ./mill xl-cli.nativeImage
-
-      - name: Build native image (Windows)
-        if: runner.os == 'Windows'
-        run: .\mill.bat xl-cli.nativeImage
-        shell: cmd
+        shell: bash
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
@@ -79,8 +74,8 @@ jobs:
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
-        run: move out\xl-cli\nativeImage.dest\native-executable.exe ${{ matrix.artifact }}.exe
-        shell: cmd
+        run: mv out/xl-cli/nativeImage.dest/native-executable.exe ${{ matrix.artifact }}.exe
+        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
