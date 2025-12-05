@@ -4,37 +4,39 @@ Get started with XL in 5 minutes.
 
 ## Installation
 
-XL is published as a set of JVM libraries. A typical setup depends on:
+XL is published as JVM libraries to Maven Central. Use the aggregate `xl` artifact for easy setup.
 
-- `xl-core` for the pure domain model and macros
-- `xl-ooxml` for in-memory OOXML read/write
-- `xl-cats-effect` for streaming and effectful I/O
-
-### With Mill (build.sc)
+### With Mill (build.mill)
 ```scala
 import mill._, scalalib._
 
 object myproject extends ScalaModule {
   def scalaVersion = "3.7.3"
-
-  def ivyDeps = Agg(
-    ivy"com.tjclp::xl-core:0.2.0",
-    ivy"com.tjclp::xl-ooxml:0.2.0",
-    ivy"com.tjclp::xl-cats-effect:0.2.0"
-  )
+  def ivyDeps = Agg(ivy"com.tjclp::xl:0.2.0")
 }
 ```
 
 ### With sbt (build.sbt)
 ```scala
 scalaVersion := "3.7.3"
-
-libraryDependencies ++= Seq(
-  "com.tjclp" %% "xl-core"       % "0.2.0",
-  "com.tjclp" %% "xl-ooxml"      % "0.2.0",
-  "com.tjclp" %% "xl-cats-effect"% "0.2.0"
-)
+libraryDependencies += "com.tjclp" %% "xl" % "0.2.0"
 ```
+
+### With Scala CLI
+```scala
+//> using dep com.tjclp::xl:0.2.0
+```
+
+### Individual Modules (Optional)
+
+For minimal dependencies, use individual modules:
+
+| Module | Description |
+|--------|-------------|
+| `xl-core` | Pure domain model, macros, DSL |
+| `xl-ooxml` | OOXML read/write |
+| `xl-cats-effect` | IO streaming with Cats Effect |
+| `xl-evaluator` | Formula parser and evaluator |
 
 ## Your First Spreadsheet (30 seconds)
 

@@ -1,0 +1,21 @@
+package build.xl
+
+import mill._
+import mill.scalalib._
+
+/** Aggregate module - bundles all XL modules for easy onboarding.
+  *
+  * Users can depend on just `com.tjclp::xl:VERSION` instead of listing each module separately.
+  * Individual modules remain available for users who want minimal dependencies.
+  */
+object `package` extends build.XLModule {
+  override def artifactDescription =
+    "XL - Pure functional Excel library for Scala 3 (complete bundle)"
+
+  override def moduleDeps = Seq(
+    build.`xl-core`,
+    build.`xl-ooxml`,
+    build.`xl-cats-effect`,
+    build.`xl-evaluator`
+  )
+}

@@ -123,8 +123,7 @@ Create a new `.sc` script file with scala-cli directives:
 
 ```scala
 //> using scala 3.7.3
-//> using dep com.tjclp::xl-core:0.2.0
-//> using repository ivy2Local
+//> using dep com.tjclp::xl:0.2.0
 
 import com.tjclp.xl.{*, given}
 
