@@ -466,26 +466,43 @@ private class EvaluatorImpl extends Evaluator:
 
       // ===== Arithmetic Range Functions =====
       case TExpr.Min(range) =>
-        // Min: find minimum value in range
+        // Min: find minimum value in range (single-pass)
         val cells = range.cells.map(cellRef => sheet(cellRef))
         val values = cells.flatMap { cell =>
           TExpr.decodeNumeric(cell).toOption
         }
-        if values.isEmpty then
-          // Excel behavior: MIN of empty range returns 0
-          Right(BigDecimal(0))
-        else Right(values.min)
+        val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+          Some(acc.fold(v)(_ min v))
+        }
+        // Excel behavior: MIN of empty range returns 0
+        Right(result.getOrElse(BigDecimal(0)))
 
       case TExpr.Max(range) =>
-        // Max: find maximum value in range
+        // Max: find maximum value in range (single-pass)
         val cells = range.cells.map(cellRef => sheet(cellRef))
         val values = cells.flatMap { cell =>
           TExpr.decodeNumeric(cell).toOption
         }
-        if values.isEmpty then
-          // Excel behavior: MAX of empty range returns 0
-          Right(BigDecimal(0))
-        else Right(values.max)
+        val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+          Some(acc.fold(v)(_ max v))
+        }
+        // Excel behavior: MAX of empty range returns 0
+        Right(result.getOrElse(BigDecimal(0)))
+
+      case TExpr.Average(range) =>
+        // Average: compute sum/count of numeric values in range
+        val cells = range.cells.map(cellRef => sheet(cellRef))
+        val values = cells.flatMap { cell =>
+          TExpr.decodeNumeric(cell).toOption
+        }
+        // Single-pass sum and count (avoids .toList materialization)
+        val (sum, count) = values.foldLeft((BigDecimal(0), 0)) { case ((s, c), v) =>
+          (s + v, c + 1)
+        }
+        if count == 0 then
+          // Excel behavior: AVERAGE of empty range returns #DIV/0!
+          Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
+        else Right(sum / count)
 
       // ===== Range Aggregation =====
       case foldExpr: TExpr.FoldRange[a, b] =>

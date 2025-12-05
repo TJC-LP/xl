@@ -350,6 +350,15 @@ enum TExpr[A] derives CanEqual:
    */
   case Max(range: CellRange) extends TExpr[BigDecimal]
 
+  /**
+   * Average value in range: AVERAGE(range)
+   *
+   * Computes sum/count of numeric values in range. Non-numeric cells are skipped (Excel-style).
+   *
+   * Example: AVERAGE(A1:A10) = mean of numeric values in range
+   */
+  case Average(range: CellRange) extends TExpr[BigDecimal]
+
   // Financial functions
 
   /**
@@ -555,20 +564,9 @@ object TExpr:
   /**
    * AVERAGE aggregation: average of numeric values in range.
    *
-   * Implementation: SUM / COUNT (requires evaluation phase)
+   * Example: TExpr.average(CellRange("A1:A10"))
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
-  def average(range: CellRange): TExpr[BigDecimal] =
-    // Note: This is a simplified representation
-    // Full implementation requires division of sum by count
-    // Suppression rationale: FoldRange returns TExpr[(BigDecimal, Int)], but we know
-    // evaluation will extract BigDecimal via pattern matching. Type-safe by construction.
-    FoldRange(
-      range,
-      (BigDecimal(0), 0),
-      (acc: (BigDecimal, Int), value: BigDecimal) => (acc._1 + value, acc._2 + 1),
-      decodeNumeric
-    ).asInstanceOf[TExpr[BigDecimal]]
+  def average(range: CellRange): TExpr[BigDecimal] = Average(range)
 
   /**
    * MIN aggregation: minimum numeric value in range.

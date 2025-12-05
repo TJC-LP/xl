@@ -416,41 +416,34 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AVERAGE(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      // @unchecked needed: JVM erases tuple element types at runtime
-      // Safe because FormulaParser constructs correct GADT types
-      case TExpr.FoldRange(range, zero: (BigDecimal, Int) @unchecked, _, _) =>
+      // AVERAGE now has dedicated TExpr case (not FoldRange)
+      case TExpr.Average(range) =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-        assertEquals(zero, (BigDecimal(0), 0)) // AVERAGE starts with (sum=0, count=0)
-      case other => fail(s"Expected FoldRange with tuple accumulator, got $other")
+      case other => fail(s"Expected Average, got $other")
     }
   }
 
-  test("SUM/COUNT/AVERAGE create different fold types") {
-    // Verify that each function creates the correct fold type (not all SUM)
+  test("SUM/COUNT/AVERAGE create different expression types") {
+    // Verify that each function creates the correct expression type
     val sumResult = FormulaParser.parse("=SUM(A1:A10)")
     val countResult = FormulaParser.parse("=COUNT(A1:A10)")
     val avgResult = FormulaParser.parse("=AVERAGE(A1:A10)")
 
-    // @unchecked needed: JVM erases tuple element types at runtime (line 447)
-    // Safe because FormulaParser constructs correct GADT types
+    // SUM/COUNT use FoldRange, AVERAGE has dedicated case
     (sumResult, countResult, avgResult) match
-      case (Right(sumFold: TExpr.FoldRange[?, ?]), Right(countFold: TExpr.FoldRange[?, ?]), Right(avgFold: TExpr.FoldRange[?, ?])) =>
-        // Extract zero values to verify different fold types
-        val sumZero = sumFold.z
-        val countZero = countFold.z
-        val avgZero = avgFold.z
-
-        // SUM has BigDecimal(0), COUNT has Int(0), AVERAGE has (BigDecimal(0), Int(0))
-        sumZero match
+      case (Right(sumFold: TExpr.FoldRange[?, ?]), Right(countFold: TExpr.FoldRange[?, ?]), Right(avgExpr: TExpr.Average)) =>
+        // SUM has BigDecimal(0), COUNT has Int(0)
+        sumFold.z match
           case _: BigDecimal => // success
           case other => fail(s"Expected BigDecimal for SUM zero, got ${other.getClass}")
-        countZero match
+        countFold.z match
           case _: Int => // success
           case other => fail(s"Expected Int for COUNT zero, got ${other.getClass}")
-        avgZero match
-          case _: (BigDecimal, Int) @unchecked => // success
-          case other => fail(s"Expected (BigDecimal, Int) for AVERAGE zero, got ${other.getClass}")
+        // AVERAGE has dedicated case with range
+        assert(avgExpr.range.toA1 == "A1:A10", s"AVERAGE range should be A1:A10")
+      case (Right(s), Right(c), Right(a)) =>
+        fail(s"Unexpected types: SUM=${s.getClass.getSimpleName}, COUNT=${c.getClass.getSimpleName}, AVERAGE=${a.getClass.getSimpleName}")
       case _ => fail("All three functions should parse successfully")
   }
 

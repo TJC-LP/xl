@@ -196,6 +196,9 @@ object FormulaPrinter:
       case TExpr.Max(range) =>
         s"MAX(${formatRange(range)})"
 
+      case TExpr.Average(range) =>
+        s"AVERAGE(${formatRange(range)})"
+
       // Financial functions
       case TExpr.Npv(rate, values) =>
         s"NPV(${printExpr(rate, 0)}, ${formatRange(values)})"
@@ -451,6 +454,8 @@ object FormulaPrinter:
         s"Min(${formatRange(range)})"
       case TExpr.Max(range) =>
         s"Max(${formatRange(range)})"
+      case TExpr.Average(range) =>
+        s"Average(${formatRange(range)})"
       case TExpr.Npv(rate, values) =>
         s"Npv(${printWithTypes(rate)}, ${formatRange(values)})"
       case TExpr.Irr(values, guessOpt) =>

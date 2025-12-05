@@ -492,9 +492,8 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(countExpr, sheet) == 3)
   }
 
-  test("Regression: AVERAGE returns (sum, count) tuple at eval level") {
-    // Bug fix: AVERAGE was returning Text("(sum,count)") after toCellValue conversion
-    // At eval level, it correctly returns (BigDecimal, Int) tuple
+  test("AVERAGE returns BigDecimal directly at eval level") {
+    // AVERAGE now has dedicated TExpr case, returns BigDecimal directly
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(150)),
@@ -503,13 +502,12 @@ class EvaluatorSpec extends ScalaCheckSuite:
     )
     val avgExpr = TExpr.average(range)
 
-    // evalOk returns Any (runtime type is (BigDecimal, Int))
-    val result: Any = evalOk(avgExpr, sheet)
+    // evalOk returns BigDecimal directly (sum / count = 425 / 3)
+    val result = evalOk(avgExpr, sheet)
 
-    // Verify it's a tuple with correct values
-    val (sum, count) = result.asInstanceOf[(BigDecimal, Int)]
-    assert(sum == BigDecimal(425), s"Sum should be 425, got $sum")
-    assert(count == 3, s"Count should be 3, got $count")
+    // Verify it's the correct average: (150 + 200 + 75) / 3 = 425 / 3
+    val expected = BigDecimal(425) / 3
+    assert(result == expected, s"Expected $expected, got $result")
   }
 
   test("AVERAGE returns Number via evaluateFormula (regression)") {
@@ -527,6 +525,73 @@ class EvaluatorSpec extends ScalaCheckSuite:
         fail(s"Expected CellValue.Number(20), got $other")
       case Left(err) =>
         fail(s"Evaluation failed: $err")
+  }
+
+  test("AVERAGE in nested arithmetic (regression for asInstanceOf crash)") {
+    // Regression test: Original bug caused "Tuple2 cannot be cast to BigDecimal" crash
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(100)),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(200)),
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(10)),
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(20))
+    )
+    sheet.evaluateFormula("=SUM(A1:A2)+AVERAGE(B1:B2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(315))
+      case Right(other) => fail(s"Expected Number, got $other")
+      case Left(err) => fail(s"Evaluation failed: $err")
+  }
+
+  test("AVERAGE on empty range returns DivByZero error (Excel-compliant)") {
+    val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    val avgExpr = TExpr.average(range)
+
+    Evaluator.instance.eval(avgExpr, sheet) match
+      case Left(_: EvalError.DivByZero) => () // Expected
+      case other => fail(s"Expected DivByZero error, got $other")
+  }
+
+  test("MIN/MAX/AVERAGE iterator consumption regression - first element must be included") {
+    // Regression test: Iterator-based implementations must not consume iterator
+    // with .isEmpty before .min/.max/.sum - that would skip the first element.
+    // We place the extreme value FIRST to catch this bug.
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(1)),   // A1: MIN is here (first!)
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(5)),   // A2
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(100)), // A3: MAX is here (last)
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(99)),  // B1: MAX is here (first!)
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(50)),  // B2
+      ARef.from0(1, 2) -> CellValue.Number(BigDecimal(10))   // B3: MIN is here (last)
+    )
+
+    val rangeA = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
+    val rangeB = CellRange(ARef.from0(1, 0), ARef.from0(1, 2)) // B1:B3
+
+    // MIN: first element is minimum - would be wrong if iterator consumed
+    assertEquals(
+      Evaluator.instance.eval(TExpr.min(rangeA), sheet),
+      Right(BigDecimal(1)),
+      "MIN must include first element (1)"
+    )
+
+    // MAX: first element is maximum - would be wrong if iterator consumed
+    assertEquals(
+      Evaluator.instance.eval(TExpr.max(rangeB), sheet),
+      Right(BigDecimal(99)),
+      "MAX must include first element (99)"
+    )
+
+    // AVERAGE: all elements must be included
+    // A1:A3 = (1 + 5 + 100) / 3 = 106 / 3 = 35.333...
+    Evaluator.instance.eval(TExpr.average(rangeA), sheet) match
+      case Right(avg) =>
+        // Use approximate comparison for BigDecimal division
+        val expected = BigDecimal(106) / BigDecimal(3)
+        assert(
+          (avg - expected).abs < BigDecimal("0.0001"),
+          s"AVERAGE must include all elements: expected ~$expected, got $avg"
+        )
+      case Left(err) => fail(s"AVERAGE failed: $err")
   }
 
   // ==================== Error Path Tests ====================

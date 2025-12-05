@@ -213,6 +213,7 @@ object DependencyGraph:
       // Range aggregate functions (direct enum cases)
       case TExpr.Min(range) => range.cells.toSet
       case TExpr.Max(range) => range.cells.toSet
+      case TExpr.Average(range) => range.cells.toSet
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
