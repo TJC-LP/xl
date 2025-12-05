@@ -551,6 +551,49 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case other => fail(s"Expected DivByZero error, got $other")
   }
 
+  test("MIN/MAX/AVERAGE iterator consumption regression - first element must be included") {
+    // Regression test: Iterator-based implementations must not consume iterator
+    // with .isEmpty before .min/.max/.sum - that would skip the first element.
+    // We place the extreme value FIRST to catch this bug.
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(1)),   // A1: MIN is here (first!)
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(5)),   // A2
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(100)), // A3: MAX is here (last)
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(99)),  // B1: MAX is here (first!)
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(50)),  // B2
+      ARef.from0(1, 2) -> CellValue.Number(BigDecimal(10))   // B3: MIN is here (last)
+    )
+
+    val rangeA = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
+    val rangeB = CellRange(ARef.from0(1, 0), ARef.from0(1, 2)) // B1:B3
+
+    // MIN: first element is minimum - would be wrong if iterator consumed
+    assertEquals(
+      Evaluator.instance.eval(TExpr.min(rangeA), sheet),
+      Right(BigDecimal(1)),
+      "MIN must include first element (1)"
+    )
+
+    // MAX: first element is maximum - would be wrong if iterator consumed
+    assertEquals(
+      Evaluator.instance.eval(TExpr.max(rangeB), sheet),
+      Right(BigDecimal(99)),
+      "MAX must include first element (99)"
+    )
+
+    // AVERAGE: all elements must be included
+    // A1:A3 = (1 + 5 + 100) / 3 = 106 / 3 = 35.333...
+    Evaluator.instance.eval(TExpr.average(rangeA), sheet) match
+      case Right(avg) =>
+        // Use approximate comparison for BigDecimal division
+        val expected = BigDecimal(106) / BigDecimal(3)
+        assert(
+          (avg - expected).abs < BigDecimal("0.0001"),
+          s"AVERAGE must include all elements: expected ~$expected, got $avg"
+        )
+      case Left(err) => fail(s"AVERAGE failed: $err")
+  }
+
   // ==================== Error Path Tests ====================
 
   test("Error: Nested error - error in IF condition propagates") {
