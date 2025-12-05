@@ -227,6 +227,16 @@ object PutLiteral:
    *
    * When all refs are string literals, validates them at compile time and returns `Sheet`. When any
    * ref is a runtime expression, falls back to runtime parsing and returns `XLResult[Sheet]`.
+   *
+   * Performance: Uses batch put internally (O(N) single Sheet copy) rather than chained single-item
+   * puts (O(N²) intermediate copies).
+   *
+   * Duplicate cell references are detected and rejected:
+   *   - For literals: compile-time error
+   *   - For runtime strings: returns `Left(XLError.DuplicateCellRef(...))`
+   *
+   * Note: For runtime strings, validation is fail-fast. If the 3rd ref is invalid, refs 4+ are not
+   * validated.
    */
   def putTuplesImpl[A: Type](
     sheet: Expr[Sheet],
@@ -271,26 +281,44 @@ object PutLiteral:
             Left(refExpr) // Runtime expression
       }
 
+    // Check for duplicate literal refs at compile time
+    val literalRefs = parsedRefs.collect { case Right((col, row, _)) => (col, row) }
+    val duplicates = literalRefs.groupBy(identity).filter(_._2.size > 1).keys.toList
+    if duplicates.nonEmpty then
+      val dupStr = duplicates.map { case (c, r) => ARef.from0(c, r).toA1 }.mkString(", ")
+      report.errorAndAbort(s"Duplicate cell references not allowed: $dupStr")
+
     // If all refs are literals, emit direct put calls (returns Sheet)
     val allLiterals = parsedRefs.forall(_.isRight)
 
     if allLiterals then
-      // Build chained put calls: sheet.put(aref1, v1).put(aref2, v2)...
+      // Build single batch put call: sheet.put((aref1, v1), (aref2, v2), ...)
+      // This is O(N) vs O(N²) for chained single puts
       val literals = parsedRefs.collect { case Right(t) => t }
-      literals.foldLeft(sheet) { case (accSheet, (col0, row0, valueExpr)) =>
-        '{ $accSheet.put(ARef.from0(${ Expr(col0) }, ${ Expr(row0) }), $valueExpr)(using $cw) }
+      val pairExprs = literals.map { case (col0, row0, valueExpr) =>
+        '{ (ARef.from0(${ Expr(col0) }, ${ Expr(row0) }), $valueExpr) }
       }
+      '{ $sheet.put(${ Varargs(pairExprs) }*)(using $cw) }
     else
       // Fall back to runtime parsing (returns XLResult[Sheet])
       '{
         val refValuePairs: Seq[(String, A)] = $updates
-        refValuePairs.foldLeft[XLResult[Sheet]](Right($sheet)) { (accResult, pair) =>
-          accResult.flatMap { s =>
-            ARef.parse(pair._1) match
-              case Left(err) => Left(XLError.InvalidCellRef(pair._1, err))
-              case Right(aref) => Right(s.put(aref, pair._2)(using $cw))
+        // Check for duplicate refs at runtime
+        val refStrings = refValuePairs.map(_._1)
+        val duplicates = refStrings.groupBy(identity).filter(_._2.size > 1).keys.toList
+        if duplicates.nonEmpty then Left(XLError.DuplicateCellRef(duplicates.mkString(", ")))
+        else
+          // Parse all refs first, then batch put if all valid
+          val parsed = refValuePairs.map { case (refStr, value) =>
+            ARef.parse(refStr).map(aref => (aref, value))
           }
-        }
+          parsed.collectFirst { case Left(err) => err } match
+            case Some(err) =>
+              val badRef = refValuePairs(parsed.indexWhere(_.isLeft))._1
+              Left(XLError.InvalidCellRef(badRef, err))
+            case None =>
+              val validPairs = parsed.collect { case Right(pair) => pair }
+              Right($sheet.put(validPairs*)(using $cw))
       }
 
   /**
@@ -298,6 +326,13 @@ object PutLiteral:
    *
    * When all refs are string literals, validates them at compile time and returns `Sheet`. When any
    * ref is a runtime expression, falls back to runtime parsing and returns `XLResult[Sheet]`.
+   *
+   * Duplicate references (same string) are detected and rejected:
+   *   - For literals: compile-time error
+   *   - For runtime strings: returns `Left(XLError.DuplicateCellRef(...))`
+   *
+   * Note: For runtime strings, validation is fail-fast. If the 3rd ref is invalid, refs 4+ are not
+   * validated.
    */
   def styleTuplesImpl(
     sheet: Expr[Sheet],
@@ -355,6 +390,14 @@ object PutLiteral:
             RuntimeRef(refExpr, styleExpr) // Runtime expression
       }
 
+    // Check for duplicate literal refs at compile time (by original string)
+    val literalRefStrings = tupleExprs.collect { (refExpr, _) =>
+      refExpr.value
+    }.flatten
+    val duplicates = literalRefStrings.groupBy(identity).filter(_._2.size > 1).keys.toList
+    if duplicates.nonEmpty then
+      report.errorAndAbort(s"Duplicate references not allowed: ${duplicates.mkString(", ")}")
+
     // If all refs are literals, emit direct style calls (returns Sheet)
     val allLiterals = parsedRefs.forall(!_.isInstanceOf[RuntimeRef])
 
@@ -385,20 +428,26 @@ object PutLiteral:
       '{
         import com.tjclp.xl.sheets.styleSyntax.*
         val refStylePairs: Seq[(String, CellStyle)] = $updates
-        refStylePairs.foldLeft[XLResult[Sheet]](Right($sheet)) { (accResult, pair) =>
-          accResult.flatMap { s =>
-            val ref = pair._1
-            val style = pair._2
-            if ref.contains(":") then
-              CellRange.parse(ref) match
-                case Left(err) => Left(XLError.InvalidCellRef(ref, s"Invalid range: $err"))
-                case Right(range) => Right(s.withRangeStyle(range, style))
-            else
-              ARef.parse(ref) match
-                case Left(err) => Left(XLError.InvalidCellRef(ref, s"Invalid cell reference: $err"))
-                case Right(aref) => Right(s.withCellStyle(aref, style))
+        // Check for duplicate refs at runtime
+        val refStrings = refStylePairs.map(_._1)
+        val duplicates = refStrings.groupBy(identity).filter(_._2.size > 1).keys.toList
+        if duplicates.nonEmpty then Left(XLError.DuplicateCellRef(duplicates.mkString(", ")))
+        else
+          refStylePairs.foldLeft[XLResult[Sheet]](Right($sheet)) { (accResult, pair) =>
+            accResult.flatMap { s =>
+              val ref = pair._1
+              val style = pair._2
+              if ref.contains(":") then
+                CellRange.parse(ref) match
+                  case Left(err) => Left(XLError.InvalidCellRef(ref, s"Invalid range: $err"))
+                  case Right(range) => Right(s.withRangeStyle(range, style))
+              else
+                ARef.parse(ref) match
+                  case Left(err) =>
+                    Left(XLError.InvalidCellRef(ref, s"Invalid cell reference: $err"))
+                  case Right(aref) => Right(s.withCellStyle(aref, style))
+            }
           }
-        }
       }
 
 end PutLiteral

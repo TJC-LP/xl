@@ -25,6 +25,9 @@ enum XLError:
   /** Duplicate sheet name */
   case DuplicateSheet(name: String)
 
+  /** Duplicate cell reference in batch operation */
+  case DuplicateCellRef(refs: String)
+
   /** Invalid column index */
   case InvalidColumn(index: Int, reason: String)
 
@@ -99,6 +102,7 @@ object XLError:
       case OutOfBounds(ref, reason) => s"Reference out of bounds '$ref': $reason"
       case SheetNotFound(name) => s"Sheet not found: '$name'"
       case DuplicateSheet(name) => s"Duplicate sheet name: '$name'"
+      case DuplicateCellRef(refs) => s"Duplicate cell references not allowed: $refs"
       case InvalidColumn(index, reason) => s"Invalid column index $index: $reason"
       case InvalidRow(index, reason) => s"Invalid row index $index: $reason"
       case TypeMismatch(expected, actual, ref) =>

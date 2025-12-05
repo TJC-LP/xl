@@ -296,3 +296,68 @@ class StringMapSyntaxSpec extends FunSuite:
     assertEquals(workbook.sheetCount, 3)
     assertEquals(workbook.sheetNames.map(_.value), Seq("Sales", "Marketing", "Finance"))
   }
+
+  // ========== Edge Case Tests ==========
+
+  test("style with empty varargs returns unchanged sheet") {
+    // Empty put varargs is ambiguous at compile time due to overloads,
+    // but empty style() works and should return unchanged sheet
+    val sheet = emptySheet.put("A1" -> "Test")
+    val result = sheet.style()
+
+    assertEquals(result.cellCount, 1)
+    assertEquals(result(ARef.parse("A1").toOption.get).value, CellValue.Text("Test"))
+  }
+
+  test("put with runtime duplicate refs returns error") {
+    val ref1 = "A" + "1" // Runtime string
+    val ref2 = "A" + "1" // Same runtime string
+
+    val result: XLResult[Sheet] = emptySheet.put(ref1 -> "First", ref2 -> "Second")
+
+    assert(result.isLeft, "Duplicate refs should return Left")
+    result.left.foreach { err =>
+      assert(err.message.contains("Duplicate"), s"Error should mention duplicates: ${err.message}")
+    }
+  }
+
+  test("style with runtime duplicate refs returns error") {
+    val ref1 = "A" + "1" // Runtime string
+    val ref2 = "A" + "1" // Same runtime string
+    val bold = CellStyle.default.bold
+
+    val result: XLResult[Sheet] = emptySheet
+      .put("A1" -> "Test")
+      .style(ref1 -> bold, ref2 -> bold)
+
+    assert(result.isLeft, "Duplicate refs should return Left")
+    result.left.foreach { err =>
+      assert(err.message.contains("Duplicate"), s"Error should mention duplicates: ${err.message}")
+    }
+  }
+
+  test("put with max valid Excel ref XFD1048576") {
+    val sheet = emptySheet.put("XFD1048576" -> "Max Cell")
+
+    assertEquals(sheet.cellCount, 1)
+    assertEquals(
+      sheet(ARef.parse("XFD1048576").toOption.get).value,
+      CellValue.Text("Max Cell")
+    )
+  }
+
+  test("put value containing unicode characters") {
+    val sheet = emptySheet
+      .put(
+        "A1" -> "日本語テスト",
+        "A2" -> "Émojis: 🎉🚀💰",
+        "A3" -> "Mixed: αβγ δεζ",
+        "A4" -> "RTL: مرحبا"
+      )
+
+    assertEquals(sheet.cellCount, 4)
+    assertEquals(sheet(ARef.parse("A1").toOption.get).value, CellValue.Text("日本語テスト"))
+    assertEquals(sheet(ARef.parse("A2").toOption.get).value, CellValue.Text("Émojis: 🎉🚀💰"))
+    assertEquals(sheet(ARef.parse("A3").toOption.get).value, CellValue.Text("Mixed: αβγ δεζ"))
+    assertEquals(sheet(ARef.parse("A4").toOption.get).value, CellValue.Text("RTL: مرحبا"))
+  }
