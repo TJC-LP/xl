@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.{ARef, CellRange}
+import com.tjclp.xl.{ARef, Anchor, CellRange}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec.CodecError
 
@@ -36,12 +36,14 @@ enum TExpr[A] derives CanEqual:
    *
    * @param at
    *   The cell address to read from
+   * @param anchor
+   *   Anchoring mode for formula dragging (default: Relative)
    * @param decode
    *   Function to decode the cell's value to type A
    *
-   * Example: Ref(ARef("A1"), decodeNumber) reads numeric value from A1
+   * Example: Ref(ARef("A1"), Anchor.Relative, decodeNumber) reads numeric value from A1
    */
-  case Ref[A](at: ARef, decode: Cell => Either[CodecError, A]) extends TExpr[A]
+  case Ref[A](at: ARef, anchor: Anchor, decode: Cell => Either[CodecError, A]) extends TExpr[A]
 
   /**
    * Polymorphic cell reference - defers type commitment until function context.
@@ -54,10 +56,12 @@ enum TExpr[A] derives CanEqual:
    *
    * @param at
    *   The cell address to read from
+   * @param anchor
+   *   Anchoring mode for formula dragging (default: Relative)
    *
-   * Example: PolyRef(ARef("A1")) - type determined by enclosing function
+   * Example: PolyRef(ARef("A1"), Anchor.Relative) - type determined by enclosing function
    */
-  case PolyRef(at: ARef) extends TExpr[Nothing]
+  case PolyRef(at: ARef, anchor: Anchor = Anchor.Relative) extends TExpr[Nothing]
 
   /**
    * Conditional expression - if/then/else.
@@ -499,10 +503,18 @@ object TExpr:
   /**
    * Smart constructor for cell references.
    *
+   * Example: TExpr.ref(ARef("A1"), Anchor.Relative, codec)
+   */
+  def ref[A](at: ARef, anchor: Anchor, decode: Cell => Either[CodecError, A]): TExpr[A] =
+    Ref(at, anchor, decode)
+
+  /**
+   * Smart constructor for cell references with default Relative anchor.
+   *
    * Example: TExpr.ref(ARef("A1"), codec)
    */
   def ref[A](at: ARef, decode: Cell => Either[CodecError, A]): TExpr[A] =
-    Ref(at, decode)
+    Ref(at, Anchor.Relative, decode)
 
   /**
    * Smart constructor for conditionals.
@@ -975,7 +987,7 @@ object TExpr:
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asStringExpr(expr: TExpr[?]): TExpr[String] = expr match
-    case PolyRef(at) => Ref(at, decodeAsString)
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeAsString)
     case other => other.asInstanceOf[TExpr[String]] // Safe: non-PolyRef already has correct type
 
   /**
@@ -985,7 +997,7 @@ object TExpr:
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asDateExpr(expr: TExpr[?]): TExpr[java.time.LocalDate] = expr match
-    case PolyRef(at) => Ref(at, decodeAsDate)
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeAsDate)
     case other =>
       other.asInstanceOf[TExpr[java.time.LocalDate]] // Safe: non-PolyRef already has correct type
 
@@ -997,7 +1009,7 @@ object TExpr:
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asIntExpr(expr: TExpr[?]): TExpr[Int] = expr match
-    case PolyRef(at) => Ref(at, decodeAsInt)
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeAsInt)
     case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
     // Convert BigDecimal expressions to Int (YEAR/MONTH/DAY/LEN return BigDecimal)
     case year: TExpr.Year => ToInt(year)
@@ -1013,7 +1025,7 @@ object TExpr:
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asNumericExpr(expr: TExpr[?]): TExpr[BigDecimal] = expr match
-    case PolyRef(at) => Ref(at, decodeNumeric)
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeNumeric)
     case other =>
       other.asInstanceOf[TExpr[BigDecimal]] // Safe: non-PolyRef already has correct type
 
@@ -1024,7 +1036,7 @@ object TExpr:
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asBooleanExpr(expr: TExpr[?]): TExpr[Boolean] = expr match
-    case PolyRef(at) => Ref(at, decodeBool)
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeBool)
     case other => other.asInstanceOf[TExpr[Boolean]] // Safe: non-PolyRef already has correct type
 
   // Extension methods for ergonomic formula construction

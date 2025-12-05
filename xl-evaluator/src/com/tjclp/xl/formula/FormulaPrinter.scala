@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.{ARef, CellRange}
+import com.tjclp.xl.{ARef, Anchor, CellRange}
 import com.tjclp.xl.addressing.{Column, Row}
 
 /**
@@ -74,8 +74,8 @@ object FormulaPrinter:
       case TExpr.Lit(value) => value.toString
 
       // Cell reference
-      case TExpr.Ref(at, _) => formatARef(at)
-      case TExpr.PolyRef(at) => formatARef(at) // PolyRef prints same as Ref
+      case TExpr.Ref(at, anchor, _) => formatARef(at, anchor)
+      case TExpr.PolyRef(at, anchor) => formatARef(at, anchor) // PolyRef prints same as Ref
 
       // Conditional
       case TExpr.If(cond, ifTrue, ifFalse) =>
@@ -301,13 +301,20 @@ object FormulaPrinter:
     s"SUM($rangeStr)"
 
   /**
-   * Format ARef to A1 notation.
+   * Format ARef to A1 notation with default Relative anchor.
+   *
+   * Used for range endpoints where anchor info isn't tracked.
+   */
+  private def formatARef(aref: ARef): String = formatARef(aref, Anchor.Relative)
+
+  /**
+   * Format ARef to A1 notation with anchor support.
    *
    * Helper function to avoid opaque type extension method issues. Manually extracts col/row from
-   * packed Long representation.
+   * packed Long representation and adds $ prefixes based on anchor mode.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
-  private def formatARef(aref: ARef): String =
+  private def formatARef(aref: ARef, anchor: Anchor): String =
     // ARef is opaque type = Long with (row << 32) | col packing
     // Extract col (low 32 bits) and row (high 32 bits)
     val arefLong: Long = aref.asInstanceOf[Long] // Safe: ARef is opaque type = Long
@@ -316,13 +323,16 @@ object FormulaPrinter:
 
     // Convert to A1 notation
     val col = Column.from0(colIndex)
-    val row = Row.from1(rowIndex + 1)
 
-    // Format column letter
+    // Format column letter with optional $ prefix
     val colLetter = Column.toLetter(col)
     val rowNum = rowIndex + 1
 
-    s"$colLetter$rowNum"
+    // Add $ prefixes based on anchor mode
+    val colStr = if anchor.isColAbsolute then s"$$$colLetter" else colLetter
+    val rowStr = if anchor.isRowAbsolute then s"$$$rowNum" else rowNum.toString
+
+    s"$colStr$rowStr"
 
   /**
    * Add parentheses if condition is true.
@@ -382,10 +392,10 @@ object FormulaPrinter:
     expr match
       case TExpr.Lit(value) =>
         s"Lit($value: ${value.getClass.getSimpleName})"
-      case TExpr.Ref(at, _) =>
-        s"Ref($at)"
-      case TExpr.PolyRef(at) =>
-        s"PolyRef($at)"
+      case TExpr.Ref(at, anchor, _) =>
+        s"Ref($at, $anchor)"
+      case TExpr.PolyRef(at, anchor) =>
+        s"PolyRef($at, $anchor)"
       case TExpr.If(cond, ifTrue, ifFalse) =>
         s"If(${printWithTypes(cond)}, ${printWithTypes(ifTrue)}, ${printWithTypes(ifFalse)})"
       case TExpr.Add(x, y) =>

@@ -38,7 +38,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
 
   /** Generate cell references */
   val genCellRef: Gen[TExpr[BigDecimal]] =
-    genARef.map(ref => TExpr.Ref(ref, TExpr.decodeNumeric))
+    genARef.map(ref => TExpr.ref(ref, TExpr.decodeNumeric))
 
   /** Generate simple arithmetic expressions */
   def genArithExpr(depth: Int = 0): Gen[TExpr[BigDecimal]] =
@@ -139,7 +139,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
 
       parsed.isRight &&
       parsed.exists {
-        case TExpr.PolyRef(at) => at == ref  // Updated to expect PolyRef
+        case TExpr.PolyRef(at, _) => at == ref  // Updated to expect PolyRef
         case _                 => false
       }
     }
@@ -332,7 +332,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=A1")
     assert(result.isRight)
     result.foreach {
-      case TExpr.PolyRef(at) =>  // Updated to expect PolyRef (parser change)
+      case TExpr.PolyRef(at, _) =>  // Updated to expect PolyRef (parser change)
         val expected = ARef.parse("A1").fold(err => fail(s"Invalid ref: $err"), identity)
         assertEquals(at, expected)
       case other => fail(s"Expected PolyRef(A1), got $other")
@@ -343,7 +343,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=Z99")
     assert(result.isRight)
     result.foreach {
-      case TExpr.PolyRef(at) =>  // Updated to expect PolyRef (parser change)
+      case TExpr.PolyRef(at, _) =>  // Updated to expect PolyRef (parser change)
         val expected = ARef.parse("Z99").fold(err => fail(s"Invalid ref: $err"), identity)
         assertEquals(at, expected)
       case other => fail(s"Expected PolyRef(Z99), got $other")
@@ -580,7 +580,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
 
   test("print cell reference") {
     val ref = ARef.parse("A1").fold(err => fail(s"Invalid ref: $err"), identity)
-    val expr = TExpr.Ref(ref, TExpr.decodeNumeric)
+    val expr = TExpr.ref(ref, TExpr.decodeNumeric)
     val result = FormulaPrinter.print(expr)
     assertEquals(result, "=A1")
   }

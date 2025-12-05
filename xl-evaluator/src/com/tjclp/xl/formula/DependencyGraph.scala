@@ -118,10 +118,10 @@ object DependencyGraph:
   def extractDependencies[A](expr: TExpr[A]): Set[ARef] =
     expr match
       // Single cell reference
-      case TExpr.Ref(at, _) => Set(at)
+      case TExpr.Ref(at, _, _) => Set(at)
 
       // Polymorphic reference (type resolved at evaluation time)
-      case TExpr.PolyRef(at) => Set(at)
+      case TExpr.PolyRef(at, _) => Set(at)
 
       // Range reference (expand to all cells)
       case TExpr.FoldRange(range, _, _, _) =>
