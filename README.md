@@ -1,25 +1,34 @@
 # XL — Pure Functional Excel Library for Scala 3
 
 [![CI](https://github.com/TJC-LP/xl/workflows/CI/badge.svg)](https://github.com/TJC-LP/xl/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 **The best Excel library for Scala.** Type-safe, purely functional, blazing fast.
 
-```scala
+```scala 3 raw
+//> using scala 3.7.3
+//> using repository ivy2Local
+//> using dep com.tjclp::xl-core:0.1.5-SNAPSHOT
+//> using dep com.tjclp::xl-cats-effect:0.1.5-SNAPSHOT
+
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.unsafe.*
 
-// Create a financial report
-val report = Sheet("Q1 Report")
-  .put("A1", "Revenue")      .put("B1", 1250000, CellStyle.default.currency)
-  .put("A2", "Expenses")     .put("B2", 875000, CellStyle.default.currency)
-  .put("A3", "Net Income")   .put("B3", fx"=B1-B2")
-  .put("A4", "Margin")       .put("B4", fx"=B3/B1")
-  .style("A1:A4", CellStyle.default.bold)
-  .style("B4", CellStyle.default.percent)
-  .unsafe
+@main def demo(): Unit =
+  // Create a financial report
+  val report = Sheet("Q1 Report")
+    .put(
+      "A1" -> "Revenue",     "B1" -> money"$$1,250,000",
+      "A2" -> "Expenses",    "B2" -> money"$$875,000",
+      "A3" -> "Net Income",  "B3" -> fx"=B1-B2",
+      "A4" -> "Margin",      "B4" -> fx"=B3/$$B$$1"
+    )
+    .style(
+      "A1:A4" -> CellStyle.default.bold,
+      "B4"    -> CellStyle.default.percent
+    )
 
-Excel.write(Workbook.empty.put(report).unsafe, "/tmp/q1-report.xlsx")
+  Excel.write(Workbook(report), "/tmp/q1-report.xlsx")
+  println(s"Created /tmp/q1-report.xlsx with ${report.cellCount} cells")
 ```
 
 ## Why XL?
@@ -36,18 +45,18 @@ Excel.write(Workbook.empty.put(report).unsafe, "/tmp/q1-report.xlsx")
 
 ### Dependencies
 
-```scala
+```scala 3 ignore
 // build.mill
 def ivyDeps = Agg(
-  ivy"com.tjclp::xl-core:0.1.0",
-  ivy"com.tjclp::xl-ooxml:0.1.0",
-  ivy"com.tjclp::xl-cats-effect:0.1.0"  // For IO
+  ivy"com.tjclp::xl-core:0.1.5-SNAPSHOT",
+  ivy"com.tjclp::xl-ooxml:0.1.5-SNAPSHOT",
+  ivy"com.tjclp::xl-cats-effect:0.1.5-SNAPSHOT"  // For IO
 )
 ```
 
 ### Basic Usage
 
-```scala
+```scala 3 ignore
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
 
@@ -57,10 +66,8 @@ val workbook = Excel.read("data.xlsx")
 // Modify
 val updated = workbook.update("Sheet1", sheet =>
   sheet
-    .put("A1", "Updated!")
-    .put("B1", 42)
-    .style("A1:B1", CellStyle.default.bold)
-    .unsafe
+    .put("A1" -> "Updated!", "B1" -> 42)
+    .style("A1:B1" -> CellStyle.default.bold)
 )
 
 // Write
@@ -69,26 +76,24 @@ Excel.write(updated, "output.xlsx")
 
 ### Patch DSL (Declarative)
 
-```scala
+```scala 3 ignore
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
 
 val sheet = Sheet("Sales")
   .put(
-    (ref"A1" := "Product")   ++ (ref"B1" := "Price")   ++ (ref"C1" := "Qty") ++
-    (ref"A2" := "Widget")    ++ (ref"B2" := 19.99)     ++ (ref"C2" := 100) ++
-    (ref"A3" := "Gadget")    ++ (ref"B3" := 29.99)     ++ (ref"C3" := 50) ++
-    (ref"D1" := "Total")     ++ (ref"D2" := fx"=B2*C2") ++ (ref"D3" := fx"=B3*C3") ++
-    ref"A1:D1".styled(CellStyle.default.bold)
+    "A1" -> "Product",  "B1" -> "Price",  "C1" -> "Qty",   "D1" -> "Total",
+    "A2" -> "Widget",   "B2" -> 19.99,    "C2" -> 100,     "D2" -> fx"=B2*C2",
+    "A3" -> "Gadget",   "B3" -> 29.99,    "C3" -> 50,      "D3" -> fx"=B3*C3"
   )
-  .unsafe
+  .style("A1:D1" -> CellStyle.default.bold)
 ```
 
 ## Modern DSL
 
 ### Compile-Time Validated References
 
-```scala
+```scala 3 ignore
 val cell: ARef = ref"A1"              // Single cell
 val range: CellRange = ref"A1:B10"    // Range
 val qualified = ref"Sheet1!A1:C100"   // With sheet name
@@ -100,7 +105,7 @@ val dynamic = ref"$col$row"           // Either[XLError, RefType]
 
 ### Formatted Literals
 
-```scala
+```scala 3 ignore
 val price = money"$$1,234.56"         // Currency format
 val growth = percent"12.5%"           // Percent format
 val date = date"2025-11-24"           // ISO date format
@@ -111,7 +116,7 @@ val loss = accounting"($$500.00)"     // Accounting (negatives in parens)
 
 ### Fluent Style DSL
 
-```scala
+```scala 3 ignore
 val header = CellStyle.default
   .bold
   .size(14.0)
@@ -126,16 +131,17 @@ val percent = CellStyle.default.percent
 
 ### Rich Text (Multi-Format in One Cell)
 
-```scala
+```scala 3 ignore
 val text = "Error: ".bold.red + "Fix this!".underline
 sheet.put("A1", text).unsafe
 ```
 
 ### Patch Composition
 
-```scala
+```scala 3 ignore
 val headerStyle = CellStyle.default.bold.size(14.0)
 
+// Patches can still use := syntax when needed for complex composition
 val patch =
   (ref"A1" := "Title") ++
   ref"A1".styled(headerStyle) ++
@@ -146,13 +152,13 @@ sheet.put(patch).unsafe
 
 ## Formula System
 
-**24 built-in functions** with type-safe parsing, evaluation, and dependency analysis.
+**30 built-in functions** with type-safe parsing, evaluation, and dependency analysis.
 
-```scala
+```scala 3 ignore
 import com.tjclp.xl.formula.*
 
-// Parse formulas
-FormulaParser.parse("=SUM(A1:B10)")        // Right(TExpr.FoldRange(...))
+// Parse formulas (supports $ anchoring)
+FormulaParser.parse("=SUM($A$1:B10)")      // Right(TExpr.FoldRange(...))
 FormulaParser.parse("=IF(A1>0, B1, C1)")   // Right(TExpr.If(...))
 
 // Evaluate with cycle detection
@@ -166,11 +172,11 @@ val graph = DependencyGraph.fromSheet(sheet)
 val precedents = DependencyGraph.precedents(graph, ref"B1")
 ```
 
-**Functions**: SUM, COUNT, AVERAGE, MIN, MAX, IF, AND, OR, NOT, CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER, TODAY, NOW, DATE, YEAR, MONTH, DAY, NPV, IRR, VLOOKUP
+**Functions**: SUM, COUNT, AVERAGE, MIN, MAX, IF, AND, OR, NOT, CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER, TODAY, NOW, DATE, YEAR, MONTH, DAY, NPV, IRR, VLOOKUP, XLOOKUP, SUMIF, COUNTIF, SUMIFS, COUNTIFS, SUMPRODUCT
 
 ## Streaming (Large Files)
 
-```scala
+```scala 3 ignore
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.IO
 
@@ -188,12 +194,18 @@ excel.writeFast(workbook, path)
 
 ## Examples
 
-Run with `scala-cli`:
+Run examples with `scala-cli` (requires local publish first):
 
 ```bash
+# Publish locally (one-time setup)
+./mill __.publishLocal
+
+# Run examples
 scala-cli run examples/quick-start.sc
 scala-cli run examples/financial-model.sc
-scala-cli run examples/table-demo.sc
+
+# Run the README itself!
+scala-cli README.md
 ```
 
 | Example | Description |
@@ -214,16 +226,23 @@ make install   # Installs to ~/.local/bin/xl
 
 Stateless by design — each command is self-contained:
 
-```bash
-# Read operations
-xl -f model.xlsx sheets                    # List all sheets
-xl -f model.xlsx -s "P&L" view A1:D20      # View range as markdown
-xl -f model.xlsx eval "=SUM(A1:A10)"       # Evaluate formula (what-if)
-xl -f model.xlsx eval "=A1*1.1" -w "A1=100"  # With temporary overrides
+| Command | Description |
+|---------|-------------|
+| `xl -f data.xlsx sheets` | List all sheets with cell counts |
+| `xl -f data.xlsx view A1:D20` | View range as markdown table |
+| `xl -f data.xlsx cell A1` | Get cell details + dependencies |
+| `xl -f data.xlsx eval "=SUM(A1:A10)"` | Evaluate formula (what-if) |
+| `xl -f data.xlsx stats A1:A100` | Calculate min/max/sum/mean/count |
+| `xl -f data.xlsx search "pattern"` | Regex search across cells |
+| `xl -f in.xlsx -o out.xlsx put B5 1000` | Write value to cell |
+| `xl -f in.xlsx -o out.xlsx putf C5 "=B5*1.1"` | Write formula to cell |
 
-# Write operations (require -o for output)
-xl -f model.xlsx -o output.xlsx put B5 1000000       # Write value
-xl -f model.xlsx -o output.xlsx putf C5 "=B5*1.1"    # Write formula
+```bash
+# Example: what-if analysis with temporary overrides
+xl -f model.xlsx eval "=A1*1.1" -w "A1=100"
+
+# Example: formula dragging with $ anchoring
+xl -f model.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
 ```
 
 See [docs/plan/xl-cli.md](docs/plan/xl-cli.md) for full command reference.
@@ -271,7 +290,7 @@ See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+Apache License 2.0 - see [LICENSE](LICENSE)
 
 ---
 

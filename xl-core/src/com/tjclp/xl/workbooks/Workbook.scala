@@ -286,6 +286,28 @@ final case class Workbook(
 
 object Workbook:
   /**
+   * Create workbook from a single sheet.
+   *
+   * Example:
+   * {{{
+   * val sheet = Sheet("Sales").put(ref"A1" -> "Revenue").unsafe
+   * val workbook = Workbook(sheet)
+   * }}}
+   */
+  def apply(sheet: Sheet): Workbook = Workbook(Vector(sheet))
+
+  /**
+   * Create workbook from multiple sheets.
+   *
+   * Example:
+   * {{{
+   * val workbook = Workbook(salesSheet, marketingSheet, financeSheet)
+   * }}}
+   */
+  def apply(first: Sheet, second: Sheet, rest: Sheet*): Workbook =
+    Workbook((first +: second +: rest).toVector)
+
+  /**
    * Create workbook with a single empty sheet.
    *
    * When called with a string literal, the name is validated at compile time and returns `Workbook`

@@ -274,6 +274,33 @@ final case class Sheet(
 
     applyBulkCells(builtCells, cellsWithStyles, registry)
 
+  /**
+   * Batch put multiple values using string references with compile-time validation.
+   *
+   * When all refs are string literals, validates them at compile time and returns `Sheet` directly.
+   * When any ref is a runtime expression, falls back to runtime parsing and returns
+   * `XLResult[Sheet]`.
+   *
+   * This enables the clean map syntax without requiring the `ref"..."` macro:
+   * {{{
+   * // All literals → returns Sheet (compile-time validated)
+   * val sheet = Sheet("Demo").put(
+   *   "A1" -> "Revenue",
+   *   "B1" -> 100,
+   *   "C1" -> fx"=A1+B1"
+   * )
+   *
+   * // Runtime ref → returns XLResult[Sheet]
+   * val col = "A"
+   * val result = Sheet("Demo").put(s"$${col}1" -> "Dynamic")
+   * }}}
+   */
+  @annotation.targetName("putStringTuples")
+  transparent inline def put[A](inline updates: (String, A)*)(using
+    inline cw: CellWriter[A]
+  ): Sheet | XLResult[Sheet] =
+    ${ com.tjclp.xl.macros.PutLiteral.putTuplesImpl('{ this }, 'updates, 'cw) }
+
   private def applyBulkCells(
     builtCells: Iterable[Cell],
     styled: Iterable[(ARef, CellStyle)],
