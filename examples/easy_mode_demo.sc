@@ -1,7 +1,6 @@
-//> using scala 3.7.3
-//> using dep com.tjclp::xl-core:0.1.5-SNAPSHOT
-//> using dep com.tjclp::xl-cats-effect:0.1.5-SNAPSHOT
-//> using repository ivy2Local
+#!/usr/bin/env -S scala-cli shebang
+//> using file project.scala
+
 
 // Standalone demo script - run with:
 //   1. Publish locally: ./mill xl-core.publishLocal && ./mill xl-cats-effect.publishLocal

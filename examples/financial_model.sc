@@ -1,7 +1,6 @@
-//> using scala 3.7.3
-//> using dep com.tjclp::xl-core:0.1.5-SNAPSHOT
-//> using dep com.tjclp::xl-evaluator:0.1.5-SNAPSHOT
-//> using repository ivy2Local
+#!/usr/bin/env -S scala-cli shebang
+//> using file project.scala
+
 
 /**
  * XL Formula System - Financial Model Example
