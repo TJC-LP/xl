@@ -68,8 +68,8 @@ object Main
       }
 
     // Standalone: no --file required (creates new files)
-    val standaloneOpts = newCmd.map { case (outPath, sheetName) =>
-      runStandalone(outPath, sheetName)
+    val standaloneOpts = newCmd.map { case (outPath, sheetName, sheets) =>
+      runStandalone(outPath, sheetName, sheets)
     }
 
     standaloneOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
@@ -156,10 +156,13 @@ object Main
   private val outputArg = Opts.argument[Path]("output")
   private val sheetNameOpt =
     Opts.option[String]("sheet-name", "Sheet name (defaults to 'Sheet1')").withDefault("Sheet1")
+  private val sheetsOpt: Opts[List[String]] =
+    Opts.options[String]("sheet", "Sheet name (repeatable for multiple sheets)").orEmpty
 
-  val newCmd: Opts[(Path, String)] = Opts.subcommand("new", "Create a blank xlsx file") {
-    (outputArg, sheetNameOpt).tupled
-  }
+  val newCmd: Opts[(Path, String, List[String])] =
+    Opts.subcommand("new", "Create a blank xlsx file") {
+      (outputArg, sheetNameOpt, sheetsOpt).tupled
+    }
 
   // --- Read-only commands ---
 
@@ -363,12 +366,20 @@ object Main
         IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
     }
 
-  private def runStandalone(outPath: Path, sheetName: String): IO[ExitCode] =
+  private def runStandalone(outPath: Path, sheetName: String, sheets: List[String]): IO[ExitCode] =
     (for
-      name <- IO.fromEither(SheetName(sheetName).left.map(e => new Exception(e)))
-      wb = Workbook(Vector(Sheet(name)))
+      // --sheet takes precedence over --sheet-name; if neither, default to "Sheet1"
+      names <- sheets match
+        case Nil =>
+          IO.fromEither(SheetName(sheetName).left.map(e => new Exception(e))).map(List(_))
+        case list =>
+          list.traverse(n => IO.fromEither(SheetName(n).left.map(e => new Exception(e))))
+      wb = Workbook(names.map(Sheet(_)).toVector)
       _ <- ExcelIO.instance[IO].write(wb, outPath)
-    yield s"Created ${outPath.toAbsolutePath} with sheet '$sheetName'").attempt.flatMap {
+    yield
+      val sheetList = names.map(_.value).mkString(", ")
+      s"Created ${outPath.toAbsolutePath} with ${names.size} sheet(s): $sheetList"
+    ).attempt.flatMap {
       case Right(output) =>
         IO.println(output).as(ExitCode.Success)
       case Left(err) =>

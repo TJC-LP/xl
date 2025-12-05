@@ -102,6 +102,10 @@ xl -f <file> -s <sheet> -o <out> batch -              # Read from stdin
 
 # Formula dragging (putf with range)
 xl -f <file> -s <sheet> -o <out> putf <range> <formula>  # Drags formula over range
+
+# Create new workbook
+xl new <output>                                          # Default Sheet1
+xl new <output> --sheet Data --sheet Summary             # Multiple sheets
 ```
 
 ---
@@ -372,10 +376,12 @@ xl new output.xlsx
 # Create with custom sheet name
 xl new output.xlsx --sheet-name "Data"
 
-# Add more sheets
-xl -f output.xlsx -o output.xlsx add-sheet "Summary" --before "Data"
+# Create with multiple sheets in one command
+xl new output.xlsx --sheet Data --sheet Summary --sheet Notes
+
+# Add more sheets to existing workbook
+xl -f output.xlsx -o output.xlsx add-sheet "Archive" --after "Notes"
 xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
-xl -f output.xlsx -o output.xlsx rename-sheet "Sheet1" "Overview"
 ```
 
 ---
