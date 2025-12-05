@@ -16,21 +16,21 @@ permissions:
 jobs:
   # Build native binaries for multiple platforms in parallel
   build-native:
-    name: Build Native (${{ matrix.artifact }})
+    name: Build Native (${{ matrix.platform }})
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: xl-linux-amd64
+            platform: linux-amd64
             extension: ""
           - os: macos-latest
-            artifact: xl-darwin-amd64
+            platform: darwin-amd64
             extension: ""
           - os: macos-14
-            artifact: xl-darwin-arm64
+            platform: darwin-arm64
             extension: ""
           - os: windows-latest
-            artifact: xl-windows-amd64
+            platform: windows-amd64
             extension: ".exe"
     runs-on: ${{ matrix.os }}
     # Only run on the main repository, not forks
@@ -39,6 +39,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        shell: bash
 
       - name: Set up GraalVM
         uses: coursier/setup-action@v1
@@ -67,26 +72,30 @@ jobs:
       - name: Build native image (Unix)
         if: runner.os != 'Windows'
         run: ./mill xl-cli.nativeImage
+        env:
+          PUBLISH_VERSION: ${{ steps.version.outputs.version }}
 
       - name: Build native image (Windows)
         if: runner.os == 'Windows'
         run: .\mill.bat xl-cli.nativeImage
         shell: cmd
+        env:
+          PUBLISH_VERSION: ${{ steps.version.outputs.version }}
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
-        run: mv out/xl-cli/nativeImage.dest/native-executable ${{ matrix.artifact }}
+        run: mv out/xl-cli/nativeImage.dest/native-executable xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
-        run: mv out/xl-cli/nativeImage.dest/native-executable.exe ${{ matrix.artifact }}.exe
+        run: mv out/xl-cli/nativeImage.dest/native-executable.exe xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}.exe
         shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}${{ matrix.extension }}
+          name: xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}
+          path: xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }}
 
   # Publish to Maven Central and create GitHub release
   release:
@@ -127,7 +136,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mill-
 
-      - name: Extract version from tag
+      - name: Extract version and tag message
         id: version
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
@@ -138,6 +147,16 @@ jobs:
             exit 1
           fi
           echo "version=$TAG_VERSION" >> $GITHUB_OUTPUT
+
+          # Extract annotated tag message (if any) for release notes
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' "v$TAG_VERSION" 2>/dev/null || echo "")
+          if [ -n "$TAG_MESSAGE" ]; then
+            # Write to file for multi-line support
+            echo "$TAG_MESSAGE" > /tmp/release-notes.md
+            echo "has_notes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_notes=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Run Tests
         run: ./mill -i __.test
@@ -192,6 +211,10 @@ jobs:
           cp .claude/skills/xl-cli/SKILL.md skill-dist/
           cp .claude/skills/xl-cli/reference/*.md skill-dist/reference/ 2>/dev/null || true
 
+          # Substitute version placeholders in SKILL.md
+          sed -i "s/__XL_VERSION__/$VERSION/g" skill-dist/SKILL.md || \
+            sed -i '' "s/__XL_VERSION__/$VERSION/g" skill-dist/SKILL.md
+
           # Create version manifest
           cat > skill-dist/VERSION << EOF
           version=$VERSION
@@ -205,10 +228,10 @@ jobs:
           VERSION="__VERSION__"
           PLATFORM="$(uname -s)-$(uname -m)"
           case "$PLATFORM" in
-            Linux-x86_64)  BINARY="xl-linux-amd64" ;;
-            Darwin-x86_64) BINARY="xl-darwin-amd64" ;;
-            Darwin-arm64)  BINARY="xl-darwin-arm64" ;;
-            MINGW*|MSYS*|CYGWIN*) BINARY="xl-windows-amd64.exe" ;;
+            Linux-x86_64)  BINARY="xl-${VERSION}-linux-amd64" ;;
+            Darwin-x86_64) BINARY="xl-${VERSION}-darwin-amd64" ;;
+            Darwin-arm64)  BINARY="xl-${VERSION}-darwin-arm64" ;;
+            MINGW*|MSYS*|CYGWIN*) BINARY="xl-${VERSION}-windows-amd64.exe" ;;
             *) echo "Unsupported platform: $PLATFORM" && exit 1 ;;
           esac
           INSTALL_DIR="${HOME}/.local/bin"
@@ -234,32 +257,34 @@ jobs:
 
       - name: Prepare release assets
         run: |
+          VERSION="${{ steps.version.outputs.version }}"
           mkdir -p release-assets
           # Copy JAR tarball
-          cp xl-cli-${{ steps.version.outputs.version }}.tar.gz release-assets/
+          cp xl-cli-$VERSION.tar.gz release-assets/
           # Copy skill zip
-          cp xl-skill-${{ steps.version.outputs.version }}.zip release-assets/
-          # Copy native binaries (Unix)
-          cp native-binaries/xl-linux-amd64/xl-linux-amd64 release-assets/xl-linux-amd64
-          cp native-binaries/xl-darwin-amd64/xl-darwin-amd64 release-assets/xl-darwin-amd64
-          cp native-binaries/xl-darwin-arm64/xl-darwin-arm64 release-assets/xl-darwin-arm64
-          # Copy Windows binary
-          cp native-binaries/xl-windows-amd64/xl-windows-amd64.exe release-assets/xl-windows-amd64.exe
+          cp xl-skill-$VERSION.zip release-assets/
+          # Copy native binaries (versioned names)
+          cp native-binaries/xl-$VERSION-linux-amd64/xl-$VERSION-linux-amd64 release-assets/
+          cp native-binaries/xl-$VERSION-darwin-amd64/xl-$VERSION-darwin-amd64 release-assets/
+          cp native-binaries/xl-$VERSION-darwin-arm64/xl-$VERSION-darwin-arm64 release-assets/
+          cp native-binaries/xl-$VERSION-windows-amd64/xl-$VERSION-windows-amd64.exe release-assets/
           # Make Unix binaries executable
-          chmod +x release-assets/xl-linux-amd64 release-assets/xl-darwin-amd64 release-assets/xl-darwin-arm64
+          chmod +x release-assets/xl-$VERSION-linux-amd64 release-assets/xl-$VERSION-darwin-amd64 release-assets/xl-$VERSION-darwin-arm64
           ls -la release-assets/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          generate_release_notes: true
+          # Use tag message if available, otherwise generate notes
+          body_path: ${{ steps.version.outputs.has_notes == 'true' && '/tmp/release-notes.md' || '' }}
+          generate_release_notes: ${{ steps.version.outputs.has_notes != 'true' }}
           draft: false
           files: |
             release-assets/xl-cli-${{ steps.version.outputs.version }}.tar.gz
             release-assets/xl-skill-${{ steps.version.outputs.version }}.zip
-            release-assets/xl-linux-amd64
-            release-assets/xl-darwin-amd64
-            release-assets/xl-darwin-arm64
-            release-assets/xl-windows-amd64.exe
+            release-assets/xl-${{ steps.version.outputs.version }}-linux-amd64
+            release-assets/xl-${{ steps.version.outputs.version }}-darwin-amd64
+            release-assets/xl-${{ steps.version.outputs.version }}-darwin-arm64
+            release-assets/xl-${{ steps.version.outputs.version }}-windows-amd64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

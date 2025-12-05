@@ -13,27 +13,28 @@ Check if installed: `which xl || echo "not installed"`
 
 **macOS/Linux:**
 ```bash
-# Detect platform and install
+# Detect platform and install __XL_VERSION__
 PLATFORM="$(uname -s)-$(uname -m)"
 case "$PLATFORM" in
-  Linux-x86_64)  BINARY="xl-linux-amd64" ;;
-  Darwin-x86_64) BINARY="xl-darwin-amd64" ;;
-  Darwin-arm64)  BINARY="xl-darwin-arm64" ;;
+  Linux-x86_64)  BINARY="xl-__XL_VERSION__-linux-amd64" ;;
+  Darwin-x86_64) BINARY="xl-__XL_VERSION__-darwin-amd64" ;;
+  Darwin-arm64)  BINARY="xl-__XL_VERSION__-darwin-arm64" ;;
   *) echo "Unsupported platform: $PLATFORM" && exit 1 ;;
 esac
-curl -sL "https://github.com/TJC-LP/xl/releases/latest/download/$BINARY" -o ~/.local/bin/xl
+mkdir -p ~/.local/bin
+curl -sL "https://github.com/TJC-LP/xl/releases/download/v__XL_VERSION__/$BINARY" -o ~/.local/bin/xl
 chmod +x ~/.local/bin/xl
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/TJC-LP/xl/releases/latest/download/xl-windows-amd64.exe" -OutFile "$env:LOCALAPPDATA\xl.exe"
+Invoke-WebRequest -Uri "https://github.com/TJC-LP/xl/releases/download/v__XL_VERSION__/xl-__XL_VERSION__-windows-amd64.exe" -OutFile "$env:LOCALAPPDATA\xl.exe"
 # Add to PATH or move to a directory in PATH
 ```
 
 **Alternative** (requires JDK 17+):
 ```bash
-curl -sL https://github.com/TJC-LP/xl/releases/latest/download/xl-cli.tar.gz | tar xz -C /tmp
+curl -sL "https://github.com/TJC-LP/xl/releases/download/v__XL_VERSION__/xl-cli-__XL_VERSION__.tar.gz" | tar xz -C /tmp
 cd /tmp && ./install.sh
 ```
 

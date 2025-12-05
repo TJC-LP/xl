@@ -59,7 +59,7 @@ object RenderUtils:
     try
       val img = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
       Some(img.createGraphics())
-    catch case _: Exception => None // Headless environment
+    catch case _: Throwable => None // Headless environment (catches UnsatisfiedLinkError too)
 
   /** Measure text width using AWT FontMetrics, with fallback estimation. */
   def measureTextWidth(text: String, font: Option[Font]): Int =

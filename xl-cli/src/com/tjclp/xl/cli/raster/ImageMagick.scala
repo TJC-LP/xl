@@ -9,8 +9,8 @@ import fs2.io.process.{ProcessBuilder, Processes}
 /**
  * ImageMagick integration for converting SVG to raster formats.
  *
- * Uses the `magick` command (ImageMagick 7+) to convert SVG input to PNG, JPEG, WebP, or PDF. Fails
- * gracefully with installation instructions if ImageMagick is not found.
+ * Supports both ImageMagick 7+ (`magick` command) and ImageMagick 6 (`convert` command). Falls back
+ * gracefully with installation instructions if neither is found.
  */
 object ImageMagick:
 
@@ -50,17 +50,51 @@ object ImageMagick:
   // Get the Processes instance for IO
   private given Processes[IO] = Processes.forAsync[IO]
 
+  /** Which ImageMagick command to use */
+  private sealed trait ImageMagickCommand:
+    def command: String
+    def versionArgs: List[String]
+
+  private object ImageMagickCommand:
+    /** ImageMagick 7+ uses unified `magick` command */
+    case object Magick7 extends ImageMagickCommand:
+      val command = "magick"
+      val versionArgs = List("--version")
+
+    /** ImageMagick 6 uses separate `convert` command */
+    case object Convert6 extends ImageMagickCommand:
+      val command = "convert"
+      val versionArgs = List("-version")
+
   /**
-   * Check if ImageMagick is available on the system.
-   *
-   * Attempts to run `magick --version` to verify installation.
+   * Check if a specific ImageMagick command is available.
    */
-  def isAvailable: IO[Boolean] =
+  private def isCommandAvailable(cmd: ImageMagickCommand): IO[Boolean] =
     Processes[IO]
-      .spawn(ProcessBuilder("magick", "--version"))
+      .spawn(ProcessBuilder(cmd.command, cmd.versionArgs))
       .use(_.exitValue)
       .map(_ == 0)
       .handleError(_ => false)
+
+  /**
+   * Find the available ImageMagick command, preferring v7 over v6.
+   */
+  private def findCommand: IO[Option[ImageMagickCommand]] =
+    isCommandAvailable(ImageMagickCommand.Magick7).flatMap {
+      case true => IO.pure(Some(ImageMagickCommand.Magick7))
+      case false =>
+        isCommandAvailable(ImageMagickCommand.Convert6).map {
+          case true => Some(ImageMagickCommand.Convert6)
+          case false => None
+        }
+    }
+
+  /**
+   * Check if ImageMagick is available on the system.
+   *
+   * Checks for both `magick` (v7+) and `convert` (v6) commands.
+   */
+  def isAvailable: IO[Boolean] = findCommand.map(_.isDefined)
 
   /**
    * Convert SVG string to raster format and write to file.
@@ -80,21 +114,23 @@ object ImageMagick:
     format: Format,
     dpi: Int = 144
   ): IO[Unit] =
-    isAvailable.flatMap {
-      case false =>
+    findCommand.flatMap {
+      case None =>
         IO.raiseError(
           ImageMagickNotFound(
             s"""ImageMagick not found. Install it to enable raster export:
 
   macOS:   brew install imagemagick
-  Ubuntu:  sudo apt-get install imagemagick
+  Ubuntu:  sudo apt-get install imagemagick librsvg2-bin
   Windows: https://imagemagick.org/script/download.php
 
-After installation, ensure 'magick' is in your PATH."""
+After installation, ensure 'magick' (v7+) or 'convert' (v6) is in your PATH."""
           )
         )
-      case true =>
-        // Build command: magick -density <dpi> -background white svg:- <format>:<output>
+      case Some(cmd) =>
+        // Build command args (same for both v6 and v7)
+        // magick -density <dpi> -background white svg:- <format>:<output>
+        // convert -density <dpi> -background white svg:- <format>:<output>
         val args = List(
           "-density",
           dpi.toString,
@@ -106,7 +142,7 @@ After installation, ensure 'magick' is in your PATH."""
         )
 
         Processes[IO]
-          .spawn(ProcessBuilder("magick", args))
+          .spawn(ProcessBuilder(cmd.command, args))
           .use { process =>
             val svgBytes = svg.getBytes(StandardCharsets.UTF_8)
 
@@ -133,13 +169,17 @@ After installation, ensure 'magick' is in your PATH."""
    * Get the ImageMagick version string for diagnostics.
    */
   def version: IO[Option[String]] =
-    Processes[IO]
-      .spawn(ProcessBuilder("magick", "--version"))
-      .use { process =>
-        process.stdout
-          .through(fs2.text.utf8.decode)
-          .compile
-          .string
-          .map(_.linesIterator.nextOption)
-      }
-      .handleError(_ => None)
+    findCommand.flatMap {
+      case None => IO.pure(None)
+      case Some(cmd) =>
+        Processes[IO]
+          .spawn(ProcessBuilder(cmd.command, cmd.versionArgs))
+          .use { process =>
+            process.stdout
+              .through(fs2.text.utf8.decode)
+              .compile
+              .string
+              .map(_.linesIterator.nextOption)
+          }
+          .handleError(_ => None)
+    }
