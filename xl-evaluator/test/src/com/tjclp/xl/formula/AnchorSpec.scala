@@ -12,6 +12,7 @@ import com.tjclp.xl.{ARef, Anchor, CellRange}
  *   - AbsRow (A$1): Column adjusts, row fixed
  *   - Absolute ($A$1): Both fixed
  */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class AnchorSpec extends FunSuite:
 
   // ===== Anchor.parse tests =====

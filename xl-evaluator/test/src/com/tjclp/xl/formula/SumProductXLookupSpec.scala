@@ -18,6 +18,7 @@ import com.tjclp.xl.sheets.Sheet
  *   - Round-trip parsing
  *   - Dependency graph extraction
  */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class SumProductXLookupSpec extends FunSuite:
 
   // Helper to create a sheet with data

@@ -51,3 +51,40 @@ When complete, stage and commit with message:
 ```
 chore(release): Bump version to $ARGUMENTS
 ```
+
+### Tagging
+
+After committing, create an **annotated tag** with release notes from CHANGELOG.md:
+
+```bash
+# Extract release notes for this version from CHANGELOG.md
+VERSION="$ARGUMENTS"
+NOTES=$(awk "/^## \[$VERSION\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md | sed '/^$/d' | head -50)
+
+# Preview the notes
+echo "=== Release notes for v$VERSION ==="
+echo "$NOTES"
+echo "==================================="
+
+# Create annotated tag (message from CHANGELOG)
+git tag -a "v$VERSION" -m "$NOTES"
+
+# Verify it's annotated (should print "tag", not "commit")
+git cat-file -t "v$VERSION"
+```
+
+**Important**: Do NOT use `git tag v$ARGUMENTS` (without `-a`) - this creates a lightweight tag with no release notes, causing GitHub releases to show the commit message instead.
+
+### Push
+
+Push the commit and tag to trigger the release workflow:
+
+```bash
+git push origin main
+git push origin "v$VERSION"
+```
+
+The release workflow will:
+1. Build native binaries for all platforms
+2. Publish to Maven Central
+3. Create GitHub Release with the tag message as release notes

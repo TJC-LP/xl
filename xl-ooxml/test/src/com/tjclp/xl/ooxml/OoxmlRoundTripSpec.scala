@@ -20,6 +20,7 @@ import com.tjclp.xl.styles.dsl.*
 import java.util.zip.ZipInputStream
 
 /** Round-trip tests for XLSX write → read */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class OoxmlRoundTripSpec extends FunSuite:
 
   val tempDir: Path = Files.createTempDirectory("xl-test-")

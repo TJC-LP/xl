@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.2] - 2025-12-06
+
+### Fixed
+
+- **WartRemover warnings eliminated**: All 82 compile-time warnings resolved
+  - Source code: Refactored `isInstanceOf` to pattern matching in `PutLiteral.scala`
+  - Source code: Added `@nowarn` for unreachable `PolyRef` case in `FormulaShifter.scala`
+  - Test code: Added class-level `@SuppressWarnings` annotations following project policy
+
+### Changed
+
+- **Release workflow improved**: `/release-prep` command now creates annotated tags with CHANGELOG extraction
+  - Ensures GitHub releases display proper release notes instead of commit messages
+  - Tags are now annotated (`git tag -a`) with message extracted from CHANGELOG.md
+
+---
+
 ## [0.2.1] - 2025-12-05
 
 ### Added

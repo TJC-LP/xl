@@ -1,5 +1,7 @@
 package com.tjclp.xl.formula
 
+import scala.annotation.nowarn
+
 import com.tjclp.xl.{Anchor, CellRange}
 import com.tjclp.xl.addressing.{ARef, Column, Row}
 
@@ -43,6 +45,9 @@ object FormulaShifter:
     else shiftInternal(expr, colDelta, rowDelta)
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  @nowarn(
+    "msg=Unreachable case"
+  ) // PolyRef extends TExpr[Nothing], reachable via asInstanceOf casts
   private def shiftInternal[A](expr: TExpr[A], colDelta: Int, rowDelta: Int): TExpr[A] =
     import TExpr.*
 

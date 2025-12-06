@@ -9,6 +9,13 @@ import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 
 /** Tests for string-based map syntax with compile-time validation */
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.OptionPartial",
+    "org.wartremover.warts.IterableOps",
+    "org.wartremover.warts.IsInstanceOf"
+  )
+)
 class StringMapSyntaxSpec extends FunSuite:
 
   def emptySheet: Sheet = Sheet(SheetName.unsafe("Test"))

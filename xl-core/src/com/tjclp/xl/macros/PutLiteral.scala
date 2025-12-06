@@ -399,7 +399,10 @@ object PutLiteral:
       report.errorAndAbort(s"Duplicate references not allowed: ${duplicates.mkString(", ")}")
 
     // If all refs are literals, emit direct style calls (returns Sheet)
-    val allLiterals = parsedRefs.forall(!_.isInstanceOf[RuntimeRef])
+    val allLiterals = parsedRefs.forall {
+      case _: RuntimeRef => false
+      case _ => true
+    }
 
     if allLiterals then
       // Build chained style calls: sheet.withCellStyle(...).withRangeStyle(...)
