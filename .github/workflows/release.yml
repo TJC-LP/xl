@@ -48,7 +48,7 @@ jobs:
       - name: Set up GraalVM
         uses: coursier/setup-action@v1
         with:
-          jvm: graalvm-community:23.0.1
+          jvm: graalvm-community:25.0.1
 
       - name: Cache Coursier
         uses: actions/cache@v4
