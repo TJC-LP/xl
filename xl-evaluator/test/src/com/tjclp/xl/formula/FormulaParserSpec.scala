@@ -2,6 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.macros.ref
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import org.scalacheck.{Arbitrary, Gen}
@@ -917,10 +918,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result match
       case Right(TExpr.Xnpv(rate, values, dates)) =>
-        assert(values.start == ARef.parse("A1").toOption.get)
-        assert(values.end == ARef.parse("A5").toOption.get)
-        assert(dates.start == ARef.parse("B1").toOption.get)
-        assert(dates.end == ARef.parse("B5").toOption.get)
+        assert(values.start == ref"A1")
+        assert(values.end == ref"A5")
+        assert(dates.start == ref"B1")
+        assert(dates.end == ref"B5")
       case _ => fail("Expected TExpr.Xnpv")
   }
 
@@ -929,10 +930,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result match
       case Right(TExpr.Xirr(values, dates, guess)) =>
-        assert(values.start == ARef.parse("A1").toOption.get)
-        assert(values.end == ARef.parse("A5").toOption.get)
-        assert(dates.start == ARef.parse("B1").toOption.get)
-        assert(dates.end == ARef.parse("B5").toOption.get)
+        assert(values.start == ref"A1")
+        assert(values.end == ref"A5")
+        assert(dates.start == ref"B1")
+        assert(dates.end == ref"B5")
         assert(guess.isEmpty)
       case _ => fail("Expected TExpr.Xirr")
   }
@@ -942,8 +943,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result match
       case Right(TExpr.Xirr(values, dates, guess)) =>
-        assert(values.start == ARef.parse("A1").toOption.get)
-        assert(values.end == ARef.parse("A5").toOption.get)
+        assert(values.start == ref"A1")
+        assert(values.end == ref"A5")
         assert(guess.isDefined)
       case _ => fail("Expected TExpr.Xirr with guess")
   }

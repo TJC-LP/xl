@@ -442,18 +442,23 @@ private class EvaluatorImpl extends Evaluator:
                 )
               )
             else
-              val date0 = dates.head
-              val onePlusR = BigDecimal(1) + rate
-              val npv = values.zip(dates).foldLeft(BigDecimal(0)) { case (acc, (value, date)) =>
-                val daysDiff = ChronoUnit.DAYS.between(date0, date)
-                val yearFraction = BigDecimal(daysDiff) / BigDecimal(365)
-                // Note: Using Double for fractional exponents matches Excel's precision behavior.
-                // BigDecimal.pow only supports integer exponents. For financial calculations,
-                // Double precision (~15 decimal digits) is sufficient and consistent with Excel.
-                val discountFactor = math.pow(onePlusR.toDouble, yearFraction.toDouble)
-                acc + value / BigDecimal(discountFactor)
-              }
-              Right(npv)
+              // Pattern match to extract first date (safe: non-empty check above)
+              dates match
+                case date0 :: _ =>
+                  val onePlusR = BigDecimal(1) + rate
+                  val npv = values.zip(dates).foldLeft(BigDecimal(0)) { case (acc, (value, date)) =>
+                    val daysDiff = ChronoUnit.DAYS.between(date0, date)
+                    val yearFraction = BigDecimal(daysDiff) / BigDecimal(365)
+                    // Note: Using Double for fractional exponents matches Excel's precision behavior.
+                    // BigDecimal.pow only supports integer exponents. For financial calculations,
+                    // Double precision (~15 decimal digits) is sufficient and consistent with Excel.
+                    val discountFactor = math.pow(onePlusR.toDouble, yearFraction.toDouble)
+                    acc + value / BigDecimal(discountFactor)
+                  }
+                  Right(npv)
+                case Nil =>
+                  // Unreachable: dates verified non-empty at line 430
+                  Left(EvalError.EvalFailed("XNPV: dates cannot be empty", None))
           }
         yield result
 
@@ -502,56 +507,60 @@ private class EvaluatorImpl extends Evaluator:
           guessEither.flatMap { guess0 =>
             val maxIter = 100
             val tolerance = BigDecimal("1e-7")
-            val date0 = dates.head
+            // Pattern match to extract first date (safe: non-empty check at line 480)
+            dates match
+              case date0 :: _ =>
+                // Calculate year fractions for each date
+                val yearFractions: List[BigDecimal] = dates.map { date =>
+                  val daysDiff = ChronoUnit.DAYS.between(date0, date)
+                  BigDecimal(daysDiff) / BigDecimal(365)
+                }
 
-            // Calculate year fractions for each date
-            val yearFractions: List[BigDecimal] = dates.map { date =>
-              val daysDiff = ChronoUnit.DAYS.between(date0, date)
-              BigDecimal(daysDiff) / BigDecimal(365)
-            }
+                // XNPV at given rate: sum(value_i / (1 + rate)^yearFraction_i)
+                // Note: Uses Double for fractional exponents (matches Excel precision, see XNPV comment)
+                def xnpvAt(rate: BigDecimal): BigDecimal =
+                  val onePlusR = BigDecimal(1) + rate
+                  values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                    val discountFactor = math.pow(onePlusR.toDouble, yf.toDouble)
+                    acc + cf / BigDecimal(discountFactor)
+                  }
 
-            // XNPV at given rate: sum(value_i / (1 + rate)^yearFraction_i)
-            // Note: Uses Double for fractional exponents (matches Excel precision, see XNPV comment)
-            def xnpvAt(rate: BigDecimal): BigDecimal =
-              val onePlusR = BigDecimal(1) + rate
-              values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
-                val discountFactor = math.pow(onePlusR.toDouble, yf.toDouble)
-                acc + cf / BigDecimal(discountFactor)
-              }
+                // Derivative of XNPV: sum(-yearFraction_i * value_i / (1 + rate)^(yearFraction_i + 1))
+                def dXnpvAt(rate: BigDecimal): BigDecimal =
+                  val onePlusR = BigDecimal(1) + rate
+                  values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                    val discountFactor = math.pow(onePlusR.toDouble, (yf + 1).toDouble)
+                    acc - (yf * cf) / BigDecimal(discountFactor)
+                  }
 
-            // Derivative of XNPV: sum(-yearFraction_i * value_i / (1 + rate)^(yearFraction_i + 1))
-            def dXnpvAt(rate: BigDecimal): BigDecimal =
-              val onePlusR = BigDecimal(1) + rate
-              values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
-                val discountFactor = math.pow(onePlusR.toDouble, (yf + 1).toDouble)
-                acc - (yf * cf) / BigDecimal(discountFactor)
-              }
-
-            @tailrec
-            def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
-              if iter >= maxIter then
-                Left(
-                  EvalError.EvalFailed(
-                    s"XIRR did not converge after $maxIter iterations",
-                    Some("XIRR(values, dates[, guess])")
-                  )
-                )
-              else
-                val f = xnpvAt(r)
-                val df = dXnpvAt(r)
-                if df.abs < BigDecimal("1e-10") then
-                  Left(
-                    EvalError.EvalFailed(
-                      "XIRR derivative is near zero; cannot continue iteration",
-                      Some("XIRR(values, dates[, guess])")
+                @tailrec
+                def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
+                  if iter >= maxIter then
+                    Left(
+                      EvalError.EvalFailed(
+                        s"XIRR did not converge after $maxIter iterations",
+                        Some("XIRR(values, dates[, guess])")
+                      )
                     )
-                  )
-                else
-                  val next = r - f / df
-                  if (next - r).abs <= tolerance then Right(next)
-                  else loop(iter + 1, next)
+                  else
+                    val f = xnpvAt(r)
+                    val df = dXnpvAt(r)
+                    if df.abs < BigDecimal("1e-10") then
+                      Left(
+                        EvalError.EvalFailed(
+                          "XIRR derivative is near zero; cannot continue iteration",
+                          Some("XIRR(values, dates[, guess])")
+                        )
+                      )
+                    else
+                      val next = r - f / df
+                      if (next - r).abs <= tolerance then Right(next)
+                      else loop(iter + 1, next)
 
-            loop(0, guess0)
+                loop(0, guess0)
+              case Nil =>
+                // Unreachable: dates verified non-empty at line 480
+                Left(EvalError.EvalFailed("XIRR: dates cannot be empty", None))
           }
 
       case TExpr.VLookup(lookupExpr, table, colIndexExpr, rangeLookupExpr) =>
