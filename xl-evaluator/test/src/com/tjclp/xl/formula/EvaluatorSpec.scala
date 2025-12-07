@@ -839,14 +839,20 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case other => fail(s"Expected Number(20), got $other")
   }
 
-  test("INDEX: out of bounds returns #REF!") {
+  test("INDEX: out of bounds returns descriptive #REF! error") {
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
       ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)) // A2
     )
+    // Row 5 is out of bounds for a 2-row array
     sheet.evaluateFormula("=INDEX(A1:A2, 5)") match
-      case Right(CellValue.Error(_)) => assert(true)
-      case other => fail(s"Expected Error, got $other")
+      case Left(error) =>
+        val msg = error.toString
+        // Should contain descriptive info about the bounds
+        assert(msg.contains("#REF!"), s"Expected #REF! in error, got $msg")
+        assert(msg.contains("row_num 5"), s"Expected row number in error, got $msg")
+        assert(msg.contains("2 rows"), s"Expected array dimensions in error, got $msg")
+      case other => fail(s"Expected EvalError with descriptive message, got $other")
   }
 
   test("MATCH: exact match finds position") {
@@ -860,15 +866,15 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case other => fail(s"Expected Number(2), got $other")
   }
 
-  test("MATCH: exact match not found returns -1") {
+  test("MATCH: exact match not found returns #N/A error") {
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
       ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)), // A2
       ARef.from0(0, 2) -> CellValue.Number(BigDecimal(30)) // A3
     )
     sheet.evaluateFormula("=MATCH(25, A1:A3, 0)") match
-      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(-1))
-      case other => fail(s"Expected Number(-1), got $other")
+      case Left(error) => assert(error.toString.contains("#N/A"))
+      case other => fail(s"Expected #N/A error, got $other")
   }
 
   test("MATCH: approximate match (match_type=1) finds largest <= lookup") {

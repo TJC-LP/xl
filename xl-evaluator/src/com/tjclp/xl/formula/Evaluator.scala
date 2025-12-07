@@ -447,7 +447,9 @@ private class EvaluatorImpl extends Evaluator:
               val npv = values.zip(dates).foldLeft(BigDecimal(0)) { case (acc, (value, date)) =>
                 val daysDiff = ChronoUnit.DAYS.between(date0, date)
                 val yearFraction = BigDecimal(daysDiff) / BigDecimal(365)
-                // value / (1 + rate)^yearFraction
+                // Note: Using Double for fractional exponents matches Excel's precision behavior.
+                // BigDecimal.pow only supports integer exponents. For financial calculations,
+                // Double precision (~15 decimal digits) is sufficient and consistent with Excel.
                 val discountFactor = math.pow(onePlusR.toDouble, yearFraction.toDouble)
                 acc + value / BigDecimal(discountFactor)
               }
@@ -509,6 +511,7 @@ private class EvaluatorImpl extends Evaluator:
             }
 
             // XNPV at given rate: sum(value_i / (1 + rate)^yearFraction_i)
+            // Note: Uses Double for fractional exponents (matches Excel precision, see XNPV comment)
             def xnpvAt(rate: BigDecimal): BigDecimal =
               val onePlusR = BigDecimal(1) + rate
               values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
@@ -928,24 +931,30 @@ private class EvaluatorImpl extends Evaluator:
         yield roundToDigits(value, numDigits.toInt, BigDecimal.RoundingMode.HALF_UP)
 
       case TExpr.RoundUp(valueExpr, numDigitsExpr) =>
-        // ROUNDUP: round away from zero
+        // ROUNDUP: round away from zero (Excel semantics)
+        // Examples: ROUNDUP(2.1, 0) = 3, ROUNDUP(-2.1, 0) = -3
         for
           value <- eval(valueExpr, sheet, clock)
           numDigits <- eval(numDigitsExpr, sheet, clock)
         yield
-          // Round away from zero: CEILING for positive, FLOOR for negative
+          // Excel ROUNDUP rounds away from zero, which requires different RoundingMode by sign:
+          // - Positive numbers: CEILING (rounds toward +∞, away from 0)
+          // - Negative numbers: FLOOR (rounds toward -∞, away from 0)
           val mode =
             if value >= 0 then BigDecimal.RoundingMode.CEILING
             else BigDecimal.RoundingMode.FLOOR
           roundToDigits(value, numDigits.toInt, mode)
 
       case TExpr.RoundDown(valueExpr, numDigitsExpr) =>
-        // ROUNDDOWN: round toward zero (truncate)
+        // ROUNDDOWN: round toward zero / truncate (Excel semantics)
+        // Examples: ROUNDDOWN(2.9, 0) = 2, ROUNDDOWN(-2.9, 0) = -2
         for
           value <- eval(valueExpr, sheet, clock)
           numDigits <- eval(numDigitsExpr, sheet, clock)
         yield
-          // Round toward zero: FLOOR for positive, CEILING for negative
+          // Excel ROUNDDOWN rounds toward zero, which requires different RoundingMode by sign:
+          // - Positive numbers: FLOOR (rounds toward -∞, toward 0)
+          // - Negative numbers: CEILING (rounds toward +∞, toward 0)
           val mode =
             if value >= 0 then BigDecimal.RoundingMode.FLOOR
             else BigDecimal.RoundingMode.CEILING
@@ -959,77 +968,101 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.Index(array, rowNumExpr, colNumExpr) =>
         // INDEX: return value at position in array
+        // Returns #REF! error with descriptive message if position is out of bounds
         for
           rowNum <- eval(rowNumExpr, sheet, clock)
           colNum <- colNumExpr match
             case Some(expr) => eval(expr, sheet, clock).map(Some(_))
             case None => Right(None)
-        yield
-          val rowIdx = rowNum.toInt - 1 // 1-based to 0-based
-          val colIdx = colNum.map(_.toInt - 1).getOrElse(0) // Default to first column
+          result <- {
+            val rowIdx = rowNum.toInt - 1 // 1-based to 0-based
+            val colIdx = colNum.map(_.toInt - 1).getOrElse(0) // Default to first column
 
-          // Get dimensions of the range
-          val startCol = array.colStart.index0
-          val startRow = array.rowStart.index0
-          val numCols = array.colEnd.index0 - startCol + 1
-          val numRows = array.rowEnd.index0 - startRow + 1
+            // Get dimensions of the range
+            val startCol = array.colStart.index0
+            val startRow = array.rowStart.index0
+            val numCols = array.colEnd.index0 - startCol + 1
+            val numRows = array.rowEnd.index0 - startRow + 1
 
-          // Bounds check
-          if rowIdx < 0 || rowIdx >= numRows || colIdx < 0 || colIdx >= numCols then
-            CellValue.Error(CellError.Ref)
-          else
-            val targetRef = ARef.from0(startCol + colIdx, startRow + rowIdx)
-            sheet(targetRef).value
+            // Bounds check with descriptive error
+            if rowIdx < 0 || rowIdx >= numRows then
+              Left(
+                EvalError.EvalFailed(
+                  s"INDEX: row_num ${rowNum.toInt} is out of bounds (array has $numRows rows, valid range: 1-$numRows) (#REF!)",
+                  Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
+                )
+              )
+            else if colIdx < 0 || colIdx >= numCols then
+              Left(
+                EvalError.EvalFailed(
+                  s"INDEX: col_num ${colNum.map(_.toInt).getOrElse(1)} is out of bounds (array has $numCols columns, valid range: 1-$numCols) (#REF!)",
+                  Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
+                )
+              )
+            else
+              val targetRef = ARef.from0(startCol + colIdx, startRow + rowIdx)
+              Right(sheet(targetRef).value)
+          }
+        yield result
 
       case TExpr.Match(lookupValueExpr, lookupArray, matchTypeExpr) =>
         // MATCH: find position of value in array (1-based)
+        // Returns #N/A error if no match found (Excel behavior)
         for
           lookupValue <- evalAny(lookupValueExpr, sheet, clock)
           matchType <- eval(matchTypeExpr, sheet, clock)
-        yield
-          val matchTypeInt = matchType.toInt
+          result <- {
+            val matchTypeInt = matchType.toInt
 
-          // Get cells from lookup array (must be 1D - single row or column)
-          val cells: List[(Int, CellValue)] =
-            lookupArray.cells.toList.zipWithIndex.map { case (ref, idx) =>
-              (idx + 1, sheet(ref).value) // 1-based position
-            }
-
-          matchTypeInt match
-            case 0 =>
-              // Exact match
-              cells.find { case (_, cv) =>
-                compareCellValues(cv, lookupValue) == 0
-              } match
-                case Some((pos, _)) => BigDecimal(pos)
-                case None => BigDecimal(-1) // #N/A should be error, but return -1 for now
-
-            case 1 =>
-              // Largest value <= lookup (array should be sorted ascending)
-              val numericLookup = coerceToBigDecimal(lookupValue)
-              val candidates = cells.flatMap { case (pos, cv) =>
-                val numericCv = coerceToNumeric(cv)
-                if numericCv <= numericLookup then Some((pos, numericCv))
-                else None
+            // Get cells from lookup array (must be 1D - single row or column)
+            val cells: List[(Int, CellValue)] =
+              lookupArray.cells.toList.zipWithIndex.map { case (ref, idx) =>
+                (idx + 1, sheet(ref).value) // 1-based position
               }
-              candidates.maxByOption(_._2) match
-                case Some((pos, _)) => BigDecimal(pos)
-                case None => BigDecimal(-1)
 
-            case -1 =>
-              // Smallest value >= lookup (array should be sorted descending)
-              val numericLookup = coerceToBigDecimal(lookupValue)
-              val candidates = cells.flatMap { case (pos, cv) =>
-                val numericCv = coerceToNumeric(cv)
-                if numericCv >= numericLookup then Some((pos, numericCv))
-                else None
-              }
-              candidates.minByOption(_._2) match
-                case Some((pos, _)) => BigDecimal(pos)
-                case None => BigDecimal(-1)
+            val positionOpt: Option[Int] = matchTypeInt match
+              case 0 =>
+                // Exact match
+                cells
+                  .find { case (_, cv) =>
+                    compareCellValues(cv, lookupValue) == 0
+                  }
+                  .map(_._1)
 
-            case _ =>
-              BigDecimal(-1) // Unknown match type
+              case 1 =>
+                // Largest value <= lookup (array should be sorted ascending)
+                val numericLookup = coerceToBigDecimal(lookupValue)
+                val candidates = cells.flatMap { case (pos, cv) =>
+                  val numericCv = coerceToNumeric(cv)
+                  if numericCv <= numericLookup then Some((pos, numericCv))
+                  else None
+                }
+                candidates.maxByOption(_._2).map(_._1)
+
+              case -1 =>
+                // Smallest value >= lookup (array should be sorted descending)
+                val numericLookup = coerceToBigDecimal(lookupValue)
+                val candidates = cells.flatMap { case (pos, cv) =>
+                  val numericCv = coerceToNumeric(cv)
+                  if numericCv >= numericLookup then Some((pos, numericCv))
+                  else None
+                }
+                candidates.minByOption(_._2).map(_._1)
+
+              case _ =>
+                None // Unknown match type
+
+            positionOpt match
+              case Some(pos) => Right(BigDecimal(pos))
+              case None =>
+                Left(
+                  EvalError.EvalFailed(
+                    "MATCH: no match found for lookup value (#N/A)",
+                    Some("MATCH(lookup_value, lookup_array, [match_type])")
+                  )
+                )
+          }
+        yield result
 
   // ===== Helper Methods =====
 
