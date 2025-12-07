@@ -210,6 +210,30 @@ object DependencyGraph:
       case TExpr.Upper(x) => extractDependencies(x)
       case TExpr.Lower(x) => extractDependencies(x)
 
+      // Error handling functions
+      case TExpr.Iferror(value, valueIfError) =>
+        extractDependencies(value) ++ extractDependencies(valueIfError)
+      case TExpr.Iserror(value) => extractDependencies(value)
+
+      // Rounding and math functions
+      case TExpr.Round(value, numDigits) =>
+        extractDependencies(value) ++ extractDependencies(numDigits)
+      case TExpr.RoundUp(value, numDigits) =>
+        extractDependencies(value) ++ extractDependencies(numDigits)
+      case TExpr.RoundDown(value, numDigits) =>
+        extractDependencies(value) ++ extractDependencies(numDigits)
+      case TExpr.Abs(value) => extractDependencies(value)
+
+      // Lookup functions
+      case TExpr.Index(array, rowNum, colNum) =>
+        array.cells.toSet ++ extractDependencies(rowNum) ++ colNum
+          .map(extractDependencies)
+          .getOrElse(Set.empty)
+      case TExpr.Match(lookupValue, lookupArray, matchType) =>
+        extractDependencies(lookupValue) ++ lookupArray.cells.toSet ++ extractDependencies(
+          matchType
+        )
+
       // Range aggregate functions (direct enum cases)
       case TExpr.Min(range) => range.cells.toSet
       case TExpr.Max(range) => range.cells.toSet

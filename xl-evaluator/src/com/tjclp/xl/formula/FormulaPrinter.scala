@@ -214,6 +214,36 @@ object FormulaPrinter:
           s"${formatRange(table)}, " +
           s"${printExpr(colIndex, 0)}, ${printExpr(rangeLookup, 0)})"
 
+      // Error handling functions
+      case TExpr.Iferror(value, valueIfError) =>
+        s"IFERROR(${printExpr(value, 0)}, ${printExpr(valueIfError, 0)})"
+
+      case TExpr.Iserror(value) =>
+        s"ISERROR(${printExpr(value, 0)})"
+
+      // Rounding and math functions
+      case TExpr.Round(value, numDigits) =>
+        s"ROUND(${printExpr(value, 0)}, ${printExpr(numDigits, 0)})"
+
+      case TExpr.RoundUp(value, numDigits) =>
+        s"ROUNDUP(${printExpr(value, 0)}, ${printExpr(numDigits, 0)})"
+
+      case TExpr.RoundDown(value, numDigits) =>
+        s"ROUNDDOWN(${printExpr(value, 0)}, ${printExpr(numDigits, 0)})"
+
+      case TExpr.Abs(value) =>
+        s"ABS(${printExpr(value, 0)})"
+
+      // Lookup functions
+      case TExpr.Index(array, rowNum, colNum) =>
+        val arrayStr = formatRange(array)
+        colNum match
+          case Some(col) => s"INDEX($arrayStr, ${printExpr(rowNum, 0)}, ${printExpr(col, 0)})"
+          case None => s"INDEX($arrayStr, ${printExpr(rowNum, 0)})"
+
+      case TExpr.Match(lookupValue, lookupArray, matchType) =>
+        s"MATCH(${printExpr(lookupValue, 0)}, ${formatRange(lookupArray)}, ${printExpr(matchType, 0)})"
+
       // Conditional aggregation functions
       case TExpr.SumIf(range, criteria, sumRangeOpt) =>
         val rangeStr = formatRange(range)
@@ -465,6 +495,26 @@ object FormulaPrinter:
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLookup(${printWithTypes(lookup)}, ${formatRange(table)}, " +
           s"${printWithTypes(colIndex)}, ${printWithTypes(rangeLookup)})"
+      case TExpr.Iferror(value, valueIfError) =>
+        s"Iferror(${printWithTypes(value)}, ${printWithTypes(valueIfError)})"
+      case TExpr.Iserror(value) =>
+        s"Iserror(${printWithTypes(value)})"
+      case TExpr.Round(value, numDigits) =>
+        s"Round(${printWithTypes(value)}, ${printWithTypes(numDigits)})"
+      case TExpr.RoundUp(value, numDigits) =>
+        s"RoundUp(${printWithTypes(value)}, ${printWithTypes(numDigits)})"
+      case TExpr.RoundDown(value, numDigits) =>
+        s"RoundDown(${printWithTypes(value)}, ${printWithTypes(numDigits)})"
+      case TExpr.Abs(value) =>
+        s"Abs(${printWithTypes(value)})"
+      case TExpr.Index(array, rowNum, colNum) =>
+        colNum match
+          case Some(col) =>
+            s"Index(${formatRange(array)}, ${printWithTypes(rowNum)}, ${printWithTypes(col)})"
+          case None =>
+            s"Index(${formatRange(array)}, ${printWithTypes(rowNum)})"
+      case TExpr.Match(lookupValue, lookupArray, matchType) =>
+        s"Match(${printWithTypes(lookupValue)}, ${formatRange(lookupArray)}, ${printWithTypes(matchType)})"
       case TExpr.SumIf(range, criteria, sumRangeOpt) =>
         sumRangeOpt match
           case Some(sumRange) =>

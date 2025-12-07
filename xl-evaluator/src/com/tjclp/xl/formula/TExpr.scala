@@ -466,6 +466,66 @@ enum TExpr[A] derives CanEqual:
     conditions: List[(CellRange, TExpr[?])]
   ) extends TExpr[BigDecimal]
 
+  // Error handling functions
+
+  /**
+   * Error handler: IFERROR(value, value_if_error)
+   *
+   * Returns value if no error, otherwise returns value_if_error. Catches both evaluation errors and
+   * CellValue.Error values.
+   *
+   * Example: IFERROR(A1/B1, 0) returns 0 if B1 is 0 (division by zero)
+   */
+  case Iferror(value: TExpr[CellValue], valueIfError: TExpr[CellValue]) extends TExpr[CellValue]
+
+  /**
+   * Error check: ISERROR(value)
+   *
+   * Returns TRUE if value results in any error, FALSE otherwise.
+   *
+   * Example: ISERROR(A1/B1) returns TRUE if B1 is 0
+   */
+  case Iserror(value: TExpr[CellValue]) extends TExpr[Boolean]
+
+  // Rounding and math functions
+
+  /**
+   * Round to specified digits: ROUND(number, num_digits)
+   *
+   * Rounds using HALF_UP mode (standard rounding). Negative num_digits rounds to left of decimal
+   * point.
+   *
+   * Example: ROUND(2.5, 0) = 3, ROUND(1234, -2) = 1200
+   */
+  case Round(value: TExpr[BigDecimal], numDigits: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Round up (away from zero): ROUNDUP(number, num_digits)
+   *
+   * Always rounds away from zero.
+   *
+   * Example: ROUNDUP(2.1, 0) = 3, ROUNDUP(-2.1, 0) = -3
+   */
+  case RoundUp(value: TExpr[BigDecimal], numDigits: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Round down (toward zero): ROUNDDOWN(number, num_digits)
+   *
+   * Always rounds toward zero (truncation).
+   *
+   * Example: ROUNDDOWN(2.9, 0) = 2, ROUNDDOWN(-2.9, 0) = -2
+   */
+  case RoundDown(value: TExpr[BigDecimal], numDigits: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Absolute value: ABS(number)
+   *
+   * Returns the absolute value of a number.
+   *
+   * Example: ABS(-5) = 5, ABS(5) = 5
+   */
+  case Abs(value: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
   // Array and advanced lookup functions
 
   /**
@@ -500,6 +560,43 @@ enum TExpr[A] derives CanEqual:
     matchMode: TExpr[Int],
     searchMode: TExpr[Int]
   ) extends TExpr[CellValue]
+
+  /**
+   * Index into array: INDEX(array, row_num, [column_num])
+   *
+   * Returns the value at a specific row/column position in a range.
+   *
+   * Semantics:
+   *   - row_num: 1-based row position within the array
+   *   - column_num: 1-based column position (optional, defaults to 1 for single-column ranges)
+   *   - Returns #REF! if indices are out of bounds
+   *
+   * Example: INDEX(A1:C3, 2, 3) returns value at row 2, column 3 of the range
+   */
+  case Index(
+    array: CellRange,
+    rowNum: TExpr[BigDecimal],
+    colNum: Option[TExpr[BigDecimal]]
+  ) extends TExpr[CellValue]
+
+  /**
+   * Find position: MATCH(lookup_value, lookup_array, [match_type])
+   *
+   * Returns the relative position of a value in a range (1-based).
+   *
+   * Semantics:
+   *   - match_type=1 (default): largest value <= lookup_value (array must be sorted ascending)
+   *   - match_type=0: exact match (array need not be sorted)
+   *   - match_type=-1: smallest value >= lookup_value (array must be sorted descending)
+   *   - Returns #N/A if no match found
+   *
+   * Example: MATCH("B", {"A","B","C"}, 0) returns 2
+   */
+  case Match(
+    lookupValue: TExpr[?],
+    lookupArray: CellRange,
+    matchType: TExpr[BigDecimal]
+  ) extends TExpr[BigDecimal]
 
 object TExpr:
   /**
@@ -654,6 +751,58 @@ object TExpr:
   def countIfs(conditions: List[(CellRange, TExpr[?])]): TExpr[BigDecimal] =
     CountIfs(conditions)
 
+  // Error handling function smart constructors
+
+  /**
+   * IFERROR: return value_if_error if value results in error.
+   *
+   * Example: TExpr.iferror(TExpr.Div(...), TExpr.Lit(CellValue.Number(0)))
+   */
+  def iferror(value: TExpr[CellValue], valueIfError: TExpr[CellValue]): TExpr[CellValue] =
+    Iferror(value, valueIfError)
+
+  /**
+   * ISERROR: check if expression results in error.
+   *
+   * Example: TExpr.iserror(TExpr.Div(...))
+   */
+  def iserror(value: TExpr[CellValue]): TExpr[Boolean] =
+    Iserror(value)
+
+  // Rounding and math function smart constructors
+
+  /**
+   * ROUND: round number to specified digits.
+   *
+   * Example: TExpr.round(TExpr.Lit(2.5), TExpr.Lit(0))
+   */
+  def round(value: TExpr[BigDecimal], numDigits: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Round(value, numDigits)
+
+  /**
+   * ROUNDUP: round away from zero.
+   *
+   * Example: TExpr.roundUp(TExpr.Lit(2.1), TExpr.Lit(0))
+   */
+  def roundUp(value: TExpr[BigDecimal], numDigits: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    RoundUp(value, numDigits)
+
+  /**
+   * ROUNDDOWN: round toward zero (truncate).
+   *
+   * Example: TExpr.roundDown(TExpr.Lit(2.9), TExpr.Lit(0))
+   */
+  def roundDown(value: TExpr[BigDecimal], numDigits: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    RoundDown(value, numDigits)
+
+  /**
+   * ABS: absolute value.
+   *
+   * Example: TExpr.abs(TExpr.Lit(-5))
+   */
+  def abs(value: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Abs(value)
+
   // Array and advanced lookup function smart constructors
 
   /**
@@ -692,6 +841,44 @@ object TExpr:
     searchMode: TExpr[Int] = Lit(1)
   ): TExpr[CellValue] =
     XLookup(lookupValue, lookupArray, returnArray, ifNotFound, matchMode, searchMode)
+
+  /**
+   * INDEX: get value at position in array.
+   *
+   * @param array
+   *   The range to index into
+   * @param rowNum
+   *   1-based row position
+   * @param colNum
+   *   Optional 1-based column position (defaults to 1 for single-column ranges)
+   *
+   * Example: TExpr.index(range, TExpr.Lit(2), Some(TExpr.Lit(3)))
+   */
+  def index(
+    array: CellRange,
+    rowNum: TExpr[BigDecimal],
+    colNum: Option[TExpr[BigDecimal]] = None
+  ): TExpr[CellValue] =
+    Index(array, rowNum, colNum)
+
+  /**
+   * MATCH: find position of value in array.
+   *
+   * @param lookupValue
+   *   The value to search for
+   * @param lookupArray
+   *   The range to search in
+   * @param matchType
+   *   1=largest <= (default), 0=exact, -1=smallest >=
+   *
+   * Example: TExpr.matchExpr(TExpr.Lit("B"), range, TExpr.Lit(0))
+   */
+  def matchExpr(
+    lookupValue: TExpr[?],
+    lookupArray: CellRange,
+    matchType: TExpr[BigDecimal] = Lit(BigDecimal(1))
+  ): TExpr[BigDecimal] =
+    Match(lookupValue, lookupArray, matchType)
 
   // Text function smart constructors
 
@@ -899,6 +1086,14 @@ object TExpr:
           )
         )
 
+  /**
+   * Decode cell as CellValue (always succeeds).
+   *
+   * Used for IFERROR/ISERROR which need to preserve the raw cell value.
+   */
+  def decodeCellValue(cell: Cell): Either[CodecError, CellValue] =
+    scala.util.Right(cell.value)
+
   // ===== Type-Coercing Decoders (Excel-compatible automatic conversion) =====
 
   /**
@@ -1036,6 +1231,17 @@ object TExpr:
   def asBooleanExpr(expr: TExpr[?]): TExpr[Boolean] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeBool)
     case other => other.asInstanceOf[TExpr[Boolean]] // Safe: non-PolyRef already has correct type
+
+  /**
+   * Convert any TExpr to CellValue type.
+   *
+   * Used by error handling functions (IFERROR, ISERROR) to preserve raw cell values.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def asCellValueExpr(expr: TExpr[?]): TExpr[CellValue] = expr match
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeCellValue)
+    case other =>
+      other.asInstanceOf[TExpr[CellValue]] // Safe: non-PolyRef already has correct type
 
   // Extension methods for ergonomic formula construction
 

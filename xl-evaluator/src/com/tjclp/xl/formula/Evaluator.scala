@@ -2,7 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
 import scala.math.BigDecimal
 import scala.annotation.tailrec
@@ -744,6 +744,149 @@ private class EvaluatorImpl extends Evaluator:
             )
           yield result
 
+      // ===== Error Handling Functions =====
+
+      case TExpr.Iferror(valueExpr, valueIfErrorExpr) =>
+        // IFERROR: return valueIfError if value results in any error
+        evalAny(valueExpr, sheet, clock) match
+          case Left(_) =>
+            // Evaluation error occurred - return fallback
+            evalAny(valueIfErrorExpr, sheet, clock).map(convertToCellValue)
+          case Right(cv: CellValue) =>
+            cv match
+              case CellValue.Error(_) =>
+                // Cell contains error value - return fallback
+                evalAny(valueIfErrorExpr, sheet, clock).map(convertToCellValue)
+              case _ =>
+                // No error - return original value
+                Right(cv)
+          case Right(other) =>
+            // Non-CellValue result - wrap it
+            Right(convertToCellValue(other))
+
+      case TExpr.Iserror(valueExpr) =>
+        // ISERROR: return TRUE if value results in any error
+        evalAny(valueExpr, sheet, clock) match
+          case Left(_) => Right(true) // Evaluation error
+          case Right(cv: CellValue) =>
+            cv match
+              case CellValue.Error(_) => Right(true) // Cell error value
+              case _ => Right(false) // No error
+          case Right(_) => Right(false) // Non-CellValue result, no error
+
+      // ===== Rounding and Math Functions =====
+
+      case TExpr.Round(valueExpr, numDigitsExpr) =>
+        // ROUND: round to specified digits using HALF_UP
+        for
+          value <- eval(valueExpr, sheet, clock)
+          numDigits <- eval(numDigitsExpr, sheet, clock)
+        yield roundToDigits(value, numDigits.toInt, BigDecimal.RoundingMode.HALF_UP)
+
+      case TExpr.RoundUp(valueExpr, numDigitsExpr) =>
+        // ROUNDUP: round away from zero
+        for
+          value <- eval(valueExpr, sheet, clock)
+          numDigits <- eval(numDigitsExpr, sheet, clock)
+        yield
+          // Round away from zero: CEILING for positive, FLOOR for negative
+          val mode =
+            if value >= 0 then BigDecimal.RoundingMode.CEILING
+            else BigDecimal.RoundingMode.FLOOR
+          roundToDigits(value, numDigits.toInt, mode)
+
+      case TExpr.RoundDown(valueExpr, numDigitsExpr) =>
+        // ROUNDDOWN: round toward zero (truncate)
+        for
+          value <- eval(valueExpr, sheet, clock)
+          numDigits <- eval(numDigitsExpr, sheet, clock)
+        yield
+          // Round toward zero: FLOOR for positive, CEILING for negative
+          val mode =
+            if value >= 0 then BigDecimal.RoundingMode.FLOOR
+            else BigDecimal.RoundingMode.CEILING
+          roundToDigits(value, numDigits.toInt, mode)
+
+      case TExpr.Abs(valueExpr) =>
+        // ABS: absolute value
+        eval(valueExpr, sheet, clock).map(_.abs)
+
+      // ===== Lookup Functions =====
+
+      case TExpr.Index(array, rowNumExpr, colNumExpr) =>
+        // INDEX: return value at position in array
+        for
+          rowNum <- eval(rowNumExpr, sheet, clock)
+          colNum <- colNumExpr match
+            case Some(expr) => eval(expr, sheet, clock).map(Some(_))
+            case None => Right(None)
+        yield
+          val rowIdx = rowNum.toInt - 1 // 1-based to 0-based
+          val colIdx = colNum.map(_.toInt - 1).getOrElse(0) // Default to first column
+
+          // Get dimensions of the range
+          val startCol = array.colStart.index0
+          val startRow = array.rowStart.index0
+          val numCols = array.colEnd.index0 - startCol + 1
+          val numRows = array.rowEnd.index0 - startRow + 1
+
+          // Bounds check
+          if rowIdx < 0 || rowIdx >= numRows || colIdx < 0 || colIdx >= numCols then
+            CellValue.Error(CellError.Ref)
+          else
+            val targetRef = ARef.from0(startCol + colIdx, startRow + rowIdx)
+            sheet(targetRef).value
+
+      case TExpr.Match(lookupValueExpr, lookupArray, matchTypeExpr) =>
+        // MATCH: find position of value in array (1-based)
+        for
+          lookupValue <- evalAny(lookupValueExpr, sheet, clock)
+          matchType <- eval(matchTypeExpr, sheet, clock)
+        yield
+          val matchTypeInt = matchType.toInt
+
+          // Get cells from lookup array (must be 1D - single row or column)
+          val cells: List[(Int, CellValue)] =
+            lookupArray.cells.toList.zipWithIndex.map { case (ref, idx) =>
+              (idx + 1, sheet(ref).value) // 1-based position
+            }
+
+          matchTypeInt match
+            case 0 =>
+              // Exact match
+              cells.find { case (_, cv) =>
+                compareCellValues(cv, lookupValue) == 0
+              } match
+                case Some((pos, _)) => BigDecimal(pos)
+                case None => BigDecimal(-1) // #N/A should be error, but return -1 for now
+
+            case 1 =>
+              // Largest value <= lookup (array should be sorted ascending)
+              val numericLookup = coerceToBigDecimal(lookupValue)
+              val candidates = cells.flatMap { case (pos, cv) =>
+                val numericCv = coerceToNumeric(cv)
+                if numericCv <= numericLookup then Some((pos, numericCv))
+                else None
+              }
+              candidates.maxByOption(_._2) match
+                case Some((pos, _)) => BigDecimal(pos)
+                case None => BigDecimal(-1)
+
+            case -1 =>
+              // Smallest value >= lookup (array should be sorted descending)
+              val numericLookup = coerceToBigDecimal(lookupValue)
+              val candidates = cells.flatMap { case (pos, cv) =>
+                val numericCv = coerceToNumeric(cv)
+                if numericCv >= numericLookup then Some((pos, numericCv))
+                else None
+              }
+              candidates.minByOption(_._2) match
+                case Some((pos, _)) => BigDecimal(pos)
+                case None => BigDecimal(-1)
+
+            case _ =>
+              BigDecimal(-1) // Unknown match type
+
   // ===== Helper Methods =====
 
   /**
@@ -784,6 +927,75 @@ private class EvaluatorImpl extends Evaluator:
       case bd: BigDecimal => bd.toInt
       case n: Number => n.intValue()
       case _ => 0
+
+  /**
+   * Round BigDecimal to specified number of digits.
+   *
+   * Handles negative numDigits by rounding to left of decimal point. Excel behavior: ROUND(1234,
+   * -2) = 1200
+   */
+  private def roundToDigits(
+    value: BigDecimal,
+    numDigits: Int,
+    mode: BigDecimal.RoundingMode.Value
+  ): BigDecimal =
+    if numDigits >= 0 then value.setScale(numDigits, mode)
+    else
+      // Negative numDigits: round to left of decimal
+      // ROUND(1234, -2) means round to nearest 100 = 1200
+      val scale = math.pow(10, -numDigits).toLong
+      val divided = value / scale
+      val rounded = divided.setScale(0, mode)
+      rounded * scale
+
+  /**
+   * Convert any value to CellValue for IFERROR result.
+   */
+  private def convertToCellValue(value: Any): CellValue =
+    value match
+      case cv: CellValue => cv
+      case s: String => CellValue.Text(s)
+      case n: BigDecimal => CellValue.Number(n)
+      case b: Boolean => CellValue.Bool(b)
+      case n: Int => CellValue.Number(BigDecimal(n))
+      case n: Long => CellValue.Number(BigDecimal(n))
+      case n: Double => CellValue.Number(BigDecimal(n))
+      case d: java.time.LocalDate =>
+        CellValue.DateTime(d.atStartOfDay())
+      case dt: java.time.LocalDateTime =>
+        CellValue.DateTime(dt)
+      case other => CellValue.Text(other.toString)
+
+  /**
+   * Compare two cell values for MATCH function. Returns: 0 if equal, negative if cv < value,
+   * positive if cv > value
+   */
+  private def compareCellValues(cv: CellValue, value: Any): Int =
+    (cv, value) match
+      case (CellValue.Number(n1), n2: BigDecimal) => n1.compare(n2)
+      case (CellValue.Number(n1), n2: Int) => n1.compare(BigDecimal(n2))
+      case (CellValue.Number(n1), n2: Long) => n1.compare(BigDecimal(n2))
+      case (CellValue.Number(n1), n2: Double) => n1.compare(BigDecimal(n2))
+      case (CellValue.Text(s1), s2: String) => s1.compareToIgnoreCase(s2)
+      case (CellValue.Bool(b1), b2: Boolean) => b1.compare(b2)
+      case (CellValue.Number(n), CellValue.Number(n2)) => n.compare(n2)
+      case (CellValue.Text(s), CellValue.Text(s2)) => s.compareToIgnoreCase(s2)
+      case (CellValue.Bool(b), CellValue.Bool(b2)) => b.compare(b2)
+      case _ => -2 // Different types, no match
+
+  /**
+   * Coerce Any value to BigDecimal for MATCH comparisons.
+   */
+  private def coerceToBigDecimal(value: Any): BigDecimal =
+    value match
+      case n: BigDecimal => n
+      case n: Int => BigDecimal(n)
+      case n: Long => BigDecimal(n)
+      case n: Double => BigDecimal(n)
+      case CellValue.Number(n) => n
+      case CellValue.Bool(true) => BigDecimal(1)
+      case CellValue.Bool(false) => BigDecimal(0)
+      case _ => BigDecimal(0)
 
   /**
    * Perform XLOOKUP search with specified match and search modes.

@@ -682,3 +682,217 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case _: EvalError.CodecFailed => // success
       case other => fail(s"Expected CodecFailed, got $other")
   }
+
+  // ==================== Error Handling Functions (IFERROR, ISERROR) ====================
+
+  test("IFERROR: returns value when no error") {
+    val sheet = sheetWith(ARef.from0(0, 0) -> CellValue.Number(BigDecimal(42)))
+    sheet.evaluateFormula("=IFERROR(A1, 0)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(42))
+      case other => fail(s"Expected Number(42), got $other")
+  }
+
+  test("IFERROR: returns fallback on division by zero") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)),
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(0))
+    )
+    sheet.evaluateFormula("=IFERROR(A1/B1, -1)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(-1))
+      case other => fail(s"Expected Number(-1), got $other")
+  }
+
+  test("IFERROR: returns fallback on CellValue.Error") {
+    val sheet = sheetWith(ARef.from0(0, 0) -> CellValue.Error(CellError.Div0))
+    sheet.evaluateFormula("=IFERROR(A1, 999)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(999))
+      case other => fail(s"Expected Number(999), got $other")
+  }
+
+  test("ISERROR: returns TRUE for error value") {
+    val sheet = sheetWith(ARef.from0(0, 0) -> CellValue.Error(CellError.Value))
+    sheet.evaluateFormula("=ISERROR(A1)") match
+      case Right(CellValue.Bool(b)) => assert(b)
+      case other => fail(s"Expected Bool(true), got $other")
+  }
+
+  test("ISERROR: returns FALSE for non-error value") {
+    val sheet = sheetWith(ARef.from0(0, 0) -> CellValue.Number(BigDecimal(42)))
+    sheet.evaluateFormula("=ISERROR(A1)") match
+      case Right(CellValue.Bool(b)) => assert(!b)
+      case other => fail(s"Expected Bool(false), got $other")
+  }
+
+  test("ISERROR: returns TRUE when expression causes error") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)),
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(0))
+    )
+    sheet.evaluateFormula("=ISERROR(A1/B1)") match
+      case Right(CellValue.Bool(b)) => assert(b)
+      case other => fail(s"Expected Bool(true), got $other")
+  }
+
+  // ==================== Rounding Functions (ROUND, ROUNDUP, ROUNDDOWN, ABS) ====================
+
+  test("ROUND: rounds to specified decimal places (half up)") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ROUND(3.14159, 2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal("3.14"))
+      case other => fail(s"Expected Number(3.14), got $other")
+  }
+
+  test("ROUND: rounds 2.5 to 3 (half up)") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ROUND(2.5, 0)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(3))
+      case other => fail(s"Expected Number(3), got $other")
+  }
+
+  test("ROUND: negative digits rounds to tens/hundreds") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ROUND(12345, -2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(12300))
+      case other => fail(s"Expected Number(12300), got $other")
+  }
+
+  test("ROUNDUP: always rounds away from zero (positive)") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ROUNDUP(3.14159, 2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal("3.15"))
+      case other => fail(s"Expected Number(3.15), got $other")
+  }
+
+  test("ROUNDUP: always rounds away from zero (negative)") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ROUNDUP(-3.14159, 2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal("-3.15"))
+      case other => fail(s"Expected Number(-3.15), got $other")
+  }
+
+  test("ROUNDDOWN: always rounds toward zero (positive)") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ROUNDDOWN(3.99999, 2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal("3.99"))
+      case other => fail(s"Expected Number(3.99), got $other")
+  }
+
+  test("ROUNDDOWN: always rounds toward zero (negative)") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ROUNDDOWN(-3.99999, 2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal("-3.99"))
+      case other => fail(s"Expected Number(-3.99), got $other")
+  }
+
+  test("ABS: absolute value of positive number") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ABS(5)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(5))
+      case other => fail(s"Expected Number(5), got $other")
+  }
+
+  test("ABS: absolute value of negative number") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ABS(-5)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(5))
+      case other => fail(s"Expected Number(5), got $other")
+  }
+
+  test("ABS: absolute value of zero") {
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    sheet.evaluateFormula("=ABS(0)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(0))
+      case other => fail(s"Expected Number(0), got $other")
+  }
+
+  test("ABS: with cell reference") {
+    val sheet = sheetWith(ARef.from0(0, 0) -> CellValue.Number(BigDecimal(-42)))
+    sheet.evaluateFormula("=ABS(A1)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(42))
+      case other => fail(s"Expected Number(42), got $other")
+  }
+
+  // ==================== Lookup Functions (INDEX, MATCH) ====================
+
+  test("INDEX: returns value at position") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)), // A2
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(30)), // A3
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(100)), // B1
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(200)), // B2
+      ARef.from0(1, 2) -> CellValue.Number(BigDecimal(300)) // B3
+    )
+    sheet.evaluateFormula("=INDEX(A1:B3, 2, 2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(200))
+      case other => fail(s"Expected Number(200), got $other")
+  }
+
+  test("INDEX: single column array with just row") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)), // A2
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(30)) // A3
+    )
+    sheet.evaluateFormula("=INDEX(A1:A3, 2)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(20))
+      case other => fail(s"Expected Number(20), got $other")
+  }
+
+  test("INDEX: out of bounds returns #REF!") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)) // A2
+    )
+    sheet.evaluateFormula("=INDEX(A1:A2, 5)") match
+      case Right(CellValue.Error(_)) => assert(true)
+      case other => fail(s"Expected Error, got $other")
+  }
+
+  test("MATCH: exact match finds position") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)), // A2
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(30)) // A3
+    )
+    sheet.evaluateFormula("=MATCH(20, A1:A3, 0)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(2))
+      case other => fail(s"Expected Number(2), got $other")
+  }
+
+  test("MATCH: exact match not found returns -1") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)), // A2
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(30)) // A3
+    )
+    sheet.evaluateFormula("=MATCH(25, A1:A3, 0)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(-1))
+      case other => fail(s"Expected Number(-1), got $other")
+  }
+
+  test("MATCH: approximate match (match_type=1) finds largest <= lookup") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(20)), // A2
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(30)) // A3
+    )
+    sheet.evaluateFormula("=MATCH(25, A1:A3, 1)") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(2)) // 20 is largest <= 25
+      case other => fail(s"Expected Number(2), got $other")
+  }
+
+  test("INDEX/MATCH: classic lookup pattern") {
+    // Classic Excel pattern: INDEX(return_range, MATCH(lookup, lookup_range, 0))
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Text("Apple"), // A1
+      ARef.from0(0, 1) -> CellValue.Text("Banana"), // A2
+      ARef.from0(0, 2) -> CellValue.Text("Cherry"), // A3
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(100)), // B1
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(200)), // B2
+      ARef.from0(1, 2) -> CellValue.Number(BigDecimal(300)) // B3
+    )
+    sheet.evaluateFormula("=INDEX(B1:B3, MATCH(\"Banana\", A1:A3, 0))") match
+      case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(200))
+      case other => fail(s"Expected Number(200), got $other")
+  }
