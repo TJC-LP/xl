@@ -42,6 +42,12 @@ object RenderUtils:
   /** Column label row height in pixels. */
   val HeaderHeight: Int = 24
 
+  /** Pixels per indent level (~3 characters at ~7px each, matches Excel behavior). */
+  val IndentPxPerLevel: Int = 21
+
+  /** Inter-run gap for rich text (compensates for AWT vs SVG font metric differences). */
+  val InterRunGapPx: Int = 4
+
   // ========== Unit Conversion ==========
 
   /** Convert Excel column width (character units) to pixels. */

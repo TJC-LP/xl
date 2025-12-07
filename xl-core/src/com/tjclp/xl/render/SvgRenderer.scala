@@ -227,7 +227,7 @@ object SvgRenderer:
 
                     // Inter-run gap to account for AWT vs SVG font metric differences
                     // SVG renders slightly wider than AWT measures, so add extra spacing
-                    val interRunGap = 4
+                    val interRunGap = InterRunGapPx
 
                     // Calculate total width of all runs (including gaps) for proper alignment
                     val runWidths =
@@ -605,13 +605,13 @@ object SvgRenderer:
   /**
    * Calculate text x position and anchor based on alignment and indentation.
    *
-   * Indentation adds ~21px per level (Excel uses ~3 characters per level).
+   * Indentation adds IndentPxPerLevel pixels per level (Excel uses ~3 characters per level).
    */
   private def textAlignment(cell: Cell, sheet: Sheet, cellX: Int, cellWidth: Int): (Int, String) =
     val style = cell.styleId.flatMap(sheet.styleRegistry.get)
     val align = style.map(_.align.horizontal).getOrElse(HAlign.General)
     val indent = style.map(_.align.indent).getOrElse(0)
-    val indentPx = indent * 21 // ~3 chars * 7px
+    val indentPx = indent * IndentPxPerLevel
 
     // For General alignment, use content-based alignment
     val effectiveAlign = align match

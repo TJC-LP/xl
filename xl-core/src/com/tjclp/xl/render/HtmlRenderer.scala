@@ -412,10 +412,10 @@ $headerRow$tableRows
     if wrapText then css += "white-space: pre-wrap"
     else css += "white-space: nowrap"
 
-    // Indentation (Excel uses ~3 characters per indent level, ~21px at 11pt)
+    // Indentation (Excel uses ~3 characters per indent level)
     styleOpt.foreach { style =>
       if style.align.indent > 0 then
-        val indentPx = style.align.indent * 21
+        val indentPx = style.align.indent * IndentPxPerLevel
         css += s"padding-left: ${indentPx}px"
     }
 
