@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.3] - 2025-12-07
+
+### Changed
+
+- **GraalVM upgraded to 25.0.1 LTS**: Native image builds now use JDK 25
+  - 22% heap reduction from Compact Object Headers (JEP 519)
+  - Up to 8x faster String::hashCode for constant keys
+  - Better Vector API support for numeric operations
+
+### Added
+
+- **Formula validation**: `CellValue.formula()` smart constructor validates:
+  - Non-empty expression (OOXML requirement)
+  - Cached value is not a nested Formula (illegal state)
+- **Render constants documented**: Magic numbers extracted to `RenderUtils`
+  - `IndentPxPerLevel` (21px) - Excel indent spacing
+  - `InterRunGapPx` (4px) - Rich text run spacing
+- **Enhanced scaladocs**: Union return type pattern explained
+  - Documents `transparent inline` type narrowing behavior
+  - Examples for compile-time vs runtime validation paths
+
+---
+
 ## [0.2.2] - 2025-12-06
 
 ### Fixed
