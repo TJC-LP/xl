@@ -24,11 +24,13 @@ enum CellValue:
    * Formula expression with optional cached result value.
    *
    * @param expression
-   *   The formula string (e.g., "=A1+B1")
+   *   The formula string (e.g., "=A1+B1"). Must be non-empty.
    * @param cachedValue
    *   Optional cached result value from Excel (preserved during roundtrip). This is the last
-   *   calculated value stored in the XLSX file. Can be Number, Text, Bool, Error, or Empty. Should
+   *   calculated value stored in the XLSX file. Can be Number, Text, Bool, Error, or Empty. Must
    *   never be another Formula.
+   * @note
+   *   Use `CellValue.formula()` for validated construction.
    */
   case Formula(expression: String, cachedValue: Option[CellValue] = None)
 
@@ -50,6 +52,24 @@ object CellValue:
     case b: Boolean => Bool(b)
     case dt: LocalDateTime => DateTime(dt)
     case _ => Text(value.toString)
+
+  /**
+   * Validated constructor for Formula values.
+   *
+   * @param expression
+   *   The formula string (e.g., "=A1+B1"). Must be non-empty.
+   * @param cachedValue
+   *   Optional cached result value. Must not be a Formula.
+   * @throws IllegalArgumentException
+   *   if expression is empty or cachedValue contains a Formula
+   */
+  def formula(expression: String, cachedValue: Option[CellValue] = None): Formula =
+    require(expression.nonEmpty, "Formula expression cannot be empty")
+    require(
+      !cachedValue.exists { case _: Formula => true; case _ => false },
+      "Cached value cannot be a Formula"
+    )
+    Formula(expression, cachedValue)
 
   /**
    * Convert LocalDateTime to Excel serial number.
