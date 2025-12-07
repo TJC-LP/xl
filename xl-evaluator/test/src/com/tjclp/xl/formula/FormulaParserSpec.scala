@@ -862,7 +862,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("FunctionParser.allFunctions includes all 38 functions") {
+  test("FunctionParser.allFunctions includes all 40 functions") {
     val functions = FunctionParser.allFunctions
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -892,7 +892,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     // Lookup functions
     assert(functions.contains("INDEX"))
     assert(functions.contains("MATCH"))
-    assertEquals(functions.length, 38)
+    // Date-based financial functions
+    assert(functions.contains("XNPV"))
+    assert(functions.contains("XIRR"))
+    assertEquals(functions.length, 40)
   }
 
   test("FunctionParser.lookup finds known functions") {
@@ -905,4 +908,42 @@ class FormulaParserSpec extends ScalaCheckSuite:
   test("FunctionParser.lookup returns None for unknown functions") {
     assert(FunctionParser.lookup("UNKNOWN").isEmpty)
     assert(FunctionParser.lookup("FOOBAR").isEmpty)
+  }
+
+  // ==================== XNPV/XIRR Parsing Tests ====================
+
+  test("parses XNPV(rate, values, dates)") {
+    val result = FormulaParser.parse("=XNPV(0.1, A1:A5, B1:B5)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Xnpv(rate, values, dates)) =>
+        assert(values.start == ARef.parse("A1").toOption.get)
+        assert(values.end == ARef.parse("A5").toOption.get)
+        assert(dates.start == ARef.parse("B1").toOption.get)
+        assert(dates.end == ARef.parse("B5").toOption.get)
+      case _ => fail("Expected TExpr.Xnpv")
+  }
+
+  test("parses XIRR(values, dates)") {
+    val result = FormulaParser.parse("=XIRR(A1:A5, B1:B5)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Xirr(values, dates, guess)) =>
+        assert(values.start == ARef.parse("A1").toOption.get)
+        assert(values.end == ARef.parse("A5").toOption.get)
+        assert(dates.start == ARef.parse("B1").toOption.get)
+        assert(dates.end == ARef.parse("B5").toOption.get)
+        assert(guess.isEmpty)
+      case _ => fail("Expected TExpr.Xirr")
+  }
+
+  test("parses XIRR(values, dates, guess)") {
+    val result = FormulaParser.parse("=XIRR(A1:A5, B1:B5, 0.15)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Xirr(values, dates, guess)) =>
+        assert(values.start == ARef.parse("A1").toOption.get)
+        assert(values.end == ARef.parse("A5").toOption.get)
+        assert(guess.isDefined)
+      case _ => fail("Expected TExpr.Xirr with guess")
   }

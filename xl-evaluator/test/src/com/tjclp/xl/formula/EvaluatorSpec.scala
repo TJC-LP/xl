@@ -896,3 +896,97 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case Right(CellValue.Number(n)) => assertEquals(n, BigDecimal(200))
       case other => fail(s"Expected Number(200), got $other")
   }
+
+  // ==================== Date-Based Financial Functions (XNPV, XIRR) ====================
+
+  test("XNPV: calculates present value with irregular dates") {
+    import java.time.LocalDateTime
+    // Cash flows: -1000 (initial), +300, +400, +500 over ~1 year with irregular dates
+    val sheet = sheetWith(
+      // Values in A1:A4
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(-1000)), // A1: initial investment
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(300)), // A2: payment 1
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(400)), // A3: payment 2
+      ARef.from0(0, 3) -> CellValue.Number(BigDecimal(500)), // A4: payment 3
+      // Dates in B1:B4
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 1, 1, 0, 0)), // B1
+      ARef.from0(1, 1) -> CellValue.DateTime(LocalDateTime.of(2024, 4, 1, 0, 0)), // B2 (~90 days later)
+      ARef.from0(1, 2) -> CellValue.DateTime(LocalDateTime.of(2024, 7, 1, 0, 0)), // B3 (~180 days later)
+      ARef.from0(1, 3) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 1, 0, 0)) // B4 (~365 days later)
+    )
+    sheet.evaluateFormula("=XNPV(0.1, A1:A4, B1:B4)") match
+      case Right(CellValue.Number(n)) =>
+        // Expected: -1000 + 300/(1.1)^(90/365) + 400/(1.1)^(181/365) + 500/(1.1)^(366/365)
+        // ~= -1000 + 293.17 + 383.31 + 454.55 ≈ 131.03
+        assert(n > BigDecimal(125) && n < BigDecimal(140), s"Expected XNPV around 131, got $n")
+      case other => fail(s"Expected Number, got $other")
+  }
+
+  test("XNPV: requires matching length of values and dates") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(-1000)),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(500)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 1, 1, 0, 0))
+      // Missing B2 date - lengths don't match
+    )
+    sheet.evaluateFormula("=XNPV(0.1, A1:A2, B1:B2)") match
+      case Left(error) => assert(error.toString.contains("same length"))
+      case other => fail(s"Expected error, got $other")
+  }
+
+  test("XIRR: calculates internal rate of return with irregular dates") {
+    import java.time.LocalDateTime
+    // Standard example: invest -10000, receive payments over ~3 years
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(-10000)), // A1: initial investment
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(2750)), // A2
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(4250)), // A3
+      ARef.from0(0, 3) -> CellValue.Number(BigDecimal(3250)), // A4
+      ARef.from0(0, 4) -> CellValue.Number(BigDecimal(2750)), // A5
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2008, 1, 1, 0, 0)), // B1
+      ARef.from0(1, 1) -> CellValue.DateTime(LocalDateTime.of(2008, 3, 1, 0, 0)), // B2
+      ARef.from0(1, 2) -> CellValue.DateTime(LocalDateTime.of(2008, 10, 30, 0, 0)), // B3
+      ARef.from0(1, 3) -> CellValue.DateTime(LocalDateTime.of(2009, 2, 15, 0, 0)), // B4
+      ARef.from0(1, 4) -> CellValue.DateTime(LocalDateTime.of(2009, 4, 1, 0, 0)) // B5
+    )
+    sheet.evaluateFormula("=XIRR(A1:A5, B1:B5)") match
+      case Right(CellValue.Number(n)) =>
+        // Excel calculates ~37.34% (0.3734) for this example
+        assert(n > BigDecimal("0.30") && n < BigDecimal("0.45"), s"Expected XIRR around 0.37, got $n")
+      case other => fail(s"Expected Number, got $other")
+  }
+
+  test("XIRR: requires both positive and negative cash flows") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(1000)), // All positive
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(500)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 1, 1, 0, 0)),
+      ARef.from0(1, 1) -> CellValue.DateTime(LocalDateTime.of(2024, 7, 1, 0, 0))
+    )
+    sheet.evaluateFormula("=XIRR(A1:A2, B1:B2)") match
+      case Left(error) => assert(error.toString.contains("positive and one negative"))
+      case other => fail(s"Expected error, got $other")
+  }
+
+  test("XIRR: with custom guess") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(-10000)),
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(2750)),
+      ARef.from0(0, 2) -> CellValue.Number(BigDecimal(4250)),
+      ARef.from0(0, 3) -> CellValue.Number(BigDecimal(3250)),
+      ARef.from0(0, 4) -> CellValue.Number(BigDecimal(2750)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2008, 1, 1, 0, 0)),
+      ARef.from0(1, 1) -> CellValue.DateTime(LocalDateTime.of(2008, 3, 1, 0, 0)),
+      ARef.from0(1, 2) -> CellValue.DateTime(LocalDateTime.of(2008, 10, 30, 0, 0)),
+      ARef.from0(1, 3) -> CellValue.DateTime(LocalDateTime.of(2009, 2, 15, 0, 0)),
+      ARef.from0(1, 4) -> CellValue.DateTime(LocalDateTime.of(2009, 4, 1, 0, 0))
+    )
+    sheet.evaluateFormula("=XIRR(A1:A5, B1:B5, 0.5)") match
+      case Right(CellValue.Number(n)) =>
+        // Should still converge to ~0.37 even with different starting guess
+        assert(n > BigDecimal("0.30") && n < BigDecimal("0.45"), s"Expected XIRR around 0.37, got $n")
+      case other => fail(s"Expected Number, got $other")
+  }

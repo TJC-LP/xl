@@ -156,6 +156,12 @@ object DependencyGraph:
         extractDependencies(rate) ++ values.cells.toSet
       case TExpr.Irr(values, guessOpt) =>
         values.cells.toSet ++ guessOpt.map(extractDependencies).getOrElse(Set.empty)
+      case TExpr.Xnpv(rate, values, dates) =>
+        extractDependencies(rate) ++ values.cells.toSet ++ dates.cells.toSet
+      case TExpr.Xirr(values, dates, guessOpt) =>
+        values.cells.toSet ++ dates.cells.toSet ++ guessOpt
+          .map(extractDependencies)
+          .getOrElse(Set.empty)
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         extractDependencies(lookup) ++
           table.cells.toSet ++

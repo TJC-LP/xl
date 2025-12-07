@@ -6,6 +6,8 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
 import scala.math.BigDecimal
 import scala.annotation.tailrec
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 
 /**
  * Pure functional formula evaluator.
@@ -397,6 +399,148 @@ private class EvaluatorImpl extends Evaluator:
                     EvalError.EvalFailed(
                       "IRR derivative is zero; cannot continue iteration",
                       Some("IRR(values[, guess])")
+                    )
+                  )
+                else
+                  val next = r - f / df
+                  if (next - r).abs <= tolerance then Right(next)
+                  else loop(iter + 1, next)
+
+            loop(0, guess0)
+          }
+
+      case TExpr.Xnpv(rateExpr, valuesRange, datesRange) =>
+        // XNPV: sum(value_i / (1 + rate)^((date_i - date_0) / 365))
+        for
+          rate <- eval(rateExpr, sheet, clock)
+          result <- {
+            // Collect values and dates from ranges
+            val values: List[BigDecimal] =
+              valuesRange.cells
+                .map(ref => sheet(ref))
+                .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+                .toList
+
+            val dates: List[LocalDate] =
+              datesRange.cells
+                .map(ref => sheet(ref))
+                .flatMap(cell => TExpr.decodeDate(cell).toOption)
+                .toList
+
+            if values.isEmpty || dates.isEmpty then
+              Left(
+                EvalError.EvalFailed(
+                  "XNPV requires non-empty values and dates ranges",
+                  Some("XNPV(rate, values, dates)")
+                )
+              )
+            else if values.length != dates.length then
+              Left(
+                EvalError.EvalFailed(
+                  s"XNPV: values (${values.length}) and dates (${dates.length}) must have same length",
+                  Some("XNPV(rate, values, dates)")
+                )
+              )
+            else
+              val date0 = dates.head
+              val onePlusR = BigDecimal(1) + rate
+              val npv = values.zip(dates).foldLeft(BigDecimal(0)) { case (acc, (value, date)) =>
+                val daysDiff = ChronoUnit.DAYS.between(date0, date)
+                val yearFraction = BigDecimal(daysDiff) / BigDecimal(365)
+                // value / (1 + rate)^yearFraction
+                val discountFactor = math.pow(onePlusR.toDouble, yearFraction.toDouble)
+                acc + value / BigDecimal(discountFactor)
+              }
+              Right(npv)
+          }
+        yield result
+
+      case TExpr.Xirr(valuesRange, datesRange, guessExprOpt) =>
+        // XIRR: Find rate where XNPV = 0 using Newton-Raphson
+        // Collect values and dates from ranges
+        val values: List[BigDecimal] =
+          valuesRange.cells
+            .map(ref => sheet(ref))
+            .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+            .toList
+
+        val dates: List[LocalDate] =
+          datesRange.cells
+            .map(ref => sheet(ref))
+            .flatMap(cell => TExpr.decodeDate(cell).toOption)
+            .toList
+
+        if values.isEmpty || dates.isEmpty then
+          Left(
+            EvalError.EvalFailed(
+              "XIRR requires non-empty values and dates ranges",
+              Some("XIRR(values, dates[, guess])")
+            )
+          )
+        else if values.length != dates.length then
+          Left(
+            EvalError.EvalFailed(
+              s"XIRR: values (${values.length}) and dates (${dates.length}) must have same length",
+              Some("XIRR(values, dates[, guess])")
+            )
+          )
+        else if !values.exists(_ < 0) || !values.exists(_ > 0) then
+          Left(
+            EvalError.EvalFailed(
+              "XIRR requires at least one positive and one negative cash flow",
+              Some("XIRR(values, dates[, guess])")
+            )
+          )
+        else
+          val guessEither: Either[EvalError, BigDecimal] =
+            guessExprOpt match
+              case Some(guessExpr) => eval(guessExpr, sheet, clock)
+              case None => Right(BigDecimal("0.1"))
+
+          guessEither.flatMap { guess0 =>
+            val maxIter = 100
+            val tolerance = BigDecimal("1e-7")
+            val date0 = dates.head
+
+            // Calculate year fractions for each date
+            val yearFractions: List[BigDecimal] = dates.map { date =>
+              val daysDiff = ChronoUnit.DAYS.between(date0, date)
+              BigDecimal(daysDiff) / BigDecimal(365)
+            }
+
+            // XNPV at given rate: sum(value_i / (1 + rate)^yearFraction_i)
+            def xnpvAt(rate: BigDecimal): BigDecimal =
+              val onePlusR = BigDecimal(1) + rate
+              values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                val discountFactor = math.pow(onePlusR.toDouble, yf.toDouble)
+                acc + cf / BigDecimal(discountFactor)
+              }
+
+            // Derivative of XNPV: sum(-yearFraction_i * value_i / (1 + rate)^(yearFraction_i + 1))
+            def dXnpvAt(rate: BigDecimal): BigDecimal =
+              val onePlusR = BigDecimal(1) + rate
+              values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                val discountFactor = math.pow(onePlusR.toDouble, (yf + 1).toDouble)
+                acc - (yf * cf) / BigDecimal(discountFactor)
+              }
+
+            @tailrec
+            def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
+              if iter >= maxIter then
+                Left(
+                  EvalError.EvalFailed(
+                    s"XIRR did not converge after $maxIter iterations",
+                    Some("XIRR(values, dates[, guess])")
+                  )
+                )
+              else
+                val f = xnpvAt(r)
+                val df = dXnpvAt(r)
+                if df.abs < BigDecimal("1e-10") then
+                  Left(
+                    EvalError.EvalFailed(
+                      "XIRR derivative is near zero; cannot continue iteration",
+                      Some("XIRR(values, dates[, guess])")
                     )
                   )
                 else

@@ -209,6 +209,16 @@ object FormulaPrinter:
           case Some(guess) => s"IRR($rangeText, ${printExpr(guess, 0)})"
           case None => s"IRR($rangeText)"
 
+      case TExpr.Xnpv(rate, values, dates) =>
+        s"XNPV(${printExpr(rate, 0)}, ${formatRange(values)}, ${formatRange(dates)})"
+
+      case TExpr.Xirr(values, dates, guessOpt) =>
+        val valuesText = formatRange(values)
+        val datesText = formatRange(dates)
+        guessOpt match
+          case Some(guess) => s"XIRR($valuesText, $datesText, ${printExpr(guess, 0)})"
+          case None => s"XIRR($valuesText, $datesText)"
+
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLOOKUP(${printExpr(lookup, 0)}, " +
           s"${formatRange(table)}, " +
@@ -492,6 +502,13 @@ object FormulaPrinter:
         guessOpt match
           case Some(guess) => s"Irr(${formatRange(values)}, ${printWithTypes(guess)})"
           case None => s"Irr(${formatRange(values)})"
+      case TExpr.Xnpv(rate, values, dates) =>
+        s"Xnpv(${printWithTypes(rate)}, ${formatRange(values)}, ${formatRange(dates)})"
+      case TExpr.Xirr(values, dates, guessOpt) =>
+        guessOpt match
+          case Some(guess) =>
+            s"Xirr(${formatRange(values)}, ${formatRange(dates)}, ${printWithTypes(guess)})"
+          case None => s"Xirr(${formatRange(values)}, ${formatRange(dates)})"
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLookup(${printWithTypes(lookup)}, ${formatRange(table)}, " +
           s"${printWithTypes(colIndex)}, ${printWithTypes(rangeLookup)})"

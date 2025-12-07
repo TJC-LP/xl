@@ -173,6 +173,18 @@ object FormulaShifter:
           shiftRange(values, colDelta, rowDelta),
           guess.map(shiftInternal(_, colDelta, rowDelta))
         ).asInstanceOf[TExpr[A]]
+      case Xnpv(rate, values, dates) =>
+        Xnpv(
+          shiftInternal(rate, colDelta, rowDelta),
+          shiftRange(values, colDelta, rowDelta),
+          shiftRange(dates, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case Xirr(values, dates, guess) =>
+        Xirr(
+          shiftRange(values, colDelta, rowDelta),
+          shiftRange(dates, colDelta, rowDelta),
+          guess.map(shiftInternal(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
       case VLookup(lookup, table, colIndex, rangeLookup) =>
         VLookup(
           shiftInternal(lookup, colDelta, rowDelta),

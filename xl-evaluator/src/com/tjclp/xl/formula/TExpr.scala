@@ -384,6 +384,43 @@ enum TExpr[A] derives CanEqual:
   case Irr(values: CellRange, guess: Option[TExpr[BigDecimal]]) extends TExpr[BigDecimal]
 
   /**
+   * Extended Net Present Value with irregular dates: XNPV(rate, values, dates)
+   *
+   * Semantics:
+   *   - `rate` is the discount rate (BigDecimal)
+   *   - `values` is a range of cash flows
+   *   - `dates` is a range of dates corresponding to each cash flow
+   *   - Formula: sum(value_i / (1 + rate)^((date_i - date_0) / 365))
+   *   - dates and values must have same length
+   *   - First date is the base date (date_0)
+   *
+   * Example: XNPV(0.1, A1:A5, B1:B5) with irregular payment dates
+   */
+  case Xnpv(
+    rate: TExpr[BigDecimal],
+    values: CellRange,
+    dates: CellRange
+  ) extends TExpr[BigDecimal]
+
+  /**
+   * Extended Internal Rate of Return with irregular dates: XIRR(values, dates, [guess])
+   *
+   * Semantics:
+   *   - `values` is a range of cash flows (must have positive and negative)
+   *   - `dates` is a range of dates corresponding to each cash flow
+   *   - `guess` is optional starting point for Newton-Raphson (default 0.1)
+   *   - Finds rate where XNPV = 0
+   *   - dates and values must have same length
+   *
+   * Example: XIRR(A1:A5, B1:B5, 0.1) for irregular cash flow schedule
+   */
+  case Xirr(
+    values: CellRange,
+    dates: CellRange,
+    guess: Option[TExpr[BigDecimal]]
+  ) extends TExpr[BigDecimal]
+
+  /**
    * Vertical lookup: VLOOKUP(lookup, table, colIndex, [rangeLookup])
    *
    * Semantics (v1):
@@ -696,6 +733,44 @@ object TExpr:
    */
   def irr(values: CellRange, guess: Option[TExpr[BigDecimal]] = None): TExpr[BigDecimal] =
     Irr(values, guess)
+
+  /**
+   * Smart constructor for XNPV with irregular dates.
+   *
+   * @param rate
+   *   Discount rate
+   * @param values
+   *   Cash flow values range
+   * @param dates
+   *   Corresponding dates range
+   *
+   * Example: TExpr.xnpv(TExpr.Lit(0.1), valuesRange, datesRange)
+   */
+  def xnpv(
+    rate: TExpr[BigDecimal],
+    values: CellRange,
+    dates: CellRange
+  ): TExpr[BigDecimal] =
+    Xnpv(rate, values, dates)
+
+  /**
+   * Smart constructor for XIRR with irregular dates.
+   *
+   * @param values
+   *   Cash flow values range (must have positive and negative)
+   * @param dates
+   *   Corresponding dates range
+   * @param guess
+   *   Optional starting rate for Newton-Raphson (default 0.1)
+   *
+   * Example: TExpr.xirr(valuesRange, datesRange, Some(TExpr.Lit(0.15)))
+   */
+  def xirr(
+    values: CellRange,
+    dates: CellRange,
+    guess: Option[TExpr[BigDecimal]] = None
+  ): TExpr[BigDecimal] =
+    Xirr(values, dates, guess)
 
   /**
    * Smart constructor for VLOOKUP.

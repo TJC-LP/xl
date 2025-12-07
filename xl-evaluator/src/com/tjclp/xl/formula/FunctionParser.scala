@@ -201,7 +201,10 @@ object FunctionParser:
       absFunctionParser,
       // Lookup functions
       indexFunctionParser,
-      matchFunctionParser
+      matchFunctionParser,
+      // Date-based financial functions
+      xnpvFunctionParser,
+      xirrFunctionParser
     ).map(p => p.name -> p).toMap
 
   // ========== Given Instances for All Functions ==========
@@ -1185,6 +1188,62 @@ object FunctionParser:
               "MATCH",
               pos,
               "2-3 arguments (lookup_value, lookup_array, [match_type])",
+              s"${args.length} arguments"
+            )
+          )
+
+  // === Date-based Financial Functions ===
+
+  /** XNPV function: XNPV(rate, values, dates) */
+  given xnpvFunctionParser: FunctionParser[Unit] with
+    def name: String = "XNPV"
+    def arity: Arity = Arity.Exact(3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(rateExpr, valuesFold: TExpr.FoldRange[?, ?], datesFold: TExpr.FoldRange[?, ?]) =>
+          (valuesFold, datesFold) match
+            case (TExpr.FoldRange(valuesRange, _, _, _), TExpr.FoldRange(datesRange, _, _, _)) =>
+              scala.util.Right(
+                TExpr.xnpv(TExpr.asNumericExpr(rateExpr), valuesRange, datesRange)
+              )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "XNPV",
+              pos,
+              "3 arguments (rate, values, dates)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** XIRR function: XIRR(values, dates, [guess]) */
+  given xirrFunctionParser: FunctionParser[Unit] with
+    def name: String = "XIRR"
+    def arity: Arity = Arity.Range(2, 3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valuesFold: TExpr.FoldRange[?, ?], datesFold: TExpr.FoldRange[?, ?]) =>
+          (valuesFold, datesFold) match
+            case (TExpr.FoldRange(valuesRange, _, _, _), TExpr.FoldRange(datesRange, _, _, _)) =>
+              scala.util.Right(TExpr.xirr(valuesRange, datesRange, None))
+        case List(
+              valuesFold: TExpr.FoldRange[?, ?],
+              datesFold: TExpr.FoldRange[?, ?],
+              guessExpr
+            ) =>
+          (valuesFold, datesFold) match
+            case (TExpr.FoldRange(valuesRange, _, _, _), TExpr.FoldRange(datesRange, _, _, _)) =>
+              scala.util.Right(
+                TExpr.xirr(valuesRange, datesRange, Some(TExpr.asNumericExpr(guessExpr)))
+              )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "XIRR",
+              pos,
+              "2-3 arguments (values, dates, [guess])",
               s"${args.length} arguments"
             )
           )
