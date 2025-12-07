@@ -123,3 +123,79 @@ object CellValue:
 
     // Add days and seconds to epoch
     epoch1900.plusDays(wholeDays).plusSeconds(seconds)
+
+  /**
+   * Characters that trigger formula injection when at the start of a cell value.
+   *
+   * When a cell value starts with these characters, Excel (and LibreOffice, Google Sheets) may
+   * interpret it as a formula or command, potentially leading to:
+   *   - `=` - Formula evaluation
+   *   - `+` - Formula evaluation (alternate prefix)
+   *   - `-` - Formula evaluation (alternate prefix)
+   *   - `@` - External data linking / potential command injection
+   *
+   * When writing untrusted data to Excel, use `escape()` to prefix with a single quote.
+   */
+  private val formulaInjectionChars: Set[Char] = Set('=', '+', '-', '@')
+
+  /**
+   * Check if a string could be interpreted as a formula by Excel.
+   *
+   * @param text
+   *   The text to check
+   * @return
+   *   true if the text starts with a formula injection character
+   */
+  def couldBeFormula(text: String): Boolean =
+    text.nonEmpty && formulaInjectionChars.contains(text.charAt(0))
+
+  /**
+   * Escape text to prevent formula injection.
+   *
+   * When writing untrusted data to Excel files, text starting with `=`, `+`, `-`, or `@` could be
+   * interpreted as formulas. This function prefixes such text with a single quote (`'`), which
+   * tells Excel to treat the value as literal text.
+   *
+   * This is idempotent: already-escaped text (starting with `'`) is returned unchanged.
+   *
+   * @param text
+   *   The text to escape
+   * @return
+   *   The escaped text (prefixed with `'` if needed)
+   *
+   * @example
+   *   {{{
+   * CellValue.escape("=SUM(A1)")    // => "'=SUM(A1)"
+   * CellValue.escape("+1234")       // => "'+1234"
+   * CellValue.escape("Hello")       // => "Hello" (no change)
+   * CellValue.escape("'=already")   // => "'=already" (already escaped)
+   *   }}}
+   */
+  def escape(text: String): String =
+    if text.isEmpty then text
+    else if text.charAt(0) == '\'' then text // Already escaped
+    else if couldBeFormula(text) then "'" + text
+    else text
+
+  /**
+   * Unescape text that was escaped for formula injection.
+   *
+   * Removes the leading single quote if it was added by `escape()`. This is useful when reading
+   * back data that was escaped during writing.
+   *
+   * @param text
+   *   The text to unescape
+   * @return
+   *   The unescaped text
+   *
+   * @example
+   *   {{{
+   * CellValue.unescape("'=SUM(A1)")  // => "=SUM(A1)"
+   * CellValue.unescape("Hello")      // => "Hello" (no change)
+   * CellValue.unescape("''quoted")   // => "'quoted" (single level unescape)
+   *   }}}
+   */
+  def unescape(text: String): String =
+    if text.length >= 2 && text.charAt(0) == '\'' && couldBeFormula(text.substring(1)) then
+      text.substring(1)
+    else text

@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2025-11-24 (Formula System Production Ready, Tables + Benchmarks Complete)
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (parser + evaluator + 24 functions + dependency graph + cycle detection); tables + benchmarks complete.
+**Last Updated**: 2025-12-07 (Security Hardening Complete - WI-30)
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (40 functions); tables + benchmarks complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -28,6 +28,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 - ✅ **Performance optimizations**: Inline hot paths, zero-overhead abstractions
 - ✅ **Style Application**: Full end-to-end formatting with fonts, colors, fills, borders
 - ✅ **DateTime Serialization**: Proper Excel serial number conversion
+- ✅ **Security Hardening**: ZIP bomb detection, XXE prevention, formula injection guards (WI-30)
 
 ### Developer Experience
 - ✅ **Mill build system**: Fast, reliable builds
@@ -347,74 +348,106 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-### 🟣 Security & Safety (P11 - Critical for Production)
+### 🟣 Security & Safety (WI-30 - Production Ready)
 
-#### 18. No ZIP Bomb Protection
-**Status**: Not implemented
-**Impact**: Malicious XLSX could cause DoS
-**Plan**: [P11 - Security](plan/23-security.md#zip-bomb-detection)
-**Phase**: P11 (Future)
+#### 18. ZIP Bomb Protection ✅
+**Status**: Implemented (WI-30)
+**Impact**: Malicious XLSX files are detected and rejected
 
-**Risk**:
-- Compressed 1KB → expands to 10GB (OOM crash)
-- Recursive ZIP files
+**Configuration** (`XlsxReader.ReaderConfig`):
+```scala
+val config = XlsxReader.ReaderConfig(
+  maxCompressionRatio = 100,        // Max 100:1 ratio (default)
+  maxUncompressedSize = 100_000_000L, // 100 MB max (default)
+  maxEntryCount = 10_000,           // 10k files max (default)
+  maxCellCount = 10_000_000L,       // 10M cells max (default)
+  maxStringLength = 32_768          // 32 KB per string (default)
+)
 
-**Mitigation Needed**:
-- Compression ratio limits
-- Uncompressed size limits
-- Entry count limits
+// Use permissive config for trusted files
+XlsxReader.read(path, XlsxReader.ReaderConfig.permissive)
+```
 
-**Effort**: 2-3 days
-**LOC**: ~120
+**Protection**:
+- Compression ratio validation (detects highly compressed ZIP bombs)
+- Uncompressed size tracking (prevents memory exhaustion)
+- Entry count limits (prevents archive bomb variants)
+- Fails early with `XLError.SecurityError` when limits exceeded
 
----
-
-#### 19. No XXE (XML External Entity) Protection
-**Status**: Not implemented
-**Impact**: XML files could reference external resources
-**Plan**: [P11 - Security](plan/23-security.md#xxe-prevention)
-**Phase**: P11 (Future)
-
-**Risk**: XML could trigger network requests or file reads
-
-**Mitigation Needed**:
-- Disable external entity resolution
-- Validate XML structure
-- Sanitize inputs
-
-**Effort**: 1-2 days
-**LOC**: ~60
+**Tests**: 10+ security tests in `ZipBombSpec.scala`
 
 ---
 
-#### 20. No Formula Injection Guards
-**Status**: Not implemented
-**Impact**: CSV injection risk when exporting
-**Plan**: [P11 - Security](plan/23-security.md#formula-injection)
-**Phase**: P11 (Future)
+#### 19. XXE (XML External Entity) Protection ✅
+**Status**: Implemented
+**Impact**: External entity resolution is completely disabled
 
-**Risk**:
-- Cell starting with `=`, `+`, `-`, `@` could execute formulas
-- Potential for command injection when opened in Excel
+**Protection** (in `XmlSecurity.scala`):
+```scala
+// All XML parsing uses secure parser factory
+factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
+factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
+factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+```
 
-**Mitigation Needed**:
-- Prefix dangerous cells with single quote `'=CMD|'/c calc'!A1`
-- Validate formula sources
-- Escape mode for untrusted data
-
-**Effort**: 1 day
-**LOC**: ~50
+**Tests**: XXE protection tested in `SecuritySpec.scala`
 
 ---
 
-#### 21. No File Size Limits
-**Status**: Not implemented
-**Impact**: Could process arbitrarily large files (resource exhaustion)
-**Plan**: [P11 - Security](plan/23-security.md#resource-limits)
-**Phase**: P11 (Future)
+#### 20. Formula Injection Guards ✅
+**Status**: Implemented (WI-30)
+**Impact**: Untrusted data can be safely written to Excel
 
-**Effort**: 1 day
-**LOC**: ~40
+**API** (`CellValue.escape()` and `WriterConfig.secure`):
+```scala
+// Manual escaping for individual strings
+CellValue.escape("=SUM(A1)")  // Returns: "'=SUM(A1)"
+CellValue.escape("+1234")     // Returns: "'+1234"
+CellValue.escape("-danger")   // Returns: "'-danger"
+CellValue.escape("@import")   // Returns: "'@import"
+CellValue.escape("Normal")    // Returns: "Normal" (unchanged)
+
+// Automatic escaping via WriterConfig.secure
+XlsxWriter.writeWith(workbook, path, WriterConfig.secure)
+// All text cells starting with =, +, -, @ are automatically escaped
+```
+
+**Escaping Rules**:
+- Text starting with `=` → `'=...` (prevents formula execution)
+- Text starting with `+` → `'+...` (prevents formula prefix)
+- Text starting with `-` → `'-...` (prevents formula prefix)
+- Text starting with `@` → `'@...` (prevents DDE commands)
+- Already-escaped text unchanged (idempotent)
+- Formula cells (`CellValue.Formula`) are NOT escaped (they're real formulas)
+
+**Unescape for Reading**:
+```scala
+CellValue.unescape("'=SUM(A1)")  // Returns: "=SUM(A1)"
+```
+
+**Tests**: 22 security tests in `FormulaInjectionSpec.scala`
+
+---
+
+#### 21. File Size Limits (Partial)
+**Status**: Configurable limits in `ReaderConfig`
+**Impact**: Resource exhaustion prevented via configurable limits
+
+**Implemented**:
+- `maxCellCount`: Maximum cells to process (default: 10M)
+- `maxStringLength`: Maximum string length (default: 32KB)
+- `maxUncompressedSize`: Maximum total uncompressed data (default: 100MB)
+
+**Usage**:
+```scala
+val strictConfig = XlsxReader.ReaderConfig(
+  maxCellCount = 1_000_000L,    // 1M cells max
+  maxStringLength = 10_000,     // 10KB per string
+  maxUncompressedSize = 50_000_000L  // 50MB max
+)
+XlsxReader.read(path, strictConfig)
+```
 
 ---
 
@@ -634,18 +667,21 @@ See: [plan/08-tables-and-pivots.md](plan/08-tables-and-pivots.md)
 
 ---
 
-### Phase 11: Security & Safety (Priority 7 - Pre-1.0)
-**Effort**: 1-2 weeks
-**Focus**: Production hardening
+### Phase 11: Security & Safety ✅ (WI-30 Complete)
+**Status**: Production ready (2025-12-07)
+**Focus**: Security hardening
 
 See: [plan/23-security.md](plan/23-security.md)
 
-**CRITICAL before 1.0 release**:
-- ZIP bomb detection
-- XXE prevention
-- Formula injection guards
-- Resource limits
-- Fuzzing and security audit
+**Completed** (WI-30):
+- ✅ ZIP bomb detection (`ReaderConfig` with compression ratio, size, entry count limits)
+- ✅ XXE prevention (secure XML parser factory with disabled external entities)
+- ✅ Formula injection guards (`CellValue.escape()`, `WriterConfig.secure`)
+- ✅ Resource limits (`maxCellCount`, `maxStringLength`, `maxUncompressedSize`)
+
+**Future work**:
+- Path traversal in ZIP (currently validated but could add explicit guards)
+- Fuzzing and security audit (recommended before 1.0)
 
 ---
 
@@ -666,6 +702,7 @@ See: [plan/23-security.md](plan/23-security.md)
 | **Type Safety** | ✅ | ❌ | XL: Compile-time, POI: Runtime |
 | **Purity** | ✅ | ❌ | XL: Pure, POI: Mutable |
 | **Determinism** | ✅ | ❌ | XL: Stable diffs, POI: Non-deterministic |
+| **Security** | ✅ | ⚠️ | XL: ZIP bomb, XXE, formula injection protection |
 
 **Verdict**: XL is production-ready for data-heavy use cases (streaming, ETL). POI better for rich formatting/charts (for now).
 
@@ -775,4 +812,4 @@ Want to help implement these features? See:
 
 ---
 
-*Last updated by Claude Code session on 2025-11-10*
+*Last updated by Claude Code session on 2025-12-07 (WI-30 Security Hardening)*

@@ -43,17 +43,50 @@ enum Compression derives CanEqual:
     case Stored => ZipEntry.STORED
     case Deflated => ZipEntry.DEFLATED
 
+/**
+ * Formula injection escaping policy for text cell values.
+ *
+ * When writing untrusted data to Excel, text starting with `=`, `+`, `-`, or `@` could be
+ * interpreted as formulas. This policy controls whether such values are automatically escaped.
+ */
+enum FormulaInjectionPolicy derives CanEqual:
+  /**
+   * Automatically escape potentially dangerous text by prefixing with single quote.
+   *
+   * This is the safest default for untrusted data.
+   */
+  case Escape
+
+  /**
+   * Do not escape any values (trust all input).
+   *
+   * Only use this when writing data from trusted sources where formula characters are intentional.
+   */
+  case None
+
 /** Writer configuration options */
 case class WriterConfig(
   sstPolicy: SstPolicy = SstPolicy.Auto,
   compression: Compression = Compression.Deflated,
   prettyPrint: Boolean = false, // Compact XML for production (only applies to ScalaXml backend)
-  backend: XmlBackend = XmlBackend.ScalaXml // Serialization backend (Scala XML or SAX/StAX)
+  backend: XmlBackend = XmlBackend.ScalaXml, // Serialization backend (Scala XML or SAX/StAX)
+  formulaInjectionPolicy: FormulaInjectionPolicy =
+    FormulaInjectionPolicy.None // Default: trust input
 )
 
 object WriterConfig:
   /** Default production configuration: DEFLATED compression + compact XML */
   val default: WriterConfig = WriterConfig()
+
+  /**
+   * Secure configuration for untrusted data.
+   *
+   * Escapes formula injection characters (`=`, `+`, `-`, `@`) at the start of text values. Use this
+   * when writing user-provided or external data that could contain malicious formulas.
+   */
+  val secure: WriterConfig = WriterConfig(
+    formulaInjectionPolicy = FormulaInjectionPolicy.Escape
+  )
 
   /** Debug configuration: STORED compression + pretty XML for manual inspection */
   val debug: WriterConfig = WriterConfig(
@@ -520,7 +553,8 @@ object XlsxWriter:
           )
       }
 
-      OoxmlWorksheet.fromDomainWithSST(sheet, sst, remapping, tablePartsXml)
+      val escapeFormulas = config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
+      OoxmlWorksheet.fromDomainWithSST(sheet, sst, remapping, tablePartsXml, escapeFormulas)
     }
 
     // Create content types
@@ -1371,13 +1405,15 @@ object XlsxWriter:
               )
           }
 
+          val escapeFormulas = config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
           val ooxmlSheet =
             OoxmlWorksheet.fromDomainWithMetadata(
               sheet,
               sstForSheets,
               remapping,
               preservedMetadata,
-              tablePartsXml
+              tablePartsXml,
+              escapeFormulas
             )
           writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
 

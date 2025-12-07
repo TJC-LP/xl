@@ -61,8 +61,10 @@ class XlsxReaderPassthroughSpec extends FunSuite:
     val largeChart = "<chart>" + ("x" * 1024 * 1024) + "</chart>" // 1MB chart
     val path = createWorkbookWithLargeChart(largeChart)
 
+    // Use permissive config since this test creates highly compressible synthetic data
+    // that would trigger ZIP bomb detection (not a security test)
     val wb = XlsxReader
-      .read(path)
+      .read(path, XlsxReader.ReaderConfig.permissive)
       .fold(err => fail(s"Failed to read workbook: $err"), identity)
 
     // Verify SourceContext exists

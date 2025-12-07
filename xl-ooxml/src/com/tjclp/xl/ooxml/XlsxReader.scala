@@ -48,6 +48,46 @@ object XlsxReader:
   case class ReadResult(workbook: Workbook, warnings: Vector[Warning])
 
   /**
+   * Configuration for XLSX reader with security limits.
+   *
+   * These limits protect against ZIP bombs and other denial-of-service attacks. All limits are
+   * checked during ZIP entry processing - if any limit is exceeded, reading stops immediately with
+   * a SecurityError.
+   *
+   * @param maxCompressionRatio
+   *   Maximum allowed compression ratio (uncompressed/compressed). Default 100:1. Set to 0 to
+   *   disable.
+   * @param maxUncompressedSize
+   *   Maximum total uncompressed size in bytes. Default 100 MB. Set to 0 to disable.
+   * @param maxEntryCount
+   *   Maximum number of ZIP entries. Default 10,000. Set to 0 to disable.
+   * @param maxCellCount
+   *   Maximum number of cells per sheet. Default 10 million. Set to 0 to disable.
+   * @param maxStringLength
+   *   Maximum string length for cell values. Default 32 KB (Excel's limit). Set to 0 to disable.
+   */
+  case class ReaderConfig(
+    maxCompressionRatio: Int = 100,
+    maxUncompressedSize: Long = 100_000_000L,
+    maxEntryCount: Int = 10_000,
+    maxCellCount: Long = 10_000_000L,
+    maxStringLength: Int = 32_768
+  )
+
+  object ReaderConfig:
+    /** Default configuration with sensible security limits. */
+    val default: ReaderConfig = ReaderConfig()
+
+    /** Permissive configuration with no limits (use only for trusted files). */
+    val permissive: ReaderConfig = ReaderConfig(
+      maxCompressionRatio = 0,
+      maxUncompressedSize = 0L,
+      maxEntryCount = 0,
+      maxCellCount = 0L,
+      maxStringLength = 0
+    )
+
+  /**
    * Handle for accessing source file during read (enables surgical modification).
    *
    * Provides the path to the original file, which allows XlsxReader to create a SourceContext with
@@ -93,35 +133,56 @@ object XlsxReader:
    * **Surgical Modification**: When reading from a file (not a stream), XL creates a SourceContext
    * that enables surgical writes. Unknown parts (charts, images, etc.) are indexed but not loaded
    * into memory, allowing them to be preserved byte-for-byte on write.
+   *
+   * @param inputPath
+   *   Path to XLSX file
+   * @param config
+   *   Reader configuration with security limits. Default applies sensible limits.
    */
-  def read(inputPath: Path): XLResult[Workbook] =
-    readWithWarnings(inputPath).map(_.workbook)
+  def read(inputPath: Path, config: ReaderConfig = ReaderConfig.default): XLResult[Workbook] =
+    readWithWarnings(inputPath, config).map(_.workbook)
 
   /** Read workbook and surface non-fatal warnings. */
-  def readWithWarnings(inputPath: Path): XLResult[ReadResult] =
+  def readWithWarnings(
+    inputPath: Path,
+    config: ReaderConfig = ReaderConfig.default
+  ): XLResult[ReadResult] =
     try
       val size = Files.size(inputPath)
       val digest = MessageDigest.getInstance("SHA-256")
       val fileStream = new FileInputStream(inputPath.toFile)
       val digestStream = new DigestInputStream(fileStream, digest)
       try
-        readFromStreamWithWarnings(digestStream, Some(SourceHandle(inputPath, size, digest)))
+        readFromStreamWithWarnings(
+          digestStream,
+          Some(SourceHandle(inputPath, size, digest)),
+          config
+        )
       finally
         digestStream.close()
     catch case e: Exception => Left(XLError.IOError(s"Failed to read XLSX: ${e.getMessage}"))
 
   /** Read workbook from byte array (for testing) */
-  def readFromBytes(bytes: Array[Byte]): XLResult[Workbook] =
-    readFromBytesWithWarnings(bytes).map(_.workbook)
+  def readFromBytes(
+    bytes: Array[Byte],
+    config: ReaderConfig = ReaderConfig.default
+  ): XLResult[Workbook] =
+    readFromBytesWithWarnings(bytes, config).map(_.workbook)
 
-  def readFromBytesWithWarnings(bytes: Array[Byte]): XLResult[ReadResult] =
-    try readFromStreamWithWarnings(new ByteArrayInputStream(bytes), None)
+  def readFromBytesWithWarnings(
+    bytes: Array[Byte],
+    config: ReaderConfig = ReaderConfig.default
+  ): XLResult[ReadResult] =
+    try readFromStreamWithWarnings(new ByteArrayInputStream(bytes), None, config)
     catch case e: Exception => Left(XLError.IOError(s"Failed to read bytes: ${e.getMessage}"))
 
   /** Read workbook from input stream (no surgical modification support) */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def readFromStream(is: InputStream): XLResult[Workbook] =
-    readFromStreamWithWarnings(is, None).map(_.workbook)
+  private def readFromStream(
+    is: InputStream,
+    config: ReaderConfig = ReaderConfig.default
+  ): XLResult[Workbook] =
+    readFromStreamWithWarnings(is, None, config).map(_.workbook)
 
   /**
    * Read workbook from input stream with optional source handle for surgical modification.
@@ -131,50 +192,95 @@ object XlsxReader:
    * @param source
    *   Optional source handle providing path to original file. If provided, creates SourceContext
    *   with indexed unknown parts for surgical writes.
+   * @param config
+   *   Reader configuration with security limits
    * @return
-   *   ReadResult with workbook and warnings
+   *   ReadResult with workbook and warnings, or SecurityError if limits exceeded
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def readFromStreamWithWarnings(
     is: InputStream,
-    source: Option[SourceHandle]
+    source: Option[SourceHandle],
+    config: ReaderConfig
   ): XLResult[ReadResult] =
     val zip = new ZipInputStream(is)
     val parts = mutable.Map[String, String]()
     val manifestBuilder = PartManifestBuilder.empty
 
+    // Security tracking
+    var entryCount = 0
+    var totalUncompressedSize = 0L
+    var securityError: Option[XLError] = None
+
     try
       // Read all ZIP entries - index ALL entries, parse only KNOWN ones
       var builder = manifestBuilder
       var entry = zip.getNextEntry
-      while entry != null do
+      while entry != null && securityError.isEmpty do
         if !entry.isDirectory then
           val entryName = entry.getName
+          entryCount += 1
 
-          // Record entry metadata in manifest (size, CRC, etc.)
-          builder = builder.+=(entry)
-
-          // Only parse known parts to save memory
-          if isKnownPart(entryName) then
-            val content = new String(zip.readAllBytes(), "UTF-8")
-            parts(entryName) = content
-            builder = builder.recordParsed(entryName)
+          // Security check: Entry count limit
+          if config.maxEntryCount > 0 && entryCount > config.maxEntryCount then
+            securityError = Some(
+              XLError.SecurityError(
+                s"ZIP entry count ($entryCount) exceeds limit (${config.maxEntryCount})"
+              )
+            )
           else
-            // Unknown part - index but don't load content
-            builder = builder.recordUnparsed(entryName)
-            zip.readAllBytes() // Consume bytes but don't store
+            // Record entry metadata in manifest (size, CRC, etc.)
+            builder = builder.+=(entry)
+
+            // Read content with size tracking
+            val content = zip.readAllBytes()
+            val uncompressedSize = content.length.toLong
+            totalUncompressedSize += uncompressedSize
+
+            // Security check: Total uncompressed size
+            if config.maxUncompressedSize > 0 && totalUncompressedSize > config.maxUncompressedSize
+            then
+              securityError = Some(
+                XLError.SecurityError(
+                  s"Total uncompressed size ($totalUncompressedSize bytes) exceeds limit (${config.maxUncompressedSize} bytes)"
+                )
+              )
+
+            // Security check: Compression ratio (ZIP bomb detection)
+            val compressedSize = entry.getCompressedSize
+            if securityError.isEmpty && config.maxCompressionRatio > 0 && compressedSize > 0 then
+              val ratio = uncompressedSize.toDouble / compressedSize.toDouble
+              if ratio > config.maxCompressionRatio then
+                securityError = Some(
+                  XLError.SecurityError(
+                    f"Compression ratio ($ratio%.1f:1) for '$entryName' exceeds limit (${config.maxCompressionRatio}:1) - possible ZIP bomb"
+                  )
+                )
+
+            // Only parse known parts to save memory
+            if securityError.isEmpty then
+              if isKnownPart(entryName) then
+                parts(entryName) = new String(content, "UTF-8")
+                builder = builder.recordParsed(entryName)
+              else
+                // Unknown part - index but don't store content
+                builder = builder.recordUnparsed(entryName)
 
         zip.closeEntry()
         entry = zip.getNextEntry
 
-      // Build final manifest
-      val manifest = builder.build()
+      // Return early if security error occurred
+      securityError match
+        case Some(err) => Left(err)
+        case None =>
+          // Build final manifest
+          val manifest = builder.build()
 
-      // Compute fingerprint if reading from a file
-      val fingerprint = source.map(_.finalizeFingerprint())
+          // Compute fingerprint if reading from a file
+          val fingerprint = source.map(_.finalizeFingerprint())
 
-      // Parse workbook structure from known parts
-      parseWorkbook(parts.toMap, source, manifest, fingerprint)
+          // Parse workbook structure from known parts
+          parseWorkbook(parts.toMap, source, manifest, fingerprint, config)
 
     finally zip.close()
 
@@ -187,6 +293,8 @@ object XlsxReader:
    *   Optional source handle for enabling surgical modification
    * @param manifest
    *   Part manifest with metadata for all ZIP entries (known + unknown)
+   * @param config
+   *   Reader configuration with security limits
    * @return
    *   ReadResult with workbook (with optional SourceContext) and warnings
    */
@@ -194,7 +302,8 @@ object XlsxReader:
     parts: Map[String, String],
     source: Option[SourceHandle],
     manifest: PartManifest,
-    fingerprint: Option[SourceFingerprint]
+    fingerprint: Option[SourceFingerprint],
+    config: ReaderConfig
   ): XLResult[ReadResult] =
     for
       // Parse workbook.xml
