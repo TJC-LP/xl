@@ -50,18 +50,23 @@ object extensions:
 
   extension (sheet: Sheet)
     /**
-     * Apply style to cell or range (template pattern).
+     * Apply style to cell or range with compile-time or runtime validation.
      *
-     * When called with a string literal, the reference is validated at compile time and returns
-     * `Sheet` directly. When called with a runtime string, validation is deferred and returns
-     * `XLResult[Sheet]`.
+     * Uses `transparent inline` to enable '''type narrowing''' based on the argument:
+     *   - '''String literal''' ("A1"): Validated at compile time, returns `Sheet` directly
+     *   - '''Runtime expression''' (variable): Validated at runtime, returns `XLResult[Sheet]`
      *
      * @param ref
      *   Cell ("A1") or range ("A1:B10")
      * @param cellStyle
      *   CellStyle to apply
      * @return
-     *   `Sheet` for literal refs (compile-time validated), `XLResult[Sheet]` for runtime refs
+     *   `Sheet` for literal refs, `XLResult[Sheet]` for runtime refs
+     * @example
+     *   {{{
+     *   val s1: Sheet = sheet.style("A1:B10", boldStyle)         // literal
+     *   val s2: XLResult[Sheet] = sheet.style(userRef, boldStyle) // runtime
+     *   }}}
      */
     @annotation.targetName("styleSheet")
     transparent inline def style(

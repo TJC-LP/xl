@@ -308,25 +308,47 @@ object Workbook:
     Workbook((first +: second +: rest).toVector)
 
   /**
-   * Create workbook with a single empty sheet.
+   * Create workbook with a single empty sheet, with compile-time or runtime validation.
    *
-   * When called with a string literal, the name is validated at compile time and returns `Workbook`
-   * directly. When called with a runtime expression, validation occurs at runtime and returns
-   * `XLResult[Workbook]`.
+   * Uses `transparent inline` to enable '''type narrowing''' based on the argument:
+   *   - '''String literal''' ("Sales"): Validated at compile time, returns `Workbook` directly
+   *   - '''Runtime expression''' (variable): Validated at runtime, returns `XLResult[Workbook]`
    *
-   * Examples:
-   *   - `Workbook("Sales")` → `Workbook` (compile-time validated)
-   *   - `Workbook(userInput)` → `XLResult[Workbook]` (runtime validated)
+   * The union return type `Workbook | XLResult[Workbook]` allows the compiler to narrow to the
+   * appropriate type at each call site, providing both type safety and ergonomics.
+   *
+   * @example
+   *   {{{
+   *   // Literal string → compile-time validation → Workbook
+   *   val wb1: Workbook = Workbook("Sales")
+   *
+   *   // Runtime string → runtime validation → XLResult[Workbook]
+   *   val name = getUserInput()
+   *   val wb2: XLResult[Workbook] = Workbook(name)
+   *   wb2 match
+   *     case Right(wb) => // valid
+   *     case Left(err) => // invalid sheet name
+   *   }}}
    */
   transparent inline def apply(inline sheetName: String): Workbook | XLResult[Workbook] =
     ${ com.tjclp.xl.macros.WorkbookMacros.createSingleImpl('sheetName) }
 
   /**
-   * Create workbook with multiple empty sheets.
+   * Create workbook with multiple empty sheets, with compile-time or runtime validation.
    *
-   * When called with all string literals, the names are validated at compile time and returns
-   * `Workbook` directly. When any name is a runtime expression, validation occurs at runtime and
-   * returns `XLResult[Workbook]`.
+   * Uses `transparent inline` to enable '''type narrowing''' based on all arguments:
+   *   - '''All string literals''': Validated at compile time, returns `Workbook` directly
+   *   - '''Any runtime expression''': Validated at runtime, returns `XLResult[Workbook]`
+   *
+   * @example
+   *   {{{
+   *   // All literals → Workbook
+   *   val wb1: Workbook = Workbook("Sales", "Marketing", "Finance")
+   *
+   *   // Any runtime value → XLResult[Workbook]
+   *   val dept = getDepartment()
+   *   val wb2: XLResult[Workbook] = Workbook("Sales", dept)
+   *   }}}
    */
   transparent inline def apply(
     inline first: String,

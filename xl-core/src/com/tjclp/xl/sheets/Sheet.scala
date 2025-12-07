@@ -93,16 +93,27 @@ final case class Sheet(
     putSingle(ref, value)
 
   /**
-   * Put a single value at string reference.
+   * Put a single value at string reference with compile-time or runtime validation.
    *
-   * For string literals ("A1"), validates at compile time and returns `Sheet` directly. For runtime
-   * strings, validates at runtime and returns `XLResult[Sheet]`.
+   * Uses `transparent inline` to enable '''type narrowing''' based on the argument:
+   *   - '''String literal''' ("A1"): Validated at compile time, returns `Sheet` directly
+   *   - '''Runtime expression''' (variable): Validated at runtime, returns `XLResult[Sheet]`
    *
-   * Examples:
-   * {{{
-   * sheet.put("A1", "Hello")      // Literal → Sheet (compile-time validated)
-   * sheet.put(userInput, 42)      // Variable → XLResult[Sheet] (runtime)
-   * }}}
+   * The union return type `Sheet | XLResult[Sheet]` allows the compiler to narrow to the
+   * appropriate type at each call site, providing both type safety and ergonomics.
+   *
+   * @example
+   *   {{{
+   *   // Literal string → compile-time validation → Sheet
+   *   val s1: Sheet = sheet.put("A1", "Hello")
+   *
+   *   // Runtime string → runtime validation → XLResult[Sheet]
+   *   val name = getUserInput()
+   *   val s2: XLResult[Sheet] = sheet.put(name, 42)
+   *   s2 match
+   *     case Right(s) => // valid
+   *     case Left(err) => // invalid reference
+   *   }}}
    */
   @annotation.targetName("putString")
   transparent inline def put[A](inline ref: String, value: A)(using
