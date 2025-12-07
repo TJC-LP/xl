@@ -2,6 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.macros.ref
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import org.scalacheck.{Arbitrary, Gen}
@@ -769,7 +770,100 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("FunctionParser.allFunctions includes all 28 functions") {
+  // Error handling functions
+  test("parse IFERROR function") {
+    val result = FormulaParser.parse("=IFERROR(A1/B1, 0)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Iferror(_, _) => assert(true)
+      case _ => fail("Expected TExpr.Iferror")
+    }
+  }
+
+  test("parse ISERROR function") {
+    val result = FormulaParser.parse("=ISERROR(A1)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Iserror(_) => assert(true)
+      case _ => fail("Expected TExpr.Iserror")
+    }
+  }
+
+  // Rounding and math functions
+  test("parse ROUND function") {
+    val result = FormulaParser.parse("=ROUND(3.14159, 2)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Round(_, _) => assert(true)
+      case _ => fail("Expected TExpr.Round")
+    }
+  }
+
+  test("parse ROUNDUP function") {
+    val result = FormulaParser.parse("=ROUNDUP(3.14159, 2)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.RoundUp(_, _) => assert(true)
+      case _ => fail("Expected TExpr.RoundUp")
+    }
+  }
+
+  test("parse ROUNDDOWN function") {
+    val result = FormulaParser.parse("=ROUNDDOWN(3.14159, 2)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.RoundDown(_, _) => assert(true)
+      case _ => fail("Expected TExpr.RoundDown")
+    }
+  }
+
+  test("parse ABS function") {
+    val result = FormulaParser.parse("=ABS(-5)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Abs(_) => assert(true)
+      case _ => fail("Expected TExpr.Abs")
+    }
+  }
+
+  // Lookup functions
+  test("parse INDEX function") {
+    val result = FormulaParser.parse("=INDEX(A1:C3, 2, 3)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Index(_, _, _) => assert(true)
+      case _ => fail("Expected TExpr.Index")
+    }
+  }
+
+  test("parse INDEX function with 2 args") {
+    val result = FormulaParser.parse("=INDEX(A1:A10, 5)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Index(_, _, None) => assert(true)
+      case _ => fail("Expected TExpr.Index with no column")
+    }
+  }
+
+  test("parse MATCH function") {
+    val result = FormulaParser.parse("=MATCH(42, A1:A10, 0)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Match(_, _, _) => assert(true)
+      case _ => fail("Expected TExpr.Match")
+    }
+  }
+
+  test("parse MATCH function with default match type") {
+    val result = FormulaParser.parse("=MATCH(42, A1:A10)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Match(_, _, _) => assert(true)
+      case _ => fail("Expected TExpr.Match")
+    }
+  }
+
+  test("FunctionParser.allFunctions includes all 40 functions") {
     val functions = FunctionParser.allFunctions
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -788,7 +882,21 @@ class FormulaParserSpec extends ScalaCheckSuite:
     // Array and advanced lookup functions
     assert(functions.contains("SUMPRODUCT"))
     assert(functions.contains("XLOOKUP"))
-    assertEquals(functions.length, 30)
+    // Error handling functions
+    assert(functions.contains("IFERROR"))
+    assert(functions.contains("ISERROR"))
+    // Rounding and math functions
+    assert(functions.contains("ROUND"))
+    assert(functions.contains("ROUNDUP"))
+    assert(functions.contains("ROUNDDOWN"))
+    assert(functions.contains("ABS"))
+    // Lookup functions
+    assert(functions.contains("INDEX"))
+    assert(functions.contains("MATCH"))
+    // Date-based financial functions
+    assert(functions.contains("XNPV"))
+    assert(functions.contains("XIRR"))
+    assertEquals(functions.length, 40)
   }
 
   test("FunctionParser.lookup finds known functions") {
@@ -801,4 +909,42 @@ class FormulaParserSpec extends ScalaCheckSuite:
   test("FunctionParser.lookup returns None for unknown functions") {
     assert(FunctionParser.lookup("UNKNOWN").isEmpty)
     assert(FunctionParser.lookup("FOOBAR").isEmpty)
+  }
+
+  // ==================== XNPV/XIRR Parsing Tests ====================
+
+  test("parses XNPV(rate, values, dates)") {
+    val result = FormulaParser.parse("=XNPV(0.1, A1:A5, B1:B5)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Xnpv(rate, values, dates)) =>
+        assert(values.start == ref"A1")
+        assert(values.end == ref"A5")
+        assert(dates.start == ref"B1")
+        assert(dates.end == ref"B5")
+      case _ => fail("Expected TExpr.Xnpv")
+  }
+
+  test("parses XIRR(values, dates)") {
+    val result = FormulaParser.parse("=XIRR(A1:A5, B1:B5)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Xirr(values, dates, guess)) =>
+        assert(values.start == ref"A1")
+        assert(values.end == ref"A5")
+        assert(dates.start == ref"B1")
+        assert(dates.end == ref"B5")
+        assert(guess.isEmpty)
+      case _ => fail("Expected TExpr.Xirr")
+  }
+
+  test("parses XIRR(values, dates, guess)") {
+    val result = FormulaParser.parse("=XIRR(A1:A5, B1:B5, 0.15)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Xirr(values, dates, guess)) =>
+        assert(values.start == ref"A1")
+        assert(values.end == ref"A5")
+        assert(guess.isDefined)
+      case _ => fail("Expected TExpr.Xirr with guess")
   }

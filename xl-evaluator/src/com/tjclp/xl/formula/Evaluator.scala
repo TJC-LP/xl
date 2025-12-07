@@ -2,10 +2,12 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
 import scala.math.BigDecimal
 import scala.annotation.tailrec
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 
 /**
  * Pure functional formula evaluator.
@@ -407,6 +409,160 @@ private class EvaluatorImpl extends Evaluator:
             loop(0, guess0)
           }
 
+      case TExpr.Xnpv(rateExpr, valuesRange, datesRange) =>
+        // XNPV: sum(value_i / (1 + rate)^((date_i - date_0) / 365))
+        for
+          rate <- eval(rateExpr, sheet, clock)
+          result <- {
+            // Collect values and dates from ranges
+            val values: List[BigDecimal] =
+              valuesRange.cells
+                .map(ref => sheet(ref))
+                .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+                .toList
+
+            val dates: List[LocalDate] =
+              datesRange.cells
+                .map(ref => sheet(ref))
+                .flatMap(cell => TExpr.decodeDate(cell).toOption)
+                .toList
+
+            if values.isEmpty || dates.isEmpty then
+              Left(
+                EvalError.EvalFailed(
+                  "XNPV requires non-empty values and dates ranges",
+                  Some("XNPV(rate, values, dates)")
+                )
+              )
+            else if values.length != dates.length then
+              Left(
+                EvalError.EvalFailed(
+                  s"XNPV: values (${values.length}) and dates (${dates.length}) must have same length",
+                  Some("XNPV(rate, values, dates)")
+                )
+              )
+            else
+              // Pattern match to extract first date (safe: non-empty check above)
+              dates match
+                case date0 :: _ =>
+                  val onePlusR = BigDecimal(1) + rate
+                  val npv = values.zip(dates).foldLeft(BigDecimal(0)) { case (acc, (value, date)) =>
+                    val daysDiff = ChronoUnit.DAYS.between(date0, date)
+                    val yearFraction = BigDecimal(daysDiff) / BigDecimal(365)
+                    // Note: Using Double for fractional exponents matches Excel's precision behavior.
+                    // BigDecimal.pow only supports integer exponents. For financial calculations,
+                    // Double precision (~15 decimal digits) is sufficient and consistent with Excel.
+                    val discountFactor = math.pow(onePlusR.toDouble, yearFraction.toDouble)
+                    acc + value / BigDecimal(discountFactor)
+                  }
+                  Right(npv)
+                case Nil =>
+                  // Unreachable: dates verified non-empty at line 430
+                  Left(EvalError.EvalFailed("XNPV: dates cannot be empty", None))
+          }
+        yield result
+
+      case TExpr.Xirr(valuesRange, datesRange, guessExprOpt) =>
+        // XIRR: Find rate where XNPV = 0 using Newton-Raphson
+        // Collect values and dates from ranges
+        val values: List[BigDecimal] =
+          valuesRange.cells
+            .map(ref => sheet(ref))
+            .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+            .toList
+
+        val dates: List[LocalDate] =
+          datesRange.cells
+            .map(ref => sheet(ref))
+            .flatMap(cell => TExpr.decodeDate(cell).toOption)
+            .toList
+
+        if values.isEmpty || dates.isEmpty then
+          Left(
+            EvalError.EvalFailed(
+              "XIRR requires non-empty values and dates ranges",
+              Some("XIRR(values, dates[, guess])")
+            )
+          )
+        else if values.length != dates.length then
+          Left(
+            EvalError.EvalFailed(
+              s"XIRR: values (${values.length}) and dates (${dates.length}) must have same length",
+              Some("XIRR(values, dates[, guess])")
+            )
+          )
+        else if !values.exists(_ < 0) || !values.exists(_ > 0) then
+          Left(
+            EvalError.EvalFailed(
+              "XIRR requires at least one positive and one negative cash flow",
+              Some("XIRR(values, dates[, guess])")
+            )
+          )
+        else
+          val guessEither: Either[EvalError, BigDecimal] =
+            guessExprOpt match
+              case Some(guessExpr) => eval(guessExpr, sheet, clock)
+              case None => Right(BigDecimal("0.1"))
+
+          guessEither.flatMap { guess0 =>
+            val maxIter = 100
+            val tolerance = BigDecimal("1e-7")
+            // Pattern match to extract first date (safe: non-empty check at line 480)
+            dates match
+              case date0 :: _ =>
+                // Calculate year fractions for each date
+                val yearFractions: List[BigDecimal] = dates.map { date =>
+                  val daysDiff = ChronoUnit.DAYS.between(date0, date)
+                  BigDecimal(daysDiff) / BigDecimal(365)
+                }
+
+                // XNPV at given rate: sum(value_i / (1 + rate)^yearFraction_i)
+                // Note: Uses Double for fractional exponents (matches Excel precision, see XNPV comment)
+                def xnpvAt(rate: BigDecimal): BigDecimal =
+                  val onePlusR = BigDecimal(1) + rate
+                  values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                    val discountFactor = math.pow(onePlusR.toDouble, yf.toDouble)
+                    acc + cf / BigDecimal(discountFactor)
+                  }
+
+                // Derivative of XNPV: sum(-yearFraction_i * value_i / (1 + rate)^(yearFraction_i + 1))
+                def dXnpvAt(rate: BigDecimal): BigDecimal =
+                  val onePlusR = BigDecimal(1) + rate
+                  values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                    val discountFactor = math.pow(onePlusR.toDouble, (yf + 1).toDouble)
+                    acc - (yf * cf) / BigDecimal(discountFactor)
+                  }
+
+                @tailrec
+                def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
+                  if iter >= maxIter then
+                    Left(
+                      EvalError.EvalFailed(
+                        s"XIRR did not converge after $maxIter iterations",
+                        Some("XIRR(values, dates[, guess])")
+                      )
+                    )
+                  else
+                    val f = xnpvAt(r)
+                    val df = dXnpvAt(r)
+                    if df.abs < BigDecimal("1e-10") then
+                      Left(
+                        EvalError.EvalFailed(
+                          "XIRR derivative is near zero; cannot continue iteration",
+                          Some("XIRR(values, dates[, guess])")
+                        )
+                      )
+                    else
+                      val next = r - f / df
+                      if (next - r).abs <= tolerance then Right(next)
+                      else loop(iter + 1, next)
+
+                loop(0, guess0)
+              case Nil =>
+                // Unreachable: dates verified non-empty at line 480
+                Left(EvalError.EvalFailed("XIRR: dates cannot be empty", None))
+          }
+
       case TExpr.VLookup(lookupExpr, table, colIndexExpr, rangeLookupExpr) =>
         for
           lookup <- eval(lookupExpr, sheet, clock)
@@ -744,6 +900,179 @@ private class EvaluatorImpl extends Evaluator:
             )
           yield result
 
+      // ===== Error Handling Functions =====
+
+      case TExpr.Iferror(valueExpr, valueIfErrorExpr) =>
+        // IFERROR: return valueIfError if value results in any error
+        evalAny(valueExpr, sheet, clock) match
+          case Left(_) =>
+            // Evaluation error occurred - return fallback
+            evalAny(valueIfErrorExpr, sheet, clock).map(convertToCellValue)
+          case Right(cv: CellValue) =>
+            cv match
+              case CellValue.Error(_) =>
+                // Cell contains error value - return fallback
+                evalAny(valueIfErrorExpr, sheet, clock).map(convertToCellValue)
+              case _ =>
+                // No error - return original value
+                Right(cv)
+          case Right(other) =>
+            // Non-CellValue result - wrap it
+            Right(convertToCellValue(other))
+
+      case TExpr.Iserror(valueExpr) =>
+        // ISERROR: return TRUE if value results in any error
+        evalAny(valueExpr, sheet, clock) match
+          case Left(_) => Right(true) // Evaluation error
+          case Right(cv: CellValue) =>
+            cv match
+              case CellValue.Error(_) => Right(true) // Cell error value
+              case _ => Right(false) // No error
+          case Right(_) => Right(false) // Non-CellValue result, no error
+
+      // ===== Rounding and Math Functions =====
+
+      case TExpr.Round(valueExpr, numDigitsExpr) =>
+        // ROUND: round to specified digits using HALF_UP
+        for
+          value <- eval(valueExpr, sheet, clock)
+          numDigits <- eval(numDigitsExpr, sheet, clock)
+        yield roundToDigits(value, numDigits.toInt, BigDecimal.RoundingMode.HALF_UP)
+
+      case TExpr.RoundUp(valueExpr, numDigitsExpr) =>
+        // ROUNDUP: round away from zero (Excel semantics)
+        // Examples: ROUNDUP(2.1, 0) = 3, ROUNDUP(-2.1, 0) = -3
+        for
+          value <- eval(valueExpr, sheet, clock)
+          numDigits <- eval(numDigitsExpr, sheet, clock)
+        yield
+          // Excel ROUNDUP rounds away from zero, which requires different RoundingMode by sign:
+          // - Positive numbers: CEILING (rounds toward +∞, away from 0)
+          // - Negative numbers: FLOOR (rounds toward -∞, away from 0)
+          val mode =
+            if value >= 0 then BigDecimal.RoundingMode.CEILING
+            else BigDecimal.RoundingMode.FLOOR
+          roundToDigits(value, numDigits.toInt, mode)
+
+      case TExpr.RoundDown(valueExpr, numDigitsExpr) =>
+        // ROUNDDOWN: round toward zero / truncate (Excel semantics)
+        // Examples: ROUNDDOWN(2.9, 0) = 2, ROUNDDOWN(-2.9, 0) = -2
+        for
+          value <- eval(valueExpr, sheet, clock)
+          numDigits <- eval(numDigitsExpr, sheet, clock)
+        yield
+          // Excel ROUNDDOWN rounds toward zero, which requires different RoundingMode by sign:
+          // - Positive numbers: FLOOR (rounds toward -∞, toward 0)
+          // - Negative numbers: CEILING (rounds toward +∞, toward 0)
+          val mode =
+            if value >= 0 then BigDecimal.RoundingMode.FLOOR
+            else BigDecimal.RoundingMode.CEILING
+          roundToDigits(value, numDigits.toInt, mode)
+
+      case TExpr.Abs(valueExpr) =>
+        // ABS: absolute value
+        eval(valueExpr, sheet, clock).map(_.abs)
+
+      // ===== Lookup Functions =====
+
+      case TExpr.Index(array, rowNumExpr, colNumExpr) =>
+        // INDEX: return value at position in array
+        // Returns #REF! error with descriptive message if position is out of bounds
+        for
+          rowNum <- eval(rowNumExpr, sheet, clock)
+          colNum <- colNumExpr match
+            case Some(expr) => eval(expr, sheet, clock).map(Some(_))
+            case None => Right(None)
+          result <- {
+            val rowIdx = rowNum.toInt - 1 // 1-based to 0-based
+            val colIdx = colNum.map(_.toInt - 1).getOrElse(0) // Default to first column
+
+            // Get dimensions of the range
+            val startCol = array.colStart.index0
+            val startRow = array.rowStart.index0
+            val numCols = array.colEnd.index0 - startCol + 1
+            val numRows = array.rowEnd.index0 - startRow + 1
+
+            // Bounds check with descriptive error
+            if rowIdx < 0 || rowIdx >= numRows then
+              Left(
+                EvalError.EvalFailed(
+                  s"INDEX: row_num ${rowNum.toInt} is out of bounds (array has $numRows rows, valid range: 1-$numRows) (#REF!)",
+                  Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
+                )
+              )
+            else if colIdx < 0 || colIdx >= numCols then
+              Left(
+                EvalError.EvalFailed(
+                  s"INDEX: col_num ${colNum.map(_.toInt).getOrElse(1)} is out of bounds (array has $numCols columns, valid range: 1-$numCols) (#REF!)",
+                  Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
+                )
+              )
+            else
+              val targetRef = ARef.from0(startCol + colIdx, startRow + rowIdx)
+              Right(sheet(targetRef).value)
+          }
+        yield result
+
+      case TExpr.Match(lookupValueExpr, lookupArray, matchTypeExpr) =>
+        // MATCH: find position of value in array (1-based)
+        // Returns #N/A error if no match found (Excel behavior)
+        for
+          lookupValue <- evalAny(lookupValueExpr, sheet, clock)
+          matchType <- eval(matchTypeExpr, sheet, clock)
+          result <- {
+            val matchTypeInt = matchType.toInt
+
+            // Get cells from lookup array (must be 1D - single row or column)
+            val cells: List[(Int, CellValue)] =
+              lookupArray.cells.toList.zipWithIndex.map { case (ref, idx) =>
+                (idx + 1, sheet(ref).value) // 1-based position
+              }
+
+            val positionOpt: Option[Int] = matchTypeInt match
+              case 0 =>
+                // Exact match
+                cells
+                  .find { case (_, cv) =>
+                    compareCellValues(cv, lookupValue) == 0
+                  }
+                  .map(_._1)
+
+              case 1 =>
+                // Largest value <= lookup (array should be sorted ascending)
+                val numericLookup = coerceToBigDecimal(lookupValue)
+                val candidates = cells.flatMap { case (pos, cv) =>
+                  val numericCv = coerceToNumeric(cv)
+                  if numericCv <= numericLookup then Some((pos, numericCv))
+                  else None
+                }
+                candidates.maxByOption(_._2).map(_._1)
+
+              case -1 =>
+                // Smallest value >= lookup (array should be sorted descending)
+                val numericLookup = coerceToBigDecimal(lookupValue)
+                val candidates = cells.flatMap { case (pos, cv) =>
+                  val numericCv = coerceToNumeric(cv)
+                  if numericCv >= numericLookup then Some((pos, numericCv))
+                  else None
+                }
+                candidates.minByOption(_._2).map(_._1)
+
+              case _ =>
+                None // Unknown match type
+
+            positionOpt match
+              case Some(pos) => Right(BigDecimal(pos))
+              case None =>
+                Left(
+                  EvalError.EvalFailed(
+                    "MATCH: no match found for lookup value (#N/A)",
+                    Some("MATCH(lookup_value, lookup_array, [match_type])")
+                  )
+                )
+          }
+        yield result
+
   // ===== Helper Methods =====
 
   /**
@@ -784,6 +1113,75 @@ private class EvaluatorImpl extends Evaluator:
       case bd: BigDecimal => bd.toInt
       case n: Number => n.intValue()
       case _ => 0
+
+  /**
+   * Round BigDecimal to specified number of digits.
+   *
+   * Handles negative numDigits by rounding to left of decimal point. Excel behavior: ROUND(1234,
+   * -2) = 1200
+   */
+  private def roundToDigits(
+    value: BigDecimal,
+    numDigits: Int,
+    mode: BigDecimal.RoundingMode.Value
+  ): BigDecimal =
+    if numDigits >= 0 then value.setScale(numDigits, mode)
+    else
+      // Negative numDigits: round to left of decimal
+      // ROUND(1234, -2) means round to nearest 100 = 1200
+      val scale = math.pow(10, -numDigits).toLong
+      val divided = value / scale
+      val rounded = divided.setScale(0, mode)
+      rounded * scale
+
+  /**
+   * Convert any value to CellValue for IFERROR result.
+   */
+  private def convertToCellValue(value: Any): CellValue =
+    value match
+      case cv: CellValue => cv
+      case s: String => CellValue.Text(s)
+      case n: BigDecimal => CellValue.Number(n)
+      case b: Boolean => CellValue.Bool(b)
+      case n: Int => CellValue.Number(BigDecimal(n))
+      case n: Long => CellValue.Number(BigDecimal(n))
+      case n: Double => CellValue.Number(BigDecimal(n))
+      case d: java.time.LocalDate =>
+        CellValue.DateTime(d.atStartOfDay())
+      case dt: java.time.LocalDateTime =>
+        CellValue.DateTime(dt)
+      case other => CellValue.Text(other.toString)
+
+  /**
+   * Compare two cell values for MATCH function. Returns: 0 if equal, negative if cv < value,
+   * positive if cv > value
+   */
+  private def compareCellValues(cv: CellValue, value: Any): Int =
+    (cv, value) match
+      case (CellValue.Number(n1), n2: BigDecimal) => n1.compare(n2)
+      case (CellValue.Number(n1), n2: Int) => n1.compare(BigDecimal(n2))
+      case (CellValue.Number(n1), n2: Long) => n1.compare(BigDecimal(n2))
+      case (CellValue.Number(n1), n2: Double) => n1.compare(BigDecimal(n2))
+      case (CellValue.Text(s1), s2: String) => s1.compareToIgnoreCase(s2)
+      case (CellValue.Bool(b1), b2: Boolean) => b1.compare(b2)
+      case (CellValue.Number(n), CellValue.Number(n2)) => n.compare(n2)
+      case (CellValue.Text(s), CellValue.Text(s2)) => s.compareToIgnoreCase(s2)
+      case (CellValue.Bool(b), CellValue.Bool(b2)) => b.compare(b2)
+      case _ => -2 // Different types, no match
+
+  /**
+   * Coerce Any value to BigDecimal for MATCH comparisons.
+   */
+  private def coerceToBigDecimal(value: Any): BigDecimal =
+    value match
+      case n: BigDecimal => n
+      case n: Int => BigDecimal(n)
+      case n: Long => BigDecimal(n)
+      case n: Double => BigDecimal(n)
+      case CellValue.Number(n) => n
+      case CellValue.Bool(true) => BigDecimal(1)
+      case CellValue.Bool(false) => BigDecimal(0)
+      case _ => BigDecimal(0)
 
   /**
    * Perform XLOOKUP search with specified match and search modes.

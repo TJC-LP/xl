@@ -173,6 +173,18 @@ object FormulaShifter:
           shiftRange(values, colDelta, rowDelta),
           guess.map(shiftInternal(_, colDelta, rowDelta))
         ).asInstanceOf[TExpr[A]]
+      case Xnpv(rate, values, dates) =>
+        Xnpv(
+          shiftInternal(rate, colDelta, rowDelta),
+          shiftRange(values, colDelta, rowDelta),
+          shiftRange(dates, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case Xirr(values, dates, guess) =>
+        Xirr(
+          shiftRange(values, colDelta, rowDelta),
+          shiftRange(dates, colDelta, rowDelta),
+          guess.map(shiftInternal(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
       case VLookup(lookup, table, colIndex, rangeLookup) =>
         VLookup(
           shiftInternal(lookup, colDelta, rowDelta),
@@ -218,6 +230,48 @@ object FormulaShifter:
           ifNotFound.map(shiftWildcard(_, colDelta, rowDelta)),
           shiftInternal(matchMode, colDelta, rowDelta),
           shiftInternal(searchMode, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+
+      // Error handling functions
+      case Iferror(value, valueIfError) =>
+        Iferror(
+          shiftInternal(value, colDelta, rowDelta),
+          shiftInternal(valueIfError, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case Iserror(value) =>
+        Iserror(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+
+      // Rounding and math functions
+      case Round(value, numDigits) =>
+        Round(
+          shiftInternal(value, colDelta, rowDelta),
+          shiftInternal(numDigits, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case RoundUp(value, numDigits) =>
+        RoundUp(
+          shiftInternal(value, colDelta, rowDelta),
+          shiftInternal(numDigits, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case RoundDown(value, numDigits) =>
+        RoundDown(
+          shiftInternal(value, colDelta, rowDelta),
+          shiftInternal(numDigits, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case Abs(value) =>
+        Abs(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+
+      // Lookup functions
+      case Index(array, rowNum, colNum) =>
+        Index(
+          shiftRange(array, colDelta, rowDelta),
+          shiftInternal(rowNum, colDelta, rowDelta),
+          colNum.map(shiftInternal(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+      case Match(lookupValue, lookupArray, matchType) =>
+        Match(
+          shiftWildcard(lookupValue, colDelta, rowDelta),
+          shiftRange(lookupArray, colDelta, rowDelta),
+          shiftInternal(matchType, colDelta, rowDelta)
         ).asInstanceOf[TExpr[A]]
 
   /**

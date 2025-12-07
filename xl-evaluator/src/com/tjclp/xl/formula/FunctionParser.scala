@@ -190,7 +190,21 @@ object FunctionParser:
       sumIfsFunctionParser,
       countIfsFunctionParser,
       sumProductFunctionParser,
-      xlookupFunctionParser
+      xlookupFunctionParser,
+      // Error handling functions
+      iferrorFunctionParser,
+      iserrorFunctionParser,
+      // Rounding and math functions
+      roundFunctionParser,
+      roundUpFunctionParser,
+      roundDownFunctionParser,
+      absFunctionParser,
+      // Lookup functions
+      indexFunctionParser,
+      matchFunctionParser,
+      // Date-based financial functions
+      xnpvFunctionParser,
+      xirrFunctionParser
     ).map(p => p.name -> p).toMap
 
   // ========== Given Instances for All Functions ==========
@@ -928,6 +942,308 @@ object FunctionParser:
               "XLOOKUP",
               pos,
               "3 to 6 arguments (lookup_value, lookup_array, return_array, [if_not_found], [match_mode], [search_mode])",
+              s"${args.length} arguments"
+            )
+          )
+
+  // === Error Handling Functions ===
+
+  /** IFERROR function: IFERROR(value, value_if_error) */
+  given iferrorFunctionParser: FunctionParser[Unit] with
+    def name: String = "IFERROR"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr, errorExpr) =>
+          scala.util.Right(
+            TExpr.iferror(
+              TExpr.asCellValueExpr(valueExpr),
+              TExpr.asCellValueExpr(errorExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "IFERROR",
+              pos,
+              "2 arguments (value, value_if_error)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** ISERROR function: ISERROR(value) */
+  given iserrorFunctionParser: FunctionParser[Unit] with
+    def name: String = "ISERROR"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.iserror(TExpr.asCellValueExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ISERROR",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  // === Rounding and Math Functions ===
+
+  /** ROUND function: ROUND(number, num_digits) */
+  given roundFunctionParser: FunctionParser[Unit] with
+    def name: String = "ROUND"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr, digitsExpr) =>
+          scala.util.Right(
+            TExpr.round(
+              TExpr.asNumericExpr(valueExpr),
+              TExpr.asNumericExpr(digitsExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ROUND",
+              pos,
+              "2 arguments (number, num_digits)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** ROUNDUP function: ROUNDUP(number, num_digits) */
+  given roundUpFunctionParser: FunctionParser[Unit] with
+    def name: String = "ROUNDUP"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr, digitsExpr) =>
+          scala.util.Right(
+            TExpr.roundUp(
+              TExpr.asNumericExpr(valueExpr),
+              TExpr.asNumericExpr(digitsExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ROUNDUP",
+              pos,
+              "2 arguments (number, num_digits)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** ROUNDDOWN function: ROUNDDOWN(number, num_digits) */
+  given roundDownFunctionParser: FunctionParser[Unit] with
+    def name: String = "ROUNDDOWN"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr, digitsExpr) =>
+          scala.util.Right(
+            TExpr.roundDown(
+              TExpr.asNumericExpr(valueExpr),
+              TExpr.asNumericExpr(digitsExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ROUNDDOWN",
+              pos,
+              "2 arguments (number, num_digits)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** ABS function: ABS(number) */
+  given absFunctionParser: FunctionParser[Unit] with
+    def name: String = "ABS"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.abs(TExpr.asNumericExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ABS",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  // === Lookup Functions ===
+
+  /** INDEX function: INDEX(array, row_num, [column_num]) */
+  given indexFunctionParser: FunctionParser[Unit] with
+    def name: String = "INDEX"
+    def arity: Arity = Arity.Range(2, 3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(arrayExpr, rowNumExpr) =>
+          arrayExpr match
+            case fold: TExpr.FoldRange[?, ?] =>
+              fold match
+                case TExpr.FoldRange(range, _, _, _) =>
+                  scala.util.Right(
+                    TExpr.index(range, TExpr.asNumericExpr(rowNumExpr), None)
+                  )
+            case _ =>
+              scala.util.Left(
+                ParseError.InvalidArguments(
+                  "INDEX",
+                  pos,
+                  "first argument must be a cell range",
+                  "non-range expression"
+                )
+              )
+        case List(arrayExpr, rowNumExpr, colNumExpr) =>
+          arrayExpr match
+            case fold: TExpr.FoldRange[?, ?] =>
+              fold match
+                case TExpr.FoldRange(range, _, _, _) =>
+                  scala.util.Right(
+                    TExpr.index(
+                      range,
+                      TExpr.asNumericExpr(rowNumExpr),
+                      Some(TExpr.asNumericExpr(colNumExpr))
+                    )
+                  )
+            case _ =>
+              scala.util.Left(
+                ParseError.InvalidArguments(
+                  "INDEX",
+                  pos,
+                  "first argument must be a cell range",
+                  "non-range expression"
+                )
+              )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "INDEX",
+              pos,
+              "2-3 arguments (array, row_num, [column_num])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** MATCH function: MATCH(lookup_value, lookup_array, [match_type]) */
+  given matchFunctionParser: FunctionParser[Unit] with
+    def name: String = "MATCH"
+    def arity: Arity = Arity.Range(2, 3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(lookupValueExpr, lookupArrayExpr) =>
+          lookupArrayExpr match
+            case fold: TExpr.FoldRange[?, ?] =>
+              fold match
+                case TExpr.FoldRange(range, _, _, _) =>
+                  scala.util.Right(
+                    TExpr.matchExpr(lookupValueExpr, range, TExpr.Lit(BigDecimal(1)))
+                  )
+            case _ =>
+              scala.util.Left(
+                ParseError.InvalidArguments(
+                  "MATCH",
+                  pos,
+                  "second argument must be a cell range",
+                  "non-range expression"
+                )
+              )
+        case List(lookupValueExpr, lookupArrayExpr, matchTypeExpr) =>
+          lookupArrayExpr match
+            case fold: TExpr.FoldRange[?, ?] =>
+              fold match
+                case TExpr.FoldRange(range, _, _, _) =>
+                  scala.util.Right(
+                    TExpr.matchExpr(lookupValueExpr, range, TExpr.asNumericExpr(matchTypeExpr))
+                  )
+            case _ =>
+              scala.util.Left(
+                ParseError.InvalidArguments(
+                  "MATCH",
+                  pos,
+                  "second argument must be a cell range",
+                  "non-range expression"
+                )
+              )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "MATCH",
+              pos,
+              "2-3 arguments (lookup_value, lookup_array, [match_type])",
+              s"${args.length} arguments"
+            )
+          )
+
+  // === Date-based Financial Functions ===
+
+  /** XNPV function: XNPV(rate, values, dates) */
+  given xnpvFunctionParser: FunctionParser[Unit] with
+    def name: String = "XNPV"
+    def arity: Arity = Arity.Exact(3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(rateExpr, valuesFold: TExpr.FoldRange[?, ?], datesFold: TExpr.FoldRange[?, ?]) =>
+          (valuesFold, datesFold) match
+            case (TExpr.FoldRange(valuesRange, _, _, _), TExpr.FoldRange(datesRange, _, _, _)) =>
+              scala.util.Right(
+                TExpr.xnpv(TExpr.asNumericExpr(rateExpr), valuesRange, datesRange)
+              )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "XNPV",
+              pos,
+              "3 arguments (rate, values, dates)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** XIRR function: XIRR(values, dates, [guess]) */
+  given xirrFunctionParser: FunctionParser[Unit] with
+    def name: String = "XIRR"
+    def arity: Arity = Arity.Range(2, 3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valuesFold: TExpr.FoldRange[?, ?], datesFold: TExpr.FoldRange[?, ?]) =>
+          (valuesFold, datesFold) match
+            case (TExpr.FoldRange(valuesRange, _, _, _), TExpr.FoldRange(datesRange, _, _, _)) =>
+              scala.util.Right(TExpr.xirr(valuesRange, datesRange, None))
+        case List(
+              valuesFold: TExpr.FoldRange[?, ?],
+              datesFold: TExpr.FoldRange[?, ?],
+              guessExpr
+            ) =>
+          (valuesFold, datesFold) match
+            case (TExpr.FoldRange(valuesRange, _, _, _), TExpr.FoldRange(datesRange, _, _, _)) =>
+              scala.util.Right(
+                TExpr.xirr(valuesRange, datesRange, Some(TExpr.asNumericExpr(guessExpr)))
+              )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "XIRR",
+              pos,
+              "2-3 arguments (values, dates, [guess])",
               s"${args.length} arguments"
             )
           )

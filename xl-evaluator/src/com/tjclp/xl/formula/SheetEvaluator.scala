@@ -214,6 +214,7 @@ object SheetEvaluator:
    */
   private def toCellValue(result: Any): CellValue =
     result match
+      case cv: CellValue => cv // IFERROR and similar functions return CellValue directly
       case bd: BigDecimal => CellValue.Number(bd)
       case s: String => CellValue.Text(s)
       case b: Boolean => CellValue.Bool(b)
