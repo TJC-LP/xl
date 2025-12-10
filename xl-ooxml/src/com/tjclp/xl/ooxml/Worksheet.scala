@@ -649,14 +649,17 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
    *   Map from sheet-local styleId to workbook-level styleId
    * @param tableParts
    *   Optional tableParts XML element (generated from Sheet.tables)
+   * @param escapeFormulas
+   *   If true, escape text values starting with =, +, -, @ to prevent formula injection
    */
   def fromDomainWithSST(
     sheet: Sheet,
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int] = Map.empty,
-    tableParts: Option[Elem] = None
+    tableParts: Option[Elem] = None,
+    escapeFormulas: Boolean = false
   ): OoxmlWorksheet =
-    fromDomainWithMetadata(sheet, sst, styleRemapping, None, tableParts)
+    fromDomainWithMetadata(sheet, sst, styleRemapping, None, tableParts, escapeFormulas)
 
   /**
    * Create worksheet from domain Sheet, preserving metadata from original worksheet XML.
@@ -674,13 +677,16 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
    *   Optional original worksheet to extract metadata from
    * @param tableParts
    *   Optional tableParts XML element (takes priority over preserved metadata)
+   * @param escapeFormulas
+   *   If true, escape text values starting with =, +, -, @ to prevent formula injection
    */
   def fromDomainWithMetadata(
     sheet: Sheet,
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int] = Map.empty,
     preservedMetadata: Option[OoxmlWorksheet] = None,
-    tableParts: Option[Elem] = None
+    tableParts: Option[Elem] = None,
+    escapeFormulas: Boolean = false
   ): OoxmlWorksheet =
     // Build a map of row indices to preserved row attributes
     val preservedRowAttrs = preservedMetadata
@@ -709,9 +715,11 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
         // Determine cell type and value based on CellValue type and SST availability
         val (cellType, value) = cell.value match
           case com.tjclp.xl.cells.CellValue.Text(s) =>
-            sst.flatMap(_.indexOf(s)) match
+            // Apply formula injection escaping if enabled
+            val safeText = if escapeFormulas then com.tjclp.xl.cells.CellValue.escape(s) else s
+            sst.flatMap(_.indexOf(safeText)) match
               case Some(idx) => ("s", com.tjclp.xl.cells.CellValue.Text(idx.toString))
-              case None => ("inlineStr", cell.value)
+              case None => ("inlineStr", com.tjclp.xl.cells.CellValue.Text(safeText))
           case com.tjclp.xl.cells.CellValue.RichText(rt) =>
             // Check if RichText exists in SST (it can be shared!)
             sst.flatMap(_.indexOf(rt)) match
