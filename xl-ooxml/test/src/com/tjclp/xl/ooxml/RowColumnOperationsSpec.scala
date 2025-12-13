@@ -384,4 +384,61 @@ class RowColumnOperationsSpec extends FunSuite:
     }
   }
 
+  test("column properties persist through multiple surgical writes (regression #col-props-bug)") {
+    // Regression test: Column widths were lost on subsequent write operations.
+    // Bug 1: preserved.cols.orElse(generatedCols) prioritized preserved XML over domain props
+    // Bug 2: XmlUtil.elem sorted attributes alphabetically, breaking attribute order test
+
+    val path1 = tempDir.resolve("col-props-1.xlsx")
+    val path2 = tempDir.resolve("col-props-2.xlsx")
+    val path3 = tempDir.resolve("col-props-3.xlsx")
+
+    // Create initial workbook with column A width
+    val sheet1 = Sheet("Test")
+      .put(ref"A1", CellValue.Text("Hello"))
+      .setColumnProperties(col"A", ColumnProperties(width = Some(20.0)))
+
+    val wb1 = Workbook(Vector(sheet1))
+    XlsxWriter.write(wb1, path1).fold(err => fail(s"Write 1 failed: $err"), identity)
+
+    // Read and add column B width
+    val wb2 = XlsxReader.read(path1).fold(err => fail(s"Read 1 failed: $err"), identity)
+    val sheet2 = wb2.sheets.head.setColumnProperties(col"B", ColumnProperties(width = Some(30.0)))
+    val modifiedWb2 = wb2.put(sheet2)
+    XlsxWriter.write(modifiedWb2, path2).fold(err => fail(s"Write 2 failed: $err"), identity)
+
+    // Read and add column C width
+    val wb3 = XlsxReader.read(path2).fold(err => fail(s"Read 2 failed: $err"), identity)
+    val sheet3 = wb3.sheets.head.setColumnProperties(col"C", ColumnProperties(width = Some(40.0)))
+    val modifiedWb3 = wb3.put(sheet3)
+    XlsxWriter.write(modifiedWb3, path3).fold(err => fail(s"Write 3 failed: $err"), identity)
+
+    // Verify final workbook has ALL column properties
+    val finalWb = XlsxReader.read(path3).fold(err => fail(s"Read 3 failed: $err"), identity)
+    val finalSheet = finalWb.sheets.head
+
+    val colAProps = finalSheet.columnProperties.get(col"A")
+    val colBProps = finalSheet.columnProperties.get(col"B")
+    val colCProps = finalSheet.columnProperties.get(col"C")
+
+    assert(colAProps.isDefined, "Column A properties lost after multiple writes")
+    assert(colBProps.isDefined, "Column B properties lost after multiple writes")
+    assert(colCProps.isDefined, "Column C properties lost after multiple writes")
+
+    assertEquals(colAProps.get.width, Some(20.0), "Column A width changed")
+    assertEquals(colBProps.get.width, Some(30.0), "Column B width changed")
+    assertEquals(colCProps.get.width, Some(40.0), "Column C width changed")
+
+    // Also verify the XML has proper attribute order (min before max)
+    val zip = new java.util.zip.ZipFile(path3.toFile)
+    val sheetEntry = zip.getEntry("xl/worksheets/sheet1.xml")
+    val sheetXml = scala.io.Source.fromInputStream(zip.getInputStream(sheetEntry)).mkString
+    zip.close()
+
+    assert(
+      sheetXml.contains("""<col min="1""""),
+      "Column XML should have min attribute first (OOXML compliance)"
+    )
+  }
+
 end RowColumnOperationsSpec
