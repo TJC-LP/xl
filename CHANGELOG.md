@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2025-12-13
+
+### Added
+
+- **P0 Formula Functions** (PR #77): 8 new financial and date functions
+  - `XNPV` - Net present value with irregular dates
+  - `XIRR` - Internal rate of return with irregular dates
+  - `EOMONTH` - End of month date calculation
+  - `EDATE` - Add/subtract months from date
+  - `DATEDIF` - Difference between dates
+  - `NETWORKDAYS` - Working days between dates
+  - `WORKDAY` - Add working days to date
+  - `YEARFRAC` - Year fraction between dates
+
+- **Security Hardening** (PR #78): Protection against malicious files
+  - ZIP bomb detection with configurable thresholds
+  - Formula injection guards (escape `=`, `+`, `-`, `@` prefixes)
+  - Configurable via `SecurityConfig` in read/write operations
+
+### Fixed
+
+- **Style components not rendering** (PR #80): When adding new styles (bold, fill color) to existing files, font/fill/border components weren't being added to `styles.xml`. New styles now correctly include their component definitions.
+
+- **Column widths lost on save** (PR #80): Column properties set via API/CLI were overwritten by preserved XML on subsequent operations. Domain properties now take priority over preserved XML.
+
+---
+
 ## [0.2.3] - 2025-12-07
 
 ### Changed
