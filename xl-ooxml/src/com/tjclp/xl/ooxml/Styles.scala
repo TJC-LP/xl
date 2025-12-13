@@ -238,7 +238,24 @@ object StyleIndex:
     var nextIdx = originalStyles.size
     var additionalStyles = mutable.Map[String, Int]() // Track styles added after original
 
-    // Step 3: Process ONLY modified sheets for style remapping
+    // Step 3: Build mutable component collections starting from original
+    // These will grow if new styles introduce new fonts/fills/borders/numFmts
+    val fontsBuilder = mutable.ArrayBuffer.from(originalWorkbookStyles.fonts)
+    val fillsBuilder = mutable.ArrayBuffer.from(originalWorkbookStyles.fills)
+    val bordersBuilder = mutable.ArrayBuffer.from(originalWorkbookStyles.borders)
+    val numFmtsBuilder = mutable.ArrayBuffer.from(originalWorkbookStyles.customNumFmts)
+
+    // Build lookup sets for O(1) deduplication of new components
+    val fontSet = mutable.LinkedHashSet.from(originalWorkbookStyles.fonts)
+    val fillSet = mutable.LinkedHashSet.from(originalWorkbookStyles.fills)
+    val borderSet = mutable.LinkedHashSet.from(originalWorkbookStyles.borders)
+    val numFmtCodeSet = mutable.Set.from(originalWorkbookStyles.customNumFmts.map(_._2 match {
+      case NumFmt.Custom(code) => code
+      case _ => ""
+    }))
+    var nextNumFmtId = if numFmtsBuilder.isEmpty then 164 else numFmtsBuilder.map(_._1).max + 1
+
+    // Step 4: Process ONLY modified sheets for style remapping
     val remappings = wb.sheets.zipWithIndex.flatMap { case (sheet, sheetIdx) =>
       if modifiedSheetIndices.contains(sheetIdx) then
         val registry = sheet.styleRegistry
@@ -266,6 +283,27 @@ object StyleIndex:
                   additionalStyles(key) = nextIdx
                   remapping(localIdx) = nextIdx
                   nextIdx += 1
+
+                  // CRITICAL: Also add new font/fill/border/numFmt if not already present
+                  // Without this, new styles reference non-existent component indices
+                  if !fontSet.contains(style.font) then
+                    fontSet += style.font
+                    fontsBuilder += style.font
+
+                  if !fillSet.contains(style.fill) then
+                    fillSet += style.fill
+                    fillsBuilder += style.fill
+
+                  if !borderSet.contains(style.border) then
+                    borderSet += style.border
+                    bordersBuilder += style.border
+
+                  style.numFmt match
+                    case NumFmt.Custom(code) if !numFmtCodeSet.contains(code) =>
+                      numFmtCodeSet += code
+                      numFmtsBuilder += ((nextNumFmtId, NumFmt.Custom(code)))
+                      nextNumFmtId += 1
+                    case _ => ()
         }
 
         Some(sheetIdx -> remapping.toMap)
@@ -274,12 +312,11 @@ object StyleIndex:
         None
     }.toMap
 
-    // Step 4: Use original fonts/fills/borders/numFmts (byte-perfect preservation)
-    // No deduplication - preserves exact fontId/fillId/borderId indices from source
-    val uniqueFonts = originalWorkbookStyles.fonts
-    val uniqueFills = originalWorkbookStyles.fills
-    val uniqueBorders = originalWorkbookStyles.borders
-    val customNumFmts = originalWorkbookStyles.customNumFmts
+    // Step 5: Finalize component vectors (original + any new components)
+    val uniqueFonts = fontsBuilder.toVector
+    val uniqueFills = fillsBuilder.toVector
+    val uniqueBorders = bordersBuilder.toVector
+    val customNumFmts = numFmtsBuilder.toVector
 
     // Convert unifiedIndex back to Map[String, StyleId] for StyleIndex
     // Use first index from each canonicalKey's list (preserves original layout)

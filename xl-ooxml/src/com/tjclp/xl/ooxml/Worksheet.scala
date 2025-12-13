@@ -75,7 +75,7 @@ private def buildColsElement(sheet: Sheet): Option[Elem] =
       if p.collapsed then attrs += ("collapsed" -> "1")
       // Note: styleId would need remapping to workbook-level index (deferred)
 
-      XmlUtil.elem("col", attrs.result()*)( /* no children */ )
+      XmlUtil.elemOrdered("col", attrs.result()*)( /* no children */ )
     }
     Some(XmlUtil.elem("cols")(colElems*))
 
@@ -826,7 +826,7 @@ object OoxmlWorksheet extends XmlReadable[OoxmlWorksheet]:
           ), // Use calculated dimension, fallback to preserved
           preserved.sheetViews,
           preserved.sheetFormatPr,
-          preserved.cols.orElse(generatedCols), // Fallback to domain props if not preserved
+          generatedCols.orElse(preserved.cols), // Prefer domain props over preserved XML
           preserved.conditionalFormatting,
           preserved.printOptions,
           preserved.rowBreaks,
