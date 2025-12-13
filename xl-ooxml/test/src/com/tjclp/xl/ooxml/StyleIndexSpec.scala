@@ -158,3 +158,69 @@ class StyleIndexSpec extends FunSuite:
 
     assertEquals(sheet1Remapping.get(1), sheet2Remapping.get(1), "Same style should map to same global index")
   }
+
+  test("fromWorkbookWithSource adds new font/fill components for new styles (regression #style-components-bug)") {
+    // Regression test: When adding new styles to existing files, the font/fill/border
+    // components weren't being added to the output. New styles referenced non-existent
+    // component indices, falling back to defaults (fontId=0, fillId=0).
+
+    import java.nio.file.Files
+
+    // Create initial workbook with just default style
+    val initialSheet = Sheet("Test").put(ref"A1", CellValue.Text("Original"))
+    val initialWb = Workbook(Vector(initialSheet))
+
+    val path = Files.createTempFile("style-components-test", ".xlsx")
+    try
+      // Write initial workbook
+      XlsxWriter.write(initialWb, path).fold(err => fail(s"Write failed: $err"), identity)
+
+      // Read it back
+      val readWb = XlsxReader.read(path).fold(err => fail(s"Read failed: $err"), identity)
+
+      // Add new style with bold font and blue fill
+      val boldBlueFill = CellStyle.default
+        .withFont(Font("Calibri", 11.0, bold = true, color = Some(Color.Rgb(0xFFFFFFFF))))
+        .withFill(Fill.Solid(Color.Rgb(0xFF003366)))
+
+      val modifiedSheet = readWb.sheets.head
+        .put(ref"A1", CellValue.Text("Styled"))
+        .withCellStyle(ref"A1", boldBlueFill)
+
+      val modifiedWb = readWb.put(modifiedSheet)
+
+      // Write modified workbook
+      val outputPath = Files.createTempFile("style-components-output", ".xlsx")
+      try
+        XlsxWriter.write(modifiedWb, outputPath).fold(err => fail(s"Write failed: $err"), identity)
+
+        // Read the styles.xml directly to verify components were added
+        val zip = new java.util.zip.ZipFile(outputPath.toFile)
+        val stylesEntry = zip.getEntry("xl/styles.xml")
+        val stylesXml = scala.io.Source.fromInputStream(zip.getInputStream(stylesEntry)).mkString
+        zip.close()
+
+        // Verify new font with bold was added
+        assert(
+          stylesXml.contains("<b/>") || stylesXml.contains("<b "),
+          s"Bold font element missing from styles.xml. New font components not added."
+        )
+
+        // Verify new fill with blue color was added
+        assert(
+          stylesXml.contains("003366") || stylesXml.contains("003366"),
+          s"Blue fill color missing from styles.xml. New fill components not added."
+        )
+
+        // Verify cellXf references non-zero fontId and fillId
+        // Parse to check the last cellXf has fontId > 0 and fillId > 0
+        val fontIdPattern = """fontId="(\d+)"""".r
+        val fillIdPattern = """fillId="(\d+)"""".r
+        val fontIds = fontIdPattern.findAllMatchIn(stylesXml).map(_.group(1).toInt).toList
+        val fillIds = fillIdPattern.findAllMatchIn(stylesXml).map(_.group(1).toInt).toList
+
+        assert(fontIds.exists(_ > 0), "No non-default fontId found in cellXfs")
+        assert(fillIds.exists(_ > 1), "No non-default fillId found in cellXfs (0=none, 1=gray125)")
+      finally Files.deleteIfExists(outputPath)
+    finally Files.deleteIfExists(path)
+  }
