@@ -146,6 +146,13 @@ object Main
         "Use values from this row as keys in JSON output (1-based row number)"
       )
       .orNone
+  private val useImageMagickOpt =
+    Opts
+      .flag(
+        "use-imagemagick",
+        "Use ImageMagick for rasterization instead of Batik (requires magick/convert in PATH)"
+      )
+      .orFalse
   private val sheetsFilterOpt =
     Opts
       .option[String]("sheets", "Comma-separated list of sheets to search (default: all)")
@@ -193,7 +200,8 @@ object Main
         qualityOpt,
         rasterOutputOpt,
         skipEmptyOpt,
-        headerRowOpt
+        headerRowOpt,
+        useImageMagickOpt
       )
         .mapN(CliCommand.View.apply)
     }
@@ -256,8 +264,19 @@ object Main
       .option[String]("format", "Number format: general, number, currency, percent, date, text")
       .orNone
   private val borderOpt =
-    Opts.option[String]("border", "Border style: none, thin, medium, thick").orNone
+    Opts.option[String]("border", "Border style for all sides: none, thin, medium, thick").orNone
+  private val borderTopOpt =
+    Opts.option[String]("border-top", "Top border style: none, thin, medium, thick").orNone
+  private val borderRightOpt =
+    Opts.option[String]("border-right", "Right border style: none, thin, medium, thick").orNone
+  private val borderBottomOpt =
+    Opts.option[String]("border-bottom", "Bottom border style: none, thin, medium, thick").orNone
+  private val borderLeftOpt =
+    Opts.option[String]("border-left", "Left border style: none, thin, medium, thick").orNone
   private val borderColorOpt = Opts.option[String]("border-color", "Border color").orNone
+  private val replaceOpt = Opts
+    .flag("replace", "Replace entire style instead of merging with existing")
+    .orFalse
 
   val styleCmd: Opts[CliCommand] = Opts.subcommand("style", "Apply styling to cells") {
     (
@@ -274,7 +293,12 @@ object Main
       wrapOpt,
       numFormatOpt,
       borderOpt,
-      borderColorOpt
+      borderTopOpt,
+      borderRightOpt,
+      borderBottomOpt,
+      borderLeftOpt,
+      borderColorOpt,
+      replaceOpt
     ).mapN(CliCommand.Style.apply)
   }
 
@@ -428,7 +452,8 @@ object Main
           quality,
           rasterOutput,
           skipEmpty,
-          headerRow
+          headerRow,
+          useImageMagick
         ) =>
       ReadCommands.view(
         wb,
@@ -445,7 +470,8 @@ object Main
         quality,
         rasterOutput,
         skipEmpty,
-        headerRow
+        headerRow,
+        useImageMagick
       )
 
     case CliCommand.Cell(refStr, noStyle) =>
@@ -481,7 +507,12 @@ object Main
           wrap,
           numFormat,
           border,
-          borderColor
+          borderTop,
+          borderRight,
+          borderBottom,
+          borderLeft,
+          borderColor,
+          replace
         ) =>
       requireOutput(outputOpt) { outputPath =>
         WriteCommands.style(
@@ -500,7 +531,12 @@ object Main
           wrap,
           numFormat,
           border,
+          borderTop,
+          borderRight,
+          borderBottom,
+          borderLeft,
           borderColor,
+          replace,
           outputPath
         )
       }

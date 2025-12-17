@@ -9,20 +9,21 @@ object `package` extends build.XLInternalModule with NativeImageModule {
 
   override def mvnDeps = Seq(
     mvn"com.monovore::decline-effect:2.4.1",
-    mvn"org.typelevel::cats-effect:3.5.7"
+    mvn"org.typelevel::cats-effect:3.5.7",
+    // Apache Batik for SVG->raster conversion (eliminates ImageMagick dependency)
+    mvn"org.apache.xmlgraphics:batik-transcoder:1.19",
+    mvn"org.apache.xmlgraphics:batik-codec:1.19"
   )
 
   // Make it runnable as an application
   override def mainClass = Some("com.tjclp.xl.cli.Main")
 
-  // Version from PUBLISH_VERSION env var (set by CI), or dev for local
-  // Evaluated at build file load time (when mill starts with the env var set)
-  val cliVersion: String = sys.env.getOrElse("PUBLISH_VERSION", "dev")
-
   // Generate version.properties resource at build time
+  // Reads PUBLISH_VERSION env var (set by CI), or defaults to "dev" for local builds
   def generatedVersionResource: T[PathRef] = Task {
+    val version = Task.env.getOrElse("PUBLISH_VERSION", "dev")
     val dest = Task.dest / "version.properties"
-    os.write(dest, s"version=$cliVersion\n")
+    os.write(dest, s"version=$version\n")
     PathRef(Task.dest)
   }
 
@@ -31,15 +32,24 @@ object `package` extends build.XLInternalModule with NativeImageModule {
   }
 
   // GraalVM Native Image configuration
-  def jvmId = "graalvm-community:23.0.1"
+  // Must match .github/workflows/release.yml for consistent builds
+  def jvmId = "graalvm-community:25.0.1"
 
   def nativeImageOptions = Seq(
     "--no-fallback",
     "-Os", // Optimize for size
-    "-H:+ReportExceptionStackTraces"
+    "-H:+ReportExceptionStackTraces",
+    // Suppress Cats Effect IOApp thread warning (baked into native image)
+    "-Dcats.effect.warnOnNonMainThreadDetected=false",
+    // Suppress Scala 3 LazyVals sun.misc.Unsafe warnings at build time
+    "-J--add-opens=java.base/sun.misc=ALL-UNNAMED",
+    "-J-XX:+IgnoreUnrecognizedVMOptions",
+    // Initialize scala runtime classes at build time to reduce runtime warnings
+    "--initialize-at-build-time=scala.runtime.LazyVals$",
+    "--initialize-at-build-time=scala.runtime.Statics"
   )
 
-  object test extends ScalaTests with TestModule.Munit {
+  object test extends ScalaTests with build.XLTestModule {
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.0.3",
       mvn"org.scalameta::munit-scalacheck:1.2.0",

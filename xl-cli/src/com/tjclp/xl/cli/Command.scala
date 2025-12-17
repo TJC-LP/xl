@@ -26,7 +26,8 @@ enum CliCommand:
     quality: Int,
     rasterOutput: Option[Path],
     skipEmpty: Boolean,
-    headerRow: Option[Int]
+    headerRow: Option[Int],
+    useImageMagick: Boolean
   )
   case Cell(ref: String, noStyle: Boolean)
   case Search(pattern: String, limit: Int, sheetsFilter: Option[String])
@@ -50,7 +51,12 @@ enum CliCommand:
     wrap: Boolean,
     numFormat: Option[String],
     border: Option[String],
-    borderColor: Option[String]
+    borderTop: Option[String],
+    borderRight: Option[String],
+    borderBottom: Option[String],
+    borderLeft: Option[String],
+    borderColor: Option[String],
+    replace: Boolean
   )
   case RowOp(row: Int, height: Option[Double], hide: Boolean, show: Boolean)
   case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean)

@@ -316,7 +316,11 @@ object SvgRenderer:
     cell.styleId.flatMap(sheet.styleRegistry.get).map { style =>
       style.fill match
         case Fill.Solid(color) => colorToFillAttrsWithOpacity(color, theme)
-        case _ => """fill="#FFFFFF""""
+        case Fill.Pattern(_, bgColor, _) =>
+          // For pattern fills, use the background color as the cell fill
+          // (Pattern rendering with foreground is not yet supported in SVG)
+          colorToFillAttrsWithOpacity(bgColor, theme)
+        case Fill.None => """fill="#FFFFFF""""
     }
 
   /**

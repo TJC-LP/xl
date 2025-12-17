@@ -6,7 +6,7 @@ import cats.effect.IO
 import cats.syntax.traverse.*
 import com.tjclp.xl.cli.ColorParser
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
-import com.tjclp.xl.styles.border.{Border, BorderStyle}
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.CellStyle
@@ -38,6 +38,10 @@ object StyleBuilder:
     wrap: Boolean,
     numFormat: Option[String],
     border: Option[String],
+    borderTop: Option[String],
+    borderRight: Option[String],
+    borderBottom: Option[String],
+    borderLeft: Option[String],
     borderColor: Option[String]
   ): IO[CellStyle] =
     for
@@ -49,6 +53,18 @@ object StyleBuilder:
       hAlign <- align.traverse(s => IO.fromEither(parseHAlign(s).left.map(new Exception(_))))
       vAlign <- valign.traverse(s => IO.fromEither(parseVAlign(s).left.map(new Exception(_))))
       bdrStyle <- border.traverse(s =>
+        IO.fromEither(parseBorderStyle(s).left.map(new Exception(_)))
+      )
+      bdrTopStyle <- borderTop.traverse(s =>
+        IO.fromEither(parseBorderStyle(s).left.map(new Exception(_)))
+      )
+      bdrRightStyle <- borderRight.traverse(s =>
+        IO.fromEither(parseBorderStyle(s).left.map(new Exception(_)))
+      )
+      bdrBottomStyle <- borderBottom.traverse(s =>
+        IO.fromEither(parseBorderStyle(s).left.map(new Exception(_)))
+      )
+      bdrLeftStyle <- borderLeft.traverse(s =>
         IO.fromEither(parseBorderStyle(s).left.map(new Exception(_)))
       )
       nFmt <- numFormat.traverse(s => IO.fromEither(parseNumFmt(s).left.map(new Exception(_))))
@@ -63,9 +79,9 @@ object StyleBuilder:
 
       val fill = bgColor.map(Fill.Solid.apply).getOrElse(Fill.None)
 
-      val cellBorder = bdrStyle
-        .map(style => Border.all(style, bdrColor))
-        .getOrElse(Border.none)
+      // Build border: --border applies to all sides, per-side options override
+      val cellBorder =
+        buildBorder(bdrStyle, bdrTopStyle, bdrRightStyle, bdrBottomStyle, bdrLeftStyle, bdrColor)
 
       val alignment = Align.default
         .pipe(a => hAlign.fold(a)(h => a.withHAlign(h)))
@@ -79,6 +95,28 @@ object StyleBuilder:
         numFmt = nFmt.getOrElse(NumFmt.General),
         align = alignment
       )
+
+  /**
+   * Build a Border from CLI options. --border applies to all sides, per-side options override.
+   */
+  private def buildBorder(
+    allSides: Option[BorderStyle],
+    top: Option[BorderStyle],
+    right: Option[BorderStyle],
+    bottom: Option[BorderStyle],
+    left: Option[BorderStyle],
+    color: Option[com.tjclp.xl.styles.color.Color]
+  ): Border =
+    val base = allSides.getOrElse(BorderStyle.None)
+    val topSide = BorderSide(top.getOrElse(base), color)
+    val rightSide = BorderSide(right.getOrElse(base), color)
+    val bottomSide = BorderSide(bottom.getOrElse(base), color)
+    val leftSide = BorderSide(left.getOrElse(base), color)
+    // Only create non-none border if at least one side has a style
+    if topSide.style == BorderStyle.None && rightSide.style == BorderStyle.None &&
+      bottomSide.style == BorderStyle.None && leftSide.style == BorderStyle.None
+    then Border.none
+    else Border(left = leftSide, right = rightSide, top = topSide, bottom = bottomSide)
 
   /**
    * Build a description list of style options for output.
@@ -161,3 +199,71 @@ object StyleBuilder:
       case "text" => Right(NumFmt.Text)
       case other =>
         Left(s"Unknown number format: $other. Use general, number, currency, percent, date, text")
+
+  /**
+   * Merge two CellStyles, applying non-default values from newStyle to existingStyle.
+   *
+   * The merge logic applies each component from newStyle only if it differs from the default,
+   * otherwise preserves the value from existingStyle.
+   */
+  def mergeStyles(existingStyle: CellStyle, newStyle: CellStyle): CellStyle =
+    val defaultStyle = CellStyle.default
+
+    // Merge fonts: apply non-default properties from newStyle
+    val mergedFont = {
+      val existing = existingStyle.font
+      val newer = newStyle.font
+      val default = Font.default
+      existing
+        .withBold(if newer.bold != default.bold then newer.bold else existing.bold)
+        .withItalic(if newer.italic != default.italic then newer.italic else existing.italic)
+        .withUnderline(
+          if newer.underline != default.underline then newer.underline else existing.underline
+        )
+        .pipe(f =>
+          if newer.color != default.color then newer.color.map(f.withColor).getOrElse(f) else f
+        )
+        .pipe(f => if newer.sizePt != default.sizePt then f.withSize(newer.sizePt) else f)
+        .pipe(f => if newer.name != default.name then f.withName(newer.name) else f)
+    }
+
+    // Merge fill: use newStyle if not None
+    val mergedFill =
+      if newStyle.fill != Fill.None then newStyle.fill else existingStyle.fill
+
+    // Merge border: per-side merging - apply non-none sides from newStyle
+    val mergedBorder = {
+      val existing = existingStyle.border
+      val newer = newStyle.border
+      Border(
+        top = if newer.top != BorderSide.none then newer.top else existing.top,
+        right = if newer.right != BorderSide.none then newer.right else existing.right,
+        bottom = if newer.bottom != BorderSide.none then newer.bottom else existing.bottom,
+        left = if newer.left != BorderSide.none then newer.left else existing.left
+      )
+    }
+
+    // Merge numFmt: use newStyle if not General
+    val mergedNumFmt =
+      if newStyle.numFmt != NumFmt.General then newStyle.numFmt else existingStyle.numFmt
+
+    // Merge alignment: apply non-default properties
+    val mergedAlign = {
+      val existing = existingStyle.align
+      val newer = newStyle.align
+      val default = Align.default
+      existing
+        .pipe(a =>
+          if newer.horizontal != default.horizontal then a.withHAlign(newer.horizontal) else a
+        )
+        .pipe(a => if newer.vertical != default.vertical then a.withVAlign(newer.vertical) else a)
+        .pipe(a => if newer.wrapText != default.wrapText then a.withWrap(newer.wrapText) else a)
+    }
+
+    CellStyle(
+      font = mergedFont,
+      fill = mergedFill,
+      border = mergedBorder,
+      numFmt = mergedNumFmt,
+      align = mergedAlign
+    )

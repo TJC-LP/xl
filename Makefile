@@ -35,11 +35,22 @@ build-native:
 	./mill xl-cli.nativeImage
 
 # Default install: native binary (no JDK required, instant startup)
+# Creates a wrapper script to filter Scala 3/Cats Effect warnings that appear in native images
 install: build-native
 	@mkdir -p $(BINDIR)
-	@cp $(NATIVE_PATH) $(BINDIR)/xl
+	@mkdir -p $(SHAREDIR)
+	@cp $(NATIVE_PATH) $(SHAREDIR)/xl-native
+	@chmod +x $(SHAREDIR)/xl-native
+# Generate wrapper script that filters known harmless warnings:
+#   - Cats Effect IOApp thread warning (native image specific)
+#   - Scala 3 LazyVals sun.misc.Unsafe deprecation (JDK 21+ warning)
+	@echo '#!/usr/bin/env bash' > $(BINDIR)/xl
+	@echo 'SCRIPT_DIR="$$(cd "$$(dirname "$$0")" && pwd)"' >> $(BINDIR)/xl
+	@echo 'exec "$$SCRIPT_DIR/../share/xl/xl-native" "$$@" \' >> $(BINDIR)/xl
+	@echo '  2> >(grep -vE "(sun.misc.Unsafe|terminally deprecated|LazyVals|will be removed|IOApp|warnOnNonMainThreadDetected|resource cleanup|fork :=|sbt session|silence this warning)" >&2)' >> $(BINDIR)/xl
 	@chmod +x $(BINDIR)/xl
 	@echo "Installed xl native binary to $(BINDIR)/xl"
+	@echo "Binary installed to $(SHAREDIR)/xl-native"
 	@echo ""
 	@echo "Ensure $(BINDIR) is in your PATH:"
 	@echo '  export PATH="$$HOME/.local/bin:$$PATH"'
@@ -76,6 +87,7 @@ install-jar: build
 uninstall:
 	@rm -f $(BINDIR)/xl
 	@rm -f $(SHAREDIR)/xl.jar
+	@rm -f $(SHAREDIR)/xl-native
 	@rmdir $(SHAREDIR) 2>/dev/null || true
 	@echo "Uninstalled xl from $(BINDIR)/xl"
 

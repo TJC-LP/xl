@@ -10,7 +10,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.helpers.{SheetResolver, ValueParser}
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
-import com.tjclp.xl.cli.raster.ImageMagick
+import com.tjclp.xl.cli.raster.{BatikRasterizer, ImageMagick}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.{DependencyGraph, SheetEvaluator}
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -63,7 +63,8 @@ object ReadCommands:
     quality: Int,
     rasterOutput: Option[Path],
     skipEmpty: Boolean,
-    headerRow: Option[Int]
+    headerRow: Option[Int],
+    useImageMagick: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "view")
@@ -79,8 +80,11 @@ object ReadCommands:
             Markdown.renderRange(targetSheet, limitedRange, showFormulas, skipEmpty, evalFormulas)
           )
         case ViewFormat.Html =>
+          // Pre-evaluate formulas if --eval flag is set
+          val sheetToRender =
+            if evalFormulas then evaluateSheetFormulas(targetSheet) else targetSheet
           IO.pure(
-            targetSheet.toHtml(
+            sheetToRender.toHtml(
               limitedRange,
               theme = theme,
               applyPrintScale = printScale,
@@ -88,8 +92,11 @@ object ReadCommands:
             )
           )
         case ViewFormat.Svg =>
+          // Pre-evaluate formulas if --eval flag is set
+          val sheetToRender =
+            if evalFormulas then evaluateSheetFormulas(targetSheet) else targetSheet
           IO.pure(
-            targetSheet.toSvg(
+            sheetToRender.toSvg(
               limitedRange,
               theme = theme,
               showGridlines = showGridlines,
@@ -127,21 +134,65 @@ object ReadCommands:
                 )
               )
             case Some(outputPath) =>
-              val svg = targetSheet.toSvg(
+              // Pre-evaluate formulas if --eval flag is set
+              val sheetToRender =
+                if evalFormulas then evaluateSheetFormulas(targetSheet) else targetSheet
+              val svg = sheetToRender.toSvg(
                 limitedRange,
                 theme = theme,
                 showGridlines = showGridlines,
                 showLabels = showLabels
               )
-              val rasterFormat = format match
-                case ViewFormat.Png => ImageMagick.Format.Png
-                case ViewFormat.Jpeg => ImageMagick.Format.Jpeg(quality)
-                case ViewFormat.WebP => ImageMagick.Format.WebP
-                case ViewFormat.Pdf => ImageMagick.Format.Pdf
-                case _ => ImageMagick.Format.Png // unreachable
-              ImageMagick.convertSvgToRaster(svg, outputPath, rasterFormat, dpi).map { _ =>
-                s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI)"
-              }
+
+              // Use Batik (pure JVM) by default, ImageMagick as fallback
+              // Batik requires AWT which may not be available in GraalVM native images
+              if useImageMagick then
+                val rasterFormat = format match
+                  case ViewFormat.Png => ImageMagick.Format.Png
+                  case ViewFormat.Jpeg => ImageMagick.Format.Jpeg(quality)
+                  case ViewFormat.WebP => ImageMagick.Format.WebP
+                  case ViewFormat.Pdf => ImageMagick.Format.Pdf
+                  case _ => ImageMagick.Format.Png // unreachable
+                ImageMagick.convertSvgToRaster(svg, outputPath, rasterFormat, dpi).map { _ =>
+                  s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, ImageMagick)"
+                }
+              else
+                val batikFormat = format match
+                  case ViewFormat.Png => BatikRasterizer.Format.Png
+                  case ViewFormat.Jpeg => BatikRasterizer.Format.Jpeg(quality)
+                  case ViewFormat.WebP => BatikRasterizer.Format.WebP
+                  case ViewFormat.Pdf => BatikRasterizer.Format.Pdf
+                  case _ => BatikRasterizer.Format.Png // unreachable
+                // Try Batik first, fall back to ImageMagick if AWT not available
+                BatikRasterizer
+                  .convertSvgToRaster(svg, outputPath, batikFormat, dpi)
+                  .map(_ => s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI)")
+                  .handleErrorWith {
+                    case e: BatikRasterizer.RasterizationError
+                        if e.getMessage.contains("AWT") || e.getMessage.contains("native image") =>
+                      // Batik failed due to AWT, try ImageMagick as fallback
+                      val imgFormat = format match
+                        case ViewFormat.Png => ImageMagick.Format.Png
+                        case ViewFormat.Jpeg => ImageMagick.Format.Jpeg(quality)
+                        case ViewFormat.WebP => ImageMagick.Format.WebP
+                        case ViewFormat.Pdf => ImageMagick.Format.Pdf
+                        case _ => ImageMagick.Format.Png
+                      ImageMagick
+                        .convertSvgToRaster(svg, outputPath, imgFormat, dpi)
+                        .map { _ =>
+                          s"Warning: Batik unavailable (native image), using ImageMagick fallback\n" +
+                            s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, ImageMagick)"
+                        }
+                        .handleErrorWith { imgErr =>
+                          IO.raiseError(
+                            new Exception(
+                              s"Rasterization failed: Batik requires AWT (unavailable in native image), " +
+                                s"and ImageMagick fallback failed: ${imgErr.getMessage}"
+                            )
+                          )
+                        }
+                    case e => IO.raiseError(e)
+                  }
     yield result
 
   /**
@@ -342,4 +393,30 @@ object ReadCommands:
               new Exception(s"Invalid override format: $override_. Use ref=value (e.g., B5=1000)")
             )
       }
+    }
+
+  /**
+   * Evaluate all formula cells in a sheet, replacing them with their computed values.
+   *
+   * This is used to pre-process sheets for rendering when --eval is specified. Formula cells are
+   * replaced with their evaluated results (preserving formatting), while non-formula cells remain
+   * unchanged.
+   */
+  private def evaluateSheetFormulas(sheet: Sheet): Sheet =
+    sheet.cells.foldLeft(sheet) { case (acc, (ref, cell)) =>
+      cell.value match
+        case CellValue.Formula(expr, _) =>
+          val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
+            case Right(result) =>
+              // Replace formula with evaluated result, keeping style
+              acc.put(ref, result)
+            case Left(error) =>
+              // Warn on stderr but keep formula and continue processing
+              Console.err.println(
+                s"Warning: Failed to evaluate formula at ${ref.toA1}: ${error.message}"
+              )
+              acc
+        case _ =>
+          acc
     }

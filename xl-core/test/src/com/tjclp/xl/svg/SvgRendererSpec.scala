@@ -823,3 +823,75 @@ class SvgRendererSpec extends FunSuite:
     assert(cellsIdx < bordersIdx, "Cells should come before borders")
     assert(bordersIdx < textIdx, "Borders should come before text")
   }
+
+  // ========== Pattern Fill Tests (v0.3.0 Regression #84) ==========
+
+  test("toSvg: pattern fill uses background color") {
+    import com.tjclp.xl.styles.fill.PatternType
+    // Create a LightGray pattern fill with light gray background
+    val patternFill = Fill.Pattern(
+      foreground = Color.fromRgb(0, 0, 0), // Black foreground
+      background = Color.fromRgb(200, 200, 200), // Light gray background
+      pattern = PatternType.LightGray
+    )
+    val style = CellStyle.default.withFill(patternFill)
+
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Pattern")
+      .unsafe
+      .withCellStyle(ref"A1", style)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Should use the background color (#C8C8C8 = 200,200,200)
+    assert(svg.contains("""fill="#C8C8C8""""), s"Pattern fill should use background color, got: $svg")
+  }
+
+  test("toSvg: pattern fill does not render as white") {
+    import com.tjclp.xl.styles.fill.PatternType
+    // Create a pattern fill with a distinct background color
+    val patternFill = Fill.Pattern(
+      foreground = Color.fromRgb(0, 0, 0),
+      background = Color.fromRgb(0, 128, 255), // Blue background
+      pattern = PatternType.Gray125
+    )
+    val style = CellStyle.default.withFill(patternFill)
+
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Blue Pattern")
+      .unsafe
+      .withCellStyle(ref"A1", style)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Should not render as white (the old bug behavior)
+    assert(!svg.contains("""fill="#FFFFFF"""") || svg.contains("""fill="#0080FF""""),
+      s"Pattern fill should not be white, should be blue #0080FF, got: $svg")
+    // Should use the background color
+    assert(svg.contains("""fill="#0080FF""""), s"Pattern fill should use blue background, got: $svg")
+  }
+
+  test("toSvg: solid fill still works correctly") {
+    val solidFill = Fill.Solid(Color.fromRgb(255, 0, 0)) // Red
+    val style = CellStyle.default.withFill(solidFill)
+
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Solid Red")
+      .unsafe
+      .withCellStyle(ref"A1", style)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Solid fill should still work as before
+    assert(svg.contains("""fill="#FF0000""""), s"Solid fill should be red, got: $svg")
+  }
+
+  test("toSvg: Fill.None renders default background") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "No fill")
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Default cells should have white background
+    assert(svg.contains("""fill="#FFFFFF""""), s"No fill should render as white, got: $svg")
+  }

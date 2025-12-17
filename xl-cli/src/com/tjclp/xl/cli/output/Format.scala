@@ -5,6 +5,7 @@ import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.styles.{CellStyle, StyleId}
 import com.tjclp.xl.styles.alignment.Align
+import com.tjclp.xl.styles.border.{Border, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
@@ -211,6 +212,28 @@ object Format:
       if s.align != Align.default then
         val wrapStr = if s.align.wrapText then ", wrap" else ""
         parts += s"Align: ${s.align.horizontal}, ${s.align.vertical}$wrapStr"
+
+      // Border (if non-default)
+      if s.border != Border.none then
+        val sides = Vector(
+          if s.border.top.style != BorderStyle.None then Some(s"top: ${s.border.top.style}")
+          else None,
+          if s.border.bottom.style != BorderStyle.None then
+            Some(s"bottom: ${s.border.bottom.style}")
+          else None,
+          if s.border.left.style != BorderStyle.None then Some(s"left: ${s.border.left.style}")
+          else None,
+          if s.border.right.style != BorderStyle.None then Some(s"right: ${s.border.right.style}")
+          else None
+        ).flatten
+        if sides.nonEmpty then
+          // If all sides are the same, show "all: style"
+          val allSame = s.border.top == s.border.bottom &&
+            s.border.bottom == s.border.left &&
+            s.border.left == s.border.right &&
+            s.border.top.style != BorderStyle.None
+          if allSame then parts += s"Border: ${s.border.top.style} (all sides)"
+          else parts += s"Border: ${sides.mkString(", ")}"
 
       val result = parts.result()
       if result.isEmpty then None

@@ -130,6 +130,22 @@ xl -f in.xlsx -o out.xlsx putf C5 "=B5*1.1"        # Write formula
 
 # Formula dragging with $ anchoring
 xl -f in.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
+
+# View command flags
+--eval                # Evaluate formulas (compute live values)
+--formulas            # Show formulas instead of values
+
+# Style command flags (styles merge by default, use --replace for full replacement)
+--replace             # Replace entire style instead of merging
+--border <style>      # Border style for all sides: none, thin, medium, thick
+--border-top <style>  # Top border only
+--border-right <style>    # Right border only
+--border-bottom <style>   # Bottom border only
+--border-left <style>     # Left border only
+--border-color <color>    # Border color (applies to all specified borders)
+
+# Rasterization (PNG/JPEG export)
+--use-imagemagick     # Use ImageMagick instead of Batik (needed for native image rasterization)
 ```
 
 **Common mistake**: Using unqualified range without `--sheet`:
@@ -243,12 +259,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**731+ tests**: addressing (17), patch (21), style (60), datetime (8), codec (42), batch (16), syntax (18), optics (34), OOXML (24), streaming (18), RichText (5), formula (51+)
+**767+ tests**: addressing (17), patch (21), style (60), datetime (8), codec (42), batch (16), syntax (18), optics (34), OOXML (24), streaming (18), RichText (5), formula (51+), v0.3.0 regressions (36)
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 731+ tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 767+ tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 
