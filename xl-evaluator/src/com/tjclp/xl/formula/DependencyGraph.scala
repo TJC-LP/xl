@@ -151,6 +151,24 @@ object DependencyGraph:
       case TExpr.Month(date) => extractDependencies(date)
       case TExpr.Day(date) => extractDependencies(date)
 
+      // Date calculation functions
+      case TExpr.Eomonth(startDate, months) =>
+        extractDependencies(startDate) ++ extractDependencies(months)
+      case TExpr.Edate(startDate, months) =>
+        extractDependencies(startDate) ++ extractDependencies(months)
+      case TExpr.Datedif(startDate, endDate, unit) =>
+        extractDependencies(startDate) ++ extractDependencies(endDate) ++ extractDependencies(unit)
+      case TExpr.Networkdays(startDate, endDate, holidaysOpt) =>
+        extractDependencies(startDate) ++
+          extractDependencies(endDate) ++
+          holidaysOpt.map(_.cells.toSet).getOrElse(Set.empty)
+      case TExpr.Workday(startDate, days, holidaysOpt) =>
+        extractDependencies(startDate) ++
+          extractDependencies(days) ++
+          holidaysOpt.map(_.cells.toSet).getOrElse(Set.empty)
+      case TExpr.Yearfrac(startDate, endDate, basis) =>
+        extractDependencies(startDate) ++ extractDependencies(endDate) ++ extractDependencies(basis)
+
       // Financial functions
       case TExpr.Npv(rate, values) =>
         extractDependencies(rate) ++ values.cells.toSet

@@ -276,8 +276,16 @@ Apply formatting with `style <range>` command.
 | `--valign <top\|middle\|bottom>` | Vertical |
 | `--wrap` | Text wrap |
 | `--format <general\|number\|currency\|percent\|date\|text>` | Number format |
-| `--border <none\|thin\|medium\|thick>` | Border style |
+| `--border <none\|thin\|medium\|thick>` | Border style (all sides) |
+| `--border-top <style>` | Top border only |
+| `--border-right <style>` | Right border only |
+| `--border-bottom <style>` | Bottom border only |
+| `--border-left <style>` | Left border only |
 | `--border-color <color>` | Border color |
+| `--replace` | Replace entire style (default: merge) |
+
+**Style Behavior**: Styles are merged by default (new properties combine with existing).
+Use `--replace` to replace the entire style instead.
 
 **Colors**: Named (`red`, `navy`), hex (`#FF6600`), or RGB (`rgb(100,150,200)`).
 See [reference/COLORS.md](reference/COLORS.md) for full color list.
@@ -323,11 +331,12 @@ xl -f data.xlsx -o out.xlsx col C --hide
 | csv | `--format csv` | Add `--show-labels` for headers |
 | html | `--format html` | Inline CSS |
 | svg | `--format svg` | Vector |
-| png/jpeg/webp/pdf | `--format <fmt> --raster-output <path>` | Requires ImageMagick |
+| png/jpeg/pdf | `--format <fmt> --raster-output <path>` | Batik (built-in) |
+| webp | `--format webp --raster-output <path>` | Requires ImageMagick |
 
 See [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) for detailed specs.
 
-**Raster options**: `--dpi <n>`, `--quality <n>`, `--show-labels`
+**Raster options**: `--dpi <n>`, `--quality <n>`, `--show-labels`, `--use-imagemagick`
 
 ```bash
 # Visual analysis (Claude vision)
@@ -412,6 +421,7 @@ xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
 | `--quality <n>` | JPEG quality (default: 90) |
 | `--gridlines` | Show cell gridlines in SVG |
 | `--print-scale` | Apply print scaling |
+| `--use-imagemagick` | Use ImageMagick instead of Batik for rasterization |
 
 ### Search Options
 

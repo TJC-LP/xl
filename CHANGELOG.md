@@ -11,19 +11,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2025-12-17
+
+### Added
+
+- **Pure JVM rasterization** (PR #91): Apache Batik-based SVG to PNG/JPEG conversion
+  - No external ImageMagick dependency required
+  - Falls back to ImageMagick in GraalVM native images (AWT unavailable)
+  - `--use-imagemagick` flag for explicit ImageMagick usage
+
+- **Indexed color support**: Proper handling of legacy Excel indexed colors
+  - Maps indices 0-63 to RGB values per ECMA-376 specification
+  - Preserves indexed colors during read/write round-trips
+
+- **Per-side border styling**: New CLI flags for individual border control
+  - `--border-top`, `--border-right`, `--border-bottom`, `--border-left`
+  - Border merging is now per-side (matches Excel behavior)
+
+- **Date calculation functions**: 6 new Excel-compatible date functions
+  - `EOMONTH` - End of month N months from start date
+  - `EDATE` - Same day N months from start date
+  - `DATEDIF` - Difference between dates (Y/M/D/MD/YM/YD units)
+  - `NETWORKDAYS` - Working days between dates (excludes weekends/holidays)
+  - `WORKDAY` - Date N working days from start (excludes weekends/holidays)
+  - `YEARFRAC` - Year fraction between dates (5 day-count conventions)
+
+### Changed
+
+- **Mill upgraded to 1.1.0-RC3**: Improved Scala 3.7.3 support and build performance
+  - Tested across all CI platforms (Linux/macOS/Windows)
+
+- **Style merging is now default**: `xl style` command merges with existing styles
+  - Use `--replace` flag for previous replacement behavior
+  - Preserves existing formatting when adding new properties
+
+- **Formula evaluation warnings**: `--eval` flag now prints warnings to stderr when formulas fail to evaluate instead of silently continuing
+
+### Breaking Changes
+
+- **`xl style` command now merges by default**: Style commands now merge with existing cell styles instead of replacing them entirely. Use `--replace` flag for the previous behavior.
+  - Before: `xl style A1 --bold` replaced entire cell style with just bold
+  - After: `xl style A1 --bold` adds bold to existing style
+  - Migration: Add `--replace` flag to scripts that rely on replacement behavior
+
+### Fixed
+
+- **Batik @SuppressWarnings scope**: Moved annotation from object level to method level for tighter suppression
+
+- **DRY forkArgs**: Extracted shared JVM options to `BuildConfig.lazyValsJvmArgs` constant
+
+- **Partial file cleanup**: Batik rasterizer now cleans up partial files on failure using idiomatic `Using`
+
+---
+
 ## [0.3.0] - 2025-12-13
 
 ### Added
 
-- **P0 Formula Functions** (PR #77): 8 new financial and date functions
+- **Financial Functions** (PR #77): 2 new date-aware financial functions
   - `XNPV` - Net present value with irregular dates
   - `XIRR` - Internal rate of return with irregular dates
-  - `EOMONTH` - End of month date calculation
-  - `EDATE` - Add/subtract months from date
-  - `DATEDIF` - Difference between dates
-  - `NETWORKDAYS` - Working days between dates
-  - `WORKDAY` - Add working days to date
-  - `YEARFRAC` - Year fraction between dates
 
 - **Security Hardening** (PR #78): Protection against malicious files
   - ZIP bomb detection with configurable thresholds
@@ -35,21 +82,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Style components not rendering** (PR #80): When adding new styles (bold, fill color) to existing files, font/fill/border components weren't being added to `styles.xml`. New styles now correctly include their component definitions.
 
 - **Column widths lost on save** (PR #80): Column properties set via API/CLI were overwritten by preserved XML on subsequent operations. Domain properties now take priority over preserved XML.
-
-### Breaking Changes
-
-- **`xl style` command now merges by default** (PR #91): Style commands now merge with existing cell styles instead of replacing them entirely. Use `--replace` flag for the previous behavior.
-  - Before: `xl style A1 --bold` replaced entire cell style with just bold
-  - After: `xl style A1 --bold` adds bold to existing style
-  - Migration: Add `--replace` flag to scripts that rely on replacement behavior
-
-### Changed
-
-- **Per-side border styling** (PR #91): New CLI flags for individual border sides:
-  - `--border-top`, `--border-right`, `--border-bottom`, `--border-left`
-  - Border merging is now per-side (matches Excel behavior)
-
-- **Formula evaluation warnings** (PR #91): `--eval` flag now prints warnings to stderr when formulas fail to evaluate instead of silently continuing.
 
 ---
 
