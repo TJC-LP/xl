@@ -204,7 +204,14 @@ object FunctionParser:
       matchFunctionParser,
       // Date-based financial functions
       xnpvFunctionParser,
-      xirrFunctionParser
+      xirrFunctionParser,
+      // Date calculation functions
+      eomonthFunctionParser,
+      edateFunctionParser,
+      datedifFunctionParser,
+      networkdaysFunctionParser,
+      workdayFunctionParser,
+      yearfracFunctionParser
     ).map(p => p.name -> p).toMap
 
   // ========== Given Instances for All Functions ==========
@@ -1244,6 +1251,184 @@ object FunctionParser:
               "XIRR",
               pos,
               "2-3 arguments (values, dates, [guess])",
+              s"${args.length} arguments"
+            )
+          )
+
+  // === Date Calculation Functions ===
+
+  /** EOMONTH function: EOMONTH(start_date, months) - end of month N months from start */
+  given eomonthFunctionParser: FunctionParser[Unit] with
+    def name: String = "EOMONTH"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(startDateExpr, monthsExpr) =>
+          scala.util.Right(
+            TExpr.eomonth(
+              TExpr.asDateExpr(startDateExpr),
+              TExpr.asIntExpr(monthsExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "EOMONTH",
+              pos,
+              "2 arguments (start_date, months)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** EDATE function: EDATE(start_date, months) - same day N months later */
+  given edateFunctionParser: FunctionParser[Unit] with
+    def name: String = "EDATE"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(startDateExpr, monthsExpr) =>
+          scala.util.Right(
+            TExpr.edate(
+              TExpr.asDateExpr(startDateExpr),
+              TExpr.asIntExpr(monthsExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "EDATE",
+              pos,
+              "2 arguments (start_date, months)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** DATEDIF function: DATEDIF(start_date, end_date, unit) - difference between dates */
+  given datedifFunctionParser: FunctionParser[Unit] with
+    def name: String = "DATEDIF"
+    def arity: Arity = Arity.three
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(startDateExpr, endDateExpr, unitExpr) =>
+          scala.util.Right(
+            TExpr.datedif(
+              TExpr.asDateExpr(startDateExpr),
+              TExpr.asDateExpr(endDateExpr),
+              TExpr.asStringExpr(unitExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "DATEDIF",
+              pos,
+              "3 arguments (start_date, end_date, unit)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** NETWORKDAYS function: NETWORKDAYS(start_date, end_date, [holidays]) - count working days */
+  given networkdaysFunctionParser: FunctionParser[Unit] with
+    def name: String = "NETWORKDAYS"
+    def arity: Arity = Arity.Range(2, 3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(startDateExpr, endDateExpr) =>
+          scala.util.Right(
+            TExpr.networkdays(
+              TExpr.asDateExpr(startDateExpr),
+              TExpr.asDateExpr(endDateExpr),
+              None
+            )
+          )
+        case List(startDateExpr, endDateExpr, holidaysFold: TExpr.FoldRange[?, ?]) =>
+          holidaysFold match
+            case TExpr.FoldRange(holidaysRange, _, _, _) =>
+              scala.util.Right(
+                TExpr.networkdays(
+                  TExpr.asDateExpr(startDateExpr),
+                  TExpr.asDateExpr(endDateExpr),
+                  Some(holidaysRange)
+                )
+              )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "NETWORKDAYS",
+              pos,
+              "2-3 arguments (start_date, end_date, [holidays])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** WORKDAY function: WORKDAY(start_date, days, [holidays]) - add working days */
+  given workdayFunctionParser: FunctionParser[Unit] with
+    def name: String = "WORKDAY"
+    def arity: Arity = Arity.Range(2, 3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(startDateExpr, daysExpr) =>
+          scala.util.Right(
+            TExpr.workday(
+              TExpr.asDateExpr(startDateExpr),
+              TExpr.asIntExpr(daysExpr),
+              None
+            )
+          )
+        case List(startDateExpr, daysExpr, holidaysFold: TExpr.FoldRange[?, ?]) =>
+          holidaysFold match
+            case TExpr.FoldRange(holidaysRange, _, _, _) =>
+              scala.util.Right(
+                TExpr.workday(
+                  TExpr.asDateExpr(startDateExpr),
+                  TExpr.asIntExpr(daysExpr),
+                  Some(holidaysRange)
+                )
+              )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "WORKDAY",
+              pos,
+              "2-3 arguments (start_date, days, [holidays])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** YEARFRAC function: YEARFRAC(start_date, end_date, [basis]) - year fraction between dates */
+  given yearfracFunctionParser: FunctionParser[Unit] with
+    def name: String = "YEARFRAC"
+    def arity: Arity = Arity.Range(2, 3)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(startDateExpr, endDateExpr) =>
+          scala.util.Right(
+            TExpr.yearfrac(
+              TExpr.asDateExpr(startDateExpr),
+              TExpr.asDateExpr(endDateExpr),
+              TExpr.Lit(0) // Default basis is 0 (US 30/360)
+            )
+          )
+        case List(startDateExpr, endDateExpr, basisExpr) =>
+          scala.util.Right(
+            TExpr.yearfrac(
+              TExpr.asDateExpr(startDateExpr),
+              TExpr.asDateExpr(endDateExpr),
+              TExpr.asIntExpr(basisExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "YEARFRAC",
+              pos,
+              "2-3 arguments (start_date, end_date, [basis])",
               s"${args.length} arguments"
             )
           )

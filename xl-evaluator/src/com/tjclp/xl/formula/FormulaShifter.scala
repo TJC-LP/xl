@@ -164,6 +164,42 @@ object FormulaShifter:
       case Day(date) =>
         Day(shiftInternal(date, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
+      // Date calculation functions
+      case Eomonth(startDate, months) =>
+        Eomonth(
+          shiftInternal(startDate, colDelta, rowDelta),
+          shiftInternal(months, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case Edate(startDate, months) =>
+        Edate(
+          shiftInternal(startDate, colDelta, rowDelta),
+          shiftInternal(months, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case Datedif(startDate, endDate, unit) =>
+        Datedif(
+          shiftInternal(startDate, colDelta, rowDelta),
+          shiftInternal(endDate, colDelta, rowDelta),
+          shiftInternal(unit, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case Networkdays(startDate, endDate, holidays) =>
+        Networkdays(
+          shiftInternal(startDate, colDelta, rowDelta),
+          shiftInternal(endDate, colDelta, rowDelta),
+          holidays.map(shiftRange(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+      case Workday(startDate, days, holidays) =>
+        Workday(
+          shiftInternal(startDate, colDelta, rowDelta),
+          shiftInternal(days, colDelta, rowDelta),
+          holidays.map(shiftRange(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+      case Yearfrac(startDate, endDate, basis) =>
+        Yearfrac(
+          shiftInternal(startDate, colDelta, rowDelta),
+          shiftInternal(endDate, colDelta, rowDelta),
+          shiftInternal(basis, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+
       // Financial functions
       case Npv(rate, values) =>
         Npv(shiftInternal(rate, colDelta, rowDelta), shiftRange(values, colDelta, rowDelta))

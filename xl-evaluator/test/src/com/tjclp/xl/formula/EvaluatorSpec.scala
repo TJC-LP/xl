@@ -996,3 +996,207 @@ class EvaluatorSpec extends ScalaCheckSuite:
         assert(n > BigDecimal("0.30") && n < BigDecimal("0.45"), s"Expected XIRR around 0.37, got $n")
       case other => fail(s"Expected Number, got $other")
   }
+
+  // ==================== Date Calculation Functions Tests ====================
+
+  test("EOMONTH: returns last day of target month") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 15, 0, 0))
+    )
+    // EOMONTH(2025-01-15, 1) = 2025-02-28
+    sheet.evaluateFormula("=EOMONTH(A1, 1)") match
+      case Right(CellValue.DateTime(dt)) =>
+        assert(dt.getYear == 2025)
+        assert(dt.getMonthValue == 2)
+        assert(dt.getDayOfMonth == 28)
+      case other => fail(s"Expected DateTime, got $other")
+  }
+
+  test("EOMONTH: handles negative months") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 3, 15, 0, 0))
+    )
+    // EOMONTH(2025-03-15, -1) = 2025-02-28
+    sheet.evaluateFormula("=EOMONTH(A1, -1)") match
+      case Right(CellValue.DateTime(dt)) =>
+        assert(dt.getYear == 2025)
+        assert(dt.getMonthValue == 2)
+        assert(dt.getDayOfMonth == 28)
+      case other => fail(s"Expected DateTime, got $other")
+  }
+
+  test("EDATE: adds months to date") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 15, 0, 0))
+    )
+    // EDATE(2025-01-15, 3) = 2025-04-15
+    sheet.evaluateFormula("=EDATE(A1, 3)") match
+      case Right(CellValue.DateTime(dt)) =>
+        assert(dt.getYear == 2025)
+        assert(dt.getMonthValue == 4)
+        assert(dt.getDayOfMonth == 15)
+      case other => fail(s"Expected DateTime, got $other")
+  }
+
+  test("EDATE: clamps to end of month") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 31, 0, 0))
+    )
+    // EDATE(2025-01-31, 1) = 2025-02-28 (clamped)
+    sheet.evaluateFormula("=EDATE(A1, 1)") match
+      case Right(CellValue.DateTime(dt)) =>
+        assert(dt.getYear == 2025)
+        assert(dt.getMonthValue == 2)
+        assert(dt.getDayOfMonth == 28)
+      case other => fail(s"Expected DateTime, got $other")
+  }
+
+  test("DATEDIF: calculates years between dates") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2020, 1, 1, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 6, 15, 0, 0))
+    )
+    sheet.evaluateFormula("""=DATEDIF(A1, B1, "Y")""") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(5))
+      case other => fail(s"Expected Number(5), got $other")
+  }
+
+  test("DATEDIF: calculates months between dates") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 1, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 4, 15, 0, 0))
+    )
+    sheet.evaluateFormula("""=DATEDIF(A1, B1, "M")""") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(3))
+      case other => fail(s"Expected Number(3), got $other")
+  }
+
+  test("DATEDIF: calculates days between dates") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 1, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 11, 0, 0))
+    )
+    sheet.evaluateFormula("""=DATEDIF(A1, B1, "D")""") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(10))
+      case other => fail(s"Expected Number(10), got $other")
+  }
+
+  test("DATEDIF MD: handles month boundary correctly") {
+    import java.time.LocalDateTime
+    // Jan 31 to Mar 1 = 1 day (ignoring months/years)
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 31, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 3, 1, 0, 0))
+    )
+    sheet.evaluateFormula("""=DATEDIF(A1, B1, "MD")""") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(1))
+      case other => fail(s"Expected Number(1), got $other")
+  }
+
+  test("NETWORKDAYS: counts working days (Mon-Fri)") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      // Mon 2025-01-06 to Fri 2025-01-10 = 5 working days
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 6, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 10, 0, 0))
+    )
+    sheet.evaluateFormula("=NETWORKDAYS(A1, B1)") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(5))
+      case other => fail(s"Expected Number(5), got $other")
+  }
+
+  test("NETWORKDAYS: excludes weekends") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      // Mon 2025-01-06 to Mon 2025-01-13 = 6 working days (8 days - 2 weekend days)
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 6, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 13, 0, 0))
+    )
+    sheet.evaluateFormula("=NETWORKDAYS(A1, B1)") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(6))
+      case other => fail(s"Expected Number(6), got $other")
+  }
+
+  test("NETWORKDAYS: excludes holidays from range") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      // Mon 2025-01-06 to Fri 2025-01-10 = 5 working days normally
+      // But Wed 2025-01-08 is a holiday, so only 4 working days
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 6, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 10, 0, 0)),
+      ARef.from0(2, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 8, 0, 0)) // Holiday: Wed
+    )
+    sheet.evaluateFormula("=NETWORKDAYS(A1, B1, C1:C1)") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(4))
+      case other => fail(s"Expected Number(4), got $other")
+  }
+
+  test("WORKDAY: adds working days") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      // Starting Mon 2025-01-06, add 5 working days = Fri 2025-01-10
+      // But WORKDAY starts counting from next day, so 5 days from Mon = Mon+5 = next Mon? Let me check
+      // Actually WORKDAY(2025-01-06, 5) should give 2025-01-13 (Mon + 5 working days = next Mon)
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 6, 0, 0))
+    )
+    sheet.evaluateFormula("=WORKDAY(A1, 5)") match
+      case Right(CellValue.DateTime(dt)) =>
+        assert(dt.getYear == 2025)
+        assert(dt.getMonthValue == 1)
+        assertEquals(dt.getDayOfMonth, 13) // Mon + 5 working days = next Mon
+      case other => fail(s"Expected DateTime, got $other")
+  }
+
+  test("WORKDAY: handles negative days") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      // Starting Fri 2025-01-10, subtract 5 working days = Mon 2025-01-03
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 10, 0, 0))
+    )
+    sheet.evaluateFormula("=WORKDAY(A1, -5)") match
+      case Right(CellValue.DateTime(dt)) =>
+        assert(dt.getYear == 2025)
+        assert(dt.getMonthValue == 1)
+        assertEquals(dt.getDayOfMonth, 3) // Fri - 5 working days = previous Mon
+      case other => fail(s"Expected DateTime, got $other")
+  }
+
+  test("YEARFRAC: calculates year fraction with actual/actual basis") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 1, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 7, 1, 0, 0))
+    )
+    // 181 days / 365 days ≈ 0.496
+    sheet.evaluateFormula("=YEARFRAC(A1, B1, 1)") match
+      case Right(CellValue.Number(n)) =>
+        assert(n > BigDecimal("0.49") && n < BigDecimal("0.50"), s"Expected ~0.496, got $n")
+      case other => fail(s"Expected Number, got $other")
+  }
+
+  test("YEARFRAC: default basis is US 30/360") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 1, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 7, 1, 0, 0))
+    )
+    // 30/360: 6 months = 180 days, 180/360 = 0.5
+    sheet.evaluateFormula("=YEARFRAC(A1, B1)") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal("0.5"))
+      case other => fail(s"Expected Number(0.5), got $other")
+  }

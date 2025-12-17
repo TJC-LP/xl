@@ -11,10 +11,10 @@ Detailed specifications for `view --format` options.
 | csv | CSV text | - |
 | html | HTML table | - |
 | svg | SVG vector | - |
-| png | PNG image | ImageMagick, `--raster-output` |
-| jpeg | JPEG image | ImageMagick, `--raster-output` |
+| png | PNG image | `--raster-output` (Batik built-in) |
+| jpeg | JPEG image | `--raster-output` (Batik built-in) |
 | webp | WebP image | ImageMagick, `--raster-output` |
-| pdf | PDF document | ImageMagick, `--raster-output` |
+| pdf | PDF document | `--raster-output` (Batik built-in) |
 
 ## JSON Schema
 
@@ -45,6 +45,7 @@ Detailed specifications for `view --format` options.
 | `--dpi <n>` | Resolution | 144 |
 | `--quality <n>` | JPEG quality 1-100 | 90 |
 | `--show-labels` | Add row/column headers | false |
+| `--use-imagemagick` | Use ImageMagick (instead of Batik) | false |
 
 ## CSV Options
 
@@ -69,9 +70,13 @@ xl -f data.xlsx view A1:E20 --format png --raster-output chart.png --show-labels
 xl -f data.xlsx view A1:E20 --format jpeg --raster-output chart.jpg --quality 85
 ```
 
-## ImageMagick Installation
+## ImageMagick (Optional)
 
-Required for PNG/JPEG/WebP/PDF export:
+PNG, JPEG, and PDF export use Batik (built-in) by default.
+ImageMagick is only needed for:
+- WebP format
+- GraalVM native image builds (where AWT is unavailable)
+- Using `--use-imagemagick` flag explicitly
 
 ```bash
 # macOS

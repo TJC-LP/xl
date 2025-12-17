@@ -863,7 +863,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("FunctionParser.allFunctions includes all 40 functions") {
+  test("FunctionParser.allFunctions includes all 46 functions") {
     val functions = FunctionParser.allFunctions
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -896,7 +896,14 @@ class FormulaParserSpec extends ScalaCheckSuite:
     // Date-based financial functions
     assert(functions.contains("XNPV"))
     assert(functions.contains("XIRR"))
-    assertEquals(functions.length, 40)
+    // Date calculation functions
+    assert(functions.contains("EOMONTH"))
+    assert(functions.contains("EDATE"))
+    assert(functions.contains("DATEDIF"))
+    assert(functions.contains("NETWORKDAYS"))
+    assert(functions.contains("WORKDAY"))
+    assert(functions.contains("YEARFRAC"))
+    assertEquals(functions.length, 46)
   }
 
   test("FunctionParser.lookup finds known functions") {
@@ -947,4 +954,82 @@ class FormulaParserSpec extends ScalaCheckSuite:
         assert(values.end == ref"A5")
         assert(guess.isDefined)
       case _ => fail("Expected TExpr.Xirr with guess")
+  }
+
+  // ==================== Date Calculation Function Parsing Tests ====================
+
+  test("parses EOMONTH(start_date, months)") {
+    val result = FormulaParser.parse("=EOMONTH(A1, 1)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Eomonth(_, _)) => () // Just verify type
+      case _ => fail("Expected TExpr.Eomonth")
+  }
+
+  test("parses EDATE(start_date, months)") {
+    val result = FormulaParser.parse("=EDATE(A1, 3)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Edate(_, _)) => () // Just verify type
+      case _ => fail("Expected TExpr.Edate")
+  }
+
+  test("parses DATEDIF(start, end, unit)") {
+    val result = FormulaParser.parse("""=DATEDIF(A1, B1, "Y")""")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Datedif(_, _, _)) => () // Just verify type
+      case _ => fail("Expected TExpr.Datedif")
+  }
+
+  test("parses NETWORKDAYS(start, end)") {
+    val result = FormulaParser.parse("=NETWORKDAYS(A1, B1)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Networkdays(_, _, holidays)) =>
+        assert(holidays.isEmpty)
+      case _ => fail("Expected TExpr.Networkdays")
+  }
+
+  test("parses NETWORKDAYS(start, end, holidays)") {
+    val result = FormulaParser.parse("=NETWORKDAYS(A1, B1, C1:C10)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Networkdays(_, _, holidays)) =>
+        assert(holidays.isDefined)
+      case _ => fail("Expected TExpr.Networkdays with holidays")
+  }
+
+  test("parses WORKDAY(start, days)") {
+    val result = FormulaParser.parse("=WORKDAY(A1, 5)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Workday(_, _, holidays)) =>
+        assert(holidays.isEmpty)
+      case _ => fail("Expected TExpr.Workday")
+  }
+
+  test("parses WORKDAY(start, days, holidays)") {
+    val result = FormulaParser.parse("=WORKDAY(A1, 5, C1:C10)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Workday(_, _, holidays)) =>
+        assert(holidays.isDefined)
+      case _ => fail("Expected TExpr.Workday with holidays")
+  }
+
+  test("parses YEARFRAC(start, end)") {
+    val result = FormulaParser.parse("=YEARFRAC(A1, B1)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Yearfrac(_, _, _)) => () // Just verify type
+      case _ => fail("Expected TExpr.Yearfrac")
+  }
+
+  test("parses YEARFRAC(start, end, basis)") {
+    val result = FormulaParser.parse("=YEARFRAC(A1, B1, 1)")
+    assert(result.isRight)
+    result match
+      case Right(TExpr.Yearfrac(_, _, _)) => () // Just verify type
+      case _ => fail("Expected TExpr.Yearfrac with basis")
   }
