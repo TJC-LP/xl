@@ -49,6 +49,43 @@ object `package` extends build.XLInternalModule with NativeImageModule {
     "--initialize-at-build-time=scala.runtime.Statics"
   )
 
+  // Override nativeImage to use argument file (fixes Windows command line length limit)
+  // Windows has ~8191 char limit; our classpath exceeds this
+  override def nativeImage: T[PathRef] = Task {
+    val dest = Task.dest
+    val argFile = dest / "native-image.args"
+    val outputPath = dest / "native-executable"
+
+    // Get native-image executable path from NativeImageModule
+    val nativeImageExe = nativeImageTool().path
+
+    // Build classpath string
+    val classpath = nativeImageClasspath().map(_.path).mkString(java.io.File.pathSeparator)
+
+    // Collect all arguments
+    val args = Seq(
+      "-cp",
+      classpath,
+      "-o",
+      outputPath.toString
+    ) ++ nativeImageOptions() ++ Seq(
+      finalMainClass()
+    )
+
+    // Write arguments to file (one per line for readability)
+    os.write(argFile, args.mkString("\n"))
+
+    // Call native-image with argument file
+    os.proc(nativeImageExe, s"@${argFile}").call(cwd = dest)
+
+    // Return the executable (with .exe on Windows)
+    val isWindows = System.getProperty("os.name", "").toLowerCase.contains("windows")
+    val finalPath =
+      if (isWindows) os.Path(outputPath.toString + ".exe")
+      else outputPath
+    PathRef(finalPath)
+  }
+
   object test extends ScalaTests with build.XLTestModule {
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.0.3",

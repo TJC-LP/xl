@@ -400,15 +400,7 @@ private class EvaluatorImpl extends Evaluator:
 
           // Count working days (Mon-Fri, excluding holidays)
           val (earlier, later) = if start.isBefore(end) then (start, end) else (end, start)
-          var count = 0
-          var current = earlier
-          while !current.isAfter(later) do
-            val dayOfWeek = current.getDayOfWeek
-            if dayOfWeek != java.time.DayOfWeek.SATURDAY &&
-              dayOfWeek != java.time.DayOfWeek.SUNDAY &&
-              !holidays.contains(current)
-            then count += 1
-            current = current.plusDays(1)
+          val count = countWorkingDays(earlier, later, holidays)
           // If dates were reversed, negate the count
           BigDecimal(if start.isBefore(end) || start.isEqual(end) then count else -count)
 
@@ -430,18 +422,7 @@ private class EvaluatorImpl extends Evaluator:
             .getOrElse(Set.empty)
 
           // Add working days (Mon-Fri, skipping holidays)
-          var remaining = daysValue
-          var current = start
-          val direction = if remaining >= 0 then 1L else -1L
-
-          while remaining != 0 do
-            current = current.plusDays(direction)
-            val dayOfWeek = current.getDayOfWeek
-            if dayOfWeek != java.time.DayOfWeek.SATURDAY &&
-              dayOfWeek != java.time.DayOfWeek.SUNDAY &&
-              !holidays.contains(current)
-            then remaining -= direction.toInt
-          current
+          addWorkingDays(start, daysValue, holidays)
 
       case TExpr.Yearfrac(startDate, endDate, basis) =>
         // YEARFRAC: year fraction between dates based on day count basis
@@ -1494,3 +1475,51 @@ private class EvaluatorImpl extends Evaluator:
       case n: Long => CellValue.Number(BigDecimal(n))
       case n: Double => CellValue.Number(BigDecimal(n))
       case other => CellValue.Text(other.toString)
+
+  /**
+   * Count working days (Mon-Fri) between two dates, excluding holidays.
+   *
+   * Uses imperative loop for efficiency - iterating day-by-day is the most straightforward approach
+   * for this date range calculation with weekend/holiday exclusions.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def countWorkingDays(
+    earlier: LocalDate,
+    later: LocalDate,
+    holidays: Set[LocalDate]
+  ): Int =
+    var count = 0
+    var current = earlier
+    while !current.isAfter(later) do
+      val dayOfWeek = current.getDayOfWeek
+      if dayOfWeek != java.time.DayOfWeek.SATURDAY &&
+        dayOfWeek != java.time.DayOfWeek.SUNDAY &&
+        !holidays.contains(current)
+      then count += 1
+      current = current.plusDays(1)
+    count
+
+  /**
+   * Add N working days to a start date, skipping weekends and holidays.
+   *
+   * Uses imperative loop for efficiency - stepping day-by-day while counting only business days is
+   * the most straightforward approach for WORKDAY.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def addWorkingDays(
+    start: LocalDate,
+    daysValue: Int,
+    holidays: Set[LocalDate]
+  ): LocalDate =
+    var remaining = daysValue
+    var current = start
+    val direction = if remaining >= 0 then 1L else -1L
+
+    while remaining != 0 do
+      current = current.plusDays(direction)
+      val dayOfWeek = current.getDayOfWeek
+      if dayOfWeek != java.time.DayOfWeek.SATURDAY &&
+        dayOfWeek != java.time.DayOfWeek.SUNDAY &&
+        !holidays.contains(current)
+      then remaining -= direction.toInt
+    current
