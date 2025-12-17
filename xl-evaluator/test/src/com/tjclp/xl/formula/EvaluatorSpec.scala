@@ -1091,6 +1091,19 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case other => fail(s"Expected Number(10), got $other")
   }
 
+  test("DATEDIF MD: handles month boundary correctly") {
+    import java.time.LocalDateTime
+    // Jan 31 to Mar 1 = 1 day (ignoring months/years)
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 31, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 3, 1, 0, 0))
+    )
+    sheet.evaluateFormula("""=DATEDIF(A1, B1, "MD")""") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(1))
+      case other => fail(s"Expected Number(1), got $other")
+  }
+
   test("NETWORKDAYS: counts working days (Mon-Fri)") {
     import java.time.LocalDateTime
     val sheet = sheetWith(
@@ -1115,6 +1128,21 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case Right(CellValue.Number(n)) =>
         assertEquals(n, BigDecimal(6))
       case other => fail(s"Expected Number(6), got $other")
+  }
+
+  test("NETWORKDAYS: excludes holidays from range") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      // Mon 2025-01-06 to Fri 2025-01-10 = 5 working days normally
+      // But Wed 2025-01-08 is a holiday, so only 4 working days
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 6, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 10, 0, 0)),
+      ARef.from0(2, 0) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 8, 0, 0)) // Holiday: Wed
+    )
+    sheet.evaluateFormula("=NETWORKDAYS(A1, B1, C1:C1)") match
+      case Right(CellValue.Number(n)) =>
+        assertEquals(n, BigDecimal(4))
+      case other => fail(s"Expected Number(4), got $other")
   }
 
   test("WORKDAY: adds working days") {

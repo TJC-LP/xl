@@ -347,12 +347,16 @@ private class EvaluatorImpl extends Evaluator:
               Right(BigDecimal(ChronoUnit.DAYS.between(start, end)))
             case "MD" =>
               // Days ignoring months and years
+              // Excel's MD: days between as if both dates were in the same month
               val daysDiff = end.getDayOfMonth - start.getDayOfMonth
-              val adjustedDays = if daysDiff < 0 then
-                // Adjust for month boundary
-                val prevMonth = end.minusMonths(1)
-                prevMonth.lengthOfMonth + daysDiff
-              else daysDiff
+              val adjustedDays =
+                if daysDiff >= 0 then daysDiff
+                else
+                  // Need to "borrow" from previous month
+                  val prevMonthLength = end.minusMonths(1).lengthOfMonth
+                  // If start day exceeds prev month length, treat as end of prev month
+                  val effectiveStartDay = math.min(start.getDayOfMonth, prevMonthLength)
+                  prevMonthLength - effectiveStartDay + end.getDayOfMonth
               Right(BigDecimal(adjustedDays))
             case "YM" =>
               // Months ignoring years
