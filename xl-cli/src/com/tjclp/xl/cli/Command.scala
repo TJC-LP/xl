@@ -51,6 +51,10 @@ enum CliCommand:
     wrap: Boolean,
     numFormat: Option[String],
     border: Option[String],
+    borderTop: Option[String],
+    borderRight: Option[String],
+    borderBottom: Option[String],
+    borderLeft: Option[String],
     borderColor: Option[String],
     replace: Boolean
   )

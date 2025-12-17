@@ -1,4 +1,7 @@
 //| mvnDeps: ["com.lihaoyi::mill-contrib-jmh:$MILL_VERSION"]
+// Mill 1.1.0-RC3 is used for improved Scala 3.7.3 support and build performance.
+// Tested across all CI platforms (Linux/macOS/Windows). Will upgrade to 1.1.0 stable when released.
+// Version is controlled via .mill-version file.
 import mill._
 import mill.scalalib._
 import mill.scalalib.publish._
@@ -8,17 +11,22 @@ import contrib.jmh.JmhModule
 val scala3Version = "3.7.3"
 val organization = "com.tjclp"
 
+/** Shared build configuration constants */
+object BuildConfig {
+  /** JVM options to silence Scala 3 LazyVals sun.misc.Unsafe deprecation warnings (JDK 21+) */
+  val lazyValsJvmArgs: Seq[String] = Seq(
+    "--add-opens=java.base/sun.misc=ALL-UNNAMED",
+    "-XX:+IgnoreUnrecognizedVMOptions" // Ignore if flag not supported
+  )
+}
+
 /** Base trait for all XL modules - shared compiler settings and formatting */
 trait XLModuleBase extends ScalaModule with ScalafmtModule {
   override def scalaVersion: Task.Simple[String] = scala3Version
   override def javacOptions = Seq("--release", "25") // JDK 25 LTS
 
   // JVM options for forked processes (run, test execution)
-  // Silences Scala 3 LazyVals sun.misc.Unsafe deprecation warnings
-  override def forkArgs: T[Seq[String]] = Seq(
-    "--add-opens=java.base/sun.misc=ALL-UNNAMED",
-    "-XX:+IgnoreUnrecognizedVMOptions"
-  )
+  override def forkArgs: T[Seq[String]] = BuildConfig.lazyValsJvmArgs
 
   // WartRemover compiler plugin for enhanced code quality
   def scalacPluginMvnDeps = Seq(
@@ -83,13 +91,9 @@ trait XLInternalModule extends XLModuleBase
  * Trait for test modules that silences Scala 3 LazyVals sun.misc.Unsafe deprecation warnings.
  *
  * Scala 3's lazy val implementation uses sun.misc.Unsafe internally, which triggers JVM
- * deprecation warnings in Java 21+. This trait adds JVM args to suppress these warnings
- * during test execution.
+ * deprecation warnings in Java 21+. Uses shared BuildConfig.lazyValsJvmArgs to ensure
+ * consistent JVM options across all modules.
  */
 trait XLTestModule extends TestModule.Munit {
-  override def forkArgs: T[Seq[String]] = Seq(
-    // Silence sun.misc.Unsafe deprecation warning from Scala 3 LazyVals
-    "--add-opens=java.base/sun.misc=ALL-UNNAMED",
-    "-XX:+IgnoreUnrecognizedVMOptions" // Ignore if flag not supported
-  )
+  override def forkArgs: T[Seq[String]] = BuildConfig.lazyValsJvmArgs
 }

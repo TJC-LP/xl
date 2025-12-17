@@ -36,6 +36,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Column widths lost on save** (PR #80): Column properties set via API/CLI were overwritten by preserved XML on subsequent operations. Domain properties now take priority over preserved XML.
 
+### Breaking Changes
+
+- **`xl style` command now merges by default** (PR #91): Style commands now merge with existing cell styles instead of replacing them entirely. Use `--replace` flag for the previous behavior.
+  - Before: `xl style A1 --bold` replaced entire cell style with just bold
+  - After: `xl style A1 --bold` adds bold to existing style
+  - Migration: Add `--replace` flag to scripts that rely on replacement behavior
+
+### Changed
+
+- **Per-side border styling** (PR #91): New CLI flags for individual border sides:
+  - `--border-top`, `--border-right`, `--border-bottom`, `--border-left`
+  - Border merging is now per-side (matches Excel behavior)
+
+- **Formula evaluation warnings** (PR #91): `--eval` flag now prints warnings to stderr when formulas fail to evaluate instead of silently continuing.
+
 ---
 
 ## [0.2.3] - 2025-12-07

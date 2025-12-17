@@ -411,8 +411,11 @@ object ReadCommands:
             case Right(result) =>
               // Replace formula with evaluated result, keeping style
               acc.put(ref, result)
-            case Left(_) =>
-              // Keep formula if evaluation fails
+            case Left(error) =>
+              // Warn on stderr but keep formula and continue processing
+              Console.err.println(
+                s"Warning: Failed to evaluate formula at ${ref.toA1}: ${error.message}"
+              )
               acc
         case _ =>
           acc

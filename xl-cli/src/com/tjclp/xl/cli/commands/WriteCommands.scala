@@ -130,6 +130,10 @@ object WriteCommands:
     wrap: Boolean,
     numFormat: Option[String],
     border: Option[String],
+    borderTop: Option[String],
+    borderRight: Option[String],
+    borderBottom: Option[String],
+    borderLeft: Option[String],
     borderColor: Option[String],
     replace: Boolean,
     outputPath: Path
@@ -153,6 +157,10 @@ object WriteCommands:
         wrap,
         numFormat,
         border,
+        borderTop,
+        borderRight,
+        borderBottom,
+        borderLeft,
         borderColor
       )
       // Apply style to each cell, either replacing or merging

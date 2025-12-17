@@ -188,6 +188,247 @@ class V030RegressionSpec extends CatsEffectSuite:
     }
   }
 
+  // ========== Per-Side Border Control Tests (PR #91) ==========
+
+  test("mergeStyles: per-side border merge preserves existing top when adding bottom") {
+    val existing = CellStyle.default.copy(
+      border = Border(
+        top = BorderSide(BorderStyle.Thick, None),
+        bottom = BorderSide.none,
+        left = BorderSide.none,
+        right = BorderSide.none
+      )
+    )
+    val newStyle = CellStyle.default.copy(
+      border = Border(
+        top = BorderSide.none,
+        bottom = BorderSide(BorderStyle.Thin, None),
+        left = BorderSide.none,
+        right = BorderSide.none
+      )
+    )
+
+    val merged = StyleBuilder.mergeStyles(existing, newStyle)
+
+    assertEquals(merged.border.top.style, BorderStyle.Thick, "Top should be preserved")
+    assertEquals(merged.border.bottom.style, BorderStyle.Thin, "Bottom should be added")
+    assertEquals(merged.border.left.style, BorderStyle.None, "Left should remain none")
+    assertEquals(merged.border.right.style, BorderStyle.None, "Right should remain none")
+  }
+
+  test("mergeStyles: per-side border merge preserves all existing sides when new has none") {
+    val existing = CellStyle.default.copy(
+      border = Border.all(BorderStyle.Medium, None)
+    )
+    val newStyle = CellStyle.default.copy(
+      border = Border.none
+    )
+
+    val merged = StyleBuilder.mergeStyles(existing, newStyle)
+
+    assertEquals(merged.border.top.style, BorderStyle.Medium, "Top should be preserved")
+    assertEquals(merged.border.bottom.style, BorderStyle.Medium, "Bottom should be preserved")
+    assertEquals(merged.border.left.style, BorderStyle.Medium, "Left should be preserved")
+    assertEquals(merged.border.right.style, BorderStyle.Medium, "Right should be preserved")
+  }
+
+  test("mergeStyles: per-side border new side overrides existing same side") {
+    val existing = CellStyle.default.copy(
+      border = Border(
+        top = BorderSide(BorderStyle.Thin, None),
+        bottom = BorderSide(BorderStyle.Thin, None),
+        left = BorderSide(BorderStyle.Thin, None),
+        right = BorderSide(BorderStyle.Thin, None)
+      )
+    )
+    val newStyle = CellStyle.default.copy(
+      border = Border(
+        top = BorderSide(BorderStyle.Thick, None), // Override top
+        bottom = BorderSide.none, // Keep existing
+        left = BorderSide(BorderStyle.Double, None), // Override left
+        right = BorderSide.none // Keep existing
+      )
+    )
+
+    val merged = StyleBuilder.mergeStyles(existing, newStyle)
+
+    assertEquals(merged.border.top.style, BorderStyle.Thick, "Top should be overridden to Thick")
+    assertEquals(merged.border.bottom.style, BorderStyle.Thin, "Bottom should be preserved as Thin")
+    assertEquals(merged.border.left.style, BorderStyle.Double, "Left should be overridden to Double")
+    assertEquals(merged.border.right.style, BorderStyle.Thin, "Right should be preserved as Thin")
+  }
+
+  test("mergeStyles: per-side border preserves color from existing when new has no color") {
+    val blueColor = Color.fromRgb(0, 0, 255)
+    val existing = CellStyle.default.copy(
+      border = Border(
+        top = BorderSide(BorderStyle.Thin, Some(blueColor)),
+        bottom = BorderSide.none,
+        left = BorderSide.none,
+        right = BorderSide.none
+      )
+    )
+    val newStyle = CellStyle.default.copy(
+      border = Border(
+        top = BorderSide.none, // Don't touch top
+        bottom = BorderSide(BorderStyle.Thin, None), // Add bottom without color
+        left = BorderSide.none,
+        right = BorderSide.none
+      )
+    )
+
+    val merged = StyleBuilder.mergeStyles(existing, newStyle)
+
+    assertEquals(merged.border.top.style, BorderStyle.Thin, "Top style preserved")
+    assertEquals(merged.border.top.color, Some(blueColor), "Top color preserved")
+    assertEquals(merged.border.bottom.style, BorderStyle.Thin, "Bottom added")
+    assertEquals(merged.border.bottom.color, None, "Bottom has no color")
+  }
+
+  test("buildCellStyle: --border sets all sides") {
+    StyleBuilder
+      .buildCellStyle(
+        bold = false,
+        italic = false,
+        underline = false,
+        bg = None,
+        fg = None,
+        fontSize = None,
+        fontName = None,
+        align = None,
+        valign = None,
+        wrap = false,
+        numFormat = None,
+        border = Some("thin"),
+        borderTop = None,
+        borderRight = None,
+        borderBottom = None,
+        borderLeft = None,
+        borderColor = None
+      )
+      .map { style =>
+        assertEquals(style.border.top.style, BorderStyle.Thin)
+        assertEquals(style.border.right.style, BorderStyle.Thin)
+        assertEquals(style.border.bottom.style, BorderStyle.Thin)
+        assertEquals(style.border.left.style, BorderStyle.Thin)
+      }
+  }
+
+  test("buildCellStyle: per-side options override --border") {
+    StyleBuilder
+      .buildCellStyle(
+        bold = false,
+        italic = false,
+        underline = false,
+        bg = None,
+        fg = None,
+        fontSize = None,
+        fontName = None,
+        align = None,
+        valign = None,
+        wrap = false,
+        numFormat = None,
+        border = Some("thin"), // Base: all thin
+        borderTop = Some("thick"), // Override: top thick
+        borderRight = None, // Keep thin
+        borderBottom = Some("medium"), // Override: bottom medium
+        borderLeft = None, // Keep thin
+        borderColor = None
+      )
+      .map { style =>
+        assertEquals(style.border.top.style, BorderStyle.Thick, "Top overridden to Thick")
+        assertEquals(style.border.right.style, BorderStyle.Thin, "Right stays Thin")
+        assertEquals(style.border.bottom.style, BorderStyle.Medium, "Bottom overridden to Medium")
+        assertEquals(style.border.left.style, BorderStyle.Thin, "Left stays Thin")
+      }
+  }
+
+  test("buildCellStyle: per-side options only (no --border base)") {
+    StyleBuilder
+      .buildCellStyle(
+        bold = false,
+        italic = false,
+        underline = false,
+        bg = None,
+        fg = None,
+        fontSize = None,
+        fontName = None,
+        align = None,
+        valign = None,
+        wrap = false,
+        numFormat = None,
+        border = None, // No base
+        borderTop = Some("thick"), // Only top
+        borderRight = None,
+        borderBottom = None,
+        borderLeft = Some("dashed"), // Only left
+        borderColor = None
+      )
+      .map { style =>
+        assertEquals(style.border.top.style, BorderStyle.Thick, "Top is Thick")
+        assertEquals(style.border.right.style, BorderStyle.None, "Right is None")
+        assertEquals(style.border.bottom.style, BorderStyle.None, "Bottom is None")
+        assertEquals(style.border.left.style, BorderStyle.Dashed, "Left is Dashed")
+      }
+  }
+
+  test("buildCellStyle: border color applies to all specified sides") {
+    StyleBuilder
+      .buildCellStyle(
+        bold = false,
+        italic = false,
+        underline = false,
+        bg = None,
+        fg = None,
+        fontSize = None,
+        fontName = None,
+        align = None,
+        valign = None,
+        wrap = false,
+        numFormat = None,
+        border = None,
+        borderTop = Some("thin"),
+        borderRight = None,
+        borderBottom = Some("thin"),
+        borderLeft = None,
+        borderColor = Some("#FF0000") // Red
+      )
+      .map { style =>
+        // Top and bottom should have red color
+        assert(style.border.top.color.isDefined, "Top should have color")
+        assert(style.border.bottom.color.isDefined, "Bottom should have color")
+        // Right and left are None style, so color doesn't matter
+        assertEquals(style.border.right.style, BorderStyle.None)
+        assertEquals(style.border.left.style, BorderStyle.None)
+      }
+  }
+
+  test("buildCellStyle: no borders when all options are None") {
+    StyleBuilder
+      .buildCellStyle(
+        bold = false,
+        italic = false,
+        underline = false,
+        bg = None,
+        fg = None,
+        fontSize = None,
+        fontName = None,
+        align = None,
+        valign = None,
+        wrap = false,
+        numFormat = None,
+        border = None,
+        borderTop = None,
+        borderRight = None,
+        borderBottom = None,
+        borderLeft = None,
+        borderColor = None
+      )
+      .map { style =>
+        assertEquals(style.border, Border.none, "Border should be none")
+      }
+  }
+
   // Helper to access Format.formatStyle (which is private)
   // We test via the public cellInfo method
   private def formatStyleHelper(style: Option[CellStyle]): Option[String] =

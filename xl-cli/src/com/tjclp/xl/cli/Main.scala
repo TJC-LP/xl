@@ -264,7 +264,15 @@ object Main
       .option[String]("format", "Number format: general, number, currency, percent, date, text")
       .orNone
   private val borderOpt =
-    Opts.option[String]("border", "Border style: none, thin, medium, thick").orNone
+    Opts.option[String]("border", "Border style for all sides: none, thin, medium, thick").orNone
+  private val borderTopOpt =
+    Opts.option[String]("border-top", "Top border style: none, thin, medium, thick").orNone
+  private val borderRightOpt =
+    Opts.option[String]("border-right", "Right border style: none, thin, medium, thick").orNone
+  private val borderBottomOpt =
+    Opts.option[String]("border-bottom", "Bottom border style: none, thin, medium, thick").orNone
+  private val borderLeftOpt =
+    Opts.option[String]("border-left", "Left border style: none, thin, medium, thick").orNone
   private val borderColorOpt = Opts.option[String]("border-color", "Border color").orNone
   private val replaceOpt = Opts
     .flag("replace", "Replace entire style instead of merging with existing")
@@ -285,6 +293,10 @@ object Main
       wrapOpt,
       numFormatOpt,
       borderOpt,
+      borderTopOpt,
+      borderRightOpt,
+      borderBottomOpt,
+      borderLeftOpt,
       borderColorOpt,
       replaceOpt
     ).mapN(CliCommand.Style.apply)
@@ -495,6 +507,10 @@ object Main
           wrap,
           numFormat,
           border,
+          borderTop,
+          borderRight,
+          borderBottom,
+          borderLeft,
           borderColor,
           replace
         ) =>
@@ -515,6 +531,10 @@ object Main
           wrap,
           numFormat,
           border,
+          borderTop,
+          borderRight,
+          borderBottom,
+          borderLeft,
           borderColor,
           replace,
           outputPath

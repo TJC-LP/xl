@@ -3,6 +3,8 @@ package com.tjclp.xl.cli.raster
 import java.io.StringReader
 import java.nio.file.{Files, Path}
 
+import scala.util.Using
+
 import cats.effect.IO
 
 import org.apache.batik.transcoder.{SVGAbstractTranscoder, TranscoderInput, TranscoderOutput}
@@ -17,7 +19,6 @@ import org.apache.batik.transcoder.image.{ImageTranscoder, JPEGTranscoder, PNGTr
  *   - Better error handling (no subprocess failures)
  *   - Works in headless environments
  */
-@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf")) // Required for dynamic FOP loading
 object BatikRasterizer:
 
   /** Supported output formats */
@@ -154,6 +155,7 @@ object BatikRasterizer:
    * Note: Requires batik-extension or fop-transcoder for PDF support. Falls back to error if not
    * available.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf")) // Required for dynamic FOP loading
   private def convertToPdf(svg: String, outputPath: Path, dpi: Int): IO[Unit] =
     IO.blocking {
       // Try to load PDF transcoder dynamically
@@ -182,15 +184,21 @@ object BatikRasterizer:
     }
 
   /**
-   * Common transcoding logic.
+   * Common transcoding logic. Uses idiomatic Using for resource management and cleans up partial
+   * files on failure.
    */
   private def transcode(transcoder: ImageTranscoder, svg: String, outputPath: Path): Unit =
     val input = new TranscoderInput(new StringReader(svg))
-    val outputStream = Files.newOutputStream(outputPath)
-    try
+    Using(Files.newOutputStream(outputPath)) { outputStream =>
       val output = new TranscoderOutput(outputStream)
       transcoder.transcode(input, output)
-    finally outputStream.close()
+    }.fold(
+      { e =>
+        Files.deleteIfExists(outputPath) // Clean up partial file on failure
+        throw e
+      },
+      identity
+    )
 
   /**
    * Check if Batik rasterization is available (always true since it's bundled).
