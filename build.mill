@@ -13,6 +13,13 @@ trait XLModuleBase extends ScalaModule with ScalafmtModule {
   override def scalaVersion: Task.Simple[String] = scala3Version
   override def javacOptions = Seq("--release", "25") // JDK 25 LTS
 
+  // JVM options for forked processes (run, test execution)
+  // Silences Scala 3 LazyVals sun.misc.Unsafe deprecation warnings
+  override def forkArgs: T[Seq[String]] = Seq(
+    "--add-opens=java.base/sun.misc=ALL-UNNAMED",
+    "-XX:+IgnoreUnrecognizedVMOptions"
+  )
+
   // WartRemover compiler plugin for enhanced code quality
   def scalacPluginMvnDeps = Seq(
     mvn"org.wartremover:::wartremover:3.4.1"
@@ -71,3 +78,18 @@ trait XLModule extends XLModuleBase with PublishModule {
 
 /** Trait for internal modules that should not be published (CLI, benchmarks, testkit) */
 trait XLInternalModule extends XLModuleBase
+
+/**
+ * Trait for test modules that silences Scala 3 LazyVals sun.misc.Unsafe deprecation warnings.
+ *
+ * Scala 3's lazy val implementation uses sun.misc.Unsafe internally, which triggers JVM
+ * deprecation warnings in Java 21+. This trait adds JVM args to suppress these warnings
+ * during test execution.
+ */
+trait XLTestModule extends TestModule.Munit {
+  override def forkArgs: T[Seq[String]] = Seq(
+    // Silence sun.misc.Unsafe deprecation warning from Scala 3 LazyVals
+    "--add-opens=java.base/sun.misc=ALL-UNNAMED",
+    "-XX:+IgnoreUnrecognizedVMOptions" // Ignore if flag not supported
+  )
+}

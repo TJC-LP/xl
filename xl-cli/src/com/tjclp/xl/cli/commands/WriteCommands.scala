@@ -110,6 +110,9 @@ object WriteCommands:
 
   /**
    * Apply styling to cells.
+   *
+   * By default, merges specified style properties with existing cell styles. Use replace=true to
+   * replace the entire style instead of merging.
    */
   def style(
     wb: Workbook,
@@ -128,6 +131,7 @@ object WriteCommands:
     numFormat: Option[String],
     border: Option[String],
     borderColor: Option[String],
+    replace: Boolean,
     outputPath: Path
   ): IO[String] =
     for
@@ -136,7 +140,7 @@ object WriteCommands:
       range = refOrRange match
         case Right(r) => r
         case Left(ref) => CellRange(ref, ref)
-      cellStyle <- StyleBuilder.buildCellStyle(
+      newStyle <- StyleBuilder.buildCellStyle(
         bold,
         italic,
         underline,
@@ -151,7 +155,22 @@ object WriteCommands:
         border,
         borderColor
       )
-      updatedSheet = styleSyntax.withRangeStyle(targetSheet)(range, cellStyle)
+      // Apply style to each cell, either replacing or merging
+      updatedSheet =
+        if replace then
+          // Replace mode: apply style uniformly to all cells
+          styleSyntax.withRangeStyle(targetSheet)(range, newStyle)
+        else
+          // Merge mode: merge with each cell's existing style
+          range.cells.foldLeft(targetSheet) { (sheet, ref) =>
+            val existingStyle = sheet.cells
+              .get(ref)
+              .flatMap(_.styleId)
+              .flatMap(sheet.styleRegistry.get)
+              .getOrElse(CellStyle.default)
+            val mergedStyle = StyleBuilder.mergeStyles(existingStyle, newStyle)
+            styleSyntax.withRangeStyle(sheet)(CellRange(ref, ref), mergedStyle)
+          }
       updatedWb = wb.put(updatedSheet)
       _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
       appliedList = StyleBuilder.buildStyleDescription(
@@ -168,7 +187,8 @@ object WriteCommands:
         numFormat,
         border
       )
-    yield s"Styled: ${range.toA1}\nApplied: ${appliedList.mkString(", ")}\nSaved: $outputPath"
+      modeLabel = if replace then " (replace)" else " (merge)"
+    yield s"Styled: ${range.toA1}$modeLabel\nApplied: ${appliedList.mkString(", ")}\nSaved: $outputPath"
 
   /**
    * Set row properties (height, hide/show).

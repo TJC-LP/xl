@@ -12,7 +12,7 @@ object `package` extends build.XLModule {
     mvn"org.typelevel::cats-core:2.12.0"
   )
 
-  object test extends ScalaTests with TestModule.Munit {
+  object test extends ScalaTests with build.XLTestModule {
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.0.3",
       mvn"org.scalameta::munit-scalacheck:1.2.0",

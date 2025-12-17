@@ -161,3 +161,63 @@ object StyleBuilder:
       case "text" => Right(NumFmt.Text)
       case other =>
         Left(s"Unknown number format: $other. Use general, number, currency, percent, date, text")
+
+  /**
+   * Merge two CellStyles, applying non-default values from newStyle to existingStyle.
+   *
+   * The merge logic applies each component from newStyle only if it differs from the default,
+   * otherwise preserves the value from existingStyle.
+   */
+  def mergeStyles(existingStyle: CellStyle, newStyle: CellStyle): CellStyle =
+    val defaultStyle = CellStyle.default
+
+    // Merge fonts: apply non-default properties from newStyle
+    val mergedFont = {
+      val existing = existingStyle.font
+      val newer = newStyle.font
+      val default = Font.default
+      existing
+        .withBold(if newer.bold != default.bold then newer.bold else existing.bold)
+        .withItalic(if newer.italic != default.italic then newer.italic else existing.italic)
+        .withUnderline(
+          if newer.underline != default.underline then newer.underline else existing.underline
+        )
+        .pipe(f =>
+          if newer.color != default.color then newer.color.map(f.withColor).getOrElse(f) else f
+        )
+        .pipe(f => if newer.sizePt != default.sizePt then f.withSize(newer.sizePt) else f)
+        .pipe(f => if newer.name != default.name then f.withName(newer.name) else f)
+    }
+
+    // Merge fill: use newStyle if not None
+    val mergedFill =
+      if newStyle.fill != Fill.None then newStyle.fill else existingStyle.fill
+
+    // Merge border: use newStyle if not none
+    val mergedBorder =
+      if newStyle.border != Border.none then newStyle.border else existingStyle.border
+
+    // Merge numFmt: use newStyle if not General
+    val mergedNumFmt =
+      if newStyle.numFmt != NumFmt.General then newStyle.numFmt else existingStyle.numFmt
+
+    // Merge alignment: apply non-default properties
+    val mergedAlign = {
+      val existing = existingStyle.align
+      val newer = newStyle.align
+      val default = Align.default
+      existing
+        .pipe(a =>
+          if newer.horizontal != default.horizontal then a.withHAlign(newer.horizontal) else a
+        )
+        .pipe(a => if newer.vertical != default.vertical then a.withVAlign(newer.vertical) else a)
+        .pipe(a => if newer.wrapText != default.wrapText then a.withWrap(newer.wrapText) else a)
+    }
+
+    CellStyle(
+      font = mergedFont,
+      fill = mergedFill,
+      border = mergedBorder,
+      numFmt = mergedNumFmt,
+      align = mergedAlign
+    )

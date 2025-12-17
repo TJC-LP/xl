@@ -20,6 +20,7 @@ import java.nio.file.{Files, Path}
  *
  * XL provides `CellValue.escape()` and `WriterConfig.secure` to prevent these attacks.
  */
+@SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 class FormulaInjectionSpec extends FunSuite:
 
   // ========== CellValue.escape() tests ==========

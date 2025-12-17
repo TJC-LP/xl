@@ -14,7 +14,7 @@ object `package` extends build.XLInternalModule {
     mvn"org.typelevel::scalacheck-effect:1.0.4"
   )
 
-  object test extends ScalaTests with TestModule.Munit {
+  object test extends ScalaTests with build.XLTestModule {
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.0.3",
       mvn"org.scalacheck::scalacheck:1.18.1"
