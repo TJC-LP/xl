@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > **Guiding Principle**: You are working on **the best Excel library in the world**. Before making any decision, ask yourself: **"What would the best Excel library in the world do?"**
 
-**Package**: `com.tjclp.xl` | **Build**: Mill 0.12.x | **Scala**: 3.7.3
+**Package**: `com.tjclp.xl` | **Build**: Mill 0.12.x | **Scala**: 3.7.4
 
 ## Core Philosophy (Non-Negotiables)
 

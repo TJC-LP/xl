@@ -122,7 +122,7 @@ Demonstrates declarative sheet updates using the Patch DSL.
 Create a new `.sc` script file with scala-cli directives:
 
 ```scala
-//> using scala 3.7.3
+//> using scala 3.7.4
 //> using dep com.tjclp::xl:0.4.0
 
 import com.tjclp.xl.{*, given}

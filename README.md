@@ -6,7 +6,7 @@
 **The best Excel library for Scala.** Type-safe, purely functional, blazing fast.
 
 ```scala 3 raw
-//> using scala 3.7.3
+//> using scala 3.7.4
 //> using dep com.tjclp::xl:0.4.0
 
 import com.tjclp.xl.{*, given}

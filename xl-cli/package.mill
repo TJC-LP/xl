@@ -8,8 +8,8 @@ object `package` extends build.XLInternalModule with NativeImageModule {
   override def moduleDeps = Seq(build.`xl-cats-effect`, build.`xl-evaluator`)
 
   override def mvnDeps = Seq(
-    mvn"com.monovore::decline-effect:2.4.1",
-    mvn"org.typelevel::cats-effect:3.5.7",
+    mvn"com.monovore::decline-effect:2.5.0",
+    mvn"org.typelevel::cats-effect:3.6.3",
     // Apache Batik for SVG->raster conversion (eliminates ImageMagick dependency)
     mvn"org.apache.xmlgraphics:batik-transcoder:1.19",
     mvn"org.apache.xmlgraphics:batik-codec:1.19"
@@ -39,14 +39,17 @@ object `package` extends build.XLInternalModule with NativeImageModule {
     "--no-fallback",
     "-Os", // Optimize for size
     "-H:+ReportExceptionStackTraces",
-    // Suppress Cats Effect IOApp thread warning (baked into native image)
-    "-Dcats.effect.warnOnNonMainThreadDetected=false",
-    // Suppress Scala 3 LazyVals sun.misc.Unsafe warnings at build time
-    "-J--add-opens=java.base/sun.misc=ALL-UNNAMED",
-    "-J-XX:+IgnoreUnrecognizedVMOptions",
-    // Initialize scala runtime classes at build time to reduce runtime warnings
+    // Note: --install-exit-handlers is default in GraalVM 25+ (no longer needed)
+    // Suppress JDK 24+ Unsafe deprecation warnings from Scala 3 LazyVals (JEP 471/498)
+    // See: https://github.com/scala/scala3/issues/9013
+    "-Dsun.misc.unsafe.memory.access=allow",
+    // Initialize Scala runtime at build time (reduces startup warnings)
     "--initialize-at-build-time=scala.runtime.LazyVals$",
-    "--initialize-at-build-time=scala.runtime.Statics"
+    "--initialize-at-build-time=scala.runtime.LazyVals",
+    "--initialize-at-build-time=scala.runtime.Statics",
+    // Allow Unsafe access at build time for lazy val initialization
+    "-J--add-opens=java.base/sun.misc=ALL-UNNAMED",
+    "-J--add-opens=java.base/java.lang=ALL-UNNAMED"
   )
 
   // Override nativeImage to use argument file (fixes Windows command line length limit)
