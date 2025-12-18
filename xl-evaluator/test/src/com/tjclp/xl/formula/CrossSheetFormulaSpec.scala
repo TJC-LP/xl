@@ -172,10 +172,9 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
   }
 
   // Note: COUNT, AVERAGE with cross-sheet ranges aren't implemented yet.
-  // Only SUM has SheetFoldRange support currently.
-  // TODO: TJC-361 - Add cross-sheet support for COUNT/AVERAGE/MIN/MAX
+  // Cross-sheet aggregate support now uses TExpr.Aggregate with RangeLocation
 
-  test("SheetFoldRange: COUNT across cross-sheet range (not yet supported)".ignore) {
+  test("Aggregate: COUNT across cross-sheet range") {
     val data = sheetWith(
       "Data",
       ref"B1" -> CellValue.Number(BigDecimal(1)),
@@ -190,7 +189,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(3))))
   }
 
-  test("SheetFoldRange: AVERAGE across cross-sheet range (not yet supported)".ignore) {
+  test("Aggregate: AVERAGE across cross-sheet range") {
     val nums = sheetWith(
       "Numbers",
       ref"A1" -> CellValue.Number(BigDecimal(10)),
@@ -218,10 +217,9 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(40)))) // Empty cells treated as 0
   }
 
-  // Note: MIN, MAX with cross-sheet ranges aren't implemented yet.
-  // TODO: TJC-361 - Add cross-sheet support for COUNT/AVERAGE/MIN/MAX
+  // MIN, MAX with cross-sheet ranges now use TExpr.Aggregate
 
-  test("SheetFoldRange: MIN across cross-sheet range (not yet supported)".ignore) {
+  test("Aggregate: MIN across cross-sheet range") {
     val vals = sheetWith(
       "Values",
       ref"A1" -> CellValue.Number(BigDecimal(50)),
@@ -235,7 +233,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(10))))
   }
 
-  test("SheetFoldRange: MAX across cross-sheet range (not yet supported)".ignore) {
+  test("Aggregate: MAX across cross-sheet range") {
     val vals = sheetWith(
       "Values",
       ref"A1" -> CellValue.Number(BigDecimal(50)),

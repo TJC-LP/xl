@@ -2,7 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.SheetName
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
@@ -1032,6 +1032,111 @@ private class EvaluatorImpl extends Evaluator:
                 }
                 result.asInstanceOf[Either[EvalError, A]]
 
+      // ===== Cross-Sheet Aggregate Functions =====
+
+      case TExpr.SheetMin(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val values = cells.flatMap { cell =>
+                  TExpr.decodeNumeric(cell).toOption
+                }
+                val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+                  Some(acc.fold(v)(_ min v))
+                }
+                // Excel behavior: MIN of empty range returns 0
+                Right(result.getOrElse(BigDecimal(0)))
+
+      case TExpr.SheetMax(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val values = cells.flatMap { cell =>
+                  TExpr.decodeNumeric(cell).toOption
+                }
+                val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+                  Some(acc.fold(v)(_ max v))
+                }
+                // Excel behavior: MAX of empty range returns 0
+                Right(result.getOrElse(BigDecimal(0)))
+
+      case TExpr.SheetAverage(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val values = cells.flatMap { cell =>
+                  TExpr.decodeNumeric(cell).toOption
+                }
+                // Single-pass sum and count
+                val (sum, count) = values.foldLeft((BigDecimal(0), 0)) { case ((s, c), v) =>
+                  (s + v, c + 1)
+                }
+                if count == 0 then
+                  // Excel behavior: AVERAGE of empty range returns #DIV/0!
+                  Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
+                else Right(sum / count)
+
+      case TExpr.SheetCount(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val count = cells.count { cell =>
+                  TExpr.decodeNumeric(cell).isRight
+                }
+                Right(count)
+
+      // ===== Unified Aggregation (new type-class based) =====
+
+      case TExpr.Aggregate(location, aggregator) =>
+        // Get cells based on location (local or cross-sheet)
+        val cellsResult: Either[EvalError, Iterator[Cell]] = location match
+          case TExpr.RangeLocation.Local(range) =>
+            Right(range.cells.iterator.map(ref => sheet(ref)))
+          case TExpr.RangeLocation.CrossSheet(sheetName, range) =>
+            workbook match
+              case None =>
+                val refStr = s"${sheetName.value}!${range.toA1}"
+                Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+              case Some(wb) =>
+                wb(sheetName) match
+                  case Left(err) =>
+                    Left(Evaluator.sheetNotFoundError(sheetName, err))
+                  case Right(targetSheet) =>
+                    Right(range.cells.iterator.map(ref => targetSheet(ref)))
+
+        // Evaluate using the aggregator tag
+        cellsResult.flatMap { cells =>
+          aggregator.evaluate(cells).asInstanceOf[Either[EvalError, A]]
+        }
+
       // ===== Conditional Aggregation Functions =====
 
       case TExpr.SumIf(range, criteriaExpr, sumRangeOpt) =>
@@ -1232,6 +1337,13 @@ private class EvaluatorImpl extends Evaluator:
             )
           )
         else
+          // Resolve sheets for cross-sheet lookup (or use current sheet for local)
+          val lookupSheet = lookupArray.sheetName
+            .flatMap(name => workbook.flatMap(_.apply(name).toOption))
+            .getOrElse(sheet)
+          val returnSheet = returnArray.sheetName
+            .flatMap(name => workbook.flatMap(_.apply(name).toOption))
+            .getOrElse(sheet)
           for
             lookupValue <- evalAny(lookupValueExpr, sheet, clock, workbook)
             matchModeRaw <- evalAny(matchModeExpr, sheet, clock, workbook)
@@ -1240,12 +1352,12 @@ private class EvaluatorImpl extends Evaluator:
             searchMode = toInt(searchModeRaw)
             result <- performXLookup(
               lookupValue,
-              lookupArray,
-              returnArray,
+              lookupArray.range,
+              returnArray.range,
               ifNotFoundOpt,
               matchMode,
               searchMode,
-              sheet,
+              lookupSheet, // Use resolved sheet for lookup
               clock,
               workbook
             )

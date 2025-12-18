@@ -229,39 +229,56 @@ object FormulaPrinter:
           case _ =>
             s"YEARFRAC(${printExpr(startDate, 0)}, ${printExpr(endDate, 0)}, ${printExpr(basis, 0)})"
 
-      // Arithmetic range functions
+      // Arithmetic range functions (now support cross-sheet via RangeLocation)
       case TExpr.Min(range) =>
-        s"MIN(${formatRange(range)})"
+        s"MIN(${formatLocation(range)})"
 
       case TExpr.Max(range) =>
-        s"MAX(${formatRange(range)})"
+        s"MAX(${formatLocation(range)})"
 
       case TExpr.Average(range) =>
-        s"AVERAGE(${formatRange(range)})"
+        s"AVERAGE(${formatLocation(range)})"
 
-      // Financial functions
+      // Cross-sheet aggregate functions (legacy, kept for backward compatibility)
+      case TExpr.SheetMin(sheet, range) =>
+        s"MIN(${formatSheetName(sheet)}!${formatRange(range)})"
+
+      case TExpr.SheetMax(sheet, range) =>
+        s"MAX(${formatSheetName(sheet)}!${formatRange(range)})"
+
+      case TExpr.SheetAverage(sheet, range) =>
+        s"AVERAGE(${formatSheetName(sheet)}!${formatRange(range)})"
+
+      case TExpr.SheetCount(sheet, range) =>
+        s"COUNT(${formatSheetName(sheet)}!${formatRange(range)})"
+
+      // Unified aggregation (type-class based)
+      case TExpr.Aggregate(location, aggregator) =>
+        s"${aggregator.name}(${formatLocation(location)})"
+
+      // Financial functions (now support cross-sheet via RangeLocation)
       case TExpr.Npv(rate, values) =>
-        s"NPV(${printExpr(rate, 0)}, ${formatRange(values)})"
+        s"NPV(${printExpr(rate, 0)}, ${formatLocation(values)})"
 
       case TExpr.Irr(values, guessOpt) =>
-        val rangeText = formatRange(values)
+        val rangeText = formatLocation(values)
         guessOpt match
           case Some(guess) => s"IRR($rangeText, ${printExpr(guess, 0)})"
           case None => s"IRR($rangeText)"
 
       case TExpr.Xnpv(rate, values, dates) =>
-        s"XNPV(${printExpr(rate, 0)}, ${formatRange(values)}, ${formatRange(dates)})"
+        s"XNPV(${printExpr(rate, 0)}, ${formatLocation(values)}, ${formatLocation(dates)})"
 
       case TExpr.Xirr(values, dates, guessOpt) =>
-        val valuesText = formatRange(values)
-        val datesText = formatRange(dates)
+        val valuesText = formatLocation(values)
+        val datesText = formatLocation(dates)
         guessOpt match
           case Some(guess) => s"XIRR($valuesText, $datesText, ${printExpr(guess, 0)})"
           case None => s"XIRR($valuesText, $datesText)"
 
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLOOKUP(${printExpr(lookup, 0)}, " +
-          s"${formatRange(table)}, " +
+          s"${formatLocation(table)}, " +
           s"${printExpr(colIndex, 0)}, ${printExpr(rangeLookup, 0)})"
 
       // Error handling functions
@@ -284,48 +301,48 @@ object FormulaPrinter:
       case TExpr.Abs(value) =>
         s"ABS(${printExpr(value, 0)})"
 
-      // Lookup functions
+      // Lookup functions (now support cross-sheet via RangeLocation)
       case TExpr.Index(array, rowNum, colNum) =>
-        val arrayStr = formatRange(array)
+        val arrayStr = formatLocation(array)
         colNum match
           case Some(col) => s"INDEX($arrayStr, ${printExpr(rowNum, 0)}, ${printExpr(col, 0)})"
           case None => s"INDEX($arrayStr, ${printExpr(rowNum, 0)})"
 
       case TExpr.Match(lookupValue, lookupArray, matchType) =>
-        s"MATCH(${printExpr(lookupValue, 0)}, ${formatRange(lookupArray)}, ${printExpr(matchType, 0)})"
+        s"MATCH(${printExpr(lookupValue, 0)}, ${formatLocation(lookupArray)}, ${printExpr(matchType, 0)})"
 
-      // Conditional aggregation functions
+      // Conditional aggregation functions (now support cross-sheet via RangeLocation)
       case TExpr.SumIf(range, criteria, sumRangeOpt) =>
-        val rangeStr = formatRange(range)
+        val rangeStr = formatLocation(range)
         val criteriaStr = printExpr(criteria, 0)
         sumRangeOpt match
           case Some(sumRange) =>
-            s"SUMIF($rangeStr, $criteriaStr, ${formatRange(sumRange)})"
+            s"SUMIF($rangeStr, $criteriaStr, ${formatLocation(sumRange)})"
           case None =>
             s"SUMIF($rangeStr, $criteriaStr)"
 
       case TExpr.CountIf(range, criteria) =>
-        s"COUNTIF(${formatRange(range)}, ${printExpr(criteria, 0)})"
+        s"COUNTIF(${formatLocation(range)}, ${printExpr(criteria, 0)})"
 
       case TExpr.SumIfs(sumRange, conditions) =>
         val condStrs = conditions
           .map { case (r, criteria) =>
-            s"${formatRange(r)}, ${printExpr(criteria, 0)}"
+            s"${formatLocation(r)}, ${printExpr(criteria, 0)}"
           }
           .mkString(", ")
-        s"SUMIFS(${formatRange(sumRange)}, $condStrs)"
+        s"SUMIFS(${formatLocation(sumRange)}, $condStrs)"
 
       case TExpr.CountIfs(conditions) =>
         val condStrs = conditions
           .map { case (r, criteria) =>
-            s"${formatRange(r)}, ${printExpr(criteria, 0)}"
+            s"${formatLocation(r)}, ${printExpr(criteria, 0)}"
           }
           .mkString(", ")
         s"COUNTIFS($condStrs)"
 
-      // Array and advanced lookup functions
+      // Array and advanced lookup functions (now support cross-sheet via RangeLocation)
       case TExpr.SumProduct(arrays) =>
-        s"SUMPRODUCT(${arrays.map(formatRange).mkString(", ")})"
+        s"SUMPRODUCT(${arrays.map(formatLocation).mkString(", ")})"
 
       case TExpr.XLookup(
             lookupValue,
@@ -336,8 +353,8 @@ object FormulaPrinter:
             searchMode
           ) =>
         val lookupStr = printExpr(lookupValue, 0)
-        val lookupArrayStr = formatRange(lookupArray)
-        val returnArrayStr = formatRange(returnArray)
+        val lookupArrayStr = formatLocation(lookupArray)
+        val returnArrayStr = formatLocation(returnArray)
 
         // Determine which optional args to include based on non-default values
         val hasNonDefaultMatchMode = matchMode match
@@ -391,6 +408,15 @@ object FormulaPrinter:
    */
   private def formatRange(range: CellRange): String =
     s"${formatARef(range.start, range.startAnchor)}:${formatARef(range.end, range.endAnchor)}"
+
+  /**
+   * Format RangeLocation (local or cross-sheet) to A1 notation.
+   */
+  private def formatLocation(location: TExpr.RangeLocation): String =
+    location match
+      case TExpr.RangeLocation.Local(range) => formatRange(range)
+      case TExpr.RangeLocation.CrossSheet(sheet, range) =>
+        s"${sheet.value}!${formatRange(range)}"
 
   /**
    * Format ARef to A1 notation with anchor support.
@@ -583,26 +609,36 @@ object FormulaPrinter:
       case TExpr.Yearfrac(startDate, endDate, basis) =>
         s"Yearfrac(${printWithTypes(startDate)}, ${printWithTypes(endDate)}, ${printWithTypes(basis)})"
       case TExpr.Min(range) =>
-        s"Min(${formatRange(range)})"
+        s"Min(${formatLocation(range)})"
       case TExpr.Max(range) =>
-        s"Max(${formatRange(range)})"
+        s"Max(${formatLocation(range)})"
       case TExpr.Average(range) =>
-        s"Average(${formatRange(range)})"
+        s"Average(${formatLocation(range)})"
+      case TExpr.SheetMin(sheet, range) =>
+        s"SheetMin(${formatSheetName(sheet)}!${formatRange(range)})"
+      case TExpr.SheetMax(sheet, range) =>
+        s"SheetMax(${formatSheetName(sheet)}!${formatRange(range)})"
+      case TExpr.SheetAverage(sheet, range) =>
+        s"SheetAverage(${formatSheetName(sheet)}!${formatRange(range)})"
+      case TExpr.SheetCount(sheet, range) =>
+        s"SheetCount(${formatSheetName(sheet)}!${formatRange(range)})"
+      case TExpr.Aggregate(location, aggregator) =>
+        s"Aggregate(${formatLocation(location)}, ${aggregator.name})"
       case TExpr.Npv(rate, values) =>
-        s"Npv(${printWithTypes(rate)}, ${formatRange(values)})"
+        s"Npv(${printWithTypes(rate)}, ${formatLocation(values)})"
       case TExpr.Irr(values, guessOpt) =>
         guessOpt match
-          case Some(guess) => s"Irr(${formatRange(values)}, ${printWithTypes(guess)})"
-          case None => s"Irr(${formatRange(values)})"
+          case Some(guess) => s"Irr(${formatLocation(values)}, ${printWithTypes(guess)})"
+          case None => s"Irr(${formatLocation(values)})"
       case TExpr.Xnpv(rate, values, dates) =>
-        s"Xnpv(${printWithTypes(rate)}, ${formatRange(values)}, ${formatRange(dates)})"
+        s"Xnpv(${printWithTypes(rate)}, ${formatLocation(values)}, ${formatLocation(dates)})"
       case TExpr.Xirr(values, dates, guessOpt) =>
         guessOpt match
           case Some(guess) =>
-            s"Xirr(${formatRange(values)}, ${formatRange(dates)}, ${printWithTypes(guess)})"
-          case None => s"Xirr(${formatRange(values)}, ${formatRange(dates)})"
+            s"Xirr(${formatLocation(values)}, ${formatLocation(dates)}, ${printWithTypes(guess)})"
+          case None => s"Xirr(${formatLocation(values)}, ${formatLocation(dates)})"
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
-        s"VLookup(${printWithTypes(lookup)}, ${formatRange(table)}, " +
+        s"VLookup(${printWithTypes(lookup)}, ${formatLocation(table)}, " +
           s"${printWithTypes(colIndex)}, ${printWithTypes(rangeLookup)})"
       case TExpr.Iferror(value, valueIfError) =>
         s"Iferror(${printWithTypes(value)}, ${printWithTypes(valueIfError)})"
@@ -619,35 +655,35 @@ object FormulaPrinter:
       case TExpr.Index(array, rowNum, colNum) =>
         colNum match
           case Some(col) =>
-            s"Index(${formatRange(array)}, ${printWithTypes(rowNum)}, ${printWithTypes(col)})"
+            s"Index(${formatLocation(array)}, ${printWithTypes(rowNum)}, ${printWithTypes(col)})"
           case None =>
-            s"Index(${formatRange(array)}, ${printWithTypes(rowNum)})"
+            s"Index(${formatLocation(array)}, ${printWithTypes(rowNum)})"
       case TExpr.Match(lookupValue, lookupArray, matchType) =>
-        s"Match(${printWithTypes(lookupValue)}, ${formatRange(lookupArray)}, ${printWithTypes(matchType)})"
+        s"Match(${printWithTypes(lookupValue)}, ${formatLocation(lookupArray)}, ${printWithTypes(matchType)})"
       case TExpr.SumIf(range, criteria, sumRangeOpt) =>
         sumRangeOpt match
           case Some(sumRange) =>
-            s"SumIf(${formatRange(range)}, ${printWithTypes(criteria)}, ${formatRange(sumRange)})"
+            s"SumIf(${formatLocation(range)}, ${printWithTypes(criteria)}, ${formatLocation(sumRange)})"
           case None =>
-            s"SumIf(${formatRange(range)}, ${printWithTypes(criteria)})"
+            s"SumIf(${formatLocation(range)}, ${printWithTypes(criteria)})"
       case TExpr.CountIf(range, criteria) =>
-        s"CountIf(${formatRange(range)}, ${printWithTypes(criteria)})"
+        s"CountIf(${formatLocation(range)}, ${printWithTypes(criteria)})"
       case TExpr.SumIfs(sumRange, conditions) =>
         val condStrs = conditions
           .map { case (r, criteria) =>
-            s"(${formatRange(r)}, ${printWithTypes(criteria)})"
+            s"(${formatLocation(r)}, ${printWithTypes(criteria)})"
           }
           .mkString(", ")
-        s"SumIfs(${formatRange(sumRange)}, $condStrs)"
+        s"SumIfs(${formatLocation(sumRange)}, $condStrs)"
       case TExpr.CountIfs(conditions) =>
         val condStrs = conditions
           .map { case (r, criteria) =>
-            s"(${formatRange(r)}, ${printWithTypes(criteria)})"
+            s"(${formatLocation(r)}, ${printWithTypes(criteria)})"
           }
           .mkString(", ")
         s"CountIfs($condStrs)"
       case TExpr.SumProduct(arrays) =>
-        s"SumProduct(${arrays.map(formatRange).mkString(", ")})"
+        s"SumProduct(${arrays.map(formatLocation).mkString(", ")})"
       case TExpr.XLookup(
             lookupValue,
             lookupArray,
@@ -657,7 +693,7 @@ object FormulaPrinter:
             searchMode
           ) =>
         val ifNotFoundStr = ifNotFound.map(nf => s", ${printWithTypes(nf)}").getOrElse("")
-        s"XLookup(${printWithTypes(lookupValue)}, ${formatRange(lookupArray)}, ${formatRange(returnArray)}$ifNotFoundStr, ${printWithTypes(matchMode)}, ${printWithTypes(searchMode)})"
+        s"XLookup(${printWithTypes(lookupValue)}, ${formatLocation(lookupArray)}, ${formatLocation(returnArray)}$ifNotFoundStr, ${printWithTypes(matchMode)}, ${printWithTypes(searchMode)})"
       case fold @ TExpr.FoldRange(range, _, _, _) =>
         s"FoldRange(${formatRange(range)})"
       case TExpr.SheetFoldRange(sheet, range, _, _, _) =>

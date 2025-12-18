@@ -130,6 +130,10 @@ object DependencyGraph:
       case TExpr.SheetPolyRef(_, _, _) => Set.empty
       case TExpr.SheetRange(_, _) => Set.empty
       case TExpr.SheetFoldRange(_, _, _, _, _) => Set.empty
+      case TExpr.SheetMin(_, _) => Set.empty
+      case TExpr.SheetMax(_, _) => Set.empty
+      case TExpr.SheetAverage(_, _) => Set.empty
+      case TExpr.SheetCount(_, _) => Set.empty
 
       // Range reference (expand to all cells)
       case TExpr.FoldRange(range, _, _, _) =>
@@ -179,41 +183,41 @@ object DependencyGraph:
 
       // Financial functions
       case TExpr.Npv(rate, values) =>
-        extractDependencies(rate) ++ values.cells.toSet
+        extractDependencies(rate) ++ values.localCells
       case TExpr.Irr(values, guessOpt) =>
-        values.cells.toSet ++ guessOpt.map(extractDependencies).getOrElse(Set.empty)
+        values.localCells ++ guessOpt.map(extractDependencies).getOrElse(Set.empty)
       case TExpr.Xnpv(rate, values, dates) =>
-        extractDependencies(rate) ++ values.cells.toSet ++ dates.cells.toSet
+        extractDependencies(rate) ++ values.localCells ++ dates.localCells
       case TExpr.Xirr(values, dates, guessOpt) =>
-        values.cells.toSet ++ dates.cells.toSet ++ guessOpt
+        values.localCells ++ dates.localCells ++ guessOpt
           .map(extractDependencies)
           .getOrElse(Set.empty)
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         extractDependencies(lookup) ++
-          table.cells.toSet ++
+          table.localCells ++
           extractDependencies(colIndex) ++
           extractDependencies(rangeLookup)
 
       // Conditional aggregation functions
       case TExpr.SumIf(range, criteria, sumRangeOpt) =>
-        range.cells.toSet ++
+        range.localCells ++
           extractDependencies(criteria) ++
-          sumRangeOpt.map(_.cells.toSet).getOrElse(Set.empty)
+          sumRangeOpt.map(_.localCells).getOrElse(Set.empty)
       case TExpr.CountIf(range, criteria) =>
-        range.cells.toSet ++ extractDependencies(criteria)
+        range.localCells ++ extractDependencies(criteria)
       case TExpr.SumIfs(sumRange, conditions) =>
-        sumRange.cells.toSet ++
+        sumRange.localCells ++
           conditions.flatMap { case (range, criteria) =>
-            range.cells.toSet ++ extractDependencies(criteria)
+            range.localCells ++ extractDependencies(criteria)
           }.toSet
       case TExpr.CountIfs(conditions) =>
         conditions.flatMap { case (range, criteria) =>
-          range.cells.toSet ++ extractDependencies(criteria)
+          range.localCells ++ extractDependencies(criteria)
         }.toSet
 
       // Array and advanced lookup functions
       case TExpr.SumProduct(arrays) =>
-        arrays.flatMap(_.cells.toSet).toSet
+        arrays.flatMap(_.localCells).toSet
 
       case TExpr.XLookup(
             lookupValue,
@@ -224,8 +228,8 @@ object DependencyGraph:
             searchMode
           ) =>
         extractDependencies(lookupValue) ++
-          lookupArray.cells.toSet ++
-          returnArray.cells.toSet ++
+          lookupArray.localCells ++
+          returnArray.localCells ++
           ifNotFound.map(extractDependencies).getOrElse(Set.empty) ++
           extractDependencies(matchMode) ++
           extractDependencies(searchMode)
@@ -258,18 +262,24 @@ object DependencyGraph:
 
       // Lookup functions
       case TExpr.Index(array, rowNum, colNum) =>
-        array.cells.toSet ++ extractDependencies(rowNum) ++ colNum
+        array.localCells ++ extractDependencies(rowNum) ++ colNum
           .map(extractDependencies)
           .getOrElse(Set.empty)
       case TExpr.Match(lookupValue, lookupArray, matchType) =>
-        extractDependencies(lookupValue) ++ lookupArray.cells.toSet ++ extractDependencies(
+        extractDependencies(lookupValue) ++ lookupArray.localCells ++ extractDependencies(
           matchType
         )
 
       // Range aggregate functions (direct enum cases)
-      case TExpr.Min(range) => range.cells.toSet
-      case TExpr.Max(range) => range.cells.toSet
-      case TExpr.Average(range) => range.cells.toSet
+      case TExpr.Min(range) => range.localCells
+      case TExpr.Max(range) => range.localCells
+      case TExpr.Average(range) => range.localCells
+
+      // Unified aggregate case - handles SUM, COUNT, MIN, MAX, AVERAGE with RangeLocation
+      case TExpr.Aggregate(location, _) =>
+        location match
+          case TExpr.RangeLocation.Local(range) => range.cells.toSet
+          case TExpr.RangeLocation.CrossSheet(_, _) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -573,6 +583,21 @@ object DependencyGraph:
     }.toMap
 
   /**
+   * Convert a RangeLocation to qualified cell references.
+   *
+   * For Local ranges, uses the current sheet. For CrossSheet ranges, uses the specified sheet.
+   */
+  private def locationToQualifiedRefs(
+    location: TExpr.RangeLocation,
+    currentSheet: SheetName
+  ): Set[QualifiedRef] =
+    location match
+      case TExpr.RangeLocation.Local(range) =>
+        range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+      case TExpr.RangeLocation.CrossSheet(sheet, range) =>
+        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+
+  /**
    * Extract all qualified cell references from TExpr.
    *
    * Similar to extractDependencies but returns QualifiedRef to track cross-sheet references.
@@ -603,6 +628,14 @@ object DependencyGraph:
       case TExpr.SheetRange(sheet, range) =>
         range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
       case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
+        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+      case TExpr.SheetMin(sheet, range) =>
+        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+      case TExpr.SheetMax(sheet, range) =>
+        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+      case TExpr.SheetAverage(sheet, range) =>
+        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+      case TExpr.SheetCount(sheet, range) =>
         range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
 
       // Recursive cases (binary operators)
@@ -705,9 +738,17 @@ object DependencyGraph:
       case TExpr.Day(date) => extractQualifiedDependencies(date, currentSheet)
 
       // Range functions (direct, not FoldRange)
-      case TExpr.Min(range) => range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
-      case TExpr.Max(range) => range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
-      case TExpr.Average(range) => range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+      case TExpr.Min(range) => locationToQualifiedRefs(range, currentSheet)
+      case TExpr.Max(range) => locationToQualifiedRefs(range, currentSheet)
+      case TExpr.Average(range) => locationToQualifiedRefs(range, currentSheet)
+
+      // Unified aggregate case - handles SUM, COUNT, MIN, MAX, AVERAGE with RangeLocation
+      case TExpr.Aggregate(location, _) =>
+        location match
+          case TExpr.RangeLocation.Local(range) =>
+            range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+          case TExpr.RangeLocation.CrossSheet(sheet, range) =>
+            range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -745,47 +786,47 @@ object DependencyGraph:
       // Financial functions
       case TExpr.Npv(rate, values) =>
         extractQualifiedDependencies(rate, currentSheet) ++
-          values.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+          locationToQualifiedRefs(values, currentSheet)
       case TExpr.Irr(values, guessOpt) =>
-        values.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+        locationToQualifiedRefs(values, currentSheet) ++
           guessOpt.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
       case TExpr.Xnpv(rate, values, dates) =>
         extractQualifiedDependencies(rate, currentSheet) ++
-          values.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
-          dates.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+          locationToQualifiedRefs(values, currentSheet) ++
+          locationToQualifiedRefs(dates, currentSheet)
       case TExpr.Xirr(values, dates, guessOpt) =>
-        values.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
-          dates.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+        locationToQualifiedRefs(values, currentSheet) ++
+          locationToQualifiedRefs(dates, currentSheet) ++
           guessOpt.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         extractQualifiedDependencies(lookup, currentSheet) ++
-          table.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          locationToQualifiedRefs(table, currentSheet) ++
           extractQualifiedDependencies(colIndex, currentSheet) ++
           extractQualifiedDependencies(rangeLookup, currentSheet)
 
       // Conditional aggregation functions
       case TExpr.SumIf(range, criteria, sumRangeOpt) =>
-        range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+        locationToQualifiedRefs(range, currentSheet) ++
           extractQualifiedDependencies(criteria, currentSheet) ++
           sumRangeOpt
-            .map(_.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet)
+            .map(locationToQualifiedRefs(_, currentSheet))
             .getOrElse(Set.empty)
       case TExpr.CountIf(range, criteria) =>
-        range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+        locationToQualifiedRefs(range, currentSheet) ++
           extractQualifiedDependencies(criteria, currentSheet)
       case TExpr.SumIfs(sumRange, conditions) =>
-        sumRange.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+        locationToQualifiedRefs(sumRange, currentSheet) ++
           conditions.flatMap { case (range, criteria) =>
-            range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+            locationToQualifiedRefs(range, currentSheet) ++
               extractQualifiedDependencies(criteria, currentSheet)
           }.toSet
       case TExpr.CountIfs(conditions) =>
         conditions.flatMap { case (range, criteria) =>
-          range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          locationToQualifiedRefs(range, currentSheet) ++
             extractQualifiedDependencies(criteria, currentSheet)
         }.toSet
       case TExpr.SumProduct(arrays) =>
-        arrays.flatMap(_.cells.map(ref => QualifiedRef(currentSheet, ref))).toSet
+        arrays.flatMap(locationToQualifiedRefs(_, currentSheet)).toSet
 
       // Advanced lookup functions
       case TExpr.XLookup(
@@ -797,18 +838,18 @@ object DependencyGraph:
             searchMode
           ) =>
         extractQualifiedDependencies(lookupValue, currentSheet) ++
-          lookupArray.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
-          returnArray.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          locationToQualifiedRefs(lookupArray, currentSheet) ++
+          locationToQualifiedRefs(returnArray, currentSheet) ++
           ifNotFound.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
           extractQualifiedDependencies(matchMode, currentSheet) ++
           extractQualifiedDependencies(searchMode, currentSheet)
       case TExpr.Index(array, rowNum, colNum) =>
-        array.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+        locationToQualifiedRefs(array, currentSheet) ++
           extractQualifiedDependencies(rowNum, currentSheet) ++
           colNum.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
       case TExpr.Match(lookupValue, lookupArray, matchType) =>
         extractQualifiedDependencies(lookupValue, currentSheet) ++
-          lookupArray.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          locationToQualifiedRefs(lookupArray, currentSheet) ++
           extractQualifiedDependencies(matchType, currentSheet)
 
       // Error handling functions
