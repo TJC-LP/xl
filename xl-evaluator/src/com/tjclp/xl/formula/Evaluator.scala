@@ -103,10 +103,24 @@ private class EvaluatorImpl extends Evaluator:
         )
 
       // ===== Sheet-Qualified References (Cross-Sheet) =====
+      //
+      // SheetPolyRef: Cross-sheet polymorphic reference
+      //
+      // Unlike same-sheet PolyRef (which errors defensively because it should be
+      // resolved to typed Ref during parsing), SheetPolyRef is evaluated directly
+      // because cross-sheet references are typically used at the top level of
+      // formulas (e.g., =Sales!A1) where type context is "return the raw value".
+      //
+      // The asInstanceOf[Either[EvalError, A]] cast at line ~150 is safe because:
+      // 1. The calling code (SheetEvaluator.evaluateFormula) passes result to
+      //    toCellValue(result: Any) which handles all runtime types
+      // 2. When used in typed contexts (e.g., =Sales!A1 + 10), the parser would
+      //    create SheetRef with proper decoder instead of SheetPolyRef
+      //
+      // This matches Excel behavior: cross-sheet references return the cell's
+      // raw value, with type coercion happening at the operator level.
+      //
       case TExpr.SheetPolyRef(sheetName, at, _) =>
-        // SheetPolyRef: resolve cell value from target sheet in workbook
-        // Unlike same-sheet PolyRef (which requires type context), cross-sheet refs
-        // are typically used for direct value lookups, so we evaluate them directly.
         workbook match
           case None =>
             val refStr = s"${sheetName.value}!${(at: ARef).toA1}"

@@ -44,6 +44,7 @@
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
 - ✅ **Function Library** (WI-09a/b/c complete + financial functions): 24 built-in functions (aggregate, logical, text, date, financial), extensible type class parser, evaluation API
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
+- ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
 
 **Performance** (JMH Benchmarked - WI-15):
 - ✅ **Streaming reads: 35% faster than POI for small files** (0.887ms vs 1.357ms @ 1k rows)
@@ -77,7 +78,7 @@
 
 ### Test Coverage
 
-**767+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write + v0.3.0 regressions):
+**800+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + TJC-351 cross-sheet formulas + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write + v0.3.0 regressions):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -101,7 +102,7 @@
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
-- **xl-evaluator**: ~250 tests (parser, evaluator, function library, evaluation API, dependency graph, integration)
+- **xl-evaluator**: ~280 tests (parser, evaluator, function library, evaluation API, dependency graph, cross-sheet formulas, integration)
   - **Parser (WI-07)**: 57 tests
     - 7 property-based round-trip tests (parse ∘ print = id)
     - 26 parser unit tests (literals, operators, functions, edge cases)
@@ -115,6 +116,10 @@
     - 28 unit tests (division by zero, boolean operations, comparisons, cell references, FoldRange)
     - 12 integration tests (IF, AND, OR, nested conditionals, SUM/COUNT, complex boolean logic)
     - 8 error path tests (nested errors, codec failures, missing cells, propagation vs short-circuit)
+  - **Cross-sheet formulas (TJC-351)**: 26 tests + 8 ignored (future features)
+    - Parser tests: simple refs, ranges, round-trip property tests
+    - Evaluator tests: SheetPolyRef, SheetFoldRange (SUM), error cases
+    - Cycle detection: `DependencyGraph.fromWorkbook`, `detectCrossSheetCycles`
 
 ---
 

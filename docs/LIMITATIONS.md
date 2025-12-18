@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2025-12-07 (Security Hardening Complete - WI-30)
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (40 functions); tables + benchmarks complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards).
+**Last Updated**: 2025-12-18 (Cross-Sheet Formula Support - TJC-351)
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (24 functions + cross-sheet support); tables + benchmarks complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -130,12 +130,12 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 ---
 
 #### 6. Formula System ✅ **PRODUCTION READY**
-**Status**: Complete (WI-07, WI-08, WI-09a/b/c/d + financial functions)
-**Features**: Parser, evaluator, 24 functions (including NPV, IRR, VLOOKUP), dependency graph, cycle detection
+**Status**: Complete (WI-07, WI-08, WI-09a/b/c/d + financial functions + TJC-351 cross-sheet formulas)
+**Features**: Parser, evaluator, 24 functions (including NPV, IRR, VLOOKUP), dependency graph, cycle detection, cross-sheet references
 **Plan**: [Formula System](plan/formula-system.md)
-**Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions
+**Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions + Cross-Sheet Formulas
 
-**What Works** (Production Ready - 250+ tests):
+**What Works** (Production Ready - 280+ tests):
 ```scala
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, Evaluator}
 import com.tjclp.xl.formula.SheetEvaluator.*
@@ -152,6 +152,16 @@ sheet.evaluateCell(ref"B1") // Evaluates formula in B1 if present
 sheet.evaluateWithDependencyCheck() match
   case Right(results) => // All formulas evaluated in correct order
   case Left(circularRef) => // Cycle detected: A1 → B1 → C1 → A1
+
+// Cross-sheet formula evaluation (TJC-351)
+main.evaluateFormula("=Sales!A1+10", workbook = Some(wb)) // XLResult[CellValue]
+main.evaluateFormula("=SUM(Sales!A1:A10)", workbook = Some(wb)) // Cross-sheet SUM
+
+// Cross-sheet cycle detection
+val graph = DependencyGraph.fromWorkbook(workbook)
+DependencyGraph.detectCrossSheetCycles(graph) match
+  case Right(_) => // No cycles, safe to evaluate
+  case Left(err) => // Cross-sheet circular reference detected
 ```
 
 **Capabilities**:
@@ -172,11 +182,18 @@ sheet.evaluateWithDependencyCheck() match
 - ✅ **Operators**: +, -, *, /, <, <=, >, >=, =, <>, &, AND, OR, NOT
 - ✅ **Scientific notation**: 1.5E10, 2.3E-7
 - ✅ **Round-trip**: parse ∘ print = id (property-tested)
+- ✅ **Cross-sheet formulas** (TJC-351 - 26 tests):
+  - Single cell refs: `=Sales!A1`, `=Data!B2`
+  - Range refs with SUM: `=SUM(Sales!A1:A10)`
+  - Arithmetic: `=Sales!A1 + Revenue!B1`
+  - Workbook-level cycle detection: `DependencyGraph.fromWorkbook`, `detectCrossSheetCycles`
 
 **Future Extensions** (Not Critical):
 - ⏳ Extended function library (300+ Excel functions) - WI-09e+
 - ⏳ Array formulas - Future work
 - ⏳ Structured references (Table[@Column]) - Requires WI-10 integration
+- ⏳ Quoted sheet names in formulas (`='Q1 Report'!A1`) - Parser support pending
+- ⏳ Cross-sheet COUNT/AVERAGE/MIN/MAX - Only SUM implemented for cross-sheet ranges
 
 **No workarounds needed** - formula system is complete and production-ready!
 
@@ -812,4 +829,4 @@ Want to help implement these features? See:
 
 ---
 
-*Last updated by Claude Code session on 2025-12-07 (WI-30 Security Hardening)*
+*Last updated by Claude Code session on 2025-12-18 (TJC-351 Cross-Sheet Formula Support)*

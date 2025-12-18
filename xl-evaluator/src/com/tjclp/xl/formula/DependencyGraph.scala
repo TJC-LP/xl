@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheets.Sheet
@@ -519,3 +519,294 @@ object DependencyGraph:
           case None => List.empty
 
         scala.util.Left(EvalError.CircularRef(cycle))
+
+  // ===== Cross-Sheet Dependency Tracking =====
+
+  /**
+   * Cell reference qualified with sheet name for cross-sheet tracking.
+   *
+   * Used to track dependencies across sheets within a workbook. Each QualifiedRef uniquely
+   * identifies a cell in the workbook by combining the sheet name and cell reference.
+   *
+   * Example:
+   * {{{
+   * val ref = QualifiedRef(SheetName.unsafe("Sales"), ref"A1")
+   * // Represents Sales!A1
+   * }}}
+   */
+  final case class QualifiedRef(sheet: SheetName, ref: ARef):
+    override def toString: String = s"${sheet.value}!${ref.toA1}"
+
+  /**
+   * Build dependency graph from Workbook (cross-sheet aware).
+   *
+   * Iterates through all sheets and cells, extracting references from Formula cells and
+   * constructing a workbook-level dependency graph. Cross-sheet references are properly tracked
+   * using QualifiedRef.
+   *
+   * @param workbook
+   *   The workbook to analyze
+   * @return
+   *   Dependency graph with QualifiedRef nodes covering all sheets
+   *
+   * Example:
+   * {{{
+   * // Sheet1!A1 = "=Sheet2!B1", Sheet2!B1 = 10
+   * val graph = DependencyGraph.fromWorkbook(workbook)
+   * // graph contains: QualifiedRef(Sheet1, A1) -> Set(QualifiedRef(Sheet2, B1))
+   * }}}
+   */
+  def fromWorkbook(
+    workbook: com.tjclp.xl.workbooks.Workbook
+  ): Map[QualifiedRef, Set[QualifiedRef]] =
+    workbook.sheets.flatMap { sheet =>
+      sheet.cells.flatMap { case (cellRef, cell) =>
+        cell.value match
+          case CellValue.Formula(expression, _) =>
+            val deps = FormulaParser.parse(expression) match
+              case scala.util.Right(expr) => extractQualifiedDependencies(expr, sheet.name)
+              case scala.util.Left(_) => Set.empty[QualifiedRef]
+            Some(QualifiedRef(sheet.name, cellRef) -> deps)
+          case _ => None
+      }
+    }.toMap
+
+  /**
+   * Extract all qualified cell references from TExpr.
+   *
+   * Similar to extractDependencies but returns QualifiedRef to track cross-sheet references.
+   * Same-sheet references are qualified with the current sheet name.
+   *
+   * @param expr
+   *   The expression to analyze
+   * @param currentSheet
+   *   The sheet containing the formula (used for same-sheet ref qualification)
+   * @return
+   *   Set of qualified cell references used in the expression
+   */
+  @nowarn("msg=Unreachable case")
+  private def extractQualifiedDependencies[A](
+    expr: TExpr[A],
+    currentSheet: SheetName
+  ): Set[QualifiedRef] =
+    expr match
+      // Same-sheet references - qualify with current sheet
+      case TExpr.Ref(at, _, _) => Set(QualifiedRef(currentSheet, at))
+      case TExpr.PolyRef(at, _) => Set(QualifiedRef(currentSheet, at))
+      case TExpr.FoldRange(range, _, _, _) =>
+        range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+
+      // Cross-sheet references - use target sheet
+      case TExpr.SheetRef(sheet, at, _, _) => Set(QualifiedRef(sheet, at))
+      case TExpr.SheetPolyRef(sheet, at, _) => Set(QualifiedRef(sheet, at))
+      case TExpr.SheetRange(sheet, range) =>
+        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+      case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
+        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+
+      // Recursive cases (binary operators)
+      case TExpr.Add(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Sub(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Mul(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Div(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Eq(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Neq(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Lt(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Lte(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Gt(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Gte(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.And(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Or(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+
+      // Unary operators
+      case TExpr.Not(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.Len(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.Upper(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.Lower(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.ToInt(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.Abs(x) => extractQualifiedDependencies(x, currentSheet)
+
+      // Ternary
+      case TExpr.If(cond, thenBranch, elseBranch) =>
+        extractQualifiedDependencies(cond, currentSheet) ++
+          extractQualifiedDependencies(thenBranch, currentSheet) ++
+          extractQualifiedDependencies(elseBranch, currentSheet)
+
+      // Text functions
+      case TExpr.Concatenate(xs) =>
+        xs.flatMap(extractQualifiedDependencies(_, currentSheet)).toSet
+      case TExpr.Left(text, n) =>
+        extractQualifiedDependencies(text, currentSheet) ++ extractQualifiedDependencies(
+          n,
+          currentSheet
+        )
+      case TExpr.Right(text, n) =>
+        extractQualifiedDependencies(text, currentSheet) ++ extractQualifiedDependencies(
+          n,
+          currentSheet
+        )
+
+      // Date functions
+      case TExpr.Date(y, m, d) =>
+        extractQualifiedDependencies(y, currentSheet) ++
+          extractQualifiedDependencies(m, currentSheet) ++
+          extractQualifiedDependencies(d, currentSheet)
+      case TExpr.Year(date) => extractQualifiedDependencies(date, currentSheet)
+      case TExpr.Month(date) => extractQualifiedDependencies(date, currentSheet)
+      case TExpr.Day(date) => extractQualifiedDependencies(date, currentSheet)
+
+      // Range functions (direct, not FoldRange)
+      case TExpr.Min(range) => range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+      case TExpr.Max(range) => range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+      case TExpr.Average(range) => range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+
+      // Literals and nullary functions (no dependencies)
+      case TExpr.Lit(_) => Set.empty
+      case TExpr.Today() => Set.empty
+      case TExpr.Now() => Set.empty
+
+      // All other cases - recurse into sub-expressions where applicable
+      case _ => Set.empty
+
+  /**
+   * Detect circular references across sheets using Tarjan's SCC algorithm.
+   *
+   * Similar to detectCycles but works with QualifiedRef to detect cycles that span multiple sheets.
+   * A cross-sheet cycle occurs when cells across different sheets form a circular dependency (e.g.,
+   * Sheet1!A1 = Sheet2!B1, Sheet2!B1 = Sheet1!A1).
+   *
+   * @param graph
+   *   The cross-sheet dependency graph from fromWorkbook
+   * @return
+   *   Left(CircularRef) if cycle detected, Right(()) if acyclic
+   *
+   * Example:
+   * {{{
+   * val graph = DependencyGraph.fromWorkbook(workbook)
+   * DependencyGraph.detectCrossSheetCycles(graph) match
+   *   case Left(err) => println(s"Circular reference: $err")
+   *   case Right(_) => println("No cycles")
+   * }}}
+   */
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.Var",
+      "org.wartremover.warts.IterableOps",
+      "org.wartremover.warts.Return",
+      "org.wartremover.warts.IsInstanceOf",
+      "org.wartremover.warts.AsInstanceOf"
+    )
+  )
+  def detectCrossSheetCycles(
+    graph: Map[QualifiedRef, Set[QualifiedRef]]
+  ): Either[EvalError.CircularRef, Unit] =
+    // Tarjan's SCC algorithm adapted for QualifiedRef
+    var index = 0
+    var stack = List.empty[QualifiedRef]
+    var indices = Map.empty[QualifiedRef, Int]
+    var lowLinks = Map.empty[QualifiedRef, Int]
+    var onStack = Set.empty[QualifiedRef]
+
+    def strongConnect(v: QualifiedRef): Option[List[ARef]] =
+      indices = indices.updated(v, index)
+      lowLinks = lowLinks.updated(v, index)
+      index += 1
+      stack = v :: stack
+      onStack = onStack + v
+
+      val successors = graph.getOrElse(v, Set.empty)
+      val cycleFound = successors.foldLeft(Option.empty[List[ARef]]) { (acc, w) =>
+        acc match
+          case Some(cycle) => Some(cycle)
+          case None =>
+            if !indices.contains(w) then
+              strongConnect(w) match
+                case Some(cycle) => Some(cycle)
+                case None =>
+                  lowLinks = lowLinks.updated(v, math.min(lowLinks(v), lowLinks(w)))
+                  None
+            else if onStack.contains(w) then
+              lowLinks = lowLinks.updated(v, math.min(lowLinks(v), indices(w)))
+              // Found cycle - reconstruct from stack
+              val cycleNodes = (stack.takeWhile(_ != w) :+ w).reverse
+              // Convert to List[ARef] with sheet prefix for error message
+              Some(cycleNodes.map(_.ref) :+ cycleNodes.head.ref)
+            else None
+      }
+
+      cycleFound match
+        case Some(cycle) => Some(cycle)
+        case None =>
+          if lowLinks(v) == indices(v) then
+            val (scc, remaining) = stack.span(_ != v)
+            stack = remaining.tail
+            onStack = onStack -- (scc :+ v)
+
+            if scc.nonEmpty then
+              // Multiple nodes in SCC = cycle
+              val cycleNodes = (scc :+ v).reverse
+              Some(cycleNodes.map(_.ref) :+ cycleNodes.head.ref)
+            else if graph.get(v).exists(_.contains(v)) then Some(List(v.ref, v.ref)) // Self-loop
+            else None
+          else None
+
+    val allNodes = graph.keySet
+    val cycleFound = allNodes.foldLeft(Option.empty[List[ARef]]) { (acc, node) =>
+      acc match
+        case Some(cycle) => Some(cycle)
+        case None =>
+          if !indices.contains(node) then strongConnect(node)
+          else None
+    }
+
+    cycleFound match
+      case Some(cycle) => scala.util.Left(EvalError.CircularRef(cycle))
+      case None => scala.util.Right(())
