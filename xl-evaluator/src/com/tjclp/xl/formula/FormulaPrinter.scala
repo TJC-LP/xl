@@ -252,10 +252,6 @@ object FormulaPrinter:
       case TExpr.SheetCount(sheet, range) =>
         s"COUNT(${formatSheetName(sheet)}!${formatRange(range)})"
 
-      // Unified aggregation (type-class based)
-      case TExpr.Aggregate(location, aggregator) =>
-        s"${aggregator.name}(${formatLocation(location)})"
-
       // Financial functions (now support cross-sheet via RangeLocation)
       case TExpr.Npv(rate, values) =>
         s"NPV(${printExpr(rate, 0)}, ${formatLocation(values)})"
@@ -622,8 +618,6 @@ object FormulaPrinter:
         s"SheetAverage(${formatSheetName(sheet)}!${formatRange(range)})"
       case TExpr.SheetCount(sheet, range) =>
         s"SheetCount(${formatSheetName(sheet)}!${formatRange(range)})"
-      case TExpr.Aggregate(location, aggregator) =>
-        s"Aggregate(${formatLocation(location)}, ${aggregator.name})"
       case TExpr.Npv(rate, values) =>
         s"Npv(${printWithTypes(rate)}, ${formatLocation(values)})"
       case TExpr.Irr(values, guessOpt) =>

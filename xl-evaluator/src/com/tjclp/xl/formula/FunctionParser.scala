@@ -253,13 +253,11 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(
-                TExpr.Aggregate(TExpr.RangeLocation.Local(range), AggregatorTag.Count)
-              )
+              scala.util.Right(TExpr.count(range))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.SheetCount(sheet, range))
         case List(TExpr.SheetRange(sheet, range)) =>
-          scala.util.Right(
-            TExpr.Aggregate(TExpr.RangeLocation.CrossSheet(sheet, range), AggregatorTag.Count)
-          )
+          scala.util.Right(TExpr.SheetCount(sheet, range))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments(
@@ -270,7 +268,7 @@ object FunctionParser:
             )
           )
 
-  /** AVERAGE function: AVERAGE(range) - uses unified Aggregate */
+  /** AVERAGE function: AVERAGE(range) - uses direct Average case with RangeLocation */
   given averageFunctionParser: FunctionParser[Unit] with
     def name: String = "AVERAGE"
     def arity: Arity = Arity.one
@@ -280,12 +278,10 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(
-                TExpr.Aggregate(TExpr.RangeLocation.Local(range), AggregatorTag.Average)
-              )
+              scala.util.Right(TExpr.average(range))
         case List(TExpr.SheetRange(sheet, range)) =>
           scala.util.Right(
-            TExpr.Aggregate(TExpr.RangeLocation.CrossSheet(sheet, range), AggregatorTag.Average)
+            TExpr.Average(TExpr.RangeLocation.CrossSheet(sheet, range))
           )
         case _ =>
           scala.util.Left(
@@ -297,7 +293,7 @@ object FunctionParser:
             )
           )
 
-  /** MIN function: MIN(range) - uses unified Aggregate */
+  /** MIN function: MIN(range) - uses direct Min case with RangeLocation */
   given minFunctionParser: FunctionParser[Unit] with
     def name: String = "MIN"
     def arity: Arity = Arity.one
@@ -307,17 +303,17 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(TExpr.Aggregate(TExpr.RangeLocation.Local(range), AggregatorTag.Min))
+              scala.util.Right(TExpr.min(range))
         case List(TExpr.SheetRange(sheet, range)) =>
           scala.util.Right(
-            TExpr.Aggregate(TExpr.RangeLocation.CrossSheet(sheet, range), AggregatorTag.Min)
+            TExpr.Min(TExpr.RangeLocation.CrossSheet(sheet, range))
           )
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("MIN", pos, "1 range argument", s"${args.length} arguments")
           )
 
-  /** MAX function: MAX(range) - uses unified Aggregate */
+  /** MAX function: MAX(range) - uses direct Max case with RangeLocation */
   given maxFunctionParser: FunctionParser[Unit] with
     def name: String = "MAX"
     def arity: Arity = Arity.one
@@ -327,10 +323,10 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(TExpr.Aggregate(TExpr.RangeLocation.Local(range), AggregatorTag.Max))
+              scala.util.Right(TExpr.max(range))
         case List(TExpr.SheetRange(sheet, range)) =>
           scala.util.Right(
-            TExpr.Aggregate(TExpr.RangeLocation.CrossSheet(sheet, range), AggregatorTag.Max)
+            TExpr.Max(TExpr.RangeLocation.CrossSheet(sheet, range))
           )
         case _ =>
           scala.util.Left(

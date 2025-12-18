@@ -151,11 +151,7 @@ object FormulaShifter:
       case Average(range) =>
         Average(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
-      // Unified aggregate case - handles SUM, COUNT, MIN, MAX, AVERAGE with RangeLocation
-      case Aggregate(location, aggregator) =>
-        Aggregate(shiftLocation(location, colDelta, rowDelta), aggregator).asInstanceOf[TExpr[A]]
-
-      // Cross-sheet aggregate functions (old cases - to be removed)
+      // Cross-sheet aggregate functions
       case SheetMin(sheet, range) =>
         SheetMin(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case SheetMax(sheet, range) =>

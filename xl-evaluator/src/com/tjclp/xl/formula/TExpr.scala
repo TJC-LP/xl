@@ -586,29 +586,6 @@ enum TExpr[A] derives CanEqual:
    */
   case SheetCount(sheet: SheetName, range: CellRange) extends TExpr[Int]
 
-  // Unified aggregation (replaces Min/Max/Average/SheetMin/SheetMax/SheetAverage/SheetCount)
-
-  /**
-   * Unified range aggregation - handles SUM, COUNT, MIN, MAX, AVERAGE for both local and
-   * cross-sheet ranges.
-   *
-   * This single case replaces the previous paired cases (Min + SheetMin, Max + SheetMax, etc.) by
-   * using RangeLocation to encode whether the range is local or cross-sheet, and AggregatorTag to
-   * specify the aggregation operation.
-   *
-   * @param location
-   *   Where the range is: Local(range) or CrossSheet(sheet, range)
-   * @param aggregator
-   *   The aggregation operation (SUM, COUNT, MIN, MAX, AVERAGE)
-   *
-   * Example: MIN(A1:A10) = Aggregate(Local(A1:A10), AggregatorTag.Min) Example: SUM(Sales!B1:B100) =
-   * Aggregate(CrossSheet(Sales, B1:B100), AggregatorTag.Sum)
-   */
-  case Aggregate(
-    location: TExpr.RangeLocation,
-    aggregator: AggregatorTag
-  ) extends TExpr[BigDecimal]
-
   // Financial functions
 
   /**

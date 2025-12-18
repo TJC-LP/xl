@@ -90,6 +90,30 @@ object Evaluator:
       None
     )
 
+  /**
+   * Resolve a RangeLocation to the target sheet.
+   *
+   * For Local ranges, returns the current sheet. For CrossSheet ranges, looks up the target sheet
+   * in the workbook context.
+   */
+  private[formula] def resolveRangeLocation(
+    location: TExpr.RangeLocation,
+    currentSheet: Sheet,
+    workbook: Option[Workbook]
+  ): Either[EvalError, Sheet] =
+    location match
+      case TExpr.RangeLocation.Local(_) =>
+        Right(currentSheet)
+      case TExpr.RangeLocation.CrossSheet(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) => Left(sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) => Right(targetSheet)
+
 /**
  * Private implementation of Evaluator.
  *
@@ -945,44 +969,53 @@ private class EvaluatorImpl extends Evaluator:
         yield result
 
       // ===== Arithmetic Range Functions =====
-      case TExpr.Min(range) =>
+      case TExpr.Min(location) =>
         // Min: find minimum value in range (single-pass)
-        val cells = range.cells.map(cellRef => sheet(cellRef))
-        val values = cells.flatMap { cell =>
-          TExpr.decodeNumeric(cell).toOption
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val values = cells.flatMap { cell =>
+            TExpr.decodeNumeric(cell).toOption
+          }
+          val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+            Some(acc.fold(v)(_ min v))
+          }
+          // Excel behavior: MIN of empty range returns 0
+          Right(result.getOrElse(BigDecimal(0)))
         }
-        val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
-          Some(acc.fold(v)(_ min v))
-        }
-        // Excel behavior: MIN of empty range returns 0
-        Right(result.getOrElse(BigDecimal(0)))
 
-      case TExpr.Max(range) =>
+      case TExpr.Max(location) =>
         // Max: find maximum value in range (single-pass)
-        val cells = range.cells.map(cellRef => sheet(cellRef))
-        val values = cells.flatMap { cell =>
-          TExpr.decodeNumeric(cell).toOption
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val values = cells.flatMap { cell =>
+            TExpr.decodeNumeric(cell).toOption
+          }
+          val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+            Some(acc.fold(v)(_ max v))
+          }
+          // Excel behavior: MAX of empty range returns 0
+          Right(result.getOrElse(BigDecimal(0)))
         }
-        val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
-          Some(acc.fold(v)(_ max v))
-        }
-        // Excel behavior: MAX of empty range returns 0
-        Right(result.getOrElse(BigDecimal(0)))
 
-      case TExpr.Average(range) =>
+      case TExpr.Average(location) =>
         // Average: compute sum/count of numeric values in range
-        val cells = range.cells.map(cellRef => sheet(cellRef))
-        val values = cells.flatMap { cell =>
-          TExpr.decodeNumeric(cell).toOption
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val values = cells.flatMap { cell =>
+            TExpr.decodeNumeric(cell).toOption
+          }
+          // Single-pass sum and count (avoids .toList materialization)
+          val (sum, count) = values.foldLeft((BigDecimal(0), 0)) { case ((s, c), v) =>
+            (s + v, c + 1)
+          }
+          if count == 0 then
+            // Excel behavior: AVERAGE of empty range returns #DIV/0!
+            Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
+          else Right(sum / count)
         }
-        // Single-pass sum and count (avoids .toList materialization)
-        val (sum, count) = values.foldLeft((BigDecimal(0), 0)) { case ((s, c), v) =>
-          (s + v, c + 1)
-        }
-        if count == 0 then
-          // Excel behavior: AVERAGE of empty range returns #DIV/0!
-          Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
-        else Right(sum / count)
 
       // ===== Range Aggregation =====
       case foldExpr: TExpr.FoldRange[a, b] =>
@@ -1112,30 +1145,6 @@ private class EvaluatorImpl extends Evaluator:
                   TExpr.decodeNumeric(cell).isRight
                 }
                 Right(count)
-
-      // ===== Unified Aggregation (new type-class based) =====
-
-      case TExpr.Aggregate(location, aggregator) =>
-        // Get cells based on location (local or cross-sheet)
-        val cellsResult: Either[EvalError, Iterator[Cell]] = location match
-          case TExpr.RangeLocation.Local(range) =>
-            Right(range.cells.iterator.map(ref => sheet(ref)))
-          case TExpr.RangeLocation.CrossSheet(sheetName, range) =>
-            workbook match
-              case None =>
-                val refStr = s"${sheetName.value}!${range.toA1}"
-                Left(Evaluator.missingWorkbookError(refStr, isRange = true))
-              case Some(wb) =>
-                wb(sheetName) match
-                  case Left(err) =>
-                    Left(Evaluator.sheetNotFoundError(sheetName, err))
-                  case Right(targetSheet) =>
-                    Right(range.cells.iterator.map(ref => targetSheet(ref)))
-
-        // Evaluate using the aggregator tag
-        cellsResult.flatMap { cells =>
-          aggregator.evaluate(cells).asInstanceOf[Either[EvalError, A]]
-        }
 
       // ===== Conditional Aggregation Functions =====
 
