@@ -535,20 +535,25 @@ enum TExpr[A] derives CanEqual:
   /**
    * Vertical lookup: VLOOKUP(lookup, table, colIndex, [rangeLookup])
    *
-   * Semantics (v1):
-   *   - `lookup` is numeric (BigDecimal)
+   * Semantics:
+   *   - `lookup` is any value (text or numeric) - supports both text and number lookups
    *   - `table` is a rectangular CellRange; first column is the key
    *   - `colIndex` is 1-based column index into the table
-   *   - `rangeLookup` = TRUE → approximate match (largest key <= lookup)
-   *   - `rangeLookup` = FALSE → exact match
-   *   - Result column is decoded as numeric; non-numeric cells cause a CodecFailed error
+   *   - `rangeLookup` = TRUE → approximate match (largest key <= lookup, numeric only)
+   *   - `rangeLookup` = FALSE → exact match (case-insensitive for text)
+   *   - Result is the CellValue at the matched row/column (preserves type)
+   *
+   * Excel-compatible behavior:
+   *   - Text comparisons are case-insensitive
+   *   - Numeric approximate match requires sorted ascending keys
+   *   - #N/A error if no match found
    */
   case VLookup(
-    lookup: TExpr[BigDecimal],
+    lookup: TExpr[?],
     table: CellRange,
     colIndex: TExpr[Int],
     rangeLookup: TExpr[Boolean]
-  ) extends TExpr[BigDecimal]
+  ) extends TExpr[CellValue]
 
   // Conditional aggregation functions (SUMIF/COUNTIF family)
 
@@ -885,16 +890,17 @@ object TExpr:
     Xirr(values, dates, guess)
 
   /**
-   * Smart constructor for VLOOKUP.
+   * Smart constructor for VLOOKUP (supports text and numeric lookups).
    *
-   * Example: TExpr.vlookup(TExpr.Ref(...), CellRange("B1:D10"), TExpr.Lit(2), TExpr.Lit(true))
+   * Example: TExpr.vlookup(TExpr.Lit("Widget A"), CellRange("A1:D10"), TExpr.Lit(4),
+   * TExpr.Lit(false))
    */
   def vlookup(
-    lookup: TExpr[BigDecimal],
+    lookup: TExpr[?],
     table: CellRange,
     colIndex: TExpr[Int],
     rangeLookup: TExpr[Boolean] = Lit(true)
-  ): TExpr[BigDecimal] =
+  ): TExpr[CellValue] =
     VLookup(lookup, table, colIndex, rangeLookup)
 
   // Conditional aggregation function smart constructors

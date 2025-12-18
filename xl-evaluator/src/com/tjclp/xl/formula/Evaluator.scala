@@ -733,7 +733,7 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.VLookup(lookupExpr, table, colIndexExpr, rangeLookupExpr) =>
         for
-          lookup <- eval(lookupExpr, sheet, clock)
+          lookupValue <- eval(lookupExpr, sheet, clock)
           colIndex <- eval(colIndexExpr, sheet, clock)
           rangeMatch <- eval(rangeLookupExpr, sheet, clock)
           result <-
@@ -750,40 +750,85 @@ private class EvaluatorImpl extends Evaluator:
               val rowStart0 = table.rowStart.index0
               val resultCol0 = keyCol0 + (colIndex - 1)
 
-              // Collect (rowIndex, key) pairs for numeric keys
-              val keyedRows: List[(Int, BigDecimal)] =
-                rowIndices.toList.flatMap { i =>
-                  val keyRef = ARef.from0(keyCol0, rowStart0 + i)
-                  val keyCell = sheet(keyRef)
-                  TExpr.decodeNumeric(keyCell).toOption.map(k => (i, k))
-                }
+              // Helper to extract text from a cell value for comparison
+              def extractTextForMatch(cv: CellValue): Option[String] = cv match
+                case CellValue.Text(s) => Some(s)
+                case CellValue.Number(n) => Some(n.bigDecimal.stripTrailingZeros().toPlainString)
+                case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
+                case CellValue.Formula(_, Some(cached)) => extractTextForMatch(cached)
+                case _ => None
+
+              // Helper to extract numeric from a cell value
+              def extractNumericForMatch(cv: CellValue): Option[BigDecimal] = cv match
+                case CellValue.Number(n) => Some(n)
+                case CellValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
+                case CellValue.Bool(b) => Some(if b then BigDecimal(1) else BigDecimal(0))
+                case CellValue.Formula(_, Some(cached)) => extractNumericForMatch(cached)
+                case _ => None
+
+              // Determine if lookup is text or numeric
+              val isTextLookup = lookupValue match
+                case _: String => true
+                case _: BigDecimal => false
+                case _: Int => false
+                case _: Boolean => false
+                case _ => true // Default to text for other types
 
               val chosenRowOpt: Option[Int] =
                 if rangeMatch then
-                  // Approximate match: largest key <= lookup
-                  keyedRows
-                    .filter(_._2 <= lookup)
-                    .sortBy(_._2)
-                    .lastOption
-                    .map(_._1)
+                  // Approximate match: numeric only, find largest key <= lookup
+                  val numericLookup: Option[BigDecimal] = lookupValue match
+                    case n: BigDecimal => Some(n)
+                    case i: Int => Some(BigDecimal(i))
+                    case s: String => scala.util.Try(BigDecimal(s.trim)).toOption
+                    case _ => None
+
+                  numericLookup.flatMap { lookup =>
+                    val keyedRows: List[(Int, BigDecimal)] =
+                      rowIndices.toList.flatMap { i =>
+                        val keyRef = ARef.from0(keyCol0, rowStart0 + i)
+                        extractNumericForMatch(sheet(keyRef).value).map(k => (i, k))
+                      }
+                    keyedRows
+                      .filter(_._2 <= lookup)
+                      .sortBy(_._2)
+                      .lastOption
+                      .map(_._1)
+                  }
                 else
-                  // Exact match
-                  keyedRows.find { case (_, k) => k == lookup }.map(_._1)
+                  // Exact match: supports both text (case-insensitive) and numeric
+                  if isTextLookup then
+                    val lookupText = lookupValue.toString.toLowerCase
+                    rowIndices.find { i =>
+                      val keyRef = ARef.from0(keyCol0, rowStart0 + i)
+                      extractTextForMatch(sheet(keyRef).value)
+                        .exists(_.toLowerCase == lookupText)
+                    }
+                  else
+                    // Numeric exact match
+                    val numericLookup: Option[BigDecimal] = lookupValue match
+                      case n: BigDecimal => Some(n)
+                      case i: Int => Some(BigDecimal(i))
+                      case _ => None
+                    numericLookup.flatMap { lookup =>
+                      rowIndices.find { i =>
+                        val keyRef = ARef.from0(keyCol0, rowStart0 + i)
+                        extractNumericForMatch(sheet(keyRef).value).contains(lookup)
+                      }
+                    }
 
               chosenRowOpt match
                 case Some(rowIndex) =>
                   val resultRef = ARef.from0(resultCol0, rowStart0 + rowIndex)
                   val resultCell = sheet(resultRef)
-                  TExpr
-                    .decodeNumeric(resultCell)
-                    .left
-                    .map(err => EvalError.CodecFailed(resultRef, err))
+                  // Return the CellValue directly (preserves type)
+                  Right(resultCell.value)
                 case None =>
                   Left(
                     EvalError.EvalFailed(
                       if rangeMatch then "VLOOKUP approximate match not found"
                       else "VLOOKUP exact match not found",
-                      Some(s"VLOOKUP($lookup, ${table.toA1}, $colIndex, $rangeMatch)")
+                      Some(s"VLOOKUP($lookupValue, ${table.toA1}, $colIndex, $rangeMatch)")
                     )
                   )
         yield result

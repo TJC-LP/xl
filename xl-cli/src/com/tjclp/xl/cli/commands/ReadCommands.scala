@@ -401,22 +401,18 @@ object ReadCommands:
    * This is used to pre-process sheets for rendering when --eval is specified. Formula cells are
    * replaced with their evaluated results (preserving formatting), while non-formula cells remain
    * unchanged.
+   *
+   * Uses dependency-aware evaluation to correctly handle nested formulas (e.g., F5=SUM(B5:E5) where
+   * B5=SUM(B2:B4)). Formulas are evaluated in topological order so dependencies are computed first.
    */
   private def evaluateSheetFormulas(sheet: Sheet): Sheet =
-    sheet.cells.foldLeft(sheet) { case (acc, (ref, cell)) =>
-      cell.value match
-        case CellValue.Formula(expr, _) =>
-          val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
-          SheetEvaluator.evaluateFormula(sheet)(displayExpr) match
-            case Right(result) =>
-              // Replace formula with evaluated result, keeping style
-              acc.put(ref, result)
-            case Left(error) =>
-              // Warn on stderr but keep formula and continue processing
-              Console.err.println(
-                s"Warning: Failed to evaluate formula at ${ref.toA1}: ${error.message}"
-              )
-              acc
-        case _ =>
-          acc
-    }
+    SheetEvaluator.evaluateWithDependencyCheck(sheet)() match
+      case Right(results) =>
+        // Apply evaluated results. Sheet.put preserves existing cell styleId automatically.
+        results.foldLeft(sheet) { case (acc, (ref, value)) =>
+          acc.put(ref, value)
+        }
+      case Left(error) =>
+        // Warn on stderr but return original sheet
+        Console.err.println(s"Warning: Formula evaluation failed: ${error.message}")
+        sheet

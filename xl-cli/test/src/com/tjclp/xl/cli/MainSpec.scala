@@ -233,3 +233,69 @@ class MainSpec extends CatsEffectSuite:
       )
     }
   }
+
+  // ========== Nested Formula Evaluation (TJC-350 / GH-94) ==========
+
+  test("evaluateWithDependencyCheck: nested formulas evaluate correctly") {
+    import com.tjclp.xl.formula.SheetEvaluator
+
+    IO {
+      // Create a sheet with nested formulas:
+      // B2:B4 = raw numbers
+      // B5 = SUM(B2:B4) - sums the raw numbers
+      // C5 = SUM(B2:B4) - same sum
+      // D5 = SUM(B2:B4) - same sum
+      // E5 = SUM(B2:B4) - same sum
+      // F5 = SUM(B5:E5) - DEPENDS on B5, C5, D5, E5 (nested!)
+      val sheet = Sheet("Test")
+        .put(ref"B2", CellValue.Number(BigDecimal(10)))
+        .put(ref"B3", CellValue.Number(BigDecimal(20)))
+        .put(ref"B4", CellValue.Number(BigDecimal(30)))
+        .put(ref"B5", CellValue.Formula("=SUM(B2:B4)", None)) // = 60
+        .put(ref"C5", CellValue.Formula("=SUM(B2:B4)", None)) // = 60
+        .put(ref"D5", CellValue.Formula("=SUM(B2:B4)", None)) // = 60
+        .put(ref"E5", CellValue.Formula("=SUM(B2:B4)", None)) // = 60
+        .put(ref"F5", CellValue.Formula("=SUM(B5:E5)", None)) // = 240 (depends on above formulas!)
+
+      // Evaluate using dependency-aware evaluation
+      val result = SheetEvaluator.evaluateWithDependencyCheck(sheet)()
+
+      assert(result.isRight, s"Evaluation should succeed, got: $result")
+
+      val evaluated = result.toOption.get
+
+      // B5, C5, D5, E5 should each be 60
+      assertEquals(evaluated.get(ref"B5"), Some(CellValue.Number(BigDecimal(60))))
+      assertEquals(evaluated.get(ref"C5"), Some(CellValue.Number(BigDecimal(60))))
+      assertEquals(evaluated.get(ref"D5"), Some(CellValue.Number(BigDecimal(60))))
+      assertEquals(evaluated.get(ref"E5"), Some(CellValue.Number(BigDecimal(60))))
+
+      // F5 should be 240 (sum of 60+60+60+60) - THIS IS THE CRITICAL TEST
+      // Before the fix, F5 would return 0 because B5:E5 weren't evaluated first
+      assertEquals(
+        evaluated.get(ref"F5"),
+        Some(CellValue.Number(BigDecimal(240))),
+        "F5=SUM(B5:E5) should correctly sum the dependent formulas"
+      )
+    }
+  }
+
+  test("evaluateWithDependencyCheck: simple chain A1=10, B1=A1*2, C1=B1+5") {
+    import com.tjclp.xl.formula.SheetEvaluator
+
+    IO {
+      val sheet = Sheet("Test")
+        .put(ref"A1", CellValue.Formula("=10", None))
+        .put(ref"B1", CellValue.Formula("=A1*2", None)) // depends on A1
+        .put(ref"C1", CellValue.Formula("=B1+5", None)) // depends on B1
+
+      val result = SheetEvaluator.evaluateWithDependencyCheck(sheet)()
+
+      assert(result.isRight, s"Evaluation should succeed, got: $result")
+
+      val evaluated = result.toOption.get
+      assertEquals(evaluated.get(ref"A1"), Some(CellValue.Number(BigDecimal(10))))
+      assertEquals(evaluated.get(ref"B1"), Some(CellValue.Number(BigDecimal(20))))
+      assertEquals(evaluated.get(ref"C1"), Some(CellValue.Number(BigDecimal(25))))
+    }
+  }
