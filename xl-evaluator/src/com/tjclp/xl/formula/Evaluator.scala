@@ -73,6 +73,23 @@ object Evaluator:
   ): Either[EvalError, A] =
     instance.eval(expr, sheet, clock, workbook)
 
+  // Helper methods for consistent cross-sheet error messages
+  private[formula] def missingWorkbookError(refStr: String, isRange: Boolean = false): EvalError =
+    val refType = if isRange then "range" else "reference"
+    EvalError.EvalFailed(
+      s"Cross-sheet $refType $refStr requires workbook context, but none was provided.",
+      None
+    )
+
+  private[formula] def sheetNotFoundError(
+    sheetName: SheetName,
+    err: com.tjclp.xl.error.XLError
+  ): EvalError =
+    EvalError.EvalFailed(
+      s"Sheet '${sheetName.value}' not found in workbook: ${err.message}",
+      None
+    )
+
 /**
  * Private implementation of Evaluator.
  *
@@ -124,21 +141,11 @@ private class EvaluatorImpl extends Evaluator:
         workbook match
           case None =>
             val refStr = s"${sheetName.value}!${(at: ARef).toA1}"
-            Left(
-              EvalError.EvalFailed(
-                s"Cross-sheet reference $refStr requires workbook context, but none was provided.",
-                None
-              )
-            )
+            Left(Evaluator.missingWorkbookError(refStr))
           case Some(wb) =>
             wb(sheetName) match
               case Left(err) =>
-                Left(
-                  EvalError.EvalFailed(
-                    s"Sheet '${sheetName.value}' not found in workbook: ${err.message}",
-                    None
-                  )
-                )
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
               case Right(targetSheet) =>
                 val cell = targetSheet(at)
                 // Return the cell value directly - extract raw value from CellValue
@@ -168,21 +175,11 @@ private class EvaluatorImpl extends Evaluator:
         workbook match
           case None =>
             val refStr = s"${sheetName.value}!${(at: ARef).toA1}"
-            Left(
-              EvalError.EvalFailed(
-                s"Cross-sheet reference $refStr requires workbook context, but none was provided.",
-                None
-              )
-            )
+            Left(Evaluator.missingWorkbookError(refStr))
           case Some(wb) =>
             wb(sheetName) match
               case Left(err) =>
-                Left(
-                  EvalError.EvalFailed(
-                    s"Sheet '${sheetName.value}' not found in workbook: ${err.message}",
-                    None
-                  )
-                )
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
               case Right(targetSheet) =>
                 val cell = targetSheet(at)
                 decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
@@ -1015,21 +1012,11 @@ private class EvaluatorImpl extends Evaluator:
         workbook match
           case None =>
             val refStr = s"${sheetFold.sheet.value}!${sheetFold.range.toA1}"
-            Left(
-              EvalError.EvalFailed(
-                s"Cross-sheet range $refStr requires workbook context, but none was provided.",
-                None
-              )
-            )
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
           case Some(wb) =>
             wb(sheetFold.sheet) match
               case Left(err) =>
-                Left(
-                  EvalError.EvalFailed(
-                    s"Sheet '${sheetFold.sheet.value}' not found in workbook: ${err.message}",
-                    None
-                  )
-                )
+                Left(Evaluator.sheetNotFoundError(sheetFold.sheet, err))
               case Right(targetSheet) =>
                 val cells = sheetFold.range.cells.map(cellRef => targetSheet(cellRef))
                 val result: Either[EvalError, b] = cells.foldLeft[Either[EvalError, b]](

@@ -54,6 +54,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
   // Note: Quoted sheet names ('Q1 Report'!A1) are NOT yet supported by the parser.
   // The FormulaPrinter.formatSheetName correctly outputs them, but parsing is a TODO.
   // Tests below document current behavior (parse failure).
+  // TODO: TJC-360 - Add parser support for quoted sheet names in formulas
 
   test("quoted sheet names are not yet supported (parse limitation)".ignore) {
     // When implemented, these should parse:
@@ -172,6 +173,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
 
   // Note: COUNT, AVERAGE with cross-sheet ranges aren't implemented yet.
   // Only SUM has SheetFoldRange support currently.
+  // TODO: TJC-361 - Add cross-sheet support for COUNT/AVERAGE/MIN/MAX
 
   test("SheetFoldRange: COUNT across cross-sheet range (not yet supported)".ignore) {
     val data = sheetWith(
@@ -217,6 +219,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
   }
 
   // Note: MIN, MAX with cross-sheet ranges aren't implemented yet.
+  // TODO: TJC-361 - Add cross-sheet support for COUNT/AVERAGE/MIN/MAX
 
   test("SheetFoldRange: MIN across cross-sheet range (not yet supported)".ignore) {
     val vals = sheetWith(
@@ -354,6 +357,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
 
   // Note: Tests for quoted sheet names are skipped because parsing is not yet implemented.
   // See the ignored test above documenting this limitation.
+  // TODO: TJC-360 - Add parser support for quoted sheet names in formulas
 
   test("cross-sheet reference with quoted sheet name (not yet supported)".ignore) {
     // When quoted sheet name parsing is implemented, this should work:

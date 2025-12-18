@@ -123,12 +123,13 @@ object DependencyGraph:
       // Polymorphic reference (type resolved at evaluation time)
       case TExpr.PolyRef(at, _) => Set(at)
 
-      // Sheet-qualified references (cross-sheet, not local dependencies)
-      // TODO: For workbook-level dependency tracking, these would need special handling
+      // Cross-sheet references return Set.empty in same-sheet dependency extraction.
+      // This is intentional: extractDependencies builds intra-sheet graphs only.
+      // For workbook-level dependency tracking, use extractQualifiedDependencies + fromWorkbook.
       case TExpr.SheetRef(_, _, _, _) => Set.empty
       case TExpr.SheetPolyRef(_, _, _) => Set.empty
       case TExpr.SheetRange(_, _) => Set.empty
-      case TExpr.SheetFoldRange(_, _, _, _, _) => Set.empty // Cross-sheet ranges are not local deps
+      case TExpr.SheetFoldRange(_, _, _, _, _) => Set.empty
 
       // Range reference (expand to all cells)
       case TExpr.FoldRange(range, _, _, _) =>
@@ -713,8 +714,120 @@ object DependencyGraph:
       case TExpr.Today() => Set.empty
       case TExpr.Now() => Set.empty
 
-      // All other cases - recurse into sub-expressions where applicable
-      case _ => Set.empty
+      // Date calculation functions
+      case TExpr.Eomonth(startDate, months) =>
+        extractQualifiedDependencies(startDate, currentSheet) ++
+          extractQualifiedDependencies(months, currentSheet)
+      case TExpr.Edate(startDate, months) =>
+        extractQualifiedDependencies(startDate, currentSheet) ++
+          extractQualifiedDependencies(months, currentSheet)
+      case TExpr.Datedif(startDate, endDate, unit) =>
+        extractQualifiedDependencies(startDate, currentSheet) ++
+          extractQualifiedDependencies(endDate, currentSheet) ++
+          extractQualifiedDependencies(unit, currentSheet)
+      case TExpr.Networkdays(startDate, endDate, holidaysOpt) =>
+        extractQualifiedDependencies(startDate, currentSheet) ++
+          extractQualifiedDependencies(endDate, currentSheet) ++
+          holidaysOpt
+            .map(_.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet)
+            .getOrElse(Set.empty)
+      case TExpr.Workday(startDate, days, holidaysOpt) =>
+        extractQualifiedDependencies(startDate, currentSheet) ++
+          extractQualifiedDependencies(days, currentSheet) ++
+          holidaysOpt
+            .map(_.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet)
+            .getOrElse(Set.empty)
+      case TExpr.Yearfrac(startDate, endDate, basis) =>
+        extractQualifiedDependencies(startDate, currentSheet) ++
+          extractQualifiedDependencies(endDate, currentSheet) ++
+          extractQualifiedDependencies(basis, currentSheet)
+
+      // Financial functions
+      case TExpr.Npv(rate, values) =>
+        extractQualifiedDependencies(rate, currentSheet) ++
+          values.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+      case TExpr.Irr(values, guessOpt) =>
+        values.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          guessOpt.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
+      case TExpr.Xnpv(rate, values, dates) =>
+        extractQualifiedDependencies(rate, currentSheet) ++
+          values.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          dates.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+      case TExpr.Xirr(values, dates, guessOpt) =>
+        values.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          dates.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          guessOpt.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
+      case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
+        extractQualifiedDependencies(lookup, currentSheet) ++
+          table.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          extractQualifiedDependencies(colIndex, currentSheet) ++
+          extractQualifiedDependencies(rangeLookup, currentSheet)
+
+      // Conditional aggregation functions
+      case TExpr.SumIf(range, criteria, sumRangeOpt) =>
+        range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          extractQualifiedDependencies(criteria, currentSheet) ++
+          sumRangeOpt
+            .map(_.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet)
+            .getOrElse(Set.empty)
+      case TExpr.CountIf(range, criteria) =>
+        range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          extractQualifiedDependencies(criteria, currentSheet)
+      case TExpr.SumIfs(sumRange, conditions) =>
+        sumRange.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          conditions.flatMap { case (range, criteria) =>
+            range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+              extractQualifiedDependencies(criteria, currentSheet)
+          }.toSet
+      case TExpr.CountIfs(conditions) =>
+        conditions.flatMap { case (range, criteria) =>
+          range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+            extractQualifiedDependencies(criteria, currentSheet)
+        }.toSet
+      case TExpr.SumProduct(arrays) =>
+        arrays.flatMap(_.cells.map(ref => QualifiedRef(currentSheet, ref))).toSet
+
+      // Advanced lookup functions
+      case TExpr.XLookup(
+            lookupValue,
+            lookupArray,
+            returnArray,
+            ifNotFound,
+            matchMode,
+            searchMode
+          ) =>
+        extractQualifiedDependencies(lookupValue, currentSheet) ++
+          lookupArray.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          returnArray.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          ifNotFound.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
+          extractQualifiedDependencies(matchMode, currentSheet) ++
+          extractQualifiedDependencies(searchMode, currentSheet)
+      case TExpr.Index(array, rowNum, colNum) =>
+        array.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          extractQualifiedDependencies(rowNum, currentSheet) ++
+          colNum.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
+      case TExpr.Match(lookupValue, lookupArray, matchType) =>
+        extractQualifiedDependencies(lookupValue, currentSheet) ++
+          lookupArray.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet ++
+          extractQualifiedDependencies(matchType, currentSheet)
+
+      // Error handling functions
+      case TExpr.Iferror(value, valueIfError) =>
+        extractQualifiedDependencies(value, currentSheet) ++
+          extractQualifiedDependencies(valueIfError, currentSheet)
+      case TExpr.Iserror(value) =>
+        extractQualifiedDependencies(value, currentSheet)
+
+      // Rounding and math functions
+      case TExpr.Round(value, numDigits) =>
+        extractQualifiedDependencies(value, currentSheet) ++
+          extractQualifiedDependencies(numDigits, currentSheet)
+      case TExpr.RoundUp(value, numDigits) =>
+        extractQualifiedDependencies(value, currentSheet) ++
+          extractQualifiedDependencies(numDigits, currentSheet)
+      case TExpr.RoundDown(value, numDigits) =>
+        extractQualifiedDependencies(value, currentSheet) ++
+          extractQualifiedDependencies(numDigits, currentSheet)
 
   /**
    * Detect circular references across sheets using Tarjan's SCC algorithm.
