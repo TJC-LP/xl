@@ -1136,7 +1136,12 @@ object WorkbookStyles:
     val cleaned = value.trim.stripPrefix("#")
     val normalized =
       if cleaned.length == 6 then Some("FF" + cleaned)
-      else if cleaned.length == 8 then Some(cleaned)
+      else if cleaned.length == 8 then
+        // Excel/openpyxl often write 00RRGGBB where 00 means opaque, not transparent
+        // This is a quirk of the format - treat 00 alpha as fully opaque (FF)
+        val alpha = cleaned.substring(0, 2)
+        if alpha == "00" then Some("FF" + cleaned.substring(2))
+        else Some(cleaned)
       else None
     normalized.flatMap { hex =>
       try Some(Color.Rgb(java.lang.Long.parseUnsignedLong(hex, 16).toInt))

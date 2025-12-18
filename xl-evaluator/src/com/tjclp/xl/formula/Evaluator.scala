@@ -871,6 +871,8 @@ private class EvaluatorImpl extends Evaluator:
           lookupValue <- eval(lookupExpr, sheet, clock, workbook)
           colIndex <- eval(colIndexExpr, sheet, clock, workbook)
           rangeMatch <- eval(rangeLookupExpr, sheet, clock, workbook)
+          // Resolve the target sheet for cross-sheet VLOOKUP
+          targetSheet <- Evaluator.resolveRangeLocation(table, sheet, workbook)
           result <-
             if colIndex < 1 || colIndex > table.width then
               Left(
@@ -922,7 +924,7 @@ private class EvaluatorImpl extends Evaluator:
                     val keyedRows: List[(Int, BigDecimal)] =
                       rowIndices.toList.flatMap { i =>
                         val keyRef = ARef.from0(keyCol0, rowStart0 + i)
-                        extractNumericForMatch(sheet(keyRef).value).map(k => (i, k))
+                        extractNumericForMatch(targetSheet(keyRef).value).map(k => (i, k))
                       }
                     keyedRows
                       .filter(_._2 <= lookup)
@@ -936,7 +938,7 @@ private class EvaluatorImpl extends Evaluator:
                     val lookupText = lookupValue.toString.toLowerCase
                     rowIndices.find { i =>
                       val keyRef = ARef.from0(keyCol0, rowStart0 + i)
-                      extractTextForMatch(sheet(keyRef).value)
+                      extractTextForMatch(targetSheet(keyRef).value)
                         .exists(_.toLowerCase == lookupText)
                     }
                   else
@@ -948,14 +950,14 @@ private class EvaluatorImpl extends Evaluator:
                     numericLookup.flatMap { lookup =>
                       rowIndices.find { i =>
                         val keyRef = ARef.from0(keyCol0, rowStart0 + i)
-                        extractNumericForMatch(sheet(keyRef).value).contains(lookup)
+                        extractNumericForMatch(targetSheet(keyRef).value).contains(lookup)
                       }
                     }
 
               chosenRowOpt match
                 case Some(rowIndex) =>
                   val resultRef = ARef.from0(resultCol0, rowStart0 + rowIndex)
-                  val resultCell = sheet(resultRef)
+                  val resultCell = targetSheet(resultRef)
                   // Return the CellValue directly (preserves type)
                   Right(resultCell.value)
                 case None =>
