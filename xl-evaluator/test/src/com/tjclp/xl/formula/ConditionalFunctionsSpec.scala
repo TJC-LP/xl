@@ -142,6 +142,20 @@ class ConditionalFunctionsSpec extends FunSuite:
     assertEval("=SUMIF(A1:A3, \"*apple\", B1:B3)", sheet, 30)
   }
 
+  test("SUMIF: Widget* pattern match (TJC-353 regression test)") {
+    // Exact scenario from bug report: =SUMIF(A2:A4,"Widget*",F2:F4)
+    val sheet = sheetWith(
+      ref"A2" -> "Widget A",
+      ref"F2" -> 100,
+      ref"A3" -> "Widget B",
+      ref"F3" -> 200,
+      ref"A4" -> "Other",
+      ref"F4" -> 50
+    )
+    // Should sum 100 + 200 = 300 (matching "Widget A" and "Widget B")
+    assertEval("=SUMIF(A2:A4, \"Widget*\", F2:F4)", sheet, 300)
+  }
+
   test("SUMIF: wildcard ? matches single character") {
     val sheet = sheetWith(
       ref"A1" -> "Cat",

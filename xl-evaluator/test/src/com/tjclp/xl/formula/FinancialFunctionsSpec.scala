@@ -268,7 +268,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
 
     val result = evalOk(expr, sheet)
-    assertEquals(result, BigDecimal("30"))
+    assertEquals(result, CellValue.Number(BigDecimal("30")))
   }
 
   test("VLOOKUP: approximate match (TRUE)") {
@@ -291,7 +291,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
 
     val result = evalOk(expr, sheet)
-    assertEquals(result, BigDecimal("20"))
+    assertEquals(result, CellValue.Number(BigDecimal("20")))
   }
 
   test("VLOOKUP: col_index_num out of range") {
@@ -352,7 +352,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       case other => fail(s"Expected EvalFailed, got $other")
   }
 
-  test("VLOOKUP: ignores non-numeric keys") {
+  test("VLOOKUP: ignores non-numeric keys for numeric lookup") {
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Text("skip"),
       ARef.from0(1, 0) -> CellValue.Number(BigDecimal("10")),
@@ -368,7 +368,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
 
     val result = evalOk(expr, sheet)
-    assertEquals(result, BigDecimal("20"))
+    assertEquals(result, CellValue.Number(BigDecimal("20")))
   }
 
   test("VLOOKUP: parse and print round-trip (3 args)") {
@@ -412,7 +412,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     assertEquals(npv.abs < BigDecimal("0.01"), true)
   }
 
-  test("VLOOKUP: use result in further calculations") {
+  test("VLOOKUP: returns numeric CellValue for numeric data") {
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal("100")),
       ARef.from0(1, 0) -> CellValue.Number(BigDecimal("10")),
@@ -420,16 +420,61 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       ARef.from0(1, 1) -> CellValue.Number(BigDecimal("20"))
     )
 
-    val vlookup = TExpr.vlookup(
+    val expr = TExpr.vlookup(
       TExpr.Lit(BigDecimal("200")),
       CellRange.parse("A1:B2").getOrElse(fail("Invalid range")),
       TExpr.Lit(2),
       TExpr.Lit(false)
     )
 
-    // Add 100 to the lookup result
-    val expr = TExpr.Add(vlookup, TExpr.Lit(BigDecimal("100")))
+    val result = evalOk(expr, sheet)
+    assertEquals(result, CellValue.Number(BigDecimal("20")))
+
+    // Verify we can extract numeric value from CellValue
+    result match
+      case CellValue.Number(n) => assertEquals(n + 100, BigDecimal("120"))
+      case other => fail(s"Expected Number, got $other")
+  }
+
+  test("VLOOKUP: text lookup (case-insensitive)") {
+    // Table with text keys in first column
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Text("Widget A"),
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal("100")),
+      ARef.from0(0, 1) -> CellValue.Text("Widget B"),
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal("200")),
+      ARef.from0(0, 2) -> CellValue.Text("Widget C"),
+      ARef.from0(1, 2) -> CellValue.Number(BigDecimal("300"))
+    )
+
+    // Lookup "widget b" (case-insensitive)
+    val expr = TExpr.vlookup(
+      TExpr.Lit("widget b"), // lowercase to test case-insensitivity
+      CellRange.parse("A1:B3").getOrElse(fail("Invalid range")),
+      TExpr.Lit(2),
+      TExpr.Lit(false) // exact match
+    )
 
     val result = evalOk(expr, sheet)
-    assertEquals(result, BigDecimal("120"))
+    assertEquals(result, CellValue.Number(BigDecimal("200")))
+  }
+
+  test("VLOOKUP: text lookup returns text result") {
+    // Table with text keys and text results
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Text("ID001"),
+      ARef.from0(1, 0) -> CellValue.Text("Product A"),
+      ARef.from0(0, 1) -> CellValue.Text("ID002"),
+      ARef.from0(1, 1) -> CellValue.Text("Product B")
+    )
+
+    val expr = TExpr.vlookup(
+      TExpr.Lit("ID002"),
+      CellRange.parse("A1:B2").getOrElse(fail("Invalid range")),
+      TExpr.Lit(2),
+      TExpr.Lit(false)
+    )
+
+    val result = evalOk(expr, sheet)
+    assertEquals(result, CellValue.Text("Product B"))
   }
