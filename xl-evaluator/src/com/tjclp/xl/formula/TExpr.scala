@@ -1279,11 +1279,18 @@ object TExpr:
 
   /**
    * Decode cell as numeric value (Double or BigDecimal).
+   *
+   * Handles Formula cells by extracting the cached numeric value when available. This enables
+   * nested formula evaluation where a cell reference points to another formula cell with a cached
+   * result.
    */
   def decodeNumeric(cell: Cell): Either[CodecError, BigDecimal] =
     import com.tjclp.xl.cells.CellValue
     cell.value match
       case CellValue.Number(value) => scala.util.Right(value)
+      case CellValue.Formula(_, Some(CellValue.Number(cached))) =>
+        // Extract cached numeric value from formula cell
+        scala.util.Right(cached)
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(
@@ -1303,11 +1310,15 @@ object TExpr:
 
   /**
    * Decode cell as text/string value.
+   *
+   * Handles Formula cells by extracting the cached text value when available.
    */
   def decodeString(cell: Cell): Either[CodecError, String] =
     import com.tjclp.xl.cells.CellValue
     cell.value match
       case CellValue.Text(value) => scala.util.Right(value)
+      case CellValue.Formula(_, Some(CellValue.Text(cached))) =>
+        scala.util.Right(cached)
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(
@@ -1318,19 +1329,24 @@ object TExpr:
 
   /**
    * Decode cell as integer value.
+   *
+   * Handles Formula cells by extracting the cached integer value when available.
    */
   def decodeInt(cell: Cell): Either[CodecError, Int] =
     import com.tjclp.xl.cells.CellValue
-    cell.value match
-      case CellValue.Number(value) =>
-        if value.isValidInt then scala.util.Right(value.toInt)
-        else
-          scala.util.Left(
-            CodecError.TypeMismatch(
-              expected = "Int",
-              actual = CellValue.Number(value)
-            )
+    def tryInt(value: BigDecimal, orig: CellValue): Either[CodecError, Int] =
+      if value.isValidInt then scala.util.Right(value.toInt)
+      else
+        scala.util.Left(
+          CodecError.TypeMismatch(
+            expected = "Int",
+            actual = orig
           )
+        )
+    cell.value match
+      case CellValue.Number(value) => tryInt(value, CellValue.Number(value))
+      case CellValue.Formula(_, Some(CellValue.Number(cached))) =>
+        tryInt(cached, CellValue.Number(cached))
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(
@@ -1341,11 +1357,15 @@ object TExpr:
 
   /**
    * Decode cell as LocalDate value (extracts date from DateTime).
+   *
+   * Handles Formula cells by extracting the cached DateTime value when available.
    */
   def decodeDate(cell: Cell): Either[CodecError, java.time.LocalDate] =
     import com.tjclp.xl.cells.CellValue
     cell.value match
       case CellValue.DateTime(value) => scala.util.Right(value.toLocalDate)
+      case CellValue.Formula(_, Some(CellValue.DateTime(cached))) =>
+        scala.util.Right(cached.toLocalDate)
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(
@@ -1356,11 +1376,15 @@ object TExpr:
 
   /**
    * Decode cell as LocalDateTime value.
+   *
+   * Handles Formula cells by extracting the cached DateTime value when available.
    */
   def decodeDateTime(cell: Cell): Either[CodecError, java.time.LocalDateTime] =
     import com.tjclp.xl.cells.CellValue
     cell.value match
       case CellValue.DateTime(value) => scala.util.Right(value)
+      case CellValue.Formula(_, Some(CellValue.DateTime(cached))) =>
+        scala.util.Right(cached)
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(
@@ -1371,11 +1395,15 @@ object TExpr:
 
   /**
    * Decode cell as Boolean value.
+   *
+   * Handles Formula cells by extracting the cached Boolean value when available.
    */
   def decodeBool(cell: Cell): Either[CodecError, Boolean] =
     import com.tjclp.xl.cells.CellValue
     cell.value match
       case CellValue.Bool(value) => scala.util.Right(value)
+      case CellValue.Formula(_, Some(CellValue.Bool(cached))) =>
+        scala.util.Right(cached)
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(
