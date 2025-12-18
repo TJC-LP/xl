@@ -61,6 +61,19 @@ object FormulaShifter:
         val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
         PolyRef(shiftedRef, anchor).asInstanceOf[TExpr[A]]
 
+      // Sheet-qualified references - shift the cell ref but keep the sheet
+      case SheetRef(sheet, at, anchor, decode) =>
+        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
+        SheetRef(sheet, shiftedRef, anchor, decode)
+
+      case SheetPolyRef(sheet, at, anchor) =>
+        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
+        SheetPolyRef(sheet, shiftedRef, anchor).asInstanceOf[TExpr[A]]
+
+      case SheetRange(sheet, range) =>
+        val shiftedRange = shiftRange(range, colDelta, rowDelta)
+        SheetRange(sheet, shiftedRange).asInstanceOf[TExpr[A]]
+
       // Literals - unchanged
       case lit: Lit[?] => lit.asInstanceOf[TExpr[A]]
 
@@ -123,6 +136,11 @@ object FormulaShifter:
       // Range aggregation - shift the range
       case FoldRange(range, z, step, decode) =>
         FoldRange(shiftRange(range, colDelta, rowDelta), z, step, decode).asInstanceOf[TExpr[A]]
+
+      // Cross-sheet range aggregation - shift the range but preserve sheet name
+      case SheetFoldRange(sheet, range, z, step, decode) =>
+        SheetFoldRange(sheet, shiftRange(range, colDelta, rowDelta), z, step, decode)
+          .asInstanceOf[TExpr[A]]
 
       // Arithmetic range functions
       case Min(range) =>

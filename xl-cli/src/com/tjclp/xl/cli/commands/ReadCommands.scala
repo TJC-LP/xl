@@ -82,7 +82,7 @@ object ReadCommands:
         case ViewFormat.Html =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet) else targetSheet
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
           IO.pure(
             sheetToRender.toHtml(
               limitedRange,
@@ -94,7 +94,7 @@ object ReadCommands:
         case ViewFormat.Svg =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet) else targetSheet
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
           IO.pure(
             sheetToRender.toSvg(
               limitedRange,
@@ -136,7 +136,7 @@ object ReadCommands:
             case Some(outputPath) =>
               // Pre-evaluate formulas if --eval flag is set
               val sheetToRender =
-                if evalFormulas then evaluateSheetFormulas(targetSheet) else targetSheet
+                if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
               val svg = sheetToRender.toSvg(
                 limitedRange,
                 theme = theme,
@@ -342,7 +342,10 @@ object ReadCommands:
       tempSheet <- applyOverrides(sheet, overrides)
       formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
       result <- IO.fromEither(
-        SheetEvaluator.evaluateFormula(tempSheet)(formula).left.map(e => new Exception(e.message))
+        SheetEvaluator
+          .evaluateFormula(tempSheet)(formula, workbook = Some(wb))
+          .left
+          .map(e => new Exception(e.message))
       )
     yield Format.evalSuccess(formula, result, overrides)
 
@@ -404,9 +407,14 @@ object ReadCommands:
    *
    * Uses dependency-aware evaluation to correctly handle nested formulas (e.g., F5=SUM(B5:E5) where
    * B5=SUM(B2:B4)). Formulas are evaluated in topological order so dependencies are computed first.
+   *
+   * @param sheet
+   *   The sheet to evaluate formulas in
+   * @param workbook
+   *   Optional workbook context for cross-sheet formula references
    */
-  private def evaluateSheetFormulas(sheet: Sheet): Sheet =
-    SheetEvaluator.evaluateWithDependencyCheck(sheet)() match
+  private def evaluateSheetFormulas(sheet: Sheet, workbook: Option[Workbook] = None): Sheet =
+    SheetEvaluator.evaluateWithDependencyCheck(sheet)(workbook = workbook) match
       case Right(results) =>
         // Apply evaluated results. Sheet.put preserves existing cell styleId automatically.
         results.foldLeft(sheet) { case (acc, (ref, value)) =>

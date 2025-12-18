@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.{ARef, Anchor, CellRange}
+import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.{Column, Row}
 
 /**
@@ -76,6 +76,14 @@ object FormulaPrinter:
       // Cell reference
       case TExpr.Ref(at, anchor, _) => formatARef(at, anchor)
       case TExpr.PolyRef(at, anchor) => formatARef(at, anchor) // PolyRef prints same as Ref
+
+      // Sheet-qualified references
+      case TExpr.SheetRef(sheet, at, anchor, _) =>
+        s"${formatSheetName(sheet)}!${formatARef(at, anchor)}"
+      case TExpr.SheetPolyRef(sheet, at, anchor) =>
+        s"${formatSheetName(sheet)}!${formatARef(at, anchor)}"
+      case TExpr.SheetRange(sheet, range) =>
+        s"${formatSheetName(sheet)}!${range.toA1}"
 
       // Conditional
       case TExpr.If(cond, ifTrue, ifFalse) =>
@@ -356,6 +364,11 @@ object FormulaPrinter:
         // Detect common aggregation patterns
         detectAggregation(TExpr.FoldRange(range, z, step, decode))
 
+      // Cross-sheet range aggregation
+      case TExpr.SheetFoldRange(sheet, range, z, step, decode) =>
+        // Detect common aggregation patterns for cross-sheet ranges
+        s"SUM(${formatSheetName(sheet)}!${formatRange(range)})"
+
   /**
    * Detect and print common aggregation patterns (SUM, COUNT, AVERAGE).
    */
@@ -419,6 +432,27 @@ object FormulaPrinter:
     s.replace("\"", "\"\"")
 
   /**
+   * Format sheet name for Excel formula.
+   *
+   * Sheet names with spaces or special characters need to be quoted with single quotes. Any single
+   * quotes within the name are doubled (Excel escape convention).
+   */
+  private def formatSheetName(sheet: SheetName): String =
+    val name = sheet.value
+    // Sheet names need quoting if they contain spaces, special chars, or look like cell refs
+    val needsQuoting = name.contains(' ') ||
+      name.contains('\'') ||
+      name.contains('-') ||
+      name.exists(c => !c.isLetterOrDigit && c != '_') ||
+      name.headOption.exists(_.isDigit) // Names starting with digit need quoting
+
+    if needsQuoting then
+      // Escape single quotes by doubling them
+      val escaped = name.replace("'", "''")
+      s"'$escaped'"
+    else name
+
+  /**
    * Print with minimal whitespace (compact format).
    */
   def printCompact(expr: TExpr[?]): String =
@@ -468,6 +502,12 @@ object FormulaPrinter:
         s"Ref($at, $anchor)"
       case TExpr.PolyRef(at, anchor) =>
         s"PolyRef($at, $anchor)"
+      case TExpr.SheetRef(sheet, at, anchor, _) =>
+        s"SheetRef(${sheet.value}, $at, $anchor)"
+      case TExpr.SheetPolyRef(sheet, at, anchor) =>
+        s"SheetPolyRef(${sheet.value}, $at, $anchor)"
+      case TExpr.SheetRange(sheet, range) =>
+        s"SheetRange(${sheet.value}, $range)"
       case TExpr.If(cond, ifTrue, ifFalse) =>
         s"If(${printWithTypes(cond)}, ${printWithTypes(ifTrue)}, ${printWithTypes(ifFalse)})"
       case TExpr.Add(x, y) =>
@@ -620,3 +660,5 @@ object FormulaPrinter:
         s"XLookup(${printWithTypes(lookupValue)}, ${formatRange(lookupArray)}, ${formatRange(returnArray)}$ifNotFoundStr, ${printWithTypes(matchMode)}, ${printWithTypes(searchMode)})"
       case fold @ TExpr.FoldRange(range, _, _, _) =>
         s"FoldRange(${formatRange(range)})"
+      case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
+        s"SheetFoldRange(${formatSheetName(sheet)}!${formatRange(range)})"

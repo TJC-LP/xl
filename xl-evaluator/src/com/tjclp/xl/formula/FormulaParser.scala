@@ -1,6 +1,7 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.{ARef, Anchor, CellRange}
+import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
+import com.tjclp.xl.addressing.RefParser
 import com.tjclp.xl.cells.Cell
 import com.tjclp.xl.codec
 
@@ -473,18 +474,24 @@ object FormulaParser:
       case "TRUE" => Right((TExpr.Lit(true), s2))
       case "FALSE" => Right((TExpr.Lit(false), s2))
       case _ =>
-        // Not a boolean - check for function call (identifier followed by '(')
-        val s3 = skipWhitespace(s2)
-        s3.currentChar match
-          case Some('(') =>
-            // Function call
-            parseFunction(ident, s3, startPos)
-          case Some(':') =>
-            // Range (e.g., A1:B10)
-            parseRange(state.input.substring(startPos, s2.pos), s2, startPos)
+        // Check for sheet-qualified reference (identifier followed by '!')
+        s2.currentChar match
+          case Some('!') =>
+            // Sheet-qualified reference: Sheet1!A1 or Sheet1!A1:B10
+            parseSheetQualifiedRef(state.input.substring(startPos, s2.pos), s2.advance(), startPos)
           case _ =>
-            // Cell reference
-            parseCellReference(state.input.substring(startPos, s2.pos), s2, startPos)
+            // Not a boolean - check for function call (identifier followed by '(')
+            val s3 = skipWhitespace(s2)
+            s3.currentChar match
+              case Some('(') =>
+                // Function call
+                parseFunction(ident, s3, startPos)
+              case Some(':') =>
+                // Range (e.g., A1:B10)
+                parseRange(state.input.substring(startPos, s2.pos), s2, startPos)
+              case _ =>
+                // Cell reference
+                parseCellReference(state.input.substring(startPos, s2.pos), s2, startPos)
 
   /**
    * Parse function call: FUNC(arg1, arg2, ...)
@@ -547,6 +554,60 @@ object FormulaParser:
         Right((TExpr.PolyRef(aref.asInstanceOf[ARef], anchor), state))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(refStr, startPos, err))
+
+  /**
+   * Parse sheet-qualified reference: Sheet1!A1 or Sheet1!A1:B10
+   *
+   * @param sheetStr
+   *   The sheet name (already parsed, before the !)
+   * @param state
+   *   Parser state positioned after the !
+   * @param startPos
+   *   Start position for error reporting
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def parseSheetQualifiedRef(
+    sheetStr: String,
+    state: ParserState,
+    startPos: Int
+  ): ParseResult[TExpr[?]] =
+    // Validate sheet name - use unsafe since we've validated the string
+    SheetName(sheetStr) match
+      case Left(err) =>
+        Left(ParseError.InvalidCellRef(s"$sheetStr!", startPos, s"invalid sheet name: $err"))
+      case Right(_) =>
+        // SheetName validated, create using unsafe to preserve opaque type
+        val sheetName: SheetName = SheetName.unsafe(sheetStr)
+
+        // Read the cell reference or range after the !
+        val refStartPos = state.pos
+
+        @tailrec
+        def readRef(s: ParserState): ParserState =
+          s.currentChar match
+            case Some(c) if c.isLetterOrDigit || c == '$' || c == ':' => readRef(s.advance())
+            case _ => s
+
+        val s2 = readRef(state)
+        val refPart = state.input.substring(refStartPos, s2.pos)
+
+        if refPart.isEmpty then
+          Left(ParseError.InvalidCellRef(s"$sheetStr!", startPos, "missing cell reference after !"))
+        else if refPart.contains(':') then
+          // Range reference: Sheet1!A1:B10
+          CellRange.parse(refPart) match
+            case Right(range) =>
+              Right((TExpr.SheetRange(sheetName, range), s2))
+            case Left(err) =>
+              Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
+        else
+          // Single cell reference: Sheet1!A1
+          val (cleanRef, anchor) = Anchor.parse(refPart)
+          ARef.parse(cleanRef) match
+            case Right(aref) =>
+              Right((TExpr.SheetPolyRef(sheetName, aref.asInstanceOf[ARef], anchor), s2))
+            case Left(err) =>
+              Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
 
   /**
    * Parse anchored cell reference starting with $.

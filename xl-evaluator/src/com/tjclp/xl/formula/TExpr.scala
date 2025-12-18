@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.{ARef, Anchor, CellRange}
+import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec.CodecError
 
@@ -62,6 +62,80 @@ enum TExpr[A] derives CanEqual:
    * Example: PolyRef(ARef("A1"), Anchor.Relative) - type determined by enclosing function
    */
   case PolyRef(at: ARef, anchor: Anchor = Anchor.Relative) extends TExpr[Nothing]
+
+  /**
+   * Sheet-qualified cell reference - reads value from a cell in another sheet.
+   *
+   * @param sheet
+   *   The target sheet name
+   * @param at
+   *   The cell address within the target sheet
+   * @param anchor
+   *   Anchoring mode for formula dragging
+   * @param decode
+   *   Function to decode the cell's value to type A
+   *
+   * Example: SheetRef("Sales", ARef("F4"), Anchor.Relative, decodeNumber) reads from Sales!F4
+   */
+  case SheetRef[A](
+    sheet: SheetName,
+    at: ARef,
+    anchor: Anchor,
+    decode: Cell => Either[CodecError, A]
+  ) extends TExpr[A]
+
+  /**
+   * Polymorphic sheet-qualified cell reference - defers type commitment until function context.
+   *
+   * @param sheet
+   *   The target sheet name
+   * @param at
+   *   The cell address within the target sheet
+   * @param anchor
+   *   Anchoring mode for formula dragging
+   *
+   * Example: SheetPolyRef("Sales", ARef("F4"), Anchor.Relative) - type determined by context
+   */
+  case SheetPolyRef(sheet: SheetName, at: ARef, anchor: Anchor = Anchor.Relative)
+      extends TExpr[Nothing]
+
+  /**
+   * Sheet-qualified range reference - references a range in another sheet.
+   *
+   * @param sheet
+   *   The target sheet name
+   * @param range
+   *   The cell range within the target sheet
+   *
+   * Example: SheetRange("Sales", CellRange(A1, A10)) represents Sales!A1:A10
+   */
+  case SheetRange(sheet: SheetName, range: CellRange) extends TExpr[Nothing]
+
+  /**
+   * Fold over a sheet-qualified range - aggregates values from another sheet.
+   *
+   * Similar to FoldRange but operates on a range in a different sheet.
+   *
+   * @param sheet
+   *   The target sheet name
+   * @param range
+   *   The cell range within the target sheet
+   * @param z
+   *   Initial accumulator value
+   * @param step
+   *   Fold function combining accumulator with cell value
+   * @param decode
+   *   Function to decode each cell's value to type A
+   *
+   * Example: SUM(Sales!A1:A10) = SheetFoldRange(Sales, A1:A10, BigDecimal(0), _ + _, decodeNumber)
+   */
+  case SheetFoldRange[A, B](
+    sheet: SheetName,
+    range: CellRange,
+    z: B,
+    step: (B, A) => B,
+    decode: Cell => Either[CodecError, A]
+  ) extends TExpr[B]
 
   /**
    * Conditional expression - if/then/else.

@@ -123,6 +123,13 @@ object DependencyGraph:
       // Polymorphic reference (type resolved at evaluation time)
       case TExpr.PolyRef(at, _) => Set(at)
 
+      // Sheet-qualified references (cross-sheet, not local dependencies)
+      // TODO: For workbook-level dependency tracking, these would need special handling
+      case TExpr.SheetRef(_, _, _, _) => Set.empty
+      case TExpr.SheetPolyRef(_, _, _) => Set.empty
+      case TExpr.SheetRange(_, _) => Set.empty
+      case TExpr.SheetFoldRange(_, _, _, _, _) => Set.empty // Cross-sheet ranges are not local deps
+
       // Range reference (expand to all cells)
       case TExpr.FoldRange(range, _, _, _) =>
         range.cells.toSet

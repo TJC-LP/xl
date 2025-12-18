@@ -227,6 +227,17 @@ object FunctionParser:
       args match
         case List(fold: TExpr.FoldRange[?, ?]) =>
           scala.util.Right(fold) // Already created by parseRange
+        case List(TExpr.SheetRange(sheet, range)) =>
+          // Cross-sheet range: create SheetFoldRange for SUM
+          scala.util.Right(
+            TExpr.SheetFoldRange(
+              sheet,
+              range,
+              BigDecimal(0),
+              (acc: BigDecimal, v: BigDecimal) => acc + v,
+              TExpr.decodeNumeric
+            )
+          )
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("SUM", pos, "1 range argument", s"${args.length} arguments")
