@@ -2,7 +2,9 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
+import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.SheetName
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
 import scala.math.BigDecimal
 import scala.annotation.tailrec
@@ -40,10 +42,17 @@ trait Evaluator:
    *   The sheet providing cell values
    * @param clock
    *   Clock for date/time functions (defaults to system clock)
+   * @param workbook
+   *   Optional workbook for cross-sheet references (defaults to None)
    * @return
    *   Either evaluation error or computed value
    */
-  def eval[A](expr: TExpr[A], sheet: Sheet, clock: Clock = Clock.system): Either[EvalError, A]
+  def eval[A](
+    expr: TExpr[A],
+    sheet: Sheet,
+    clock: Clock = Clock.system,
+    workbook: Option[Workbook] = None
+  ): Either[EvalError, A]
 
 object Evaluator:
   /**
@@ -56,18 +65,69 @@ object Evaluator:
   /**
    * Convenience method for direct evaluation (forwards to instance.eval).
    */
-  def eval[A](expr: TExpr[A], sheet: Sheet, clock: Clock = Clock.system): Either[EvalError, A] =
-    instance.eval(expr, sheet, clock)
+  def eval[A](
+    expr: TExpr[A],
+    sheet: Sheet,
+    clock: Clock = Clock.system,
+    workbook: Option[Workbook] = None
+  ): Either[EvalError, A] =
+    instance.eval(expr, sheet, clock, workbook)
+
+  // Helper methods for consistent cross-sheet error messages
+  private[formula] def missingWorkbookError(refStr: String, isRange: Boolean = false): EvalError =
+    val refType = if isRange then "range" else "reference"
+    EvalError.EvalFailed(
+      s"Cross-sheet $refType $refStr requires workbook context, but none was provided.",
+      None
+    )
+
+  private[formula] def sheetNotFoundError(
+    sheetName: SheetName,
+    err: com.tjclp.xl.error.XLError
+  ): EvalError =
+    EvalError.EvalFailed(
+      s"Sheet '${sheetName.value}' not found in workbook: ${err.message}",
+      None
+    )
+
+  /**
+   * Resolve a RangeLocation to the target sheet.
+   *
+   * For Local ranges, returns the current sheet. For CrossSheet ranges, looks up the target sheet
+   * in the workbook context.
+   */
+  private[formula] def resolveRangeLocation(
+    location: TExpr.RangeLocation,
+    currentSheet: Sheet,
+    workbook: Option[Workbook]
+  ): Either[EvalError, Sheet] =
+    location match
+      case TExpr.RangeLocation.Local(_) =>
+        Right(currentSheet)
+      case TExpr.RangeLocation.CrossSheet(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) => Left(sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) => Right(targetSheet)
 
 /**
  * Private implementation of Evaluator.
  *
- * Implements all 17 TExpr cases with proper error handling and short-circuit semantics.
+ * Implements all TExpr cases with proper error handling and short-circuit semantics.
  */
 private class EvaluatorImpl extends Evaluator:
   // Suppress asInstanceOf warning for FoldRange GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
-  def eval[A](expr: TExpr[A], sheet: Sheet, clock: Clock = Clock.system): Either[EvalError, A] =
+  def eval[A](
+    expr: TExpr[A],
+    sheet: Sheet,
+    clock: Clock = Clock.system,
+    workbook: Option[Workbook] = None
+  ): Either[EvalError, A] =
     // @unchecked: GADT exhaustivity - PolyRef should be resolved before evaluation
     (expr: @unchecked) match
       // ===== Defensive PolyRef Handling =====
@@ -79,6 +139,81 @@ private class EvaluatorImpl extends Evaluator:
         Left(
           EvalError.EvalFailed(
             s"Unresolved cell reference $refStr. This indicates a parser bug - PolyRef should be resolved before evaluation.",
+            None
+          )
+        )
+
+      // ===== Sheet-Qualified References (Cross-Sheet) =====
+      //
+      // SheetPolyRef: Cross-sheet polymorphic reference
+      //
+      // Unlike same-sheet PolyRef (which errors defensively because it should be
+      // resolved to typed Ref during parsing), SheetPolyRef is evaluated directly
+      // because cross-sheet references are typically used at the top level of
+      // formulas (e.g., =Sales!A1) where type context is "return the raw value".
+      //
+      // The asInstanceOf[Either[EvalError, A]] cast at line ~150 is safe because:
+      // 1. The calling code (SheetEvaluator.evaluateFormula) passes result to
+      //    toCellValue(result: Any) which handles all runtime types
+      // 2. When used in typed contexts (e.g., =Sales!A1 + 10), the parser would
+      //    create SheetRef with proper decoder instead of SheetPolyRef
+      //
+      // This matches Excel behavior: cross-sheet references return the cell's
+      // raw value, with type coercion happening at the operator level.
+      //
+      case TExpr.SheetPolyRef(sheetName, at, _) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${(at: ARef).toA1}"
+            Left(Evaluator.missingWorkbookError(refStr))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cell = targetSheet(at)
+                // Return the cell value directly - extract raw value from CellValue
+                // We cast the whole Either to avoid type issues with TExpr[Nothing]
+                val result: Either[EvalError, Any] = cell.value match
+                  case CellValue.Number(n) => Right(n)
+                  case CellValue.Text(s) => Right(s)
+                  case CellValue.Bool(b) => Right(b)
+                  case CellValue.DateTime(dt) => Right(dt)
+                  case CellValue.Formula(_, cached) =>
+                    // Use cached value if available
+                    cached match
+                      case Some(CellValue.Number(n)) => Right(n)
+                      case Some(CellValue.Text(s)) => Right(s)
+                      case Some(CellValue.Bool(b)) => Right(b)
+                      case Some(CellValue.DateTime(dt)) => Right(dt)
+                      case Some(CellValue.RichText(rt)) => Right(rt.toPlainText)
+                      case _ => Right(BigDecimal(0)) // Empty formula = 0
+                  case CellValue.Error(err) =>
+                    Left(EvalError.EvalFailed(s"Cell contains error: $err", None))
+                  case CellValue.Empty => Right(BigDecimal(0)) // Empty = 0
+                  case CellValue.RichText(rt) => Right(rt.toPlainText)
+                result.asInstanceOf[Either[EvalError, A]]
+
+      case TExpr.SheetRef(sheetName, at, _, decode) =>
+        // SheetRef: resolve cell from target sheet in workbook
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${(at: ARef).toA1}"
+            Left(Evaluator.missingWorkbookError(refStr))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cell = targetSheet(at)
+                decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+
+      case TExpr.SheetRange(sheetName, range) =>
+        // SheetRange should be wrapped in a function (SUM, COUNT, etc.) before evaluation
+        val refStr = s"${sheetName.value}!${range.toA1}"
+        Left(
+          EvalError.EvalFailed(
+            s"Cross-sheet range $refStr must be used within a function like SUM or COUNT.",
             None
           )
         )
@@ -98,38 +233,38 @@ private class EvaluatorImpl extends Evaluator:
       // ===== Conditional =====
       case TExpr.If(cond, ifTrue, ifFalse) =>
         // If: evaluate condition, then branch based on result
-        eval(cond, sheet, clock).flatMap { condValue =>
-          if condValue then eval(ifTrue, sheet, clock)
-          else eval(ifFalse, sheet, clock)
+        eval(cond, sheet, clock, workbook).flatMap { condValue =>
+          if condValue then eval(ifTrue, sheet, clock, workbook)
+          else eval(ifFalse, sheet, clock, workbook)
         }
 
       // ===== Arithmetic Operators =====
       case TExpr.Add(x, y) =>
         // Add: evaluate both operands, sum results
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
         yield xv + yv
 
       case TExpr.Sub(x, y) =>
         // Subtract: evaluate both operands, subtract second from first
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
         yield xv - yv
 
       case TExpr.Mul(x, y) =>
         // Multiply: evaluate both operands, multiply results
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
         yield xv * yv
 
       case TExpr.Div(x, y) =>
         // Divide: evaluate both operands, check for division by zero
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
           result <-
             if yv == BigDecimal(0) then
               // Division by zero: provide helpful error message with expressions
@@ -145,77 +280,77 @@ private class EvaluatorImpl extends Evaluator:
       // ===== Logical Operators =====
       case TExpr.And(x, y) =>
         // And: short-circuit evaluation (if x is false, don't evaluate y)
-        eval(x, sheet, clock).flatMap {
+        eval(x, sheet, clock, workbook).flatMap {
           case false =>
             // Short-circuit: x is false, result is false (don't evaluate y)
             Right(false)
           case true =>
             // x is true, evaluate y to determine final result
-            eval(y, sheet, clock)
+            eval(y, sheet, clock, workbook)
         }
 
       case TExpr.Or(x, y) =>
         // Or: short-circuit evaluation (if x is true, don't evaluate y)
-        eval(x, sheet, clock).flatMap {
+        eval(x, sheet, clock, workbook).flatMap {
           case true =>
             // Short-circuit: x is true, result is true (don't evaluate y)
             Right(true)
           case false =>
             // x is false, evaluate y to determine final result
-            eval(y, sheet, clock)
+            eval(y, sheet, clock, workbook)
         }
 
       case TExpr.Not(x) =>
         // Not: logical negation
-        eval(x, sheet, clock).map(xv => !xv)
+        eval(x, sheet, clock, workbook).map(xv => !xv)
 
       // ===== Comparison Operators =====
       case TExpr.Lt(x, y) =>
         // Less than: numeric comparison
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
         yield xv < yv
 
       case TExpr.Lte(x, y) =>
         // Less than or equal: numeric comparison
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
         yield xv <= yv
 
       case TExpr.Gt(x, y) =>
         // Greater than: numeric comparison
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
         yield xv > yv
 
       case TExpr.Gte(x, y) =>
         // Greater than or equal: numeric comparison
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
         yield xv >= yv
 
       case TExpr.Eq(x, y) =>
         // Equality: polymorphic comparison
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
         yield xv == yv
 
       case TExpr.Neq(x, y) =>
         // Inequality: polymorphic comparison
         for
-          xv <- eval(x, sheet, clock)
-          yv <- eval(y, sheet, clock)
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
         yield xv != yv
 
       // ===== Type Conversions =====
       case TExpr.ToInt(expr) =>
         // ToInt: Convert BigDecimal to Int (validates integer range)
-        eval(expr, sheet, clock).flatMap { bd =>
+        eval(expr, sheet, clock, workbook).flatMap { bd =>
           if bd.isValidInt then Right(bd.toInt)
           else
             Left(
@@ -233,15 +368,15 @@ private class EvaluatorImpl extends Evaluator:
         xs.foldLeft[Either[EvalError, String]](Right("")) { (accEither, expr) =>
           for
             acc <- accEither
-            value <- eval(expr, sheet, clock)
+            value <- eval(expr, sheet, clock, workbook)
           yield acc + value
         }
 
       case TExpr.Left(text, n) =>
         // Left: extract left n characters
         for
-          textValue <- eval(text, sheet, clock)
-          nValue <- eval(n, sheet, clock)
+          textValue <- eval(text, sheet, clock, workbook)
+          nValue <- eval(n, sheet, clock, workbook)
           result <-
             if nValue < 0 then
               Left(EvalError.EvalFailed(s"LEFT: n must be non-negative, got $nValue"))
@@ -252,8 +387,8 @@ private class EvaluatorImpl extends Evaluator:
       case TExpr.Right(text, n) =>
         // Right: extract right n characters
         for
-          textValue <- eval(text, sheet, clock)
-          nValue <- eval(n, sheet, clock)
+          textValue <- eval(text, sheet, clock, workbook)
+          nValue <- eval(n, sheet, clock, workbook)
           result <-
             if nValue < 0 then
               Left(EvalError.EvalFailed(s"RIGHT: n must be non-negative, got $nValue"))
@@ -263,15 +398,15 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.Len(text) =>
         // Len: text length (returns BigDecimal to match Excel and enable arithmetic)
-        eval(text, sheet, clock).map(s => BigDecimal(s.length))
+        eval(text, sheet, clock, workbook).map(s => BigDecimal(s.length))
 
       case TExpr.Upper(text) =>
         // Upper: convert to uppercase
-        eval(text, sheet, clock).map(_.toUpperCase)
+        eval(text, sheet, clock, workbook).map(_.toUpperCase)
 
       case TExpr.Lower(text) =>
         // Lower: convert to lowercase
-        eval(text, sheet, clock).map(_.toLowerCase)
+        eval(text, sheet, clock, workbook).map(_.toLowerCase)
 
       // ===== Date/Time Functions =====
       case TExpr.Today() =>
@@ -285,9 +420,9 @@ private class EvaluatorImpl extends Evaluator:
       case TExpr.Date(year, month, day) =>
         // Date: construct date from components
         for
-          y <- eval(year, sheet, clock)
-          m <- eval(month, sheet, clock)
-          d <- eval(day, sheet, clock)
+          y <- eval(year, sheet, clock, workbook)
+          m <- eval(month, sheet, clock, workbook)
+          d <- eval(day, sheet, clock, workbook)
           result <-
             scala.util.Try(java.time.LocalDate.of(y, m, d)).toEither.left.map { ex =>
               EvalError.EvalFailed(
@@ -298,15 +433,15 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.Year(date) =>
         // Year: extract year from date (returns BigDecimal to match Excel)
-        eval(date, sheet, clock).map(d => BigDecimal(d.getYear))
+        eval(date, sheet, clock, workbook).map(d => BigDecimal(d.getYear))
 
       case TExpr.Month(date) =>
         // Month: extract month from date (returns BigDecimal to match Excel)
-        eval(date, sheet, clock).map(d => BigDecimal(d.getMonthValue))
+        eval(date, sheet, clock, workbook).map(d => BigDecimal(d.getMonthValue))
 
       case TExpr.Day(date) =>
         // Day: extract day from date (returns BigDecimal to match Excel)
-        eval(date, sheet, clock).map(d => BigDecimal(d.getDayOfMonth))
+        eval(date, sheet, clock, workbook).map(d => BigDecimal(d.getDayOfMonth))
 
       // ===== Date Calculation Functions =====
 
@@ -314,8 +449,8 @@ private class EvaluatorImpl extends Evaluator:
         // EOMONTH: end of month N months from start
         // Note: months may come as Int or BigDecimal depending on parsing path
         for
-          date <- eval(startDate, sheet, clock)
-          monthsRaw <- evalAny(months, sheet, clock)
+          date <- eval(startDate, sheet, clock, workbook)
+          monthsRaw <- evalAny(months, sheet, clock, workbook)
         yield
           val monthsValue = toInt(monthsRaw)
           val targetMonth = date.plusMonths(monthsValue.toLong)
@@ -325,16 +460,16 @@ private class EvaluatorImpl extends Evaluator:
         // EDATE: same day N months later (clamped to end of month if needed)
         // Note: months may come as Int or BigDecimal depending on parsing path
         for
-          date <- eval(startDate, sheet, clock)
-          monthsRaw <- evalAny(months, sheet, clock)
+          date <- eval(startDate, sheet, clock, workbook)
+          monthsRaw <- evalAny(months, sheet, clock, workbook)
         yield date.plusMonths(toInt(monthsRaw).toLong)
 
       case TExpr.Datedif(startDate, endDate, unit) =>
         // DATEDIF: difference between dates in specified unit
         for
-          start <- eval(startDate, sheet, clock)
-          end <- eval(endDate, sheet, clock)
-          unitStr <- eval(unit, sheet, clock)
+          start <- eval(startDate, sheet, clock, workbook)
+          end <- eval(endDate, sheet, clock, workbook)
+          unitStr <- eval(unit, sheet, clock, workbook)
           result <- unitStr.toUpperCase match
             case "Y" =>
               // Years between dates
@@ -386,8 +521,8 @@ private class EvaluatorImpl extends Evaluator:
       case TExpr.Networkdays(startDate, endDate, holidaysOpt) =>
         // NETWORKDAYS: count working days (Mon-Fri) between dates, excluding holidays
         for
-          start <- eval(startDate, sheet, clock)
-          end <- eval(endDate, sheet, clock)
+          start <- eval(startDate, sheet, clock, workbook)
+          end <- eval(endDate, sheet, clock, workbook)
         yield
           // Collect holiday dates from range if provided
           val holidays: Set[LocalDate] = holidaysOpt
@@ -408,8 +543,8 @@ private class EvaluatorImpl extends Evaluator:
         // WORKDAY: add N working days to start date, skipping weekends and holidays
         // Note: days may come as Int or BigDecimal depending on parsing path
         for
-          start <- eval(startDate, sheet, clock)
-          daysRaw <- evalAny(days, sheet, clock)
+          start <- eval(startDate, sheet, clock, workbook)
+          daysRaw <- evalAny(days, sheet, clock, workbook)
         yield
           val daysValue = toInt(daysRaw)
           // Collect holiday dates from range if provided
@@ -428,9 +563,9 @@ private class EvaluatorImpl extends Evaluator:
         // YEARFRAC: year fraction between dates based on day count basis
         // Note: basis may come as Int or BigDecimal depending on parsing path
         for
-          start <- eval(startDate, sheet, clock)
-          end <- eval(endDate, sheet, clock)
-          basisRaw <- evalAny(basis, sheet, clock)
+          start <- eval(startDate, sheet, clock, workbook)
+          end <- eval(endDate, sheet, clock, workbook)
+          basisRaw <- evalAny(basis, sheet, clock, workbook)
           basisValue = toInt(basisRaw)
           result <- basisValue match
             case 0 =>
@@ -479,7 +614,7 @@ private class EvaluatorImpl extends Evaluator:
       // ===== Financial Functions =====
       case TExpr.Npv(rateExpr, range) =>
         // Evaluate discount rate
-        eval(rateExpr, sheet, clock).flatMap { rate =>
+        eval(rateExpr, sheet, clock, workbook).flatMap { rate =>
           val one = BigDecimal(1)
           val onePlusR = one + rate
 
@@ -528,7 +663,7 @@ private class EvaluatorImpl extends Evaluator:
         else
           val guessEither: Either[EvalError, BigDecimal] =
             guessExprOpt match
-              case Some(guessExpr) => eval(guessExpr, sheet, clock)
+              case Some(guessExpr) => eval(guessExpr, sheet, clock, workbook)
               case None => Right(BigDecimal("0.1"))
 
           guessEither.flatMap { guess0 =>
@@ -580,7 +715,7 @@ private class EvaluatorImpl extends Evaluator:
       case TExpr.Xnpv(rateExpr, valuesRange, datesRange) =>
         // XNPV: sum(value_i / (1 + rate)^((date_i - date_0) / 365))
         for
-          rate <- eval(rateExpr, sheet, clock)
+          rate <- eval(rateExpr, sheet, clock, workbook)
           result <- {
             // Collect values and dates from ranges
             val values: List[BigDecimal] =
@@ -669,7 +804,7 @@ private class EvaluatorImpl extends Evaluator:
         else
           val guessEither: Either[EvalError, BigDecimal] =
             guessExprOpt match
-              case Some(guessExpr) => eval(guessExpr, sheet, clock)
+              case Some(guessExpr) => eval(guessExpr, sheet, clock, workbook)
               case None => Right(BigDecimal("0.1"))
 
           guessEither.flatMap { guess0 =>
@@ -733,9 +868,9 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.VLookup(lookupExpr, table, colIndexExpr, rangeLookupExpr) =>
         for
-          lookupValue <- eval(lookupExpr, sheet, clock)
-          colIndex <- eval(colIndexExpr, sheet, clock)
-          rangeMatch <- eval(rangeLookupExpr, sheet, clock)
+          lookupValue <- eval(lookupExpr, sheet, clock, workbook)
+          colIndex <- eval(colIndexExpr, sheet, clock, workbook)
+          rangeMatch <- eval(rangeLookupExpr, sheet, clock, workbook)
           result <-
             if colIndex < 1 || colIndex > table.width then
               Left(
@@ -834,44 +969,53 @@ private class EvaluatorImpl extends Evaluator:
         yield result
 
       // ===== Arithmetic Range Functions =====
-      case TExpr.Min(range) =>
+      case TExpr.Min(location) =>
         // Min: find minimum value in range (single-pass)
-        val cells = range.cells.map(cellRef => sheet(cellRef))
-        val values = cells.flatMap { cell =>
-          TExpr.decodeNumeric(cell).toOption
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val values = cells.flatMap { cell =>
+            TExpr.decodeNumeric(cell).toOption
+          }
+          val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+            Some(acc.fold(v)(_ min v))
+          }
+          // Excel behavior: MIN of empty range returns 0
+          Right(result.getOrElse(BigDecimal(0)))
         }
-        val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
-          Some(acc.fold(v)(_ min v))
-        }
-        // Excel behavior: MIN of empty range returns 0
-        Right(result.getOrElse(BigDecimal(0)))
 
-      case TExpr.Max(range) =>
+      case TExpr.Max(location) =>
         // Max: find maximum value in range (single-pass)
-        val cells = range.cells.map(cellRef => sheet(cellRef))
-        val values = cells.flatMap { cell =>
-          TExpr.decodeNumeric(cell).toOption
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val values = cells.flatMap { cell =>
+            TExpr.decodeNumeric(cell).toOption
+          }
+          val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+            Some(acc.fold(v)(_ max v))
+          }
+          // Excel behavior: MAX of empty range returns 0
+          Right(result.getOrElse(BigDecimal(0)))
         }
-        val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
-          Some(acc.fold(v)(_ max v))
-        }
-        // Excel behavior: MAX of empty range returns 0
-        Right(result.getOrElse(BigDecimal(0)))
 
-      case TExpr.Average(range) =>
+      case TExpr.Average(location) =>
         // Average: compute sum/count of numeric values in range
-        val cells = range.cells.map(cellRef => sheet(cellRef))
-        val values = cells.flatMap { cell =>
-          TExpr.decodeNumeric(cell).toOption
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val values = cells.flatMap { cell =>
+            TExpr.decodeNumeric(cell).toOption
+          }
+          // Single-pass sum and count (avoids .toList materialization)
+          val (sum, count) = values.foldLeft((BigDecimal(0), 0)) { case ((s, c), v) =>
+            (s + v, c + 1)
+          }
+          if count == 0 then
+            // Excel behavior: AVERAGE of empty range returns #DIV/0!
+            Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
+          else Right(sum / count)
         }
-        // Single-pass sum and count (avoids .toList materialization)
-        val (sum, count) = values.foldLeft((BigDecimal(0), 0)) { case ((s, c), v) =>
-          (s + v, c + 1)
-        }
-        if count == 0 then
-          // Excel behavior: AVERAGE of empty range returns #DIV/0!
-          Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
-        else Right(sum / count)
 
       // ===== Range Aggregation =====
       case foldExpr: TExpr.FoldRange[a, b] =>
@@ -895,11 +1039,118 @@ private class EvaluatorImpl extends Evaluator:
         }
         result.asInstanceOf[Either[EvalError, A]]
 
+      // ===== Cross-Sheet Range Aggregation =====
+      case sheetFold: TExpr.SheetFoldRange[a, b] =>
+        // SheetFoldRange: like FoldRange but operates on a range in another sheet
+        workbook match
+          case None =>
+            val refStr = s"${sheetFold.sheet.value}!${sheetFold.range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetFold.sheet) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetFold.sheet, err))
+              case Right(targetSheet) =>
+                val cells = sheetFold.range.cells.map(cellRef => targetSheet(cellRef))
+                val result: Either[EvalError, b] = cells.foldLeft[Either[EvalError, b]](
+                  Right(sheetFold.z)
+                ) { (accEither, cellInstance) =>
+                  accEither.flatMap { acc =>
+                    sheetFold.decode(cellInstance) match
+                      case Right(value) =>
+                        Right(sheetFold.step(acc, value))
+                      case Left(_codecErr) =>
+                        Right(acc) // Skip cells that can't be decoded
+                  }
+                }
+                result.asInstanceOf[Either[EvalError, A]]
+
+      // ===== Cross-Sheet Aggregate Functions =====
+
+      case TExpr.SheetMin(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val values = cells.flatMap { cell =>
+                  TExpr.decodeNumeric(cell).toOption
+                }
+                val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+                  Some(acc.fold(v)(_ min v))
+                }
+                // Excel behavior: MIN of empty range returns 0
+                Right(result.getOrElse(BigDecimal(0)))
+
+      case TExpr.SheetMax(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val values = cells.flatMap { cell =>
+                  TExpr.decodeNumeric(cell).toOption
+                }
+                val result = values.foldLeft(Option.empty[BigDecimal]) { (acc, v) =>
+                  Some(acc.fold(v)(_ max v))
+                }
+                // Excel behavior: MAX of empty range returns 0
+                Right(result.getOrElse(BigDecimal(0)))
+
+      case TExpr.SheetAverage(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val values = cells.flatMap { cell =>
+                  TExpr.decodeNumeric(cell).toOption
+                }
+                // Single-pass sum and count
+                val (sum, count) = values.foldLeft((BigDecimal(0), 0)) { case ((s, c), v) =>
+                  (s + v, c + 1)
+                }
+                if count == 0 then
+                  // Excel behavior: AVERAGE of empty range returns #DIV/0!
+                  Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
+                else Right(sum / count)
+
+      case TExpr.SheetCount(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val count = cells.count { cell =>
+                  TExpr.decodeNumeric(cell).isRight
+                }
+                Right(count)
+
       // ===== Conditional Aggregation Functions =====
 
       case TExpr.SumIf(range, criteriaExpr, sumRangeOpt) =>
         // SUMIF: Sum cells in sumRange where corresponding cells in range match criteria
-        eval(criteriaExpr, sheet, clock).flatMap { criteriaValue =>
+        eval(criteriaExpr, sheet, clock, workbook).flatMap { criteriaValue =>
           val criterion = CriteriaMatcher.parse(criteriaValue)
           val effectiveRange = sumRangeOpt.getOrElse(range)
           val rangeRefsList = range.cells.toList
@@ -928,7 +1179,7 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.CountIf(range, criteriaExpr) =>
         // COUNTIF: Count cells in range matching criteria
-        eval(criteriaExpr, sheet, clock).map { criteriaValue =>
+        eval(criteriaExpr, sheet, clock, workbook).map { criteriaValue =>
           val criterion = CriteriaMatcher.parse(criteriaValue)
           val count = range.cells.count { ref =>
             CriteriaMatcher.matches(sheet(ref).value, criterion)
@@ -940,7 +1191,7 @@ private class EvaluatorImpl extends Evaluator:
         // SUMIFS: Sum cells where ALL criteria match (AND logic)
         // First evaluate all criteria expressions
         val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
-          eval(criteriaExpr, sheet, clock)
+          eval(criteriaExpr, sheet, clock, workbook)
         }
 
         // Collect all results or return first error (use :: prepend for O(1), reverse at end)
@@ -988,7 +1239,7 @@ private class EvaluatorImpl extends Evaluator:
         // COUNTIFS: Count cells where ALL criteria match (AND logic)
         // First evaluate all criteria expressions
         val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
-          eval(criteriaExpr, sheet, clock)
+          eval(criteriaExpr, sheet, clock, workbook)
         }
 
         // Collect all results or return first error (use :: prepend for O(1), reverse at end)
@@ -1095,21 +1346,29 @@ private class EvaluatorImpl extends Evaluator:
             )
           )
         else
+          // Resolve sheets for cross-sheet lookup (or use current sheet for local)
+          val lookupSheet = lookupArray.sheetName
+            .flatMap(name => workbook.flatMap(_.apply(name).toOption))
+            .getOrElse(sheet)
+          val returnSheet = returnArray.sheetName
+            .flatMap(name => workbook.flatMap(_.apply(name).toOption))
+            .getOrElse(sheet)
           for
-            lookupValue <- evalAny(lookupValueExpr, sheet, clock)
-            matchModeRaw <- evalAny(matchModeExpr, sheet, clock)
-            searchModeRaw <- evalAny(searchModeExpr, sheet, clock)
+            lookupValue <- evalAny(lookupValueExpr, sheet, clock, workbook)
+            matchModeRaw <- evalAny(matchModeExpr, sheet, clock, workbook)
+            searchModeRaw <- evalAny(searchModeExpr, sheet, clock, workbook)
             matchMode = toInt(matchModeRaw)
             searchMode = toInt(searchModeRaw)
             result <- performXLookup(
               lookupValue,
-              lookupArray,
-              returnArray,
+              lookupArray.range,
+              returnArray.range,
               ifNotFoundOpt,
               matchMode,
               searchMode,
-              sheet,
-              clock
+              lookupSheet, // Use resolved sheet for lookup
+              clock,
+              workbook
             )
           yield result
 
@@ -1117,15 +1376,15 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.Iferror(valueExpr, valueIfErrorExpr) =>
         // IFERROR: return valueIfError if value results in any error
-        evalAny(valueExpr, sheet, clock) match
+        evalAny(valueExpr, sheet, clock, workbook) match
           case Left(_) =>
             // Evaluation error occurred - return fallback
-            evalAny(valueIfErrorExpr, sheet, clock).map(convertToCellValue)
+            evalAny(valueIfErrorExpr, sheet, clock, workbook).map(convertToCellValue)
           case Right(cv: CellValue) =>
             cv match
               case CellValue.Error(_) =>
                 // Cell contains error value - return fallback
-                evalAny(valueIfErrorExpr, sheet, clock).map(convertToCellValue)
+                evalAny(valueIfErrorExpr, sheet, clock, workbook).map(convertToCellValue)
               case _ =>
                 // No error - return original value
                 Right(cv)
@@ -1135,7 +1394,7 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.Iserror(valueExpr) =>
         // ISERROR: return TRUE if value results in any error
-        evalAny(valueExpr, sheet, clock) match
+        evalAny(valueExpr, sheet, clock, workbook) match
           case Left(_) => Right(true) // Evaluation error
           case Right(cv: CellValue) =>
             cv match
@@ -1148,16 +1407,16 @@ private class EvaluatorImpl extends Evaluator:
       case TExpr.Round(valueExpr, numDigitsExpr) =>
         // ROUND: round to specified digits using HALF_UP
         for
-          value <- eval(valueExpr, sheet, clock)
-          numDigits <- eval(numDigitsExpr, sheet, clock)
+          value <- eval(valueExpr, sheet, clock, workbook)
+          numDigits <- eval(numDigitsExpr, sheet, clock, workbook)
         yield roundToDigits(value, numDigits.toInt, BigDecimal.RoundingMode.HALF_UP)
 
       case TExpr.RoundUp(valueExpr, numDigitsExpr) =>
         // ROUNDUP: round away from zero (Excel semantics)
         // Examples: ROUNDUP(2.1, 0) = 3, ROUNDUP(-2.1, 0) = -3
         for
-          value <- eval(valueExpr, sheet, clock)
-          numDigits <- eval(numDigitsExpr, sheet, clock)
+          value <- eval(valueExpr, sheet, clock, workbook)
+          numDigits <- eval(numDigitsExpr, sheet, clock, workbook)
         yield
           // Excel ROUNDUP rounds away from zero, which requires different RoundingMode by sign:
           // - Positive numbers: CEILING (rounds toward +∞, away from 0)
@@ -1171,8 +1430,8 @@ private class EvaluatorImpl extends Evaluator:
         // ROUNDDOWN: round toward zero / truncate (Excel semantics)
         // Examples: ROUNDDOWN(2.9, 0) = 2, ROUNDDOWN(-2.9, 0) = -2
         for
-          value <- eval(valueExpr, sheet, clock)
-          numDigits <- eval(numDigitsExpr, sheet, clock)
+          value <- eval(valueExpr, sheet, clock, workbook)
+          numDigits <- eval(numDigitsExpr, sheet, clock, workbook)
         yield
           // Excel ROUNDDOWN rounds toward zero, which requires different RoundingMode by sign:
           // - Positive numbers: FLOOR (rounds toward -∞, toward 0)
@@ -1184,7 +1443,7 @@ private class EvaluatorImpl extends Evaluator:
 
       case TExpr.Abs(valueExpr) =>
         // ABS: absolute value
-        eval(valueExpr, sheet, clock).map(_.abs)
+        eval(valueExpr, sheet, clock, workbook).map(_.abs)
 
       // ===== Lookup Functions =====
 
@@ -1192,9 +1451,9 @@ private class EvaluatorImpl extends Evaluator:
         // INDEX: return value at position in array
         // Returns #REF! error with descriptive message if position is out of bounds
         for
-          rowNum <- eval(rowNumExpr, sheet, clock)
+          rowNum <- eval(rowNumExpr, sheet, clock, workbook)
           colNum <- colNumExpr match
-            case Some(expr) => eval(expr, sheet, clock).map(Some(_))
+            case Some(expr) => eval(expr, sheet, clock, workbook).map(Some(_))
             case None => Right(None)
           result <- {
             val rowIdx = rowNum.toInt - 1 // 1-based to 0-based
@@ -1231,8 +1490,8 @@ private class EvaluatorImpl extends Evaluator:
         // MATCH: find position of value in array (1-based)
         // Returns #N/A error if no match found (Excel behavior)
         for
-          lookupValue <- evalAny(lookupValueExpr, sheet, clock)
-          matchType <- eval(matchTypeExpr, sheet, clock)
+          lookupValue <- evalAny(lookupValueExpr, sheet, clock, workbook)
+          matchType <- eval(matchTypeExpr, sheet, clock, workbook)
           result <- {
             val matchTypeInt = matchType.toInt
 
@@ -1312,8 +1571,13 @@ private class EvaluatorImpl extends Evaluator:
    * Used for polymorphic lookup values in XLOOKUP.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
-  private def evalAny(expr: TExpr[?], sheet: Sheet, clock: Clock): Either[EvalError, Any] =
-    eval(expr.asInstanceOf[TExpr[Any]], sheet, clock)
+  private def evalAny(
+    expr: TExpr[?],
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): Either[EvalError, Any] =
+    eval(expr.asInstanceOf[TExpr[Any]], sheet, clock, workbook)
 
   /**
    * Convert runtime value to Int for match_mode/search_mode parameters.
@@ -1407,7 +1671,8 @@ private class EvaluatorImpl extends Evaluator:
     matchMode: Int,
     searchMode: Int,
     sheet: Sheet,
-    clock: Clock
+    clock: Clock,
+    workbook: Option[Workbook]
   ): Either[EvalError, CellValue] =
     val lookupCells = lookupArray.cells.toList
     val returnCells = returnArray.cells.toList
@@ -1449,7 +1714,7 @@ private class EvaluatorImpl extends Evaluator:
         // No match found - return if_not_found or #N/A
         ifNotFoundOpt match
           case Some(expr) =>
-            evalAny(expr, sheet, clock).map(convertToXLookupResult)
+            evalAny(expr, sheet, clock, workbook).map(convertToXLookupResult)
           case None =>
             Right(CellValue.Error(com.tjclp.xl.cells.CellError.NA))
 

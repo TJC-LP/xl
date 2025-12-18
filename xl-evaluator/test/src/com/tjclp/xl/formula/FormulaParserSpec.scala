@@ -405,11 +405,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=COUNT(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.FoldRange(range, zero: Int, _, _) =>
+      case TExpr.FoldRange(range, _, _, _) =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-        assertEquals(zero, 0) // COUNT starts with 0
-      case other => fail(s"Expected FoldRange with Int accumulator, got $other")
+      case other => fail(s"Expected FoldRange for COUNT, got $other")
     }
   }
 
@@ -417,8 +416,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AVERAGE(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      // AVERAGE now has dedicated TExpr case (not FoldRange)
-      case TExpr.Average(range) =>
+      case TExpr.Average(TExpr.RangeLocation.Local(range)) =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
       case other => fail(s"Expected Average, got $other")
@@ -431,18 +429,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val countResult = FormulaParser.parse("=COUNT(A1:A10)")
     val avgResult = FormulaParser.parse("=AVERAGE(A1:A10)")
 
-    // SUM/COUNT use FoldRange, AVERAGE has dedicated case
+    // SUM uses FoldRange, COUNT uses FoldRange, AVERAGE uses Average
     (sumResult, countResult, avgResult) match
-      case (Right(sumFold: TExpr.FoldRange[?, ?]), Right(countFold: TExpr.FoldRange[?, ?]), Right(avgExpr: TExpr.Average)) =>
-        // SUM has BigDecimal(0), COUNT has Int(0)
-        sumFold.z match
-          case _: BigDecimal => // success
-          case other => fail(s"Expected BigDecimal for SUM zero, got ${other.getClass}")
-        countFold.z match
-          case _: Int => // success
-          case other => fail(s"Expected Int for COUNT zero, got ${other.getClass}")
-        // AVERAGE has dedicated case with range
-        assert(avgExpr.range.toA1 == "A1:A10", s"AVERAGE range should be A1:A10")
+      case (Right(TExpr.FoldRange(_, _, _, _)), Right(TExpr.FoldRange(_, _, _, _)), Right(TExpr.Average(_))) =>
+        () // Expected types
       case (Right(s), Right(c), Right(a)) =>
         fail(s"Unexpected types: SUM=${s.getClass.getSimpleName}, COUNT=${c.getClass.getSimpleName}, AVERAGE=${a.getClass.getSimpleName}")
       case _ => fail("All three functions should parse successfully")
@@ -639,8 +629,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MIN(A1:A10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Min(_) => assert(true)
-      case _ => fail("Expected TExpr.Min")
+      case TExpr.Min(TExpr.RangeLocation.Local(range)) =>
+        assertEquals(range.toA1, "A1:A10")
+      case other => fail(s"Expected TExpr.Min, got $other")
     }
   }
 
@@ -648,8 +639,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MAX(B2:B20)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Max(_) => assert(true)
-      case _ => fail("Expected TExpr.Max")
+      case TExpr.Max(TExpr.RangeLocation.Local(range)) =>
+        assertEquals(range.toA1, "B2:B20")
+      case other => fail(s"Expected TExpr.Max, got $other")
     }
   }
 

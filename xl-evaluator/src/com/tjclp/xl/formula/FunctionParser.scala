@@ -227,12 +227,23 @@ object FunctionParser:
       args match
         case List(fold: TExpr.FoldRange[?, ?]) =>
           scala.util.Right(fold) // Already created by parseRange
+        case List(TExpr.SheetRange(sheet, range)) =>
+          // Cross-sheet range: create SheetFoldRange for SUM
+          scala.util.Right(
+            TExpr.SheetFoldRange(
+              sheet,
+              range,
+              BigDecimal(0),
+              (acc: BigDecimal, v: BigDecimal) => acc + v,
+              TExpr.decodeNumeric
+            )
+          )
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("SUM", pos, "1 range argument", s"${args.length} arguments")
           )
 
-  /** COUNT function: COUNT(range) */
+  /** COUNT function: COUNT(range) - uses unified Aggregate */
   given countFunctionParser: FunctionParser[Unit] with
     def name: String = "COUNT"
     def arity: Arity = Arity.one
@@ -241,7 +252,12 @@ object FunctionParser:
       args match
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
-            case TExpr.FoldRange(range, _, _, _) => scala.util.Right(TExpr.count(range))
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.count(range))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.SheetCount(sheet, range))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(TExpr.SheetCount(sheet, range))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments(
@@ -252,7 +268,7 @@ object FunctionParser:
             )
           )
 
-  /** AVERAGE function: AVERAGE(range) */
+  /** AVERAGE function: AVERAGE(range) - uses direct Average case with RangeLocation */
   given averageFunctionParser: FunctionParser[Unit] with
     def name: String = "AVERAGE"
     def arity: Arity = Arity.one
@@ -261,7 +277,12 @@ object FunctionParser:
       args match
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
-            case TExpr.FoldRange(range, _, _, _) => scala.util.Right(TExpr.average(range))
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.average(range))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(
+            TExpr.Average(TExpr.RangeLocation.CrossSheet(sheet, range))
+          )
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments(
@@ -272,7 +293,7 @@ object FunctionParser:
             )
           )
 
-  /** MIN function: MIN(range) */
+  /** MIN function: MIN(range) - uses direct Min case with RangeLocation */
   given minFunctionParser: FunctionParser[Unit] with
     def name: String = "MIN"
     def arity: Arity = Arity.one
@@ -281,13 +302,18 @@ object FunctionParser:
       args match
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
-            case TExpr.FoldRange(range, _, _, _) => scala.util.Right(TExpr.min(range))
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.min(range))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(
+            TExpr.Min(TExpr.RangeLocation.CrossSheet(sheet, range))
+          )
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("MIN", pos, "1 range argument", s"${args.length} arguments")
           )
 
-  /** MAX function: MAX(range) */
+  /** MAX function: MAX(range) - uses direct Max case with RangeLocation */
   given maxFunctionParser: FunctionParser[Unit] with
     def name: String = "MAX"
     def arity: Arity = Arity.one
@@ -296,7 +322,12 @@ object FunctionParser:
       args match
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
-            case TExpr.FoldRange(range, _, _, _) => scala.util.Right(TExpr.max(range))
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.max(range))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(
+            TExpr.Max(TExpr.RangeLocation.CrossSheet(sheet, range))
+          )
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("MAX", pos, "1 range argument", s"${args.length} arguments")

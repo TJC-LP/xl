@@ -196,7 +196,7 @@ class NewFunctionsSpec extends FunSuite:
 
   test("MIN: empty range returns 0") {
     val range = parseRange("A1:A3")
-    val expr = TExpr.Min(range)
+    val expr = TExpr.min(range)
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(0)))
   }
@@ -204,7 +204,7 @@ class NewFunctionsSpec extends FunSuite:
   test("MIN: single cell") {
     val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(42)))
     val range = parseRange("A1:A1")
-    val expr = TExpr.Min(range)
+    val expr = TExpr.min(range)
     val result = evaluator.eval(expr, sheet)
     assertEquals(result, Right(BigDecimal(42)))
   }
@@ -216,14 +216,14 @@ class NewFunctionsSpec extends FunSuite:
       ref"A3" -> CellValue.Number(BigDecimal(20))
     )
     val range = parseRange("A1:A3")
-    val expr = TExpr.Min(range)
+    val expr = TExpr.min(range)
     val result = evaluator.eval(expr, sheet)
     assertEquals(result, Right(BigDecimal(5)))
   }
 
   test("MAX: empty range returns 0") {
     val range = parseRange("A1:A3")
-    val expr = TExpr.Max(range)
+    val expr = TExpr.max(range)
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(0)))
   }
@@ -231,7 +231,7 @@ class NewFunctionsSpec extends FunSuite:
   test("MAX: single cell") {
     val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(42)))
     val range = parseRange("A1:A1")
-    val expr = TExpr.Max(range)
+    val expr = TExpr.max(range)
     val result = evaluator.eval(expr, sheet)
     assertEquals(result, Right(BigDecimal(42)))
   }
@@ -243,7 +243,7 @@ class NewFunctionsSpec extends FunSuite:
       ref"A3" -> CellValue.Number(BigDecimal(20))
     )
     val range = parseRange("A1:A3")
-    val expr = TExpr.Max(range)
+    val expr = TExpr.max(range)
     val result = evaluator.eval(expr, sheet)
     assertEquals(result, Right(BigDecimal(20)))
   }
@@ -256,10 +256,10 @@ class NewFunctionsSpec extends FunSuite:
     )
     val range = parseRange("A1:A3")
 
-    val minResult = evaluator.eval(TExpr.Min(range), sheet)
+    val minResult = evaluator.eval(TExpr.min(range), sheet)
     assertEquals(minResult, Right(BigDecimal(5)))
 
-    val maxResult = evaluator.eval(TExpr.Max(range), sheet)
+    val maxResult = evaluator.eval(TExpr.max(range), sheet)
     assertEquals(maxResult, Right(BigDecimal(10)))
   }
 
@@ -339,14 +339,14 @@ class NewFunctionsSpec extends FunSuite:
 
   test("FormulaPrinter: MIN") {
     val range = parseRange("A1:A10")
-    val expr = TExpr.Min(range)
+    val expr = TExpr.min(range)
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, "=MIN(A1:A10)")
   }
 
   test("FormulaPrinter: MAX") {
     val range = parseRange("B2:B20")
-    val expr = TExpr.Max(range)
+    val expr = TExpr.max(range)
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, "=MAX(B2:B20)")
   }
@@ -385,7 +385,7 @@ class NewFunctionsSpec extends FunSuite:
 
   test("Integration: MIN/MAX with LEN") {
     // Not directly possible without cell refs, but demonstrates type composition
-    val minValue = TExpr.Min(parseRange("A1:A3"))
+    val minValue = TExpr.min(parseRange("A1:A3"))
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"A2" -> CellValue.Number(BigDecimal(5)),

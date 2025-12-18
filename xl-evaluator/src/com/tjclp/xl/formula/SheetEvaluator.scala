@@ -5,6 +5,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.workbooks.Workbook
 import java.time.{LocalDate, LocalDateTime}
 
 /**
@@ -56,7 +57,11 @@ object SheetEvaluator:
      * sheet.evaluateFormula("=TODAY()") // Right(CellValue.DateTime(...))
      * }}}
      */
-    def evaluateFormula(formula: String, clock: Clock = Clock.system): XLResult[CellValue] =
+    def evaluateFormula(
+      formula: String,
+      clock: Clock = Clock.system,
+      workbook: Option[Workbook] = None
+    ): XLResult[CellValue] =
       for
         // Parse formula string to TExpr AST
         expr <- FormulaParser
@@ -71,7 +76,7 @@ object SheetEvaluator:
 
         // Evaluate TExpr against sheet
         result <- Evaluator.instance
-          .eval(expr, sheet, clock)
+          .eval(expr, sheet, clock, workbook)
           .left
           .map(evalError => evalErrorToXLError(evalError, Some(formula)))
 
@@ -104,11 +109,15 @@ object SheetEvaluator:
      * sheet.evaluateCell(ref"D1") // Right(CellValue.Number(42)) - unchanged
      * }}}
      */
-    def evaluateCell(ref: ARef, clock: Clock = Clock.system): XLResult[CellValue] =
+    def evaluateCell(
+      ref: ARef,
+      clock: Clock = Clock.system,
+      workbook: Option[Workbook] = None
+    ): XLResult[CellValue] =
       val cell = sheet(ref)
       cell.value match
         case CellValue.Formula(expr, _) =>
-          evaluateFormula(expr, clock)
+          evaluateFormula(expr, clock, workbook)
         case other =>
           scala.util.Right(other)
 
@@ -139,7 +148,10 @@ object SheetEvaluator:
      * }}}
      */
     @SuppressWarnings(Array("org.wartremover.warts.Var"))
-    def evaluateWithDependencyCheck(clock: Clock = Clock.system): XLResult[Map[ARef, CellValue]] =
+    def evaluateWithDependencyCheck(
+      clock: Clock = Clock.system,
+      workbook: Option[Workbook] = None
+    ): XLResult[Map[ARef, CellValue]] =
       // Suppression rationale: Mutable accumulator for building results map during iteration.
       // Functional fold alternative less clear for this use case.
       // Build dependency graph
@@ -165,7 +177,7 @@ object SheetEvaluator:
               val evalResult = evalOrder.foldLeft[XLResult[Unit]](scala.util.Right(())) {
                 case (scala.util.Right(_), ref) =>
                   // Evaluate this cell against the temp sheet (which has previously evaluated values)
-                  tempSheet.evaluateCell(ref, clock) match
+                  tempSheet.evaluateCell(ref, clock, workbook) match
                     case scala.util.Right(value) =>
                       // Update temp sheet with evaluated value (for dependent formulas to use)
                       // put(ref, CellValue) returns Sheet directly - it cannot fail
@@ -200,10 +212,13 @@ object SheetEvaluator:
      * sheet.evaluateAllFormulas() // Right(Map(A1 -> CellValue.Number(10), B1 -> ...))
      * }}}
      */
-    def evaluateAllFormulas(clock: Clock = Clock.system): XLResult[Map[ARef, CellValue]] =
+    def evaluateAllFormulas(
+      clock: Clock = Clock.system,
+      workbook: Option[Workbook] = None
+    ): XLResult[Map[ARef, CellValue]] =
       // For now, delegate to the safe method
       // In the future, we may optimize this to skip dependency checking for known-safe cases
-      evaluateWithDependencyCheck(clock)
+      evaluateWithDependencyCheck(clock, workbook)
 
   // ========== Helper Functions ==========
 

@@ -4,6 +4,7 @@ import scala.annotation.nowarn
 
 import com.tjclp.xl.{Anchor, CellRange}
 import com.tjclp.xl.addressing.{ARef, Column, Row}
+import TExpr.RangeLocation
 
 /**
  * AST transformer that shifts cell references for formula dragging.
@@ -60,6 +61,19 @@ object FormulaShifter:
       case PolyRef(at, anchor) =>
         val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
         PolyRef(shiftedRef, anchor).asInstanceOf[TExpr[A]]
+
+      // Sheet-qualified references - shift the cell ref but keep the sheet
+      case SheetRef(sheet, at, anchor, decode) =>
+        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
+        SheetRef(sheet, shiftedRef, anchor, decode)
+
+      case SheetPolyRef(sheet, at, anchor) =>
+        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
+        SheetPolyRef(sheet, shiftedRef, anchor).asInstanceOf[TExpr[A]]
+
+      case SheetRange(sheet, range) =>
+        val shiftedRange = shiftRange(range, colDelta, rowDelta)
+        SheetRange(sheet, shiftedRange).asInstanceOf[TExpr[A]]
 
       // Literals - unchanged
       case lit: Lit[?] => lit.asInstanceOf[TExpr[A]]
@@ -124,13 +138,28 @@ object FormulaShifter:
       case FoldRange(range, z, step, decode) =>
         FoldRange(shiftRange(range, colDelta, rowDelta), z, step, decode).asInstanceOf[TExpr[A]]
 
-      // Arithmetic range functions
+      // Cross-sheet range aggregation - shift the range but preserve sheet name
+      case SheetFoldRange(sheet, range, z, step, decode) =>
+        SheetFoldRange(sheet, shiftRange(range, colDelta, rowDelta), z, step, decode)
+          .asInstanceOf[TExpr[A]]
+
+      // Arithmetic range functions (now using RangeLocation)
       case Min(range) =>
-        Min(shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+        Min(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case Max(range) =>
-        Max(shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+        Max(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case Average(range) =>
-        Average(shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+        Average(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+
+      // Cross-sheet aggregate functions
+      case SheetMin(sheet, range) =>
+        SheetMin(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case SheetMax(sheet, range) =>
+        SheetMax(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case SheetAverage(sheet, range) =>
+        SheetAverage(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case SheetCount(sheet, range) =>
+        SheetCount(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
       // Text functions
       case Concatenate(xs) =>
@@ -202,67 +231,67 @@ object FormulaShifter:
 
       // Financial functions
       case Npv(rate, values) =>
-        Npv(shiftInternal(rate, colDelta, rowDelta), shiftRange(values, colDelta, rowDelta))
+        Npv(shiftInternal(rate, colDelta, rowDelta), shiftLocation(values, colDelta, rowDelta))
           .asInstanceOf[TExpr[A]]
       case Irr(values, guess) =>
         Irr(
-          shiftRange(values, colDelta, rowDelta),
+          shiftLocation(values, colDelta, rowDelta),
           guess.map(shiftInternal(_, colDelta, rowDelta))
         ).asInstanceOf[TExpr[A]]
       case Xnpv(rate, values, dates) =>
         Xnpv(
           shiftInternal(rate, colDelta, rowDelta),
-          shiftRange(values, colDelta, rowDelta),
-          shiftRange(dates, colDelta, rowDelta)
+          shiftLocation(values, colDelta, rowDelta),
+          shiftLocation(dates, colDelta, rowDelta)
         ).asInstanceOf[TExpr[A]]
       case Xirr(values, dates, guess) =>
         Xirr(
-          shiftRange(values, colDelta, rowDelta),
-          shiftRange(dates, colDelta, rowDelta),
+          shiftLocation(values, colDelta, rowDelta),
+          shiftLocation(dates, colDelta, rowDelta),
           guess.map(shiftInternal(_, colDelta, rowDelta))
         ).asInstanceOf[TExpr[A]]
       case VLookup(lookup, table, colIndex, rangeLookup) =>
         VLookup(
           shiftInternal(lookup, colDelta, rowDelta),
-          shiftRange(table, colDelta, rowDelta),
+          shiftLocation(table, colDelta, rowDelta),
           shiftInternal(colIndex, colDelta, rowDelta),
           shiftInternal(rangeLookup, colDelta, rowDelta)
         ).asInstanceOf[TExpr[A]]
 
-      // Conditional aggregation
+      // Conditional aggregation (now using RangeLocation)
       case SumIf(range, criteria, sumRange) =>
         SumIf(
-          shiftRange(range, colDelta, rowDelta),
+          shiftLocation(range, colDelta, rowDelta),
           shiftWildcard(criteria, colDelta, rowDelta),
-          sumRange.map(shiftRange(_, colDelta, rowDelta))
+          sumRange.map(shiftLocation(_, colDelta, rowDelta))
         ).asInstanceOf[TExpr[A]]
       case CountIf(range, criteria) =>
         CountIf(
-          shiftRange(range, colDelta, rowDelta),
+          shiftLocation(range, colDelta, rowDelta),
           shiftWildcard(criteria, colDelta, rowDelta)
         ).asInstanceOf[TExpr[A]]
       case SumIfs(sumRange, conditions) =>
         SumIfs(
-          shiftRange(sumRange, colDelta, rowDelta),
+          shiftLocation(sumRange, colDelta, rowDelta),
           conditions.map { case (r, c) =>
-            (shiftRange(r, colDelta, rowDelta), shiftWildcard(c, colDelta, rowDelta))
+            (shiftLocation(r, colDelta, rowDelta), shiftWildcard(c, colDelta, rowDelta))
           }
         ).asInstanceOf[TExpr[A]]
       case CountIfs(conditions) =>
         CountIfs(
           conditions.map { case (r, c) =>
-            (shiftRange(r, colDelta, rowDelta), shiftWildcard(c, colDelta, rowDelta))
+            (shiftLocation(r, colDelta, rowDelta), shiftWildcard(c, colDelta, rowDelta))
           }
         ).asInstanceOf[TExpr[A]]
 
-      // Array functions
+      // Array functions (now using RangeLocation)
       case SumProduct(arrays) =>
-        SumProduct(arrays.map(shiftRange(_, colDelta, rowDelta))).asInstanceOf[TExpr[A]]
+        SumProduct(arrays.map(shiftLocation(_, colDelta, rowDelta))).asInstanceOf[TExpr[A]]
       case XLookup(lookupValue, lookupArray, returnArray, ifNotFound, matchMode, searchMode) =>
         XLookup(
           shiftWildcard(lookupValue, colDelta, rowDelta),
-          shiftRange(lookupArray, colDelta, rowDelta),
-          shiftRange(returnArray, colDelta, rowDelta),
+          shiftLocation(lookupArray, colDelta, rowDelta),
+          shiftLocation(returnArray, colDelta, rowDelta),
           ifNotFound.map(shiftWildcard(_, colDelta, rowDelta)),
           shiftInternal(matchMode, colDelta, rowDelta),
           shiftInternal(searchMode, colDelta, rowDelta)
@@ -296,17 +325,17 @@ object FormulaShifter:
       case Abs(value) =>
         Abs(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
-      // Lookup functions
+      // Lookup functions (now using RangeLocation)
       case Index(array, rowNum, colNum) =>
         Index(
-          shiftRange(array, colDelta, rowDelta),
+          shiftLocation(array, colDelta, rowDelta),
           shiftInternal(rowNum, colDelta, rowDelta),
           colNum.map(shiftInternal(_, colDelta, rowDelta))
         ).asInstanceOf[TExpr[A]]
       case Match(lookupValue, lookupArray, matchType) =>
         Match(
           shiftWildcard(lookupValue, colDelta, rowDelta),
-          shiftRange(lookupArray, colDelta, rowDelta),
+          shiftLocation(lookupArray, colDelta, rowDelta),
           shiftInternal(matchType, colDelta, rowDelta)
         ).asInstanceOf[TExpr[A]]
 
@@ -350,6 +379,18 @@ object FormulaShifter:
     val newStart = shiftARef(range.start, range.startAnchor, colDelta, rowDelta)
     val newEnd = shiftARef(range.end, range.endAnchor, colDelta, rowDelta)
     new CellRange(newStart, newEnd, range.startAnchor, range.endAnchor)
+
+  /**
+   * Shift a RangeLocation by the given deltas.
+   *
+   * Handles both Local and CrossSheet locations, shifting the underlying CellRange.
+   */
+  private def shiftLocation(location: RangeLocation, colDelta: Int, rowDelta: Int): RangeLocation =
+    location match
+      case RangeLocation.Local(range) =>
+        RangeLocation.Local(shiftRange(range, colDelta, rowDelta))
+      case RangeLocation.CrossSheet(sheet, range) =>
+        RangeLocation.CrossSheet(sheet, shiftRange(range, colDelta, rowDelta))
 
   /**
    * Helper to shift TExpr[?] (wildcard type).
