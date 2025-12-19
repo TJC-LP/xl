@@ -367,6 +367,15 @@ enum TExpr[A] derives CanEqual:
   case Now() extends TExpr[java.time.LocalDateTime]
 
   /**
+   * Mathematical constant PI: PI()
+   *
+   * Returns the mathematical constant pi (3.14159265358979...).
+   *
+   * Example: PI() = 3.141592653589793
+   */
+  case Pi() extends TExpr[BigDecimal]
+
+  /**
    * Construct date from components: DATE(year, month, day)
    *
    * @param year
@@ -1345,6 +1354,13 @@ object TExpr:
   def now(): TExpr[java.time.LocalDateTime] = Now()
 
   /**
+   * PI mathematical constant.
+   *
+   * Example: TExpr.pi()
+   */
+  def pi(): TExpr[BigDecimal] = Pi()
+
+  /**
    * DATE construct from year, month, day.
    *
    * Example: TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
@@ -1629,6 +1645,38 @@ object TExpr:
   def decodeCellValue(cell: Cell): Either[CodecError, CellValue] =
     scala.util.Right(cell.value)
 
+  /**
+   * Decode cell as resolved CellValue (extracts cached values, converts empty to 0).
+   *
+   * Used for standalone cell references (e.g., =A1, =Sheet1!B2) where the formula returns the
+   * cell's "effective" value:
+   *   - Number, Text, Bool, DateTime, RichText → returned as-is
+   *   - Formula → returns cached value if present, or Number(0) if no cache
+   *   - Empty → returns Number(0) (Excel treats empty as 0 in numeric contexts)
+   *   - Error → returns the error
+   *
+   * This matches Excel semantics for standalone cell references.
+   */
+  def decodeResolvedValue(cell: Cell): Either[CodecError, CellValue] =
+    import com.tjclp.xl.cells.CellValue
+    val resolved = cell.value match
+      case CellValue.Number(n) => CellValue.Number(n)
+      case CellValue.Text(s) => CellValue.Text(s)
+      case CellValue.Bool(b) => CellValue.Bool(b)
+      case CellValue.DateTime(dt) => CellValue.DateTime(dt)
+      case CellValue.RichText(rt) => CellValue.Text(rt.toPlainText)
+      case CellValue.Formula(_, cached) =>
+        cached match
+          case Some(CellValue.Number(n)) => CellValue.Number(n)
+          case Some(CellValue.Text(s)) => CellValue.Text(s)
+          case Some(CellValue.Bool(b)) => CellValue.Bool(b)
+          case Some(CellValue.DateTime(dt)) => CellValue.DateTime(dt)
+          case Some(CellValue.RichText(rt)) => CellValue.Text(rt.toPlainText)
+          case _ => CellValue.Number(BigDecimal(0))
+      case CellValue.Error(err) => CellValue.Error(err)
+      case CellValue.Empty => CellValue.Number(BigDecimal(0))
+    scala.util.Right(resolved)
+
   // ===== Type-Coercing Decoders (Excel-compatible automatic conversion) =====
 
   /**
@@ -1716,6 +1764,7 @@ object TExpr:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asStringExpr(expr: TExpr[?]): TExpr[String] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsString)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsString)
     case other => other.asInstanceOf[TExpr[String]] // Safe: non-PolyRef already has correct type
 
   /**
@@ -1726,6 +1775,7 @@ object TExpr:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asDateExpr(expr: TExpr[?]): TExpr[java.time.LocalDate] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsDate)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsDate)
     case other =>
       other.asInstanceOf[TExpr[java.time.LocalDate]] // Safe: non-PolyRef already has correct type
 
@@ -1738,6 +1788,7 @@ object TExpr:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asIntExpr(expr: TExpr[?]): TExpr[Int] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsInt)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsInt)
     case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
     // Convert BigDecimal expressions to Int (YEAR/MONTH/DAY/LEN return BigDecimal)
     case year: TExpr.Year => ToInt(year)
@@ -1754,6 +1805,7 @@ object TExpr:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asNumericExpr(expr: TExpr[?]): TExpr[BigDecimal] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeNumeric)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeNumeric)
     case other =>
       other.asInstanceOf[TExpr[BigDecimal]] // Safe: non-PolyRef already has correct type
 
@@ -1765,6 +1817,7 @@ object TExpr:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asBooleanExpr(expr: TExpr[?]): TExpr[Boolean] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeBool)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeBool)
     case other => other.asInstanceOf[TExpr[Boolean]] // Safe: non-PolyRef already has correct type
 
   /**
@@ -1775,6 +1828,20 @@ object TExpr:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asCellValueExpr(expr: TExpr[?]): TExpr[CellValue] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeCellValue)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeCellValue)
+    case other =>
+      other.asInstanceOf[TExpr[CellValue]] // Safe: non-PolyRef already has correct type
+
+  /**
+   * Convert any TExpr to resolved CellValue type.
+   *
+   * Used for standalone cell references (e.g., =A1, =Sheet1!B2) where we need the cell's
+   * "effective" value with cached formula results extracted and empty cells converted to 0.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def asResolvedValueExpr(expr: TExpr[?]): TExpr[CellValue] = expr match
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeResolvedValue)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeResolvedValue)
     case other =>
       other.asInstanceOf[TExpr[CellValue]] // Safe: non-PolyRef already has correct type
 

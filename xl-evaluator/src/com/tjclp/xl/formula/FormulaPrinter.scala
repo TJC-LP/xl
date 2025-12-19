@@ -185,6 +185,10 @@ object FormulaPrinter:
       case TExpr.Now() =>
         "NOW()"
 
+      // Math constants
+      case TExpr.Pi() =>
+        "PI()"
+
       case TExpr.Date(year, month, day) =>
         s"DATE(${printExpr(year, 0)}, ${printExpr(month, 0)}, ${printExpr(day, 0)})"
 
@@ -576,6 +580,8 @@ object FormulaPrinter:
         "Today()"
       case TExpr.Now() =>
         "Now()"
+      case TExpr.Pi() =>
+        "Pi()"
       case TExpr.Date(year, month, day) =>
         s"Date(${printWithTypes(year)}, ${printWithTypes(month)}, ${printWithTypes(day)})"
       case TExpr.Year(date) =>

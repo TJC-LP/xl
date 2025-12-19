@@ -147,6 +147,21 @@ class NewFunctionsSpec extends FunSuite:
     assertEquals(result, Right(fixedDateTime))
   }
 
+  // ===== Math Constants =====
+
+  test("PI: returns mathematical constant pi") {
+    val expr = TExpr.Pi()
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal(Math.PI)))
+  }
+
+  test("PI: can be used in formulas") {
+    // PI() * 2 should give 2 * pi
+    val expr = TExpr.Mul(TExpr.Pi(), TExpr.Lit(BigDecimal(2)))
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal(Math.PI * 2)))
+  }
+
   test("DATE: construct valid date") {
     val expr = TExpr.Date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
     val result = evaluator.eval(expr, emptySheet)

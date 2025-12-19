@@ -50,9 +50,14 @@ object Main
       run(file, None, None, cmd)
     }
 
+    // Headless commands: --file is optional (for constant formulas like =1+1, =PI())
+    val headlessOpts = (fileOpt.orNone, sheetOpt, evalCmd).mapN { (fileOpt, sheet, cmd) =>
+      runHeadless(fileOpt, sheet, cmd)
+    }
+
     // Sheet-level read-only: --file and --sheet (no --output)
     val sheetReadOnlySubcmds =
-      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd orElse evalCmd
+      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd
 
     val sheetReadOnlyOpts = (fileOpt, sheetOpt, sheetReadOnlySubcmds).mapN { (file, sheet, cmd) =>
       run(file, sheet, None, cmd)
@@ -72,7 +77,10 @@ object Main
       runStandalone(outPath, sheetName, sheets)
     }
 
-    standaloneOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
+    // Info commands: no file required
+    val infoOpts = functionsCmd.map(_ => runInfo())
+
+    infoOpts orElse standaloneOpts orElse headlessOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
 
   // ==========================================================================
   // Global options
@@ -157,6 +165,13 @@ object Main
     Opts
       .option[String]("sheets", "Comma-separated list of sheets to search (default: all)")
       .orNone
+
+  // --- Info commands (no --file required) ---
+
+  val functionsCmd: Opts[Unit] =
+    Opts.subcommand("functions", "List supported Excel functions") {
+      Opts.unit
+    }
 
   // --- Standalone commands (no --file required) ---
 
@@ -384,6 +399,114 @@ object Main
     cmd: CliCommand
   ): IO[ExitCode] =
     execute(filePath, sheetNameOpt, outputOpt, cmd).attempt.flatMap {
+      case Right(output) =>
+        IO.println(output).as(ExitCode.Success)
+      case Left(err) =>
+        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+    }
+
+  private def runInfo(): IO[ExitCode] =
+    IO.println(formatFunctionList()).as(ExitCode.Success)
+
+  private def formatFunctionList(): String =
+    // Functions organized by category
+    val categories = List(
+      "Aggregate" -> List(
+        "SUM" -> "Sum of values in range",
+        "COUNT" -> "Count numeric values",
+        "AVERAGE" -> "Average of values",
+        "MIN" -> "Minimum value",
+        "MAX" -> "Maximum value"
+      ),
+      "Conditional" -> List(
+        "SUMIF" -> "Sum if condition met",
+        "COUNTIF" -> "Count if condition met",
+        "SUMIFS" -> "Sum with multiple conditions",
+        "COUNTIFS" -> "Count with multiple conditions",
+        "SUMPRODUCT" -> "Sum of products of arrays"
+      ),
+      "Logical" -> List(
+        "IF" -> "Conditional logic",
+        "AND" -> "All conditions true",
+        "OR" -> "Any condition true",
+        "NOT" -> "Negate boolean",
+        "IFERROR" -> "Handle errors gracefully",
+        "ISERROR" -> "Check if value is error"
+      ),
+      "Text" -> List(
+        "CONCATENATE" -> "Join text strings",
+        "LEFT" -> "Left N characters",
+        "RIGHT" -> "Right N characters",
+        "LEN" -> "String length",
+        "UPPER" -> "Convert to uppercase",
+        "LOWER" -> "Convert to lowercase"
+      ),
+      "Date/Time" -> List(
+        "TODAY" -> "Current date",
+        "NOW" -> "Current date/time",
+        "DATE" -> "Create date from parts",
+        "YEAR" -> "Extract year",
+        "MONTH" -> "Extract month",
+        "DAY" -> "Extract day",
+        "EOMONTH" -> "End of month offset",
+        "EDATE" -> "Date offset by months",
+        "DATEDIF" -> "Difference between dates",
+        "NETWORKDAYS" -> "Working days between dates",
+        "WORKDAY" -> "Workday offset",
+        "YEARFRAC" -> "Fraction of year"
+      ),
+      "Math" -> List(
+        "PI" -> "Mathematical constant π",
+        "ABS" -> "Absolute value",
+        "ROUND" -> "Round to decimals",
+        "ROUNDUP" -> "Round up",
+        "ROUNDDOWN" -> "Round down"
+      ),
+      "Lookup" -> List(
+        "VLOOKUP" -> "Vertical lookup",
+        "XLOOKUP" -> "Modern flexible lookup",
+        "INDEX" -> "Value at row/col",
+        "MATCH" -> "Position of value"
+      ),
+      "Financial" -> List(
+        "NPV" -> "Net present value",
+        "IRR" -> "Internal rate of return",
+        "XNPV" -> "NPV with dates",
+        "XIRR" -> "IRR with dates"
+      )
+    )
+
+    val sb = new StringBuilder
+    sb.append("Supported Excel Functions (47 total)\n")
+    sb.append("=" * 40 + "\n\n")
+
+    for (category, functions) <- categories do
+      sb.append(s"## $category\n")
+      for (name, desc) <- functions do sb.append(f"  $name%-15s $desc\n")
+      sb.append("\n")
+
+    sb.append("Usage: xl eval \"=FUNCTION(args)\"\n")
+    sb.append("Example: xl eval \"=SUM(1,2,3)\" or xl -f data.xlsx eval \"=SUM(A1:A10)\"\n")
+    sb.toString
+
+  private def runHeadless(
+    filePathOpt: Option[Path],
+    sheetNameOpt: Option[String],
+    cmd: CliCommand
+  ): IO[ExitCode] =
+    val workbookIO: IO[Workbook] = filePathOpt match
+      case Some(filePath) => ExcelIO.instance[IO].read(filePath)
+      case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
+
+    (for
+      wb <- workbookIO
+      sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+      result <- cmd match
+        case CliCommand.Eval(formulaStr, overrides) =>
+          ReadCommands.eval(wb, sheet, formulaStr, overrides)
+        case other =>
+          IO.raiseError(new Exception(s"Unexpected headless command: $other"))
+    yield result).attempt.flatMap {
       case Right(output) =>
         IO.println(output).as(ExitCode.Success)
       case Left(err) =>

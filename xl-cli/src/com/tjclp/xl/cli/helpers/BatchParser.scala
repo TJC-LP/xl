@@ -71,25 +71,69 @@ object BatchParser:
     val refPattern = """"ref"\s*:\s*"([^"]+)"""".r
     val valuePattern = """"value"\s*:\s*"((?:[^"\\]|\\.)*)"""".r
 
-    val ops = objPattern.findAllIn(json).toVector.map { obj =>
-      val op = opPattern.findFirstMatchIn(obj).map(_.group(1))
-      val ref = refPattern.findFirstMatchIn(obj).map(_.group(1))
-      val value = valuePattern
-        .findFirstMatchIn(obj)
-        .map(_.group(1))
-        .map(_.replace("\\\"", "\"").replace("\\n", "\n").replace("\\\\", "\\"))
+    // Quick validation: check for common JSON syntax issues
+    val objects = objPattern.findAllIn(json).toVector
+    if objects.isEmpty then
+      // No valid JSON objects found - try to give helpful error
+      if json.contains("{") && json.contains("}") then
+        Left(
+          new Exception(
+            "JSON parse error: Found braces but couldn't parse objects. " +
+              "Check for missing quotes around string values (use \"value\": \"text\", not value: text)"
+          )
+        )
+      else
+        Left(
+          new Exception(
+            "JSON parse error: No objects found. Expected array of {\"op\": ..., \"ref\": ..., \"value\": ...}"
+          )
+        )
+    else
+      val ops = objects.zipWithIndex.map { case (obj, idx) =>
+        val op = opPattern.findFirstMatchIn(obj).map(_.group(1))
+        val ref = refPattern.findFirstMatchIn(obj).map(_.group(1))
+        val value = valuePattern
+          .findFirstMatchIn(obj)
+          .map(_.group(1))
+          .map(_.replace("\\\"", "\"").replace("\\n", "\n").replace("\\\\", "\\"))
 
-      (op, ref, value) match
-        case (Some("put"), Some(r), Some(v)) => Right(BatchOp.Put(r, v))
-        case (Some("putf"), Some(r), Some(v)) => Right(BatchOp.PutFormula(r, v))
-        case (Some(unknown), _, _) => Left(new Exception(s"Unknown operation: $unknown"))
-        case _ => Left(new Exception(s"Invalid batch operation: $obj"))
-    }
+        (op, ref, value) match
+          case (Some("put"), Some(r), Some(v)) => Right(BatchOp.Put(r, v))
+          case (Some("putf"), Some(r), Some(v)) => Right(BatchOp.PutFormula(r, v))
+          case (Some(opName), Some(_), Some(_)) =>
+            // Unknown op with valid ref and value
+            Left(
+              new Exception(
+                s"Unknown operation '$opName' in object ${idx + 1}. Valid operations: put, putf"
+              )
+            )
+          case (Some(_), None, _) =>
+            Left(
+              new Exception(
+                s"JSON parse error in object ${idx + 1}: Missing or malformed 'ref' field. " +
+                  "Expected \"ref\": \"A1\" (with quotes around the cell reference)"
+              )
+            )
+          case (Some(_), _, None) =>
+            Left(
+              new Exception(
+                s"JSON parse error in object ${idx + 1}: Missing or malformed 'value' field. " +
+                  "Expected \"value\": \"text\" (with quotes around the value)"
+              )
+            )
+          case (None, _, _) =>
+            Left(
+              new Exception(
+                s"JSON parse error in object ${idx + 1}: Missing or malformed 'op' field. " +
+                  "Expected \"op\": \"put\" or \"op\": \"putf\" (with quotes)"
+              )
+            )
+      }
 
-    val errors = ops.collect { case Left(e) => e }
-    errors.headOption match
-      case Some(e) => Left(e)
-      case None => Right(ops.collect { case Right(op) => op })
+      val errors = ops.collect { case Left(e) => e }
+      errors.headOption match
+        case Some(e) => Left(e)
+        case None => Right(ops.collect { case Right(op) => op })
 
   /**
    * Resolved operation with parsed ref and target sheet name.

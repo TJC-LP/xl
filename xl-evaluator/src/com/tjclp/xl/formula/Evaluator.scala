@@ -130,69 +130,34 @@ private class EvaluatorImpl extends Evaluator:
   ): Either[EvalError, A] =
     // @unchecked: GADT exhaustivity - PolyRef should be resolved before evaluation
     (expr: @unchecked) match
-      // ===== Defensive PolyRef Handling =====
-      // PolyRef should be converted to typed Ref during parsing, but if it reaches
-      // evaluation unconverted, provide a clear error instead of MatchError
+      // ===== PolyRef Handling (Same-Sheet Reference) =====
+      //
+      // PolyRef should be resolved to typed Ref during parsing (see resolveTopLevelPolyRef
+      // in FormulaParser). If we reach this case, it means a PolyRef escaped resolution,
+      // which is a programming error. Return an error instead of using unsafe asInstanceOf.
+      //
       case TExpr.PolyRef(at, _) =>
-        // Cast to ARef to workaround Scala 3 inline method issue with pattern-matched values
-        val refStr = (at: ARef).toA1
         Left(
           EvalError.EvalFailed(
-            s"Unresolved cell reference $refStr. This indicates a parser bug - PolyRef should be resolved before evaluation.",
+            s"Unresolved PolyRef at ${(at: ARef).toA1} - should have been resolved during parsing",
             None
           )
         )
 
       // ===== Sheet-Qualified References (Cross-Sheet) =====
       //
-      // SheetPolyRef: Cross-sheet polymorphic reference
-      //
-      // Unlike same-sheet PolyRef (which errors defensively because it should be
-      // resolved to typed Ref during parsing), SheetPolyRef is evaluated directly
-      // because cross-sheet references are typically used at the top level of
-      // formulas (e.g., =Sales!A1) where type context is "return the raw value".
-      //
-      // The asInstanceOf[Either[EvalError, A]] cast at line ~150 is safe because:
-      // 1. The calling code (SheetEvaluator.evaluateFormula) passes result to
-      //    toCellValue(result: Any) which handles all runtime types
-      // 2. When used in typed contexts (e.g., =Sales!A1 + 10), the parser would
-      //    create SheetRef with proper decoder instead of SheetPolyRef
-      //
-      // This matches Excel behavior: cross-sheet references return the cell's
-      // raw value, with type coercion happening at the operator level.
+      // SheetPolyRef should be resolved to typed SheetRef during parsing (see
+      // resolveTopLevelPolyRef in FormulaParser). If we reach this case, it means
+      // a SheetPolyRef escaped resolution, which is a programming error.
+      // Return an error instead of using unsafe asInstanceOf.
       //
       case TExpr.SheetPolyRef(sheetName, at, _) =>
-        workbook match
-          case None =>
-            val refStr = s"${sheetName.value}!${(at: ARef).toA1}"
-            Left(Evaluator.missingWorkbookError(refStr))
-          case Some(wb) =>
-            wb(sheetName) match
-              case Left(err) =>
-                Left(Evaluator.sheetNotFoundError(sheetName, err))
-              case Right(targetSheet) =>
-                val cell = targetSheet(at)
-                // Return the cell value directly - extract raw value from CellValue
-                // We cast the whole Either to avoid type issues with TExpr[Nothing]
-                val result: Either[EvalError, Any] = cell.value match
-                  case CellValue.Number(n) => Right(n)
-                  case CellValue.Text(s) => Right(s)
-                  case CellValue.Bool(b) => Right(b)
-                  case CellValue.DateTime(dt) => Right(dt)
-                  case CellValue.Formula(_, cached) =>
-                    // Use cached value if available
-                    cached match
-                      case Some(CellValue.Number(n)) => Right(n)
-                      case Some(CellValue.Text(s)) => Right(s)
-                      case Some(CellValue.Bool(b)) => Right(b)
-                      case Some(CellValue.DateTime(dt)) => Right(dt)
-                      case Some(CellValue.RichText(rt)) => Right(rt.toPlainText)
-                      case _ => Right(BigDecimal(0)) // Empty formula = 0
-                  case CellValue.Error(err) =>
-                    Left(EvalError.EvalFailed(s"Cell contains error: $err", None))
-                  case CellValue.Empty => Right(BigDecimal(0)) // Empty = 0
-                  case CellValue.RichText(rt) => Right(rt.toPlainText)
-                result.asInstanceOf[Either[EvalError, A]]
+        Left(
+          EvalError.EvalFailed(
+            s"Unresolved SheetPolyRef at ${sheetName.value}!${(at: ARef).toA1} - should have been resolved during parsing",
+            None
+          )
+        )
 
       case TExpr.SheetRef(sheetName, at, _, decode) =>
         // SheetRef: resolve cell from target sheet in workbook
@@ -416,6 +381,11 @@ private class EvaluatorImpl extends Evaluator:
       case TExpr.Now() =>
         // Now: get current date and time from clock
         Right(clock.now())
+
+      // ===== Math Constants =====
+      case TExpr.Pi() =>
+        // PI: mathematical constant
+        Right(BigDecimal(Math.PI))
 
       case TExpr.Date(year, month, day) =>
         // Date: construct date from components
