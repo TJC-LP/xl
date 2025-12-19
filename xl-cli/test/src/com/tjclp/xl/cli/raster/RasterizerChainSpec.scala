@@ -324,6 +324,22 @@ class RasterizerChainSpec extends CatsEffectSuite:
       .guarantee(IO(Files.deleteIfExists(tempFile)).void)
   }
 
+  test("CairoSvg rejects JPEG format immediately") {
+    val tempFile = Files.createTempFile("test", ".jpg")
+    val svg = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"/>"""
+
+    CairoSvg
+      .convertSvgToRaster(svg, tempFile, RasterFormat.Jpeg(85))
+      .attempt
+      .map { result =>
+        assert(result.isLeft)
+        result.left.foreach { err =>
+          assert(err.isInstanceOf[RasterError.FormatNotSupported])
+        }
+      }
+      .guarantee(IO(Files.deleteIfExists(tempFile)).void)
+  }
+
   test("RsvgConvert rejects WebP format immediately") {
     val tempFile = Files.createTempFile("test", ".webp")
     val svg = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"/>"""
