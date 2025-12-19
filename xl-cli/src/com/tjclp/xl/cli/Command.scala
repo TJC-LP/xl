@@ -27,7 +27,7 @@ enum CliCommand:
     rasterOutput: Option[Path],
     skipEmpty: Boolean,
     headerRow: Option[Int],
-    useImageMagick: Boolean
+    rasterizer: Option[String]
   )
   case Cell(ref: String, noStyle: Boolean)
   case Search(pattern: String, limit: Int, sheetsFilter: Option[String])

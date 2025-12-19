@@ -10,7 +10,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.helpers.{SheetResolver, ValueParser}
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
-import com.tjclp.xl.cli.raster.{BatikRasterizer, ImageMagick}
+import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.{DependencyGraph, FormulaParser, SheetEvaluator}
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -64,7 +64,7 @@ object ReadCommands:
     rasterOutput: Option[Path],
     skipEmpty: Boolean,
     headerRow: Option[Int],
-    useImageMagick: Boolean = false
+    rasterizer: Option[String] = None
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "view")
@@ -159,55 +159,20 @@ object ReadCommands:
                 showLabels = showLabels
               )
 
-              // Use Batik (pure JVM) by default, ImageMagick as fallback
-              // Batik requires AWT which may not be available in GraalVM native images
-              if useImageMagick then
-                val rasterFormat = format match
-                  case ViewFormat.Png => ImageMagick.Format.Png
-                  case ViewFormat.Jpeg => ImageMagick.Format.Jpeg(quality)
-                  case ViewFormat.WebP => ImageMagick.Format.WebP
-                  case ViewFormat.Pdf => ImageMagick.Format.Pdf
-                  case _ => ImageMagick.Format.Png // unreachable
-                ImageMagick.convertSvgToRaster(svg, outputPath, rasterFormat, dpi).map { _ =>
-                  s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, ImageMagick)"
+              // Convert ViewFormat to RasterFormat
+              val rasterFormat = format match
+                case ViewFormat.Png => RasterFormat.Png
+                case ViewFormat.Jpeg => RasterFormat.Jpeg(quality)
+                case ViewFormat.WebP => RasterFormat.WebP
+                case ViewFormat.Pdf => RasterFormat.Pdf
+                case _ => RasterFormat.Png // unreachable
+
+              // Use RasterizerChain for automatic fallback
+              RasterizerChain
+                .convert(svg, outputPath, rasterFormat, dpi, rasterizer)
+                .map { usedRasterizer =>
+                  s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, $usedRasterizer)"
                 }
-              else
-                val batikFormat = format match
-                  case ViewFormat.Png => BatikRasterizer.Format.Png
-                  case ViewFormat.Jpeg => BatikRasterizer.Format.Jpeg(quality)
-                  case ViewFormat.WebP => BatikRasterizer.Format.WebP
-                  case ViewFormat.Pdf => BatikRasterizer.Format.Pdf
-                  case _ => BatikRasterizer.Format.Png // unreachable
-                // Try Batik first, fall back to ImageMagick if AWT not available
-                BatikRasterizer
-                  .convertSvgToRaster(svg, outputPath, batikFormat, dpi)
-                  .map(_ => s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI)")
-                  .handleErrorWith {
-                    case e: BatikRasterizer.RasterizationError
-                        if e.getMessage.contains("AWT") || e.getMessage.contains("native image") =>
-                      // Batik failed due to AWT, try ImageMagick as fallback
-                      val imgFormat = format match
-                        case ViewFormat.Png => ImageMagick.Format.Png
-                        case ViewFormat.Jpeg => ImageMagick.Format.Jpeg(quality)
-                        case ViewFormat.WebP => ImageMagick.Format.WebP
-                        case ViewFormat.Pdf => ImageMagick.Format.Pdf
-                        case _ => ImageMagick.Format.Png
-                      ImageMagick
-                        .convertSvgToRaster(svg, outputPath, imgFormat, dpi)
-                        .map { _ =>
-                          s"Warning: Batik unavailable (native image), using ImageMagick fallback\n" +
-                            s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, ImageMagick)"
-                        }
-                        .handleErrorWith { imgErr =>
-                          IO.raiseError(
-                            new Exception(
-                              s"Rasterization failed: Batik requires AWT (unavailable in native image), " +
-                                s"and ImageMagick fallback failed: ${imgErr.getMessage}"
-                            )
-                          )
-                        }
-                    case e => IO.raiseError(e)
-                  }
     yield result
 
   /**
