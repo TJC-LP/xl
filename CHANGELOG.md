@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.2] - 2025-12-19
+
+### Added
+
+- **PI() function**: Mathematical constant (3.14159...) now available in formulas
+- **Headless formula evaluation**: `xl eval "=PI()*2"` works without a file for constant formulas
+- **`xl functions` command**: Lists all 47 supported formula functions with categories and descriptions
+- **Cross-sheet formula references**: `=Sheet1!A1` syntax now fully supported in evaluator
+
+### Fixed
+
+- **PolyRef type safety**: Eliminated unsafe `asInstanceOf` casts in formula evaluator by resolving polymorphic references at parse time
+- **VLOOKUP text lookup**: Text lookups now correctly return text results
+- **Nested formula evaluation**: Formula cells with cached values now properly extract values during evaluation
+- **Wildcard pattern matching**: `Widget*` patterns in SUMIF/COUNTIF now match correctly (TJC-353)
+- **Addition with cell references**: Fixed regression where `=A1+B1` failed to evaluate
+
+---
+
 ## [0.4.0] - 2025-12-17
 
 ### Added

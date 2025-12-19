@@ -67,7 +67,7 @@ trait XLModule extends XLModuleBase with PublishModule {
 
   /** Version derived from PUBLISH_VERSION env var (set by CI), or SNAPSHOT for local dev */
   override def publishVersion: T[String] =
-    sys.env.getOrElse("PUBLISH_VERSION", "0.4.2-SNAPSHOT")
+    sys.env.getOrElse("PUBLISH_VERSION", "0.4.2")
 
   override def pomSettings: T[PomSettings] = PomSettings(
     description = artifactDescription,
