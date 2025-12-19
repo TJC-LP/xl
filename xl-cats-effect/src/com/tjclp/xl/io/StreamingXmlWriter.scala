@@ -79,7 +79,8 @@ object StreamingXmlWriter:
           case FormulaInjectionPolicy.Escape => CellValue.escape(s)
           case FormulaInjectionPolicy.None => s
         // Add xml:space="preserve" for text with leading/trailing/multiple spaces
-        // Note: check escaped text since escaping may add leading quote
+        // Note: we check the escaped text because whitespace in the original (e.g., "  =formula")
+        // must still be preserved after escaping adds a leading quote (e.g., "'  =formula")
         val needsPreserve = XmlUtil.needsXmlSpacePreserve(escaped)
         val tAttrs =
           if needsPreserve then

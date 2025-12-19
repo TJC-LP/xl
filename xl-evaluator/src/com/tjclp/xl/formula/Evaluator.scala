@@ -903,8 +903,26 @@ private class EvaluatorImpl extends Evaluator:
                 case CellValue.Formula(_, Some(cached)) => extractNumericForMatch(cached)
                 case _ => None
 
+              // Normalize lookup value - unwrap CellValue if needed
+              // This handles when lookupExpr is TExpr[CellValue] (e.g., from asCellValueExpr)
+              val normalizedLookup: Any = lookupValue match
+                case cv: CellValue =>
+                  cv match
+                    case CellValue.Number(n) => n
+                    case CellValue.Text(s) => s
+                    case CellValue.Bool(b) => b
+                    case CellValue.Formula(_, Some(cached)) =>
+                      // Recursively unwrap cached formula value
+                      cached match
+                        case CellValue.Number(n) => n
+                        case CellValue.Text(s) => s
+                        case CellValue.Bool(b) => b
+                        case other => other
+                    case other => other
+                case other => other
+
               // Determine if lookup is text or numeric
-              val isTextLookup = lookupValue match
+              val isTextLookup = normalizedLookup match
                 case _: String => true
                 case _: BigDecimal => false
                 case _: Int => false
@@ -914,7 +932,7 @@ private class EvaluatorImpl extends Evaluator:
               val chosenRowOpt: Option[Int] =
                 if rangeMatch then
                   // Approximate match: numeric only, find largest key <= lookup
-                  val numericLookup: Option[BigDecimal] = lookupValue match
+                  val numericLookup: Option[BigDecimal] = normalizedLookup match
                     case n: BigDecimal => Some(n)
                     case i: Int => Some(BigDecimal(i))
                     case s: String => scala.util.Try(BigDecimal(s.trim)).toOption
@@ -935,7 +953,7 @@ private class EvaluatorImpl extends Evaluator:
                 else
                   // Exact match: supports both text (case-insensitive) and numeric
                   if isTextLookup then
-                    val lookupText = lookupValue.toString.toLowerCase
+                    val lookupText = normalizedLookup.toString.toLowerCase
                     rowIndices.find { i =>
                       val keyRef = ARef.from0(keyCol0, rowStart0 + i)
                       extractTextForMatch(targetSheet(keyRef).value)
@@ -943,7 +961,7 @@ private class EvaluatorImpl extends Evaluator:
                     }
                   else
                     // Numeric exact match
-                    val numericLookup: Option[BigDecimal] = lookupValue match
+                    val numericLookup: Option[BigDecimal] = normalizedLookup match
                       case n: BigDecimal => Some(n)
                       case i: Int => Some(BigDecimal(i))
                       case _ => None
@@ -965,7 +983,7 @@ private class EvaluatorImpl extends Evaluator:
                     EvalError.EvalFailed(
                       if rangeMatch then "VLOOKUP approximate match not found"
                       else "VLOOKUP exact match not found",
-                      Some(s"VLOOKUP($lookupValue, ${table.toA1}, $colIndex, $rangeMatch)")
+                      Some(s"VLOOKUP($normalizedLookup, ${table.toA1}, $colIndex, $rangeMatch)")
                     )
                   )
         yield result

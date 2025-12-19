@@ -658,27 +658,80 @@ object FunctionParser:
 
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
-        // No explicit range_lookup → default TRUE
+        // Local range, no explicit range_lookup → default TRUE
         case List(lookupExpr, fold: TExpr.FoldRange[?, ?], colIndexExpr) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
               scala.util.Right(
-                TExpr.vlookup(
-                  TExpr.asNumericExpr(lookupExpr),
-                  range,
+                TExpr.vlookupWithLocation(
+                  TExpr.asCellValueExpr(lookupExpr), // Resolve PolyRef, preserve value type
+                  TExpr.RangeLocation.Local(range),
                   TExpr.asIntExpr(colIndexExpr),
                   TExpr.Lit(true)
                 )
               )
 
-        // All four arguments provided
+        // Local range, all four arguments provided
         case List(lookupExpr, fold: TExpr.FoldRange[?, ?], colIndexExpr, rangeLookupExpr) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
               scala.util.Right(
-                TExpr.vlookup(
-                  TExpr.asNumericExpr(lookupExpr),
-                  range,
+                TExpr.vlookupWithLocation(
+                  TExpr.asCellValueExpr(lookupExpr), // Resolve PolyRef, preserve value type
+                  TExpr.RangeLocation.Local(range),
+                  TExpr.asIntExpr(colIndexExpr),
+                  TExpr.asBooleanExpr(rangeLookupExpr)
+                )
+              )
+
+        // Cross-sheet range (SheetRange), no explicit range_lookup → default TRUE
+        case List(lookupExpr, TExpr.SheetRange(sheet, range), colIndexExpr) =>
+          scala.util.Right(
+            TExpr.vlookupWithLocation(
+              TExpr.asCellValueExpr(lookupExpr), // Resolve PolyRef, preserve value type
+              TExpr.RangeLocation.CrossSheet(sheet, range),
+              TExpr.asIntExpr(colIndexExpr),
+              TExpr.Lit(true)
+            )
+          )
+
+        // Cross-sheet range (SheetRange), all four arguments provided
+        case List(lookupExpr, TExpr.SheetRange(sheet, range), colIndexExpr, rangeLookupExpr) =>
+          scala.util.Right(
+            TExpr.vlookupWithLocation(
+              TExpr.asCellValueExpr(lookupExpr), // Resolve PolyRef, preserve value type
+              TExpr.RangeLocation.CrossSheet(sheet, range),
+              TExpr.asIntExpr(colIndexExpr),
+              TExpr.asBooleanExpr(rangeLookupExpr)
+            )
+          )
+
+        // Cross-sheet range (SheetFoldRange from function context), no explicit range_lookup
+        case List(lookupExpr, sheetFold: TExpr.SheetFoldRange[?, ?], colIndexExpr) =>
+          sheetFold match
+            case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
+              scala.util.Right(
+                TExpr.vlookupWithLocation(
+                  TExpr.asCellValueExpr(lookupExpr), // Resolve PolyRef, preserve value type
+                  TExpr.RangeLocation.CrossSheet(sheet, range),
+                  TExpr.asIntExpr(colIndexExpr),
+                  TExpr.Lit(true)
+                )
+              )
+
+        // Cross-sheet range (SheetFoldRange from function context), all four arguments
+        case List(
+              lookupExpr,
+              sheetFold: TExpr.SheetFoldRange[?, ?],
+              colIndexExpr,
+              rangeLookupExpr
+            ) =>
+          sheetFold match
+            case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
+              scala.util.Right(
+                TExpr.vlookupWithLocation(
+                  TExpr.asCellValueExpr(lookupExpr), // Resolve PolyRef, preserve value type
+                  TExpr.RangeLocation.CrossSheet(sheet, range),
                   TExpr.asIntExpr(colIndexExpr),
                   TExpr.asBooleanExpr(rangeLookupExpr)
                 )

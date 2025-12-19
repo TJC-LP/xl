@@ -517,3 +517,92 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assert(deps.contains(sheet1A1), "Sheet1!A2 should depend on Sheet1!A1")
     assert(deps.contains(sheet2B1), "Sheet1!A2 should depend on Sheet2!B1")
   }
+
+  // ===== VLOOKUP Cross-Sheet Tests (TJC-352) =====
+
+  test("VLOOKUP: cross-sheet reference with exact match") {
+    val lookup = sheetWith(
+      "Lookup",
+      ref"A1" -> CellValue.Number(BigDecimal(100)),
+      ref"B1" -> CellValue.Text("Result1"),
+      ref"A2" -> CellValue.Number(BigDecimal(200)),
+      ref"B2" -> CellValue.Text("Result2"),
+      ref"A3" -> CellValue.Number(BigDecimal(300)),
+      ref"B3" -> CellValue.Text("Result3")
+    )
+    val calc = sheetWith(
+      "Calc",
+      ref"A1" -> CellValue.Number(BigDecimal(200)) // Lookup value
+    )
+    val wb = workbookWith(calc, lookup)
+
+    val result = calc.evaluateFormula("=VLOOKUP(A1,Lookup!A1:B3,2,FALSE)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Text("Result2")))
+  }
+
+  test("VLOOKUP: cross-sheet reference with approximate match") {
+    val lookup = sheetWith(
+      "Lookup",
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"B1" -> CellValue.Text("Small"),
+      ref"A2" -> CellValue.Number(BigDecimal(50)),
+      ref"B2" -> CellValue.Text("Medium"),
+      ref"A3" -> CellValue.Number(BigDecimal(100)),
+      ref"B3" -> CellValue.Text("Large")
+    )
+    val calc = sheetWith(
+      "Calc",
+      ref"A1" -> CellValue.Number(BigDecimal(75)) // Between 50 and 100
+    )
+    val wb = workbookWith(calc, lookup)
+
+    // Approximate match (TRUE) should find 50 (largest <= 75)
+    val result = calc.evaluateFormula("=VLOOKUP(A1,Lookup!A1:B3,2,TRUE)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Text("Medium")))
+  }
+
+  test("VLOOKUP: cross-sheet reference with text lookup") {
+    val lookup = sheetWith(
+      "Products",
+      ref"A1" -> CellValue.Text("Apple"),
+      ref"B1" -> CellValue.Number(BigDecimal("1.50")),
+      ref"A2" -> CellValue.Text("Banana"),
+      ref"B2" -> CellValue.Number(BigDecimal("0.75")),
+      ref"A3" -> CellValue.Text("Cherry"),
+      ref"B3" -> CellValue.Number(BigDecimal("3.00"))
+    )
+    val order = sheetWith(
+      "Order",
+      ref"A1" -> CellValue.Text("Banana")
+    )
+    val wb = workbookWith(order, lookup)
+
+    val result = order.evaluateFormula("=VLOOKUP(A1,Products!A1:B3,2,FALSE)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal("0.75"))))
+  }
+
+  test("VLOOKUP: cross-sheet reference not found returns error") {
+    val lookup = sheetWith(
+      "Lookup",
+      ref"A1" -> CellValue.Number(BigDecimal(100)),
+      ref"B1" -> CellValue.Text("Found")
+    )
+    val calc = sheetWith(
+      "Calc",
+      ref"A1" -> CellValue.Number(BigDecimal(999)) // Not in lookup table
+    )
+    val wb = workbookWith(calc, lookup)
+
+    val result = calc.evaluateFormula("=VLOOKUP(A1,Lookup!A1:B1,2,FALSE)", workbook = Some(wb))
+    // VLOOKUP returns error when value not found (either Left or Right(Error))
+    result match
+      case Left(err) =>
+        assert(
+          err.message.contains("not found") || err.message.contains("VLOOKUP"),
+          s"Error should mention lookup failure: ${err.message}"
+        )
+      case Right(CellValue.Error(_)) =>
+        () // Also acceptable
+      case other =>
+        fail(s"Expected error for not-found lookup, got: $other")
+  }
