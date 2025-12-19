@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.3] - 2025-12-19
+
+### Added
+
+- **Rasterizer fallback chain**: Multiple SVG-to-raster backends for native image support in environments where Batik/AWT is unavailable (like Claude.ai)
+  - Batik (built-in), cairosvg, rsvg-convert, resvg, ImageMagick
+  - Automatic fallback tries each rasterizer in order until one succeeds
+  - New `--rasterizer <name>` flag to force a specific backend
+
+- **Targeted range evaluation**: `--eval` now only evaluates formulas within the viewed range (plus their dependencies) instead of the entire sheet
+  - Significantly faster for small ranges on large sheets
+  - Complexity: O(R + D) where R = range cells, D = dependencies vs O(N) for all formulas
+
+### Fixed
+
+- **Cross-sheet formula evaluation**: Fixed `--eval` flag to work correctly with cross-sheet references like `='Sheet2'!A1`
+- **CairoSvg JPEG handling**: Now explicitly rejects JPEG format to allow fallback chain to find appropriate rasterizer
+
+### Breaking Changes
+
+- **`--use-imagemagick` flag removed**: Replaced with `--rasterizer <name>` option for specifying rasterizer backend
+  - Migration: `--use-imagemagick` → `--rasterizer imagemagick`
+
+---
+
 ## [0.4.2] - 2025-12-19
 
 ### Added
