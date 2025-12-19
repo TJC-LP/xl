@@ -76,8 +76,17 @@ object ReadCommands:
       theme = wb.metadata.theme // Use workbook's parsed theme
       result <- format match
         case ViewFormat.Markdown =>
+          // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
+          val sheetToRender =
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
           IO.pure(
-            Markdown.renderRange(targetSheet, limitedRange, showFormulas, skipEmpty, evalFormulas)
+            Markdown.renderRange(
+              sheetToRender,
+              limitedRange,
+              showFormulas,
+              skipEmpty,
+              evalFormulas = false
+            )
           )
         case ViewFormat.Html =>
           // Pre-evaluate formulas if --eval flag is set
@@ -104,25 +113,31 @@ object ReadCommands:
             )
           )
         case ViewFormat.Json =>
+          // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
+          val sheetToRender =
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
           IO.pure(
             JsonRenderer.renderRange(
-              targetSheet,
+              sheetToRender,
               limitedRange,
               showFormulas,
               skipEmpty,
               headerRow,
-              evalFormulas
+              evalFormulas = false
             )
           )
         case ViewFormat.Csv =>
+          // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
+          val sheetToRender =
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
           IO.pure(
             CsvRenderer.renderRange(
-              targetSheet,
+              sheetToRender,
               limitedRange,
               showFormulas,
               showLabels,
               skipEmpty,
-              evalFormulas
+              evalFormulas = false
             )
           )
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
