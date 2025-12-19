@@ -11,10 +11,10 @@ Detailed specifications for `view --format` options.
 | csv | CSV text | - |
 | html | HTML table | - |
 | svg | SVG vector | - |
-| png | PNG image | `--raster-output` (Batik built-in) |
-| jpeg | JPEG image | `--raster-output` (Batik built-in) |
-| webp | WebP image | ImageMagick, `--raster-output` |
-| pdf | PDF document | `--raster-output` (Batik built-in) |
+| png | PNG image | `--raster-output` (auto fallback chain) |
+| jpeg | JPEG image | `--raster-output` (auto fallback chain) |
+| webp | WebP image | `--raster-output`, ImageMagick |
+| pdf | PDF document | `--raster-output` (auto fallback chain) |
 
 ## JSON Schema
 
@@ -45,7 +45,7 @@ Detailed specifications for `view --format` options.
 | `--dpi <n>` | Resolution | 144 |
 | `--quality <n>` | JPEG quality 1-100 | 90 |
 | `--show-labels` | Add row/column headers | false |
-| `--use-imagemagick` | Use ImageMagick (instead of Batik) | false |
+| `--rasterizer <name>` | Force specific rasterizer | auto |
 
 ## CSV Options
 
@@ -70,18 +70,40 @@ xl -f data.xlsx view A1:E20 --format png --raster-output chart.png --show-labels
 xl -f data.xlsx view A1:E20 --format jpeg --raster-output chart.jpg --quality 85
 ```
 
-## ImageMagick (Optional)
+## Rasterizer Fallback Chain
 
-PNG, JPEG, and PDF export use Batik (built-in) by default.
-ImageMagick is only needed for:
-- WebP format
-- GraalVM native image builds (where AWT is unavailable)
-- Using `--use-imagemagick` flag explicitly
+The CLI automatically tries rasterizers in order until one succeeds:
 
+1. **Batik** (built-in) - Works in JVM mode, not in native image
+2. **cairosvg** - Python, very portable (`pip install cairosvg`)
+3. **rsvg-convert** - Fast C/Rust binary (`apt install librsvg2-bin`)
+4. **resvg** - Best quality Rust (`cargo install resvg`)
+5. **ImageMagick** - Widely available, last resort
+
+**Format Support**:
+- PNG: All rasterizers
+- JPEG: Batik, ImageMagick
+- PDF: Batik, cairosvg, rsvg-convert
+- WebP: ImageMagick only
+
+**Force Specific Rasterizer**:
 ```bash
-# macOS
-brew install imagemagick
+xl -f data.xlsx view A1:E10 --format png --raster-output out.png --rasterizer cairosvg
+```
 
-# Ubuntu/Debian
-sudo apt-get install imagemagick
+**Installation**:
+```bash
+# cairosvg (recommended for native image)
+pip install cairosvg
+
+# rsvg-convert
+brew install librsvg          # macOS
+sudo apt install librsvg2-bin # Ubuntu/Debian
+
+# resvg (best quality)
+cargo install resvg
+
+# ImageMagick
+brew install imagemagick      # macOS
+sudo apt install imagemagick  # Ubuntu/Debian
 ```
