@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
@@ -219,6 +219,99 @@ object SheetEvaluator:
       // For now, delegate to the safe method
       // In the future, we may optimize this to skip dependency checking for known-safe cases
       evaluateWithDependencyCheck(clock, workbook)
+
+    /**
+     * Evaluate formula cells within a specific range, plus their transitive dependencies.
+     *
+     * This is an optimized evaluation method for viewing a subset of a sheet. Instead of evaluating
+     * all formula cells, it only evaluates:
+     *   1. Formula cells within the specified range
+     *   2. Formula cells that those formulas depend on (transitively)
+     *
+     * This is much more efficient than evaluateWithDependencyCheck when viewing a small range from
+     * a large sheet with many formulas.
+     *
+     * @param range
+     *   The cell range to evaluate
+     * @param clock
+     *   Clock for date/time functions (defaults to system clock)
+     * @param workbook
+     *   Optional workbook context for cross-sheet formula references
+     * @return
+     *   Either XLError or map of ref → evaluated value for cells within the range
+     *
+     * Example:
+     * {{{
+     * // Sheet with formulas throughout, but we only need A1:C10
+     * sheet.evaluateForRange(CellRange.parse("A1:C10").toOption.get)
+     * // Only evaluates formulas in A1:C10 + their dependencies
+     * }}}
+     */
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
+    def evaluateForRange(
+      range: CellRange,
+      clock: Clock = Clock.system,
+      workbook: Option[Workbook] = None
+    ): XLResult[Map[ARef, CellValue]] =
+      // Suppression rationale: Mutable accumulator for building results map during iteration.
+      // Same pattern as evaluateWithDependencyCheck.
+
+      // 1. Find formula cells within the range (using pattern match, not isInstanceOf)
+      val rangeFormulaCells = sheet.cells
+        .collect {
+          case (ref, cell) if range.contains(ref) =>
+            cell.value match
+              case _: CellValue.Formula => Some(ref)
+              case _ => None
+        }
+        .flatten
+        .toSet
+
+      // If no formulas in range, return empty (nothing to evaluate)
+      if rangeFormulaCells.isEmpty then scala.util.Right(Map.empty)
+      else
+        // 2. Build full dependency graph
+        val graph = DependencyGraph.fromSheet(sheet)
+
+        // 3. Find all transitive dependencies (cells that range formulas depend on)
+        val transitiveDeps = DependencyGraph.transitiveDependencies(graph, rangeFormulaCells)
+
+        // 4. Target cells = range formulas + (transitive deps that are also formulas)
+        val allFormulaCells = graph.dependencies.keySet
+        val targetCells = rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
+
+        // 5. Check for cycles in the subgraph (could still have cycles if dependencies have cycles)
+        // We use the full graph for cycle detection since dependencies may form cycles outside the range
+        DependencyGraph.detectCycles(graph) match
+          case scala.util.Left(circularRef) =>
+            scala.util.Left(evalErrorToXLError(circularRef, None))
+          case scala.util.Right(_) =>
+            // 6. Get topological order from full graph, but filter to only our target cells
+            DependencyGraph.topologicalSort(graph) match
+              case scala.util.Left(circularRef) =>
+                scala.util.Left(evalErrorToXLError(circularRef, None))
+              case scala.util.Right(fullEvalOrder) =>
+                // Filter to only include cells we need to evaluate
+                val evalOrder = fullEvalOrder.filter(targetCells.contains)
+
+                // 7. Evaluate in dependency order
+                var tempSheet = sheet
+                var results = Map.empty[ARef, CellValue]
+
+                val evalResult = evalOrder.foldLeft[XLResult[Unit]](scala.util.Right(())) {
+                  case (scala.util.Right(_), ref) =>
+                    tempSheet.evaluateCell(ref, clock, workbook) match
+                      case scala.util.Right(value) =>
+                        tempSheet = tempSheet.put(ref, value)
+                        // Only include results for cells in the original range
+                        if rangeFormulaCells.contains(ref) then results = results + (ref -> value)
+                        scala.util.Right(())
+                      case scala.util.Left(error) =>
+                        scala.util.Left(error)
+                  case (left, _) => left
+                }
+
+                evalResult.map(_ => results)
 
   // ========== Helper Functions ==========
 

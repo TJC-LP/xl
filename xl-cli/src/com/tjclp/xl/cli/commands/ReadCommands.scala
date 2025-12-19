@@ -78,7 +78,8 @@ object ReadCommands:
         case ViewFormat.Markdown =>
           // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            else targetSheet
           IO.pure(
             Markdown.renderRange(
               sheetToRender,
@@ -91,7 +92,8 @@ object ReadCommands:
         case ViewFormat.Html =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            else targetSheet
           IO.pure(
             sheetToRender.toHtml(
               limitedRange,
@@ -103,7 +105,8 @@ object ReadCommands:
         case ViewFormat.Svg =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            else targetSheet
           IO.pure(
             sheetToRender.toSvg(
               limitedRange,
@@ -115,7 +118,8 @@ object ReadCommands:
         case ViewFormat.Json =>
           // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            else targetSheet
           IO.pure(
             JsonRenderer.renderRange(
               sheetToRender,
@@ -129,7 +133,8 @@ object ReadCommands:
         case ViewFormat.Csv =>
           // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
+            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            else targetSheet
           IO.pure(
             CsvRenderer.renderRange(
               sheetToRender,
@@ -151,7 +156,9 @@ object ReadCommands:
             case Some(outputPath) =>
               // Pre-evaluate formulas if --eval flag is set
               val sheetToRender =
-                if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb)) else targetSheet
+                if evalFormulas then
+                  evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+                else targetSheet
               val svg = sheetToRender.toSvg(
                 limitedRange,
                 theme = theme,
@@ -415,7 +422,7 @@ object ReadCommands:
     }
 
   /**
-   * Evaluate all formula cells in a sheet, replacing them with their computed values.
+   * Evaluate formula cells in a sheet, replacing them with their computed values.
    *
    * This is used to pre-process sheets for rendering when --eval is specified. Formula cells are
    * replaced with their evaluated results (preserving formatting), while non-formula cells remain
@@ -424,13 +431,31 @@ object ReadCommands:
    * Uses dependency-aware evaluation to correctly handle nested formulas (e.g., F5=SUM(B5:E5) where
    * B5=SUM(B2:B4)). Formulas are evaluated in topological order so dependencies are computed first.
    *
+   * When a range is specified, only evaluates formulas within that range (plus their transitive
+   * dependencies). This is much more efficient than evaluating the entire sheet when viewing a
+   * small subset.
+   *
    * @param sheet
    *   The sheet to evaluate formulas in
    * @param workbook
    *   Optional workbook context for cross-sheet formula references
+   * @param range
+   *   Optional range to limit evaluation to (formulas outside this range are not evaluated)
    */
-  private def evaluateSheetFormulas(sheet: Sheet, workbook: Option[Workbook] = None): Sheet =
-    SheetEvaluator.evaluateWithDependencyCheck(sheet)(workbook = workbook) match
+  private def evaluateSheetFormulas(
+    sheet: Sheet,
+    workbook: Option[Workbook] = None,
+    range: Option[CellRange] = None
+  ): Sheet =
+    val evalResult = range match
+      case Some(r) =>
+        // Targeted evaluation: only evaluate formulas in range + their dependencies
+        SheetEvaluator.evaluateForRange(sheet)(r, workbook = workbook)
+      case None =>
+        // Full evaluation: evaluate all formulas
+        SheetEvaluator.evaluateWithDependencyCheck(sheet)(workbook = workbook)
+
+    evalResult match
       case Right(results) =>
         // Apply evaluated results. Sheet.put preserves existing cell styleId automatically.
         results.foldLeft(sheet) { case (acc, (ref, value)) =>
