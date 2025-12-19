@@ -223,7 +223,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
               ) ++
               // 3. Stream XML events → bytes → ZIP
               (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
-                StreamingXmlWriter.worksheetEvents[F](rows))
+                StreamingXmlWriter.worksheetEvents[F](rows, config.formulaInjectionPolicy))
                 .through(xml.render.raw())
                 .through(fs2.text.utf8.encode)
                 .chunks
@@ -286,7 +286,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                 ) ++
                   // Stream XML events → bytes → ZIP
                   (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
-                    StreamingXmlWriter.worksheetEvents[F](rows))
+                    StreamingXmlWriter.worksheetEvents[F](rows, config.formulaInjectionPolicy))
                     .through(xml.render.raw())
                     .through(fs2.text.utf8.encode)
                     .chunks

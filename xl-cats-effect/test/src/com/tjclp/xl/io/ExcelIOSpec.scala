@@ -9,6 +9,7 @@ import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
 
 /** Tests for Excel streaming API */
 class ExcelIOSpec extends CatsEffectSuite:
@@ -688,4 +689,99 @@ class ExcelIOSpec extends CatsEffectSuite:
         assert(size < 500_000, s"File size ($size) suggests poor compression")
       }
     }
+  }
+
+  // ========== Formula Injection Tests (TJC-339) ==========
+
+  tempDir.test("writeStreamTrue: WriterConfig.secure escapes formula injection") { dir =>
+    val excel = ExcelIO.instance[IO]
+
+    // Test data with potentially dangerous formula-like text
+    val rows = fs2.Stream.emits(List(
+      RowData(1, Map(
+        0 -> CellValue.Text("=SUM(A2:A10)"),      // Starts with =
+        1 -> CellValue.Text("+1234"),             // Starts with +
+        2 -> CellValue.Text("-dangerous"),        // Starts with -
+        3 -> CellValue.Text("@import"),           // Starts with @
+        4 -> CellValue.Text("Normal text")        // Normal text
+      ))
+    ))
+
+    val path = dir.resolve("streaming-injection.xlsx")
+
+    for
+      _ <- rows.through(excel.writeStreamTrue(path, "Data", 1, WriterConfig.secure)).compile.drain
+      wb <- IO(XlsxReader.read(path)).map(_.toOption.get)
+    yield
+      val sheet = wb.sheets.head
+
+      // Text starting with =, +, -, @ should be escaped with leading quote
+      sheet(ref"A1").value match
+        case CellValue.Text(t) => assertEquals(t, "'=SUM(A2:A10)", "= should be escaped")
+        case other => fail(s"Expected Text, got: $other")
+
+      sheet(ref"B1").value match
+        case CellValue.Text(t) => assertEquals(t, "'+1234", "+ should be escaped")
+        case other => fail(s"Expected Text, got: $other")
+
+      sheet(ref"C1").value match
+        case CellValue.Text(t) => assertEquals(t, "'-dangerous", "- should be escaped")
+        case other => fail(s"Expected Text, got: $other")
+
+      sheet(ref"D1").value match
+        case CellValue.Text(t) => assertEquals(t, "'@import", "@ should be escaped")
+        case other => fail(s"Expected Text, got: $other")
+
+      // Normal text should be unchanged
+      sheet(ref"E1").value match
+        case CellValue.Text(t) => assertEquals(t, "Normal text", "Normal text unchanged")
+        case other => fail(s"Expected Text, got: $other")
+  }
+
+  tempDir.test("writeStreamTrue: WriterConfig.default does not escape text") { dir =>
+    val excel = ExcelIO.instance[IO]
+
+    val rows = fs2.Stream.emits(List(
+      RowData(1, Map(
+        0 -> CellValue.Text("=SUM(A2:A10)"),
+        1 -> CellValue.Text("Normal text")
+      ))
+    ))
+
+    val path = dir.resolve("streaming-no-escape.xlsx")
+
+    for
+      _ <- rows.through(excel.writeStreamTrue(path, "Data", 1, WriterConfig.default)).compile.drain
+      wb <- IO(XlsxReader.read(path)).map(_.toOption.get)
+    yield
+      val sheet = wb.sheets.head
+
+      // With default config, text should NOT be escaped
+      sheet(ref"A1").value match
+        case CellValue.Text(t) => assertEquals(t, "=SUM(A2:A10)", "Should not escape with default")
+        case other => fail(s"Expected Text, got: $other")
+  }
+
+  tempDir.test("writeStreamsSeqTrue: WriterConfig.secure escapes across multiple sheets") { dir =>
+    val excel = ExcelIO.instance[IO]
+
+    val sheet1 = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("=DANGER"))))
+    val sheet2 = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("+EVIL"))))
+
+    val path = dir.resolve("streaming-multi-escape.xlsx")
+
+    for
+      _ <- excel.writeStreamsSeqTrue(path, Seq(("Sheet1", sheet1), ("Sheet2", sheet2)), WriterConfig.secure)
+      wb <- IO(XlsxReader.read(path)).map(_.toOption.get)
+    yield
+      // Both sheets should have escaped text
+      val s1 = wb.sheets.find(_.name.value == "Sheet1").get
+      s1(ref"A1").value match
+        case CellValue.Text(t) => assertEquals(t, "'=DANGER", "Sheet1 should be escaped")
+        case other => fail(s"Expected Text, got: $other")
+
+      val s2 = wb.sheets.find(_.name.value == "Sheet2").get
+      s2(ref"A1").value match
+        case CellValue.Text(t) => assertEquals(t, "'+EVIL", "Sheet2 should be escaped")
+        case other => fail(s"Expected Text, got: $other")
   }

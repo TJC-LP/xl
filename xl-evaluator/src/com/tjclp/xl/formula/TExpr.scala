@@ -1087,6 +1087,21 @@ object TExpr:
   ): TExpr[CellValue] =
     VLookup(lookup, RangeLocation.Local(table), colIndex, rangeLookup)
 
+  /**
+   * Smart constructor for VLOOKUP with explicit RangeLocation (supports cross-sheet lookups).
+   *
+   * Example: TExpr.vlookupWithLocation(TExpr.Lit("Widget A"),
+   * RangeLocation.CrossSheet(SheetName("Lookup"), CellRange("A1:D10")), TExpr.Lit(4),
+   * TExpr.Lit(false))
+   */
+  def vlookupWithLocation(
+    lookup: TExpr[?],
+    table: RangeLocation,
+    colIndex: TExpr[Int],
+    rangeLookup: TExpr[Boolean] = Lit(true)
+  ): TExpr[CellValue] =
+    VLookup(lookup, table, colIndex, rangeLookup)
+
   // Conditional aggregation function smart constructors
 
   /**

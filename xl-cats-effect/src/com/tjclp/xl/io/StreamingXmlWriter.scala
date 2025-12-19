@@ -4,7 +4,7 @@ import fs2.Stream
 import fs2.data.xml.*
 import fs2.data.xml.XmlEvent.*
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.ooxml.XmlUtil
+import com.tjclp.xl.ooxml.{FormulaInjectionPolicy, XmlUtil}
 
 /**
  * True streaming XML writer using fs2-data-xml for constant-memory writes.
@@ -45,6 +45,7 @@ object StreamingXmlWriter:
    *   - Text cells: adds xml:space="preserve" via QName(Some("xml"), "space") when needed
    *   - Whitespace preserved byte-for-byte for text with leading/trailing/double spaces
    *   - All events are well-formed and balance StartTag/EndTag
+   *   - Formula injection escaping applied when policy is Escape
    * DETERMINISTIC: Yes (pure transformation of inputs) ERROR CASES: None (total function over valid
    * CellValue)
    *
@@ -54,10 +55,17 @@ object StreamingXmlWriter:
    *   Row index (1-based for Excel compatibility)
    * @param value
    *   Cell value to serialize
+   * @param injectionPolicy
+   *   Formula injection escaping policy (default: None)
    * @return
    *   List of XML events representing the cell
    */
-  def cellToEvents(colIndex: Int, rowIndex: Int, value: CellValue): List[XmlEvent] =
+  def cellToEvents(
+    colIndex: Int,
+    rowIndex: Int,
+    value: CellValue,
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+  ): List[XmlEvent] =
     val ref = s"${columnToLetter(colIndex)}$rowIndex"
 
     val (cellType, valueEvents) = value match
@@ -66,8 +74,14 @@ object StreamingXmlWriter:
 
       case CellValue.Text(s) =>
         // <c r="A1" t="inlineStr"><is><t>text</t></is></c>
+        // Apply formula injection escaping if policy requires it
+        val escaped = injectionPolicy match
+          case FormulaInjectionPolicy.Escape => CellValue.escape(s)
+          case FormulaInjectionPolicy.None => s
         // Add xml:space="preserve" for text with leading/trailing/multiple spaces
-        val needsPreserve = XmlUtil.needsXmlSpacePreserve(s)
+        // Note: we check the escaped text because whitespace in the original (e.g., "  =formula")
+        // must still be preserved after escaping adds a leading quote (e.g., "'  =formula")
+        val needsPreserve = XmlUtil.needsXmlSpacePreserve(escaped)
         val tAttrs =
           if needsPreserve then
             List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
@@ -78,7 +92,7 @@ object StreamingXmlWriter:
           List(
             XmlEvent.StartTag(QName("is"), Nil, false),
             XmlEvent.StartTag(QName("t"), tAttrs, false),
-            XmlEvent.XmlString(s, false),
+            XmlEvent.XmlString(escaped, false),
             XmlEvent.EndTag(QName("t")),
             XmlEvent.EndTag(QName("is"))
           )
@@ -247,14 +261,17 @@ object StreamingXmlWriter:
         (if valueEvents.nonEmpty then List(XmlEvent.EndTag(QName("c"))) else Nil)
 
   /** Generate XML events for a row */
-  def rowToEvents(rowData: RowData): List[XmlEvent] =
+  def rowToEvents(
+    rowData: RowData,
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+  ): List[XmlEvent] =
     val rowAttrs = List(attr("r", rowData.rowIndex.toString))
 
     // Sort cells by column for deterministic output
     val cellEvents = rowData.cells.toList
       .sortBy(_._1)
       .flatMap { case (colIdx, value) =>
-        cellToEvents(colIdx, rowData.rowIndex, value)
+        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy)
       }
 
     if cellEvents.isEmpty then Nil // Skip empty rows
@@ -263,8 +280,18 @@ object StreamingXmlWriter:
         cellEvents :::
         XmlEvent.EndTag(QName("row")) :: Nil
 
-  /** Stream worksheet XML events with header/footer scaffolding */
-  def worksheetEvents[F[_]](rows: Stream[F, RowData]): Stream[F, XmlEvent] =
+  /**
+   * Stream worksheet XML events with header/footer scaffolding.
+   *
+   * @param rows
+   *   Stream of row data
+   * @param injectionPolicy
+   *   Formula injection escaping policy (default: None)
+   */
+  def worksheetEvents[F[_]](
+    rows: Stream[F, RowData],
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+  ): Stream[F, XmlEvent] =
     val header = List(
       XmlEvent.StartTag(
         QName("worksheet"),
@@ -283,5 +310,5 @@ object StreamingXmlWriter:
     )
 
     Stream.emits(header) ++
-      rows.flatMap(row => Stream.emits(rowToEvents(row))) ++
+      rows.flatMap(row => Stream.emits(rowToEvents(row, injectionPolicy))) ++
       Stream.emits(footer)

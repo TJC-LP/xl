@@ -125,3 +125,41 @@ class IndexedColorSpec extends FunSuite:
       case other =>
         fail(s"Expected Theme color, got: $other")
   }
+
+  test("00RRGGBB format (openpyxl) parses as opaque color (#354)") {
+    // openpyxl writes colors as 00RRGGBB where 00 doesn't mean transparent
+    // This is a format quirk - the 00 alpha should be treated as opaque (FF)
+    val xml = <color rgb="00FF0000"/>
+    val color = parseColorFromXml(xml)
+    color match
+      case Some(Color.Rgb(argb)) =>
+        val alpha = (argb >> 24) & 0xff
+        val rgb = argb & 0xffffff
+        assertEquals(rgb, 0xff0000, "Should parse red component correctly")
+        assertEquals(alpha, 0xff, "00 alpha should be treated as opaque (FF)")
+      case other =>
+        fail(s"Expected Rgb color, got: $other")
+  }
+
+  test("FFRRGGBB format parses with correct alpha") {
+    val xml = <color rgb="FFFF0000"/>
+    val color = parseColorFromXml(xml)
+    color match
+      case Some(Color.Rgb(argb)) =>
+        val alpha = (argb >> 24) & 0xff
+        assertEquals(alpha, 0xff, "FF alpha should remain FF")
+      case other =>
+        fail(s"Expected Rgb color, got: $other")
+  }
+
+  test("semi-transparent AARRGGBB format preserves alpha") {
+    // 80 = 50% opacity, should be preserved
+    val xml = <color rgb="80FF0000"/>
+    val color = parseColorFromXml(xml)
+    color match
+      case Some(Color.Rgb(argb)) =>
+        val alpha = (argb >> 24) & 0xff
+        assertEquals(alpha, 0x80, "50% alpha should be preserved")
+      case other =>
+        fail(s"Expected Rgb color, got: $other")
+  }

@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2025-12-18 (Cross-Sheet Formula Support - TJC-351)
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (24 functions + cross-sheet support); tables + benchmarks complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards).
+**Last Updated**: 2025-12-18 (Week 1 Bug Fixes - TJC-352, TJC-339, TJC-354)
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (24 functions + cross-sheet support); tables + benchmarks complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -182,9 +182,10 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - ✅ **Operators**: +, -, *, /, <, <=, >, >=, =, <>, &, AND, OR, NOT
 - ✅ **Scientific notation**: 1.5E10, 2.3E-7
 - ✅ **Round-trip**: parse ∘ print = id (property-tested)
-- ✅ **Cross-sheet formulas** (TJC-351 - 26 tests):
+- ✅ **Cross-sheet formulas** (TJC-351, TJC-352 - 30 tests):
   - Single cell refs: `=Sales!A1`, `=Data!B2`
-  - Range refs with SUM: `=SUM(Sales!A1:A10)`
+  - Range refs with aggregates: `=SUM(Sales!A1:A10)`, `=MIN(...)`, `=MAX(...)`, `=AVERAGE(...)`
+  - VLOOKUP with cross-sheet tables: `=VLOOKUP(A1,Lookup!A1:B10,2,FALSE)` (TJC-352)
   - Arithmetic: `=Sales!A1 + Revenue!B1`
   - Workbook-level cycle detection: `DependencyGraph.fromWorkbook`, `detectCrossSheetCycles`
 
@@ -193,7 +194,6 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - ⏳ Array formulas - Future work
 - ⏳ Structured references (Table[@Column]) - Requires WI-10 integration
 - ⏳ Quoted sheet names in formulas (`='Q1 Report'!A1`) - Parser support pending
-- ⏳ Cross-sheet COUNT/AVERAGE/MIN/MAX - Only SUM implemented for cross-sheet ranges
 
 **No workarounds needed** - formula system is complete and production-ready!
 
@@ -413,8 +413,8 @@ factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
 ---
 
 #### 20. Formula Injection Guards ✅
-**Status**: Implemented (WI-30)
-**Impact**: Untrusted data can be safely written to Excel
+**Status**: Implemented (WI-30, TJC-339)
+**Impact**: Untrusted data can be safely written to Excel (both in-memory and streaming writes)
 
 **API** (`CellValue.escape()` and `WriterConfig.secure`):
 ```scala
@@ -425,9 +425,13 @@ CellValue.escape("-danger")   // Returns: "'-danger"
 CellValue.escape("@import")   // Returns: "'@import"
 CellValue.escape("Normal")    // Returns: "Normal" (unchanged)
 
-// Automatic escaping via WriterConfig.secure
+// Automatic escaping via WriterConfig.secure (in-memory writes)
 XlsxWriter.writeWith(workbook, path, WriterConfig.secure)
 // All text cells starting with =, +, -, @ are automatically escaped
+
+// Streaming writes also support formula injection escaping (TJC-339)
+excel.writeStreamTrue(path, "Sheet1", config = WriterConfig.secure)(rows)
+excel.writeStreamsSeqTrue(path, sheets, config = WriterConfig.secure)
 ```
 
 **Escaping Rules**:
@@ -829,4 +833,4 @@ Want to help implement these features? See:
 
 ---
 
-*Last updated by Claude Code session on 2025-12-18 (TJC-351 Cross-Sheet Formula Support)*
+*Last updated by Claude Code session on 2025-12-18 (Week 1 Bug Fixes: TJC-352 VLOOKUP cross-sheet, TJC-339 streaming formula injection, TJC-354 SVG styling)*
