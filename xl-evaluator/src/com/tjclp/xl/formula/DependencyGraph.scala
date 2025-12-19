@@ -279,6 +279,7 @@ object DependencyGraph:
       case TExpr.Lit(_) => Set.empty
       case TExpr.Today() => Set.empty
       case TExpr.Now() => Set.empty
+      case TExpr.Pi() => Set.empty
 
   /**
    * Get cells this cell depends on (precedents).
@@ -740,6 +741,7 @@ object DependencyGraph:
       case TExpr.Lit(_) => Set.empty
       case TExpr.Today() => Set.empty
       case TExpr.Now() => Set.empty
+      case TExpr.Pi() => Set.empty
 
       // Date calculation functions
       case TExpr.Eomonth(startDate, months) =>

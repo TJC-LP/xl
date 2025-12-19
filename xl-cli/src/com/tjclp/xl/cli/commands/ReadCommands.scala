@@ -12,7 +12,7 @@ import com.tjclp.xl.cli.helpers.{SheetResolver, ValueParser}
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
 import com.tjclp.xl.cli.raster.{BatikRasterizer, ImageMagick}
 import com.tjclp.xl.display.NumFmtFormatter
-import com.tjclp.xl.formula.{DependencyGraph, SheetEvaluator}
+import com.tjclp.xl.formula.{DependencyGraph, FormulaParser, SheetEvaluator}
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -330,6 +330,9 @@ object ReadCommands:
 
   /**
    * Evaluate formula without modifying sheet.
+   *
+   * For constant formulas (e.g., =1+1, =PI()*2) that don't reference any cells, both --file and
+   * --sheet are optional. For formulas that reference cells, a file and sheet must be provided.
    */
   def eval(
     wb: Workbook,
@@ -337,17 +340,50 @@ object ReadCommands:
     formulaStr: String,
     overrides: List[String]
   ): IO[String] =
-    for
-      sheet <- SheetResolver.requireSheet(wb, sheetOpt, "eval")
-      tempSheet <- applyOverrides(sheet, overrides)
-      formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
-      result <- IO.fromEither(
-        SheetEvaluator
-          .evaluateFormula(tempSheet)(formula, workbook = Some(wb))
-          .left
-          .map(e => new Exception(e.message))
-      )
-    yield Format.evalSuccess(formula, result, overrides)
+    val formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
+
+    // Check if formula needs a sheet by parsing and extracting dependencies
+    val needsSheet = FormulaParser.parse(formula) match
+      case Right(expr) =>
+        val deps = DependencyGraph.extractDependencies(expr)
+        // If formula has cell references or overrides are specified, require a sheet
+        deps.nonEmpty || overrides.nonEmpty
+      case Left(_) =>
+        // Parse error - let SheetEvaluator handle it (it will give a better error message)
+        false
+
+    if needsSheet then
+      // Formula references cells - require sheet
+      // Check if workbook is empty (no file provided)
+      if wb.sheets.isEmpty then
+        IO.raiseError(
+          new Exception(
+            "Formula references cells but no file provided. Use --file to specify an Excel file."
+          )
+        )
+      else
+        for
+          sheet <- SheetResolver.requireSheet(wb, sheetOpt, "eval")
+          tempSheet <- applyOverrides(sheet, overrides)
+          result <- IO.fromEither(
+            SheetEvaluator
+              .evaluateFormula(tempSheet)(formula, workbook = Some(wb))
+              .left
+              .map(e => new Exception(e.message))
+          )
+        yield Format.evalSuccess(formula, result, overrides)
+    else
+      // Constant formula - use empty sheet or provided sheet
+      val sheet = sheetOpt.getOrElse(Sheet("_eval"))
+      // For constant formulas, workbook context is not needed
+      val wbOpt = if wb.sheets.nonEmpty then Some(wb) else None
+      for result <- IO.fromEither(
+          SheetEvaluator
+            .evaluateFormula(sheet)(formula, workbook = wbOpt)
+            .left
+            .map(e => new Exception(e.message))
+        )
+      yield Format.evalSuccess(formula, result, overrides)
 
   // ==========================================================================
   // Private helpers

@@ -367,6 +367,15 @@ enum TExpr[A] derives CanEqual:
   case Now() extends TExpr[java.time.LocalDateTime]
 
   /**
+   * Mathematical constant PI: PI()
+   *
+   * Returns the mathematical constant pi (3.14159265358979...).
+   *
+   * Example: PI() = 3.141592653589793
+   */
+  case Pi() extends TExpr[BigDecimal]
+
+  /**
    * Construct date from components: DATE(year, month, day)
    *
    * @param year
@@ -1343,6 +1352,13 @@ object TExpr:
    * Example: TExpr.now()
    */
   def now(): TExpr[java.time.LocalDateTime] = Now()
+
+  /**
+   * PI mathematical constant.
+   *
+   * Example: TExpr.pi()
+   */
+  def pi(): TExpr[BigDecimal] = Pi()
 
   /**
    * DATE construct from year, month, day.

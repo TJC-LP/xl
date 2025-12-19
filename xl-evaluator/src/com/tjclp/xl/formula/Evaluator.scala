@@ -130,18 +130,37 @@ private class EvaluatorImpl extends Evaluator:
   ): Either[EvalError, A] =
     // @unchecked: GADT exhaustivity - PolyRef should be resolved before evaluation
     (expr: @unchecked) match
-      // ===== Defensive PolyRef Handling =====
-      // PolyRef should be converted to typed Ref during parsing, but if it reaches
-      // evaluation unconverted, provide a clear error instead of MatchError
+      // ===== PolyRef Handling (Same-Sheet Reference) =====
+      //
+      // PolyRef is a polymorphic cell reference like A1 that hasn't been resolved
+      // to a typed Ref during parsing. This happens when a formula is just a cell
+      // reference (e.g., =A1) without any operators to provide type context.
+      //
+      // We evaluate it directly by looking up the cell and returning its raw value,
+      // matching the behavior of SheetPolyRef for cross-sheet references.
+      //
       case TExpr.PolyRef(at, _) =>
-        // Cast to ARef to workaround Scala 3 inline method issue with pattern-matched values
-        val refStr = (at: ARef).toA1
-        Left(
-          EvalError.EvalFailed(
-            s"Unresolved cell reference $refStr. This indicates a parser bug - PolyRef should be resolved before evaluation.",
-            None
-          )
-        )
+        val cell = sheet(at: ARef)
+        // Return the cell value directly - extract raw value from CellValue
+        val result: Either[EvalError, Any] = cell.value match
+          case CellValue.Number(n) => Right(n)
+          case CellValue.Text(s) => Right(s)
+          case CellValue.Bool(b) => Right(b)
+          case CellValue.DateTime(dt) => Right(dt)
+          case CellValue.Formula(_, cached) =>
+            // Use cached value if available
+            cached match
+              case Some(CellValue.Number(n)) => Right(n)
+              case Some(CellValue.Text(s)) => Right(s)
+              case Some(CellValue.Bool(b)) => Right(b)
+              case Some(CellValue.DateTime(dt)) => Right(dt)
+              case Some(CellValue.RichText(rt)) => Right(rt.toPlainText)
+              case _ => Right(BigDecimal(0)) // Empty formula = 0
+          case CellValue.Error(err) =>
+            Left(EvalError.EvalFailed(s"Cell contains error: $err", None))
+          case CellValue.Empty => Right(BigDecimal(0)) // Empty = 0
+          case CellValue.RichText(rt) => Right(rt.toPlainText)
+        result.asInstanceOf[Either[EvalError, A]]
 
       // ===== Sheet-Qualified References (Cross-Sheet) =====
       //
@@ -416,6 +435,11 @@ private class EvaluatorImpl extends Evaluator:
       case TExpr.Now() =>
         // Now: get current date and time from clock
         Right(clock.now())
+
+      // ===== Math Constants =====
+      case TExpr.Pi() =>
+        // PI: mathematical constant
+        Right(BigDecimal(Math.PI))
 
       case TExpr.Date(year, month, day) =>
         // Date: construct date from components

@@ -178,6 +178,7 @@ object FunctionParser:
       lowerFunctionParser,
       todayFunctionParser,
       nowFunctionParser,
+      piFunctionParser,
       dateFunctionParser,
       yearFunctionParser,
       monthFunctionParser,
@@ -522,6 +523,21 @@ object FunctionParser:
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("NOW", pos, "0 arguments", s"${args.length} arguments")
+          )
+
+  // === Math Constants ===
+
+  /** PI function: PI() - returns mathematical constant pi */
+  given piFunctionParser: FunctionParser[Unit] with
+    def name: String = "PI"
+    def arity: Arity = Arity.none
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case Nil => scala.util.Right(TExpr.pi())
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments("PI", pos, "0 arguments", s"${args.length} arguments")
           )
 
   /** DATE function: DATE(year, month, day) */

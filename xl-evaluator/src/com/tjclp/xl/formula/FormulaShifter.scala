@@ -180,6 +180,8 @@ object FormulaShifter:
       // Date/Time functions - Today/Now have no refs to shift
       case t: Today => t.asInstanceOf[TExpr[A]]
       case n: Now => n.asInstanceOf[TExpr[A]]
+      // Math constants - no refs to shift
+      case p: Pi => p.asInstanceOf[TExpr[A]]
       case Date(year, month, day) =>
         Date(
           shiftInternal(year, colDelta, rowDelta),

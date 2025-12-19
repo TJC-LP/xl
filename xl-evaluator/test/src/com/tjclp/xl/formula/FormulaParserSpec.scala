@@ -855,7 +855,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("FunctionParser.allFunctions includes all 46 functions") {
+  test("FunctionParser.allFunctions includes all 47 functions") {
     val functions = FunctionParser.allFunctions
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -882,6 +882,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("ROUNDUP"))
     assert(functions.contains("ROUNDDOWN"))
     assert(functions.contains("ABS"))
+    // Math constants
+    assert(functions.contains("PI"))
     // Lookup functions
     assert(functions.contains("INDEX"))
     assert(functions.contains("MATCH"))
@@ -895,7 +897,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("NETWORKDAYS"))
     assert(functions.contains("WORKDAY"))
     assert(functions.contains("YEARFRAC"))
-    assertEquals(functions.length, 46)
+    assertEquals(functions.length, 47)
   }
 
   test("FunctionParser.lookup finds known functions") {
