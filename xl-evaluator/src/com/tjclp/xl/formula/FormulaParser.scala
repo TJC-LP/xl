@@ -73,7 +73,10 @@ object FormulaParser:
         case Right((expr, finalState)) =>
           // Ensure we consumed all input
           skipWhitespace(finalState) match
-            case s if s.pos >= s.input.length => Right(expr)
+            case s if s.pos >= s.input.length =>
+              // Resolve top-level PolyRef to typed Ref (default: numeric)
+              // This eliminates unsafe asInstanceOf casts in the evaluator
+              Right(resolveTopLevelPolyRef(expr))
             case s =>
               Left(
                 ParseError.UnexpectedChar(
@@ -83,6 +86,24 @@ object FormulaParser:
                 )
               )
         case Left(err) => Left(err)
+
+  /**
+   * Resolve top-level polymorphic references to typed references.
+   *
+   * When a formula is just a cell reference (e.g., "=A1" or "=Sheet1!A1"), the parser returns a
+   * PolyRef/SheetPolyRef with no static type information. This function converts these to typed
+   * Ref/SheetRef with a resolved value decoder that:
+   *   - Extracts cached values from Formula cells
+   *   - Converts Empty cells to Number(0)
+   *   - Returns other cell types as-is
+   *
+   * This resolution eliminates unsafe asInstanceOf casts in the evaluator by ensuring all cell
+   * references are properly typed before evaluation. The resolved value decoder matches Excel's
+   * behavior where standalone cell references return the cell's effective value.
+   */
+  private def resolveTopLevelPolyRef(expr: TExpr[?]): TExpr[?] = expr match
+    case _: TExpr.PolyRef | _: TExpr.SheetPolyRef => TExpr.asResolvedValueExpr(expr)
+    case other => other
 
   /**
    * Parser state - tracks position in input string.

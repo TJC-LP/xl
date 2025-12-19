@@ -54,10 +54,10 @@ class AnchorSpec extends FunSuite:
     assert(result.isRight, s"Parse failed: $result")
     result.foreach { expr =>
       expr match
-        case TExpr.PolyRef(_, anchor) =>
+        case TExpr.Ref(_, anchor, _) => // PolyRef resolved to typed Ref
           assertEquals(anchor, Anchor.Relative)
         case other =>
-          fail(s"Expected PolyRef, got $other")
+          fail(s"Expected Ref, got $other")
     }
 
   test("FormulaParser: parse absolute column $A1"):
@@ -65,10 +65,10 @@ class AnchorSpec extends FunSuite:
     assert(result.isRight, s"Parse failed: $result")
     result.foreach { expr =>
       expr match
-        case TExpr.PolyRef(_, anchor) =>
+        case TExpr.Ref(_, anchor, _) => // PolyRef resolved to typed Ref
           assertEquals(anchor, Anchor.AbsCol)
         case other =>
-          fail(s"Expected PolyRef, got $other")
+          fail(s"Expected Ref, got $other")
     }
 
   test("FormulaParser: parse absolute row A$1"):
@@ -76,10 +76,10 @@ class AnchorSpec extends FunSuite:
     assert(result.isRight, s"Parse failed: $result")
     result.foreach { expr =>
       expr match
-        case TExpr.PolyRef(_, anchor) =>
+        case TExpr.Ref(_, anchor, _) => // PolyRef resolved to typed Ref
           assertEquals(anchor, Anchor.AbsRow)
         case other =>
-          fail(s"Expected PolyRef, got $other")
+          fail(s"Expected Ref, got $other")
     }
 
   test("FormulaParser: parse absolute both $A$1"):
@@ -87,10 +87,10 @@ class AnchorSpec extends FunSuite:
     assert(result.isRight, s"Parse failed: $result")
     result.foreach { expr =>
       expr match
-        case TExpr.PolyRef(_, anchor) =>
+        case TExpr.Ref(_, anchor, _) => // PolyRef resolved to typed Ref
           assertEquals(anchor, Anchor.Absolute)
         case other =>
-          fail(s"Expected PolyRef, got $other")
+          fail(s"Expected Ref, got $other")
     }
 
   test("FormulaParser: parse mixed anchors in formula"):
