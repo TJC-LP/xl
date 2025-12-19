@@ -96,11 +96,8 @@ object CairoSvg extends Rasterizer:
         val formatArg = format match
           case RasterFormat.Png => "png"
           case RasterFormat.Pdf => "pdf"
-          case RasterFormat.Jpeg(_) =>
-            // cairosvg doesn't support JPEG directly
-            // Let the chain try another rasterizer
-            "png"
-          case RasterFormat.WebP => "png" // unreachable
+          case RasterFormat.Jpeg(_) => "png" // cairosvg doesn't support JPEG; fallback to PNG
+          case RasterFormat.WebP => "png" // unreachable: WebP rejected above
 
         findInvocation.flatMap {
           case None =>

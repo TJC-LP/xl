@@ -58,8 +58,8 @@ object RsvgConvert extends Rasterizer:
         val formatArg = format match
           case RasterFormat.Png => "png"
           case RasterFormat.Pdf => "pdf"
-          case RasterFormat.Jpeg(_) => "png" // unreachable
-          case RasterFormat.WebP => "png" // unreachable
+          case RasterFormat.Jpeg(_) => "png" // unreachable: rejected above
+          case RasterFormat.WebP => "png" // unreachable: rejected above
 
         isAvailable.flatMap {
           case false =>

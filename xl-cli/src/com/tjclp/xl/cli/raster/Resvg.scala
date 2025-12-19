@@ -3,7 +3,7 @@ package com.tjclp.xl.cli.raster
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
-import cats.effect.IO
+import cats.effect.{IO, Resource}
 import fs2.io.process.{ProcessBuilder, Processes}
 
 /**
@@ -63,11 +63,16 @@ object Resvg extends Rasterizer:
 
           case true =>
             // resvg requires file paths, so write SVG to temp file
-            IO.blocking {
-              val tempSvg = Files.createTempFile("xl-resvg-", ".svg")
-              Files.write(tempSvg, svg.getBytes(StandardCharsets.UTF_8))
-              tempSvg
-            }.flatMap { tempSvg =>
+            // Use Resource to ensure cleanup even if spawn fails
+            val tempFileResource = Resource.make(
+              IO.blocking {
+                val tempSvg = Files.createTempFile("xl-resvg-", ".svg")
+                Files.write(tempSvg, svg.getBytes(StandardCharsets.UTF_8))
+                tempSvg
+              }
+            )(path => IO.blocking(Files.deleteIfExists(path)).void)
+
+            tempFileResource.use { tempSvg =>
               // Build command:
               // resvg --dpi 144 input.svg output.png
               val args = List(
@@ -93,7 +98,6 @@ object Resvg extends Rasterizer:
                         )
                   yield ()
                 }
-                .guarantee(IO.blocking(Files.deleteIfExists(tempSvg)).void)
             }
         }
       case _ =>
