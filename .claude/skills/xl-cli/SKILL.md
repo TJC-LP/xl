@@ -331,12 +331,12 @@ xl -f data.xlsx -o out.xlsx col C --hide
 | csv | `--format csv` | Add `--show-labels` for headers |
 | html | `--format html` | Inline CSS |
 | svg | `--format svg` | Vector |
-| png/jpeg/pdf | `--format <fmt> --raster-output <path>` | Batik (built-in) |
+| png/jpeg/pdf | `--format <fmt> --raster-output <path>` | Auto fallback (Batik/cairosvg/rsvg/ImageMagick) |
 | webp | `--format webp --raster-output <path>` | Requires ImageMagick |
 
 See [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) for detailed specs.
 
-**Raster options**: `--dpi <n>`, `--quality <n>`, `--show-labels`, `--use-imagemagick`
+**Raster options**: `--dpi <n>`, `--quality <n>`, `--show-labels`, `--rasterizer <name>`
 
 ```bash
 # Visual analysis (Claude vision)
@@ -421,7 +421,7 @@ xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
 | `--quality <n>` | JPEG quality (default: 90) |
 | `--gridlines` | Show cell gridlines in SVG |
 | `--print-scale` | Apply print scaling |
-| `--use-imagemagick` | Use ImageMagick instead of Batik for rasterization |
+| `--rasterizer <name>` | Force specific rasterizer: batik, cairosvg, rsvg-convert, resvg, imagemagick |
 
 ### Search Options
 

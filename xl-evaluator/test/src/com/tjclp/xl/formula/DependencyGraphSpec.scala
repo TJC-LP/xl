@@ -546,3 +546,68 @@ class DependencyGraphSpec extends FunSuite:
     val graph = DependencyGraph.fromSheet(sheet)
     assertEquals(DependencyGraph.dependents(graph, ref"A1"), Set(ref"B1", ref"C1"))
   }
+
+  // ===== Transitive Dependencies Tests (6 tests) =====
+
+  test("transitiveDependencies: empty set returns empty") {
+    val graph = DependencyGraph(Map.empty, Map.empty)
+    assertEquals(DependencyGraph.transitiveDependencies(graph, Set.empty), Set.empty[ARef])
+  }
+
+  test("transitiveDependencies: single node with no deps") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Formula("=42"))
+    val graph = DependencyGraph.fromSheet(sheet)
+    assertEquals(DependencyGraph.transitiveDependencies(graph, Set(ref"A1")), Set(ref"A1"))
+  }
+
+  test("transitiveDependencies: single hop") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"B1" -> CellValue.Formula("=A1*2")
+    )
+    val graph = DependencyGraph.fromSheet(sheet)
+    val result = DependencyGraph.transitiveDependencies(graph, Set(ref"B1"))
+    // B1 depends on A1
+    assertEquals(result, Set(ref"B1", ref"A1"))
+  }
+
+  test("transitiveDependencies: multi-hop chain") {
+    // A1 <- B1 <- C1 <- D1 (D1 transitively depends on A1)
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(5)),
+      ref"B1" -> CellValue.Formula("=A1*2"),
+      ref"C1" -> CellValue.Formula("=B1+10"),
+      ref"D1" -> CellValue.Formula("=C1*3")
+    )
+    val graph = DependencyGraph.fromSheet(sheet)
+    val result = DependencyGraph.transitiveDependencies(graph, Set(ref"D1"))
+    // D1 -> C1 -> B1 -> A1 (A1 is constant, not in graph dependencies)
+    assertEquals(result, Set(ref"D1", ref"C1", ref"B1", ref"A1"))
+  }
+
+  test("transitiveDependencies: diamond dependency") {
+    // D1 depends on both B1 and C1, both depend on A1
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"B1" -> CellValue.Formula("=A1+5"),
+      ref"C1" -> CellValue.Formula("=A1*2"),
+      ref"D1" -> CellValue.Formula("=B1+C1")
+    )
+    val graph = DependencyGraph.fromSheet(sheet)
+    val result = DependencyGraph.transitiveDependencies(graph, Set(ref"D1"))
+    // D1 -> B1, C1 -> A1
+    assertEquals(result, Set(ref"D1", ref"B1", ref"C1", ref"A1"))
+  }
+
+  test("transitiveDependencies: multiple starting points") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"B1" -> CellValue.Formula("=A1*2"),
+      ref"C1" -> CellValue.Number(BigDecimal(20)),
+      ref"D1" -> CellValue.Formula("=C1+5")
+    )
+    val graph = DependencyGraph.fromSheet(sheet)
+    val result = DependencyGraph.transitiveDependencies(graph, Set(ref"B1", ref"D1"))
+    // B1 -> A1, D1 -> C1
+    assertEquals(result, Set(ref"B1", ref"A1", ref"D1", ref"C1"))
+  }

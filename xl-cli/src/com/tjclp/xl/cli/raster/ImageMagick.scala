@@ -11,41 +11,13 @@ import fs2.io.process.{ProcessBuilder, Processes}
  *
  * Supports both ImageMagick 7+ (`magick` command) and ImageMagick 6 (`convert` command). Falls back
  * gracefully with installation instructions if neither is found.
+ *
+ * Note: ImageMagick's SVG rendering can be inconsistent. Consider using cairosvg or rsvg-convert
+ * for better SVG compatibility.
  */
-object ImageMagick:
+object ImageMagick extends Rasterizer:
 
-  /** Supported output formats */
-  sealed trait Format:
-    def extension: String
-    def magickFormat: String
-    def extraArgs: List[String]
-
-  object Format:
-    case object Png extends Format:
-      val extension = "png"
-      val magickFormat = "png"
-      val extraArgs = List.empty
-
-    case class Jpeg(quality: Int) extends Format:
-      val extension = "jpeg"
-      val magickFormat = "jpeg"
-      val extraArgs = List("-quality", quality.toString)
-
-    case object WebP extends Format:
-      val extension = "webp"
-      val magickFormat = "webp"
-      val extraArgs = List.empty
-
-    case object Pdf extends Format:
-      val extension = "pdf"
-      val magickFormat = "pdf"
-      val extraArgs = List.empty
-
-  /** Error indicating ImageMagick is not installed */
-  case class ImageMagickNotFound(message: String) extends Exception(message)
-
-  /** Error from ImageMagick conversion */
-  case class ConversionError(message: String, exitCode: Int) extends Exception(message)
+  val name: String = "ImageMagick"
 
   // Get the Processes instance for IO
   private given Processes[IO] = Processes.forAsync[IO]
@@ -72,8 +44,13 @@ object ImageMagick:
   private def isCommandAvailable(cmd: ImageMagickCommand): IO[Boolean] =
     Processes[IO]
       .spawn(ProcessBuilder(cmd.command, cmd.versionArgs))
-      .use(_.exitValue)
-      .map(_ == 0)
+      .use { process =>
+        for
+          _ <- process.stdout.compile.drain
+          _ <- process.stderr.compile.drain
+          exitCode <- process.exitValue
+        yield exitCode == 0
+      }
       .handleError(_ => false)
 
   /**
@@ -111,23 +88,28 @@ object ImageMagick:
   def convertSvgToRaster(
     svg: String,
     outputPath: Path,
-    format: Format,
+    format: RasterFormat,
     dpi: Int = 144
   ): IO[Unit] =
     findCommand.flatMap {
       case None =>
         IO.raiseError(
-          ImageMagickNotFound(
-            s"""ImageMagick not found. Install it to enable raster export:
-
-  macOS:   brew install imagemagick
-  Ubuntu:  sudo apt-get install imagemagick librsvg2-bin
-  Windows: https://imagemagick.org/script/download.php
-
-After installation, ensure 'magick' (v7+) or 'convert' (v6) is in your PATH."""
+          RasterError.RasterizerNotFound(
+            name,
+            """Install ImageMagick:
+              |  macOS:   brew install imagemagick
+              |  Ubuntu:  sudo apt-get install imagemagick
+              |  Windows: https://imagemagick.org/script/download.php""".stripMargin
           )
         )
       case Some(cmd) =>
+        // Map format to ImageMagick format string and extra args
+        val (magickFormat, extraArgs) = format match
+          case RasterFormat.Png => ("png", List.empty)
+          case RasterFormat.Jpeg(q) => ("jpeg", List("-quality", q.toString))
+          case RasterFormat.WebP => ("webp", List.empty)
+          case RasterFormat.Pdf => ("pdf", List.empty)
+
         // Build command args (same for both v6 and v7)
         // magick -density <dpi> -background white svg:- <format>:<output>
         // convert -density <dpi> -background white svg:- <format>:<output>
@@ -137,8 +119,8 @@ After installation, ensure 'magick' (v7+) or 'convert' (v6) is in your PATH."""
           "-background",
           "white", // SVG may have transparent background
           "svg:-" // Read SVG from stdin
-        ) ++ format.extraArgs ++ List(
-          s"${format.magickFormat}:${outputPath.toAbsolutePath}"
+        ) ++ extraArgs ++ List(
+          s"$magickFormat:${outputPath.toAbsolutePath}"
         )
 
         Processes[IO]
@@ -149,18 +131,15 @@ After installation, ensure 'magick' (v7+) or 'convert' (v6) is in your PATH."""
             // Write SVG to stdin, then read exit code and stderr
             for
               _ <- fs2.Stream.emits(svgBytes).through(process.stdin).compile.drain
+              // Always drain stderr to prevent hanging
+              stderr <- process.stderr.through(fs2.text.utf8.decode).compile.string
               exitCode <- process.exitValue
               _ <-
                 if exitCode == 0 then IO.unit
                 else
-                  process.stderr.through(fs2.text.utf8.decode).compile.string.flatMap { stderr =>
-                    IO.raiseError(
-                      ConversionError(
-                        s"ImageMagick conversion failed (exit $exitCode): $stderr",
-                        exitCode
-                      )
-                    )
-                  }
+                  IO.raiseError(
+                    RasterError.ConversionFailed(name, stderr, exitCode)
+                  )
             yield ()
           }
     }
@@ -175,11 +154,10 @@ After installation, ensure 'magick' (v7+) or 'convert' (v6) is in your PATH."""
         Processes[IO]
           .spawn(ProcessBuilder(cmd.command, cmd.versionArgs))
           .use { process =>
-            process.stdout
-              .through(fs2.text.utf8.decode)
-              .compile
-              .string
-              .map(_.linesIterator.nextOption)
+            for
+              versionOutput <- process.stdout.through(fs2.text.utf8.decode).compile.string
+              _ <- process.stderr.compile.drain
+            yield versionOutput.linesIterator.nextOption
           }
           .handleError(_ => None)
     }

@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.CellValue
 // SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
@@ -360,5 +360,127 @@ class SheetEvaluatorSpec extends FunSuite:
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 0)
+    }
+  }
+
+  // ===== evaluateForRange Tests (Targeted Range Evaluation) =====
+
+  test("evaluateForRange: empty range") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Formula("=10+5"),
+      ref"Z1" -> CellValue.Formula("=100*2")
+    )
+    // Range with no formulas
+    val range = CellRange(ref"B1", ref"C10")
+    val result = sheet.evaluateForRange(range)
+    assertEquals(result, Right(Map.empty[ARef, CellValue]))
+  }
+
+  test("evaluateForRange: single formula in range") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"B1" -> CellValue.Formula("=A1*2"),
+      ref"Z1" -> CellValue.Formula("=100*2") // Outside range, should NOT be evaluated
+    )
+    val range = CellRange(ref"A1", ref"B1")
+    val result = sheet.evaluateForRange(range)
+    assert(result.isRight)
+    result.foreach { results =>
+      assertEquals(results.size, 1)
+      assertEquals(results.get(ref"B1"), Some(CellValue.Number(BigDecimal(20))))
+      assert(!results.contains(ref"Z1"), "Formula outside range should not be evaluated")
+    }
+  }
+
+  test("evaluateForRange: only evaluates formulas in range") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(5)),
+      ref"A2" -> CellValue.Formula("=A1*2"),   // In range
+      ref"A3" -> CellValue.Formula("=A2+10"),  // Outside range
+      ref"B1" -> CellValue.Formula("=A1+100")  // Outside range
+    )
+    val range = CellRange(ref"A1", ref"A2")
+    val result = sheet.evaluateForRange(range)
+    assert(result.isRight)
+    result.foreach { results =>
+      assertEquals(results.size, 1)
+      assertEquals(results.get(ref"A2"), Some(CellValue.Number(BigDecimal(10))))
+      assert(!results.contains(ref"A3"), "A3 outside range should not be in results")
+      assert(!results.contains(ref"B1"), "B1 outside range should not be in results")
+    }
+  }
+
+  test("evaluateForRange: evaluates transitive dependencies outside range") {
+    // C1 is in range, depends on B1, which depends on A1 (both outside range)
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(5)),
+      ref"B1" -> CellValue.Formula("=A1*2"),   // Outside range but needed
+      ref"C1" -> CellValue.Formula("=B1+10")   // In range
+    )
+    val range = CellRange(ref"C1", ref"C1")
+    val result = sheet.evaluateForRange(range)
+    assert(result.isRight)
+    result.foreach { results =>
+      // Only C1 should be in results (in range), but B1 was evaluated to compute it
+      assertEquals(results.size, 1)
+      assertEquals(results.get(ref"C1"), Some(CellValue.Number(BigDecimal(20)))) // B1=10, C1=10+10=20
+    }
+  }
+
+  test("evaluateForRange: handles range with no formulas") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"A2" -> CellValue.Number(BigDecimal(20)),
+      ref"A3" -> CellValue.Text("Hello")
+    )
+    val range = CellRange(ref"A1", ref"A3")
+    val result = sheet.evaluateForRange(range)
+    assertEquals(result, Right(Map.empty[ARef, CellValue]))
+  }
+
+  test("evaluateForRange: detects circular references in dependencies") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Formula("=B1"),
+      ref"B1" -> CellValue.Formula("=A1"),
+      ref"C1" -> CellValue.Formula("=A1+10") // Depends on circular ref
+    )
+    val range = CellRange(ref"C1", ref"C1")
+    val result = sheet.evaluateForRange(range)
+    assert(result.isLeft)
+  }
+
+  test("evaluateForRange: complex dependency chain") {
+    // D1 = (A1 + B1) * C1 where each is a formula
+    val sheet = sheetWith(
+      ref"X1" -> CellValue.Number(BigDecimal(2)),
+      ref"A1" -> CellValue.Formula("=X1*5"),   // 10
+      ref"B1" -> CellValue.Formula("=X1+3"),   // 5
+      ref"C1" -> CellValue.Formula("=X1"),     // 2
+      ref"D1" -> CellValue.Formula("=(A1+B1)*C1") // (10+5)*2 = 30
+    )
+    val range = CellRange(ref"D1", ref"D1")
+    val result = sheet.evaluateForRange(range)
+    assert(result.isRight)
+    result.foreach { results =>
+      assertEquals(results.size, 1)
+      assertEquals(results.get(ref"D1"), Some(CellValue.Number(BigDecimal(30))))
+    }
+  }
+
+  test("evaluateForRange: SUM range dependency") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(1)),
+      ref"A2" -> CellValue.Number(BigDecimal(2)),
+      ref"A3" -> CellValue.Number(BigDecimal(3)),
+      ref"B1" -> CellValue.Formula("=SUM(A1:A3)"), // 6
+      ref"C1" -> CellValue.Formula("=B1*10"),      // 60
+      ref"Z1" -> CellValue.Formula("=999")         // Outside, should not be evaluated
+    )
+    val range = CellRange(ref"C1", ref"C1")
+    val result = sheet.evaluateForRange(range)
+    assert(result.isRight)
+    result.foreach { results =>
+      assertEquals(results.size, 1)
+      assertEquals(results.get(ref"C1"), Some(CellValue.Number(BigDecimal(60))))
     }
   }

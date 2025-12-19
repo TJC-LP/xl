@@ -81,7 +81,8 @@ object WriteCommands:
       (updatedSheet, cellCount) = refOrRange match
         case Left(ref) =>
           // Single cell: apply formula as-is, evaluate and cache result
-          val cachedValue = SheetEvaluator.evaluateFormula(targetSheet)(fullFormula).toOption
+          val cachedValue =
+            SheetEvaluator.evaluateFormula(targetSheet)(fullFormula, workbook = Some(wb)).toOption
           (targetSheet.put(ref, CellValue.Formula(formula, cachedValue)), 1)
         case Right(range) =>
           // Range: apply formula with shifting based on anchor modes
@@ -96,7 +97,8 @@ object WriteCommands:
             val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
             // Evaluate against current sheet state and cache result
             val fullShiftedFormula = s"=$shiftedFormula"
-            val cachedValue = SheetEvaluator.evaluateFormula(s)(fullShiftedFormula).toOption
+            val cachedValue =
+              SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
             s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
           }
           (sheet, cells.size)

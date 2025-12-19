@@ -154,13 +154,13 @@ object Main
         "Use values from this row as keys in JSON output (1-based row number)"
       )
       .orNone
-  private val useImageMagickOpt =
+  private val rasterizerOpt =
     Opts
-      .flag(
-        "use-imagemagick",
-        "Use ImageMagick for rasterization instead of Batik (requires magick/convert in PATH)"
+      .option[String](
+        "rasterizer",
+        "Force specific rasterizer: batik, cairosvg, rsvg-convert, resvg, imagemagick"
       )
-      .orFalse
+      .orNone
   private val sheetsFilterOpt =
     Opts
       .option[String]("sheets", "Comma-separated list of sheets to search (default: all)")
@@ -216,7 +216,7 @@ object Main
         rasterOutputOpt,
         skipEmptyOpt,
         headerRowOpt,
-        useImageMagickOpt
+        rasterizerOpt
       )
         .mapN(CliCommand.View.apply)
     }
@@ -576,7 +576,7 @@ object Main
           rasterOutput,
           skipEmpty,
           headerRow,
-          useImageMagick
+          rasterizer
         ) =>
       ReadCommands.view(
         wb,
@@ -594,7 +594,7 @@ object Main
         rasterOutput,
         skipEmpty,
         headerRow,
-        useImageMagick
+        rasterizer
       )
 
     case CliCommand.Cell(refStr, noStyle) =>

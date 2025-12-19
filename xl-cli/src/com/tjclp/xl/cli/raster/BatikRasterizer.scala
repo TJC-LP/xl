@@ -13,35 +13,42 @@ import org.apache.batik.transcoder.image.{ImageTranscoder, JPEGTranscoder, PNGTr
 /**
  * Pure-JVM SVG to raster image conversion using Apache Batik.
  *
- * This eliminates the external ImageMagick dependency, providing:
+ * This eliminates the external dependency on ImageMagick, providing:
  *   - Zero external dependencies for raster output
  *   - Consistent behavior across all platforms
  *   - Better error handling (no subprocess failures)
  *   - Works in headless environments
+ *
+ * Note: Batik requires AWT, which is not available in GraalVM native images. When running as a
+ * native image, the rasterizer chain will fall back to external tools (cairosvg, rsvg-convert,
+ * etc.).
  */
-object BatikRasterizer:
+object BatikRasterizer extends Rasterizer:
 
-  /** Supported output formats */
-  sealed trait Format:
-    def extension: String
-
-  object Format:
-    case object Png extends Format:
-      val extension = "png"
-
-    case class Jpeg(quality: Int = 90) extends Format:
-      val extension = "jpeg"
-
-    case object WebP extends Format:
-      val extension = "webp"
-
-    case object Pdf extends Format:
-      val extension = "pdf"
+  val name: String = "Batik"
 
   /** Error during rasterization */
   case class RasterizationError(message: String, cause: Option[Throwable] = None)
       extends Exception(message):
     cause.foreach(initCause)
+
+  /**
+   * Check if Batik rasterization is available.
+   *
+   * Batik is bundled in the classpath, but requires AWT which may not be available in native
+   * images. We do a simple probe to check if AWT classes can be loaded.
+   */
+  def isAvailable: IO[Boolean] =
+    IO.blocking {
+      try
+        // Try to load a basic AWT class to check availability
+        Class.forName("java.awt.image.BufferedImage")
+        true
+      catch
+        case _: UnsatisfiedLinkError => false
+        case _: NoClassDefFoundError => false
+        case _: ExceptionInInitializerError => false
+    }.handleError(_ => false)
 
   /**
    * Convert SVG string to raster format and write to file.
@@ -58,23 +65,18 @@ object BatikRasterizer:
   def convertSvgToRaster(
     svg: String,
     outputPath: Path,
-    format: Format,
+    format: RasterFormat,
     dpi: Int = 144
   ): IO[Unit] =
     format match
-      case Format.Png =>
+      case RasterFormat.Png =>
         convertToPng(svg, outputPath, dpi)
-      case Format.Jpeg(quality) =>
+      case RasterFormat.Jpeg(quality) =>
         convertToJpeg(svg, outputPath, dpi, quality)
-      case Format.WebP =>
-        // WebP not natively supported by Batik, fall back to PNG
-        // Could add webp-imageio library for native support
-        IO.raiseError(
-          RasterizationError(
-            "WebP format requires ImageMagick. Use --use-imagemagick flag or choose PNG/JPEG."
-          )
-        )
-      case Format.Pdf =>
+      case RasterFormat.WebP =>
+        // WebP not natively supported by Batik
+        IO.raiseError(RasterError.FormatNotSupported(name, format))
+      case RasterFormat.Pdf =>
         convertToPdf(svg, outputPath, dpi)
 
   /**
@@ -94,15 +96,17 @@ object BatikRasterizer:
 
         transcode(transcoder, svg, outputPath)
       catch
-        case e: UnsatisfiedLinkError if e.getMessage != null && e.getMessage.contains("awt") =>
+        case _: UnsatisfiedLinkError =>
           throw RasterizationError(
-            "PNG export requires AWT which is not available in GraalVM native image. " +
-              "Use --use-imagemagick flag for rasterization, or run via JVM (mill xl-cli.run)."
+            "PNG export requires AWT which is not available in GraalVM native image."
           )
-        case e: NoClassDefFoundError if e.getMessage != null && e.getMessage.contains("awt") =>
+        case _: NoClassDefFoundError =>
           throw RasterizationError(
-            "PNG export requires AWT which is not available in GraalVM native image. " +
-              "Use --use-imagemagick flag for rasterization, or run via JVM (mill xl-cli.run)."
+            "PNG export requires AWT which is not available in GraalVM native image."
+          )
+        case _: ExceptionInInitializerError =>
+          throw RasterizationError(
+            "PNG export requires AWT which is not available in GraalVM native image."
           )
     }.handleErrorWith {
       case e: RasterizationError => IO.raiseError(e)
@@ -133,15 +137,17 @@ object BatikRasterizer:
 
         transcode(transcoder, svg, outputPath)
       catch
-        case e: UnsatisfiedLinkError if e.getMessage != null && e.getMessage.contains("awt") =>
+        case _: UnsatisfiedLinkError =>
           throw RasterizationError(
-            "JPEG export requires AWT which is not available in GraalVM native image. " +
-              "Use --use-imagemagick flag for rasterization, or run via JVM (mill xl-cli.run)."
+            "JPEG export requires AWT which is not available in GraalVM native image."
           )
-        case e: NoClassDefFoundError if e.getMessage != null && e.getMessage.contains("awt") =>
+        case _: NoClassDefFoundError =>
           throw RasterizationError(
-            "JPEG export requires AWT which is not available in GraalVM native image. " +
-              "Use --use-imagemagick flag for rasterization, or run via JVM (mill xl-cli.run)."
+            "JPEG export requires AWT which is not available in GraalVM native image."
+          )
+        case _: ExceptionInInitializerError =>
+          throw RasterizationError(
+            "JPEG export requires AWT which is not available in GraalVM native image."
           )
     }.handleErrorWith {
       case e: RasterizationError => IO.raiseError(e)
@@ -174,9 +180,7 @@ object BatikRasterizer:
         transcode(transcoder, svg, outputPath)
       catch
         case _: ClassNotFoundException =>
-          throw RasterizationError(
-            "PDF format requires Apache FOP. Use --use-imagemagick flag or choose PNG/JPEG."
-          )
+          throw RasterizationError("PDF format requires Apache FOP library.")
     }.handleErrorWith {
       case e: RasterizationError => IO.raiseError(e)
       case e =>
@@ -199,8 +203,3 @@ object BatikRasterizer:
       },
       identity
     )
-
-  /**
-   * Check if Batik rasterization is available (always true since it's bundled).
-   */
-  def isAvailable: IO[Boolean] = IO.pure(true)
