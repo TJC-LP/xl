@@ -971,6 +971,28 @@ private class EvaluatorImpl extends Evaluator:
         yield result
 
       // ===== Arithmetic Range Functions =====
+      case TExpr.Sum(location) =>
+        // Sum: add all numeric values in range
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val sum = cells.foldLeft(BigDecimal(0)) { (acc, cell) =>
+            TExpr.decodeNumeric(cell).toOption.fold(acc)(acc + _)
+          }
+          Right(sum)
+        }
+
+      case TExpr.Count(location) =>
+        // Count: count numeric values in range
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val count = cells.count { cell =>
+            TExpr.decodeNumeric(cell).isRight
+          }
+          Right(count)
+        }
+
       case TExpr.Min(location) =>
         // Min: find minimum value in range (single-pass)
         // Supports both local and cross-sheet ranges via RangeLocation
@@ -1068,6 +1090,22 @@ private class EvaluatorImpl extends Evaluator:
                 result.asInstanceOf[Either[EvalError, A]]
 
       // ===== Cross-Sheet Aggregate Functions =====
+
+      case TExpr.SheetSum(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val sum = cells.foldLeft(BigDecimal(0)) { (acc, cell) =>
+                  TExpr.decodeNumeric(cell).toOption.fold(acc)(acc + _)
+                }
+                Right(sum)
 
       case TExpr.SheetMin(sheetName, range) =>
         workbook match

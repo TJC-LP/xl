@@ -549,7 +549,25 @@ enum TExpr[A] derives CanEqual:
     basis: TExpr[Int]
   ) extends TExpr[BigDecimal]
 
-  // Arithmetic range functions (MIN, MAX)
+  // Arithmetic range functions (SUM, COUNT, MIN, MAX, AVERAGE)
+
+  /**
+   * Sum of values in range: SUM(range) or SUM(Sheet!range)
+   *
+   * Sums all numeric values in range. Non-numeric cells are skipped (Excel-style).
+   *
+   * Example: SUM(A1:A10) = sum of numeric values in range
+   */
+  case Sum(range: TExpr.RangeLocation) extends TExpr[BigDecimal]
+
+  /**
+   * Count of numeric values in range: COUNT(range) or COUNT(Sheet!range)
+   *
+   * Counts cells containing numeric values. Non-numeric cells are skipped (Excel-style).
+   *
+   * Example: COUNT(A1:A10) = count of numeric values in range
+   */
+  case Count(range: TExpr.RangeLocation) extends TExpr[Int]
 
   /**
    * Minimum value in range: MIN(range) or MIN(Sheet!range)
@@ -578,6 +596,15 @@ enum TExpr[A] derives CanEqual:
   case Average(range: TExpr.RangeLocation) extends TExpr[BigDecimal]
 
   // Cross-sheet aggregate functions
+
+  /**
+   * Cross-sheet sum: SUM(Sheet!range)
+   *
+   * Sums numeric values in a range in another sheet.
+   *
+   * Example: SUM(Sales!A1:A10) = SheetSum(Sales, A1:A10)
+   */
+  case SheetSum(sheet: SheetName, range: CellRange) extends TExpr[BigDecimal]
 
   /**
    * Cross-sheet minimum value: MIN(Sheet!range)

@@ -144,6 +144,10 @@ object FormulaShifter:
           .asInstanceOf[TExpr[A]]
 
       // Arithmetic range functions (now using RangeLocation)
+      case Sum(range) =>
+        Sum(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Count(range) =>
+        Count(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case Min(range) =>
         Min(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case Max(range) =>
@@ -152,6 +156,8 @@ object FormulaShifter:
         Average(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
       // Cross-sheet aggregate functions
+      case SheetSum(sheet, range) =>
+        SheetSum(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case SheetMin(sheet, range) =>
         SheetMin(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case SheetMax(sheet, range) =>

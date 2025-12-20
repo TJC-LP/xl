@@ -130,6 +130,7 @@ object DependencyGraph:
       case TExpr.SheetPolyRef(_, _, _) => Set.empty
       case TExpr.SheetRange(_, _) => Set.empty
       case TExpr.SheetFoldRange(_, _, _, _, _) => Set.empty
+      case TExpr.SheetSum(_, _) => Set.empty
       case TExpr.SheetMin(_, _) => Set.empty
       case TExpr.SheetMax(_, _) => Set.empty
       case TExpr.SheetAverage(_, _) => Set.empty
@@ -271,6 +272,8 @@ object DependencyGraph:
         )
 
       // Range aggregate functions (direct enum cases)
+      case TExpr.Sum(range) => range.localCells
+      case TExpr.Count(range) => range.localCells
       case TExpr.Min(range) => range.localCells
       case TExpr.Max(range) => range.localCells
       case TExpr.Average(range) => range.localCells
@@ -663,6 +666,8 @@ object DependencyGraph:
         range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
       case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
         range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+      case TExpr.SheetSum(sheet, range) =>
+        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
       case TExpr.SheetMin(sheet, range) =>
         range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
       case TExpr.SheetMax(sheet, range) =>
@@ -772,6 +777,8 @@ object DependencyGraph:
       case TExpr.Day(date) => extractQualifiedDependencies(date, currentSheet)
 
       // Range functions (direct, not FoldRange)
+      case TExpr.Sum(range) => locationToQualifiedRefs(range, currentSheet)
+      case TExpr.Count(range) => locationToQualifiedRefs(range, currentSheet)
       case TExpr.Min(range) => locationToQualifiedRefs(range, currentSheet)
       case TExpr.Max(range) => locationToQualifiedRefs(range, currentSheet)
       case TExpr.Average(range) => locationToQualifiedRefs(range, currentSheet)

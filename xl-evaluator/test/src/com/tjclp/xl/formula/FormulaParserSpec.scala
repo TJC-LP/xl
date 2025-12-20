@@ -393,11 +393,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=SUM(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.FoldRange(range, zero: BigDecimal, _, _) =>
+      case TExpr.Sum(TExpr.RangeLocation.Local(range)) =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-        assertEquals(zero, BigDecimal(0)) // SUM starts with 0
-      case other => fail(s"Expected FoldRange with BigDecimal, got $other")
+      case other => fail(s"Expected Sum with Local range, got $other")
     }
   }
 
@@ -405,10 +404,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=COUNT(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.FoldRange(range, _, _, _) =>
+      case TExpr.Count(TExpr.RangeLocation.Local(range)) =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-      case other => fail(s"Expected FoldRange for COUNT, got $other")
+      case other => fail(s"Expected Count with Local range, got $other")
     }
   }
 
@@ -429,9 +428,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val countResult = FormulaParser.parse("=COUNT(A1:A10)")
     val avgResult = FormulaParser.parse("=AVERAGE(A1:A10)")
 
-    // SUM uses FoldRange, COUNT uses FoldRange, AVERAGE uses Average
+    // SUM uses Sum, COUNT uses Count, AVERAGE uses Average (all dedicated case classes)
     (sumResult, countResult, avgResult) match
-      case (Right(TExpr.FoldRange(_, _, _, _)), Right(TExpr.FoldRange(_, _, _, _)), Right(TExpr.Average(_))) =>
+      case (Right(TExpr.Sum(_)), Right(TExpr.Count(_)), Right(TExpr.Average(_))) =>
         () // Expected types
       case (Right(s), Right(c), Right(a)) =>
         fail(s"Unexpected types: SUM=${s.getClass.getSimpleName}, COUNT=${c.getClass.getSimpleName}, AVERAGE=${a.getClass.getSimpleName}")

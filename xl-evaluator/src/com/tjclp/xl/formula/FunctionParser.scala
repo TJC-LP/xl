@@ -219,7 +219,7 @@ object FunctionParser:
 
   // === Aggregate Functions ===
 
-  /** SUM function: SUM(range) */
+  /** SUM function: SUM(range) - uses dedicated Sum case with RangeLocation */
   given sumFunctionParser: FunctionParser[Unit] with
     def name: String = "SUM"
     def arity: Arity = Arity.one
@@ -227,24 +227,19 @@ object FunctionParser:
     def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
       args match
         case List(fold: TExpr.FoldRange[?, ?]) =>
-          scala.util.Right(fold) // Already created by parseRange
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.Sum(TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.SheetSum(sheet, range))
         case List(TExpr.SheetRange(sheet, range)) =>
-          // Cross-sheet range: create SheetFoldRange for SUM
-          scala.util.Right(
-            TExpr.SheetFoldRange(
-              sheet,
-              range,
-              BigDecimal(0),
-              (acc: BigDecimal, v: BigDecimal) => acc + v,
-              TExpr.decodeNumeric
-            )
-          )
+          scala.util.Right(TExpr.SheetSum(sheet, range))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("SUM", pos, "1 range argument", s"${args.length} arguments")
           )
 
-  /** COUNT function: COUNT(range) - uses unified Aggregate */
+  /** COUNT function: COUNT(range) - uses dedicated Count case with RangeLocation */
   given countFunctionParser: FunctionParser[Unit] with
     def name: String = "COUNT"
     def arity: Arity = Arity.one
@@ -254,7 +249,7 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(TExpr.count(range))
+              scala.util.Right(TExpr.Count(TExpr.RangeLocation.Local(range)))
         case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
           scala.util.Right(TExpr.SheetCount(sheet, range))
         case List(TExpr.SheetRange(sheet, range)) =>

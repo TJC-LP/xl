@@ -241,6 +241,12 @@ object FormulaPrinter:
             s"YEARFRAC(${printExpr(startDate, 0)}, ${printExpr(endDate, 0)}, ${printExpr(basis, 0)})"
 
       // Arithmetic range functions (now support cross-sheet via RangeLocation)
+      case TExpr.Sum(range) =>
+        s"SUM(${formatLocation(range)})"
+
+      case TExpr.Count(range) =>
+        s"COUNT(${formatLocation(range)})"
+
       case TExpr.Min(range) =>
         s"MIN(${formatLocation(range)})"
 
@@ -251,6 +257,9 @@ object FormulaPrinter:
         s"AVERAGE(${formatLocation(range)})"
 
       // Cross-sheet aggregate functions (legacy, kept for backward compatibility)
+      case TExpr.SheetSum(sheet, range) =>
+        s"SUM(${formatSheetName(sheet)}!${formatRange(range)})"
+
       case TExpr.SheetMin(sheet, range) =>
         s"MIN(${formatSheetName(sheet)}!${formatRange(range)})"
 
@@ -621,12 +630,18 @@ object FormulaPrinter:
             s"Workday(${printWithTypes(startDate)}, ${printWithTypes(days)})"
       case TExpr.Yearfrac(startDate, endDate, basis) =>
         s"Yearfrac(${printWithTypes(startDate)}, ${printWithTypes(endDate)}, ${printWithTypes(basis)})"
+      case TExpr.Sum(range) =>
+        s"Sum(${formatLocation(range)})"
+      case TExpr.Count(range) =>
+        s"Count(${formatLocation(range)})"
       case TExpr.Min(range) =>
         s"Min(${formatLocation(range)})"
       case TExpr.Max(range) =>
         s"Max(${formatLocation(range)})"
       case TExpr.Average(range) =>
         s"Average(${formatLocation(range)})"
+      case TExpr.SheetSum(sheet, range) =>
+        s"SheetSum(${formatSheetName(sheet)}!${formatRange(range)})"
       case TExpr.SheetMin(sheet, range) =>
         s"SheetMin(${formatSheetName(sheet)}!${formatRange(range)})"
       case TExpr.SheetMax(sheet, range) =>
