@@ -2,12 +2,13 @@ package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.api.{Sheet, Cell}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.addressing.{ARef, Row}
+import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.richtext.RichText
+import com.tjclp.xl.sheets.RowProperties
 import com.tjclp.xl.styles.Color
 import com.tjclp.xl.ooxml.SaxSupport.writeElem
+import java.util.Arrays
 import scala.xml.{NamespaceBinding, TopScope}
-import scala.collection.immutable.TreeMap
 
 /**
  * Direct SAX emission from domain model, bypassing intermediate OOXML types.
@@ -26,6 +27,17 @@ object DirectSaxEmitter:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
   private val nsX14ac = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
   private val nsMc = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+
+  private val cellComparator: java.util.Comparator[Cell] =
+    new java.util.Comparator[Cell]:
+      override def compare(a: Cell, b: Cell): Int =
+        val rowDiff = a.ref.row.index0 - b.ref.row.index0
+        if rowDiff != 0 then rowDiff else a.ref.col.index0 - b.ref.col.index0
+
+  private val rowPropsComparator: java.util.Comparator[(Int, RowProperties)] =
+    new java.util.Comparator[(Int, RowProperties)]:
+      override def compare(a: (Int, RowProperties), b: (Int, RowProperties)): Int =
+        Integer.compare(a._1, b._1)
 
   /**
    * Emit worksheet XML directly from domain Sheet.
@@ -149,19 +161,48 @@ object DirectSaxEmitter:
   ): Unit =
     writer.startElement("sheetData")
 
-    // Group cells by row index, using TreeMap for auto-sorted iteration
-    val cellsByRow = sheet.cells.groupBy(_._1.row.index1).to(TreeMap)
+    val sortedCells = sheet.cells.values.toArray
+    if sortedCells.length > 1 then Arrays.sort(sortedCells, cellComparator)
 
-    // Also include empty rows with properties
-    val allRowIndices =
-      (cellsByRow.keys ++ sheet.rowProperties.keys.map(_.index1)).toSeq.distinct.sorted
+    val rowProps = sheet.rowProperties.iterator.map { case (row, props) =>
+      (row.index1, props)
+    }.toArray
+    if rowProps.length > 1 then Arrays.sort(rowProps, rowPropsComparator)
 
-    allRowIndices.foreach { rowIdx =>
-      val cells = cellsByRow.getOrElse(rowIdx, Map.empty)
-      val rowProps = sheet.rowProperties.get(Row.from1(rowIdx))
+    var cellIdx = 0
+    var rowPropsIdx = 0
 
-      emitRow(writer, rowIdx, cells, rowProps, sst, styleRemapping, escapeFormulas)
-    }
+    while cellIdx < sortedCells.length || rowPropsIdx < rowProps.length do
+      val nextCellRow =
+        if cellIdx < sortedCells.length then sortedCells(cellIdx).ref.row.index1
+        else Int.MaxValue
+      val nextPropRow =
+        if rowPropsIdx < rowProps.length then rowProps(rowPropsIdx)._1
+        else Int.MaxValue
+
+      val rowIdx = if nextCellRow <= nextPropRow then nextCellRow else nextPropRow
+      val rowPropsOpt =
+        if rowPropsIdx < rowProps.length && rowProps(rowPropsIdx)._1 == rowIdx then
+          val props = rowProps(rowPropsIdx)._2
+          rowPropsIdx += 1
+          Some(props)
+        else None
+
+      val rowStart = cellIdx
+      while cellIdx < sortedCells.length && sortedCells(cellIdx).ref.row.index1 == rowIdx do
+        cellIdx += 1
+
+      emitRow(
+        writer,
+        rowIdx,
+        sortedCells,
+        rowStart,
+        cellIdx,
+        rowPropsOpt,
+        sst,
+        styleRemapping,
+        escapeFormulas
+      )
 
     writer.endElement() // sheetData
 
@@ -171,8 +212,10 @@ object DirectSaxEmitter:
   private def emitRow(
     writer: SaxWriter,
     rowIdx: Int,
-    cells: Map[ARef, Cell],
-    rowProps: Option[com.tjclp.xl.sheets.RowProperties],
+    cells: Array[Cell],
+    start: Int,
+    end: Int,
+    rowProps: Option[RowProperties],
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int],
     escapeFormulas: Boolean
@@ -181,10 +224,9 @@ object DirectSaxEmitter:
     writer.writeAttribute("r", rowIdx.toString)
 
     // Calculate spans
-    if cells.nonEmpty then
-      val colIndices = cells.keys.map(_.col.index1).toSeq
-      val minCol = colIndices.minOption.getOrElse(1)
-      val maxCol = colIndices.maxOption.getOrElse(1)
+    if start < end then
+      val minCol = cells(start).ref.col.index1
+      val maxCol = cells(end - 1).ref.col.index1
       writer.writeAttribute("spans", s"$minCol:$maxCol")
 
     // Row properties
@@ -197,9 +239,10 @@ object DirectSaxEmitter:
     }
 
     // Emit cells sorted by column
-    cells.toSeq.sortBy(_._1.col.index0).foreach { case (ref, cell) =>
-      emitCell(writer, ref, cell, sst, styleRemapping, escapeFormulas)
-    }
+    var idx = start
+    while idx < end do
+      emitCell(writer, cells(idx), sst, styleRemapping, escapeFormulas)
+      idx += 1
 
     writer.endElement() // row
 
@@ -208,12 +251,12 @@ object DirectSaxEmitter:
    */
   private def emitCell(
     writer: SaxWriter,
-    ref: ARef,
     cell: Cell,
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int],
     escapeFormulas: Boolean
   ): Unit =
+    val ref = cell.ref
     // Determine cell type and prepare value
     val (cellType, preparedValue) = determineCellType(cell.value, sst, escapeFormulas)
 
