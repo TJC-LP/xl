@@ -29,19 +29,27 @@ import com.tjclp.xl.{*, given}
   println(s"Created /tmp/q1-report.xlsx with ${report.cellCount} cells")
 ```
 
+## Table of Contents
+
+- [Why XL?](#why-xl)
+- [Quick Start](#quick-start)
+- [Key Features](#key-features)
+- [CLI](#cli)
+- [Documentation](#documentation)
+- [Project Status](#project-status)
+- [Contributing](#contributing)
+
 ## Why XL?
 
-| | XL | Apache POI |
-|-|-----|-----------|
-| **Memory** | 10MB constant (streaming) | 800MB for 100k rows |
-| **Speed** | 35% faster reads | Baseline |
-| **Type Safety** | Compile-time validated | Runtime errors |
-| **Purity** | No side effects, immutable | Mutable everywhere |
-| **Output** | Byte-identical, diffable | Non-deterministic |
+- **Type-safe**: Compile-time validated cell references (`ref"A1"`) catch errors before runtime
+- **Pure functional**: Immutable data structures, no side effects, deterministic output
+- **Streaming**: O(1) memory for reads and writes — handle 1M+ rows without OOM
+- **Diffable output**: Canonical XML ordering produces byte-identical files for version control
+- **Modern Scala 3**: Opaque types, inline macros, Cats Effect integration
 
 ## Quick Start
 
-### Dependencies
+### Installation
 
 ```scala 3 ignore
 // build.mill — single dependency for everything
@@ -73,21 +81,7 @@ val updated = workbook.update("Sheet1", sheet =>
 Excel.write(updated, "output.xlsx")
 ```
 
-### Patch DSL (Declarative)
-
-```scala 3 ignore
-import com.tjclp.xl.{*, given}
-
-val sheet = Sheet("Sales")
-  .put(
-    "A1" -> "Product",  "B1" -> "Price",  "C1" -> "Qty",   "D1" -> "Total",
-    "A2" -> "Widget",   "B2" -> 19.99,    "C2" -> 100,     "D2" -> fx"=B2*C2",
-    "A3" -> "Gadget",   "B3" -> 29.99,    "C3" -> 50,      "D3" -> fx"=B3*C3"
-  )
-  .style("A1:D1" -> CellStyle.default.bold)
-```
-
-## Modern DSL
+## Key Features
 
 ### Compile-Time Validated References
 
@@ -101,99 +95,46 @@ val col = "A"; val row = "1"
 val dynamic = ref"$col$row"           // Either[XLError, RefType]
 ```
 
-### Runtime References (Pure FP)
-
-When cell references come from user input or configuration, XL returns `Either` to ensure errors are handled:
-
-```scala 3 ignore
-import com.tjclp.xl.{*, given}
-
-val userInput = "B5"  // From config, CLI, etc.
-
-// Pure approach: pattern match on result
-sheet.put(userInput -> 100) match
-  case Right(updated) => Excel.write(Workbook(updated), "out.xlsx")
-  case Left(error)    => println(s"Invalid ref: ${error.message}")
-
-// Escape hatch: .unsafe throws on invalid refs (for scripts/demos)
-import com.tjclp.xl.unsafe.*
-val updated = sheet.put(userInput -> 100).unsafe  // Throws if invalid
-```
-
-This design catches errors like `"ZZZ999999"` at the appropriate boundary — compile time for literals, explicit handling for runtime values.
-
 ### Formatted Literals
 
 ```scala 3 ignore
 val price = money"$$1,234.56"         // Currency format
 val growth = percent"12.5%"           // Percent format
 val date = date"2025-11-24"           // ISO date format
-val loss = accounting"($$500.00)"     // Accounting (negatives in parens)
 ```
 
 > **Note**: Use `$$` to escape `$` in string interpolators (Scala syntax requirement).
 
-### Fluent Style DSL
-
-```scala 3 ignore
-val header = CellStyle.default
-  .bold
-  .size(14.0)
-  .bgBlue
-  .white
-  .center
-  .bordered
-
-val currency = CellStyle.default.currency
-val percent = CellStyle.default.percent
-```
-
-### Rich Text (Multi-Format in One Cell)
+### Rich Text
 
 ```scala 3 ignore
 val text = "Error: ".bold.red + "Fix this!".underline
-sheet.put("A1" -> text)  // Literal ref → no .unsafe needed
+sheet.put("A1" -> text)  // Multiple formats in one cell
 ```
 
-### Patch Composition
+### Formula System
+
+**47 built-in functions** with type-safe evaluation and dependency analysis.
 
 ```scala 3 ignore
-val headerStyle = CellStyle.default.bold.size(14.0)
+// Add formulas to cells
+val sheet = Sheet("Model")
+  .put(
+    "A1" -> 100,
+    "A2" -> 200,
+    "A3" -> fx"=SUM(A1:A2)",      // Formula literal
+    "A4" -> fx"=A3 * 1.1"
+  )
 
-// Patches use := syntax for complex composition
-val patch =
-  (ref"A1" := "Title") ++
-  ref"A1".styled(headerStyle) ++
-  ref"A1:C1".merge
-
-sheet.put(patch)  // Patch application is infallible
-```
-
-## Formula System
-
-**30 built-in functions** with type-safe parsing, evaluation, and dependency analysis.
-
-```scala 3 ignore
-import com.tjclp.xl.formula.*
-
-// Parse formulas (supports $ anchoring)
-FormulaParser.parse("=SUM($A$1:B10)")      // Right(TExpr.FoldRange(...))
-FormulaParser.parse("=IF(A1>0, B1, C1)")   // Right(TExpr.If(...))
-
-// Evaluate with cycle detection
-import com.tjclp.xl.formula.SheetEvaluator.*
+// Evaluate all formulas (with cycle detection)
 sheet.evaluateWithDependencyCheck() match
-  case Right(results) => results.foreach(println)
-  case Left(error)    => println(s"Cycle: ${error.message}")
-
-// Analyze dependencies
-val graph = DependencyGraph.fromSheet(sheet)
-val precedents = DependencyGraph.precedents(graph, ref"B1")
+  case Right(results) => // Map[ARef, CellValue] of computed values
+  case Left(error)    => // Circular reference detected
 ```
 
-**Functions**: SUM, COUNT, AVERAGE, MIN, MAX, IF, AND, OR, NOT, CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER, TODAY, NOW, DATE, YEAR, MONTH, DAY, NPV, IRR, VLOOKUP, XLOOKUP, SUMIF, COUNTIF, SUMIFS, COUNTIFS, SUMPRODUCT
+**Functions**: SUM, AVERAGE, MIN, MAX, COUNT, IF, AND, OR, VLOOKUP, XLOOKUP, SUMIF, COUNTIF, NPV, IRR, TODAY, DATE, and [more](docs/STATUS.md).
 
-## Streaming (Large Files)
+### Streaming (Large Files)
 
 ```scala 3 ignore
 import com.tjclp.xl.io.ExcelIO
@@ -205,35 +146,9 @@ val excel = ExcelIO.instance[IO]
 // Read 1M+ rows without OOM
 excel.readStream(path).evalMap(row => process(row))
 
-// Write with SAX backend (fastest)
+// Write with SAX backend
 excel.writeFast(workbook, path)
 ```
-
-**Performance**: 100k rows in ~1.8s read, ~1.1s write, ~10MB memory
-
-## Examples
-
-Run examples with `scala-cli` (requires local publish first):
-
-```bash
-# Publish locally (one-time setup)
-./mill __.publishLocal
-
-# Run examples
-scala-cli run examples/quick-start.sc
-scala-cli run examples/financial-model.sc
-
-# Run the README itself!
-scala-cli README.md
-```
-
-| Example | Description |
-|---------|-------------|
-| `quick-start.sc` | Formula system in 5 minutes |
-| `financial-model.sc` | 3-year income statement |
-| `table-demo.sc` | Excel tables with AutoFilter |
-| `easy-mode-demo.sc` | Easy Mode showcase |
-| `dependency-analysis.sc` | Formula dependency graph |
 
 ## CLI
 
@@ -250,34 +165,41 @@ Stateless by design — each command is self-contained:
 | `xl -f data.xlsx sheets` | List all sheets with cell counts |
 | `xl -f data.xlsx view A1:D20` | View range as markdown table |
 | `xl -f data.xlsx cell A1` | Get cell details + dependencies |
-| `xl -f data.xlsx eval "=SUM(A1:A10)"` | Evaluate formula (what-if) |
-| `xl -f data.xlsx stats A1:A100` | Calculate min/max/sum/mean/count |
+| `xl -f data.xlsx eval "=SUM(A1:A10)"` | Evaluate formula |
 | `xl -f data.xlsx search "pattern"` | Regex search across cells |
 | `xl -f in.xlsx -o out.xlsx put B5 1000` | Write value to cell |
-| `xl -f in.xlsx -o out.xlsx putf C5 "=B5*1.1"` | Write formula to cell |
-
-```bash
-# Example: what-if analysis with temporary overrides
-xl -f model.xlsx eval "=A1*1.1" -w "A1=100"
-
-# Example: formula dragging with $ anchoring
-xl -f model.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
-```
 
 See [docs/plan/xl-cli.md](docs/plan/xl-cli.md) for full command reference.
+
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| **[docs/INDEX.md](docs/INDEX.md)** | Documentation navigation hub |
+| [docs/QUICK-START.md](docs/QUICK-START.md) | Get started in 5 minutes |
+| [docs/STATUS.md](docs/STATUS.md) | Current capabilities |
+| [examples/](examples/) | Runnable scala-cli examples |
+| [CLAUDE.md](CLAUDE.md) | Complete API reference |
+
+```bash
+# Run examples with scala-cli
+./mill __.publishLocal
+scala-cli run examples/quick_start.sc
+scala-cli run examples/financial_model.sc
+```
 
 ## Project Status
 
 | Feature | Status | Tests |
 |---------|--------|-------|
-| Core Domain | ✅ Production | 500+ |
-| OOXML Read/Write | ✅ Production | 145+ |
-| Streaming I/O | ✅ Production | 30+ |
-| Formula System | ✅ Production | 169+ |
-| Excel Tables | ✅ Production | 45+ |
-| **Total** | **731+ tests** | |
+| Core Domain | Production | 500+ |
+| OOXML Read/Write | Production | 145+ |
+| Streaming I/O | Production | 30+ |
+| Formula System (47 functions) | Production | 169+ |
+| Excel Tables | Production | 45+ |
+| **Total** | **800+ tests** | |
 
-See [STATUS.md](docs/STATUS.md) for detailed coverage and [roadmap.md](docs/plan/roadmap.md) for future work.
+See [docs/STATUS.md](docs/STATUS.md) for details and [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for known limitations.
 
 ## Development
 
@@ -285,18 +207,7 @@ See [STATUS.md](docs/STATUS.md) for detailed coverage and [roadmap.md](docs/plan
 ./mill __.compile          # Compile all
 ./mill __.test             # Run tests
 ./mill __.reformat         # Format code
-./mill xl-benchmarks.run   # Run JMH benchmarks
 ```
-
-## Documentation
-
-| Doc | Purpose |
-|-----|---------|
-| [CLAUDE.md](CLAUDE.md) | Complete API reference |
-| [STATUS.md](docs/STATUS.md) | Current capabilities |
-| [roadmap.md](docs/plan/roadmap.md) | Future work |
-| [examples/](examples/) | Runnable examples |
-| [LIMITATIONS.md](docs/LIMITATIONS.md) | Known limitations |
 
 ## Contributing
 
@@ -305,7 +216,7 @@ See [STATUS.md](docs/STATUS.md) for detailed coverage and [roadmap.md](docs/plan
 3. Ensure `./mill __.checkFormat` passes
 4. Submit PR with clear description
 
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
 
 ## License
 

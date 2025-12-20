@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
 **Last Updated**: 2025-12-18 (Week 1 Bug Fixes - TJC-352, TJC-339, TJC-354)
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (24 functions + cross-sheet support); tables + benchmarks complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (47 functions + cross-sheet support); tables + benchmarks complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -131,7 +131,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 #### 6. Formula System ✅ **PRODUCTION READY**
 **Status**: Complete (WI-07, WI-08, WI-09a/b/c/d + financial functions + TJC-351 cross-sheet formulas)
-**Features**: Parser, evaluator, 24 functions (including NPV, IRR, VLOOKUP), dependency graph, cycle detection, cross-sheet references
+**Features**: Parser, evaluator, 47 functions (including NPV, IRR, VLOOKUP, XLOOKUP), dependency graph, cycle detection, cross-sheet references
 **Plan**: [Formula System](plan/formula-system.md)
 **Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions + Cross-Sheet Formulas
 
@@ -167,7 +167,7 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 **Capabilities**:
 - ✅ **Parsing** (WI-07): Typed GADT AST (TExpr), FormulaParser, FormulaPrinter, round-trip laws (57 tests)
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics (58 tests)
-- ✅ **24 Built-in Functions** (WI-09a/b/c + financial functions - 78+ tests):
+- ✅ **47 Built-in Functions** (WI-09a/b/c + financial functions - 78+ tests):
   - **Aggregate** (5): SUM, COUNT, AVERAGE, MIN, MAX
   - **Logical** (4): IF, AND, OR, NOT
   - **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
@@ -715,7 +715,7 @@ See: [plan/23-security.md](plan/23-security.md)
 | **Streaming Read** | ✅ | ✅ | XL: 55k rows/s, POI: ~40k rows/s |
 | **Multi-sheet** | ✅ | ✅ | XL: Arbitrary, POI: Sequential |
 | **Styles** | ✅ | ✅ | XL: Full in-memory; streaming uses minimal default styles |
-| **Formulas (eval)** | ✅ | ✅ | XL: 24 functions, dependency graph, cycle detection |
+| **Formulas (eval)** | ✅ | ✅ | XL: 47 functions, dependency graph, cycle detection |
 | **Tables** | ✅ | ✅ | XL: Full table support with AutoFilter, structured refs |
 | **Charts** | ❌ | ✅ | POI: Full support |
 | **Drawings** | ❌ | ✅ | POI: Images/shapes |
@@ -740,7 +740,7 @@ See: [plan/23-security.md](plan/23-security.md)
 - Multi-sheet workbooks
 - Core cell types and rich text
 - Styling in in-memory workflows (full styles supported)
-- Formula evaluation (24 functions, dependency graph, cycle detection)
+- Formula evaluation (47 functions, dependency graph, cycle detection)
 - Excel Tables (structured data with AutoFilter, headers, styling)
 - Performance-critical workloads (benchmarked vs POI)
 

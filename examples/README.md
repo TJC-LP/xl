@@ -16,106 +16,110 @@ These examples use [scala-cli](https://scala-cli.virtuslab.org/) for easy standa
 
 2. **Publish XL modules locally**:
    ```bash
-   ./mill xl-core.publishLocal
-   ./mill xl-evaluator.publishLocal  # Required for formula-demo.sc
+   ./mill __.publishLocal
    ```
 
-### Running demo.sc
+### Running Examples
+
+```bash
+scala-cli run examples/<example-name>.sc
+```
+
+---
+
+## Example Catalog
+
+### Core API
+
+| Example | Description |
+|---------|-------------|
+| `demo.sc` | Core API showcase: addressing, formatting, DSL, rich text |
+| `easy_mode_demo.sc` | Easy Mode API: string refs, inline styling, simplified IO |
+
+### Formula System
+
+| Example | Description |
+|---------|-------------|
+| `quick_start.sc` | Formula system in 5 minutes: parsing, evaluation, round-trip |
+| `dependency_analysis.sc` | Formula dependency graph analysis and visualization |
+
+### Real-World Applications
+
+| Example | Description |
+|---------|-------------|
+| `financial_model.sc` | Complete 3-year income statement model |
+| `sales_pipeline.sc` | CRM analytics with conversion funnels |
+| `data_validation.sc` | Data quality validation patterns |
+| `table_demo.sc` | Excel tables with AutoFilter and styling |
+| `resize_demo.sc` | Row/column sizing and HTML/SVG export |
+
+### Test Utilities
+
+| Example | Description |
+|---------|-------------|
+| `readme_test.sc` | Validates README.md code examples work correctly |
+| `display_test.sc` | Tests display formatting utilities |
+| `dependency_test.sc` | Generates test files for CLI dependency tracking |
+
+---
+
+## Featured Examples
+
+### demo.sc
 
 ```bash
 scala-cli run examples/demo.sc
 ```
 
-The script showcases:
+Showcases:
 - Compile-time validated literals (`ref"A1"`, `money"$1,234.56"`)
 - Creating workbooks and sheets
 - Addressing operations (shift, intersects, contains)
 - Sheet-qualified references (`ref"Sales!A1"`)
-- Formatted literals (money, percent, date)
 - Rich text formatting
 
-### Running easy-mode-demo.sc
+### easy_mode_demo.sc
 
 ```bash
-scala-cli run examples/easy-mode-demo.sc
+scala-cli run examples/easy_mode_demo.sc
 ```
 
-The script showcases **Easy Mode API** (LLM-friendly ergonomics):
+Showcases **Easy Mode API** (LLM-friendly ergonomics):
 - String-based cell references (`.put("A1", value)`)
 - Template-first styling (`.style("A1:B1", style)`)
-- Inline styling (`.put("A1", value, style)`)
 - Safe lookups (`.cell("A1")` returns `Option`)
 - Rich text formatting (`"Error: ".red.bold + "Fix!"`)
 - Simplified IO (`Excel.read/write/modify`)
-- Structured exception handling (`XLException` wraps `XLError`)
 
-### Running formula-demo.sc
+### quick_start.sc
 
 ```bash
-# Publish required modules
-./mill xl-core.publishLocal && ./mill xl-evaluator.publishLocal
-
-# Run formula demo
-scala-cli run examples/formula-demo.sc
+scala-cli run examples/quick_start.sc
 ```
 
-The script showcases **Formula Parser** (WI-07):
+Showcases **Formula System**:
 - Parse Excel formula strings to typed AST (`FormulaParser`)
 - Build formulas programmatically with GADT type safety (`TExpr[A]`)
-- Round-trip verification (parse ∘ print = id)
-- Scientific notation support (1.5E10, 3.14E-5, etc.)
-- Error handling with position-aware diagnostics (`ParseError`)
-- Complex nested formulas (nested IF, AND/OR combinations)
-- Type safety demo (GADT prevents type mixing at compile time)
+- Round-trip verification (parse . print = id)
+- Scientific notation support
+- Error handling with position-aware diagnostics
 
-**Sections**:
-1. Basic parsing (literals, operators, functions)
-2. Programmatic construction (build TExpr manually)
-3. Round-trip verification (8 test formulas)
-4. Scientific notation (7 edge cases)
-5. Error handling (6 invalid formulas with diagnostics)
-6. Complex nested formulas (4 real-world examples)
-7. Type safety demo (GADT compile-time guarantees)
-
-**Note**: Formula evaluation (WI-08) is not yet implemented. This demo focuses on parsing and AST manipulation.
-
-### Running table-demo.sc
+### table_demo.sc
 
 ```bash
-# Publish required modules
-./mill xl-core.publishLocal && ./mill xl-ooxml.publishLocal
-
-# Run table demo
-scala-cli run examples/table-demo.sc
+scala-cli run examples/table_demo.sc
 ```
 
-The script showcases **Excel Table Support** (WI-10):
+Showcases **Excel Table Support**:
 - Create structured tables with `TableSpec.fromColumnNames`
 - Apply table styles (Light, Medium, Dark variants)
 - Enable AutoFilter for filterable data
 - Multiple tables on one sheet
-- Full round-trip (write → read → verify)
-- Table validation and operations
+- Full round-trip (write -> read -> verify)
 
-**Sections**:
-1. Creating a table with TableSpec
-2. Populating table with data (header + 10 data rows)
-3. Multiple tables on one sheet
-4. Writing to XLSX file
-5. Reading tables back and accessing properties
-6. Table style examples (Light, Medium, Dark, None)
-7. Table validation (valid vs invalid configurations)
-8. Table operations (get, has, remove)
+**Output**: Creates a real Excel file with formatted tables, AutoFilter, and styling.
 
-**Output**: Creates a real Excel file with formatted tables, AutoFilter, and styling. Open in Excel to see the tables with drop-down filters and banded rows!
-
-### Running patch-dsl-demo.sc
-
-```bash
-scala-cli run examples/patch-dsl-demo.sc
-```
-
-Demonstrates declarative sheet updates using the Patch DSL.
+---
 
 ## Adding New Examples
 
@@ -131,4 +135,4 @@ import com.tjclp.xl.{*, given}
   // Your code here
 ```
 
-Run with: `scala-cli run examples/my-example.sc`
+Run with: `scala-cli run examples/my_example.sc`

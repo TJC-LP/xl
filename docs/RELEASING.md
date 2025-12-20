@@ -52,11 +52,11 @@ git pull origin main
 ### 2. Create and Push Tag
 
 ```bash
-# Create annotated tag
-git tag -a v0.1.0 -m "Release 0.1.0"
+# Create annotated tag (replace X.Y.Z with actual version)
+git tag -a vX.Y.Z -m "Release X.Y.Z"
 
 # Push tag to trigger release workflow
-git push origin v0.1.0
+git push origin vX.Y.Z
 ```
 
 ### 3. Monitor Release
@@ -112,28 +112,31 @@ gpg --export-secret-key -a ABCD1234EFGH5678 | base64 | pbcopy
 ### Mill
 
 ```scala
+// Replace X.Y.Z with the latest version
 def ivyDeps = Seq(
-  mvn"com.tjclp::xl-core:0.1.0",
-  mvn"com.tjclp::xl-cats-effect:0.1.0"
+  mvn"com.tjclp::xl-core:X.Y.Z",
+  mvn"com.tjclp::xl-cats-effect:X.Y.Z"
 )
 ```
 
 ### SBT
 
 ```scala
+// Replace X.Y.Z with the latest version
 libraryDependencies ++= Seq(
-  "com.tjclp" %% "xl-core" % "0.1.0",
-  "com.tjclp" %% "xl-cats-effect" % "0.1.0"
+  "com.tjclp" %% "xl-core" % "X.Y.Z",
+  "com.tjclp" %% "xl-cats-effect" % "X.Y.Z"
 )
 ```
 
 ### Maven
 
 ```xml
+<!-- Replace X.Y.Z with the latest version -->
 <dependency>
   <groupId>com.tjclp</groupId>
   <artifactId>xl-core_3</artifactId>
-  <version>0.1.0</version>
+  <version>X.Y.Z</version>
 </dependency>
 ```
 
@@ -165,6 +168,6 @@ libraryDependencies ++= Seq(
 # Verify in local Ivy cache
 ls ~/.ivy2/local/com/tjclp/
 
-# Check generated POM
-cat ~/.ivy2/local/com/tjclp/xl-core_3/0.1.0-SNAPSHOT/poms/xl-core_3.pom
+# Check generated POM (version will be X.Y.Z-SNAPSHOT for local builds)
+cat ~/.ivy2/local/com/tjclp/xl-core_3/*/poms/xl-core_3.pom
 ```
