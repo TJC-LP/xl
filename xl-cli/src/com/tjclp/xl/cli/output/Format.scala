@@ -115,8 +115,8 @@ object Format:
     style: Option[CellStyle],
     comment: Option[Comment],
     hyperlink: Option[String],
-    dependencies: Vector[ARef],
-    dependents: Vector[ARef]
+    dependencies: Vector[String],
+    dependents: Vector[String]
   ): String =
     val sb = new StringBuilder
     sb.append(s"Cell: ${ref.toA1}\n")
@@ -156,8 +156,8 @@ object Format:
     hyperlink.foreach(h => sb.append(s"Hyperlink: $h\n"))
 
     // Dependencies and dependents
-    val depsStr = if dependencies.isEmpty then "(none)" else dependencies.map(_.toA1).mkString(", ")
-    val deptsStr = if dependents.isEmpty then "(none)" else dependents.map(_.toA1).mkString(", ")
+    val depsStr = if dependencies.isEmpty then "(none)" else dependencies.mkString(", ")
+    val deptsStr = if dependents.isEmpty then "(none)" else dependents.mkString(", ")
     sb.append(s"Dependencies: $depsStr\n")
     sb.append(s"Dependents: $deptsStr")
 
