@@ -142,6 +142,116 @@ class RefTypeSpec extends ScalaCheckSuite:
       case other => fail(s"Expected RefType.QualifiedCell with multiple escaped quotes, got $other")
   }
 
+  // ========== Full Column References (F:F, A:C) ==========
+
+  test("Parse full column reference: A:A") {
+    CellRange.parse("A:A") match
+      case Right(range) =>
+        assertEquals(range.colStart.index0, 0, "Column A = index 0")
+        assertEquals(range.colEnd.index0, 0, "Column A = index 0")
+        assertEquals(range.rowStart.index0, 0, "Full column starts at row 0")
+        assertEquals(range.rowEnd.index0, Row.MaxIndex0, "Full column ends at max row")
+      case Left(err) => fail(s"Failed to parse A:A: $err")
+  }
+
+  test("Parse full column range: A:C") {
+    CellRange.parse("A:C") match
+      case Right(range) =>
+        assertEquals(range.colStart.index0, 0, "Start column A = index 0")
+        assertEquals(range.colEnd.index0, 2, "End column C = index 2")
+        assertEquals(range.rowStart.index0, 0, "Full column starts at row 0")
+        assertEquals(range.rowEnd.index0, Row.MaxIndex0, "Full column ends at max row")
+        assertEquals(range.height, Row.MaxIndex0 + 1, "Full column spans all rows")
+      case Left(err) => fail(s"Failed to parse A:C: $err")
+  }
+
+  test("Parse full column reference with anchors: $A:$C") {
+    CellRange.parse("$A:$C") match
+      case Right(range) =>
+        assertEquals(range.colStart.index0, 0)
+        assertEquals(range.colEnd.index0, 2)
+        assertEquals(range.rowStart.index0, 0)
+        assertEquals(range.rowEnd.index0, Row.MaxIndex0)
+      case Left(err) => fail(s"Failed to parse $$A:$$C: $err")
+  }
+
+  test("Parse reversed full column: C:A normalizes to A:C") {
+    CellRange.parse("C:A") match
+      case Right(range) =>
+        assertEquals(range.colStart.index0, 0, "Normalized start column A = index 0")
+        assertEquals(range.colEnd.index0, 2, "Normalized end column C = index 2")
+      case Left(err) => fail(s"Failed to parse C:A: $err")
+  }
+
+  test("Parse max column reference: XFD:XFD") {
+    CellRange.parse("XFD:XFD") match
+      case Right(range) =>
+        assertEquals(range.colStart.index0, Column.MaxIndex0)
+        assertEquals(range.colEnd.index0, Column.MaxIndex0)
+      case Left(err) => fail(s"Failed to parse XFD:XFD: $err")
+  }
+
+  // ========== Full Row References (1:1, 1:5) ==========
+
+  test("Parse full row reference: 1:1") {
+    CellRange.parse("1:1") match
+      case Right(range) =>
+        assertEquals(range.rowStart.index0, 0, "Row 1 = index 0")
+        assertEquals(range.rowEnd.index0, 0, "Row 1 = index 0")
+        assertEquals(range.colStart.index0, 0, "Full row starts at column 0")
+        assertEquals(range.colEnd.index0, Column.MaxIndex0, "Full row ends at max column")
+      case Left(err) => fail(s"Failed to parse 1:1: $err")
+  }
+
+  test("Parse full row range: 1:5") {
+    CellRange.parse("1:5") match
+      case Right(range) =>
+        assertEquals(range.rowStart.index0, 0, "Start row 1 = index 0")
+        assertEquals(range.rowEnd.index0, 4, "End row 5 = index 4")
+        assertEquals(range.colStart.index0, 0, "Full row starts at column 0")
+        assertEquals(range.colEnd.index0, Column.MaxIndex0, "Full row ends at max column")
+        assertEquals(range.width, Column.MaxIndex0 + 1, "Full row spans all columns")
+      case Left(err) => fail(s"Failed to parse 1:5: $err")
+  }
+
+  test("Parse full row reference with anchors: $1:$5") {
+    CellRange.parse("$1:$5") match
+      case Right(range) =>
+        assertEquals(range.rowStart.index0, 0)
+        assertEquals(range.rowEnd.index0, 4)
+        assertEquals(range.colStart.index0, 0)
+        assertEquals(range.colEnd.index0, Column.MaxIndex0)
+      case Left(err) => fail(s"Failed to parse $$1:$$5: $err")
+  }
+
+  test("Parse reversed full row: 5:1 normalizes to 1:5") {
+    CellRange.parse("5:1") match
+      case Right(range) =>
+        assertEquals(range.rowStart.index0, 0, "Normalized start row 1 = index 0")
+        assertEquals(range.rowEnd.index0, 4, "Normalized end row 5 = index 4")
+      case Left(err) => fail(s"Failed to parse 5:1: $err")
+  }
+
+  test("Parse max row reference: 1048576:1048576") {
+    CellRange.parse("1048576:1048576") match
+      case Right(range) =>
+        assertEquals(range.rowStart.index0, Row.MaxIndex0)
+        assertEquals(range.rowEnd.index0, Row.MaxIndex0)
+      case Left(err) => fail(s"Failed to parse 1048576:1048576: $err")
+  }
+
+  test("Full row reference: row 0 is invalid") {
+    assert(CellRange.parse("0:0").isLeft, "Row 0 should be invalid")
+  }
+
+  test("Full row reference: row beyond max is invalid") {
+    assert(CellRange.parse("1048577:1048577").isLeft, "Row 1048577 should be invalid")
+  }
+
+  test("Full column reference: column beyond XFD is invalid") {
+    assert(CellRange.parse("XFE:XFE").isLeft, "Column XFE should be invalid")
+  }
+
   // ========== Edge Cases ==========
 
   test("Empty string fails") {

@@ -396,8 +396,12 @@ object FormulaParser:
         // String literal
         parseStringLiteral(s)
       case Some(c) if c.isDigit || c == '.' =>
-        // Number literal
-        parseNumberLiteral(s)
+        // Check for full row reference (e.g., 1:1, 1:5) before treating as number
+        // Row references are digits followed by ':' and more digits
+        if c.isDigit then parseNumberOrRowRange(s)
+        else
+          // Starts with '.' - definitely a number like .5
+          parseNumberLiteral(s)
       case Some(c) if c.isLetter =>
         // Function call, cell reference, or boolean literal
         parseFunctionOrRef(s)
@@ -429,6 +433,47 @@ object FormulaParser:
       case Some('"') => loop(state.advance(), new StringBuilder)
       case _ =>
         Left(ParseError.UnexpectedChar(state.input(state.pos), state.pos, "expected '\"'"))
+
+  /**
+   * Parse either a number literal or a full row range reference.
+   *
+   * Distinguishes between:
+   *   - Numbers: 42, 3.14, 1.5E10
+   *   - Row ranges: 1:1, 1:5 (digits followed by ':' and more digits)
+   */
+  private def parseNumberOrRowRange(state: ParserState): ParseResult[TExpr[?]] =
+    val startPos = state.pos
+
+    // First, read all leading digits
+    @tailrec
+    def readDigits(s: ParserState): ParserState =
+      s.currentChar match
+        case Some(c) if c.isDigit => readDigits(s.advance())
+        case _ => s
+
+    val afterDigits = readDigits(state)
+
+    // Check if followed by ':' and more digits (row range pattern)
+    afterDigits.currentChar match
+      case Some(':') =>
+        val afterColon = afterDigits.advance()
+        afterColon.currentChar match
+          case Some(c) if c.isDigit =>
+            // This is a row range like 1:5
+            val afterSecondDigits = readDigits(afterColon)
+            val rangeStr = state.input.substring(startPos, afterSecondDigits.pos)
+            CellRange.parse(rangeStr) match
+              case Right(range) =>
+                // Create FoldRange for SUM by default (function parsers will re-wrap)
+                Right((TExpr.sum(range), afterSecondDigits))
+              case Left(err) =>
+                Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
+          case _ =>
+            // Just digits followed by ':' but not more digits - treat as number
+            parseNumberLiteral(state)
+      case _ =>
+        // No ':' - definitely a number
+        parseNumberLiteral(state)
 
   /**
    * Parse number literal: 42, 3.14, .5, 1.5E10, 2.3E-7
