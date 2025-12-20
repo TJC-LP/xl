@@ -278,6 +278,9 @@ object DependencyGraph:
       case TExpr.Max(range) => range.localCells
       case TExpr.Average(range) => range.localCells
 
+      // Unified aggregate function (typeclass-based)
+      case TExpr.Aggregate(_, location) => location.localCells
+
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
       case TExpr.Today() => Set.empty
@@ -782,6 +785,9 @@ object DependencyGraph:
       case TExpr.Min(range) => locationToQualifiedRefs(range, currentSheet)
       case TExpr.Max(range) => locationToQualifiedRefs(range, currentSheet)
       case TExpr.Average(range) => locationToQualifiedRefs(range, currentSheet)
+
+      // Unified aggregate function (typeclass-based)
+      case TExpr.Aggregate(_, location) => locationToQualifiedRefs(location, currentSheet)
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty

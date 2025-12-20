@@ -219,7 +219,7 @@ object FunctionParser:
 
   // === Aggregate Functions ===
 
-  /** SUM function: SUM(range) - uses dedicated Sum case with RangeLocation */
+  /** SUM function: SUM(range) - uses unified Aggregate case with Aggregator typeclass */
   given sumFunctionParser: FunctionParser[Unit] with
     def name: String = "SUM"
     def arity: Arity = Arity.one
@@ -229,17 +229,17 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(TExpr.Sum(TExpr.RangeLocation.Local(range)))
+              scala.util.Right(TExpr.Aggregate("SUM", TExpr.RangeLocation.Local(range)))
         case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
-          scala.util.Right(TExpr.SheetSum(sheet, range))
+          scala.util.Right(TExpr.Aggregate("SUM", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case List(TExpr.SheetRange(sheet, range)) =>
-          scala.util.Right(TExpr.SheetSum(sheet, range))
+          scala.util.Right(TExpr.Aggregate("SUM", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("SUM", pos, "1 range argument", s"${args.length} arguments")
           )
 
-  /** COUNT function: COUNT(range) - uses dedicated Count case with RangeLocation */
+  /** COUNT function: COUNT(range) - uses unified Aggregate case with Aggregator typeclass */
   given countFunctionParser: FunctionParser[Unit] with
     def name: String = "COUNT"
     def arity: Arity = Arity.one
@@ -249,11 +249,11 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(TExpr.Count(TExpr.RangeLocation.Local(range)))
+              scala.util.Right(TExpr.Aggregate("COUNT", TExpr.RangeLocation.Local(range)))
         case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
-          scala.util.Right(TExpr.SheetCount(sheet, range))
+          scala.util.Right(TExpr.Aggregate("COUNT", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case List(TExpr.SheetRange(sheet, range)) =>
-          scala.util.Right(TExpr.SheetCount(sheet, range))
+          scala.util.Right(TExpr.Aggregate("COUNT", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments(
@@ -264,7 +264,7 @@ object FunctionParser:
             )
           )
 
-  /** AVERAGE function: AVERAGE(range) - uses direct Average case with RangeLocation */
+  /** AVERAGE function: AVERAGE(range) - uses unified Aggregate case with Aggregator typeclass */
   given averageFunctionParser: FunctionParser[Unit] with
     def name: String = "AVERAGE"
     def arity: Arity = Arity.one
@@ -274,11 +274,11 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(TExpr.average(range))
+              scala.util.Right(TExpr.Aggregate("AVERAGE", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.Aggregate("AVERAGE", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case List(TExpr.SheetRange(sheet, range)) =>
-          scala.util.Right(
-            TExpr.Average(TExpr.RangeLocation.CrossSheet(sheet, range))
-          )
+          scala.util.Right(TExpr.Aggregate("AVERAGE", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments(
@@ -289,7 +289,7 @@ object FunctionParser:
             )
           )
 
-  /** MIN function: MIN(range) - uses direct Min case with RangeLocation */
+  /** MIN function: MIN(range) - uses unified Aggregate case with Aggregator typeclass */
   given minFunctionParser: FunctionParser[Unit] with
     def name: String = "MIN"
     def arity: Arity = Arity.one
@@ -299,17 +299,17 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(TExpr.min(range))
+              scala.util.Right(TExpr.Aggregate("MIN", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.Aggregate("MIN", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case List(TExpr.SheetRange(sheet, range)) =>
-          scala.util.Right(
-            TExpr.Min(TExpr.RangeLocation.CrossSheet(sheet, range))
-          )
+          scala.util.Right(TExpr.Aggregate("MIN", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("MIN", pos, "1 range argument", s"${args.length} arguments")
           )
 
-  /** MAX function: MAX(range) - uses direct Max case with RangeLocation */
+  /** MAX function: MAX(range) - uses unified Aggregate case with Aggregator typeclass */
   given maxFunctionParser: FunctionParser[Unit] with
     def name: String = "MAX"
     def arity: Arity = Arity.one
@@ -319,11 +319,11 @@ object FunctionParser:
         case List(fold: TExpr.FoldRange[?, ?]) =>
           fold match
             case TExpr.FoldRange(range, _, _, _) =>
-              scala.util.Right(TExpr.max(range))
+              scala.util.Right(TExpr.Aggregate("MAX", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.Aggregate("MAX", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case List(TExpr.SheetRange(sheet, range)) =>
-          scala.util.Right(
-            TExpr.Max(TExpr.RangeLocation.CrossSheet(sheet, range))
-          )
+          scala.util.Right(TExpr.Aggregate("MAX", TExpr.RangeLocation.CrossSheet(sheet, range)))
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("MAX", pos, "1 range argument", s"${args.length} arguments")

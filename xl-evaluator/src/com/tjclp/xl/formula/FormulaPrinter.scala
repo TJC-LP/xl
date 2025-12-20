@@ -256,6 +256,10 @@ object FormulaPrinter:
       case TExpr.Average(range) =>
         s"AVERAGE(${formatLocation(range)})"
 
+      // Unified aggregate function (typeclass-based)
+      case TExpr.Aggregate(aggregatorId, location) =>
+        s"$aggregatorId(${formatLocation(location)})"
+
       // Cross-sheet aggregate functions (legacy, kept for backward compatibility)
       case TExpr.SheetSum(sheet, range) =>
         s"SUM(${formatSheetName(sheet)}!${formatRange(range)})"
@@ -640,6 +644,8 @@ object FormulaPrinter:
         s"Max(${formatLocation(range)})"
       case TExpr.Average(range) =>
         s"Average(${formatLocation(range)})"
+      case TExpr.Aggregate(aggregatorId, location) =>
+        s"Aggregate($aggregatorId, ${formatLocation(location)})"
       case TExpr.SheetSum(sheet, range) =>
         s"SheetSum(${formatSheetName(sheet)}!${formatRange(range)})"
       case TExpr.SheetMin(sheet, range) =>

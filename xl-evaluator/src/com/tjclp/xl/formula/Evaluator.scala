@@ -1041,6 +1041,26 @@ private class EvaluatorImpl extends Evaluator:
           else Right(sum / count)
         }
 
+      // ===== Unified Aggregate Function (Typeclass-based) =====
+      case TExpr.Aggregate(aggregatorId, location) =>
+        // Use Aggregator typeclass to evaluate any registered aggregate function
+        Aggregator.lookup(aggregatorId) match
+          case None =>
+            Left(EvalError.EvalFailed(s"Unknown aggregator: $aggregatorId", None))
+          case Some(agg) =>
+            Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+              val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+              // Fold over cells using the aggregator's combine function
+              val result = cells.foldLeft(agg.empty) { (acc, cell) =>
+                TExpr.decodeNumeric(cell) match
+                  case Right(value) => agg.combine(acc, value)
+                  case Left(_) if agg.skipNonNumeric => acc
+                  case Left(_) => acc // Skip non-numeric cells
+              }
+              // Finalize and return the result
+              Right(agg.finalize(result))
+            }
+
       // ===== Range Aggregation =====
       case foldExpr: TExpr.FoldRange[a, b] =>
         // FoldRange: iterate cells in range, apply step function with accumulator

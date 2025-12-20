@@ -642,6 +642,26 @@ enum TExpr[A] derives CanEqual:
    */
   case SheetCount(sheet: SheetName, range: CellRange) extends TExpr[Int]
 
+  /**
+   * Generic aggregate function over a range using the Aggregator typeclass.
+   *
+   * This case unifies all simple aggregate functions (SUM, COUNT, MIN, MAX, AVERAGE) into a single
+   * representation. The aggregatorId determines which Aggregator instance to use for evaluation.
+   *
+   * Benefits:
+   *   - Single pattern match case in Evaluator, FormulaPrinter, FormulaShifter, DependencyGraph
+   *   - Adding new aggregates only requires a new Aggregator given instance
+   *   - Automatically supports full row/column references via RangeLocation
+   *
+   * @param aggregatorId
+   *   The name of the aggregator (SUM, COUNT, MIN, MAX, AVERAGE)
+   * @param location
+   *   The range to aggregate (local or cross-sheet)
+   *
+   * Example: Aggregate("SUM", RangeLocation.Local(A1:A10))
+   */
+  case Aggregate(aggregatorId: String, location: TExpr.RangeLocation) extends TExpr[BigDecimal]
+
   // Financial functions
 
   /**

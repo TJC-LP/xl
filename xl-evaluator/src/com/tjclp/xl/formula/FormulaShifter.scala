@@ -155,6 +155,10 @@ object FormulaShifter:
       case Average(range) =>
         Average(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
+      // Unified aggregate function (typeclass-based)
+      case Aggregate(aggregatorId, location) =>
+        Aggregate(aggregatorId, shiftLocation(location, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+
       // Cross-sheet aggregate functions
       case SheetSum(sheet, range) =>
         SheetSum(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
