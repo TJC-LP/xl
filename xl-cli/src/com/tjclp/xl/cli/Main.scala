@@ -420,6 +420,7 @@ object Main
       "Aggregate" -> List(
         "SUM" -> "Sum of values in range",
         "COUNT" -> "Count numeric values",
+        "COUNTA" -> "Count non-empty cells",
         "AVERAGE" -> "Average of values",
         "MIN" -> "Minimum value",
         "MAX" -> "Maximum value"
@@ -483,7 +484,7 @@ object Main
     )
 
     val sb = new StringBuilder
-    sb.append("Supported Excel Functions (47 total)\n")
+    sb.append("Supported Excel Functions (48 total)\n")
     sb.append("=" * 40 + "\n\n")
 
     for (category, functions) <- categories do
