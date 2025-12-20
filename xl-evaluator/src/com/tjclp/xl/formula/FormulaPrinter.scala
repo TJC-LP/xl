@@ -185,6 +185,13 @@ object FormulaPrinter:
       case TExpr.Now() =>
         "NOW()"
 
+      // Date-to-serial converters (print transparently - internal conversion)
+      case TExpr.DateToSerial(expr) =>
+        printExpr(expr, precedence)
+
+      case TExpr.DateTimeToSerial(expr) =>
+        printExpr(expr, precedence)
+
       // Math constants
       case TExpr.Pi() =>
         "PI()"
@@ -580,6 +587,10 @@ object FormulaPrinter:
         "Today()"
       case TExpr.Now() =>
         "Now()"
+      case TExpr.DateToSerial(expr) =>
+        s"DateToSerial(${printWithTypes(expr)})"
+      case TExpr.DateTimeToSerial(expr) =>
+        s"DateTimeToSerial(${printWithTypes(expr)})"
       case TExpr.Pi() =>
         "Pi()"
       case TExpr.Date(year, month, day) =>

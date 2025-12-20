@@ -289,6 +289,26 @@ enum TExpr[A] derives CanEqual:
    */
   case ToInt(expr: TExpr[BigDecimal]) extends TExpr[Int]
 
+  /**
+   * Convert LocalDate to Excel serial number.
+   *
+   * Excel represents dates as the number of days since December 30, 1899. This enables date
+   * arithmetic like TODAY()+30.
+   *
+   * Example: DateToSerial(TODAY()) where TODAY() = 2025-12-20 → BigDecimal(46011)
+   */
+  case DateToSerial(expr: TExpr[java.time.LocalDate]) extends TExpr[BigDecimal]
+
+  /**
+   * Convert LocalDateTime to Excel serial number.
+   *
+   * Excel represents dates/times as days since epoch + fractional day for time. This enables
+   * datetime arithmetic like NOW()+0.5.
+   *
+   * Example: DateTimeToSerial(NOW()) where NOW() = 2025-12-20 12:00 → BigDecimal(46011.5)
+   */
+  case DateTimeToSerial(expr: TExpr[java.time.LocalDateTime]) extends TExpr[BigDecimal]
+
   // Text functions
 
   /**
@@ -1806,6 +1826,13 @@ object TExpr:
   def asNumericExpr(expr: TExpr[?]): TExpr[BigDecimal] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeNumeric)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeNumeric)
+    // Date functions return LocalDate/LocalDateTime - convert to Excel serial number
+    case today: Today => DateToSerial(today)
+    case date: Date => DateToSerial(date)
+    case edate: Edate => DateToSerial(edate)
+    case eomonth: Eomonth => DateToSerial(eomonth)
+    case workday: Workday => DateToSerial(workday)
+    case now: Now => DateTimeToSerial(now)
     case other =>
       other.asInstanceOf[TExpr[BigDecimal]] // Safe: non-PolyRef already has correct type
 
@@ -1844,6 +1871,94 @@ object TExpr:
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeResolvedValue)
     case other =>
       other.asInstanceOf[TExpr[CellValue]] // Safe: non-PolyRef already has correct type
+
+  // ===== Date Function Detection =====
+  // Used by CLI to auto-apply date formatting when writing formulas
+
+  /**
+   * Check if expression contains any date-returning functions.
+   *
+   * Used to determine if a formula result should be formatted as a date in Excel. Recursively
+   * checks compound expressions (arithmetic, conditionals, etc.).
+   */
+  def containsDateFunction(expr: TExpr[?]): Boolean = expr match
+    // Date-returning functions
+    case _: Today | _: Now | _: Date | _: Eomonth | _: Edate | _: Workday => true
+    // Date-to-serial wrappers (for arithmetic)
+    case DateToSerial(_) | DateTimeToSerial(_) => true
+    // Arithmetic - recursively check operands
+    case Add(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Sub(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Mul(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Div(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    // Conditionals
+    case If(c, t, e) =>
+      containsDateFunction(c) || containsDateFunction(t) || containsDateFunction(e)
+    // Boolean operators
+    case And(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Or(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Not(x) => containsDateFunction(x)
+    // Comparisons
+    case Eq(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Neq(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Lt(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Lte(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Gt(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    case Gte(l, r) => containsDateFunction(l) || containsDateFunction(r)
+    // Error handling
+    case Iferror(v, e) => containsDateFunction(v) || containsDateFunction(e)
+    case Iserror(v) => containsDateFunction(v)
+    // Rounding functions
+    case Round(v, _) => containsDateFunction(v)
+    case RoundUp(v, _) => containsDateFunction(v)
+    case RoundDown(v, _) => containsDateFunction(v)
+    case Abs(v) => containsDateFunction(v)
+    // Type conversion
+    case ToInt(e) => containsDateFunction(e)
+    // Default: no date function
+    case _ => false
+
+  /**
+   * Check if expression contains time-returning functions (NOW).
+   *
+   * Used to distinguish between Date format (m/d/yy) and DateTime format (m/d/yy h:mm). If true,
+   * use DateTime format; otherwise use Date format.
+   */
+  def containsTimeFunction(expr: TExpr[?]): Boolean = expr match
+    // Time-returning functions
+    case _: Now => true
+    case DateTimeToSerial(_) => true
+    // Arithmetic - recursively check operands
+    case Add(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Sub(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Mul(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Div(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    // Conditionals
+    case If(c, t, e) =>
+      containsTimeFunction(c) || containsTimeFunction(t) || containsTimeFunction(e)
+    // Boolean operators
+    case And(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Or(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Not(x) => containsTimeFunction(x)
+    // Comparisons
+    case Eq(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Neq(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Lt(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Lte(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Gt(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    case Gte(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
+    // Error handling
+    case Iferror(v, e) => containsTimeFunction(v) || containsTimeFunction(e)
+    case Iserror(v) => containsTimeFunction(v)
+    // Rounding functions
+    case Round(v, _) => containsTimeFunction(v)
+    case RoundUp(v, _) => containsTimeFunction(v)
+    case RoundDown(v, _) => containsTimeFunction(v)
+    case Abs(v) => containsTimeFunction(v)
+    // Type conversion
+    case ToInt(e) => containsTimeFunction(e)
+    // Default: no time function
+    case _ => false
 
   // Extension methods for ergonomic formula construction
 

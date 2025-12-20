@@ -13,8 +13,10 @@ import com.tjclp.xl.formula.{
   FormulaPrinter,
   FormulaShifter,
   ParseError,
-  SheetEvaluator
+  SheetEvaluator,
+  TExpr
 }
+import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.styleSyntax
 import com.tjclp.xl.styles.CellStyle
@@ -83,14 +85,25 @@ object WriteCommands:
           // Single cell: apply formula as-is, evaluate and cache result
           val cachedValue =
             SheetEvaluator.evaluateFormula(targetSheet)(fullFormula, workbook = Some(wb)).toOption
-          (targetSheet.put(ref, CellValue.Formula(formula, cachedValue)), 1)
+          val sheetWithFormula = targetSheet.put(ref, CellValue.Formula(formula, cachedValue))
+          // Auto-apply date format if formula involves date functions (matches Excel behavior)
+          val finalSheet =
+            if TExpr.containsDateFunction(parsedExpr) then
+              val numFmt =
+                if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
+              styleSyntax.withRangeStyle(sheetWithFormula)(
+                CellRange(ref, ref),
+                CellStyle.default.withNumFmt(numFmt)
+              )
+            else sheetWithFormula
+          (finalSheet, 1)
         case Right(range) =>
           // Range: apply formula with shifting based on anchor modes
           val startRef = range.start
           val startCol = Column.index0(startRef.col)
           val startRow = Row.index0(startRef.row)
           val cells = range.cells.toList
-          val sheet = cells.foldLeft(targetSheet) { (s, targetRef) =>
+          val sheetWithFormulas = cells.foldLeft(targetSheet) { (s, targetRef) =>
             val colDelta = Column.index0(targetRef.col) - startCol
             val rowDelta = Row.index0(targetRef.row) - startRow
             val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
@@ -101,7 +114,17 @@ object WriteCommands:
               SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
             s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
           }
-          (sheet, cells.size)
+          // Auto-apply date format to entire range if formula involves date functions
+          val finalSheet =
+            if TExpr.containsDateFunction(parsedExpr) then
+              val numFmt =
+                if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
+              styleSyntax.withRangeStyle(sheetWithFormulas)(
+                range,
+                CellStyle.default.withNumFmt(numFmt)
+              )
+            else sheetWithFormulas
+          (finalSheet, cells.size)
       updatedWb = wb.put(updatedSheet)
       _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
     yield refOrRange match

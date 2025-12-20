@@ -281,6 +281,10 @@ object DependencyGraph:
       case TExpr.Now() => Set.empty
       case TExpr.Pi() => Set.empty
 
+      // Date-to-serial converters - extract from inner expression
+      case TExpr.DateToSerial(dateExpr) => extractDependencies(dateExpr)
+      case TExpr.DateTimeToSerial(dtExpr) => extractDependencies(dtExpr)
+
   /**
    * Get cells this cell depends on (precedents).
    *
@@ -777,6 +781,10 @@ object DependencyGraph:
       case TExpr.Today() => Set.empty
       case TExpr.Now() => Set.empty
       case TExpr.Pi() => Set.empty
+
+      // Date-to-serial converters - extract from inner expression
+      case TExpr.DateToSerial(dateExpr) => extractQualifiedDependencies(dateExpr, currentSheet)
+      case TExpr.DateTimeToSerial(dtExpr) => extractQualifiedDependencies(dtExpr, currentSheet)
 
       // Date calculation functions
       case TExpr.Eomonth(startDate, months) =>

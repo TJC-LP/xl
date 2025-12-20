@@ -382,6 +382,18 @@ private class EvaluatorImpl extends Evaluator:
         // Now: get current date and time from clock
         Right(clock.now())
 
+      // ===== Date-to-Serial Conversions =====
+      // These convert date expressions to Excel serial numbers for arithmetic
+      case TExpr.DateToSerial(dateExpr) =>
+        eval(dateExpr, sheet, clock, workbook).map { date =>
+          BigDecimal(CellValue.dateTimeToExcelSerial(date.atStartOfDay()))
+        }
+
+      case TExpr.DateTimeToSerial(dtExpr) =>
+        eval(dtExpr, sheet, clock, workbook).map { dt =>
+          BigDecimal(CellValue.dateTimeToExcelSerial(dt))
+        }
+
       // ===== Math Constants =====
       case TExpr.Pi() =>
         // PI: mathematical constant
