@@ -1052,10 +1052,17 @@ private class EvaluatorImpl extends Evaluator:
               val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
               // Fold over cells using the aggregator's combine function
               val result = cells.foldLeft(agg.empty) { (acc, cell) =>
-                TExpr.decodeNumeric(cell) match
-                  case Right(value) => agg.combine(acc, value)
-                  case Left(_) if agg.skipNonNumeric => acc
-                  case Left(_) => acc // Skip non-numeric cells
+                if agg.countsNonEmpty then
+                  // COUNTA mode: count any non-empty cell
+                  cell.value match
+                    case CellValue.Empty => acc
+                    case _ => agg.combine(acc, BigDecimal(1))
+                else
+                  // Standard mode: only process numeric values
+                  TExpr.decodeNumeric(cell) match
+                    case Right(value) => agg.combine(acc, value)
+                    case Left(_) if agg.skipNonNumeric => acc
+                    case Left(_) => acc // Skip non-numeric cells
               }
               // Finalize and return the result
               Right(agg.finalize(result))

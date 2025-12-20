@@ -163,6 +163,7 @@ object FunctionParser:
     List(
       sumFunctionParser,
       countFunctionParser,
+      countaFunctionParser,
       averageFunctionParser,
       minFunctionParser,
       maxFunctionParser,
@@ -258,6 +259,31 @@ object FunctionParser:
           scala.util.Left(
             ParseError.InvalidArguments(
               "COUNT",
+              pos,
+              "1 range argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** COUNTA function: COUNTA(range) - counts non-empty cells using Aggregator typeclass */
+  given countaFunctionParser: FunctionParser[Unit] with
+    def name: String = "COUNTA"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(fold: TExpr.FoldRange[?, ?]) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.Aggregate("COUNTA", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.Aggregate("COUNTA", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(TExpr.Aggregate("COUNTA", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "COUNTA",
               pos,
               "1 range argument",
               s"${args.length} arguments"

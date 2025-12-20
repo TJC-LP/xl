@@ -858,7 +858,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("FunctionParser.allFunctions includes all 47 functions") {
+  test("FunctionParser.allFunctions includes all 48 functions") {
     val functions = FunctionParser.allFunctions
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -900,7 +900,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("NETWORKDAYS"))
     assert(functions.contains("WORKDAY"))
     assert(functions.contains("YEARFRAC"))
-    assertEquals(functions.length, 47)
+    // Non-empty cell counter (added via Aggregator typeclass)
+    assert(functions.contains("COUNTA"))
+    assertEquals(functions.length, 48)
   }
 
   test("FunctionParser.lookup finds known functions") {

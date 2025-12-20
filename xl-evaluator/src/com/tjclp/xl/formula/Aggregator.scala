@@ -31,11 +31,20 @@ trait Aggregator[A]:
   /** Whether to skip non-numeric cells (true) or include them in count (false) */
   def skipNonNumeric: Boolean = true
 
+  /**
+   * Whether this aggregator counts non-empty cells (like COUNTA).
+   *
+   * When true, the evaluator will count any non-empty cell rather than calling `combine` with
+   * numeric values. This is used for COUNTA which counts all non-empty cells regardless of type.
+   */
+  def countsNonEmpty: Boolean = false
+
 object Aggregator:
   /** Registry of all aggregators by name (uppercase) */
   private lazy val registry: Map[String, Aggregator[?]] = Map(
     "SUM" -> sumAggregator,
     "COUNT" -> countAggregator,
+    "COUNTA" -> countaAggregator,
     "MIN" -> minAggregator,
     "MAX" -> maxAggregator,
     "AVERAGE" -> averageAggregator
@@ -67,6 +76,14 @@ object Aggregator:
     def empty = 0
     def combine(acc: Int, value: BigDecimal) = acc + 1
     def finalize(acc: Int) = BigDecimal(acc)
+
+  /** COUNTA: Count non-empty cells in a range (not just numeric) */
+  given countaAggregator: Aggregator[Int] with
+    def name = "COUNTA"
+    def empty = 0
+    def combine(acc: Int, value: BigDecimal) = acc + 1
+    def finalize(acc: Int) = BigDecimal(acc)
+    override def countsNonEmpty: Boolean = true
 
   /** MIN: Find the minimum numeric value in a range */
   given minAggregator: Aggregator[Option[BigDecimal]] with
