@@ -382,6 +382,18 @@ private class EvaluatorImpl extends Evaluator:
         // Now: get current date and time from clock
         Right(clock.now())
 
+      // ===== Date-to-Serial Conversions =====
+      // These convert date expressions to Excel serial numbers for arithmetic
+      case TExpr.DateToSerial(dateExpr) =>
+        eval(dateExpr, sheet, clock, workbook).map { date =>
+          BigDecimal(CellValue.dateTimeToExcelSerial(date.atStartOfDay()))
+        }
+
+      case TExpr.DateTimeToSerial(dtExpr) =>
+        eval(dtExpr, sheet, clock, workbook).map { dt =>
+          BigDecimal(CellValue.dateTimeToExcelSerial(dt))
+        }
+
       // ===== Math Constants =====
       case TExpr.Pi() =>
         // PI: mathematical constant
@@ -959,6 +971,28 @@ private class EvaluatorImpl extends Evaluator:
         yield result
 
       // ===== Arithmetic Range Functions =====
+      case TExpr.Sum(location) =>
+        // Sum: add all numeric values in range
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val sum = cells.foldLeft(BigDecimal(0)) { (acc, cell) =>
+            TExpr.decodeNumeric(cell).toOption.fold(acc)(acc + _)
+          }
+          Right(sum)
+        }
+
+      case TExpr.Count(location) =>
+        // Count: count numeric values in range
+        // Supports both local and cross-sheet ranges via RangeLocation
+        Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+          val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+          val count = cells.count { cell =>
+            TExpr.decodeNumeric(cell).isRight
+          }
+          Right(count)
+        }
+
       case TExpr.Min(location) =>
         // Min: find minimum value in range (single-pass)
         // Supports both local and cross-sheet ranges via RangeLocation
@@ -1006,6 +1040,33 @@ private class EvaluatorImpl extends Evaluator:
             Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
           else Right(sum / count)
         }
+
+      // ===== Unified Aggregate Function (Typeclass-based) =====
+      case TExpr.Aggregate(aggregatorId, location) =>
+        // Use Aggregator typeclass to evaluate any registered aggregate function
+        Aggregator.lookup(aggregatorId) match
+          case None =>
+            Left(EvalError.EvalFailed(s"Unknown aggregator: $aggregatorId", None))
+          case Some(agg) =>
+            Evaluator.resolveRangeLocation(location, sheet, workbook).flatMap { targetSheet =>
+              val cells = location.range.cells.map(cellRef => targetSheet(cellRef))
+              // Fold over cells using the aggregator's combine function
+              val result = cells.foldLeft(agg.empty) { (acc, cell) =>
+                if agg.countsNonEmpty then
+                  // COUNTA mode: count any non-empty cell
+                  cell.value match
+                    case CellValue.Empty => acc
+                    case _ => agg.combine(acc, BigDecimal(1))
+                else
+                  // Standard mode: only process numeric values
+                  TExpr.decodeNumeric(cell) match
+                    case Right(value) => agg.combine(acc, value)
+                    case Left(_) if agg.skipNonNumeric => acc
+                    case Left(_) => acc // Skip non-numeric cells
+              }
+              // Finalize and return the result (may return error for AVERAGE on empty range)
+              agg.finalizeWithError(result)
+            }
 
       // ===== Range Aggregation =====
       case foldExpr: TExpr.FoldRange[a, b] =>
@@ -1056,6 +1117,22 @@ private class EvaluatorImpl extends Evaluator:
                 result.asInstanceOf[Either[EvalError, A]]
 
       // ===== Cross-Sheet Aggregate Functions =====
+
+      case TExpr.SheetSum(sheetName, range) =>
+        workbook match
+          case None =>
+            val refStr = s"${sheetName.value}!${range.toA1}"
+            Left(Evaluator.missingWorkbookError(refStr, isRange = true))
+          case Some(wb) =>
+            wb(sheetName) match
+              case Left(err) =>
+                Left(Evaluator.sheetNotFoundError(sheetName, err))
+              case Right(targetSheet) =>
+                val cells = range.cells.map(cellRef => targetSheet(cellRef))
+                val sum = cells.foldLeft(BigDecimal(0)) { (acc, cell) =>
+                  TExpr.decodeNumeric(cell).toOption.fold(acc)(acc + _)
+                }
+                Right(sum)
 
       case TExpr.SheetMin(sheetName, range) =>
         workbook match

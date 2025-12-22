@@ -350,8 +350,9 @@ final case class Sheet(
 
   /** Remove all cells in range */
   def removeRange(range: CellRange): Sheet =
-    val toRemove = range.cells.toSet
-    copy(cells = cells.filterNot((ref, _) => toRemove.contains(ref)))
+    // Use range.contains() instead of materializing to Set - O(n) where n = existing cells
+    // This avoids iterating 1M+ cells for full column/row references like A:A or 1:1
+    copy(cells = cells.filterNot((ref, _) => range.contains(ref)))
 
   /** Get all cells in a range */
   def getRange(range: CellRange): Iterable[Cell] =

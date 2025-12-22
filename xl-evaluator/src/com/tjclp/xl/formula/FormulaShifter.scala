@@ -144,6 +144,10 @@ object FormulaShifter:
           .asInstanceOf[TExpr[A]]
 
       // Arithmetic range functions (now using RangeLocation)
+      case Sum(range) =>
+        Sum(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Count(range) =>
+        Count(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case Min(range) =>
         Min(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case Max(range) =>
@@ -151,7 +155,13 @@ object FormulaShifter:
       case Average(range) =>
         Average(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
+      // Unified aggregate function (typeclass-based)
+      case Aggregate(aggregatorId, location) =>
+        Aggregate(aggregatorId, shiftLocation(location, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+
       // Cross-sheet aggregate functions
+      case SheetSum(sheet, range) =>
+        SheetSum(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case SheetMin(sheet, range) =>
         SheetMin(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case SheetMax(sheet, range) =>
@@ -180,6 +190,11 @@ object FormulaShifter:
       // Date/Time functions - Today/Now have no refs to shift
       case t: Today => t.asInstanceOf[TExpr[A]]
       case n: Now => n.asInstanceOf[TExpr[A]]
+      // Date-to-serial converters - shift inner expression
+      case DateToSerial(dateExpr) =>
+        DateToSerial(shiftInternal(dateExpr, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case DateTimeToSerial(dtExpr) =>
+        DateTimeToSerial(shiftInternal(dtExpr, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       // Math constants - no refs to shift
       case p: Pi => p.asInstanceOf[TExpr[A]]
       case Date(year, month, day) =>

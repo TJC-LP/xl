@@ -213,10 +213,26 @@ object ReadCommands:
       comment = targetSheet.getComment(ref)
       // Get hyperlink from cell
       hyperlink = cellOpt.flatMap(_.hyperlink)
-      // Build dependency graph for dependencies/dependents
-      graph = DependencyGraph.fromSheet(targetSheet)
-      deps = graph.dependencies.getOrElse(ref, Set.empty).toVector.sortBy(_.toA1)
-      dependents = graph.dependents.getOrElse(ref, Set.empty).toVector.sortBy(_.toA1)
+      // Build dependency graph for dependencies/dependents (workbook-level for cross-sheet support)
+      currentRef = DependencyGraph.QualifiedRef(targetSheet.name, ref)
+      wbGraph = DependencyGraph.fromWorkbook(wb)
+      // Get dependencies for this cell
+      rawDeps = wbGraph.getOrElse(currentRef, Set.empty)
+      // Build reverse graph for dependents
+      allDependents = wbGraph.foldLeft(
+        Map.empty[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]]
+      ) { case (acc, (source, targets)) =>
+        targets.foldLeft(acc) { (m, target) =>
+          m.updated(target, m.getOrElse(target, Set.empty) + source)
+        }
+      }
+      rawDependents = allDependents.getOrElse(currentRef, Set.empty)
+      // Format qualified refs - omit sheet name if same sheet as current cell
+      formatQRef = (qref: DependencyGraph.QualifiedRef) =>
+        if qref.sheet == targetSheet.name then qref.ref.toA1
+        else s"${qref.sheet.value}!${qref.ref.toA1}"
+      deps = rawDeps.toVector.sortBy(formatQRef).map(formatQRef)
+      dependents = rawDependents.toVector.sortBy(formatQRef).map(formatQRef)
     yield Format.cellInfo(ref, value, formatted, style, comment, hyperlink, deps, dependents)
 
   /**

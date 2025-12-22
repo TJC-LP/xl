@@ -188,3 +188,90 @@ class AddressingSpec extends ScalaCheckSuite:
     assert(SheetName("Sheet/1").isLeft) // Invalid char
     assert(SheetName("Sheet?1").isLeft) // Invalid char
   }
+
+  // ==================== CellRange.intersect tests ====================
+
+  property("CellRange.intersect is symmetric") {
+    forAll { (r1: CellRange, r2: CellRange) =>
+      val i1 = r1.intersect(r2)
+      val i2 = r2.intersect(r1)
+      assertEquals(i1.isDefined, i2.isDefined)
+      // Intersection ranges should be equal
+      (i1, i2) match
+        case (Some(a), Some(b)) =>
+          assertEquals(a.start, b.start)
+          assertEquals(a.end, b.end)
+        case _ => ()
+    }
+  }
+
+  test("CellRange.intersect: overlapping ranges") {
+    val r1 = CellRange.parse("A1:C10").toOption.get
+    val r2 = CellRange.parse("B5:D15").toOption.get
+    val result = r1.intersect(r2)
+    assert(result.isDefined)
+    assertEquals(result.get.toA1, "B5:C10")
+  }
+
+  test("CellRange.intersect: non-overlapping ranges") {
+    val r1 = CellRange.parse("A1:B5").toOption.get
+    val r2 = CellRange.parse("D10:E15").toOption.get
+    assertEquals(r1.intersect(r2), None)
+  }
+
+  test("CellRange.intersect: contained range") {
+    val outer = CellRange.parse("A1:Z100").toOption.get
+    val inner = CellRange.parse("B5:C10").toOption.get
+    val result = outer.intersect(inner)
+    assert(result.isDefined)
+    assertEquals(result.get.toA1, "B5:C10")
+  }
+
+  test("CellRange.intersect: full column with bounded range") {
+    val fullCol = CellRange.parse("A:A").toOption.get
+    val used = CellRange.parse("A1:Z100").toOption.get
+    val result = fullCol.intersect(used)
+    assert(result.isDefined)
+    assertEquals(result.get.toA1, "A1:A100")
+  }
+
+  test("CellRange.intersect: full row with bounded range") {
+    val fullRow = CellRange.parse("1:1").toOption.get
+    val used = CellRange.parse("A1:Z100").toOption.get
+    val result = fullRow.intersect(used)
+    assert(result.isDefined)
+    assertEquals(result.get.toA1, "A1:Z1")
+  }
+
+  // ==================== Full column/row detection tests ====================
+
+  test("CellRange.isFullColumn detects full column references") {
+    val fullCol = CellRange.parse("A:A").toOption.get
+    val fullColRange = CellRange.parse("B:D").toOption.get
+    val normalRange = CellRange.parse("A1:A100").toOption.get
+
+    assert(fullCol.isFullColumn)
+    assert(fullColRange.isFullColumn)
+    assert(!normalRange.isFullColumn)
+  }
+
+  test("CellRange.isFullRow detects full row references") {
+    val fullRow = CellRange.parse("1:1").toOption.get
+    val fullRowRange = CellRange.parse("5:10").toOption.get
+    val normalRange = CellRange.parse("A1:Z1").toOption.get
+
+    assert(fullRow.isFullRow)
+    assert(fullRowRange.isFullRow)
+    assert(!normalRange.isFullRow)
+  }
+
+  test("CellRange.cellCount returns correct count") {
+    val smallRange = CellRange.parse("A1:B2").toOption.get
+    assertEquals(smallRange.cellCount, 4L)
+
+    val fullCol = CellRange.parse("A:A").toOption.get
+    assertEquals(fullCol.cellCount, 1048576L) // Max rows
+
+    val fullRow = CellRange.parse("1:1").toOption.get
+    assertEquals(fullRow.cellCount, 16384L) // Max columns
+  }

@@ -104,6 +104,8 @@ object Main
   private val rangeArg = Opts.argument[String]("range")
   private val refArg = Opts.argument[String]("ref")
   private val valueArg = Opts.argument[String]("value")
+  // Alternative flag for values starting with - (e.g., --value=-5)
+  private val valueOpt = Opts.option[String]("value", "Cell value (use for negative numbers)", "v")
   private val patternArg = Opts.argument[String]("pattern")
 
   private val formulasOpt = Opts.flag("formulas", "Show formulas instead of values").orFalse
@@ -254,12 +256,16 @@ object Main
 
   // --- Mutate (require -o) ---
 
+  // Value argument: prefers --value flag over positional (needed for negative numbers)
+  private val valueArgOrOpt: Opts[String] =
+    valueOpt orElse valueArg
+
   val putCmd: Opts[CliCommand] = Opts.subcommand("put", "Write value to cell") {
-    (refArg, valueArg).mapN(CliCommand.Put.apply)
+    (refArg, valueArgOrOpt).mapN(CliCommand.Put.apply)
   }
 
   val putfCmd: Opts[CliCommand] = Opts.subcommand("putf", "Write formula to cell") {
-    (refArg, valueArg).mapN(CliCommand.PutFormula.apply)
+    (refArg, valueArgOrOpt).mapN(CliCommand.PutFormula.apply)
   }
 
   // --- Style command options ---
@@ -414,6 +420,7 @@ object Main
       "Aggregate" -> List(
         "SUM" -> "Sum of values in range",
         "COUNT" -> "Count numeric values",
+        "COUNTA" -> "Count non-empty cells",
         "AVERAGE" -> "Average of values",
         "MIN" -> "Minimum value",
         "MAX" -> "Maximum value"
@@ -477,7 +484,7 @@ object Main
     )
 
     val sb = new StringBuilder
-    sb.append("Supported Excel Functions (47 total)\n")
+    sb.append("Supported Excel Functions (48 total)\n")
     sb.append("=" * 40 + "\n\n")
 
     for (category, functions) <- categories do

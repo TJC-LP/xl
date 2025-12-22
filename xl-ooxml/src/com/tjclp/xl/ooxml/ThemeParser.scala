@@ -44,10 +44,9 @@ object ThemeParser:
    *   Either[String, ThemePalette] with error message or parsed palette
    */
   def parse(themeXml: String): Either[String, ThemePalette] =
-    try
-      val elem = XML.loadString(themeXml)
-      parseThemeElement(elem)
-    catch case e: Exception => Left(s"Failed to parse theme XML: ${e.getMessage}")
+    XmlSecurity.parseSafe(themeXml, "xl/theme/theme1.xml") match
+      case Right(elem) => parseThemeElement(elem)
+      case Left(err) => Left(s"Failed to parse theme XML: ${err.message}")
 
   /**
    * Parse theme from XML element.
