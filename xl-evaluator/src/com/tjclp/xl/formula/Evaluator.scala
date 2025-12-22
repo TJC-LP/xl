@@ -1512,6 +1512,168 @@ private class EvaluatorImpl extends Evaluator:
         // ABS: absolute value
         eval(valueExpr, sheet, clock, workbook).map(_.abs)
 
+      case TExpr.Sqrt(valueExpr) =>
+        // SQRT: square root
+        // Returns #NUM! error for negative numbers
+        eval(valueExpr, sheet, clock, workbook).flatMap { value =>
+          if value < 0 then
+            Left(
+              EvalError.EvalFailed(
+                s"SQRT: cannot take square root of negative number ($value)",
+                Some(s"SQRT($value)")
+              )
+            )
+          else Right(BigDecimal(Math.sqrt(value.toDouble)))
+        }
+
+      case TExpr.Mod(numberExpr, divisorExpr) =>
+        // MOD: remainder after division
+        // Excel semantics: result has same sign as divisor
+        // MOD(n, d) = n - d * INT(n/d)
+        for
+          number <- eval(numberExpr, sheet, clock, workbook)
+          divisor <- eval(divisorExpr, sheet, clock, workbook)
+          result <-
+            if divisor == 0 then
+              Left(EvalError.EvalFailed("MOD: division by zero", Some(s"MOD($number, $divisor)")))
+            else
+              // Excel MOD formula: n - d * INT(n/d)
+              // INT rounds toward negative infinity
+              val quotient = (number / divisor).setScale(0, BigDecimal.RoundingMode.FLOOR)
+              Right(number - divisor * quotient)
+        yield result
+
+      case TExpr.Power(numberExpr, powerExpr) =>
+        // POWER: number raised to a power
+        for
+          number <- eval(numberExpr, sheet, clock, workbook)
+          power <- eval(powerExpr, sheet, clock, workbook)
+        yield BigDecimal(Math.pow(number.toDouble, power.toDouble))
+
+      case TExpr.Log(numberExpr, baseExpr) =>
+        // LOG: logarithm to specified base
+        // Returns #NUM! error for non-positive numbers or base <= 0 or base == 1
+        for
+          number <- eval(numberExpr, sheet, clock, workbook)
+          base <- eval(baseExpr, sheet, clock, workbook)
+          result <- {
+            if number <= 0 then
+              Left(
+                EvalError.EvalFailed(
+                  s"LOG: argument must be positive ($number)",
+                  Some(s"LOG($number, $base)")
+                )
+              )
+            else if base <= 0 then
+              Left(
+                EvalError
+                  .EvalFailed(s"LOG: base must be positive ($base)", Some(s"LOG($number, $base)"))
+              )
+            else if base == 1 then
+              Left(EvalError.EvalFailed(s"LOG: base cannot be 1", Some(s"LOG($number, $base)")))
+            else
+              // log_base(number) = ln(number) / ln(base)
+              Right(BigDecimal(Math.log(number.toDouble) / Math.log(base.toDouble)))
+          }
+        yield result
+
+      case TExpr.Ln(valueExpr) =>
+        // LN: natural logarithm (base e)
+        // Returns #NUM! error for non-positive numbers
+        eval(valueExpr, sheet, clock, workbook).flatMap { value =>
+          if value <= 0 then
+            Left(
+              EvalError.EvalFailed(s"LN: argument must be positive ($value)", Some(s"LN($value)"))
+            )
+          else Right(BigDecimal(Math.log(value.toDouble)))
+        }
+
+      case TExpr.Exp(valueExpr) =>
+        // EXP: e raised to a power
+        eval(valueExpr, sheet, clock, workbook).map { value =>
+          BigDecimal(Math.exp(value.toDouble))
+        }
+
+      case TExpr.Floor(numberExpr, significanceExpr) =>
+        // FLOOR: round down toward zero to nearest multiple of significance
+        // Excel semantics: number and significance must have same sign (or significance = 0 is error)
+        for
+          number <- eval(numberExpr, sheet, clock, workbook)
+          significance <- eval(significanceExpr, sheet, clock, workbook)
+          result <- {
+            if significance == 0 then
+              Left(
+                EvalError.EvalFailed(
+                  "FLOOR: significance cannot be zero",
+                  Some(s"FLOOR($number, $significance)")
+                )
+              )
+            else if number > 0 && significance < 0 then
+              Left(
+                EvalError.EvalFailed(
+                  "FLOOR: number and significance must have same sign",
+                  Some(s"FLOOR($number, $significance)")
+                )
+              )
+            else
+              // Round toward zero to nearest multiple of significance
+              val quotient = (number / significance).setScale(0, BigDecimal.RoundingMode.FLOOR)
+              Right(quotient * significance)
+          }
+        yield result
+
+      case TExpr.Ceiling(numberExpr, significanceExpr) =>
+        // CEILING: round up away from zero to nearest multiple of significance
+        // Excel semantics: number and significance must have same sign (or significance = 0 is error)
+        for
+          number <- eval(numberExpr, sheet, clock, workbook)
+          significance <- eval(significanceExpr, sheet, clock, workbook)
+          result <- {
+            if significance == 0 then
+              Left(
+                EvalError.EvalFailed(
+                  "CEILING: significance cannot be zero",
+                  Some(s"CEILING($number, $significance)")
+                )
+              )
+            else if number > 0 && significance < 0 then
+              Left(
+                EvalError.EvalFailed(
+                  "CEILING: number and significance must have same sign",
+                  Some(s"CEILING($number, $significance)")
+                )
+              )
+            else
+              // Round away from zero to nearest multiple of significance
+              val quotient = (number / significance).setScale(0, BigDecimal.RoundingMode.CEILING)
+              Right(quotient * significance)
+          }
+        yield result
+
+      case TExpr.Trunc(numberExpr, numDigitsExpr) =>
+        // TRUNC: truncate to specified number of decimal places
+        // Unlike ROUNDDOWN, TRUNC always truncates (removes fractional part)
+        for
+          number <- eval(numberExpr, sheet, clock, workbook)
+          numDigits <- eval(numDigitsExpr, sheet, clock, workbook)
+        yield roundToDigits(number, numDigits.toInt, BigDecimal.RoundingMode.DOWN)
+
+      case TExpr.Sign(valueExpr) =>
+        // SIGN: returns 1 for positive, -1 for negative, 0 for zero
+        eval(valueExpr, sheet, clock, workbook).map { value =>
+          if value > 0 then BigDecimal(1)
+          else if value < 0 then BigDecimal(-1)
+          else BigDecimal(0)
+        }
+
+      case TExpr.Int_(valueExpr) =>
+        // INT: round down to nearest integer (floor function)
+        // Unlike TRUNC, INT always rounds toward negative infinity
+        // INT(8.9) = 8, INT(-8.9) = -9
+        eval(valueExpr, sheet, clock, workbook).map { value =>
+          value.setScale(0, BigDecimal.RoundingMode.FLOOR)
+        }
+
       // ===== Lookup Functions =====
 
       case TExpr.Index(array, rowNumExpr, colNumExpr) =>

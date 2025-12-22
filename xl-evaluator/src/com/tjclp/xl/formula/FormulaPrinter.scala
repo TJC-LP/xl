@@ -321,6 +321,39 @@ object FormulaPrinter:
       case TExpr.Abs(value) =>
         s"ABS(${printExpr(value, 0)})"
 
+      case TExpr.Sqrt(value) =>
+        s"SQRT(${printExpr(value, 0)})"
+
+      case TExpr.Mod(number, divisor) =>
+        s"MOD(${printExpr(number, 0)}, ${printExpr(divisor, 0)})"
+
+      case TExpr.Power(number, power) =>
+        s"POWER(${printExpr(number, 0)}, ${printExpr(power, 0)})"
+
+      case TExpr.Log(number, base) =>
+        s"LOG(${printExpr(number, 0)}, ${printExpr(base, 0)})"
+
+      case TExpr.Ln(value) =>
+        s"LN(${printExpr(value, 0)})"
+
+      case TExpr.Exp(value) =>
+        s"EXP(${printExpr(value, 0)})"
+
+      case TExpr.Floor(number, significance) =>
+        s"FLOOR(${printExpr(number, 0)}, ${printExpr(significance, 0)})"
+
+      case TExpr.Ceiling(number, significance) =>
+        s"CEILING(${printExpr(number, 0)}, ${printExpr(significance, 0)})"
+
+      case TExpr.Trunc(number, numDigits) =>
+        s"TRUNC(${printExpr(number, 0)}, ${printExpr(numDigits, 0)})"
+
+      case TExpr.Sign(value) =>
+        s"SIGN(${printExpr(value, 0)})"
+
+      case TExpr.Int_(value) =>
+        s"INT(${printExpr(value, 0)})"
+
       // Lookup functions (now support cross-sheet via RangeLocation)
       case TExpr.Index(array, rowNum, colNum) =>
         val arrayStr = formatLocation(array)
@@ -684,6 +717,28 @@ object FormulaPrinter:
         s"RoundDown(${printWithTypes(value)}, ${printWithTypes(numDigits)})"
       case TExpr.Abs(value) =>
         s"Abs(${printWithTypes(value)})"
+      case TExpr.Sqrt(value) =>
+        s"Sqrt(${printWithTypes(value)})"
+      case TExpr.Mod(number, divisor) =>
+        s"Mod(${printWithTypes(number)}, ${printWithTypes(divisor)})"
+      case TExpr.Power(number, power) =>
+        s"Power(${printWithTypes(number)}, ${printWithTypes(power)})"
+      case TExpr.Log(number, base) =>
+        s"Log(${printWithTypes(number)}, ${printWithTypes(base)})"
+      case TExpr.Ln(value) =>
+        s"Ln(${printWithTypes(value)})"
+      case TExpr.Exp(value) =>
+        s"Exp(${printWithTypes(value)})"
+      case TExpr.Floor(number, significance) =>
+        s"Floor(${printWithTypes(number)}, ${printWithTypes(significance)})"
+      case TExpr.Ceiling(number, significance) =>
+        s"Ceiling(${printWithTypes(number)}, ${printWithTypes(significance)})"
+      case TExpr.Trunc(number, numDigits) =>
+        s"Trunc(${printWithTypes(number)}, ${printWithTypes(numDigits)})"
+      case TExpr.Sign(value) =>
+        s"Sign(${printWithTypes(value)})"
+      case TExpr.Int_(value) =>
+        s"Int_(${printWithTypes(value)})"
       case TExpr.Index(array, rowNum, colNum) =>
         colNum match
           case Some(col) =>

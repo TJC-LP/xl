@@ -871,6 +871,107 @@ enum TExpr[A] derives CanEqual:
    */
   case Abs(value: TExpr[BigDecimal]) extends TExpr[BigDecimal]
 
+  /**
+   * Square root: SQRT(number)
+   *
+   * Returns the square root of a number. Returns #NUM! for negative numbers.
+   *
+   * Example: SQRT(16) = 4, SQRT(2) ≈ 1.414
+   */
+  case Sqrt(value: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Modulo: MOD(number, divisor)
+   *
+   * Returns the remainder after division. Result has the same sign as divisor (Excel semantics).
+   *
+   * Example: MOD(5, 3) = 2, MOD(-5, 3) = 1, MOD(5, -3) = -1
+   */
+  case Mod(number: TExpr[BigDecimal], divisor: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Power: POWER(number, power)
+   *
+   * Returns number raised to a power.
+   *
+   * Example: POWER(2, 3) = 8, POWER(4, 0.5) = 2
+   */
+  case Power(number: TExpr[BigDecimal], power: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Logarithm: LOG(number, [base])
+   *
+   * Returns the logarithm of a number to a specified base. Default base is 10.
+   *
+   * Example: LOG(100) = 2, LOG(8, 2) = 3
+   */
+  case Log(number: TExpr[BigDecimal], base: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Natural logarithm: LN(number)
+   *
+   * Returns the natural logarithm (base e) of a number.
+   *
+   * Example: LN(E()) ≈ 1, LN(2.718281828) ≈ 1
+   */
+  case Ln(value: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Exponential: EXP(number)
+   *
+   * Returns e raised to the power of number.
+   *
+   * Example: EXP(1) ≈ 2.718, EXP(0) = 1
+   */
+  case Exp(value: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Floor: FLOOR(number, significance)
+   *
+   * Rounds number down toward zero to the nearest multiple of significance.
+   *
+   * Example: FLOOR(2.5, 1) = 2, FLOOR(-2.5, -1) = -2, FLOOR(1.5, 0.5) = 1.5
+   */
+  case Floor(number: TExpr[BigDecimal], significance: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Ceiling: CEILING(number, significance)
+   *
+   * Rounds number up away from zero to the nearest multiple of significance.
+   *
+   * Example: CEILING(2.5, 1) = 3, CEILING(-2.5, -1) = -3, CEILING(1.2, 0.5) = 1.5
+   */
+  case Ceiling(number: TExpr[BigDecimal], significance: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Truncate: TRUNC(number, [num_digits])
+   *
+   * Truncates number to specified number of decimal places (removes fractional part). Default
+   * num_digits is 0.
+   *
+   * Example: TRUNC(8.9) = 8, TRUNC(-8.9) = -8, TRUNC(3.14159, 2) = 3.14
+   */
+  case Trunc(number: TExpr[BigDecimal], numDigits: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Sign: SIGN(number)
+   *
+   * Returns the sign of a number: 1 for positive, -1 for negative, 0 for zero.
+   *
+   * Example: SIGN(5) = 1, SIGN(-5) = -1, SIGN(0) = 0
+   */
+  case Sign(value: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
+  /**
+   * Integer part: INT(number)
+   *
+   * Rounds number down to the nearest integer (floor function). Unlike TRUNC, INT always rounds
+   * toward negative infinity.
+   *
+   * Example: INT(8.9) = 8, INT(-8.9) = -9
+   */
+  case Int_(value: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
   // Array and advanced lookup functions
 
   /**
@@ -1291,6 +1392,94 @@ object TExpr:
    */
   def abs(value: TExpr[BigDecimal]): TExpr[BigDecimal] =
     Abs(value)
+
+  /**
+   * SQRT: square root.
+   *
+   * Example: TExpr.sqrt(TExpr.Lit(16))
+   */
+  def sqrt(value: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Sqrt(value)
+
+  /**
+   * MOD: modulo (remainder after division).
+   *
+   * Example: TExpr.mod(TExpr.Lit(5), TExpr.Lit(3))
+   */
+  def mod(number: TExpr[BigDecimal], divisor: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Mod(number, divisor)
+
+  /**
+   * POWER: number raised to a power.
+   *
+   * Example: TExpr.power(TExpr.Lit(2), TExpr.Lit(3))
+   */
+  def power(number: TExpr[BigDecimal], power: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Power(number, power)
+
+  /**
+   * LOG: logarithm to specified base.
+   *
+   * Example: TExpr.log(TExpr.Lit(100), TExpr.Lit(10))
+   */
+  def log(number: TExpr[BigDecimal], base: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Log(number, base)
+
+  /**
+   * LN: natural logarithm (base e).
+   *
+   * Example: TExpr.ln(TExpr.Lit(2.718281828))
+   */
+  def ln(value: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Ln(value)
+
+  /**
+   * EXP: e raised to a power.
+   *
+   * Example: TExpr.exp(TExpr.Lit(1))
+   */
+  def exp(value: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Exp(value)
+
+  /**
+   * FLOOR: round down to nearest multiple of significance.
+   *
+   * Example: TExpr.floor(TExpr.Lit(2.5), TExpr.Lit(1))
+   */
+  def floor(number: TExpr[BigDecimal], significance: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Floor(number, significance)
+
+  /**
+   * CEILING: round up to nearest multiple of significance.
+   *
+   * Example: TExpr.ceiling(TExpr.Lit(2.5), TExpr.Lit(1))
+   */
+  def ceiling(number: TExpr[BigDecimal], significance: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Ceiling(number, significance)
+
+  /**
+   * TRUNC: truncate to specified number of decimal places.
+   *
+   * Example: TExpr.trunc(TExpr.Lit(8.9), TExpr.Lit(0))
+   */
+  def trunc(number: TExpr[BigDecimal], numDigits: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Trunc(number, numDigits)
+
+  /**
+   * SIGN: sign of a number (1, -1, or 0).
+   *
+   * Example: TExpr.sign(TExpr.Lit(-5))
+   */
+  def sign(value: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Sign(value)
+
+  /**
+   * INT: round down to nearest integer (floor).
+   *
+   * Example: TExpr.int_(TExpr.Lit(8.9))
+   */
+  def int_(value: TExpr[BigDecimal]): TExpr[BigDecimal] =
+    Int_(value)
 
   // Array and advanced lookup function smart constructors
 
@@ -1978,6 +2167,18 @@ object TExpr:
     case RoundUp(v, _) => containsDateFunction(v)
     case RoundDown(v, _) => containsDateFunction(v)
     case Abs(v) => containsDateFunction(v)
+    // Math functions
+    case Sqrt(v) => containsDateFunction(v)
+    case Mod(n, _) => containsDateFunction(n)
+    case Power(n, _) => containsDateFunction(n)
+    case Log(n, _) => containsDateFunction(n)
+    case Ln(v) => containsDateFunction(v)
+    case Exp(v) => containsDateFunction(v)
+    case Floor(n, _) => containsDateFunction(n)
+    case Ceiling(n, _) => containsDateFunction(n)
+    case Trunc(n, _) => containsDateFunction(n)
+    case Sign(v) => containsDateFunction(v)
+    case Int_(v) => containsDateFunction(v)
     // Type conversion
     case ToInt(e) => containsDateFunction(e)
     // Default: no date function
@@ -2020,6 +2221,18 @@ object TExpr:
     case RoundUp(v, _) => containsTimeFunction(v)
     case RoundDown(v, _) => containsTimeFunction(v)
     case Abs(v) => containsTimeFunction(v)
+    // Math functions
+    case Sqrt(v) => containsTimeFunction(v)
+    case Mod(n, _) => containsTimeFunction(n)
+    case Power(n, _) => containsTimeFunction(n)
+    case Log(n, _) => containsTimeFunction(n)
+    case Ln(v) => containsTimeFunction(v)
+    case Exp(v) => containsTimeFunction(v)
+    case Floor(n, _) => containsTimeFunction(n)
+    case Ceiling(n, _) => containsTimeFunction(n)
+    case Trunc(n, _) => containsTimeFunction(n)
+    case Sign(v) => containsTimeFunction(v)
+    case Int_(v) => containsTimeFunction(v)
     // Type conversion
     case ToInt(e) => containsTimeFunction(e)
     // Default: no time function

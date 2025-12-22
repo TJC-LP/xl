@@ -263,6 +263,23 @@ object DependencyGraph:
       case TExpr.RoundDown(value, numDigits) =>
         extractDependencies(value) ++ extractDependencies(numDigits)
       case TExpr.Abs(value) => extractDependencies(value)
+      case TExpr.Sqrt(value) => extractDependencies(value)
+      case TExpr.Mod(number, divisor) =>
+        extractDependencies(number) ++ extractDependencies(divisor)
+      case TExpr.Power(number, power) =>
+        extractDependencies(number) ++ extractDependencies(power)
+      case TExpr.Log(number, base) =>
+        extractDependencies(number) ++ extractDependencies(base)
+      case TExpr.Ln(value) => extractDependencies(value)
+      case TExpr.Exp(value) => extractDependencies(value)
+      case TExpr.Floor(number, significance) =>
+        extractDependencies(number) ++ extractDependencies(significance)
+      case TExpr.Ceiling(number, significance) =>
+        extractDependencies(number) ++ extractDependencies(significance)
+      case TExpr.Trunc(number, numDigits) =>
+        extractDependencies(number) ++ extractDependencies(numDigits)
+      case TExpr.Sign(value) => extractDependencies(value)
+      case TExpr.Int_(value) => extractDependencies(value)
 
       // Lookup functions
       case TExpr.Index(array, rowNum, colNum) =>
@@ -479,6 +496,29 @@ object DependencyGraph:
       case TExpr.RoundDown(value, numDigits) =>
         extractDependenciesBounded(value, bounds) ++ extractDependenciesBounded(numDigits, bounds)
       case TExpr.Abs(value) => extractDependenciesBounded(value, bounds)
+      case TExpr.Sqrt(value) => extractDependenciesBounded(value, bounds)
+      case TExpr.Mod(number, divisor) =>
+        extractDependenciesBounded(number, bounds) ++ extractDependenciesBounded(divisor, bounds)
+      case TExpr.Power(number, power) =>
+        extractDependenciesBounded(number, bounds) ++ extractDependenciesBounded(power, bounds)
+      case TExpr.Log(number, base) =>
+        extractDependenciesBounded(number, bounds) ++ extractDependenciesBounded(base, bounds)
+      case TExpr.Ln(value) => extractDependenciesBounded(value, bounds)
+      case TExpr.Exp(value) => extractDependenciesBounded(value, bounds)
+      case TExpr.Floor(number, significance) =>
+        extractDependenciesBounded(number, bounds) ++ extractDependenciesBounded(
+          significance,
+          bounds
+        )
+      case TExpr.Ceiling(number, significance) =>
+        extractDependenciesBounded(number, bounds) ++ extractDependenciesBounded(
+          significance,
+          bounds
+        )
+      case TExpr.Trunc(number, numDigits) =>
+        extractDependenciesBounded(number, bounds) ++ extractDependenciesBounded(numDigits, bounds)
+      case TExpr.Sign(value) => extractDependenciesBounded(value, bounds)
+      case TExpr.Int_(value) => extractDependenciesBounded(value, bounds)
 
       // Lookup functions
       case TExpr.Index(array, rowNum, colNum) =>
@@ -968,6 +1008,41 @@ object DependencyGraph:
       case TExpr.Lower(x) => extractQualifiedDependencies(x, currentSheet)
       case TExpr.ToInt(x) => extractQualifiedDependencies(x, currentSheet)
       case TExpr.Abs(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.Sqrt(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.Mod(n, d) =>
+        extractQualifiedDependencies(n, currentSheet) ++ extractQualifiedDependencies(
+          d,
+          currentSheet
+        )
+      case TExpr.Power(n, p) =>
+        extractQualifiedDependencies(n, currentSheet) ++ extractQualifiedDependencies(
+          p,
+          currentSheet
+        )
+      case TExpr.Log(n, b) =>
+        extractQualifiedDependencies(n, currentSheet) ++ extractQualifiedDependencies(
+          b,
+          currentSheet
+        )
+      case TExpr.Ln(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.Exp(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.Floor(n, s) =>
+        extractQualifiedDependencies(n, currentSheet) ++ extractQualifiedDependencies(
+          s,
+          currentSheet
+        )
+      case TExpr.Ceiling(n, s) =>
+        extractQualifiedDependencies(n, currentSheet) ++ extractQualifiedDependencies(
+          s,
+          currentSheet
+        )
+      case TExpr.Trunc(n, d) =>
+        extractQualifiedDependencies(n, currentSheet) ++ extractQualifiedDependencies(
+          d,
+          currentSheet
+        )
+      case TExpr.Sign(x) => extractQualifiedDependencies(x, currentSheet)
+      case TExpr.Int_(x) => extractQualifiedDependencies(x, currentSheet)
 
       // Ternary
       case TExpr.If(cond, thenBranch, elseBranch) =>

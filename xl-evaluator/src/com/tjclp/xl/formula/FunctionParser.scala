@@ -201,6 +201,17 @@ object FunctionParser:
       roundUpFunctionParser,
       roundDownFunctionParser,
       absFunctionParser,
+      sqrtFunctionParser,
+      modFunctionParser,
+      powerFunctionParser,
+      logFunctionParser,
+      lnFunctionParser,
+      expFunctionParser,
+      floorFunctionParser,
+      ceilingFunctionParser,
+      truncFunctionParser,
+      signFunctionParser,
+      intFunctionParser,
       // Lookup functions
       indexFunctionParser,
       matchFunctionParser,
@@ -1206,6 +1217,255 @@ object FunctionParser:
           scala.util.Left(
             ParseError.InvalidArguments(
               "ABS",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** SQRT function: SQRT(number) */
+  given sqrtFunctionParser: FunctionParser[Unit] with
+    def name: String = "SQRT"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.sqrt(TExpr.asNumericExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "SQRT",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** MOD function: MOD(number, divisor) */
+  given modFunctionParser: FunctionParser[Unit] with
+    def name: String = "MOD"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(numberExpr, divisorExpr) =>
+          scala.util.Right(
+            TExpr.mod(
+              TExpr.asNumericExpr(numberExpr),
+              TExpr.asNumericExpr(divisorExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "MOD",
+              pos,
+              "2 arguments (number, divisor)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** POWER function: POWER(number, power) */
+  given powerFunctionParser: FunctionParser[Unit] with
+    def name: String = "POWER"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(numberExpr, powerExpr) =>
+          scala.util.Right(
+            TExpr.power(
+              TExpr.asNumericExpr(numberExpr),
+              TExpr.asNumericExpr(powerExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "POWER",
+              pos,
+              "2 arguments (number, power)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** LOG function: LOG(number, [base]) - base defaults to 10 */
+  given logFunctionParser: FunctionParser[Unit] with
+    def name: String = "LOG"
+    def arity: Arity = Arity.Range(1, 2)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(numberExpr) =>
+          // Default base is 10
+          scala.util.Right(
+            TExpr.log(TExpr.asNumericExpr(numberExpr), TExpr.Lit(BigDecimal(10)))
+          )
+        case List(numberExpr, baseExpr) =>
+          scala.util.Right(
+            TExpr.log(
+              TExpr.asNumericExpr(numberExpr),
+              TExpr.asNumericExpr(baseExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "LOG",
+              pos,
+              "1 or 2 arguments (number, [base])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** LN function: LN(number) */
+  given lnFunctionParser: FunctionParser[Unit] with
+    def name: String = "LN"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.ln(TExpr.asNumericExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "LN",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** EXP function: EXP(number) */
+  given expFunctionParser: FunctionParser[Unit] with
+    def name: String = "EXP"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.exp(TExpr.asNumericExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "EXP",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** FLOOR function: FLOOR(number, significance) */
+  given floorFunctionParser: FunctionParser[Unit] with
+    def name: String = "FLOOR"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(numberExpr, significanceExpr) =>
+          scala.util.Right(
+            TExpr.floor(
+              TExpr.asNumericExpr(numberExpr),
+              TExpr.asNumericExpr(significanceExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "FLOOR",
+              pos,
+              "2 arguments (number, significance)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** CEILING function: CEILING(number, significance) */
+  given ceilingFunctionParser: FunctionParser[Unit] with
+    def name: String = "CEILING"
+    def arity: Arity = Arity.two
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(numberExpr, significanceExpr) =>
+          scala.util.Right(
+            TExpr.ceiling(
+              TExpr.asNumericExpr(numberExpr),
+              TExpr.asNumericExpr(significanceExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "CEILING",
+              pos,
+              "2 arguments (number, significance)",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** TRUNC function: TRUNC(number, [num_digits]) - num_digits defaults to 0 */
+  given truncFunctionParser: FunctionParser[Unit] with
+    def name: String = "TRUNC"
+    def arity: Arity = Arity.Range(1, 2)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(numberExpr) =>
+          // Default num_digits is 0
+          scala.util.Right(
+            TExpr.trunc(TExpr.asNumericExpr(numberExpr), TExpr.Lit(BigDecimal(0)))
+          )
+        case List(numberExpr, digitsExpr) =>
+          scala.util.Right(
+            TExpr.trunc(
+              TExpr.asNumericExpr(numberExpr),
+              TExpr.asNumericExpr(digitsExpr)
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "TRUNC",
+              pos,
+              "1 or 2 arguments (number, [num_digits])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** SIGN function: SIGN(number) */
+  given signFunctionParser: FunctionParser[Unit] with
+    def name: String = "SIGN"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.sign(TExpr.asNumericExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "SIGN",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** INT function: INT(number) */
+  given intFunctionParser: FunctionParser[Unit] with
+    def name: String = "INT"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.int_(TExpr.asNumericExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "INT",
               pos,
               "1 argument",
               s"${args.length} arguments"
