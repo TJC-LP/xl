@@ -382,6 +382,24 @@ object FormulaShifter:
       case Int_(value) =>
         Int_(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
+      // Reference functions
+      case Row_(ref) =>
+        Row_(shiftWildcard(ref, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Column_(ref) =>
+        Column_(shiftWildcard(ref, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Rows(range) =>
+        Rows(shiftWildcard(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Columns(range) =>
+        Columns(shiftWildcard(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Address(row, col, absNum, a1Style, sheetName) =>
+        Address(
+          shiftInternal(row, colDelta, rowDelta),
+          shiftInternal(col, colDelta, rowDelta),
+          shiftInternal(absNum, colDelta, rowDelta),
+          shiftInternal(a1Style, colDelta, rowDelta),
+          sheetName.map(shiftInternal(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+
       // Lookup functions (now using RangeLocation)
       case Index(array, rowNum, colNum) =>
         Index(

@@ -1,6 +1,6 @@
 # Supported Formula Functions
 
-The `eval` command supports 59 Excel functions.
+The `eval` command supports 65 Excel functions.
 
 ## Math Functions
 
@@ -10,7 +10,9 @@ The `eval` command supports 59 Excel functions.
 | AVERAGE | `=AVERAGE(range)` | `=AVERAGE(B1:B5)` |
 | MIN | `=MIN(range)` | `=MIN(C1:C100)` |
 | MAX | `=MAX(range)` | `=MAX(D1:D50)` |
-| COUNT | `=COUNT(range)` | `=COUNT(A:A)` |
+| COUNT | `=COUNT(range)` | `=COUNT(A:A)` (counts numeric cells) |
+| COUNTA | `=COUNTA(range)` | `=COUNTA(A:A)` (counts non-empty cells) |
+| COUNTBLANK | `=COUNTBLANK(range)` | `=COUNTBLANK(A:A)` (counts empty cells) |
 | ABS | `=ABS(number)` | `=ABS(-5)` |
 | SQRT | `=SQRT(number)` | `=SQRT(16)` → 4 |
 | MOD | `=MOD(number, divisor)` | `=MOD(7, 3)` → 1 |
@@ -108,3 +110,15 @@ The `eval` command supports 59 Excel functions.
 |----------|--------|---------|
 | IFERROR | `=IFERROR(value, value_if_error)` | `=IFERROR(A1/B1, 0)` |
 | ISERROR | `=ISERROR(value)` | `=ISERROR(A1/0)` |
+
+## Reference Functions
+
+| Function | Syntax | Example |
+|----------|--------|---------|
+| ROW | `=ROW(ref)` | `=ROW(A5)` → 5 |
+| COLUMN | `=COLUMN(ref)` | `=COLUMN(C1)` → 3 |
+| ROWS | `=ROWS(range)` | `=ROWS(A1:A10)` → 10 |
+| COLUMNS | `=COLUMNS(range)` | `=COLUMNS(A1:D1)` → 4 |
+| ADDRESS | `=ADDRESS(row, col, [abs], [a1], [sheet])` | `=ADDRESS(1, 1, 1, TRUE)` → "$A$1" |
+
+**ADDRESS abs_num**: 1=$A$1, 2=A$1, 3=$A1, 4=A1

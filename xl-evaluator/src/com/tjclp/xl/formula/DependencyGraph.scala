@@ -281,6 +281,18 @@ object DependencyGraph:
       case TExpr.Sign(value) => extractDependencies(value)
       case TExpr.Int_(value) => extractDependencies(value)
 
+      // Reference functions
+      case TExpr.Row_(ref) => extractDependencies(ref)
+      case TExpr.Column_(ref) => extractDependencies(ref)
+      case TExpr.Rows(range) => extractDependencies(range)
+      case TExpr.Columns(range) => extractDependencies(range)
+      case TExpr.Address(row, col, absNum, a1Style, sheetName) =>
+        extractDependencies(row) ++
+          extractDependencies(col) ++
+          extractDependencies(absNum) ++
+          extractDependencies(a1Style) ++
+          sheetName.map(extractDependencies).getOrElse(Set.empty)
+
       // Lookup functions
       case TExpr.Index(array, rowNum, colNum) =>
         array.localCells ++ extractDependencies(rowNum) ++ colNum
@@ -519,6 +531,18 @@ object DependencyGraph:
         extractDependenciesBounded(number, bounds) ++ extractDependenciesBounded(numDigits, bounds)
       case TExpr.Sign(value) => extractDependenciesBounded(value, bounds)
       case TExpr.Int_(value) => extractDependenciesBounded(value, bounds)
+
+      // Reference functions
+      case TExpr.Row_(ref) => extractDependenciesBounded(ref, bounds)
+      case TExpr.Column_(ref) => extractDependenciesBounded(ref, bounds)
+      case TExpr.Rows(range) => extractDependenciesBounded(range, bounds)
+      case TExpr.Columns(range) => extractDependenciesBounded(range, bounds)
+      case TExpr.Address(row, col, absNum, a1Style, sheetName) =>
+        extractDependenciesBounded(row, bounds) ++
+          extractDependenciesBounded(col, bounds) ++
+          extractDependenciesBounded(absNum, bounds) ++
+          extractDependenciesBounded(a1Style, bounds) ++
+          sheetName.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
 
       // Lookup functions
       case TExpr.Index(array, rowNum, colNum) =>
@@ -1043,6 +1067,18 @@ object DependencyGraph:
         )
       case TExpr.Sign(x) => extractQualifiedDependencies(x, currentSheet)
       case TExpr.Int_(x) => extractQualifiedDependencies(x, currentSheet)
+
+      // Reference functions
+      case TExpr.Row_(ref) => extractQualifiedDependencies(ref, currentSheet)
+      case TExpr.Column_(ref) => extractQualifiedDependencies(ref, currentSheet)
+      case TExpr.Rows(range) => extractQualifiedDependencies(range, currentSheet)
+      case TExpr.Columns(range) => extractQualifiedDependencies(range, currentSheet)
+      case TExpr.Address(row, col, absNum, a1Style, sheetName) =>
+        extractQualifiedDependencies(row, currentSheet) ++
+          extractQualifiedDependencies(col, currentSheet) ++
+          extractQualifiedDependencies(absNum, currentSheet) ++
+          extractQualifiedDependencies(a1Style, currentSheet) ++
+          sheetName.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
 
       // Ternary
       case TExpr.If(cond, thenBranch, elseBranch) =>

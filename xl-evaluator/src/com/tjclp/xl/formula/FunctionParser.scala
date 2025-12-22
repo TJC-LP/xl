@@ -164,6 +164,7 @@ object FunctionParser:
       sumFunctionParser,
       countFunctionParser,
       countaFunctionParser,
+      countblankFunctionParser,
       averageFunctionParser,
       minFunctionParser,
       maxFunctionParser,
@@ -212,6 +213,12 @@ object FunctionParser:
       truncFunctionParser,
       signFunctionParser,
       intFunctionParser,
+      // Reference functions
+      rowFunctionParser,
+      columnFunctionParser,
+      rowsFunctionParser,
+      columnsFunctionParser,
+      addressFunctionParser,
       // Lookup functions
       indexFunctionParser,
       matchFunctionParser,
@@ -295,6 +302,35 @@ object FunctionParser:
           scala.util.Left(
             ParseError.InvalidArguments(
               "COUNTA",
+              pos,
+              "1 range argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** COUNTBLANK function: COUNTBLANK(range) - counts empty cells using Aggregator typeclass */
+  given countblankFunctionParser: FunctionParser[Unit] with
+    def name: String = "COUNTBLANK"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(fold: TExpr.FoldRange[?, ?]) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.Aggregate("COUNTBLANK", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(
+            TExpr.Aggregate("COUNTBLANK", TExpr.RangeLocation.CrossSheet(sheet, range))
+          )
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(
+            TExpr.Aggregate("COUNTBLANK", TExpr.RangeLocation.CrossSheet(sheet, range))
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "COUNTBLANK",
               pos,
               "1 range argument",
               s"${args.length} arguments"
@@ -1468,6 +1504,121 @@ object FunctionParser:
               "INT",
               pos,
               "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  // === Reference Functions ===
+
+  /** ROW function: ROW(reference) - returns 1-based row number */
+  given rowFunctionParser: FunctionParser[Unit] with
+    def name: String = "ROW"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(refExpr) =>
+          scala.util.Right(TExpr.Row_(refExpr))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments("ROW", pos, "1 argument", s"${args.length} arguments")
+          )
+
+  /** COLUMN function: COLUMN(reference) - returns 1-based column number */
+  given columnFunctionParser: FunctionParser[Unit] with
+    def name: String = "COLUMN"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(refExpr) =>
+          scala.util.Right(TExpr.Column_(refExpr))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments("COLUMN", pos, "1 argument", s"${args.length} arguments")
+          )
+
+  /** ROWS function: ROWS(range) - returns number of rows in range */
+  given rowsFunctionParser: FunctionParser[Unit] with
+    def name: String = "ROWS"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(rangeExpr) =>
+          scala.util.Right(TExpr.Rows(rangeExpr))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments("ROWS", pos, "1 argument", s"${args.length} arguments")
+          )
+
+  /** COLUMNS function: COLUMNS(range) - returns number of columns in range */
+  given columnsFunctionParser: FunctionParser[Unit] with
+    def name: String = "COLUMNS"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(rangeExpr) =>
+          scala.util.Right(TExpr.Columns(rangeExpr))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments("COLUMNS", pos, "1 argument", s"${args.length} arguments")
+          )
+
+  /** ADDRESS function: ADDRESS(row, column, [abs_num], [a1], [sheet_text]) */
+  given addressFunctionParser: FunctionParser[Unit] with
+    def name: String = "ADDRESS"
+    def arity: Arity = Arity.Range(2, 5)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(rowExpr, colExpr) =>
+          scala.util.Right(
+            TExpr.Address(
+              TExpr.asNumericExpr(rowExpr),
+              TExpr.asNumericExpr(colExpr),
+              TExpr.Lit(BigDecimal(1)),
+              TExpr.Lit(true),
+              None
+            )
+          )
+        case List(rowExpr, colExpr, absNumExpr) =>
+          scala.util.Right(
+            TExpr.Address(
+              TExpr.asNumericExpr(rowExpr),
+              TExpr.asNumericExpr(colExpr),
+              TExpr.asNumericExpr(absNumExpr),
+              TExpr.Lit(true),
+              None
+            )
+          )
+        case List(rowExpr, colExpr, absNumExpr, a1Expr) =>
+          scala.util.Right(
+            TExpr.Address(
+              TExpr.asNumericExpr(rowExpr),
+              TExpr.asNumericExpr(colExpr),
+              TExpr.asNumericExpr(absNumExpr),
+              TExpr.asBooleanExpr(a1Expr),
+              None
+            )
+          )
+        case List(rowExpr, colExpr, absNumExpr, a1Expr, sheetExpr) =>
+          scala.util.Right(
+            TExpr.Address(
+              TExpr.asNumericExpr(rowExpr),
+              TExpr.asNumericExpr(colExpr),
+              TExpr.asNumericExpr(absNumExpr),
+              TExpr.asBooleanExpr(a1Expr),
+              Some(TExpr.asStringExpr(sheetExpr))
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ADDRESS",
+              pos,
+              "2 to 5 arguments",
               s"${args.length} arguments"
             )
           )

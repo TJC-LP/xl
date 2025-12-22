@@ -354,6 +354,37 @@ object FormulaPrinter:
       case TExpr.Int_(value) =>
         s"INT(${printExpr(value, 0)})"
 
+      // Reference functions
+      case TExpr.Row_(ref) =>
+        s"ROW(${printExpr(ref, 0)})"
+
+      case TExpr.Column_(ref) =>
+        s"COLUMN(${printExpr(ref, 0)})"
+
+      case TExpr.Rows(rangeExpr) =>
+        // ROWS takes a range argument, extract range from FoldRange if needed
+        rangeExpr match
+          case TExpr.FoldRange(range, _, _, _) => s"ROWS(${formatRange(range)})"
+          case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
+            s"ROWS(${formatSheetName(sheet)}!${formatRange(range)})"
+          case other => s"ROWS(${printExpr(other, 0)})"
+
+      case TExpr.Columns(rangeExpr) =>
+        // COLUMNS takes a range argument, extract range from FoldRange if needed
+        rangeExpr match
+          case TExpr.FoldRange(range, _, _, _) => s"COLUMNS(${formatRange(range)})"
+          case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
+            s"COLUMNS(${formatSheetName(sheet)}!${formatRange(range)})"
+          case other => s"COLUMNS(${printExpr(other, 0)})"
+
+      case TExpr.Address(row, col, absNum, a1Style, sheetName) =>
+        val args = sheetName match
+          case Some(sheet) =>
+            s"${printExpr(row, 0)}, ${printExpr(col, 0)}, ${printExpr(absNum, 0)}, ${printExpr(a1Style, 0)}, ${printExpr(sheet, 0)}"
+          case None =>
+            s"${printExpr(row, 0)}, ${printExpr(col, 0)}, ${printExpr(absNum, 0)}, ${printExpr(a1Style, 0)}"
+        s"ADDRESS($args)"
+
       // Lookup functions (now support cross-sheet via RangeLocation)
       case TExpr.Index(array, rowNum, colNum) =>
         val arrayStr = formatLocation(array)
@@ -739,6 +770,17 @@ object FormulaPrinter:
         s"Sign(${printWithTypes(value)})"
       case TExpr.Int_(value) =>
         s"Int_(${printWithTypes(value)})"
+      case TExpr.Row_(ref) =>
+        s"Row_(${printWithTypes(ref)})"
+      case TExpr.Column_(ref) =>
+        s"Column_(${printWithTypes(ref)})"
+      case TExpr.Rows(range) =>
+        s"Rows(${printWithTypes(range)})"
+      case TExpr.Columns(range) =>
+        s"Columns(${printWithTypes(range)})"
+      case TExpr.Address(row, col, absNum, a1Style, sheetName) =>
+        val sheetStr = sheetName.map(s => s", ${printWithTypes(s)}").getOrElse("")
+        s"Address(${printWithTypes(row)}, ${printWithTypes(col)}, ${printWithTypes(absNum)}, ${printWithTypes(a1Style)}$sheetStr)"
       case TExpr.Index(array, rowNum, colNum) =>
         colNum match
           case Some(col) =>
