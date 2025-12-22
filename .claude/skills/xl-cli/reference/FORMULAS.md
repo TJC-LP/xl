@@ -1,6 +1,6 @@
 # Supported Formula Functions
 
-The `eval` command supports 46 Excel functions.
+The `eval` command supports 59 Excel functions.
 
 ## Math Functions
 
@@ -12,6 +12,18 @@ The `eval` command supports 46 Excel functions.
 | MAX | `=MAX(range)` | `=MAX(D1:D50)` |
 | COUNT | `=COUNT(range)` | `=COUNT(A:A)` |
 | ABS | `=ABS(number)` | `=ABS(-5)` |
+| SQRT | `=SQRT(number)` | `=SQRT(16)` → 4 |
+| MOD | `=MOD(number, divisor)` | `=MOD(7, 3)` → 1 |
+| POWER | `=POWER(number, power)` | `=POWER(2, 10)` → 1024 |
+| LOG | `=LOG(number, [base])` | `=LOG(100)` → 2 (base 10) |
+| LN | `=LN(number)` | `=LN(2.718)` → 1 |
+| EXP | `=EXP(number)` | `=EXP(1)` → 2.718... |
+| FLOOR | `=FLOOR(number, significance)` | `=FLOOR(2.5, 1)` → 2 |
+| CEILING | `=CEILING(number, significance)` | `=CEILING(2.1, 1)` → 3 |
+| TRUNC | `=TRUNC(number, [num_digits])` | `=TRUNC(8.9)` → 8 |
+| SIGN | `=SIGN(number)` | `=SIGN(-5)` → -1 |
+| INT | `=INT(number)` | `=INT(-8.9)` → -9 |
+| PI | `=PI()` | `=PI()` → 3.14159... |
 | ROUND | `=ROUND(number, digits)` | `=ROUND(3.14159, 2)` |
 | ROUNDUP | `=ROUNDUP(number, digits)` | `=ROUNDUP(3.14159, 2)` |
 | ROUNDDOWN | `=ROUNDDOWN(number, digits)` | `=ROUNDDOWN(3.99, 0)` |
