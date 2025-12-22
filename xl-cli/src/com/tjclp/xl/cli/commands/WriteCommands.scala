@@ -87,14 +87,18 @@ object WriteCommands:
             SheetEvaluator.evaluateFormula(targetSheet)(fullFormula, workbook = Some(wb)).toOption
           val sheetWithFormula = targetSheet.put(ref, CellValue.Formula(formula, cachedValue))
           // Auto-apply date format if formula involves date functions (matches Excel behavior)
+          // Merge with existing style to preserve font, fill, border, etc.
           val finalSheet =
             if TExpr.containsDateFunction(parsedExpr) then
               val numFmt =
                 if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
-              styleSyntax.withRangeStyle(sheetWithFormula)(
-                CellRange(ref, ref),
-                CellStyle.default.withNumFmt(numFmt)
-              )
+              val existingStyle = sheetWithFormula.cells
+                .get(ref)
+                .flatMap(_.styleId)
+                .flatMap(sheetWithFormula.styleRegistry.get)
+                .getOrElse(CellStyle.default)
+              val mergedStyle = existingStyle.withNumFmt(numFmt)
+              styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
             else sheetWithFormula
           (finalSheet, 1)
         case Right(range) =>
@@ -103,6 +107,9 @@ object WriteCommands:
           val startCol = Column.index0(startRef.col)
           val startRow = Row.index0(startRef.row)
           val cells = range.cells.toList
+          // Evaluate against current sheet state (not final state) so formulas can reference
+          // earlier cells in the drag range. This is O(n²) but correct for cumulative formulas
+          // like =SUM($A$1:A2) dragged down multiple rows.
           val sheetWithFormulas = cells.foldLeft(targetSheet) { (s, targetRef) =>
             val colDelta = Column.index0(targetRef.col) - startCol
             val rowDelta = Row.index0(targetRef.row) - startRow
@@ -115,14 +122,20 @@ object WriteCommands:
             s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
           }
           // Auto-apply date format to entire range if formula involves date functions
+          // Merge with each cell's existing style to preserve font, fill, border, etc.
           val finalSheet =
             if TExpr.containsDateFunction(parsedExpr) then
               val numFmt =
                 if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
-              styleSyntax.withRangeStyle(sheetWithFormulas)(
-                range,
-                CellStyle.default.withNumFmt(numFmt)
-              )
+              cells.foldLeft(sheetWithFormulas) { (s, cellRef) =>
+                val existingStyle = s.cells
+                  .get(cellRef)
+                  .flatMap(_.styleId)
+                  .flatMap(s.styleRegistry.get)
+                  .getOrElse(CellStyle.default)
+                val mergedStyle = existingStyle.withNumFmt(numFmt)
+                styleSyntax.withRangeStyle(s)(CellRange(cellRef, cellRef), mergedStyle)
+              }
             else sheetWithFormulas
           (finalSheet, cells.size)
       updatedWb = wb.put(updatedSheet)
