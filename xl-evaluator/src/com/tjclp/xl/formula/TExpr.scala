@@ -974,6 +974,24 @@ object TExpr:
         case Local(r) => r.cells.toSet
         case CrossSheet(_, _) => Set.empty
 
+      /**
+       * Get cells for local ranges, bounded by the sheet's used range.
+       *
+       * Preferred for dependency graph construction to avoid materializing 1M+ cells for full
+       * column/row references like A:A or 1:1.
+       *
+       * @param bounds
+       *   Optional bounding range (typically sheet.usedRange)
+       * @return
+       *   Set of cell references in the intersection of this range and bounds
+       */
+      def localCellsBounded(bounds: Option[CellRange]): Set[ARef] = loc match
+        case Local(r) =>
+          bounds match
+            case Some(b) => r.intersect(b).map(_.cells.toSet).getOrElse(Set.empty)
+            case None => r.cells.toSet
+        case CrossSheet(_, _) => Set.empty
+
       /** Check if this is a cross-sheet reference */
       def isCrossSheet: Boolean = loc match
         case CrossSheet(_, _) => true

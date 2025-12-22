@@ -69,16 +69,19 @@ object DependencyGraph:
    * }}}
    */
   def fromSheet(sheet: Sheet): DependencyGraph =
+    // Get bounds once for all extractions - constrains full column/row ranges
+    val bounds = sheet.usedRange
+
     val formulaCells = sheet.cells.flatMap { case (ref, cell) =>
       cell.value match
         case CellValue.Formula(expression, _) => Some(ref -> expression)
         case _ => None
     }
 
-    // Build forward edges (dependencies)
+    // Build forward edges (dependencies) - use bounded extraction to avoid 1M+ cells
     val dependencies = formulaCells.map { case (ref, formulaStr) =>
       val deps = FormulaParser.parse(formulaStr) match
-        case scala.util.Right(expr) => extractDependencies(expr)
+        case scala.util.Right(expr) => extractDependenciesBounded(expr, bounds)
         case scala.util.Left(_) => Set.empty[ARef] // Parse error: no dependencies
       ref -> deps
     }.toMap
@@ -290,6 +293,222 @@ object DependencyGraph:
       // Date-to-serial converters - extract from inner expression
       case TExpr.DateToSerial(dateExpr) => extractDependencies(dateExpr)
       case TExpr.DateTimeToSerial(dtExpr) => extractDependencies(dtExpr)
+
+  /**
+   * Extract all cell references from TExpr, bounded by the sheet's used range.
+   *
+   * This optimized version constrains full column/row references (like A:A or 1:1) to the
+   * intersection with bounds, avoiding iteration over 1M+ cells. Use this when building dependency
+   * graphs from sheets.
+   *
+   * @param expr
+   *   The expression to analyze
+   * @param bounds
+   *   Optional bounding range (typically sheet.usedRange) to constrain full ranges
+   * @return
+   *   Set of all cell references used in the expression, bounded by the given range
+   */
+  @nowarn("msg=Unreachable case")
+  def extractDependenciesBounded[A](expr: TExpr[A], bounds: Option[CellRange]): Set[ARef] =
+    // Helper to bound a CellRange
+    def boundRange(range: CellRange): Set[ARef] =
+      bounds match
+        case Some(b) => range.intersect(b).map(_.cells.toSet).getOrElse(Set.empty)
+        case None => range.cells.toSet
+
+    expr match
+      // Single cell reference
+      case TExpr.Ref(at, _, _) => Set(at)
+
+      // Polymorphic reference (type resolved at evaluation time)
+      case TExpr.PolyRef(at, _) => Set(at)
+
+      // Cross-sheet references return Set.empty in same-sheet dependency extraction.
+      case TExpr.SheetRef(_, _, _, _) => Set.empty
+      case TExpr.SheetPolyRef(_, _, _) => Set.empty
+      case TExpr.SheetRange(_, _) => Set.empty
+      case TExpr.SheetFoldRange(_, _, _, _, _) => Set.empty
+      case TExpr.SheetSum(_, _) => Set.empty
+      case TExpr.SheetMin(_, _) => Set.empty
+      case TExpr.SheetMax(_, _) => Set.empty
+      case TExpr.SheetAverage(_, _) => Set.empty
+      case TExpr.SheetCount(_, _) => Set.empty
+
+      // Range reference (expand to all cells, BOUNDED)
+      case TExpr.FoldRange(range, _, _, _) => boundRange(range)
+
+      // Recursive cases (binary operators)
+      case TExpr.Add(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Sub(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Mul(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Div(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Eq(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Neq(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Lt(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Lte(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Gt(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Gte(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.And(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Or(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.ToInt(expr) => extractDependenciesBounded(expr, bounds)
+      case TExpr.Concatenate(xs) => xs.flatMap(extractDependenciesBounded(_, bounds)).toSet
+      case TExpr.Left(text, n) =>
+        extractDependenciesBounded(text, bounds) ++ extractDependenciesBounded(n, bounds)
+      case TExpr.Right(text, n) =>
+        extractDependenciesBounded(text, bounds) ++ extractDependenciesBounded(n, bounds)
+      case TExpr.Date(y, m, d) =>
+        extractDependenciesBounded(y, bounds) ++ extractDependenciesBounded(m, bounds) ++
+          extractDependenciesBounded(d, bounds)
+      case TExpr.Year(date) => extractDependenciesBounded(date, bounds)
+      case TExpr.Month(date) => extractDependenciesBounded(date, bounds)
+      case TExpr.Day(date) => extractDependenciesBounded(date, bounds)
+
+      // Date calculation functions
+      case TExpr.Eomonth(startDate, months) =>
+        extractDependenciesBounded(startDate, bounds) ++ extractDependenciesBounded(months, bounds)
+      case TExpr.Edate(startDate, months) =>
+        extractDependenciesBounded(startDate, bounds) ++ extractDependenciesBounded(months, bounds)
+      case TExpr.Datedif(startDate, endDate, unit) =>
+        extractDependenciesBounded(startDate, bounds) ++
+          extractDependenciesBounded(endDate, bounds) ++
+          extractDependenciesBounded(unit, bounds)
+      case TExpr.Networkdays(startDate, endDate, holidaysOpt) =>
+        extractDependenciesBounded(startDate, bounds) ++
+          extractDependenciesBounded(endDate, bounds) ++
+          holidaysOpt.map(boundRange).getOrElse(Set.empty)
+      case TExpr.Workday(startDate, days, holidaysOpt) =>
+        extractDependenciesBounded(startDate, bounds) ++
+          extractDependenciesBounded(days, bounds) ++
+          holidaysOpt.map(boundRange).getOrElse(Set.empty)
+      case TExpr.Yearfrac(startDate, endDate, basis) =>
+        extractDependenciesBounded(startDate, bounds) ++
+          extractDependenciesBounded(endDate, bounds) ++
+          extractDependenciesBounded(basis, bounds)
+
+      // Financial functions
+      case TExpr.Npv(rate, values) =>
+        extractDependenciesBounded(rate, bounds) ++ values.localCellsBounded(bounds)
+      case TExpr.Irr(values, guessOpt) =>
+        values.localCellsBounded(bounds) ++
+          guessOpt.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
+      case TExpr.Xnpv(rate, values, dates) =>
+        extractDependenciesBounded(rate, bounds) ++
+          values.localCellsBounded(bounds) ++
+          dates.localCellsBounded(bounds)
+      case TExpr.Xirr(values, dates, guessOpt) =>
+        values.localCellsBounded(bounds) ++
+          dates.localCellsBounded(bounds) ++
+          guessOpt.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
+      case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
+        extractDependenciesBounded(lookup, bounds) ++
+          table.localCellsBounded(bounds) ++
+          extractDependenciesBounded(colIndex, bounds) ++
+          extractDependenciesBounded(rangeLookup, bounds)
+
+      // Conditional aggregation functions
+      case TExpr.SumIf(range, criteria, sumRangeOpt) =>
+        range.localCellsBounded(bounds) ++
+          extractDependenciesBounded(criteria, bounds) ++
+          sumRangeOpt.map(_.localCellsBounded(bounds)).getOrElse(Set.empty)
+      case TExpr.CountIf(range, criteria) =>
+        range.localCellsBounded(bounds) ++ extractDependenciesBounded(criteria, bounds)
+      case TExpr.SumIfs(sumRange, conditions) =>
+        sumRange.localCellsBounded(bounds) ++
+          conditions.flatMap { case (range, criteria) =>
+            range.localCellsBounded(bounds) ++ extractDependenciesBounded(criteria, bounds)
+          }.toSet
+      case TExpr.CountIfs(conditions) =>
+        conditions.flatMap { case (range, criteria) =>
+          range.localCellsBounded(bounds) ++ extractDependenciesBounded(criteria, bounds)
+        }.toSet
+
+      // Array and advanced lookup functions
+      case TExpr.SumProduct(arrays) =>
+        arrays.flatMap(_.localCellsBounded(bounds)).toSet
+
+      case TExpr.XLookup(
+            lookupValue,
+            lookupArray,
+            returnArray,
+            ifNotFound,
+            matchMode,
+            searchMode
+          ) =>
+        extractDependenciesBounded(lookupValue, bounds) ++
+          lookupArray.localCellsBounded(bounds) ++
+          returnArray.localCellsBounded(bounds) ++
+          ifNotFound.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
+          extractDependenciesBounded(matchMode, bounds) ++
+          extractDependenciesBounded(searchMode, bounds)
+
+      // Ternary operator
+      case TExpr.If(cond, thenBranch, elseBranch) =>
+        extractDependenciesBounded(cond, bounds) ++
+          extractDependenciesBounded(thenBranch, bounds) ++
+          extractDependenciesBounded(elseBranch, bounds)
+
+      // Unary operators
+      case TExpr.Not(x) => extractDependenciesBounded(x, bounds)
+      case TExpr.Len(x) => extractDependenciesBounded(x, bounds)
+      case TExpr.Upper(x) => extractDependenciesBounded(x, bounds)
+      case TExpr.Lower(x) => extractDependenciesBounded(x, bounds)
+
+      // Error handling functions
+      case TExpr.Iferror(value, valueIfError) =>
+        extractDependenciesBounded(value, bounds) ++
+          extractDependenciesBounded(valueIfError, bounds)
+      case TExpr.Iserror(value) => extractDependenciesBounded(value, bounds)
+
+      // Rounding and math functions
+      case TExpr.Round(value, numDigits) =>
+        extractDependenciesBounded(value, bounds) ++ extractDependenciesBounded(numDigits, bounds)
+      case TExpr.RoundUp(value, numDigits) =>
+        extractDependenciesBounded(value, bounds) ++ extractDependenciesBounded(numDigits, bounds)
+      case TExpr.RoundDown(value, numDigits) =>
+        extractDependenciesBounded(value, bounds) ++ extractDependenciesBounded(numDigits, bounds)
+      case TExpr.Abs(value) => extractDependenciesBounded(value, bounds)
+
+      // Lookup functions
+      case TExpr.Index(array, rowNum, colNum) =>
+        array.localCellsBounded(bounds) ++
+          extractDependenciesBounded(rowNum, bounds) ++
+          colNum.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
+      case TExpr.Match(lookupValue, lookupArray, matchType) =>
+        extractDependenciesBounded(lookupValue, bounds) ++
+          lookupArray.localCellsBounded(bounds) ++
+          extractDependenciesBounded(matchType, bounds)
+
+      // Range aggregate functions (direct enum cases)
+      case TExpr.Sum(range) => range.localCellsBounded(bounds)
+      case TExpr.Count(range) => range.localCellsBounded(bounds)
+      case TExpr.Min(range) => range.localCellsBounded(bounds)
+      case TExpr.Max(range) => range.localCellsBounded(bounds)
+      case TExpr.Average(range) => range.localCellsBounded(bounds)
+
+      // Unified aggregate function (typeclass-based)
+      case TExpr.Aggregate(_, location) => location.localCellsBounded(bounds)
+
+      // Literals and nullary functions (no dependencies)
+      case TExpr.Lit(_) => Set.empty
+      case TExpr.Today() => Set.empty
+      case TExpr.Now() => Set.empty
+      case TExpr.Pi() => Set.empty
+
+      // Date-to-serial converters - extract from inner expression
+      case TExpr.DateToSerial(dateExpr) => extractDependenciesBounded(dateExpr, bounds)
+      case TExpr.DateTimeToSerial(dtExpr) => extractDependenciesBounded(dtExpr, bounds)
 
   /**
    * Get cells this cell depends on (precedents).

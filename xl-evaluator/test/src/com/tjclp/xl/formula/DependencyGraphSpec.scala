@@ -611,3 +611,50 @@ class DependencyGraphSpec extends FunSuite:
     // B1 -> A1, D1 -> C1
     assertEquals(result, Set(ref"B1", ref"A1", ref"D1", ref"C1"))
   }
+
+  // ===== Bounded Dependency Extraction Tests =====
+
+  test("extractDependenciesBounded: bounds limits full column range") {
+    val bounds = Some(parseRange("A1:Z10"))
+    val expr = TExpr.sum(parseRange("A:A")) // Full column A
+    val deps = DependencyGraph.extractDependenciesBounded(expr, bounds)
+    // Should only include A1:A10, not all 1M+ cells
+    assertEquals(deps.size, 10)
+    assert(deps.contains(ref"A1"))
+    assert(deps.contains(ref"A10"))
+    assert(!deps.contains(ref"A11"))
+  }
+
+  test("extractDependenciesBounded: bounds limits full row range") {
+    val bounds = Some(parseRange("A1:D100"))
+    val expr = TExpr.sum(parseRange("1:1")) // Full row 1
+    val deps = DependencyGraph.extractDependenciesBounded(expr, bounds)
+    // Should only include A1:D1, not all 16K+ cells
+    assertEquals(deps.size, 4)
+    assert(deps.contains(ref"A1"))
+    assert(deps.contains(ref"D1"))
+    assert(!deps.contains(ref"E1"))
+  }
+
+  test("extractDependenciesBounded: no bounds behaves like original") {
+    val expr = TExpr.sum(parseRange("A1:A3"))
+    val bounded = DependencyGraph.extractDependenciesBounded(expr, None)
+    val original = DependencyGraph.extractDependencies(expr)
+    assertEquals(bounded, original)
+  }
+
+  test("fromSheet: full column formula uses bounded extraction") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(1)),
+      ref"A2" -> CellValue.Number(BigDecimal(2)),
+      ref"A3" -> CellValue.Number(BigDecimal(3)),
+      ref"B1" -> CellValue.Formula("=SUM(A:A)") // Full column reference
+    )
+    val graph = DependencyGraph.fromSheet(sheet)
+    // Should only include cells in the used range (A1:B1 expanded to A1:A3, B1)
+    // Not all 1M+ cells in column A
+    val deps = graph.dependencies(ref"B1")
+    assertEquals(deps, Set(ref"A1", ref"A2", ref"A3"))
+    // Verify it didn't include cells outside used range
+    assert(!deps.contains(ref"A100"))
+  }
