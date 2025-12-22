@@ -47,12 +47,21 @@ trait Aggregator[A]:
    */
   def countsNonEmpty: Boolean = false
 
+  /**
+   * Whether this aggregator counts empty cells (like COUNTBLANK).
+   *
+   * When true, the evaluator will count cells that are empty rather than calling `combine` with
+   * values. This is used for COUNTBLANK which counts truly empty cells.
+   */
+  def countsEmpty: Boolean = false
+
 object Aggregator:
   /** Registry of all aggregators by name (uppercase) */
   private lazy val registry: Map[String, Aggregator[?]] = Map(
     "SUM" -> sumAggregator,
     "COUNT" -> countAggregator,
     "COUNTA" -> countaAggregator,
+    "COUNTBLANK" -> countblankAggregator,
     "MIN" -> minAggregator,
     "MAX" -> maxAggregator,
     "AVERAGE" -> averageAggregator
@@ -92,6 +101,14 @@ object Aggregator:
     def combine(acc: Int, value: BigDecimal) = acc + 1
     def finalize(acc: Int) = BigDecimal(acc)
     override def countsNonEmpty: Boolean = true
+
+  /** COUNTBLANK: Count empty cells in a range */
+  given countblankAggregator: Aggregator[Int] with
+    def name = "COUNTBLANK"
+    def empty = 0
+    def combine(acc: Int, value: BigDecimal) = acc + 1
+    def finalize(acc: Int) = BigDecimal(acc)
+    override def countsEmpty: Boolean = true
 
   /** MIN: Find the minimum numeric value in a range */
   given minAggregator: Aggregator[Option[BigDecimal]] with

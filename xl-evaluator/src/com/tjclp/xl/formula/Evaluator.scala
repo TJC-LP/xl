@@ -1057,6 +1057,11 @@ private class EvaluatorImpl extends Evaluator:
                   cell.value match
                     case CellValue.Empty => acc
                     case _ => agg.combine(acc, BigDecimal(1))
+                else if agg.countsEmpty then
+                  // COUNTBLANK mode: count only empty cells
+                  cell.value match
+                    case CellValue.Empty => agg.combine(acc, BigDecimal(1))
+                    case _ => acc
                 else
                   // Standard mode: only process numeric values
                   TExpr.decodeNumeric(cell) match
@@ -1674,6 +1679,88 @@ private class EvaluatorImpl extends Evaluator:
           value.setScale(0, BigDecimal.RoundingMode.FLOOR)
         }
 
+      // ===== Reference Functions =====
+
+      case TExpr.Row_(refExpr) =>
+        // ROW: return 1-based row number of reference
+        extractARef(refExpr) match
+          case Some(aref) => Right(BigDecimal(aref.row.index0 + 1)) // 0-based to 1-based
+          case None =>
+            Left(EvalError.EvalFailed("ROW requires a cell reference", Some(s"ROW($refExpr)")))
+
+      case TExpr.Column_(refExpr) =>
+        // COLUMN: return 1-based column number of reference
+        extractARef(refExpr) match
+          case Some(aref) => Right(BigDecimal(aref.col.index0 + 1)) // 0-based to 1-based
+          case None =>
+            Left(
+              EvalError.EvalFailed("COLUMN requires a cell reference", Some(s"COLUMN($refExpr)"))
+            )
+
+      case TExpr.Rows(rangeExpr) =>
+        // ROWS: return number of rows in range
+        extractCellRange(rangeExpr) match
+          case Some(range) =>
+            val rowCount = range.rowEnd.index0 - range.rowStart.index0 + 1
+            Right(BigDecimal(rowCount))
+          case None =>
+            Left(EvalError.EvalFailed("ROWS requires a range argument", Some(s"ROWS($rangeExpr)")))
+
+      case TExpr.Columns(rangeExpr) =>
+        // COLUMNS: return number of columns in range
+        extractCellRange(rangeExpr) match
+          case Some(range) =>
+            val colCount = range.colEnd.index0 - range.colStart.index0 + 1
+            Right(BigDecimal(colCount))
+          case None =>
+            Left(
+              EvalError.EvalFailed(
+                "COLUMNS requires a range argument",
+                Some(s"COLUMNS($rangeExpr)")
+              )
+            )
+
+      case TExpr.Address(rowExpr, colExpr, absNumExpr, a1StyleExpr, sheetNameExpr) =>
+        // ADDRESS: create cell reference string
+        for
+          row <- eval(rowExpr, sheet, clock, workbook)
+          col <- eval(colExpr, sheet, clock, workbook)
+          absNum <- eval(absNumExpr, sheet, clock, workbook)
+          a1Style <- eval(a1StyleExpr, sheet, clock, workbook)
+          sheetOpt <- sheetNameExpr match
+            case Some(expr) => eval(expr, sheet, clock, workbook).map(Some(_))
+            case None => Right(None)
+        yield
+          val rowInt = row.toInt
+          val colInt = col.toInt
+          val absType = absNum.toInt
+
+          if rowInt < 1 || colInt < 1 then "#VALUE!"
+          else if a1Style then
+            // A1 notation
+            val colLetter = columnToLetter(colInt - 1) // Convert to 0-based for helper
+            val (colPrefix, rowPrefix) = absType match
+              case 1 => ("$", "$") // $A$1
+              case 2 => ("", "$") // A$1
+              case 3 => ("$", "") // $A1
+              case _ => ("", "") // A1
+            val refStr = s"$colPrefix$colLetter$rowPrefix$rowInt"
+            sheetOpt match
+              case Some(sn) => s"$sn!$refStr"
+              case None => refStr
+          else
+            // R1C1 notation
+            val rowPart = absType match
+              case 1 | 2 => s"R$rowInt"
+              case _ => s"R[$rowInt]"
+            val colPart = absType match
+              case 1 | 3 => s"C$colInt"
+              case _ => s"C[$colInt]"
+            val refStr = s"$rowPart$colPart"
+            sheetOpt match
+              case Some(sn) => s"$sn!$refStr"
+              case None => refStr
+
       // ===== Lookup Functions =====
 
       case TExpr.Index(array, rowNumExpr, colNumExpr) =>
@@ -2062,3 +2149,42 @@ private class EvaluatorImpl extends Evaluator:
         !holidays.contains(current)
       then remaining -= direction.toInt
     current
+
+  // ===== Helper functions for reference functions =====
+
+  /**
+   * Extract an ARef from a TExpr that represents a cell reference. Handles PolyRef (single cell),
+   * Ref, SheetPolyRef, and SheetRef.
+   */
+  private def extractARef(expr: TExpr[?]): Option[ARef] = expr match
+    case TExpr.PolyRef(ref, _) => Some(ref)
+    case TExpr.Ref(ref, _, _) => Some(ref)
+    case TExpr.SheetPolyRef(_, ref, _) => Some(ref)
+    case TExpr.SheetRef(_, ref, _, _) => Some(ref)
+    case TExpr.FoldRange(range, _, _, _) => Some(range.start) // Return top-left of range
+    case TExpr.SheetFoldRange(_, range, _, _, _) => Some(range.start)
+    case _ => None
+
+  /**
+   * Extract a CellRange from a TExpr that represents a range reference. Handles FoldRange and
+   * SheetFoldRange.
+   */
+  private def extractCellRange(expr: TExpr[?]): Option[CellRange] = expr match
+    case TExpr.FoldRange(range, _, _, _) => Some(range)
+    case TExpr.SheetFoldRange(_, range, _, _, _) => Some(range)
+    case _ => None
+
+  /**
+   * Convert a 0-based column index to Excel letter notation. 0 -> A, 1 -> B, ..., 25 -> Z, 26 ->
+   * AA, 27 -> AB, etc.
+   */
+  @tailrec
+  private def columnToLetter(col: Int, acc: String = ""): String =
+    if col < 0 then acc
+    else if acc.isEmpty && col <= 25 then ('A' + col).toChar.toString
+    else
+      val remainder = col % 26
+      val quotient = col / 26 - 1
+      val letter = ('A' + remainder).toChar
+      if quotient < 0 then letter.toString + acc
+      else columnToLetter(quotient, letter.toString + acc)

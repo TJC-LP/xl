@@ -972,6 +972,75 @@ enum TExpr[A] derives CanEqual:
    */
   case Int_(value: TExpr[BigDecimal]) extends TExpr[BigDecimal]
 
+  // Reference information functions
+
+  /**
+   * Row number: ROW(reference)
+   *
+   * Returns the 1-based row number of a cell reference. For ranges, returns the row of the top-left
+   * cell.
+   *
+   * Example: ROW(A5) = 5, ROW(B1:C10) = 1
+   *
+   * @note
+   *   Named Row_ to avoid conflict with com.tjclp.xl.Row opaque type
+   */
+  case Row_(ref: TExpr[?]) extends TExpr[BigDecimal]
+
+  /**
+   * Column number: COLUMN(reference)
+   *
+   * Returns the 1-based column number of a cell reference. For ranges, returns the column of the
+   * top-left cell.
+   *
+   * Example: COLUMN(C1) = 3, COLUMN(B1:D10) = 2
+   */
+  case Column_(ref: TExpr[?]) extends TExpr[BigDecimal]
+
+  /**
+   * Row count: ROWS(range)
+   *
+   * Returns the number of rows in a range.
+   *
+   * Example: ROWS(A1:A10) = 10, ROWS(B2:D5) = 4
+   */
+  case Rows(range: TExpr[?]) extends TExpr[BigDecimal]
+
+  /**
+   * Column count: COLUMNS(range)
+   *
+   * Returns the number of columns in a range.
+   *
+   * Example: COLUMNS(A1:D1) = 4, COLUMNS(B2:E5) = 4
+   */
+  case Columns(range: TExpr[?]) extends TExpr[BigDecimal]
+
+  /**
+   * Create cell address: ADDRESS(row, column, [abs_num], [a1], [sheet])
+   *
+   * Returns a cell reference as text string.
+   *
+   * @param row
+   *   1-based row number
+   * @param col
+   *   1-based column number
+   * @param absNum
+   *   Anchor style: 1=$A$1, 2=A$1, 3=$A1, 4=A1 (default 1)
+   * @param a1Style
+   *   TRUE for A1 notation (default), FALSE for R1C1
+   * @param sheetName
+   *   Optional sheet name to prepend
+   *
+   * Example: ADDRESS(1, 1) = "$A$1", ADDRESS(1, 1, 4) = "A1"
+   */
+  case Address(
+    row: TExpr[BigDecimal],
+    col: TExpr[BigDecimal],
+    absNum: TExpr[BigDecimal],
+    a1Style: TExpr[Boolean],
+    sheetName: Option[TExpr[String]]
+  ) extends TExpr[String]
+
   // Array and advanced lookup functions
 
   /**
@@ -1480,6 +1549,54 @@ object TExpr:
    */
   def int_(value: TExpr[BigDecimal]): TExpr[BigDecimal] =
     Int_(value)
+
+  // Reference information function smart constructors
+
+  /**
+   * Create ROW expression.
+   *
+   * Example: TExpr.row(TExpr.PolyRef(ref"A5", Anchor.Relative))
+   */
+  def row(ref: TExpr[?]): TExpr[BigDecimal] =
+    Row_(ref)
+
+  /**
+   * Create COLUMN expression.
+   *
+   * Example: TExpr.column(TExpr.PolyRef(ref"C1", Anchor.Relative))
+   */
+  def column(ref: TExpr[?]): TExpr[BigDecimal] =
+    Column_(ref)
+
+  /**
+   * Create ROWS expression.
+   *
+   * Example: TExpr.rows(TExpr.FoldRange(range, ...))
+   */
+  def rows(range: TExpr[?]): TExpr[BigDecimal] =
+    Rows(range)
+
+  /**
+   * Create COLUMNS expression.
+   *
+   * Example: TExpr.columns(TExpr.FoldRange(range, ...))
+   */
+  def columns(range: TExpr[?]): TExpr[BigDecimal] =
+    Columns(range)
+
+  /**
+   * Create ADDRESS expression.
+   *
+   * Example: TExpr.address(TExpr.Lit(1), TExpr.Lit(1), TExpr.Lit(1), TExpr.Lit(true), None)
+   */
+  def address(
+    row: TExpr[BigDecimal],
+    col: TExpr[BigDecimal],
+    absNum: TExpr[BigDecimal] = Lit(BigDecimal(1)),
+    a1Style: TExpr[Boolean] = Lit(true),
+    sheetName: Option[TExpr[String]] = None
+  ): TExpr[String] =
+    Address(row, col, absNum, a1Style, sheetName)
 
   // Array and advanced lookup function smart constructors
 
