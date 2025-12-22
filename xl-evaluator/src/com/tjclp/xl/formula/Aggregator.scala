@@ -28,6 +28,14 @@ trait Aggregator[A]:
   /** Finalize the result after processing all cells */
   def finalize(acc: A): BigDecimal
 
+  /**
+   * Finalize with error handling for functions that can fail (like AVERAGE on empty range).
+   *
+   * By default, wraps `finalize` in Right. Override for error-returning functions.
+   */
+  def finalizeWithError(acc: A): Either[EvalError, BigDecimal] =
+    Right(finalize(acc))
+
   /** Whether to skip non-numeric cells (true) or include them in count (false) */
   def skipNonNumeric: Boolean = true
 
@@ -110,5 +118,8 @@ object Aggregator:
     def combine(acc: (BigDecimal, Int), value: BigDecimal) =
       (acc._1 + value, acc._2 + 1)
     def finalize(acc: (BigDecimal, Int)) =
-      if acc._2 == 0 then BigDecimal(0) // Could return #DIV/0! error
+      if acc._2 == 0 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
       else acc._1 / acc._2
+    override def finalizeWithError(acc: (BigDecimal, Int)) =
+      if acc._2 == 0 then Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
+      else Right(acc._1 / acc._2)

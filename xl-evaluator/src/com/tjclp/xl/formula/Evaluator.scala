@@ -1064,8 +1064,8 @@ private class EvaluatorImpl extends Evaluator:
                     case Left(_) if agg.skipNonNumeric => acc
                     case Left(_) => acc // Skip non-numeric cells
               }
-              // Finalize and return the result
-              Right(agg.finalize(result))
+              // Finalize and return the result (may return error for AVERAGE on empty range)
+              agg.finalizeWithError(result)
             }
 
       // ===== Range Aggregation =====
