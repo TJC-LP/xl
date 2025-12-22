@@ -902,7 +902,19 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("YEARFRAC"))
     // Non-empty cell counter (added via Aggregator typeclass)
     assert(functions.contains("COUNTA"))
-    assertEquals(functions.length, 48)
+    // Math functions
+    assert(functions.contains("SQRT"))
+    assert(functions.contains("MOD"))
+    assert(functions.contains("POWER"))
+    assert(functions.contains("LOG"))
+    assert(functions.contains("LN"))
+    assert(functions.contains("EXP"))
+    assert(functions.contains("FLOOR"))
+    assert(functions.contains("CEILING"))
+    assert(functions.contains("TRUNC"))
+    assert(functions.contains("SIGN"))
+    assert(functions.contains("INT"))
+    assertEquals(functions.length, 59)
   }
 
   test("FunctionParser.lookup finds known functions") {
