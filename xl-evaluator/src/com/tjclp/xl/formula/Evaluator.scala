@@ -1608,7 +1608,7 @@ private class EvaluatorImpl extends Evaluator:
                   Some(s"FLOOR($number, $significance)")
                 )
               )
-            else if number > 0 && significance < 0 then
+            else if (number > 0 && significance < 0) || (number < 0 && significance > 0) then
               Left(
                 EvalError.EvalFailed(
                   "FLOOR: number and significance must have same sign",
@@ -1616,7 +1616,7 @@ private class EvaluatorImpl extends Evaluator:
                 )
               )
             else
-              // Round toward zero to nearest multiple of significance
+              // Round down toward negative infinity to nearest multiple of significance
               val quotient = (number / significance).setScale(0, BigDecimal.RoundingMode.FLOOR)
               Right(quotient * significance)
           }
@@ -1636,7 +1636,7 @@ private class EvaluatorImpl extends Evaluator:
                   Some(s"CEILING($number, $significance)")
                 )
               )
-            else if number > 0 && significance < 0 then
+            else if (number > 0 && significance < 0) || (number < 0 && significance > 0) then
               Left(
                 EvalError.EvalFailed(
                   "CEILING: number and significance must have same sign",
@@ -1644,7 +1644,7 @@ private class EvaluatorImpl extends Evaluator:
                 )
               )
             else
-              // Round away from zero to nearest multiple of significance
+              // Round up toward positive infinity to nearest multiple of significance
               val quotient = (number / significance).setScale(0, BigDecimal.RoundingMode.CEILING)
               Right(quotient * significance)
           }

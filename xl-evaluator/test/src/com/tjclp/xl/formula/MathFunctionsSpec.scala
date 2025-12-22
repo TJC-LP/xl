@@ -263,6 +263,34 @@ class MathFunctionsSpec extends FunSuite:
     assert(result.isLeft, "CEILING with significance 0 should return error")
   }
 
+  test("FLOOR: negative number with positive significance returns error") {
+    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(1)))
+    val result = evaluator.eval(expr, emptySheet)
+    assert(result.isLeft, "FLOOR(-2.5, 1) should return error (mismatched signs)")
+  }
+
+  test("CEILING: negative number with positive significance returns error") {
+    val expr = TExpr.Ceiling(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(1)))
+    val result = evaluator.eval(expr, emptySheet)
+    assert(result.isLeft, "CEILING(-2.5, 1) should return error (mismatched signs)")
+  }
+
+  test("FLOOR: negative number with negative significance works") {
+    // FLOOR(-4.1, -2) rounds down (toward -∞) to nearest multiple of -2
+    // -4.1 / -2 = 2.05, floor(2.05) = 2, 2 * -2 = -4
+    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(-4.1)), TExpr.Lit(BigDecimal(-2)))
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal(-4)))
+  }
+
+  test("CEILING: negative number with negative significance works") {
+    // CEILING(-4.1, -2) rounds up (toward +∞) to nearest multiple of -2
+    // -4.1 / -2 = 2.05, ceil(2.05) = 3, 3 * -2 = -6
+    val expr = TExpr.Ceiling(TExpr.Lit(BigDecimal(-4.1)), TExpr.Lit(BigDecimal(-2)))
+    val result = evaluator.eval(expr, emptySheet)
+    assertEquals(result, Right(BigDecimal(-6)))
+  }
+
   // ===== TRUNC Tests =====
 
   test("TRUNC: trunc(8.9) = 8") {
