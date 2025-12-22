@@ -424,6 +424,23 @@ object FormulaPrinter:
           .mkString(", ")
         s"COUNTIFS($condStrs)"
 
+      case TExpr.AverageIf(range, criteria, avgRangeOpt) =>
+        val rangeStr = formatLocation(range)
+        val criteriaStr = printExpr(criteria, 0)
+        avgRangeOpt match
+          case Some(avgRange) =>
+            s"AVERAGEIF($rangeStr, $criteriaStr, ${formatLocation(avgRange)})"
+          case None =>
+            s"AVERAGEIF($rangeStr, $criteriaStr)"
+
+      case TExpr.AverageIfs(avgRange, conditions) =>
+        val condStrs = conditions
+          .map { case (r, criteria) =>
+            s"${formatLocation(r)}, ${printExpr(criteria, 0)}"
+          }
+          .mkString(", ")
+        s"AVERAGEIFS(${formatLocation(avgRange)}, $condStrs)"
+
       // Array and advanced lookup functions (now support cross-sheet via RangeLocation)
       case TExpr.SumProduct(arrays) =>
         s"SUMPRODUCT(${arrays.map(formatLocation).mkString(", ")})"
@@ -811,6 +828,19 @@ object FormulaPrinter:
           }
           .mkString(", ")
         s"CountIfs($condStrs)"
+      case TExpr.AverageIf(range, criteria, avgRangeOpt) =>
+        avgRangeOpt match
+          case Some(avgRange) =>
+            s"AverageIf(${formatLocation(range)}, ${printWithTypes(criteria)}, ${formatLocation(avgRange)})"
+          case None =>
+            s"AverageIf(${formatLocation(range)}, ${printWithTypes(criteria)})"
+      case TExpr.AverageIfs(avgRange, conditions) =>
+        val condStrs = conditions
+          .map { case (r, criteria) =>
+            s"(${formatLocation(r)}, ${printWithTypes(criteria)})"
+          }
+          .mkString(", ")
+        s"AverageIfs(${formatLocation(avgRange)}, $condStrs)"
       case TExpr.SumProduct(arrays) =>
         s"SumProduct(${arrays.map(formatLocation).mkString(", ")})"
       case TExpr.XLookup(

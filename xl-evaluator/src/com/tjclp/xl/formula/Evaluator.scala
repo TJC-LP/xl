@@ -1358,6 +1358,89 @@ private class EvaluatorImpl extends Evaluator:
                 Right(BigDecimal(0))
           }
 
+      case TExpr.AverageIf(range, criteriaExpr, avgRangeOpt) =>
+        // AVERAGEIF: Average cells in avgRange where corresponding cells in range match criteria
+        eval(criteriaExpr, sheet, clock, workbook).flatMap { criteriaValue =>
+          val criterion = CriteriaMatcher.parse(criteriaValue)
+          val effectiveRange = avgRangeOpt.getOrElse(range)
+          val rangeRefsList = range.cells.toList
+          val avgRefsList = effectiveRange.cells.toList
+
+          // Validate dimensions match (both width and height, not just total count)
+          if range.width != effectiveRange.width || range.height != effectiveRange.height then
+            Left(
+              EvalError.EvalFailed(
+                s"AVERAGEIF: range and average_range must have same dimensions (${range.height}×${range.width} vs ${effectiveRange.height}×${effectiveRange.width})",
+                Some(s"AVERAGEIF(${range.toA1}, ..., ${effectiveRange.toA1})")
+              )
+            )
+          else
+            val pairs = rangeRefsList.zip(avgRefsList)
+            val (sum, count) = pairs.foldLeft((BigDecimal(0), 0)) {
+              case ((accSum, accCount), (testRef, avgRef)) =>
+                val testCell = sheet(testRef)
+                if CriteriaMatcher.matches(testCell.value, criterion) then
+                  sheet(avgRef).value match
+                    case CellValue.Number(n) => (accSum + n, accCount + 1)
+                    case _ => (accSum, accCount) // Skip non-numeric (Excel behavior)
+                else (accSum, accCount)
+            }
+            if count == 0 then
+              Left(EvalError.DivByZero("AVERAGEIF sum", "0 (no matching numeric cells)"))
+            else Right(sum / count)
+        }
+
+      case TExpr.AverageIfs(avgRange, conditions) =>
+        // AVERAGEIFS: Average cells where ALL criteria match (AND logic)
+        // First evaluate all criteria expressions
+        val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
+          eval(criteriaExpr, sheet, clock, workbook)
+        }
+
+        // Collect all results or return first error (use :: prepend for O(1), reverse at end)
+        criteriaEithers
+          .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
+            acc.flatMap(list => either.map(v => v :: list))
+          }
+          .map(_.reverse)
+          .flatMap { criteriaValues =>
+            val parsedConditions = conditions
+              .zip(criteriaValues)
+              .map { case ((range, _), criteriaValue) =>
+                (range, CriteriaMatcher.parse(criteriaValue))
+              }
+
+            // Validate all ranges have same dimensions as avgRange (both width and height)
+            val avgRefsList = avgRange.cells.toList
+            val dimensionError = parsedConditions.collectFirst {
+              case (range, _) if range.width != avgRange.width || range.height != avgRange.height =>
+                EvalError.EvalFailed(
+                  s"AVERAGEIFS: all ranges must have same dimensions (average_range is ${avgRange.height}×${avgRange.width}, criteria_range is ${range.height}×${range.width})",
+                  Some(s"AVERAGEIFS(${avgRange.toA1}, ${range.toA1}, ...)")
+                )
+            }
+
+            dimensionError match
+              case Some(err) => Left(err)
+              case None =>
+                val (sum, count) = avgRefsList.indices.foldLeft((BigDecimal(0), 0)) { (acc, idx) =>
+                  val (accSum, accCount) = acc
+                  // Check if ALL criteria match for this row
+                  val allMatch = parsedConditions.forall { case (criteriaRange, criterion) =>
+                    val testRef = criteriaRange.cells.toList(idx)
+                    CriteriaMatcher.matches(sheet(testRef).value, criterion)
+                  }
+                  if allMatch then
+                    sheet(avgRefsList(idx)).value match
+                      case CellValue.Number(n) => (accSum + n, accCount + 1)
+                      case _ => (accSum, accCount)
+                  else (accSum, accCount)
+                }
+                if count == 0 then
+                  Left(EvalError.DivByZero("AVERAGEIFS sum", "0 (no matching numeric cells)"))
+                else Right(sum / count)
+          }
+
       // ===== Array and Advanced Lookup Functions =====
 
       case TExpr.SumProduct(arrays) =>

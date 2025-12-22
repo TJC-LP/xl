@@ -218,6 +218,15 @@ object DependencyGraph:
         conditions.flatMap { case (range, criteria) =>
           range.localCells ++ extractDependencies(criteria)
         }.toSet
+      case TExpr.AverageIf(range, criteria, avgRangeOpt) =>
+        range.localCells ++
+          extractDependencies(criteria) ++
+          avgRangeOpt.map(_.localCells).getOrElse(Set.empty)
+      case TExpr.AverageIfs(avgRange, conditions) =>
+        avgRange.localCells ++
+          conditions.flatMap { case (range, criteria) =>
+            range.localCells ++ extractDependencies(criteria)
+          }.toSet
 
       // Array and advanced lookup functions
       case TExpr.SumProduct(arrays) =>
@@ -462,6 +471,15 @@ object DependencyGraph:
         conditions.flatMap { case (range, criteria) =>
           range.localCellsBounded(bounds) ++ extractDependenciesBounded(criteria, bounds)
         }.toSet
+      case TExpr.AverageIf(range, criteria, avgRangeOpt) =>
+        range.localCellsBounded(bounds) ++
+          extractDependenciesBounded(criteria, bounds) ++
+          avgRangeOpt.map(_.localCellsBounded(bounds)).getOrElse(Set.empty)
+      case TExpr.AverageIfs(avgRange, conditions) =>
+        avgRange.localCellsBounded(bounds) ++
+          conditions.flatMap { case (range, criteria) =>
+            range.localCellsBounded(bounds) ++ extractDependenciesBounded(criteria, bounds)
+          }.toSet
 
       // Array and advanced lookup functions
       case TExpr.SumProduct(arrays) =>
@@ -1199,6 +1217,18 @@ object DependencyGraph:
           locationToQualifiedRefs(range, currentSheet) ++
             extractQualifiedDependencies(criteria, currentSheet)
         }.toSet
+      case TExpr.AverageIf(range, criteria, avgRangeOpt) =>
+        locationToQualifiedRefs(range, currentSheet) ++
+          extractQualifiedDependencies(criteria, currentSheet) ++
+          avgRangeOpt
+            .map(locationToQualifiedRefs(_, currentSheet))
+            .getOrElse(Set.empty)
+      case TExpr.AverageIfs(avgRange, conditions) =>
+        locationToQualifiedRefs(avgRange, currentSheet) ++
+          conditions.flatMap { case (range, criteria) =>
+            locationToQualifiedRefs(range, currentSheet) ++
+              extractQualifiedDependencies(criteria, currentSheet)
+          }.toSet
       case TExpr.SumProduct(arrays) =>
         arrays.flatMap(locationToQualifiedRefs(_, currentSheet)).toSet
 

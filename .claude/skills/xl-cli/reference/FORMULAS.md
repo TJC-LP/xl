@@ -1,6 +1,6 @@
 # Supported Formula Functions
 
-The `eval` command supports 65 Excel functions.
+The `eval` command supports 67 Excel functions.
 
 ## Math Functions
 
@@ -100,8 +100,10 @@ The `eval` command supports 65 Excel functions.
 |----------|--------|---------|
 | SUMIF | `=SUMIF(range, criteria, [sum_range])` | `=SUMIF(A:A, ">100", B:B)` |
 | COUNTIF | `=COUNTIF(range, criteria)` | `=COUNTIF(A:A, "Yes")` |
+| AVERAGEIF | `=AVERAGEIF(range, criteria, [avg_range])` | `=AVERAGEIF(A:A, ">100", B:B)` |
 | SUMIFS | `=SUMIFS(sum_range, crit_range1, crit1, ...)` | `=SUMIFS(C:C, A:A, "Q1", B:B, ">0")` |
 | COUNTIFS | `=COUNTIFS(range1, crit1, range2, crit2, ...)` | `=COUNTIFS(A:A, "Active", B:B, ">100")` |
+| AVERAGEIFS | `=AVERAGEIFS(avg_range, crit_range1, crit1, ...)` | `=AVERAGEIFS(C:C, A:A, "Q1", B:B, ">0")` |
 | SUMPRODUCT | `=SUMPRODUCT(array1, [array2], ...)` | `=SUMPRODUCT(A1:A10, B1:B10)` |
 
 ## Error Handling Functions

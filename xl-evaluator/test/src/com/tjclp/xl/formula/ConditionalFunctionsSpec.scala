@@ -589,3 +589,316 @@ class ConditionalFunctionsSpec extends FunSuite:
     val result = sheet.evaluateFormula("=SUMIF(A1:A3, \"X\", B1:B3)")
     assertEquals(result, Right(CellValue.Number(BigDecimal(40))))
   }
+
+  // ===== AVERAGEIF Basic Tests =====
+
+  test("AVERAGEIF: average values where text criteria matches exactly") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> 10,
+      ref"A2" -> "Banana",
+      ref"B2" -> 20,
+      ref"A3" -> "Apple",
+      ref"B3" -> 30
+    )
+    // Apple matches rows 1 and 3, average of 10 and 30 is 20
+    assertEval("=AVERAGEIF(A1:A3, \"Apple\", B1:B3)", sheet, 20)
+  }
+
+  test("AVERAGEIF: average with same range (2-arg form)") {
+    val sheet = sheetWith(
+      ref"A1" -> 10,
+      ref"A2" -> 20,
+      ref"A3" -> 10,
+      ref"A4" -> 30
+    )
+    // Match 10s: average of 10, 10 is 10
+    assertEval("=AVERAGEIF(A1:A4, 10)", sheet, 10)
+  }
+
+  test("AVERAGEIF: case-insensitive text matching") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> 10,
+      ref"A2" -> "APPLE",
+      ref"B2" -> 20,
+      ref"A3" -> "apple",
+      ref"B3" -> 30
+    )
+    // All three match, average of 10, 20, 30 is 20
+    assertEval("=AVERAGEIF(A1:A3, \"apple\", B1:B3)", sheet, 20)
+  }
+
+  test("AVERAGEIF: no matches returns #DIV/0! error") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> 10,
+      ref"A2" -> "Banana",
+      ref"B2" -> 20
+    )
+    val result = sheet.evaluateFormula("=AVERAGEIF(A1:A2, \"Cherry\", B1:B2)")
+    assert(result.isLeft, "Should fail with division by zero")
+  }
+
+  test("AVERAGEIF: skip non-numeric values in average range") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> 10,
+      ref"A2" -> "Apple",
+      ref"B2" -> "text",
+      ref"A3" -> "Apple",
+      ref"B3" -> 30
+    )
+    // Three Apple matches, but only 10 and 30 are numeric, average is 20
+    assertEval("=AVERAGEIF(A1:A3, \"Apple\", B1:B3)", sheet, 20)
+  }
+
+  test("AVERAGEIF: all matching cells non-numeric returns #DIV/0!") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> "text1",
+      ref"A2" -> "Apple",
+      ref"B2" -> "text2"
+    )
+    val result = sheet.evaluateFormula("=AVERAGEIF(A1:A2, \"Apple\", B1:B2)")
+    assert(result.isLeft, "Should fail when all matching cells are non-numeric")
+  }
+
+  // ===== AVERAGEIF Wildcard Tests =====
+
+  test("AVERAGEIF: wildcard * matches any characters") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> 10,
+      ref"A2" -> "Apricot",
+      ref"B2" -> 20,
+      ref"A3" -> "Banana",
+      ref"B3" -> 30
+    )
+    // A* matches Apple and Apricot, average of 10 and 20 is 15
+    assertEval("=AVERAGEIF(A1:A3, \"A*\", B1:B3)", sheet, 15)
+  }
+
+  test("AVERAGEIF: wildcard ? matches single character") {
+    val sheet = sheetWith(
+      ref"A1" -> "Cat",
+      ref"B1" -> 10,
+      ref"A2" -> "Cut",
+      ref"B2" -> 20,
+      ref"A3" -> "Cart",
+      ref"B3" -> 30
+    )
+    // C?t matches Cat and Cut, average of 10 and 20 is 15
+    assertEval("=AVERAGEIF(A1:A3, \"C?t\", B1:B3)", sheet, 15)
+  }
+
+  // ===== AVERAGEIF Numeric Comparison Tests =====
+
+  test("AVERAGEIF: greater than comparison") {
+    val sheet = sheetWith(
+      ref"A1" -> 50,
+      ref"A2" -> 150,
+      ref"A3" -> 200
+    )
+    // >100 matches 150 and 200, average is 175
+    assertEval("=AVERAGEIF(A1:A3, \">100\")", sheet, 175)
+  }
+
+  test("AVERAGEIF: less than or equal comparison") {
+    val sheet = sheetWith(
+      ref"A1" -> 50,
+      ref"A2" -> 100,
+      ref"A3" -> 150
+    )
+    // <=100 matches 50 and 100, average is 75
+    assertEval("=AVERAGEIF(A1:A3, \"<=100\")", sheet, 75)
+  }
+
+  test("AVERAGEIF: not equal comparison") {
+    val sheet = sheetWith(
+      ref"A1" -> 0,
+      ref"A2" -> 100,
+      ref"A3" -> 0,
+      ref"A4" -> 200
+    )
+    // <>0 matches 100 and 200, average is 150
+    assertEval("=AVERAGEIF(A1:A4, \"<>0\")", sheet, 150)
+  }
+
+  // ===== AVERAGEIFS Tests (Multiple Criteria) =====
+
+  test("AVERAGEIFS: two criteria AND logic") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> "Red",
+      ref"C1" -> 10,
+      ref"A2" -> "Apple",
+      ref"B2" -> "Red",
+      ref"C2" -> 20,
+      ref"A3" -> "Apple",
+      ref"B3" -> "Green",
+      ref"C3" -> 30,
+      ref"A4" -> "Banana",
+      ref"B4" -> "Red",
+      ref"C4" -> 40
+    )
+    // Apple AND Red matches rows 1 and 2, average of 10 and 20 is 15
+    assertEval("=AVERAGEIFS(C1:C4, A1:A4, \"Apple\", B1:B4, \"Red\")", sheet, 15)
+  }
+
+  test("AVERAGEIFS: mixed text and numeric criteria") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> 100,
+      ref"C1" -> 10,
+      ref"A2" -> "Apple",
+      ref"B2" -> 50,
+      ref"C2" -> 20,
+      ref"A3" -> "Apple",
+      ref"B3" -> 150,
+      ref"C3" -> 30,
+      ref"A4" -> "Banana",
+      ref"B4" -> 200,
+      ref"C4" -> 40
+    )
+    // Apple AND >75 matches rows 1 and 3, average of 10 and 30 is 20
+    assertEval("=AVERAGEIFS(C1:C4, A1:A4, \"Apple\", B1:B4, \">75\")", sheet, 20)
+  }
+
+  test("AVERAGEIFS: no matches returns #DIV/0!") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> "Red",
+      ref"C1" -> 10,
+      ref"A2" -> "Apple",
+      ref"B2" -> "Green",
+      ref"C2" -> 20
+    )
+    // Apple + Blue matches nothing
+    val result = sheet.evaluateFormula("=AVERAGEIFS(C1:C2, A1:A2, \"Apple\", B1:B2, \"Blue\")")
+    assert(result.isLeft, "Should fail with division by zero")
+  }
+
+  test("AVERAGEIFS: wildcard in multiple criteria") {
+    val sheet = sheetWith(
+      ref"A1" -> "Apple",
+      ref"B1" -> "Red Apple",
+      ref"C1" -> 10,
+      ref"A2" -> "Apple",
+      ref"B2" -> "Green Apple",
+      ref"C2" -> 20,
+      ref"A3" -> "Apricot",
+      ref"B3" -> "Fresh Apricot",
+      ref"C3" -> 30,
+      ref"A4" -> "Banana",
+      ref"B4" -> "Yellow Banana",
+      ref"C4" -> 40
+    )
+    // A* AND *Apple matches rows 1 and 2, average of 10 and 20 is 15
+    assertEval("=AVERAGEIFS(C1:C4, A1:A4, \"A*\", B1:B4, \"*Apple\")", sheet, 15)
+  }
+
+  // ===== AVERAGEIF/AVERAGEIFS Round-trip Tests =====
+
+  test("AVERAGEIF: parse -> print -> parse roundtrip") {
+    val formula = "=AVERAGEIF(A1:A10, \"Apple\", B1:B10)"
+    FormulaParser.parse(formula) match
+      case Right(expr) =>
+        val printed = FormulaPrinter.print(expr)
+        assertEquals(printed, formula)
+      case Left(err) => fail(s"Parse error: $err")
+  }
+
+  test("AVERAGEIF: 2-arg form roundtrip") {
+    val formula = "=AVERAGEIF(A1:A10, \">100\")"
+    FormulaParser.parse(formula) match
+      case Right(expr) =>
+        val printed = FormulaPrinter.print(expr)
+        assertEquals(printed, formula)
+      case Left(err) => fail(s"Parse error: $err")
+  }
+
+  test("AVERAGEIFS: parse -> print -> parse roundtrip") {
+    val formula = "=AVERAGEIFS(C1:C10, A1:A10, \"Apple\", B1:B10, \">100\")"
+    FormulaParser.parse(formula) match
+      case Right(expr) =>
+        val printed = FormulaPrinter.print(expr)
+        assertEquals(printed, formula)
+      case Left(err) => fail(s"Parse error: $err")
+  }
+
+  // ===== AVERAGEIF/AVERAGEIFS Shape Validation Tests =====
+
+  test("AVERAGEIF: shape mismatch error (same count, different dimensions)") {
+    val sheet = sheetWith(
+      ref"A1" -> "X",
+      ref"A2" -> "Y",
+      ref"A3" -> "X",
+      ref"B1" -> 10,
+      ref"C1" -> 20,
+      ref"D1" -> 30
+    )
+
+    val result = sheet.evaluateFormula("=AVERAGEIF(A1:A3, \"X\", B1:D1)")
+    assert(result.isLeft, "Should fail with shape mismatch")
+    result.left.foreach { err =>
+      assert(err.toString.contains("dimensions"), s"Error should mention dimensions: $err")
+    }
+  }
+
+  test("AVERAGEIFS: shape mismatch error in criteria range") {
+    val sheet = sheetWith(
+      ref"A1" -> 10,
+      ref"A2" -> 20,
+      ref"A3" -> 30,
+      ref"B1" -> "X",
+      ref"C1" -> "Y",
+      ref"D1" -> "X"
+    )
+
+    val result = sheet.evaluateFormula("=AVERAGEIFS(A1:A3, B1:D1, \"X\")")
+    assert(result.isLeft, "Should fail with shape mismatch")
+  }
+
+  test("AVERAGEIF: matching shapes work correctly") {
+    val sheet = sheetWith(
+      ref"A1" -> "X",
+      ref"A2" -> "Y",
+      ref"A3" -> "X",
+      ref"B1" -> 10,
+      ref"B2" -> 20,
+      ref"B3" -> 30
+    )
+
+    // X matches rows 1 and 3, average of 10 and 30 is 20
+    val result = sheet.evaluateFormula("=AVERAGEIF(A1:A3, \"X\", B1:B3)")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(20))))
+  }
+
+  // ===== AVERAGEIF/AVERAGEIFS Dependency Graph Tests =====
+
+  test("DependencyGraph: AVERAGEIF extracts all range dependencies") {
+    val formula = "=AVERAGEIF(A1:A3, \"Apple\", B1:B3)"
+    FormulaParser.parse(formula) match
+      case Right(expr) =>
+        val deps = DependencyGraph.extractDependencies(expr)
+        // Should include A1, A2, A3 (criteria range) and B1, B2, B3 (average range)
+        assert(deps.contains(ref"A1"))
+        assert(deps.contains(ref"A2"))
+        assert(deps.contains(ref"A3"))
+        assert(deps.contains(ref"B1"))
+        assert(deps.contains(ref"B2"))
+        assert(deps.contains(ref"B3"))
+        assertEquals(deps.size, 6)
+      case Left(err) => fail(s"Parse error: $err")
+  }
+
+  test("DependencyGraph: AVERAGEIFS extracts all ranges") {
+    val formula = "=AVERAGEIFS(C1:C2, A1:A2, \"X\", B1:B2, \"Y\")"
+    FormulaParser.parse(formula) match
+      case Right(expr) =>
+        val deps = DependencyGraph.extractDependencies(expr)
+        // Should include C1, C2, A1, A2, B1, B2
+        assertEquals(deps.size, 6)
+      case Left(err) => fail(s"Parse error: $err")
+  }
