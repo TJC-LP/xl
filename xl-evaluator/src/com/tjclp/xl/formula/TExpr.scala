@@ -811,6 +811,44 @@ enum TExpr[A] derives CanEqual:
     conditions: List[(TExpr.RangeLocation, TExpr[?])]
   ) extends TExpr[BigDecimal]
 
+  /**
+   * Average cells where criteria matches: AVERAGEIF(range, criteria, [average_range])
+   *
+   * Semantics:
+   *   - `range` is the range to test against criteria
+   *   - `criteria` is evaluated at runtime to determine matching rule
+   *   - `averageRange` is the range to average (defaults to `range` if None)
+   *   - Non-numeric cells in averageRange are skipped (Excel behavior)
+   *   - Returns #DIV/0! if no cells match or all matching cells are non-numeric
+   *   - Criteria supports: exact match, wildcards (*,?), comparisons (>,>=,<,<=,<>)
+   *
+   * Example: AVERAGEIF(A1:A10, "Apple", B1:B10) averages B values where A equals "Apple"
+   */
+  case AverageIf(
+    range: TExpr.RangeLocation,
+    criteria: TExpr[?],
+    averageRange: Option[TExpr.RangeLocation]
+  ) extends TExpr[BigDecimal]
+
+  /**
+   * Average with multiple criteria (AND logic): AVERAGEIFS(avg_range, criteria_range1, criteria1,
+   * ...)
+   *
+   * Semantics:
+   *   - `averageRange` is the range to average
+   *   - `conditions` is a list of (range, criteria) pairs - ALL must match
+   *   - All ranges must have same dimensions
+   *   - Non-numeric cells in averageRange are skipped
+   *   - Returns #DIV/0! if no cells match or all matching cells are non-numeric
+   *
+   * Example: AVERAGEIFS(C1:C10, A1:A10, "Apple", B1:B10, ">100") averages C where A="Apple" AND
+   * B>100
+   */
+  case AverageIfs(
+    averageRange: TExpr.RangeLocation,
+    conditions: List[(TExpr.RangeLocation, TExpr[?])]
+  ) extends TExpr[BigDecimal]
+
   // Error handling functions
 
   /**
@@ -1409,6 +1447,32 @@ object TExpr:
    */
   def countIfs(conditions: List[(CellRange, TExpr[?])]): TExpr[BigDecimal] =
     CountIfs(conditions.map { case (r, c) => (RangeLocation.Local(r), c) })
+
+  /**
+   * AVERAGEIF: average cells where criteria matches.
+   *
+   * Example: TExpr.averageIf(CellRange("A1:A10"), TExpr.Lit("Apple"), Some(CellRange("B1:B10")))
+   */
+  def averageIf(
+    range: CellRange,
+    criteria: TExpr[?],
+    averageRange: Option[CellRange] = None
+  ): TExpr[BigDecimal] =
+    AverageIf(RangeLocation.Local(range), criteria, averageRange.map(RangeLocation.Local(_)))
+
+  /**
+   * AVERAGEIFS: average with multiple criteria (AND logic).
+   *
+   * Example: TExpr.averageIfs(CellRange("C1:C10"), List((CellRange("A1:A10"), TExpr.Lit("Apple"))))
+   */
+  def averageIfs(
+    averageRange: CellRange,
+    conditions: List[(CellRange, TExpr[?])]
+  ): TExpr[BigDecimal] =
+    AverageIfs(
+      RangeLocation.Local(averageRange),
+      conditions.map { case (r, c) => (RangeLocation.Local(r), c) }
+    )
 
   // Error handling function smart constructors
 

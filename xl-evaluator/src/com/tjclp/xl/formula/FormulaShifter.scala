@@ -300,6 +300,19 @@ object FormulaShifter:
             (shiftLocation(r, colDelta, rowDelta), shiftWildcard(c, colDelta, rowDelta))
           }
         ).asInstanceOf[TExpr[A]]
+      case AverageIf(range, criteria, avgRange) =>
+        AverageIf(
+          shiftLocation(range, colDelta, rowDelta),
+          shiftWildcard(criteria, colDelta, rowDelta),
+          avgRange.map(shiftLocation(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+      case AverageIfs(avgRange, conditions) =>
+        AverageIfs(
+          shiftLocation(avgRange, colDelta, rowDelta),
+          conditions.map { case (r, c) =>
+            (shiftLocation(r, colDelta, rowDelta), shiftWildcard(c, colDelta, rowDelta))
+          }
+        ).asInstanceOf[TExpr[A]]
 
       // Array functions (now using RangeLocation)
       case SumProduct(arrays) =>
