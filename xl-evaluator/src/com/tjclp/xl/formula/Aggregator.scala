@@ -147,81 +147,90 @@ object Aggregator:
       else Right(acc._1 / acc._2)
 
   /** MEDIAN: Find the middle value(s) in a range */
-  given medianAggregator: Aggregator[List[BigDecimal]] with
+  given medianAggregator: Aggregator[Vector[BigDecimal]] with
     def name = "MEDIAN"
-    def empty = List.empty
-    def combine(acc: List[BigDecimal], value: BigDecimal) = acc :+ value
-    def finalize(acc: List[BigDecimal]) =
+    def empty = Vector.empty
+    def combine(acc: Vector[BigDecimal], value: BigDecimal) = acc :+ value
+    def finalize(acc: Vector[BigDecimal]) =
       if acc.isEmpty then BigDecimal(0) // Fallback; use finalizeWithError for proper error
       else
         val sorted = acc.sorted
         val mid = sorted.length / 2
         if sorted.length % 2 == 0 then (sorted(mid - 1) + sorted(mid)) / 2
         else sorted(mid)
-    override def finalizeWithError(acc: List[BigDecimal]) =
+    override def finalizeWithError(acc: Vector[BigDecimal]) =
       if acc.isEmpty then Left(EvalError.EvalFailed("MEDIAN requires at least 1 value", None))
       else Right(finalize(acc))
 
+  /**
+   * Welford accumulator for numerically stable variance computation. Stores (count, mean, m2) where
+   * m2 = sum of squared deviations from mean. Reference: Welford, B. P. (1962) and Knuth TAOCP Vol
+   * 2, Section 4.2.2
+   */
+  private type WelfordAcc = (Int, BigDecimal, BigDecimal)
+
+  /** Welford's online algorithm update step */
+  private def welfordCombine(acc: WelfordAcc, value: BigDecimal): WelfordAcc =
+    val (count, mean, m2) = acc
+    val newCount = count + 1
+    val delta = value - mean
+    val newMean = mean + delta / newCount
+    val delta2 = value - newMean
+    val newM2 = m2 + delta * delta2
+    (newCount, newMean, newM2)
+
   /** STDEV: Sample standard deviation (divides by n-1) */
-  given stdevAggregator: Aggregator[(BigDecimal, BigDecimal, Int)] with
+  given stdevAggregator: Aggregator[WelfordAcc] with
     def name = "STDEV"
-    def empty = (BigDecimal(0), BigDecimal(0), 0)
-    def combine(acc: (BigDecimal, BigDecimal, Int), value: BigDecimal) =
-      (acc._1 + value, acc._2 + value * value, acc._3 + 1)
-    def finalize(acc: (BigDecimal, BigDecimal, Int)) =
-      val (sum, sumSq, n) = acc
+    def empty = (0, BigDecimal(0), BigDecimal(0))
+    def combine(acc: WelfordAcc, value: BigDecimal) = welfordCombine(acc, value)
+    def finalize(acc: WelfordAcc) =
+      val (n, _, m2) = acc
       if n < 2 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
-      else
-        val variance = (sumSq - sum * sum / n) / (n - 1)
-        BigDecimal(math.sqrt(variance.toDouble))
-    override def finalizeWithError(acc: (BigDecimal, BigDecimal, Int)) =
-      if acc._3 < 2 then
-        Left(EvalError.DivByZero("STDEV requires at least 2 values", s"count=${acc._3}"))
+      else BigDecimal(math.sqrt((m2 / (n - 1)).toDouble))
+    override def finalizeWithError(acc: WelfordAcc) =
+      if acc._1 < 2 then
+        Left(EvalError.EvalFailed("STDEV requires at least 2 values", Some(s"count=${acc._1}")))
       else Right(finalize(acc))
 
   /** STDEVP: Population standard deviation (divides by n) */
-  given stdevpAggregator: Aggregator[(BigDecimal, BigDecimal, Int)] with
+  given stdevpAggregator: Aggregator[WelfordAcc] with
     def name = "STDEVP"
-    def empty = (BigDecimal(0), BigDecimal(0), 0)
-    def combine(acc: (BigDecimal, BigDecimal, Int), value: BigDecimal) =
-      (acc._1 + value, acc._2 + value * value, acc._3 + 1)
-    def finalize(acc: (BigDecimal, BigDecimal, Int)) =
-      val (sum, sumSq, n) = acc
+    def empty = (0, BigDecimal(0), BigDecimal(0))
+    def combine(acc: WelfordAcc, value: BigDecimal) = welfordCombine(acc, value)
+    def finalize(acc: WelfordAcc) =
+      val (n, _, m2) = acc
       if n < 1 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
-      else
-        val variance = (sumSq - sum * sum / n) / n
-        BigDecimal(math.sqrt(variance.toDouble))
-    override def finalizeWithError(acc: (BigDecimal, BigDecimal, Int)) =
-      if acc._3 < 1 then
-        Left(EvalError.DivByZero("STDEVP requires at least 1 value", s"count=${acc._3}"))
+      else BigDecimal(math.sqrt((m2 / n).toDouble))
+    override def finalizeWithError(acc: WelfordAcc) =
+      if acc._1 < 1 then
+        Left(EvalError.EvalFailed("STDEVP requires at least 1 value", Some(s"count=${acc._1}")))
       else Right(finalize(acc))
 
   /** VAR: Sample variance (divides by n-1) */
-  given varAggregator: Aggregator[(BigDecimal, BigDecimal, Int)] with
+  given varAggregator: Aggregator[WelfordAcc] with
     def name = "VAR"
-    def empty = (BigDecimal(0), BigDecimal(0), 0)
-    def combine(acc: (BigDecimal, BigDecimal, Int), value: BigDecimal) =
-      (acc._1 + value, acc._2 + value * value, acc._3 + 1)
-    def finalize(acc: (BigDecimal, BigDecimal, Int)) =
-      val (sum, sumSq, n) = acc
+    def empty = (0, BigDecimal(0), BigDecimal(0))
+    def combine(acc: WelfordAcc, value: BigDecimal) = welfordCombine(acc, value)
+    def finalize(acc: WelfordAcc) =
+      val (n, _, m2) = acc
       if n < 2 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
-      else (sumSq - sum * sum / n) / (n - 1)
-    override def finalizeWithError(acc: (BigDecimal, BigDecimal, Int)) =
-      if acc._3 < 2 then
-        Left(EvalError.DivByZero("VAR requires at least 2 values", s"count=${acc._3}"))
+      else m2 / (n - 1)
+    override def finalizeWithError(acc: WelfordAcc) =
+      if acc._1 < 2 then
+        Left(EvalError.EvalFailed("VAR requires at least 2 values", Some(s"count=${acc._1}")))
       else Right(finalize(acc))
 
   /** VARP: Population variance (divides by n) */
-  given varpAggregator: Aggregator[(BigDecimal, BigDecimal, Int)] with
+  given varpAggregator: Aggregator[WelfordAcc] with
     def name = "VARP"
-    def empty = (BigDecimal(0), BigDecimal(0), 0)
-    def combine(acc: (BigDecimal, BigDecimal, Int), value: BigDecimal) =
-      (acc._1 + value, acc._2 + value * value, acc._3 + 1)
-    def finalize(acc: (BigDecimal, BigDecimal, Int)) =
-      val (sum, sumSq, n) = acc
+    def empty = (0, BigDecimal(0), BigDecimal(0))
+    def combine(acc: WelfordAcc, value: BigDecimal) = welfordCombine(acc, value)
+    def finalize(acc: WelfordAcc) =
+      val (n, _, m2) = acc
       if n < 1 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
-      else (sumSq - sum * sum / n) / n
-    override def finalizeWithError(acc: (BigDecimal, BigDecimal, Int)) =
-      if acc._3 < 1 then
-        Left(EvalError.DivByZero("VARP requires at least 1 value", s"count=${acc._3}"))
+      else m2 / n
+    override def finalizeWithError(acc: WelfordAcc) =
+      if acc._1 < 1 then
+        Left(EvalError.EvalFailed("VARP requires at least 1 value", Some(s"count=${acc._1}")))
       else Right(finalize(acc))

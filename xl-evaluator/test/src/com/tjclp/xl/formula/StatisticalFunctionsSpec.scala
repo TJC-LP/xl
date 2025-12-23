@@ -255,7 +255,7 @@ class StatisticalFunctionsSpec extends FunSuite:
     val range = CellRange.parse("A1:A8").toOption.get
     val expr = TExpr.Aggregate("VARP", TExpr.RangeLocation.Local(range))
     val result = evaluator.eval(expr, sheet)
-    assertEquals(result, Right(BigDecimal(4)))
+    assertApprox(result, 4.0, 0.0001)
   }
 
   test("VARP: single value returns 0") {
@@ -339,4 +339,92 @@ class StatisticalFunctionsSpec extends FunSuite:
       val printed = FormulaPrinter.print(expr)
       assertEquals(printed, "=STDEV(Data!B1:B100)")
     }
+  }
+
+  // ===== Numerical Stability Tests (Welford's Algorithm) =====
+
+  test("STDEV: numerical stability with large numbers") {
+    // Classic catastrophic cancellation case for naive algorithm
+    // Values: 10000000000000, 10000000000001, 10000000000002
+    // Naive formula (sumSq - sum²/n) would lose precision
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal("10000000000000")),
+      ref"A2" -> CellValue.Number(BigDecimal("10000000000001")),
+      ref"A3" -> CellValue.Number(BigDecimal("10000000000002"))
+    )
+    val range = CellRange.parse("A1:A3").toOption.get
+    val expr = TExpr.Aggregate("STDEV", TExpr.RangeLocation.Local(range))
+    val result = evaluator.eval(expr, sheet)
+    // Sample stdev of [0, 1, 2] = 1.0, so same for shifted values
+    assertApprox(result, 1.0, 0.0001)
+  }
+
+  test("VAR: numerical stability with numbers of similar magnitude") {
+    // Another classic case: values very close together relative to magnitude
+    // [1000000.0, 1000001.0, 1000002.0] - variance should be 1.0
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal("1000000.0")),
+      ref"A2" -> CellValue.Number(BigDecimal("1000001.0")),
+      ref"A3" -> CellValue.Number(BigDecimal("1000002.0"))
+    )
+    val range = CellRange.parse("A1:A3").toOption.get
+    val expr = TExpr.Aggregate("VAR", TExpr.RangeLocation.Local(range))
+    val result = evaluator.eval(expr, sheet)
+    // Sample variance of [0, 1, 2] = 1.0
+    assertEquals(result, Right(BigDecimal(1)))
+  }
+
+  test("STDEVP: handles negative values correctly") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(-10),
+      ref"A2" -> CellValue.Number(-5),
+      ref"A3" -> CellValue.Number(0),
+      ref"A4" -> CellValue.Number(5),
+      ref"A5" -> CellValue.Number(10)
+    )
+    val range = CellRange.parse("A1:A5").toOption.get
+    val expr = TExpr.Aggregate("STDEVP", TExpr.RangeLocation.Local(range))
+    val result = evaluator.eval(expr, sheet)
+    // Mean = 0, Population variance = (100+25+0+25+100)/5 = 50
+    // Population stdev = sqrt(50) ≈ 7.071
+    assertApprox(result, 7.071, 0.001)
+  }
+
+  test("VARP: handles many decimal places") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal("0.123456789")),
+      ref"A2" -> CellValue.Number(BigDecimal("0.123456790")),
+      ref"A3" -> CellValue.Number(BigDecimal("0.123456791"))
+    )
+    val range = CellRange.parse("A1:A3").toOption.get
+    val expr = TExpr.Aggregate("VARP", TExpr.RangeLocation.Local(range))
+    val result = evaluator.eval(expr, sheet)
+    // Tiny variance from tiny differences - Welford handles this correctly
+    result match
+      case Right(value) =>
+        // Should be approximately 6.67e-19 (very small but non-zero)
+        assert(value > BigDecimal(0), s"Expected positive variance, got $value")
+        assert(value < BigDecimal("0.000001"), s"Variance too large: $value")
+      case Left(err) => fail(s"Expected success but got: $err")
+  }
+
+  test("MEDIAN: handles larger dataset") {
+    // Create a sheet with values 1 to 10 in column A
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(1),
+      ref"A2" -> CellValue.Number(2),
+      ref"A3" -> CellValue.Number(3),
+      ref"A4" -> CellValue.Number(4),
+      ref"A5" -> CellValue.Number(5),
+      ref"A6" -> CellValue.Number(6),
+      ref"A7" -> CellValue.Number(7),
+      ref"A8" -> CellValue.Number(8),
+      ref"A9" -> CellValue.Number(9),
+      ref"A10" -> CellValue.Number(10)
+    )
+    val range = CellRange.parse("A1:A10").toOption.get
+    val expr = TExpr.Aggregate("MEDIAN", TExpr.RangeLocation.Local(range))
+    val result = evaluator.eval(expr, sheet)
+    // Median of 1..10 = (5 + 6) / 2 = 5.5
+    assertEquals(result, Right(BigDecimal(5.5)))
   }
