@@ -723,6 +723,112 @@ enum TExpr[A] derives CanEqual:
     guess: Option[TExpr[BigDecimal]]
   ) extends TExpr[BigDecimal]
 
+  // ===== Time Value of Money (TVM) Functions =====
+
+  /**
+   * Payment per period: PMT(rate, nper, pv, [fv], [type])
+   *
+   * Semantics:
+   *   - `rate` is the interest rate per period
+   *   - `nper` is the total number of payment periods
+   *   - `pv` is the present value (loan amount)
+   *   - `fv` is the future value (default 0)
+   *   - `type` is 0 for end of period (default), 1 for beginning
+   *   - Negative result = outflow (payment made)
+   *
+   * Example: PMT(0.05/12, 24, 10000) for monthly payment on $10k loan at 5% APR for 2 years
+   */
+  case Pmt(
+    rate: TExpr[BigDecimal],
+    nper: TExpr[BigDecimal],
+    pv: TExpr[BigDecimal],
+    fv: Option[TExpr[BigDecimal]],
+    pmtType: Option[TExpr[BigDecimal]]
+  ) extends TExpr[BigDecimal]
+
+  /**
+   * Future value: FV(rate, nper, pmt, [pv], [type])
+   *
+   * Semantics:
+   *   - `rate` is the interest rate per period
+   *   - `nper` is the total number of payment periods
+   *   - `pmt` is the payment per period (negative = outflow)
+   *   - `pv` is the present value (default 0)
+   *   - `type` is 0 for end of period (default), 1 for beginning
+   *
+   * Example: FV(0.05/12, 24, -100, 0) for future value of $100/month savings at 5% APR
+   */
+  case Fv(
+    rate: TExpr[BigDecimal],
+    nper: TExpr[BigDecimal],
+    pmt: TExpr[BigDecimal],
+    pv: Option[TExpr[BigDecimal]],
+    pmtType: Option[TExpr[BigDecimal]]
+  ) extends TExpr[BigDecimal]
+
+  /**
+   * Present value: PV(rate, nper, pmt, [fv], [type])
+   *
+   * Semantics:
+   *   - `rate` is the interest rate per period
+   *   - `nper` is the total number of payment periods
+   *   - `pmt` is the payment per period (negative = outflow)
+   *   - `fv` is the future value (default 0)
+   *   - `type` is 0 for end of period (default), 1 for beginning
+   *
+   * Example: PV(0.05/12, 24, -500) for present value of $500/month payments at 5% APR
+   */
+  case Pv(
+    rate: TExpr[BigDecimal],
+    nper: TExpr[BigDecimal],
+    pmt: TExpr[BigDecimal],
+    fv: Option[TExpr[BigDecimal]],
+    pmtType: Option[TExpr[BigDecimal]]
+  ) extends TExpr[BigDecimal]
+
+  /**
+   * Number of periods: NPER(rate, pmt, pv, [fv], [type])
+   *
+   * Semantics:
+   *   - `rate` is the interest rate per period
+   *   - `pmt` is the payment per period (negative = outflow)
+   *   - `pv` is the present value (loan amount)
+   *   - `fv` is the future value (default 0)
+   *   - `type` is 0 for end of period (default), 1 for beginning
+   *
+   * Example: NPER(0.05/12, -500, 10000) for months to pay off $10k loan at $500/month
+   */
+  case Nper(
+    rate: TExpr[BigDecimal],
+    pmt: TExpr[BigDecimal],
+    pv: TExpr[BigDecimal],
+    fv: Option[TExpr[BigDecimal]],
+    pmtType: Option[TExpr[BigDecimal]]
+  ) extends TExpr[BigDecimal]
+
+  /**
+   * Interest rate: RATE(nper, pmt, pv, [fv], [type], [guess])
+   *
+   * Semantics:
+   *   - `nper` is the total number of payment periods
+   *   - `pmt` is the payment per period (negative = outflow)
+   *   - `pv` is the present value (loan amount)
+   *   - `fv` is the future value (default 0)
+   *   - `type` is 0 for end of period (default), 1 for beginning
+   *   - `guess` is the starting guess for iteration (default 0.1)
+   *   - Uses Newton-Raphson iteration (like IRR)
+   *
+   * Example: RATE(24, -500, 10000) for interest rate on $10k loan with $500/month payments
+   */
+  case Rate(
+    nper: TExpr[BigDecimal],
+    pmt: TExpr[BigDecimal],
+    pv: TExpr[BigDecimal],
+    fv: Option[TExpr[BigDecimal]],
+    pmtType: Option[TExpr[BigDecimal]],
+    guess: Option[TExpr[BigDecimal]]
+  ) extends TExpr[BigDecimal]
+
   /**
    * Vertical lookup: VLOOKUP(lookup, table, colIndex, [rangeLookup])
    *
@@ -869,6 +975,44 @@ enum TExpr[A] derives CanEqual:
    * Example: ISERROR(A1/B1) returns TRUE if B1 is 0
    */
   case Iserror(value: TExpr[CellValue]) extends TExpr[Boolean]
+
+  /**
+   * Error check (excluding #N/A): ISERR(value)
+   *
+   * Returns TRUE if value results in any error EXCEPT #N/A, FALSE otherwise. Use ISERROR to check
+   * for all errors including #N/A.
+   *
+   * Example: ISERR(1/0) returns TRUE, ISERR(VLOOKUP("missing", A:A, 1, FALSE)) returns FALSE
+   */
+  case Iserr(value: TExpr[CellValue]) extends TExpr[Boolean]
+
+  /**
+   * Type check for numbers: ISNUMBER(value)
+   *
+   * Returns TRUE if value is numeric, FALSE otherwise.
+   *
+   * Example: ISNUMBER(42) returns TRUE, ISNUMBER("hello") returns FALSE
+   */
+  case Isnumber(value: TExpr[CellValue]) extends TExpr[Boolean]
+
+  /**
+   * Type check for text: ISTEXT(value)
+   *
+   * Returns TRUE if value is a text string, FALSE otherwise.
+   *
+   * Example: ISTEXT("hello") returns TRUE, ISTEXT(42) returns FALSE
+   */
+  case Istext(value: TExpr[CellValue]) extends TExpr[Boolean]
+
+  /**
+   * Type check for blank cells: ISBLANK(ref)
+   *
+   * Returns TRUE if the referenced cell is empty, FALSE otherwise. Note: cells containing empty
+   * strings ("") are NOT considered blank.
+   *
+   * Example: ISBLANK(A1) returns TRUE if A1 is empty
+   */
+  case Isblank(value: TExpr[CellValue]) extends TExpr[Boolean]
 
   // Rounding and math functions
 
@@ -1375,6 +1519,79 @@ object TExpr:
   ): TExpr[BigDecimal] =
     Xirr(RangeLocation.Local(values), RangeLocation.Local(dates), guess)
 
+  // ===== TVM Smart Constructors =====
+
+  /**
+   * PMT: calculate payment per period.
+   *
+   * Example: TExpr.pmt(TExpr.Lit(0.05/12), TExpr.Lit(24), TExpr.Lit(10000))
+   */
+  def pmt(
+    rate: TExpr[BigDecimal],
+    nper: TExpr[BigDecimal],
+    pv: TExpr[BigDecimal],
+    fv: Option[TExpr[BigDecimal]] = None,
+    pmtType: Option[TExpr[BigDecimal]] = None
+  ): TExpr[BigDecimal] =
+    Pmt(rate, nper, pv, fv, pmtType)
+
+  /**
+   * FV: calculate future value.
+   *
+   * Example: TExpr.fv(TExpr.Lit(0.05/12), TExpr.Lit(24), TExpr.Lit(-100))
+   */
+  def fv(
+    rate: TExpr[BigDecimal],
+    nper: TExpr[BigDecimal],
+    pmt: TExpr[BigDecimal],
+    pv: Option[TExpr[BigDecimal]] = None,
+    pmtType: Option[TExpr[BigDecimal]] = None
+  ): TExpr[BigDecimal] =
+    Fv(rate, nper, pmt, pv, pmtType)
+
+  /**
+   * PV: calculate present value.
+   *
+   * Example: TExpr.pv(TExpr.Lit(0.05/12), TExpr.Lit(24), TExpr.Lit(-500))
+   */
+  def pv(
+    rate: TExpr[BigDecimal],
+    nper: TExpr[BigDecimal],
+    pmt: TExpr[BigDecimal],
+    fv: Option[TExpr[BigDecimal]] = None,
+    pmtType: Option[TExpr[BigDecimal]] = None
+  ): TExpr[BigDecimal] =
+    Pv(rate, nper, pmt, fv, pmtType)
+
+  /**
+   * NPER: calculate number of periods.
+   *
+   * Example: TExpr.nper(TExpr.Lit(0.05/12), TExpr.Lit(-500), TExpr.Lit(10000))
+   */
+  def nper(
+    rate: TExpr[BigDecimal],
+    pmt: TExpr[BigDecimal],
+    pv: TExpr[BigDecimal],
+    fv: Option[TExpr[BigDecimal]] = None,
+    pmtType: Option[TExpr[BigDecimal]] = None
+  ): TExpr[BigDecimal] =
+    Nper(rate, pmt, pv, fv, pmtType)
+
+  /**
+   * RATE: calculate interest rate per period.
+   *
+   * Example: TExpr.rate(TExpr.Lit(24), TExpr.Lit(-500), TExpr.Lit(10000))
+   */
+  def rate(
+    nper: TExpr[BigDecimal],
+    pmt: TExpr[BigDecimal],
+    pv: TExpr[BigDecimal],
+    fv: Option[TExpr[BigDecimal]] = None,
+    pmtType: Option[TExpr[BigDecimal]] = None,
+    guess: Option[TExpr[BigDecimal]] = None
+  ): TExpr[BigDecimal] =
+    Rate(nper, pmt, pv, fv, pmtType, guess)
+
   /**
    * Smart constructor for VLOOKUP (supports text and numeric lookups).
    *
@@ -1491,6 +1708,38 @@ object TExpr:
    */
   def iserror(value: TExpr[CellValue]): TExpr[Boolean] =
     Iserror(value)
+
+  /**
+   * ISERR: check if expression results in error (excluding #N/A).
+   *
+   * Example: TExpr.iserr(TExpr.Div(...))
+   */
+  def iserr(value: TExpr[CellValue]): TExpr[Boolean] =
+    Iserr(value)
+
+  /**
+   * ISNUMBER: check if value is numeric.
+   *
+   * Example: TExpr.isnumber(TExpr.ref(ARef("A1")))
+   */
+  def isnumber(value: TExpr[CellValue]): TExpr[Boolean] =
+    Isnumber(value)
+
+  /**
+   * ISTEXT: check if value is text.
+   *
+   * Example: TExpr.istext(TExpr.ref(ARef("A1")))
+   */
+  def istext(value: TExpr[CellValue]): TExpr[Boolean] =
+    Istext(value)
+
+  /**
+   * ISBLANK: check if cell is empty.
+   *
+   * Example: TExpr.isblank(TExpr.ref(ARef("A1")))
+   */
+  def isblank(value: TExpr[CellValue]): TExpr[Boolean] =
+    Isblank(value)
 
   // Rounding and math function smart constructors
 
@@ -2343,6 +2592,10 @@ object TExpr:
     // Error handling
     case Iferror(v, e) => containsDateFunction(v) || containsDateFunction(e)
     case Iserror(v) => containsDateFunction(v)
+    case Iserr(v) => containsDateFunction(v)
+    case Isnumber(v) => containsDateFunction(v)
+    case Istext(v) => containsDateFunction(v)
+    case Isblank(v) => containsDateFunction(v)
     // Rounding functions
     case Round(v, _) => containsDateFunction(v)
     case RoundUp(v, _) => containsDateFunction(v)
@@ -2397,6 +2650,10 @@ object TExpr:
     // Error handling
     case Iferror(v, e) => containsTimeFunction(v) || containsTimeFunction(e)
     case Iserror(v) => containsTimeFunction(v)
+    case Iserr(v) => containsTimeFunction(v)
+    case Isnumber(v) => containsTimeFunction(v)
+    case Istext(v) => containsTimeFunction(v)
+    case Isblank(v) => containsTimeFunction(v)
     // Rounding functions
     case Round(v, _) => containsTimeFunction(v)
     case RoundUp(v, _) => containsTimeFunction(v)

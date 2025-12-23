@@ -296,6 +296,38 @@ object FormulaPrinter:
           case Some(guess) => s"XIRR($valuesText, $datesText, ${printExpr(guess, 0)})"
           case None => s"XIRR($valuesText, $datesText)"
 
+      // TVM Functions
+      case TExpr.Pmt(rate, nper, pv, fv, pmtType) =>
+        val args = List(printExpr(rate, 0), printExpr(nper, 0), printExpr(pv, 0)) ++
+          fv.map(printExpr(_, 0)).toList ++
+          pmtType.map(printExpr(_, 0)).toList
+        s"PMT(${args.mkString(", ")})"
+
+      case TExpr.Fv(rate, nper, pmt, pv, pmtType) =>
+        val args = List(printExpr(rate, 0), printExpr(nper, 0), printExpr(pmt, 0)) ++
+          pv.map(printExpr(_, 0)).toList ++
+          pmtType.map(printExpr(_, 0)).toList
+        s"FV(${args.mkString(", ")})"
+
+      case TExpr.Pv(rate, nper, pmt, fv, pmtType) =>
+        val args = List(printExpr(rate, 0), printExpr(nper, 0), printExpr(pmt, 0)) ++
+          fv.map(printExpr(_, 0)).toList ++
+          pmtType.map(printExpr(_, 0)).toList
+        s"PV(${args.mkString(", ")})"
+
+      case TExpr.Nper(rate, pmt, pv, fv, pmtType) =>
+        val args = List(printExpr(rate, 0), printExpr(pmt, 0), printExpr(pv, 0)) ++
+          fv.map(printExpr(_, 0)).toList ++
+          pmtType.map(printExpr(_, 0)).toList
+        s"NPER(${args.mkString(", ")})"
+
+      case TExpr.Rate(nper, pmt, pv, fv, pmtType, guess) =>
+        val args = List(printExpr(nper, 0), printExpr(pmt, 0), printExpr(pv, 0)) ++
+          fv.map(printExpr(_, 0)).toList ++
+          pmtType.map(printExpr(_, 0)).toList ++
+          guess.map(printExpr(_, 0)).toList
+        s"RATE(${args.mkString(", ")})"
+
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLOOKUP(${printExpr(lookup, 0)}, " +
           s"${formatLocation(table)}, " +
@@ -307,6 +339,19 @@ object FormulaPrinter:
 
       case TExpr.Iserror(value) =>
         s"ISERROR(${printExpr(value, 0)})"
+
+      case TExpr.Iserr(value) =>
+        s"ISERR(${printExpr(value, 0)})"
+
+      // Type-check functions
+      case TExpr.Isnumber(value) =>
+        s"ISNUMBER(${printExpr(value, 0)})"
+
+      case TExpr.Istext(value) =>
+        s"ISTEXT(${printExpr(value, 0)})"
+
+      case TExpr.Isblank(value) =>
+        s"ISBLANK(${printExpr(value, 0)})"
 
       // Rounding and math functions
       case TExpr.Round(value, numDigits) =>
@@ -750,6 +795,27 @@ object FormulaPrinter:
           case Some(guess) =>
             s"Xirr(${formatLocation(values)}, ${formatLocation(dates)}, ${printWithTypes(guess)})"
           case None => s"Xirr(${formatLocation(values)}, ${formatLocation(dates)})"
+      case TExpr.Pmt(rate, nper, pv, fv, pmtType) =>
+        val args = List(printWithTypes(rate), printWithTypes(nper), printWithTypes(pv)) ++
+          fv.map(printWithTypes).toList ++ pmtType.map(printWithTypes).toList
+        s"Pmt(${args.mkString(", ")})"
+      case TExpr.Fv(rate, nper, pmt, pv, pmtType) =>
+        val args = List(printWithTypes(rate), printWithTypes(nper), printWithTypes(pmt)) ++
+          pv.map(printWithTypes).toList ++ pmtType.map(printWithTypes).toList
+        s"Fv(${args.mkString(", ")})"
+      case TExpr.Pv(rate, nper, pmt, fv, pmtType) =>
+        val args = List(printWithTypes(rate), printWithTypes(nper), printWithTypes(pmt)) ++
+          fv.map(printWithTypes).toList ++ pmtType.map(printWithTypes).toList
+        s"Pv(${args.mkString(", ")})"
+      case TExpr.Nper(rate, pmt, pv, fv, pmtType) =>
+        val args = List(printWithTypes(rate), printWithTypes(pmt), printWithTypes(pv)) ++
+          fv.map(printWithTypes).toList ++ pmtType.map(printWithTypes).toList
+        s"Nper(${args.mkString(", ")})"
+      case TExpr.Rate(nper, pmt, pv, fv, pmtType, guess) =>
+        val args = List(printWithTypes(nper), printWithTypes(pmt), printWithTypes(pv)) ++
+          fv.map(printWithTypes).toList ++ pmtType.map(printWithTypes).toList ++
+          guess.map(printWithTypes).toList
+        s"Rate(${args.mkString(", ")})"
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLookup(${printWithTypes(lookup)}, ${formatLocation(table)}, " +
           s"${printWithTypes(colIndex)}, ${printWithTypes(rangeLookup)})"
@@ -757,6 +823,14 @@ object FormulaPrinter:
         s"Iferror(${printWithTypes(value)}, ${printWithTypes(valueIfError)})"
       case TExpr.Iserror(value) =>
         s"Iserror(${printWithTypes(value)})"
+      case TExpr.Iserr(value) =>
+        s"Iserr(${printWithTypes(value)})"
+      case TExpr.Isnumber(value) =>
+        s"Isnumber(${printWithTypes(value)})"
+      case TExpr.Istext(value) =>
+        s"Istext(${printWithTypes(value)})"
+      case TExpr.Isblank(value) =>
+        s"Isblank(${printWithTypes(value)})"
       case TExpr.Round(value, numDigits) =>
         s"Round(${printWithTypes(value)}, ${printWithTypes(numDigits)})"
       case TExpr.RoundUp(value, numDigits) =>

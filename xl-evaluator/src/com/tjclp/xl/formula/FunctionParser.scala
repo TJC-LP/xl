@@ -204,6 +204,11 @@ object FunctionParser:
       // Error handling functions
       iferrorFunctionParser,
       iserrorFunctionParser,
+      iserrFunctionParser,
+      // Type-check functions
+      isnumberFunctionParser,
+      istextFunctionParser,
+      isblankFunctionParser,
       // Rounding and math functions
       roundFunctionParser,
       roundUpFunctionParser,
@@ -232,6 +237,12 @@ object FunctionParser:
       // Date-based financial functions
       xnpvFunctionParser,
       xirrFunctionParser,
+      // TVM functions
+      pmtFunctionParser,
+      fvFunctionParser,
+      pvFunctionParser,
+      nperFunctionParser,
+      rateFunctionParser,
       // Date calculation functions
       eomonthFunctionParser,
       edateFunctionParser,
@@ -1382,6 +1393,84 @@ object FunctionParser:
             )
           )
 
+  /** ISERR function: ISERR(value) - TRUE if error (except #N/A) */
+  given iserrFunctionParser: FunctionParser[Unit] with
+    def name: String = "ISERR"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.iserr(TExpr.asCellValueExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ISERR",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  // === Type-Check Functions ===
+
+  /** ISNUMBER function: ISNUMBER(value) - TRUE if numeric */
+  given isnumberFunctionParser: FunctionParser[Unit] with
+    def name: String = "ISNUMBER"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.isnumber(TExpr.asCellValueExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ISNUMBER",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** ISTEXT function: ISTEXT(value) - TRUE if text string */
+  given istextFunctionParser: FunctionParser[Unit] with
+    def name: String = "ISTEXT"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.istext(TExpr.asCellValueExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ISTEXT",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** ISBLANK function: ISBLANK(ref) - TRUE if cell is empty */
+  given isblankFunctionParser: FunctionParser[Unit] with
+    def name: String = "ISBLANK"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(valueExpr) =>
+          scala.util.Right(TExpr.isblank(TExpr.asCellValueExpr(valueExpr)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "ISBLANK",
+              pos,
+              "1 argument",
+              s"${args.length} arguments"
+            )
+          )
+
   // === Rounding and Math Functions ===
 
   /** ROUND function: ROUND(number, num_digits) */
@@ -1999,6 +2088,257 @@ object FunctionParser:
               "XIRR",
               pos,
               "2-3 arguments (values, dates, [guess])",
+              s"${args.length} arguments"
+            )
+          )
+
+  // === TVM (Time Value of Money) Functions ===
+
+  /** PMT function: PMT(rate, nper, pv, [fv], [type]) - payment per period */
+  given pmtFunctionParser: FunctionParser[Unit] with
+    def name: String = "PMT"
+    def arity: Arity = Arity.Range(3, 5)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(rateExpr, nperExpr, pvExpr) =>
+          scala.util.Right(
+            TExpr.pmt(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pvExpr),
+              None,
+              None
+            )
+          )
+        case List(rateExpr, nperExpr, pvExpr, fvExpr) =>
+          scala.util.Right(
+            TExpr.pmt(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pvExpr),
+              Some(TExpr.asNumericExpr(fvExpr)),
+              None
+            )
+          )
+        case List(rateExpr, nperExpr, pvExpr, fvExpr, pmtTypeExpr) =>
+          scala.util.Right(
+            TExpr.pmt(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pvExpr),
+              Some(TExpr.asNumericExpr(fvExpr)),
+              Some(TExpr.asNumericExpr(pmtTypeExpr))
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "PMT",
+              pos,
+              "3-5 arguments (rate, nper, pv, [fv], [type])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** FV function: FV(rate, nper, pmt, [pv], [type]) - future value */
+  given fvFunctionParser: FunctionParser[Unit] with
+    def name: String = "FV"
+    def arity: Arity = Arity.Range(3, 5)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(rateExpr, nperExpr, pmtExpr) =>
+          scala.util.Right(
+            TExpr.fv(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              None,
+              None
+            )
+          )
+        case List(rateExpr, nperExpr, pmtExpr, pvExpr) =>
+          scala.util.Right(
+            TExpr.fv(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              Some(TExpr.asNumericExpr(pvExpr)),
+              None
+            )
+          )
+        case List(rateExpr, nperExpr, pmtExpr, pvExpr, pmtTypeExpr) =>
+          scala.util.Right(
+            TExpr.fv(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              Some(TExpr.asNumericExpr(pvExpr)),
+              Some(TExpr.asNumericExpr(pmtTypeExpr))
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "FV",
+              pos,
+              "3-5 arguments (rate, nper, pmt, [pv], [type])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** PV function: PV(rate, nper, pmt, [fv], [type]) - present value */
+  given pvFunctionParser: FunctionParser[Unit] with
+    def name: String = "PV"
+    def arity: Arity = Arity.Range(3, 5)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(rateExpr, nperExpr, pmtExpr) =>
+          scala.util.Right(
+            TExpr.pv(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              None,
+              None
+            )
+          )
+        case List(rateExpr, nperExpr, pmtExpr, fvExpr) =>
+          scala.util.Right(
+            TExpr.pv(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              Some(TExpr.asNumericExpr(fvExpr)),
+              None
+            )
+          )
+        case List(rateExpr, nperExpr, pmtExpr, fvExpr, pmtTypeExpr) =>
+          scala.util.Right(
+            TExpr.pv(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              Some(TExpr.asNumericExpr(fvExpr)),
+              Some(TExpr.asNumericExpr(pmtTypeExpr))
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "PV",
+              pos,
+              "3-5 arguments (rate, nper, pmt, [fv], [type])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** NPER function: NPER(rate, pmt, pv, [fv], [type]) - number of periods */
+  given nperFunctionParser: FunctionParser[Unit] with
+    def name: String = "NPER"
+    def arity: Arity = Arity.Range(3, 5)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(rateExpr, pmtExpr, pvExpr) =>
+          scala.util.Right(
+            TExpr.nper(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              TExpr.asNumericExpr(pvExpr),
+              None,
+              None
+            )
+          )
+        case List(rateExpr, pmtExpr, pvExpr, fvExpr) =>
+          scala.util.Right(
+            TExpr.nper(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              TExpr.asNumericExpr(pvExpr),
+              Some(TExpr.asNumericExpr(fvExpr)),
+              None
+            )
+          )
+        case List(rateExpr, pmtExpr, pvExpr, fvExpr, pmtTypeExpr) =>
+          scala.util.Right(
+            TExpr.nper(
+              TExpr.asNumericExpr(rateExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              TExpr.asNumericExpr(pvExpr),
+              Some(TExpr.asNumericExpr(fvExpr)),
+              Some(TExpr.asNumericExpr(pmtTypeExpr))
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "NPER",
+              pos,
+              "3-5 arguments (rate, pmt, pv, [fv], [type])",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** RATE function: RATE(nper, pmt, pv, [fv], [type], [guess]) - interest rate per period */
+  given rateFunctionParser: FunctionParser[Unit] with
+    def name: String = "RATE"
+    def arity: Arity = Arity.Range(3, 6)
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(nperExpr, pmtExpr, pvExpr) =>
+          scala.util.Right(
+            TExpr.rate(
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              TExpr.asNumericExpr(pvExpr),
+              None,
+              None,
+              None
+            )
+          )
+        case List(nperExpr, pmtExpr, pvExpr, fvExpr) =>
+          scala.util.Right(
+            TExpr.rate(
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              TExpr.asNumericExpr(pvExpr),
+              Some(TExpr.asNumericExpr(fvExpr)),
+              None,
+              None
+            )
+          )
+        case List(nperExpr, pmtExpr, pvExpr, fvExpr, pmtTypeExpr) =>
+          scala.util.Right(
+            TExpr.rate(
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              TExpr.asNumericExpr(pvExpr),
+              Some(TExpr.asNumericExpr(fvExpr)),
+              Some(TExpr.asNumericExpr(pmtTypeExpr)),
+              None
+            )
+          )
+        case List(nperExpr, pmtExpr, pvExpr, fvExpr, pmtTypeExpr, guessExpr) =>
+          scala.util.Right(
+            TExpr.rate(
+              TExpr.asNumericExpr(nperExpr),
+              TExpr.asNumericExpr(pmtExpr),
+              TExpr.asNumericExpr(pvExpr),
+              Some(TExpr.asNumericExpr(fvExpr)),
+              Some(TExpr.asNumericExpr(pmtTypeExpr)),
+              Some(TExpr.asNumericExpr(guessExpr))
+            )
+          )
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "RATE",
+              pos,
+              "3-6 arguments (nper, pmt, pv, [fv], [type], [guess])",
               s"${args.length} arguments"
             )
           )

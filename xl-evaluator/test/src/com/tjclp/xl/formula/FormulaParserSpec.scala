@@ -858,7 +858,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("FunctionParser.allFunctions includes all 72 functions") {
+  test("FunctionParser.allFunctions includes all 81 functions") {
     val functions = FunctionParser.allFunctions
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -930,7 +930,18 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("STDEVP"))
     assert(functions.contains("VAR"))
     assert(functions.contains("VARP"))
-    assertEquals(functions.length, 72)
+    // Type-check functions
+    assert(functions.contains("ISNUMBER"))
+    assert(functions.contains("ISTEXT"))
+    assert(functions.contains("ISBLANK"))
+    assert(functions.contains("ISERR"))
+    // TVM Financial functions
+    assert(functions.contains("PMT"))
+    assert(functions.contains("FV"))
+    assert(functions.contains("PV"))
+    assert(functions.contains("RATE"))
+    assert(functions.contains("NPER"))
+    assertEquals(functions.length, 81)
   }
 
   test("FunctionParser.lookup finds known functions") {

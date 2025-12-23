@@ -1557,6 +1557,226 @@ private class EvaluatorImpl extends Evaluator:
               case _ => Right(false) // No error
           case Right(_) => Right(false) // Non-CellValue result, no error
 
+      case TExpr.Iserr(valueExpr) =>
+        // ISERR: return TRUE if value results in any error EXCEPT #N/A
+        evalAny(valueExpr, sheet, clock, workbook) match
+          case Left(_) => Right(true) // Evaluation error (not #N/A)
+          case Right(cv: CellValue) =>
+            cv match
+              case CellValue.Error(err) =>
+                // ISERR returns FALSE for #N/A, TRUE for all other errors
+                Right(err != CellError.NA)
+              case _ => Right(false) // No error
+          case Right(_) => Right(false) // Non-CellValue result, no error
+
+      // ===== Type-Check Functions =====
+
+      case TExpr.Isnumber(valueExpr) =>
+        // ISNUMBER: return TRUE if value is numeric
+        evalAny(valueExpr, sheet, clock, workbook) match
+          case Left(_) => Right(false) // Evaluation error is not a number
+          case Right(cv: CellValue) =>
+            cv match
+              case CellValue.Number(_) => Right(true)
+              case CellValue.Formula(_, Some(CellValue.Number(_))) => Right(true)
+              case _ => Right(false)
+          case Right(_: BigDecimal) => Right(true)
+          case Right(_: Int) => Right(true)
+          case Right(_: Long) => Right(true)
+          case Right(_: Double) => Right(true)
+          case Right(_) => Right(false)
+
+      case TExpr.Istext(valueExpr) =>
+        // ISTEXT: return TRUE if value is a text string
+        evalAny(valueExpr, sheet, clock, workbook) match
+          case Left(_) => Right(false) // Evaluation error is not text
+          case Right(cv: CellValue) =>
+            cv match
+              case CellValue.Text(_) => Right(true)
+              case CellValue.Formula(_, Some(CellValue.Text(_))) => Right(true)
+              case _ => Right(false)
+          case Right(_: String) => Right(true)
+          case Right(_) => Right(false)
+
+      case TExpr.Isblank(valueExpr) =>
+        // ISBLANK: return TRUE if cell is empty
+        // Note: Empty string is NOT blank in Excel
+        evalAny(valueExpr, sheet, clock, workbook) match
+          case Left(_) => Right(false) // Evaluation error is not blank
+          case Right(cv: CellValue) =>
+            cv match
+              case CellValue.Empty => Right(true)
+              case _ => Right(false)
+          case Right(_) => Right(false) // Non-CellValue result is not blank
+
+      // ===== TVM (Time Value of Money) Functions =====
+
+      case TExpr.Pmt(rateExpr, nperExpr, pvExpr, fvExprOpt, pmtTypeExprOpt) =>
+        // PMT: Calculate payment per period
+        // Formula: PMT = -rate * (PV * (1+rate)^nper + FV) / ((1+rate*type) * ((1+rate)^nper - 1))
+        // When rate = 0: PMT = -(PV + FV) / nper
+        for
+          rate <- eval(rateExpr, sheet, clock, workbook).map(_.toDouble)
+          nper <- eval(nperExpr, sheet, clock, workbook).map(_.toDouble)
+          pv <- eval(pvExpr, sheet, clock, workbook).map(_.toDouble)
+          fv <- fvExprOpt match
+            case Some(expr) => eval(expr, sheet, clock, workbook).map(_.toDouble)
+            case None => Right(0.0)
+          pmtType <- pmtTypeExprOpt match
+            case Some(expr) =>
+              eval(expr, sheet, clock, workbook).map(v => if v.toInt != 0 then 1 else 0)
+            case None => Right(0)
+        yield
+          if math.abs(rate) < 1e-10 then
+            // Zero interest rate case
+            if nper == 0.0 then BigDecimal(Double.NaN)
+            else BigDecimal(-(pv + fv) / nper)
+          else
+            val pvif = math.pow(1.0 + rate, nper) // (1 + rate)^nper
+            BigDecimal(-rate * (pv * pvif + fv) / ((1.0 + rate * pmtType) * (pvif - 1.0)))
+
+      case TExpr.Fv(rateExpr, nperExpr, pmtExpr, pvExprOpt, pmtTypeExprOpt) =>
+        // FV: Calculate future value
+        // Formula: FV = -PV * (1+rate)^nper - PMT * (1+rate*type) * ((1+rate)^nper - 1) / rate
+        // When rate = 0: FV = -PV - PMT * nper
+        for
+          rate <- eval(rateExpr, sheet, clock, workbook).map(_.toDouble)
+          nper <- eval(nperExpr, sheet, clock, workbook).map(_.toDouble)
+          pmt <- eval(pmtExpr, sheet, clock, workbook).map(_.toDouble)
+          pv <- pvExprOpt match
+            case Some(expr) => eval(expr, sheet, clock, workbook).map(_.toDouble)
+            case None => Right(0.0)
+          pmtType <- pmtTypeExprOpt match
+            case Some(expr) =>
+              eval(expr, sheet, clock, workbook).map(v => if v.toInt != 0 then 1 else 0)
+            case None => Right(0)
+        yield
+          if math.abs(rate) < 1e-10 then
+            // Zero interest rate case
+            BigDecimal(-pv - pmt * nper)
+          else
+            val pvif = math.pow(1.0 + rate, nper) // (1 + rate)^nper
+            val fvifa = (pvif - 1.0) / rate // future value interest factor of annuity
+            BigDecimal(-pv * pvif - pmt * (1.0 + rate * pmtType) * fvifa)
+
+      case TExpr.Pv(rateExpr, nperExpr, pmtExpr, fvExprOpt, pmtTypeExprOpt) =>
+        // PV: Calculate present value
+        // Formula: PV = (-FV - PMT * (1+rate*type) * ((1+rate)^nper - 1) / rate) / (1+rate)^nper
+        // When rate = 0: PV = -FV - PMT * nper
+        for
+          rate <- eval(rateExpr, sheet, clock, workbook).map(_.toDouble)
+          nper <- eval(nperExpr, sheet, clock, workbook).map(_.toDouble)
+          pmt <- eval(pmtExpr, sheet, clock, workbook).map(_.toDouble)
+          fv <- fvExprOpt match
+            case Some(expr) => eval(expr, sheet, clock, workbook).map(_.toDouble)
+            case None => Right(0.0)
+          pmtType <- pmtTypeExprOpt match
+            case Some(expr) =>
+              eval(expr, sheet, clock, workbook).map(v => if v.toInt != 0 then 1 else 0)
+            case None => Right(0)
+        yield
+          if math.abs(rate) < 1e-10 then
+            // Zero interest rate case
+            BigDecimal(-fv - pmt * nper)
+          else
+            val pvif = math.pow(1.0 + rate, nper) // (1 + rate)^nper
+            val fvifa = (pvif - 1.0) / rate // future value interest factor of annuity
+            BigDecimal((-fv - pmt * (1.0 + rate * pmtType) * fvifa) / pvif)
+
+      case TExpr.Nper(rateExpr, pmtExpr, pvExpr, fvExprOpt, pmtTypeExprOpt) =>
+        // NPER: Calculate number of periods
+        // Formula: NPER = ln((PMT*(1+rate*type) - FV*rate) / (PMT*(1+rate*type) + PV*rate)) / ln(1+rate)
+        // When rate = 0: NPER = -(PV + FV) / PMT
+        for
+          rate <- eval(rateExpr, sheet, clock, workbook).map(_.toDouble)
+          pmt <- eval(pmtExpr, sheet, clock, workbook).map(_.toDouble)
+          pv <- eval(pvExpr, sheet, clock, workbook).map(_.toDouble)
+          fv <- fvExprOpt match
+            case Some(expr) => eval(expr, sheet, clock, workbook).map(_.toDouble)
+            case None => Right(0.0)
+          pmtType <- pmtTypeExprOpt match
+            case Some(expr) =>
+              eval(expr, sheet, clock, workbook).map(v => if v.toInt != 0 then 1 else 0)
+            case None => Right(0)
+        yield
+          if math.abs(rate) < 1e-10 then
+            // Zero interest rate case
+            if pmt == 0.0 then BigDecimal(Double.NaN)
+            else BigDecimal(-(pv + fv) / pmt)
+          else
+            val pmtAdj = pmt * (1.0 + rate * pmtType)
+            val numerator = pmtAdj - fv * rate
+            val denominator = pmtAdj + pv * rate
+            if denominator == 0.0 || numerator / denominator <= 0.0 then BigDecimal(Double.NaN)
+            else BigDecimal(math.log(numerator / denominator) / math.log(1.0 + rate))
+
+      case TExpr.Rate(nperExpr, pmtExpr, pvExpr, fvExprOpt, pmtTypeExprOpt, guessExprOpt) =>
+        // RATE: Calculate interest rate using Newton-Raphson iteration
+        // Solves: PV*(1+rate)^nper + PMT*(1+rate*type)*((1+rate)^nper - 1)/rate + FV = 0
+        for
+          nper <- eval(nperExpr, sheet, clock, workbook).map(_.toDouble)
+          pmt <- eval(pmtExpr, sheet, clock, workbook).map(_.toDouble)
+          pv <- eval(pvExpr, sheet, clock, workbook).map(_.toDouble)
+          fv <- fvExprOpt match
+            case Some(expr) => eval(expr, sheet, clock, workbook).map(_.toDouble)
+            case None => Right(0.0)
+          pmtType <- pmtTypeExprOpt match
+            case Some(expr) =>
+              eval(expr, sheet, clock, workbook).map(v => if v.toInt != 0 then 1 else 0)
+            case None => Right(0)
+          guess <- guessExprOpt match
+            case Some(expr) => eval(expr, sheet, clock, workbook).map(_.toDouble)
+            case None => Right(0.1)
+          result <- {
+            val maxIter = 100
+            val tolerance = 1e-10
+
+            // TVM equation: f(rate) = PV*(1+rate)^nper + PMT*(1+rate*type)*((1+rate)^nper - 1)/rate + FV
+            def f(rate: Double): Double =
+              if math.abs(rate) < 1e-10 then pv + pmt * nper + fv
+              else
+                val pvif = math.pow(1.0 + rate, nper)
+                val fvifa = (pvif - 1.0) / rate
+                pv * pvif + pmt * (1.0 + rate * pmtType) * fvifa + fv
+
+            // Derivative of f with respect to rate
+            def df(rate: Double): Double =
+              if math.abs(rate) < 1e-10 then pv * nper + pmt * nper * (nper - 1.0) / 2.0
+              else
+                val pvif = math.pow(1.0 + rate, nper)
+                val dpvif = nper * math.pow(1.0 + rate, nper - 1.0)
+                val fvifa = (pvif - 1.0) / rate
+                val dfvifa = (dpvif * rate - (pvif - 1.0)) / (rate * rate)
+                pv * dpvif + pmt * pmtType * fvifa + pmt * (1.0 + rate * pmtType) * dfvifa
+
+            @tailrec
+            def loop(iter: Int, r: Double): Either[EvalError, BigDecimal] =
+              if iter >= maxIter then
+                Left(
+                  EvalError.EvalFailed(
+                    s"RATE did not converge after $maxIter iterations",
+                    Some("RATE(nper, pmt, pv, [fv], [type], [guess])")
+                  )
+                )
+              else
+                val fVal = f(r)
+                val dfVal = df(r)
+                if math.abs(dfVal) < 1e-14 then
+                  Left(
+                    EvalError.EvalFailed(
+                      "RATE derivative is zero; cannot continue iteration",
+                      Some("RATE(nper, pmt, pv, [fv], [type], [guess])")
+                    )
+                  )
+                else
+                  val next = r - fVal / dfVal
+                  if math.abs(next - r) <= tolerance then Right(BigDecimal(next))
+                  else loop(iter + 1, next)
+
+            loop(0, guess)
+          }
+        yield result
+
       // ===== Rounding and Math Functions =====
 
       case TExpr.Round(valueExpr, numDigitsExpr) =>
