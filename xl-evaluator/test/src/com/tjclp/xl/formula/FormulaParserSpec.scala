@@ -821,6 +821,15 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
+  test("parse SQRT function") {
+    val result = FormulaParser.parse("=SQRT(9)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Call(spec, _) if spec.name == "SQRT" => assert(true)
+      case _ => fail("Expected TExpr.Call(SQRT)")
+    }
+  }
+
   // Lookup functions
   test("parse INDEX function") {
     val result = FormulaParser.parse("=INDEX(A1:C3, 2, 3)")
