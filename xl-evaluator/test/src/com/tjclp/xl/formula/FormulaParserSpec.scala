@@ -816,8 +816,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ABS(-5)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Abs(_) => assert(true)
-      case _ => fail("Expected TExpr.Abs")
+      case TExpr.Call(spec, _) if spec.name == "ABS" => assert(true)
+      case _ => fail("Expected TExpr.Call(ABS)")
     }
   }
 

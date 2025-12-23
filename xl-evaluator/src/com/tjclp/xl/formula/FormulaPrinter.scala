@@ -260,6 +260,14 @@ object FormulaPrinter:
       case TExpr.Aggregate(aggregatorId, location) =>
         s"$aggregatorId(${formatLocation(location)})"
 
+      case call: TExpr.Call[?] =>
+        val printer = ArgPrinter(
+          expr = expr => printExpr(expr, precedence = 0),
+          location = formatLocation,
+          cellRange = formatRange
+        )
+        call.spec.render(call.args, printer)
+
       // Cross-sheet aggregate functions (legacy, kept for backward compatibility)
       case TExpr.SheetSum(sheet, range) =>
         s"SUM(${formatSheetName(sheet)}!${formatRange(range)})"
@@ -772,6 +780,13 @@ object FormulaPrinter:
         s"Average(${formatLocation(range)})"
       case TExpr.Aggregate(aggregatorId, location) =>
         s"Aggregate($aggregatorId, ${formatLocation(location)})"
+      case call: TExpr.Call[?] =>
+        val printer = ArgPrinter(
+          expr = expr => printWithTypes(expr),
+          location = formatLocation,
+          cellRange = formatRange
+        )
+        s"Call(${call.spec.name}, ${call.spec.argSpec.render(call.args, printer).mkString(", ")})"
       case TExpr.SheetSum(sheet, range) =>
         s"SheetSum(${formatSheetName(sheet)}!${formatRange(range)})"
       case TExpr.SheetMin(sheet, range) =>

@@ -587,17 +587,36 @@ object FormulaParser:
           }
 
     parseArgs(s2, Nil).flatMap { case (args, finalState) =>
-      // Lookup function in type class registry
-      FunctionParser.lookup(name) match
-        case Some(parser) =>
-          // Parse using registered function parser
-          parser.parse(args, startPos) match
-            case Right(expr) => Right((expr, finalState))
-            case Left(err) => Left(err)
+      FunctionRegistry.lookup(name) match
+        case Some(spec) =>
+          spec.arity
+            .validate(args.length, spec.name, startPos)
+            .flatMap(_ => spec.argSpec.parse(args, startPos, spec.name))
+            .flatMap {
+              case (parsedArgs, Nil) =>
+                Right((TExpr.Call(spec, parsedArgs), finalState))
+              case _ =>
+                Left(
+                  ParseError.InvalidArguments(
+                    spec.name,
+                    startPos,
+                    spec.argSpec.describe,
+                    s"${args.length} arguments"
+                  )
+                )
+            }
         case None =>
-          // Unknown function - provide suggestions
-          val suggestions = suggestFunctions(name)
-          Left(ParseError.UnknownFunction(name, startPos, suggestions))
+          // Lookup function in type class registry
+          FunctionParser.lookup(name) match
+            case Some(parser) =>
+              // Parse using registered function parser
+              parser.parse(args, startPos) match
+                case Right(expr) => Right((expr, finalState))
+                case Left(err) => Left(err)
+            case None =>
+              // Unknown function - provide suggestions
+              val suggestions = suggestFunctions(name)
+              Left(ParseError.UnknownFunction(name, startPos, suggestions))
     }
 
   /**
@@ -735,8 +754,8 @@ object FormulaParser:
    * Suggest similar function names for unknown functions.
    */
   private def suggestFunctions(name: String): List[String] =
-    // Use FunctionParser registry for all available functions
-    val knownFunctions = FunctionParser.allFunctions
+    // Combine function registries for suggestions
+    val knownFunctions = (FunctionParser.allFunctions ++ FunctionRegistry.allNames).distinct
 
     // Simple Levenshtein distance for suggestions
     knownFunctions

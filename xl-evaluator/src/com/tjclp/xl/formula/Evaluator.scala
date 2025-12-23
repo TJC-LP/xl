@@ -1073,6 +1073,15 @@ private class EvaluatorImpl extends Evaluator:
               agg.finalizeWithError(result)
             }
 
+      case call: TExpr.Call[?] =>
+        val ctx = EvalContext(
+          sheet,
+          clock,
+          workbook,
+          [A] => (expr: TExpr[A]) => eval(expr, sheet, clock, workbook)
+        )
+        call.spec.eval(call.args, ctx)
+
       // ===== Range Aggregation =====
       case foldExpr: TExpr.FoldRange[a, b] =>
         // FoldRange: iterate cells in range, apply step function with accumulator

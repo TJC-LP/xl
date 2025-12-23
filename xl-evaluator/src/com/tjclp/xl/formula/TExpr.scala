@@ -662,6 +662,14 @@ enum TExpr[A] derives CanEqual:
    */
   case Aggregate(aggregatorId: String, location: TExpr.RangeLocation) extends TExpr[BigDecimal]
 
+  /**
+   * Generic function call backed by FunctionSpec.
+   *
+   * Centralizes function definitions so parser, evaluator, printer, shifter, and dependency
+   * analysis can share a single spec.
+   */
+  case Call[A](spec: FunctionSpec[A], args: spec.Args) extends TExpr[A]
+
   // Financial functions
 
   /**
@@ -2566,6 +2574,12 @@ object TExpr:
    * checks compound expressions (arithmetic, conditionals, etc.).
    */
   def containsDateFunction(expr: TExpr[?]): Boolean = expr match
+    case call: Call[?] =>
+      call.spec.flags.returnsDate ||
+      call.spec.argSpec
+        .toValues(call.args)
+        .collect { case ArgValue.Expr(e) => containsDateFunction(e) }
+        .exists(identity)
     // Date-returning functions
     case _: Today | _: Now | _: Date | _: Eomonth | _: Edate | _: Workday => true
     // Date-to-serial wrappers (for arithmetic)
@@ -2625,6 +2639,12 @@ object TExpr:
    * use DateTime format; otherwise use Date format.
    */
   def containsTimeFunction(expr: TExpr[?]): Boolean = expr match
+    case call: Call[?] =>
+      call.spec.flags.returnsTime ||
+      call.spec.argSpec
+        .toValues(call.args)
+        .collect { case ArgValue.Expr(e) => containsTimeFunction(e) }
+        .exists(identity)
     // Time-returning functions
     case _: Now => true
     case DateTimeToSerial(_) => true

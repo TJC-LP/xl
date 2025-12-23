@@ -45,6 +45,24 @@ final case class DependencyGraph(
 )
 
 object DependencyGraph:
+  private def depsFromArgValues(
+    values: List[ArgValue],
+    exprDeps: TExpr[?] => Set[ARef],
+    rangeDeps: TExpr.RangeLocation => Set[ARef],
+    cellRangeDeps: CellRange => Set[ARef]
+  ): Set[ARef] =
+    values.foldLeft(Set.empty[ARef]) { (acc, value) =>
+      value match
+        case ArgValue.Expr(expr) => acc ++ exprDeps(expr)
+        case ArgValue.Range(range) => acc ++ rangeDeps(range)
+        case ArgValue.Cells(range) => acc ++ cellRangeDeps(range)
+    }
+
+  private def boundedCells(range: CellRange, bounds: Option[CellRange]): Set[ARef] =
+    bounds match
+      case Some(b) => range.intersect(b).map(_.cells.toSet).getOrElse(Set.empty)
+      case None => range.cells.toSet
+
   /**
    * Build dependency graph from Sheet.
    *
@@ -142,6 +160,14 @@ object DependencyGraph:
       // Range reference (expand to all cells)
       case TExpr.FoldRange(range, _, _, _) =>
         range.cells.toSet
+
+      case call: TExpr.Call[?] =>
+        depsFromArgValues(
+          call.spec.argSpec.toValues(call.args),
+          expr => extractDependencies(expr),
+          _.localCells,
+          _.cells.toSet
+        )
 
       // Recursive cases (binary operators)
       case TExpr.Add(l, r) => extractDependencies(l) ++ extractDependencies(r)
@@ -646,6 +672,14 @@ object DependencyGraph:
 
       // Unified aggregate function (typeclass-based)
       case TExpr.Aggregate(_, location) => location.localCellsBounded(bounds)
+
+      case call: TExpr.Call[?] =>
+        depsFromArgValues(
+          call.spec.argSpec.toValues(call.args),
+          expr => extractDependenciesBounded(expr, bounds),
+          loc => loc.localCellsBounded(bounds),
+          range => boundedCells(range, bounds)
+        )
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -1201,6 +1235,16 @@ object DependencyGraph:
 
       // Unified aggregate function (typeclass-based)
       case TExpr.Aggregate(_, location) => locationToQualifiedRefs(location, currentSheet)
+
+      case call: TExpr.Call[?] =>
+        val values = call.spec.argSpec.toValues(call.args)
+        values.foldLeft(Set.empty[QualifiedRef]) { (acc, value) =>
+          value match
+            case ArgValue.Expr(expr) => acc ++ extractQualifiedDependencies(expr, currentSheet)
+            case ArgValue.Range(range) => acc ++ locationToQualifiedRefs(range, currentSheet)
+            case ArgValue.Cells(range) =>
+              acc ++ range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+        }
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
