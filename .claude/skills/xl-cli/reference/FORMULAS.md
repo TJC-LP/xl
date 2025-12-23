@@ -1,6 +1,6 @@
 # Supported Formula Functions
 
-The `eval` command supports 67 Excel functions.
+The `eval` command supports 72 Excel functions.
 
 ## Math Functions
 
@@ -29,6 +29,18 @@ The `eval` command supports 67 Excel functions.
 | ROUND | `=ROUND(number, digits)` | `=ROUND(3.14159, 2)` |
 | ROUNDUP | `=ROUNDUP(number, digits)` | `=ROUNDUP(3.14159, 2)` |
 | ROUNDDOWN | `=ROUNDDOWN(number, digits)` | `=ROUNDDOWN(3.99, 0)` |
+
+## Statistical Functions
+
+| Function | Syntax | Example |
+|----------|--------|---------|
+| MEDIAN | `=MEDIAN(range)` | `=MEDIAN(A1:A10)` → middle value |
+| STDEV | `=STDEV(range)` | `=STDEV(A1:A10)` → sample std dev (n-1) |
+| STDEVP | `=STDEVP(range)` | `=STDEVP(A1:A10)` → population std dev (n) |
+| VAR | `=VAR(range)` | `=VAR(A1:A10)` → sample variance (n-1) |
+| VARP | `=VARP(range)` | `=VARP(A1:A10)` → population variance (n) |
+
+**Note**: STDEV/VAR use Welford's algorithm for numerical stability. Sample variants require at least 2 values; population variants require at least 1.
 
 ## Logic Functions
 

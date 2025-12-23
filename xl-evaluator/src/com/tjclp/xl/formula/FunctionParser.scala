@@ -168,6 +168,11 @@ object FunctionParser:
       averageFunctionParser,
       minFunctionParser,
       maxFunctionParser,
+      medianFunctionParser,
+      stdevFunctionParser,
+      stdevpFunctionParser,
+      varFunctionParser,
+      varpFunctionParser,
       ifFunctionParser,
       andFunctionParser,
       orFunctionParser,
@@ -402,6 +407,126 @@ object FunctionParser:
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("MAX", pos, "1 range argument", s"${args.length} arguments")
+          )
+
+  /** MEDIAN function: MEDIAN(range) - uses unified Aggregate case with Aggregator typeclass */
+  given medianFunctionParser: FunctionParser[Unit] with
+    def name: String = "MEDIAN"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(fold: TExpr.FoldRange[?, ?]) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.Aggregate("MEDIAN", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.Aggregate("MEDIAN", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(TExpr.Aggregate("MEDIAN", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "MEDIAN",
+              pos,
+              "1 range argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** STDEV function: STDEV(range) - sample standard deviation */
+  given stdevFunctionParser: FunctionParser[Unit] with
+    def name: String = "STDEV"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(fold: TExpr.FoldRange[?, ?]) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.Aggregate("STDEV", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.Aggregate("STDEV", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(TExpr.Aggregate("STDEV", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "STDEV",
+              pos,
+              "1 range argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** STDEVP function: STDEVP(range) - population standard deviation */
+  given stdevpFunctionParser: FunctionParser[Unit] with
+    def name: String = "STDEVP"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(fold: TExpr.FoldRange[?, ?]) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.Aggregate("STDEVP", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.Aggregate("STDEVP", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(TExpr.Aggregate("STDEVP", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "STDEVP",
+              pos,
+              "1 range argument",
+              s"${args.length} arguments"
+            )
+          )
+
+  /** VAR function: VAR(range) - sample variance */
+  given varFunctionParser: FunctionParser[Unit] with
+    def name: String = "VAR"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(fold: TExpr.FoldRange[?, ?]) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.Aggregate("VAR", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.Aggregate("VAR", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(TExpr.Aggregate("VAR", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments("VAR", pos, "1 range argument", s"${args.length} arguments")
+          )
+
+  /** VARP function: VARP(range) - population variance */
+  given varpFunctionParser: FunctionParser[Unit] with
+    def name: String = "VARP"
+    def arity: Arity = Arity.one
+
+    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
+      args match
+        case List(fold: TExpr.FoldRange[?, ?]) =>
+          fold match
+            case TExpr.FoldRange(range, _, _, _) =>
+              scala.util.Right(TExpr.Aggregate("VARP", TExpr.RangeLocation.Local(range)))
+        case List(TExpr.SheetFoldRange(sheet, range, _, _, _)) =>
+          scala.util.Right(TExpr.Aggregate("VARP", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case List(TExpr.SheetRange(sheet, range)) =>
+          scala.util.Right(TExpr.Aggregate("VARP", TExpr.RangeLocation.CrossSheet(sheet, range)))
+        case _ =>
+          scala.util.Left(
+            ParseError.InvalidArguments(
+              "VARP",
+              pos,
+              "1 range argument",
+              s"${args.length} arguments"
+            )
           )
 
   // === Logical Functions ===
