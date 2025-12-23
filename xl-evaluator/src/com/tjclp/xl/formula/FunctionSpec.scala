@@ -95,7 +95,7 @@ object FunctionSpec:
     renderFn: Option[(A0, ArgPrinter) => String] = None
   )(evalFn: (A0, EvalContext) => Either[EvalError, A])(using
     spec: ArgSpec[A0]
-  ): FunctionSpec[A] =
+  ): FunctionSpec[A] { type Args = A0 } =
     Simple(name, arity, spec, evalFn, flags, renderFn)
 
 trait ExprCoercer[A]:

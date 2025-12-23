@@ -397,65 +397,6 @@ object FormulaShifter:
       case Isblank(value) =>
         Isblank(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
-      // Rounding and math functions
-      case Round(value, numDigits) =>
-        Round(
-          shiftInternal(value, colDelta, rowDelta),
-          shiftInternal(numDigits, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case RoundUp(value, numDigits) =>
-        RoundUp(
-          shiftInternal(value, colDelta, rowDelta),
-          shiftInternal(numDigits, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case RoundDown(value, numDigits) =>
-        RoundDown(
-          shiftInternal(value, colDelta, rowDelta),
-          shiftInternal(numDigits, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case Abs(value) =>
-        Abs(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Sqrt(value) =>
-        Sqrt(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Mod(number, divisor) =>
-        Mod(
-          shiftInternal(number, colDelta, rowDelta),
-          shiftInternal(divisor, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case Power(number, power) =>
-        Power(
-          shiftInternal(number, colDelta, rowDelta),
-          shiftInternal(power, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case Log(number, base) =>
-        Log(
-          shiftInternal(number, colDelta, rowDelta),
-          shiftInternal(base, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case Ln(value) =>
-        Ln(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Exp(value) =>
-        Exp(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Floor(number, significance) =>
-        Floor(
-          shiftInternal(number, colDelta, rowDelta),
-          shiftInternal(significance, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case Ceiling(number, significance) =>
-        Ceiling(
-          shiftInternal(number, colDelta, rowDelta),
-          shiftInternal(significance, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case Trunc(number, numDigits) =>
-        Trunc(
-          shiftInternal(number, colDelta, rowDelta),
-          shiftInternal(numDigits, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case Sign(value) =>
-        Sign(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Int_(value) =>
-        Int_(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-
       // Reference functions
       case Row_(ref) =>
         Row_(shiftWildcard(ref, colDelta, rowDelta)).asInstanceOf[TExpr[A]]

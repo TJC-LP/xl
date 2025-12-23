@@ -789,8 +789,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ROUND(3.14159, 2)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Round(_, _) => assert(true)
-      case _ => fail("Expected TExpr.Round")
+      case TExpr.Call(spec, _) if spec.name == "ROUND" => assert(true)
+      case _ => fail("Expected TExpr.Call(ROUND)")
     }
   }
 
@@ -798,8 +798,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ROUNDUP(3.14159, 2)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.RoundUp(_, _) => assert(true)
-      case _ => fail("Expected TExpr.RoundUp")
+      case TExpr.Call(spec, _) if spec.name == "ROUNDUP" => assert(true)
+      case _ => fail("Expected TExpr.Call(ROUNDUP)")
     }
   }
 
@@ -807,8 +807,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ROUNDDOWN(3.14159, 2)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.RoundDown(_, _) => assert(true)
-      case _ => fail("Expected TExpr.RoundDown")
+      case TExpr.Call(spec, _) if spec.name == "ROUNDDOWN" => assert(true)
+      case _ => fail("Expected TExpr.Call(ROUNDDOWN)")
     }
   }
 
@@ -867,8 +867,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("FunctionParser.allFunctions includes all 81 functions") {
-    val functions = FunctionParser.allFunctions
+  test("Known functions include all 81 functions") {
+    val functions = (FunctionParser.allFunctions ++ FunctionRegistry.allNames).distinct
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
     assert(functions.contains("MAX"))
