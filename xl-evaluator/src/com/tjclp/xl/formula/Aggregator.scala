@@ -64,7 +64,12 @@ object Aggregator:
     "COUNTBLANK" -> countblankAggregator,
     "MIN" -> minAggregator,
     "MAX" -> maxAggregator,
-    "AVERAGE" -> averageAggregator
+    "AVERAGE" -> averageAggregator,
+    "MEDIAN" -> medianAggregator,
+    "STDEV" -> stdevAggregator,
+    "STDEVP" -> stdevpAggregator,
+    "VAR" -> varAggregator,
+    "VARP" -> varpAggregator
   )
 
   /** Look up an aggregator by name (case-insensitive) */
@@ -140,3 +145,83 @@ object Aggregator:
     override def finalizeWithError(acc: (BigDecimal, Int)) =
       if acc._2 == 0 then Left(EvalError.DivByZero("AVERAGE(empty range)", "count=0"))
       else Right(acc._1 / acc._2)
+
+  /** MEDIAN: Find the middle value(s) in a range */
+  given medianAggregator: Aggregator[List[BigDecimal]] with
+    def name = "MEDIAN"
+    def empty = List.empty
+    def combine(acc: List[BigDecimal], value: BigDecimal) = acc :+ value
+    def finalize(acc: List[BigDecimal]) =
+      if acc.isEmpty then BigDecimal(0) // Fallback; use finalizeWithError for proper error
+      else
+        val sorted = acc.sorted
+        val mid = sorted.length / 2
+        if sorted.length % 2 == 0 then (sorted(mid - 1) + sorted(mid)) / 2
+        else sorted(mid)
+    override def finalizeWithError(acc: List[BigDecimal]) =
+      if acc.isEmpty then Left(EvalError.EvalFailed("MEDIAN requires at least 1 value", None))
+      else Right(finalize(acc))
+
+  /** STDEV: Sample standard deviation (divides by n-1) */
+  given stdevAggregator: Aggregator[(BigDecimal, BigDecimal, Int)] with
+    def name = "STDEV"
+    def empty = (BigDecimal(0), BigDecimal(0), 0)
+    def combine(acc: (BigDecimal, BigDecimal, Int), value: BigDecimal) =
+      (acc._1 + value, acc._2 + value * value, acc._3 + 1)
+    def finalize(acc: (BigDecimal, BigDecimal, Int)) =
+      val (sum, sumSq, n) = acc
+      if n < 2 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
+      else
+        val variance = (sumSq - sum * sum / n) / (n - 1)
+        BigDecimal(math.sqrt(variance.toDouble))
+    override def finalizeWithError(acc: (BigDecimal, BigDecimal, Int)) =
+      if acc._3 < 2 then
+        Left(EvalError.DivByZero("STDEV requires at least 2 values", s"count=${acc._3}"))
+      else Right(finalize(acc))
+
+  /** STDEVP: Population standard deviation (divides by n) */
+  given stdevpAggregator: Aggregator[(BigDecimal, BigDecimal, Int)] with
+    def name = "STDEVP"
+    def empty = (BigDecimal(0), BigDecimal(0), 0)
+    def combine(acc: (BigDecimal, BigDecimal, Int), value: BigDecimal) =
+      (acc._1 + value, acc._2 + value * value, acc._3 + 1)
+    def finalize(acc: (BigDecimal, BigDecimal, Int)) =
+      val (sum, sumSq, n) = acc
+      if n < 1 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
+      else
+        val variance = (sumSq - sum * sum / n) / n
+        BigDecimal(math.sqrt(variance.toDouble))
+    override def finalizeWithError(acc: (BigDecimal, BigDecimal, Int)) =
+      if acc._3 < 1 then
+        Left(EvalError.DivByZero("STDEVP requires at least 1 value", s"count=${acc._3}"))
+      else Right(finalize(acc))
+
+  /** VAR: Sample variance (divides by n-1) */
+  given varAggregator: Aggregator[(BigDecimal, BigDecimal, Int)] with
+    def name = "VAR"
+    def empty = (BigDecimal(0), BigDecimal(0), 0)
+    def combine(acc: (BigDecimal, BigDecimal, Int), value: BigDecimal) =
+      (acc._1 + value, acc._2 + value * value, acc._3 + 1)
+    def finalize(acc: (BigDecimal, BigDecimal, Int)) =
+      val (sum, sumSq, n) = acc
+      if n < 2 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
+      else (sumSq - sum * sum / n) / (n - 1)
+    override def finalizeWithError(acc: (BigDecimal, BigDecimal, Int)) =
+      if acc._3 < 2 then
+        Left(EvalError.DivByZero("VAR requires at least 2 values", s"count=${acc._3}"))
+      else Right(finalize(acc))
+
+  /** VARP: Population variance (divides by n) */
+  given varpAggregator: Aggregator[(BigDecimal, BigDecimal, Int)] with
+    def name = "VARP"
+    def empty = (BigDecimal(0), BigDecimal(0), 0)
+    def combine(acc: (BigDecimal, BigDecimal, Int), value: BigDecimal) =
+      (acc._1 + value, acc._2 + value * value, acc._3 + 1)
+    def finalize(acc: (BigDecimal, BigDecimal, Int)) =
+      val (sum, sumSq, n) = acc
+      if n < 1 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
+      else (sumSq - sum * sum / n) / n
+    override def finalizeWithError(acc: (BigDecimal, BigDecimal, Int)) =
+      if acc._3 < 1 then
+        Left(EvalError.DivByZero("VARP requires at least 1 value", s"count=${acc._3}"))
+      else Right(finalize(acc))
