@@ -478,3 +478,239 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     val result = evalOk(expr, sheet)
     assertEquals(result, CellValue.Text("Product B"))
   }
+
+  // ==================== PMT Tests ====================
+
+  /** Helper to evaluate numeric formulas */
+  def evalNumeric(formula: String, sheet: Sheet = sheetWith()): Double =
+    FormulaParser.parse(formula) match
+      case Right(expr) =>
+        evaluator.eval(expr, sheet) match
+          case Right(v: BigDecimal) => v.toDouble
+          case Right(other) => fail(s"Expected BigDecimal, got: $other")
+          case Left(err) => fail(s"Eval error: $err")
+      case Left(err) => fail(s"Parse error: $err")
+
+  /** Helper to assert approximately equal with tolerance */
+  def assertApprox(actual: Double, expected: Double, tolerance: Double = 0.01): Unit =
+    assert(
+      math.abs(actual - expected) < tolerance,
+      s"Expected $expected ± $tolerance, got $actual"
+    )
+
+  test("PMT: basic loan payment (Excel example)") {
+    // $10,000 loan, 5% annual rate (0.05/12 per month), 24 months
+    // Excel: =PMT(0.05/12, 24, 10000) ≈ -438.71
+    val result = evalNumeric("=PMT(0.05/12, 24, 10000)")
+    assertApprox(result, -438.71, 0.01)
+  }
+
+  test("PMT: with future value parameter") {
+    // Saving for $10,000 target, 6% annual rate (0.06/12 per month), 60 months, $0 pv
+    // Excel: =PMT(0.06/12, 60, 0, 10000) ≈ -143.33
+    val result = evalNumeric("=PMT(0.06/12, 60, 0, 10000)")
+    assertApprox(result, -143.33, 0.01)
+  }
+
+  test("PMT: beginning of period (type=1)") {
+    // Same loan, but payments at beginning of period
+    // Excel: =PMT(0.05/12, 24, 10000, 0, 1) ≈ -436.89
+    val result = evalNumeric("=PMT(0.05/12, 24, 10000, 0, 1)")
+    assertApprox(result, -436.89, 0.01)
+  }
+
+  test("PMT: zero interest rate") {
+    // No interest loan
+    // PMT(0, 24, 10000) = -10000/24 ≈ -416.67
+    val result = evalNumeric("=PMT(0, 24, 10000)")
+    assertApprox(result, -416.67, 0.01)
+  }
+
+  test("PMT: parse and print round-trip") {
+    val formula = "=PMT(0.05, 12, 10000)"
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
+    val printed = FormulaPrinter.print(parsed)
+    assertEquals(printed, formula)
+  }
+
+  // ==================== FV Tests ====================
+
+  test("FV: future value of investment (Excel example)") {
+    // $200/month deposits, 6% annual rate (0.06/12 per month), 60 months, $0 starting
+    // Excel: =FV(0.06/12, 60, -200) ≈ 13954.01
+    val result = evalNumeric("=FV(0.06/12, 60, -200)")
+    assertApprox(result, 13954.01, 0.01)
+  }
+
+  test("FV: with present value parameter") {
+    // $100/month deposits, 5% annual rate, 12 months, $1000 starting
+    // Implementation gives ≈ 2279.05
+    val result = evalNumeric("=FV(0.05/12, 12, -100, -1000)")
+    assertApprox(result, 2279.05, 1.0)
+  }
+
+  test("FV: beginning of period (type=1)") {
+    // Same investment, but deposits at beginning of period
+    // Implementation gives ≈ 14023.78 (type=1 adjustment)
+    val result = evalNumeric("=FV(0.06/12, 60, -200, 0, 1)")
+    assertApprox(result, 14023.78, 1.0)
+  }
+
+  test("FV: zero interest rate") {
+    // Simple accumulation
+    // FV(0, 12, -100) = 100 * 12 = 1200
+    val result = evalNumeric("=FV(0, 12, -100)")
+    assertApprox(result, 1200.0, 0.01)
+  }
+
+  test("FV: parse and print round-trip") {
+    val formula = "=FV(0.05, 12, -100, -1000, 1)"
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
+    val printed = FormulaPrinter.print(parsed)
+    assertEquals(printed, formula)
+  }
+
+  // ==================== PV Tests ====================
+
+  test("PV: present value of annuity (Excel example)") {
+    // $500/month payments, 5% annual rate (0.05/12 per month), 60 months
+    // Implementation gives ≈ 26495.35
+    val result = evalNumeric("=PV(0.05/12, 60, -500)")
+    assertApprox(result, 26495.35, 1.0)
+  }
+
+  test("PV: with future value parameter") {
+    // How much to invest now for $10,000 in 10 years at 5%?
+    // PV(0.05, 10, 0, 10000) ≈ -6139.13
+    val result = evalNumeric("=PV(0.05, 10, 0, 10000)")
+    assertApprox(result, -6139.13, 0.01)
+  }
+
+  test("PV: beginning of period (type=1)") {
+    // Same annuity, but payments at beginning of period
+    // Implementation gives ≈ 26605.75
+    val result = evalNumeric("=PV(0.05/12, 60, -500, 0, 1)")
+    assertApprox(result, 26605.75, 1.0)
+  }
+
+  test("PV: zero interest rate") {
+    // Simple summation
+    // PV(0, 12, -100) = 100 * 12 = 1200
+    val result = evalNumeric("=PV(0, 12, -100)")
+    assertApprox(result, 1200.0, 0.01)
+  }
+
+  test("PV: parse and print round-trip") {
+    val formula = "=PV(0.05, 12, -100)"
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
+    val printed = FormulaPrinter.print(parsed)
+    assertEquals(printed, formula)
+  }
+
+  // ==================== NPER Tests ====================
+
+  test("NPER: how long to pay off loan (Excel example)") {
+    // $10,000 loan, 8% annual rate, $200/month payments
+    // Implementation gives ≈ 61.02 periods
+    val result = evalNumeric("=NPER(0.08/12, -200, 10000)")
+    assertApprox(result, 61.02, 0.1)
+  }
+
+  test("NPER: with future value parameter") {
+    // Saving $100/month at 5% to reach $5,000
+    // Implementation gives ≈ 45.51 periods
+    val result = evalNumeric("=NPER(0.05/12, -100, 0, 5000)")
+    assertApprox(result, 45.51, 0.1)
+  }
+
+  test("NPER: beginning of period (type=1)") {
+    // Same loan, but payments at beginning of period
+    // Implementation gives ≈ 60.52 periods
+    val result = evalNumeric("=NPER(0.08/12, -200, 10000, 0, 1)")
+    assertApprox(result, 60.52, 0.1)
+  }
+
+  test("NPER: zero interest rate") {
+    // Simple division
+    // NPER(0, -100, 1000) = 1000 / 100 = 10
+    val result = evalNumeric("=NPER(0, -100, 1000)")
+    assertApprox(result, 10.0, 0.01)
+  }
+
+  test("NPER: parse and print round-trip") {
+    val formula = "=NPER(0.05, -100, 1000)"
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
+    val printed = FormulaPrinter.print(parsed)
+    assertEquals(printed, formula)
+  }
+
+  // ==================== RATE Tests ====================
+
+  test("RATE: find interest rate for loan (Excel example)") {
+    // 24 months, $500/month payments, $10,000 loan
+    // Implementation gives ≈ 0.01513 (1.513% per month)
+    val result = evalNumeric("=RATE(24, -500, 10000)")
+    assertApprox(result, 0.01513, 0.0001)
+  }
+
+  test("RATE: with future value parameter") {
+    // 60 months, $100/month deposits, $0 pv, $10,000 fv target
+    // Implementation gives ≈ 0.01615 (1.615% per month)
+    val result = evalNumeric("=RATE(60, -100, 0, 10000)")
+    assertApprox(result, 0.01615, 0.0001)
+  }
+
+  test("RATE: with explicit guess") {
+    // Same as first test, but with explicit guess
+    val result = evalNumeric("=RATE(24, -500, 10000, 0, 0, 0.01)")
+    assertApprox(result, 0.01513, 0.0001)
+  }
+
+  test("RATE: parse and print round-trip (3 args)") {
+    val formula = "=RATE(24, -500, 10000)"
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
+    val printed = FormulaPrinter.print(parsed)
+    assertEquals(printed, formula)
+  }
+
+  test("RATE: parse and print round-trip (6 args)") {
+    val formula = "=RATE(24, -500, 10000, 0, 0, 0.1)"
+    val parsed = FormulaParser.parse(formula).getOrElse(fail("Parse failed"))
+    val printed = FormulaPrinter.print(parsed)
+    assertEquals(printed, formula)
+  }
+
+  // ==================== TVM Cross-Validation Tests ====================
+
+  test("TVM: PMT and FV consistency - FV of payments equals target") {
+    // If we know PMT for a target FV, then FV of those payments should equal target
+    // PMT to reach $10,000 in 60 months at 0.5% per month
+    val pmt = evalNumeric("=PMT(0.005, 60, 0, 10000)") // ≈ -143.33
+
+    // FV of those payments
+    val fvFormula = s"=FV(0.005, 60, $pmt, 0)"
+    val fv = evalNumeric(fvFormula)
+    assertApprox(fv, 10000.0, 0.1)
+  }
+
+  test("TVM: PV and FV consistency - PV grows to FV") {
+    // If we know PV for a target FV, then FV of that PV should equal target
+    // PV returns negative (investment outflow), FV returns negative (future value)
+    val pv = evalNumeric("=PV(0.05, 10, 0, 10000)") // ≈ -6139.13
+
+    // FV of that PV investment should equal the target (with sign inversion)
+    val fvFormula = s"=FV(0.05, 10, 0, ${-pv})"
+    val fv = evalNumeric(fvFormula)
+    // FV returns -10000 (same sign convention: negative = outflow/investment result)
+    assertApprox(math.abs(fv), 10000.0, 0.1)
+  }
+
+  test("TVM: NPER and PMT consistency - loan paid off in NPER periods") {
+    // NPER to pay off $10,000 at 0.5% per month with $200 payments
+    val nper = evalNumeric("=NPER(0.005, -200, 10000)") // ≈ 54.7
+
+    // FV after NPER periods should be ≈ 0
+    val fvFormula = s"=FV(0.005, $nper, -200, 10000)"
+    val fv = evalNumeric(fvFormula)
+    assertApprox(fv, 0.0, 1.0)
+  }

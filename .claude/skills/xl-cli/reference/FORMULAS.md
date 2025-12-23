@@ -1,6 +1,6 @@
 # Supported Formula Functions
 
-The `eval` command supports 72 Excel functions.
+The `eval` command supports 81 Excel functions.
 
 ## Math Functions
 
@@ -96,6 +96,19 @@ The `eval` command supports 72 Excel functions.
 | IRR | `=IRR(values, [guess])` | `=IRR(A1:A10)` |
 | XNPV | `=XNPV(rate, values, dates)` | `=XNPV(0.1, A1:A5, B1:B5)` |
 | XIRR | `=XIRR(values, dates, [guess])` | `=XIRR(A1:A5, B1:B5)` |
+| PMT | `=PMT(rate, nper, pv, [fv], [type])` | `=PMT(0.05/12, 24, 10000)` |
+| FV | `=FV(rate, nper, pmt, [pv], [type])` | `=FV(0.06/12, 60, -200)` |
+| PV | `=PV(rate, nper, pmt, [fv], [type])` | `=PV(0.05/12, 60, -500)` |
+| RATE | `=RATE(nper, pmt, pv, [fv], [type], [guess])` | `=RATE(24, -500, 10000)` |
+| NPER | `=NPER(rate, pmt, pv, [fv], [type])` | `=NPER(0.08/12, -200, 10000)` |
+
+**TVM Functions**: PMT, FV, PV, RATE, NPER use standard Time Value of Money formulas. Parameters:
+- `rate`: Interest rate per period
+- `nper`: Number of periods
+- `pmt`: Payment per period (negative = outflow)
+- `pv`: Present value (negative = outflow)
+- `fv`: Future value (default: 0)
+- `type`: 0 = end of period (default), 1 = beginning of period
 
 ## Lookup Functions
 
@@ -123,7 +136,18 @@ The `eval` command supports 72 Excel functions.
 | Function | Syntax | Example |
 |----------|--------|---------|
 | IFERROR | `=IFERROR(value, value_if_error)` | `=IFERROR(A1/B1, 0)` |
-| ISERROR | `=ISERROR(value)` | `=ISERROR(A1/0)` |
+| ISERROR | `=ISERROR(value)` | `=ISERROR(A1/0)` → TRUE for any error |
+| ISERR | `=ISERR(value)` | `=ISERR(A1/0)` → TRUE for errors except #N/A |
+
+## Type-Check Functions
+
+| Function | Syntax | Example |
+|----------|--------|---------|
+| ISNUMBER | `=ISNUMBER(value)` | `=ISNUMBER(A1)` → TRUE if numeric |
+| ISTEXT | `=ISTEXT(value)` | `=ISTEXT(A1)` → TRUE if text string |
+| ISBLANK | `=ISBLANK(ref)` | `=ISBLANK(A1)` → TRUE if cell is empty |
+
+**Note**: ISERR excludes #N/A errors (returns FALSE for #N/A). Use ISERROR to catch all errors including #N/A. ISBLANK returns FALSE for cells with empty strings.
 
 ## Reference Functions
 

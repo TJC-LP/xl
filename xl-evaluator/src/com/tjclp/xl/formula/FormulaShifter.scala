@@ -267,6 +267,50 @@ object FormulaShifter:
           shiftLocation(dates, colDelta, rowDelta),
           guess.map(shiftInternal(_, colDelta, rowDelta))
         ).asInstanceOf[TExpr[A]]
+
+      // TVM Functions
+      case Pmt(rate, nper, pv, fv, pmtType) =>
+        Pmt(
+          shiftInternal(rate, colDelta, rowDelta),
+          shiftInternal(nper, colDelta, rowDelta),
+          shiftInternal(pv, colDelta, rowDelta),
+          fv.map(shiftInternal(_, colDelta, rowDelta)),
+          pmtType.map(shiftInternal(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+      case Fv(rate, nper, pmt, pv, pmtType) =>
+        Fv(
+          shiftInternal(rate, colDelta, rowDelta),
+          shiftInternal(nper, colDelta, rowDelta),
+          shiftInternal(pmt, colDelta, rowDelta),
+          pv.map(shiftInternal(_, colDelta, rowDelta)),
+          pmtType.map(shiftInternal(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+      case Pv(rate, nper, pmt, fv, pmtType) =>
+        Pv(
+          shiftInternal(rate, colDelta, rowDelta),
+          shiftInternal(nper, colDelta, rowDelta),
+          shiftInternal(pmt, colDelta, rowDelta),
+          fv.map(shiftInternal(_, colDelta, rowDelta)),
+          pmtType.map(shiftInternal(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+      case Nper(rate, pmt, pv, fv, pmtType) =>
+        Nper(
+          shiftInternal(rate, colDelta, rowDelta),
+          shiftInternal(pmt, colDelta, rowDelta),
+          shiftInternal(pv, colDelta, rowDelta),
+          fv.map(shiftInternal(_, colDelta, rowDelta)),
+          pmtType.map(shiftInternal(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+      case Rate(nper, pmt, pv, fv, pmtType, guess) =>
+        Rate(
+          shiftInternal(nper, colDelta, rowDelta),
+          shiftInternal(pmt, colDelta, rowDelta),
+          shiftInternal(pv, colDelta, rowDelta),
+          fv.map(shiftInternal(_, colDelta, rowDelta)),
+          pmtType.map(shiftInternal(_, colDelta, rowDelta)),
+          guess.map(shiftInternal(_, colDelta, rowDelta))
+        ).asInstanceOf[TExpr[A]]
+
       case VLookup(lookup, table, colIndex, rangeLookup) =>
         VLookup(
           shiftInternal(lookup, colDelta, rowDelta),
@@ -335,6 +379,14 @@ object FormulaShifter:
         ).asInstanceOf[TExpr[A]]
       case Iserror(value) =>
         Iserror(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Iserr(value) =>
+        Iserr(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Isnumber(value) =>
+        Isnumber(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Istext(value) =>
+        Istext(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
+      case Isblank(value) =>
+        Isblank(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
       // Rounding and math functions
       case Round(value, numDigits) =>

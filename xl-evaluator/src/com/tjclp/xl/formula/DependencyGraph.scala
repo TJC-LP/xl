@@ -196,6 +196,30 @@ object DependencyGraph:
         values.localCells ++ dates.localCells ++ guessOpt
           .map(extractDependencies)
           .getOrElse(Set.empty)
+
+      // TVM Functions
+      case TExpr.Pmt(rate, nper, pv, fv, pmtType) =>
+        extractDependencies(rate) ++ extractDependencies(nper) ++ extractDependencies(pv) ++
+          fv.map(extractDependencies).getOrElse(Set.empty) ++
+          pmtType.map(extractDependencies).getOrElse(Set.empty)
+      case TExpr.Fv(rate, nper, pmt, pv, pmtType) =>
+        extractDependencies(rate) ++ extractDependencies(nper) ++ extractDependencies(pmt) ++
+          pv.map(extractDependencies).getOrElse(Set.empty) ++
+          pmtType.map(extractDependencies).getOrElse(Set.empty)
+      case TExpr.Pv(rate, nper, pmt, fv, pmtType) =>
+        extractDependencies(rate) ++ extractDependencies(nper) ++ extractDependencies(pmt) ++
+          fv.map(extractDependencies).getOrElse(Set.empty) ++
+          pmtType.map(extractDependencies).getOrElse(Set.empty)
+      case TExpr.Nper(rate, pmt, pv, fv, pmtType) =>
+        extractDependencies(rate) ++ extractDependencies(pmt) ++ extractDependencies(pv) ++
+          fv.map(extractDependencies).getOrElse(Set.empty) ++
+          pmtType.map(extractDependencies).getOrElse(Set.empty)
+      case TExpr.Rate(nper, pmt, pv, fv, pmtType, guess) =>
+        extractDependencies(nper) ++ extractDependencies(pmt) ++ extractDependencies(pv) ++
+          fv.map(extractDependencies).getOrElse(Set.empty) ++
+          pmtType.map(extractDependencies).getOrElse(Set.empty) ++
+          guess.map(extractDependencies).getOrElse(Set.empty)
+
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         extractDependencies(lookup) ++
           table.localCells ++
@@ -263,6 +287,12 @@ object DependencyGraph:
       case TExpr.Iferror(value, valueIfError) =>
         extractDependencies(value) ++ extractDependencies(valueIfError)
       case TExpr.Iserror(value) => extractDependencies(value)
+      case TExpr.Iserr(value) => extractDependencies(value)
+
+      // Type-check functions
+      case TExpr.Isnumber(value) => extractDependencies(value)
+      case TExpr.Istext(value) => extractDependencies(value)
+      case TExpr.Isblank(value) => extractDependencies(value)
 
       // Rounding and math functions
       case TExpr.Round(value, numDigits) =>
@@ -449,6 +479,35 @@ object DependencyGraph:
         values.localCellsBounded(bounds) ++
           dates.localCellsBounded(bounds) ++
           guessOpt.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
+
+      // TVM Functions
+      case TExpr.Pmt(rate, nper, pv, fv, pmtType) =>
+        extractDependenciesBounded(rate, bounds) ++
+          extractDependenciesBounded(nper, bounds) ++ extractDependenciesBounded(pv, bounds) ++
+          fv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
+          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
+      case TExpr.Fv(rate, nper, pmt, pv, pmtType) =>
+        extractDependenciesBounded(rate, bounds) ++
+          extractDependenciesBounded(nper, bounds) ++ extractDependenciesBounded(pmt, bounds) ++
+          pv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
+          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
+      case TExpr.Pv(rate, nper, pmt, fv, pmtType) =>
+        extractDependenciesBounded(rate, bounds) ++
+          extractDependenciesBounded(nper, bounds) ++ extractDependenciesBounded(pmt, bounds) ++
+          fv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
+          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
+      case TExpr.Nper(rate, pmt, pv, fv, pmtType) =>
+        extractDependenciesBounded(rate, bounds) ++
+          extractDependenciesBounded(pmt, bounds) ++ extractDependenciesBounded(pv, bounds) ++
+          fv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
+          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
+      case TExpr.Rate(nper, pmt, pv, fv, pmtType, guess) =>
+        extractDependenciesBounded(nper, bounds) ++
+          extractDependenciesBounded(pmt, bounds) ++ extractDependenciesBounded(pv, bounds) ++
+          fv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
+          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
+          guess.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
+
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         extractDependenciesBounded(lookup, bounds) ++
           table.localCellsBounded(bounds) ++
@@ -517,6 +576,12 @@ object DependencyGraph:
         extractDependenciesBounded(value, bounds) ++
           extractDependenciesBounded(valueIfError, bounds)
       case TExpr.Iserror(value) => extractDependenciesBounded(value, bounds)
+      case TExpr.Iserr(value) => extractDependenciesBounded(value, bounds)
+
+      // Type-check functions
+      case TExpr.Isnumber(value) => extractDependenciesBounded(value, bounds)
+      case TExpr.Istext(value) => extractDependenciesBounded(value, bounds)
+      case TExpr.Isblank(value) => extractDependenciesBounded(value, bounds)
 
       // Rounding and math functions
       case TExpr.Round(value, numDigits) =>
@@ -1190,6 +1255,40 @@ object DependencyGraph:
         locationToQualifiedRefs(values, currentSheet) ++
           locationToQualifiedRefs(dates, currentSheet) ++
           guessOpt.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
+
+      // TVM Functions
+      case TExpr.Pmt(rate, nper, pv, fv, pmtType) =>
+        extractQualifiedDependencies(rate, currentSheet) ++
+          extractQualifiedDependencies(nper, currentSheet) ++
+          extractQualifiedDependencies(pv, currentSheet) ++
+          fv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
+          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
+      case TExpr.Fv(rate, nper, pmt, pv, pmtType) =>
+        extractQualifiedDependencies(rate, currentSheet) ++
+          extractQualifiedDependencies(nper, currentSheet) ++
+          extractQualifiedDependencies(pmt, currentSheet) ++
+          pv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
+          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
+      case TExpr.Pv(rate, nper, pmt, fv, pmtType) =>
+        extractQualifiedDependencies(rate, currentSheet) ++
+          extractQualifiedDependencies(nper, currentSheet) ++
+          extractQualifiedDependencies(pmt, currentSheet) ++
+          fv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
+          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
+      case TExpr.Nper(rate, pmt, pv, fv, pmtType) =>
+        extractQualifiedDependencies(rate, currentSheet) ++
+          extractQualifiedDependencies(pmt, currentSheet) ++
+          extractQualifiedDependencies(pv, currentSheet) ++
+          fv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
+          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
+      case TExpr.Rate(nper, pmt, pv, fv, pmtType, guess) =>
+        extractQualifiedDependencies(nper, currentSheet) ++
+          extractQualifiedDependencies(pmt, currentSheet) ++
+          extractQualifiedDependencies(pv, currentSheet) ++
+          fv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
+          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
+          guess.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
+
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         extractQualifiedDependencies(lookup, currentSheet) ++
           locationToQualifiedRefs(table, currentSheet) ++
@@ -1261,6 +1360,16 @@ object DependencyGraph:
         extractQualifiedDependencies(value, currentSheet) ++
           extractQualifiedDependencies(valueIfError, currentSheet)
       case TExpr.Iserror(value) =>
+        extractQualifiedDependencies(value, currentSheet)
+      case TExpr.Iserr(value) =>
+        extractQualifiedDependencies(value, currentSheet)
+
+      // Type-check functions
+      case TExpr.Isnumber(value) =>
+        extractQualifiedDependencies(value, currentSheet)
+      case TExpr.Istext(value) =>
+        extractQualifiedDependencies(value, currentSheet)
+      case TExpr.Isblank(value) =>
         extractQualifiedDependencies(value, currentSheet)
 
       // Rounding and math functions
