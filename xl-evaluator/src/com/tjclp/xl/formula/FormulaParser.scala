@@ -50,7 +50,7 @@ object FormulaParser:
    *
    * Example:
    * {{{
-   * parse("=SUM(A1:B10)") // Right(TExpr.FoldRange(...))
+   * parse("=SUM(A1:B10)") // Right(TExpr.Call(...))
    * parse("=A1+B2")       // Right(TExpr.Add(...))
    * parse("=IF(A1>0, "Yes", "No")") // Right(TExpr.Call(...))
    * }}}
@@ -476,8 +476,8 @@ object FormulaParser:
             val rangeStr = state.input.substring(startPos, afterSecondDigits.pos)
             CellRange.parse(rangeStr) match
               case Right(range) =>
-                // Create FoldRange for SUM by default (function parsers will re-wrap)
-                Right((TExpr.sum(range), afterSecondDigits))
+                // Create RangeRef for range arguments
+                Right((TExpr.RangeRef(range), afterSecondDigits))
               case Left(err) =>
                 Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
           case _ =>
@@ -618,17 +618,9 @@ object FormulaParser:
                 )
             }
         case None =>
-          // Lookup function in type class registry
-          FunctionParser.lookup(name) match
-            case Some(parser) =>
-              // Parse using registered function parser
-              parser.parse(args, startPos) match
-                case Right(expr) => Right((expr, finalState))
-                case Left(err) => Left(err)
-            case None =>
-              // Unknown function - provide suggestions
-              val suggestions = suggestFunctions(name)
-              Left(ParseError.UnknownFunction(name, startPos, suggestions))
+          // Unknown function - provide suggestions
+          val suggestions = suggestFunctions(name)
+          Left(ParseError.UnknownFunction(name, startPos, suggestions))
     }
 
   /**
@@ -756,9 +748,8 @@ object FormulaParser:
 
     CellRange.parse(rangeStr) match
       case Right(range) =>
-        // Create FoldRange for SUM by default (function parsers will re-wrap as needed)
-        // E.g., COUNT(A1:B10) will extract the range and create TExpr.count(range)
-        Right((TExpr.sum(range), s3))
+        // Create RangeRef for range arguments
+        Right((TExpr.RangeRef(range), s3))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
 
@@ -766,8 +757,8 @@ object FormulaParser:
    * Suggest similar function names for unknown functions.
    */
   private def suggestFunctions(name: String): List[String] =
-    // Combine function registries for suggestions
-    val knownFunctions = (FunctionParser.allFunctions ++ FunctionRegistry.allNames).distinct
+    // Use registry list for suggestions
+    val knownFunctions = FunctionRegistry.allNames
 
     // Simple Levenshtein distance for suggestions
     knownFunctions

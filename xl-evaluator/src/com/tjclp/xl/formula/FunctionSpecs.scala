@@ -1,7 +1,8 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.CellRange
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.sheets.Sheet
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
@@ -181,6 +182,148 @@ object FunctionSpecs:
         !holidays.contains(current)
       then remaining -= direction.toInt
     current
+
+  private def coerceToNumeric(value: CellValue): BigDecimal =
+    value match
+      case CellValue.Number(n) => n
+      case CellValue.Bool(true) => BigDecimal(1)
+      case CellValue.Bool(false) => BigDecimal(0)
+      case CellValue.Formula(_, Some(cached)) => coerceToNumeric(cached)
+      case _ => BigDecimal(0)
+
+  private def compareCellValues(cv: CellValue, value: Any): Int =
+    (cv, value) match
+      case (CellValue.Number(n1), n2: BigDecimal) => n1.compare(n2)
+      case (CellValue.Number(n1), n2: Int) => n1.compare(BigDecimal(n2))
+      case (CellValue.Number(n1), n2: Long) => n1.compare(BigDecimal(n2))
+      case (CellValue.Number(n1), n2: Double) => n1.compare(BigDecimal(n2))
+      case (CellValue.Text(s1), s2: String) => s1.compareToIgnoreCase(s2)
+      case (CellValue.Bool(b1), b2: Boolean) => b1.compare(b2)
+      case (CellValue.Number(n), CellValue.Number(n2)) => n.compare(n2)
+      case (CellValue.Text(s), CellValue.Text(s2)) => s.compareToIgnoreCase(s2)
+      case (CellValue.Bool(b), CellValue.Bool(b2)) => b.compare(b2)
+      case _ => -2
+
+  private def coerceToBigDecimal(value: Any): BigDecimal =
+    value match
+      case n: BigDecimal => n
+      case n: Int => BigDecimal(n)
+      case n: Long => BigDecimal(n)
+      case n: Double => BigDecimal(n)
+      case CellValue.Number(n) => n
+      case CellValue.Bool(true) => BigDecimal(1)
+      case CellValue.Bool(false) => BigDecimal(0)
+      case _ => BigDecimal(0)
+
+  private def performXLookup(
+    lookupValue: Any,
+    lookupArray: CellRange,
+    returnArray: CellRange,
+    ifNotFoundOpt: Option[TExpr[?]],
+    matchMode: Int,
+    searchMode: Int,
+    ctx: EvalContext
+  ): Either[EvalError, CellValue] =
+    val lookupCells = lookupArray.cells.toList
+    val returnCells = returnArray.cells.toList
+
+    val indices: List[Int] = searchMode match
+      case -1 => lookupCells.indices.reverse.toList
+      case _ => lookupCells.indices.toList
+
+    val matchingIndexOpt: Option[Int] = matchMode match
+      case 0 =>
+        indices.find { idx =>
+          val cellValue = ctx.sheet(lookupCells(idx)).value
+          matchesExactForXLookup(cellValue, lookupValue)
+        }
+      case 2 =>
+        lookupValue match
+          case pattern: String =>
+            val criterion = CriteriaMatcher.parse(pattern)
+            indices.find { idx =>
+              CriteriaMatcher.matches(ctx.sheet(lookupCells(idx)).value, criterion)
+            }
+          case _ => None
+      case -1 =>
+        findNextSmaller(lookupValue, lookupCells, ctx.sheet, indices)
+      case 1 =>
+        findNextLarger(lookupValue, lookupCells, ctx.sheet, indices)
+      case _ => None
+
+    matchingIndexOpt match
+      case Some(idx) =>
+        Right(ctx.sheet(returnCells(idx)).value)
+      case None =>
+        ifNotFoundOpt match
+          case Some(expr) => evalAny(ctx, expr).map(toCellValue)
+          case None => Right(CellValue.Error(CellError.NA))
+
+  private def matchesExactForXLookup(cellValue: CellValue, lookupValue: Any): Boolean =
+    CriteriaMatcher.matches(cellValue, CriteriaMatcher.Exact(lookupValue))
+
+  private def findNextSmaller(
+    lookupValue: Any,
+    lookupCells: List[ARef],
+    sheet: Sheet,
+    indices: List[Int]
+  ): Option[Int] =
+    lookupValue match
+      case targetNum: BigDecimal =>
+        val candidates = indices
+          .flatMap { idx =>
+            extractNumericValue(sheet(lookupCells(idx)).value).map(n => (idx, n))
+          }
+          .filter(_._2 <= targetNum)
+        candidates.sortBy(-_._2).headOption.map(_._1)
+      case _ => None
+
+  private def findNextLarger(
+    lookupValue: Any,
+    lookupCells: List[ARef],
+    sheet: Sheet,
+    indices: List[Int]
+  ): Option[Int] =
+    lookupValue match
+      case targetNum: BigDecimal =>
+        val candidates = indices
+          .flatMap { idx =>
+            extractNumericValue(sheet(lookupCells(idx)).value).map(n => (idx, n))
+          }
+          .filter(_._2 >= targetNum)
+        candidates.sortBy(_._2).headOption.map(_._1)
+      case _ => None
+
+  private def extractNumericValue(value: CellValue): Option[BigDecimal] =
+    value match
+      case CellValue.Number(n) => Some(n)
+      case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+      case _ => None
+
+  private def extractARef(expr: TExpr[?]): Option[ARef] = expr match
+    case TExpr.PolyRef(ref, _) => Some(ref)
+    case TExpr.Ref(ref, _, _) => Some(ref)
+    case TExpr.SheetPolyRef(_, ref, _) => Some(ref)
+    case TExpr.SheetRef(_, ref, _, _) => Some(ref)
+    case TExpr.RangeRef(range) => Some(range.start)
+    case TExpr.SheetRange(_, range) => Some(range.start)
+    case _ => None
+
+  private def extractCellRange(expr: TExpr[?]): Option[CellRange] = expr match
+    case TExpr.RangeRef(range) => Some(range)
+    case TExpr.SheetRange(_, range) => Some(range)
+    case _ => None
+
+  @annotation.tailrec
+  private def columnToLetter(col: Int, acc: String = ""): String =
+    if col < 0 then acc
+    else if acc.isEmpty && col <= 25 then ('A' + col).toChar.toString
+    else
+      val remainder = col % 26
+      val quotient = col / 26 - 1
+      val letter = ('A' + remainder).toChar
+      if quotient < 0 then letter.toString + acc
+      else columnToLetter(quotient, letter.toString + acc)
 
   val abs: FunctionSpec[BigDecimal] { type Args = UnaryNumeric } =
     FunctionSpec.simple[BigDecimal, UnaryNumeric]("ABS", Arity.one) { (expr, ctx) =>
@@ -457,37 +600,218 @@ object FunctionSpecs:
   val sumif: FunctionSpec[BigDecimal] { type Args = SumIfArgs } =
     FunctionSpec.simple[BigDecimal, SumIfArgs]("SUMIF", Arity.Range(2, 3)) { (args, ctx) =>
       val (range, criteria, sumRangeOpt) = args
-      ctx.evalExpr(TExpr.SumIf(toLocation(range), criteria, sumRangeOpt.map(toLocation)))
+      evalAny(ctx, criteria).flatMap { criteriaValue =>
+        val criterion = CriteriaMatcher.parse(criteriaValue)
+        val effectiveRange = sumRangeOpt.getOrElse(range)
+        val rangeRefsList = range.cells.toList
+        val sumRefsList = effectiveRange.cells.toList
+
+        if range.width != effectiveRange.width || range.height != effectiveRange.height then
+          Left(
+            EvalError.EvalFailed(
+              s"SUMIF: range and sum_range must have same dimensions (${range.height}×${range.width} vs ${effectiveRange.height}×${effectiveRange.width})",
+              Some(s"SUMIF(${range.toA1}, ..., ${effectiveRange.toA1})")
+            )
+          )
+        else
+          val pairs = rangeRefsList.zip(sumRefsList)
+          val sum = pairs.foldLeft(BigDecimal(0)) { case (acc, (testRef, sumRef)) =>
+            val testCell = ctx.sheet(testRef)
+            if CriteriaMatcher.matches(testCell.value, criterion) then
+              ctx.sheet(sumRef).value match
+                case CellValue.Number(n) => acc + n
+                case _ => acc
+            else acc
+          }
+          Right(sum)
+      }
     }
 
   val countif: FunctionSpec[BigDecimal] { type Args = CountIfArgs } =
     FunctionSpec.simple[BigDecimal, CountIfArgs]("COUNTIF", Arity.two) { (args, ctx) =>
       val (range, criteria) = args
-      ctx.evalExpr(TExpr.CountIf(toLocation(range), criteria))
+      evalAny(ctx, criteria).map { criteriaValue =>
+        val criterion = CriteriaMatcher.parse(criteriaValue)
+        val count = range.cells.count { ref =>
+          CriteriaMatcher.matches(ctx.sheet(ref).value, criterion)
+        }
+        BigDecimal(count)
+      }
     }
 
   val sumifs: FunctionSpec[BigDecimal] { type Args = SumIfsArgs } =
     FunctionSpec.simple[BigDecimal, SumIfsArgs]("SUMIFS", Arity.AtLeast(3)) { (args, ctx) =>
       val (sumRange, conditions) = args
-      ctx.evalExpr(TExpr.SumIfs(toLocation(sumRange), toConditions(conditions)))
+      val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
+        evalAny(ctx, criteriaExpr)
+      }
+
+      criteriaEithers
+        .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
+          acc.flatMap(list => either.map(v => v :: list))
+        }
+        .map(_.reverse)
+        .flatMap { criteriaValues =>
+          val parsedConditions = conditions
+            .zip(criteriaValues)
+            .map { case ((range, _), criteriaValue) =>
+              (range, CriteriaMatcher.parse(criteriaValue))
+            }
+
+          val sumRefsList = sumRange.cells.toList
+          val dimensionError = parsedConditions.collectFirst {
+            case (range, _) if range.width != sumRange.width || range.height != sumRange.height =>
+              EvalError.EvalFailed(
+                s"SUMIFS: all ranges must have same dimensions (sum_range is ${sumRange.height}×${sumRange.width}, criteria_range is ${range.height}×${range.width})",
+                Some(s"SUMIFS(${sumRange.toA1}, ${range.toA1}, ...)")
+              )
+          }
+
+          dimensionError match
+            case Some(err) => Left(err)
+            case None =>
+              val sum = sumRefsList.indices.foldLeft(BigDecimal(0)) { (acc, idx) =>
+                val allMatch = parsedConditions.forall { case (criteriaRange, criterion) =>
+                  val testRef = criteriaRange.cells.toList(idx)
+                  CriteriaMatcher.matches(ctx.sheet(testRef).value, criterion)
+                }
+                if allMatch then
+                  ctx.sheet(sumRefsList(idx)).value match
+                    case CellValue.Number(n) => acc + n
+                    case _ => acc
+                else acc
+              }
+              Right(sum)
+        }
     }
 
   val countifs: FunctionSpec[BigDecimal] { type Args = CountIfsArgs } =
     FunctionSpec.simple[BigDecimal, CountIfsArgs]("COUNTIFS", Arity.AtLeast(2)) {
       (conditions, ctx) =>
-        ctx.evalExpr(TExpr.CountIfs(toConditions(conditions)))
+        val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
+          evalAny(ctx, criteriaExpr)
+        }
+
+        criteriaEithers
+          .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
+            acc.flatMap(list => either.map(v => v :: list))
+          }
+          .map(_.reverse)
+          .flatMap { criteriaValues =>
+            val parsedConditions = conditions
+              .zip(criteriaValues)
+              .map { case ((range, _), criteriaValue) =>
+                (range, CriteriaMatcher.parse(criteriaValue))
+              }
+
+            parsedConditions match
+              case (firstRange, _) :: _ =>
+                val refCount = firstRange.cells.toList.length
+
+                val dimensionError = parsedConditions.collectFirst {
+                  case (range, _)
+                      if range.width != firstRange.width || range.height != firstRange.height =>
+                    EvalError.EvalFailed(
+                      s"COUNTIFS: all ranges must have same dimensions (first is ${firstRange.height}×${firstRange.width}, this is ${range.height}×${range.width})",
+                      Some(s"COUNTIFS(${firstRange.toA1}, ..., ${range.toA1}, ...)")
+                    )
+                }
+
+                dimensionError match
+                  case Some(err) => Left(err)
+                  case None =>
+                    val count = (0 until refCount).count { idx =>
+                      parsedConditions.forall { case (criteriaRange, criterion) =>
+                        val testRef = criteriaRange.cells.toList(idx)
+                        CriteriaMatcher.matches(ctx.sheet(testRef).value, criterion)
+                      }
+                    }
+                    Right(BigDecimal(count))
+              case Nil =>
+                Right(BigDecimal(0))
+          }
     }
 
   val averageif: FunctionSpec[BigDecimal] { type Args = AverageIfArgs } =
     FunctionSpec.simple[BigDecimal, AverageIfArgs]("AVERAGEIF", Arity.Range(2, 3)) { (args, ctx) =>
       val (range, criteria, avgRangeOpt) = args
-      ctx.evalExpr(TExpr.AverageIf(toLocation(range), criteria, avgRangeOpt.map(toLocation)))
+      evalAny(ctx, criteria).flatMap { criteriaValue =>
+        val criterion = CriteriaMatcher.parse(criteriaValue)
+        val effectiveRange = avgRangeOpt.getOrElse(range)
+        val rangeRefsList = range.cells.toList
+        val avgRefsList = effectiveRange.cells.toList
+
+        if range.width != effectiveRange.width || range.height != effectiveRange.height then
+          Left(
+            EvalError.EvalFailed(
+              s"AVERAGEIF: range and average_range must have same dimensions (${range.height}×${range.width} vs ${effectiveRange.height}×${effectiveRange.width})",
+              Some(s"AVERAGEIF(${range.toA1}, ..., ${effectiveRange.toA1})")
+            )
+          )
+        else
+          val pairs = rangeRefsList.zip(avgRefsList)
+          val (sum, count) = pairs.foldLeft((BigDecimal(0), 0)) {
+            case ((accSum, accCount), (testRef, avgRef)) =>
+              val testCell = ctx.sheet(testRef)
+              if CriteriaMatcher.matches(testCell.value, criterion) then
+                ctx.sheet(avgRef).value match
+                  case CellValue.Number(n) => (accSum + n, accCount + 1)
+                  case _ => (accSum, accCount)
+              else (accSum, accCount)
+          }
+          if count == 0 then
+            Left(EvalError.DivByZero("AVERAGEIF sum", "0 (no matching numeric cells)"))
+          else Right(sum / count)
+      }
     }
 
   val averageifs: FunctionSpec[BigDecimal] { type Args = AverageIfsArgs } =
     FunctionSpec.simple[BigDecimal, AverageIfsArgs]("AVERAGEIFS", Arity.AtLeast(3)) { (args, ctx) =>
       val (avgRange, conditions) = args
-      ctx.evalExpr(TExpr.AverageIfs(toLocation(avgRange), toConditions(conditions)))
+      val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
+        evalAny(ctx, criteriaExpr)
+      }
+
+      criteriaEithers
+        .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
+          acc.flatMap(list => either.map(v => v :: list))
+        }
+        .map(_.reverse)
+        .flatMap { criteriaValues =>
+          val parsedConditions = conditions
+            .zip(criteriaValues)
+            .map { case ((range, _), criteriaValue) =>
+              (range, CriteriaMatcher.parse(criteriaValue))
+            }
+
+          val avgRefsList = avgRange.cells.toList
+          val dimensionError = parsedConditions.collectFirst {
+            case (range, _) if range.width != avgRange.width || range.height != avgRange.height =>
+              EvalError.EvalFailed(
+                s"AVERAGEIFS: all ranges must have same dimensions (average_range is ${avgRange.height}×${avgRange.width}, criteria_range is ${range.height}×${range.width})",
+                Some(s"AVERAGEIFS(${avgRange.toA1}, ${range.toA1}, ...)")
+              )
+          }
+
+          dimensionError match
+            case Some(err) => Left(err)
+            case None =>
+              val (sum, count) = avgRefsList.indices.foldLeft((BigDecimal(0), 0)) { (acc, idx) =>
+                val (accSum, accCount) = acc
+                val allMatch = parsedConditions.forall { case (criteriaRange, criterion) =>
+                  val testRef = criteriaRange.cells.toList(idx)
+                  CriteriaMatcher.matches(ctx.sheet(testRef).value, criterion)
+                }
+                if allMatch then
+                  ctx.sheet(avgRefsList(idx)).value match
+                    case CellValue.Number(n) => (accSum + n, accCount + 1)
+                    case _ => (accSum, accCount)
+                else (accSum, accCount)
+              }
+              if count == 0 then
+                Left(EvalError.DivByZero("AVERAGEIFS sum", "0 (no matching numeric cells)"))
+              else Right(sum / count)
+        }
     }
 
   val and: FunctionSpec[Boolean] { type Args = BooleanList } =
@@ -641,22 +965,31 @@ object FunctionSpecs:
       flags = FunctionFlags(returnsDate = true)
     ) { (args, ctx) =>
       val (yearExpr, monthExpr, dayExpr) = args
-      ctx.evalExpr(TExpr.Date(yearExpr, monthExpr, dayExpr))
+      for
+        y <- ctx.evalExpr(yearExpr)
+        m <- ctx.evalExpr(monthExpr)
+        d <- ctx.evalExpr(dayExpr)
+        result <- scala.util.Try(LocalDate.of(y, m, d)).toEither.left.map { ex =>
+          EvalError.EvalFailed(
+            s"DATE: invalid date components (year=$y, month=$m, day=$d): ${ex.getMessage}"
+          )
+        }
+      yield result
     }
 
   val year: FunctionSpec[BigDecimal] { type Args = UnaryDate } =
     FunctionSpec.simple[BigDecimal, UnaryDate]("YEAR", Arity.one) { (expr, ctx) =>
-      ctx.evalExpr(TExpr.Year(expr))
+      ctx.evalExpr(expr).map(date => BigDecimal(date.getYear))
     }
 
   val month: FunctionSpec[BigDecimal] { type Args = UnaryDate } =
     FunctionSpec.simple[BigDecimal, UnaryDate]("MONTH", Arity.one) { (expr, ctx) =>
-      ctx.evalExpr(TExpr.Month(expr))
+      ctx.evalExpr(expr).map(date => BigDecimal(date.getMonthValue))
     }
 
   val day: FunctionSpec[BigDecimal] { type Args = UnaryDate } =
     FunctionSpec.simple[BigDecimal, UnaryDate]("DAY", Arity.one) { (expr, ctx) =>
-      ctx.evalExpr(TExpr.Day(expr))
+      ctx.evalExpr(expr).map(date => BigDecimal(date.getDayOfMonth))
     }
 
   val eomonth: FunctionSpec[LocalDate] { type Args = DateInt } =
@@ -849,68 +1182,546 @@ object FunctionSpecs:
   val npv: FunctionSpec[BigDecimal] { type Args = NpvArgs } =
     FunctionSpec.simple[BigDecimal, NpvArgs]("NPV", Arity.two) { (args, ctx) =>
       val (rateExpr, range) = args
-      ctx.evalExpr(TExpr.npv(rateExpr, range))
+      ctx.evalExpr(rateExpr).flatMap { rate =>
+        val onePlusR = BigDecimal(1) + rate
+        if onePlusR == BigDecimal(0) then
+          Left(
+            EvalError.EvalFailed(
+              "NPV: rate = -1 would require division by zero",
+              Some("NPV(rate, values)")
+            )
+          )
+        else
+          val cashFlows: List[BigDecimal] =
+            range.cells
+              .map(ref => ctx.sheet(ref))
+              .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+              .toList
+
+          val npv =
+            cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
+              val period = idx + 1
+              acc + cf / onePlusR.pow(period)
+            }
+          Right(npv)
+      }
     }
 
   val irr: FunctionSpec[BigDecimal] { type Args = IrrArgs } =
     FunctionSpec.simple[BigDecimal, IrrArgs]("IRR", Arity.Range(1, 2)) { (args, ctx) =>
       val (range, guessOpt) = args
-      ctx.evalExpr(TExpr.irr(range, guessOpt))
+      val cashFlows: List[BigDecimal] =
+        range.cells
+          .map(ref => ctx.sheet(ref))
+          .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+          .toList
+
+      if cashFlows.isEmpty || !cashFlows.exists(_ < 0) || !cashFlows.exists(_ > 0) then
+        Left(
+          EvalError.EvalFailed(
+            "IRR requires at least one positive and one negative cash flow",
+            Some("IRR(values[, guess])")
+          )
+        )
+      else
+        val guessEither: Either[EvalError, BigDecimal] =
+          guessOpt match
+            case Some(guessExpr) => ctx.evalExpr(guessExpr)
+            case None => Right(BigDecimal("0.1"))
+
+        guessEither.flatMap { guess0 =>
+          val maxIter = 50
+          val tolerance = BigDecimal("1e-7")
+          val one = BigDecimal(1)
+
+          def npvAt(rate: BigDecimal): BigDecimal =
+            val onePlusR = one + rate
+            cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
+              if idx == 0 then acc + cf
+              else acc + cf / onePlusR.pow(idx)
+            }
+
+          def dNpvAt(rate: BigDecimal): BigDecimal =
+            val onePlusR = one + rate
+            cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
+              if idx == 0 then acc
+              else acc - (idx * cf) / onePlusR.pow(idx + 1)
+            }
+
+          @annotation.tailrec
+          def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
+            if iter >= maxIter then
+              Left(
+                EvalError.EvalFailed(
+                  s"IRR did not converge after $maxIter iterations",
+                  Some("IRR(values[, guess])")
+                )
+              )
+            else
+              val f = npvAt(r)
+              val df = dNpvAt(r)
+              if df == BigDecimal(0) then
+                Left(
+                  EvalError.EvalFailed(
+                    "IRR derivative is zero; cannot continue iteration",
+                    Some("IRR(values[, guess])")
+                  )
+                )
+              else
+                val next = r - f / df
+                if (next - r).abs <= tolerance then Right(next)
+                else loop(iter + 1, next)
+
+          loop(0, guess0)
+        }
     }
 
   val xnpv: FunctionSpec[BigDecimal] { type Args = XnpvArgs } =
     FunctionSpec.simple[BigDecimal, XnpvArgs]("XNPV", Arity.three) { (args, ctx) =>
       val (rateExpr, valuesRange, datesRange) = args
-      ctx.evalExpr(TExpr.xnpv(rateExpr, valuesRange, datesRange))
+      for
+        rate <- ctx.evalExpr(rateExpr)
+        result <- {
+          val values: List[BigDecimal] =
+            valuesRange.cells
+              .map(ref => ctx.sheet(ref))
+              .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+              .toList
+
+          val dates: List[LocalDate] =
+            datesRange.cells
+              .map(ref => ctx.sheet(ref))
+              .flatMap(cell => TExpr.decodeDate(cell).toOption)
+              .toList
+
+          if values.isEmpty || dates.isEmpty then
+            Left(
+              EvalError.EvalFailed(
+                "XNPV requires non-empty values and dates ranges",
+                Some("XNPV(rate, values, dates)")
+              )
+            )
+          else if values.length != dates.length then
+            Left(
+              EvalError.EvalFailed(
+                s"XNPV: values (${values.length}) and dates (${dates.length}) must have same length",
+                Some("XNPV(rate, values, dates)")
+              )
+            )
+          else
+            dates match
+              case date0 :: _ =>
+                val onePlusR = BigDecimal(1) + rate
+                val npv = values.zip(dates).foldLeft(BigDecimal(0)) { case (acc, (value, date)) =>
+                  val daysDiff = ChronoUnit.DAYS.between(date0, date)
+                  val yearFraction = BigDecimal(daysDiff) / BigDecimal(365)
+                  val discountFactor = math.pow(onePlusR.toDouble, yearFraction.toDouble)
+                  acc + value / BigDecimal(discountFactor)
+                }
+                Right(npv)
+              case Nil =>
+                Left(EvalError.EvalFailed("XNPV: dates cannot be empty", None))
+        }
+      yield result
     }
 
   val xirr: FunctionSpec[BigDecimal] { type Args = XirrArgs } =
     FunctionSpec.simple[BigDecimal, XirrArgs]("XIRR", Arity.Range(2, 3)) { (args, ctx) =>
       val (valuesRange, datesRange, guessOpt) = args
-      ctx.evalExpr(TExpr.xirr(valuesRange, datesRange, guessOpt))
+      val values: List[BigDecimal] =
+        valuesRange.cells
+          .map(ref => ctx.sheet(ref))
+          .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+          .toList
+
+      val dates: List[LocalDate] =
+        datesRange.cells
+          .map(ref => ctx.sheet(ref))
+          .flatMap(cell => TExpr.decodeDate(cell).toOption)
+          .toList
+
+      if values.isEmpty || dates.isEmpty then
+        Left(
+          EvalError.EvalFailed(
+            "XIRR requires non-empty values and dates ranges",
+            Some("XIRR(values, dates[, guess])")
+          )
+        )
+      else if values.length != dates.length then
+        Left(
+          EvalError.EvalFailed(
+            s"XIRR: values (${values.length}) and dates (${dates.length}) must have same length",
+            Some("XIRR(values, dates[, guess])")
+          )
+        )
+      else if !values.exists(_ < 0) || !values.exists(_ > 0) then
+        Left(
+          EvalError.EvalFailed(
+            "XIRR requires at least one positive and one negative cash flow",
+            Some("XIRR(values, dates[, guess])")
+          )
+        )
+      else
+        val guessEither: Either[EvalError, BigDecimal] =
+          guessOpt match
+            case Some(guessExpr) => ctx.evalExpr(guessExpr)
+            case None => Right(BigDecimal("0.1"))
+
+        guessEither.flatMap { guess0 =>
+          val maxIter = 100
+          val tolerance = BigDecimal("1e-7")
+          dates match
+            case date0 :: _ =>
+              val yearFractions: List[BigDecimal] = dates.map { date =>
+                val daysDiff = ChronoUnit.DAYS.between(date0, date)
+                BigDecimal(daysDiff) / BigDecimal(365)
+              }
+
+              def xnpvAt(rate: BigDecimal): BigDecimal =
+                val onePlusR = BigDecimal(1) + rate
+                values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                  val discountFactor = math.pow(onePlusR.toDouble, yf.toDouble)
+                  acc + cf / BigDecimal(discountFactor)
+                }
+
+              def dXnpvAt(rate: BigDecimal): BigDecimal =
+                val onePlusR = BigDecimal(1) + rate
+                values.zip(yearFractions).foldLeft(BigDecimal(0)) { case (acc, (cf, yf)) =>
+                  val discountFactor = math.pow(onePlusR.toDouble, (yf + 1).toDouble)
+                  acc - (yf * cf) / BigDecimal(discountFactor)
+                }
+
+              @annotation.tailrec
+              def loop(iter: Int, r: BigDecimal): Either[EvalError, BigDecimal] =
+                if iter >= maxIter then
+                  Left(
+                    EvalError.EvalFailed(
+                      s"XIRR did not converge after $maxIter iterations",
+                      Some("XIRR(values, dates[, guess])")
+                    )
+                  )
+                else
+                  val f = xnpvAt(r)
+                  val df = dXnpvAt(r)
+                  if df.abs < BigDecimal("1e-10") then
+                    Left(
+                      EvalError.EvalFailed(
+                        "XIRR derivative is near zero; cannot continue iteration",
+                        Some("XIRR(values, dates[, guess])")
+                      )
+                    )
+                  else
+                    val next = r - f / df
+                    if (next - r).abs <= tolerance then Right(next)
+                    else loop(iter + 1, next)
+
+              loop(0, guess0)
+            case Nil =>
+              Left(EvalError.EvalFailed("XIRR: dates cannot be empty", None))
+        }
     }
 
   val pmt: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
     FunctionSpec.simple[BigDecimal, TvmArgs]("PMT", Arity.Range(3, 5)) { (args, ctx) =>
       val (rateExpr, nperExpr, pvExpr, fvOpt, typeOpt) = args
-      ctx.evalExpr(TExpr.pmt(rateExpr, nperExpr, pvExpr, fvOpt, typeOpt))
+      for
+        rate <- ctx.evalExpr(rateExpr).map(_.toDouble)
+        nper <- ctx.evalExpr(nperExpr).map(_.toDouble)
+        pv <- ctx.evalExpr(pvExpr).map(_.toDouble)
+        fv <- fvOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(_.toDouble)
+          case None => Right(0.0)
+        pmtType <- typeOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(v => if v.toInt != 0 then 1 else 0)
+          case None => Right(0)
+      yield
+        if math.abs(rate) < 1e-10 then
+          if nper == 0.0 then BigDecimal(Double.NaN)
+          else BigDecimal(-(pv + fv) / nper)
+        else
+          val pvif = math.pow(1.0 + rate, nper)
+          BigDecimal(-rate * (pv * pvif + fv) / ((1.0 + rate * pmtType) * (pvif - 1.0)))
     }
 
   val fv: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
     FunctionSpec.simple[BigDecimal, TvmArgs]("FV", Arity.Range(3, 5)) { (args, ctx) =>
       val (rateExpr, nperExpr, pmtExpr, pvOpt, typeOpt) = args
-      ctx.evalExpr(TExpr.fv(rateExpr, nperExpr, pmtExpr, pvOpt, typeOpt))
+      for
+        rate <- ctx.evalExpr(rateExpr).map(_.toDouble)
+        nper <- ctx.evalExpr(nperExpr).map(_.toDouble)
+        pmt <- ctx.evalExpr(pmtExpr).map(_.toDouble)
+        pv <- pvOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(_.toDouble)
+          case None => Right(0.0)
+        pmtType <- typeOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(v => if v.toInt != 0 then 1 else 0)
+          case None => Right(0)
+      yield
+        if math.abs(rate) < 1e-10 then BigDecimal(-pv - pmt * nper)
+        else
+          val pvif = math.pow(1.0 + rate, nper)
+          val fvifa = (pvif - 1.0) / rate
+          BigDecimal(-pv * pvif - pmt * (1.0 + rate * pmtType) * fvifa)
     }
 
   val pv: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
     FunctionSpec.simple[BigDecimal, TvmArgs]("PV", Arity.Range(3, 5)) { (args, ctx) =>
       val (rateExpr, nperExpr, pmtExpr, fvOpt, typeOpt) = args
-      ctx.evalExpr(TExpr.pv(rateExpr, nperExpr, pmtExpr, fvOpt, typeOpt))
+      for
+        rate <- ctx.evalExpr(rateExpr).map(_.toDouble)
+        nper <- ctx.evalExpr(nperExpr).map(_.toDouble)
+        pmt <- ctx.evalExpr(pmtExpr).map(_.toDouble)
+        fv <- fvOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(_.toDouble)
+          case None => Right(0.0)
+        pmtType <- typeOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(v => if v.toInt != 0 then 1 else 0)
+          case None => Right(0)
+      yield
+        if math.abs(rate) < 1e-10 then BigDecimal(-fv - pmt * nper)
+        else
+          val pvif = math.pow(1.0 + rate, nper)
+          val fvifa = (pvif - 1.0) / rate
+          BigDecimal((-fv - pmt * (1.0 + rate * pmtType) * fvifa) / pvif)
     }
 
   val nper: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
     FunctionSpec.simple[BigDecimal, TvmArgs]("NPER", Arity.Range(3, 5)) { (args, ctx) =>
       val (rateExpr, pmtExpr, pvExpr, fvOpt, typeOpt) = args
-      ctx.evalExpr(TExpr.nper(rateExpr, pmtExpr, pvExpr, fvOpt, typeOpt))
+      for
+        rate <- ctx.evalExpr(rateExpr).map(_.toDouble)
+        pmt <- ctx.evalExpr(pmtExpr).map(_.toDouble)
+        pv <- ctx.evalExpr(pvExpr).map(_.toDouble)
+        fv <- fvOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(_.toDouble)
+          case None => Right(0.0)
+        pmtType <- typeOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(v => if v.toInt != 0 then 1 else 0)
+          case None => Right(0)
+      yield
+        if math.abs(rate) < 1e-10 then
+          if pmt == 0.0 then BigDecimal(Double.NaN)
+          else BigDecimal(-(pv + fv) / pmt)
+        else
+          val ratep1 = 1.0 + rate
+          val numerator = -fv * rate + pmt * (1.0 + rate * pmtType)
+          val denominator = pv * rate + pmt * (1.0 + rate * pmtType)
+          BigDecimal(math.log(numerator / denominator) / math.log(ratep1))
     }
 
   val rate: FunctionSpec[BigDecimal] { type Args = RateArgs } =
     FunctionSpec.simple[BigDecimal, RateArgs]("RATE", Arity.Range(3, 6)) { (args, ctx) =>
       val (nperExpr, pmtExpr, pvExpr, fvOpt, typeOpt, guessOpt) = args
-      ctx.evalExpr(TExpr.rate(nperExpr, pmtExpr, pvExpr, fvOpt, typeOpt, guessOpt))
+      for
+        nper <- ctx.evalExpr(nperExpr).map(_.toDouble)
+        pmt <- ctx.evalExpr(pmtExpr).map(_.toDouble)
+        pv <- ctx.evalExpr(pvExpr).map(_.toDouble)
+        fv <- fvOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(_.toDouble)
+          case None => Right(0.0)
+        pmtType <- typeOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(v => if v.toInt != 0 then 1 else 0)
+          case None => Right(0)
+        guess <- guessOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(_.toDouble)
+          case None => Right(0.1)
+        result <- {
+          val maxIter = 100
+          val tolerance = 1e-7
+
+          def f(rate: Double): Double =
+            if math.abs(rate) < 1e-10 then pv + pmt * nper + fv
+            else
+              val pvif = math.pow(1.0 + rate, nper)
+              val fvifa = (pvif - 1.0) / rate
+              pv * pvif + pmt * (1.0 + rate * pmtType) * fvifa + fv
+
+          def df(rate: Double): Double =
+            if math.abs(rate) < 1e-10 then pv * nper + pmt * nper * (nper - 1.0) / 2.0
+            else
+              val pvif = math.pow(1.0 + rate, nper)
+              val dpvif = nper * math.pow(1.0 + rate, nper - 1.0)
+              val fvifa = (pvif - 1.0) / rate
+              val dfvifa = (dpvif * rate - (pvif - 1.0)) / (rate * rate)
+              pv * dpvif + pmt * pmtType * fvifa + pmt * (1.0 + rate * pmtType) * dfvifa
+
+          @annotation.tailrec
+          def loop(iter: Int, r: Double): Either[EvalError, BigDecimal] =
+            if iter >= maxIter then
+              Left(
+                EvalError.EvalFailed(
+                  s"RATE did not converge after $maxIter iterations",
+                  Some("RATE(nper, pmt, pv, [fv], [type], [guess])")
+                )
+              )
+            else
+              val fVal = f(r)
+              val dfVal = df(r)
+              if math.abs(dfVal) < 1e-14 then
+                Left(
+                  EvalError.EvalFailed(
+                    "RATE derivative is zero; cannot continue iteration",
+                    Some("RATE(nper, pmt, pv, [fv], [type], [guess])")
+                  )
+                )
+              else
+                val next = r - fVal / dfVal
+                if math.abs(next - r) <= tolerance then Right(BigDecimal(next))
+                else loop(iter + 1, next)
+
+          loop(0, guess)
+        }
+      yield result
     }
 
   val vlookup: FunctionSpec[CellValue] { type Args = VlookupArgs } =
     FunctionSpec.simple[CellValue, VlookupArgs]("VLOOKUP", Arity.Range(3, 4)) { (args, ctx) =>
       val (lookupExpr, table, colIndexExpr, rangeLookupOpt) = args
       val rangeLookupExpr = rangeLookupOpt.getOrElse(TExpr.Lit(true))
-      ctx.evalExpr(TExpr.vlookupWithLocation(lookupExpr, table, colIndexExpr, rangeLookupExpr))
+      for
+        lookupValue <- evalAny(ctx, lookupExpr)
+        colIndex <- ctx.evalExpr(colIndexExpr)
+        rangeMatch <- ctx.evalExpr(rangeLookupExpr)
+        targetSheet <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
+        result <-
+          if colIndex < 1 || colIndex > table.range.width then
+            Left(
+              EvalError.EvalFailed(
+                s"VLOOKUP: col_index_num $colIndex is outside 1..${table.range.width}",
+                Some(s"VLOOKUP(…, ${table.range.toA1})")
+              )
+            )
+          else
+            val rowIndices = 0 until table.range.height
+            val keyCol0 = table.range.colStart.index0
+            val rowStart0 = table.range.rowStart.index0
+            val resultCol0 = keyCol0 + (colIndex - 1)
+
+            def extractTextForMatch(cv: CellValue): Option[String] = cv match
+              case CellValue.Text(s) => Some(s)
+              case CellValue.Number(n) => Some(n.bigDecimal.stripTrailingZeros().toPlainString)
+              case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
+              case CellValue.Formula(_, Some(cached)) => extractTextForMatch(cached)
+              case _ => None
+
+            def extractNumericForMatch(cv: CellValue): Option[BigDecimal] = cv match
+              case CellValue.Number(n) => Some(n)
+              case CellValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
+              case CellValue.Bool(b) => Some(if b then BigDecimal(1) else BigDecimal(0))
+              case CellValue.Formula(_, Some(cached)) => extractNumericForMatch(cached)
+              case _ => None
+
+            val normalizedLookup: Any = lookupValue match
+              case cv: CellValue =>
+                cv match
+                  case CellValue.Number(n) => n
+                  case CellValue.Text(s) => s
+                  case CellValue.Bool(b) => b
+                  case CellValue.Formula(_, Some(cached)) =>
+                    cached match
+                      case CellValue.Number(n) => n
+                      case CellValue.Text(s) => s
+                      case CellValue.Bool(b) => b
+                      case other => other
+                  case other => other
+              case other => other
+
+            val isTextLookup = normalizedLookup match
+              case _: String => true
+              case _: BigDecimal => false
+              case _: Int => false
+              case _: Boolean => false
+              case _ => true
+
+            val chosenRowOpt: Option[Int] =
+              if rangeMatch then
+                val numericLookup: Option[BigDecimal] = normalizedLookup match
+                  case n: BigDecimal => Some(n)
+                  case i: Int => Some(BigDecimal(i))
+                  case s: String => scala.util.Try(BigDecimal(s.trim)).toOption
+                  case _ => None
+
+                numericLookup.flatMap { lookup =>
+                  val keyedRows: List[(Int, BigDecimal)] =
+                    rowIndices.toList.flatMap { i =>
+                      val keyRef = ARef.from0(keyCol0, rowStart0 + i)
+                      extractNumericForMatch(targetSheet(keyRef).value).map(k => (i, k))
+                    }
+                  keyedRows
+                    .filter(_._2 <= lookup)
+                    .sortBy(_._2)
+                    .lastOption
+                    .map(_._1)
+                }
+              else if isTextLookup then
+                val lookupText = normalizedLookup.toString.toLowerCase
+                rowIndices.find { i =>
+                  val keyRef = ARef.from0(keyCol0, rowStart0 + i)
+                  extractTextForMatch(targetSheet(keyRef).value)
+                    .exists(_.toLowerCase == lookupText)
+                }
+              else
+                val numericLookup: Option[BigDecimal] = normalizedLookup match
+                  case n: BigDecimal => Some(n)
+                  case i: Int => Some(BigDecimal(i))
+                  case _ => None
+                numericLookup.flatMap { lookup =>
+                  rowIndices.find { i =>
+                    val keyRef = ARef.from0(keyCol0, rowStart0 + i)
+                    extractNumericForMatch(targetSheet(keyRef).value).contains(lookup)
+                  }
+                }
+
+            chosenRowOpt match
+              case Some(rowIndex) =>
+                val resultRef = ARef.from0(resultCol0, rowStart0 + rowIndex)
+                Right(targetSheet(resultRef).value)
+              case None =>
+                Left(
+                  EvalError.EvalFailed(
+                    if rangeMatch then "VLOOKUP approximate match not found"
+                    else "VLOOKUP exact match not found",
+                    Some(
+                      s"VLOOKUP($normalizedLookup, ${table.range.toA1}, $colIndex, $rangeMatch)"
+                    )
+                  )
+                )
+      yield result
     }
 
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
     FunctionSpec.simple[BigDecimal, SumProductArgs]("SUMPRODUCT", Arity.atLeastOne) {
       (arrays, ctx) =>
-        ctx.evalExpr(TExpr.sumProduct(arrays))
+        arrays match
+          case Nil => Right(BigDecimal(0))
+          case first :: rest =>
+            val firstWidth = first.width
+            val firstHeight = first.height
+
+            val dimensionError = rest.collectFirst {
+              case range if range.width != firstWidth || range.height != firstHeight =>
+                EvalError.EvalFailed(
+                  s"SUMPRODUCT: all arrays must have same dimensions (first is ${firstHeight}×${firstWidth}, got ${range.height}×${range.width})",
+                  Some(s"SUMPRODUCT(${first.toA1}, ${range.toA1}, ...)")
+                )
+            }
+
+            dimensionError match
+              case Some(err) => Left(err)
+              case None =>
+                val cellLists = arrays.map(_.cells.toList)
+                val cellCount = cellLists.headOption.map(_.length).getOrElse(0)
+
+                val sum = (0 until cellCount).foldLeft(BigDecimal(0)) { (acc, idx) =>
+                  val values = cellLists.map { cells =>
+                    val ref = cells(idx)
+                    coerceToNumeric(ctx.sheet(ref).value)
+                  }
+                  val product = values.foldLeft(BigDecimal(1))(_ * _)
+                  acc + product
+                }
+
+                Right(sum)
     }
 
   val xlookup: FunctionSpec[CellValue] { type Args = XLookupArgs } =
@@ -919,58 +1730,86 @@ object FunctionSpecs:
         args
       val matchModeExpr = matchModeOpt.getOrElse(TExpr.Lit(0))
       val searchModeExpr = searchModeOpt.getOrElse(TExpr.Lit(1))
-      ctx.evalExpr(
-        TExpr.xlookup(
-          lookupValue,
-          lookupArray,
-          returnArray,
-          ifNotFoundOpt,
-          matchModeExpr,
-          searchModeExpr
+      if lookupArray.width != returnArray.width || lookupArray.height != returnArray.height then
+        Left(
+          EvalError.EvalFailed(
+            s"XLOOKUP: lookup_array and return_array must have same dimensions (${lookupArray.height}×${lookupArray.width} vs ${returnArray.height}×${returnArray.width})",
+            Some(s"XLOOKUP(..., ${lookupArray.toA1}, ${returnArray.toA1}, ...)")
+          )
         )
-      )
+      else
+        for
+          lookupValueEval <- evalAny(ctx, lookupValue)
+          matchModeRaw <- evalAny(ctx, matchModeExpr)
+          searchModeRaw <- evalAny(ctx, searchModeExpr)
+          matchMode = toInt(matchModeRaw)
+          searchMode = toInt(searchModeRaw)
+          result <- performXLookup(
+            lookupValueEval,
+            lookupArray,
+            returnArray,
+            ifNotFoundOpt,
+            matchMode,
+            searchMode,
+            ctx
+          )
+        yield result
     }
 
   val row: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
     FunctionSpec.simple[BigDecimal, AnyExpr]("ROW", Arity.one) { (expr, ctx) =>
-      ctx.evalExpr(TExpr.row(expr))
+      extractARef(expr) match
+        case Some(aref) => Right(BigDecimal(aref.row.index0 + 1))
+        case None =>
+          Left(
+            EvalError.EvalFailed(
+              "ROW requires a cell reference",
+              Some(s"ROW($expr)")
+            )
+          )
     }
 
   val column: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
     FunctionSpec.simple[BigDecimal, AnyExpr]("COLUMN", Arity.one) { (expr, ctx) =>
-      ctx.evalExpr(TExpr.column(expr))
+      extractARef(expr) match
+        case Some(aref) => Right(BigDecimal(aref.col.index0 + 1))
+        case None =>
+          Left(
+            EvalError.EvalFailed(
+              "COLUMN requires a cell reference",
+              Some(s"COLUMN($expr)")
+            )
+          )
     }
 
   val rows: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
-    FunctionSpec.simple[BigDecimal, AnyExpr](
-      "ROWS",
-      Arity.one,
-      renderFn = Some { (expr, printer) =>
-        val rendered = expr match
-          case TExpr.FoldRange(range, _, _, _) => printer.cellRange(range)
-          case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
-            printer.location(TExpr.RangeLocation.CrossSheet(sheet, range))
-          case other => printer.expr(other)
-        s"ROWS($rendered)"
-      }
-    ) { (expr, ctx) =>
-      ctx.evalExpr(TExpr.rows(expr))
+    FunctionSpec.simple[BigDecimal, AnyExpr]("ROWS", Arity.one) { (expr, ctx) =>
+      extractCellRange(expr) match
+        case Some(range) =>
+          val rowCount = range.rowEnd.index0 - range.rowStart.index0 + 1
+          Right(BigDecimal(rowCount))
+        case None =>
+          Left(
+            EvalError.EvalFailed(
+              "ROWS requires a range argument",
+              Some(s"ROWS($expr)")
+            )
+          )
     }
 
   val columns: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
-    FunctionSpec.simple[BigDecimal, AnyExpr](
-      "COLUMNS",
-      Arity.one,
-      renderFn = Some { (expr, printer) =>
-        val rendered = expr match
-          case TExpr.FoldRange(range, _, _, _) => printer.cellRange(range)
-          case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
-            printer.location(TExpr.RangeLocation.CrossSheet(sheet, range))
-          case other => printer.expr(other)
-        s"COLUMNS($rendered)"
-      }
-    ) { (expr, ctx) =>
-      ctx.evalExpr(TExpr.columns(expr))
+    FunctionSpec.simple[BigDecimal, AnyExpr]("COLUMNS", Arity.one) { (expr, ctx) =>
+      extractCellRange(expr) match
+        case Some(range) =>
+          val colCount = range.colEnd.index0 - range.colStart.index0 + 1
+          Right(BigDecimal(colCount))
+        case None =>
+          Left(
+            EvalError.EvalFailed(
+              "COLUMNS requires a range argument",
+              Some(s"COLUMNS($expr)")
+            )
+          )
     }
 
   val address: FunctionSpec[String] { type Args = AddressArgs } =
@@ -978,20 +1817,132 @@ object FunctionSpecs:
       val (rowExpr, colExpr, absNumOpt, a1Opt, sheetOpt) = args
       val absNumExpr = absNumOpt.getOrElse(TExpr.Lit(BigDecimal(1)))
       val a1Expr = a1Opt.getOrElse(TExpr.Lit(true))
-      ctx.evalExpr(TExpr.address(rowExpr, colExpr, absNumExpr, a1Expr, sheetOpt))
+      for
+        row <- ctx.evalExpr(rowExpr)
+        col <- ctx.evalExpr(colExpr)
+        absNum <- ctx.evalExpr(absNumExpr)
+        a1Style <- ctx.evalExpr(a1Expr)
+        sheetName <- sheetOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(Some(_))
+          case None => Right(None)
+      yield
+        val rowInt = row.toInt
+        val colInt = col.toInt
+        val absType = absNum.toInt
+
+        if rowInt < 1 || colInt < 1 then "#VALUE!"
+        else if a1Style then
+          val colLetter = columnToLetter(colInt - 1)
+          val (colPrefix, rowPrefix) = absType match
+            case 1 => ("$", "$")
+            case 2 => ("", "$")
+            case 3 => ("$", "")
+            case _ => ("", "")
+          val refStr = s"$colPrefix$colLetter$rowPrefix$rowInt"
+          sheetName match
+            case Some(sn) => s"$sn!$refStr"
+            case None => refStr
+        else
+          val rowPart = absType match
+            case 1 | 2 => s"R$rowInt"
+            case _ => s"R[$rowInt]"
+          val colPart = absType match
+            case 1 | 3 => s"C$colInt"
+            case _ => s"C[$colInt]"
+          val refStr = s"$rowPart$colPart"
+          sheetName match
+            case Some(sn) => s"$sn!$refStr"
+            case None => refStr
     }
 
   val index: FunctionSpec[CellValue] { type Args = IndexArgs } =
     FunctionSpec.simple[CellValue, IndexArgs]("INDEX", Arity.Range(2, 3)) { (args, ctx) =>
       val (array, rowNumExpr, colNumOpt) = args
-      ctx.evalExpr(TExpr.index(array, rowNumExpr, colNumOpt))
+      for
+        rowNum <- ctx.evalExpr(rowNumExpr)
+        colNum <- colNumOpt match
+          case Some(expr) => ctx.evalExpr(expr).map(Some(_))
+          case None => Right(None)
+        result <- {
+          val rowIdx = rowNum.toInt - 1
+          val colIdx = colNum.map(_.toInt - 1).getOrElse(0)
+          val startCol = array.colStart.index0
+          val startRow = array.rowStart.index0
+          val numCols = array.colEnd.index0 - startCol + 1
+          val numRows = array.rowEnd.index0 - startRow + 1
+
+          if rowIdx < 0 || rowIdx >= numRows then
+            Left(
+              EvalError.EvalFailed(
+                s"INDEX: row_num ${rowNum.toInt} is out of bounds (array has $numRows rows, valid range: 1-$numRows) (#REF!)",
+                Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
+              )
+            )
+          else if colIdx < 0 || colIdx >= numCols then
+            Left(
+              EvalError.EvalFailed(
+                s"INDEX: col_num ${colNum.map(_.toInt).getOrElse(1)} is out of bounds (array has $numCols columns, valid range: 1-$numCols) (#REF!)",
+                Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
+              )
+            )
+          else
+            val targetRef = ARef.from0(startCol + colIdx, startRow + rowIdx)
+            Right(ctx.sheet(targetRef).value)
+        }
+      yield result
     }
 
   val matchFn: FunctionSpec[BigDecimal] { type Args = MatchArgs } =
     FunctionSpec.simple[BigDecimal, MatchArgs]("MATCH", Arity.Range(2, 3)) { (args, ctx) =>
       val (lookupValue, lookupArray, matchTypeOpt) = args
       val matchTypeExpr = matchTypeOpt.getOrElse(TExpr.Lit(BigDecimal(1)))
-      ctx.evalExpr(TExpr.matchExpr(lookupValue, lookupArray, matchTypeExpr))
+      for
+        lookupValueEval <- evalAny(ctx, lookupValue)
+        matchType <- ctx.evalExpr(matchTypeExpr)
+        result <- {
+          val matchTypeInt = matchType.toInt
+          val cells: List[(Int, CellValue)] =
+            lookupArray.cells.toList.zipWithIndex.map { case (ref, idx) =>
+              (idx + 1, ctx.sheet(ref).value)
+            }
+
+          val positionOpt: Option[Int] = matchTypeInt match
+            case 0 =>
+              cells
+                .find { case (_, cv) =>
+                  compareCellValues(cv, lookupValueEval) == 0
+                }
+                .map(_._1)
+            case 1 =>
+              val numericLookup = coerceToBigDecimal(lookupValueEval)
+              val candidates = cells.flatMap { case (pos, cv) =>
+                val numericCv = coerceToNumeric(cv)
+                if numericCv <= numericLookup then Some((pos, numericCv))
+                else None
+              }
+              candidates.maxByOption(_._2).map(_._1)
+            case -1 =>
+              val numericLookup = coerceToBigDecimal(lookupValueEval)
+              val candidates = cells.flatMap { case (pos, cv) =>
+                val numericCv = coerceToNumeric(cv)
+                if numericCv >= numericLookup then Some((pos, numericCv))
+                else None
+              }
+              candidates.minByOption(_._2).map(_._1)
+            case _ =>
+              None
+
+          positionOpt match
+            case Some(pos) => Right(BigDecimal(pos))
+            case None =>
+              Left(
+                EvalError.EvalFailed(
+                  "MATCH: no match found for lookup value (#N/A)",
+                  Some("MATCH(lookup_value, lookup_array, [match_type])")
+                )
+              )
+        }
+      yield result
     }
 
   val concatenate: FunctionSpec[String] { type Args = TextList } =

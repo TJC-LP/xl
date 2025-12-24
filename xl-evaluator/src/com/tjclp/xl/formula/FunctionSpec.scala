@@ -164,10 +164,8 @@ object ArgSpec:
       fnName: String
     ): Either[ParseError, (TExpr.RangeLocation, List[TExpr[?]])] =
       args match
-        case (fold: TExpr.FoldRange[?, ?]) :: tail =>
-          Right((TExpr.RangeLocation.Local(fold.range), tail))
-        case TExpr.SheetFoldRange(sheet, range, _, _, _) :: tail =>
-          Right((TExpr.RangeLocation.CrossSheet(sheet, range), tail))
+        case TExpr.RangeRef(range) :: tail =>
+          Right((TExpr.RangeLocation.Local(range), tail))
         case TExpr.SheetRange(sheet, range) :: tail =>
           Right((TExpr.RangeLocation.CrossSheet(sheet, range), tail))
         case _ =>
@@ -194,8 +192,8 @@ object ArgSpec:
       fnName: String
     ): Either[ParseError, (CellRange, List[TExpr[?]])] =
       args match
-        case (fold: TExpr.FoldRange[?, ?]) :: tail =>
-          Right((fold.range, tail))
+        case TExpr.RangeRef(range) :: tail =>
+          Right((range, tail))
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
 

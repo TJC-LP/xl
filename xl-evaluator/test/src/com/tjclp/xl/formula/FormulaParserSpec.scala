@@ -879,7 +879,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
   }
 
   test("Known functions include all 81 functions") {
-    val functions = (FunctionParser.allFunctions ++ FunctionRegistry.allNames).distinct
+    val functions = FunctionRegistry.allNames
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
     assert(functions.contains("MAX"))
@@ -964,11 +964,6 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertEquals(functions.length, 81)
   }
 
-  test("FunctionParser.lookup returns None for spec-based functions") {
-    assert(FunctionParser.lookup("TODAY").isEmpty)
-    assert(FunctionParser.lookup("VLOOKUP").isEmpty)
-  }
-
   test("FunctionRegistry.lookup finds spec-based functions") {
     assert(FunctionRegistry.lookup("SUM").isDefined)
     assert(FunctionRegistry.lookup("MIN").isDefined)
@@ -988,9 +983,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(FunctionRegistry.lookup("ISBLANK").isDefined)
   }
 
-  test("FunctionParser.lookup returns None for unknown functions") {
-    assert(FunctionParser.lookup("UNKNOWN").isEmpty)
-    assert(FunctionParser.lookup("FOOBAR").isEmpty)
+  test("FunctionRegistry.lookup returns None for unknown functions") {
+    assert(FunctionRegistry.lookup("UNKNOWN").isEmpty)
+    assert(FunctionRegistry.lookup("FOOBAR").isEmpty)
   }
 
   // ==================== XNPV/XIRR Parsing Tests ====================

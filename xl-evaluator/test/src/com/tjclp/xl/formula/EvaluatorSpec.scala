@@ -315,7 +315,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == true)
   }
 
-  test("FoldRange: empty range returns zero value") {
+  test("SUM: empty range returns zero value") {
     val range = CellRange(ARef.from0(10, 10), ARef.from0(10, 10)) // K11:K11 (single empty cell)
     val expr = TExpr.sum(range)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
@@ -323,7 +323,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == BigDecimal(0))
   }
 
-  test("FoldRange: SUM with single cell") {
+  test("SUM: single cell") {
     val ref = ARef.from0(0, 0) // A1
     val range = CellRange(ref, ref) // A1:A1
     val sheet = sheetWith(ref -> CellValue.Number(BigDecimal(42)))
@@ -331,7 +331,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == BigDecimal(42))
   }
 
-  test("FoldRange: SUM with multiple cells") {
+  test("SUM: multiple cells") {
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)),
@@ -342,7 +342,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == BigDecimal(60))
   }
 
-  test("FoldRange: COUNT with multiple cells") {
+  test("COUNT: numeric cells only") {
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 4)) // A1:A5
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)),
@@ -352,11 +352,8 @@ class EvaluatorSpec extends ScalaCheckSuite:
       // A5 not set (empty)
     )
     val expr = TExpr.count(range)
-    // Note: Current implementation counts all cells in range (including empty)
-    // because decodeAny succeeds for all cells and step function doesn't check Some/None
-    // Excel COUNTA would return 3 (only non-empty: A1, A2, A3)
-    // This is a known limitation - COUNT should use a smarter step function
-    assert(evalOk(expr, sheet) == 5)  // All 5 cells in range
+    // Excel COUNT counts numeric cells only; text/empty are skipped
+    assert(evalOk(expr, sheet) == BigDecimal(2))
   }
 
   // ==================== Integration Tests (Real Formulas) ====================
@@ -486,14 +483,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
     )
     val sumExpr = TExpr.sum(range)
     val countExpr = TExpr.count(range)
-    // Average = Sum / Count (but count returns Int, need to convert)
-    // For now, just test sum and count separately
     assert(evalOk(sumExpr, sheet) == BigDecimal(60))
-    assert(evalOk(countExpr, sheet) == 3)
+    assert(evalOk(countExpr, sheet) == BigDecimal(3))
   }
 
   test("AVERAGE returns BigDecimal directly at eval level") {
-    // AVERAGE now has dedicated TExpr case, returns BigDecimal directly
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(150)),
@@ -629,7 +623,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == "Yes")
   }
 
-  test("FoldRange: SUM skips text cells (Excel behavior)") {
+  test("SUM: skips text cells (Excel behavior)") {
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)),

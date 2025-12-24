@@ -100,6 +100,13 @@ enum TExpr[A] derives CanEqual:
       extends TExpr[Nothing]
 
   /**
+   * Local range reference.
+   *
+   * Represents a range like A1:B10 before being consumed by a function.
+   */
+  case RangeRef(range: CellRange) extends TExpr[Nothing]
+
+  /**
    * Sheet-qualified range reference - references a range in another sheet.
    *
    * @param sheet
@@ -110,32 +117,6 @@ enum TExpr[A] derives CanEqual:
    * Example: SheetRange("Sales", CellRange(A1, A10)) represents Sales!A1:A10
    */
   case SheetRange(sheet: SheetName, range: CellRange) extends TExpr[Nothing]
-
-  /**
-   * Fold over a sheet-qualified range - aggregates values from another sheet.
-   *
-   * Similar to FoldRange but operates on a range in a different sheet.
-   *
-   * @param sheet
-   *   The target sheet name
-   * @param range
-   *   The cell range within the target sheet
-   * @param z
-   *   Initial accumulator value
-   * @param step
-   *   Fold function combining accumulator with cell value
-   * @param decode
-   *   Function to decode each cell's value to type A
-   *
-   * Example: SUM(Sales!A1:A10) = SheetFoldRange(Sales, A1:A10, BigDecimal(0), _ + _, decodeNumber)
-   */
-  case SheetFoldRange[A, B](
-    sheet: SheetName,
-    range: CellRange,
-    z: B,
-    step: (B, A) => B,
-    decode: Cell => Either[CodecError, A]
-  ) extends TExpr[B]
 
   // Arithmetic operators (form commutative semiring over BigDecimal)
 
@@ -173,30 +154,6 @@ enum TExpr[A] derives CanEqual:
   case Div(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
 
   // Range aggregation
-
-  /**
-   * Fold over a cell range - generalized aggregation.
-   *
-   * This is the foundation for SUM, COUNT, AVERAGE, etc.
-   *
-   * @param range
-   *   The range of cells to aggregate
-   * @param z
-   *   Initial accumulator value
-   * @param step
-   *   Aggregation function: (accumulator, cell_value) => new_accumulator
-   * @param decode
-   *   Function to decode each cell's value to type A
-   *
-   * Example: SUM(A1:A10) = FoldRange(A1:A10, BigDecimal(0), _ + _, decodeNumber) Example:
-   * COUNT(A1:A10) = FoldRange(A1:A10, 0, (acc, _) => acc + 1, decodeAny)
-   */
-  case FoldRange[A, B](
-    range: CellRange,
-    z: B,
-    step: (B, A) => B,
-    decode: Cell => Either[CodecError, A]
-  ) extends TExpr[B]
 
   // Comparison operators (return Boolean)
 
@@ -264,171 +221,6 @@ enum TExpr[A] derives CanEqual:
    */
   case DateTimeToSerial(expr: TExpr[java.time.LocalDateTime]) extends TExpr[BigDecimal]
 
-  // Date/Time functions
-
-  /**
-   * Current date: TODAY()
-   *
-   * Returns the current date without time component. Requires Clock parameter in evaluator for
-   * purity.
-   *
-   * Example: TODAY() = LocalDate.of(2025, 11, 21)
-   */
-  case Today() extends TExpr[java.time.LocalDate]
-
-  /**
-   * Current date and time: NOW()
-   *
-   * Returns the current date and time. Requires Clock parameter in evaluator for purity.
-   *
-   * Example: NOW() = LocalDateTime.of(2025, 11, 21, 18, 30, 0)
-   */
-  case Now() extends TExpr[java.time.LocalDateTime]
-
-  /**
-   * Mathematical constant PI: PI()
-   *
-   * Returns the mathematical constant pi (3.14159265358979...).
-   *
-   * Example: PI() = 3.141592653589793
-   */
-  case Pi() extends TExpr[BigDecimal]
-
-  /**
-   * Construct date from components: DATE(year, month, day)
-   *
-   * @param year
-   *   The year (e.g., 2025)
-   * @param month
-   *   The month (1-12)
-   * @param day
-   *   The day (1-31)
-   *
-   * Example: DATE(2025, 11, 21) = LocalDate.of(2025, 11, 21)
-   */
-  case Date(year: TExpr[Int], month: TExpr[Int], day: TExpr[Int]) extends TExpr[java.time.LocalDate]
-
-  /**
-   * Extract year from date: YEAR(date)
-   *
-   * Returns BigDecimal to match Excel semantics (all numbers are doubles) and enable composition
-   * with arithmetic operators (e.g., YEAR(A1) + 1).
-   *
-   * Example: YEAR(DATE(2025, 11, 21)) = 2025
-   */
-  case Year(date: TExpr[java.time.LocalDate]) extends TExpr[BigDecimal]
-
-  /**
-   * Extract month from date: MONTH(date)
-   *
-   * Returns BigDecimal to match Excel semantics and enable composition.
-   *
-   * Example: MONTH(DATE(2025, 11, 21)) = 11
-   */
-  case Month(date: TExpr[java.time.LocalDate]) extends TExpr[BigDecimal]
-
-  /**
-   * Extract day from date: DAY(date)
-   *
-   * Returns BigDecimal to match Excel semantics and enable composition.
-   *
-   * Example: DAY(DATE(2025, 11, 21)) = 21
-   */
-  case Day(date: TExpr[java.time.LocalDate]) extends TExpr[BigDecimal]
-
-  // Arithmetic range functions (SUM, COUNT, MIN, MAX, AVERAGE)
-
-  /**
-   * Sum of values in range: SUM(range) or SUM(Sheet!range)
-   *
-   * Sums all numeric values in range. Non-numeric cells are skipped (Excel-style).
-   *
-   * Example: SUM(A1:A10) = sum of numeric values in range
-   */
-  case Sum(range: TExpr.RangeLocation) extends TExpr[BigDecimal]
-
-  /**
-   * Count of numeric values in range: COUNT(range) or COUNT(Sheet!range)
-   *
-   * Counts cells containing numeric values. Non-numeric cells are skipped (Excel-style).
-   *
-   * Example: COUNT(A1:A10) = count of numeric values in range
-   */
-  case Count(range: TExpr.RangeLocation) extends TExpr[Int]
-
-  /**
-   * Minimum value in range: MIN(range) or MIN(Sheet!range)
-   *
-   * Example: MIN(A1:A10) = smallest numeric value in range Example: MIN(Sales!A1:A10) = smallest
-   * value in Sales sheet
-   */
-  case Min(range: TExpr.RangeLocation) extends TExpr[BigDecimal]
-
-  /**
-   * Maximum value in range: MAX(range) or MAX(Sheet!range)
-   *
-   * Example: MAX(A1:A10) = largest numeric value in range Example: MAX(Sales!A1:A10) = largest
-   * value in Sales sheet
-   */
-  case Max(range: TExpr.RangeLocation) extends TExpr[BigDecimal]
-
-  /**
-   * Average value in range: AVERAGE(range) or AVERAGE(Sheet!range)
-   *
-   * Computes sum/count of numeric values in range. Non-numeric cells are skipped (Excel-style).
-   *
-   * Example: AVERAGE(A1:A10) = mean of numeric values in range Example: AVERAGE(Sales!A1:A10) =
-   * mean of values in Sales sheet
-   */
-  case Average(range: TExpr.RangeLocation) extends TExpr[BigDecimal]
-
-  // Cross-sheet aggregate functions
-
-  /**
-   * Cross-sheet sum: SUM(Sheet!range)
-   *
-   * Sums numeric values in a range in another sheet.
-   *
-   * Example: SUM(Sales!A1:A10) = SheetSum(Sales, A1:A10)
-   */
-  case SheetSum(sheet: SheetName, range: CellRange) extends TExpr[BigDecimal]
-
-  /**
-   * Cross-sheet minimum value: MIN(Sheet!range)
-   *
-   * Evaluates MIN over a range in another sheet.
-   *
-   * Example: MIN(Sales!A1:A10) = SheetMin(Sales, A1:A10)
-   */
-  case SheetMin(sheet: SheetName, range: CellRange) extends TExpr[BigDecimal]
-
-  /**
-   * Cross-sheet maximum value: MAX(Sheet!range)
-   *
-   * Evaluates MAX over a range in another sheet.
-   *
-   * Example: MAX(Sales!A1:A10) = SheetMax(Sales, A1:A10)
-   */
-  case SheetMax(sheet: SheetName, range: CellRange) extends TExpr[BigDecimal]
-
-  /**
-   * Cross-sheet average value: AVERAGE(Sheet!range)
-   *
-   * Evaluates AVERAGE over a range in another sheet.
-   *
-   * Example: AVERAGE(Sales!A1:A10) = SheetAverage(Sales, A1:A10)
-   */
-  case SheetAverage(sheet: SheetName, range: CellRange) extends TExpr[BigDecimal]
-
-  /**
-   * Cross-sheet count: COUNT(Sheet!range)
-   *
-   * Counts numeric values in a range in another sheet.
-   *
-   * Example: COUNT(Data!B1:B10) = SheetCount(Data, B1:B10)
-   */
-  case SheetCount(sheet: SheetName, range: CellRange) extends TExpr[Int]
-
   /**
    * Generic aggregate function over a range using the Aggregator typeclass.
    *
@@ -456,440 +248,6 @@ enum TExpr[A] derives CanEqual:
    * analysis can share a single spec.
    */
   case Call[A](spec: FunctionSpec[A], args: spec.Args) extends TExpr[A]
-
-  // Financial functions
-
-  /**
-   * Net Present Value: NPV(rate, range)
-   *
-   * Semantics (v1):
-   *   - `rate` is a numeric expression (BigDecimal)
-   *   - `range` is a cell range of future cash flows at regular intervals
-   *   - Non-numeric cells in the range are ignored (Excel-style)
-   *   - First numeric value is treated as period 1 (t = 1), consistent with Excel NPV
-   */
-  case Npv(rate: TExpr[BigDecimal], values: TExpr.RangeLocation) extends TExpr[BigDecimal]
-
-  /**
-   * Internal Rate of Return: IRR(values, [guess])
-   *
-   * Semantics (v1):
-   *   - `values` is a range of cash flows including the initial investment (t0)
-   *   - Non-numeric cells ignored
-   *   - Requires at least one positive and one negative flow
-   *   - Optional `guess` is a numeric expression; default is 0.1 (10%)
-   */
-  case Irr(values: TExpr.RangeLocation, guess: Option[TExpr[BigDecimal]]) extends TExpr[BigDecimal]
-
-  /**
-   * Extended Net Present Value with irregular dates: XNPV(rate, values, dates)
-   *
-   * Semantics:
-   *   - `rate` is the discount rate (BigDecimal)
-   *   - `values` is a range of cash flows
-   *   - `dates` is a range of dates corresponding to each cash flow
-   *   - Formula: sum(value_i / (1 + rate)^((date_i - date_0) / 365))
-   *   - dates and values must have same length
-   *   - First date is the base date (date_0)
-   *
-   * Example: XNPV(0.1, A1:A5, B1:B5) with irregular payment dates
-   */
-  case Xnpv(
-    rate: TExpr[BigDecimal],
-    values: TExpr.RangeLocation,
-    dates: TExpr.RangeLocation
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Extended Internal Rate of Return with irregular dates: XIRR(values, dates, [guess])
-   *
-   * Semantics:
-   *   - `values` is a range of cash flows (must have positive and negative)
-   *   - `dates` is a range of dates corresponding to each cash flow
-   *   - `guess` is optional starting point for Newton-Raphson (default 0.1)
-   *   - Finds rate where XNPV = 0
-   *   - dates and values must have same length
-   *
-   * Example: XIRR(A1:A5, B1:B5, 0.1) for irregular cash flow schedule
-   */
-  case Xirr(
-    values: TExpr.RangeLocation,
-    dates: TExpr.RangeLocation,
-    guess: Option[TExpr[BigDecimal]]
-  ) extends TExpr[BigDecimal]
-
-  // ===== Time Value of Money (TVM) Functions =====
-
-  /**
-   * Payment per period: PMT(rate, nper, pv, [fv], [type])
-   *
-   * Semantics:
-   *   - `rate` is the interest rate per period
-   *   - `nper` is the total number of payment periods
-   *   - `pv` is the present value (loan amount)
-   *   - `fv` is the future value (default 0)
-   *   - `type` is 0 for end of period (default), 1 for beginning
-   *   - Negative result = outflow (payment made)
-   *
-   * Example: PMT(0.05/12, 24, 10000) for monthly payment on $10k loan at 5% APR for 2 years
-   */
-  case Pmt(
-    rate: TExpr[BigDecimal],
-    nper: TExpr[BigDecimal],
-    pv: TExpr[BigDecimal],
-    fv: Option[TExpr[BigDecimal]],
-    pmtType: Option[TExpr[BigDecimal]]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Future value: FV(rate, nper, pmt, [pv], [type])
-   *
-   * Semantics:
-   *   - `rate` is the interest rate per period
-   *   - `nper` is the total number of payment periods
-   *   - `pmt` is the payment per period (negative = outflow)
-   *   - `pv` is the present value (default 0)
-   *   - `type` is 0 for end of period (default), 1 for beginning
-   *
-   * Example: FV(0.05/12, 24, -100, 0) for future value of $100/month savings at 5% APR
-   */
-  case Fv(
-    rate: TExpr[BigDecimal],
-    nper: TExpr[BigDecimal],
-    pmt: TExpr[BigDecimal],
-    pv: Option[TExpr[BigDecimal]],
-    pmtType: Option[TExpr[BigDecimal]]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Present value: PV(rate, nper, pmt, [fv], [type])
-   *
-   * Semantics:
-   *   - `rate` is the interest rate per period
-   *   - `nper` is the total number of payment periods
-   *   - `pmt` is the payment per period (negative = outflow)
-   *   - `fv` is the future value (default 0)
-   *   - `type` is 0 for end of period (default), 1 for beginning
-   *
-   * Example: PV(0.05/12, 24, -500) for present value of $500/month payments at 5% APR
-   */
-  case Pv(
-    rate: TExpr[BigDecimal],
-    nper: TExpr[BigDecimal],
-    pmt: TExpr[BigDecimal],
-    fv: Option[TExpr[BigDecimal]],
-    pmtType: Option[TExpr[BigDecimal]]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Number of periods: NPER(rate, pmt, pv, [fv], [type])
-   *
-   * Semantics:
-   *   - `rate` is the interest rate per period
-   *   - `pmt` is the payment per period (negative = outflow)
-   *   - `pv` is the present value (loan amount)
-   *   - `fv` is the future value (default 0)
-   *   - `type` is 0 for end of period (default), 1 for beginning
-   *
-   * Example: NPER(0.05/12, -500, 10000) for months to pay off $10k loan at $500/month
-   */
-  case Nper(
-    rate: TExpr[BigDecimal],
-    pmt: TExpr[BigDecimal],
-    pv: TExpr[BigDecimal],
-    fv: Option[TExpr[BigDecimal]],
-    pmtType: Option[TExpr[BigDecimal]]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Interest rate: RATE(nper, pmt, pv, [fv], [type], [guess])
-   *
-   * Semantics:
-   *   - `nper` is the total number of payment periods
-   *   - `pmt` is the payment per period (negative = outflow)
-   *   - `pv` is the present value (loan amount)
-   *   - `fv` is the future value (default 0)
-   *   - `type` is 0 for end of period (default), 1 for beginning
-   *   - `guess` is the starting guess for iteration (default 0.1)
-   *   - Uses Newton-Raphson iteration (like IRR)
-   *
-   * Example: RATE(24, -500, 10000) for interest rate on $10k loan with $500/month payments
-   */
-  case Rate(
-    nper: TExpr[BigDecimal],
-    pmt: TExpr[BigDecimal],
-    pv: TExpr[BigDecimal],
-    fv: Option[TExpr[BigDecimal]],
-    pmtType: Option[TExpr[BigDecimal]],
-    guess: Option[TExpr[BigDecimal]]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Vertical lookup: VLOOKUP(lookup, table, colIndex, [rangeLookup])
-   *
-   * Semantics:
-   *   - `lookup` is any value (text or numeric) - supports both text and number lookups
-   *   - `table` is a rectangular CellRange; first column is the key
-   *   - `colIndex` is 1-based column index into the table
-   *   - `rangeLookup` = TRUE → approximate match (largest key <= lookup, numeric only)
-   *   - `rangeLookup` = FALSE → exact match (case-insensitive for text)
-   *   - Result is the CellValue at the matched row/column (preserves type)
-   *
-   * Excel-compatible behavior:
-   *   - Text comparisons are case-insensitive
-   *   - Numeric approximate match requires sorted ascending keys
-   *   - #N/A error if no match found
-   */
-  case VLookup(
-    lookup: TExpr[?],
-    table: TExpr.RangeLocation,
-    colIndex: TExpr[Int],
-    rangeLookup: TExpr[Boolean]
-  ) extends TExpr[CellValue]
-
-  // Conditional aggregation functions (SUMIF/COUNTIF family)
-
-  /**
-   * Sum cells where criteria matches: SUMIF(range, criteria, [sum_range])
-   *
-   * Semantics:
-   *   - `range` is the range to test against criteria
-   *   - `criteria` is evaluated at runtime to determine matching rule
-   *   - `sumRange` is the range to sum (defaults to `range` if None)
-   *   - Non-numeric cells in sumRange are skipped (Excel behavior)
-   *   - Criteria supports: exact match, wildcards (*,?), comparisons (>,>=,<,<=,<>)
-   *
-   * Example: SUMIF(A1:A10, "Apple", B1:B10) sums B values where A equals "Apple"
-   */
-  case SumIf(
-    range: TExpr.RangeLocation,
-    criteria: TExpr[?],
-    sumRange: Option[TExpr.RangeLocation]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Count cells where criteria matches: COUNTIF(range, criteria)
-   *
-   * Semantics:
-   *   - `range` is the range to test against criteria
-   *   - `criteria` is evaluated at runtime to determine matching rule
-   *   - Returns count as BigDecimal (Excel convention)
-   *
-   * Example: COUNTIF(A1:A10, ">100") counts cells greater than 100
-   */
-  case CountIf(
-    range: TExpr.RangeLocation,
-    criteria: TExpr[?]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Sum with multiple criteria (AND logic): SUMIFS(sum_range, criteria_range1, criteria1, ...)
-   *
-   * Semantics:
-   *   - `sumRange` is the range to sum
-   *   - `conditions` is a list of (range, criteria) pairs - ALL must match
-   *   - All ranges must have same dimensions
-   *   - Non-numeric cells in sumRange are skipped
-   *
-   * Example: SUMIFS(C1:C10, A1:A10, "Apple", B1:B10, ">100") sums C where A="Apple" AND B>100
-   */
-  case SumIfs(
-    sumRange: TExpr.RangeLocation,
-    conditions: List[(TExpr.RangeLocation, TExpr[?])]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Count with multiple criteria (AND logic): COUNTIFS(criteria_range1, criteria1, ...)
-   *
-   * Semantics:
-   *   - `conditions` is a list of (range, criteria) pairs - ALL must match
-   *   - All ranges must have same dimensions
-   *   - Returns count as BigDecimal (Excel convention)
-   *
-   * Example: COUNTIFS(A1:A10, "Apple", B1:B10, ">100") counts where A="Apple" AND B>100
-   */
-  case CountIfs(
-    conditions: List[(TExpr.RangeLocation, TExpr[?])]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Average cells where criteria matches: AVERAGEIF(range, criteria, [average_range])
-   *
-   * Semantics:
-   *   - `range` is the range to test against criteria
-   *   - `criteria` is evaluated at runtime to determine matching rule
-   *   - `averageRange` is the range to average (defaults to `range` if None)
-   *   - Non-numeric cells in averageRange are skipped (Excel behavior)
-   *   - Returns #DIV/0! if no cells match or all matching cells are non-numeric
-   *   - Criteria supports: exact match, wildcards (*,?), comparisons (>,>=,<,<=,<>)
-   *
-   * Example: AVERAGEIF(A1:A10, "Apple", B1:B10) averages B values where A equals "Apple"
-   */
-  case AverageIf(
-    range: TExpr.RangeLocation,
-    criteria: TExpr[?],
-    averageRange: Option[TExpr.RangeLocation]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Average with multiple criteria (AND logic): AVERAGEIFS(avg_range, criteria_range1, criteria1,
-   * ...)
-   *
-   * Semantics:
-   *   - `averageRange` is the range to average
-   *   - `conditions` is a list of (range, criteria) pairs - ALL must match
-   *   - All ranges must have same dimensions
-   *   - Non-numeric cells in averageRange are skipped
-   *   - Returns #DIV/0! if no cells match or all matching cells are non-numeric
-   *
-   * Example: AVERAGEIFS(C1:C10, A1:A10, "Apple", B1:B10, ">100") averages C where A="Apple" AND
-   * B>100
-   */
-  case AverageIfs(
-    averageRange: TExpr.RangeLocation,
-    conditions: List[(TExpr.RangeLocation, TExpr[?])]
-  ) extends TExpr[BigDecimal]
-
-  // Reference information functions
-
-  /**
-   * Row number: ROW(reference)
-   *
-   * Returns the 1-based row number of a cell reference. For ranges, returns the row of the top-left
-   * cell.
-   *
-   * Example: ROW(A5) = 5, ROW(B1:C10) = 1
-   *
-   * @note
-   *   Named Row_ to avoid conflict with com.tjclp.xl.Row opaque type
-   */
-  case Row_(ref: TExpr[?]) extends TExpr[BigDecimal]
-
-  /**
-   * Column number: COLUMN(reference)
-   *
-   * Returns the 1-based column number of a cell reference. For ranges, returns the column of the
-   * top-left cell.
-   *
-   * Example: COLUMN(C1) = 3, COLUMN(B1:D10) = 2
-   */
-  case Column_(ref: TExpr[?]) extends TExpr[BigDecimal]
-
-  /**
-   * Row count: ROWS(range)
-   *
-   * Returns the number of rows in a range.
-   *
-   * Example: ROWS(A1:A10) = 10, ROWS(B2:D5) = 4
-   */
-  case Rows(range: TExpr[?]) extends TExpr[BigDecimal]
-
-  /**
-   * Column count: COLUMNS(range)
-   *
-   * Returns the number of columns in a range.
-   *
-   * Example: COLUMNS(A1:D1) = 4, COLUMNS(B2:E5) = 4
-   */
-  case Columns(range: TExpr[?]) extends TExpr[BigDecimal]
-
-  /**
-   * Create cell address: ADDRESS(row, column, [abs_num], [a1], [sheet])
-   *
-   * Returns a cell reference as text string.
-   *
-   * @param row
-   *   1-based row number
-   * @param col
-   *   1-based column number
-   * @param absNum
-   *   Anchor style: 1=$A$1, 2=A$1, 3=$A1, 4=A1 (default 1)
-   * @param a1Style
-   *   TRUE for A1 notation (default), FALSE for R1C1
-   * @param sheetName
-   *   Optional sheet name to prepend
-   *
-   * Example: ADDRESS(1, 1) = "$A$1", ADDRESS(1, 1, 4) = "A1"
-   */
-  case Address(
-    row: TExpr[BigDecimal],
-    col: TExpr[BigDecimal],
-    absNum: TExpr[BigDecimal],
-    a1Style: TExpr[Boolean],
-    sheetName: Option[TExpr[String]]
-  ) extends TExpr[String]
-
-  // Array and advanced lookup functions
-
-  /**
-   * Multiply corresponding elements across arrays and sum: SUMPRODUCT(array1, [array2], ...)
-   *
-   * Semantics:
-   *   - All arrays must have same dimensions (width and height)
-   *   - Non-numeric cells coerced: TRUE→1, FALSE→0, text/empty→0
-   *   - Returns sum of element-wise products
-   *
-   * Example: SUMPRODUCT(A1:A3, B1:B3) = A1*B1 + A2*B2 + A3*B3
-   */
-  case SumProduct(arrays: List[TExpr.RangeLocation]) extends TExpr[BigDecimal]
-
-  /**
-   * Advanced lookup: XLOOKUP(lookup_value, lookup_array, return_array, [if_not_found],
-   * [match_mode], [search_mode])
-   *
-   * Semantics:
-   *   - lookup_array and return_array must have same dimensions
-   *   - match_mode: 0=exact (default), -1=next smaller, 1=next larger, 2=wildcard
-   *   - search_mode: 1=first-to-last (default), -1=last-to-first, 2=binary asc, -2=binary desc
-   *   - if_not_found: expression to return if no match (default #N/A)
-   *
-   * Example: XLOOKUP("Apple", A1:A10, B1:B10) returns corresponding B value
-   */
-  case XLookup(
-    lookupValue: TExpr[?],
-    lookupArray: TExpr.RangeLocation,
-    returnArray: TExpr.RangeLocation,
-    ifNotFound: Option[TExpr[?]],
-    matchMode: TExpr[Int],
-    searchMode: TExpr[Int]
-  ) extends TExpr[CellValue]
-
-  /**
-   * Index into array: INDEX(array, row_num, [column_num])
-   *
-   * Returns the value at a specific row/column position in a range.
-   *
-   * Semantics:
-   *   - row_num: 1-based row position within the array
-   *   - column_num: 1-based column position (optional, defaults to 1 for single-column ranges)
-   *   - Returns #REF! if indices are out of bounds
-   *
-   * Example: INDEX(A1:C3, 2, 3) returns value at row 2, column 3 of the range
-   */
-  case Index(
-    array: TExpr.RangeLocation,
-    rowNum: TExpr[BigDecimal],
-    colNum: Option[TExpr[BigDecimal]]
-  ) extends TExpr[CellValue]
-
-  /**
-   * Find position: MATCH(lookup_value, lookup_array, [match_type])
-   *
-   * Returns the relative position of a value in a range (1-based).
-   *
-   * Semantics:
-   *   - match_type=1 (default): largest value <= lookup_value (array must be sorted ascending)
-   *   - match_type=0: exact match (array need not be sorted)
-   *   - match_type=-1: smallest value >= lookup_value (array must be sorted descending)
-   *   - Returns #N/A if no match found
-   *
-   * Example: MATCH("B", {"A","B","C"}, 0) returns 2
-   */
-  case Match(
-    lookupValue: TExpr[?],
-    lookupArray: TExpr.RangeLocation,
-    matchType: TExpr[BigDecimal]
-  ) extends TExpr[BigDecimal]
 
 object TExpr:
 
@@ -1022,46 +380,39 @@ object TExpr:
    * Example: TExpr.sum(CellRange("A1:A10"))
    */
   def sum(range: CellRange): TExpr[BigDecimal] =
-    FoldRange(
-      range,
-      BigDecimal(0),
-      (acc: BigDecimal, value: BigDecimal) => acc + value,
-      decodeNumeric
-    )
+    Call(FunctionSpecs.sum, RangeLocation.Local(range))
 
   /**
-   * COUNT aggregation: count non-empty cells in range.
+   * COUNT aggregation: count numeric cells in range.
    *
    * Example: TExpr.count(CellRange("A1:A10"))
    */
-  def count(range: CellRange): TExpr[Int] =
-    FoldRange(
-      range,
-      0,
-      (acc: Int, _: Option[Any]) => acc + 1,
-      decodeAny
-    )
+  def count(range: CellRange): TExpr[BigDecimal] =
+    Call(FunctionSpecs.count, RangeLocation.Local(range))
 
   /**
    * AVERAGE aggregation: average of numeric values in range.
    *
    * Example: TExpr.average(CellRange("A1:A10"))
    */
-  def average(range: CellRange): TExpr[BigDecimal] = Average(RangeLocation.Local(range))
+  def average(range: CellRange): TExpr[BigDecimal] =
+    Call(FunctionSpecs.average, RangeLocation.Local(range))
 
   /**
    * MIN aggregation: minimum numeric value in range.
    *
    * Example: TExpr.min(CellRange("A1:A10"))
    */
-  def min(range: CellRange): TExpr[BigDecimal] = Min(RangeLocation.Local(range))
+  def min(range: CellRange): TExpr[BigDecimal] =
+    Call(FunctionSpecs.min, RangeLocation.Local(range))
 
   /**
    * MAX aggregation: maximum numeric value in range.
    *
    * Example: TExpr.max(CellRange("A1:A10"))
    */
-  def max(range: CellRange): TExpr[BigDecimal] = Max(RangeLocation.Local(range))
+  def max(range: CellRange): TExpr[BigDecimal] =
+    Call(FunctionSpecs.max, RangeLocation.Local(range))
 
   // Financial function smart constructors
 
@@ -1071,7 +422,7 @@ object TExpr:
    * Example: TExpr.npv(TExpr.Lit(BigDecimal("0.1")), CellRange("A2:A6"))
    */
   def npv(rate: TExpr[BigDecimal], values: CellRange): TExpr[BigDecimal] =
-    Npv(rate, RangeLocation.Local(values))
+    Call(FunctionSpecs.npv, (rate, values))
 
   /**
    * Smart constructor for IRR with optional guess.
@@ -1079,7 +430,7 @@ object TExpr:
    * Example: TExpr.irr(CellRange("A1:A6"), Some(TExpr.Lit(BigDecimal("0.15"))))
    */
   def irr(values: CellRange, guess: Option[TExpr[BigDecimal]] = None): TExpr[BigDecimal] =
-    Irr(RangeLocation.Local(values), guess)
+    Call(FunctionSpecs.irr, (values, guess))
 
   /**
    * Smart constructor for XNPV with irregular dates.
@@ -1098,7 +449,7 @@ object TExpr:
     values: CellRange,
     dates: CellRange
   ): TExpr[BigDecimal] =
-    Xnpv(rate, RangeLocation.Local(values), RangeLocation.Local(dates))
+    Call(FunctionSpecs.xnpv, (rate, values, dates))
 
   /**
    * Smart constructor for XIRR with irregular dates.
@@ -1117,7 +468,7 @@ object TExpr:
     dates: CellRange,
     guess: Option[TExpr[BigDecimal]] = None
   ): TExpr[BigDecimal] =
-    Xirr(RangeLocation.Local(values), RangeLocation.Local(dates), guess)
+    Call(FunctionSpecs.xirr, (values, dates, guess))
 
   // ===== TVM Smart Constructors =====
 
@@ -1133,7 +484,7 @@ object TExpr:
     fv: Option[TExpr[BigDecimal]] = None,
     pmtType: Option[TExpr[BigDecimal]] = None
   ): TExpr[BigDecimal] =
-    Pmt(rate, nper, pv, fv, pmtType)
+    Call(FunctionSpecs.pmt, (rate, nper, pv, fv, pmtType))
 
   /**
    * FV: calculate future value.
@@ -1147,7 +498,7 @@ object TExpr:
     pv: Option[TExpr[BigDecimal]] = None,
     pmtType: Option[TExpr[BigDecimal]] = None
   ): TExpr[BigDecimal] =
-    Fv(rate, nper, pmt, pv, pmtType)
+    Call(FunctionSpecs.fv, (rate, nper, pmt, pv, pmtType))
 
   /**
    * PV: calculate present value.
@@ -1161,7 +512,7 @@ object TExpr:
     fv: Option[TExpr[BigDecimal]] = None,
     pmtType: Option[TExpr[BigDecimal]] = None
   ): TExpr[BigDecimal] =
-    Pv(rate, nper, pmt, fv, pmtType)
+    Call(FunctionSpecs.pv, (rate, nper, pmt, fv, pmtType))
 
   /**
    * NPER: calculate number of periods.
@@ -1175,7 +526,7 @@ object TExpr:
     fv: Option[TExpr[BigDecimal]] = None,
     pmtType: Option[TExpr[BigDecimal]] = None
   ): TExpr[BigDecimal] =
-    Nper(rate, pmt, pv, fv, pmtType)
+    Call(FunctionSpecs.nper, (rate, pmt, pv, fv, pmtType))
 
   /**
    * RATE: calculate interest rate per period.
@@ -1190,7 +541,7 @@ object TExpr:
     pmtType: Option[TExpr[BigDecimal]] = None,
     guess: Option[TExpr[BigDecimal]] = None
   ): TExpr[BigDecimal] =
-    Rate(nper, pmt, pv, fv, pmtType, guess)
+    Call(FunctionSpecs.rate, (nper, pmt, pv, fv, pmtType, guess))
 
   /**
    * Smart constructor for VLOOKUP (supports text and numeric lookups).
@@ -1204,7 +555,10 @@ object TExpr:
     colIndex: TExpr[Int],
     rangeLookup: TExpr[Boolean] = Lit(true)
   ): TExpr[CellValue] =
-    VLookup(lookup, RangeLocation.Local(table), colIndex, rangeLookup)
+    Call(
+      FunctionSpecs.vlookup,
+      (asCellValueExpr(lookup), RangeLocation.Local(table), colIndex, Some(rangeLookup))
+    )
 
   /**
    * Smart constructor for VLOOKUP with explicit RangeLocation (supports cross-sheet lookups).
@@ -1219,7 +573,10 @@ object TExpr:
     colIndex: TExpr[Int],
     rangeLookup: TExpr[Boolean] = Lit(true)
   ): TExpr[CellValue] =
-    VLookup(lookup, table, colIndex, rangeLookup)
+    Call(
+      FunctionSpecs.vlookup,
+      (asCellValueExpr(lookup), table, colIndex, Some(rangeLookup))
+    )
 
   // Conditional aggregation function smart constructors
 
@@ -1233,7 +590,10 @@ object TExpr:
     criteria: TExpr[?],
     sumRange: Option[CellRange] = None
   ): TExpr[BigDecimal] =
-    SumIf(RangeLocation.Local(range), criteria, sumRange.map(RangeLocation.Local(_)))
+    Call(
+      FunctionSpecs.sumif,
+      (range, criteria.asInstanceOf[TExpr[Any]], sumRange)
+    )
 
   /**
    * COUNTIF: count cells where criteria matches.
@@ -1241,7 +601,7 @@ object TExpr:
    * Example: TExpr.countIf(CellRange("A1:A10"), TExpr.Lit(">100"))
    */
   def countIf(range: CellRange, criteria: TExpr[?]): TExpr[BigDecimal] =
-    CountIf(RangeLocation.Local(range), criteria)
+    Call(FunctionSpecs.countif, (range, criteria.asInstanceOf[TExpr[Any]]))
 
   /**
    * SUMIFS: sum with multiple criteria (AND logic).
@@ -1252,9 +612,9 @@ object TExpr:
     sumRange: CellRange,
     conditions: List[(CellRange, TExpr[?])]
   ): TExpr[BigDecimal] =
-    SumIfs(
-      RangeLocation.Local(sumRange),
-      conditions.map { case (r, c) => (RangeLocation.Local(r), c) }
+    Call(
+      FunctionSpecs.sumifs,
+      (sumRange, conditions.map { case (r, c) => (r, c.asInstanceOf[TExpr[Any]]) })
     )
 
   /**
@@ -1263,7 +623,10 @@ object TExpr:
    * Example: TExpr.countIfs(List((CellRange("A1:A10"), TExpr.Lit("Apple"))))
    */
   def countIfs(conditions: List[(CellRange, TExpr[?])]): TExpr[BigDecimal] =
-    CountIfs(conditions.map { case (r, c) => (RangeLocation.Local(r), c) })
+    Call(
+      FunctionSpecs.countifs,
+      conditions.map { case (r, c) => (r, c.asInstanceOf[TExpr[Any]]) }
+    )
 
   /**
    * AVERAGEIF: average cells where criteria matches.
@@ -1275,7 +638,10 @@ object TExpr:
     criteria: TExpr[?],
     averageRange: Option[CellRange] = None
   ): TExpr[BigDecimal] =
-    AverageIf(RangeLocation.Local(range), criteria, averageRange.map(RangeLocation.Local(_)))
+    Call(
+      FunctionSpecs.averageif,
+      (range, criteria.asInstanceOf[TExpr[Any]], averageRange)
+    )
 
   /**
    * AVERAGEIFS: average with multiple criteria (AND logic).
@@ -1286,9 +652,9 @@ object TExpr:
     averageRange: CellRange,
     conditions: List[(CellRange, TExpr[?])]
   ): TExpr[BigDecimal] =
-    AverageIfs(
-      RangeLocation.Local(averageRange),
-      conditions.map { case (r, c) => (RangeLocation.Local(r), c) }
+    Call(
+      FunctionSpecs.averageifs,
+      (averageRange, conditions.map { case (r, c) => (r, c.asInstanceOf[TExpr[Any]]) })
     )
 
   // Error handling function smart constructors
@@ -1471,7 +837,7 @@ object TExpr:
    * Example: TExpr.row(TExpr.PolyRef(ref"A5", Anchor.Relative))
    */
   def row(ref: TExpr[?]): TExpr[BigDecimal] =
-    Row_(ref)
+    Call(FunctionSpecs.row, ref.asInstanceOf[TExpr[Any]])
 
   /**
    * Create COLUMN expression.
@@ -1479,23 +845,23 @@ object TExpr:
    * Example: TExpr.column(TExpr.PolyRef(ref"C1", Anchor.Relative))
    */
   def column(ref: TExpr[?]): TExpr[BigDecimal] =
-    Column_(ref)
+    Call(FunctionSpecs.column, ref.asInstanceOf[TExpr[Any]])
 
   /**
    * Create ROWS expression.
    *
-   * Example: TExpr.rows(TExpr.FoldRange(range, ...))
+   * Example: TExpr.rows(TExpr.RangeRef(range))
    */
   def rows(range: TExpr[?]): TExpr[BigDecimal] =
-    Rows(range)
+    Call(FunctionSpecs.rows, range.asInstanceOf[TExpr[Any]])
 
   /**
    * Create COLUMNS expression.
    *
-   * Example: TExpr.columns(TExpr.FoldRange(range, ...))
+   * Example: TExpr.columns(TExpr.RangeRef(range))
    */
   def columns(range: TExpr[?]): TExpr[BigDecimal] =
-    Columns(range)
+    Call(FunctionSpecs.columns, range.asInstanceOf[TExpr[Any]])
 
   /**
    * Create ADDRESS expression.
@@ -1509,7 +875,7 @@ object TExpr:
     a1Style: TExpr[Boolean] = Lit(true),
     sheetName: Option[TExpr[String]] = None
   ): TExpr[String] =
-    Address(row, col, absNum, a1Style, sheetName)
+    Call(FunctionSpecs.address, (row, col, Some(absNum), Some(a1Style), sheetName))
 
   // Array and advanced lookup function smart constructors
 
@@ -1520,7 +886,7 @@ object TExpr:
    * CellRange.parse("B1:B3").toOption.get))
    */
   def sumProduct(arrays: List[CellRange]): TExpr[BigDecimal] =
-    SumProduct(arrays.map(RangeLocation.Local(_)))
+    Call(FunctionSpecs.sumproduct, arrays)
 
   /**
    * XLOOKUP: advanced lookup with flexible matching.
@@ -1548,13 +914,18 @@ object TExpr:
     matchMode: TExpr[Int] = Lit(0),
     searchMode: TExpr[Int] = Lit(1)
   ): TExpr[CellValue] =
-    XLookup(
-      lookupValue,
-      RangeLocation.Local(lookupArray),
-      RangeLocation.Local(returnArray),
-      ifNotFound,
-      matchMode,
-      searchMode
+    val matchModeOpt = ifNotFound.map(_ => matchMode)
+    val searchModeOpt = ifNotFound.map(_ => searchMode)
+    Call(
+      FunctionSpecs.xlookup,
+      (
+        lookupValue.asInstanceOf[TExpr[Any]],
+        lookupArray,
+        returnArray,
+        ifNotFound.map(_.asInstanceOf[TExpr[Any]]),
+        matchModeOpt,
+        searchModeOpt
+      )
     )
 
   /**
@@ -1574,7 +945,7 @@ object TExpr:
     rowNum: TExpr[BigDecimal],
     colNum: Option[TExpr[BigDecimal]] = None
   ): TExpr[CellValue] =
-    Index(RangeLocation.Local(array), rowNum, colNum)
+    Call(FunctionSpecs.index, (array, rowNum, colNum))
 
   /**
    * MATCH: find position of value in array.
@@ -1593,7 +964,10 @@ object TExpr:
     lookupArray: CellRange,
     matchType: TExpr[BigDecimal] = Lit(BigDecimal(1))
   ): TExpr[BigDecimal] =
-    Match(lookupValue, RangeLocation.Local(lookupArray), matchType)
+    Call(
+      FunctionSpecs.matchFn,
+      (lookupValue.asInstanceOf[TExpr[Any]], lookupArray, Some(matchType))
+    )
 
   // Text function smart constructors
 
@@ -1654,21 +1028,21 @@ object TExpr:
    *
    * Example: TExpr.today()
    */
-  def today(): TExpr[java.time.LocalDate] = Today()
+  def today(): TExpr[java.time.LocalDate] = Call(FunctionSpecs.today, EmptyTuple)
 
   /**
    * NOW current date and time.
    *
    * Example: TExpr.now()
    */
-  def now(): TExpr[java.time.LocalDateTime] = Now()
+  def now(): TExpr[java.time.LocalDateTime] = Call(FunctionSpecs.now, EmptyTuple)
 
   /**
    * PI mathematical constant.
    *
    * Example: TExpr.pi()
    */
-  def pi(): TExpr[BigDecimal] = Pi()
+  def pi(): TExpr[BigDecimal] = Call(FunctionSpecs.pi, EmptyTuple)
 
   /**
    * DATE construct from year, month, day.
@@ -1676,7 +1050,7 @@ object TExpr:
    * Example: TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
    */
   def date(year: TExpr[Int], month: TExpr[Int], day: TExpr[Int]): TExpr[java.time.LocalDate] =
-    Date(year, month, day)
+    Call(FunctionSpecs.date, (year, month, day))
 
   /**
    * YEAR extract year from date.
@@ -1685,7 +1059,7 @@ object TExpr:
    *
    * Example: TExpr.year(TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21)))
    */
-  def year(date: TExpr[java.time.LocalDate]): TExpr[BigDecimal] = Year(date)
+  def year(date: TExpr[java.time.LocalDate]): TExpr[BigDecimal] = Call(FunctionSpecs.year, date)
 
   /**
    * MONTH extract month from date.
@@ -1694,7 +1068,7 @@ object TExpr:
    *
    * Example: TExpr.month(TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21)))
    */
-  def month(date: TExpr[java.time.LocalDate]): TExpr[BigDecimal] = Month(date)
+  def month(date: TExpr[java.time.LocalDate]): TExpr[BigDecimal] = Call(FunctionSpecs.month, date)
 
   /**
    * DAY extract day from date.
@@ -1703,7 +1077,7 @@ object TExpr:
    *
    * Example: TExpr.day(TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21)))
    */
-  def day(date: TExpr[java.time.LocalDate]): TExpr[BigDecimal] = Day(date)
+  def day(date: TExpr[java.time.LocalDate]): TExpr[BigDecimal] = Call(FunctionSpecs.day, date)
 
   /**
    * EOMONTH end of month N months from start.
@@ -1810,7 +1184,7 @@ object TExpr:
   ): TExpr[BigDecimal] =
     Call(FunctionSpecs.yearfrac, (startDate, endDate, Some(basis)))
 
-  // Decoder functions for FoldRange
+  // Decoder functions for cell coercion
 
   /**
    * Decode cell as numeric value (Double or BigDecimal).
@@ -1833,15 +1207,6 @@ object TExpr:
             actual = other
           )
         )
-
-  /**
-   * Decode cell as any value (for COUNT, etc).
-   */
-  def decodeAny(cell: Cell): Either[CodecError, Option[Any]] =
-    import com.tjclp.xl.cells.CellValue
-    cell.value match
-      case CellValue.Empty => scala.util.Right(None)
-      case other => scala.util.Right(Some(other))
 
   /**
    * Decode cell as text/string value.
@@ -2101,9 +1466,12 @@ object TExpr:
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsInt)
     case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
     // Convert BigDecimal expressions to Int (YEAR/MONTH/DAY/LEN return BigDecimal)
-    case year: TExpr.Year => ToInt(year)
-    case month: TExpr.Month => ToInt(month)
-    case day: TExpr.Day => ToInt(day)
+    case call: TExpr.Call[?] if call.spec == FunctionSpecs.year =>
+      ToInt(call.asInstanceOf[TExpr[BigDecimal]])
+    case call: TExpr.Call[?] if call.spec == FunctionSpecs.month =>
+      ToInt(call.asInstanceOf[TExpr[BigDecimal]])
+    case call: TExpr.Call[?] if call.spec == FunctionSpecs.day =>
+      ToInt(call.asInstanceOf[TExpr[BigDecimal]])
     case call: TExpr.Call[?] if call.spec == FunctionSpecs.len =>
       ToInt(call.asInstanceOf[TExpr[BigDecimal]])
     case other => other.asInstanceOf[TExpr[Int]] // Safe: non-PolyRef already has correct type
@@ -2118,9 +1486,6 @@ object TExpr:
     case PolyRef(at, anchor) => Ref(at, anchor, decodeNumeric)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeNumeric)
     // Date functions return LocalDate/LocalDateTime - convert to Excel serial number
-    case today: Today => DateToSerial(today)
-    case date: Date => DateToSerial(date)
-    case now: Now => DateTimeToSerial(now)
     case call: TExpr.Call[?] if call.spec.flags.returnsDate =>
       DateToSerial(call.asInstanceOf[TExpr[java.time.LocalDate]])
     case call: TExpr.Call[?] if call.spec.flags.returnsTime =>
@@ -2180,8 +1545,6 @@ object TExpr:
         .toValues(call.args)
         .collect { case ArgValue.Expr(e) => containsDateFunction(e) }
         .exists(identity)
-    // Date-returning functions
-    case _: Today | _: Now | _: Date => true
     // Date-to-serial wrappers (for arithmetic)
     case DateToSerial(_) | DateTimeToSerial(_) => true
     // Arithmetic - recursively check operands
@@ -2216,8 +1579,6 @@ object TExpr:
         .toValues(call.args)
         .collect { case ArgValue.Expr(e) => containsTimeFunction(e) }
         .exists(identity)
-    // Time-returning functions
-    case _: Now => true
     case DateTimeToSerial(_) => true
     // Arithmetic - recursively check operands
     case Add(l, r) => containsTimeFunction(l) || containsTimeFunction(r)

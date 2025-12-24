@@ -46,7 +46,7 @@ class DependencyGraphSpec extends FunSuite:
     assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1", ref"B1"))
   }
 
-  test("extractDependencies: FoldRange expands to all cells in range") {
+  test("extractDependencies: range arguments expand to all cells in range") {
     val range = parseRange("A1:A3")
     val expr = TExpr.sum(range)
     val expected = Set(ref"A1", ref"A2", ref"A3")
@@ -87,7 +87,7 @@ class DependencyGraphSpec extends FunSuite:
   }
 
   test("extractDependencies: date functions with Refs") {
-    val expr = TExpr.Date(
+    val expr = TExpr.date(
       TExpr.ref(ref"A1", TExpr.decodeInt),
       TExpr.ref(ref"A2", TExpr.decodeInt),
       TExpr.ref(ref"A3", TExpr.decodeInt)

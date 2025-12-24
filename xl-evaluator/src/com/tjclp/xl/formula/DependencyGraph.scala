@@ -118,7 +118,7 @@ object DependencyGraph:
    *
    * Recursively traverses the expression AST and collects all cell references, including:
    *   - Single cell references (Ref)
-   *   - Range references (FoldRange) expanded to all cells in range
+   *   - Range references (RangeRef) expanded to all cells in range
    *
    * @param expr
    *   The expression to analyze
@@ -150,15 +150,7 @@ object DependencyGraph:
       case TExpr.SheetRef(_, _, _, _) => Set.empty
       case TExpr.SheetPolyRef(_, _, _) => Set.empty
       case TExpr.SheetRange(_, _) => Set.empty
-      case TExpr.SheetFoldRange(_, _, _, _, _) => Set.empty
-      case TExpr.SheetSum(_, _) => Set.empty
-      case TExpr.SheetMin(_, _) => Set.empty
-      case TExpr.SheetMax(_, _) => Set.empty
-      case TExpr.SheetAverage(_, _) => Set.empty
-      case TExpr.SheetCount(_, _) => Set.empty
-
-      // Range reference (expand to all cells)
-      case TExpr.FoldRange(range, _, _, _) =>
+      case TExpr.RangeRef(range) =>
         range.cells.toSet
 
       case call: TExpr.Call[?] =>
@@ -182,137 +174,10 @@ object DependencyGraph:
       case TExpr.Gte(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.ToInt(expr) =>
         extractDependencies(expr) // Type conversion - extract from wrapped expr
-      case TExpr.Date(y, m, d) =>
-        extractDependencies(y) ++ extractDependencies(m) ++ extractDependencies(d)
-      case TExpr.Year(date) => extractDependencies(date)
-      case TExpr.Month(date) => extractDependencies(date)
-      case TExpr.Day(date) => extractDependencies(date)
-
-      // Financial functions
-      case TExpr.Npv(rate, values) =>
-        extractDependencies(rate) ++ values.localCells
-      case TExpr.Irr(values, guessOpt) =>
-        values.localCells ++ guessOpt.map(extractDependencies).getOrElse(Set.empty)
-      case TExpr.Xnpv(rate, values, dates) =>
-        extractDependencies(rate) ++ values.localCells ++ dates.localCells
-      case TExpr.Xirr(values, dates, guessOpt) =>
-        values.localCells ++ dates.localCells ++ guessOpt
-          .map(extractDependencies)
-          .getOrElse(Set.empty)
-
-      // TVM Functions
-      case TExpr.Pmt(rate, nper, pv, fv, pmtType) =>
-        extractDependencies(rate) ++ extractDependencies(nper) ++ extractDependencies(pv) ++
-          fv.map(extractDependencies).getOrElse(Set.empty) ++
-          pmtType.map(extractDependencies).getOrElse(Set.empty)
-      case TExpr.Fv(rate, nper, pmt, pv, pmtType) =>
-        extractDependencies(rate) ++ extractDependencies(nper) ++ extractDependencies(pmt) ++
-          pv.map(extractDependencies).getOrElse(Set.empty) ++
-          pmtType.map(extractDependencies).getOrElse(Set.empty)
-      case TExpr.Pv(rate, nper, pmt, fv, pmtType) =>
-        extractDependencies(rate) ++ extractDependencies(nper) ++ extractDependencies(pmt) ++
-          fv.map(extractDependencies).getOrElse(Set.empty) ++
-          pmtType.map(extractDependencies).getOrElse(Set.empty)
-      case TExpr.Nper(rate, pmt, pv, fv, pmtType) =>
-        extractDependencies(rate) ++ extractDependencies(pmt) ++ extractDependencies(pv) ++
-          fv.map(extractDependencies).getOrElse(Set.empty) ++
-          pmtType.map(extractDependencies).getOrElse(Set.empty)
-      case TExpr.Rate(nper, pmt, pv, fv, pmtType, guess) =>
-        extractDependencies(nper) ++ extractDependencies(pmt) ++ extractDependencies(pv) ++
-          fv.map(extractDependencies).getOrElse(Set.empty) ++
-          pmtType.map(extractDependencies).getOrElse(Set.empty) ++
-          guess.map(extractDependencies).getOrElse(Set.empty)
-
-      case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
-        extractDependencies(lookup) ++
-          table.localCells ++
-          extractDependencies(colIndex) ++
-          extractDependencies(rangeLookup)
-
-      // Conditional aggregation functions
-      case TExpr.SumIf(range, criteria, sumRangeOpt) =>
-        range.localCells ++
-          extractDependencies(criteria) ++
-          sumRangeOpt.map(_.localCells).getOrElse(Set.empty)
-      case TExpr.CountIf(range, criteria) =>
-        range.localCells ++ extractDependencies(criteria)
-      case TExpr.SumIfs(sumRange, conditions) =>
-        sumRange.localCells ++
-          conditions.flatMap { case (range, criteria) =>
-            range.localCells ++ extractDependencies(criteria)
-          }.toSet
-      case TExpr.CountIfs(conditions) =>
-        conditions.flatMap { case (range, criteria) =>
-          range.localCells ++ extractDependencies(criteria)
-        }.toSet
-      case TExpr.AverageIf(range, criteria, avgRangeOpt) =>
-        range.localCells ++
-          extractDependencies(criteria) ++
-          avgRangeOpt.map(_.localCells).getOrElse(Set.empty)
-      case TExpr.AverageIfs(avgRange, conditions) =>
-        avgRange.localCells ++
-          conditions.flatMap { case (range, criteria) =>
-            range.localCells ++ extractDependencies(criteria)
-          }.toSet
-
-      // Array and advanced lookup functions
-      case TExpr.SumProduct(arrays) =>
-        arrays.flatMap(_.localCells).toSet
-
-      case TExpr.XLookup(
-            lookupValue,
-            lookupArray,
-            returnArray,
-            ifNotFound,
-            matchMode,
-            searchMode
-          ) =>
-        extractDependencies(lookupValue) ++
-          lookupArray.localCells ++
-          returnArray.localCells ++
-          ifNotFound.map(extractDependencies).getOrElse(Set.empty) ++
-          extractDependencies(matchMode) ++
-          extractDependencies(searchMode)
-
-      // Reference functions
-      case TExpr.Row_(ref) => extractDependencies(ref)
-      case TExpr.Column_(ref) => extractDependencies(ref)
-      case TExpr.Rows(range) => extractDependencies(range)
-      case TExpr.Columns(range) => extractDependencies(range)
-      case TExpr.Address(row, col, absNum, a1Style, sheetName) =>
-        extractDependencies(row) ++
-          extractDependencies(col) ++
-          extractDependencies(absNum) ++
-          extractDependencies(a1Style) ++
-          sheetName.map(extractDependencies).getOrElse(Set.empty)
-
-      // Lookup functions
-      case TExpr.Index(array, rowNum, colNum) =>
-        array.localCells ++ extractDependencies(rowNum) ++ colNum
-          .map(extractDependencies)
-          .getOrElse(Set.empty)
-      case TExpr.Match(lookupValue, lookupArray, matchType) =>
-        extractDependencies(lookupValue) ++ lookupArray.localCells ++ extractDependencies(
-          matchType
-        )
-
-      // Range aggregate functions (direct enum cases)
-      case TExpr.Sum(range) => range.localCells
-      case TExpr.Count(range) => range.localCells
-      case TExpr.Min(range) => range.localCells
-      case TExpr.Max(range) => range.localCells
-      case TExpr.Average(range) => range.localCells
-
-      // Unified aggregate function (typeclass-based)
       case TExpr.Aggregate(_, location) => location.localCells
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
-      case TExpr.Today() => Set.empty
-      case TExpr.Now() => Set.empty
-      case TExpr.Pi() => Set.empty
-
-      // Date-to-serial converters - extract from inner expression
       case TExpr.DateToSerial(dateExpr) => extractDependencies(dateExpr)
       case TExpr.DateTimeToSerial(dtExpr) => extractDependencies(dtExpr)
 
@@ -349,15 +214,7 @@ object DependencyGraph:
       case TExpr.SheetRef(_, _, _, _) => Set.empty
       case TExpr.SheetPolyRef(_, _, _) => Set.empty
       case TExpr.SheetRange(_, _) => Set.empty
-      case TExpr.SheetFoldRange(_, _, _, _, _) => Set.empty
-      case TExpr.SheetSum(_, _) => Set.empty
-      case TExpr.SheetMin(_, _) => Set.empty
-      case TExpr.SheetMax(_, _) => Set.empty
-      case TExpr.SheetAverage(_, _) => Set.empty
-      case TExpr.SheetCount(_, _) => Set.empty
-
-      // Range reference (expand to all cells, BOUNDED)
-      case TExpr.FoldRange(range, _, _, _) => boundRange(range)
+      case TExpr.RangeRef(range) => boundRange(range)
 
       // Recursive cases (binary operators)
       case TExpr.Add(l, r) =>
@@ -381,138 +238,6 @@ object DependencyGraph:
       case TExpr.Gte(l, r) =>
         extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
       case TExpr.ToInt(expr) => extractDependenciesBounded(expr, bounds)
-      case TExpr.Date(y, m, d) =>
-        extractDependenciesBounded(y, bounds) ++ extractDependenciesBounded(m, bounds) ++
-          extractDependenciesBounded(d, bounds)
-      case TExpr.Year(date) => extractDependenciesBounded(date, bounds)
-      case TExpr.Month(date) => extractDependenciesBounded(date, bounds)
-      case TExpr.Day(date) => extractDependenciesBounded(date, bounds)
-
-      // Financial functions
-      case TExpr.Npv(rate, values) =>
-        extractDependenciesBounded(rate, bounds) ++ values.localCellsBounded(bounds)
-      case TExpr.Irr(values, guessOpt) =>
-        values.localCellsBounded(bounds) ++
-          guessOpt.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
-      case TExpr.Xnpv(rate, values, dates) =>
-        extractDependenciesBounded(rate, bounds) ++
-          values.localCellsBounded(bounds) ++
-          dates.localCellsBounded(bounds)
-      case TExpr.Xirr(values, dates, guessOpt) =>
-        values.localCellsBounded(bounds) ++
-          dates.localCellsBounded(bounds) ++
-          guessOpt.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
-
-      // TVM Functions
-      case TExpr.Pmt(rate, nper, pv, fv, pmtType) =>
-        extractDependenciesBounded(rate, bounds) ++
-          extractDependenciesBounded(nper, bounds) ++ extractDependenciesBounded(pv, bounds) ++
-          fv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
-          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
-      case TExpr.Fv(rate, nper, pmt, pv, pmtType) =>
-        extractDependenciesBounded(rate, bounds) ++
-          extractDependenciesBounded(nper, bounds) ++ extractDependenciesBounded(pmt, bounds) ++
-          pv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
-          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
-      case TExpr.Pv(rate, nper, pmt, fv, pmtType) =>
-        extractDependenciesBounded(rate, bounds) ++
-          extractDependenciesBounded(nper, bounds) ++ extractDependenciesBounded(pmt, bounds) ++
-          fv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
-          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
-      case TExpr.Nper(rate, pmt, pv, fv, pmtType) =>
-        extractDependenciesBounded(rate, bounds) ++
-          extractDependenciesBounded(pmt, bounds) ++ extractDependenciesBounded(pv, bounds) ++
-          fv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
-          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
-      case TExpr.Rate(nper, pmt, pv, fv, pmtType, guess) =>
-        extractDependenciesBounded(nper, bounds) ++
-          extractDependenciesBounded(pmt, bounds) ++ extractDependenciesBounded(pv, bounds) ++
-          fv.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
-          pmtType.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
-          guess.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
-
-      case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
-        extractDependenciesBounded(lookup, bounds) ++
-          table.localCellsBounded(bounds) ++
-          extractDependenciesBounded(colIndex, bounds) ++
-          extractDependenciesBounded(rangeLookup, bounds)
-
-      // Conditional aggregation functions
-      case TExpr.SumIf(range, criteria, sumRangeOpt) =>
-        range.localCellsBounded(bounds) ++
-          extractDependenciesBounded(criteria, bounds) ++
-          sumRangeOpt.map(_.localCellsBounded(bounds)).getOrElse(Set.empty)
-      case TExpr.CountIf(range, criteria) =>
-        range.localCellsBounded(bounds) ++ extractDependenciesBounded(criteria, bounds)
-      case TExpr.SumIfs(sumRange, conditions) =>
-        sumRange.localCellsBounded(bounds) ++
-          conditions.flatMap { case (range, criteria) =>
-            range.localCellsBounded(bounds) ++ extractDependenciesBounded(criteria, bounds)
-          }.toSet
-      case TExpr.CountIfs(conditions) =>
-        conditions.flatMap { case (range, criteria) =>
-          range.localCellsBounded(bounds) ++ extractDependenciesBounded(criteria, bounds)
-        }.toSet
-      case TExpr.AverageIf(range, criteria, avgRangeOpt) =>
-        range.localCellsBounded(bounds) ++
-          extractDependenciesBounded(criteria, bounds) ++
-          avgRangeOpt.map(_.localCellsBounded(bounds)).getOrElse(Set.empty)
-      case TExpr.AverageIfs(avgRange, conditions) =>
-        avgRange.localCellsBounded(bounds) ++
-          conditions.flatMap { case (range, criteria) =>
-            range.localCellsBounded(bounds) ++ extractDependenciesBounded(criteria, bounds)
-          }.toSet
-
-      // Array and advanced lookup functions
-      case TExpr.SumProduct(arrays) =>
-        arrays.flatMap(_.localCellsBounded(bounds)).toSet
-
-      case TExpr.XLookup(
-            lookupValue,
-            lookupArray,
-            returnArray,
-            ifNotFound,
-            matchMode,
-            searchMode
-          ) =>
-        extractDependenciesBounded(lookupValue, bounds) ++
-          lookupArray.localCellsBounded(bounds) ++
-          returnArray.localCellsBounded(bounds) ++
-          ifNotFound.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
-          extractDependenciesBounded(matchMode, bounds) ++
-          extractDependenciesBounded(searchMode, bounds)
-
-      // Rounding and math functions
-      // Reference functions
-      case TExpr.Row_(ref) => extractDependenciesBounded(ref, bounds)
-      case TExpr.Column_(ref) => extractDependenciesBounded(ref, bounds)
-      case TExpr.Rows(range) => extractDependenciesBounded(range, bounds)
-      case TExpr.Columns(range) => extractDependenciesBounded(range, bounds)
-      case TExpr.Address(row, col, absNum, a1Style, sheetName) =>
-        extractDependenciesBounded(row, bounds) ++
-          extractDependenciesBounded(col, bounds) ++
-          extractDependenciesBounded(absNum, bounds) ++
-          extractDependenciesBounded(a1Style, bounds) ++
-          sheetName.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
-
-      // Lookup functions
-      case TExpr.Index(array, rowNum, colNum) =>
-        array.localCellsBounded(bounds) ++
-          extractDependenciesBounded(rowNum, bounds) ++
-          colNum.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty)
-      case TExpr.Match(lookupValue, lookupArray, matchType) =>
-        extractDependenciesBounded(lookupValue, bounds) ++
-          lookupArray.localCellsBounded(bounds) ++
-          extractDependenciesBounded(matchType, bounds)
-
-      // Range aggregate functions (direct enum cases)
-      case TExpr.Sum(range) => range.localCellsBounded(bounds)
-      case TExpr.Count(range) => range.localCellsBounded(bounds)
-      case TExpr.Min(range) => range.localCellsBounded(bounds)
-      case TExpr.Max(range) => range.localCellsBounded(bounds)
-      case TExpr.Average(range) => range.localCellsBounded(bounds)
-
-      // Unified aggregate function (typeclass-based)
       case TExpr.Aggregate(_, location) => location.localCellsBounded(bounds)
 
       case call: TExpr.Call[?] =>
@@ -525,11 +250,6 @@ object DependencyGraph:
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
-      case TExpr.Today() => Set.empty
-      case TExpr.Now() => Set.empty
-      case TExpr.Pi() => Set.empty
-
-      // Date-to-serial converters - extract from inner expression
       case TExpr.DateToSerial(dateExpr) => extractDependenciesBounded(dateExpr, bounds)
       case TExpr.DateTimeToSerial(dtExpr) => extractDependenciesBounded(dtExpr, bounds)
 
@@ -901,7 +621,7 @@ object DependencyGraph:
       // Same-sheet references - qualify with current sheet
       case TExpr.Ref(at, _, _) => Set(QualifiedRef(currentSheet, at))
       case TExpr.PolyRef(at, _) => Set(QualifiedRef(currentSheet, at))
-      case TExpr.FoldRange(range, _, _, _) =>
+      case TExpr.RangeRef(range) =>
         range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
 
       // Cross-sheet references - use target sheet
@@ -909,20 +629,6 @@ object DependencyGraph:
       case TExpr.SheetPolyRef(sheet, at, _) => Set(QualifiedRef(sheet, at))
       case TExpr.SheetRange(sheet, range) =>
         range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-      case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
-        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-      case TExpr.SheetSum(sheet, range) =>
-        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-      case TExpr.SheetMin(sheet, range) =>
-        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-      case TExpr.SheetMax(sheet, range) =>
-        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-      case TExpr.SheetAverage(sheet, range) =>
-        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-      case TExpr.SheetCount(sheet, range) =>
-        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-
-      // Recursive cases (binary operators)
       case TExpr.Add(l, r) =>
         extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
           r,
@@ -977,34 +683,6 @@ object DependencyGraph:
       case TExpr.ToInt(x) => extractQualifiedDependencies(x, currentSheet)
 
       // Reference functions
-      case TExpr.Row_(ref) => extractQualifiedDependencies(ref, currentSheet)
-      case TExpr.Column_(ref) => extractQualifiedDependencies(ref, currentSheet)
-      case TExpr.Rows(range) => extractQualifiedDependencies(range, currentSheet)
-      case TExpr.Columns(range) => extractQualifiedDependencies(range, currentSheet)
-      case TExpr.Address(row, col, absNum, a1Style, sheetName) =>
-        extractQualifiedDependencies(row, currentSheet) ++
-          extractQualifiedDependencies(col, currentSheet) ++
-          extractQualifiedDependencies(absNum, currentSheet) ++
-          extractQualifiedDependencies(a1Style, currentSheet) ++
-          sheetName.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-
-      // Date functions
-      case TExpr.Date(y, m, d) =>
-        extractQualifiedDependencies(y, currentSheet) ++
-          extractQualifiedDependencies(m, currentSheet) ++
-          extractQualifiedDependencies(d, currentSheet)
-      case TExpr.Year(date) => extractQualifiedDependencies(date, currentSheet)
-      case TExpr.Month(date) => extractQualifiedDependencies(date, currentSheet)
-      case TExpr.Day(date) => extractQualifiedDependencies(date, currentSheet)
-
-      // Range functions (direct, not FoldRange)
-      case TExpr.Sum(range) => locationToQualifiedRefs(range, currentSheet)
-      case TExpr.Count(range) => locationToQualifiedRefs(range, currentSheet)
-      case TExpr.Min(range) => locationToQualifiedRefs(range, currentSheet)
-      case TExpr.Max(range) => locationToQualifiedRefs(range, currentSheet)
-      case TExpr.Average(range) => locationToQualifiedRefs(range, currentSheet)
-
-      // Unified aggregate function (typeclass-based)
       case TExpr.Aggregate(_, location) => locationToQualifiedRefs(location, currentSheet)
 
       case call: TExpr.Call[?] =>
@@ -1019,131 +697,10 @@ object DependencyGraph:
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
-      case TExpr.Today() => Set.empty
-      case TExpr.Now() => Set.empty
-      case TExpr.Pi() => Set.empty
-
-      // Date-to-serial converters - extract from inner expression
       case TExpr.DateToSerial(dateExpr) => extractQualifiedDependencies(dateExpr, currentSheet)
       case TExpr.DateTimeToSerial(dtExpr) => extractQualifiedDependencies(dtExpr, currentSheet)
 
       // Financial functions
-      case TExpr.Npv(rate, values) =>
-        extractQualifiedDependencies(rate, currentSheet) ++
-          locationToQualifiedRefs(values, currentSheet)
-      case TExpr.Irr(values, guessOpt) =>
-        locationToQualifiedRefs(values, currentSheet) ++
-          guessOpt.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-      case TExpr.Xnpv(rate, values, dates) =>
-        extractQualifiedDependencies(rate, currentSheet) ++
-          locationToQualifiedRefs(values, currentSheet) ++
-          locationToQualifiedRefs(dates, currentSheet)
-      case TExpr.Xirr(values, dates, guessOpt) =>
-        locationToQualifiedRefs(values, currentSheet) ++
-          locationToQualifiedRefs(dates, currentSheet) ++
-          guessOpt.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-
-      // TVM Functions
-      case TExpr.Pmt(rate, nper, pv, fv, pmtType) =>
-        extractQualifiedDependencies(rate, currentSheet) ++
-          extractQualifiedDependencies(nper, currentSheet) ++
-          extractQualifiedDependencies(pv, currentSheet) ++
-          fv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
-          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-      case TExpr.Fv(rate, nper, pmt, pv, pmtType) =>
-        extractQualifiedDependencies(rate, currentSheet) ++
-          extractQualifiedDependencies(nper, currentSheet) ++
-          extractQualifiedDependencies(pmt, currentSheet) ++
-          pv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
-          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-      case TExpr.Pv(rate, nper, pmt, fv, pmtType) =>
-        extractQualifiedDependencies(rate, currentSheet) ++
-          extractQualifiedDependencies(nper, currentSheet) ++
-          extractQualifiedDependencies(pmt, currentSheet) ++
-          fv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
-          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-      case TExpr.Nper(rate, pmt, pv, fv, pmtType) =>
-        extractQualifiedDependencies(rate, currentSheet) ++
-          extractQualifiedDependencies(pmt, currentSheet) ++
-          extractQualifiedDependencies(pv, currentSheet) ++
-          fv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
-          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-      case TExpr.Rate(nper, pmt, pv, fv, pmtType, guess) =>
-        extractQualifiedDependencies(nper, currentSheet) ++
-          extractQualifiedDependencies(pmt, currentSheet) ++
-          extractQualifiedDependencies(pv, currentSheet) ++
-          fv.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
-          pmtType.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
-          guess.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-
-      case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
-        extractQualifiedDependencies(lookup, currentSheet) ++
-          locationToQualifiedRefs(table, currentSheet) ++
-          extractQualifiedDependencies(colIndex, currentSheet) ++
-          extractQualifiedDependencies(rangeLookup, currentSheet)
-
-      // Conditional aggregation functions
-      case TExpr.SumIf(range, criteria, sumRangeOpt) =>
-        locationToQualifiedRefs(range, currentSheet) ++
-          extractQualifiedDependencies(criteria, currentSheet) ++
-          sumRangeOpt
-            .map(locationToQualifiedRefs(_, currentSheet))
-            .getOrElse(Set.empty)
-      case TExpr.CountIf(range, criteria) =>
-        locationToQualifiedRefs(range, currentSheet) ++
-          extractQualifiedDependencies(criteria, currentSheet)
-      case TExpr.SumIfs(sumRange, conditions) =>
-        locationToQualifiedRefs(sumRange, currentSheet) ++
-          conditions.flatMap { case (range, criteria) =>
-            locationToQualifiedRefs(range, currentSheet) ++
-              extractQualifiedDependencies(criteria, currentSheet)
-          }.toSet
-      case TExpr.CountIfs(conditions) =>
-        conditions.flatMap { case (range, criteria) =>
-          locationToQualifiedRefs(range, currentSheet) ++
-            extractQualifiedDependencies(criteria, currentSheet)
-        }.toSet
-      case TExpr.AverageIf(range, criteria, avgRangeOpt) =>
-        locationToQualifiedRefs(range, currentSheet) ++
-          extractQualifiedDependencies(criteria, currentSheet) ++
-          avgRangeOpt
-            .map(locationToQualifiedRefs(_, currentSheet))
-            .getOrElse(Set.empty)
-      case TExpr.AverageIfs(avgRange, conditions) =>
-        locationToQualifiedRefs(avgRange, currentSheet) ++
-          conditions.flatMap { case (range, criteria) =>
-            locationToQualifiedRefs(range, currentSheet) ++
-              extractQualifiedDependencies(criteria, currentSheet)
-          }.toSet
-      case TExpr.SumProduct(arrays) =>
-        arrays.flatMap(locationToQualifiedRefs(_, currentSheet)).toSet
-
-      // Advanced lookup functions
-      case TExpr.XLookup(
-            lookupValue,
-            lookupArray,
-            returnArray,
-            ifNotFound,
-            matchMode,
-            searchMode
-          ) =>
-        extractQualifiedDependencies(lookupValue, currentSheet) ++
-          locationToQualifiedRefs(lookupArray, currentSheet) ++
-          locationToQualifiedRefs(returnArray, currentSheet) ++
-          ifNotFound.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty) ++
-          extractQualifiedDependencies(matchMode, currentSheet) ++
-          extractQualifiedDependencies(searchMode, currentSheet)
-      case TExpr.Index(array, rowNum, colNum) =>
-        locationToQualifiedRefs(array, currentSheet) ++
-          extractQualifiedDependencies(rowNum, currentSheet) ++
-          colNum.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-      case TExpr.Match(lookupValue, lookupArray, matchType) =>
-        extractQualifiedDependencies(lookupValue, currentSheet) ++
-          locationToQualifiedRefs(lookupArray, currentSheet) ++
-          extractQualifiedDependencies(matchType, currentSheet)
-
-      // Error handling functions
-
   /**
    * Detect circular references across sheets using Tarjan's SCC algorithm.
    *

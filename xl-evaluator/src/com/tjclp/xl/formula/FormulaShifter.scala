@@ -71,6 +71,10 @@ object FormulaShifter:
         val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
         SheetPolyRef(sheet, shiftedRef, anchor).asInstanceOf[TExpr[A]]
 
+      case RangeRef(range) =>
+        val shiftedRange = shiftRange(range, colDelta, rowDelta)
+        RangeRef(shiftedRange).asInstanceOf[TExpr[A]]
+
       case SheetRange(sheet, range) =>
         val shiftedRange = shiftRange(range, colDelta, rowDelta)
         SheetRange(sheet, shiftedRange).asInstanceOf[TExpr[A]]
@@ -116,28 +120,7 @@ object FormulaShifter:
       case ToInt(e) =>
         ToInt(shiftInternal(e, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
-      // Range aggregation - shift the range
-      case FoldRange(range, z, step, decode) =>
-        FoldRange(shiftRange(range, colDelta, rowDelta), z, step, decode).asInstanceOf[TExpr[A]]
-
-      // Cross-sheet range aggregation - shift the range but preserve sheet name
-      case SheetFoldRange(sheet, range, z, step, decode) =>
-        SheetFoldRange(sheet, shiftRange(range, colDelta, rowDelta), z, step, decode)
-          .asInstanceOf[TExpr[A]]
-
       // Arithmetic range functions (now using RangeLocation)
-      case Sum(range) =>
-        Sum(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Count(range) =>
-        Count(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Min(range) =>
-        Min(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Max(range) =>
-        Max(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Average(range) =>
-        Average(shiftLocation(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-
-      // Unified aggregate function (typeclass-based)
       case Aggregate(aggregatorId, location) =>
         Aggregate(aggregatorId, shiftLocation(location, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
@@ -150,197 +133,11 @@ object FormulaShifter:
           )
         Call(call.spec, shifted).asInstanceOf[TExpr[A]]
 
-      // Cross-sheet aggregate functions
-      case SheetSum(sheet, range) =>
-        SheetSum(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case SheetMin(sheet, range) =>
-        SheetMin(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case SheetMax(sheet, range) =>
-        SheetMax(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case SheetAverage(sheet, range) =>
-        SheetAverage(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case SheetCount(sheet, range) =>
-        SheetCount(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-
-      // Date/Time functions - Today/Now have no refs to shift
-      case t: Today => t.asInstanceOf[TExpr[A]]
-      case n: Now => n.asInstanceOf[TExpr[A]]
       // Date-to-serial converters - shift inner expression
       case DateToSerial(dateExpr) =>
         DateToSerial(shiftInternal(dateExpr, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case DateTimeToSerial(dtExpr) =>
         DateTimeToSerial(shiftInternal(dtExpr, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      // Math constants - no refs to shift
-      case p: Pi => p.asInstanceOf[TExpr[A]]
-      case Date(year, month, day) =>
-        Date(
-          shiftInternal(year, colDelta, rowDelta),
-          shiftInternal(month, colDelta, rowDelta),
-          shiftInternal(day, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case Year(date) =>
-        Year(shiftInternal(date, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Month(date) =>
-        Month(shiftInternal(date, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Day(date) =>
-        Day(shiftInternal(date, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-
-      // Financial functions
-      case Npv(rate, values) =>
-        Npv(shiftInternal(rate, colDelta, rowDelta), shiftLocation(values, colDelta, rowDelta))
-          .asInstanceOf[TExpr[A]]
-      case Irr(values, guess) =>
-        Irr(
-          shiftLocation(values, colDelta, rowDelta),
-          guess.map(shiftInternal(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-      case Xnpv(rate, values, dates) =>
-        Xnpv(
-          shiftInternal(rate, colDelta, rowDelta),
-          shiftLocation(values, colDelta, rowDelta),
-          shiftLocation(dates, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case Xirr(values, dates, guess) =>
-        Xirr(
-          shiftLocation(values, colDelta, rowDelta),
-          shiftLocation(dates, colDelta, rowDelta),
-          guess.map(shiftInternal(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-
-      // TVM Functions
-      case Pmt(rate, nper, pv, fv, pmtType) =>
-        Pmt(
-          shiftInternal(rate, colDelta, rowDelta),
-          shiftInternal(nper, colDelta, rowDelta),
-          shiftInternal(pv, colDelta, rowDelta),
-          fv.map(shiftInternal(_, colDelta, rowDelta)),
-          pmtType.map(shiftInternal(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-      case Fv(rate, nper, pmt, pv, pmtType) =>
-        Fv(
-          shiftInternal(rate, colDelta, rowDelta),
-          shiftInternal(nper, colDelta, rowDelta),
-          shiftInternal(pmt, colDelta, rowDelta),
-          pv.map(shiftInternal(_, colDelta, rowDelta)),
-          pmtType.map(shiftInternal(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-      case Pv(rate, nper, pmt, fv, pmtType) =>
-        Pv(
-          shiftInternal(rate, colDelta, rowDelta),
-          shiftInternal(nper, colDelta, rowDelta),
-          shiftInternal(pmt, colDelta, rowDelta),
-          fv.map(shiftInternal(_, colDelta, rowDelta)),
-          pmtType.map(shiftInternal(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-      case Nper(rate, pmt, pv, fv, pmtType) =>
-        Nper(
-          shiftInternal(rate, colDelta, rowDelta),
-          shiftInternal(pmt, colDelta, rowDelta),
-          shiftInternal(pv, colDelta, rowDelta),
-          fv.map(shiftInternal(_, colDelta, rowDelta)),
-          pmtType.map(shiftInternal(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-      case Rate(nper, pmt, pv, fv, pmtType, guess) =>
-        Rate(
-          shiftInternal(nper, colDelta, rowDelta),
-          shiftInternal(pmt, colDelta, rowDelta),
-          shiftInternal(pv, colDelta, rowDelta),
-          fv.map(shiftInternal(_, colDelta, rowDelta)),
-          pmtType.map(shiftInternal(_, colDelta, rowDelta)),
-          guess.map(shiftInternal(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-
-      case VLookup(lookup, table, colIndex, rangeLookup) =>
-        VLookup(
-          shiftInternal(lookup, colDelta, rowDelta),
-          shiftLocation(table, colDelta, rowDelta),
-          shiftInternal(colIndex, colDelta, rowDelta),
-          shiftInternal(rangeLookup, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-
-      // Conditional aggregation (now using RangeLocation)
-      case SumIf(range, criteria, sumRange) =>
-        SumIf(
-          shiftLocation(range, colDelta, rowDelta),
-          shiftWildcard(criteria, colDelta, rowDelta),
-          sumRange.map(shiftLocation(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-      case CountIf(range, criteria) =>
-        CountIf(
-          shiftLocation(range, colDelta, rowDelta),
-          shiftWildcard(criteria, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-      case SumIfs(sumRange, conditions) =>
-        SumIfs(
-          shiftLocation(sumRange, colDelta, rowDelta),
-          conditions.map { case (r, c) =>
-            (shiftLocation(r, colDelta, rowDelta), shiftWildcard(c, colDelta, rowDelta))
-          }
-        ).asInstanceOf[TExpr[A]]
-      case CountIfs(conditions) =>
-        CountIfs(
-          conditions.map { case (r, c) =>
-            (shiftLocation(r, colDelta, rowDelta), shiftWildcard(c, colDelta, rowDelta))
-          }
-        ).asInstanceOf[TExpr[A]]
-      case AverageIf(range, criteria, avgRange) =>
-        AverageIf(
-          shiftLocation(range, colDelta, rowDelta),
-          shiftWildcard(criteria, colDelta, rowDelta),
-          avgRange.map(shiftLocation(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-      case AverageIfs(avgRange, conditions) =>
-        AverageIfs(
-          shiftLocation(avgRange, colDelta, rowDelta),
-          conditions.map { case (r, c) =>
-            (shiftLocation(r, colDelta, rowDelta), shiftWildcard(c, colDelta, rowDelta))
-          }
-        ).asInstanceOf[TExpr[A]]
-
-      // Array functions (now using RangeLocation)
-      case SumProduct(arrays) =>
-        SumProduct(arrays.map(shiftLocation(_, colDelta, rowDelta))).asInstanceOf[TExpr[A]]
-      case XLookup(lookupValue, lookupArray, returnArray, ifNotFound, matchMode, searchMode) =>
-        XLookup(
-          shiftWildcard(lookupValue, colDelta, rowDelta),
-          shiftLocation(lookupArray, colDelta, rowDelta),
-          shiftLocation(returnArray, colDelta, rowDelta),
-          ifNotFound.map(shiftWildcard(_, colDelta, rowDelta)),
-          shiftInternal(matchMode, colDelta, rowDelta),
-          shiftInternal(searchMode, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-
-      // Reference functions
-      case Row_(ref) =>
-        Row_(shiftWildcard(ref, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Column_(ref) =>
-        Column_(shiftWildcard(ref, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Rows(range) =>
-        Rows(shiftWildcard(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Columns(range) =>
-        Columns(shiftWildcard(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Address(row, col, absNum, a1Style, sheetName) =>
-        Address(
-          shiftInternal(row, colDelta, rowDelta),
-          shiftInternal(col, colDelta, rowDelta),
-          shiftInternal(absNum, colDelta, rowDelta),
-          shiftInternal(a1Style, colDelta, rowDelta),
-          sheetName.map(shiftInternal(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-
-      // Lookup functions (now using RangeLocation)
-      case Index(array, rowNum, colNum) =>
-        Index(
-          shiftLocation(array, colDelta, rowDelta),
-          shiftInternal(rowNum, colDelta, rowDelta),
-          colNum.map(shiftInternal(_, colDelta, rowDelta))
-        ).asInstanceOf[TExpr[A]]
-      case Match(lookupValue, lookupArray, matchType) =>
-        Match(
-          shiftWildcard(lookupValue, colDelta, rowDelta),
-          shiftLocation(lookupArray, colDelta, rowDelta),
-          shiftInternal(matchType, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
 
   /**
    * Shift a cell reference based on its anchor mode.
