@@ -172,38 +172,6 @@ object FormulaPrinter:
       case TExpr.Day(date) =>
         s"DAY(${printExpr(date, 0)})"
 
-      // Date calculation functions
-      case TExpr.Eomonth(startDate, months) =>
-        s"EOMONTH(${printExpr(startDate, 0)}, ${printExpr(months, 0)})"
-
-      case TExpr.Edate(startDate, months) =>
-        s"EDATE(${printExpr(startDate, 0)}, ${printExpr(months, 0)})"
-
-      case TExpr.Datedif(startDate, endDate, unit) =>
-        s"DATEDIF(${printExpr(startDate, 0)}, ${printExpr(endDate, 0)}, ${printExpr(unit, 0)})"
-
-      case TExpr.Networkdays(startDate, endDate, holidaysOpt) =>
-        holidaysOpt match
-          case Some(holidays) =>
-            s"NETWORKDAYS(${printExpr(startDate, 0)}, ${printExpr(endDate, 0)}, ${formatRange(holidays)})"
-          case None =>
-            s"NETWORKDAYS(${printExpr(startDate, 0)}, ${printExpr(endDate, 0)})"
-
-      case TExpr.Workday(startDate, days, holidaysOpt) =>
-        holidaysOpt match
-          case Some(holidays) =>
-            s"WORKDAY(${printExpr(startDate, 0)}, ${printExpr(days, 0)}, ${formatRange(holidays)})"
-          case None =>
-            s"WORKDAY(${printExpr(startDate, 0)}, ${printExpr(days, 0)})"
-
-      case TExpr.Yearfrac(startDate, endDate, basis) =>
-        // Only print basis if non-default (0)
-        basis match
-          case TExpr.Lit(0) =>
-            s"YEARFRAC(${printExpr(startDate, 0)}, ${printExpr(endDate, 0)})"
-          case _ =>
-            s"YEARFRAC(${printExpr(startDate, 0)}, ${printExpr(endDate, 0)}, ${printExpr(basis, 0)})"
-
       // Arithmetic range functions (now support cross-sheet via RangeLocation)
       case TExpr.Sum(range) =>
         s"SUM(${formatLocation(range)})"
@@ -626,26 +594,6 @@ object FormulaPrinter:
         s"Month(${printWithTypes(date)})"
       case TExpr.Day(date) =>
         s"Day(${printWithTypes(date)})"
-      case TExpr.Eomonth(startDate, months) =>
-        s"Eomonth(${printWithTypes(startDate)}, ${printWithTypes(months)})"
-      case TExpr.Edate(startDate, months) =>
-        s"Edate(${printWithTypes(startDate)}, ${printWithTypes(months)})"
-      case TExpr.Datedif(startDate, endDate, unit) =>
-        s"Datedif(${printWithTypes(startDate)}, ${printWithTypes(endDate)}, ${printWithTypes(unit)})"
-      case TExpr.Networkdays(startDate, endDate, holidaysOpt) =>
-        holidaysOpt match
-          case Some(holidays) =>
-            s"Networkdays(${printWithTypes(startDate)}, ${printWithTypes(endDate)}, ${formatRange(holidays)})"
-          case None =>
-            s"Networkdays(${printWithTypes(startDate)}, ${printWithTypes(endDate)})"
-      case TExpr.Workday(startDate, days, holidaysOpt) =>
-        holidaysOpt match
-          case Some(holidays) =>
-            s"Workday(${printWithTypes(startDate)}, ${printWithTypes(days)}, ${formatRange(holidays)})"
-          case None =>
-            s"Workday(${printWithTypes(startDate)}, ${printWithTypes(days)})"
-      case TExpr.Yearfrac(startDate, endDate, basis) =>
-        s"Yearfrac(${printWithTypes(startDate)}, ${printWithTypes(endDate)}, ${printWithTypes(basis)})"
       case TExpr.Sum(range) =>
         s"Sum(${formatLocation(range)})"
       case TExpr.Count(range) =>

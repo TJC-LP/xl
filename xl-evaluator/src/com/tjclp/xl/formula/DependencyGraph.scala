@@ -188,24 +188,6 @@ object DependencyGraph:
       case TExpr.Month(date) => extractDependencies(date)
       case TExpr.Day(date) => extractDependencies(date)
 
-      // Date calculation functions
-      case TExpr.Eomonth(startDate, months) =>
-        extractDependencies(startDate) ++ extractDependencies(months)
-      case TExpr.Edate(startDate, months) =>
-        extractDependencies(startDate) ++ extractDependencies(months)
-      case TExpr.Datedif(startDate, endDate, unit) =>
-        extractDependencies(startDate) ++ extractDependencies(endDate) ++ extractDependencies(unit)
-      case TExpr.Networkdays(startDate, endDate, holidaysOpt) =>
-        extractDependencies(startDate) ++
-          extractDependencies(endDate) ++
-          holidaysOpt.map(_.cells.toSet).getOrElse(Set.empty)
-      case TExpr.Workday(startDate, days, holidaysOpt) =>
-        extractDependencies(startDate) ++
-          extractDependencies(days) ++
-          holidaysOpt.map(_.cells.toSet).getOrElse(Set.empty)
-      case TExpr.Yearfrac(startDate, endDate, basis) =>
-        extractDependencies(startDate) ++ extractDependencies(endDate) ++ extractDependencies(basis)
-
       // Financial functions
       case TExpr.Npv(rate, values) =>
         extractDependencies(rate) ++ values.localCells
@@ -405,28 +387,6 @@ object DependencyGraph:
       case TExpr.Year(date) => extractDependenciesBounded(date, bounds)
       case TExpr.Month(date) => extractDependenciesBounded(date, bounds)
       case TExpr.Day(date) => extractDependenciesBounded(date, bounds)
-
-      // Date calculation functions
-      case TExpr.Eomonth(startDate, months) =>
-        extractDependenciesBounded(startDate, bounds) ++ extractDependenciesBounded(months, bounds)
-      case TExpr.Edate(startDate, months) =>
-        extractDependenciesBounded(startDate, bounds) ++ extractDependenciesBounded(months, bounds)
-      case TExpr.Datedif(startDate, endDate, unit) =>
-        extractDependenciesBounded(startDate, bounds) ++
-          extractDependenciesBounded(endDate, bounds) ++
-          extractDependenciesBounded(unit, bounds)
-      case TExpr.Networkdays(startDate, endDate, holidaysOpt) =>
-        extractDependenciesBounded(startDate, bounds) ++
-          extractDependenciesBounded(endDate, bounds) ++
-          holidaysOpt.map(boundRange).getOrElse(Set.empty)
-      case TExpr.Workday(startDate, days, holidaysOpt) =>
-        extractDependenciesBounded(startDate, bounds) ++
-          extractDependenciesBounded(days, bounds) ++
-          holidaysOpt.map(boundRange).getOrElse(Set.empty)
-      case TExpr.Yearfrac(startDate, endDate, basis) =>
-        extractDependenciesBounded(startDate, bounds) ++
-          extractDependenciesBounded(endDate, bounds) ++
-          extractDependenciesBounded(basis, bounds)
 
       // Financial functions
       case TExpr.Npv(rate, values) =>
@@ -1066,34 +1026,6 @@ object DependencyGraph:
       // Date-to-serial converters - extract from inner expression
       case TExpr.DateToSerial(dateExpr) => extractQualifiedDependencies(dateExpr, currentSheet)
       case TExpr.DateTimeToSerial(dtExpr) => extractQualifiedDependencies(dtExpr, currentSheet)
-
-      // Date calculation functions
-      case TExpr.Eomonth(startDate, months) =>
-        extractQualifiedDependencies(startDate, currentSheet) ++
-          extractQualifiedDependencies(months, currentSheet)
-      case TExpr.Edate(startDate, months) =>
-        extractQualifiedDependencies(startDate, currentSheet) ++
-          extractQualifiedDependencies(months, currentSheet)
-      case TExpr.Datedif(startDate, endDate, unit) =>
-        extractQualifiedDependencies(startDate, currentSheet) ++
-          extractQualifiedDependencies(endDate, currentSheet) ++
-          extractQualifiedDependencies(unit, currentSheet)
-      case TExpr.Networkdays(startDate, endDate, holidaysOpt) =>
-        extractQualifiedDependencies(startDate, currentSheet) ++
-          extractQualifiedDependencies(endDate, currentSheet) ++
-          holidaysOpt
-            .map(_.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet)
-            .getOrElse(Set.empty)
-      case TExpr.Workday(startDate, days, holidaysOpt) =>
-        extractQualifiedDependencies(startDate, currentSheet) ++
-          extractQualifiedDependencies(days, currentSheet) ++
-          holidaysOpt
-            .map(_.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet)
-            .getOrElse(Set.empty)
-      case TExpr.Yearfrac(startDate, endDate, basis) =>
-        extractQualifiedDependencies(startDate, currentSheet) ++
-          extractQualifiedDependencies(endDate, currentSheet) ++
-          extractQualifiedDependencies(basis, currentSheet)
 
       // Financial functions
       case TExpr.Npv(rate, values) =>

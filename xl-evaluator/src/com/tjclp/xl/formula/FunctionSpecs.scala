@@ -2,6 +2,8 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.cells.{CellError, CellValue}
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 
 object FunctionSpecs:
   private given numericExpr: ArgSpec[TExpr[BigDecimal]] = ArgSpec.expr[BigDecimal]
@@ -9,6 +11,7 @@ object FunctionSpecs:
   private given intExpr: ArgSpec[TExpr[Int]] = ArgSpec.expr[Int]
   private given booleanExpr: ArgSpec[TExpr[Boolean]] = ArgSpec.expr[Boolean]
   private given cellValueExpr: ArgSpec[TExpr[CellValue]] = ArgSpec.expr[CellValue]
+  private given dateExpr: ArgSpec[TExpr[LocalDate]] = ArgSpec.expr[LocalDate]
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private given anyExpr: ArgSpec[TExpr[Any]] with
@@ -45,6 +48,11 @@ object FunctionSpecs:
   type UnaryBoolean = TExpr[Boolean]
   type BooleanList = List[TExpr[Boolean]]
   type UnaryCellValue = TExpr[CellValue]
+  type DateInt = (TExpr[LocalDate], TExpr[Int])
+  type DatePairUnit = (TExpr[LocalDate], TExpr[LocalDate], TExpr[String])
+  type DatePairOptRange = (TExpr[LocalDate], TExpr[LocalDate], Option[CellRange])
+  type DateIntOptRange = (TExpr[LocalDate], TExpr[Int], Option[CellRange])
+  type DatePairOptBasis = (TExpr[LocalDate], TExpr[LocalDate], Option[TExpr[Int]])
   type IfArgs = (TExpr[Boolean], TExpr[Any], TExpr[Any])
   type IfErrorArgs = (TExpr[CellValue], TExpr[CellValue])
 
@@ -65,6 +73,13 @@ object FunctionSpecs:
       case dt: java.time.LocalDateTime => CellValue.DateTime(dt)
       case other => CellValue.Text(other.toString)
 
+  private def toInt(value: Any): Int =
+    value match
+      case i: Int => i
+      case bd: BigDecimal => bd.toInt
+      case n: Number => n.intValue()
+      case _ => 0
+
   private def roundToDigits(
     value: BigDecimal,
     numDigits: Int,
@@ -76,6 +91,42 @@ object FunctionSpecs:
       val divided = value / scale
       val rounded = divided.setScale(0, mode)
       rounded * scale
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def countWorkingDays(
+    earlier: LocalDate,
+    later: LocalDate,
+    holidays: Set[LocalDate]
+  ): Int =
+    var count = 0
+    var current = earlier
+    while !current.isAfter(later) do
+      val dayOfWeek = current.getDayOfWeek
+      if dayOfWeek != java.time.DayOfWeek.SATURDAY &&
+        dayOfWeek != java.time.DayOfWeek.SUNDAY &&
+        !holidays.contains(current)
+      then count += 1
+      current = current.plusDays(1)
+    count
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def addWorkingDays(
+    start: LocalDate,
+    daysValue: Int,
+    holidays: Set[LocalDate]
+  ): LocalDate =
+    var remaining = daysValue
+    var current = start
+    val direction = if remaining >= 0 then 1L else -1L
+
+    while remaining != 0 do
+      current = current.plusDays(direction)
+      val dayOfWeek = current.getDayOfWeek
+      if dayOfWeek != java.time.DayOfWeek.SATURDAY &&
+        dayOfWeek != java.time.DayOfWeek.SUNDAY &&
+        !holidays.contains(current)
+      then remaining -= direction.toInt
+    current
 
   val abs: FunctionSpec[BigDecimal] { type Args = UnaryNumeric } =
     FunctionSpec.simple[BigDecimal, UnaryNumeric]("ABS", Arity.one) { (expr, ctx) =>
@@ -417,6 +468,193 @@ object FunctionSpecs:
             case CellValue.Empty => Right(true)
             case _ => Right(false)
         case Right(_) => Right(false)
+    }
+
+  val eomonth: FunctionSpec[LocalDate] { type Args = DateInt } =
+    FunctionSpec.simple[LocalDate, DateInt](
+      "EOMONTH",
+      Arity.two,
+      flags = FunctionFlags(returnsDate = true)
+    ) { (args, ctx) =>
+      val (startDateExpr, monthsExpr) = args
+      for
+        date <- ctx.evalExpr(startDateExpr)
+        monthsRaw <- evalAny(ctx, monthsExpr)
+      yield
+        val monthsValue = toInt(monthsRaw)
+        val targetMonth = date.plusMonths(monthsValue.toLong)
+        targetMonth.withDayOfMonth(targetMonth.lengthOfMonth)
+    }
+
+  val edate: FunctionSpec[LocalDate] { type Args = DateInt } =
+    FunctionSpec.simple[LocalDate, DateInt](
+      "EDATE",
+      Arity.two,
+      flags = FunctionFlags(returnsDate = true)
+    ) { (args, ctx) =>
+      val (startDateExpr, monthsExpr) = args
+      for
+        date <- ctx.evalExpr(startDateExpr)
+        monthsRaw <- evalAny(ctx, monthsExpr)
+      yield date.plusMonths(toInt(monthsRaw).toLong)
+    }
+
+  val datedif: FunctionSpec[BigDecimal] { type Args = DatePairUnit } =
+    FunctionSpec.simple[BigDecimal, DatePairUnit]("DATEDIF", Arity.three) { (args, ctx) =>
+      val (startDateExpr, endDateExpr, unitExpr) = args
+      for
+        start <- ctx.evalExpr(startDateExpr)
+        end <- ctx.evalExpr(endDateExpr)
+        unitStr <- ctx.evalExpr(unitExpr)
+        result <- unitStr.toUpperCase match
+          case "Y" =>
+            Right(BigDecimal(ChronoUnit.YEARS.between(start, end)))
+          case "M" =>
+            Right(BigDecimal(ChronoUnit.MONTHS.between(start, end)))
+          case "D" =>
+            Right(BigDecimal(ChronoUnit.DAYS.between(start, end)))
+          case "MD" =>
+            val daysDiff = end.getDayOfMonth - start.getDayOfMonth
+            val adjustedDays =
+              if daysDiff >= 0 then daysDiff
+              else
+                val prevMonthLength = end.minusMonths(1).lengthOfMonth
+                val effectiveStartDay = math.min(start.getDayOfMonth, prevMonthLength)
+                prevMonthLength - effectiveStartDay + end.getDayOfMonth
+            Right(BigDecimal(adjustedDays))
+          case "YM" =>
+            val monthsDiff = end.getMonthValue - start.getMonthValue
+            val adjustedMonths = if monthsDiff < 0 then 12 + monthsDiff else monthsDiff
+            val finalMonths =
+              if end.getDayOfMonth < start.getDayOfMonth then (adjustedMonths - 1 + 12) % 12
+              else adjustedMonths
+            Right(BigDecimal(finalMonths))
+          case "YD" =>
+            val startAdjusted = start.withYear(end.getYear)
+            val days =
+              if startAdjusted.isAfter(end) then
+                ChronoUnit.DAYS.between(startAdjusted.minusYears(1), end)
+              else ChronoUnit.DAYS.between(startAdjusted, end)
+            Right(BigDecimal(days))
+          case other =>
+            Left(
+              EvalError.EvalFailed(
+                s"DATEDIF: invalid unit '$other'. Valid units: Y, M, D, MD, YM, YD",
+                Some("DATEDIF(start, end, unit)")
+              )
+            )
+      yield result
+    }
+
+  val networkdays: FunctionSpec[BigDecimal] { type Args = DatePairOptRange } =
+    FunctionSpec.simple[BigDecimal, DatePairOptRange]("NETWORKDAYS", Arity.Range(2, 3)) {
+      (args, ctx) =>
+        val (startDateExpr, endDateExpr, holidaysOpt) = args
+        for
+          start <- ctx.evalExpr(startDateExpr)
+          end <- ctx.evalExpr(endDateExpr)
+        yield
+          val holidays: Set[LocalDate] = holidaysOpt
+            .map { range =>
+              range.cells
+                .flatMap(ref => TExpr.decodeDate(ctx.sheet(ref)).toOption)
+                .toSet
+            }
+            .getOrElse(Set.empty)
+
+          val (earlier, later) = if start.isBefore(end) then (start, end) else (end, start)
+          val count = countWorkingDays(earlier, later, holidays)
+          BigDecimal(if start.isBefore(end) || start.isEqual(end) then count else -count)
+    }
+
+  val workday: FunctionSpec[LocalDate] { type Args = DateIntOptRange } =
+    FunctionSpec.simple[LocalDate, DateIntOptRange](
+      "WORKDAY",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(returnsDate = true)
+    ) { (args, ctx) =>
+      val (startDateExpr, daysExpr, holidaysOpt) = args
+      for
+        start <- ctx.evalExpr(startDateExpr)
+        daysRaw <- evalAny(ctx, daysExpr)
+      yield
+        val daysValue = toInt(daysRaw)
+        val holidays: Set[LocalDate] = holidaysOpt
+          .map { range =>
+            range.cells
+              .flatMap(ref => TExpr.decodeDate(ctx.sheet(ref)).toOption)
+              .toSet
+          }
+          .getOrElse(Set.empty)
+        addWorkingDays(start, daysValue, holidays)
+    }
+
+  val yearfrac: FunctionSpec[BigDecimal] { type Args = DatePairOptBasis } =
+    FunctionSpec.simple[BigDecimal, DatePairOptBasis](
+      "YEARFRAC",
+      Arity.Range(2, 3),
+      renderFn = Some { (args, printer) =>
+        val (startDateExpr, endDateExpr, basisOpt) = args
+        val rendered = basisOpt match
+          case None =>
+            List(printer.expr(startDateExpr), printer.expr(endDateExpr))
+          case Some(TExpr.Lit(0)) =>
+            List(printer.expr(startDateExpr), printer.expr(endDateExpr))
+          case Some(basisExpr) =>
+            List(
+              printer.expr(startDateExpr),
+              printer.expr(endDateExpr),
+              printer.expr(basisExpr)
+            )
+        s"YEARFRAC(${rendered.mkString(", ")})"
+      }
+    ) { (args, ctx) =>
+      val (startDateExpr, endDateExpr, basisOpt) = args
+      val basisValueEither = basisOpt match
+        case Some(expr) => evalAny(ctx, expr).map(toInt)
+        case None => Right(0)
+      for
+        start <- ctx.evalExpr(startDateExpr)
+        end <- ctx.evalExpr(endDateExpr)
+        basisValue <- basisValueEither
+        result <- basisValue match
+          case 0 =>
+            val d1 = math.min(30, start.getDayOfMonth)
+            val d2 = if start.getDayOfMonth == 31 then 30 else end.getDayOfMonth
+            val m1 = start.getMonthValue
+            val m2 = end.getMonthValue
+            val y1 = start.getYear
+            val y2 = end.getYear
+            val days = ((y2 - y1) * 360) + ((m2 - m1) * 30) + (d2 - d1)
+            Right(BigDecimal(days) / BigDecimal(360))
+          case 1 =>
+            val daysBetween = ChronoUnit.DAYS.between(start, end)
+            val year = start.getYear
+            val daysInYear = if java.time.Year.isLeap(year) then 366 else 365
+            Right(BigDecimal(daysBetween) / BigDecimal(daysInYear))
+          case 2 =>
+            val daysBetween = ChronoUnit.DAYS.between(start, end)
+            Right(BigDecimal(daysBetween) / BigDecimal(360))
+          case 3 =>
+            val daysBetween = ChronoUnit.DAYS.between(start, end)
+            Right(BigDecimal(daysBetween) / BigDecimal(365))
+          case 4 =>
+            val d1 = math.min(30, start.getDayOfMonth)
+            val d2 = math.min(30, end.getDayOfMonth)
+            val m1 = start.getMonthValue
+            val m2 = end.getMonthValue
+            val y1 = start.getYear
+            val y2 = end.getYear
+            val days = ((y2 - y1) * 360) + ((m2 - m1) * 30) + (d2 - d1)
+            Right(BigDecimal(days) / BigDecimal(360))
+          case other =>
+            Left(
+              EvalError.EvalFailed(
+                s"YEARFRAC: invalid basis $other. Valid values: 0-4",
+                Some("YEARFRAC(start, end, [basis])")
+              )
+            )
+      yield result
     }
 
   val concatenate: FunctionSpec[String] { type Args = TextList } =

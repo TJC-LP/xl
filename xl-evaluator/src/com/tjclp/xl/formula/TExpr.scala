@@ -336,118 +336,6 @@ enum TExpr[A] derives CanEqual:
    */
   case Day(date: TExpr[java.time.LocalDate]) extends TExpr[BigDecimal]
 
-  /**
-   * End of month: EOMONTH(start_date, months)
-   *
-   * Returns the last day of the month N months from start_date.
-   *
-   * @param startDate
-   *   The starting date
-   * @param months
-   *   Number of months to add (can be negative)
-   *
-   * Example: EOMONTH(DATE(2025, 1, 15), 1) = DATE(2025, 2, 28)
-   */
-  case Eomonth(startDate: TExpr[java.time.LocalDate], months: TExpr[Int])
-      extends TExpr[java.time.LocalDate]
-
-  /**
-   * Add months to date: EDATE(start_date, months)
-   *
-   * Returns the same day N months later (clamped to end of month if needed).
-   *
-   * @param startDate
-   *   The starting date
-   * @param months
-   *   Number of months to add (can be negative)
-   *
-   * Example: EDATE(DATE(2025, 1, 31), 1) = DATE(2025, 2, 28)
-   */
-  case Edate(startDate: TExpr[java.time.LocalDate], months: TExpr[Int])
-      extends TExpr[java.time.LocalDate]
-
-  /**
-   * Difference between dates: DATEDIF(start, end, unit)
-   *
-   * Returns the difference between two dates in the specified unit.
-   *
-   * @param startDate
-   *   The starting date
-   * @param endDate
-   *   The ending date (must be >= startDate)
-   * @param unit
-   *   Unit of measurement: "Y" (years), "M" (months), "D" (days), "MD" (days ignoring
-   *   months/years), "YM" (months ignoring years), "YD" (days ignoring years)
-   *
-   * Example: DATEDIF(DATE(2020, 1, 1), DATE(2025, 6, 15), "Y") = 5
-   */
-  case Datedif(
-    startDate: TExpr[java.time.LocalDate],
-    endDate: TExpr[java.time.LocalDate],
-    unit: TExpr[String]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Count working days: NETWORKDAYS(start, end, [holidays])
-   *
-   * Returns the number of working days (Mon-Fri) between two dates, excluding holidays.
-   *
-   * @param startDate
-   *   The starting date (inclusive)
-   * @param endDate
-   *   The ending date (inclusive)
-   * @param holidays
-   *   Optional range of dates to exclude
-   *
-   * Example: NETWORKDAYS(DATE(2025, 1, 1), DATE(2025, 1, 10)) = 8
-   */
-  case Networkdays(
-    startDate: TExpr[java.time.LocalDate],
-    endDate: TExpr[java.time.LocalDate],
-    holidays: Option[CellRange]
-  ) extends TExpr[BigDecimal]
-
-  /**
-   * Add working days: WORKDAY(start, days, [holidays])
-   *
-   * Returns the date after adding N working days (Mon-Fri), skipping holidays.
-   *
-   * @param startDate
-   *   The starting date
-   * @param days
-   *   Number of working days to add (can be negative)
-   * @param holidays
-   *   Optional range of dates to exclude
-   *
-   * Example: WORKDAY(DATE(2025, 1, 1), 5) = DATE(2025, 1, 8)
-   */
-  case Workday(
-    startDate: TExpr[java.time.LocalDate],
-    days: TExpr[Int],
-    holidays: Option[CellRange]
-  ) extends TExpr[java.time.LocalDate]
-
-  /**
-   * Year fraction: YEARFRAC(start, end, [basis])
-   *
-   * Returns the fraction of a year between two dates based on the day count basis.
-   *
-   * @param startDate
-   *   The starting date
-   * @param endDate
-   *   The ending date
-   * @param basis
-   *   Day count basis: 0=US 30/360 (default), 1=Actual/actual, 2=Actual/360, 3=Actual/365, 4=EU
-   *   30/360
-   *
-   * Example: YEARFRAC(DATE(2025, 1, 1), DATE(2025, 7, 1), 1) ≈ 0.4959
-   */
-  case Yearfrac(
-    startDate: TExpr[java.time.LocalDate],
-    endDate: TExpr[java.time.LocalDate],
-    basis: TExpr[Int]
-  ) extends TExpr[BigDecimal]
-
   // Arithmetic range functions (SUM, COUNT, MIN, MAX, AVERAGE)
 
   /**
@@ -1831,7 +1719,7 @@ object TExpr:
     startDate: TExpr[java.time.LocalDate],
     months: TExpr[Int]
   ): TExpr[java.time.LocalDate] =
-    Eomonth(startDate, months)
+    Call(FunctionSpecs.eomonth, (startDate, months))
 
   /**
    * EDATE add months to date.
@@ -1844,7 +1732,7 @@ object TExpr:
    * Example: TExpr.edate(dateExpr, TExpr.Lit(3))
    */
   def edate(startDate: TExpr[java.time.LocalDate], months: TExpr[Int]): TExpr[java.time.LocalDate] =
-    Edate(startDate, months)
+    Call(FunctionSpecs.edate, (startDate, months))
 
   /**
    * DATEDIF difference between dates.
@@ -1863,7 +1751,7 @@ object TExpr:
     endDate: TExpr[java.time.LocalDate],
     unit: TExpr[String]
   ): TExpr[BigDecimal] =
-    Datedif(startDate, endDate, unit)
+    Call(FunctionSpecs.datedif, (startDate, endDate, unit))
 
   /**
    * NETWORKDAYS count working days between dates.
@@ -1882,7 +1770,7 @@ object TExpr:
     endDate: TExpr[java.time.LocalDate],
     holidays: Option[CellRange] = None
   ): TExpr[BigDecimal] =
-    Networkdays(startDate, endDate, holidays)
+    Call(FunctionSpecs.networkdays, (startDate, endDate, holidays))
 
   /**
    * WORKDAY add working days to date.
@@ -1901,7 +1789,7 @@ object TExpr:
     days: TExpr[Int],
     holidays: Option[CellRange] = None
   ): TExpr[java.time.LocalDate] =
-    Workday(startDate, days, holidays)
+    Call(FunctionSpecs.workday, (startDate, days, holidays))
 
   /**
    * YEARFRAC year fraction between dates.
@@ -1920,7 +1808,7 @@ object TExpr:
     endDate: TExpr[java.time.LocalDate],
     basis: TExpr[Int] = Lit(0)
   ): TExpr[BigDecimal] =
-    Yearfrac(startDate, endDate, basis)
+    Call(FunctionSpecs.yearfrac, (startDate, endDate, Some(basis)))
 
   // Decoder functions for FoldRange
 
@@ -2232,10 +2120,11 @@ object TExpr:
     // Date functions return LocalDate/LocalDateTime - convert to Excel serial number
     case today: Today => DateToSerial(today)
     case date: Date => DateToSerial(date)
-    case edate: Edate => DateToSerial(edate)
-    case eomonth: Eomonth => DateToSerial(eomonth)
-    case workday: Workday => DateToSerial(workday)
     case now: Now => DateTimeToSerial(now)
+    case call: TExpr.Call[?] if call.spec.flags.returnsDate =>
+      DateToSerial(call.asInstanceOf[TExpr[java.time.LocalDate]])
+    case call: TExpr.Call[?] if call.spec.flags.returnsTime =>
+      DateTimeToSerial(call.asInstanceOf[TExpr[java.time.LocalDateTime]])
     case other =>
       other.asInstanceOf[TExpr[BigDecimal]] // Safe: non-PolyRef already has correct type
 
@@ -2292,7 +2181,7 @@ object TExpr:
         .collect { case ArgValue.Expr(e) => containsDateFunction(e) }
         .exists(identity)
     // Date-returning functions
-    case _: Today | _: Now | _: Date | _: Eomonth | _: Edate | _: Workday => true
+    case _: Today | _: Now | _: Date => true
     // Date-to-serial wrappers (for arithmetic)
     case DateToSerial(_) | DateTimeToSerial(_) => true
     // Arithmetic - recursively check operands
