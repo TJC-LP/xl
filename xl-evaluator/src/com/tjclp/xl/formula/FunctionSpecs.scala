@@ -13,6 +13,7 @@ object FunctionSpecs:
   private given cellValueExpr: ArgSpec[TExpr[CellValue]] = ArgSpec.expr[CellValue]
   private given dateExpr: ArgSpec[TExpr[LocalDate]] = ArgSpec.expr[LocalDate]
   private given rangeLocation: ArgSpec[TExpr.RangeLocation] = ArgSpec.rangeLocation
+  private given cellRange: ArgSpec[CellRange] = ArgSpec.cellRange
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private given anyExpr: ArgSpec[TExpr[Any]] with
@@ -50,6 +51,15 @@ object FunctionSpecs:
   type BooleanList = List[TExpr[Boolean]]
   type UnaryCellValue = TExpr[CellValue]
   type UnaryRange = TExpr.RangeLocation
+  type CriteriaExpr = TExpr[Any]
+  type RangeCriteria = (CellRange, CriteriaExpr)
+  type RangeCriteriaList = List[RangeCriteria]
+  type SumIfArgs = (CellRange, CriteriaExpr, Option[CellRange])
+  type CountIfArgs = (CellRange, CriteriaExpr)
+  type SumIfsArgs = (CellRange, RangeCriteriaList)
+  type CountIfsArgs = RangeCriteriaList
+  type AverageIfArgs = (CellRange, CriteriaExpr, Option[CellRange])
+  type AverageIfsArgs = (CellRange, RangeCriteriaList)
   type DateInt = (TExpr[LocalDate], TExpr[Int])
   type DatePairUnit = (TExpr[LocalDate], TExpr[LocalDate], TExpr[String])
   type DatePairOptRange = (TExpr[LocalDate], TExpr[LocalDate], Option[CellRange])
@@ -358,6 +368,14 @@ object FunctionSpecs:
       ctx.evalExpr(TExpr.Aggregate(name, location))
     }
 
+  private def toLocation(range: CellRange): TExpr.RangeLocation =
+    TExpr.RangeLocation.Local(range)
+
+  private def toConditions(
+    pairs: RangeCriteriaList
+  ): List[(TExpr.RangeLocation, TExpr[?])] =
+    pairs.map { case (range, criteria) => (toLocation(range), criteria) }
+
   val sum: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
     aggregateSpec("SUM")
 
@@ -393,6 +411,42 @@ object FunctionSpecs:
 
   val variancep: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
     aggregateSpec("VARP")
+
+  val sumif: FunctionSpec[BigDecimal] { type Args = SumIfArgs } =
+    FunctionSpec.simple[BigDecimal, SumIfArgs]("SUMIF", Arity.Range(2, 3)) { (args, ctx) =>
+      val (range, criteria, sumRangeOpt) = args
+      ctx.evalExpr(TExpr.SumIf(toLocation(range), criteria, sumRangeOpt.map(toLocation)))
+    }
+
+  val countif: FunctionSpec[BigDecimal] { type Args = CountIfArgs } =
+    FunctionSpec.simple[BigDecimal, CountIfArgs]("COUNTIF", Arity.two) { (args, ctx) =>
+      val (range, criteria) = args
+      ctx.evalExpr(TExpr.CountIf(toLocation(range), criteria))
+    }
+
+  val sumifs: FunctionSpec[BigDecimal] { type Args = SumIfsArgs } =
+    FunctionSpec.simple[BigDecimal, SumIfsArgs]("SUMIFS", Arity.AtLeast(3)) { (args, ctx) =>
+      val (sumRange, conditions) = args
+      ctx.evalExpr(TExpr.SumIfs(toLocation(sumRange), toConditions(conditions)))
+    }
+
+  val countifs: FunctionSpec[BigDecimal] { type Args = CountIfsArgs } =
+    FunctionSpec.simple[BigDecimal, CountIfsArgs]("COUNTIFS", Arity.AtLeast(2)) {
+      (conditions, ctx) =>
+        ctx.evalExpr(TExpr.CountIfs(toConditions(conditions)))
+    }
+
+  val averageif: FunctionSpec[BigDecimal] { type Args = AverageIfArgs } =
+    FunctionSpec.simple[BigDecimal, AverageIfArgs]("AVERAGEIF", Arity.Range(2, 3)) { (args, ctx) =>
+      val (range, criteria, avgRangeOpt) = args
+      ctx.evalExpr(TExpr.AverageIf(toLocation(range), criteria, avgRangeOpt.map(toLocation)))
+    }
+
+  val averageifs: FunctionSpec[BigDecimal] { type Args = AverageIfsArgs } =
+    FunctionSpec.simple[BigDecimal, AverageIfsArgs]("AVERAGEIFS", Arity.AtLeast(3)) { (args, ctx) =>
+      val (avgRange, conditions) = args
+      ctx.evalExpr(TExpr.AverageIfs(toLocation(avgRange), toConditions(conditions)))
+    }
 
   val and: FunctionSpec[Boolean] { type Args = BooleanList } =
     FunctionSpec.simple[Boolean, BooleanList]("AND", Arity.atLeastOne) { (args, ctx) =>
