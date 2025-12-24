@@ -11,13 +11,26 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       ctx.evalExpr(TExpr.Aggregate(name, location))
     }
 
-  private def toLocation(range: CellRange): TExpr.RangeLocation =
-    TExpr.RangeLocation.Local(range)
+  private def evalCriteriaValues(
+    ctx: EvalContext,
+    conditions: RangeCriteriaList
+  ): Either[EvalError, List[Any]] =
+    conditions
+      .map { case (_, criteriaExpr) => evalAny(ctx, criteriaExpr) }
+      .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
+        acc.flatMap(list => either.map(v => v :: list))
+      }
+      .map(_.reverse)
 
-  private def toConditions(
-    pairs: RangeCriteriaList
-  ): List[(TExpr.RangeLocation, TExpr[?])] =
-    pairs.map { case (range, criteria) => (toLocation(range), criteria) }
+  private def parseConditions(
+    conditions: RangeCriteriaList,
+    criteriaValues: List[Any]
+  ): List[(CellRange, CriteriaMatcher.Criterion)] =
+    conditions
+      .zip(criteriaValues)
+      .map { case ((range, _), criteriaValue) =>
+        (range, CriteriaMatcher.parse(criteriaValue))
+      }
 
   val sum: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
     aggregateSpec("SUM")
@@ -100,21 +113,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   val sumifs: FunctionSpec[BigDecimal] { type Args = SumIfsArgs } =
     FunctionSpec.simple[BigDecimal, SumIfsArgs]("SUMIFS", Arity.AtLeast(3)) { (args, ctx) =>
       val (sumRange, conditions) = args
-      val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
-        evalAny(ctx, criteriaExpr)
-      }
-
-      criteriaEithers
-        .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
-          acc.flatMap(list => either.map(v => v :: list))
-        }
-        .map(_.reverse)
+      evalCriteriaValues(ctx, conditions)
         .flatMap { criteriaValues =>
-          val parsedConditions = conditions
-            .zip(criteriaValues)
-            .map { case ((range, _), criteriaValue) =>
-              (range, CriteriaMatcher.parse(criteriaValue))
-            }
+          val parsedConditions = parseConditions(conditions, criteriaValues)
 
           val sumRefsList = sumRange.cells.toList
           val dimensionError = parsedConditions.collectFirst {
@@ -146,21 +147,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   val countifs: FunctionSpec[BigDecimal] { type Args = CountIfsArgs } =
     FunctionSpec.simple[BigDecimal, CountIfsArgs]("COUNTIFS", Arity.AtLeast(2)) {
       (conditions, ctx) =>
-        val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
-          evalAny(ctx, criteriaExpr)
-        }
-
-        criteriaEithers
-          .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
-            acc.flatMap(list => either.map(v => v :: list))
-          }
-          .map(_.reverse)
+        evalCriteriaValues(ctx, conditions)
           .flatMap { criteriaValues =>
-            val parsedConditions = conditions
-              .zip(criteriaValues)
-              .map { case ((range, _), criteriaValue) =>
-                (range, CriteriaMatcher.parse(criteriaValue))
-              }
+            val parsedConditions = parseConditions(conditions, criteriaValues)
 
             parsedConditions match
               case (firstRange, _) :: _ =>
@@ -226,21 +215,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   val averageifs: FunctionSpec[BigDecimal] { type Args = AverageIfsArgs } =
     FunctionSpec.simple[BigDecimal, AverageIfsArgs]("AVERAGEIFS", Arity.AtLeast(3)) { (args, ctx) =>
       val (avgRange, conditions) = args
-      val criteriaEithers = conditions.map { case (_, criteriaExpr) =>
-        evalAny(ctx, criteriaExpr)
-      }
-
-      criteriaEithers
-        .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
-          acc.flatMap(list => either.map(v => v :: list))
-        }
-        .map(_.reverse)
+      evalCriteriaValues(ctx, conditions)
         .flatMap { criteriaValues =>
-          val parsedConditions = conditions
-            .zip(criteriaValues)
-            .map { case ((range, _), criteriaValue) =>
-              (range, CriteriaMatcher.parse(criteriaValue))
-            }
+          val parsedConditions = parseConditions(conditions, criteriaValues)
 
           val avgRefsList = avgRange.cells.toList
           val dimensionError = parsedConditions.collectFirst {
