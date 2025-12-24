@@ -862,55 +862,6 @@ enum TExpr[A] derives CanEqual:
     conditions: List[(TExpr.RangeLocation, TExpr[?])]
   ) extends TExpr[BigDecimal]
 
-  // Error handling functions
-
-  /**
-   * Error check: ISERROR(value)
-   *
-   * Returns TRUE if value results in any error, FALSE otherwise.
-   *
-   * Example: ISERROR(A1/B1) returns TRUE if B1 is 0
-   */
-  case Iserror(value: TExpr[CellValue]) extends TExpr[Boolean]
-
-  /**
-   * Error check (excluding #N/A): ISERR(value)
-   *
-   * Returns TRUE if value results in any error EXCEPT #N/A, FALSE otherwise. Use ISERROR to check
-   * for all errors including #N/A.
-   *
-   * Example: ISERR(1/0) returns TRUE, ISERR(VLOOKUP("missing", A:A, 1, FALSE)) returns FALSE
-   */
-  case Iserr(value: TExpr[CellValue]) extends TExpr[Boolean]
-
-  /**
-   * Type check for numbers: ISNUMBER(value)
-   *
-   * Returns TRUE if value is numeric, FALSE otherwise.
-   *
-   * Example: ISNUMBER(42) returns TRUE, ISNUMBER("hello") returns FALSE
-   */
-  case Isnumber(value: TExpr[CellValue]) extends TExpr[Boolean]
-
-  /**
-   * Type check for text: ISTEXT(value)
-   *
-   * Returns TRUE if value is a text string, FALSE otherwise.
-   *
-   * Example: ISTEXT("hello") returns TRUE, ISTEXT(42) returns FALSE
-   */
-  case Istext(value: TExpr[CellValue]) extends TExpr[Boolean]
-
-  /**
-   * Type check for blank cells: ISBLANK(ref)
-   *
-   * Returns TRUE if the referenced cell is empty, FALSE otherwise. Note: cells containing empty
-   * strings ("") are NOT considered blank.
-   *
-   * Example: ISBLANK(A1) returns TRUE if A1 is empty
-   */
-  case Isblank(value: TExpr[CellValue]) extends TExpr[Boolean]
-
   // Reference information functions
 
   /**
@@ -1468,7 +1419,7 @@ object TExpr:
    * Example: TExpr.iserror(TExpr.Div(...))
    */
   def iserror(value: TExpr[CellValue]): TExpr[Boolean] =
-    Iserror(value)
+    Call(FunctionSpecs.iserror, value)
 
   /**
    * ISERR: check if expression results in error (excluding #N/A).
@@ -1476,7 +1427,7 @@ object TExpr:
    * Example: TExpr.iserr(TExpr.Div(...))
    */
   def iserr(value: TExpr[CellValue]): TExpr[Boolean] =
-    Iserr(value)
+    Call(FunctionSpecs.iserr, value)
 
   /**
    * ISNUMBER: check if value is numeric.
@@ -1484,7 +1435,7 @@ object TExpr:
    * Example: TExpr.isnumber(TExpr.ref(ARef("A1")))
    */
   def isnumber(value: TExpr[CellValue]): TExpr[Boolean] =
-    Isnumber(value)
+    Call(FunctionSpecs.isnumber, value)
 
   /**
    * ISTEXT: check if value is text.
@@ -1492,7 +1443,7 @@ object TExpr:
    * Example: TExpr.istext(TExpr.ref(ARef("A1")))
    */
   def istext(value: TExpr[CellValue]): TExpr[Boolean] =
-    Istext(value)
+    Call(FunctionSpecs.istext, value)
 
   /**
    * ISBLANK: check if cell is empty.
@@ -1500,7 +1451,7 @@ object TExpr:
    * Example: TExpr.isblank(TExpr.ref(ARef("A1")))
    */
   def isblank(value: TExpr[CellValue]): TExpr[Boolean] =
-    Isblank(value)
+    Call(FunctionSpecs.isblank, value)
 
   // Rounding and math function smart constructors
 
@@ -2358,11 +2309,6 @@ object TExpr:
     case Gt(l, r) => containsDateFunction(l) || containsDateFunction(r)
     case Gte(l, r) => containsDateFunction(l) || containsDateFunction(r)
     // Error handling
-    case Iserror(v) => containsDateFunction(v)
-    case Iserr(v) => containsDateFunction(v)
-    case Isnumber(v) => containsDateFunction(v)
-    case Istext(v) => containsDateFunction(v)
-    case Isblank(v) => containsDateFunction(v)
     // Type conversion
     case ToInt(e) => containsDateFunction(e)
     // Default: no date function
@@ -2398,11 +2344,6 @@ object TExpr:
     case Gt(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
     case Gte(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
     // Error handling
-    case Iserror(v) => containsTimeFunction(v)
-    case Iserr(v) => containsTimeFunction(v)
-    case Isnumber(v) => containsTimeFunction(v)
-    case Istext(v) => containsTimeFunction(v)
-    case Isblank(v) => containsTimeFunction(v)
     // Type conversion
     case ToInt(e) => containsTimeFunction(e)
     // Default: no time function

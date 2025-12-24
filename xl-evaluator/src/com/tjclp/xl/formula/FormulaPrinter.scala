@@ -305,23 +305,6 @@ object FormulaPrinter:
           s"${formatLocation(table)}, " +
           s"${printExpr(colIndex, 0)}, ${printExpr(rangeLookup, 0)})"
 
-      // Error handling functions
-      case TExpr.Iserror(value) =>
-        s"ISERROR(${printExpr(value, 0)})"
-
-      case TExpr.Iserr(value) =>
-        s"ISERR(${printExpr(value, 0)})"
-
-      // Type-check functions
-      case TExpr.Isnumber(value) =>
-        s"ISNUMBER(${printExpr(value, 0)})"
-
-      case TExpr.Istext(value) =>
-        s"ISTEXT(${printExpr(value, 0)})"
-
-      case TExpr.Isblank(value) =>
-        s"ISBLANK(${printExpr(value, 0)})"
-
       // Reference functions
       case TExpr.Row_(ref) =>
         s"ROW(${printExpr(ref, 0)})"
@@ -729,16 +712,6 @@ object FormulaPrinter:
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLookup(${printWithTypes(lookup)}, ${formatLocation(table)}, " +
           s"${printWithTypes(colIndex)}, ${printWithTypes(rangeLookup)})"
-      case TExpr.Iserror(value) =>
-        s"Iserror(${printWithTypes(value)})"
-      case TExpr.Iserr(value) =>
-        s"Iserr(${printWithTypes(value)})"
-      case TExpr.Isnumber(value) =>
-        s"Isnumber(${printWithTypes(value)})"
-      case TExpr.Istext(value) =>
-        s"Istext(${printWithTypes(value)})"
-      case TExpr.Isblank(value) =>
-        s"Isblank(${printWithTypes(value)})"
       case TExpr.Row_(ref) =>
         s"Row_(${printWithTypes(ref)})"
       case TExpr.Column_(ref) =>

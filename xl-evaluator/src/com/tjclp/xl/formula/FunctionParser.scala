@@ -192,13 +192,6 @@ object FunctionParser:
       averageIfsFunctionParser,
       sumProductFunctionParser,
       xlookupFunctionParser,
-      // Error handling functions
-      iserrorFunctionParser,
-      iserrFunctionParser,
-      // Type-check functions
-      isnumberFunctionParser,
-      istextFunctionParser,
-      isblankFunctionParser,
       // Reference functions
       rowFunctionParser,
       columnFunctionParser,
@@ -1155,105 +1148,6 @@ object FunctionParser:
               "XLOOKUP",
               pos,
               "3 to 6 arguments (lookup_value, lookup_array, return_array, [if_not_found], [match_mode], [search_mode])",
-              s"${args.length} arguments"
-            )
-          )
-
-  // === Error Handling Functions ===
-
-  /** ISERROR function: ISERROR(value) */
-  given iserrorFunctionParser: FunctionParser[Unit] with
-    def name: String = "ISERROR"
-    def arity: Arity = Arity.one
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(valueExpr) =>
-          scala.util.Right(TExpr.iserror(TExpr.asCellValueExpr(valueExpr)))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments(
-              "ISERROR",
-              pos,
-              "1 argument",
-              s"${args.length} arguments"
-            )
-          )
-
-  /** ISERR function: ISERR(value) - TRUE if error (except #N/A) */
-  given iserrFunctionParser: FunctionParser[Unit] with
-    def name: String = "ISERR"
-    def arity: Arity = Arity.one
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(valueExpr) =>
-          scala.util.Right(TExpr.iserr(TExpr.asCellValueExpr(valueExpr)))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments(
-              "ISERR",
-              pos,
-              "1 argument",
-              s"${args.length} arguments"
-            )
-          )
-
-  // === Type-Check Functions ===
-
-  /** ISNUMBER function: ISNUMBER(value) - TRUE if numeric */
-  given isnumberFunctionParser: FunctionParser[Unit] with
-    def name: String = "ISNUMBER"
-    def arity: Arity = Arity.one
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(valueExpr) =>
-          scala.util.Right(TExpr.isnumber(TExpr.asCellValueExpr(valueExpr)))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments(
-              "ISNUMBER",
-              pos,
-              "1 argument",
-              s"${args.length} arguments"
-            )
-          )
-
-  /** ISTEXT function: ISTEXT(value) - TRUE if text string */
-  given istextFunctionParser: FunctionParser[Unit] with
-    def name: String = "ISTEXT"
-    def arity: Arity = Arity.one
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(valueExpr) =>
-          scala.util.Right(TExpr.istext(TExpr.asCellValueExpr(valueExpr)))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments(
-              "ISTEXT",
-              pos,
-              "1 argument",
-              s"${args.length} arguments"
-            )
-          )
-
-  /** ISBLANK function: ISBLANK(ref) - TRUE if cell is empty */
-  given isblankFunctionParser: FunctionParser[Unit] with
-    def name: String = "ISBLANK"
-    def arity: Arity = Arity.one
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(valueExpr) =>
-          scala.util.Right(TExpr.isblank(TExpr.asCellValueExpr(valueExpr)))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments(
-              "ISBLANK",
-              pos,
-              "1 argument",
               s"${args.length} arguments"
             )
           )

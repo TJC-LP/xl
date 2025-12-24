@@ -783,8 +783,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ISERROR(A1)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Iserror(_) => assert(true)
-      case _ => fail("Expected TExpr.Iserror")
+      case TExpr.Call(spec, _) if spec.name == "ISERROR" => assert(true)
+      case _ => fail("Expected TExpr.Call(ISERROR)")
     }
   }
 
@@ -972,6 +972,11 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(FunctionRegistry.lookup("OR").isDefined)
     assert(FunctionRegistry.lookup("NOT").isDefined)
     assert(FunctionRegistry.lookup("IFERROR").isDefined)
+    assert(FunctionRegistry.lookup("ISERROR").isDefined)
+    assert(FunctionRegistry.lookup("ISERR").isDefined)
+    assert(FunctionRegistry.lookup("ISNUMBER").isDefined)
+    assert(FunctionRegistry.lookup("ISTEXT").isDefined)
+    assert(FunctionRegistry.lookup("ISBLANK").isDefined)
   }
 
   test("FunctionParser.lookup returns None for unknown functions") {

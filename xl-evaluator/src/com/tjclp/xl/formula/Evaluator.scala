@@ -1457,68 +1457,6 @@ private class EvaluatorImpl extends Evaluator:
 
       // ===== Error Handling Functions =====
 
-      case TExpr.Iserror(valueExpr) =>
-        // ISERROR: return TRUE if value results in any error
-        evalAny(valueExpr, sheet, clock, workbook) match
-          case Left(_) => Right(true) // Evaluation error
-          case Right(cv: CellValue) =>
-            cv match
-              case CellValue.Error(_) => Right(true) // Cell error value
-              case _ => Right(false) // No error
-          case Right(_) => Right(false) // Non-CellValue result, no error
-
-      case TExpr.Iserr(valueExpr) =>
-        // ISERR: return TRUE if value results in any error EXCEPT #N/A
-        evalAny(valueExpr, sheet, clock, workbook) match
-          case Left(_) => Right(true) // Evaluation error (not #N/A)
-          case Right(cv: CellValue) =>
-            cv match
-              case CellValue.Error(err) =>
-                // ISERR returns FALSE for #N/A, TRUE for all other errors
-                Right(err != CellError.NA)
-              case _ => Right(false) // No error
-          case Right(_) => Right(false) // Non-CellValue result, no error
-
-      // ===== Type-Check Functions =====
-
-      case TExpr.Isnumber(valueExpr) =>
-        // ISNUMBER: return TRUE if value is numeric
-        evalAny(valueExpr, sheet, clock, workbook) match
-          case Left(_) => Right(false) // Evaluation error is not a number
-          case Right(cv: CellValue) =>
-            cv match
-              case CellValue.Number(_) => Right(true)
-              case CellValue.Formula(_, Some(CellValue.Number(_))) => Right(true)
-              case _ => Right(false)
-          case Right(_: BigDecimal) => Right(true)
-          case Right(_: Int) => Right(true)
-          case Right(_: Long) => Right(true)
-          case Right(_: Double) => Right(true)
-          case Right(_) => Right(false)
-
-      case TExpr.Istext(valueExpr) =>
-        // ISTEXT: return TRUE if value is a text string
-        evalAny(valueExpr, sheet, clock, workbook) match
-          case Left(_) => Right(false) // Evaluation error is not text
-          case Right(cv: CellValue) =>
-            cv match
-              case CellValue.Text(_) => Right(true)
-              case CellValue.Formula(_, Some(CellValue.Text(_))) => Right(true)
-              case _ => Right(false)
-          case Right(_: String) => Right(true)
-          case Right(_) => Right(false)
-
-      case TExpr.Isblank(valueExpr) =>
-        // ISBLANK: return TRUE if cell is empty
-        // Note: Empty string is NOT blank in Excel
-        evalAny(valueExpr, sheet, clock, workbook) match
-          case Left(_) => Right(false) // Evaluation error is not blank
-          case Right(cv: CellValue) =>
-            cv match
-              case CellValue.Empty => Right(true)
-              case _ => Right(false)
-          case Right(_) => Right(false) // Non-CellValue result is not blank
-
       // ===== TVM (Time Value of Money) Functions =====
 
       case TExpr.Pmt(rateExpr, nperExpr, pvExpr, fvExprOpt, pmtTypeExprOpt) =>

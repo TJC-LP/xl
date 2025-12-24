@@ -292,15 +292,6 @@ object DependencyGraph:
           extractDependencies(matchMode) ++
           extractDependencies(searchMode)
 
-      // Error handling functions
-      case TExpr.Iserror(value) => extractDependencies(value)
-      case TExpr.Iserr(value) => extractDependencies(value)
-
-      // Type-check functions
-      case TExpr.Isnumber(value) => extractDependencies(value)
-      case TExpr.Istext(value) => extractDependencies(value)
-      case TExpr.Isblank(value) => extractDependencies(value)
-
       // Reference functions
       case TExpr.Row_(ref) => extractDependencies(ref)
       case TExpr.Column_(ref) => extractDependencies(ref)
@@ -530,15 +521,6 @@ object DependencyGraph:
           ifNotFound.map(extractDependenciesBounded(_, bounds)).getOrElse(Set.empty) ++
           extractDependenciesBounded(matchMode, bounds) ++
           extractDependenciesBounded(searchMode, bounds)
-
-      // Error handling functions
-      case TExpr.Iserror(value) => extractDependenciesBounded(value, bounds)
-      case TExpr.Iserr(value) => extractDependenciesBounded(value, bounds)
-
-      // Type-check functions
-      case TExpr.Isnumber(value) => extractDependenciesBounded(value, bounds)
-      case TExpr.Istext(value) => extractDependenciesBounded(value, bounds)
-      case TExpr.Isblank(value) => extractDependenciesBounded(value, bounds)
 
       // Rounding and math functions
       // Reference functions
@@ -1229,18 +1211,6 @@ object DependencyGraph:
           extractQualifiedDependencies(matchType, currentSheet)
 
       // Error handling functions
-      case TExpr.Iserror(value) =>
-        extractQualifiedDependencies(value, currentSheet)
-      case TExpr.Iserr(value) =>
-        extractQualifiedDependencies(value, currentSheet)
-
-      // Type-check functions
-      case TExpr.Isnumber(value) =>
-        extractQualifiedDependencies(value, currentSheet)
-      case TExpr.Istext(value) =>
-        extractQualifiedDependencies(value, currentSheet)
-      case TExpr.Isblank(value) =>
-        extractQualifiedDependencies(value, currentSheet)
 
   /**
    * Detect circular references across sheets using Tarjan's SCC algorithm.

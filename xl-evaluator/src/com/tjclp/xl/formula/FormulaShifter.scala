@@ -346,18 +346,6 @@ object FormulaShifter:
           shiftInternal(searchMode, colDelta, rowDelta)
         ).asInstanceOf[TExpr[A]]
 
-      // Error handling functions
-      case Iserror(value) =>
-        Iserror(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Iserr(value) =>
-        Iserr(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Isnumber(value) =>
-        Isnumber(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Istext(value) =>
-        Istext(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Isblank(value) =>
-        Isblank(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-
       // Reference functions
       case Row_(ref) =>
         Row_(shiftWildcard(ref, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
