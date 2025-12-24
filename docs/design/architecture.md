@@ -80,14 +80,14 @@ See also:
 
 ## Formula System Architecture
 
-The formula system (xl-evaluator) provides typed parsing and future evaluation capabilities:
+The formula system (xl-evaluator) provides typed parsing and evaluation capabilities:
 
 ```mermaid
 flowchart LR
   subgraph Parse["Formula Parsing (WI-07 ✅)"]
     FS[Formula String<br/>"=SUM(A1:B10)"]
     FP[FormulaParser]
-    AST[TExpr AST<br/>FoldRange(...)]
+    AST[TExpr AST<br/>Call(FunctionSpecs.sum, RangeLocation.Local(...))]
     PR[FormulaPrinter]
   end
 
@@ -96,7 +96,7 @@ flowchart LR
     DEPS[Dependency Graph<br/>(cell references)]
   end
 
-  subgraph Eval["Evaluation (WI-08 Planned)"]
+  subgraph Eval["Evaluation (WI-08 ✅)"]
     EV[Evaluator]
     RES[Result Value]
   end
@@ -119,8 +119,14 @@ The core of the formula system is the `TExpr[A]` GADT (Generalized Algebraic Dat
 ```scala
 enum TExpr[A] derives CanEqual:
   case Lit[A](value: A)                                          // Literals
-  case Ref[A](at: ARef, decode: Cell => Either[CodecError, A])  // Cell references
-  case If[A](cond: TExpr[Boolean], ifTrue: TExpr[A], ifFalse: TExpr[A])  // Conditionals
+  case Ref[A](at: ARef, anchor: Anchor, decode: Cell => Either[CodecError, A])  // Cell references
+  case PolyRef(at: ARef, anchor: Anchor = Anchor.Relative)                     // Polymorphic refs
+  case SheetRef[A](sheet: SheetName, at: ARef, anchor: Anchor, decode: Cell => Either[CodecError, A])
+      extends TExpr[A]
+  case SheetPolyRef(sheet: SheetName, at: ARef, anchor: Anchor = Anchor.Relative)
+      extends TExpr[Nothing]
+  case RangeRef(range: CellRange)                           // Local ranges
+  case SheetRange(sheet: SheetName, range: CellRange)        // Cross-sheet ranges
 
   // Arithmetic (TExpr[BigDecimal])
   case Add(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
@@ -131,18 +137,14 @@ enum TExpr[A] derives CanEqual:
   // Comparison (TExpr[Boolean])
   case Lt, Lte, Gt, Gte, Eq, Neq  // All extend TExpr[Boolean]
 
-  // Logical (TExpr[Boolean])
-  case And(x: TExpr[Boolean], y: TExpr[Boolean]) extends TExpr[Boolean]
-  case Or(x: TExpr[Boolean], y: TExpr[Boolean]) extends TExpr[Boolean]
-  case Not(x: TExpr[Boolean]) extends TExpr[Boolean]
-
-  // Range aggregation (polymorphic in result type B)
-  case FoldRange[A, B](range: CellRange, z: B, step: (B, A) => B, ...) extends TExpr[B]
+  // Function calls + aggregation
+  case Aggregate(aggregatorId: String, location: TExpr.RangeLocation) extends TExpr[BigDecimal]
+  case Call[A](spec: FunctionSpec[A], args: spec.Args) extends TExpr[A]
 ```
 
 **Type Safety Guarantees**:
 - `TExpr[BigDecimal]` — Only numeric operations (Add, Mul, etc.)
-- `TExpr[Boolean]` — Only logical operations (And, Or, comparisons)
+- `TExpr[Boolean]` — Only logical operations (comparisons + logical functions)
 - `TExpr[String]` — Only text operations (Lit, Concat)
 - **Compile-time prevention** of type mixing (cannot Add a Boolean and a BigDecimal)
 
@@ -184,4 +186,3 @@ The evaluator will implement: `eval: TExpr[A] => Sheet => Either[EvalError, A]`
 - Division by zero handling
 
 See `docs/plan/formula-system.md` for detailed design.
-

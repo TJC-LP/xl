@@ -16,11 +16,14 @@ object FunctionRegistryMacro:
       else Ref(targetType.typeSymbol.companionModule)
     val specSym = TypeRepr.of[FunctionSpec[Any]].typeSymbol
 
-    val specFields = classSym.declaredFields.filter { field =>
-      field.tree match
-        case v: ValDef => v.tpt.tpe.dealias.typeSymbol == specSym
-        case _ => false
-    }
+    val specFields = targetType.baseClasses
+      .flatMap(_.declaredFields)
+      .distinctBy(_.name)
+      .filter { field =>
+        field.tree match
+          case v: ValDef => v.tpt.tpe.dealias.typeSymbol == specSym
+          case _ => false
+      }
 
     val entries = specFields.map { field =>
       Select.unique(moduleRef, field.name).asExprOf[FunctionSpec[?]]

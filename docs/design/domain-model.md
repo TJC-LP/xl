@@ -88,8 +88,13 @@ package com.tjclp.xl.formula
 enum TExpr[A] derives CanEqual:
   // Core constructors
   case Lit[A](value: A) extends TExpr[A]
-  case Ref[A](at: ARef, decode: Cell => Either[CodecError, A]) extends TExpr[A]
-  case If[A](cond: TExpr[Boolean], ifTrue: TExpr[A], ifFalse: TExpr[A]) extends TExpr[A]
+  case Ref[A](at: ARef, anchor: Anchor, decode: Cell => Either[CodecError, A]) extends TExpr[A]
+  case PolyRef(at: ARef, anchor: Anchor = Anchor.Relative) extends TExpr[Nothing]
+  case SheetRef[A](sheet: SheetName, at: ARef, anchor: Anchor, decode: Cell => Either[CodecError, A])
+      extends TExpr[A]
+  case SheetPolyRef(sheet: SheetName, at: ARef, anchor: Anchor = Anchor.Relative) extends TExpr[Nothing]
+  case RangeRef(range: CellRange) extends TExpr[Nothing]
+  case SheetRange(sheet: SheetName, range: CellRange) extends TExpr[Nothing]
 
   // Arithmetic (TExpr[BigDecimal])
   case Add(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
@@ -105,24 +110,16 @@ enum TExpr[A] derives CanEqual:
   case Eq[A](x: TExpr[A], y: TExpr[A]) extends TExpr[Boolean]
   case Neq[A](x: TExpr[A], y: TExpr[A]) extends TExpr[Boolean]
 
-  // Logical (TExpr[Boolean])
-  case And(x: TExpr[Boolean], y: TExpr[Boolean]) extends TExpr[Boolean]
-  case Or(x: TExpr[Boolean], y: TExpr[Boolean]) extends TExpr[Boolean]
-  case Not(x: TExpr[Boolean]) extends TExpr[Boolean]
-
-  // Range aggregation (polymorphic in result type B)
-  case FoldRange[A, B](
-    range: CellRange,
-    z: B,
-    step: (B, A) => B,
-    decode: Cell => Either[CodecError, A]
-  ) extends TExpr[B]
+  // Range aggregation + function calls
+  case Aggregate(aggregatorId: String, location: TExpr.RangeLocation) extends TExpr[BigDecimal]
+  case Call[A](spec: FunctionSpec[A], args: spec.Args) extends TExpr[A]
 
 object TExpr:
   // Smart constructors
   def sum(range: CellRange): TExpr[BigDecimal] = ...
-  def count(range: CellRange): TExpr[Int] = ...
+  def count(range: CellRange): TExpr[BigDecimal] = ...
   def average(range: CellRange): TExpr[BigDecimal] = ...
+  def cond[A](test: TExpr[Boolean], ifTrue: TExpr[A], ifFalse: TExpr[A]): TExpr[A] = ...
 
   // Extension methods for ergonomic construction
   extension (x: TExpr[BigDecimal])
@@ -141,7 +138,7 @@ object TExpr:
 - `FormulaPrinter.print(expr: TExpr[?]): String` — Print back to Excel syntax
 - Round-trip law: `parse(print(expr)) == Right(expr)` (verified by 51 property tests)
 
-**Future**: `Evaluator.eval(expr: TExpr[A], sheet: Sheet): Either[EvalError, A]` (WI-08)
+**Evaluator**: `Evaluator.eval(expr: TExpr[A], sheet: Sheet): Either[EvalError, A]` (WI-08)
 
 ## Cell, Sheet, Workbook
 ```scala

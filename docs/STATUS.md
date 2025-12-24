@@ -113,12 +113,12 @@
   - **Function library (WI-09a/b/c)**: 48 tests across aggregate/logical/text/date functions
   - **Dependency graph (WI-09d)**: 44 graph tests + 8 integration/dependency tests
     - 10 property-based law tests (literal identity, arithmetic correctness, short-circuit semantics)
-    - 28 unit tests (division by zero, boolean operations, comparisons, cell references, FoldRange)
+    - 28 unit tests (division by zero, boolean operations, comparisons, cell references, range references)
     - 12 integration tests (IF, AND, OR, nested conditionals, SUM/COUNT, complex boolean logic)
     - 8 error path tests (nested errors, codec failures, missing cells, propagation vs short-circuit)
   - **Cross-sheet formulas (TJC-351)**: 26 tests + 8 ignored (future features)
     - Parser tests: simple refs, ranges, round-trip property tests
-    - Evaluator tests: SheetPolyRef, SheetFoldRange (SUM), error cases
+    - Evaluator tests: SheetPolyRef, cross-sheet range aggregates (SUM), error cases
     - Cycle detection: `DependencyGraph.fromWorkbook`, `detectCrossSheetCycles`
 
 ---
@@ -136,7 +136,7 @@
   - **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
   - **Date** (6): TODAY, NOW, DATE, YEAR, MONTH, DAY
   - **Financial** (3): NPV, IRR, VLOOKUP
-  - Type class: FunctionParser[F] with extensible registry
+  - FunctionSpec registry: macro-collected specs with extensible registry
   - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
   - Clock trait for pure date/time functions (deterministic testing)
 - ✅ **Dependency Graph** (WI-09d): Circular reference detection + topological sort, 52 tests

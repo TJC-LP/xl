@@ -46,10 +46,10 @@ import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, TExpr, ParseError}
 
 // Parse basic formulas
 val sum = FormulaParser.parse("=SUM(A2:A10)")
-// Right(TExpr.FoldRange(CellRange("A2:A10"), BigDecimal(0), sumFunc, decodeNumeric))
+// Right(TExpr.Call(FunctionSpecs.sum, TExpr.RangeLocation.Local(CellRange("A2:A10"))))
 
 val conditional = FormulaParser.parse("=IF(A1>100, \"High\", \"Low\")")
-// Right(TExpr.If(TExpr.Gt(...), TExpr.Lit("High"), TExpr.Lit("Low")))
+// Right(TExpr.Call(FunctionSpecs.ifFn, (TExpr.Gt(...), TExpr.Lit("High"), TExpr.Lit("Low"))))
 
 val arithmetic = FormulaParser.parse("=(A1+B1)*C1/D1")
 // Right(TExpr.Div(TExpr.Mul(TExpr.Add(...), ...), ...))
@@ -66,15 +66,15 @@ val avgFormula: TExpr[BigDecimal] = TExpr.Div(
   TExpr.Lit(BigDecimal(9))
 )
 
-val nestedIf: TExpr[String] = TExpr.If(
+val nestedIf: TExpr[String] = TExpr.cond(
   TExpr.Gt(
-    TExpr.Ref(ref"A1", TExpr.decodeNumeric),
+    TExpr.ref(ref"A1", TExpr.decodeNumeric),
     TExpr.Lit(BigDecimal(100))
   ),
   TExpr.Lit("High"),
-  TExpr.If(
+  TExpr.cond(
     TExpr.Gt(
-      TExpr.Ref(ref"A1", TExpr.decodeNumeric),
+      TExpr.ref(ref"A1", TExpr.decodeNumeric),
       TExpr.Lit(BigDecimal(50))
     ),
     TExpr.Lit("Medium"),
