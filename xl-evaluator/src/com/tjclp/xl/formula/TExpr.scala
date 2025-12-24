@@ -309,62 +309,6 @@ enum TExpr[A] derives CanEqual:
    */
   case DateTimeToSerial(expr: TExpr[java.time.LocalDateTime]) extends TExpr[BigDecimal]
 
-  // Text functions
-
-  /**
-   * Concatenate multiple text values: CONCATENATE(text1, text2, ...)
-   *
-   * Example: CONCATENATE("Hello", " ", "World") = "Hello World"
-   */
-  case Concatenate(xs: List[TExpr[String]]) extends TExpr[String]
-
-  /**
-   * Extract left substring: LEFT(text, n)
-   *
-   * @param text
-   *   The text to extract from
-   * @param n
-   *   Number of characters to extract
-   *
-   * Example: LEFT("Hello", 3) = "Hel"
-   */
-  case Left(text: TExpr[String], n: TExpr[Int]) extends TExpr[String]
-
-  /**
-   * Extract right substring: RIGHT(text, n)
-   *
-   * @param text
-   *   The text to extract from
-   * @param n
-   *   Number of characters to extract
-   *
-   * Example: RIGHT("Hello", 3) = "llo"
-   */
-  case Right(text: TExpr[String], n: TExpr[Int]) extends TExpr[String]
-
-  /**
-   * Text length: LEN(text)
-   *
-   * Returns BigDecimal to match Excel semantics and enable composition with arithmetic.
-   *
-   * Example: LEN("Hello") = 5
-   */
-  case Len(text: TExpr[String]) extends TExpr[BigDecimal]
-
-  /**
-   * Convert to uppercase: UPPER(text)
-   *
-   * Example: UPPER("hello") = "HELLO"
-   */
-  case Upper(text: TExpr[String]) extends TExpr[String]
-
-  /**
-   * Convert to lowercase: LOWER(text)
-   *
-   * Example: LOWER("HELLO") = "hello"
-   */
-  case Lower(text: TExpr[String]) extends TExpr[String]
-
   // Date/Time functions
 
   /**
@@ -1870,21 +1814,24 @@ object TExpr:
    *
    * Example: TExpr.concatenate(List(TExpr.Lit("Hello"), TExpr.Lit(" "), TExpr.Lit("World")))
    */
-  def concatenate(xs: List[TExpr[String]]): TExpr[String] = Concatenate(xs)
+  def concatenate(xs: List[TExpr[String]]): TExpr[String] =
+    Call(FunctionSpecs.concatenate, xs)
 
   /**
    * LEFT substring extraction.
    *
    * Example: TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(3))
    */
-  def left(text: TExpr[String], n: TExpr[Int]): TExpr[String] = Left(text, n)
+  def left(text: TExpr[String], n: TExpr[Int]): TExpr[String] =
+    Call(FunctionSpecs.left, (text, n))
 
   /**
    * RIGHT substring extraction.
    *
    * Example: TExpr.right(TExpr.Lit("Hello"), TExpr.Lit(3))
    */
-  def right(text: TExpr[String], n: TExpr[Int]): TExpr[String] = Right(text, n)
+  def right(text: TExpr[String], n: TExpr[Int]): TExpr[String] =
+    Call(FunctionSpecs.right, (text, n))
 
   /**
    * LEN text length.
@@ -1893,21 +1840,24 @@ object TExpr:
    *
    * Example: TExpr.len(TExpr.Lit("Hello"))
    */
-  def len(text: TExpr[String]): TExpr[BigDecimal] = Len(text)
+  def len(text: TExpr[String]): TExpr[BigDecimal] =
+    Call(FunctionSpecs.len, text)
 
   /**
    * UPPER convert to uppercase.
    *
    * Example: TExpr.upper(TExpr.Lit("hello"))
    */
-  def upper(text: TExpr[String]): TExpr[String] = Upper(text)
+  def upper(text: TExpr[String]): TExpr[String] =
+    Call(FunctionSpecs.upper, text)
 
   /**
    * LOWER convert to lowercase.
    *
    * Example: TExpr.lower(TExpr.Lit("HELLO"))
    */
-  def lower(text: TExpr[String]): TExpr[String] = Lower(text)
+  def lower(text: TExpr[String]): TExpr[String] =
+    Call(FunctionSpecs.lower, text)
 
   // Date/Time function smart constructors
 
@@ -2366,7 +2316,8 @@ object TExpr:
     case year: TExpr.Year => ToInt(year)
     case month: TExpr.Month => ToInt(month)
     case day: TExpr.Day => ToInt(day)
-    case len: TExpr.Len => ToInt(len)
+    case call: TExpr.Call[?] if call.spec == FunctionSpecs.len =>
+      ToInt(call.asInstanceOf[TExpr[BigDecimal]])
     case other => other.asInstanceOf[TExpr[Int]] // Safe: non-PolyRef already has correct type
 
   /**

@@ -177,12 +177,6 @@ object FunctionParser:
       andFunctionParser,
       orFunctionParser,
       notFunctionParser,
-      concatenateFunctionParser,
-      leftFunctionParser,
-      rightFunctionParser,
-      lenFunctionParser,
-      upperFunctionParser,
-      lowerFunctionParser,
       todayFunctionParser,
       nowFunctionParser,
       piFunctionParser,
@@ -593,98 +587,6 @@ object FunctionParser:
         case _ =>
           scala.util.Left(
             ParseError.InvalidArguments("NOT", pos, "1 argument", s"${args.length} arguments")
-          )
-
-  // === Text Functions ===
-
-  /** CONCATENATE function: CONCATENATE(text1, text2, ...) - variadic */
-  given concatenateFunctionParser: FunctionParser[Unit] with
-    def name: String = "CONCATENATE"
-    def arity: Arity = Arity.atLeastOne
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case Nil =>
-          scala.util.Left(
-            ParseError.InvalidArguments("CONCATENATE", pos, "at least 1 argument", "0 arguments")
-          )
-        case _ =>
-          // Convert all arguments to String with coercion (handles PolyRef, numbers, etc.)
-          scala.util.Right(TExpr.concatenate(args.map(TExpr.asStringExpr)))
-
-  /** LEFT function: LEFT(text, n) */
-  given leftFunctionParser: FunctionParser[Unit] with
-    def name: String = "LEFT"
-    def arity: Arity = Arity.two
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(text, n) =>
-          // Convert PolyRef to String with coercion (handles numeric cells, etc.)
-          val textStr = TExpr.asStringExpr(text)
-          // Convert n to Int (handles PolyRef and BigDecimal literals)
-          val nInt = TExpr.asIntExpr(n)
-          scala.util.Right(TExpr.left(textStr, nInt))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments("LEFT", pos, "2 arguments", s"${args.length} arguments")
-          )
-
-  /** RIGHT function: RIGHT(text, n) */
-  given rightFunctionParser: FunctionParser[Unit] with
-    def name: String = "RIGHT"
-    def arity: Arity = Arity.two
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(text, n) =>
-          // Convert PolyRef to String with coercion
-          val textStr = TExpr.asStringExpr(text)
-          // Convert n to Int (handles PolyRef and BigDecimal literals)
-          val nInt = TExpr.asIntExpr(n)
-          scala.util.Right(TExpr.right(textStr, nInt))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments("RIGHT", pos, "2 arguments", s"${args.length} arguments")
-          )
-
-  /** LEN function: LEN(text) */
-  given lenFunctionParser: FunctionParser[Unit] with
-    def name: String = "LEN"
-    def arity: Arity = Arity.one
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(text) => scala.util.Right(TExpr.len(TExpr.asStringExpr(text)))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments("LEN", pos, "1 argument", s"${args.length} arguments")
-          )
-
-  /** UPPER function: UPPER(text) */
-  given upperFunctionParser: FunctionParser[Unit] with
-    def name: String = "UPPER"
-    def arity: Arity = Arity.one
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(text) => scala.util.Right(TExpr.upper(TExpr.asStringExpr(text)))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments("UPPER", pos, "1 argument", s"${args.length} arguments")
-          )
-
-  /** LOWER function: LOWER(text) */
-  given lowerFunctionParser: FunctionParser[Unit] with
-    def name: String = "LOWER"
-    def arity: Arity = Arity.one
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(text) => scala.util.Right(TExpr.lower(TExpr.asStringExpr(text)))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments("LOWER", pos, "1 argument", s"${args.length} arguments")
           )
 
   // === Date/Time Functions ===

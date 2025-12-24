@@ -327,52 +327,6 @@ private class EvaluatorImpl extends Evaluator:
             )
         }
 
-      // ===== Text Functions =====
-      case TExpr.Concatenate(xs) =>
-        // Concatenate: evaluate all expressions, concat results
-        xs.foldLeft[Either[EvalError, String]](Right("")) { (accEither, expr) =>
-          for
-            acc <- accEither
-            value <- eval(expr, sheet, clock, workbook)
-          yield acc + value
-        }
-
-      case TExpr.Left(text, n) =>
-        // Left: extract left n characters
-        for
-          textValue <- eval(text, sheet, clock, workbook)
-          nValue <- eval(n, sheet, clock, workbook)
-          result <-
-            if nValue < 0 then
-              Left(EvalError.EvalFailed(s"LEFT: n must be non-negative, got $nValue"))
-            else if nValue >= textValue.length then Right(textValue)
-            else Right(textValue.take(nValue))
-        yield result
-
-      case TExpr.Right(text, n) =>
-        // Right: extract right n characters
-        for
-          textValue <- eval(text, sheet, clock, workbook)
-          nValue <- eval(n, sheet, clock, workbook)
-          result <-
-            if nValue < 0 then
-              Left(EvalError.EvalFailed(s"RIGHT: n must be non-negative, got $nValue"))
-            else if nValue >= textValue.length then Right(textValue)
-            else Right(textValue.takeRight(nValue))
-        yield result
-
-      case TExpr.Len(text) =>
-        // Len: text length (returns BigDecimal to match Excel and enable arithmetic)
-        eval(text, sheet, clock, workbook).map(s => BigDecimal(s.length))
-
-      case TExpr.Upper(text) =>
-        // Upper: convert to uppercase
-        eval(text, sheet, clock, workbook).map(_.toUpperCase)
-
-      case TExpr.Lower(text) =>
-        // Lower: convert to lowercase
-        eval(text, sheet, clock, workbook).map(_.toLowerCase)
-
       // ===== Date/Time Functions =====
       case TExpr.Today() =>
         // Today: get current date from clock

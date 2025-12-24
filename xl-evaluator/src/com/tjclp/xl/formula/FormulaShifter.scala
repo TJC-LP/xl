@@ -180,22 +180,6 @@ object FormulaShifter:
       case SheetCount(sheet, range) =>
         SheetCount(sheet, shiftRange(range, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
-      // Text functions
-      case Concatenate(xs) =>
-        Concatenate(xs.map(shiftInternal(_, colDelta, rowDelta))).asInstanceOf[TExpr[A]]
-      case Left(text, n) =>
-        Left(shiftInternal(text, colDelta, rowDelta), shiftInternal(n, colDelta, rowDelta))
-          .asInstanceOf[TExpr[A]]
-      case Right(text, n) =>
-        Right(shiftInternal(text, colDelta, rowDelta), shiftInternal(n, colDelta, rowDelta))
-          .asInstanceOf[TExpr[A]]
-      case Len(text) =>
-        Len(shiftInternal(text, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Upper(text) =>
-        Upper(shiftInternal(text, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-      case Lower(text) =>
-        Lower(shiftInternal(text, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-
       // Date/Time functions - Today/Now have no refs to shift
       case t: Today => t.asInstanceOf[TExpr[A]]
       case n: Now => n.asInstanceOf[TExpr[A]]

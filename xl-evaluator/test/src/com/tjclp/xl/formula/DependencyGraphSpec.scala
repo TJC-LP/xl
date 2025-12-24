@@ -78,7 +78,7 @@ class DependencyGraphSpec extends FunSuite:
   }
 
   test("extractDependencies: text functions with Refs") {
-    val expr = TExpr.Concatenate(List(
+    val expr = TExpr.concatenate(List(
       TExpr.ref(ref"A1", TExpr.decodeString),
       TExpr.Lit(" "),
       TExpr.ref(ref"B1", TExpr.decodeString)

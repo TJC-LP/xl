@@ -29,19 +29,19 @@ class NewFunctionsSpec extends FunSuite:
   // ===== Text Functions =====
 
   test("CONCATENATE: empty list") {
-    val expr = TExpr.Concatenate(List.empty)
+    val expr = TExpr.concatenate(List.empty)
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(""))
   }
 
   test("CONCATENATE: single string") {
-    val expr = TExpr.Concatenate(List(TExpr.Lit("Hello")))
+    val expr = TExpr.concatenate(List(TExpr.Lit("Hello")))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hello"))
   }
 
   test("CONCATENATE: multiple strings") {
-    val expr = TExpr.Concatenate(List(
+    val expr = TExpr.concatenate(List(
       TExpr.Lit("Hello"),
       TExpr.Lit(" "),
       TExpr.Lit("World"),
@@ -52,79 +52,79 @@ class NewFunctionsSpec extends FunSuite:
   }
 
   test("LEFT: extract left 3 characters") {
-    val expr = TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(3))
+    val expr = TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(3))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hel"))
   }
 
   test("LEFT: n greater than length returns full string") {
-    val expr = TExpr.Left(TExpr.Lit("Hi"), TExpr.Lit(10))
+    val expr = TExpr.left(TExpr.Lit("Hi"), TExpr.Lit(10))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hi"))
   }
 
   test("LEFT: n equals length") {
-    val expr = TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(5))
+    val expr = TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(5))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hello"))
   }
 
   test("LEFT: negative n returns error") {
-    val expr = TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(-1))
+    val expr = TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(-1))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft)
   }
 
   test("RIGHT: extract right 3 characters") {
-    val expr = TExpr.Right(TExpr.Lit("Hello"), TExpr.Lit(3))
+    val expr = TExpr.right(TExpr.Lit("Hello"), TExpr.Lit(3))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("llo"))
   }
 
   test("RIGHT: n greater than length returns full string") {
-    val expr = TExpr.Right(TExpr.Lit("Hi"), TExpr.Lit(10))
+    val expr = TExpr.right(TExpr.Lit("Hi"), TExpr.Lit(10))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hi"))
   }
 
   test("RIGHT: negative n returns error") {
-    val expr = TExpr.Right(TExpr.Lit("Hello"), TExpr.Lit(-1))
+    val expr = TExpr.right(TExpr.Lit("Hello"), TExpr.Lit(-1))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft)
   }
 
   test("LEN: empty string") {
-    val expr = TExpr.Len(TExpr.Lit(""))
+    val expr = TExpr.len(TExpr.Lit(""))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(0)))
   }
 
   test("LEN: normal string") {
-    val expr = TExpr.Len(TExpr.Lit("Hello"))
+    val expr = TExpr.len(TExpr.Lit("Hello"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(5)))
   }
 
   test("UPPER: convert to uppercase") {
-    val expr = TExpr.Upper(TExpr.Lit("hello world"))
+    val expr = TExpr.upper(TExpr.Lit("hello world"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("HELLO WORLD"))
   }
 
   test("UPPER: already uppercase") {
-    val expr = TExpr.Upper(TExpr.Lit("HELLO"))
+    val expr = TExpr.upper(TExpr.Lit("HELLO"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("HELLO"))
   }
 
   test("LOWER: convert to lowercase") {
-    val expr = TExpr.Lower(TExpr.Lit("HELLO WORLD"))
+    val expr = TExpr.lower(TExpr.Lit("HELLO WORLD"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("hello world"))
   }
 
   test("LOWER: already lowercase") {
-    val expr = TExpr.Lower(TExpr.Lit("hello"))
+    val expr = TExpr.lower(TExpr.Lit("hello"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("hello"))
   }
@@ -281,37 +281,37 @@ class NewFunctionsSpec extends FunSuite:
   // ===== FormulaPrinter Integration =====
 
   test("FormulaPrinter: CONCATENATE") {
-    val expr = TExpr.Concatenate(List(TExpr.Lit("A"), TExpr.Lit("B")))
+    val expr = TExpr.concatenate(List(TExpr.Lit("A"), TExpr.Lit("B")))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=CONCATENATE("A", "B")""")
   }
 
   test("FormulaPrinter: LEFT") {
-    val expr = TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(3))
+    val expr = TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(3))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=LEFT("Hello", 3)""")
   }
 
   test("FormulaPrinter: RIGHT") {
-    val expr = TExpr.Right(TExpr.Lit("Hello"), TExpr.Lit(3))
+    val expr = TExpr.right(TExpr.Lit("Hello"), TExpr.Lit(3))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=RIGHT("Hello", 3)""")
   }
 
   test("FormulaPrinter: LEN") {
-    val expr = TExpr.Len(TExpr.Lit("Hello"))
+    val expr = TExpr.len(TExpr.Lit("Hello"))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=LEN("Hello")""")
   }
 
   test("FormulaPrinter: UPPER") {
-    val expr = TExpr.Upper(TExpr.Lit("hello"))
+    val expr = TExpr.upper(TExpr.Lit("hello"))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=UPPER("hello")""")
   }
 
   test("FormulaPrinter: LOWER") {
-    val expr = TExpr.Lower(TExpr.Lit("HELLO"))
+    val expr = TExpr.lower(TExpr.Lit("HELLO"))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=LOWER("HELLO")""")
   }
@@ -369,10 +369,10 @@ class NewFunctionsSpec extends FunSuite:
   // ===== Integration Tests =====
 
   test("Integration: nested text functions") {
-    val expr = TExpr.Upper(
-      TExpr.Concatenate(List(
-        TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(3)),
-        TExpr.Right(TExpr.Lit("World"), TExpr.Lit(3))
+    val expr = TExpr.upper(
+      TExpr.concatenate(List(
+        TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(3)),
+        TExpr.right(TExpr.Lit("World"), TExpr.Lit(3))
       ))
     )
     val result = evaluator.eval(expr, emptySheet)

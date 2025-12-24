@@ -184,9 +184,6 @@ object DependencyGraph:
       case TExpr.Or(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.ToInt(expr) =>
         extractDependencies(expr) // Type conversion - extract from wrapped expr
-      case TExpr.Concatenate(xs) => xs.flatMap(extractDependencies).toSet
-      case TExpr.Left(text, n) => extractDependencies(text) ++ extractDependencies(n)
-      case TExpr.Right(text, n) => extractDependencies(text) ++ extractDependencies(n)
       case TExpr.Date(y, m, d) =>
         extractDependencies(y) ++ extractDependencies(m) ++ extractDependencies(d)
       case TExpr.Year(date) => extractDependencies(date)
@@ -305,9 +302,6 @@ object DependencyGraph:
 
       // Unary operators
       case TExpr.Not(x) => extractDependencies(x)
-      case TExpr.Len(x) => extractDependencies(x)
-      case TExpr.Upper(x) => extractDependencies(x)
-      case TExpr.Lower(x) => extractDependencies(x)
 
       // Error handling functions
       case TExpr.Iferror(value, valueIfError) =>
@@ -431,11 +425,6 @@ object DependencyGraph:
       case TExpr.Or(l, r) =>
         extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
       case TExpr.ToInt(expr) => extractDependenciesBounded(expr, bounds)
-      case TExpr.Concatenate(xs) => xs.flatMap(extractDependenciesBounded(_, bounds)).toSet
-      case TExpr.Left(text, n) =>
-        extractDependenciesBounded(text, bounds) ++ extractDependenciesBounded(n, bounds)
-      case TExpr.Right(text, n) =>
-        extractDependenciesBounded(text, bounds) ++ extractDependenciesBounded(n, bounds)
       case TExpr.Date(y, m, d) =>
         extractDependenciesBounded(y, bounds) ++ extractDependenciesBounded(m, bounds) ++
           extractDependenciesBounded(d, bounds)
@@ -567,9 +556,6 @@ object DependencyGraph:
 
       // Unary operators
       case TExpr.Not(x) => extractDependenciesBounded(x, bounds)
-      case TExpr.Len(x) => extractDependenciesBounded(x, bounds)
-      case TExpr.Upper(x) => extractDependenciesBounded(x, bounds)
-      case TExpr.Lower(x) => extractDependenciesBounded(x, bounds)
 
       // Error handling functions
       case TExpr.Iferror(value, valueIfError) =>
@@ -1087,9 +1073,6 @@ object DependencyGraph:
 
       // Unary operators
       case TExpr.Not(x) => extractQualifiedDependencies(x, currentSheet)
-      case TExpr.Len(x) => extractQualifiedDependencies(x, currentSheet)
-      case TExpr.Upper(x) => extractQualifiedDependencies(x, currentSheet)
-      case TExpr.Lower(x) => extractQualifiedDependencies(x, currentSheet)
       case TExpr.ToInt(x) => extractQualifiedDependencies(x, currentSheet)
 
       // Reference functions
@@ -1109,20 +1092,6 @@ object DependencyGraph:
         extractQualifiedDependencies(cond, currentSheet) ++
           extractQualifiedDependencies(thenBranch, currentSheet) ++
           extractQualifiedDependencies(elseBranch, currentSheet)
-
-      // Text functions
-      case TExpr.Concatenate(xs) =>
-        xs.flatMap(extractQualifiedDependencies(_, currentSheet)).toSet
-      case TExpr.Left(text, n) =>
-        extractQualifiedDependencies(text, currentSheet) ++ extractQualifiedDependencies(
-          n,
-          currentSheet
-        )
-      case TExpr.Right(text, n) =>
-        extractQualifiedDependencies(text, currentSheet) ++ extractQualifiedDependencies(
-          n,
-          currentSheet
-        )
 
       // Date functions
       case TExpr.Date(y, m, d) =>

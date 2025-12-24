@@ -652,8 +652,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=CONCATENATE(\"Hello\", \" \", \"World\")")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Concatenate(xs) => assertEquals(xs.length, 3)
-      case _ => fail("Expected TExpr.Concatenate")
+      case TExpr.Call(spec, args: List[?]) if spec.name == "CONCATENATE" =>
+        assertEquals(args.length, 3)
+      case _ => fail("Expected TExpr.Call(CONCATENATE)")
     }
   }
 
@@ -661,8 +662,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=LEFT(\"Hello\", 3)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Left(_, _) => assert(true)
-      case _ => fail("Expected TExpr.Left")
+      case TExpr.Call(spec, _) if spec.name == "LEFT" => assert(true)
+      case _ => fail("Expected TExpr.Call(LEFT)")
     }
   }
 
@@ -670,8 +671,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=RIGHT(A1, 5)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Right(_, _) => assert(true)
-      case _ => fail("Expected TExpr.Right")
+      case TExpr.Call(spec, _) if spec.name == "RIGHT" => assert(true)
+      case _ => fail("Expected TExpr.Call(RIGHT)")
     }
   }
 
@@ -679,8 +680,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=LEN(A1)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Len(_) => assert(true)
-      case _ => fail("Expected TExpr.Len")
+      case TExpr.Call(spec, _) if spec.name == "LEN" => assert(true)
+      case _ => fail("Expected TExpr.Call(LEN)")
     }
   }
 
@@ -688,8 +689,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=UPPER(\"hello\")")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Upper(_) => assert(true)
-      case _ => fail("Expected TExpr.Upper")
+      case TExpr.Call(spec, _) if spec.name == "UPPER" => assert(true)
+      case _ => fail("Expected TExpr.Call(UPPER)")
     }
   }
 
@@ -697,8 +698,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=LOWER(\"WORLD\")")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Lower(_) => assert(true)
-      case _ => fail("Expected TExpr.Lower")
+      case TExpr.Call(spec, _) if spec.name == "LOWER" => assert(true)
+      case _ => fail("Expected TExpr.Call(LOWER)")
     }
   }
 
@@ -760,7 +761,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=UPPER(CONCATENATE(LEFT(A1, 3), RIGHT(B1, 2)))")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Upper(TExpr.Concatenate(_)) => assert(true)
+      case TExpr.Call(upperSpec, inner) if upperSpec.name == "UPPER" =>
+        inner match
+          case TExpr.Call(concatSpec, _) if concatSpec.name == "CONCATENATE" => assert(true)
+          case _ => fail("Expected nested CONCATENATE")
       case _ => fail("Expected nested text functions")
     }
   }
@@ -953,11 +957,16 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertEquals(functions.length, 81)
   }
 
-  test("FunctionParser.lookup finds known functions") {
+  test("FunctionParser.lookup finds known parser-based functions") {
     assert(FunctionParser.lookup("SUM").isDefined)
     assert(FunctionParser.lookup("min").isDefined) // Case insensitive
-    assert(FunctionParser.lookup("CONCATENATE").isDefined)
     assert(FunctionParser.lookup("TODAY").isDefined)
+  }
+
+  test("FunctionRegistry.lookup finds spec-based functions") {
+    assert(FunctionRegistry.lookup("CONCATENATE").isDefined)
+    assert(FunctionRegistry.lookup("LEFT").isDefined)
+    assert(FunctionRegistry.lookup("LOWER").isDefined)
   }
 
   test("FunctionParser.lookup returns None for unknown functions") {

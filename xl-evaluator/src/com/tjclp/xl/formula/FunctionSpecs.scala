@@ -2,10 +2,15 @@ package com.tjclp.xl.formula
 
 object FunctionSpecs:
   private given numericExpr: ArgSpec[TExpr[BigDecimal]] = ArgSpec.expr[BigDecimal]
+  private given stringExpr: ArgSpec[TExpr[String]] = ArgSpec.expr[String]
+  private given intExpr: ArgSpec[TExpr[Int]] = ArgSpec.expr[Int]
 
   type UnaryNumeric = TExpr[BigDecimal]
   type BinaryNumeric = (TExpr[BigDecimal], TExpr[BigDecimal])
   type BinaryNumericOpt = (TExpr[BigDecimal], Option[TExpr[BigDecimal]])
+  type UnaryText = TExpr[String]
+  type BinaryTextInt = (TExpr[String], TExpr[Int])
+  type TextList = List[TExpr[String]]
 
   private def roundToDigits(
     value: BigDecimal,
@@ -238,4 +243,57 @@ object FunctionSpecs:
   val int: FunctionSpec[BigDecimal] { type Args = UnaryNumeric } =
     FunctionSpec.simple[BigDecimal, UnaryNumeric]("INT", Arity.one) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.setScale(0, BigDecimal.RoundingMode.FLOOR))
+    }
+
+  val concatenate: FunctionSpec[String] { type Args = TextList } =
+    FunctionSpec.simple[String, TextList]("CONCATENATE", Arity.atLeastOne) { (args, ctx) =>
+      args.foldLeft[Either[EvalError, String]](Right("")) { (accEither, expr) =>
+        for
+          acc <- accEither
+          value <- ctx.evalExpr(expr)
+        yield acc + value
+      }
+    }
+
+  val left: FunctionSpec[String] { type Args = BinaryTextInt } =
+    FunctionSpec.simple[String, BinaryTextInt]("LEFT", Arity.two) { (args, ctx) =>
+      val (textExpr, nExpr) = args
+      for
+        text <- ctx.evalExpr(textExpr)
+        nValue <- ctx.evalExpr(nExpr)
+        result <-
+          if nValue < 0 then
+            Left(EvalError.EvalFailed(s"LEFT: n must be non-negative, got $nValue"))
+          else if nValue >= text.length then Right(text)
+          else Right(text.take(nValue))
+      yield result
+    }
+
+  val right: FunctionSpec[String] { type Args = BinaryTextInt } =
+    FunctionSpec.simple[String, BinaryTextInt]("RIGHT", Arity.two) { (args, ctx) =>
+      val (textExpr, nExpr) = args
+      for
+        text <- ctx.evalExpr(textExpr)
+        nValue <- ctx.evalExpr(nExpr)
+        result <-
+          if nValue < 0 then
+            Left(EvalError.EvalFailed(s"RIGHT: n must be non-negative, got $nValue"))
+          else if nValue >= text.length then Right(text)
+          else Right(text.takeRight(nValue))
+      yield result
+    }
+
+  val len: FunctionSpec[BigDecimal] { type Args = UnaryText } =
+    FunctionSpec.simple[BigDecimal, UnaryText]("LEN", Arity.one) { (expr, ctx) =>
+      ctx.evalExpr(expr).map(text => BigDecimal(text.length))
+    }
+
+  val upper: FunctionSpec[String] { type Args = UnaryText } =
+    FunctionSpec.simple[String, UnaryText]("UPPER", Arity.one) { (expr, ctx) =>
+      ctx.evalExpr(expr).map(_.toUpperCase)
+    }
+
+  val lower: FunctionSpec[String] { type Args = UnaryText } =
+    FunctionSpec.simple[String, UnaryText]("LOWER", Arity.one) { (expr, ctx) =>
+      ctx.evalExpr(expr).map(_.toLowerCase)
     }

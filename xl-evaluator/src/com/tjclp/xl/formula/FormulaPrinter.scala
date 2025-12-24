@@ -158,26 +158,6 @@ object FormulaPrinter:
       case TExpr.ToInt(expr) =>
         printExpr(expr, precedence) // Print wrapped expression without conversion syntax
 
-      // Text functions
-      case TExpr.Concatenate(xs) =>
-        val args = xs.map(x => printExpr(x, 0)).mkString(", ")
-        s"CONCATENATE($args)"
-
-      case TExpr.Left(text, n) =>
-        s"LEFT(${printExpr(text, 0)}, ${printExpr(n, 0)})"
-
-      case TExpr.Right(text, n) =>
-        s"RIGHT(${printExpr(text, 0)}, ${printExpr(n, 0)})"
-
-      case TExpr.Len(text) =>
-        s"LEN(${printExpr(text, 0)})"
-
-      case TExpr.Upper(text) =>
-        s"UPPER(${printExpr(text, 0)})"
-
-      case TExpr.Lower(text) =>
-        s"LOWER(${printExpr(text, 0)})"
-
       // Date/Time functions
       case TExpr.Today() =>
         "TODAY()"
@@ -672,18 +652,6 @@ object FormulaPrinter:
         s"Gte(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.ToInt(expr) =>
         s"ToInt(${printWithTypes(expr)})"
-      case TExpr.Concatenate(xs) =>
-        s"Concatenate(${xs.map(printWithTypes).mkString(", ")})"
-      case TExpr.Left(text, n) =>
-        s"Left(${printWithTypes(text)}, ${printWithTypes(n)})"
-      case TExpr.Right(text, n) =>
-        s"Right(${printWithTypes(text)}, ${printWithTypes(n)})"
-      case TExpr.Len(text) =>
-        s"Len(${printWithTypes(text)})"
-      case TExpr.Upper(text) =>
-        s"Upper(${printWithTypes(text)})"
-      case TExpr.Lower(text) =>
-        s"Lower(${printWithTypes(text)})"
       case TExpr.Today() =>
         "Today()"
       case TExpr.Now() =>
