@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
@@ -21,6 +21,17 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       if searchMode == -1 then lookupCells.indices.reverse
       else lookupCells.indices
 
+    val wildcardCriterionOpt = lookupValue match
+      case text: String =>
+        CriteriaMatcher.parse(text) match
+          case c: CriteriaMatcher.Wildcard => Some(c)
+          case _ => None
+      case CellValue.Text(text) =>
+        CriteriaMatcher.parse(text) match
+          case c: CriteriaMatcher.Wildcard => Some(c)
+          case _ => None
+      case _ => None
+
     val matchedIndexOpt = matchMode match
       case 0 =>
         indices.find { idx =>
@@ -35,9 +46,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         indices.find { idx =>
           val cellValue = ctx.sheet(lookupCells(idx)).value
           matchesExactForXLookup(cellValue, lookupValue) ||
-          ((cellValue, lookupValue) match
-            case (CellValue.Text(s), v: String) => s.toLowerCase.contains(v.toLowerCase)
-            case _ => false)
+          wildcardCriterionOpt.exists(CriteriaMatcher.matches(cellValue, _))
         }
       case _ => None
 
@@ -46,7 +55,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       case None =>
         ifNotFoundOpt match
           case Some(expr) => evalAny(ctx, expr).map(toCellValue)
-          case None => Left(EvalError.EvalFailed("XLOOKUP: no match found", None))
+          case None => Right(CellValue.Error(CellError.NA))
 
   private def matchesExactForXLookup(cellValue: CellValue, lookupValue: Any): Boolean =
     (cellValue, lookupValue) match
