@@ -445,8 +445,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=IF(TRUE, 1, 2)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.If(_, _, _) => ()
-      case other             => fail(s"Expected If, got $other")
+      case TExpr.Call(spec, _) if spec.name == "IF" => ()
+      case other => fail(s"Expected IF Call, got $other")
     }
   }
 
@@ -454,8 +454,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AND(TRUE, FALSE)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.And(_, _) => ()
-      case other           => fail(s"Expected And, got $other")
+      case TExpr.Call(spec, _) if spec.name == "AND" => ()
+      case other => fail(s"Expected AND Call, got $other")
     }
   }
 
@@ -463,8 +463,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=OR(TRUE, FALSE)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Or(_, _) => ()
-      case other          => fail(s"Expected Or, got $other")
+      case TExpr.Call(spec, _) if spec.name == "OR" => ()
+      case other => fail(s"Expected OR Call, got $other")
     }
   }
 
@@ -472,8 +472,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=NOT(TRUE)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Not(_) => ()
-      case other        => fail(s"Expected Not, got $other")
+      case TExpr.Call(spec, _) if spec.name == "NOT" => ()
+      case other => fail(s"Expected NOT Call, got $other")
     }
   }
 
@@ -774,8 +774,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=IFERROR(A1/B1, 0)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Iferror(_, _) => assert(true)
-      case _ => fail("Expected TExpr.Iferror")
+      case TExpr.Call(spec, _) if spec.name == "IFERROR" => assert(true)
+      case _ => fail("Expected TExpr.Call(IFERROR)")
     }
   }
 
@@ -967,6 +967,11 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(FunctionRegistry.lookup("CONCATENATE").isDefined)
     assert(FunctionRegistry.lookup("LEFT").isDefined)
     assert(FunctionRegistry.lookup("LOWER").isDefined)
+    assert(FunctionRegistry.lookup("IF").isDefined)
+    assert(FunctionRegistry.lookup("AND").isDefined)
+    assert(FunctionRegistry.lookup("OR").isDefined)
+    assert(FunctionRegistry.lookup("NOT").isDefined)
+    assert(FunctionRegistry.lookup("IFERROR").isDefined)
   }
 
   test("FunctionParser.lookup returns None for unknown functions") {

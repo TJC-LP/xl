@@ -62,7 +62,7 @@ class DependencyGraphSpec extends FunSuite:
   }
 
   test("extractDependencies: If with three branches") {
-    val expr = TExpr.If(
+    val expr = TExpr.cond(
       TExpr.Gt(TExpr.ref(ref"A1", TExpr.decodeNumeric), TExpr.Lit(BigDecimal(0))),
       TExpr.ref(ref"B1", TExpr.decodeNumeric),
       TExpr.ref(ref"C1", TExpr.decodeNumeric)

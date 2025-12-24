@@ -92,24 +92,6 @@ object FormulaShifter:
         Div(shiftInternal(x, colDelta, rowDelta), shiftInternal(y, colDelta, rowDelta))
           .asInstanceOf[TExpr[A]]
 
-      // Boolean operators
-      case And(x, y) =>
-        And(shiftInternal(x, colDelta, rowDelta), shiftInternal(y, colDelta, rowDelta))
-          .asInstanceOf[TExpr[A]]
-      case Or(x, y) =>
-        Or(shiftInternal(x, colDelta, rowDelta), shiftInternal(y, colDelta, rowDelta))
-          .asInstanceOf[TExpr[A]]
-      case Not(x) =>
-        Not(shiftInternal(x, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
-
-      // Conditional
-      case If(cond, ifTrue, ifFalse) =>
-        If(
-          shiftInternal(cond, colDelta, rowDelta),
-          shiftInternal(ifTrue, colDelta, rowDelta),
-          shiftInternal(ifFalse, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
-
       // Comparison operators
       case Eq(x, y) =>
         Eq(shiftInternal(x, colDelta, rowDelta), shiftInternal(y, colDelta, rowDelta))
@@ -365,11 +347,6 @@ object FormulaShifter:
         ).asInstanceOf[TExpr[A]]
 
       // Error handling functions
-      case Iferror(value, valueIfError) =>
-        Iferror(
-          shiftInternal(value, colDelta, rowDelta),
-          shiftInternal(valueIfError, colDelta, rowDelta)
-        ).asInstanceOf[TExpr[A]]
       case Iserror(value) =>
         Iserror(shiftInternal(value, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
       case Iserr(value) =>

@@ -7,7 +7,8 @@ import boundary.break
 /**
  * Type class for parsing Excel formula functions.
  *
- * Each function (SUM, IF, MIN, etc.) has its own FunctionParser instance that encapsulates:
+ * Each parser-based function (SUM, MIN, etc.) has its own FunctionParser instance that
+ * encapsulates:
  *   - Function metadata (name, arity)
  *   - Argument validation logic
  *   - TExpr construction
@@ -173,10 +174,6 @@ object FunctionParser:
       stdevpFunctionParser,
       varFunctionParser,
       varpFunctionParser,
-      ifFunctionParser,
-      andFunctionParser,
-      orFunctionParser,
-      notFunctionParser,
       todayFunctionParser,
       nowFunctionParser,
       piFunctionParser,
@@ -196,7 +193,6 @@ object FunctionParser:
       sumProductFunctionParser,
       xlookupFunctionParser,
       // Error handling functions
-      iferrorFunctionParser,
       iserrorFunctionParser,
       iserrFunctionParser,
       // Type-check functions
@@ -516,77 +512,6 @@ object FunctionParser:
               "1 range argument",
               s"${args.length} arguments"
             )
-          )
-
-  // === Logical Functions ===
-
-  /** IF function: IF(condition, ifTrue, ifFalse) */
-  given ifFunctionParser: FunctionParser[Unit] with
-    def name: String = "IF"
-    def arity: Arity = Arity.three
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(cond, ifTrue, ifFalse) =>
-          scala.util.Right(
-            TExpr.If(
-              TExpr.asBooleanExpr(cond), // Convert PolyRef to Boolean
-              ifTrue.asInstanceOf[TExpr[Any]], // ifTrue/ifFalse can be any type
-              ifFalse.asInstanceOf[TExpr[Any]]
-            )
-          )
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments("IF", pos, "3 arguments", s"${args.length} arguments")
-          )
-
-  /** AND function: AND(expr1, expr2, ...) - variadic */
-  given andFunctionParser: FunctionParser[Unit] with
-    def name: String = "AND"
-    def arity: Arity = Arity.atLeastOne
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case Nil =>
-          scala.util.Left(
-            ParseError.InvalidArguments("AND", pos, "at least 1 argument", "0 arguments")
-          )
-        case head :: tail =>
-          // Convert all arguments to Boolean (handles PolyRef)
-          val result = tail.foldLeft(TExpr.asBooleanExpr(head)) { (acc, expr) =>
-            TExpr.And(acc, TExpr.asBooleanExpr(expr))
-          }
-          scala.util.Right(result)
-
-  /** OR function: OR(expr1, expr2, ...) - variadic */
-  given orFunctionParser: FunctionParser[Unit] with
-    def name: String = "OR"
-    def arity: Arity = Arity.atLeastOne
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case Nil =>
-          scala.util.Left(
-            ParseError.InvalidArguments("OR", pos, "at least 1 argument", "0 arguments")
-          )
-        case head :: tail =>
-          // Convert all arguments to Boolean (handles PolyRef)
-          val result = tail.foldLeft(TExpr.asBooleanExpr(head)) { (acc, expr) =>
-            TExpr.Or(acc, TExpr.asBooleanExpr(expr))
-          }
-          scala.util.Right(result)
-
-  /** NOT function: NOT(expr) */
-  given notFunctionParser: FunctionParser[Unit] with
-    def name: String = "NOT"
-    def arity: Arity = Arity.one
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(expr) => scala.util.Right(TExpr.Not(TExpr.asBooleanExpr(expr)))
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments("NOT", pos, "1 argument", s"${args.length} arguments")
           )
 
   // === Date/Time Functions ===
@@ -1235,30 +1160,6 @@ object FunctionParser:
           )
 
   // === Error Handling Functions ===
-
-  /** IFERROR function: IFERROR(value, value_if_error) */
-  given iferrorFunctionParser: FunctionParser[Unit] with
-    def name: String = "IFERROR"
-    def arity: Arity = Arity.two
-
-    def parse(args: List[TExpr[?]], pos: Int): Either[ParseError, TExpr[?]] =
-      args match
-        case List(valueExpr, errorExpr) =>
-          scala.util.Right(
-            TExpr.iferror(
-              TExpr.asCellValueExpr(valueExpr),
-              TExpr.asCellValueExpr(errorExpr)
-            )
-          )
-        case _ =>
-          scala.util.Left(
-            ParseError.InvalidArguments(
-              "IFERROR",
-              pos,
-              "2 arguments (value, value_if_error)",
-              s"${args.length} arguments"
-            )
-          )
 
   /** ISERROR function: ISERROR(value) */
   given iserrorFunctionParser: FunctionParser[Unit] with

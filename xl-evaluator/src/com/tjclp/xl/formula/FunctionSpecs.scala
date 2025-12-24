@@ -1,9 +1,40 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.CellRange
+import com.tjclp.xl.cells.CellValue
+
 object FunctionSpecs:
   private given numericExpr: ArgSpec[TExpr[BigDecimal]] = ArgSpec.expr[BigDecimal]
   private given stringExpr: ArgSpec[TExpr[String]] = ArgSpec.expr[String]
   private given intExpr: ArgSpec[TExpr[Int]] = ArgSpec.expr[Int]
+  private given booleanExpr: ArgSpec[TExpr[Boolean]] = ArgSpec.expr[Boolean]
+  private given cellValueExpr: ArgSpec[TExpr[CellValue]] = ArgSpec.expr[CellValue]
+
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private given anyExpr: ArgSpec[TExpr[Any]] with
+    def describeParts: List[String] = List("value")
+
+    def parse(
+      args: List[TExpr[?]],
+      pos: Int,
+      fnName: String
+    ): Either[ParseError, (TExpr[Any], List[TExpr[?]])] =
+      args match
+        case head :: tail => Right((head.asInstanceOf[TExpr[Any]], tail))
+        case Nil =>
+          Left(ParseError.InvalidArguments(fnName, pos, describe, "0 arguments"))
+
+    def toValues(args: TExpr[Any]): List[ArgValue] =
+      List(ArgValue.Expr(args))
+
+    def map(
+      args: TExpr[Any]
+    )(
+      mapExpr: TExpr[?] => TExpr[?],
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
+      mapCells: CellRange => CellRange
+    ): TExpr[Any] =
+      mapExpr(args).asInstanceOf[TExpr[Any]]
 
   type UnaryNumeric = TExpr[BigDecimal]
   type BinaryNumeric = (TExpr[BigDecimal], TExpr[BigDecimal])
@@ -11,6 +42,27 @@ object FunctionSpecs:
   type UnaryText = TExpr[String]
   type BinaryTextInt = (TExpr[String], TExpr[Int])
   type TextList = List[TExpr[String]]
+  type UnaryBoolean = TExpr[Boolean]
+  type BooleanList = List[TExpr[Boolean]]
+  type IfArgs = (TExpr[Boolean], TExpr[Any], TExpr[Any])
+  type IfErrorArgs = (TExpr[CellValue], TExpr[CellValue])
+
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalAny(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
+    ctx.evalExpr[Any](expr.asInstanceOf[TExpr[Any]])
+
+  private def toCellValue(value: Any): CellValue =
+    value match
+      case cv: CellValue => cv
+      case s: String => CellValue.Text(s)
+      case n: BigDecimal => CellValue.Number(n)
+      case b: Boolean => CellValue.Bool(b)
+      case n: Int => CellValue.Number(BigDecimal(n))
+      case n: Long => CellValue.Number(BigDecimal(n))
+      case n: Double => CellValue.Number(BigDecimal(n))
+      case d: java.time.LocalDate => CellValue.DateTime(d.atStartOfDay())
+      case dt: java.time.LocalDateTime => CellValue.DateTime(dt)
+      case other => CellValue.Text(other.toString)
 
   private def roundToDigits(
     value: BigDecimal,
@@ -243,6 +295,65 @@ object FunctionSpecs:
   val int: FunctionSpec[BigDecimal] { type Args = UnaryNumeric } =
     FunctionSpec.simple[BigDecimal, UnaryNumeric]("INT", Arity.one) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.setScale(0, BigDecimal.RoundingMode.FLOOR))
+    }
+
+  val and: FunctionSpec[Boolean] { type Args = BooleanList } =
+    FunctionSpec.simple[Boolean, BooleanList]("AND", Arity.atLeastOne) { (args, ctx) =>
+      @annotation.tailrec
+      def loop(remaining: List[TExpr[Boolean]]): Either[EvalError, Boolean] =
+        remaining match
+          case Nil => Right(true)
+          case head :: tail =>
+            ctx.evalExpr(head) match
+              case Left(err) => Left(err)
+              case Right(value) =>
+                if !value then Right(false)
+                else loop(tail)
+      loop(args)
+    }
+
+  val or: FunctionSpec[Boolean] { type Args = BooleanList } =
+    FunctionSpec.simple[Boolean, BooleanList]("OR", Arity.atLeastOne) { (args, ctx) =>
+      @annotation.tailrec
+      def loop(remaining: List[TExpr[Boolean]]): Either[EvalError, Boolean] =
+        remaining match
+          case Nil => Right(false)
+          case head :: tail =>
+            ctx.evalExpr(head) match
+              case Left(err) => Left(err)
+              case Right(value) =>
+                if value then Right(true)
+                else loop(tail)
+      loop(args)
+    }
+
+  val not: FunctionSpec[Boolean] { type Args = UnaryBoolean } =
+    FunctionSpec.simple[Boolean, UnaryBoolean]("NOT", Arity.one) { (expr, ctx) =>
+      ctx.evalExpr(expr).map(value => !value)
+    }
+
+  val ifFn: FunctionSpec[Any] { type Args = IfArgs } =
+    FunctionSpec.simple[Any, IfArgs]("IF", Arity.three) { (args, ctx) =>
+      val (condExpr, ifTrueExpr, ifFalseExpr) = args
+      for
+        cond <- ctx.evalExpr(condExpr)
+        result <- if cond then evalAny(ctx, ifTrueExpr) else evalAny(ctx, ifFalseExpr)
+      yield result
+    }
+
+  val iferror: FunctionSpec[CellValue] { type Args = IfErrorArgs } =
+    FunctionSpec.simple[CellValue, IfErrorArgs]("IFERROR", Arity.two) { (args, ctx) =>
+      val (valueExpr, valueIfErrorExpr) = args
+      evalAny(ctx, valueExpr) match
+        case Left(_) =>
+          evalAny(ctx, valueIfErrorExpr).map(toCellValue)
+        case Right(cv: CellValue) =>
+          cv match
+            case CellValue.Error(_) =>
+              evalAny(ctx, valueIfErrorExpr).map(toCellValue)
+            case _ => Right(cv)
+        case Right(other) =>
+          Right(toCellValue(other))
     }
 
   val concatenate: FunctionSpec[String] { type Args = TextList } =

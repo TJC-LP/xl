@@ -195,14 +195,6 @@ private class EvaluatorImpl extends Evaluator:
         val cell = sheet(at)
         decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
 
-      // ===== Conditional =====
-      case TExpr.If(cond, ifTrue, ifFalse) =>
-        // If: evaluate condition, then branch based on result
-        eval(cond, sheet, clock, workbook).flatMap { condValue =>
-          if condValue then eval(ifTrue, sheet, clock, workbook)
-          else eval(ifFalse, sheet, clock, workbook)
-        }
-
       // ===== Arithmetic Operators =====
       case TExpr.Add(x, y) =>
         // Add: evaluate both operands, sum results
@@ -241,33 +233,6 @@ private class EvaluatorImpl extends Evaluator:
               )
             else Right(xv / yv)
         yield result
-
-      // ===== Logical Operators =====
-      case TExpr.And(x, y) =>
-        // And: short-circuit evaluation (if x is false, don't evaluate y)
-        eval(x, sheet, clock, workbook).flatMap {
-          case false =>
-            // Short-circuit: x is false, result is false (don't evaluate y)
-            Right(false)
-          case true =>
-            // x is true, evaluate y to determine final result
-            eval(y, sheet, clock, workbook)
-        }
-
-      case TExpr.Or(x, y) =>
-        // Or: short-circuit evaluation (if x is true, don't evaluate y)
-        eval(x, sheet, clock, workbook).flatMap {
-          case true =>
-            // Short-circuit: x is true, result is true (don't evaluate y)
-            Right(true)
-          case false =>
-            // x is false, evaluate y to determine final result
-            eval(y, sheet, clock, workbook)
-        }
-
-      case TExpr.Not(x) =>
-        // Not: logical negation
-        eval(x, sheet, clock, workbook).map(xv => !xv)
 
       // ===== Comparison Operators =====
       case TExpr.Lt(x, y) =>
@@ -1492,24 +1457,6 @@ private class EvaluatorImpl extends Evaluator:
 
       // ===== Error Handling Functions =====
 
-      case TExpr.Iferror(valueExpr, valueIfErrorExpr) =>
-        // IFERROR: return valueIfError if value results in any error
-        evalAny(valueExpr, sheet, clock, workbook) match
-          case Left(_) =>
-            // Evaluation error occurred - return fallback
-            evalAny(valueIfErrorExpr, sheet, clock, workbook).map(convertToCellValue)
-          case Right(cv: CellValue) =>
-            cv match
-              case CellValue.Error(_) =>
-                // Cell contains error value - return fallback
-                evalAny(valueIfErrorExpr, sheet, clock, workbook).map(convertToCellValue)
-              case _ =>
-                // No error - return original value
-                Right(cv)
-          case Right(other) =>
-            // Non-CellValue result - wrap it
-            Right(convertToCellValue(other))
-
       case TExpr.Iserror(valueExpr) =>
         // ISERROR: return TRUE if value results in any error
         evalAny(valueExpr, sheet, clock, workbook) match
@@ -1967,24 +1914,6 @@ private class EvaluatorImpl extends Evaluator:
       case bd: BigDecimal => bd.toInt
       case n: Number => n.intValue()
       case _ => 0
-
-  /**
-   * Convert any value to CellValue for IFERROR result.
-   */
-  private def convertToCellValue(value: Any): CellValue =
-    value match
-      case cv: CellValue => cv
-      case s: String => CellValue.Text(s)
-      case n: BigDecimal => CellValue.Number(n)
-      case b: Boolean => CellValue.Bool(b)
-      case n: Int => CellValue.Number(BigDecimal(n))
-      case n: Long => CellValue.Number(BigDecimal(n))
-      case n: Double => CellValue.Number(BigDecimal(n))
-      case d: java.time.LocalDate =>
-        CellValue.DateTime(d.atStartOfDay())
-      case dt: java.time.LocalDateTime =>
-        CellValue.DateTime(dt)
-      case other => CellValue.Text(other.toString)
 
   /**
    * Compare two cell values for MATCH function. Returns: 0 if equal, negative if cv < value,

@@ -85,10 +85,6 @@ object FormulaPrinter:
       case TExpr.SheetRange(sheet, range) =>
         s"${formatSheetName(sheet)}!${range.toA1}"
 
-      // Conditional
-      case TExpr.If(cond, ifTrue, ifFalse) =>
-        s"IF(${printExpr(cond, 0)}, ${printExpr(ifTrue, 0)}, ${printExpr(ifFalse, 0)})"
-
       // Arithmetic operators
       case TExpr.Add(x, y) =>
         val result = s"${printExpr(x, Precedence.AddSub)}+${printExpr(y, Precedence.AddSub)}"
@@ -110,18 +106,6 @@ object FormulaPrinter:
       case TExpr.Div(x, y) =>
         val result = s"${printExpr(x, Precedence.MulDiv)}/${printExpr(y, Precedence.MulDiv)}"
         parenthesizeIf(result, precedence > Precedence.MulDiv)
-
-      // Boolean operators
-      case TExpr.And(x, y) =>
-        val result = s"AND(${printExpr(x, 0)}, ${printExpr(y, 0)})"
-        result // Functions don't need precedence-based parens
-
-      case TExpr.Or(x, y) =>
-        val result = s"OR(${printExpr(x, 0)}, ${printExpr(y, 0)})"
-        result
-
-      case TExpr.Not(x) =>
-        s"NOT(${printExpr(x, 0)})"
 
       // Comparison operators
       case TExpr.Eq(x, y) =>
@@ -322,9 +306,6 @@ object FormulaPrinter:
           s"${printExpr(colIndex, 0)}, ${printExpr(rangeLookup, 0)})"
 
       // Error handling functions
-      case TExpr.Iferror(value, valueIfError) =>
-        s"IFERROR(${printExpr(value, 0)}, ${printExpr(valueIfError, 0)})"
-
       case TExpr.Iserror(value) =>
         s"ISERROR(${printExpr(value, 0)})"
 
@@ -622,8 +603,6 @@ object FormulaPrinter:
         s"SheetPolyRef(${sheet.value}, $at, $anchor)"
       case TExpr.SheetRange(sheet, range) =>
         s"SheetRange(${sheet.value}, $range)"
-      case TExpr.If(cond, ifTrue, ifFalse) =>
-        s"If(${printWithTypes(cond)}, ${printWithTypes(ifTrue)}, ${printWithTypes(ifFalse)})"
       case TExpr.Add(x, y) =>
         s"Add(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Sub(x, y) =>
@@ -632,12 +611,6 @@ object FormulaPrinter:
         s"Mul(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Div(x, y) =>
         s"Div(${printWithTypes(x)}, ${printWithTypes(y)})"
-      case TExpr.And(x, y) =>
-        s"And(${printWithTypes(x)}, ${printWithTypes(y)})"
-      case TExpr.Or(x, y) =>
-        s"Or(${printWithTypes(x)}, ${printWithTypes(y)})"
-      case TExpr.Not(x) =>
-        s"Not(${printWithTypes(x)})"
       case TExpr.Eq(x, y) =>
         s"Eq(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Neq(x, y) =>
@@ -756,8 +729,6 @@ object FormulaPrinter:
       case TExpr.VLookup(lookup, table, colIndex, rangeLookup) =>
         s"VLookup(${printWithTypes(lookup)}, ${formatLocation(table)}, " +
           s"${printWithTypes(colIndex)}, ${printWithTypes(rangeLookup)})"
-      case TExpr.Iferror(value, valueIfError) =>
-        s"Iferror(${printWithTypes(value)}, ${printWithTypes(valueIfError)})"
       case TExpr.Iserror(value) =>
         s"Iserror(${printWithTypes(value)})"
       case TExpr.Iserr(value) =>

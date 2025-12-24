@@ -180,8 +180,6 @@ object DependencyGraph:
       case TExpr.Lte(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.Gt(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.Gte(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.And(l, r) => extractDependencies(l) ++ extractDependencies(r)
-      case TExpr.Or(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.ToInt(expr) =>
         extractDependencies(expr) // Type conversion - extract from wrapped expr
       case TExpr.Date(y, m, d) =>
@@ -294,18 +292,7 @@ object DependencyGraph:
           extractDependencies(matchMode) ++
           extractDependencies(searchMode)
 
-      // Ternary operator
-      case TExpr.If(cond, thenBranch, elseBranch) =>
-        extractDependencies(cond) ++ extractDependencies(thenBranch) ++ extractDependencies(
-          elseBranch
-        )
-
-      // Unary operators
-      case TExpr.Not(x) => extractDependencies(x)
-
       // Error handling functions
-      case TExpr.Iferror(value, valueIfError) =>
-        extractDependencies(value) ++ extractDependencies(valueIfError)
       case TExpr.Iserror(value) => extractDependencies(value)
       case TExpr.Iserr(value) => extractDependencies(value)
 
@@ -419,10 +406,6 @@ object DependencyGraph:
       case TExpr.Gt(l, r) =>
         extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
       case TExpr.Gte(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
-      case TExpr.And(l, r) =>
-        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
-      case TExpr.Or(l, r) =>
         extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
       case TExpr.ToInt(expr) => extractDependenciesBounded(expr, bounds)
       case TExpr.Date(y, m, d) =>
@@ -548,19 +531,7 @@ object DependencyGraph:
           extractDependenciesBounded(matchMode, bounds) ++
           extractDependenciesBounded(searchMode, bounds)
 
-      // Ternary operator
-      case TExpr.If(cond, thenBranch, elseBranch) =>
-        extractDependenciesBounded(cond, bounds) ++
-          extractDependenciesBounded(thenBranch, bounds) ++
-          extractDependenciesBounded(elseBranch, bounds)
-
-      // Unary operators
-      case TExpr.Not(x) => extractDependenciesBounded(x, bounds)
-
       // Error handling functions
-      case TExpr.Iferror(value, valueIfError) =>
-        extractDependenciesBounded(value, bounds) ++
-          extractDependenciesBounded(valueIfError, bounds)
       case TExpr.Iserror(value) => extractDependenciesBounded(value, bounds)
       case TExpr.Iserr(value) => extractDependenciesBounded(value, bounds)
 
@@ -1060,19 +1031,7 @@ object DependencyGraph:
           r,
           currentSheet
         )
-      case TExpr.And(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Or(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-
       // Unary operators
-      case TExpr.Not(x) => extractQualifiedDependencies(x, currentSheet)
       case TExpr.ToInt(x) => extractQualifiedDependencies(x, currentSheet)
 
       // Reference functions
@@ -1086,12 +1045,6 @@ object DependencyGraph:
           extractQualifiedDependencies(absNum, currentSheet) ++
           extractQualifiedDependencies(a1Style, currentSheet) ++
           sheetName.map(extractQualifiedDependencies(_, currentSheet)).getOrElse(Set.empty)
-
-      // Ternary
-      case TExpr.If(cond, thenBranch, elseBranch) =>
-        extractQualifiedDependencies(cond, currentSheet) ++
-          extractQualifiedDependencies(thenBranch, currentSheet) ++
-          extractQualifiedDependencies(elseBranch, currentSheet)
 
       // Date functions
       case TExpr.Date(y, m, d) =>
@@ -1276,9 +1229,6 @@ object DependencyGraph:
           extractQualifiedDependencies(matchType, currentSheet)
 
       // Error handling functions
-      case TExpr.Iferror(value, valueIfError) =>
-        extractQualifiedDependencies(value, currentSheet) ++
-          extractQualifiedDependencies(valueIfError, currentSheet)
       case TExpr.Iserror(value) =>
         extractQualifiedDependencies(value, currentSheet)
       case TExpr.Iserr(value) =>

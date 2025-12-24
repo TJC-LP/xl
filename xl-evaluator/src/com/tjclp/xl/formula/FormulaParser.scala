@@ -52,7 +52,7 @@ object FormulaParser:
    * {{{
    * parse("=SUM(A1:B10)") // Right(TExpr.FoldRange(...))
    * parse("=A1+B2")       // Right(TExpr.Add(...))
-   * parse("=IF(A1>0, "Yes", "No")") // Right(TExpr.If(...))
+   * parse("=IF(A1>0, "Yes", "No")") // Right(TExpr.Call(...))
    * }}}
    */
   def parse(input: String): Either[ParseError, TExpr[?]] =
@@ -153,7 +153,13 @@ object FormulaParser:
       if s2.remaining.toUpperCase.startsWith("OR") then
         val s3 = skipWhitespace(s2.advance(2))
         parseLogicalOr(s3).map { case (right, s4) =>
-          (TExpr.Or(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]]), s4)
+          (
+            TExpr.Call(
+              FunctionSpecs.or,
+              List(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]])
+            ),
+            s4
+          )
         }
       else Right((left, s2))
     }
@@ -168,7 +174,13 @@ object FormulaParser:
       if s2.remaining.toUpperCase.startsWith("AND") then
         val s3 = skipWhitespace(s2.advance(3))
         parseLogicalAnd(s3).map { case (right, s4) =>
-          (TExpr.And(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]]), s4)
+          (
+            TExpr.Call(
+              FunctionSpecs.and,
+              List(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]])
+            ),
+            s4
+          )
         }
       else Right((left, s2))
     }
@@ -370,7 +382,7 @@ object FormulaParser:
       case Some('N') | Some('n') if s.remaining.toUpperCase.startsWith("NOT") =>
         val s2 = skipWhitespace(s.advance(3))
         parseUnary(s2).map { case (expr, s3) =>
-          (TExpr.Not(TExpr.asBooleanExpr(expr)), s3) // Convert PolyRef
+          (TExpr.Call(FunctionSpecs.not, TExpr.asBooleanExpr(expr)), s3) // Convert PolyRef
         }
       case _ => parsePrimary(s)
 

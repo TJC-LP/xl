@@ -137,20 +137,6 @@ enum TExpr[A] derives CanEqual:
     decode: Cell => Either[CodecError, A]
   ) extends TExpr[B]
 
-  /**
-   * Conditional expression - if/then/else.
-   *
-   * @param cond
-   *   Boolean condition to evaluate
-   * @param ifTrue
-   *   Expression to evaluate if condition is true
-   * @param ifFalse
-   *   Expression to evaluate if condition is false
-   *
-   * Example: If(Ref(A1) > 0, Lit("Positive"), Lit("Non-positive"))
-   */
-  case If[A](cond: TExpr[Boolean], ifTrue: TExpr[A], ifFalse: TExpr[A]) extends TExpr[A]
-
   // Arithmetic operators (form commutative semiring over BigDecimal)
 
   /**
@@ -185,37 +171,6 @@ enum TExpr[A] derives CanEqual:
    * Note: Division by zero returns evaluation error (not parse error)
    */
   case Div(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
-
-  // Boolean/logical operators
-
-  /**
-   * Logical AND: x && y
-   *
-   * Laws:
-   *   - Commutative: And(x, y) = And(y, x)
-   *   - Associative: And(And(x, y), z) = And(x, And(y, z))
-   *   - Short-circuit: If x evaluates to false, y is not evaluated
-   */
-  case And(x: TExpr[Boolean], y: TExpr[Boolean]) extends TExpr[Boolean]
-
-  /**
-   * Logical OR: x || y
-   *
-   * Laws:
-   *   - Commutative: Or(x, y) = Or(y, x)
-   *   - Associative: Or(Or(x, y), z) = Or(x, Or(y, z))
-   *   - Short-circuit: If x evaluates to true, y is not evaluated
-   */
-  case Or(x: TExpr[Boolean], y: TExpr[Boolean]) extends TExpr[Boolean]
-
-  /**
-   * Logical NOT: !x
-   *
-   * Laws:
-   *   - Double negation: Not(Not(x)) = x
-   *   - De Morgan: Not(And(x, y)) = Or(Not(x), Not(y))
-   */
-  case Not(x: TExpr[Boolean]) extends TExpr[Boolean]
 
   // Range aggregation
 
@@ -910,16 +865,6 @@ enum TExpr[A] derives CanEqual:
   // Error handling functions
 
   /**
-   * Error handler: IFERROR(value, value_if_error)
-   *
-   * Returns value if no error, otherwise returns value_if_error. Catches both evaluation errors and
-   * CellValue.Error values.
-   *
-   * Example: IFERROR(A1/B1, 0) returns 0 if B1 is 0 (division by zero)
-   */
-  case Iferror(value: TExpr[CellValue], valueIfError: TExpr[CellValue]) extends TExpr[CellValue]
-
-  /**
    * Error check: ISERROR(value)
    *
    * Returns TRUE if value results in any error, FALSE otherwise.
@@ -1223,8 +1168,12 @@ object TExpr:
    *
    * Example: TExpr.cond(test, ifTrue, ifFalse)
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def cond[A](test: TExpr[Boolean], ifTrue: TExpr[A], ifFalse: TExpr[A]): TExpr[A] =
-    If(test, ifTrue, ifFalse)
+    Call(
+      FunctionSpecs.ifFn,
+      (test, ifTrue.asInstanceOf[TExpr[Any]], ifFalse.asInstanceOf[TExpr[Any]])
+    ).asInstanceOf[TExpr[A]]
 
   // Convenience constructors for common operations
 
@@ -1511,7 +1460,7 @@ object TExpr:
    * Example: TExpr.iferror(TExpr.Div(...), TExpr.Lit(CellValue.Number(0)))
    */
   def iferror(value: TExpr[CellValue], valueIfError: TExpr[CellValue]): TExpr[CellValue] =
-    Iferror(value, valueIfError)
+    Call(FunctionSpecs.iferror, (value, valueIfError))
 
   /**
    * ISERROR: check if expression results in error.
@@ -2400,13 +2349,7 @@ object TExpr:
     case Sub(l, r) => containsDateFunction(l) || containsDateFunction(r)
     case Mul(l, r) => containsDateFunction(l) || containsDateFunction(r)
     case Div(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    // Conditionals
-    case If(c, t, e) =>
-      containsDateFunction(c) || containsDateFunction(t) || containsDateFunction(e)
-    // Boolean operators
-    case And(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Or(l, r) => containsDateFunction(l) || containsDateFunction(r)
-    case Not(x) => containsDateFunction(x)
+    // Conditionals and logical functions handled via Call args
     // Comparisons
     case Eq(l, r) => containsDateFunction(l) || containsDateFunction(r)
     case Neq(l, r) => containsDateFunction(l) || containsDateFunction(r)
@@ -2415,7 +2358,6 @@ object TExpr:
     case Gt(l, r) => containsDateFunction(l) || containsDateFunction(r)
     case Gte(l, r) => containsDateFunction(l) || containsDateFunction(r)
     // Error handling
-    case Iferror(v, e) => containsDateFunction(v) || containsDateFunction(e)
     case Iserror(v) => containsDateFunction(v)
     case Iserr(v) => containsDateFunction(v)
     case Isnumber(v) => containsDateFunction(v)
@@ -2447,13 +2389,7 @@ object TExpr:
     case Sub(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
     case Mul(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
     case Div(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    // Conditionals
-    case If(c, t, e) =>
-      containsTimeFunction(c) || containsTimeFunction(t) || containsTimeFunction(e)
-    // Boolean operators
-    case And(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Or(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
-    case Not(x) => containsTimeFunction(x)
+    // Conditionals and logical functions handled via Call args
     // Comparisons
     case Eq(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
     case Neq(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
@@ -2462,7 +2398,6 @@ object TExpr:
     case Gt(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
     case Gte(l, r) => containsTimeFunction(l) || containsTimeFunction(r)
     // Error handling
-    case Iferror(v, e) => containsTimeFunction(v) || containsTimeFunction(e)
     case Iserror(v) => containsTimeFunction(v)
     case Iserr(v) => containsTimeFunction(v)
     case Isnumber(v) => containsTimeFunction(v)
@@ -2502,9 +2437,9 @@ object TExpr:
      *
      * Example: expr1 && expr2
      */
-    def &&(y: TExpr[Boolean]): TExpr[Boolean] = And(x, y)
-    def ||(y: TExpr[Boolean]): TExpr[Boolean] = Or(x, y)
-    def unary_! : TExpr[Boolean] = Not(x)
+    def &&(y: TExpr[Boolean]): TExpr[Boolean] = Call(FunctionSpecs.and, List(x, y))
+    def ||(y: TExpr[Boolean]): TExpr[Boolean] = Call(FunctionSpecs.or, List(x, y))
+    def unary_! : TExpr[Boolean] = Call(FunctionSpecs.not, x)
 
   extension [A](x: TExpr[A])
     /**
