@@ -393,10 +393,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=SUM(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("SUM", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "SUM" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-      case other => fail(s"Expected Aggregate(SUM) with Local range, got $other")
+      case other => fail(s"Expected Call(SUM) with Local range, got $other")
     }
   }
 
@@ -404,10 +404,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=COUNT(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("COUNT", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "COUNT" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-      case other => fail(s"Expected Aggregate(COUNT) with Local range, got $other")
+      case other => fail(s"Expected Call(COUNT) with Local range, got $other")
     }
   }
 
@@ -415,27 +415,28 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AVERAGE(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("AVERAGE", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "AVERAGE" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-      case other => fail(s"Expected Aggregate(AVERAGE), got $other")
+      case other => fail(s"Expected Call(AVERAGE), got $other")
     }
   }
 
-  test("SUM/COUNT/AVERAGE create unified Aggregate expression type") {
-    // Verify that each aggregate function creates Aggregate with correct aggregatorId
+  test("SUM/COUNT/AVERAGE parse to spec-backed calls") {
+    // Verify that each aggregate function creates a FunctionSpec call
     val sumResult = FormulaParser.parse("=SUM(A1:A10)")
     val countResult = FormulaParser.parse("=COUNT(A1:A10)")
     val avgResult = FormulaParser.parse("=AVERAGE(A1:A10)")
 
-    // All use unified Aggregate case with different aggregatorIds
     (sumResult, countResult, avgResult) match
       case (
-            Right(TExpr.Aggregate("SUM", _)),
-            Right(TExpr.Aggregate("COUNT", _)),
-            Right(TExpr.Aggregate("AVERAGE", _))
+            Right(TExpr.Call(sumSpec, _: TExpr.RangeLocation)),
+            Right(TExpr.Call(countSpec, _: TExpr.RangeLocation)),
+            Right(TExpr.Call(avgSpec, _: TExpr.RangeLocation))
           ) =>
-        () // Expected types
+        assertEquals(sumSpec.name, "SUM")
+        assertEquals(countSpec.name, "COUNT")
+        assertEquals(avgSpec.name, "AVERAGE")
       case (Right(s), Right(c), Right(a)) =>
         fail(s"Unexpected types: SUM=${s.getClass.getSimpleName}, COUNT=${c.getClass.getSimpleName}, AVERAGE=${a.getClass.getSimpleName}")
       case _ => fail("All three functions should parse successfully")
@@ -632,9 +633,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MIN(A1:A10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("MIN", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "MIN" =>
         assertEquals(range.toA1, "A1:A10")
-      case other => fail(s"Expected Aggregate(MIN), got $other")
+      case other => fail(s"Expected Call(MIN), got $other")
     }
   }
 
@@ -642,9 +643,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MAX(B2:B20)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("MAX", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "MAX" =>
         assertEquals(range.toA1, "B2:B20")
-      case other => fail(s"Expected Aggregate(MAX), got $other")
+      case other => fail(s"Expected Call(MAX), got $other")
     }
   }
 
@@ -958,12 +959,14 @@ class FormulaParserSpec extends ScalaCheckSuite:
   }
 
   test("FunctionParser.lookup finds known parser-based functions") {
-    assert(FunctionParser.lookup("SUM").isDefined)
-    assert(FunctionParser.lookup("min").isDefined) // Case insensitive
     assert(FunctionParser.lookup("TODAY").isDefined)
+    assert(FunctionParser.lookup("VLOOKUP").isDefined)
   }
 
   test("FunctionRegistry.lookup finds spec-based functions") {
+    assert(FunctionRegistry.lookup("SUM").isDefined)
+    assert(FunctionRegistry.lookup("MIN").isDefined)
+    assert(FunctionRegistry.lookup("MAX").isDefined)
     assert(FunctionRegistry.lookup("CONCATENATE").isDefined)
     assert(FunctionRegistry.lookup("LEFT").isDefined)
     assert(FunctionRegistry.lookup("LOWER").isDefined)

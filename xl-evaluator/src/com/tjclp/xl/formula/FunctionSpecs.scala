@@ -12,6 +12,7 @@ object FunctionSpecs:
   private given booleanExpr: ArgSpec[TExpr[Boolean]] = ArgSpec.expr[Boolean]
   private given cellValueExpr: ArgSpec[TExpr[CellValue]] = ArgSpec.expr[CellValue]
   private given dateExpr: ArgSpec[TExpr[LocalDate]] = ArgSpec.expr[LocalDate]
+  private given rangeLocation: ArgSpec[TExpr.RangeLocation] = ArgSpec.rangeLocation
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private given anyExpr: ArgSpec[TExpr[Any]] with
@@ -48,6 +49,7 @@ object FunctionSpecs:
   type UnaryBoolean = TExpr[Boolean]
   type BooleanList = List[TExpr[Boolean]]
   type UnaryCellValue = TExpr[CellValue]
+  type UnaryRange = TExpr.RangeLocation
   type DateInt = (TExpr[LocalDate], TExpr[Int])
   type DatePairUnit = (TExpr[LocalDate], TExpr[LocalDate], TExpr[String])
   type DatePairOptRange = (TExpr[LocalDate], TExpr[LocalDate], Option[CellRange])
@@ -348,6 +350,49 @@ object FunctionSpecs:
     FunctionSpec.simple[BigDecimal, UnaryNumeric]("INT", Arity.one) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.setScale(0, BigDecimal.RoundingMode.FLOOR))
     }
+
+  private def aggregateSpec(
+    name: String
+  ): FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    FunctionSpec.simple[BigDecimal, UnaryRange](name, Arity.one) { (location, ctx) =>
+      ctx.evalExpr(TExpr.Aggregate(name, location))
+    }
+
+  val sum: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("SUM")
+
+  val count: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("COUNT")
+
+  val counta: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("COUNTA")
+
+  val countblank: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("COUNTBLANK")
+
+  val average: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("AVERAGE")
+
+  val min: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("MIN")
+
+  val max: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("MAX")
+
+  val median: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("MEDIAN")
+
+  val stdev: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("STDEV")
+
+  val stdevp: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("STDEVP")
+
+  val variance: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("VAR")
+
+  val variancep: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
+    aggregateSpec("VARP")
 
   val and: FunctionSpec[Boolean] { type Args = BooleanList } =
     FunctionSpec.simple[Boolean, BooleanList]("AND", Arity.atLeastOne) { (args, ctx) =>
