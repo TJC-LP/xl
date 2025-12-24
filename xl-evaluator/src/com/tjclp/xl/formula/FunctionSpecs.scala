@@ -67,6 +67,48 @@ object FunctionSpecs:
   type DatePairOptBasis = (TExpr[LocalDate], TExpr[LocalDate], Option[TExpr[Int]])
   type IfArgs = (TExpr[Boolean], TExpr[Any], TExpr[Any])
   type IfErrorArgs = (TExpr[CellValue], TExpr[CellValue])
+  type NoArgs = EmptyTuple
+  type DateTripleInt = (TExpr[Int], TExpr[Int], TExpr[Int])
+  type UnaryDate = TExpr[LocalDate]
+  type AnyExpr = TExpr[Any]
+  type NpvArgs = (TExpr[BigDecimal], CellRange)
+  type IrrArgs = (CellRange, Option[TExpr[BigDecimal]])
+  type VlookupArgs = (TExpr[CellValue], TExpr.RangeLocation, TExpr[Int], Option[TExpr[Boolean]])
+  type SumProductArgs = List[CellRange]
+  type XLookupArgs = (
+    AnyExpr,
+    CellRange,
+    CellRange,
+    Option[AnyExpr],
+    Option[TExpr[Int]],
+    Option[TExpr[Int]]
+  )
+  type IndexArgs = (CellRange, TExpr[BigDecimal], Option[TExpr[BigDecimal]])
+  type MatchArgs = (AnyExpr, CellRange, Option[TExpr[BigDecimal]])
+  type AddressArgs = (
+    TExpr[BigDecimal],
+    TExpr[BigDecimal],
+    Option[TExpr[BigDecimal]],
+    Option[TExpr[Boolean]],
+    Option[TExpr[String]]
+  )
+  type XnpvArgs = (TExpr[BigDecimal], CellRange, CellRange)
+  type XirrArgs = (CellRange, CellRange, Option[TExpr[BigDecimal]])
+  type TvmArgs = (
+    TExpr[BigDecimal],
+    TExpr[BigDecimal],
+    TExpr[BigDecimal],
+    Option[TExpr[BigDecimal]],
+    Option[TExpr[BigDecimal]]
+  )
+  type RateArgs = (
+    TExpr[BigDecimal],
+    TExpr[BigDecimal],
+    TExpr[BigDecimal],
+    Option[TExpr[BigDecimal]],
+    Option[TExpr[BigDecimal]],
+    Option[TExpr[BigDecimal]]
+  )
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalAny(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
@@ -569,6 +611,54 @@ object FunctionSpecs:
         case Right(_) => Right(false)
     }
 
+  val today: FunctionSpec[LocalDate] { type Args = NoArgs } =
+    FunctionSpec.simple[LocalDate, NoArgs](
+      "TODAY",
+      Arity.none,
+      flags = FunctionFlags(returnsDate = true)
+    ) { (_, ctx) =>
+      Right(ctx.clock.today())
+    }
+
+  val now: FunctionSpec[java.time.LocalDateTime] { type Args = NoArgs } =
+    FunctionSpec.simple[java.time.LocalDateTime, NoArgs](
+      "NOW",
+      Arity.none,
+      flags = FunctionFlags(returnsTime = true)
+    ) { (_, ctx) =>
+      Right(ctx.clock.now())
+    }
+
+  val pi: FunctionSpec[BigDecimal] { type Args = NoArgs } =
+    FunctionSpec.simple[BigDecimal, NoArgs]("PI", Arity.none) { (_, _) =>
+      Right(BigDecimal(Math.PI))
+    }
+
+  val date: FunctionSpec[LocalDate] { type Args = DateTripleInt } =
+    FunctionSpec.simple[LocalDate, DateTripleInt](
+      "DATE",
+      Arity.three,
+      flags = FunctionFlags(returnsDate = true)
+    ) { (args, ctx) =>
+      val (yearExpr, monthExpr, dayExpr) = args
+      ctx.evalExpr(TExpr.Date(yearExpr, monthExpr, dayExpr))
+    }
+
+  val year: FunctionSpec[BigDecimal] { type Args = UnaryDate } =
+    FunctionSpec.simple[BigDecimal, UnaryDate]("YEAR", Arity.one) { (expr, ctx) =>
+      ctx.evalExpr(TExpr.Year(expr))
+    }
+
+  val month: FunctionSpec[BigDecimal] { type Args = UnaryDate } =
+    FunctionSpec.simple[BigDecimal, UnaryDate]("MONTH", Arity.one) { (expr, ctx) =>
+      ctx.evalExpr(TExpr.Month(expr))
+    }
+
+  val day: FunctionSpec[BigDecimal] { type Args = UnaryDate } =
+    FunctionSpec.simple[BigDecimal, UnaryDate]("DAY", Arity.one) { (expr, ctx) =>
+      ctx.evalExpr(TExpr.Day(expr))
+    }
+
   val eomonth: FunctionSpec[LocalDate] { type Args = DateInt } =
     FunctionSpec.simple[LocalDate, DateInt](
       "EOMONTH",
@@ -754,6 +844,154 @@ object FunctionSpecs:
               )
             )
       yield result
+    }
+
+  val npv: FunctionSpec[BigDecimal] { type Args = NpvArgs } =
+    FunctionSpec.simple[BigDecimal, NpvArgs]("NPV", Arity.two) { (args, ctx) =>
+      val (rateExpr, range) = args
+      ctx.evalExpr(TExpr.npv(rateExpr, range))
+    }
+
+  val irr: FunctionSpec[BigDecimal] { type Args = IrrArgs } =
+    FunctionSpec.simple[BigDecimal, IrrArgs]("IRR", Arity.Range(1, 2)) { (args, ctx) =>
+      val (range, guessOpt) = args
+      ctx.evalExpr(TExpr.irr(range, guessOpt))
+    }
+
+  val xnpv: FunctionSpec[BigDecimal] { type Args = XnpvArgs } =
+    FunctionSpec.simple[BigDecimal, XnpvArgs]("XNPV", Arity.three) { (args, ctx) =>
+      val (rateExpr, valuesRange, datesRange) = args
+      ctx.evalExpr(TExpr.xnpv(rateExpr, valuesRange, datesRange))
+    }
+
+  val xirr: FunctionSpec[BigDecimal] { type Args = XirrArgs } =
+    FunctionSpec.simple[BigDecimal, XirrArgs]("XIRR", Arity.Range(2, 3)) { (args, ctx) =>
+      val (valuesRange, datesRange, guessOpt) = args
+      ctx.evalExpr(TExpr.xirr(valuesRange, datesRange, guessOpt))
+    }
+
+  val pmt: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
+    FunctionSpec.simple[BigDecimal, TvmArgs]("PMT", Arity.Range(3, 5)) { (args, ctx) =>
+      val (rateExpr, nperExpr, pvExpr, fvOpt, typeOpt) = args
+      ctx.evalExpr(TExpr.pmt(rateExpr, nperExpr, pvExpr, fvOpt, typeOpt))
+    }
+
+  val fv: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
+    FunctionSpec.simple[BigDecimal, TvmArgs]("FV", Arity.Range(3, 5)) { (args, ctx) =>
+      val (rateExpr, nperExpr, pmtExpr, pvOpt, typeOpt) = args
+      ctx.evalExpr(TExpr.fv(rateExpr, nperExpr, pmtExpr, pvOpt, typeOpt))
+    }
+
+  val pv: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
+    FunctionSpec.simple[BigDecimal, TvmArgs]("PV", Arity.Range(3, 5)) { (args, ctx) =>
+      val (rateExpr, nperExpr, pmtExpr, fvOpt, typeOpt) = args
+      ctx.evalExpr(TExpr.pv(rateExpr, nperExpr, pmtExpr, fvOpt, typeOpt))
+    }
+
+  val nper: FunctionSpec[BigDecimal] { type Args = TvmArgs } =
+    FunctionSpec.simple[BigDecimal, TvmArgs]("NPER", Arity.Range(3, 5)) { (args, ctx) =>
+      val (rateExpr, pmtExpr, pvExpr, fvOpt, typeOpt) = args
+      ctx.evalExpr(TExpr.nper(rateExpr, pmtExpr, pvExpr, fvOpt, typeOpt))
+    }
+
+  val rate: FunctionSpec[BigDecimal] { type Args = RateArgs } =
+    FunctionSpec.simple[BigDecimal, RateArgs]("RATE", Arity.Range(3, 6)) { (args, ctx) =>
+      val (nperExpr, pmtExpr, pvExpr, fvOpt, typeOpt, guessOpt) = args
+      ctx.evalExpr(TExpr.rate(nperExpr, pmtExpr, pvExpr, fvOpt, typeOpt, guessOpt))
+    }
+
+  val vlookup: FunctionSpec[CellValue] { type Args = VlookupArgs } =
+    FunctionSpec.simple[CellValue, VlookupArgs]("VLOOKUP", Arity.Range(3, 4)) { (args, ctx) =>
+      val (lookupExpr, table, colIndexExpr, rangeLookupOpt) = args
+      val rangeLookupExpr = rangeLookupOpt.getOrElse(TExpr.Lit(true))
+      ctx.evalExpr(TExpr.vlookupWithLocation(lookupExpr, table, colIndexExpr, rangeLookupExpr))
+    }
+
+  val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
+    FunctionSpec.simple[BigDecimal, SumProductArgs]("SUMPRODUCT", Arity.atLeastOne) {
+      (arrays, ctx) =>
+        ctx.evalExpr(TExpr.sumProduct(arrays))
+    }
+
+  val xlookup: FunctionSpec[CellValue] { type Args = XLookupArgs } =
+    FunctionSpec.simple[CellValue, XLookupArgs]("XLOOKUP", Arity.Range(3, 6)) { (args, ctx) =>
+      val (lookupValue, lookupArray, returnArray, ifNotFoundOpt, matchModeOpt, searchModeOpt) =
+        args
+      val matchModeExpr = matchModeOpt.getOrElse(TExpr.Lit(0))
+      val searchModeExpr = searchModeOpt.getOrElse(TExpr.Lit(1))
+      ctx.evalExpr(
+        TExpr.xlookup(
+          lookupValue,
+          lookupArray,
+          returnArray,
+          ifNotFoundOpt,
+          matchModeExpr,
+          searchModeExpr
+        )
+      )
+    }
+
+  val row: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
+    FunctionSpec.simple[BigDecimal, AnyExpr]("ROW", Arity.one) { (expr, ctx) =>
+      ctx.evalExpr(TExpr.row(expr))
+    }
+
+  val column: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
+    FunctionSpec.simple[BigDecimal, AnyExpr]("COLUMN", Arity.one) { (expr, ctx) =>
+      ctx.evalExpr(TExpr.column(expr))
+    }
+
+  val rows: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
+    FunctionSpec.simple[BigDecimal, AnyExpr](
+      "ROWS",
+      Arity.one,
+      renderFn = Some { (expr, printer) =>
+        val rendered = expr match
+          case TExpr.FoldRange(range, _, _, _) => printer.cellRange(range)
+          case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
+            printer.location(TExpr.RangeLocation.CrossSheet(sheet, range))
+          case other => printer.expr(other)
+        s"ROWS($rendered)"
+      }
+    ) { (expr, ctx) =>
+      ctx.evalExpr(TExpr.rows(expr))
+    }
+
+  val columns: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
+    FunctionSpec.simple[BigDecimal, AnyExpr](
+      "COLUMNS",
+      Arity.one,
+      renderFn = Some { (expr, printer) =>
+        val rendered = expr match
+          case TExpr.FoldRange(range, _, _, _) => printer.cellRange(range)
+          case TExpr.SheetFoldRange(sheet, range, _, _, _) =>
+            printer.location(TExpr.RangeLocation.CrossSheet(sheet, range))
+          case other => printer.expr(other)
+        s"COLUMNS($rendered)"
+      }
+    ) { (expr, ctx) =>
+      ctx.evalExpr(TExpr.columns(expr))
+    }
+
+  val address: FunctionSpec[String] { type Args = AddressArgs } =
+    FunctionSpec.simple[String, AddressArgs]("ADDRESS", Arity.Range(2, 5)) { (args, ctx) =>
+      val (rowExpr, colExpr, absNumOpt, a1Opt, sheetOpt) = args
+      val absNumExpr = absNumOpt.getOrElse(TExpr.Lit(BigDecimal(1)))
+      val a1Expr = a1Opt.getOrElse(TExpr.Lit(true))
+      ctx.evalExpr(TExpr.address(rowExpr, colExpr, absNumExpr, a1Expr, sheetOpt))
+    }
+
+  val index: FunctionSpec[CellValue] { type Args = IndexArgs } =
+    FunctionSpec.simple[CellValue, IndexArgs]("INDEX", Arity.Range(2, 3)) { (args, ctx) =>
+      val (array, rowNumExpr, colNumOpt) = args
+      ctx.evalExpr(TExpr.index(array, rowNumExpr, colNumOpt))
+    }
+
+  val matchFn: FunctionSpec[BigDecimal] { type Args = MatchArgs } =
+    FunctionSpec.simple[BigDecimal, MatchArgs]("MATCH", Arity.Range(2, 3)) { (args, ctx) =>
+      val (lookupValue, lookupArray, matchTypeOpt) = args
+      val matchTypeExpr = matchTypeOpt.getOrElse(TExpr.Lit(BigDecimal(1)))
+      ctx.evalExpr(TExpr.matchExpr(lookupValue, lookupArray, matchTypeExpr))
     }
 
   val concatenate: FunctionSpec[String] { type Args = TextList } =
