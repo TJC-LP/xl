@@ -1,9 +1,22 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.addressing.CellRange
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
 trait FunctionSpecsFinancial extends FunctionSpecsBase:
+  private def numericValues(range: CellRange, ctx: EvalContext): List[BigDecimal] =
+    range.cells
+      .map(ref => ctx.sheet(ref))
+      .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
+      .toList
+
+  private def dateValues(range: CellRange, ctx: EvalContext): List[LocalDate] =
+    range.cells
+      .map(ref => ctx.sheet(ref))
+      .flatMap(cell => TExpr.decodeDate(cell).toOption)
+      .toList
+
   val npv: FunctionSpec[BigDecimal] { type Args = NpvArgs } =
     FunctionSpec.simple[BigDecimal, NpvArgs]("NPV", Arity.two) { (args, ctx) =>
       val (rateExpr, range) = args
@@ -17,11 +30,7 @@ trait FunctionSpecsFinancial extends FunctionSpecsBase:
             )
           )
         else
-          val cashFlows: List[BigDecimal] =
-            range.cells
-              .map(ref => ctx.sheet(ref))
-              .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
-              .toList
+          val cashFlows = numericValues(range, ctx)
 
           val npv =
             cashFlows.zipWithIndex.foldLeft(BigDecimal(0)) { case (acc, (cf, idx)) =>
@@ -35,11 +44,7 @@ trait FunctionSpecsFinancial extends FunctionSpecsBase:
   val irr: FunctionSpec[BigDecimal] { type Args = IrrArgs } =
     FunctionSpec.simple[BigDecimal, IrrArgs]("IRR", Arity.Range(1, 2)) { (args, ctx) =>
       val (range, guessOpt) = args
-      val cashFlows: List[BigDecimal] =
-        range.cells
-          .map(ref => ctx.sheet(ref))
-          .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
-          .toList
+      val cashFlows = numericValues(range, ctx)
 
       if cashFlows.isEmpty || !cashFlows.exists(_ < 0) || !cashFlows.exists(_ > 0) then
         Left(
@@ -107,17 +112,8 @@ trait FunctionSpecsFinancial extends FunctionSpecsBase:
       for
         rate <- ctx.evalExpr(rateExpr)
         result <- {
-          val values: List[BigDecimal] =
-            valuesRange.cells
-              .map(ref => ctx.sheet(ref))
-              .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
-              .toList
-
-          val dates: List[LocalDate] =
-            datesRange.cells
-              .map(ref => ctx.sheet(ref))
-              .flatMap(cell => TExpr.decodeDate(cell).toOption)
-              .toList
+          val values = numericValues(valuesRange, ctx)
+          val dates = dateValues(datesRange, ctx)
 
           if values.isEmpty || dates.isEmpty then
             Left(
@@ -153,17 +149,8 @@ trait FunctionSpecsFinancial extends FunctionSpecsBase:
   val xirr: FunctionSpec[BigDecimal] { type Args = XirrArgs } =
     FunctionSpec.simple[BigDecimal, XirrArgs]("XIRR", Arity.Range(2, 3)) { (args, ctx) =>
       val (valuesRange, datesRange, guessOpt) = args
-      val values: List[BigDecimal] =
-        valuesRange.cells
-          .map(ref => ctx.sheet(ref))
-          .flatMap(cell => TExpr.decodeNumeric(cell).toOption)
-          .toList
-
-      val dates: List[LocalDate] =
-        datesRange.cells
-          .map(ref => ctx.sheet(ref))
-          .flatMap(cell => TExpr.decodeDate(cell).toOption)
-          .toList
+      val values = numericValues(valuesRange, ctx)
+      val dates = dateValues(datesRange, ctx)
 
       if values.isEmpty || dates.isEmpty then
         Left(

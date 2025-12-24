@@ -1,9 +1,19 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.addressing.CellRange
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
 trait FunctionSpecsDateTime extends FunctionSpecsBase:
+  private def holidaySet(rangeOpt: Option[CellRange], ctx: EvalContext): Set[LocalDate] =
+    rangeOpt
+      .map { range =>
+        range.cells
+          .flatMap(ref => TExpr.decodeDate(ctx.sheet(ref)).toOption)
+          .toSet
+      }
+      .getOrElse(Set.empty)
+
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def countWorkingDays(
     earlier: LocalDate,
@@ -176,13 +186,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
           start <- ctx.evalExpr(startDateExpr)
           end <- ctx.evalExpr(endDateExpr)
         yield
-          val holidays: Set[LocalDate] = holidaysOpt
-            .map { range =>
-              range.cells
-                .flatMap(ref => TExpr.decodeDate(ctx.sheet(ref)).toOption)
-                .toSet
-            }
-            .getOrElse(Set.empty)
+          val holidays = holidaySet(holidaysOpt, ctx)
 
           val (earlier, later) = if start.isBefore(end) then (start, end) else (end, start)
           val count = countWorkingDays(earlier, later, holidays)
@@ -201,13 +205,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
         daysRaw <- evalAny(ctx, daysExpr)
       yield
         val daysValue = toInt(daysRaw)
-        val holidays: Set[LocalDate] = holidaysOpt
-          .map { range =>
-            range.cells
-              .flatMap(ref => TExpr.decodeDate(ctx.sheet(ref)).toOption)
-              .toSet
-          }
-          .getOrElse(Set.empty)
+        val holidays = holidaySet(holidaysOpt, ctx)
         addWorkingDays(start, daysValue, holidays)
     }
 
