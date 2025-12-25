@@ -4,6 +4,7 @@ import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.ooxml.{WriterConfig, XmlBackend}
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.addressing.Column
 import org.apache.poi.ss.usermodel.{
@@ -72,8 +73,20 @@ class PoiComparisonBenchmark {
   var xlWriteFile: Path = uninitialized
   var poiWriteFile: Path = uninitialized
 
+  // Pre-configured WriterConfigs for backend comparison
+  val saxStaxConfig: WriterConfig = WriterConfig.default.copy(backend = XmlBackend.SaxStax)
+  val scalaXmlConfig: WriterConfig = WriterConfig.default.copy(backend = XmlBackend.ScalaXml)
+
+  val excel: ExcelIO[IO] = ExcelIO.instance[IO]
+
+  // Pre-initialized SAX parser factory for fair POI streaming comparison
+  // (XL's ExcelIO.instance is also pre-initialized - this levels the playing field)
+  var saxParserFactory: SAXParserFactory = uninitialized
+
   @Setup(Level.Trial)
   def setup(): Unit = {
+    // Initialize SAX parser factory once (not measured in benchmarks)
+    saxParserFactory = SAXParserFactory.newInstance()
     // Generate verifiable workbook (cell A{i} = i for arithmetic series sum validation)
     xlWorkbook = BenchmarkUtils.createVerifiableWorkbook(rows)
     expectedSum = BenchmarkUtils.expectedSum(rows)
@@ -158,15 +171,15 @@ class PoiComparisonBenchmark {
   }
 
   @Benchmark
-  def xlWrite(): Unit = {
-    // XL write performance (ScalaXml backend - default)
-    ExcelIO.instance[IO].write(xlWorkbook, xlWriteFile).unsafeRunSync()
+  def xlWriteSaxStax(): Unit = {
+    // XL write performance with SaxStax backend (default since 0.5.0)
+    excel.writeWith(xlWorkbook, xlWriteFile, saxStaxConfig).unsafeRunSync()
   }
 
   @Benchmark
-  def xlWriteFast(): Unit = {
-    // XL write performance (SaxStax backend - optimized)
-    ExcelIO.instance[IO].writeFast(xlWorkbook, xlWriteFile).unsafeRunSync()
+  def xlWriteScalaXml(): Unit = {
+    // XL write performance with ScalaXml backend (for comparison)
+    excel.writeWith(xlWorkbook, xlWriteFile, scalaXmlConfig).unsafeRunSync()
   }
 
   @Benchmark
@@ -336,7 +349,7 @@ class PoiComparisonBenchmark {
     val pkg = org.apache.poi.openxml4j.opc.OPCPackage.open(path.toFile)
     try {
       val reader = new org.apache.poi.xssf.eventusermodel.XSSFReader(pkg)
-      val parser = SAXParserFactory.newInstance().newSAXParser()
+      val parser = saxParserFactory.newSAXParser() // Use pre-initialized factory (fair comparison)
       val sheetsIter = reader.getSheetsData()
       sheetsIter.asScala.map { sheetStream =>
         try saxSumColumnA(parser, sheetStream)
@@ -349,7 +362,7 @@ class PoiComparisonBenchmark {
     val pkg = org.apache.poi.openxml4j.opc.OPCPackage.open(path.toFile)
     try {
       val reader = new org.apache.poi.xssf.eventusermodel.XSSFReader(pkg)
-      val parser = SAXParserFactory.newInstance().newSAXParser()
+      val parser = saxParserFactory.newSAXParser() // Use pre-initialized factory (fair comparison)
       val sheetsIter = reader.getSheetsData()
       sheetsIter.asScala.map { sheetStream =>
         try saxSumColumnAMaterialized(parser, sheetStream)
