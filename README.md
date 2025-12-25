@@ -36,7 +36,6 @@ import com.tjclp.xl.{*, given}
 - [Key Features](#key-features)
 - [CLI](#cli)
 - [Documentation](#documentation)
-- [Project Status](#project-status)
 - [Contributing](#contributing)
 
 ## Why XL?
@@ -114,7 +113,7 @@ sheet.put("A1" -> text)  // Multiple formats in one cell
 
 ### Formula System
 
-**47 built-in functions** with type-safe evaluation and dependency analysis.
+Type-safe evaluation and dependency analysis.
 
 ```scala 3 ignore
 // Add formulas to cells
@@ -187,19 +186,6 @@ See [docs/plan/xl-cli.md](docs/plan/xl-cli.md) for full command reference.
 scala-cli run examples/quick_start.sc
 scala-cli run examples/financial_model.sc
 ```
-
-## Project Status
-
-| Feature | Status | Tests |
-|---------|--------|-------|
-| Core Domain | Production | 500+ |
-| OOXML Read/Write | Production | 145+ |
-| Streaming I/O | Production | 30+ |
-| Formula System (47 functions) | Production | 169+ |
-| Excel Tables | Production | 45+ |
-| **Total** | **800+ tests** | |
-
-See [docs/STATUS.md](docs/STATUS.md) for details and [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for known limitations.
 
 ## Development
 
