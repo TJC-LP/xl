@@ -19,10 +19,12 @@ import scala.xml.Elem
  * Goal: Quantify performance difference between backends to validate optimization claims and
  * identify bottlenecks in the write path.
  *
- * Results (Phase 2): ScalaXml is 5-6x FASTER than SaxStax because both build intermediate Elem
- * trees via toXml(). SaxStax adds overhead converting Elem → SAX events.
+ * SaxStax is the default backend since 0.5.0 due to:
+ *   - Direct streaming to output (no intermediate String allocation)
+ *   - Better memory efficiency for large workbooks
+ *   - Surgical modification support (modify existing OOXML in place)
  *
- * Phase 3: Isolate toXml() vs serialization to identify true bottleneck.
+ * Phase 3 isolation benchmarks: Separate toXml() from serialization to identify true bottleneck.
  *
  * Run with: ./mill xl-benchmarks.runJmh -- SaxWriterBenchmark
  */
@@ -85,20 +87,12 @@ class SaxWriterBenchmark {
     excel.writeWith(workbook, scalaXmlWriteFile, scalaXmlConfig).unsafeRunSync()
   }
 
-  // ===== SaxStax Backend =====
+  // ===== SaxStax Backend (default since 0.5.0) =====
 
   @Benchmark
   def writeSaxStax(): Unit = {
-    // Write using SaxStax backend (builds Elem tree, converts to SAX events)
+    // Write using SaxStax backend (default since 0.5.0)
     excel.writeWith(workbook, saxStaxWriteFile, saxStaxConfig).unsafeRunSync()
-  }
-
-  // ===== writeFast() convenience method =====
-
-  @Benchmark
-  def writeFast(): Unit = {
-    // Use the convenience method (internally uses SaxStax)
-    excel.writeFast(workbook, saxStaxWriteFile).unsafeRunSync()
   }
 
   // ===== Isolation Benchmarks (Phase 3) =====
