@@ -8,7 +8,7 @@ import java.nio.file.{Files, Path, StandardCopyOption}
 import java.nio.charset.StandardCharsets
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try, Using}
-import com.tjclp.xl.api.{Workbook, CellValue}
+import com.tjclp.xl.api.{Sheet, Workbook, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext}
 import com.tjclp.xl.richtext.RichText
@@ -506,7 +506,9 @@ object XlsxWriter:
           vmlDrawings,
           tablesBySheet,
           tableIdMap,
-          config
+          config,
+          Some(workbook),
+          sheetRemappings
         )
       case OutputStreamTarget(stream) =>
         writeZipToStream(
@@ -522,7 +524,9 @@ object XlsxWriter:
           vmlDrawings,
           tablesBySheet,
           tableIdMap,
-          config
+          config,
+          Some(workbook),
+          sheetRemappings
         )
 
   /** Write all parts to ZIP file */
@@ -539,59 +543,30 @@ object XlsxWriter:
     vmlDrawings: Map[Int, String],
     tablesBySheet: Map[Int, Seq[(TableSpec, Long)]],
     tableIdMap: Map[String, Long],
-    config: WriterConfig
+    config: WriterConfig,
+    domainWorkbook: Option[Workbook] = None,
+    sheetRemappings: Map[Int, Map[Int, Int]] = Map.empty
   ): Unit =
     val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
     zip.setLevel(1) // Match Excel's compression level (super fast)
     try
-      // Write parts in canonical order
-      writePart(zip, "[Content_Types].xml", contentTypes, config)
-      writePart(zip, "_rels/.rels", rootRels, config)
-      writePart(zip, "xl/workbook.xml", workbook, config)
-      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels, config)
-
-      // Write styles
-      writeStyles(zip, "xl/styles.xml", styles, config)
-
-      // Write shared strings if present
-      sst.foreach { sharedStrings =>
-        writeSharedStrings(zip, "xl/sharedStrings.xml", sharedStrings, config)
-      }
-
-      // Write worksheets
-      sheets.zipWithIndex.foreach { case (sheet, idx) =>
-        writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet, config)
-
-        // Write worksheet relationships if this sheet has comments or tables
-        val hasComments = commentsBySheet.contains(idx)
-        val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
-
-        if hasComments || tableIds.nonEmpty then
-          val sheetRels = buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
-          writePart(
-            zip,
-            s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels",
-            sheetRels,
-            config
-          )
-      }
-
-      // Write comment files and VML drawings for sheets with comments
-      commentsBySheet.foreach { case (idx, comments) =>
-        writePart(zip, s"xl/comments${idx + 1}.xml", comments, config)
-
-        // Write VML drawing for comment indicators
-        vmlDrawings.get(idx).foreach { vmlXml =>
-          writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
-        }
-      }
-
-      // Write table files for all sheets
-      tablesBySheet.values.flatten.foreach { case (tableSpec, tableId) =>
-        val ooxmlTable = TableConversions.toOoxml(tableSpec, tableId)
-        writePart(zip, s"xl/tables/table$tableId.xml", ooxmlTable, config)
-      }
-
+      writeZipContents(
+        zip,
+        contentTypes,
+        rootRels,
+        workbookRels,
+        workbook,
+        sheets,
+        styles,
+        sst,
+        commentsBySheet,
+        vmlDrawings,
+        tablesBySheet,
+        tableIdMap,
+        config,
+        domainWorkbook,
+        sheetRemappings
+      )
     finally zip.close()
 
   /** Write all parts to ZIP stream (for OutputStreamTarget) */
@@ -608,60 +583,171 @@ object XlsxWriter:
     vmlDrawings: Map[Int, String],
     tablesBySheet: Map[Int, Seq[(TableSpec, Long)]],
     tableIdMap: Map[String, Long],
-    config: WriterConfig
+    config: WriterConfig,
+    domainWorkbook: Option[Workbook] = None,
+    sheetRemappings: Map[Int, Map[Int, Int]] = Map.empty
   ): Unit =
     val zip = new ZipOutputStream(stream)
     zip.setLevel(1) // Match Excel's compression level (super fast)
     try
-      // Write parts in canonical order
-      writePart(zip, "[Content_Types].xml", contentTypes, config)
-      writePart(zip, "_rels/.rels", rootRels, config)
-      writePart(zip, "xl/workbook.xml", workbook, config)
-      writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels, config)
+      writeZipContents(
+        zip,
+        contentTypes,
+        rootRels,
+        workbookRels,
+        workbook,
+        sheets,
+        styles,
+        sst,
+        commentsBySheet,
+        vmlDrawings,
+        tablesBySheet,
+        tableIdMap,
+        config,
+        domainWorkbook,
+        sheetRemappings
+      )
+    finally zip.close()
 
-      // Write styles
-      writeStyles(zip, "xl/styles.xml", styles, config)
+  /** Common logic for writing all parts to a ZIP stream */
+  private def writeZipContents(
+    zip: ZipOutputStream,
+    contentTypes: ContentTypes,
+    rootRels: Relationships,
+    workbookRels: Relationships,
+    workbook: OoxmlWorkbook,
+    sheets: Vector[OoxmlWorksheet],
+    styles: OoxmlStyles,
+    sst: Option[SharedStrings],
+    commentsBySheet: Map[Int, OoxmlComments],
+    vmlDrawings: Map[Int, String],
+    tablesBySheet: Map[Int, Seq[(TableSpec, Long)]],
+    tableIdMap: Map[String, Long],
+    config: WriterConfig,
+    domainWorkbook: Option[Workbook],
+    sheetRemappings: Map[Int, Map[Int, Int]]
+  ): Unit =
+    // Write parts in canonical order
+    writePart(zip, "[Content_Types].xml", contentTypes, config)
+    writePart(zip, "_rels/.rels", rootRels, config)
+    writePart(zip, "xl/workbook.xml", workbook, config)
+    writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels, config)
 
-      // Write shared strings if present
-      sst.foreach { sharedStrings =>
-        writeSharedStrings(zip, "xl/sharedStrings.xml", sharedStrings, config)
-      }
+    // Write styles
+    writeStyles(zip, "xl/styles.xml", styles, config)
 
-      // Write worksheets
-      sheets.zipWithIndex.foreach { case (sheet, idx) =>
-        writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet, config)
+    // Write shared strings if present
+    sst.foreach { sharedStrings =>
+      writeSharedStrings(zip, "xl/sharedStrings.xml", sharedStrings, config)
+    }
 
-        // Write worksheet relationships if this sheet has comments or tables
-        val hasComments = commentsBySheet.contains(idx)
-        val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
-
-        if hasComments || tableIds.nonEmpty then
-          val sheetRels = buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
-          writePart(
+    // Write worksheets
+    sheets.zipWithIndex.foreach { case (sheet, idx) =>
+      // For SaxStax backend with domain workbook available, use direct emission
+      (config.backend, domainWorkbook) match
+        case (XmlBackend.SaxStax, Some(dwb)) =>
+          val domainSheet = dwb.sheets(idx)
+          val remapping = sheetRemappings.getOrElse(idx, Map.empty)
+          val escapeFormulas = config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
+          writeWorksheetDirect(
             zip,
-            s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels",
-            sheetRels,
+            s"xl/worksheets/sheet${idx + 1}.xml",
+            domainSheet,
+            sst,
+            remapping,
+            sheet.tableParts,
+            escapeFormulas,
             config
           )
+        case _ =>
+          writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet, config)
+
+      // Write worksheet relationships if this sheet has comments or tables
+      val hasComments = commentsBySheet.contains(idx)
+      val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
+
+      if hasComments || tableIds.nonEmpty then
+        val sheetRels = buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
+        writePart(
+          zip,
+          s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels",
+          sheetRels,
+          config
+        )
+    }
+
+    // Write comment files and VML drawings for sheets with comments
+    commentsBySheet.foreach { case (idx, comments) =>
+      writePart(zip, s"xl/comments${idx + 1}.xml", comments, config)
+
+      // Write VML drawing for comment indicators
+      vmlDrawings.get(idx).foreach { vmlXml =>
+        writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
       }
+    }
 
-      // Write comment files and VML drawings for sheets with comments
-      commentsBySheet.foreach { case (idx, comments) =>
-        writePart(zip, s"xl/comments${idx + 1}.xml", comments, config)
+    // Write table files for all sheets
+    tablesBySheet.values.flatten.foreach { case (tableSpec, tableId) =>
+      val ooxmlTable = TableConversions.toOoxml(tableSpec, tableId)
+      writePart(zip, s"xl/tables/table$tableId.xml", ooxmlTable, config)
+    }
 
-        // Write VML drawing for comment indicators
-        vmlDrawings.get(idx).foreach { vmlXml =>
-          writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
-        }
-      }
+  /** Write worksheet directly from domain Sheet using DirectSaxEmitter */
+  private def writeWorksheetDirect(
+    zip: ZipOutputStream,
+    entryName: String,
+    sheet: Sheet,
+    sst: Option[SharedStrings],
+    styleRemapping: Map[Int, Int],
+    tablePartsXml: Option[scala.xml.Elem],
+    escapeFormulas: Boolean,
+    config: WriterConfig
+  ): Unit =
+    val entry = new ZipEntry(entryName)
+    entry.setTime(0L)
+    entry.setMethod(config.compression.zipMethod)
 
-      // Write table files for all sheets
-      tablesBySheet.values.flatten.foreach { case (tableSpec, tableId) =>
-        val ooxmlTable = TableConversions.toOoxml(tableSpec, tableId)
-        writePart(zip, s"xl/tables/table$tableId.xml", ooxmlTable, config)
-      }
+    config.compression match
+      case Compression.Stored =>
+        val baos = new ByteArrayOutputStream()
+        val saxWriter = StaxSaxWriter.create(baos)
+        DirectSaxEmitter.emitWorksheet(
+          saxWriter,
+          sheet,
+          sst,
+          styleRemapping,
+          tablePartsXml,
+          escapeFormulas
+        )
+        val bytes = baos.toByteArray
 
-    finally zip.close()
+        entry.setSize(bytes.length)
+        entry.setCompressedSize(bytes.length)
+        entry.setCrc(calculateCrc(bytes))
+
+        zip.putNextEntry(entry)
+        zip.write(bytes)
+        zip.closeEntry()
+
+      case Compression.Deflated =>
+        // Buffer first to avoid many small writes to compressed stream
+        // (single bulk write is much more efficient for DEFLATE algorithm)
+        val baos = new ByteArrayOutputStream()
+        val saxWriter = StaxSaxWriter.create(baos)
+        DirectSaxEmitter.emitWorksheet(
+          saxWriter,
+          sheet,
+          sst,
+          styleRemapping,
+          tablePartsXml,
+          escapeFormulas
+        )
+        saxWriter.flush()
+        val bytes = baos.toByteArray
+
+        zip.putNextEntry(entry)
+        zip.write(bytes)
+        zip.closeEntry()
 
   /** Write VML part to ZIP (VML is plain text, not standard XML) */
   private def writeVmlPart(
@@ -770,10 +856,15 @@ object XlsxWriter:
         zip.closeEntry()
 
       case Compression.Deflated =>
-        zip.putNextEntry(entry)
-        val saxWriter = StaxSaxWriter.create(zip)
+        // Buffer first to avoid many small writes to compressed stream
+        val baos = new ByteArrayOutputStream()
+        val saxWriter = StaxSaxWriter.create(baos)
         sheet.writeSax(saxWriter)
         saxWriter.flush()
+        val bytes = baos.toByteArray
+
+        zip.putNextEntry(entry)
+        zip.write(bytes)
         zip.closeEntry()
 
   private def writeSharedStrings(
@@ -818,10 +909,15 @@ object XlsxWriter:
         zip.closeEntry()
 
       case Compression.Deflated =>
-        zip.putNextEntry(entry)
-        val saxWriter = StaxSaxWriter.create(zip)
+        // Buffer first to avoid many small writes to compressed stream
+        val baos = new ByteArrayOutputStream()
+        val saxWriter = StaxSaxWriter.create(baos)
         body(saxWriter)
         saxWriter.flush()
+        val bytes = baos.toByteArray
+
+        zip.putNextEntry(entry)
+        zip.write(bytes)
         zip.closeEntry()
 
   /** Calculate CRC32 checksum for ZIP entry */
@@ -1319,16 +1415,32 @@ object XlsxWriter:
           }
 
           val escapeFormulas = config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
-          val ooxmlSheet =
-            OoxmlWorksheet.fromDomainWithMetadata(
-              sheet,
-              sstForSheets,
-              remapping,
-              preservedMetadata,
-              tablePartsXml,
-              escapeFormulas
-            )
-          writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
+
+          // For SaxStax backend with no preserved metadata, use direct SAX emission
+          // (bypasses intermediate OOXML types for 5-7x performance improvement)
+          (config.backend, preservedMetadata) match
+            case (XmlBackend.SaxStax, None) =>
+              writeWorksheetDirect(
+                zip,
+                s"xl/worksheets/sheet${idx + 1}.xml",
+                sheet,
+                sstForSheets,
+                remapping,
+                tablePartsXml,
+                escapeFormulas,
+                config
+              )
+            case _ =>
+              val ooxmlSheet =
+                OoxmlWorksheet.fromDomainWithMetadata(
+                  sheet,
+                  sstForSheets,
+                  remapping,
+                  preservedMetadata,
+                  tablePartsXml,
+                  escapeFormulas
+                )
+              writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
 
           // Comments: copy from source if available, else generate new
           val commentPath = s"xl/comments${idx + 1}.xml"

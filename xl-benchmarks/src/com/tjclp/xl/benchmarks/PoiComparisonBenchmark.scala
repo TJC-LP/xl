@@ -45,7 +45,7 @@ import org.xml.sax.Attributes
 @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.Null"))
 class PoiComparisonBenchmark {
 
-  @Param(Array("1000", "10000"))
+  @Param(Array("1000", "10000", "100000"))
   var rows: Int = uninitialized
 
   var xlWorkbook: Workbook = uninitialized
@@ -159,8 +159,14 @@ class PoiComparisonBenchmark {
 
   @Benchmark
   def xlWrite(): Unit = {
-    // XL write performance
+    // XL write performance (ScalaXml backend - default)
     ExcelIO.instance[IO].write(xlWorkbook, xlWriteFile).unsafeRunSync()
+  }
+
+  @Benchmark
+  def xlWriteFast(): Unit = {
+    // XL write performance (SaxStax backend - optimized)
+    ExcelIO.instance[IO].writeFast(xlWorkbook, xlWriteFile).unsafeRunSync()
   }
 
   @Benchmark
