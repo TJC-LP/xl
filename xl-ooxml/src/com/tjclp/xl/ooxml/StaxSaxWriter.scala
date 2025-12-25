@@ -48,11 +48,15 @@ class StaxSaxWriter(underlying: XMLStreamWriter) extends SaxWriter:
 
   private def writeNamespaceDecl(prefix: String, uri: String, force: Boolean): Unit =
     val current = namespaceBindings.get(prefix)
-    val changed = current.forall(_ != uri)
-    if force || changed then
-      if changed then recordNamespace(prefix, uri)
-      if prefix.isEmpty then underlying.writeDefaultNamespace(uri)
-      else underlying.writeNamespace(prefix, uri)
+    val alreadyBound = current.contains(uri)
+    // Don't write duplicate declarations - if already bound to same URI, skip
+    if alreadyBound then ()
+    else
+      val changed = current.forall(_ != uri)
+      if force || changed then
+        if changed then recordNamespace(prefix, uri)
+        if prefix.isEmpty then underlying.writeDefaultNamespace(uri)
+        else underlying.writeNamespace(prefix, uri)
 
   def startDocument(): Unit =
     namespaceBindings.clear()
@@ -71,8 +75,11 @@ class StaxSaxWriter(underlying: XMLStreamWriter) extends SaxWriter:
     name.split(":", 2) match
       case Array(prefix, local) =>
         underlying.writeStartElement(prefix, local, namespace)
+        writeNamespaceDecl(prefix, namespace, force = true)
       case _ =>
         underlying.writeStartElement("", name, namespace)
+        // Emit xmlns declaration - StAX doesn't do this automatically when IS_REPAIRING_NAMESPACES=false
+        writeNamespaceDecl("", namespace, force = true)
   def writeAttribute(name: String, value: String): Unit =
     name match
       case "xmlns" =>
