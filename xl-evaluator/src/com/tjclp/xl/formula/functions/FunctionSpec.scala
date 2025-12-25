@@ -319,3 +319,40 @@ object ArgSpec:
     ): H *: T =
       head.map(args.head)(mapExpr, mapRange, mapCells) *: tail
         .map(args.tail)(mapExpr, mapRange, mapCells)
+
+  /** Variadic numeric arg: either a range location or a numeric expression. */
+  type NumericArg = Either[TExpr.RangeLocation, TExpr[BigDecimal]]
+
+  given numericArg: ArgSpec[NumericArg] with
+    def describeParts: List[String] = List("number or range")
+
+    def parse(
+      args: List[TExpr[?]],
+      pos: Int,
+      fnName: String
+    ): Either[ParseError, (NumericArg, List[TExpr[?]])] =
+      args match
+        case TExpr.RangeRef(range) :: tail =>
+          Right((Left(TExpr.RangeLocation.Local(range)), tail))
+        case TExpr.SheetRange(sheet, range) :: tail =>
+          Right((Left(TExpr.RangeLocation.CrossSheet(sheet, range)), tail))
+        case head :: tail =>
+          Right((Right(TExpr.asNumericExpr(head)), tail))
+        case Nil =>
+          Left(ParseError.InvalidArguments(fnName, pos, describe, "0 arguments"))
+
+    def toValues(args: NumericArg): List[ArgValue] =
+      args match
+        case Left(loc) => List(ArgValue.Range(loc))
+        case Right(expr) => List(ArgValue.Expr(expr))
+
+    def map(
+      args: NumericArg
+    )(
+      mapExpr: TExpr[?] => TExpr[?],
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
+      mapCells: CellRange => CellRange
+    ): NumericArg =
+      args match
+        case Left(loc) => Left(mapRange(loc))
+        case Right(expr) => Right(mapExpr(expr).asInstanceOf[TExpr[BigDecimal]])

@@ -14,7 +14,15 @@ trait TExprAggregateOps:
    * Example: TExpr.sum(CellRange("A1:A10"))
    */
   def sum(range: CellRange): TExpr[BigDecimal] =
-    Call(FunctionSpecs.sum, RangeLocation.Local(range))
+    Call(FunctionSpecs.sum, List(Left(RangeLocation.Local(range))))
+
+  /**
+   * SUM aggregation: sum variadic numeric values.
+   *
+   * Example: TExpr.sum(TExpr.Lit(1), TExpr.Lit(2), TExpr.Lit(3))
+   */
+  def sum(values: TExpr[BigDecimal]*): TExpr[BigDecimal] =
+    Call(FunctionSpecs.sum, values.map(Right(_)).toList)
 
   /**
    * COUNT aggregation: count numeric cells in range.
@@ -22,7 +30,7 @@ trait TExprAggregateOps:
    * Example: TExpr.count(CellRange("A1:A10"))
    */
   def count(range: CellRange): TExpr[BigDecimal] =
-    Call(FunctionSpecs.count, RangeLocation.Local(range))
+    Call(FunctionSpecs.count, List(Left(RangeLocation.Local(range))))
 
   /**
    * AVERAGE aggregation: average of numeric values in range.
@@ -30,7 +38,15 @@ trait TExprAggregateOps:
    * Example: TExpr.average(CellRange("A1:A10"))
    */
   def average(range: CellRange): TExpr[BigDecimal] =
-    Call(FunctionSpecs.average, RangeLocation.Local(range))
+    Call(FunctionSpecs.average, List(Left(RangeLocation.Local(range))))
+
+  /**
+   * AVERAGE aggregation: average variadic numeric values.
+   *
+   * Example: TExpr.average(TExpr.Lit(1), TExpr.Lit(2), TExpr.Lit(3))
+   */
+  def average(values: TExpr[BigDecimal]*): TExpr[BigDecimal] =
+    Call(FunctionSpecs.average, values.map(Right(_)).toList)
 
   /**
    * MIN aggregation: minimum numeric value in range.
@@ -38,7 +54,15 @@ trait TExprAggregateOps:
    * Example: TExpr.min(CellRange("A1:A10"))
    */
   def min(range: CellRange): TExpr[BigDecimal] =
-    Call(FunctionSpecs.min, RangeLocation.Local(range))
+    Call(FunctionSpecs.min, List(Left(RangeLocation.Local(range))))
+
+  /**
+   * MIN aggregation: minimum of variadic numeric values.
+   *
+   * Example: TExpr.min(TExpr.Lit(1), TExpr.Lit(2), TExpr.Lit(3))
+   */
+  def min(values: TExpr[BigDecimal]*): TExpr[BigDecimal] =
+    Call(FunctionSpecs.min, values.map(Right(_)).toList)
 
   /**
    * MAX aggregation: maximum numeric value in range.
@@ -46,7 +70,15 @@ trait TExprAggregateOps:
    * Example: TExpr.max(CellRange("A1:A10"))
    */
   def max(range: CellRange): TExpr[BigDecimal] =
-    Call(FunctionSpecs.max, RangeLocation.Local(range))
+    Call(FunctionSpecs.max, List(Left(RangeLocation.Local(range))))
+
+  /**
+   * MAX aggregation: maximum of variadic numeric values.
+   *
+   * Example: TExpr.max(TExpr.Lit(1), TExpr.Lit(2), TExpr.Lit(3))
+   */
+  def max(values: TExpr[BigDecimal]*): TExpr[BigDecimal] =
+    Call(FunctionSpecs.max, values.map(Right(_)).toList)
 
   // Conditional aggregation function smart constructors
 

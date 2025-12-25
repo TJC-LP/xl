@@ -393,10 +393,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=SUM(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "SUM" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "SUM" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-      case other => fail(s"Expected Call(SUM) with Local range, got $other")
+      case other => fail(s"Expected Call(SUM) with List(Left(Local range)), got $other")
     }
   }
 
@@ -404,10 +404,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=COUNT(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "COUNT" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "COUNT" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-      case other => fail(s"Expected Call(COUNT) with Local range, got $other")
+      case other => fail(s"Expected Call(COUNT) with List(Left(Local range)), got $other")
     }
   }
 
@@ -415,7 +415,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AVERAGE(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "AVERAGE" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "AVERAGE" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
       case other => fail(s"Expected Call(AVERAGE), got $other")
@@ -430,9 +430,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
 
     (sumResult, countResult, avgResult) match
       case (
-            Right(TExpr.Call(sumSpec, _: TExpr.RangeLocation)),
-            Right(TExpr.Call(countSpec, _: TExpr.RangeLocation)),
-            Right(TExpr.Call(avgSpec, _: TExpr.RangeLocation))
+            Right(TExpr.Call(sumSpec, _: List[?])),
+            Right(TExpr.Call(countSpec, _: List[?])),
+            Right(TExpr.Call(avgSpec, _: List[?]))
           ) =>
         assertEquals(sumSpec.name, "SUM")
         assertEquals(countSpec.name, "COUNT")
@@ -633,7 +633,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MIN(A1:A10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "MIN" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "MIN" =>
         assertEquals(range.toA1, "A1:A10")
       case other => fail(s"Expected Call(MIN), got $other")
     }
@@ -643,7 +643,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MAX(B2:B20)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, TExpr.RangeLocation.Local(range)) if spec.name == "MAX" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "MAX" =>
         assertEquals(range.toA1, "B2:B20")
       case other => fail(s"Expected Call(MAX), got $other")
     }

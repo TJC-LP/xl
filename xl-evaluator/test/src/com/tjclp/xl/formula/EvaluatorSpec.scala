@@ -635,6 +635,32 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == BigDecimal(40))
   }
 
+  // ==================== Variadic Aggregate Tests ====================
+
+  test("SUM: variadic literals SUM(1,2,3) = 6") {
+    val expr = TExpr.sum(TExpr.Lit(BigDecimal(1)), TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    assert(evalOk(expr, sheet) == BigDecimal(6))
+  }
+
+  test("AVERAGE: variadic literals AVERAGE(1,2,3) = 2") {
+    val expr = TExpr.average(TExpr.Lit(BigDecimal(1)), TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    assert(evalOk(expr, sheet) == BigDecimal(2))
+  }
+
+  test("MIN: variadic literals MIN(5,3,8) = 3") {
+    val expr = TExpr.min(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(8)))
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    assert(evalOk(expr, sheet) == BigDecimal(3))
+  }
+
+  test("MAX: variadic literals MAX(5,3,8) = 8") {
+    val expr = TExpr.max(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(8)))
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    assert(evalOk(expr, sheet) == BigDecimal(8))
+  }
+
   test("Error: Multiple cell references, first one fails") {
     val refA1 = ARef.from0(0, 0) // Missing
     val refB1 = ARef.from0(1, 0) // Exists

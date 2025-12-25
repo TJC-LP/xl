@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, CriteriaMatcher}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, CriteriaMatcher, Aggregator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -9,11 +9,75 @@ import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.cells.CellValue
 
 trait FunctionSpecsAggregate extends FunctionSpecsBase:
-  private def aggregateSpec(
+  import ArgSpec.NumericArg
+
+  // Import the ArgSpec for variadic numeric args
+  protected given variadicNumeric: ArgSpec[List[NumericArg]] = ArgSpec.list[NumericArg]
+
+  /**
+   * Create a variadic aggregate function spec.
+   *
+   * Supports Excel-compatible syntax: SUM(1,2,3) / SUM(A1:A5,B1:B5) / SUM(A1,5,B1:B3)
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def variadicAggregateSpec(
     name: String
-  ): FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    FunctionSpec.simple[BigDecimal, UnaryRange](name, Arity.one) { (location, ctx) =>
-      ctx.evalExpr(TExpr.Aggregate(name, location))
+  ): FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    FunctionSpec.simple[BigDecimal, List[NumericArg]](name, Arity.atLeastOne) { (args, ctx) =>
+      Aggregator.lookup(name) match
+        case None =>
+          Left(EvalError.EvalFailed(s"Unknown aggregator: $name", None))
+        case Some(agg) =>
+          evalVariadicAggregate(agg, args, ctx)
+    }
+
+  /** Helper to evaluate variadic aggregates with proper type handling. */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalVariadicAggregate[A](
+    agg: Aggregator[A],
+    args: List[NumericArg],
+    ctx: EvalContext
+  ): Either[EvalError, BigDecimal] =
+    // Collect all numeric values from both ranges and individual expressions
+    val valuesResult: Either[EvalError, Vector[BigDecimal]] =
+      args.foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
+        case (Left(err), _) => Left(err)
+        case (Right(acc), Left(location)) =>
+          // Range argument - extract all numeric values from cells
+          Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map { targetSheet =>
+            val rangeValues = location.range.cells.flatMap { cellRef =>
+              val cellValue = targetSheet(cellRef).value
+              // Handle different cell types for aggregation
+              if agg.countsNonEmpty then
+                // COUNTA mode: count any non-empty cell
+                cellValue match
+                  case CellValue.Empty => None
+                  case _ => Some(BigDecimal(1))
+              else if agg.countsEmpty then
+                // COUNTBLANK mode: count only empty cells
+                cellValue match
+                  case CellValue.Empty => Some(BigDecimal(1))
+                  case _ => None
+              else
+                // Standard numeric mode: extract numeric values
+                extractNumericValue(cellValue)
+            }.toVector
+            acc ++ rangeValues
+          }
+        case (Right(acc), Right(expr)) =>
+          // Individual numeric expression - evaluate it
+          ctx.evalExpr(expr).map { value =>
+            if agg.countsNonEmpty || agg.countsEmpty then
+              // For COUNT/COUNTA/COUNTBLANK, individual values always count
+              acc :+ BigDecimal(1)
+            else acc :+ value
+          }
+      }
+
+    valuesResult.flatMap { values =>
+      // Apply the aggregator to all collected values
+      val result = values.foldLeft(agg.empty)((acc, v) => agg.combine(acc, v))
+      agg.finalizeWithError(result)
     }
 
   private def evalCriteriaValues(
@@ -37,41 +101,41 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         (range, CriteriaMatcher.parse(criteriaValue))
       }
 
-  val sum: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("SUM")
+  val sum: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("SUM")
 
-  val count: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("COUNT")
+  val count: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("COUNT")
 
-  val counta: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("COUNTA")
+  val counta: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("COUNTA")
 
-  val countblank: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("COUNTBLANK")
+  val countblank: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("COUNTBLANK")
 
-  val average: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("AVERAGE")
+  val average: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("AVERAGE")
 
-  val min: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("MIN")
+  val min: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("MIN")
 
-  val max: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("MAX")
+  val max: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("MAX")
 
-  val median: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("MEDIAN")
+  val median: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("MEDIAN")
 
-  val stdev: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("STDEV")
+  val stdev: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("STDEV")
 
-  val stdevp: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("STDEVP")
+  val stdevp: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("STDEVP")
 
-  val variance: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("VAR")
+  val variance: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("VAR")
 
-  val variancep: FunctionSpec[BigDecimal] { type Args = UnaryRange } =
-    aggregateSpec("VARP")
+  val variancep: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
+    variadicAggregateSpec("VARP")
 
   val sumif: FunctionSpec[BigDecimal] { type Args = SumIfArgs } =
     FunctionSpec.simple[BigDecimal, SumIfArgs]("SUMIF", Arity.Range(2, 3)) { (args, ctx) =>

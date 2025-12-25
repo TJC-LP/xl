@@ -55,6 +55,11 @@ trait FunctionSpecsBase:
   type BooleanList = List[TExpr[Boolean]]
   type UnaryCellValue = TExpr[CellValue]
   type UnaryRange = TExpr.RangeLocation
+
+  // Variadic numeric: Either a range (aggregated) or a single numeric expression
+  // Used for Excel-compatible SUM(1,2,3) / SUM(A1:A5,B1:B5) / SUM(A1,5,B1:B3)
+  type NumericArg = Either[TExpr.RangeLocation, TExpr[BigDecimal]]
+  type VariadicNumeric = List[NumericArg]
   type RangeCriteriaList = List[(CellRange, TExpr[Any])]
   type SumIfArgs = (CellRange, TExpr[Any], Option[CellRange])
   type CountIfArgs = (CellRange, TExpr[Any])
