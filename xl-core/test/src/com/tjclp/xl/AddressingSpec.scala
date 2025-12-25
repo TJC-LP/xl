@@ -6,6 +6,7 @@ import org.scalacheck.Prop.*
 import Generators.given
 
 /** Property tests for addressing types */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class AddressingSpec extends ScalaCheckSuite:
 
   property("Column.from0 and index0 are inverses") {

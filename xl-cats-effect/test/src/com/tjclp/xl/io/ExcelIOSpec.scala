@@ -12,6 +12,7 @@ import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
 
 /** Tests for Excel streaming API */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
 class ExcelIOSpec extends CatsEffectSuite:
 
   val tempDir: FunFixture[Path] = FunFixture[Path](

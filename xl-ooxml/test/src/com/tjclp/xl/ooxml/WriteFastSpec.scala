@@ -13,15 +13,14 @@ import com.tjclp.xl.styles.Font
 /**
  * Integration tests for writeFast (SAX/StAX backend) functionality.
  *
- * These tests verify that the streaming write backend produces valid XLSX files
- * that can be read back with all data intact. This addresses PR feedback about
- * benchmarks not verifying output correctness.
+ * These tests verify that the streaming write backend produces valid XLSX files that can be read
+ * back with all data intact. This addresses PR feedback about benchmarks not verifying output
+ * correctness.
  *
- * writeFast uses XmlBackend.SaxStax for better performance on large files.
- * These tests ensure the SAX backend produces functionally equivalent output
- * to the default (Scala XML) backend.
+ * writeFast uses XmlBackend.SaxStax for better performance on large files. These tests ensure the
+ * SAX backend produces functionally equivalent output to the default (Scala XML) backend.
  */
-@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
 class WriteFastSpec extends FunSuite:
 
   val tempDir: Path = Files.createTempDirectory("xl-writefast-test-")

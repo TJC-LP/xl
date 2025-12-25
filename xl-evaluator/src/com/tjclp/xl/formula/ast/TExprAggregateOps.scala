@@ -7,6 +7,7 @@ import com.tjclp.xl.formula.functions.EvalContext
 import com.tjclp.xl.CellRange
 import TExpr.*
 
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 trait TExprAggregateOps:
   /**
    * SUM aggregation: sum all numeric values in range.

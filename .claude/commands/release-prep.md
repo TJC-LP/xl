@@ -57,21 +57,20 @@ chore(release): Bump version to $ARGUMENTS
 After committing, create an **annotated tag** with release notes from CHANGELOG.md:
 
 ```bash
-# Extract release notes for this version from CHANGELOG.md
-VERSION="$ARGUMENTS"
-NOTES=$(awk "/^## \[$VERSION\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md | sed '/^$/d' | head -50)
+# Step 1: Extract and preview release notes (run separately to avoid zsh parse issues)
+awk '/^## \[0.5.0-RC1\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md | sed '/^$/d' | head -50
 
-# Preview the notes
-echo "=== Release notes for v$VERSION ==="
-echo "$NOTES"
-echo "==================================="
+# Step 2: Create annotated tag with heredoc (replace version and paste notes)
+git tag -a "v0.5.0-RC1" -m "$(cat <<'EOF'
+<paste release notes here>
+EOF
+)"
 
-# Create annotated tag (message from CHANGELOG)
-git tag -a "v$VERSION" -m "$NOTES"
-
-# Verify it's annotated (should print "tag", not "commit")
-git cat-file -t "v$VERSION"
+# Step 3: Verify it's annotated (should print "tag", not "commit")
+git cat-file -t "v0.5.0-RC1"
 ```
+
+**Note**: The awk command with `$VERSION` variable substitution causes zsh parse errors. Use literal version strings in each command instead of variable chaining.
 
 **Important**: Do NOT use `git tag v$ARGUMENTS` (without `-a`) - this creates a lightweight tag with no release notes, causing GitHub releases to show the commit message instead.
 

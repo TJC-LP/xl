@@ -15,6 +15,7 @@ import munit.FunSuite
  * VAR    - Sample variance (divides by n-1)
  * VARP   - Population variance (divides by n)
  */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class StatisticalFunctionsSpec extends FunSuite:
   val emptySheet = new Sheet(name = SheetName.unsafe("Test"))
   val evaluator = Evaluator.instance

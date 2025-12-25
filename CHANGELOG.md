@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0-RC1] - 2025-12-25
+
+### Added
+
+- **34 new formula functions** bringing total to 81:
+  - **Financial (TVM)**: PMT, FV, PV, RATE, NPER - time value of money calculations
+  - **Statistical**: MEDIAN, STDEV, STDEVP, VAR, VARP - descriptive statistics
+  - **Type checking**: ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR - value type inspection
+  - **Conditional aggregation**: AVERAGEIF, AVERAGEIFS - conditional averaging
+  - **Count/Reference**: COUNTBLANK, ROW, COLUMN, ROWS, COLUMNS, ADDRESS - cell reference utilities
+  - **Math**: SQRT, MOD, POWER, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, INT - numeric operations
+
+- **Variadic aggregate functions**: SUM, COUNT, AVERAGE, MIN, MAX, MEDIAN, STDEV, VAR now support Excel-compatible variadic syntax
+  - `=SUM(1,2,3)` - individual values
+  - `=SUM(A1:A5, B1:B5)` - multiple ranges
+  - `=SUM(A1, 5, B1:B3)` - mixed ranges and values
+
+- **Dynamic `xl functions` command**: Now shows all 81 functions from registry instead of hardcoded list
+
+### Changed
+
+- **Formula system refactored**: Reorganized into modular traits for better maintainability
+  - Split `FunctionSpecs.scala` into focused modules (Aggregate, Financial, Lookup, etc.)
+  - Extracted `TExpr` helpers into dedicated traits
+  - Deduplicated range extraction and criteria parsing helpers
+
+### Fixed
+
+- **Formula parsing edge cases**: Fixed scientific notation, date arithmetic, cross-sheet dependencies
+- **WartRemover compliance**: Added `@SuppressWarnings` annotations for intentional type casts in formula DSL
+
+---
+
 ## [0.4.3] - 2025-12-19
 
 ### Added

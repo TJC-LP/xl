@@ -8,6 +8,7 @@ import com.tjclp.xl.CellRange
 import com.tjclp.xl.cells.CellValue
 import TExpr.*
 
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 trait TExprLookupOps:
   /**
    * Smart constructor for VLOOKUP (supports text and numeric lookups).

@@ -11,6 +11,7 @@ import munit.FunSuite
  *
  * These functions provide information about cell references and ranges.
  */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class ReferenceFunctionsSpec extends FunSuite:
   val emptySheet = new Sheet(name = SheetName.unsafe("Test"))
   val evaluator = Evaluator.instance

@@ -11,7 +11,7 @@ import munit.CatsEffectSuite
  * Uses mock rasterizers to test chain logic without requiring external tools. This ensures tests
  * are fast, deterministic, and work in any environment.
  */
-@SuppressWarnings(Array("org.wartremover.warts.IsInstanceOf"))
+@SuppressWarnings(Array("org.wartremover.warts.IsInstanceOf", "org.wartremover.warts.AsInstanceOf"))
 class RasterizerChainSpec extends CatsEffectSuite:
 
   // ========== Mock Rasterizers ==========

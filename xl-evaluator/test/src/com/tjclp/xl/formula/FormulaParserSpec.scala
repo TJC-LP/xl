@@ -14,6 +14,7 @@ import scala.math.BigDecimal
  *
  * Tests round-trip laws, edge cases, and integration with existing formula system.
  */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.AsInstanceOf"))
 class FormulaParserSpec extends ScalaCheckSuite:
 
   // ==================== Generators ====================

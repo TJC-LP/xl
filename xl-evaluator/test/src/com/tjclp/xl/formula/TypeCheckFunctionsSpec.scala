@@ -14,6 +14,7 @@ import munit.FunSuite
  * ISBLANK  - Returns TRUE if cell is empty (NOT for empty string)
  * ISERR    - Returns TRUE if error (except #N/A)
  */
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class TypeCheckFunctionsSpec extends FunSuite:
   val emptySheet = new Sheet(name = SheetName.unsafe("Test"))
 

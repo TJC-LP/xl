@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.functions.EvalContext
 
 import TExpr.*
 
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 trait TExprReferenceOps:
   /**
    * Create ROW expression.
