@@ -1,3 +1,0 @@
-package com.tjclp.xl.formula
-
-trait FunctionSpecsFinancial extends FunctionSpecsFinancialCashflow with FunctionSpecsFinancialTvm

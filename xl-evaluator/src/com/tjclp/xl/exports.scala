@@ -14,31 +14,31 @@ package com.tjclp.xl
  */
 object formulaExports:
   // Parser and printer
-  export formula.FormulaParser
-  export formula.FormulaPrinter
-  export formula.FunctionRegistry
+  export formula.parser.FormulaParser
+  export formula.printer.FormulaPrinter
+  export formula.functions.FunctionRegistry
 
   // Typed expression AST
-  export formula.TExpr
+  export formula.ast.TExpr
 
   // Dependency analysis
-  export formula.DependencyGraph
+  export formula.graph.DependencyGraph
 
   // Evaluation
-  export formula.Evaluator
+  export formula.eval.Evaluator
   export formula.Clock
 
   // Error types
-  export formula.EvalError
-  export formula.ParseError
+  export formula.eval.EvalError
+  export formula.parser.ParseError
 
   // SheetEvaluator object and extension methods
-  export formula.SheetEvaluator
-  export formula.SheetEvaluator.*
+  export formula.eval.SheetEvaluator
+  export formula.eval.SheetEvaluator.*
 
   // WorkbookEvaluator extension methods (withCachedFormulas)
-  export formula.WorkbookEvaluator
-  export formula.WorkbookEvaluator.*
+  export formula.eval.WorkbookEvaluator
+  export formula.eval.WorkbookEvaluator.*
 
   // Display strategy with formula evaluation
   // The evaluating given has higher priority than default due to LowPriority pattern

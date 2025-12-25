@@ -1,3 +1,0 @@
-package com.tjclp.xl.formula
-
-trait FunctionSpecsLookup extends FunctionSpecsLookupSearch with FunctionSpecsLookupIndex

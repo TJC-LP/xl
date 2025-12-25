@@ -79,18 +79,18 @@ class DependencyGraphSpec extends FunSuite:
 
   test("extractDependencies: text functions with Refs") {
     val expr = TExpr.concatenate(List(
-      TExpr.ref(ref"A1", TExpr.decodeString),
+      TExpr.ref(ref"A1", TExpr.decodeAsString),
       TExpr.Lit(" "),
-      TExpr.ref(ref"B1", TExpr.decodeString)
+      TExpr.ref(ref"B1", TExpr.decodeAsString)
     ))
     assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1", ref"B1"))
   }
 
   test("extractDependencies: date functions with Refs") {
     val expr = TExpr.date(
-      TExpr.ref(ref"A1", TExpr.decodeInt),
-      TExpr.ref(ref"A2", TExpr.decodeInt),
-      TExpr.ref(ref"A3", TExpr.decodeInt)
+      TExpr.ref(ref"A1", TExpr.decodeAsInt),
+      TExpr.ref(ref"A2", TExpr.decodeAsInt),
+      TExpr.ref(ref"A3", TExpr.decodeAsInt)
     )
     assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1", ref"A2", ref"A3"))
   }

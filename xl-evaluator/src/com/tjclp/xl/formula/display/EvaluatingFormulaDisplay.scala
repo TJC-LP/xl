@@ -1,7 +1,8 @@
 package com.tjclp.xl.formula.display
 
 import com.tjclp.xl.display.{FormulaDisplayStrategy, LowPriorityFormulaDisplay, NumFmtFormatter}
-import com.tjclp.xl.formula.{Clock, SheetEvaluator}
+import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.eval.SheetEvaluator
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.numfmt.NumFmt
 

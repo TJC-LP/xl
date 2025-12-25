@@ -1,5 +1,7 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.formula.parser.ParseError
+
 /**
  * Arity specification for function arguments.
  *
