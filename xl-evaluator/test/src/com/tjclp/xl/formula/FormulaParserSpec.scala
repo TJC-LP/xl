@@ -393,10 +393,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=SUM(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("SUM", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "SUM" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-      case other => fail(s"Expected Aggregate(SUM) with Local range, got $other")
+      case other => fail(s"Expected Call(SUM) with List(Left(Local range)), got $other")
     }
   }
 
@@ -404,10 +404,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=COUNT(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("COUNT", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "COUNT" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-      case other => fail(s"Expected Aggregate(COUNT) with Local range, got $other")
+      case other => fail(s"Expected Call(COUNT) with List(Left(Local range)), got $other")
     }
   }
 
@@ -415,27 +415,28 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AVERAGE(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("AVERAGE", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "AVERAGE" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
-      case other => fail(s"Expected Aggregate(AVERAGE), got $other")
+      case other => fail(s"Expected Call(AVERAGE), got $other")
     }
   }
 
-  test("SUM/COUNT/AVERAGE create unified Aggregate expression type") {
-    // Verify that each aggregate function creates Aggregate with correct aggregatorId
+  test("SUM/COUNT/AVERAGE parse to spec-backed calls") {
+    // Verify that each aggregate function creates a FunctionSpec call
     val sumResult = FormulaParser.parse("=SUM(A1:A10)")
     val countResult = FormulaParser.parse("=COUNT(A1:A10)")
     val avgResult = FormulaParser.parse("=AVERAGE(A1:A10)")
 
-    // All use unified Aggregate case with different aggregatorIds
     (sumResult, countResult, avgResult) match
       case (
-            Right(TExpr.Aggregate("SUM", _)),
-            Right(TExpr.Aggregate("COUNT", _)),
-            Right(TExpr.Aggregate("AVERAGE", _))
+            Right(TExpr.Call(sumSpec, _: List[?])),
+            Right(TExpr.Call(countSpec, _: List[?])),
+            Right(TExpr.Call(avgSpec, _: List[?]))
           ) =>
-        () // Expected types
+        assertEquals(sumSpec.name, "SUM")
+        assertEquals(countSpec.name, "COUNT")
+        assertEquals(avgSpec.name, "AVERAGE")
       case (Right(s), Right(c), Right(a)) =>
         fail(s"Unexpected types: SUM=${s.getClass.getSimpleName}, COUNT=${c.getClass.getSimpleName}, AVERAGE=${a.getClass.getSimpleName}")
       case _ => fail("All three functions should parse successfully")
@@ -445,8 +446,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=IF(TRUE, 1, 2)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.If(_, _, _) => ()
-      case other             => fail(s"Expected If, got $other")
+      case TExpr.Call(spec, _) if spec.name == "IF" => ()
+      case other => fail(s"Expected IF Call, got $other")
     }
   }
 
@@ -454,8 +455,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AND(TRUE, FALSE)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.And(_, _) => ()
-      case other           => fail(s"Expected And, got $other")
+      case TExpr.Call(spec, _) if spec.name == "AND" => ()
+      case other => fail(s"Expected AND Call, got $other")
     }
   }
 
@@ -463,8 +464,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=OR(TRUE, FALSE)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Or(_, _) => ()
-      case other          => fail(s"Expected Or, got $other")
+      case TExpr.Call(spec, _) if spec.name == "OR" => ()
+      case other => fail(s"Expected OR Call, got $other")
     }
   }
 
@@ -472,8 +473,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=NOT(TRUE)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Not(_) => ()
-      case other        => fail(s"Expected Not, got $other")
+      case TExpr.Call(spec, _) if spec.name == "NOT" => ()
+      case other => fail(s"Expected NOT Call, got $other")
     }
   }
 
@@ -632,9 +633,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MIN(A1:A10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("MIN", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "MIN" =>
         assertEquals(range.toA1, "A1:A10")
-      case other => fail(s"Expected Aggregate(MIN), got $other")
+      case other => fail(s"Expected Call(MIN), got $other")
     }
   }
 
@@ -642,9 +643,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MAX(B2:B20)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Aggregate("MAX", TExpr.RangeLocation.Local(range)) =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "MAX" =>
         assertEquals(range.toA1, "B2:B20")
-      case other => fail(s"Expected Aggregate(MAX), got $other")
+      case other => fail(s"Expected Call(MAX), got $other")
     }
   }
 
@@ -652,8 +653,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=CONCATENATE(\"Hello\", \" \", \"World\")")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Concatenate(xs) => assertEquals(xs.length, 3)
-      case _ => fail("Expected TExpr.Concatenate")
+      case TExpr.Call(spec, args: List[?]) if spec.name == "CONCATENATE" =>
+        assertEquals(args.length, 3)
+      case _ => fail("Expected TExpr.Call(CONCATENATE)")
     }
   }
 
@@ -661,8 +663,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=LEFT(\"Hello\", 3)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Left(_, _) => assert(true)
-      case _ => fail("Expected TExpr.Left")
+      case TExpr.Call(spec, _) if spec.name == "LEFT" => assert(true)
+      case _ => fail("Expected TExpr.Call(LEFT)")
     }
   }
 
@@ -670,8 +672,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=RIGHT(A1, 5)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Right(_, _) => assert(true)
-      case _ => fail("Expected TExpr.Right")
+      case TExpr.Call(spec, _) if spec.name == "RIGHT" => assert(true)
+      case _ => fail("Expected TExpr.Call(RIGHT)")
     }
   }
 
@@ -679,8 +681,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=LEN(A1)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Len(_) => assert(true)
-      case _ => fail("Expected TExpr.Len")
+      case TExpr.Call(spec, _) if spec.name == "LEN" => assert(true)
+      case _ => fail("Expected TExpr.Call(LEN)")
     }
   }
 
@@ -688,8 +690,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=UPPER(\"hello\")")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Upper(_) => assert(true)
-      case _ => fail("Expected TExpr.Upper")
+      case TExpr.Call(spec, _) if spec.name == "UPPER" => assert(true)
+      case _ => fail("Expected TExpr.Call(UPPER)")
     }
   }
 
@@ -697,8 +699,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=LOWER(\"WORLD\")")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Lower(_) => assert(true)
-      case _ => fail("Expected TExpr.Lower")
+      case TExpr.Call(spec, _) if spec.name == "LOWER" => assert(true)
+      case _ => fail("Expected TExpr.Call(LOWER)")
     }
   }
 
@@ -706,8 +708,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=TODAY()")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Today() => assert(true)
-      case _ => fail("Expected TExpr.Today")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.today => assert(true)
+      case _ => fail("Expected TExpr.Call(TODAY)")
     }
   }
 
@@ -715,8 +717,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=NOW()")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Now() => assert(true)
-      case _ => fail("Expected TExpr.Now")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.now => assert(true)
+      case _ => fail("Expected TExpr.Call(NOW)")
     }
   }
 
@@ -724,8 +726,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=DATE(2025, 11, 21)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Date(_, _, _) => assert(true)
-      case _ => fail("Expected TExpr.Date")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.date => assert(true)
+      case _ => fail("Expected TExpr.Call(DATE)")
     }
   }
 
@@ -733,8 +735,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=YEAR(TODAY())")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Year(_) => assert(true)
-      case _ => fail("Expected TExpr.Year")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.year => assert(true)
+      case _ => fail("Expected TExpr.Call(YEAR)")
     }
   }
 
@@ -742,8 +744,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MONTH(A1)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Month(_) => assert(true)
-      case _ => fail("Expected TExpr.Month")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.month => assert(true)
+      case _ => fail("Expected TExpr.Call(MONTH)")
     }
   }
 
@@ -751,8 +753,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=DAY(DATE(2025, 11, 21))")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Day(_) => assert(true)
-      case _ => fail("Expected TExpr.Day")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.day => assert(true)
+      case _ => fail("Expected TExpr.Call(DAY)")
     }
   }
 
@@ -760,7 +762,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=UPPER(CONCATENATE(LEFT(A1, 3), RIGHT(B1, 2)))")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Upper(TExpr.Concatenate(_)) => assert(true)
+      case TExpr.Call(upperSpec, inner) if upperSpec.name == "UPPER" =>
+        inner match
+          case TExpr.Call(concatSpec, _) if concatSpec.name == "CONCATENATE" => assert(true)
+          case _ => fail("Expected nested CONCATENATE")
       case _ => fail("Expected nested text functions")
     }
   }
@@ -770,8 +775,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=IFERROR(A1/B1, 0)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Iferror(_, _) => assert(true)
-      case _ => fail("Expected TExpr.Iferror")
+      case TExpr.Call(spec, _) if spec.name == "IFERROR" => assert(true)
+      case _ => fail("Expected TExpr.Call(IFERROR)")
     }
   }
 
@@ -779,8 +784,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ISERROR(A1)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Iserror(_) => assert(true)
-      case _ => fail("Expected TExpr.Iserror")
+      case TExpr.Call(spec, _) if spec.name == "ISERROR" => assert(true)
+      case _ => fail("Expected TExpr.Call(ISERROR)")
     }
   }
 
@@ -789,8 +794,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ROUND(3.14159, 2)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Round(_, _) => assert(true)
-      case _ => fail("Expected TExpr.Round")
+      case TExpr.Call(spec, _) if spec.name == "ROUND" => assert(true)
+      case _ => fail("Expected TExpr.Call(ROUND)")
     }
   }
 
@@ -798,8 +803,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ROUNDUP(3.14159, 2)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.RoundUp(_, _) => assert(true)
-      case _ => fail("Expected TExpr.RoundUp")
+      case TExpr.Call(spec, _) if spec.name == "ROUNDUP" => assert(true)
+      case _ => fail("Expected TExpr.Call(ROUNDUP)")
     }
   }
 
@@ -807,8 +812,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ROUNDDOWN(3.14159, 2)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.RoundDown(_, _) => assert(true)
-      case _ => fail("Expected TExpr.RoundDown")
+      case TExpr.Call(spec, _) if spec.name == "ROUNDDOWN" => assert(true)
+      case _ => fail("Expected TExpr.Call(ROUNDDOWN)")
     }
   }
 
@@ -816,8 +821,17 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=ABS(-5)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Abs(_) => assert(true)
-      case _ => fail("Expected TExpr.Abs")
+      case TExpr.Call(spec, _) if spec.name == "ABS" => assert(true)
+      case _ => fail("Expected TExpr.Call(ABS)")
+    }
+  }
+
+  test("parse SQRT function") {
+    val result = FormulaParser.parse("=SQRT(9)")
+    assert(result.isRight)
+    result.foreach {
+      case TExpr.Call(spec, _) if spec.name == "SQRT" => assert(true)
+      case _ => fail("Expected TExpr.Call(SQRT)")
     }
   }
 
@@ -826,8 +840,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=INDEX(A1:C3, 2, 3)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Index(_, _, _) => assert(true)
-      case _ => fail("Expected TExpr.Index")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.index => assert(true)
+      case _ => fail("Expected TExpr.Call(INDEX)")
     }
   }
 
@@ -835,8 +849,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=INDEX(A1:A10, 5)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Index(_, _, None) => assert(true)
-      case _ => fail("Expected TExpr.Index with no column")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.index =>
+        val (_, _, colNumOpt) = call.args.asInstanceOf[FunctionSpecs.IndexArgs]
+        assert(colNumOpt.isEmpty)
+      case _ => fail("Expected TExpr.Call(INDEX) with no column")
     }
   }
 
@@ -844,8 +860,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MATCH(42, A1:A10, 0)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Match(_, _, _) => assert(true)
-      case _ => fail("Expected TExpr.Match")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.matchFn =>
+        val (_, _, matchTypeOpt) = call.args.asInstanceOf[FunctionSpecs.MatchArgs]
+        assert(matchTypeOpt.isDefined)
+      case _ => fail("Expected TExpr.Call(MATCH)")
     }
   }
 
@@ -853,13 +871,15 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=MATCH(42, A1:A10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Match(_, _, _) => assert(true)
-      case _ => fail("Expected TExpr.Match")
+      case call: TExpr.Call[?] if call.spec == FunctionSpecs.matchFn =>
+        val (_, _, matchTypeOpt) = call.args.asInstanceOf[FunctionSpecs.MatchArgs]
+        assert(matchTypeOpt.isEmpty)
+      case _ => fail("Expected TExpr.Call(MATCH)")
     }
   }
 
-  test("FunctionParser.allFunctions includes all 81 functions") {
-    val functions = FunctionParser.allFunctions
+  test("Known functions include all 81 functions") {
+    val functions = FunctionRegistry.allNames
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
     assert(functions.contains("MAX"))
@@ -944,16 +964,28 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertEquals(functions.length, 81)
   }
 
-  test("FunctionParser.lookup finds known functions") {
-    assert(FunctionParser.lookup("SUM").isDefined)
-    assert(FunctionParser.lookup("min").isDefined) // Case insensitive
-    assert(FunctionParser.lookup("CONCATENATE").isDefined)
-    assert(FunctionParser.lookup("TODAY").isDefined)
+  test("FunctionRegistry.lookup finds spec-based functions") {
+    assert(FunctionRegistry.lookup("SUM").isDefined)
+    assert(FunctionRegistry.lookup("MIN").isDefined)
+    assert(FunctionRegistry.lookup("MAX").isDefined)
+    assert(FunctionRegistry.lookup("CONCATENATE").isDefined)
+    assert(FunctionRegistry.lookup("LEFT").isDefined)
+    assert(FunctionRegistry.lookup("LOWER").isDefined)
+    assert(FunctionRegistry.lookup("IF").isDefined)
+    assert(FunctionRegistry.lookup("AND").isDefined)
+    assert(FunctionRegistry.lookup("OR").isDefined)
+    assert(FunctionRegistry.lookup("NOT").isDefined)
+    assert(FunctionRegistry.lookup("IFERROR").isDefined)
+    assert(FunctionRegistry.lookup("ISERROR").isDefined)
+    assert(FunctionRegistry.lookup("ISERR").isDefined)
+    assert(FunctionRegistry.lookup("ISNUMBER").isDefined)
+    assert(FunctionRegistry.lookup("ISTEXT").isDefined)
+    assert(FunctionRegistry.lookup("ISBLANK").isDefined)
   }
 
-  test("FunctionParser.lookup returns None for unknown functions") {
-    assert(FunctionParser.lookup("UNKNOWN").isEmpty)
-    assert(FunctionParser.lookup("FOOBAR").isEmpty)
+  test("FunctionRegistry.lookup returns None for unknown functions") {
+    assert(FunctionRegistry.lookup("UNKNOWN").isEmpty)
+    assert(FunctionRegistry.lookup("FOOBAR").isEmpty)
   }
 
   // ==================== XNPV/XIRR Parsing Tests ====================
@@ -962,36 +994,39 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=XNPV(0.1, A1:A5, B1:B5)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Xnpv(rate, values, dates)) =>
+      case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.xnpv =>
+        val (_, values, dates) = call.args.asInstanceOf[FunctionSpecs.XnpvArgs]
         assert(values.start == ref"A1")
         assert(values.end == ref"A5")
         assert(dates.start == ref"B1")
         assert(dates.end == ref"B5")
-      case _ => fail("Expected TExpr.Xnpv")
+      case _ => fail("Expected TExpr.Call(XNPV)")
   }
 
   test("parses XIRR(values, dates)") {
     val result = FormulaParser.parse("=XIRR(A1:A5, B1:B5)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Xirr(values, dates, guess)) =>
+      case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.xirr =>
+        val (values, dates, guess) = call.args.asInstanceOf[FunctionSpecs.XirrArgs]
         assert(values.start == ref"A1")
         assert(values.end == ref"A5")
         assert(dates.start == ref"B1")
         assert(dates.end == ref"B5")
         assert(guess.isEmpty)
-      case _ => fail("Expected TExpr.Xirr")
+      case _ => fail("Expected TExpr.Call(XIRR)")
   }
 
   test("parses XIRR(values, dates, guess)") {
     val result = FormulaParser.parse("=XIRR(A1:A5, B1:B5, 0.15)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Xirr(values, dates, guess)) =>
+      case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.xirr =>
+        val (values, _, guess) = call.args.asInstanceOf[FunctionSpecs.XirrArgs]
         assert(values.start == ref"A1")
         assert(values.end == ref"A5")
         assert(guess.isDefined)
-      case _ => fail("Expected TExpr.Xirr with guess")
+      case _ => fail("Expected TExpr.Call(XIRR) with guess")
   }
 
   // ==================== Date Calculation Function Parsing Tests ====================
@@ -1000,74 +1035,76 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=EOMONTH(A1, 1)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Eomonth(_, _)) => () // Just verify type
-      case _ => fail("Expected TExpr.Eomonth")
+      case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.eomonth => ()
+      case _ => fail("Expected TExpr.Call(EOMONTH)")
   }
 
   test("parses EDATE(start_date, months)") {
     val result = FormulaParser.parse("=EDATE(A1, 3)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Edate(_, _)) => () // Just verify type
-      case _ => fail("Expected TExpr.Edate")
+      case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.edate => ()
+      case _ => fail("Expected TExpr.Call(EDATE)")
   }
 
   test("parses DATEDIF(start, end, unit)") {
     val result = FormulaParser.parse("""=DATEDIF(A1, B1, "Y")""")
     assert(result.isRight)
     result match
-      case Right(TExpr.Datedif(_, _, _)) => () // Just verify type
-      case _ => fail("Expected TExpr.Datedif")
+      case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.datedif => ()
+      case _ => fail("Expected TExpr.Call(DATEDIF)")
   }
 
   test("parses NETWORKDAYS(start, end)") {
     val result = FormulaParser.parse("=NETWORKDAYS(A1, B1)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Networkdays(_, _, holidays)) =>
-        assert(holidays.isEmpty)
-      case _ => fail("Expected TExpr.Networkdays")
+      case Right(TExpr.Call(FunctionSpecs.networkdays, (_, _, holidays))) =>
+        assert(holidays == None)
+      case _ => fail("Expected TExpr.Call(NETWORKDAYS)")
   }
 
   test("parses NETWORKDAYS(start, end, holidays)") {
     val result = FormulaParser.parse("=NETWORKDAYS(A1, B1, C1:C10)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Networkdays(_, _, holidays)) =>
-        assert(holidays.isDefined)
-      case _ => fail("Expected TExpr.Networkdays with holidays")
+      case Right(TExpr.Call(FunctionSpecs.networkdays, (_, _, holidays))) =>
+        assert(holidays != None)
+      case _ => fail("Expected TExpr.Call(NETWORKDAYS) with holidays")
   }
 
   test("parses WORKDAY(start, days)") {
     val result = FormulaParser.parse("=WORKDAY(A1, 5)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Workday(_, _, holidays)) =>
-        assert(holidays.isEmpty)
-      case _ => fail("Expected TExpr.Workday")
+      case Right(TExpr.Call(FunctionSpecs.workday, (_, _, holidays))) =>
+        assert(holidays == None)
+      case _ => fail("Expected TExpr.Call(WORKDAY)")
   }
 
   test("parses WORKDAY(start, days, holidays)") {
     val result = FormulaParser.parse("=WORKDAY(A1, 5, C1:C10)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Workday(_, _, holidays)) =>
-        assert(holidays.isDefined)
-      case _ => fail("Expected TExpr.Workday with holidays")
+      case Right(TExpr.Call(FunctionSpecs.workday, (_, _, holidays))) =>
+        assert(holidays != None)
+      case _ => fail("Expected TExpr.Call(WORKDAY) with holidays")
   }
 
   test("parses YEARFRAC(start, end)") {
     val result = FormulaParser.parse("=YEARFRAC(A1, B1)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Yearfrac(_, _, _)) => () // Just verify type
-      case _ => fail("Expected TExpr.Yearfrac")
+      case Right(TExpr.Call(FunctionSpecs.yearfrac, (_, _, basis))) =>
+        assert(basis == None)
+      case _ => fail("Expected TExpr.Call(YEARFRAC)")
   }
 
   test("parses YEARFRAC(start, end, basis)") {
     val result = FormulaParser.parse("=YEARFRAC(A1, B1, 1)")
     assert(result.isRight)
     result match
-      case Right(TExpr.Yearfrac(_, _, _)) => () // Just verify type
-      case _ => fail("Expected TExpr.Yearfrac with basis")
+      case Right(TExpr.Call(FunctionSpecs.yearfrac, (_, _, basis))) =>
+        assert(basis != None)
+      case _ => fail("Expected TExpr.Call(YEARFRAC) with basis")
   }

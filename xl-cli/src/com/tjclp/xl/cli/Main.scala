@@ -415,84 +415,21 @@ object Main
     IO.println(formatFunctionList()).as(ExitCode.Success)
 
   private def formatFunctionList(): String =
-    // Functions organized by category
-    val categories = List(
-      "Aggregate" -> List(
-        "SUM" -> "Sum of values in range",
-        "COUNT" -> "Count numeric values",
-        "COUNTA" -> "Count non-empty cells",
-        "AVERAGE" -> "Average of values",
-        "MIN" -> "Minimum value",
-        "MAX" -> "Maximum value"
-      ),
-      "Conditional" -> List(
-        "SUMIF" -> "Sum if condition met",
-        "COUNTIF" -> "Count if condition met",
-        "SUMIFS" -> "Sum with multiple conditions",
-        "COUNTIFS" -> "Count with multiple conditions",
-        "SUMPRODUCT" -> "Sum of products of arrays"
-      ),
-      "Logical" -> List(
-        "IF" -> "Conditional logic",
-        "AND" -> "All conditions true",
-        "OR" -> "Any condition true",
-        "NOT" -> "Negate boolean",
-        "IFERROR" -> "Handle errors gracefully",
-        "ISERROR" -> "Check if value is error"
-      ),
-      "Text" -> List(
-        "CONCATENATE" -> "Join text strings",
-        "LEFT" -> "Left N characters",
-        "RIGHT" -> "Right N characters",
-        "LEN" -> "String length",
-        "UPPER" -> "Convert to uppercase",
-        "LOWER" -> "Convert to lowercase"
-      ),
-      "Date/Time" -> List(
-        "TODAY" -> "Current date",
-        "NOW" -> "Current date/time",
-        "DATE" -> "Create date from parts",
-        "YEAR" -> "Extract year",
-        "MONTH" -> "Extract month",
-        "DAY" -> "Extract day",
-        "EOMONTH" -> "End of month offset",
-        "EDATE" -> "Date offset by months",
-        "DATEDIF" -> "Difference between dates",
-        "NETWORKDAYS" -> "Working days between dates",
-        "WORKDAY" -> "Workday offset",
-        "YEARFRAC" -> "Fraction of year"
-      ),
-      "Math" -> List(
-        "PI" -> "Mathematical constant π",
-        "ABS" -> "Absolute value",
-        "ROUND" -> "Round to decimals",
-        "ROUNDUP" -> "Round up",
-        "ROUNDDOWN" -> "Round down"
-      ),
-      "Lookup" -> List(
-        "VLOOKUP" -> "Vertical lookup",
-        "XLOOKUP" -> "Modern flexible lookup",
-        "INDEX" -> "Value at row/col",
-        "MATCH" -> "Position of value"
-      ),
-      "Financial" -> List(
-        "NPV" -> "Net present value",
-        "IRR" -> "Internal rate of return",
-        "XNPV" -> "NPV with dates",
-        "XIRR" -> "IRR with dates"
-      )
-    )
+    // Dynamically get all functions from the registry
+    val names = FunctionRegistry.allNames
+    val count = names.size
 
     val sb = new StringBuilder
-    sb.append("Supported Excel Functions (48 total)\n")
+    sb.append(s"Supported Excel Functions ($count total)\n")
     sb.append("=" * 40 + "\n\n")
 
-    for (category, functions) <- categories do
-      sb.append(s"## $category\n")
-      for (name, desc) <- functions do sb.append(f"  $name%-15s $desc\n")
+    // Display in columns (5 per row)
+    names.grouped(5).foreach { row =>
+      sb.append(row.map(n => f"$n%-14s").mkString("  "))
       sb.append("\n")
+    }
 
-    sb.append("Usage: xl eval \"=FUNCTION(args)\"\n")
+    sb.append("\nUsage: xl eval \"=FUNCTION(args)\"\n")
     sb.append("Example: xl eval \"=SUM(1,2,3)\" or xl -f data.xlsx eval \"=SUM(A1:A10)\"\n")
     sb.toString
 

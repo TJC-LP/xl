@@ -267,21 +267,22 @@ println(s"  Cells referenced: ${deps.toSeq.sortBy(_.toString).take(10).map(_.toA
 println()
 
 // Show all available functions
-println(s"Available functions (${FunctionParser.allFunctions.size} total):")
-println(s"  ${FunctionParser.allFunctions.sorted.mkString(", ")}")
+val allFunctions = FunctionRegistry.allNames
+println(s"Available functions (${allFunctions.size} total):")
+println(s"  ${allFunctions.mkString(", ")}")
 println()
 
 // Function lookup
 println("Function introspection:")
-FunctionParser.lookup("SUM") match
-  case Some(parser) =>
-    println(s"  SUM: arity = ${parser.arity}")
+FunctionRegistry.lookup("SUM") match
+  case Some(spec) =>
+    println(s"  SUM: arity = ${spec.arity}")
   case None =>
     println("  SUM: not found")
 
-FunctionParser.lookup("AVERAGE") match
-  case Some(parser) =>
-    println(s"  AVERAGE: arity = ${parser.arity}")
+FunctionRegistry.lookup("AVERAGE") match
+  case Some(spec) =>
+    println(s"  AVERAGE: arity = ${spec.arity}")
   case None =>
     println("  AVERAGE: not found")
 

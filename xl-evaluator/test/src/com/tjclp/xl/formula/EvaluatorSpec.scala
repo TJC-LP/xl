@@ -133,7 +133,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
   property("Short-circuit: And(Lit(false), error) doesn't evaluate error") {
     forAll(genARef) { missingRef =>
       val errorExpr = TExpr.Ref[Boolean](missingRef, Anchor.Relative, _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty)))
-      val andExpr = TExpr.And(TExpr.Lit(false), errorExpr)
+      val andExpr = TExpr.Lit(false) && errorExpr
       val sheet = new Sheet(name = SheetName.unsafe("Empty"))
       // Should return Right(false) without evaluating errorExpr
       evaluator.eval(andExpr, sheet) == Right(false)
@@ -143,7 +143,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
   property("Short-circuit: Or(Lit(true), error) doesn't evaluate error") {
     forAll(genARef) { missingRef =>
       val errorExpr = TExpr.Ref[Boolean](missingRef, Anchor.Relative, _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty)))
-      val orExpr = TExpr.Or(TExpr.Lit(true), errorExpr)
+      val orExpr = TExpr.Lit(true) || errorExpr
       val sheet = new Sheet(name = SheetName.unsafe("Empty"))
       // Should return Right(true) without evaluating errorExpr
       evaluator.eval(orExpr, sheet) == Right(true)
@@ -214,61 +214,61 @@ class EvaluatorSpec extends ScalaCheckSuite:
   }
 
   test("Boolean And: And(true, true) == Right(true)") {
-    val expr = TExpr.And(TExpr.Lit(true), TExpr.Lit(true))
+    val expr = TExpr.Lit(true) && TExpr.Lit(true)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == true)
   }
 
   test("Boolean And: And(true, false) == Right(false)") {
-    val expr = TExpr.And(TExpr.Lit(true), TExpr.Lit(false))
+    val expr = TExpr.Lit(true) && TExpr.Lit(false)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == false)
   }
 
   test("Boolean And: And(false, true) == Right(false)") {
-    val expr = TExpr.And(TExpr.Lit(false), TExpr.Lit(true))
+    val expr = TExpr.Lit(false) && TExpr.Lit(true)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == false)
   }
 
   test("Boolean And: And(false, false) == Right(false)") {
-    val expr = TExpr.And(TExpr.Lit(false), TExpr.Lit(false))
+    val expr = TExpr.Lit(false) && TExpr.Lit(false)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == false)
   }
 
   test("Boolean Or: Or(true, true) == Right(true)") {
-    val expr = TExpr.Or(TExpr.Lit(true), TExpr.Lit(true))
+    val expr = TExpr.Lit(true) || TExpr.Lit(true)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == true)
   }
 
   test("Boolean Or: Or(true, false) == Right(true)") {
-    val expr = TExpr.Or(TExpr.Lit(true), TExpr.Lit(false))
+    val expr = TExpr.Lit(true) || TExpr.Lit(false)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == true)
   }
 
   test("Boolean Or: Or(false, true) == Right(true)") {
-    val expr = TExpr.Or(TExpr.Lit(false), TExpr.Lit(true))
+    val expr = TExpr.Lit(false) || TExpr.Lit(true)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == true)
   }
 
   test("Boolean Or: Or(false, false) == Right(false)") {
-    val expr = TExpr.Or(TExpr.Lit(false), TExpr.Lit(false))
+    val expr = TExpr.Lit(false) || TExpr.Lit(false)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == false)
   }
 
   test("Boolean Not: Not(Lit(true)) == Right(false)") {
-    val expr = TExpr.Not(TExpr.Lit(true))
+    val expr = !TExpr.Lit(true)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == false)
   }
 
   test("Boolean Not: Not(Lit(false)) == Right(true)") {
-    val expr = TExpr.Not(TExpr.Lit(false))
+    val expr = !TExpr.Lit(false)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == true)
   }
@@ -315,7 +315,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == true)
   }
 
-  test("FoldRange: empty range returns zero value") {
+  test("SUM: empty range returns zero value") {
     val range = CellRange(ARef.from0(10, 10), ARef.from0(10, 10)) // K11:K11 (single empty cell)
     val expr = TExpr.sum(range)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
@@ -323,7 +323,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == BigDecimal(0))
   }
 
-  test("FoldRange: SUM with single cell") {
+  test("SUM: single cell") {
     val ref = ARef.from0(0, 0) // A1
     val range = CellRange(ref, ref) // A1:A1
     val sheet = sheetWith(ref -> CellValue.Number(BigDecimal(42)))
@@ -331,7 +331,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == BigDecimal(42))
   }
 
-  test("FoldRange: SUM with multiple cells") {
+  test("SUM: multiple cells") {
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)),
@@ -342,7 +342,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == BigDecimal(60))
   }
 
-  test("FoldRange: COUNT with multiple cells") {
+  test("COUNT: numeric cells only") {
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 4)) // A1:A5
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)),
@@ -352,11 +352,8 @@ class EvaluatorSpec extends ScalaCheckSuite:
       // A5 not set (empty)
     )
     val expr = TExpr.count(range)
-    // Note: Current implementation counts all cells in range (including empty)
-    // because decodeAny succeeds for all cells and step function doesn't check Some/None
-    // Excel COUNTA would return 3 (only non-empty: A1, A2, A3)
-    // This is a known limitation - COUNT should use a smarter step function
-    assert(evalOk(expr, sheet) == 5)  // All 5 cells in range
+    // Excel COUNT counts numeric cells only; text/empty are skipped
+    assert(evalOk(expr, sheet) == BigDecimal(2))
   }
 
   // ==================== Integration Tests (Real Formulas) ====================
@@ -365,7 +362,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val refA1 = ARef.from0(0, 0)
     val sheet = sheetWith(refA1 -> CellValue.Number(BigDecimal(5)))
     val condition = TExpr.Gt(TExpr.ref(refA1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(0)))
-    val expr = TExpr.If(condition, TExpr.Lit("Positive"), TExpr.Lit("Non-positive"))
+    val expr = TExpr.cond(condition, TExpr.Lit("Positive"), TExpr.Lit("Non-positive"))
     assert(evalOk(expr, sheet) == "Positive")
   }
 
@@ -373,7 +370,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val refA1 = ARef.from0(0, 0)
     val sheet = sheetWith(refA1 -> CellValue.Number(BigDecimal(-3)))
     val condition = TExpr.Gt(TExpr.ref(refA1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(0)))
-    val expr = TExpr.If(condition, TExpr.Lit("Positive"), TExpr.Lit("Non-positive"))
+    val expr = TExpr.cond(condition, TExpr.Lit("Positive"), TExpr.Lit("Non-positive"))
     assert(evalOk(expr, sheet) == "Non-positive")
   }
 
@@ -390,9 +387,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     )
     val condA1 = TExpr.Gt(TExpr.ref(refA1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(0)))
     val condB1 = TExpr.Lt(TExpr.ref(refB1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(100)))
-    val condition = TExpr.And(condA1, condB1)
+    val condition = condA1 && condB1
     val sumExpr = TExpr.sum(rangeC1C3)
-    val expr = TExpr.If(condition, sumExpr, TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.cond(condition, sumExpr, TExpr.Lit(BigDecimal(0)))
     assert(evalOk(expr, sheet) == BigDecimal(600))
   }
 
@@ -409,9 +406,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     )
     val condA1 = TExpr.Gt(TExpr.ref(refA1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(0)))
     val condB1 = TExpr.Lt(TExpr.ref(refB1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(100)))
-    val condition = TExpr.And(condA1, condB1)
+    val condition = condA1 && condB1
     val sumExpr = TExpr.sum(rangeC1C3)
-    val expr = TExpr.If(condition, sumExpr, TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.cond(condition, sumExpr, TExpr.Lit(BigDecimal(0)))
     assert(evalOk(expr, sheet) == BigDecimal(0))
   }
 
@@ -453,8 +450,8 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val sheet = sheetWith(refA1 -> CellValue.Number(BigDecimal(7)))
     val cond1 = TExpr.Gt(TExpr.ref(refA1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(10)))
     val cond2 = TExpr.Gt(TExpr.ref(refA1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(5)))
-    val innerIf = TExpr.If(cond2, TExpr.Lit("Medium"), TExpr.Lit("Low"))
-    val expr = TExpr.If(cond1, TExpr.Lit("High"), innerIf)
+    val innerIf = TExpr.cond(cond2, TExpr.Lit("Medium"), TExpr.Lit("Low"))
+    val expr = TExpr.cond(cond1, TExpr.Lit("High"), innerIf)
     // A1=7: not >10, but >5, so "Medium"
     assert(evalOk(expr, sheet) == "Medium")
   }
@@ -471,8 +468,8 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val condA = TExpr.Gt(TExpr.ref(refA1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(5)))
     val condB = TExpr.Lt(TExpr.ref(refB1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(10)))
     val condC = TExpr.Eq(TExpr.ref(refC1, TExpr.decodeNumeric), TExpr.Lit(BigDecimal(20)))
-    val orExpr = TExpr.Or(condB, condC)
-    val expr = TExpr.And(condA, orExpr)
+    val orExpr = condB || condC
+    val expr = condA && orExpr
     // A1>5: true, B1<10: false, C1==20: true, (false OR true)=true, (true AND true)=true
     assert(evalOk(expr, sheet) == true)
   }
@@ -486,14 +483,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
     )
     val sumExpr = TExpr.sum(range)
     val countExpr = TExpr.count(range)
-    // Average = Sum / Count (but count returns Int, need to convert)
-    // For now, just test sum and count separately
     assert(evalOk(sumExpr, sheet) == BigDecimal(60))
-    assert(evalOk(countExpr, sheet) == 3)
+    assert(evalOk(countExpr, sheet) == BigDecimal(3))
   }
 
   test("AVERAGE returns BigDecimal directly at eval level") {
-    // AVERAGE now has dedicated TExpr case, returns BigDecimal directly
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(150)),
@@ -599,7 +593,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
   test("Error: Nested error - error in IF condition propagates") {
     val refA1 = ARef.from0(0, 0) // A1 doesn't exist
     val condition = TExpr.Ref[Boolean](refA1, Anchor.Relative, _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty)))
-    val expr = TExpr.If(condition, TExpr.Lit("Yes"), TExpr.Lit("No"))
+    val expr = TExpr.cond(condition, TExpr.Lit("Yes"), TExpr.Lit("No"))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     val error = evalErr(expr, sheet)
     error match
@@ -611,7 +605,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val refA1 = ARef.from0(0, 0)
     val condition = TExpr.Lit(true)
     val trueBranch = TExpr.Ref[String](refA1, Anchor.Relative, _ => Left(CodecError.TypeMismatch("String", CellValue.Empty)))
-    val expr = TExpr.If(condition, trueBranch, TExpr.Lit("No"))
+    val expr = TExpr.cond(condition, trueBranch, TExpr.Lit("No"))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     val error = evalErr(expr, sheet)
     error match
@@ -623,13 +617,13 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val refA1 = ARef.from0(0, 0)
     val condition = TExpr.Lit(true)
     val falseBranch = TExpr.Ref[String](refA1, Anchor.Relative, _ => Left(CodecError.TypeMismatch("String", CellValue.Empty)))
-    val expr = TExpr.If(condition, TExpr.Lit("Yes"), falseBranch)
+    val expr = TExpr.cond(condition, TExpr.Lit("Yes"), falseBranch)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     // False branch should NOT be evaluated, so no error
     assert(evalOk(expr, sheet) == "Yes")
   }
 
-  test("FoldRange: SUM skips text cells (Excel behavior)") {
+  test("SUM: skips text cells (Excel behavior)") {
     val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)),
@@ -639,6 +633,32 @@ class EvaluatorSpec extends ScalaCheckSuite:
     val expr = TExpr.sum(range)
     // Excel behavior: SUM skips text cells, sums numeric ones (10 + 30 = 40)
     assert(evalOk(expr, sheet) == BigDecimal(40))
+  }
+
+  // ==================== Variadic Aggregate Tests ====================
+
+  test("SUM: variadic literals SUM(1,2,3) = 6") {
+    val expr = TExpr.sum(TExpr.Lit(BigDecimal(1)), TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    assert(evalOk(expr, sheet) == BigDecimal(6))
+  }
+
+  test("AVERAGE: variadic literals AVERAGE(1,2,3) = 2") {
+    val expr = TExpr.average(TExpr.Lit(BigDecimal(1)), TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    assert(evalOk(expr, sheet) == BigDecimal(2))
+  }
+
+  test("MIN: variadic literals MIN(5,3,8) = 3") {
+    val expr = TExpr.min(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(8)))
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    assert(evalOk(expr, sheet) == BigDecimal(3))
+  }
+
+  test("MAX: variadic literals MAX(5,3,8) = 8") {
+    val expr = TExpr.max(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(8)))
+    val sheet = new Sheet(name = SheetName.unsafe("Empty"))
+    assert(evalOk(expr, sheet) == BigDecimal(8))
   }
 
   test("Error: Multiple cell references, first one fails") {
@@ -674,7 +694,7 @@ class EvaluatorSpec extends ScalaCheckSuite:
   test("Error: AND with error in second operand (first=true, evaluates second)") {
     val refA1 = ARef.from0(0, 0) // Missing
     val errorExpr = TExpr.Ref[Boolean](refA1, Anchor.Relative, _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty)))
-    val andExpr = TExpr.And(TExpr.Lit(true), errorExpr)
+    val andExpr = TExpr.Lit(true) && errorExpr
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     // First is true, so second is evaluated and error propagates
     val error = evalErr(andExpr, sheet)

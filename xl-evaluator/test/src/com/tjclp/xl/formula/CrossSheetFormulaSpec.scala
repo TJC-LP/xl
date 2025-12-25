@@ -157,7 +157,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Bool(true)))
   }
 
-  test("SheetFoldRange: SUM across cross-sheet range") {
+  test("SUM: cross-sheet range") {
     val sales = sheetWith(
       "Sales",
       ref"A1" -> CellValue.Number(BigDecimal(10)),
@@ -203,7 +203,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(20))))
   }
 
-  test("SheetFoldRange: handles empty cells in range") {
+  test("SUM: cross-sheet range handles empty cells") {
     val sparse = sheetWith(
       "Sparse",
       ref"A1" -> CellValue.Number(BigDecimal(10)),

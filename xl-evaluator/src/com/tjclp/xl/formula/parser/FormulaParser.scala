@@ -1,4 +1,8 @@
-package com.tjclp.xl.formula
+package com.tjclp.xl.formula.parser
+
+import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, FunctionRegistry}
+import com.tjclp.xl.formula.{Arity}
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.RefParser
@@ -50,9 +54,9 @@ object FormulaParser:
    *
    * Example:
    * {{{
-   * parse("=SUM(A1:B10)") // Right(TExpr.FoldRange(...))
+   * parse("=SUM(A1:B10)") // Right(TExpr.Call(...))
    * parse("=A1+B2")       // Right(TExpr.Add(...))
-   * parse("=IF(A1>0, "Yes", "No")") // Right(TExpr.If(...))
+   * parse("=IF(A1>0, "Yes", "No")") // Right(TExpr.Call(...))
    * }}}
    */
   def parse(input: String): Either[ParseError, TExpr[?]] =
@@ -153,7 +157,13 @@ object FormulaParser:
       if s2.remaining.toUpperCase.startsWith("OR") then
         val s3 = skipWhitespace(s2.advance(2))
         parseLogicalOr(s3).map { case (right, s4) =>
-          (TExpr.Or(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]]), s4)
+          (
+            TExpr.Call(
+              FunctionSpecs.or,
+              List(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]])
+            ),
+            s4
+          )
         }
       else Right((left, s2))
     }
@@ -168,7 +178,13 @@ object FormulaParser:
       if s2.remaining.toUpperCase.startsWith("AND") then
         val s3 = skipWhitespace(s2.advance(3))
         parseLogicalAnd(s3).map { case (right, s4) =>
-          (TExpr.And(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]]), s4)
+          (
+            TExpr.Call(
+              FunctionSpecs.and,
+              List(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]])
+            ),
+            s4
+          )
         }
       else Right((left, s2))
     }
@@ -370,7 +386,7 @@ object FormulaParser:
       case Some('N') | Some('n') if s.remaining.toUpperCase.startsWith("NOT") =>
         val s2 = skipWhitespace(s.advance(3))
         parseUnary(s2).map { case (expr, s3) =>
-          (TExpr.Not(TExpr.asBooleanExpr(expr)), s3) // Convert PolyRef
+          (TExpr.Call(FunctionSpecs.not, TExpr.asBooleanExpr(expr)), s3) // Convert PolyRef
         }
       case _ => parsePrimary(s)
 
@@ -464,8 +480,8 @@ object FormulaParser:
             val rangeStr = state.input.substring(startPos, afterSecondDigits.pos)
             CellRange.parse(rangeStr) match
               case Right(range) =>
-                // Create FoldRange for SUM by default (function parsers will re-wrap)
-                Right((TExpr.sum(range), afterSecondDigits))
+                // Create RangeRef for range arguments
+                Right((TExpr.RangeRef(range), afterSecondDigits))
               case Left(err) =>
                 Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
           case _ =>
@@ -587,13 +603,24 @@ object FormulaParser:
           }
 
     parseArgs(s2, Nil).flatMap { case (args, finalState) =>
-      // Lookup function in type class registry
-      FunctionParser.lookup(name) match
-        case Some(parser) =>
-          // Parse using registered function parser
-          parser.parse(args, startPos) match
-            case Right(expr) => Right((expr, finalState))
-            case Left(err) => Left(err)
+      FunctionRegistry.lookup(name) match
+        case Some(spec) =>
+          spec.arity
+            .validate(args.length, spec.name, startPos)
+            .flatMap(_ => spec.argSpec.parse(args, startPos, spec.name))
+            .flatMap {
+              case (parsedArgs, Nil) =>
+                Right((TExpr.Call(spec, parsedArgs), finalState))
+              case _ =>
+                Left(
+                  ParseError.InvalidArguments(
+                    spec.name,
+                    startPos,
+                    spec.argSpec.describe,
+                    s"${args.length} arguments"
+                  )
+                )
+            }
         case None =>
           // Unknown function - provide suggestions
           val suggestions = suggestFunctions(name)
@@ -725,9 +752,8 @@ object FormulaParser:
 
     CellRange.parse(rangeStr) match
       case Right(range) =>
-        // Create FoldRange for SUM by default (function parsers will re-wrap as needed)
-        // E.g., COUNT(A1:B10) will extract the range and create TExpr.count(range)
-        Right((TExpr.sum(range), s3))
+        // Create RangeRef for range arguments
+        Right((TExpr.RangeRef(range), s3))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
 
@@ -735,8 +761,8 @@ object FormulaParser:
    * Suggest similar function names for unknown functions.
    */
   private def suggestFunctions(name: String): List[String] =
-    // Use FunctionParser registry for all available functions
-    val knownFunctions = FunctionParser.allFunctions
+    // Use registry list for suggestions
+    val knownFunctions = FunctionRegistry.allNames
 
     // Simple Levenshtein distance for suggestions
     knownFunctions

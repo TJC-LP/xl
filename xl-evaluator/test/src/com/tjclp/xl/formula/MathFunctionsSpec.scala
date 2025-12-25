@@ -25,19 +25,19 @@ class MathFunctionsSpec extends FunSuite:
   // ===== SQRT Tests =====
 
   test("SQRT: square root of 16") {
-    val expr = TExpr.Sqrt(TExpr.Lit(BigDecimal(16)))
+    val expr = TExpr.sqrt(TExpr.Lit(BigDecimal(16)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(4.0)))
   }
 
   test("SQRT: square root of 0") {
-    val expr = TExpr.Sqrt(TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.sqrt(TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(0.0)))
   }
 
   test("SQRT: square root of 2 (irrational)") {
-    val expr = TExpr.Sqrt(TExpr.Lit(BigDecimal(2)))
+    val expr = TExpr.sqrt(TExpr.Lit(BigDecimal(2)))
     val result = evaluator.eval(expr, emptySheet)
     result match
       case Right(value) => assertEqualsDouble(value.toDouble, 1.4142135623730951, 0.0000001)
@@ -45,7 +45,7 @@ class MathFunctionsSpec extends FunSuite:
   }
 
   test("SQRT: negative number returns error") {
-    val expr = TExpr.Sqrt(TExpr.Lit(BigDecimal(-4)))
+    val expr = TExpr.sqrt(TExpr.Lit(BigDecimal(-4)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "SQRT of negative number should return error")
   }
@@ -53,31 +53,31 @@ class MathFunctionsSpec extends FunSuite:
   // ===== MOD Tests =====
 
   test("MOD: 5 mod 3 = 2") {
-    val expr = TExpr.Mod(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)))
+    val expr = TExpr.mod(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(2)))
   }
 
   test("MOD: -5 mod 3 = 1 (Excel semantics: result has sign of divisor)") {
-    val expr = TExpr.Mod(TExpr.Lit(BigDecimal(-5)), TExpr.Lit(BigDecimal(3)))
+    val expr = TExpr.mod(TExpr.Lit(BigDecimal(-5)), TExpr.Lit(BigDecimal(3)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(1)))
   }
 
   test("MOD: 5 mod -3 = -1 (Excel semantics: result has sign of divisor)") {
-    val expr = TExpr.Mod(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(-3)))
+    val expr = TExpr.mod(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(-3)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(-1)))
   }
 
   test("MOD: 10 mod 10 = 0") {
-    val expr = TExpr.Mod(TExpr.Lit(BigDecimal(10)), TExpr.Lit(BigDecimal(10)))
+    val expr = TExpr.mod(TExpr.Lit(BigDecimal(10)), TExpr.Lit(BigDecimal(10)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(0)))
   }
 
   test("MOD: division by zero returns error") {
-    val expr = TExpr.Mod(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.mod(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "MOD by zero should return error")
   }
@@ -85,25 +85,25 @@ class MathFunctionsSpec extends FunSuite:
   // ===== POWER Tests =====
 
   test("POWER: 2^3 = 8") {
-    val expr = TExpr.Power(TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
+    val expr = TExpr.power(TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(8.0)))
   }
 
   test("POWER: 4^0.5 = 2 (square root)") {
-    val expr = TExpr.Power(TExpr.Lit(BigDecimal(4)), TExpr.Lit(BigDecimal(0.5)))
+    val expr = TExpr.power(TExpr.Lit(BigDecimal(4)), TExpr.Lit(BigDecimal(0.5)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(2.0)))
   }
 
   test("POWER: 10^0 = 1") {
-    val expr = TExpr.Power(TExpr.Lit(BigDecimal(10)), TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.power(TExpr.Lit(BigDecimal(10)), TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(1.0)))
   }
 
   test("POWER: 2^-1 = 0.5") {
-    val expr = TExpr.Power(TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(-1)))
+    val expr = TExpr.power(TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(-1)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(0.5)))
   }
@@ -111,7 +111,7 @@ class MathFunctionsSpec extends FunSuite:
   // ===== LOG Tests =====
 
   test("LOG: log10(100) = 2") {
-    val expr = TExpr.Log(TExpr.Lit(BigDecimal(100)), TExpr.Lit(BigDecimal(10)))
+    val expr = TExpr.log(TExpr.Lit(BigDecimal(100)), TExpr.Lit(BigDecimal(10)))
     val result = evaluator.eval(expr, emptySheet)
     result match
       case Right(value) => assertEqualsDouble(value.toDouble, 2.0, 0.0000001)
@@ -119,7 +119,7 @@ class MathFunctionsSpec extends FunSuite:
   }
 
   test("LOG: log2(8) = 3") {
-    val expr = TExpr.Log(TExpr.Lit(BigDecimal(8)), TExpr.Lit(BigDecimal(2)))
+    val expr = TExpr.log(TExpr.Lit(BigDecimal(8)), TExpr.Lit(BigDecimal(2)))
     val result = evaluator.eval(expr, emptySheet)
     result match
       case Right(value) => assertEqualsDouble(value.toDouble, 3.0, 0.0000001)
@@ -127,19 +127,19 @@ class MathFunctionsSpec extends FunSuite:
   }
 
   test("LOG: log of 0 returns error") {
-    val expr = TExpr.Log(TExpr.Lit(BigDecimal(0)), TExpr.Lit(BigDecimal(10)))
+    val expr = TExpr.log(TExpr.Lit(BigDecimal(0)), TExpr.Lit(BigDecimal(10)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "LOG of 0 should return error")
   }
 
   test("LOG: log of negative returns error") {
-    val expr = TExpr.Log(TExpr.Lit(BigDecimal(-1)), TExpr.Lit(BigDecimal(10)))
+    val expr = TExpr.log(TExpr.Lit(BigDecimal(-1)), TExpr.Lit(BigDecimal(10)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "LOG of negative should return error")
   }
 
   test("LOG: log base 1 returns error") {
-    val expr = TExpr.Log(TExpr.Lit(BigDecimal(10)), TExpr.Lit(BigDecimal(1)))
+    val expr = TExpr.log(TExpr.Lit(BigDecimal(10)), TExpr.Lit(BigDecimal(1)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "LOG base 1 should return error")
   }
@@ -148,7 +148,7 @@ class MathFunctionsSpec extends FunSuite:
 
   test("LN: ln(e) ≈ 1") {
     val e = BigDecimal(Math.E)
-    val expr = TExpr.Ln(TExpr.Lit(e))
+    val expr = TExpr.ln(TExpr.Lit(e))
     val result = evaluator.eval(expr, emptySheet)
     result match
       case Right(value) => assertEqualsDouble(value.toDouble, 1.0, 0.0000001)
@@ -156,7 +156,7 @@ class MathFunctionsSpec extends FunSuite:
   }
 
   test("LN: ln(1) = 0") {
-    val expr = TExpr.Ln(TExpr.Lit(BigDecimal(1)))
+    val expr = TExpr.ln(TExpr.Lit(BigDecimal(1)))
     val result = evaluator.eval(expr, emptySheet)
     result match
       case Right(value) => assertEqualsDouble(value.toDouble, 0.0, 0.0000001)
@@ -164,13 +164,13 @@ class MathFunctionsSpec extends FunSuite:
   }
 
   test("LN: ln(0) returns error") {
-    val expr = TExpr.Ln(TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.ln(TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "LN of 0 should return error")
   }
 
   test("LN: ln of negative returns error") {
-    val expr = TExpr.Ln(TExpr.Lit(BigDecimal(-1)))
+    val expr = TExpr.ln(TExpr.Lit(BigDecimal(-1)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "LN of negative should return error")
   }
@@ -178,13 +178,13 @@ class MathFunctionsSpec extends FunSuite:
   // ===== EXP Tests =====
 
   test("EXP: e^0 = 1") {
-    val expr = TExpr.Exp(TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.exp(TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(1.0)))
   }
 
   test("EXP: e^1 ≈ 2.718") {
-    val expr = TExpr.Exp(TExpr.Lit(BigDecimal(1)))
+    val expr = TExpr.exp(TExpr.Lit(BigDecimal(1)))
     val result = evaluator.eval(expr, emptySheet)
     result match
       case Right(value) => assertEqualsDouble(value.toDouble, Math.E, 0.0000001)
@@ -192,7 +192,7 @@ class MathFunctionsSpec extends FunSuite:
   }
 
   test("EXP: e^-1 ≈ 0.368") {
-    val expr = TExpr.Exp(TExpr.Lit(BigDecimal(-1)))
+    val expr = TExpr.exp(TExpr.Lit(BigDecimal(-1)))
     val result = evaluator.eval(expr, emptySheet)
     result match
       case Right(value) => assertEqualsDouble(value.toDouble, 1.0 / Math.E, 0.0000001)
@@ -202,37 +202,37 @@ class MathFunctionsSpec extends FunSuite:
   // ===== FLOOR Tests =====
 
   test("FLOOR: floor(2.5, 1) = 2") {
-    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(1)))
+    val expr = TExpr.floor(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(1)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(2)))
   }
 
   test("FLOOR: floor(-2.5, -1) = -2") {
-    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(-1)))
+    val expr = TExpr.floor(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(-1)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(-2)))
   }
 
   test("FLOOR: floor(1.5, 0.5) = 1.5") {
-    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(1.5)), TExpr.Lit(BigDecimal(0.5)))
+    val expr = TExpr.floor(TExpr.Lit(BigDecimal(1.5)), TExpr.Lit(BigDecimal(0.5)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(1.5)))
   }
 
   test("FLOOR: floor(3.7, 2) = 2") {
-    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(3.7)), TExpr.Lit(BigDecimal(2)))
+    val expr = TExpr.floor(TExpr.Lit(BigDecimal(3.7)), TExpr.Lit(BigDecimal(2)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(2)))
   }
 
   test("FLOOR: significance 0 returns error") {
-    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.floor(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "FLOOR with significance 0 should return error")
   }
 
   test("FLOOR: positive number with negative significance returns error") {
-    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(-1)))
+    val expr = TExpr.floor(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(-1)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "FLOOR with mismatched signs should return error")
   }
@@ -240,37 +240,37 @@ class MathFunctionsSpec extends FunSuite:
   // ===== CEILING Tests =====
 
   test("CEILING: ceiling(2.5, 1) = 3") {
-    val expr = TExpr.Ceiling(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(1)))
+    val expr = TExpr.ceiling(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(1)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(3)))
   }
 
   test("CEILING: ceiling(-2.5, -1) = -3") {
-    val expr = TExpr.Ceiling(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(-1)))
+    val expr = TExpr.ceiling(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(-1)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(-3)))
   }
 
   test("CEILING: ceiling(1.2, 0.5) = 1.5") {
-    val expr = TExpr.Ceiling(TExpr.Lit(BigDecimal(1.2)), TExpr.Lit(BigDecimal(0.5)))
+    val expr = TExpr.ceiling(TExpr.Lit(BigDecimal(1.2)), TExpr.Lit(BigDecimal(0.5)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(1.5)))
   }
 
   test("CEILING: significance 0 returns error") {
-    val expr = TExpr.Ceiling(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.ceiling(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "CEILING with significance 0 should return error")
   }
 
   test("FLOOR: negative number with positive significance returns error") {
-    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(1)))
+    val expr = TExpr.floor(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(1)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "FLOOR(-2.5, 1) should return error (mismatched signs)")
   }
 
   test("CEILING: negative number with positive significance returns error") {
-    val expr = TExpr.Ceiling(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(1)))
+    val expr = TExpr.ceiling(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(1)))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft, "CEILING(-2.5, 1) should return error (mismatched signs)")
   }
@@ -278,7 +278,7 @@ class MathFunctionsSpec extends FunSuite:
   test("FLOOR: negative number with negative significance works") {
     // FLOOR(-4.1, -2) rounds down (toward -∞) to nearest multiple of -2
     // -4.1 / -2 = 2.05, floor(2.05) = 2, 2 * -2 = -4
-    val expr = TExpr.Floor(TExpr.Lit(BigDecimal(-4.1)), TExpr.Lit(BigDecimal(-2)))
+    val expr = TExpr.floor(TExpr.Lit(BigDecimal(-4.1)), TExpr.Lit(BigDecimal(-2)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(-4)))
   }
@@ -286,7 +286,7 @@ class MathFunctionsSpec extends FunSuite:
   test("CEILING: negative number with negative significance works") {
     // CEILING(-4.1, -2) rounds up (toward +∞) to nearest multiple of -2
     // -4.1 / -2 = 2.05, ceil(2.05) = 3, 3 * -2 = -6
-    val expr = TExpr.Ceiling(TExpr.Lit(BigDecimal(-4.1)), TExpr.Lit(BigDecimal(-2)))
+    val expr = TExpr.ceiling(TExpr.Lit(BigDecimal(-4.1)), TExpr.Lit(BigDecimal(-2)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(-6)))
   }
@@ -294,25 +294,25 @@ class MathFunctionsSpec extends FunSuite:
   // ===== TRUNC Tests =====
 
   test("TRUNC: trunc(8.9) = 8") {
-    val expr = TExpr.Trunc(TExpr.Lit(BigDecimal(8.9)), TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.trunc(TExpr.Lit(BigDecimal(8.9)), TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(8)))
   }
 
   test("TRUNC: trunc(-8.9) = -8") {
-    val expr = TExpr.Trunc(TExpr.Lit(BigDecimal(-8.9)), TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.trunc(TExpr.Lit(BigDecimal(-8.9)), TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(-8)))
   }
 
   test("TRUNC: trunc(3.14159, 2) = 3.14") {
-    val expr = TExpr.Trunc(TExpr.Lit(BigDecimal(3.14159)), TExpr.Lit(BigDecimal(2)))
+    val expr = TExpr.trunc(TExpr.Lit(BigDecimal(3.14159)), TExpr.Lit(BigDecimal(2)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(3.14)))
   }
 
   test("TRUNC: trunc(1234.5678, -2) = 1200") {
-    val expr = TExpr.Trunc(TExpr.Lit(BigDecimal(1234.5678)), TExpr.Lit(BigDecimal(-2)))
+    val expr = TExpr.trunc(TExpr.Lit(BigDecimal(1234.5678)), TExpr.Lit(BigDecimal(-2)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(1200)))
   }
@@ -320,19 +320,19 @@ class MathFunctionsSpec extends FunSuite:
   // ===== SIGN Tests =====
 
   test("SIGN: sign(5) = 1") {
-    val expr = TExpr.Sign(TExpr.Lit(BigDecimal(5)))
+    val expr = TExpr.sign(TExpr.Lit(BigDecimal(5)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(1)))
   }
 
   test("SIGN: sign(-5) = -1") {
-    val expr = TExpr.Sign(TExpr.Lit(BigDecimal(-5)))
+    val expr = TExpr.sign(TExpr.Lit(BigDecimal(-5)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(-1)))
   }
 
   test("SIGN: sign(0) = 0") {
-    val expr = TExpr.Sign(TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.sign(TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(0)))
   }
@@ -340,27 +340,27 @@ class MathFunctionsSpec extends FunSuite:
   // ===== INT Tests =====
 
   test("INT: int(8.9) = 8") {
-    val expr = TExpr.Int_(TExpr.Lit(BigDecimal(8.9)))
+    val expr = TExpr.int_(TExpr.Lit(BigDecimal(8.9)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(8)))
   }
 
   test("INT: int(-8.9) = -9 (floor behavior)") {
-    val expr = TExpr.Int_(TExpr.Lit(BigDecimal(-8.9)))
+    val expr = TExpr.int_(TExpr.Lit(BigDecimal(-8.9)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(-9)))
   }
 
   test("INT: int(0) = 0") {
-    val expr = TExpr.Int_(TExpr.Lit(BigDecimal(0)))
+    val expr = TExpr.int_(TExpr.Lit(BigDecimal(0)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(0)))
   }
 
   test("INT vs TRUNC: INT rounds toward negative infinity, TRUNC toward zero") {
     // For -8.9: INT gives -9, TRUNC gives -8
-    val intExpr = TExpr.Int_(TExpr.Lit(BigDecimal(-8.9)))
-    val truncExpr = TExpr.Trunc(TExpr.Lit(BigDecimal(-8.9)), TExpr.Lit(BigDecimal(0)))
+    val intExpr = TExpr.int_(TExpr.Lit(BigDecimal(-8.9)))
+    val truncExpr = TExpr.trunc(TExpr.Lit(BigDecimal(-8.9)), TExpr.Lit(BigDecimal(0)))
 
     val intResult = evaluator.eval(intExpr, emptySheet)
     val truncResult = evaluator.eval(truncExpr, emptySheet)

@@ -29,19 +29,19 @@ class NewFunctionsSpec extends FunSuite:
   // ===== Text Functions =====
 
   test("CONCATENATE: empty list") {
-    val expr = TExpr.Concatenate(List.empty)
+    val expr = TExpr.concatenate(List.empty)
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(""))
   }
 
   test("CONCATENATE: single string") {
-    val expr = TExpr.Concatenate(List(TExpr.Lit("Hello")))
+    val expr = TExpr.concatenate(List(TExpr.Lit("Hello")))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hello"))
   }
 
   test("CONCATENATE: multiple strings") {
-    val expr = TExpr.Concatenate(List(
+    val expr = TExpr.concatenate(List(
       TExpr.Lit("Hello"),
       TExpr.Lit(" "),
       TExpr.Lit("World"),
@@ -52,79 +52,79 @@ class NewFunctionsSpec extends FunSuite:
   }
 
   test("LEFT: extract left 3 characters") {
-    val expr = TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(3))
+    val expr = TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(3))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hel"))
   }
 
   test("LEFT: n greater than length returns full string") {
-    val expr = TExpr.Left(TExpr.Lit("Hi"), TExpr.Lit(10))
+    val expr = TExpr.left(TExpr.Lit("Hi"), TExpr.Lit(10))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hi"))
   }
 
   test("LEFT: n equals length") {
-    val expr = TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(5))
+    val expr = TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(5))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hello"))
   }
 
   test("LEFT: negative n returns error") {
-    val expr = TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(-1))
+    val expr = TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(-1))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft)
   }
 
   test("RIGHT: extract right 3 characters") {
-    val expr = TExpr.Right(TExpr.Lit("Hello"), TExpr.Lit(3))
+    val expr = TExpr.right(TExpr.Lit("Hello"), TExpr.Lit(3))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("llo"))
   }
 
   test("RIGHT: n greater than length returns full string") {
-    val expr = TExpr.Right(TExpr.Lit("Hi"), TExpr.Lit(10))
+    val expr = TExpr.right(TExpr.Lit("Hi"), TExpr.Lit(10))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hi"))
   }
 
   test("RIGHT: negative n returns error") {
-    val expr = TExpr.Right(TExpr.Lit("Hello"), TExpr.Lit(-1))
+    val expr = TExpr.right(TExpr.Lit("Hello"), TExpr.Lit(-1))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft)
   }
 
   test("LEN: empty string") {
-    val expr = TExpr.Len(TExpr.Lit(""))
+    val expr = TExpr.len(TExpr.Lit(""))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(0)))
   }
 
   test("LEN: normal string") {
-    val expr = TExpr.Len(TExpr.Lit("Hello"))
+    val expr = TExpr.len(TExpr.Lit("Hello"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(5)))
   }
 
   test("UPPER: convert to uppercase") {
-    val expr = TExpr.Upper(TExpr.Lit("hello world"))
+    val expr = TExpr.upper(TExpr.Lit("hello world"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("HELLO WORLD"))
   }
 
   test("UPPER: already uppercase") {
-    val expr = TExpr.Upper(TExpr.Lit("HELLO"))
+    val expr = TExpr.upper(TExpr.Lit("HELLO"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("HELLO"))
   }
 
   test("LOWER: convert to lowercase") {
-    val expr = TExpr.Lower(TExpr.Lit("HELLO WORLD"))
+    val expr = TExpr.lower(TExpr.Lit("HELLO WORLD"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("hello world"))
   }
 
   test("LOWER: already lowercase") {
-    val expr = TExpr.Lower(TExpr.Lit("hello"))
+    val expr = TExpr.lower(TExpr.Lit("hello"))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("hello"))
   }
@@ -134,7 +134,7 @@ class NewFunctionsSpec extends FunSuite:
   test("TODAY: returns current date from clock") {
     val fixedDate = LocalDate.of(2025, 11, 21)
     val clock = Clock.fixedDate(fixedDate)
-    val expr = TExpr.Today()
+    val expr = TExpr.today()
     val result = evaluator.eval(expr, emptySheet, clock)
     assertEquals(result, Right(fixedDate))
   }
@@ -142,7 +142,7 @@ class NewFunctionsSpec extends FunSuite:
   test("NOW: returns current datetime from clock") {
     val fixedDateTime = LocalDateTime.of(2025, 11, 21, 18, 30, 0)
     val clock = Clock.fixed(LocalDate.of(2025, 11, 21), fixedDateTime)
-    val expr = TExpr.Now()
+    val expr = TExpr.now()
     val result = evaluator.eval(expr, emptySheet, clock)
     assertEquals(result, Right(fixedDateTime))
   }
@@ -150,47 +150,47 @@ class NewFunctionsSpec extends FunSuite:
   // ===== Math Constants =====
 
   test("PI: returns mathematical constant pi") {
-    val expr = TExpr.Pi()
+    val expr = TExpr.pi()
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(Math.PI)))
   }
 
   test("PI: can be used in formulas") {
     // PI() * 2 should give 2 * pi
-    val expr = TExpr.Mul(TExpr.Pi(), TExpr.Lit(BigDecimal(2)))
+    val expr = TExpr.Mul(TExpr.pi(), TExpr.Lit(BigDecimal(2)))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(Math.PI * 2)))
   }
 
   test("DATE: construct valid date") {
-    val expr = TExpr.Date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
+    val expr = TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(LocalDate.of(2025, 11, 21)))
   }
 
   test("DATE: invalid date returns error") {
-    val expr = TExpr.Date(TExpr.Lit(2025), TExpr.Lit(2), TExpr.Lit(30))
+    val expr = TExpr.date(TExpr.Lit(2025), TExpr.Lit(2), TExpr.Lit(30))
     val result = evaluator.eval(expr, emptySheet)
     assert(result.isLeft)
   }
 
   test("YEAR: extract year from date") {
     val date = LocalDate.of(2025, 11, 21)
-    val expr = TExpr.Year(TExpr.Lit(date))
+    val expr = TExpr.year(TExpr.Lit(date))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(2025)))  // Now returns BigDecimal
   }
 
   test("MONTH: extract month from date") {
     val date = LocalDate.of(2025, 11, 21)
-    val expr = TExpr.Month(TExpr.Lit(date))
+    val expr = TExpr.month(TExpr.Lit(date))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(11)))  // Now returns BigDecimal
   }
 
   test("DAY: extract day from date") {
     val date = LocalDate.of(2025, 11, 21)
-    val expr = TExpr.Day(TExpr.Lit(date))
+    val expr = TExpr.day(TExpr.Lit(date))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(21)))  // Now returns BigDecimal
   }
@@ -198,10 +198,10 @@ class NewFunctionsSpec extends FunSuite:
   test("Date functions: round-trip DATE/YEAR/MONTH/DAY") {
     // Manual ToInt wrapping for programmatic construction (parser uses asIntExpr automatically)
     val baseDate = TExpr.Lit(LocalDate.of(2025, 11, 21))
-    val expr = TExpr.Date(
-      TExpr.ToInt(TExpr.Year(baseDate)),
-      TExpr.ToInt(TExpr.Month(baseDate)),
-      TExpr.ToInt(TExpr.Day(baseDate))
+    val expr = TExpr.date(
+      TExpr.ToInt(TExpr.year(baseDate)),
+      TExpr.ToInt(TExpr.month(baseDate)),
+      TExpr.ToInt(TExpr.day(baseDate))
     )
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(LocalDate.of(2025, 11, 21)))
@@ -281,73 +281,73 @@ class NewFunctionsSpec extends FunSuite:
   // ===== FormulaPrinter Integration =====
 
   test("FormulaPrinter: CONCATENATE") {
-    val expr = TExpr.Concatenate(List(TExpr.Lit("A"), TExpr.Lit("B")))
+    val expr = TExpr.concatenate(List(TExpr.Lit("A"), TExpr.Lit("B")))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=CONCATENATE("A", "B")""")
   }
 
   test("FormulaPrinter: LEFT") {
-    val expr = TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(3))
+    val expr = TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(3))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=LEFT("Hello", 3)""")
   }
 
   test("FormulaPrinter: RIGHT") {
-    val expr = TExpr.Right(TExpr.Lit("Hello"), TExpr.Lit(3))
+    val expr = TExpr.right(TExpr.Lit("Hello"), TExpr.Lit(3))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=RIGHT("Hello", 3)""")
   }
 
   test("FormulaPrinter: LEN") {
-    val expr = TExpr.Len(TExpr.Lit("Hello"))
+    val expr = TExpr.len(TExpr.Lit("Hello"))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=LEN("Hello")""")
   }
 
   test("FormulaPrinter: UPPER") {
-    val expr = TExpr.Upper(TExpr.Lit("hello"))
+    val expr = TExpr.upper(TExpr.Lit("hello"))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=UPPER("hello")""")
   }
 
   test("FormulaPrinter: LOWER") {
-    val expr = TExpr.Lower(TExpr.Lit("HELLO"))
+    val expr = TExpr.lower(TExpr.Lit("HELLO"))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, """=LOWER("HELLO")""")
   }
 
   test("FormulaPrinter: TODAY") {
-    val expr = TExpr.Today()
+    val expr = TExpr.today()
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, "=TODAY()")
   }
 
   test("FormulaPrinter: NOW") {
-    val expr = TExpr.Now()
+    val expr = TExpr.now()
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, "=NOW()")
   }
 
   test("FormulaPrinter: DATE") {
-    val expr = TExpr.Date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
+    val expr = TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, "=DATE(2025, 11, 21)")
   }
 
   test("FormulaPrinter: YEAR") {
-    val expr = TExpr.Year(TExpr.Date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21)))
+    val expr = TExpr.year(TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21)))
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, "=YEAR(DATE(2025, 11, 21))")
   }
 
   test("FormulaPrinter: MONTH") {
-    val expr = TExpr.Month(TExpr.Today())
+    val expr = TExpr.month(TExpr.today())
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, "=MONTH(TODAY())")
   }
 
   test("FormulaPrinter: DAY") {
-    val expr = TExpr.Day(TExpr.Today())
+    val expr = TExpr.day(TExpr.today())
     val formula = FormulaPrinter.print(expr)
     assertEquals(formula, "=DAY(TODAY())")
   }
@@ -369,10 +369,10 @@ class NewFunctionsSpec extends FunSuite:
   // ===== Integration Tests =====
 
   test("Integration: nested text functions") {
-    val expr = TExpr.Upper(
-      TExpr.Concatenate(List(
-        TExpr.Left(TExpr.Lit("Hello"), TExpr.Lit(3)),
-        TExpr.Right(TExpr.Lit("World"), TExpr.Lit(3))
+    val expr = TExpr.upper(
+      TExpr.concatenate(List(
+        TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(3)),
+        TExpr.right(TExpr.Lit("World"), TExpr.Lit(3))
       ))
     )
     val result = evaluator.eval(expr, emptySheet)
@@ -383,10 +383,10 @@ class NewFunctionsSpec extends FunSuite:
     val clock = Clock.fixedDate(LocalDate.of(2025, 11, 21))
 
     // Extract year, month, day from TODAY()
-    val today = TExpr.Today()
-    val year = TExpr.Year(today)
-    val month = TExpr.Month(today)
-    val day = TExpr.Day(today)
+    val today = TExpr.today()
+    val year = TExpr.year(today)
+    val month = TExpr.month(today)
+    val day = TExpr.day(today)
 
     // Verify each component (now returns BigDecimal)
     assertEquals(evaluator.eval(year, emptySheet, clock), Right(BigDecimal(2025)))
@@ -394,7 +394,7 @@ class NewFunctionsSpec extends FunSuite:
     assertEquals(evaluator.eval(day, emptySheet, clock), Right(BigDecimal(21)))
 
     // Recompose into DATE (use literal Ints since DATE expects Int arguments)
-    val reconstructed = TExpr.Date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
+    val reconstructed = TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
     assertEquals(evaluator.eval(reconstructed, emptySheet, clock), Right(LocalDate.of(2025, 11, 21)))
   }
 

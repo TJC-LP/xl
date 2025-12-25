@@ -1,4 +1,11 @@
-package com.tjclp.xl.formula
+package com.tjclp.xl.formula.eval
+
+import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
+import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
+import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.printer.FormulaPrinter
+import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
+import com.tjclp.xl.formula.Clock
 
 import com.tjclp.xl.cells.CellValue
 import scala.util.boundary
@@ -17,9 +24,9 @@ import scala.util.matching.Regex
  *   - **Not Equal**: `"<>0"` → Numeric inequality
  *
  * Laws:
- *   1. Exact match: `matches(Text("Apple"), Exact("Apple")) == true`
+ *   1. Exact match: `matches(Text("Apple"), Exact(ExprValue.Text("Apple"))) == true`
  *   2. Wildcard: `matches(Text("Apple"), Wildcard("A*")) == true`
- *   3. Case-insensitive text: `matches(Text("APPLE"), Exact("apple")) == true`
+ *   3. Case-insensitive text: `matches(Text("APPLE"), Exact(ExprValue.Text("apple"))) == true`
  *   4. Numeric comparison: `matches(Number(150), Compare(Gt, 100)) == true`
  */
 object CriteriaMatcher:
@@ -28,7 +35,7 @@ object CriteriaMatcher:
   sealed trait Criterion derives CanEqual
 
   /** Exact match against text, number, or boolean */
-  case class Exact(value: Any) extends Criterion
+  case class Exact(value: ExprValue) extends Criterion
 
   /** Numeric comparison */
   case class Compare(op: CompareOp, value: BigDecimal) extends Criterion
@@ -58,14 +65,14 @@ object CriteriaMatcher:
    * @return
    *   Parsed Criterion
    */
-  def parse(value: Any): Criterion = value match
-    case s: String => parseString(s)
-    case n: BigDecimal => Exact(n)
-    case n: Int => Exact(BigDecimal(n))
-    case n: Long => Exact(BigDecimal(n))
-    case n: Double => Exact(BigDecimal(n))
-    case b: Boolean => Exact(b)
-    case _ => Exact(value)
+  def parse(value: ExprValue): Criterion = value match
+    case ExprValue.Text(text) => parseString(text)
+    case ExprValue.Number(number) => Exact(ExprValue.Number(number))
+    case ExprValue.Bool(bool) => Exact(ExprValue.Bool(bool))
+    case ExprValue.Date(date) => Exact(ExprValue.Date(date))
+    case ExprValue.DateTime(dateTime) => Exact(ExprValue.DateTime(dateTime))
+    case ExprValue.Cell(cellValue) => Exact(ExprValue.Cell(cellValue))
+    case ExprValue.Opaque(other) => Exact(ExprValue.Opaque(other))
 
   /**
    * Parse string criterion into operator, wildcard, or exact match.
@@ -76,41 +83,41 @@ object CriteriaMatcher:
       case _ if s.startsWith("<>") =>
         parseNumeric(s.drop(2)) match
           case Some(n) => Compare(CompareOp.Neq, n)
-          case None => Exact(s) // Couldn't parse number, treat as literal
+          case None => Exact(ExprValue.Text(s)) // Couldn't parse number, treat as literal
       // Greater than or equal: >=
       case _ if s.startsWith(">=") =>
         parseNumeric(s.drop(2)) match
           case Some(n) => Compare(CompareOp.Gte, n)
-          case None => Exact(s)
+          case None => Exact(ExprValue.Text(s))
       // Less than or equal: <=
       case _ if s.startsWith("<=") =>
         parseNumeric(s.drop(2)) match
           case Some(n) => Compare(CompareOp.Lte, n)
-          case None => Exact(s)
+          case None => Exact(ExprValue.Text(s))
       // Greater than: >
       case _ if s.startsWith(">") =>
         parseNumeric(s.drop(1)) match
           case Some(n) => Compare(CompareOp.Gt, n)
-          case None => Exact(s)
+          case None => Exact(ExprValue.Text(s))
       // Less than: <
       case _ if s.startsWith("<") =>
         parseNumeric(s.drop(1)) match
           case Some(n) => Compare(CompareOp.Lt, n)
-          case None => Exact(s)
+          case None => Exact(ExprValue.Text(s))
       // Equal: =
       case _ if s.startsWith("=") =>
         parseNumeric(s.drop(1)) match
-          case Some(n) => Exact(n)
-          case None => Exact(s.drop(1)) // Keep text after =
+          case Some(n) => Exact(ExprValue.Number(n))
+          case None => Exact(ExprValue.Text(s.drop(1))) // Keep text after =
       // Wildcard pattern
       case _ if hasUnescapedWildcard(s) =>
         Wildcard(s)
       // Has escape sequences but no wildcards - unescape and exact match
       case _ if hasEscapeSequence(s) =>
-        Exact(unescapePattern(s))
+        Exact(ExprValue.Text(unescapePattern(s)))
       // Plain string - exact match
       case _ =>
-        Exact(s)
+        Exact(ExprValue.Text(s))
 
   /**
    * Check if string contains unescaped wildcards (* or ?).
@@ -209,44 +216,42 @@ object CriteriaMatcher:
    *   - Text "42" vs Number 42: matches
    *   - Boolean TRUE vs Text "TRUE": matches
    */
-  private def matchesExact(cellValue: CellValue, expected: Any): Boolean =
+  private def matchesExact(cellValue: CellValue, expected: ExprValue): Boolean =
     cellValue match
       case CellValue.Empty =>
         expected match
-          case "" => true
+          case ExprValue.Text(text) => text.isEmpty
           case _ => false
 
       case CellValue.Text(text) =>
         expected match
-          case s: String => text.equalsIgnoreCase(s)
-          case n: BigDecimal => parseNumeric(text).contains(n)
-          case b: Boolean => text.equalsIgnoreCase(b.toString)
+          case ExprValue.Text(s) => text.equalsIgnoreCase(s)
+          case ExprValue.Number(n) => parseNumeric(text).contains(n)
+          case ExprValue.Bool(b) => text.equalsIgnoreCase(b.toString)
           case _ => false
 
       case CellValue.Number(value) =>
         expected match
-          case n: BigDecimal => value == n
-          case n: Int => value == BigDecimal(n)
-          case n: Long => value == BigDecimal(n)
-          case n: Double => value == BigDecimal(n)
-          case s: String => parseNumeric(s).contains(value)
+          case ExprValue.Number(n) => value == n
+          case ExprValue.Text(s) => parseNumeric(s).contains(value)
           case _ => false
 
       case CellValue.Bool(value) =>
         expected match
-          case b: Boolean => value == b
-          case s: String =>
+          case ExprValue.Bool(b) => value == b
+          case ExprValue.Text(s) =>
             s.equalsIgnoreCase("TRUE") && value || s.equalsIgnoreCase("FALSE") && !value
-          case n: BigDecimal => (n == BigDecimal(1) && value) || (n == BigDecimal(0) && !value)
+          case ExprValue.Number(n) =>
+            (n == BigDecimal(1) && value) || (n == BigDecimal(0) && !value)
           case _ => false
 
       case CellValue.DateTime(dt) =>
         expected match
-          case s: String => dt.toString == s || dt.toLocalDate.toString == s
-          case ld: java.time.LocalDate =>
+          case ExprValue.Text(s) => dt.toString == s || dt.toLocalDate.toString == s
+          case ExprValue.Date(ld) =>
             // DATE() returns LocalDate - compare date portion
             dt.toLocalDate == ld
-          case n: BigDecimal =>
+          case ExprValue.Number(n) =>
             // Excel serial number comparison (e.g., from numeric criteria)
             val cellSerial = BigDecimal(CellValue.dateTimeToExcelSerial(dt))
             // Compare with tolerance for floating point (dates are integers, times add fractions)
@@ -267,7 +272,7 @@ object CriteriaMatcher:
 
       case CellValue.RichText(rt) =>
         expected match
-          case s: String => rt.toPlainText.equalsIgnoreCase(s)
+          case ExprValue.Text(s) => rt.toPlainText.equalsIgnoreCase(s)
           case _ => false
 
       case CellValue.Error(_) =>

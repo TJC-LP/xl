@@ -46,7 +46,7 @@ class DependencyGraphSpec extends FunSuite:
     assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1", ref"B1"))
   }
 
-  test("extractDependencies: FoldRange expands to all cells in range") {
+  test("extractDependencies: range arguments expand to all cells in range") {
     val range = parseRange("A1:A3")
     val expr = TExpr.sum(range)
     val expected = Set(ref"A1", ref"A2", ref"A3")
@@ -62,7 +62,7 @@ class DependencyGraphSpec extends FunSuite:
   }
 
   test("extractDependencies: If with three branches") {
-    val expr = TExpr.If(
+    val expr = TExpr.cond(
       TExpr.Gt(TExpr.ref(ref"A1", TExpr.decodeNumeric), TExpr.Lit(BigDecimal(0))),
       TExpr.ref(ref"B1", TExpr.decodeNumeric),
       TExpr.ref(ref"C1", TExpr.decodeNumeric)
@@ -78,19 +78,19 @@ class DependencyGraphSpec extends FunSuite:
   }
 
   test("extractDependencies: text functions with Refs") {
-    val expr = TExpr.Concatenate(List(
-      TExpr.ref(ref"A1", TExpr.decodeString),
+    val expr = TExpr.concatenate(List(
+      TExpr.ref(ref"A1", TExpr.decodeAsString),
       TExpr.Lit(" "),
-      TExpr.ref(ref"B1", TExpr.decodeString)
+      TExpr.ref(ref"B1", TExpr.decodeAsString)
     ))
     assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1", ref"B1"))
   }
 
   test("extractDependencies: date functions with Refs") {
-    val expr = TExpr.Date(
-      TExpr.ref(ref"A1", TExpr.decodeInt),
-      TExpr.ref(ref"A2", TExpr.decodeInt),
-      TExpr.ref(ref"A3", TExpr.decodeInt)
+    val expr = TExpr.date(
+      TExpr.ref(ref"A1", TExpr.decodeAsInt),
+      TExpr.ref(ref"A2", TExpr.decodeAsInt),
+      TExpr.ref(ref"A3", TExpr.decodeAsInt)
     )
     assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1", ref"A2", ref"A3"))
   }

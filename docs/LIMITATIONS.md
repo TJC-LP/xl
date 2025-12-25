@@ -141,8 +141,8 @@ import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, Evaluator}
 import com.tjclp.xl.formula.SheetEvaluator.*
 
 // Parse formulas to typed AST
-FormulaParser.parse("=SUM(A1:B10)") // Right(TExpr.FoldRange(...))
-FormulaParser.parse("=IF(A1>0, \"Positive\", \"Negative\")") // Right(TExpr.If(...))
+FormulaParser.parse("=SUM(A1:B10)") // Right(TExpr.Call(FunctionSpecs.sum, TExpr.RangeLocation.Local(...)))
+FormulaParser.parse("=IF(A1>0, \"Positive\", \"Negative\")") // Right(TExpr.Call(FunctionSpecs.ifFn, (...)))
 
 // Evaluate formulas against sheets
 sheet.evaluateFormula("=SUM(A1:A10)") // XLResult[CellValue]

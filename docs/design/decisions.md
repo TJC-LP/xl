@@ -138,7 +138,7 @@
   - **Separate ASTs per type** (`NumExpr`, `BoolExpr`, `StrExpr`): Rejected due to code duplication and inability to express polymorphic operations like `If[A]`
   - **HList-based encoding**: Rejected due to complexity and poor error messages
 - **Implementation Details**:
-  - 17 constructors: Lit, Ref, If, Add/Sub/Mul/Div, Lt/Lte/Gt/Gte/Eq/Neq, And/Or/Not, FoldRange
+  - Core constructors: Lit, Ref/PolyRef, SheetRef/SheetPolyRef, RangeRef/SheetRange, Add/Sub/Mul/Div, Lt/Lte/Gt/Gte/Eq/Neq, ToInt/DateToSerial/DateTimeToSerial, Aggregate, Call
   - Extension methods for ergonomic construction: `expr1 + expr2`, `expr1 < expr2`, `expr1 && expr2`
   - Smart constructors: `TExpr.sum(range)`, `TExpr.count(range)`, `TExpr.average(range)`
 - **Consequences**:
@@ -147,7 +147,7 @@
   - ✅ Scientific notation support (1.5E10, 3E-5)
   - ✅ FormulaParser produces Either[ParseError, TExpr[?]] (total function)
   - ❌ More complex pattern matching (need asInstanceOf for Eq/Neq when type info lost in runtime parsing)
-  - ❌ Requires decode functions for Ref/FoldRange (explicit type conversions via CellCodec)
+  - ❌ Requires decode functions for Ref/SheetRef (explicit type conversions via CellCodec); PolyRef/RangeRef resolved by FunctionSpec
 - **Integration**: Works seamlessly with opaque ARef type (64-bit packing), CellCodec for decoding cell values
 - **Testing**: 51 tests verify round-trip laws, operator precedence, error handling
 
