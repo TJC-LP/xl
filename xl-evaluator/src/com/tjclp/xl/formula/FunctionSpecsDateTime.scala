@@ -111,7 +111,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
       val (startDateExpr, monthsExpr) = args
       for
         date <- ctx.evalExpr(startDateExpr)
-        monthsRaw <- evalAny(ctx, monthsExpr)
+        monthsRaw <- evalValue(ctx, monthsExpr)
       yield
         val monthsValue = toInt(monthsRaw)
         val targetMonth = date.plusMonths(monthsValue.toLong)
@@ -127,7 +127,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
       val (startDateExpr, monthsExpr) = args
       for
         date <- ctx.evalExpr(startDateExpr)
-        monthsRaw <- evalAny(ctx, monthsExpr)
+        monthsRaw <- evalValue(ctx, monthsExpr)
       yield date.plusMonths(toInt(monthsRaw).toLong)
     }
 
@@ -202,7 +202,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
       val (startDateExpr, daysExpr, holidaysOpt) = args
       for
         start <- ctx.evalExpr(startDateExpr)
-        daysRaw <- evalAny(ctx, daysExpr)
+        daysRaw <- evalValue(ctx, daysExpr)
       yield
         val daysValue = toInt(daysRaw)
         val holidays = holidaySet(holidaysOpt, ctx)
@@ -231,7 +231,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     ) { (args, ctx) =>
       val (startDateExpr, endDateExpr, basisOpt) = args
       val basisValueEither = basisOpt match
-        case Some(expr) => evalAny(ctx, expr).map(toInt)
+        case Some(expr) => evalValue(ctx, expr).map(toInt)
         case None => Right(0)
       for
         start <- ctx.evalExpr(startDateExpr)

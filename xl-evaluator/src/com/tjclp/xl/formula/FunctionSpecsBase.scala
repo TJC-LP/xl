@@ -50,14 +50,12 @@ trait FunctionSpecsBase:
   type BooleanList = List[TExpr[Boolean]]
   type UnaryCellValue = TExpr[CellValue]
   type UnaryRange = TExpr.RangeLocation
-  type CriteriaExpr = TExpr[Any]
-  type RangeCriteria = (CellRange, CriteriaExpr)
-  type RangeCriteriaList = List[RangeCriteria]
-  type SumIfArgs = (CellRange, CriteriaExpr, Option[CellRange])
-  type CountIfArgs = (CellRange, CriteriaExpr)
+  type RangeCriteriaList = List[(CellRange, TExpr[Any])]
+  type SumIfArgs = (CellRange, TExpr[Any], Option[CellRange])
+  type CountIfArgs = (CellRange, TExpr[Any])
   type SumIfsArgs = (CellRange, RangeCriteriaList)
   type CountIfsArgs = RangeCriteriaList
-  type AverageIfArgs = (CellRange, CriteriaExpr, Option[CellRange])
+  type AverageIfArgs = (CellRange, TExpr[Any], Option[CellRange])
   type AverageIfsArgs = (CellRange, RangeCriteriaList)
   type DateInt = (TExpr[LocalDate], TExpr[Int])
   type DatePairUnit = (TExpr[LocalDate], TExpr[LocalDate], TExpr[String])
@@ -113,24 +111,22 @@ trait FunctionSpecsBase:
   protected def evalAny(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
     ctx.evalExpr[Any](expr.asInstanceOf[TExpr[Any]])
 
-  protected def toCellValue(value: Any): CellValue =
-    value match
-      case cv: CellValue => cv
-      case s: String => CellValue.Text(s)
-      case n: BigDecimal => CellValue.Number(n)
-      case b: Boolean => CellValue.Bool(b)
-      case n: Int => CellValue.Number(BigDecimal(n))
-      case n: Long => CellValue.Number(BigDecimal(n))
-      case n: Double => CellValue.Number(BigDecimal(n))
-      case d: java.time.LocalDate => CellValue.DateTime(d.atStartOfDay())
-      case dt: java.time.LocalDateTime => CellValue.DateTime(dt)
-      case other => CellValue.Text(other.toString)
+  protected def evalValue(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, ExprValue] =
+    evalAny(ctx, expr).map(ExprValue.from)
 
-  protected def toInt(value: Any): Int =
+  protected def toCellValue(value: ExprValue): CellValue =
     value match
-      case i: Int => i
-      case bd: BigDecimal => bd.toInt
-      case n: Number => n.intValue()
+      case ExprValue.Cell(cv) => cv
+      case ExprValue.Text(s) => CellValue.Text(s)
+      case ExprValue.Number(n) => CellValue.Number(n)
+      case ExprValue.Bool(b) => CellValue.Bool(b)
+      case ExprValue.Date(d) => CellValue.DateTime(d.atStartOfDay())
+      case ExprValue.DateTime(dt) => CellValue.DateTime(dt)
+      case ExprValue.Opaque(other) => CellValue.Text(other.toString)
+
+  protected def toInt(value: ExprValue): Int =
+    value match
+      case ExprValue.Number(n) => n.toInt
       case _ => 0
 
   protected def coerceToNumeric(value: CellValue): BigDecimal =

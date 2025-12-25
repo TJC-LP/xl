@@ -4,31 +4,28 @@ import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
 
 trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
-  private def compareCellValues(cv: CellValue, value: Any): Int =
+  private def compareCellValues(cv: CellValue, value: ExprValue): Int =
     (cv, value) match
-      case (CellValue.Number(n1), n2: BigDecimal) => n1.compare(n2)
-      case (CellValue.Number(n1), n2: Int) => n1.compare(BigDecimal(n2))
-      case (CellValue.Number(n1), n2: Long) => n1.compare(BigDecimal(n2))
-      case (CellValue.Number(n1), n2: Double) => n1.compare(BigDecimal(n2))
-      case (CellValue.Text(s1), s2: String) => s1.compareToIgnoreCase(s2)
-      case (CellValue.Bool(b1), b2: Boolean) => b1.compare(b2)
-      case (CellValue.Error(e1), CellValue.Error(e2)) => e1.ordinal.compareTo(e2.ordinal)
+      case (CellValue.Number(n1), ExprValue.Number(n2)) => n1.compare(n2)
+      case (CellValue.Text(s1), ExprValue.Text(s2)) => s1.compareToIgnoreCase(s2)
+      case (CellValue.Bool(b1), ExprValue.Bool(b2)) => b1.compare(b2)
+      case (CellValue.Error(e1), ExprValue.Cell(CellValue.Error(e2))) =>
+        e1.ordinal.compareTo(e2.ordinal)
       case (CellValue.Formula(_, Some(cached)), other) => compareCellValues(cached, other)
       case _ => 0
 
-  private def coerceToBigDecimal(value: Any): BigDecimal =
+  private def coerceToBigDecimal(value: ExprValue): BigDecimal =
     value match
-      case n: BigDecimal => n
-      case i: Int => BigDecimal(i)
-      case l: Long => BigDecimal(l)
-      case d: Double => BigDecimal(d)
-      case s: String => scala.util.Try(BigDecimal(s.trim)).getOrElse(BigDecimal(0))
-      case b: Boolean => if b then BigDecimal(1) else BigDecimal(0)
-      case CellValue.Number(n) => n
-      case CellValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).getOrElse(BigDecimal(0))
-      case CellValue.Bool(true) => BigDecimal(1)
-      case CellValue.Bool(false) => BigDecimal(0)
-      case CellValue.Formula(_, Some(cached)) => coerceToBigDecimal(cached)
+      case ExprValue.Number(n) => n
+      case ExprValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).getOrElse(BigDecimal(0))
+      case ExprValue.Bool(b) => if b then BigDecimal(1) else BigDecimal(0)
+      case ExprValue.Cell(CellValue.Number(n)) => n
+      case ExprValue.Cell(CellValue.Text(s)) =>
+        scala.util.Try(BigDecimal(s.trim)).getOrElse(BigDecimal(0))
+      case ExprValue.Cell(CellValue.Bool(true)) => BigDecimal(1)
+      case ExprValue.Cell(CellValue.Bool(false)) => BigDecimal(0)
+      case ExprValue.Cell(CellValue.Formula(_, Some(cached))) =>
+        coerceToBigDecimal(ExprValue.Cell(cached))
       case _ => BigDecimal(0)
 
   val index: FunctionSpec[CellValue] { type Args = IndexArgs } =
@@ -73,7 +70,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       val (lookupValue, lookupArray, matchTypeOpt) = args
       val matchTypeExpr = matchTypeOpt.getOrElse(TExpr.Lit(BigDecimal(1)))
       for
-        lookupValueEval <- evalAny(ctx, lookupValue)
+        lookupValueEval <- evalValue(ctx, lookupValue)
         matchType <- ctx.evalExpr(matchTypeExpr)
         result <- {
           val matchTypeInt = matchType.toInt

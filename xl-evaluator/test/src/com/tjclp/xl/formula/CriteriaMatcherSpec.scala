@@ -5,164 +5,169 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.CriteriaMatcher.*
 
 class CriteriaMatcherSpec extends FunSuite:
+  private def parseValue(value: Any): Criterion =
+    parse(ExprValue.from(value))
+
+  private def exactValue(value: Any): Criterion =
+    Exact(ExprValue.from(value))
 
   // ===== Criterion Parsing Tests =====
 
   test("parse: exact string") {
-    assertEquals(parse("Apple"), Exact("Apple"))
+    assertEquals(parseValue("Apple"), exactValue("Apple"))
   }
 
   test("parse: exact number from BigDecimal") {
-    assertEquals(parse(BigDecimal(42)), Exact(BigDecimal(42)))
+    assertEquals(parseValue(BigDecimal(42)), exactValue(BigDecimal(42)))
   }
 
   test("parse: exact number from Int") {
-    assertEquals(parse(100), Exact(BigDecimal(100)))
+    assertEquals(parseValue(100), exactValue(BigDecimal(100)))
   }
 
   test("parse: exact boolean") {
-    assertEquals(parse(true), Exact(true))
-    assertEquals(parse(false), Exact(false))
+    assertEquals(parseValue(true), exactValue(true))
+    assertEquals(parseValue(false), exactValue(false))
   }
 
   test("parse: greater than") {
-    assertEquals(parse(">100"), Compare(CompareOp.Gt, BigDecimal(100)))
+    assertEquals(parseValue(">100"), Compare(CompareOp.Gt, BigDecimal(100)))
   }
 
   test("parse: greater than or equal") {
-    assertEquals(parse(">=50"), Compare(CompareOp.Gte, BigDecimal(50)))
+    assertEquals(parseValue(">=50"), Compare(CompareOp.Gte, BigDecimal(50)))
   }
 
   test("parse: less than") {
-    assertEquals(parse("<10"), Compare(CompareOp.Lt, BigDecimal(10)))
+    assertEquals(parseValue("<10"), Compare(CompareOp.Lt, BigDecimal(10)))
   }
 
   test("parse: less than or equal") {
-    assertEquals(parse("<=5"), Compare(CompareOp.Lte, BigDecimal(5)))
+    assertEquals(parseValue("<=5"), Compare(CompareOp.Lte, BigDecimal(5)))
   }
 
   test("parse: not equal") {
-    assertEquals(parse("<>0"), Compare(CompareOp.Neq, BigDecimal(0)))
+    assertEquals(parseValue("<>0"), Compare(CompareOp.Neq, BigDecimal(0)))
   }
 
   test("parse: negative number comparison") {
-    assertEquals(parse(">-10"), Compare(CompareOp.Gt, BigDecimal(-10)))
-    assertEquals(parse("<=-5.5"), Compare(CompareOp.Lte, BigDecimal("-5.5")))
+    assertEquals(parseValue(">-10"), Compare(CompareOp.Gt, BigDecimal(-10)))
+    assertEquals(parseValue("<=-5.5"), Compare(CompareOp.Lte, BigDecimal("-5.5")))
   }
 
   test("parse: decimal comparison") {
-    assertEquals(parse(">3.14"), Compare(CompareOp.Gt, BigDecimal("3.14")))
+    assertEquals(parseValue(">3.14"), Compare(CompareOp.Gt, BigDecimal("3.14")))
   }
 
   test("parse: comparison with spaces") {
-    assertEquals(parse("> 100"), Compare(CompareOp.Gt, BigDecimal(100)))
-    assertEquals(parse("<= 50"), Compare(CompareOp.Lte, BigDecimal(50)))
+    assertEquals(parseValue("> 100"), Compare(CompareOp.Gt, BigDecimal(100)))
+    assertEquals(parseValue("<= 50"), Compare(CompareOp.Lte, BigDecimal(50)))
   }
 
   test("parse: invalid comparison falls back to exact") {
-    assertEquals(parse(">abc"), Exact(">abc"))
-    assertEquals(parse("<>xyz"), Exact("<>xyz"))
+    assertEquals(parseValue(">abc"), exactValue(">abc"))
+    assertEquals(parseValue("<>xyz"), exactValue("<>xyz"))
   }
 
   test("parse: wildcard with asterisk") {
-    assertEquals(parse("A*"), Wildcard("A*"))
-    assertEquals(parse("*pple"), Wildcard("*pple"))
-    assertEquals(parse("*"), Wildcard("*"))
+    assertEquals(parseValue("A*"), Wildcard("A*"))
+    assertEquals(parseValue("*pple"), Wildcard("*pple"))
+    assertEquals(parseValue("*"), Wildcard("*"))
   }
 
   test("parse: wildcard with question mark") {
-    assertEquals(parse("A?ple"), Wildcard("A?ple"))
-    assertEquals(parse("???"), Wildcard("???"))
+    assertEquals(parseValue("A?ple"), Wildcard("A?ple"))
+    assertEquals(parseValue("???"), Wildcard("???"))
   }
 
   test("parse: escaped wildcards are not wildcards") {
     // Escaped wildcards become exact match with the literal character (unescaped)
-    assertEquals(parse("~*"), Exact("*"))
-    assertEquals(parse("~?"), Exact("?"))
-    assertEquals(parse("test~*"), Exact("test*"))
+    assertEquals(parseValue("~*"), exactValue("*"))
+    assertEquals(parseValue("~?"), exactValue("?"))
+    assertEquals(parseValue("test~*"), exactValue("test*"))
   }
 
   test("parse: mixed escaped and unescaped wildcards") {
-    assertEquals(parse("~**"), Wildcard("~**"))
-    assertEquals(parse("*~*"), Wildcard("*~*"))
+    assertEquals(parseValue("~**"), Wildcard("~**"))
+    assertEquals(parseValue("*~*"), Wildcard("*~*"))
   }
 
   test("parse: equals prefix extracts number") {
-    assertEquals(parse("=100"), Exact(BigDecimal(100)))
-    assertEquals(parse("=text"), Exact("text"))
+    assertEquals(parseValue("=100"), exactValue(BigDecimal(100)))
+    assertEquals(parseValue("=text"), exactValue("text"))
   }
 
   // ===== Exact Matching Tests =====
 
   test("matches: exact text case-insensitive") {
     val cell = CellValue.Text("Apple")
-    assert(matches(cell, Exact("Apple")))
-    assert(matches(cell, Exact("APPLE")))
-    assert(matches(cell, Exact("apple")))
+    assert(matches(cell, exactValue("Apple")))
+    assert(matches(cell, exactValue("APPLE")))
+    assert(matches(cell, exactValue("apple")))
   }
 
   test("matches: exact text no match") {
     val cell = CellValue.Text("Apple")
-    assert(!matches(cell, Exact("Banana")))
+    assert(!matches(cell, exactValue("Banana")))
   }
 
   test("matches: exact number") {
     val cell = CellValue.Number(BigDecimal(42))
-    assert(matches(cell, Exact(BigDecimal(42))))
-    assert(!matches(cell, Exact(BigDecimal(43))))
+    assert(matches(cell, exactValue(BigDecimal(42))))
+    assert(!matches(cell, exactValue(BigDecimal(43))))
   }
 
   test("matches: exact number from text criterion") {
     val cell = CellValue.Number(BigDecimal(42))
-    assert(matches(cell, Exact("42")))
-    assert(!matches(cell, Exact("43")))
+    assert(matches(cell, exactValue("42")))
+    assert(!matches(cell, exactValue("43")))
   }
 
   test("matches: exact text from number criterion") {
     val cell = CellValue.Text("42")
-    assert(matches(cell, Exact(BigDecimal(42))))
+    assert(matches(cell, exactValue(BigDecimal(42))))
   }
 
   test("matches: exact boolean") {
     val trueCell = CellValue.Bool(true)
     val falseCell = CellValue.Bool(false)
-    assert(matches(trueCell, Exact(true)))
-    assert(matches(falseCell, Exact(false)))
-    assert(!matches(trueCell, Exact(false)))
+    assert(matches(trueCell, exactValue(true)))
+    assert(matches(falseCell, exactValue(false)))
+    assert(!matches(trueCell, exactValue(false)))
   }
 
   test("matches: exact boolean from text criterion") {
     val cell = CellValue.Bool(true)
-    assert(matches(cell, Exact("TRUE")))
-    assert(matches(cell, Exact("true")))
-    assert(!matches(cell, Exact("FALSE")))
+    assert(matches(cell, exactValue("TRUE")))
+    assert(matches(cell, exactValue("true")))
+    assert(!matches(cell, exactValue("FALSE")))
   }
 
   test("matches: empty cell matches empty string") {
-    assert(matches(CellValue.Empty, Exact("")))
-    assert(!matches(CellValue.Empty, Exact("something")))
+    assert(matches(CellValue.Empty, exactValue("")))
+    assert(!matches(CellValue.Empty, exactValue("something")))
   }
 
   test("matches: formula with cached value") {
     val cell = CellValue.Formula("=A1+B1", Some(CellValue.Number(BigDecimal(100))))
-    assert(matches(cell, Exact(BigDecimal(100))))
-    assert(!matches(cell, Exact(BigDecimal(50))))
+    assert(matches(cell, exactValue(BigDecimal(100))))
+    assert(!matches(cell, exactValue(BigDecimal(50))))
   }
 
   test("matches: formula without cached value") {
     val cell = CellValue.Formula("=A1+B1", None)
-    assert(!matches(cell, Exact(BigDecimal(100))))
+    assert(!matches(cell, exactValue(BigDecimal(100))))
   }
 
   test("matches: rich text") {
     val cell = CellValue.RichText(com.tjclp.xl.richtext.RichText.plain("Hello"))
-    assert(matches(cell, Exact("Hello")))
-    assert(matches(cell, Exact("HELLO")))
+    assert(matches(cell, exactValue("Hello")))
+    assert(matches(cell, exactValue("HELLO")))
   }
 
   test("matches: error cells never match") {
     val cell = CellValue.Error(com.tjclp.xl.cells.CellError.Value)
-    assert(!matches(cell, Exact("anything")))
+    assert(!matches(cell, exactValue("anything")))
   }
 
   // ===== Comparison Matching Tests =====
@@ -302,7 +307,7 @@ class CriteriaMatcherSpec extends FunSuite:
       CellValue.Text("Cherry")
     )
 
-    val criterion = parse("Apple")
+    val criterion = parseValue("Apple")
     val matchingCount = fruits.count(cell => matches(cell, criterion))
     assertEquals(matchingCount, 2)
   }
@@ -315,7 +320,7 @@ class CriteriaMatcherSpec extends FunSuite:
       CellValue.Number(BigDecimal(75))
     )
 
-    val criterion = parse(">100")
+    val criterion = parseValue(">100")
     val matchingCount = numbers.count(cell => matches(cell, criterion))
     assertEquals(matchingCount, 2)
   }
@@ -328,7 +333,7 @@ class CriteriaMatcherSpec extends FunSuite:
       CellValue.Text("Apple Watch")
     )
 
-    val criterion = parse("Apple*")
+    val criterion = parseValue("Apple*")
     val matchingCount = products.count(cell => matches(cell, criterion))
     assertEquals(matchingCount, 3)
   }
@@ -340,11 +345,11 @@ class CriteriaMatcherSpec extends FunSuite:
     val dateCell = CellValue.DateTime(dt)
 
     // LocalDate criterion (e.g., from DATE() function)
-    val localDateCrit = parse(java.time.LocalDate.of(2024, 1, 15))
+    val localDateCrit = parseValue(java.time.LocalDate.of(2024, 1, 15))
     assert(matches(dateCell, localDateCrit))
 
     // Different date should not match
-    val wrongDateCrit = parse(java.time.LocalDate.of(2024, 1, 16))
+    val wrongDateCrit = parseValue(java.time.LocalDate.of(2024, 1, 16))
     assert(!matches(dateCell, wrongDateCrit))
   }
 
@@ -355,7 +360,7 @@ class CriteriaMatcherSpec extends FunSuite:
 
     // Integer serial (date only)
     val serial = BigDecimal(CellValue.dateTimeToExcelSerial(dt).toLong)
-    val serialCrit = parse(serial)
+    val serialCrit = parseValue(serial)
     assert(matches(dateCell, serialCrit))
   }
 
@@ -365,10 +370,10 @@ class CriteriaMatcherSpec extends FunSuite:
     val serial = CellValue.dateTimeToExcelSerial(dt)
 
     // Greater than comparison
-    val gtCrit = parse(s">${(serial - 1).toLong}")
+    val gtCrit = parseValue(s">${(serial - 1).toLong}")
     assert(matches(dateCell, gtCrit))
 
     // Less than comparison
-    val ltCrit = parse(s"<${(serial + 1).toLong}")
+    val ltCrit = parseValue(s"<${(serial + 1).toLong}")
     assert(matches(dateCell, ltCrit))
   }

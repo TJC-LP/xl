@@ -14,17 +14,17 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   private def evalCriteriaValues(
     ctx: EvalContext,
     conditions: RangeCriteriaList
-  ): Either[EvalError, List[Any]] =
+  ): Either[EvalError, List[ExprValue]] =
     conditions
-      .map { case (_, criteriaExpr) => evalAny(ctx, criteriaExpr) }
-      .foldLeft[Either[EvalError, List[Any]]](Right(List.empty)) { (acc, either) =>
+      .map { case (_, criteriaExpr) => evalValue(ctx, criteriaExpr) }
+      .foldLeft[Either[EvalError, List[ExprValue]]](Right(List.empty)) { (acc, either) =>
         acc.flatMap(list => either.map(v => v :: list))
       }
       .map(_.reverse)
 
   private def parseConditions(
     conditions: RangeCriteriaList,
-    criteriaValues: List[Any]
+    criteriaValues: List[ExprValue]
   ): List[(CellRange, CriteriaMatcher.Criterion)] =
     conditions
       .zip(criteriaValues)
@@ -71,7 +71,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   val sumif: FunctionSpec[BigDecimal] { type Args = SumIfArgs } =
     FunctionSpec.simple[BigDecimal, SumIfArgs]("SUMIF", Arity.Range(2, 3)) { (args, ctx) =>
       val (range, criteria, sumRangeOpt) = args
-      evalAny(ctx, criteria).flatMap { criteriaValue =>
+      evalValue(ctx, criteria).flatMap { criteriaValue =>
         val criterion = CriteriaMatcher.parse(criteriaValue)
         val effectiveRange = sumRangeOpt.getOrElse(range)
         val rangeRefsList = range.cells.toList
@@ -101,7 +101,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   val countif: FunctionSpec[BigDecimal] { type Args = CountIfArgs } =
     FunctionSpec.simple[BigDecimal, CountIfArgs]("COUNTIF", Arity.two) { (args, ctx) =>
       val (range, criteria) = args
-      evalAny(ctx, criteria).map { criteriaValue =>
+      evalValue(ctx, criteria).map { criteriaValue =>
         val criterion = CriteriaMatcher.parse(criteriaValue)
         val count = range.cells.count { ref =>
           CriteriaMatcher.matches(ctx.sheet(ref).value, criterion)
@@ -182,7 +182,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   val averageif: FunctionSpec[BigDecimal] { type Args = AverageIfArgs } =
     FunctionSpec.simple[BigDecimal, AverageIfArgs]("AVERAGEIF", Arity.Range(2, 3)) { (args, ctx) =>
       val (range, criteria, avgRangeOpt) = args
-      evalAny(ctx, criteria).flatMap { criteriaValue =>
+      evalValue(ctx, criteria).flatMap { criteriaValue =>
         val criterion = CriteriaMatcher.parse(criteriaValue)
         val effectiveRange = avgRangeOpt.getOrElse(range)
         val rangeRefsList = range.cells.toList

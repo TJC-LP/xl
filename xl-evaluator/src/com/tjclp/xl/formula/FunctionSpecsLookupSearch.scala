@@ -6,7 +6,7 @@ import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
   private def performXLookup(
-    lookupValue: Any,
+    lookupValue: ExprValue,
     lookupArray: CellRange,
     returnArray: CellRange,
     ifNotFoundOpt: Option[AnyExpr],
@@ -22,12 +22,12 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       else lookupCells.indices
 
     val wildcardCriterionOpt = lookupValue match
-      case text: String =>
-        CriteriaMatcher.parse(text) match
+      case ExprValue.Text(text) =>
+        CriteriaMatcher.parse(ExprValue.Text(text)) match
           case c: CriteriaMatcher.Wildcard => Some(c)
           case _ => None
-      case CellValue.Text(text) =>
-        CriteriaMatcher.parse(text) match
+      case ExprValue.Cell(CellValue.Text(text)) =>
+        CriteriaMatcher.parse(ExprValue.Text(text)) match
           case c: CriteriaMatcher.Wildcard => Some(c)
           case _ => None
       case _ => None
@@ -54,28 +54,25 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       case Some(idx) => Right(ctx.sheet(returnCells(idx)).value)
       case None =>
         ifNotFoundOpt match
-          case Some(expr) => evalAny(ctx, expr).map(toCellValue)
+          case Some(expr) => evalValue(ctx, expr).map(toCellValue)
           case None => Right(CellValue.Error(CellError.NA))
 
-  private def matchesExactForXLookup(cellValue: CellValue, lookupValue: Any): Boolean =
+  private def matchesExactForXLookup(cellValue: CellValue, lookupValue: ExprValue): Boolean =
     (cellValue, lookupValue) match
-      case (CellValue.Number(n), v: BigDecimal) => n == v
-      case (CellValue.Number(n), v: Int) => n == BigDecimal(v)
-      case (CellValue.Number(n), v: Long) => n == BigDecimal(v)
-      case (CellValue.Number(n), v: Double) => n == BigDecimal(v)
-      case (CellValue.Text(s), v: String) => s.equalsIgnoreCase(v)
-      case (CellValue.Bool(b), v: Boolean) => b == v
+      case (CellValue.Number(n), ExprValue.Number(v)) => n == v
+      case (CellValue.Text(s), ExprValue.Text(v)) => s.equalsIgnoreCase(v)
+      case (CellValue.Bool(b), ExprValue.Bool(v)) => b == v
       case (CellValue.Formula(_, Some(cached)), v) => matchesExactForXLookup(cached, v)
       case _ => false
 
   private def findNextSmaller(
-    lookupValue: Any,
+    lookupValue: ExprValue,
     lookupCells: Vector[ARef],
     sheet: Sheet,
     indices: IndexedSeq[Int]
   ): Option[Int] =
     lookupValue match
-      case targetNum: BigDecimal =>
+      case ExprValue.Number(targetNum) =>
         val candidates = indices
           .flatMap { idx =>
             extractNumericValue(sheet(lookupCells(idx)).value).map(n => (idx, n))
@@ -85,13 +82,13 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       case _ => None
 
   private def findNextLarger(
-    lookupValue: Any,
+    lookupValue: ExprValue,
     lookupCells: Vector[ARef],
     sheet: Sheet,
     indices: IndexedSeq[Int]
   ): Option[Int] =
     lookupValue match
-      case targetNum: BigDecimal =>
+      case ExprValue.Number(targetNum) =>
         val candidates = indices
           .flatMap { idx =>
             extractNumericValue(sheet(lookupCells(idx)).value).map(n => (idx, n))
@@ -111,7 +108,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       val (lookupExpr, table, colIndexExpr, rangeLookupOpt) = args
       val rangeLookupExpr = rangeLookupOpt.getOrElse(TExpr.Lit(true))
       for
-        lookupValue <- evalAny(ctx, lookupExpr)
+        lookupValue <- evalValue(ctx, lookupExpr)
         colIndex <- ctx.evalExpr(colIndexExpr)
         rangeMatch <- ctx.evalExpr(rangeLookupExpr)
         targetSheet <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
@@ -143,34 +140,41 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
               case CellValue.Formula(_, Some(cached)) => extractNumericForMatch(cached)
               case _ => None
 
-            val normalizedLookup: Any = lookupValue match
-              case cv: CellValue =>
+            def renderValue(value: ExprValue): String = value match
+              case ExprValue.Text(s) => s
+              case ExprValue.Number(n) => n.toString
+              case ExprValue.Bool(b) => b.toString
+              case ExprValue.Date(d) => d.toString
+              case ExprValue.DateTime(dt) => dt.toString
+              case ExprValue.Cell(cv) => cv.toString
+              case ExprValue.Opaque(other) => other.toString
+
+            val normalizedLookup: ExprValue = lookupValue match
+              case ExprValue.Cell(cv) =>
                 cv match
-                  case CellValue.Number(n) => n
-                  case CellValue.Text(s) => s
-                  case CellValue.Bool(b) => b
+                  case CellValue.Number(n) => ExprValue.Number(n)
+                  case CellValue.Text(s) => ExprValue.Text(s)
+                  case CellValue.Bool(b) => ExprValue.Bool(b)
                   case CellValue.Formula(_, Some(cached)) =>
                     cached match
-                      case CellValue.Number(n) => n
-                      case CellValue.Text(s) => s
-                      case CellValue.Bool(b) => b
-                      case other => other
-                  case other => other
+                      case CellValue.Number(n) => ExprValue.Number(n)
+                      case CellValue.Text(s) => ExprValue.Text(s)
+                      case CellValue.Bool(b) => ExprValue.Bool(b)
+                      case other => ExprValue.Cell(other)
+                  case other => ExprValue.Cell(other)
               case other => other
 
             val isTextLookup = normalizedLookup match
-              case _: String => true
-              case _: BigDecimal => false
-              case _: Int => false
-              case _: Boolean => false
+              case ExprValue.Text(_) => true
+              case ExprValue.Number(_) => false
+              case ExprValue.Bool(_) => false
               case _ => true
 
             val chosenRowOpt: Option[Int] =
               if rangeMatch then
                 val numericLookup: Option[BigDecimal] = normalizedLookup match
-                  case n: BigDecimal => Some(n)
-                  case i: Int => Some(BigDecimal(i))
-                  case s: String => scala.util.Try(BigDecimal(s.trim)).toOption
+                  case ExprValue.Number(n) => Some(n)
+                  case ExprValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
                   case _ => None
 
                 numericLookup.flatMap { lookup =>
@@ -186,7 +190,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                     .map(_._1)
                 }
               else if isTextLookup then
-                val lookupText = normalizedLookup.toString.toLowerCase
+                val lookupText = renderValue(normalizedLookup).toLowerCase
                 rowIndices.find { i =>
                   val keyRef = ARef.from0(keyCol0, rowStart0 + i)
                   extractTextForMatch(targetSheet(keyRef).value)
@@ -194,8 +198,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                 }
               else
                 val numericLookup: Option[BigDecimal] = normalizedLookup match
-                  case n: BigDecimal => Some(n)
-                  case i: Int => Some(BigDecimal(i))
+                  case ExprValue.Number(n) => Some(n)
                   case _ => None
                 numericLookup.flatMap { lookup =>
                   rowIndices.find { i =>
@@ -214,7 +217,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
                     if rangeMatch then "VLOOKUP approximate match not found"
                     else "VLOOKUP exact match not found",
                     Some(
-                      s"VLOOKUP($normalizedLookup, ${table.range.toA1}, $colIndex, $rangeMatch)"
+                      s"VLOOKUP(${renderValue(normalizedLookup)}, ${table.range.toA1}, $colIndex, $rangeMatch)"
                     )
                   )
                 )
@@ -236,9 +239,9 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         )
       else
         for
-          lookupValueEval <- evalAny(ctx, lookupValue)
-          matchModeRaw <- evalAny(ctx, matchModeExpr)
-          searchModeRaw <- evalAny(ctx, searchModeExpr)
+          lookupValueEval <- evalValue(ctx, lookupValue)
+          matchModeRaw <- evalValue(ctx, matchModeExpr)
+          searchModeRaw <- evalValue(ctx, searchModeExpr)
           matchMode = toInt(matchModeRaw)
           searchMode = toInt(searchModeRaw)
           result <- performXLookup(
