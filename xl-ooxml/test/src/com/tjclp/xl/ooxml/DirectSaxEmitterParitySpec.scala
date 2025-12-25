@@ -9,6 +9,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.richtext.RichText.*
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
+// DirectSaxEmitter is in the same package
 
 class DirectSaxEmitterParitySpec extends FunSuite:
 

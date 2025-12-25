@@ -173,10 +173,7 @@ final case class OoxmlStyles(
 
     val attrs = rootAttributes.getOrElse(Null)
     val scope = Option(rootScope).getOrElse(defaultStylesScope)
-    SaxWriter.withAttributes(
-      writer,
-      writer.namespaceAttributes(scope) ++ writer.metaDataAttributes(attrs)*
-    ) {
+    SaxWriter.withAttributes(writer, writer.combinedAttributes(scope, attrs)*) {
       // numFmts
       if index.numFmts.nonEmpty then
         writer.startElement("numFmts")
@@ -421,9 +418,13 @@ final case class OoxmlStyles(
 
         if align.indent != Align.default.indent then attrs += ("indent" -> align.indent.toString)
 
-        SaxWriter.withAttributes(writer, attrs.result()*) {
-          ()
-        }
+        val attrSeq = attrs.result()
+        if attrSeq.nonEmpty then
+          writer.startElement("alignment")
+          SaxWriter.withAttributes(writer, attrSeq*) {
+            ()
+          }
+          writer.endElement()
       }
 
   private def writeFontSax(writer: SaxWriter, font: Font): Unit =

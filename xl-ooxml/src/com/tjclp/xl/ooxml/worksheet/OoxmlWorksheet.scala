@@ -94,10 +94,7 @@ case class OoxmlWorksheet(
 
     // Namespace declarations (deterministic order)
     import com.tjclp.xl.ooxml.SaxSupport.*
-    SaxWriter.withAttributes(
-      writer,
-      writer.namespaceAttributes(scope) ++ writer.metaDataAttributes(rootAttrs)*
-    ) {
+    SaxWriter.withAttributes(writer, writer.combinedAttributes(scope, rootAttrs)*) {
       // Emit metadata in OOXML order
       sheetPr.foreach(writer.writeElem)
       dimension.foreach(writer.writeElem)

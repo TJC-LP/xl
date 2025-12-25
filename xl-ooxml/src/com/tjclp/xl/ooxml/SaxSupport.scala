@@ -1,6 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import scala.xml.{
+  Atom,
   Elem,
   MetaData,
   NamespaceBinding,
@@ -41,6 +42,19 @@ trait SaxSupport:
 
     loop(scope, Nil).distinctBy(_._1).sortBy(_._1)
 
+  /**
+   * Combine namespace and metadata attributes with deduplication.
+   *
+   * When reading XML files, namespace declarations may appear in both the scope (NamespaceBinding)
+   * and root attributes (MetaData). This method merges them and deduplicates by attribute name,
+   * keeping the first occurrence (from namespace declarations).
+   */
+  protected def combinedAttributes(
+    scope: NamespaceBinding,
+    attrs: MetaData
+  ): Seq[(String, String)] =
+    (namespaceAttributes(scope) ++ metaDataAttributes(attrs)).distinctBy(_._1)
+
   /** Stream an existing scala.xml Elem through a SaxWriter */
   protected def emitElem(writer: SaxWriter, elem: Elem): Unit =
     val qName =
@@ -59,6 +73,9 @@ trait SaxSupport:
         case e: Elem => emitElem(writer, e)
         case t: Text => writer.writeCharacters(t.data)
         case pc: PCData => writer.writeCharacters(pc.data)
+        // Atom[String] for interpolated values in XML literals (e.g., <elem>{stringVal}</elem>)
+        // Must come after Text/PCData since those extend Atom[String]
+        case a: Atom[?] => writer.writeCharacters(a.data.toString)
         case _ => ()
       }
     }
@@ -72,3 +89,5 @@ object SaxSupport extends SaxSupport:
       SaxSupport.namespaceAttributes(scope)
     def metaDataAttributes(md: MetaData): Seq[(String, String)] =
       SaxSupport.metaDataAttributes(md)
+    def combinedAttributes(scope: NamespaceBinding, attrs: MetaData): Seq[(String, String)] =
+      SaxSupport.combinedAttributes(scope, attrs)

@@ -201,8 +201,9 @@ class StyleIndexSpec extends FunSuite:
         zip.close()
 
         // Verify new font with bold was added
+        // Note: StAX outputs <b></b> while ScalaXml outputs <b/>
         assert(
-          stylesXml.contains("<b/>") || stylesXml.contains("<b "),
+          stylesXml.contains("<b/>") || stylesXml.contains("<b>") || stylesXml.contains("<b "),
           s"Bold font element missing from styles.xml. New font components not added."
         )
 
