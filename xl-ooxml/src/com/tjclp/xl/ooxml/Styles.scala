@@ -489,7 +489,7 @@ final case class OoxmlStyles(
 
   def writeSax(writer: SaxWriter): Unit =
     writer.startDocument()
-    writer.startElement("styleSheet", nsSpreadsheetML)
+    writer.startElement("styleSheet")
 
     val attrs = rootAttributes.getOrElse(Null)
     val scope = Option(rootScope).getOrElse(defaultStylesScope)
