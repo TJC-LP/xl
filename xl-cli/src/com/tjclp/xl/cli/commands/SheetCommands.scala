@@ -8,6 +8,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.ooxml.writer.WriterConfig
 
 /**
  * Sheet management command handlers.
@@ -24,7 +25,8 @@ object SheetCommands:
     name: String,
     afterOpt: Option[String],
     beforeOpt: Option[String],
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     for
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
@@ -72,7 +74,7 @@ object SheetCommands:
         case (None, None) =>
           // Append at end (use put for simplicity - adds if not exists)
           IO.pure(wb.put(newSheet))
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
       position = (afterOpt, beforeOpt) match
         case (Some(after), _) => s" (after '$after')"
         case (_, Some(before)) => s" (before '$before')"
@@ -82,7 +84,7 @@ object SheetCommands:
   /**
    * Remove sheet from workbook.
    */
-  def removeSheet(wb: Workbook, name: String, outputPath: Path): IO[String] =
+  def removeSheet(wb: Workbook, name: String, outputPath: Path, config: WriterConfig): IO[String] =
     for
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
       updatedWb <- IO.fromEither(wb.remove(sheetName).left.map {
@@ -93,7 +95,7 @@ object SheetCommands:
         case XLError.InvalidWorkbook(reason) => new Exception(reason)
         case e => new Exception(e.message)
       })
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
     yield s"Removed sheet: $name\nSaved: $outputPath"
 
   /**
@@ -103,7 +105,8 @@ object SheetCommands:
     wb: Workbook,
     oldName: String,
     newName: String,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     for
       oldSheetName <- IO.fromEither(SheetName(oldName).left.map(e => new Exception(e)))
@@ -117,7 +120,7 @@ object SheetCommands:
           new Exception(s"Sheet '$newName' already exists")
         case e => new Exception(e.message)
       })
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
     yield s"Renamed: $oldName → $newName\nSaved: $outputPath"
 
   /**
@@ -129,7 +132,8 @@ object SheetCommands:
     toIndexOpt: Option[Int],
     afterOpt: Option[String],
     beforeOpt: Option[String],
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     for
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
@@ -179,7 +183,7 @@ object SheetCommands:
       clampedIdx = adjustedIdx.max(0).min(withoutSheet.size)
       newOrder = withoutSheet.patch(clampedIdx, Vector(sheetName), 0)
       updatedWb <- IO.fromEither(wb.reorder(newOrder).left.map(e => new Exception(e.message)))
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
       position = s"to position $clampedIdx"
     yield s"Moved: $name $position\nSaved: $outputPath"
 
@@ -190,7 +194,8 @@ object SheetCommands:
     wb: Workbook,
     sourceName: String,
     targetName: String,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     for
       sourceSheetName <- IO.fromEither(SheetName(sourceName).left.map(e => new Exception(e)))
@@ -205,5 +210,5 @@ object SheetCommands:
         .whenA(wb.sheets.exists(_.name == targetSheetName))
       copiedSheet = sourceSheet.copy(name = targetSheetName)
       updatedWb = wb.put(copiedSheet)
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
     yield s"Copied: $sourceName → $targetName\nSaved: $outputPath"

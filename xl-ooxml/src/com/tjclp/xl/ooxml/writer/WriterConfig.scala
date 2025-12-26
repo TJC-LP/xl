@@ -65,13 +65,13 @@ case class WriterConfig(
   compression: Compression = Compression.Deflated,
   prettyPrint: Boolean = false, // Compact XML for production (only applies to ScalaXml backend)
   backend: XmlBackend =
-    XmlBackend.SaxStax, // Serialization backend (SAX/StAX default for 33% faster writes)
+    XmlBackend.ScalaXml, // Default to ScalaXml for stability; use --backend saxstax for speed
   formulaInjectionPolicy: FormulaInjectionPolicy =
     FormulaInjectionPolicy.None // Default: trust input
 )
 
 object WriterConfig:
-  /** Default production configuration: DEFLATED compression + SaxStax backend (33% faster) */
+  /** Default production configuration: DEFLATED compression + ScalaXml backend (stable) */
   val default: WriterConfig = WriterConfig()
 
   /**
@@ -96,13 +96,16 @@ object WriterConfig:
     backend = XmlBackend.ScalaXml
   )
 
-  /**
-   * ScalaXml backend configuration.
-   *
-   * Use this when you need prettyPrint support or want the legacy behavior before SaxStax became
-   * default. Note: SaxStax is 33% faster for writes; only use ScalaXml when needed.
-   */
+  /** ScalaXml backend configuration (same as default). */
   val scalaXml: WriterConfig = WriterConfig(backend = XmlBackend.ScalaXml)
+
+  /**
+   * SaxStax backend configuration for faster writes.
+   *
+   * Use this for 33% faster writes when processing large files. ScalaXml is the default for
+   * stability; opt into SaxStax explicitly when performance is critical.
+   */
+  val saxStax: WriterConfig = WriterConfig(backend = XmlBackend.SaxStax)
 
 /**
  * Target for XLSX output (file path or output stream).

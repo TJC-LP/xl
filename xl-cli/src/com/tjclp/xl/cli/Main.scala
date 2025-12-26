@@ -10,6 +10,7 @@ import com.monovore.decline.effect.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.cli.commands.{
   CellCommands,
   ReadCommands,
@@ -47,7 +48,7 @@ object Main
     // Workbook-level: only --file (no --sheet)
     val workbookSubcmds = sheetsCmd orElse namesCmd
     val workbookOpts = (fileOpt, workbookSubcmds).mapN { (file, cmd) =>
-      run(file, None, None, cmd)
+      run(file, None, None, None, cmd)
     }
 
     // Headless commands: --file is optional (for constant formulas like =1+1, =PI())
@@ -60,7 +61,7 @@ object Main
       boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd
 
     val sheetReadOnlyOpts = (fileOpt, sheetOpt, sheetReadOnlySubcmds).mapN { (file, sheet, cmd) =>
-      run(file, sheet, None, cmd)
+      run(file, sheet, None, None, cmd)
     }
 
     // Sheet-level write: --file, --sheet, and --output (required)
@@ -68,13 +69,14 @@ object Main
       putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd
 
     val sheetWriteOpts =
-      (fileOpt, sheetOpt, outputOpt, sheetWriteSubcmds).mapN { (file, sheet, out, cmd) =>
-        run(file, sheet, Some(out), cmd)
+      (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
+        (file, sheet, out, backend, cmd) =>
+          run(file, sheet, Some(out), backend, cmd)
       }
 
     // Standalone: no --file required (creates new files)
-    val standaloneOpts = newCmd.map { case (outPath, sheetName, sheets) =>
-      runStandalone(outPath, sheetName, sheets)
+    val standaloneOpts = newCmd.map { case (outPath, sheetName, sheets, backend) =>
+      runStandalone(outPath, sheetName, sheets, backend)
     }
 
     // Info commands: no file required
@@ -96,6 +98,21 @@ object Main
 
   private val outputOpt =
     Opts.option[Path]("output", "Output file (required)", "o")
+
+  private val backendOpt: Opts[Option[XmlBackend]] =
+    Opts
+      .option[String]("backend", "XML backend: scalaxml (default, stable) or saxstax (faster)")
+      .mapValidated {
+        case "scalaxml" | "scala-xml" | "xml" =>
+          cats.data.Validated.valid(XmlBackend.ScalaXml)
+        case "saxstax" | "sax-stax" | "stax" =>
+          cats.data.Validated.valid(XmlBackend.SaxStax)
+        case other =>
+          cats.data.Validated.invalidNel(
+            s"Unknown backend: $other. Use 'scalaxml' (default) or 'saxstax' (faster)"
+          )
+      }
+      .orNone
 
   // ==========================================================================
   // Command definitions
@@ -183,9 +200,9 @@ object Main
   private val sheetsOpt: Opts[List[String]] =
     Opts.options[String]("sheet", "Sheet name (repeatable for multiple sheets)").orEmpty
 
-  val newCmd: Opts[(Path, String, List[String])] =
+  val newCmd: Opts[(Path, String, List[String], Option[XmlBackend])] =
     Opts.subcommand("new", "Create a blank xlsx file") {
-      (outputArg, sheetNameOpt, sheetsOpt).tupled
+      (outputArg, sheetNameOpt, sheetsOpt, backendOpt).tupled
     }
 
   // --- Read-only commands ---
@@ -402,9 +419,10 @@ object Main
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
+    backendOpt: Option[XmlBackend],
     cmd: CliCommand
   ): IO[ExitCode] =
-    execute(filePath, sheetNameOpt, outputOpt, cmd).attempt.flatMap {
+    execute(filePath, sheetNameOpt, outputOpt, backendOpt, cmd).attempt.flatMap {
       case Right(output) =>
         IO.println(output).as(ExitCode.Success)
       case Left(err) =>
@@ -457,7 +475,13 @@ object Main
         IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
     }
 
-  private def runStandalone(outPath: Path, sheetName: String, sheets: List[String]): IO[ExitCode] =
+  private def runStandalone(
+    outPath: Path,
+    sheetName: String,
+    sheets: List[String],
+    backendOpt: Option[XmlBackend]
+  ): IO[ExitCode] =
+    val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
     (for
       // --sheet takes precedence over --sheet-name; if neither, default to "Sheet1"
       names <- sheets match
@@ -466,7 +490,7 @@ object Main
         case list =>
           list.traverse(n => IO.fromEither(SheetName(n).left.map(e => new Exception(e))))
       wb = Workbook(names.map(Sheet(_)).toVector)
-      _ <- ExcelIO.instance[IO].write(wb, outPath)
+      _ <- ExcelIO.instance[IO].writeWith(wb, outPath, config)
     yield
       val sheetList = names.map(_.value).mkString(", ")
       s"Created ${outPath.toAbsolutePath} with ${names.size} sheet(s): $sheetList"
@@ -481,18 +505,20 @@ object Main
     filePath: Path,
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
+    backendOpt: Option[XmlBackend],
     cmd: CliCommand
   ): IO[String] =
     for
       wb <- ExcelIO.instance[IO].read(filePath)
       sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-      result <- executeCommand(wb, sheet, outputOpt, cmd)
+      result <- executeCommand(wb, sheet, outputOpt, backendOpt, cmd)
     yield result
 
   private def executeCommand(
     wb: Workbook,
     sheetOpt: Option[Sheet],
     outputOpt: Option[Path],
+    backendOpt: Option[XmlBackend],
     cmd: CliCommand
   ): IO[String] = cmd match
     // Workbook commands
@@ -555,10 +581,12 @@ object Main
 
     // Write commands (require output)
     case CliCommand.Put(refStr, valueStr) =>
-      requireOutput(outputOpt)(WriteCommands.put(wb, sheetOpt, refStr, valueStr, _))
+      requireOutput(outputOpt, backendOpt)(WriteCommands.put(wb, sheetOpt, refStr, valueStr, _, _))
 
     case CliCommand.PutFormula(refStr, formulaStr) =>
-      requireOutput(outputOpt)(WriteCommands.putFormula(wb, sheetOpt, refStr, formulaStr, _))
+      requireOutput(outputOpt, backendOpt)(
+        WriteCommands.putFormula(wb, sheetOpt, refStr, formulaStr, _, _)
+      )
 
     case CliCommand.Style(
           rangeStr,
@@ -581,7 +609,7 @@ object Main
           borderColor,
           replace
         ) =>
-      requireOutput(outputOpt) { outputPath =>
+      requireOutput(outputOpt, backendOpt) { (outputPath, config) =>
         WriteCommands.style(
           wb,
           sheetOpt,
@@ -604,47 +632,62 @@ object Main
           borderLeft,
           borderColor,
           replace,
-          outputPath
+          outputPath,
+          config
         )
       }
 
     case CliCommand.RowOp(rowNum, height, hide, show) =>
-      requireOutput(outputOpt)(WriteCommands.row(wb, sheetOpt, rowNum, height, hide, show, _))
+      requireOutput(outputOpt, backendOpt)(
+        WriteCommands.row(wb, sheetOpt, rowNum, height, hide, show, _, _)
+      )
 
     case CliCommand.ColOp(colStr, width, hide, show) =>
-      requireOutput(outputOpt)(WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, _))
+      requireOutput(outputOpt, backendOpt)(
+        WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, _, _)
+      )
 
     case CliCommand.Batch(source) =>
-      requireOutput(outputOpt)(WriteCommands.batch(wb, sheetOpt, source, _))
+      requireOutput(outputOpt, backendOpt)(WriteCommands.batch(wb, sheetOpt, source, _, _))
 
     // Sheet management commands
     case CliCommand.AddSheet(name, afterOpt, beforeOpt) =>
-      requireOutput(outputOpt)(SheetCommands.addSheet(wb, name, afterOpt, beforeOpt, _))
+      requireOutput(outputOpt, backendOpt)(
+        SheetCommands.addSheet(wb, name, afterOpt, beforeOpt, _, _)
+      )
 
     case CliCommand.RemoveSheet(name) =>
-      requireOutput(outputOpt)(SheetCommands.removeSheet(wb, name, _))
+      requireOutput(outputOpt, backendOpt)(SheetCommands.removeSheet(wb, name, _, _))
 
     case CliCommand.RenameSheet(oldName, newName) =>
-      requireOutput(outputOpt)(SheetCommands.renameSheet(wb, oldName, newName, _))
+      requireOutput(outputOpt, backendOpt)(SheetCommands.renameSheet(wb, oldName, newName, _, _))
 
     case CliCommand.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>
-      requireOutput(outputOpt)(
-        SheetCommands.moveSheet(wb, name, toIndexOpt, afterOpt, beforeOpt, _)
+      requireOutput(outputOpt, backendOpt)(
+        SheetCommands.moveSheet(wb, name, toIndexOpt, afterOpt, beforeOpt, _, _)
       )
 
     case CliCommand.CopySheet(sourceName, targetName) =>
-      requireOutput(outputOpt)(SheetCommands.copySheet(wb, sourceName, targetName, _))
+      requireOutput(outputOpt, backendOpt)(
+        SheetCommands.copySheet(wb, sourceName, targetName, _, _)
+      )
 
     // Cell commands
     case CliCommand.Merge(rangeStr) =>
-      requireOutput(outputOpt)(CellCommands.merge(wb, sheetOpt, rangeStr, _))
+      requireOutput(outputOpt, backendOpt)(CellCommands.merge(wb, sheetOpt, rangeStr, _, _))
 
     case CliCommand.Unmerge(rangeStr) =>
-      requireOutput(outputOpt)(CellCommands.unmerge(wb, sheetOpt, rangeStr, _))
+      requireOutput(outputOpt, backendOpt)(CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _))
 
   // ==========================================================================
   // Helpers
   // ==========================================================================
 
-  private def requireOutput(outputOpt: Option[Path])(f: Path => IO[String]): IO[String] =
-    outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required")))(f)
+  private def requireOutput(
+    outputOpt: Option[Path],
+    backendOpt: Option[XmlBackend]
+  )(f: (Path, WriterConfig) => IO[String]): IO[String] =
+    val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
+    outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required")))(path =>
+      f(path, config)
+    )

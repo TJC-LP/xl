@@ -20,6 +20,7 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.styleSyntax
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.ooxml.writer.WriterConfig
 
 /**
  * Write command handlers.
@@ -36,7 +37,8 @@ object WriteCommands:
     sheetOpt: Option[Sheet],
     refStr: String,
     valueStr: String,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "put")
@@ -52,7 +54,7 @@ object WriteCommands:
           val sheet = cells.foldLeft(targetSheet)((s, ref) => s.put(ref, value))
           (sheet, cells.size)
       updatedWb = wb.put(updatedSheet)
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
     yield refOrRange match
       case Left(ref) => s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
       case Right(range) =>
@@ -66,7 +68,8 @@ object WriteCommands:
     sheetOpt: Option[Sheet],
     refStr: String,
     formulaStr: String,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "putf")
@@ -139,7 +142,7 @@ object WriteCommands:
             else sheetWithFormulas
           (finalSheet, cells.size)
       updatedWb = wb.put(updatedSheet)
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
     yield refOrRange match
       case Left(ref) =>
         s"${Format.putSuccess(ref, CellValue.Formula(formula))}\nSaved: $outputPath"
@@ -174,7 +177,8 @@ object WriteCommands:
     borderLeft: Option[String],
     borderColor: Option[String],
     replace: Boolean,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "style")
@@ -218,7 +222,7 @@ object WriteCommands:
             styleSyntax.withRangeStyle(sheet)(CellRange(ref, ref), mergedStyle)
           }
       updatedWb = wb.put(updatedSheet)
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
       appliedList = StyleBuilder.buildStyleDescription(
         bold,
         italic,
@@ -246,7 +250,8 @@ object WriteCommands:
     height: Option[Double],
     hide: Boolean,
     show: Boolean,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     SheetResolver.requireSheet(wb, sheetOpt, "row").flatMap { sheet =>
       val rowRef = Row.from1(rowNum)
@@ -257,7 +262,7 @@ object WriteCommands:
       )
       val updatedSheet = sheet.setRowProperties(rowRef, newProps)
       val updatedWb = wb.put(updatedSheet)
-      ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
+      ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
         val changes = List(
           height.map(h => s"height=$h"),
           if hide then Some("hidden=true") else None,
@@ -277,7 +282,8 @@ object WriteCommands:
     width: Option[Double],
     hide: Boolean,
     show: Boolean,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     SheetResolver.requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
       IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e))).flatMap { colRef =>
@@ -288,7 +294,7 @@ object WriteCommands:
         )
         val updatedSheet = sheet.setColumnProperties(colRef, newProps)
         val updatedWb = wb.put(updatedSheet)
-        ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
+        ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
           val changes = List(
             width.map(w => s"width=$w"),
             if hide then Some("hidden=true") else None,
@@ -306,12 +312,13 @@ object WriteCommands:
     wb: Workbook,
     sheetOpt: Option[Sheet],
     source: String,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     BatchParser.readBatchInput(source).flatMap { input =>
       BatchParser.parseBatchOperations(input).flatMap { ops =>
         BatchParser.applyBatchOperations(wb, sheetOpt, ops).flatMap { updatedWb =>
-          ExcelIO.instance[IO].write(updatedWb, outputPath).map { _ =>
+          ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
             val summary = ops
               .map {
                 case BatchParser.BatchOp.Put(ref, value) => s"  PUT $ref = $value"
