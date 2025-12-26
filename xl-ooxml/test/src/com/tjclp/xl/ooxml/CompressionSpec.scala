@@ -74,16 +74,16 @@ class CompressionSpec extends FunSuite:
     val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Test"))
     val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
 
-    // Write with compact XML
+    // Write with compact XML (must use ScalaXml backend since prettyPrint is ScalaXml-specific)
     val compactPath = dir.resolve("compact.xlsx")
-    val compactConfig = WriterConfig(compression = Compression.Deflated, prettyPrint = false)
+    val compactConfig = WriterConfig.scalaXml.copy(prettyPrint = false)
     XlsxWriter.writeWith(wb, compactPath, compactConfig) match
       case Left(err) => fail(s"Failed to write compact: $err")
       case Right(_) => ()
 
-    // Write with pretty XML
+    // Write with pretty XML (must use ScalaXml backend since prettyPrint is ScalaXml-specific)
     val prettyPath = dir.resolve("pretty.xlsx")
-    val prettyConfig = WriterConfig(compression = Compression.Deflated, prettyPrint = true)
+    val prettyConfig = WriterConfig.scalaXml.copy(prettyPrint = true)
     XlsxWriter.writeWith(wb, prettyPath, prettyConfig) match
       case Left(err) => fail(s"Failed to write pretty: $err")
       case Right(_) => ()

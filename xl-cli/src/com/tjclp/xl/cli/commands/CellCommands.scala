@@ -7,6 +7,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.cli.helpers.SheetResolver
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.ooxml.writer.WriterConfig
 
 /**
  * Cell-level command handlers.
@@ -22,7 +23,8 @@ object CellCommands:
     wb: Workbook,
     sheetOpt: Option[Sheet],
     rangeStr: String,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "merge")
@@ -35,7 +37,7 @@ object CellCommands:
           )
       updatedSheet = targetSheet.merge(range)
       updatedWb = wb.put(updatedSheet)
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
     yield s"Merged: ${range.toA1}\nSaved: $outputPath"
 
   /**
@@ -45,7 +47,8 @@ object CellCommands:
     wb: Workbook,
     sheetOpt: Option[Sheet],
     rangeStr: String,
-    outputPath: Path
+    outputPath: Path,
+    config: WriterConfig
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "unmerge")
@@ -58,5 +61,5 @@ object CellCommands:
           )
       updatedSheet = targetSheet.unmerge(range)
       updatedWb = wb.put(updatedSheet)
-      _ <- ExcelIO.instance[IO].write(updatedWb, outputPath)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
     yield s"Unmerged: ${range.toA1}\nSaved: $outputPath"

@@ -43,12 +43,12 @@ class OoxmlWorksheetSaxSpec extends FunSuite:
   private def writeWithSax(ws: OoxmlWorksheet): String =
     val output = StringWriter()
     val xmlWriter = XMLOutputFactory.newInstance().createXMLStreamWriter(output)
-    val saxWriter = new StaxSaxWriter(xmlWriter)
+    val saxWriter = new TestSaxWriter(xmlWriter)
     ws.writeSax(saxWriter)
     xmlWriter.flush()
     output.toString
 
-private class StaxSaxWriter(underlying: javax.xml.stream.XMLStreamWriter) extends SaxWriter:
+private class TestSaxWriter(underlying: javax.xml.stream.XMLStreamWriter) extends SaxWriter:
   def startDocument(): Unit = underlying.writeStartDocument("UTF-8", "1.0")
   def endDocument(): Unit = underlying.writeEndDocument()
   def startElement(name: String): Unit = underlying.writeStartElement(name)

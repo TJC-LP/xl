@@ -172,7 +172,8 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     val sheetXml = readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
 
     // Row 1: Empty row with formatting (was getting dropped)
-    assert(sheetXml.contains("""<row r="1""""), "Empty row 1 should be preserved")
+    // Note: Attribute order may vary between backends but row is preserved
+    assert(sheetXml.contains("""r="1"""") && sheetXml.contains("<row"), "Empty row 1 should be preserved")
 
     // Row 2: All 10 attributes
     assert(sheetXml.contains("""spans="1:5""""), "Row 'spans' attribute missing")

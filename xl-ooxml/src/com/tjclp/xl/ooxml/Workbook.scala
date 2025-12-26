@@ -149,9 +149,8 @@ case class OoxmlWorkbook(
 
     val scope = Option(rootScope).getOrElse(defaultWorkbookScope)
     val attrs = Option(rootAttributes).getOrElse(Null)
-    val rootAttrs = writer.namespaceAttributes(scope) ++ writer.metaDataAttributes(attrs)
 
-    SaxWriter.withAttributes(writer, rootAttrs*) {
+    SaxWriter.withAttributes(writer, writer.combinedAttributes(scope, attrs)*) {
       fileVersion.foreach(writer.writeElem)
       workbookPr.foreach(writer.writeElem)
       alternateContent.foreach(writer.writeElem)

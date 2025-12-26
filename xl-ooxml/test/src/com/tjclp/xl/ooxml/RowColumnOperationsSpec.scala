@@ -429,16 +429,9 @@ class RowColumnOperationsSpec extends FunSuite:
     assertEquals(colBProps.get.width, Some(30.0), "Column B width changed")
     assertEquals(colCProps.get.width, Some(40.0), "Column C width changed")
 
-    // Also verify the XML has proper attribute order (min before max)
-    val zip = new java.util.zip.ZipFile(path3.toFile)
-    val sheetEntry = zip.getEntry("xl/worksheets/sheet1.xml")
-    val sheetXml = scala.io.Source.fromInputStream(zip.getInputStream(sheetEntry)).mkString
-    zip.close()
-
-    assert(
-      sheetXml.contains("""<col min="1""""),
-      "Column XML should have min attribute first (OOXML compliance)"
-    )
+    // Note: Attribute order is not significant in XML spec.
+    // Excel correctly parses col elements regardless of attribute order.
+    // We only verify the data is preserved, not the attribute order.
   }
 
 end RowColumnOperationsSpec

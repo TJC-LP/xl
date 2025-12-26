@@ -3,12 +3,15 @@ package com.tjclp.xl.benchmarks
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import com.tjclp.xl.io.ExcelIO
-import com.tjclp.xl.ooxml.{WriterConfig, XmlBackend}
+import com.tjclp.xl.ooxml.{OoxmlWorksheet, SharedStrings, WriterConfig, XmlBackend, XmlUtil}
+import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import org.openjdk.jmh.annotations.*
+import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
 import scala.compiletime.uninitialized
+import scala.xml.Elem
 
 /**
  * Benchmarks comparing XL write backends: ScalaXml vs SaxStax.
@@ -16,8 +19,12 @@ import scala.compiletime.uninitialized
  * Goal: Quantify performance difference between backends to validate optimization claims and
  * identify bottlenecks in the write path.
  *
- * Expected: SaxStax should be faster due to streaming output, but both currently build intermediate
- * Elem trees via toXml() before serialization.
+ * SaxStax is the default backend since 0.5.0 due to:
+ *   - Direct streaming to output (no intermediate String allocation)
+ *   - Better memory efficiency for large workbooks
+ *   - Surgical modification support (modify existing OOXML in place)
+ *
+ * Phase 3 isolation benchmarks: Separate toXml() from serialization to identify true bottleneck.
  *
  * Run with: ./mill xl-benchmarks.runJmh -- SaxWriterBenchmark
  */
@@ -37,6 +44,10 @@ class SaxWriterBenchmark {
   var scalaXmlWriteFile: Path = uninitialized
   var saxStaxWriteFile: Path = uninitialized
 
+  // For isolation benchmarks
+  var sheet: Sheet = uninitialized
+  var preBuiltElem: Elem = uninitialized
+
   val excel: ExcelIO[IO] = ExcelIO.instance[IO]
 
   // Pre-configured WriterConfigs
@@ -48,6 +59,13 @@ class SaxWriterBenchmark {
     // Generate workbook once per trial (shared across iterations)
     // Use verifiable workbook for consistency with other benchmarks
     workbook = BenchmarkUtils.createVerifiableWorkbook(rows)
+
+    // Extract sheet for isolation benchmarks
+    sheet = workbook.sheets.find(_.name.value == "Data").get
+
+    // Pre-build Elem for serialization-only benchmark
+    val ooxmlWorksheet = OoxmlWorksheet.fromDomainWithSST(sheet, None)
+    preBuiltElem = ooxmlWorksheet.toXml
 
     // Create dedicated temp files for each backend
     scalaXmlWriteFile = Files.createTempFile("xl-scalaxml-write-", ".xlsx")
@@ -69,19 +87,29 @@ class SaxWriterBenchmark {
     excel.writeWith(workbook, scalaXmlWriteFile, scalaXmlConfig).unsafeRunSync()
   }
 
-  // ===== SaxStax Backend =====
+  // ===== SaxStax Backend (default since 0.5.0) =====
 
   @Benchmark
   def writeSaxStax(): Unit = {
-    // Write using SaxStax backend (builds Elem tree, converts to SAX events)
+    // Write using SaxStax backend (default since 0.5.0)
     excel.writeWith(workbook, saxStaxWriteFile, saxStaxConfig).unsafeRunSync()
   }
 
-  // ===== writeFast() convenience method =====
+  // ===== Isolation Benchmarks (Phase 3) =====
+  // Separate toXml() from serialization to identify true bottleneck
 
   @Benchmark
-  def writeFast(): Unit = {
-    // Use the convenience method (internally uses SaxStax)
-    excel.writeFast(workbook, saxStaxWriteFile).unsafeRunSync()
+  def toXmlOnly(): Elem = {
+    // Measure ONLY Elem tree construction from domain model
+    // This is the suspected bottleneck based on Phase 2 results
+    val ooxmlWorksheet = OoxmlWorksheet.fromDomainWithSST(sheet, None)
+    ooxmlWorksheet.toXml
+  }
+
+  @Benchmark
+  def serializeOnly(): Array[Byte] = {
+    // Measure ONLY XML serialization (Elem pre-built in setup)
+    // Uses same serialization path as ScalaXml backend
+    XmlUtil.compact(preBuiltElem).getBytes(UTF_8)
   }
 }

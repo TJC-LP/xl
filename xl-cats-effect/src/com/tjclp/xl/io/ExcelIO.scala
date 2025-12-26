@@ -44,20 +44,18 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     }
 
   /** Write workbook using SAX/StAX backend for faster writes */
+  @deprecated("SaxStax is now the default backend. Use write() instead.", "0.4.0")
   def writeFast(wb: Workbook, path: Path): F[Unit] =
-    val saxConfig = com.tjclp.xl.ooxml.WriterConfig.default.copy(
-      backend = com.tjclp.xl.ooxml.XmlBackend.SaxStax
-    )
-    writeWith(wb, path, saxConfig)
+    write(wb, path)
 
   /** Write workbook with custom config but forcing SAX/StAX backend */
+  @deprecated("SaxStax is now the default backend. Use writeWith() instead.", "0.4.0")
   def writeFastWith(
     wb: Workbook,
     path: Path,
     config: com.tjclp.xl.ooxml.WriterConfig
   ): F[Unit] =
-    val saxConfig = config.copy(backend = com.tjclp.xl.ooxml.XmlBackend.SaxStax)
-    writeWith(wb, path, saxConfig)
+    writeWith(wb, path, config)
 
   /**
    * Stream rows from first sheet with constant memory.
