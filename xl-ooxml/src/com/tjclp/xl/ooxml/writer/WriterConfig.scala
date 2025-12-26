@@ -54,18 +54,34 @@ enum FormulaInjectionPolicy derives CanEqual:
    */
   case None
 
-/** XML serialization backend */
+/**
+ * XML serialization backend for XLSX output.
+ *
+ * SaxStax is 33% faster than ScalaXml but is newer and less battle-tested. ScalaXml remains the
+ * default for stability until SaxStax has been proven stable in production use.
+ *
+ * Users can opt into SaxStax via CLI (`--backend saxstax`) or programmatically
+ * (`WriterConfig.saxStax`).
+ */
 enum XmlBackend derives CanEqual:
+  /** Stable backend using scala-xml. Default for production use. */
   case ScalaXml
+
+  /** High-performance backend using StAX. 33% faster writes, ready for beta testing. */
   case SaxStax
 
-/** Writer configuration options */
+/**
+ * Writer configuration options.
+ *
+ * The default backend is ScalaXml for stability. SaxStax (33% faster) is available for beta testing
+ * via `--backend saxstax` CLI flag or `WriterConfig.saxStax`. Once SaxStax has been proven stable
+ * in production, it will become the default.
+ */
 case class WriterConfig(
   sstPolicy: SstPolicy = SstPolicy.Auto,
   compression: Compression = Compression.Deflated,
   prettyPrint: Boolean = false, // Compact XML for production (only applies to ScalaXml backend)
-  backend: XmlBackend =
-    XmlBackend.ScalaXml, // Default to ScalaXml for stability; use --backend saxstax for speed
+  backend: XmlBackend = XmlBackend.ScalaXml, // ScalaXml default for stability; SaxStax opt-in
   formulaInjectionPolicy: FormulaInjectionPolicy =
     FormulaInjectionPolicy.None // Default: trust input
 )
@@ -100,10 +116,11 @@ object WriterConfig:
   val scalaXml: WriterConfig = WriterConfig(backend = XmlBackend.ScalaXml)
 
   /**
-   * SaxStax backend configuration for faster writes.
+   * SaxStax backend configuration for faster writes (beta).
    *
    * Use this for 33% faster writes when processing large files. ScalaXml is the default for
-   * stability; opt into SaxStax explicitly when performance is critical.
+   * stability; opt into SaxStax explicitly when performance is critical. SaxStax is ready for beta
+   * testing and will become the default once proven stable in production.
    */
   val saxStax: WriterConfig = WriterConfig(backend = XmlBackend.SaxStax)
 
