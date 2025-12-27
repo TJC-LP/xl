@@ -32,7 +32,7 @@ xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), ma
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
 xl-benchmarks/   → JMH performance benchmarks
-xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 72 functions, dependency graphs)
+xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 81 functions, dependency graphs)
 xl-testkit/      → Test laws, generators, helpers [future]
 ```
 
@@ -156,7 +156,7 @@ xl -f data.xlsx --sheet "Sheet1" view A1:B4
 xl -f data.xlsx view "Sheet1"!A1:B4
 ```
 
-See `docs/plan/xl-cli.md` for full command reference.
+See `docs/reference/cli.md` for full command reference.
 
 **Note on CLI Skill Documentation**: The file `.claude/skills/xl-cli/SKILL.md` uses `__XL_VERSION__` placeholders for version strings. These are intentionally **not** hardcoded—CI replaces them at build/release time. Do not replace these placeholders during version bumps.
 
@@ -268,10 +268,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 ## AI Agent Workflow
 
-1. Check `docs/plan/roadmap.md` TL;DR for available work (🔵 blue nodes)
+**Issue Tracking**: [Linear Project](https://linear.app/tjc-technologies/project/xl) | [GitHub Issues](https://github.com/TJC-LP/xl/issues)
+
+1. Check Linear for available issues (filter by `Backlog` status)
 2. Run `gtr list` to verify no conflicting worktrees
-3. Read corresponding plan doc for implementation details
-4. After PR merge: update roadmap.md, STATUS.md, LIMITATIONS.md
+3. Create worktree: `gtr create TJC-XXX-description`
+4. After PR merge: close Linear issue, update STATUS.md if needed
 
 **Module Conflict Matrix**:
 - High risk: `xl-core/Sheet.scala` (serialize work)
