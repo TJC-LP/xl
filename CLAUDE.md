@@ -268,12 +268,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 ## AI Agent Workflow
 
-**Issue Tracking**: [Linear Project](https://linear.app/tjc-technologies/project/xl) | [GitHub Issues](https://github.com/TJC-LP/xl/issues)
+**Issue Tracking**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-1. Check Linear for available issues (filter by `Backlog` status)
+1. Check GitHub Issues for available tasks
 2. Run `gtr list` to verify no conflicting worktrees
-3. Create worktree: `gtr create TJC-XXX-description`
-4. After PR merge: close Linear issue, update STATUS.md if needed
+3. Create worktree: `gtr create issue-XXX-description`
+4. After PR merge: close GitHub issue, update STATUS.md if needed
 
 **Module Conflict Matrix**:
 - High risk: `xl-core/Sheet.scala` (serialize work)

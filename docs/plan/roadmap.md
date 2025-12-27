@@ -1,84 +1,54 @@
 # XL Roadmap
 
-> **Track Progress**: [Linear Project](https://linear.app/tjc-technologies/project/xl) | [GitHub Issues](https://github.com/TJC-LP/xl/issues)
+> **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
 **Last Updated**: 2025-12-27
 
 ---
 
-## TL;DR (For AI Agents)
+## TL;DR
 
 **Current Status**: Production-ready with **81 formula functions**, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 800+ tests passing.
 
-**Next Priority**: Security hardening (TJC-480 through TJC-483) before v1.0.0 release.
-
-**Quick Start**: Check Linear for available issues, then use worktree workflow below.
+**Current Version**: 0.5.0-RC2
 
 ---
 
-## Current Focus
+## Release Roadmap
 
-### v1.0.0 Requirements
+### v0.5.0 (Current)
 
-| Priority | Issue | Title | Status |
-|----------|-------|-------|--------|
-| Urgent | [TJC-480](https://linear.app/tjc-technologies/issue/TJC-480) | Security: ZIP Bomb Detection | Backlog |
-| High | [TJC-481](https://linear.app/tjc-technologies/issue/TJC-481) | Security: Formula Injection Guards | Backlog |
-| High | [TJC-482](https://linear.app/tjc-technologies/issue/TJC-482) | Security: File Size Limits | Backlog |
-| Medium | [TJC-483](https://linear.app/tjc-technologies/issue/TJC-483) | Security: XLSM Macro Handling | Backlog |
+Core security hardening complete:
 
-### Backlog (Post-1.0)
+| Feature | Status |
+|---------|--------|
+| ZIP Bomb Detection | ✅ Done |
+| Formula Injection Guards | ✅ Done |
+| XXE Prevention | ✅ Done |
 
-| Priority | Issue | Title | Status |
-|----------|-------|-------|--------|
-| Medium | [TJC-484](https://linear.app/tjc-technologies/issue/TJC-484) | Drawing Layer (Images, Shapes) | Backlog |
-| Medium | [TJC-486](https://linear.app/tjc-technologies/issue/TJC-486) | Merged Cells in Streaming Write | Backlog |
-| Medium | [TJC-487](https://linear.app/tjc-technologies/issue/TJC-487) | Query API | Backlog |
-| Medium | [TJC-488](https://linear.app/tjc-technologies/issue/TJC-488) | Named Ranges | Backlog |
-| Low | [TJC-485](https://linear.app/tjc-technologies/issue/TJC-485) | Pivot Tables | Backlog |
-| — | [TJC-318](https://linear.app/tjc-technologies/issue/TJC-318) | Chart Model | Backlog |
+### v0.6.0 (Security Polish)
 
----
+| Feature | Status |
+|---------|--------|
+| File Size Limits (enforcement) | Planned |
+| XLSM Macro Handling | Planned |
 
-## Worktree Workflow
+### v0.7.0 (Features)
 
-Use git worktrees for isolated development. See `~/git/CLAUDE.md` for full `gtr` command reference.
+| Feature | Status |
+|---------|--------|
+| Drawing Layer (Images, Shapes) | Planned |
+| Chart Model | Planned |
+| Two-phase streaming (SST + styles) | Planned |
 
-### Starting Work
+### Future
 
-```bash
-# 1. Check for existing worktrees
-cd ~/git/xl
-gtr list
-
-# 2. Create worktree for Linear issue
-gtr create TJC-480-zip-bomb-detection
-
-# 3. Work in isolation
-cd ~/git/worktrees/xl/TJC-480-zip-bomb-detection
-# ... implement ...
-
-# 4. Create PR and clean up
-gh pr create
-gtr rm TJC-480-zip-bomb-detection
-```
-
-### Parallel Work Guidelines
-
-**Safe** (different modules):
-- Security (xl-ooxml) + Query API (xl-core)
-- Charts (xl-ooxml) + Formula enhancements (xl-evaluator)
-
-**Coordinate** (same module):
-- Multiple xl-ooxml changes → merge sequentially
-
-### Module Conflict Matrix
-
-| Module | Risk | Reason |
-|--------|------|--------|
-| `xl-core/Sheet.scala` | High | Central domain model |
-| `xl-ooxml/Worksheet.scala` | Medium | OOXML serialization hub |
-| `xl-evaluator/` | Low | Isolated formula module |
+| Feature | Status |
+|---------|--------|
+| Merged Cells in Streaming Write | Backlog |
+| Query API | Backlog |
+| Named Ranges | Backlog |
+| Pivot Tables | Backlog |
 
 ---
 
@@ -108,9 +78,8 @@ For historical details: `git log --oneline docs/plan/`
 
 ---
 
-## Adding New Work
+## Contributing
 
-1. Create Linear issue with description and acceptance criteria
-2. Add `enhancement` or `security` label
-3. Link to `xl` project
-4. Reference issue ID in commits: `fix(ooxml): implement ZIP bomb detection (TJC-480)`
+1. Check [GitHub Issues](https://github.com/TJC-LP/xl/issues) for open tasks
+2. See [CONTRIBUTING.md](../CONTRIBUTING.md) for code guidelines
+3. Reference issue number in commits: `fix(ooxml): implement feature (#123)`

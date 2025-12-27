@@ -16,9 +16,8 @@ Welcome to the XL documentation. This index helps you find what you need quickly
 
 ## Issue Tracking
 
-- **[Linear Project](https://linear.app/tjc-technologies/project/xl)** - Primary issue tracker
-- **[GitHub Issues](https://github.com/TJC-LP/xl/issues)** - Public issues and discussions
-- **[plan/roadmap.md](plan/roadmap.md)** - Roadmap summary with Linear links
+- **[GitHub Issues](https://github.com/TJC-LP/xl/issues)** - Issues and discussions
+- **[plan/roadmap.md](plan/roadmap.md)** - Release roadmap
 
 ---
 

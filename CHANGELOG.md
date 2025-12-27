@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0-RC2] - 2025-12-27
+
+### Changed
+
+- **36-39% faster streaming writes** via SaxStax backend and DirectSaxEmitter (PR #145)
+  - New `DirectSaxEmitter` bypasses intermediate XML construction
+  - Optimized attribute handling and string building
+  - Benchmarked against Apache POI with consistent improvements
+
+### Documentation
+
+- Cleaned up internal planning docs, consolidated roadmap
+- Removed 14 obsolete planning documents
+
+---
+
 ## [0.5.0-RC1] - 2025-12-25
 
 ### Added

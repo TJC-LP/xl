@@ -314,4 +314,4 @@ Suggestion: Use a different cell reference to break the cycle
 
 - [Quick Start Guide](../QUICK-START.md) — Library usage
 - [Performance Guide](performance-guide.md) — Streaming for large files
-- [Linear Issues](https://linear.app/tjc-technologies/project/xl) — CLI enhancements backlog
+- [GitHub Issues](https://github.com/TJC-LP/xl/issues) — Feature requests and bug reports
