@@ -1,6 +1,10 @@
-# xl-cli Formula Expansion Priorities
+> **📁 ARCHIVED** — This priorities document is outdated. XL now supports **81 functions** (see CLAUDE.md for the complete list). All P0 and P1 functions have been implemented.
 
-## Currently Supported (30 functions)
+# xl-cli Formula Expansion Priorities (Historical)
+
+## Status at Archive Time: 81 functions implemented
+
+### Originally Documented (30 functions)
 
 **Math:** SUM, AVERAGE, MIN, MAX, COUNT
 **Logic:** IF, AND, OR, NOT

@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2025-12-18 (Week 1 Bug Fixes - TJC-352, TJC-339, TJC-354)
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (47 functions + cross-sheet support); tables + benchmarks complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
+**Last Updated**: 2025-12-27 (Docs Cleanup)
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**81 functions** + cross-sheet support); tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -100,38 +100,20 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 ---
 
-#### 5. Column/Row Properties Not Serialized
-**Status**: Tracked but not written
-**Impact**: Column widths, row heights, hidden state lost on write
-**Plan**: [P4 Continuation - Dimension Metadata](plan/11-ooxml-mapping.md#column-row-properties)
-**Phase**: P4
+#### 5. Column/Row Properties ✅ NOW SERIALIZED
+**Status**: Complete (via DirectSaxEmitter)
+**Impact**: Column widths, row heights, hidden state, outline levels are preserved on write
 
-**Current State**:
-- `ColumnProperties(width, hidden)` and `RowProperties(height, hidden)` defined
-- `Sheet.columnProps` and `Sheet.rowProps` track state
-- Patches work: `Patch.SetColumnProperties`, `Patch.SetRowProperties`
-- BUT: Not serialized to `<cols>` or `<row ht="">` in XML
-
-**What's Missing**:
-```xml
-<!-- Should emit: -->
-<cols>
-  <col min="1" max="1" width="15.5" customWidth="1"/>
-</cols>
-
-<row r="1" ht="25.5" customHeight="1">
-  ...
-</row>
-```
-
-**Effort**: 3-4 hours
-**LOC**: ~60 changes in Worksheet.scala
+**What Works**:
+- `<cols>` element generated with width, hidden, outlineLevel, collapsed attributes
+- `<row>` attributes include ht, customHeight, hidden, outlineLevel, collapsed
+- Full round-trip preservation
 
 ---
 
 #### 6. Formula System ✅ **PRODUCTION READY**
-**Status**: Complete (WI-07, WI-08, WI-09a/b/c/d + financial functions + TJC-351 cross-sheet formulas)
-**Features**: Parser, evaluator, 47 functions (including NPV, IRR, VLOOKUP, XLOOKUP), dependency graph, cycle detection, cross-sheet references
+**Status**: Complete (WI-07, WI-08, WI-09a-h + TJC-351 cross-sheet formulas)
+**Features**: Parser, evaluator, **81 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, INDEX, MATCH, XIRR, XNPV), dependency graph, cycle detection, cross-sheet references
 **Plan**: [Formula System](plan/formula-system.md)
 **Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions + Cross-Sheet Formulas
 
@@ -167,12 +149,15 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 **Capabilities**:
 - ✅ **Parsing** (WI-07): Typed GADT AST (TExpr), FormulaParser, FormulaPrinter, round-trip laws (57 tests)
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics (58 tests)
-- ✅ **47 Built-in Functions** (WI-09a/b/c + financial functions - 78+ tests):
-  - **Aggregate** (5): SUM, COUNT, AVERAGE, MIN, MAX
-  - **Logical** (4): IF, AND, OR, NOT
-  - **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
-  - **Date** (6): TODAY, NOW, DATE, YEAR, MONTH, DAY
-  - **Financial** (3): NPV, IRR, VLOOKUP
+- ✅ **81 Built-in Functions** (WI-09a-h - 174 tests):
+  - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
+  - **Conditional** (7): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
+  - **Logical** (9): IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
+  - **Text** (11): CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, SUBSTITUTE, TEXT, VALUE
+  - **Date** (13): TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
+  - **Math** (16): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
+  - **Financial** (9): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
+  - **Lookup** (4): VLOOKUP, XLOOKUP, INDEX, MATCH
 - ✅ **Dependency Graph** (WI-09d - 52 tests):
   - Tarjan's SCC algorithm: O(V+E) cycle detection
   - Kahn's algorithm: O(V+E) topological sort
@@ -715,7 +700,7 @@ See: [plan/23-security.md](plan/23-security.md)
 | **Streaming Read** | ✅ | ✅ | XL: 55k rows/s, POI: ~40k rows/s |
 | **Multi-sheet** | ✅ | ✅ | XL: Arbitrary, POI: Sequential |
 | **Styles** | ✅ | ✅ | XL: Full in-memory; streaming uses minimal default styles |
-| **Formulas (eval)** | ✅ | ✅ | XL: 47 functions, dependency graph, cycle detection |
+| **Formulas (eval)** | ✅ | ✅ | XL: 81 functions, dependency graph, cycle detection |
 | **Tables** | ✅ | ✅ | XL: Full table support with AutoFilter, structured refs |
 | **Charts** | ❌ | ✅ | POI: Full support |
 | **Drawings** | ❌ | ✅ | POI: Images/shapes |
@@ -772,7 +757,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 - Multi-sheet workbooks
 - Core cell types and rich text
 - Styling in in-memory workflows (full styles supported)
-- Formula evaluation (47 functions, dependency graph, cycle detection)
+- Formula evaluation (81 functions, dependency graph, cycle detection)
 - Excel Tables (structured data with AutoFilter, headers, styling)
 - Performance-critical workloads (benchmarked vs POI)
 
@@ -821,7 +806,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 **Status**: ✅ Production Ready (as of WI-07/08/09)
 
 **What's implemented**:
-- 24 built-in functions (SUM, IF, VLOOKUP, NPV, IRR, etc.)
+- 81 built-in functions (SUM, SUMIF, COUNTIF, XLOOKUP, INDEX, MATCH, XIRR, XNPV, etc.)
 - Full dependency graph with cycle detection
 - Safe evaluation with `evaluateWithDependencyCheck()`
 - Type coercion and error handling

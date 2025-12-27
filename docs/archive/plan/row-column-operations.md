@@ -1,6 +1,8 @@
+> **📁 ARCHIVED** — This plan was completed. DirectSaxEmitter now serializes column properties (`<cols>`) and row properties (ht, hidden, outlineLevel, collapsed attributes). The col"A" macro and builder DSL remain as future enhancements.
+
 # Row/Column Operations — Full POI Parity
 
-**Status**: 🔵 Ready to Start
+**Status**: ✅ Complete (Core Serialization)
 **Priority**: High (POI parity, common use case)
 **Estimated Effort**: 1-1.5 days
 **Last Updated**: 2025-11-25

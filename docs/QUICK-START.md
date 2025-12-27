@@ -283,11 +283,17 @@ cyclicSheet.evaluateWithDependencyCheck() match
   case Right(_) => // Won't happen
 ```
 
-**Available Functions** (21 total):
-- **Aggregate**: SUM, COUNT, AVERAGE, MIN, MAX
-- **Logical**: IF, AND, OR, NOT
-- **Text**: CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
-- **Date**: TODAY, NOW, DATE, YEAR, MONTH, DAY
+**Available Functions** (81 total):
+- **Aggregate**: SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, VAR
+- **Conditional**: SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
+- **Logical**: IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
+- **Text**: CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, SUBSTITUTE, TEXT, VALUE
+- **Date**: TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, EDATE
+- **Math**: ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, PI
+- **Financial**: NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
+- **Lookup**: VLOOKUP, XLOOKUP, INDEX, MATCH
+
+See CLAUDE.md for the complete list.
 
 ---
 

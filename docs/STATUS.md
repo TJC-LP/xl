@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2025-11-25
+**Last Updated**: 2025-12-27
 
 ## Current State
 
@@ -42,7 +42,7 @@
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
-- ✅ **Function Library** (WI-09a/b/c complete + financial functions): 24 built-in functions (aggregate, logical, text, date, financial), extensible type class parser, evaluation API
+- ✅ **Function Library** (WI-09a-h complete): **81 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math), extensible type class parser, evaluation API
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 - ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
 
@@ -130,12 +130,16 @@
 **Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
 - ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function Library** (WI-09a/b/c + financial functions): 24 built-in functions, extensible type class parser, evaluation API, 78+ tests
-  - **Aggregate** (5): SUM, COUNT, AVERAGE, MIN, MAX
-  - **Logical** (4): IF, AND, OR, NOT
-  - **Text** (6): CONCATENATE, LEFT, RIGHT, LEN, UPPER, LOWER
-  - **Date** (6): TODAY, NOW, DATE, YEAR, MONTH, DAY
-  - **Financial** (3): NPV, IRR, VLOOKUP
+- ✅ **Function Library** (WI-09a-h complete): **81 built-in functions**, extensible type class parser, evaluation API, 174 tests
+  - **Aggregate** (9): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
+  - **Conditional** (6): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
+  - **Logical** (8): IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
+  - **Text** (12): CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, SUBSTITUTE, TEXT, VALUE
+  - **Date** (13): TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
+  - **Math** (16): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
+  - **Financial** (7): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
+  - **Lookup** (4): VLOOKUP, XLOOKUP, INDEX, MATCH
+  - **Info** (4): ROW, COLUMN, ROWS, COLUMNS, ADDRESS
   - FunctionSpec registry: macro-collected specs with extensible registry
   - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
   - Clock trait for pure date/time functions (deterministic testing)
@@ -147,7 +151,7 @@
   - Performance: Handles 10k formula cells in <10ms
 - ⚠️ Merged cells are fully supported in the in-memory OOXML path, but not emitted by streaming writers.
 - ❌ Hyperlinks not serialized.
-- ❌ Column/row properties (width, height, hidden) are parsed and tracked in the domain model but not yet serialized back into `<cols>` / `<row>` in the regenerated XML.
+- ✅ Column/row properties (width, height, hidden, outlineLevel, collapsed) are fully serialized via DirectSaxEmitter.
 
 ### Style System
 
@@ -206,7 +210,7 @@
 - ✅ P7: String interpolation Phase 1 (runtime validation for all macros)
 - ✅ P8: String interpolation Phase 2 (compile-time optimization)
 - ✅ P31: Optics, RichText, HTML export, enhanced ergonomics
-- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 24 functions, dependency graph, cycle detection
+- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 81 functions, dependency graph, cycle detection
 - ✅ **Excel Tables** (WI-10): Structured data with headers, AutoFilter, styling
 - ✅ **Benchmarks** (WI-15): JMH performance suite (XL vs POI)
 - ✅ **SAX Write** (WI-17): Fast SAX/StAX streaming write path
@@ -300,7 +304,7 @@ xl-cats-effect/src/com/tjclp/xl/io/
 ```
 
 ### Completed Modules (Additional)
-- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 24 functions, dependency graph)
+- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 81 functions, dependency graph)
 - `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)
 
 ### Not Started (Future Phases)

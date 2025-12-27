@@ -1,6 +1,8 @@
+> **📁 ARCHIVED** — This plan was completed in November 2025. DirectSaxEmitter + array sort optimization achieved 27-34% faster writes than Apache POI.
+
 # SAX Write Optimization Plan
 
-## Status: Complete - XL Beats POI
+## Status: ✅ Complete - XL Beats POI
 
 Phase 1 (DirectSaxEmitter + buffering) and Phase 2 (Array sort optimization) are complete. **XL now outperforms Apache POI on writes.**
 

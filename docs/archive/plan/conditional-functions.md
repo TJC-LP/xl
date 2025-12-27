@@ -1,6 +1,8 @@
+> **📁 ARCHIVED** — This plan was completed. SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS are all implemented in xl-evaluator (81 functions total).
+
 # WI-09f: Conditional Aggregation Functions (SUMIF/COUNTIF)
 
-**Status**: 🔵 Ready to Start
+**Status**: ✅ Complete
 **Priority**: High (80% of reporting use cases)
 **Estimated Effort**: 3-4 days
 **Last Updated**: 2025-11-25
