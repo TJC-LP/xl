@@ -35,8 +35,8 @@ enum CliCommand:
   // Analyze
   case Eval(formula: String, overrides: List[String])
   // Mutate (require -o)
-  case Put(ref: String, value: String)
-  case PutFormula(ref: String, formula: String)
+  case Put(ref: String, values: List[String])
+  case PutFormula(ref: String, formulas: List[String])
   case Style(
     range: String,
     bold: Boolean,

@@ -120,6 +120,23 @@ final case class CellRange(
       endAnchor
     )
 
+  /**
+   * Iterate over all cells in the range in row-major order.
+   *
+   * Row-major order processes cells left-to-right, top-to-bottom (Excel's native ordering). For
+   * range A1:B2, yields: A1, B1, A2, B2
+   *
+   * This ordering matches Excel's cell iteration and CSV import behavior.
+   *
+   * @return
+   *   Iterator of cell references in row-major order
+   */
+  def cellsRowMajor: Iterator[ARef] =
+    for
+      row <- (rowStart.index0 to rowEnd.index0).iterator
+      col <- (colStart.index0 to colEnd.index0).iterator
+    yield ARef.from0(col, row)
+
   /** Convert to A1:B2 notation (without anchors) */
   def toA1: String = s"${start.toA1}:${end.toA1}"
 

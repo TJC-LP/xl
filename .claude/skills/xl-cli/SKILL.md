@@ -258,6 +258,87 @@ xl -f data.xlsx -o out.xlsx put A1 --value "-100"
 
 ---
 
+## Batch Put & Fill Patterns
+
+The `put` command supports three modes automatically based on argument count:
+
+### Mode 1: Single Cell
+```bash
+xl -f file.xlsx -s Sheet1 -o out.xlsx put A1 100
+```
+
+### Mode 2: Fill Pattern
+Fill all cells in a range with the same value:
+
+```bash
+# Fill column
+xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:A10 "TBD"
+
+# Fill row
+xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:Z1 0
+
+# Fill 2D range
+xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:C3 "Empty"
+```
+
+### Mode 3: Batch Values
+Map different values to each cell (row-major order: left-to-right, top-to-bottom):
+
+```bash
+# Set header row
+xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:D1 "Name" "Age" "City" "Active"
+
+# Set column
+xl -f file.xlsx -s Sheet1 -o out.xlsx put B2:B4 100 200 300
+
+# Fill 2D grid (row-major)
+xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:B2 1 2 3 4
+# Result: A1=1, B1=2, A2=3, B2=4
+```
+
+**Important**: Value count must match cell count:
+```bash
+xl put A1:A5 1 2 3
+# Error: Range A1:A5 has 5 cells but 3 values provided
+```
+
+## Batch Formulas
+
+The `putf` command supports three modes:
+
+### Mode 1: Single Formula
+```bash
+xl -f file.xlsx -s Sheet1 -o out.xlsx putf B1 "=A1*2"
+```
+
+### Mode 2: Formula Dragging (with $ anchors)
+Single formula with intelligent reference shifting:
+
+```bash
+# Relative references shift
+xl -f file.xlsx -s Sheet1 -o out.xlsx putf B1:B10 "=A1*2"
+# B1=A1*2, B2=A2*2, B3=A3*2, ...
+
+# $ anchors control shifting
+xl -f file.xlsx -s Sheet1 -o out.xlsx putf C1:C10 "=SUM(\$A\$1:A1)"
+# C1=SUM($A$1:A1), C2=SUM($A$1:A2), ...
+```
+
+### Mode 3: Batch Formulas (explicit, no dragging)
+Different formulas for each cell:
+
+```bash
+xl -f file.xlsx -s Sheet1 -o out.xlsx putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"
+# Formulas applied as-is, no shifting
+
+# Mix constants and references
+xl -f file.xlsx -s Sheet1 -o out.xlsx putf E1:E2 "=100" "=D1*1.1"
+```
+
+**Important**: Formula count must match cell count.
+
+---
+
 ## CSV Import
 
 Import CSV data into Excel workbooks with automatic type detection.
