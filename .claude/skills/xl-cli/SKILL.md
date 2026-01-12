@@ -58,6 +58,9 @@ cd /tmp && ./install.sh
 ## Quick Reference
 
 ```bash
+# Info commands
+xl functions                           # List all 81 supported functions
+
 # Read operations
 xl -f <file> sheets                    # List sheets with stats
 xl -f <file> names                     # List defined names (named ranges)
@@ -228,6 +231,29 @@ xl -f data.xlsx -s Sheet1 -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)"
 | `A$1` | Column relative, row absolute |
 | `A1` | Fully relative (shifts both ways) |
 
+### Putting Negative Numbers
+
+For negative numbers, use the `--value` flag because `-` is interpreted as a flag prefix:
+
+```bash
+# ❌ Wrong - interpreted as flags
+xl -f data.xlsx -s Sheet1 -o out.xlsx put A1 -100
+
+# ✅ Correct - use --value flag
+xl -f data.xlsx -s Sheet1 -o out.xlsx put A1 --value "-100"
+```
+
+The `--value` flag works for all values, but it's required for negative numbers:
+
+```bash
+# Both work for non-negative values
+xl -f data.xlsx -o out.xlsx put A1 100
+xl -f data.xlsx -o out.xlsx put A1 --value "100"
+
+# Only --value works for negative values
+xl -f data.xlsx -o out.xlsx put A1 --value "-100"
+```
+
 ---
 
 ## Batch Operations
@@ -395,6 +421,37 @@ xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
 
 ---
 
+## Performance
+
+### Backend Selection
+
+Choose between two XML backends with the `--backend` flag:
+
+| Backend | Speed | Stability | Use Case |
+|---------|-------|-----------|----------|
+| `scalaxml` | Baseline | Proven | Default, general use |
+| `saxstax` | **36-39% faster** | Production-ready | Heavy writes, batch ops |
+
+**Examples**:
+```bash
+# Use faster backend for batch operations
+xl -f data.xlsx -o out.xlsx --backend saxstax batch ops.json
+
+# Create new file with faster backend
+xl new report.xlsx --backend saxstax --sheet Data --sheet Summary
+
+# Style large range with faster backend
+xl -f data.xlsx -o out.xlsx --backend saxstax style A1:Z1000 --bold
+```
+
+**Recommendation**: Use `saxstax` for:
+- Large batch operations
+- Styling many cells
+- Creating files with `new` command
+- Repeated write operations in scripts
+
+---
+
 ## Command Reference
 
 ### Global Options
@@ -404,6 +461,7 @@ xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
 | `--file <path>` | `-f` | Input file (required) |
 | `--sheet <name>` | `-s` | Sheet name |
 | `--output <path>` | `-o` | Output file (for writes) |
+| `--backend <type>` | | XML backend: scalaxml (default, stable) or saxstax (36-39% faster) |
 
 ### View Options
 
@@ -460,3 +518,9 @@ xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
 | `unmerge <range>` | Unmerge cells in range |
 | `stats <range>` | Calculate statistics for numeric values |
 | `batch [<file>]` | Apply JSON operations (`-` for stdin) |
+
+### Info Commands
+
+| Command | Description |
+|---------|-------------|
+| `functions` | List all 81 supported Excel functions (no file required) |
