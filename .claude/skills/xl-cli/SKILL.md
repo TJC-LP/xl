@@ -300,6 +300,13 @@ xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --encoding "ISO-8859-1"
 - `--new-sheet <name>` - Create new sheet for imported data
 - `--no-type-inference` - Treat all values as text (useful for ZIP codes, phone numbers)
 
+**Limitations**:
+- **Memory**: Entire CSV loaded into memory (not streamed)
+- **Recommended size**: <50k rows for optimal performance
+- **Large files**: Split CSVs before importing or use batch operations
+- **Date formats**: Only ISO 8601 (YYYY-MM-DD) supported
+- **Boolean formats**: Only true/false (case-insensitive)
+
 ## Batch Operations
 
 Apply multiple cell operations atomically from JSON input:

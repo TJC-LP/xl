@@ -1,14 +1,14 @@
 package com.tjclp.xl.cli.helpers
 
-import com.tjclp.xl.addressing.{ARef, Column, Row}
-import com.tjclp.xl.cells.CellValue
-import cats.effect.IO
-import com.github.tototoshi.csv.{CSVReader, DefaultCSVFormat}
-
 import java.nio.file.Path
 import java.time.{LocalDate, LocalDateTime}
 import java.time.format.DateTimeFormatter
 import scala.util.Try
+
+import cats.effect.IO
+import com.github.tototoshi.csv.{CSVReader, DefaultCSVFormat}
+import com.tjclp.xl.addressing.{ARef, Column, Row}
+import com.tjclp.xl.cells.CellValue
 
 /**
  * CSV parser for importing CSV files into Excel workbooks.
@@ -80,11 +80,29 @@ object CsvParser:
               if options.inferTypes then inferColumnTypes(dataRows, options.sampleRows)
               else Vector.fill(dataRows.headOption.map(_.length).getOrElse(0))(ColumnType.Text)
 
+            // Pre-check CSV dimensions fit within Excel bounds
+            val csvRows = dataRows.length
+            val csvCols = dataRows.headOption.map(_.length).getOrElse(0)
+            val endCol = startRef.col.index0 + csvCols - 1
+            val endRow = startRef.row.index0 + csvRows - 1
+
+            if endCol > 16383 then
+              throw new Exception(
+                s"CSV exceeds Excel column limit: start=${startRef.col.toLetter}, " +
+                  s"columns=$csvCols, end=${Column.from0(endCol).toLetter} (max: XFD)"
+              )
+
+            if endRow > 1048575 then
+              throw new Exception(
+                s"CSV exceeds Excel row limit: start=${startRef.row.index1}, " +
+                  s"rows=$csvRows, end=${endRow + 1} (max: 1048576)"
+              )
+
             // Map each CSV cell to (ARef, CellValue)
             val updates = scala.collection.mutable.ArrayBuffer[(ARef, CellValue)]()
 
-            dataRows.zipWithIndex.foreach { (row, rowIdx) =>
-              row.zipWithIndex.foreach { (value, colIdx) =>
+            dataRows.zipWithIndex.foreach { (dataRow, rowIdx) =>
+              dataRow.zipWithIndex.foreach { (value, colIdx) =>
                 val ref = ARef.from0(
                   startRef.col.index0 + colIdx,
                   startRef.row.index0 + rowIdx
@@ -120,11 +138,13 @@ object CsvParser:
       (0 until maxCols).map { colIdx =>
         // Get all values for this column from sample rows
         val columnValues = sampleRows.flatMap(_.lift(colIdx))
+        val nonEmptyValues = columnValues.filter(_.trim.nonEmpty)
 
-        // Check types in priority order
-        if columnValues.forall(isNumber) then ColumnType.Number
-        else if columnValues.forall(isBoolean) then ColumnType.Boolean
-        else if columnValues.forall(isDate) then ColumnType.Date
+        // Only infer type if we have non-empty values (prevents all-empty columns from being typed as Number)
+        if nonEmptyValues.isEmpty then ColumnType.Text
+        else if nonEmptyValues.forall(isNumber) then ColumnType.Number
+        else if nonEmptyValues.forall(isBoolean) then ColumnType.Boolean
+        else if nonEmptyValues.forall(isDate) then ColumnType.Date
         else ColumnType.Text
       }.toVector
 

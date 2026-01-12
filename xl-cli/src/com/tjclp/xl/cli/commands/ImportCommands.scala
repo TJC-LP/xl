@@ -1,14 +1,13 @@
 package com.tjclp.xl.cli.commands
 
+import java.nio.file.{Path, Paths}
+
 import cats.effect.IO
-import com.tjclp.xl.{Workbook, Sheet}
-import com.tjclp.xl.{given} // Import given instances for CellWriter
+import com.tjclp.xl.{Workbook, Sheet, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cli.helpers.CsvParser
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
-
-import java.nio.file.{Path, Paths}
 
 /**
  * Command handlers for CSV import operations.
@@ -155,8 +154,14 @@ Saved: ${outputPath}"""
         // Parse CSV starting at A1
         updates <- CsvParser.parseCsv(csvPath, ARef.from0(0, 0), options)
 
+        // Validate sheet name using safe constructor
+        sheetNameValidated <- SheetName(sheetName) match
+          case Right(name) => IO.pure(name)
+          case Left(err) =>
+            IO.raiseError(new Exception(s"Invalid sheet name '$sheetName': $err"))
+
         // Create new sheet with CSV data
-        newSheet = Sheet(SheetName.unsafe(sheetName)).put(updates*)
+        newSheet = Sheet(sheetNameValidated).put(updates*)
 
         // Add sheet to workbook
         updatedWb = wb.put(newSheet)

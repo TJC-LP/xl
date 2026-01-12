@@ -380,7 +380,10 @@ object Main
     Opts.flag("no-type-inference", "Treat all values as text").orFalse
 
   val importCmd: Opts[CliCommand] =
-    Opts.subcommand("import", "Import CSV data into workbook") {
+    Opts.subcommand(
+      "import",
+      "Import CSV data (loads entire file into memory, <50k rows recommended)"
+    ) {
       (
         csvPathArg,
         startRefOpt,
