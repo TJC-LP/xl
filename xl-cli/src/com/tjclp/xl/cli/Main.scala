@@ -13,6 +13,7 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.cli.commands.{
   CellCommands,
+  ImportCommands,
   ReadCommands,
   SheetCommands,
   WorkbookCommands,
@@ -66,7 +67,7 @@ object Main
 
     // Sheet-level write: --file, --sheet, and --output (required)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
@@ -364,6 +365,36 @@ object Main
       batchArg.map(CliCommand.Batch.apply)
     }
 
+  // --- Import command ---
+  private val csvPathArg = Opts.argument[String]("csv-file")
+  private val startRefOpt = Opts.argument[String]("start-ref").orNone
+  private val delimiterOpt =
+    Opts.option[Char]("delimiter", "Field separator (default: comma)").withDefault(',')
+  private val noHeaderOpt =
+    Opts.flag("no-header", "First row is data, not headers").orFalse
+  private val encodingOpt =
+    Opts.option[String]("encoding", "Input encoding (default: UTF-8)").withDefault("UTF-8")
+  private val newSheetImportOpt =
+    Opts.option[String]("new-sheet", "Create new sheet with this name").orNone
+  private val noTypeInferenceOpt =
+    Opts.flag("no-type-inference", "Treat all values as text").orFalse
+
+  val importCmd: Opts[CliCommand] =
+    Opts.subcommand("import", "Import CSV data into workbook") {
+      (
+        csvPathArg,
+        startRefOpt,
+        delimiterOpt,
+        noHeaderOpt,
+        encodingOpt,
+        newSheetImportOpt,
+        noTypeInferenceOpt
+      )
+        .mapN { (path, ref, delim, noHeader, enc, newSh, noInfer) =>
+          CliCommand.Import(path, ref, delim, !noHeader, enc, newSh, noInfer)
+        }
+    }
+
   // --- Sheet management commands ---
   private val sheetNameArg = Opts.argument[String]("name")
   private val afterOpt =
@@ -649,6 +680,23 @@ object Main
 
     case CliCommand.Batch(source) =>
       requireOutput(outputOpt, backendOpt)(WriteCommands.batch(wb, sheetOpt, source, _, _))
+
+    case CliCommand.Import(csvPath, startRefOpt, delim, hasHeader, enc, newSheetOpt, noInfer) =>
+      requireOutput(outputOpt, backendOpt) { (outputPath, writerConfig) =>
+        ImportCommands.importCsv(
+          wb,
+          sheetOpt,
+          csvPath,
+          startRefOpt,
+          delim,
+          hasHeader,
+          enc,
+          newSheetOpt,
+          noInfer,
+          outputPath,
+          writerConfig
+        )
+      }
 
     // Sheet management commands
     case CliCommand.AddSheet(name, afterOpt, beforeOpt) =>

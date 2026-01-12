@@ -61,6 +61,15 @@ enum CliCommand:
   case RowOp(row: Int, height: Option[Double], hide: Boolean, show: Boolean)
   case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean)
   case Batch(source: String) // "-" for stdin or file path
+  case Import(
+    csvPath: String,
+    startRef: Option[String],
+    delimiter: Char,
+    hasHeader: Boolean,
+    encoding: String,
+    newSheet: Option[String],
+    noTypeInference: Boolean
+  )
   // Sheet management
   case AddSheet(name: String, after: Option[String], before: Option[String])
   case RemoveSheet(name: String)

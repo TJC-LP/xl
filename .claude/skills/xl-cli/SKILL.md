@@ -79,6 +79,8 @@ xl -f <file> -s <sheet> view <range> --format png --raster-output out.png
 # Write operations (require -o)
 xl -f <file> -s <sheet> -o <out> put <ref> <value>
 xl -f <file> -s <sheet> -o <out> putf <ref> <formula>
+xl -f <file> -s <sheet> -o <out> import <csv-file> <ref>
+xl -f <file> -o <out> import <csv-file> --new-sheet "Data"
 
 # Style operations (require -o)
 xl -f <file> -s <sheet> -o <out> style <range> --bold --bg yellow
@@ -255,6 +257,48 @@ xl -f data.xlsx -o out.xlsx put A1 --value "-100"
 ```
 
 ---
+
+## CSV Import
+
+Import CSV data into Excel workbooks with automatic type detection.
+
+```bash
+# Import to existing sheet at A1
+xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1
+
+# Import at specific position
+xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv B5
+
+# Import to new sheet
+xl -f file.xlsx -o out.xlsx import data.csv --new-sheet "Imported Data"
+
+# Custom delimiter (semicolon, tab, etc.)
+xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --delimiter ";"
+
+# Treat first row as data (not headers)
+xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --no-header
+
+# Force all values to text (disable type inference)
+xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --no-type-inference
+
+# Custom encoding
+xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --encoding "ISO-8859-1"
+```
+
+**Type Inference**: Automatically detects and converts:
+- **Numbers**: `100`, `29.99`, `-5.5` → Number type with Decimal format
+- **Booleans**: `true`, `false` (case-insensitive) → Boolean type
+- **Dates**: `2024-01-15` (ISO 8601 format) → DateTime type with Date format
+- **Text**: Everything else
+
+**Column-based inference**: Samples first 10 rows per column. If all values match a type, assigns that type; otherwise defaults to Text.
+
+**Options**:
+- `--delimiter <char>` - Field separator (default: `,`)
+- `--no-header` - First row is data, not headers
+- `--encoding <enc>` - Input encoding (default: UTF-8)
+- `--new-sheet <name>` - Create new sheet for imported data
+- `--no-type-inference` - Treat all values as text (useful for ZIP codes, phone numbers)
 
 ## Batch Operations
 
@@ -518,6 +562,7 @@ xl -f data.xlsx -o out.xlsx --backend saxstax style A1:Z1000 --bold
 | `unmerge <range>` | Unmerge cells in range |
 | `stats <range>` | Calculate statistics for numeric values |
 | `batch [<file>]` | Apply JSON operations (`-` for stdin) |
+| `import <csv-file> [<ref>]` | Import CSV data with automatic type detection |
 
 ### Info Commands
 
