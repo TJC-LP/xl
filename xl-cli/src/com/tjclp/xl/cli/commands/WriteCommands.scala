@@ -3,6 +3,7 @@ package com.tjclp.xl.cli.commands
 import java.nio.file.Path
 
 import cats.effect.IO
+import cats.implicits.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
@@ -30,35 +31,136 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
 object WriteCommands:
 
   /**
-   * Write value to cell(s).
+   * Validate that the count of values/formulas matches the cell count in a range.
+   *
+   * Returns None if valid, Some(Exception) if counts mismatch with actionable error message.
+   */
+  private def validateCountMatch(
+    command: String,
+    range: CellRange,
+    cellCount: Int,
+    providedCount: Int,
+    itemType: String
+  ): Option[Exception] =
+    if cellCount == providedCount then None
+    else
+      val suggestion =
+        if providedCount == 1 then
+          s"Hint: Use 1 $itemType for fill pattern: `$command ${range.toA1} <$itemType>`"
+        else if providedCount < cellCount then
+          s"Hint: Provide exactly $cellCount ${itemType}s to match range size."
+        else s"Hint: Range has $cellCount cells but you provided $providedCount ${itemType}s."
+
+      Some(
+        new Exception(
+          s"Range ${range.toA1} has $cellCount cells but $providedCount ${itemType}s provided. " +
+            suggestion
+        )
+      )
+
+  /**
+   * Write value(s) to cell(s).
+   *
+   * Supports three modes:
+   *   1. Single cell: put A1 100
+   *   2. Fill pattern: put A1:A10 100 (all cells get same value)
+   *   3. Batch values: put A1:A3 1 2 3 (values map 1:1, row-major)
    */
   def put(
     wb: Workbook,
     sheetOpt: Option[Sheet],
     refStr: String,
-    valueStr: String,
+    values: List[String],
     outputPath: Path,
     config: WriterConfig
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "put")
       (targetSheet, refOrRange) = resolved
-      value = ValueParser.parseValue(valueStr)
-      // Support both single cells and ranges
-      (updatedSheet, cellCount) = refOrRange match
-        case Left(ref) =>
-          (targetSheet.put(ref, value), 1)
-        case Right(range) =>
-          // Fill all cells in range with same value
-          val cells = range.cells.toList
-          val sheet = cells.foldLeft(targetSheet)((s, ref) => s.put(ref, value))
-          (sheet, cells.size)
-      updatedWb = wb.put(updatedSheet)
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
-    yield refOrRange match
-      case Left(ref) => s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
-      case Right(range) =>
-        s"Applied value to $cellCount cells in ${range.toA1}\nSaved: $outputPath"
+
+      // Determine mode based on ref type and value count
+      result <- (refOrRange, values) match
+        case (Left(ref), List(singleValue)) =>
+          // Mode 1: Single cell
+          putSingleCell(wb, targetSheet, ref, singleValue, outputPath, config)
+
+        case (Right(range), List(singleValue)) =>
+          // Mode 2: Fill pattern
+          putFillPattern(wb, targetSheet, range, singleValue, outputPath, config)
+
+        case (Right(range), multipleValues) =>
+          // Mode 3: Batch values (validate count matches)
+          putBatchValues(wb, targetSheet, range, multipleValues, outputPath, config)
+
+        case (Left(ref), multipleValues) =>
+          IO.raiseError(
+            new Exception(
+              s"Cannot put ${multipleValues.length} values to single cell ${ref.toA1}. " +
+                "Use a range (e.g., A1:A3) for batch operations."
+            )
+          )
+
+        case (_, Nil) =>
+          IO.raiseError(new Exception("No values provided for put command"))
+    yield result
+
+  /** Mode 1: Put single value to single cell */
+  private def putSingleCell(
+    wb: Workbook,
+    sheet: Sheet,
+    ref: com.tjclp.xl.addressing.ARef,
+    valueStr: String,
+    outputPath: Path,
+    config: WriterConfig
+  ): IO[String] =
+    val value = ValueParser.parseValue(valueStr)
+    val updatedSheet = sheet.put(ref, value)
+    val updatedWb = wb.put(updatedSheet)
+    ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
+      s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
+    }
+
+  /** Mode 2: Fill all cells in range with same value */
+  private def putFillPattern(
+    wb: Workbook,
+    sheet: Sheet,
+    range: CellRange,
+    valueStr: String,
+    outputPath: Path,
+    config: WriterConfig
+  ): IO[String] =
+    val value = ValueParser.parseValue(valueStr)
+    val cellCount = range.cellCount
+    val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => s.put(ref, value))
+    val updatedWb = wb.put(updatedSheet)
+    ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
+      s"Filled $cellCount cells in ${range.toA1} with value ${value}\nSaved: $outputPath"
+    }
+
+  /** Mode 3: Put different values to each cell (row-major order) */
+  private def putBatchValues(
+    wb: Workbook,
+    sheet: Sheet,
+    range: CellRange,
+    values: List[String],
+    outputPath: Path,
+    config: WriterConfig
+  ): IO[String] =
+    val cellCount = range.cellCount.toInt
+    validateCountMatch("put", range, cellCount, values.length, "value") match
+      case Some(error) => IO.raiseError(error)
+      case None =>
+        val updates = range.cellsRowMajor
+          .zip(values.iterator)
+          .map { (ref, valueStr) =>
+            (ref, ValueParser.parseValue(valueStr))
+          }
+          .toVector
+        val updatedSheet = sheet.put(updates*)
+        val updatedWb = wb.put(updatedSheet)
+        ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
+          s"Put ${values.length} values to ${range.toA1} (row-major)\nSaved: $outputPath"
+        }
 
   /**
    * Write formula to cell(s).
@@ -67,87 +169,172 @@ object WriteCommands:
     wb: Workbook,
     sheetOpt: Option[Sheet],
     refStr: String,
-    formulaStr: String,
+    formulas: List[String],
     outputPath: Path,
     config: WriterConfig
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "putf")
       (targetSheet, refOrRange) = resolved
-      formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
-      // Parse formula to AST for dragging support
-      fullFormula = s"=$formula"
+
+      // Determine mode based on ref type and formula count
+      result <- (refOrRange, formulas) match
+        case (Left(ref), List(singleFormula)) =>
+          // Mode 1: Single cell
+          putfSingleCell(wb, targetSheet, ref, singleFormula, outputPath, config)
+
+        case (Right(range), List(singleFormula)) =>
+          // Mode 2: Formula dragging (existing behavior with $ anchors)
+          putfFormulaDragging(wb, targetSheet, range, singleFormula, outputPath, config)
+
+        case (Right(range), multipleFormulas) =>
+          // Mode 3: Batch formulas (no dragging, apply as-is)
+          putfBatchFormulas(wb, targetSheet, range, multipleFormulas, outputPath, config)
+
+        case (Left(ref), multipleFormulas) =>
+          IO.raiseError(
+            new Exception(
+              s"Cannot put ${multipleFormulas.length} formulas to single cell ${ref.toA1}. " +
+                "Use a range (e.g., B1:B3) for batch formula operations."
+            )
+          )
+
+        case (_, Nil) =>
+          IO.raiseError(new Exception("No formulas provided for putf command"))
+    yield result
+
+  /** Mode 1: Put single formula to single cell */
+  private def putfSingleCell(
+    wb: Workbook,
+    sheet: Sheet,
+    ref: com.tjclp.xl.addressing.ARef,
+    formulaStr: String,
+    outputPath: Path,
+    config: WriterConfig
+  ): IO[String] =
+    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val fullFormula = s"=$formula"
+    for
       parsedExpr <- IO.fromEither(
         FormulaParser.parse(fullFormula).left.map { e =>
           new Exception(ParseError.formatWithContext(e, fullFormula))
         }
       )
-      // Apply formula with Excel-style dragging
-      (updatedSheet, cellCount) = refOrRange match
-        case Left(ref) =>
-          // Single cell: apply formula as-is, evaluate and cache result
-          val cachedValue =
-            SheetEvaluator.evaluateFormula(targetSheet)(fullFormula, workbook = Some(wb)).toOption
-          val sheetWithFormula = targetSheet.put(ref, CellValue.Formula(formula, cachedValue))
-          // Auto-apply date format if formula involves date functions (matches Excel behavior)
-          // Merge with existing style to preserve font, fill, border, etc.
-          val finalSheet =
-            if TExpr.containsDateFunction(parsedExpr) then
-              val numFmt =
-                if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
-              val existingStyle = sheetWithFormula.cells
-                .get(ref)
-                .flatMap(_.styleId)
-                .flatMap(sheetWithFormula.styleRegistry.get)
-                .getOrElse(CellStyle.default)
-              val mergedStyle = existingStyle.withNumFmt(numFmt)
-              styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
-            else sheetWithFormula
-          (finalSheet, 1)
-        case Right(range) =>
-          // Range: apply formula with shifting based on anchor modes
-          val startRef = range.start
-          val startCol = Column.index0(startRef.col)
-          val startRow = Row.index0(startRef.row)
-          val cells = range.cells.toList
-          // Evaluate against current sheet state (not final state) so formulas can reference
-          // earlier cells in the drag range. This is O(n²) but correct for cumulative formulas
-          // like =SUM($A$1:A2) dragged down multiple rows.
-          val sheetWithFormulas = cells.foldLeft(targetSheet) { (s, targetRef) =>
-            val colDelta = Column.index0(targetRef.col) - startCol
-            val rowDelta = Row.index0(targetRef.row) - startRow
-            val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
-            val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
-            // Evaluate against current sheet state and cache result
-            val fullShiftedFormula = s"=$shiftedFormula"
-            val cachedValue =
-              SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
-            s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
-          }
-          // Auto-apply date format to entire range if formula involves date functions
-          // Merge with each cell's existing style to preserve font, fill, border, etc.
-          val finalSheet =
-            if TExpr.containsDateFunction(parsedExpr) then
-              val numFmt =
-                if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
-              cells.foldLeft(sheetWithFormulas) { (s, cellRef) =>
-                val existingStyle = s.cells
-                  .get(cellRef)
-                  .flatMap(_.styleId)
-                  .flatMap(s.styleRegistry.get)
-                  .getOrElse(CellStyle.default)
-                val mergedStyle = existingStyle.withNumFmt(numFmt)
-                styleSyntax.withRangeStyle(s)(CellRange(cellRef, cellRef), mergedStyle)
-              }
-            else sheetWithFormulas
-          (finalSheet, cells.size)
+      cachedValue = SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+      sheetWithFormula = sheet.put(ref, CellValue.Formula(formula, cachedValue))
+      // Auto-apply date format if formula involves date functions
+      finalSheet =
+        if TExpr.containsDateFunction(parsedExpr) then
+          val numFmt =
+            if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
+          val existingStyle = sheetWithFormula.cells
+            .get(ref)
+            .flatMap(_.styleId)
+            .flatMap(sheetWithFormula.styleRegistry.get)
+            .getOrElse(CellStyle.default)
+          val mergedStyle = existingStyle.withNumFmt(numFmt)
+          styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
+        else sheetWithFormula
+      updatedWb = wb.put(finalSheet)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+    yield s"${Format.putSuccess(ref, CellValue.Formula(formula))}\nSaved: $outputPath"
+
+  /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
+  private def putfFormulaDragging(
+    wb: Workbook,
+    sheet: Sheet,
+    range: CellRange,
+    formulaStr: String,
+    outputPath: Path,
+    config: WriterConfig
+  ): IO[String] =
+    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val fullFormula = s"=$formula"
+    for
+      parsedExpr <- IO.fromEither(
+        FormulaParser.parse(fullFormula).left.map { e =>
+          new Exception(ParseError.formatWithContext(e, fullFormula))
+        }
+      )
+      // Apply formula with Excel-style dragging (existing logic)
+      updatedSheet = putfDraggingLogic(sheet, wb, range, formula, parsedExpr)
       updatedWb = wb.put(updatedSheet)
       _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
-    yield refOrRange match
-      case Left(ref) =>
-        s"${Format.putSuccess(ref, CellValue.Formula(formula))}\nSaved: $outputPath"
-      case Right(range) =>
-        s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\nSaved: $outputPath"
+      cellCount = range.cellCount
+    yield s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\nSaved: $outputPath"
+
+  /** Mode 3: Batch formulas (no dragging, apply as-is) */
+  private def putfBatchFormulas(
+    wb: Workbook,
+    sheet: Sheet,
+    range: CellRange,
+    formulas: List[String],
+    outputPath: Path,
+    config: WriterConfig
+  ): IO[String] =
+    val cellCount = range.cellCount.toInt
+    validateCountMatch("putf", range, cellCount, formulas.length, "formula") match
+      case Some(error) => IO.raiseError(error)
+      case None =>
+        for
+          // Parse and apply each formula (using iterator to avoid toList)
+          updates <- range.cellsRowMajor.zip(formulas.iterator).toList.traverse {
+            (ref, formulaStr) =>
+              val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+              val fullFormula = s"=$formula"
+              IO.fromEither(
+                FormulaParser.parse(fullFormula).left.map { e =>
+                  new Exception(
+                    s"Formula for ${ref.toA1}: ${ParseError.formatWithContext(e, fullFormula)}"
+                  )
+                }
+              ).map { _ =>
+                val cachedValue =
+                  SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+                (ref, CellValue.Formula(formula, cachedValue))
+              }
+          }
+          updatedSheet = sheet.put(updates*)
+          updatedWb = wb.put(updatedSheet)
+          _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+        yield s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)\nSaved: $outputPath"
+
+  /** Helper: Apply formula dragging logic (extracted from original putFormula) */
+  private def putfDraggingLogic(
+    sheet: Sheet,
+    wb: Workbook,
+    range: CellRange,
+    formula: String,
+    parsedExpr: TExpr[?]
+  ): Sheet =
+    val startRef = range.start
+    val startCol = Column.index0(startRef.col)
+    val startRow = Row.index0(startRef.row)
+    val cells = range.cells.toList
+    // Apply formula with shifting (existing logic)
+    val sheetWithFormulas = cells.foldLeft(sheet) { (s, targetRef) =>
+      val colDelta = Column.index0(targetRef.col) - startCol
+      val rowDelta = Row.index0(targetRef.row) - startRow
+      val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
+      val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+      val fullShiftedFormula = s"=$shiftedFormula"
+      val cachedValue =
+        SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
+      s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
+    }
+    // Auto-apply date format if needed
+    if TExpr.containsDateFunction(parsedExpr) then
+      val numFmt = if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
+      cells.foldLeft(sheetWithFormulas) { (s, cellRef) =>
+        val existingStyle = s.cells
+          .get(cellRef)
+          .flatMap(_.styleId)
+          .flatMap(s.styleRegistry.get)
+          .getOrElse(CellStyle.default)
+        val mergedStyle = existingStyle.withNumFmt(numFmt)
+        styleSyntax.withRangeStyle(s)(CellRange(cellRef, cellRef), mergedStyle)
+      }
+    else sheetWithFormulas
 
   /**
    * Apply styling to cells.

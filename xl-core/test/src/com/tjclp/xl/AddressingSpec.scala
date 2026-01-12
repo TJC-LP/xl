@@ -276,3 +276,106 @@ class AddressingSpec extends ScalaCheckSuite:
     val fullRow = CellRange.parse("1:1").toOption.get
     assertEquals(fullRow.cellCount, 16384L) // Max columns
   }
+
+  // ========== cellsRowMajor Tests ==========
+
+  property("CellRange.cellsRowMajor count matches cellCount") {
+    forAll { (range: CellRange) =>
+      // Verify iterator yields exactly cellCount cells
+      val actualCount = range.cellsRowMajor.size.toLong
+      assertEquals(actualCount, range.cellCount)
+      true
+    }
+  }
+
+  property("CellRange.cellsRowMajor yields unique cells") {
+    forAll { (range: CellRange) =>
+      // Verify no duplicate cells in iteration
+      val cells = range.cellsRowMajor.toSet
+      assertEquals(cells.size.toLong, range.cellCount)
+      true
+    }
+  }
+
+  property("CellRange.cellsRowMajor all cells within bounds") {
+    forAll { (range: CellRange) =>
+      // Verify all cells are within the range bounds
+      range.cellsRowMajor.forall { ref =>
+        ref.col.index0 >= range.colStart.index0 &&
+        ref.col.index0 <= range.colEnd.index0 &&
+        ref.row.index0 >= range.rowStart.index0 &&
+        ref.row.index0 <= range.rowEnd.index0
+      }
+    }
+  }
+
+  test("cellsRowMajor: 1D column range (A1:A3)") {
+    val range = CellRange(ARef.from0(0, 0), ARef.from0(0, 2))
+    val cells = range.cellsRowMajor.toList
+
+    assertEquals(cells.length, 3)
+    assertEquals(cells(0), ARef.from0(0, 0)) // A1
+    assertEquals(cells(1), ARef.from0(0, 1)) // A2
+    assertEquals(cells(2), ARef.from0(0, 2)) // A3
+  }
+
+  test("cellsRowMajor: 1D row range (A1:C1)") {
+    val range = CellRange(ARef.from0(0, 0), ARef.from0(2, 0))
+    val cells = range.cellsRowMajor.toList
+
+    assertEquals(cells.length, 3)
+    assertEquals(cells(0), ARef.from0(0, 0)) // A1
+    assertEquals(cells(1), ARef.from0(1, 0)) // B1
+    assertEquals(cells(2), ARef.from0(2, 0)) // C1
+  }
+
+  test("cellsRowMajor: 2D range row-major order (A1:B2)") {
+    val range = CellRange(ARef.from0(0, 0), ARef.from0(1, 1))
+    val cells = range.cellsRowMajor.toList
+
+    assertEquals(cells.length, 4)
+    // Row-major: row 0 first (A1, B1), then row 1 (A2, B2)
+    assertEquals(cells(0), ARef.from0(0, 0)) // A1
+    assertEquals(cells(1), ARef.from0(1, 0)) // B1
+    assertEquals(cells(2), ARef.from0(0, 1)) // A2
+    assertEquals(cells(3), ARef.from0(1, 1)) // B2
+  }
+
+  test("cellsRowMajor: 3x3 range correct ordering") {
+    val range = CellRange(ARef.from0(0, 0), ARef.from0(2, 2))
+    val cells = range.cellsRowMajor.toList
+
+    assertEquals(cells.length, 9)
+    // Row 0: A1, B1, C1
+    assertEquals(cells(0), ARef.from0(0, 0))
+    assertEquals(cells(1), ARef.from0(1, 0))
+    assertEquals(cells(2), ARef.from0(2, 0))
+    // Row 1: A2, B2, C2
+    assertEquals(cells(3), ARef.from0(0, 1))
+    assertEquals(cells(4), ARef.from0(1, 1))
+    assertEquals(cells(5), ARef.from0(2, 1))
+    // Row 2: A3, B3, C3
+    assertEquals(cells(6), ARef.from0(0, 2))
+    assertEquals(cells(7), ARef.from0(1, 2))
+    assertEquals(cells(8), ARef.from0(2, 2))
+  }
+
+  test("cellsRowMajor: offset range (B2:C3)") {
+    val range = CellRange(ARef.from0(1, 1), ARef.from0(2, 2))
+    val cells = range.cellsRowMajor.toList
+
+    assertEquals(cells.length, 4)
+    // Row-major from B2
+    assertEquals(cells(0), ARef.from0(1, 1)) // B2
+    assertEquals(cells(1), ARef.from0(2, 1)) // C2
+    assertEquals(cells(2), ARef.from0(1, 2)) // B3
+    assertEquals(cells(3), ARef.from0(2, 2)) // C3
+  }
+
+  test("cellsRowMajor: single cell range") {
+    val range = CellRange(ARef.from0(5, 10), ARef.from0(5, 10))
+    val cells = range.cellsRowMajor.toList
+
+    assertEquals(cells.length, 1)
+    assertEquals(cells(0), ARef.from0(5, 10))
+  }

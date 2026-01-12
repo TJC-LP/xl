@@ -274,16 +274,22 @@ object Main
 
   // --- Mutate (require -o) ---
 
-  // Value argument: prefers --value flag over positional (needed for negative numbers)
-  private val valueArgOrOpt: Opts[String] =
-    valueOpt orElse valueArg
+  // Variadic values for put (supports single value, fill pattern, or batch values)
+  private val valuesArg = Opts.arguments[String]("value")
 
-  val putCmd: Opts[CliCommand] = Opts.subcommand("put", "Write value to cell") {
-    (refArg, valueArgOrOpt).mapN(CliCommand.Put.apply)
+  val putCmd: Opts[CliCommand] = Opts.subcommand("put", "Write value(s) to cell or range") {
+    // Support both positional args and --value flag (for negative numbers)
+    val valuesOrOpt = valueOpt.map(v => List(v)) orElse valuesArg.map(_.toList)
+    (refArg, valuesOrOpt).mapN(CliCommand.Put.apply)
   }
 
-  val putfCmd: Opts[CliCommand] = Opts.subcommand("putf", "Write formula to cell") {
-    (refArg, valueArgOrOpt).mapN(CliCommand.PutFormula.apply)
+  // Variadic formulas for putf (supports single formula, dragging, or batch formulas)
+  private val formulasArg = Opts.arguments[String]("formula")
+
+  val putfCmd: Opts[CliCommand] = Opts.subcommand("putf", "Write formula(s) to cell or range") {
+    (refArg, formulasArg).mapN { (ref, formulas) =>
+      CliCommand.PutFormula(ref, formulas.toList)
+    }
   }
 
   // --- Style command options ---
@@ -614,12 +620,12 @@ object Main
       ReadCommands.eval(wb, sheetOpt, formulaStr, overrides)
 
     // Write commands (require output)
-    case CliCommand.Put(refStr, valueStr) =>
-      requireOutput(outputOpt, backendOpt)(WriteCommands.put(wb, sheetOpt, refStr, valueStr, _, _))
+    case CliCommand.Put(refStr, values) =>
+      requireOutput(outputOpt, backendOpt)(WriteCommands.put(wb, sheetOpt, refStr, values, _, _))
 
-    case CliCommand.PutFormula(refStr, formulaStr) =>
+    case CliCommand.PutFormula(refStr, formulas) =>
       requireOutput(outputOpt, backendOpt)(
-        WriteCommands.putFormula(wb, sheetOpt, refStr, formulaStr, _, _)
+        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _)
       )
 
     case CliCommand.Style(
