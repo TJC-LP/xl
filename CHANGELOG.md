@@ -11,7 +11,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-01-12
+
+### Fixed
+
+- **SVG text overflow**: Added clip-path constraints to prevent text from overflowing beyond cell boundaries in SVG/PNG exports (GH-146)
+  - Text properly clips when adjacent cells have content
+  - Maintains Excel-like overflow behavior into empty cells
+  - All raster formats (PNG, JPEG, WebP, PDF) benefit from fix
+
+### Documentation
+
+- **CLI skill 100% parity**: Added missing documentation for `functions` command, `--backend` flag, `--value` flag, and performance guide
+  - Achieves complete coverage of all CLI features
+  - Better guidance for LLM agents using xl
+
+### Changed
+
+- **36-39% faster streaming writes** via SaxStax backend and DirectSaxEmitter (PR #145)
+  - New `DirectSaxEmitter` bypasses intermediate XML construction
+  - Optimized attribute handling and string building
+  - Benchmarked against Apache POI with consistent improvements
+
+### Added
+
+- **34 new formula functions** bringing total to 81:
+  - **Financial (TVM)**: PMT, FV, PV, RATE, NPER - time value of money calculations
+  - **Statistical**: MEDIAN, STDEV, STDEVP, VAR, VARP - descriptive statistics
+  - **Type checking**: ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR - value type inspection
+  - **Conditional aggregation**: AVERAGEIF, AVERAGEIFS - conditional averaging
+  - **Count/Reference**: COUNTBLANK, ROW, COLUMN, ROWS, COLUMNS, ADDRESS - cell reference utilities
+  - **Math**: SQRT, MOD, POWER, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, INT - numeric operations
+
+- **Variadic aggregate functions**: SUM, COUNT, AVERAGE, MIN, MAX, MEDIAN, STDEV, VAR now support Excel-compatible variadic syntax
+  - `=SUM(1,2,3)` - individual values
+  - `=SUM(A1:A5, B1:B5)` - multiple ranges
+  - `=SUM(A1, 5, B1:B3)` - mixed ranges and values
+
+- **Dynamic `xl functions` command**: Now shows all 81 functions from registry instead of hardcoded list
+- **Formula system refactored**: Reorganized into modular traits for better maintainability
+
+### Security
+
+- **Formula injection guards** complete (WI-31)
+- **ZIP bomb detection** complete (WI-30)
+- **XXE prevention** verified
+
+---
+
 ## [0.5.0-RC2] - 2025-12-27
+
+### Changed
+
+- **36-39% faster streaming writes** via SaxStax backend and DirectSaxEmitter (PR #145)
+  - New `DirectSaxEmitter` bypasses intermediate XML construction
+  - Optimized attribute handling and string building
+  - Benchmarked against Apache POI with consistent improvements
+
+### Documentation
+
+- Cleaned up internal planning docs, consolidated roadmap
+- Removed 14 obsolete planning documents
+
+---
+
+## [0.5.0-RC1] - 2025-12-25
 
 ### Changed
 
