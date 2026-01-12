@@ -895,3 +895,87 @@ class SvgRendererSpec extends FunSuite:
     // Default cells should have white background
     assert(svg.contains("""fill="#FFFFFF""""), s"No fill should render as white, got: $svg")
   }
+
+  // ========== Text Clipping Tests (GH-146) ==========
+
+  test("toSvg: text clipping prevents overflow beyond cell boundary") {
+    // Test case from GH-146: text should be clipped when adjacent cell has content
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Sales Report") // 12 chars, ~80-90px
+      .put(ref"B1" -> "Revenue")
+
+    val svg = sheet.toSvg(ref"A1:B1")
+
+    // Should have defs section
+    assert(svg.contains("<defs>"), "Should have defs section")
+    assert(svg.contains("</defs>"), "Should close defs section")
+
+    // Should have clip paths for both cells
+    assert(svg.contains("""<clipPath id="clip-0-0">"""), "Should have clip path for A1")
+    assert(svg.contains("""<clipPath id="clip-64-0">"""), "Should have clip path for B1")
+
+    // Text elements should reference their clip paths
+    assert(svg.contains("""clip-path="url(#clip-0-0)">Sales Report</text>"""),
+      s"A1 text should have clip-path attribute, got: $svg")
+    assert(svg.contains("""clip-path="url(#clip-64-0)">Revenue</text>"""),
+      s"B1 text should have clip-path attribute, got: $svg")
+
+    // Clip path for A1 should be cell width only (64px) since B1 is not empty
+    assert(svg.contains("""<clipPath id="clip-0-0"><rect x="0" y="0" width="64" height="20"/>"""),
+      s"A1 clip should be 64px (single cell), got: $svg")
+  }
+
+  test("toSvg: text can overflow into empty cells with expanded clip region") {
+    // Long text in A1, B1 and C1 are empty → should allow overflow with expanded clip
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Long text here") // ~85-90px, overflows into B1
+
+    val svg = sheet.toSvg(ref"A1:C1")
+
+    // Should have clip path for A1
+    assert(svg.contains("""<clipPath id="clip-0-0">"""), "Should have clip path for A1")
+
+    // Clip region should be expanded to allow overflow into empty B1
+    // Width should be >64px (at least 2 cells = 128px)
+    val clipPattern = """<clipPath id="clip-0-0"><rect x="0" y="0" width="(\d+)" """.r
+    val widthOpt = clipPattern.findFirstMatchIn(svg).map(_.group(1).toInt)
+    assert(widthOpt.exists(_ >= 128),
+      s"Clip region should be ≥128px for overflow into empty cells, got: ${widthOpt.getOrElse(0)}")
+  }
+
+  test("toSvg: all cells have clip paths in defs section") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "A")
+      .put(ref"B1" -> "B")
+      .put(ref"A2" -> "C")
+
+    val svg = sheet.toSvg(ref"A1:B2")
+
+    // Should have 4 clip paths (A1, B1, A2, B2)
+    val clipPathCount = """<clipPath id=""".r.findAllIn(svg).length
+    assertEquals(clipPathCount, 4, s"Should have 4 clip paths for 4 cells, got: $clipPathCount")
+
+    // All clip paths should be inside defs
+    val defsStart = svg.indexOf("<defs>")
+    val defsEnd = svg.indexOf("</defs>")
+    assert(defsStart < defsEnd, "Defs section should be properly closed")
+
+    // All clip paths should appear before </defs>
+    val firstClipPath = svg.indexOf("""<clipPath""")
+    val lastClipPath = svg.lastIndexOf("""</clipPath>""")
+    assert(firstClipPath > defsStart && firstClipPath < defsEnd,
+      "Clip paths should be inside defs section")
+    assert(lastClipPath > defsStart && lastClipPath < defsEnd,
+      "All clip paths should be inside defs section")
+  }
+
+  test("toSvg: defs section appears before cells group") {
+    val sheet = Sheet("Test").put(ref"A1" -> "Test")
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    val defsIdx = svg.indexOf("<defs>")
+    val cellsIdx = svg.indexOf("""<g class="cells">""")
+
+    assert(defsIdx < cellsIdx,
+      s"Defs section should appear before cells group, defs at $defsIdx, cells at $cellsIdx")
+  }

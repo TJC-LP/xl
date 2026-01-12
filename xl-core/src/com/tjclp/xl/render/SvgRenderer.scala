@@ -86,6 +86,9 @@ object SvgRenderer:
   </style>
 """)
 
+    // Clip path buffer - will be rendered in <defs> after cell loop
+    val clipPathBuffer = new StringBuilder
+
     // Column headers (A, B, C...) - only if showLabels
     if showLabels then
       sb.append("  <g class=\"col-headers\">\n")
@@ -129,7 +132,9 @@ object SvgRenderer:
     val textBuffer = new StringBuilder
     val borderBuffer = new StringBuilder
 
-    // Pass 1: Cell backgrounds
+    // Clip paths will be rendered in defs section after cell loop completes
+
+    // Pass 1: Cell backgrounds (also generates clip paths in clipPathBuffer)
     sb.append("  <g class=\"cells\">\n")
     (startRow to endRow).foreach { row =>
       val rowIdx = row - startRow
@@ -191,6 +196,12 @@ object SvgRenderer:
 
             val effectiveHeight = if mergeRange.isDefined then mergeHeight else rowHeight
 
+            // Generate clip path for this cell (to prevent text overflow beyond effective width)
+            val clipId = s"clip-$xPos-$y"
+            clipPathBuffer.append(
+              s"""    <clipPath id="$clipId"><rect x="$xPos" y="$y" width="$effectiveWidth" height="$effectiveHeight"/></clipPath>\n"""
+            )
+
             // Cell background (borders rendered separately as line elements)
             val fillAttr = cellOpt
               .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet, theme) else None)
@@ -210,7 +221,8 @@ object SvgRenderer:
                   )
               }
 
-            // Collect text for second pass (skip hidden rows/cols)
+            // Collect text for third pass (skip hidden rows/cols)
+            // Apply clip-path to prevent text overflow beyond effective width
             if effectiveHeight > 0 && effectiveWidth > 0 then
               cellOpt.foreach { cell =>
                 val (textX, anchor) = textAlignment(cell, sheet, xPos, effectiveWidth)
@@ -219,6 +231,9 @@ object SvgRenderer:
                   .flatMap(sheet.styleRegistry.get)
                   .map(_.numFmt)
                   .getOrElse(NumFmt.General)
+
+                // Apply clip-path to constrain text within cell boundaries
+                val clipAttr = s""" clip-path="url(#$clipId)""""
 
                 cell.value match
                   case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
@@ -242,7 +257,7 @@ object SvgRenderer:
                       case _ => textX // "start"
 
                     textBuffer.append(
-                      s"""    <text y="$textY" class="cell-text">"""
+                      s"""    <text y="$textY" class="cell-text"$clipAttr>"""
                     )
                     rt.runs.zipWithIndex.foldLeft(adjustedTextX) { case (currentX, (run, idx)) =>
                       val runStyle = runToSvgStyle(run, baseFont, theme)
@@ -270,7 +285,7 @@ object SvgRenderer:
                           textYPositionWrapped(cell, sheet, y, effectiveHeight, lines.size, lh)
 
                         textBuffer.append(
-                          s"""    <text x="$textX" text-anchor="$anchor" class="cell-text"$textStyle>"""
+                          s"""    <text x="$textX" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
                         )
                         lines.zipWithIndex.foreach { (line, idx) =>
                           val lineY = firstLineY + idx * lh
@@ -283,7 +298,7 @@ object SvgRenderer:
                       else
                         val escapedText = escapeXml(text)
                         textBuffer.append(
-                          s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle>"""
+                          s"""    <text x="$textX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
                         )
                         textBuffer.append(s"""$escapedText</text>\n""")
               }
@@ -291,18 +306,35 @@ object SvgRenderer:
     }
     sb.append("  </g>\n")
 
+    // Rebuild SVG with correct structure: header -> styles -> defs -> content
+    // Extract the header and styles portion
+    val content = sb.toString
+    val styleEndMarker = "</style>\n"
+    val styleEndIdx = content.indexOf(styleEndMarker) + styleEndMarker.length
+
+    val result = new StringBuilder
+    result.append(content.substring(0, styleEndIdx))
+
+    // Insert defs with clip paths before content
+    result.append("  <defs>\n")
+    result.append(clipPathBuffer)
+    result.append("  </defs>\n")
+
+    // Append remaining content (headers and cells)
+    result.append(content.substring(styleEndIdx))
+
     // Pass 2: Cell borders (rendered above backgrounds, below text)
-    sb.append("  <g class=\"cell-borders\">\n")
-    sb.append(borderBuffer)
-    sb.append("  </g>\n")
+    result.append("  <g class=\"cell-borders\">\n")
+    result.append(borderBuffer)
+    result.append("  </g>\n")
 
-    // Pass 3: Cell text (rendered on top of all backgrounds and borders)
-    sb.append("  <g class=\"cell-text-layer\">\n")
-    sb.append(textBuffer)
-    sb.append("  </g>\n")
+    // Pass 3: Cell text (rendered on top of all backgrounds and borders, clipped to cell boundaries)
+    result.append("  <g class=\"cell-text-layer\">\n")
+    result.append(textBuffer)
+    result.append("  </g>\n")
 
-    sb.append("</svg>")
-    sb.toString
+    result.append("</svg>")
+    result.toString
 
   /**
    * Get SVG fill attribute for a cell's background. Borders are rendered separately as line
