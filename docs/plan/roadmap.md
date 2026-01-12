@@ -10,7 +10,7 @@
 
 **Current Status**: Production-ready with **81 formula functions**, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 800+ tests passing.
 
-**Current Version**: 0.5.0-RC2
+**Current Version**: 0.5.0
 
 ---
 
