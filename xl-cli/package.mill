@@ -12,7 +12,9 @@ object `package` extends build.XLInternalModule with NativeImageModule {
     mvn"org.typelevel::cats-effect:3.6.3",
     // Apache Batik for SVG->raster conversion (eliminates ImageMagick dependency)
     mvn"org.apache.xmlgraphics:batik-transcoder:1.19",
-    mvn"org.apache.xmlgraphics:batik-codec:1.19"
+    mvn"org.apache.xmlgraphics:batik-codec:1.19",
+    // CSV parsing for import command (GH-132)
+    mvn"com.github.tototoshi::scala-csv:1.4.1"
   )
 
   // Make it runnable as an application
