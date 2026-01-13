@@ -355,14 +355,15 @@ object Main
   private val widthOpt = Opts.option[Double]("width", "Column width in character units").orNone
   private val hideOpt = Opts.flag("hide", "Hide row/column").orFalse
   private val showOpt = Opts.flag("show", "Show (unhide) row/column").orFalse
+  private val autoFitOpt = Opts.flag("auto-fit", "Auto-fit column width based on content").orFalse
 
   val rowCmd: Opts[CliCommand] = Opts.subcommand("row", "Set row properties (height, hide/show)") {
     (rowArg, heightOpt, hideOpt, showOpt).mapN(CliCommand.RowOp.apply)
   }
 
   val colCmd: Opts[CliCommand] =
-    Opts.subcommand("col", "Set column properties (width, hide/show)") {
-      (colArg, widthOpt, hideOpt, showOpt).mapN(CliCommand.ColOp.apply)
+    Opts.subcommand("col", "Set column properties (width, hide/show, auto-fit)") {
+      (colArg, widthOpt, hideOpt, showOpt, autoFitOpt).mapN(CliCommand.ColOp.apply)
     }
 
   // --- Batch command ---
@@ -720,9 +721,9 @@ object Main
         WriteCommands.row(wb, sheetOpt, rowNum, height, hide, show, _, _)
       )
 
-    case CliCommand.ColOp(colStr, width, hide, show) =>
+    case CliCommand.ColOp(colStr, width, hide, show, autoFit) =>
       requireOutput(outputOpt, backendOpt)(
-        WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, _, _)
+        WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, autoFit, _, _)
       )
 
     case CliCommand.Batch(source) =>

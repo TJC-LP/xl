@@ -59,7 +59,7 @@ enum CliCommand:
     replace: Boolean
   )
   case RowOp(row: Int, height: Option[Double], hide: Boolean, show: Boolean)
-  case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean)
+  case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean, autoFit: Boolean)
   case Batch(source: String) // "-" for stdin or file path
   case Import(
     csvPath: String,

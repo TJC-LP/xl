@@ -461,7 +461,7 @@ object WriteCommands:
     }
 
   /**
-   * Set column properties (width, hide/show).
+   * Set column properties (width, hide/show, auto-fit).
    */
   def col(
     wb: Workbook,
@@ -470,21 +470,28 @@ object WriteCommands:
     width: Option[Double],
     hide: Boolean,
     show: Boolean,
+    autoFit: Boolean,
     outputPath: Path,
     config: WriterConfig
   ): IO[String] =
     SheetResolver.requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
       IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e))).flatMap { colRef =>
         val currentProps = sheet.getColumnProperties(colRef)
+
+        // Calculate auto-fit width if requested
+        val effectiveWidth: Option[Double] =
+          if autoFit then Some(calculateAutoFitWidth(sheet, colRef))
+          else width
+
         val newProps = currentProps.copy(
-          width = width.orElse(currentProps.width),
+          width = effectiveWidth.orElse(currentProps.width),
           hidden = if hide then true else if show then false else currentProps.hidden
         )
         val updatedSheet = sheet.setColumnProperties(colRef, newProps)
         val updatedWb = wb.put(updatedSheet)
         ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
           val changes = List(
-            width.map(w => s"width=$w"),
+            effectiveWidth.map(w => f"width=$w%.2f${if autoFit then " (auto-fit)" else ""}"),
             if hide then Some("hidden=true") else None,
             if show then Some("hidden=false") else None
           ).flatten
@@ -492,6 +499,47 @@ object WriteCommands:
         }
       }
     }
+
+  /**
+   * Calculate optimal column width based on cell content. Returns width in Excel character units
+   * (~8.43 pixels per unit).
+   */
+  private def calculateAutoFitWidth(sheet: Sheet, col: Column): Double =
+    val cellsInColumn = sheet.cells.filter { case (ref, _) => ref.col == col }
+
+    if cellsInColumn.isEmpty then 8.43 // Default Excel column width
+    else
+      val maxCharWidth = cellsInColumn.values
+        .map { cell =>
+          estimateCellWidth(cell.value)
+        }
+        .maxOption
+        .getOrElse(0)
+
+      // Add padding (2 characters) and ensure minimum width
+      val width = (maxCharWidth + 2).toDouble
+      math.max(width, 8.43) // Don't go below default width
+
+  /**
+   * Estimate the display width of a cell value in characters.
+   */
+  private def estimateCellWidth(value: CellValue): Int =
+    import com.tjclp.xl.cells.CellValue.*
+    value match
+      case Text(s) => s.length
+      case Number(n) => formatNumber(n).length
+      case Bool(b) => if b then 4 else 5 // "TRUE" or "FALSE"
+      case Error(e) => e.toString.length
+      case Empty => 0
+      case DateTime(dt) => dt.toString.length // ISO format
+      case Formula(_, Some(cached)) => estimateCellWidth(cached)
+      case Formula(expr, None) => expr.length
+      case RichText(rt) => rt.toPlainText.length
+
+  /** Format number for display width estimation */
+  private def formatNumber(n: BigDecimal): String =
+    if n.isWhole then n.toBigInt.toString
+    else n.underlying.stripTrailingZeros.toPlainString
 
   /**
    * Apply multiple operations atomically (JSON from stdin or file).
