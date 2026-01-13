@@ -561,8 +561,8 @@ object WriteCommands:
       Column.fromLetter(spec).map(c => List(c))
 
   /**
-   * Calculate optimal column width based on cell content. Returns width in Excel character units
-   * (~8.43 pixels per unit).
+   * Calculate optimal column width based on cell content. Returns width in Excel character units.
+   * Uses a multiplier approach calibrated against Excel's actual autofit behavior.
    */
   private def calculateAutoFitWidth(sheet: Sheet, col: Column): Double =
     val cellsInColumn = sheet.cells.filter { case (ref, _) => ref.col == col }
@@ -576,9 +576,11 @@ object WriteCommands:
         .maxOption
         .getOrElse(0)
 
-      // Add padding (2 characters) and ensure minimum width
-      val width = (maxCharWidth + 2).toDouble
-      math.max(width, 8.43) // Don't go below default width
+      // Use multiplier + small padding (calibrated to match Excel's font-metric-aware autofit)
+      // Excel uses ~0.85x char count for proportional fonts (Calibri 11pt default)
+      val width =
+        BigDecimal(maxCharWidth * 0.85 + 1.5).setScale(2, BigDecimal.RoundingMode.HALF_UP).toDouble
+      math.max(width, 5.0) // Allow narrower columns like Excel does
 
   /**
    * Estimate the display width of a cell value in characters.
