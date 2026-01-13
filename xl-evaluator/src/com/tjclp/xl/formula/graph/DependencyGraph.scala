@@ -171,6 +171,7 @@ object DependencyGraph:
       case TExpr.Sub(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.Mul(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.Div(l, r) => extractDependencies(l) ++ extractDependencies(r)
+      case TExpr.Concat(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.Eq(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.Neq(l, r) => extractDependencies(l) ++ extractDependencies(r)
       case TExpr.Lt(l, r) => extractDependencies(l) ++ extractDependencies(r)
@@ -229,6 +230,8 @@ object DependencyGraph:
       case TExpr.Mul(l, r) =>
         extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
       case TExpr.Div(l, r) =>
+        extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
+      case TExpr.Concat(l, r) =>
         extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
       case TExpr.Eq(l, r) =>
         extractDependenciesBounded(l, bounds) ++ extractDependenciesBounded(r, bounds)
@@ -650,6 +653,11 @@ object DependencyGraph:
           currentSheet
         )
       case TExpr.Div(l, r) =>
+        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
+          r,
+          currentSheet
+        )
+      case TExpr.Concat(l, r) =>
         extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
           r,
           currentSheet

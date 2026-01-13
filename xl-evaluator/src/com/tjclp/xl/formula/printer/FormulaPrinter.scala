@@ -112,6 +112,11 @@ object FormulaPrinter:
         val result = s"${printExpr(x, Precedence.MulDiv)}/${printExpr(y, Precedence.MulDiv)}"
         parenthesizeIf(result, precedence > Precedence.MulDiv)
 
+      // String operators
+      case TExpr.Concat(x, y) =>
+        val result = s"${printExpr(x, Precedence.Concat)}&${printExpr(y, Precedence.Concat)}"
+        parenthesizeIf(result, precedence > Precedence.Concat)
+
       // Comparison operators
       case TExpr.Eq(x, y) =>
         val result =
@@ -316,6 +321,8 @@ object FormulaPrinter:
         s"Mul(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Div(x, y) =>
         s"Div(${printWithTypes(x)}, ${printWithTypes(y)})"
+      case TExpr.Concat(x, y) =>
+        s"Concat(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Eq(x, y) =>
         s"Eq(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Neq(x, y) =>

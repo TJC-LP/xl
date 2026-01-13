@@ -271,21 +271,26 @@ object FormulaParser:
     }
 
   /**
-   * Parse concatenation operator: &
+   * Parse concatenation operator: & (left-associative)
+   *
+   * Excel's & operator joins strings: "Hello" & "World" → "HelloWorld" Operands are coerced to
+   * strings via asStringExpr.
    */
   private def parseConcatenation(state: ParserState): ParseResult[TExpr[?]] =
     parseAddSub(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
       s2.currentChar match
         case Some('&') =>
-          // Concatenation operator not yet supported
-          Left(
-            ParseError.InvalidOperator(
-              "&",
-              s2.pos,
-              "concatenation operator not yet supported (see LIMITATIONS.md)"
+          val s3 = skipWhitespace(s2.advance())
+          parseConcatenation(s3).map { case (right, s4) =>
+            (
+              TExpr.Concat(
+                TExpr.asStringExpr(left),
+                TExpr.asStringExpr(right)
+              ),
+              s4
             )
-          )
+          }
         case _ => Right((left, s2))
     }
 
