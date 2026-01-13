@@ -475,6 +475,17 @@ final case class Sheet(
   def clearMerged: Sheet =
     copy(mergedRanges = Set.empty)
 
+  /** Clear styles from cells in range (set styleId to None) */
+  def clearStylesInRange(range: CellRange): Sheet =
+    copy(cells = cells.map { (ref, cell) =>
+      if range.contains(ref) then (ref, cell.copy(styleId = None))
+      else (ref, cell)
+    })
+
+  /** Clear comments from cells in range */
+  def clearCommentsInRange(range: CellRange): Sheet =
+    copy(comments = comments.filterNot((ref, _) => range.contains(ref)))
+
 object Sheet:
   /**
    * Create empty sheet with name.

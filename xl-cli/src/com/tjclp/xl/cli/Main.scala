@@ -68,7 +68,7 @@ object Main
 
     // Sheet-level write: --file, --sheet, and --output (required)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
@@ -466,6 +466,16 @@ object Main
       refArg.map(CliCommand.RemoveComment.apply)
     }
 
+  // --- Clear command ---
+  private val clearAllOpt = Opts.flag("all", "Clear contents, styles, and comments").orFalse
+  private val clearStylesOpt = Opts.flag("styles", "Clear styles only (reset to default)").orFalse
+  private val clearCommentsOpt = Opts.flag("comments", "Clear comments only").orFalse
+
+  val clearCmd: Opts[CliCommand] =
+    Opts.subcommand("clear", "Clear cell contents, styles, or comments from range") {
+      (rangeArg, clearAllOpt, clearStylesOpt, clearCommentsOpt).mapN(CliCommand.Clear.apply)
+    }
+
   // ==========================================================================
   // Command execution
   // ==========================================================================
@@ -759,6 +769,11 @@ object Main
     case CliCommand.RemoveComment(refStr) =>
       requireOutput(outputOpt, backendOpt)(
         CommentCommands.removeComment(wb, sheetOpt, refStr, _, _)
+      )
+
+    case CliCommand.Clear(rangeStr, all, styles, comments) =>
+      requireOutput(outputOpt, backendOpt)(
+        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _)
       )
 
   // ==========================================================================

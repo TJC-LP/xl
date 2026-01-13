@@ -81,3 +81,4 @@ enum CliCommand:
   case Unmerge(range: String)
   case AddComment(ref: String, text: String, author: Option[String])
   case RemoveComment(ref: String)
+  case Clear(range: String, all: Boolean, styles: Boolean, comments: Boolean)
