@@ -461,7 +461,8 @@ object WriteCommands:
     }
 
   /**
-   * Set column properties (width, hide/show, auto-fit).
+   * Set column properties (width, hide/show, auto-fit). Supports single columns (A) or ranges
+   * (A:F).
    */
   def col(
     wb: Workbook,
@@ -475,30 +476,89 @@ object WriteCommands:
     config: WriterConfig
   ): IO[String] =
     SheetResolver.requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
-      IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e))).flatMap { colRef =>
-        val currentProps = sheet.getColumnProperties(colRef)
-
-        // Calculate auto-fit width if requested
-        val effectiveWidth: Option[Double] =
-          if autoFit then Some(calculateAutoFitWidth(sheet, colRef))
-          else width
-
-        val newProps = currentProps.copy(
-          width = effectiveWidth.orElse(currentProps.width),
-          hidden = if hide then true else if show then false else currentProps.hidden
-        )
-        val updatedSheet = sheet.setColumnProperties(colRef, newProps)
-        val updatedWb = wb.put(updatedSheet)
-        ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
-          val changes = List(
-            effectiveWidth.map(w => f"width=$w%.2f${if autoFit then " (auto-fit)" else ""}"),
-            if hide then Some("hidden=true") else None,
-            if show then Some("hidden=false") else None
-          ).flatten
-          s"Column $colStr: ${changes.mkString(", ")}\nSaved: $outputPath"
-        }
-      }
+      // Try parsing as column range (A:F) first, then single column (A)
+      parseColumnSpec(colStr) match
+        case Left(err) => IO.raiseError(new Exception(err))
+        case Right(columns) =>
+          val (updatedSheet, results) = columns.foldLeft((sheet, List.empty[String])) {
+            case ((s, msgs), colRef) =>
+              val currentProps = s.getColumnProperties(colRef)
+              val effectiveWidth: Option[Double] =
+                if autoFit then Some(calculateAutoFitWidth(s, colRef))
+                else width
+              val newProps = currentProps.copy(
+                width = effectiveWidth.orElse(currentProps.width),
+                hidden = if hide then true else if show then false else currentProps.hidden
+              )
+              val newSheet = s.setColumnProperties(colRef, newProps)
+              val changes = List(
+                effectiveWidth.map(w => f"$w%.2f${if autoFit then " (auto)" else ""}"),
+                if hide then Some("hide") else None,
+                if show then Some("show") else None
+              ).flatten
+              val msg = s"${colRef.toLetter}: ${changes.mkString(", ")}"
+              (newSheet, msgs :+ msg)
+          }
+          val updatedWb = wb.put(updatedSheet)
+          ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
+            results match
+              case single :: Nil => s"Column $single\nSaved: $outputPath"
+              case multiple =>
+                s"Columns:\n${multiple.map("  " + _).mkString("\n")}\nSaved: $outputPath"
+          }
     }
+
+  /**
+   * Auto-fit all columns (or specified range) based on content.
+   */
+  def autoFit(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    columnsOpt: Option[String],
+    outputPath: Path,
+    config: WriterConfig
+  ): IO[String] =
+    SheetResolver.requireSheet(wb, sheetOpt, "autofit").flatMap { sheet =>
+      // Determine columns to auto-fit
+      val columnsResult: Either[String, List[Column]] = columnsOpt match
+        case Some(spec) => parseColumnSpec(spec)
+        case None =>
+          // Auto-fit all used columns
+          sheet.usedRange match
+            case Some(range) =>
+              val cols = (range.colStart.index0 to range.colEnd.index0).map(Column.from0).toList
+              Right(cols)
+            case None => Right(List.empty) // Empty sheet
+
+      columnsResult match
+        case Left(err) => IO.raiseError(new Exception(err))
+        case Right(columns) if columns.isEmpty =>
+          IO.pure(s"No columns to auto-fit (empty sheet)\nSaved: $outputPath")
+        case Right(columns) =>
+          val (updatedSheet, widths) = columns.foldLeft((sheet, List.empty[(Column, Double)])) {
+            case ((s, ws), colRef) =>
+              val w = calculateAutoFitWidth(s, colRef)
+              val currentProps = s.getColumnProperties(colRef)
+              val newProps = currentProps.copy(width = Some(w))
+              (s.setColumnProperties(colRef, newProps), ws :+ (colRef, w))
+          }
+          val updatedWb = wb.put(updatedSheet)
+          ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
+            val summary = widths.map { case (c, w) => f"${c.toLetter}: $w%.2f" }.mkString(", ")
+            s"Auto-fit ${columns.size} column(s): $summary\nSaved: $outputPath"
+          }
+    }
+
+  /** Parse column spec: single column (A) or range (A:F) */
+  private def parseColumnSpec(spec: String): Either[String, List[Column]] =
+    if spec.contains(':') then
+      // Column range like A:F
+      CellRange.parse(spec).map { range =>
+        (range.colStart.index0 to range.colEnd.index0).map(Column.from0).toList
+      }
+    else
+      // Single column
+      Column.fromLetter(spec).map(c => List(c))
 
   /**
    * Calculate optimal column width based on cell content. Returns width in Excel character units

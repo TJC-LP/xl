@@ -90,6 +90,9 @@ xl -f <file> -s <sheet> -o <out> style <range> --bg "#FF6600" --fg white
 xl -f <file> -s <sheet> -o <out> row <n> --height 30
 xl -f <file> -s <sheet> -o <out> col <letter> --width 20 --hide
 xl -f <file> -s <sheet> -o <out> col <letter> --auto-fit
+xl -f <file> -s <sheet> -o <out> col A:F --auto-fit     # Column range
+xl -f <file> -s <sheet> -o <out> autofit                # All used columns
+xl -f <file> -s <sheet> -o <out> autofit --columns A:Z  # Specific range
 
 # Sheet management (require -o)
 xl -f <file> -o <out> add-sheet "NewSheet"
@@ -491,7 +494,12 @@ xl -f data.xlsx -o out.xlsx col B --width 20
 xl -f data.xlsx -o out.xlsx col C --hide
 
 # Auto-fit column width based on content
-xl -f data.xlsx -o out.xlsx col A --auto-fit
+xl -f data.xlsx -o out.xlsx col A --auto-fit            # Single column
+xl -f data.xlsx -o out.xlsx col A:F --auto-fit          # Column range
+
+# Auto-fit all columns (or specific range)
+xl -f data.xlsx -o out.xlsx autofit                     # All used columns
+xl -f data.xlsx -o out.xlsx autofit --columns A:Z       # Specific range
 ```
 
 | Option | Description |
@@ -499,6 +507,7 @@ xl -f data.xlsx -o out.xlsx col A --auto-fit
 | `--height <pt>` | Row height (row only) |
 | `--width <chars>` | Column width (col only) |
 | `--auto-fit` | Auto-fit column width based on content (col only) |
+| `--columns <range>` | Column range for autofit command (e.g., A:Z) |
 | `--hide` | Hide row/column |
 | `--show` | Unhide row/column |
 
@@ -677,6 +686,14 @@ xl -f data.xlsx -o out.xlsx --backend saxstax style A1:Z1000 --bold
 | `stats <range>` | Calculate statistics for numeric values |
 | `batch [<file>]` | Apply JSON operations (`-` for stdin) |
 | `import <csv-file> [<ref>]` | Import CSV data with automatic type detection |
+
+### Row/Column Commands
+
+| Command | Options | Description |
+|---------|---------|-------------|
+| `row <n>` | `--height <pt>`, `--hide`, `--show` | Set row properties |
+| `col <letter(s)>` | `--width <chars>`, `--auto-fit`, `--hide`, `--show` | Set column properties (supports ranges like A:F) |
+| `autofit` | `--columns <range>` | Auto-fit all used columns (or specific range) |
 
 ### Info Commands
 

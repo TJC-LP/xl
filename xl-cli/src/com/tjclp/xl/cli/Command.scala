@@ -83,6 +83,7 @@ enum CliCommand:
   case RemoveComment(ref: String)
   case Clear(range: String, all: Boolean, styles: Boolean, comments: Boolean)
   case Fill(source: String, target: String, direction: FillDirection)
+  case AutoFit(columns: Option[String]) // None = all used columns, Some("A:F") = specific range
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:

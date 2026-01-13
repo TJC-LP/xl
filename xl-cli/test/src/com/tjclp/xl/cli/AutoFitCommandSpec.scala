@@ -45,9 +45,9 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      assert(result.contains("auto-fit"))
+      assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
       // Width = 26 chars (longest) + 2 padding = 28
-      assert(result.contains("width=28.00"))
+      assert(result.contains("28.00"), s"Expected '28.00' in output: $result")
 
       // Verify the file was saved with the column width
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
@@ -71,9 +71,9 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "B", None, hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      assert(result.contains("auto-fit"))
+      assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
       // Width = 10 digits (1234567890) + 2 padding = 12
-      assert(result.contains("width=12.00"))
+      assert(result.contains("12.00"), s"Expected '12.00' in output: $result")
     }
   }
 
@@ -87,8 +87,8 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "C", None, hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      assert(result.contains("auto-fit"))
-      assert(result.contains("width=8.43")) // Default Excel width
+      assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
+      assert(result.contains("8.43"), s"Expected '8.43' in output: $result") // Default Excel width
     }
   }
 
@@ -105,7 +105,7 @@ class AutoFitCommandSpec extends FunSuite:
         .unsafeRunSync()
 
       // Width = 5 chars (FALSE) + 2 padding = 7, but min is 8.43
-      assert(result.contains("width=8.43"))
+      assert(result.contains("8.43"), s"Expected '8.43' in output: $result")
     }
   }
 
@@ -122,7 +122,7 @@ class AutoFitCommandSpec extends FunSuite:
         .unsafeRunSync()
 
       // Width = 3 chars (200) + 2 padding = 5, but min is 8.43
-      assert(result.contains("width=8.43"))
+      assert(result.contains("8.43"), s"Expected '8.43' in output: $result")
     }
   }
 
@@ -138,7 +138,7 @@ class AutoFitCommandSpec extends FunSuite:
         .unsafeRunSync()
 
       // Width = 10 chars + 2 padding = 12
-      assert(result.contains("width=12.00"))
+      assert(result.contains("12.00"), s"Expected '12.00' in output: $result")
     }
   }
 
@@ -155,8 +155,8 @@ class AutoFitCommandSpec extends FunSuite:
         .unsafeRunSync()
 
       // Auto-fit should win: 5 chars + 2 padding = 7, min 8.43
-      assert(result.contains("width=8.43"))
-      assert(result.contains("auto-fit"))
+      assert(result.contains("8.43"), s"Expected '8.43' in output: $result")
+      assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
     }
   }
 
@@ -170,7 +170,113 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "A", Some(25.0), hide = false, show = false, autoFit = false, outputPath, config)
         .unsafeRunSync()
 
-      assert(result.contains("width=25"))
-      assert(!result.contains("auto-fit"))
+      assert(result.contains("25.00"), s"Expected '25.00' in output: $result")
+      assert(!result.contains("(auto)"), s"Should not contain '(auto)' in output: $result")
+    }
+  }
+
+  // ========== Column Range Auto-Fit Tests ==========
+
+  test("col --auto-fit: supports column range (A:C)") {
+    withTempFile { outputPath =>
+      val sheet = Sheet("Test")
+        .put(ref(0, 0), CellValue.Text("Short")) // A1
+        .put(ref(1, 0), CellValue.Text("Medium length text")) // B1
+        .put(ref(2, 0), CellValue.Text("This is the longest")) // C1
+      val wb = Workbook(sheet)
+
+      val result = WriteCommands
+        .col(wb, Some(sheet), "A:C", None, hide = false, show = false, autoFit = true, outputPath, config)
+        .unsafeRunSync()
+
+      // Should output multiple columns
+      assert(result.contains("Columns:"), s"Expected 'Columns:' in output: $result")
+      assert(result.contains("A:"), s"Expected 'A:' in output: $result")
+      assert(result.contains("B:"), s"Expected 'B:' in output: $result")
+      assert(result.contains("C:"), s"Expected 'C:' in output: $result")
+      assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
+
+      // Verify widths in saved file
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val s = imported.sheets.headOption.getOrElse(fail("No sheets found"))
+      val colA = Column.fromLetter("A").toOption.getOrElse(fail("Invalid column A"))
+      val colB = Column.fromLetter("B").toOption.getOrElse(fail("Invalid column B"))
+      val colC = Column.fromLetter("C").toOption.getOrElse(fail("Invalid column C"))
+
+      // A: 5 chars + 2 padding = 7, min 8.43
+      assertEquals(s.getColumnProperties(colA).width, Some(8.43))
+      // B: 18 chars + 2 padding = 20
+      assertEquals(s.getColumnProperties(colB).width, Some(20.0))
+      // C: 19 chars + 2 padding = 21
+      assertEquals(s.getColumnProperties(colC).width, Some(21.0))
+    }
+  }
+
+  // ========== Global Auto-Fit Tests ==========
+
+  test("autofit: auto-fits all used columns") {
+    withTempFile { outputPath =>
+      val sheet = Sheet("Test")
+        .put(ref(0, 0), CellValue.Text("A column data")) // A1
+        .put(ref(2, 0), CellValue.Text("C column data here")) // C1 (skip B)
+        .put(ref(3, 1), CellValue.Number(BigDecimal(12345678))) // D2
+      val wb = Workbook(sheet)
+
+      val result = WriteCommands
+        .autoFit(wb, Some(sheet), None, outputPath, config)
+        .unsafeRunSync()
+
+      // Should auto-fit columns A through D (used range)
+      assert(result.contains("Auto-fit"), s"Expected 'Auto-fit' in output: $result")
+      assert(result.contains("4 column"), s"Expected '4 column' in output: $result")
+      assert(result.contains("A:"), s"Expected 'A:' in output: $result")
+      assert(result.contains("D:"), s"Expected 'D:' in output: $result")
+
+      // Verify widths
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val s = imported.sheets.headOption.getOrElse(fail("No sheets found"))
+      val colA = Column.fromLetter("A").toOption.getOrElse(fail("Invalid column A"))
+      val colD = Column.fromLetter("D").toOption.getOrElse(fail("Invalid column D"))
+
+      // A: 13 chars + 2 padding = 15
+      assertEquals(s.getColumnProperties(colA).width, Some(15.0))
+      // D: 8 chars + 2 padding = 10
+      assertEquals(s.getColumnProperties(colD).width, Some(10.0))
+    }
+  }
+
+  test("autofit: accepts specific column range") {
+    withTempFile { outputPath =>
+      val sheet = Sheet("Test")
+        .put(ref(0, 0), CellValue.Text("Column A")) // A1
+        .put(ref(1, 0), CellValue.Text("Column B")) // B1
+        .put(ref(2, 0), CellValue.Text("Column C")) // C1
+        .put(ref(3, 0), CellValue.Text("Column D should not change")) // D1
+      val wb = Workbook(sheet)
+
+      val result = WriteCommands
+        .autoFit(wb, Some(sheet), Some("A:C"), outputPath, config)
+        .unsafeRunSync()
+
+      assert(result.contains("3 column"), s"Expected '3 column' in output: $result")
+
+      // Verify D was not touched
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val s = imported.sheets.headOption.getOrElse(fail("No sheets found"))
+      val colD = Column.fromLetter("D").toOption.getOrElse(fail("Invalid column D"))
+      assertEquals(s.getColumnProperties(colD).width, None) // No width set
+    }
+  }
+
+  test("autofit: handles empty sheet gracefully") {
+    withTempFile { outputPath =>
+      val sheet = Sheet("Empty")
+      val wb = Workbook(sheet)
+
+      val result = WriteCommands
+        .autoFit(wb, Some(sheet), None, outputPath, config)
+        .unsafeRunSync()
+
+      assert(result.contains("No columns to auto-fit"), s"Expected empty sheet message in output: $result")
     }
   }

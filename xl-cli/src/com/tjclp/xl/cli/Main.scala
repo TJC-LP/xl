@@ -68,7 +68,7 @@ object Main
 
     // Sheet-level write: --file, --sheet, and --output (required)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
@@ -362,8 +362,21 @@ object Main
   }
 
   val colCmd: Opts[CliCommand] =
-    Opts.subcommand("col", "Set column properties (width, hide/show, auto-fit)") {
+    Opts.subcommand(
+      "col",
+      "Set column properties (width, hide/show, auto-fit). Supports ranges like A:F"
+    ) {
       (colArg, widthOpt, hideOpt, showOpt, autoFitOpt).mapN(CliCommand.ColOp.apply)
+    }
+
+  // --- Auto-fit command ---
+  private val autoFitColumnsOpt =
+    Opts
+      .option[String]("columns", "Column range to auto-fit (e.g., A:F). Default: all used columns")
+      .orNone
+  val autoFitCmd: Opts[CliCommand] =
+    Opts.subcommand("autofit", "Auto-fit column widths based on content") {
+      autoFitColumnsOpt.map(CliCommand.AutoFit.apply)
     }
 
   // --- Batch command ---
@@ -793,6 +806,11 @@ object Main
     case CliCommand.Fill(source, target, direction) =>
       requireOutput(outputOpt, backendOpt)(
         WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _)
+      )
+
+    case CliCommand.AutoFit(columnsOpt) =>
+      requireOutput(outputOpt, backendOpt)(
+        WriteCommands.autoFit(wb, sheetOpt, columnsOpt, _, _)
       )
 
   // ==========================================================================
