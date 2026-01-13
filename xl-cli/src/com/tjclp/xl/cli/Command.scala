@@ -79,3 +79,5 @@ enum CliCommand:
   // Cell operations
   case Merge(range: String)
   case Unmerge(range: String)
+  case AddComment(ref: String, text: String, author: Option[String])
+  case RemoveComment(ref: String)

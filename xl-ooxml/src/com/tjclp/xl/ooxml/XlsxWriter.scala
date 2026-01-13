@@ -1447,14 +1447,16 @@ object XlsxWriter:
           val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
 
           sourceContext match
-            case Some(ctx) if ctx.partManifest.contains(commentPath) =>
-              // Preserve existing comments byte-for-byte (comments independent of cell values)
+            case Some(ctx)
+                if ctx.partManifest.contains(commentPath) && commentsBySheet.contains(idx) =>
+              // Preserve existing comments only if sheet still has them
+              // This prevents preserving comments that were removed via Sheet.removeComment()
               copyPreservedPart(ctx.sourcePath, commentPath, zip)
               if ctx.partManifest.contains(relsPath) then
                 copyPreservedPart(ctx.sourcePath, relsPath, zip)
 
             case _ =>
-              // No source comments/tables - write new ones if sheet has them
+              // No source comments OR comments were removed - write new ones if sheet has them
               val hasComments = commentsBySheet.contains(idx)
               val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
 
@@ -1496,9 +1498,19 @@ object XlsxWriter:
       }
 
       // Copy preserved parts (charts, drawings, images, etc.) if source available
+      // Skip VML drawings for sheets that no longer have comments (removed via removeComment)
       sourceContext.foreach { ctx =>
         preservableParts.foreach { path =>
-          copyPreservedPart(ctx.sourcePath, path, zip)
+          val isVmlDrawing = path.startsWith("xl/drawings/vmlDrawing") && path.endsWith(".vml")
+          val shouldSkip = isVmlDrawing && {
+            // Extract sheet index from vmlDrawingN.vml (N is 1-based)
+            val sheetIdxOpt =
+              path.stripPrefix("xl/drawings/vmlDrawing").stripSuffix(".vml").toIntOption.map(_ - 1)
+            // Skip if this sheet no longer has comments
+            sheetIdxOpt.exists(idx => !commentsBySheet.contains(idx))
+          }
+
+          if !shouldSkip then copyPreservedPart(ctx.sourcePath, path, zip)
         }
       }
 

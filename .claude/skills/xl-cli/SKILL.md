@@ -100,6 +100,8 @@ xl -f <file> -o <out> copy-sheet "Template" "Copy"
 # Cell operations (require -o and -s)
 xl -f <file> -s <sheet> -o <out> merge A1:C1
 xl -f <file> -s <sheet> -o <out> unmerge A1:C1
+xl -f <file> -s <sheet> -o <out> comment A1 "Review this" --author "John"
+xl -f <file> -s <sheet> -o <out> remove-comment A1
 
 # Batch operations (require -o)
 xl -f <file> -s <sheet> -o <out> batch <json-file>
@@ -178,6 +180,23 @@ xl -f data.xlsx -o out.xlsx copy-sheet "Template" "Q1 Report"
 ---
 
 ## Cell Operations
+
+### Comments
+
+Add or remove comments from cells (yellow notes in Excel):
+
+```bash
+# Add comment
+xl -f file.xlsx -s Sheet1 -o out.xlsx comment A1 "Review this value"
+
+# Add comment with author
+xl -f file.xlsx -s Sheet1 -o out.xlsx comment A1 "Q1 data needs verification" --author "Finance Team"
+
+# Remove comment
+xl -f file.xlsx -s Sheet1 -o out.xlsx remove-comment A1
+```
+
+Comments appear as yellow notes in Excel when hovering over cells. The `cell` command shows existing comments.
 
 ### Merge / Unmerge Cells
 
@@ -648,6 +667,8 @@ xl -f data.xlsx -o out.xlsx --backend saxstax style A1:Z1000 --bold
 |---------|-------------|
 | `merge <range>` | Merge cells in range |
 | `unmerge <range>` | Unmerge cells in range |
+| `comment <ref> <text>` | Add comment to cell (`--author` for attribution) |
+| `remove-comment <ref>` | Remove comment from cell |
 | `stats <range>` | Calculate statistics for numeric values |
 | `batch [<file>]` | Apply JSON operations (`-` for stdin) |
 | `import <csv-file> [<ref>]` | Import CSV data with automatic type detection |
