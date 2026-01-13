@@ -89,6 +89,7 @@ xl -f <file> -s <sheet> -o <out> style <range> --bg "#FF6600" --fg white
 # Row/Column operations (require -o)
 xl -f <file> -s <sheet> -o <out> row <n> --height 30
 xl -f <file> -s <sheet> -o <out> col <letter> --width 20 --hide
+xl -f <file> -s <sheet> -o <out> col <letter> --auto-fit
 
 # Sheet management (require -o)
 xl -f <file> -o <out> add-sheet "NewSheet"
@@ -488,12 +489,16 @@ xl -f data.xlsx -o out.xlsx row 10 --show
 # Column width and visibility
 xl -f data.xlsx -o out.xlsx col B --width 20
 xl -f data.xlsx -o out.xlsx col C --hide
+
+# Auto-fit column width based on content
+xl -f data.xlsx -o out.xlsx col A --auto-fit
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--height <pt>` | Row height (row only) |
 | `--width <chars>` | Column width (col only) |
+| `--auto-fit` | Auto-fit column width based on content (col only) |
 | `--hide` | Hide row/column |
 | `--show` | Unhide row/column |
 
