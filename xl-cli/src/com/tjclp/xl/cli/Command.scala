@@ -82,3 +82,9 @@ enum CliCommand:
   case AddComment(ref: String, text: String, author: Option[String])
   case RemoveComment(ref: String)
   case Clear(range: String, all: Boolean, styles: Boolean, comments: Boolean)
+  case Fill(source: String, target: String, direction: FillDirection)
+
+/** Fill direction for the fill command */
+enum FillDirection derives CanEqual:
+  case Down // Fill downward (default)
+  case Right // Fill rightward

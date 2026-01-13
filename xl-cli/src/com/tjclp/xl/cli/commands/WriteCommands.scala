@@ -22,6 +22,7 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.styleSyntax
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.cli.FillDirection
 
 /**
  * Write command handlers.
@@ -517,3 +518,207 @@ object WriteCommands:
         }
       }
     }
+
+  /**
+   * Fill cells with source value/formula (Excel Ctrl+D/Ctrl+R).
+   *
+   * Fill direction controls how source cells map to target cells:
+   *   - Down: Source row is repeated down (A1 → A1:A10, or A1:E1 → A1:E10)
+   *   - Right: Source column is repeated right (A1 → A1:J1, or A1:A5 → A1:J5)
+   *
+   * Formulas are shifted relative to the source position using Excel's anchor rules.
+   */
+  def fill(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    sourceStr: String,
+    targetStr: String,
+    direction: FillDirection,
+    outputPath: Path,
+    config: WriterConfig
+  ): IO[String] =
+    for
+      // Resolve source and target
+      sourceResolved <- SheetResolver.resolveRef(wb, sheetOpt, sourceStr, "fill")
+      targetResolved <- SheetResolver.resolveRef(wb, sheetOpt, targetStr, "fill")
+      (targetSheet, _) = targetResolved
+
+      // Convert source to range (single cell becomes 1x1 range)
+      sourceRange = sourceResolved._2 match
+        case Left(ref) => CellRange(ref, ref)
+        case Right(range) => range
+
+      // Target must be a range
+      targetRange <- targetResolved._2 match
+        case Right(range) => IO.pure(range)
+        case Left(ref) =>
+          IO.raiseError(
+            new Exception(s"Fill target must be a range, not a single cell: ${ref.toA1}")
+          )
+
+      // Validate source/target compatibility based on direction
+      _ <- validateFillRanges(sourceRange, targetRange, direction)
+
+      // Apply fill operation
+      updatedSheet = applyFill(targetSheet, wb, sourceRange, targetRange, direction)
+      updatedWb = wb.put(updatedSheet)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      dirLabel = if direction == FillDirection.Right then "right" else "down"
+    yield s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)\nSaved: $outputPath"
+
+  /** Validate that source and target ranges are compatible for fill direction */
+  private def validateFillRanges(
+    source: CellRange,
+    target: CellRange,
+    direction: FillDirection
+  ): IO[Unit] =
+    direction match
+      case FillDirection.Down =>
+        // For fill down, source columns must match target columns
+        val sourceStartCol = Column.index0(source.start.col)
+        val sourceEndCol = Column.index0(source.end.col)
+        val targetStartCol = Column.index0(target.start.col)
+        val targetEndCol = Column.index0(target.end.col)
+        if sourceStartCol == targetStartCol && sourceEndCol == targetEndCol then IO.unit
+        else
+          IO.raiseError(
+            new Exception(
+              s"Fill down requires matching columns. Source: ${source.toA1}, Target: ${target.toA1}"
+            )
+          )
+
+      case FillDirection.Right =>
+        // For fill right, source rows must match target rows
+        val sourceStartRow = Row.index0(source.start.row)
+        val sourceEndRow = Row.index0(source.end.row)
+        val targetStartRow = Row.index0(target.start.row)
+        val targetEndRow = Row.index0(target.end.row)
+        if sourceStartRow == targetStartRow && sourceEndRow == targetEndRow then IO.unit
+        else
+          IO.raiseError(
+            new Exception(
+              s"Fill right requires matching rows. Source: ${source.toA1}, Target: ${target.toA1}"
+            )
+          )
+
+  /** Apply fill operation by copying source cells to target range with formula shifting */
+  private def applyFill(
+    sheet: Sheet,
+    wb: Workbook,
+    source: CellRange,
+    target: CellRange,
+    direction: FillDirection
+  ): Sheet =
+    direction match
+      case FillDirection.Down =>
+        applyFillDown(sheet, wb, source, target)
+      case FillDirection.Right =>
+        applyFillRight(sheet, wb, source, target)
+
+  /** Fill down: repeat source row(s) down through target range */
+  private def applyFillDown(
+    sheet: Sheet,
+    wb: Workbook,
+    source: CellRange,
+    target: CellRange
+  ): Sheet =
+    val sourceStartRow = Row.index0(source.start.row)
+    val sourceEndRow = Row.index0(source.end.row)
+    val sourceRowCount = sourceEndRow - sourceStartRow + 1
+
+    val targetStartRow = Row.index0(target.start.row)
+    val targetEndRow = Row.index0(target.end.row)
+
+    val startCol = Column.index0(source.start.col)
+    val endCol = Column.index0(source.end.col)
+
+    // For each target row, copy from corresponding source row (cycling if needed)
+    (targetStartRow to targetEndRow).foldLeft(sheet) { (s, targetRowIdx) =>
+      // Determine which source row to copy from (0-indexed within source)
+      val sourceRowOffset = (targetRowIdx - targetStartRow) % sourceRowCount
+      val sourceRowIdx = sourceStartRow + sourceRowOffset.toInt
+      val rowDelta = targetRowIdx - sourceRowIdx
+
+      // Skip if we're on a source row (no shifting needed for source itself)
+      if rowDelta == 0 then s
+      else
+        // Copy each cell in the row
+        (startCol to endCol).foldLeft(s) { (s2, colIdx) =>
+          // ARef.from0 takes (colIndex, rowIndex)
+          val sourceRef = com.tjclp.xl.addressing.ARef.from0(colIdx, sourceRowIdx)
+          val targetRef = com.tjclp.xl.addressing.ARef.from0(colIdx, targetRowIdx)
+          copyCell(s2, wb, sourceRef, targetRef, colDelta = 0, rowDelta = rowDelta.toInt)
+        }
+    }
+
+  /** Fill right: repeat source column(s) right through target range */
+  private def applyFillRight(
+    sheet: Sheet,
+    wb: Workbook,
+    source: CellRange,
+    target: CellRange
+  ): Sheet =
+    val sourceStartCol = Column.index0(source.start.col)
+    val sourceEndCol = Column.index0(source.end.col)
+    val sourceColCount = sourceEndCol - sourceStartCol + 1
+
+    val targetStartCol = Column.index0(target.start.col)
+    val targetEndCol = Column.index0(target.end.col)
+
+    val startRow = Row.index0(source.start.row)
+    val endRow = Row.index0(source.end.row)
+
+    // For each target column, copy from corresponding source column (cycling if needed)
+    (targetStartCol to targetEndCol).foldLeft(sheet) { (s, targetColIdx) =>
+      // Determine which source column to copy from (0-indexed within source)
+      val sourceColOffset = (targetColIdx - targetStartCol) % sourceColCount
+      val sourceColIdx = sourceStartCol + sourceColOffset.toInt
+      val colDelta = targetColIdx - sourceColIdx
+
+      // Skip if we're on a source column (no shifting needed for source itself)
+      if colDelta == 0 then s
+      else
+        // Copy each cell in the column
+        (startRow to endRow).foldLeft(s) { (s2, rowIdx) =>
+          // ARef.from0 takes (colIndex, rowIndex)
+          val sourceRef = com.tjclp.xl.addressing.ARef.from0(sourceColIdx, rowIdx)
+          val targetRef = com.tjclp.xl.addressing.ARef.from0(targetColIdx, rowIdx)
+          copyCell(s2, wb, sourceRef, targetRef, colDelta = colDelta.toInt, rowDelta = 0)
+        }
+    }
+
+  /** Copy a single cell with formula shifting */
+  private def copyCell(
+    sheet: Sheet,
+    wb: Workbook,
+    sourceRef: com.tjclp.xl.addressing.ARef,
+    targetRef: com.tjclp.xl.addressing.ARef,
+    colDelta: Int,
+    rowDelta: Int
+  ): Sheet =
+    sheet.cells.get(sourceRef) match
+      case None => sheet // Empty source cell, nothing to copy
+      case Some(sourceCell) =>
+        sourceCell.value match
+          case CellValue.Formula(formula, _) =>
+            // Shift formula references
+            val fullFormula = s"=$formula"
+            FormulaParser.parse(fullFormula) match
+              case Left(_) =>
+                // If formula can't be parsed, copy as-is
+                val cachedValue =
+                  SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+                sheet.put(targetRef, CellValue.Formula(formula, cachedValue))
+              case Right(parsedExpr) =>
+                val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
+                val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+                val fullShiftedFormula = s"=$shiftedFormula"
+                val cachedValue =
+                  SheetEvaluator
+                    .evaluateFormula(sheet)(fullShiftedFormula, workbook = Some(wb))
+                    .toOption
+                sheet.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
+
+          case value =>
+            // Non-formula: copy value as-is
+            sheet.put(targetRef, value)
