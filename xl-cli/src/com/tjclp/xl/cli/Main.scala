@@ -13,6 +13,7 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.cli.commands.{
   CellCommands,
+  CommentCommands,
   ImportCommands,
   ReadCommands,
   SheetCommands,
@@ -67,7 +68,7 @@ object Main
 
     // Sheet-level write: --file, --sheet, and --output (required)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
@@ -451,6 +452,20 @@ object Main
       rangeArg.map(CliCommand.Unmerge.apply)
     }
 
+  // --- Comment commands ---
+  private val commentTextArg = Opts.argument[String]("text")
+  private val authorOpt = Opts.option[String]("author", "Comment author name").orNone
+
+  val commentCmd: Opts[CliCommand] =
+    Opts.subcommand("comment", "Add comment to cell") {
+      (refArg, commentTextArg, authorOpt).mapN(CliCommand.AddComment.apply)
+    }
+
+  val removeCommentCmd: Opts[CliCommand] =
+    Opts.subcommand("remove-comment", "Remove comment from cell") {
+      refArg.map(CliCommand.RemoveComment.apply)
+    }
+
   // ==========================================================================
   // Command execution
   // ==========================================================================
@@ -735,6 +750,16 @@ object Main
 
     case CliCommand.Unmerge(rangeStr) =>
       requireOutput(outputOpt, backendOpt)(CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _))
+
+    case CliCommand.AddComment(refStr, text, author) =>
+      requireOutput(outputOpt, backendOpt)(
+        CommentCommands.addComment(wb, sheetOpt, refStr, text, author, _, _)
+      )
+
+    case CliCommand.RemoveComment(refStr) =>
+      requireOutput(outputOpt, backendOpt)(
+        CommentCommands.removeComment(wb, sheetOpt, refStr, _, _)
+      )
 
   // ==========================================================================
   // Helpers
