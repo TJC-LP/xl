@@ -344,6 +344,165 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(outputPath)
   }
 
+  // ========== Regression Tests for Comment Removal (PR #151 bug fix) ==========
+
+  test("comment removal actually deletes comments XML and VML (regression #comment-removal-bug)") {
+    // This test validates the fix for the surgical modification bug where:
+    // - Sheet.removeComment() didn't actually delete comments from output
+    // - comments1.xml and vmlDrawing1.vml persisted even when sheet.comments was empty
+    // Fix in XlsxWriter.scala lines 1450-1451 and 1503-1514
+
+    // Create sheet with comment
+    val sheet = Sheet("Sheet1")
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Test note", Some("Author")))
+    val initialWb = Workbook(Vector(sheet))
+
+    // Write initial workbook
+    val sourcePath = Files.createTempFile("comment-removal-source", ".xlsx")
+    XlsxWriter.write(initialWb, sourcePath).fold(err => fail(s"Initial write failed: $err"), identity)
+
+    // Verify comments exist in source
+    val sourceZip = new ZipFile(sourcePath.toFile)
+    assert(sourceZip.getEntry("xl/comments1.xml") != null, "Source should have comments1.xml")
+    assert(sourceZip.getEntry("xl/drawings/vmlDrawing1.vml") != null, "Source should have vmlDrawing1.vml")
+    sourceZip.close()
+
+    // Reload and remove comment (surgical modification)
+    val withContext = XlsxReader.read(sourcePath).fold(err => fail(s"Read failed: $err"), identity)
+    val sheetWithComment = withContext("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity)
+    val sheetWithoutComment = sheetWithComment.removeComment(ref"A1")
+    val modifiedWb = withContext.put(sheetWithoutComment)
+
+    // Write modified workbook
+    val outputPath = Files.createTempFile("comment-removal-output", ".xlsx")
+    XlsxWriter.write(modifiedWb, outputPath).fold(err => fail(s"Surgical write failed: $err"), identity)
+
+    // CRITICAL: Verify comments XML is GONE (this was the bug!)
+    val outputZip = new ZipFile(outputPath.toFile)
+    val commentsEntry = outputZip.getEntry("xl/comments1.xml")
+    assert(commentsEntry == null, "comments1.xml should be REMOVED after comment deletion")
+
+    val vmlEntry = outputZip.getEntry("xl/drawings/vmlDrawing1.vml")
+    assert(vmlEntry == null, "vmlDrawing1.vml should be REMOVED after comment deletion")
+
+    // Verify sheet is still valid
+    val reread = XlsxReader.read(outputPath).fold(err => fail(s"Reload failed: $err"), identity)
+    val rereadSheet = reread("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity)
+    assert(rereadSheet.comments.isEmpty, "Sheet should have no comments after removal")
+
+    outputZip.close()
+    Files.deleteIfExists(sourcePath)
+    Files.deleteIfExists(outputPath)
+  }
+
+  test("comment round-trip: add → remove → add again (regression #comment-roundtrip-bug)") {
+    // This tests that state properly resets and we can re-add comments after removing them
+
+    val sheet = Sheet("Sheet1")
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("First comment", Some("Author1")))
+    val wb1 = Workbook(Vector(sheet))
+
+    // Step 1: Write initial with comment
+    val path1 = Files.createTempFile("roundtrip-1", ".xlsx")
+    XlsxWriter.write(wb1, path1).fold(err => fail(s"Write 1 failed: $err"), identity)
+
+    // Step 2: Read, remove comment, write
+    val loaded1 = XlsxReader.read(path1).fold(err => fail(s"Read 1 failed: $err"), identity)
+    val sheetNoComment = loaded1("Sheet1")
+      .fold(err => fail(s"Sheet1 missing: $err"), identity)
+      .removeComment(ref"A1")
+    val wb2 = loaded1.put(sheetNoComment)
+
+    val path2 = Files.createTempFile("roundtrip-2", ".xlsx")
+    XlsxWriter.write(wb2, path2).fold(err => fail(s"Write 2 failed: $err"), identity)
+
+    // Verify comment is gone
+    val loaded2 = XlsxReader.read(path2).fold(err => fail(s"Read 2 failed: $err"), identity)
+    val sheet2 = loaded2("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity)
+    assert(sheet2.comments.isEmpty, "Comment should be removed")
+
+    // Step 3: Read, add NEW comment, write
+    val loaded3 = XlsxReader.read(path2).fold(err => fail(s"Read 3 failed: $err"), identity)
+    val sheetNewComment = loaded3("Sheet1")
+      .fold(err => fail(s"Sheet1 missing: $err"), identity)
+      .comment(ref"B2", com.tjclp.xl.cells.Comment.plainText("Second comment", Some("Author2")))
+    val wb3 = loaded3.put(sheetNewComment)
+
+    val path3 = Files.createTempFile("roundtrip-3", ".xlsx")
+    XlsxWriter.write(wb3, path3).fold(err => fail(s"Write 3 failed: $err"), identity)
+
+    // Verify new comment exists
+    val finalWb = XlsxReader.read(path3).fold(err => fail(s"Final read failed: $err"), identity)
+    val finalSheet = finalWb("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity)
+    assertEquals(finalSheet.comments.size, 1, "Should have exactly 1 comment")
+    assert(finalSheet.comments.contains(ref"B2"), "Comment should be at B2")
+    assertEquals(finalSheet.comments.get(ref"B2").flatMap(_.author), Some("Author2"))
+
+    // Verify A1 has no comment
+    assert(!finalSheet.comments.contains(ref"A1"), "A1 should have no comment")
+
+    // Verify XML files exist (since we have a comment now)
+    val finalZip = new ZipFile(path3.toFile)
+    assert(finalZip.getEntry("xl/comments1.xml") != null, "Should have comments1.xml for new comment")
+    assert(finalZip.getEntry("xl/drawings/vmlDrawing1.vml") != null, "Should have vmlDrawing1.vml for new comment")
+    finalZip.close()
+
+    // Clean up
+    Files.deleteIfExists(path1)
+    Files.deleteIfExists(path2)
+    Files.deleteIfExists(path3)
+  }
+
+  test("VML drawings for multi-sheet workbook are cleaned up per-sheet (regression #vml-cleanup-bug)") {
+    // Verifies that VML drawings are only removed for sheets that lost their comments,
+    // not for other sheets that still have comments
+
+    // Create workbook with comments on two sheets
+    val sheet1 = Sheet("Sheet1")
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Sheet1 comment", Some("Author")))
+    val sheet2 = Sheet("Sheet2")
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Sheet2 comment", Some("Author")))
+    val initialWb = Workbook(Vector(sheet1, sheet2))
+
+    val sourcePath = Files.createTempFile("multi-sheet-vml-source", ".xlsx")
+    XlsxWriter.write(initialWb, sourcePath).fold(err => fail(s"Initial write failed: $err"), identity)
+
+    // Verify both sheets have comments/VML
+    val sourceZip = new ZipFile(sourcePath.toFile)
+    assert(sourceZip.getEntry("xl/comments1.xml") != null, "Sheet1 should have comments")
+    assert(sourceZip.getEntry("xl/comments2.xml") != null, "Sheet2 should have comments")
+    assert(sourceZip.getEntry("xl/drawings/vmlDrawing1.vml") != null, "Sheet1 should have VML")
+    assert(sourceZip.getEntry("xl/drawings/vmlDrawing2.vml") != null, "Sheet2 should have VML")
+    sourceZip.close()
+
+    // Remove comment from Sheet1 only, keep Sheet2's comment
+    val withContext = XlsxReader.read(sourcePath).fold(err => fail(s"Read failed: $err"), identity)
+    val sheet1NoComment = withContext("Sheet1")
+      .fold(err => fail(s"Sheet1 missing: $err"), identity)
+      .removeComment(ref"A1")
+    val modifiedWb = withContext.put(sheet1NoComment)
+
+    val outputPath = Files.createTempFile("multi-sheet-vml-output", ".xlsx")
+    XlsxWriter.write(modifiedWb, outputPath).fold(err => fail(s"Write failed: $err"), identity)
+
+    // Verify Sheet1's comment files are gone, but Sheet2's remain
+    val outputZip = new ZipFile(outputPath.toFile)
+    assert(outputZip.getEntry("xl/comments1.xml") == null, "Sheet1 comments should be REMOVED")
+    assert(outputZip.getEntry("xl/drawings/vmlDrawing1.vml") == null, "Sheet1 VML should be REMOVED")
+    assert(outputZip.getEntry("xl/comments2.xml") != null, "Sheet2 comments should REMAIN")
+    assert(outputZip.getEntry("xl/drawings/vmlDrawing2.vml") != null, "Sheet2 VML should REMAIN")
+
+    // Verify Sheet2's comment is still readable
+    val reread = XlsxReader.read(outputPath).fold(err => fail(s"Reload failed: $err"), identity)
+    val rereadSheet2 = reread("Sheet2").fold(err => fail(s"Sheet2 missing: $err"), identity)
+    assertEquals(rereadSheet2.comments.size, 1, "Sheet2 should still have 1 comment")
+    assertEquals(rereadSheet2.comments.get(ref"A1").map(_.text.toPlainText), Some("Sheet2 comment"))
+
+    outputZip.close()
+    Files.deleteIfExists(sourcePath)
+    Files.deleteIfExists(outputPath)
+  }
+
   // Helper: Read entry bytes from ZIP
   private def readEntryBytes(zip: ZipFile, entry: ZipEntry): Array[Byte] =
     val is = zip.getInputStream(entry)
