@@ -80,6 +80,7 @@ xl -f model.xlsx eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary v
 | `put` | `<ref> <value>` | Write value to cell (requires `-o`) |
 | `putf` | `<ref> <formula>` | Write formula to cell (requires `-o`) |
 | `style` | `<range> [options]` | Apply styling (requires `-o`) |
+| `clear` | `<range> [--all\|--styles\|--comments]` | Clear cell contents/styles/comments (requires `-o`) |
 
 ---
 
@@ -273,6 +274,46 @@ Apply styling to cells.
 **Example**:
 ```bash
 xl -f input.xlsx -o output.xlsx style A1:D1 --bold --bg yellow --align center
+```
+
+---
+
+### `xl clear <range>`
+
+Clear cell contents, styles, or comments from a range.
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `range` | string | Yes | — | Cell or range reference (e.g., "A1", "A1:D10") |
+| `--all` | flag | No | false | Clear contents, styles, and comments |
+| `--styles` | flag | No | false | Clear styles only (reset to default) |
+| `--comments` | flag | No | false | Clear comments only |
+
+**Behavior**:
+- **Default** (no flags): Clears cell contents only
+- **`--all`**: Clears everything (contents, styles, comments)
+- **`--styles`**: Clears formatting but keeps contents and comments
+- **`--comments`**: Clears comments but keeps contents and styles
+- Flags can be combined: `--styles --comments` clears both
+- Merged regions overlapping the cleared range are automatically unmerged
+
+**Examples**:
+```bash
+# Clear contents (default)
+xl -f input.xlsx -o output.xlsx clear A1:D10
+
+# Clear everything
+xl -f input.xlsx -o output.xlsx clear A1:D10 --all
+
+# Clear styles only (keep data)
+xl -f input.xlsx -o output.xlsx clear A1:D10 --styles
+
+# Clear comments only
+xl -f input.xlsx -o output.xlsx clear B5 --comments
+
+# Clear styles and comments, keep contents
+xl -f input.xlsx -o output.xlsx clear A1:D10 --styles --comments
 ```
 
 ---
