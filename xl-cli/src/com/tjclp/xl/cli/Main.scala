@@ -68,7 +68,7 @@ object Main
 
     // Sheet-level write: --file, --sheet, and --output (required)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
@@ -476,6 +476,19 @@ object Main
       (rangeArg, clearAllOpt, clearStylesOpt, clearCommentsOpt).mapN(CliCommand.Clear.apply)
     }
 
+  // --- Fill command ---
+  private val sourceArg = Opts.argument[String]("source")
+  private val targetArg = Opts.argument[String]("target")
+  private val rightOpt = Opts.flag("right", "Fill rightward instead of downward").orFalse
+
+  val fillCmd: Opts[CliCommand] =
+    Opts.subcommand("fill", "Fill cells with source value/formula (Excel Ctrl+D/Ctrl+R)") {
+      (sourceArg, targetArg, rightOpt).mapN { (source, target, right) =>
+        val direction = if right then FillDirection.Right else FillDirection.Down
+        CliCommand.Fill(source, target, direction)
+      }
+    }
+
   // ==========================================================================
   // Command execution
   // ==========================================================================
@@ -774,6 +787,11 @@ object Main
     case CliCommand.Clear(rangeStr, all, styles, comments) =>
       requireOutput(outputOpt, backendOpt)(
         CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _)
+      )
+
+    case CliCommand.Fill(source, target, direction) =>
+      requireOutput(outputOpt, backendOpt)(
+        WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _)
       )
 
   // ==========================================================================

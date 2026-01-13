@@ -65,7 +65,7 @@ xl -f model.xlsx eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary v
 | **Navigate** | `sheets`, `bounds` | Find your way around |
 | **Explore** | `view`, `cell`, `search` | Read data incrementally |
 | **Analyze** | `eval` | What-if formula evaluation |
-| **Mutate** | `put`, `putf`, `style` | Make changes (requires `-o`) |
+| **Mutate** | `put`, `putf`, `style`, `fill`, `clear` | Make changes (requires `-o`) |
 
 ### Command Summary
 
@@ -80,6 +80,7 @@ xl -f model.xlsx eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary v
 | `put` | `<ref> <value>` | Write value to cell (requires `-o`) |
 | `putf` | `<ref> <formula>` | Write formula to cell (requires `-o`) |
 | `style` | `<range> [options]` | Apply styling (requires `-o`) |
+| `fill` | `<source> <target> [--right]` | Fill cells with source value/formula (requires `-o`) |
 | `clear` | `<range> [--all\|--styles\|--comments]` | Clear cell contents/styles/comments (requires `-o`) |
 
 ---
@@ -314,6 +315,48 @@ xl -f input.xlsx -o output.xlsx clear B5 --comments
 
 # Clear styles and comments, keep contents
 xl -f input.xlsx -o output.xlsx clear A1:D10 --styles --comments
+```
+
+---
+
+### `xl fill <source> <target> [--right]`
+
+Fill cells with source value/formula (Excel Ctrl+D/Ctrl+R equivalent).
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `source` | string | Yes | — | Source cell or range (e.g., "A1", "A1:C1") |
+| `target` | string | Yes | — | Target range to fill (e.g., "A1:A10", "A1:C10") |
+| `--right` | flag | No | false | Fill rightward instead of downward |
+
+**Behavior**:
+- **Fill Down** (default): Source row(s) are repeated down through target range
+  - Columns must match between source and target
+  - Example: `fill A1 A1:A10` copies A1 to A2:A10
+  - Example: `fill A1:C1 A1:C10` copies row 1 to rows 2-10
+- **Fill Right** (`--right`): Source column(s) are repeated right through target range
+  - Rows must match between source and target
+  - Example: `fill A1 A1:E1 --right` copies A1 to B1:E1
+  - Example: `fill A1:A5 A1:E5 --right` copies column A to columns B-E
+- Formulas are shifted using Excel anchor rules (`$` anchors are preserved)
+
+**Examples**:
+```bash
+# Fill value down a column (Ctrl+D equivalent)
+xl -f input.xlsx -o output.xlsx fill A1 A1:A100
+
+# Fill multiple columns down together
+xl -f input.xlsx -o output.xlsx fill A1:E1 A1:E100
+
+# Fill value right across a row (Ctrl+R equivalent)
+xl -f input.xlsx -o output.xlsx fill A1 A1:J1 --right
+
+# Fill multiple rows right together
+xl -f input.xlsx -o output.xlsx fill A1:A5 A1:J5 --right
+
+# Formula shifting example: =A1*2 in B1 fills to =A2*2, =A3*2, etc.
+xl -f input.xlsx -o output.xlsx fill B1 B1:B10
 ```
 
 ---
