@@ -182,6 +182,57 @@ class ClearCommandSpec extends FunSuite:
     assert(!s.comments.contains(ref))
   }
 
+  // ========== Formula Clearing ==========
+
+  test("clear: default mode clears formula cells") {
+    val ref = ARef.from0(0, 0)
+    val sheet = Sheet("Test")
+      .put(ref, CellValue.Formula("=1+1", Some(CellValue.Number(2.0))))
+      .put(ARef.from0(1, 0), CellValue.Text("B1"))
+    val wb = Workbook(sheet)
+
+    // Verify formula is present
+    assert(sheet.cells.get(ref).exists(_.value.isInstanceOf[CellValue.Formula]))
+
+    val result = CellCommands
+      .clear(wb, Some(sheet), "A1", all = false, styles = false, comments = false, outputPath, config)
+      .unsafeRunSync()
+
+    assert(result.contains("Cleared contents"))
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.head
+    // Formula cell should be cleared
+    assertEquals(s.cells.get(ref), None)
+    // Other cell should remain
+    assertEquals(s.cells.get(ARef.from0(1, 0)).map(_.value), Some(CellValue.Text("B1")))
+  }
+
+  // ========== Merged Region Handling ==========
+
+  test("clear: default mode unmerges overlapping merged regions") {
+    val sheet = Sheet("Test")
+      .put(ARef.from0(0, 0), CellValue.Text("Merged"))
+      .put(ARef.from0(2, 0), CellValue.Text("C1"))
+      .merge(CellRange(ARef.from0(0, 0), ARef.from0(1, 0))) // Merge A1:B1
+    val wb = Workbook(sheet)
+
+    // Verify merge exists
+    assertEquals(sheet.mergedRanges.size, 1)
+
+    // Clear A1 which overlaps with the merge
+    val result = CellCommands
+      .clear(wb, Some(sheet), "A1", all = false, styles = false, comments = false, outputPath, config)
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.head
+    // Merged region should be removed
+    assertEquals(s.mergedRanges.size, 0)
+    // Cell outside merge should remain
+    assertEquals(s.cells.get(ARef.from0(2, 0)).map(_.value), Some(CellValue.Text("C1")))
+  }
+
   // ========== Combined Flags ==========
 
   test("clear --styles --comments: clears both but keeps contents") {

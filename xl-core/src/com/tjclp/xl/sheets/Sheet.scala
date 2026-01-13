@@ -475,14 +475,35 @@ final case class Sheet(
   def clearMerged: Sheet =
     copy(mergedRanges = Set.empty)
 
-  /** Clear styles from cells in range (set styleId to None) */
+  /**
+   * Clear styles from cells in range (set styleId to None).
+   *
+   * This resets cells in the range to the default style without affecting their contents or
+   * comments. Cells outside the range are unchanged.
+   *
+   * @param range
+   *   The cell range to clear styles from
+   * @return
+   *   A new Sheet with styles cleared from cells in the range
+   */
   def clearStylesInRange(range: CellRange): Sheet =
-    copy(cells = cells.map { (ref, cell) =>
-      if range.contains(ref) then (ref, cell.copy(styleId = None))
-      else (ref, cell)
-    })
+    // Use filter + reconstruct pattern for performance:
+    // Only modify cells within the range, avoiding reconstruction of unaffected entries
+    val (inRange, outsideRange) = cells.partition((ref, _) => range.contains(ref))
+    val clearedInRange = inRange.view.mapValues(cell => cell.copy(styleId = None)).toMap
+    copy(cells = outsideRange ++ clearedInRange)
 
-  /** Clear comments from cells in range */
+  /**
+   * Clear comments from cells in range.
+   *
+   * Removes all comments from cells within the specified range. Cell contents and styles are not
+   * affected.
+   *
+   * @param range
+   *   The cell range to clear comments from
+   * @return
+   *   A new Sheet with comments removed from cells in the range
+   */
   def clearCommentsInRange(range: CellRange): Sheet =
     copy(comments = comments.filterNot((ref, _) => range.contains(ref)))
 

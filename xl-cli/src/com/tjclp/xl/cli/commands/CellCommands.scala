@@ -105,7 +105,15 @@ object CellCommands:
       sheet2 = if clearStyles then sheet1.clearStylesInRange(range) else sheet1
       sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
 
-      updatedWb = wb.put(sheet3)
+      // Unmerge any merged regions that overlap with the cleared range
+      // This prevents leaving orphaned merge regions that reference cleared cells
+      sheet4 =
+        if clearContents then
+          val overlappingMerges = sheet3.mergedRanges.filter(_.intersects(range))
+          overlappingMerges.foldLeft(sheet3)((s, mr) => s.unmerge(mr))
+        else sheet3
+
+      updatedWb = wb.put(sheet4)
       _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
 
       // Build description of what was cleared
