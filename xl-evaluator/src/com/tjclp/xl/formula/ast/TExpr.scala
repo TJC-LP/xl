@@ -157,6 +157,20 @@ enum TExpr[A] derives CanEqual:
    */
   case Div(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
 
+  // String operators
+
+  /**
+   * String concatenation: x & y
+   *
+   * Excel's & operator joins two strings together.
+   *
+   * Examples:
+   *   - "Hello" & "World" → "HelloWorld"
+   *   - A1 & B1 where A1="Hello", B1="World" → "HelloWorld"
+   *   - A1 & " - " & B1 → "Hello - World"
+   */
+  case Concat(x: TExpr[String], y: TExpr[String]) extends TExpr[String]
+
   // Range aggregation
 
   // Comparison operators (return Boolean)

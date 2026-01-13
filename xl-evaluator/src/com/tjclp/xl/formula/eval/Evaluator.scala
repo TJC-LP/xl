@@ -246,6 +246,14 @@ private class EvaluatorImpl extends Evaluator:
             else Right(xv / yv)
         yield result
 
+      // ===== String Operators =====
+      case TExpr.Concat(x, y) =>
+        // Concatenate: join two strings
+        for
+          xv <- eval(x, sheet, clock, workbook)
+          yv <- eval(y, sheet, clock, workbook)
+        yield xv + yv
+
       // ===== Comparison Operators =====
       case TExpr.Lt(x, y) =>
         // Less than: numeric comparison

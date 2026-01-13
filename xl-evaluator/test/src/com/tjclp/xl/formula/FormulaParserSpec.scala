@@ -2,7 +2,10 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.eval.Evaluator
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.sheets.Sheet
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import org.scalacheck.{Arbitrary, Gen}
@@ -536,15 +539,79 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("error: concatenation operator not supported") {
-    val result = FormulaParser.parse("=\"foo\"&\"bar\"")
-    assert(result.isLeft)
-    result.left.foreach {
-      case ParseError.InvalidOperator("&", _, reason) =>
-        assert(reason.contains("concatenation"))
-        assert(reason.contains("not yet supported"))
-      case other => fail(s"Expected InvalidOperator for '&', got $other")
+  // ==================== Concatenation Operator Tests ====================
+
+  test("parse concatenation: string literals") {
+    val result = FormulaParser.parse("=\"Hello\"&\"World\"")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach { expr =>
+      assertEquals(FormulaPrinter.print(expr), "=\"Hello\"&\"World\"")
     }
+  }
+
+  test("parse concatenation: cell references") {
+    val result = FormulaParser.parse("=A1&B1")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach { expr =>
+      assertEquals(FormulaPrinter.print(expr), "=A1&B1")
+    }
+  }
+
+  test("parse concatenation: mixed literals and refs") {
+    val result = FormulaParser.parse("=A1&\" - \"&B1")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach { expr =>
+      assertEquals(FormulaPrinter.print(expr), "=A1&\" - \"&B1")
+    }
+  }
+
+  test("parse concatenation: with arithmetic (precedence)") {
+    // & has lower precedence than + so A1+B1 evaluates first
+    val result = FormulaParser.parse("=A1+B1&C1")
+    assert(result.isRight, s"Expected success, got $result")
+  }
+
+  test("evaluate concatenation: string literals") {
+    val sheet = Sheet("Test")
+    val result = for
+      expr <- FormulaParser.parse("=\"Hello\"&\"World\"")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right("HelloWorld"))
+  }
+
+  test("evaluate concatenation: cell references") {
+    val sheet = Sheet("Test")
+      .put(ARef.from0(0, 0), CellValue.Text("Hello"))
+      .put(ARef.from0(1, 0), CellValue.Text("World"))
+    val result = for
+      expr <- FormulaParser.parse("=A1&B1")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right("HelloWorld"))
+  }
+
+  test("evaluate concatenation: number coercion to string") {
+    val sheet = Sheet("Test")
+      .put(ARef.from0(0, 0), CellValue.Number(42))
+      .put(ARef.from0(1, 0), CellValue.Text("!"))
+    val result = for
+      expr <- FormulaParser.parse("=A1&B1")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right("42!"))
+  }
+
+  test("evaluate concatenation: chained") {
+    val sheet = Sheet("Test")
+      .put(ARef.from0(0, 0), CellValue.Text("A"))
+      .put(ARef.from0(1, 0), CellValue.Text("B"))
+      .put(ARef.from0(2, 0), CellValue.Text("C"))
+    val result = for
+      expr <- FormulaParser.parse("=A1&B1&C1")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right("ABC"))
   }
 
   // ==================== Printer Tests ====================

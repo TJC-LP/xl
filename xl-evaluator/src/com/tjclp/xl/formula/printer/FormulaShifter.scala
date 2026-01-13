@@ -99,6 +99,11 @@ object FormulaShifter:
         Div(shiftInternal(x, colDelta, rowDelta), shiftInternal(y, colDelta, rowDelta))
           .asInstanceOf[TExpr[A]]
 
+      // String operators
+      case Concat(x, y) =>
+        Concat(shiftInternal(x, colDelta, rowDelta), shiftInternal(y, colDelta, rowDelta))
+          .asInstanceOf[TExpr[A]]
+
       // Comparison operators
       case Eq(x, y) =>
         Eq(shiftInternal(x, colDelta, rowDelta), shiftInternal(y, colDelta, rowDelta))
