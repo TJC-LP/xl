@@ -65,7 +65,7 @@ xl -f model.xlsx eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary v
 | **Navigate** | `sheets`, `bounds` | Find your way around |
 | **Explore** | `view`, `cell`, `search` | Read data incrementally |
 | **Analyze** | `eval` | What-if formula evaluation |
-| **Mutate** | `put`, `putf`, `style`, `fill`, `clear` | Make changes (requires `-o`) |
+| **Mutate** | `put`, `putf`, `style`, `row`, `col`, `fill`, `clear` | Make changes (requires `-o`) |
 
 ### Command Summary
 
@@ -80,6 +80,8 @@ xl -f model.xlsx eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary v
 | `put` | `<ref> <value>` | Write value to cell (requires `-o`) |
 | `putf` | `<ref> <formula>` | Write formula to cell (requires `-o`) |
 | `style` | `<range> [options]` | Apply styling (requires `-o`) |
+| `row` | `<n> [options]` | Set row height, hide/show (requires `-o`) |
+| `col` | `<letter> [options]` | Set column width, hide/show, auto-fit (requires `-o`) |
 | `fill` | `<source> <target> [--right]` | Fill cells with source value/formula (requires `-o`) |
 | `clear` | `<range> [--all\|--styles\|--comments]` | Clear cell contents/styles/comments (requires `-o`) |
 
@@ -275,6 +277,61 @@ Apply styling to cells.
 **Example**:
 ```bash
 xl -f input.xlsx -o output.xlsx style A1:D1 --bold --bg yellow --align center
+```
+
+---
+
+### `xl row <n> [options]`
+
+Set row properties (height, hide/show).
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `n` | int | Yes | — | Row number (1-based) |
+| `--height` | double | No | — | Row height in points |
+| `--hide` | flag | No | false | Hide the row |
+| `--show` | flag | No | false | Show (unhide) the row |
+
+**Examples**:
+```bash
+xl -f input.xlsx -o output.xlsx row 5 --height 30
+xl -f input.xlsx -o output.xlsx row 10 --hide
+xl -f input.xlsx -o output.xlsx row 10 --show
+```
+
+---
+
+### `xl col <letter> [options]`
+
+Set column properties (width, hide/show, auto-fit).
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `letter` | string | Yes | — | Column letter (e.g., "A", "B", "AA") |
+| `--width` | double | No | — | Column width in character units (~8.43 default) |
+| `--auto-fit` | flag | No | false | Auto-fit width based on cell content |
+| `--hide` | flag | No | false | Hide the column |
+| `--show` | flag | No | false | Show (unhide) the column |
+
+**Behavior**:
+- `--auto-fit` calculates optimal width based on longest cell content in the column
+- Adds 2 characters of padding to the calculated width
+- Minimum width is 8.43 (Excel default)
+- If both `--width` and `--auto-fit` are specified, `--auto-fit` takes precedence
+
+**Examples**:
+```bash
+# Set explicit width
+xl -f input.xlsx -o output.xlsx col B --width 20
+
+# Auto-fit column width based on content
+xl -f input.xlsx -o output.xlsx col A --auto-fit
+
+# Hide/show columns
+xl -f input.xlsx -o output.xlsx col C --hide
+xl -f input.xlsx -o output.xlsx col C --show
 ```
 
 ---

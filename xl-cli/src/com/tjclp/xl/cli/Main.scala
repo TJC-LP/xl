@@ -68,7 +68,7 @@ object Main
 
     // Sheet-level write: --file, --sheet, and --output (required)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
@@ -355,14 +355,28 @@ object Main
   private val widthOpt = Opts.option[Double]("width", "Column width in character units").orNone
   private val hideOpt = Opts.flag("hide", "Hide row/column").orFalse
   private val showOpt = Opts.flag("show", "Show (unhide) row/column").orFalse
+  private val autoFitOpt = Opts.flag("auto-fit", "Auto-fit column width based on content").orFalse
 
   val rowCmd: Opts[CliCommand] = Opts.subcommand("row", "Set row properties (height, hide/show)") {
     (rowArg, heightOpt, hideOpt, showOpt).mapN(CliCommand.RowOp.apply)
   }
 
   val colCmd: Opts[CliCommand] =
-    Opts.subcommand("col", "Set column properties (width, hide/show)") {
-      (colArg, widthOpt, hideOpt, showOpt).mapN(CliCommand.ColOp.apply)
+    Opts.subcommand(
+      "col",
+      "Set column properties (width, hide/show, auto-fit). Supports ranges like A:F"
+    ) {
+      (colArg, widthOpt, hideOpt, showOpt, autoFitOpt).mapN(CliCommand.ColOp.apply)
+    }
+
+  // --- Auto-fit command ---
+  private val autoFitColumnsOpt =
+    Opts
+      .option[String]("columns", "Column range to auto-fit (e.g., A:F). Default: all used columns")
+      .orNone
+  val autoFitCmd: Opts[CliCommand] =
+    Opts.subcommand("autofit", "Auto-fit column widths based on content") {
+      autoFitColumnsOpt.map(CliCommand.AutoFit.apply)
     }
 
   // --- Batch command ---
@@ -720,9 +734,9 @@ object Main
         WriteCommands.row(wb, sheetOpt, rowNum, height, hide, show, _, _)
       )
 
-    case CliCommand.ColOp(colStr, width, hide, show) =>
+    case CliCommand.ColOp(colStr, width, hide, show, autoFit) =>
       requireOutput(outputOpt, backendOpt)(
-        WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, _, _)
+        WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, autoFit, _, _)
       )
 
     case CliCommand.Batch(source) =>
@@ -792,6 +806,11 @@ object Main
     case CliCommand.Fill(source, target, direction) =>
       requireOutput(outputOpt, backendOpt)(
         WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _)
+      )
+
+    case CliCommand.AutoFit(columnsOpt) =>
+      requireOutput(outputOpt, backendOpt)(
+        WriteCommands.autoFit(wb, sheetOpt, columnsOpt, _, _)
       )
 
   // ==========================================================================

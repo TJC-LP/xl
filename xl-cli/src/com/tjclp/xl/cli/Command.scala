@@ -59,7 +59,7 @@ enum CliCommand:
     replace: Boolean
   )
   case RowOp(row: Int, height: Option[Double], hide: Boolean, show: Boolean)
-  case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean)
+  case ColOp(col: String, width: Option[Double], hide: Boolean, show: Boolean, autoFit: Boolean)
   case Batch(source: String) // "-" for stdin or file path
   case Import(
     csvPath: String,
@@ -83,6 +83,7 @@ enum CliCommand:
   case RemoveComment(ref: String)
   case Clear(range: String, all: Boolean, styles: Boolean, comments: Boolean)
   case Fill(source: String, target: String, direction: FillDirection)
+  case AutoFit(columns: Option[String]) // None = all used columns, Some("A:F") = specific range
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:
