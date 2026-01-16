@@ -7,7 +7,7 @@ import java.nio.file.{Files, Path}
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{Workbook, Sheet}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -358,4 +358,75 @@ class SortCommandSpec extends FunSuite:
     assertEquals(s.cells.get(ref(0, 1)).map(_.value), Some(CellValue.Number(10)))
     // Row 3: B cached value 30 (largest), so A=15
     assertEquals(s.cells.get(ref(0, 2)).map(_.value), Some(CellValue.Number(15)))
+  }
+
+  // ========== Data Preservation (Regression Tests) ==========
+
+  test("sort: cells outside range are preserved") {
+    // Column C is outside the sort range A:B
+    // Row 0: 3, X, Alpha
+    // Row 1: 1, Y, Beta
+    // Row 2: 2, Z, Gamma
+    val sheet = Sheet("Test")
+      .put(ref(0, 0), CellValue.Number(3))
+      .put(ref(1, 0), CellValue.Text("X"))
+      .put(ref(2, 0), CellValue.Text("Alpha")) // C1 - outside sort range
+      .put(ref(0, 1), CellValue.Number(1))
+      .put(ref(1, 1), CellValue.Text("Y"))
+      .put(ref(2, 1), CellValue.Text("Beta")) // C2 - outside sort range
+      .put(ref(0, 2), CellValue.Number(2))
+      .put(ref(1, 2), CellValue.Text("Z"))
+      .put(ref(2, 2), CellValue.Text("Gamma")) // C3 - outside sort range
+    val wb = Workbook(sheet)
+
+    // Sort only A:B range, column C should NOT move
+    val key = SortKey("A", SortDirection.Ascending, SortMode.Numeric)
+    WriteCommands
+      .sort(wb, Some(sheet), "A1:B3", List(key), false, outputPath, config)
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.head
+
+    // Verify A:B columns are sorted (1, 2, 3 order)
+    assertEquals(s.cells.get(ref(0, 0)).map(_.value), Some(CellValue.Number(1)))
+    assertEquals(s.cells.get(ref(1, 0)).map(_.value), Some(CellValue.Text("Y")))
+    assertEquals(s.cells.get(ref(0, 1)).map(_.value), Some(CellValue.Number(2)))
+    assertEquals(s.cells.get(ref(1, 1)).map(_.value), Some(CellValue.Text("Z")))
+    assertEquals(s.cells.get(ref(0, 2)).map(_.value), Some(CellValue.Number(3)))
+    assertEquals(s.cells.get(ref(1, 2)).map(_.value), Some(CellValue.Text("X")))
+
+    // Verify column C is UNCHANGED (did not move with A:B)
+    assertEquals(s.cells.get(ref(2, 0)).map(_.value), Some(CellValue.Text("Alpha")))
+    assertEquals(s.cells.get(ref(2, 1)).map(_.value), Some(CellValue.Text("Beta")))
+    assertEquals(s.cells.get(ref(2, 2)).map(_.value), Some(CellValue.Text("Gamma")))
+  }
+
+  test("sort: cells above and below range are preserved") {
+    // Row 0 is above range, Row 4 is below range
+    val sheet = Sheet("Test")
+      .put(ref(0, 0), CellValue.Text("Header")) // Above range
+      .put(ref(0, 1), CellValue.Number(3))
+      .put(ref(0, 2), CellValue.Number(1))
+      .put(ref(0, 3), CellValue.Number(2))
+      .put(ref(0, 4), CellValue.Text("Footer")) // Below range
+    val wb = Workbook(sheet)
+
+    // Sort only A2:A4
+    val key = SortKey("A", SortDirection.Ascending, SortMode.Numeric)
+    WriteCommands
+      .sort(wb, Some(sheet), "A2:A4", List(key), false, outputPath, config)
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.head
+
+    // Row 0 (A1) unchanged
+    assertEquals(s.cells.get(ref(0, 0)).map(_.value), Some(CellValue.Text("Header")))
+    // Rows 1-3 (A2:A4) sorted
+    assertEquals(s.cells.get(ref(0, 1)).map(_.value), Some(CellValue.Number(1)))
+    assertEquals(s.cells.get(ref(0, 2)).map(_.value), Some(CellValue.Number(2)))
+    assertEquals(s.cells.get(ref(0, 3)).map(_.value), Some(CellValue.Number(3)))
+    // Row 4 (A5) unchanged
+    assertEquals(s.cells.get(ref(0, 4)).map(_.value), Some(CellValue.Text("Footer")))
   }
