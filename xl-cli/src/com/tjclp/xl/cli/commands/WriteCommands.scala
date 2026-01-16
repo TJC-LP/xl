@@ -841,6 +841,10 @@ object WriteCommands:
    *   - Comments (move with cells)
    *   - Formulas (references are NOT adjusted - sorted as-is)
    *
+   * Note: Only cells within the specified range columns are moved. Cells outside the range (e.g.,
+   * column C when sorting A:B) are not affected. This matches Excel's behavior for range-based
+   * sorting.
+   *
    * @param sortKeys
    *   Sort criteria (column, direction, mode) - at least one required
    * @param hasHeader
@@ -921,18 +925,18 @@ object WriteCommands:
     // If only header row or empty, nothing to sort
     if dataRowStart > rowEnd then sheet
     else
-      // Extract row data (row index -> cells in that row within range)
-      val rowsToSort: Vector[(Int, Vector[Cell])] =
+      // Extract row data as Map[colIndex -> Cell] for O(1) lookup during comparison
+      val rowsToSort: Vector[(Int, Map[Int, Cell])] =
         (dataRowStart to rowEnd).map { rowIdx =>
-          val cellsInRow = (colStart to colEnd).flatMap { colIdx =>
+          val cellMap = (colStart to colEnd).flatMap { colIdx =>
             val ref = com.tjclp.xl.addressing.ARef.from0(colIdx, rowIdx)
-            sheet.cells.get(ref)
-          }.toVector
-          (rowIdx, cellsInRow)
+            sheet.cells.get(ref).map(colIdx -> _)
+          }.toMap
+          (rowIdx, cellMap)
         }.toVector
 
       // Sort rows using comparison function
-      val comparator = buildRowComparator(sortKeys, colStart)
+      val comparator = buildRowComparator(sortKeys)
       val sortedRows = rowsToSort.sortWith { (a, b) =>
         comparator(a._2, b._2) < 0
       }
@@ -940,11 +944,10 @@ object WriteCommands:
       // Reconstruct sheet with sorted rows
       reconstructWithSortedRows(sheet, range, dataRowStart, sortedRows)
 
-  /** Build a comparator for rows based on sort keys */
+  /** Build a comparator for rows based on sort keys. Uses Map for O(1) cell lookup. */
   private def buildRowComparator(
-    sortKeys: List[SortKey],
-    rangeColStart: Int
-  ): (Vector[Cell], Vector[Cell]) => Int =
+    sortKeys: List[SortKey]
+  ): (Map[Int, Cell], Map[Int, Cell]) => Int =
     (rowA, rowB) =>
       // Find first non-equal comparison
       sortKeys.iterator
@@ -952,8 +955,8 @@ object WriteCommands:
           // Column was already validated, so this should always succeed
           Column.fromLetter(key.column).toOption.map { col =>
             val colIdx = col.index0
-            val cellA = rowA.find(_.col.index0 == colIdx)
-            val cellB = rowB.find(_.col.index0 == colIdx)
+            val cellA = rowA.get(colIdx) // O(1) lookup
+            val cellB = rowB.get(colIdx) // O(1) lookup
 
             val valueA = cellA.map(c => getSortableValue(c.value, key.mode))
             val valueB = cellB.map(c => getSortableValue(c.value, key.mode))
@@ -1025,7 +1028,7 @@ object WriteCommands:
     sheet: Sheet,
     range: CellRange,
     dataRowStart: Int,
-    sortedRows: Vector[(Int, Vector[Cell])]
+    sortedRows: Vector[(Int, Map[Int, Cell])]
   ): Sheet =
     val rowEnd = Row.index0(range.rowEnd)
     val colStart = Column.index0(range.colStart)
@@ -1041,9 +1044,9 @@ object WriteCommands:
 
     // Insert sorted cells at new positions
     sortedRows.zipWithIndex.foldLeft(sheetWithoutDataCells) {
-      case (s, ((_, cells), newRowOffset)) =>
+      case (s, ((_, cellMap), newRowOffset)) =>
         val newRowIdx = dataRowStart + newRowOffset
-        cells.foldLeft(s) { (s2, cell) =>
+        cellMap.values.foldLeft(s) { (s2, cell) =>
           // Create new cell with updated row position, preserving styleId and other properties
           val newRef = com.tjclp.xl.addressing.ARef.from0(cell.col.index0, newRowIdx)
           val newCell = Cell(newRef, cell.value, cell.styleId, cell.comment, cell.hyperlink)
