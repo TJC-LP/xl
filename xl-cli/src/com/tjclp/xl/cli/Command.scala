@@ -102,4 +102,4 @@ enum SortMode derives CanEqual:
   case Numeric // Force numeric comparison
 
 /** Sort key specifying column, direction, and mode */
-final case class SortKey(column: String, direction: SortDirection, mode: SortMode)
+final case class SortKey(column: String, direction: SortDirection, mode: SortMode) derives CanEqual
