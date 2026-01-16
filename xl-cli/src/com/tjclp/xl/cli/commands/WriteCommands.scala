@@ -22,7 +22,7 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.styleSyntax
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.ooxml.writer.WriterConfig
-import com.tjclp.xl.cli.FillDirection
+import com.tjclp.xl.cli.{FillDirection, SortDirection, SortKey, SortMode}
 
 /**
  * Write command handlers.
@@ -832,3 +832,221 @@ object WriteCommands:
           case value =>
             // Non-formula: copy value as-is
             sheet.put(targetRef, value)
+
+  /**
+   * Sort rows in a range by specified column(s).
+   *
+   * Sorts rows in-place while preserving:
+   *   - Cell styles (styles move with their rows)
+   *   - Comments (move with cells)
+   *   - Formulas (references are NOT adjusted - sorted as-is)
+   *
+   * @param sortKeys
+   *   Sort criteria (column, direction, mode) - at least one required
+   * @param hasHeader
+   *   If true, first row is excluded from sort
+   */
+  def sort(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    rangeStr: String,
+    sortKeys: List[SortKey],
+    hasHeader: Boolean,
+    outputPath: Path,
+    config: WriterConfig
+  ): IO[String] =
+    for
+      resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "sort")
+      (targetSheet, refOrRange) = resolved
+
+      // Sort requires a range, not single cell
+      range <- refOrRange match
+        case Right(r) => IO.pure(r)
+        case Left(ref) =>
+          IO.raiseError(
+            new Exception(s"sort requires a range, not single cell: ${ref.toA1}")
+          )
+
+      // Validate sort columns are within range
+      _ <- validateSortColumns(range, sortKeys)
+
+      // Perform sort
+      sortedSheet = applySortToRange(targetSheet, range, sortKeys, hasHeader)
+      updatedWb = wb.put(sortedSheet)
+      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+
+      // Build result message
+      keyDesc = sortKeys
+        .map(k =>
+          s"${k.column} ${if k.direction == SortDirection.Descending then "desc" else "asc"}"
+        )
+        .mkString(", ")
+      headerNote = if hasHeader then " (header row preserved)" else ""
+    yield s"Sorted ${range.toA1} by $keyDesc$headerNote\nSaved: $outputPath"
+
+  /** Validate that all sort columns are within the range */
+  private def validateSortColumns(range: CellRange, keys: List[SortKey]): IO[Unit] =
+    val rangeColStart = Column.index0(range.colStart)
+    val rangeColEnd = Column.index0(range.colEnd)
+
+    keys.traverse_ { key =>
+      Column.fromLetter(key.column) match
+        case Left(err) => IO.raiseError(new Exception(s"Invalid column: ${key.column}"))
+        case Right(col) =>
+          val colIdx = Column.index0(col)
+          if colIdx < rangeColStart || colIdx > rangeColEnd then
+            IO.raiseError(
+              new Exception(
+                s"Sort column ${key.column} is outside range ${range.toA1}"
+              )
+            )
+          else IO.unit
+    }
+
+  /** Apply sort to the specified range */
+  private def applySortToRange(
+    sheet: Sheet,
+    range: CellRange,
+    sortKeys: List[SortKey],
+    hasHeader: Boolean
+  ): Sheet =
+    val rowStart = Row.index0(range.rowStart)
+    val rowEnd = Row.index0(range.rowEnd)
+    val colStart = Column.index0(range.colStart)
+    val colEnd = Column.index0(range.colEnd)
+
+    // Determine which rows to sort (skip header if specified)
+    val dataRowStart = if hasHeader then rowStart + 1 else rowStart
+
+    // If only header row or empty, nothing to sort
+    if dataRowStart > rowEnd then sheet
+    else
+      // Extract row data (row index -> cells in that row within range)
+      val rowsToSort: Vector[(Int, Vector[Cell])] =
+        (dataRowStart to rowEnd).map { rowIdx =>
+          val cellsInRow = (colStart to colEnd).flatMap { colIdx =>
+            val ref = com.tjclp.xl.addressing.ARef.from0(colIdx, rowIdx)
+            sheet.cells.get(ref)
+          }.toVector
+          (rowIdx, cellsInRow)
+        }.toVector
+
+      // Sort rows using comparison function
+      val comparator = buildRowComparator(sortKeys, colStart)
+      val sortedRows = rowsToSort.sortWith { (a, b) =>
+        comparator(a._2, b._2) < 0
+      }
+
+      // Reconstruct sheet with sorted rows
+      reconstructWithSortedRows(sheet, range, dataRowStart, sortedRows)
+
+  /** Build a comparator for rows based on sort keys */
+  private def buildRowComparator(
+    sortKeys: List[SortKey],
+    rangeColStart: Int
+  ): (Vector[Cell], Vector[Cell]) => Int =
+    (rowA, rowB) =>
+      // Find first non-equal comparison
+      sortKeys.iterator
+        .flatMap { key =>
+          // Column was already validated, so this should always succeed
+          Column.fromLetter(key.column).toOption.map { col =>
+            val colIdx = col.index0
+            val cellA = rowA.find(_.col.index0 == colIdx)
+            val cellB = rowB.find(_.col.index0 == colIdx)
+
+            val valueA = cellA.map(c => getSortableValue(c.value, key.mode))
+            val valueB = cellB.map(c => getSortableValue(c.value, key.mode))
+
+            val cmp = compareSortValues(valueA, valueB, key.mode)
+
+            // Apply direction
+            if key.direction == SortDirection.Descending then -cmp else cmp
+          }
+        }
+        .find(_ != 0)
+        .getOrElse(0)
+
+  /** ADT for sortable values with natural ordering */
+  private enum SortValue:
+    case Empty
+    case Error
+    case Num(value: Double)
+    case Str(value: String)
+
+  /** Extract a sortable value from a cell value */
+  private def getSortableValue(value: CellValue, mode: SortMode): SortValue =
+    import com.tjclp.xl.cells.CellValue.*
+    value match
+      case CellValue.Empty => SortValue.Empty
+      case Text(s) =>
+        if mode == SortMode.Numeric then
+          s.toDoubleOption.map(SortValue.Num(_)).getOrElse(SortValue.Str(s.toLowerCase))
+        else SortValue.Str(s.toLowerCase)
+      case Number(n) => SortValue.Num(n.toDouble)
+      case Bool(b) => SortValue.Num(if b then 1.0 else 0.0)
+      case DateTime(dt) =>
+        // Convert to Excel serial number for comparison
+        SortValue.Num(CellValue.dateTimeToExcelSerial(dt))
+      case Formula(_, Some(cached)) =>
+        getSortableValue(cached, mode)
+      case Formula(_, None) => SortValue.Str("")
+      case RichText(rt) => SortValue.Str(rt.toPlainText.toLowerCase)
+      case CellValue.Error(_) => SortValue.Error
+
+  /** Compare two sort values (Empty/Error sort last) */
+  private def compareSortValues(
+    a: Option[SortValue],
+    b: Option[SortValue],
+    mode: SortMode
+  ): Int =
+    (a, b) match
+      case (None, None) => 0
+      case (None, _) => 1 // Empty cells sort last
+      case (_, None) => -1
+      case (Some(va), Some(vb)) =>
+        (va, vb) match
+          case (SortValue.Empty, SortValue.Empty) => 0
+          case (SortValue.Empty, _) => 1
+          case (_, SortValue.Empty) => -1
+          case (SortValue.Error, SortValue.Error) => 0
+          case (SortValue.Error, _) => 1
+          case (_, SortValue.Error) => -1
+          case (SortValue.Num(na), SortValue.Num(nb)) => na.compare(nb)
+          case (SortValue.Str(sa), SortValue.Str(sb)) => sa.compare(sb)
+          case (SortValue.Num(n), SortValue.Str(s)) =>
+            // In numeric mode, numbers come before strings
+            if mode == SortMode.Numeric then -1 else n.toString.compare(s)
+          case (SortValue.Str(s), SortValue.Num(n)) =>
+            if mode == SortMode.Numeric then 1 else s.compare(n.toString)
+
+  /** Reconstruct sheet with rows in sorted order */
+  private def reconstructWithSortedRows(
+    sheet: Sheet,
+    range: CellRange,
+    dataRowStart: Int,
+    sortedRows: Vector[(Int, Vector[Cell])]
+  ): Sheet =
+    val rowEnd = Row.index0(range.rowEnd)
+    val colStart = Column.index0(range.colStart)
+    val colEnd = Column.index0(range.colEnd)
+
+    // Remove all cells in the data portion of the range
+    val sheetWithoutDataCells = (dataRowStart to rowEnd).foldLeft(sheet) { (s, rowIdx) =>
+      (colStart to colEnd).foldLeft(s) { (s2, colIdx) =>
+        val ref = com.tjclp.xl.addressing.ARef.from0(colIdx, rowIdx)
+        s2.remove(ref)
+      }
+    }
+
+    // Insert sorted cells at new positions
+    sortedRows.zipWithIndex.foldLeft(sheetWithoutDataCells) {
+      case (s, ((_, cells), newRowOffset)) =>
+        val newRowIdx = dataRowStart + newRowOffset
+        cells.foldLeft(s) { (s2, cell) =>
+          // Create new cell with updated row position, preserving styleId and other properties
+          val newRef = com.tjclp.xl.addressing.ARef.from0(cell.col.index0, newRowIdx)
+          val newCell = Cell(newRef, cell.value, cell.styleId, cell.comment, cell.hyperlink)
+          s2.put(newCell)
+        }
+    }

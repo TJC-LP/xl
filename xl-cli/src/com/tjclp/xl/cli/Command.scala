@@ -84,8 +84,22 @@ enum CliCommand:
   case Clear(range: String, all: Boolean, styles: Boolean, comments: Boolean)
   case Fill(source: String, target: String, direction: FillDirection)
   case AutoFit(columns: Option[String]) // None = all used columns, Some("A:F") = specific range
+  case Sort(range: String, sortKeys: List[SortKey], hasHeader: Boolean)
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:
   case Down // Fill downward (default)
   case Right // Fill rightward
+
+/** Sort direction for the sort command */
+enum SortDirection derives CanEqual:
+  case Ascending
+  case Descending
+
+/** Sort mode for the sort command */
+enum SortMode derives CanEqual:
+  case Alphanumeric // Case-insensitive string comparison (default)
+  case Numeric // Force numeric comparison
+
+/** Sort key specifying column, direction, and mode */
+final case class SortKey(column: String, direction: SortDirection, mode: SortMode)
