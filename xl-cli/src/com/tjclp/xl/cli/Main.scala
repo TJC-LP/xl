@@ -68,7 +68,7 @@ object Main
 
     // Sheet-level write: --file, --sheet, and --output (required)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd
 
     val sheetWriteOpts =
       (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
@@ -503,6 +503,28 @@ object Main
       }
     }
 
+  // --- Sort command ---
+  private val byOpt = Opts.option[String]("by", "Primary sort column (required)", "b")
+  private val descOpt = Opts.flag("desc", "Sort descending (default: ascending)").orFalse
+  private val numericSortOpt = Opts.flag("numeric", "Force numeric comparison").orFalse
+  private val thenByOpts = Opts.options[String]("then-by", "Additional sort column(s)").orEmpty
+  private val sortHeaderOpt =
+    Opts.flag("header", "First row is header (exclude from sort)").orFalse
+
+  val sortCmd: Opts[CliCommand] =
+    Opts.subcommand("sort", "Sort rows in range by column(s)") {
+      (rangeArg, byOpt, descOpt, numericSortOpt, thenByOpts, sortHeaderOpt).mapN {
+        (range, by, desc, numeric, thenBy, header) =>
+          val direction =
+            if desc then SortDirection.Descending else SortDirection.Ascending
+          val mode = if numeric then SortMode.Numeric else SortMode.Alphanumeric
+          val primaryKey = SortKey(by, direction, mode)
+          // Secondary keys inherit direction and mode from primary
+          val secondaryKeys = thenBy.map(col => SortKey(col, direction, mode)).toList
+          CliCommand.Sort(range, primaryKey :: secondaryKeys, header)
+      }
+    }
+
   // ==========================================================================
   // Command execution
   // ==========================================================================
@@ -811,6 +833,11 @@ object Main
     case CliCommand.AutoFit(columnsOpt) =>
       requireOutput(outputOpt, backendOpt)(
         WriteCommands.autoFit(wb, sheetOpt, columnsOpt, _, _)
+      )
+
+    case CliCommand.Sort(rangeStr, sortKeys, hasHeader) =>
+      requireOutput(outputOpt, backendOpt)(
+        WriteCommands.sort(wb, sheetOpt, rangeStr, sortKeys, hasHeader, _, _)
       )
 
   // ==========================================================================
