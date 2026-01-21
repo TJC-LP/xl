@@ -453,6 +453,51 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(path3)
   }
 
+  test("multiple comments on same sheet are preserved after re-save (regression GH-166)") {
+    // When adding multiple comments to a file and re-saving, all comments should be preserved.
+    // Bug: Adding second comment would overwrite first because source file comments were
+    // copied instead of writing domain model comments for modified sheets.
+
+    // Step 1: Create initial file with first comment
+    val sheet1 = Sheet("Sheet1")
+      .put(ref"A1" -> "First cell")
+      .put(ref"B1" -> "Second cell")
+      .unsafe
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("First comment", Some("Author1")))
+    val wb1 = Workbook(Vector(sheet1))
+
+    val path1 = Files.createTempFile("multi-comment-1", ".xlsx")
+    XlsxWriter.write(wb1, path1).fold(err => fail(s"Write 1 failed: $err"), identity)
+
+    // Verify first comment exists
+    val loaded1 = XlsxReader.read(path1).fold(err => fail(s"Read 1 failed: $err"), identity)
+    val loadedSheet1 = loaded1("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity)
+    assertEquals(loadedSheet1.comments.size, 1, "Should have 1 comment after first save")
+
+    // Step 2: Add second comment to the loaded file and save
+    val sheetWith2Comments = loadedSheet1
+      .comment(ref"B1", com.tjclp.xl.cells.Comment.plainText("Second comment", Some("Author2")))
+    assertEquals(sheetWith2Comments.comments.size, 2, "Domain model should have 2 comments")
+
+    val wb2 = loaded1.put(sheetWith2Comments)
+    val path2 = Files.createTempFile("multi-comment-2", ".xlsx")
+    XlsxWriter.write(wb2, path2).fold(err => fail(s"Write 2 failed: $err"), identity)
+
+    // Verify BOTH comments exist after re-reading
+    val loaded2 = XlsxReader.read(path2).fold(err => fail(s"Read 2 failed: $err"), identity)
+    val loadedSheet2 = loaded2("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity)
+
+    assertEquals(loadedSheet2.comments.size, 2, "Should have 2 comments after second save")
+    assert(loadedSheet2.comments.contains(ref"A1"), "First comment at A1 should exist")
+    assert(loadedSheet2.comments.contains(ref"B1"), "Second comment at B1 should exist")
+    assertEquals(loadedSheet2.comments.get(ref"A1").flatMap(_.author), Some("Author1"))
+    assertEquals(loadedSheet2.comments.get(ref"B1").flatMap(_.author), Some("Author2"))
+
+    // Clean up
+    Files.deleteIfExists(path1)
+    Files.deleteIfExists(path2)
+  }
+
   test("VML drawings for multi-sheet workbook are cleaned up per-sheet (regression #vml-cleanup-bug)") {
     // Verifies that VML drawings are only removed for sheets that lost their comments,
     // not for other sheets that still have comments
