@@ -139,6 +139,66 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(50))))
   }
 
+  // ===== GH-161: Cross-sheet reference to formula cell without cached value =====
+
+  test("GH-161: evaluates formula WITHOUT cached value") {
+    // This is the bug case: formula with no cache should evaluate, not return 0
+    val sales = sheetWith(
+      "Sales",
+      ref"A1" -> CellValue.Formula("10*5", None) // No cached value!
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, sales)
+
+    val result = main.evaluateFormula("=Sales!A1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(50))))
+  }
+
+  test("GH-161: evaluates nested formula chain without cache") {
+    // A1 = B1 + 10, B1 = 20, both without cache
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("B1+10", None),
+      ref"B1" -> CellValue.Number(BigDecimal(20))
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    val result = main.evaluateFormula("=Data!A1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(30))))
+  }
+
+  test("GH-161: cross-sheet ref to formula with SUM") {
+    // Sales!A1 = SUM(B1:B3), B1:B3 contain values
+    val sales = sheetWith(
+      "Sales",
+      ref"A1" -> CellValue.Formula("SUM(B1:B3)", None),
+      ref"B1" -> CellValue.Number(BigDecimal(10)),
+      ref"B2" -> CellValue.Number(BigDecimal(20)),
+      ref"B3" -> CellValue.Number(BigDecimal(30))
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, sales)
+
+    val result = main.evaluateFormula("=Sales!A1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(60))))
+  }
+
+  test("GH-161: cross-sheet ref to formula with arithmetic") {
+    // Data!A1 = A2*A3 where A2=5, A3=7
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("A2*A3", None),
+      ref"A2" -> CellValue.Number(BigDecimal(5)),
+      ref"A3" -> CellValue.Number(BigDecimal(7))
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    val result = main.evaluateFormula("=Data!A1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(35))))
+  }
+
   test("SheetPolyRef: empty cell returns 0") {
     val empty = sheetWith("Empty")
     val main = sheetWith("Main")

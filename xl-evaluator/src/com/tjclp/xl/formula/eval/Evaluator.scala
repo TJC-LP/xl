@@ -118,6 +118,52 @@ object Evaluator:
               case Left(err) => Left(sheetNotFoundError(sheetName, err))
               case Right(targetSheet) => Right(targetSheet)
 
+  /**
+   * Evaluate a formula string from a cross-sheet reference (GH-161).
+   *
+   * When a cross-sheet reference points to a formula cell without a cached value, we need to
+   * recursively parse and evaluate that formula against the target sheet.
+   *
+   * @param formulaStr
+   *   The formula string (without leading =)
+   * @param targetSheet
+   *   The sheet containing the formula cell
+   * @param clock
+   *   Clock for date/time functions
+   * @param workbook
+   *   Workbook context for nested cross-sheet references
+   * @return
+   *   Either evaluation error or computed CellValue
+   */
+  private[formula] def evalCrossSheetFormula(
+    formulaStr: String,
+    targetSheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): Either[EvalError, CellValue] =
+    FormulaParser.parse(formulaStr) match
+      case Left(parseErr) =>
+        Left(
+          EvalError.EvalFailed(
+            s"Failed to parse cross-sheet formula: ${ParseError.toXLError(parseErr, formulaStr).message}",
+            None
+          )
+        )
+      case Right(expr) =>
+        // Recursively evaluate with the target sheet as context
+        instance.eval(expr, targetSheet, clock, workbook).map { result =>
+          // Convert typed result to CellValue
+          result match
+            case cv: CellValue => cv
+            case bd: BigDecimal => CellValue.Number(bd)
+            case s: String => CellValue.Text(s)
+            case b: Boolean => CellValue.Bool(b)
+            case i: Int => CellValue.Number(BigDecimal(i))
+            case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
+            case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
+            case other => CellValue.Text(other.toString)
+        }
+
 /**
  * Private implementation of Evaluator.
  *
@@ -175,7 +221,16 @@ private class EvaluatorImpl extends Evaluator:
                 Left(Evaluator.sheetNotFoundError(sheetName, err))
               case Right(targetSheet) =>
                 val cell = targetSheet(at)
-                decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+                // GH-161: Handle formula cells without cached values by recursively evaluating
+                cell.value match
+                  case CellValue.Formula(formulaStr, None) =>
+                    // Formula has no cached value - parse and evaluate against target sheet
+                    Evaluator
+                      .evalCrossSheetFormula(formulaStr, targetSheet, clock, workbook)
+                      .asInstanceOf[Either[EvalError, A]]
+                  case _ =>
+                    // Cached formula or non-formula cell - use decoder
+                    decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
 
       case TExpr.SheetRange(sheetName, range) =>
         // SheetRange should be wrapped in a function (SUM, COUNT, etc.) before evaluation
