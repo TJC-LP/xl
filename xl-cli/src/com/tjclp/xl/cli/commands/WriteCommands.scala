@@ -845,7 +845,7 @@ object WriteCommands:
    * Sorts rows in-place while preserving:
    *   - Cell styles (styles move with their rows)
    *   - Comments (move with cells)
-   *   - Formulas (references are NOT adjusted - sorted as-is)
+   *   - Formulas (relative references adjusted to match new row position)
    *
    * Note: Only cells within the specified range columns are moved. Cells outside the range (e.g.,
    * column C when sorting A:B) are not affected. This matches Excel's behavior for range-based
@@ -1050,12 +1050,47 @@ object WriteCommands:
 
     // Insert sorted cells at new positions
     sortedRows.zipWithIndex.foldLeft(sheetWithoutDataCells) {
-      case (s, ((_, cellMap), newRowOffset)) =>
+      case (s, ((originalRowIdx, cellMap), newRowOffset)) =>
         val newRowIdx = dataRowStart + newRowOffset
+        val rowDelta = newRowIdx - originalRowIdx
         cellMap.values.foldLeft(s) { (s2, cell) =>
           // Create new cell with updated row position, preserving styleId and other properties
           val newRef = com.tjclp.xl.addressing.ARef.from0(cell.col.index0, newRowIdx)
-          val newCell = Cell(newRef, cell.value, cell.styleId, cell.comment, cell.hyperlink)
+          // Shift formula references if the row moved
+          val shiftedValue = shiftCellValueForSort(cell.value, rowDelta)
+          val newCell = Cell(newRef, shiftedValue, cell.styleId, cell.comment, cell.hyperlink)
           s2.put(newCell)
         }
     }
+
+  /**
+   * Shift formula references when a cell moves to a different row during sorting.
+   *
+   * When a row moves from position X to Y, relative row references in formulas should be adjusted
+   * by (Y - X) so they continue pointing to the same relative positions. This matches Excel's
+   * behavior for sorting.
+   *
+   * @param value
+   *   The cell value to potentially shift
+   * @param rowDelta
+   *   The number of rows the cell moved (positive = down, negative = up)
+   * @return
+   *   Shifted cell value (or original if not a formula or rowDelta is 0)
+   */
+  private def shiftCellValueForSort(value: CellValue, rowDelta: Int): CellValue =
+    if rowDelta == 0 then value
+    else
+      value match
+        case CellValue.Formula(formula, _) =>
+          val fullFormula = s"=$formula"
+          FormulaParser.parse(fullFormula) match
+            case Left(_) =>
+              // If formula can't be parsed, keep as-is
+              value
+            case Right(parsedExpr) =>
+              // Shift only row references, not columns (colDelta = 0)
+              val shiftedExpr = FormulaShifter.shift(parsedExpr, 0, rowDelta)
+              val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+              // Clear cached value since it will need re-evaluation
+              CellValue.Formula(shiftedFormula, None)
+        case other => other
