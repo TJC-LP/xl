@@ -7,7 +7,7 @@
 
 ```scala 3 raw
 //> using scala 3.7.4
-//> using dep com.tjclp::xl:0.5.0
+//> using dep com.tjclp::xl:0.6.0
 
 import com.tjclp.xl.{*, given}
 
@@ -52,13 +52,13 @@ import com.tjclp.xl.{*, given}
 
 ```scala 3 ignore
 // build.mill — single dependency for everything
-def ivyDeps = Agg(ivy"com.tjclp::xl:0.5.0")
+def ivyDeps = Agg(ivy"com.tjclp::xl:0.6.0")
 
 // Or individual modules for minimal footprint:
-// ivy"com.tjclp::xl-core:0.5.0"        — Pure domain model only
-// ivy"com.tjclp::xl-ooxml:0.5.0"       — Add OOXML read/write
-// ivy"com.tjclp::xl-cats-effect:0.5.0" — Add IO streaming
-// ivy"com.tjclp::xl-evaluator:0.5.0"   — Add formula evaluation
+// ivy"com.tjclp::xl-core:0.6.0"        — Pure domain model only
+// ivy"com.tjclp::xl-ooxml:0.6.0"       — Add OOXML read/write
+// ivy"com.tjclp::xl-cats-effect:0.6.0" — Add IO streaming
+// ivy"com.tjclp::xl-evaluator:0.6.0"   — Add formula evaluation
 ```
 
 ### Basic Usage

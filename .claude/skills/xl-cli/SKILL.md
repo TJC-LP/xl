@@ -106,6 +106,18 @@ xl -f <file> -s <sheet> -o <out> merge A1:C1
 xl -f <file> -s <sheet> -o <out> unmerge A1:C1
 xl -f <file> -s <sheet> -o <out> comment A1 "Review this" --author "John"
 xl -f <file> -s <sheet> -o <out> remove-comment A1
+xl -f <file> -s <sheet> -o <out> clear A1:D10               # Clear contents (default)
+xl -f <file> -s <sheet> -o <out> clear A1:D10 --styles      # Clear styles only
+xl -f <file> -s <sheet> -o <out> clear A1:D10 --all         # Clear everything
+
+# Fill operations (Excel Ctrl+D / Ctrl+R)
+xl -f <file> -s <sheet> -o <out> fill A1 A2:A10             # Fill down
+xl -f <file> -s <sheet> -o <out> fill A1 B1:F1 --right      # Fill right
+
+# Sort operations
+xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B         # Sort by column B
+xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B --desc  # Descending
+xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B --header # Exclude header row
 
 # Batch operations (require -o)
 xl -f <file> -s <sheet> -o <out> batch <json-file>
@@ -201,6 +213,97 @@ xl -f file.xlsx -s Sheet1 -o out.xlsx remove-comment A1
 ```
 
 Comments appear as yellow notes in Excel when hovering over cells. The `cell` command shows existing comments.
+
+### Clear Cells
+
+Remove cell contents, styles, or comments from a range:
+
+```bash
+# Clear contents only (default behavior)
+xl -f file.xlsx -s Sheet1 -o out.xlsx clear A1:D10
+
+# Clear styles only (reset formatting to default)
+xl -f file.xlsx -s Sheet1 -o out.xlsx clear A1:D10 --styles
+
+# Clear comments only
+xl -f file.xlsx -s Sheet1 -o out.xlsx clear A1:D10 --comments
+
+# Clear everything (contents + styles + comments)
+xl -f file.xlsx -s Sheet1 -o out.xlsx clear A1:D10 --all
+```
+
+| Flag | Description |
+|------|-------------|
+| (none) | Clear cell contents only (default) |
+| `--styles` | Clear styles only (reset to default formatting) |
+| `--comments` | Clear comments only |
+| `--all` | Clear contents, styles, and comments |
+
+### Fill Cells
+
+Excel-style fill down/right functionality (like Ctrl+D / Ctrl+R):
+
+```bash
+# Fill down: copy A1 value/formula to A2:A10
+xl -f file.xlsx -s Sheet1 -o out.xlsx fill A1 A2:A10
+
+# Fill right: copy A1 value/formula to B1:F1
+xl -f file.xlsx -s Sheet1 -o out.xlsx fill A1 B1:F1 --right
+
+# Fill with formula (references shift automatically)
+# If A1 contains "=B1*1.1", filling to A2:A5 produces:
+# A2: =B2*1.1, A3: =B3*1.1, ...
+xl -f file.xlsx -s Sheet1 -o out.xlsx fill A1 A2:A5
+
+# Anchored references ($) are preserved
+# If A1 contains "=SUM($B$1:B1)", filling to A2:A5 produces:
+# A2: =SUM($B$1:B2), A3: =SUM($B$1:B3), ...
+```
+
+| Flag | Description |
+|------|-------------|
+| (none) | Fill downward (default) |
+| `--right` | Fill rightward instead |
+
+**Note**: The source cell must align with the target range (same column for down, same row for right).
+
+### Sort Rows
+
+Sort rows in a range by one or more columns:
+
+```bash
+# Sort by column B (ascending, alphanumeric)
+xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B
+
+# Sort descending
+xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --desc
+
+# Force numeric comparison (treats "10" > "9" instead of "10" < "9")
+xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --numeric
+
+# Exclude header row from sort
+xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --header
+
+# Multi-column sort (sort by B, then by C as tie-breaker)
+xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --then-by C
+
+# Complex: numeric descending, with header, multiple columns
+xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --numeric --desc --then-by C --header
+```
+
+| Option | Description |
+|--------|-------------|
+| `--by <col>` | Primary sort column (required) |
+| `--desc` | Sort descending (default: ascending) |
+| `--numeric` | Force numeric comparison |
+| `--then-by <col>` | Additional sort column(s), repeatable |
+| `--header` | First row is header (exclude from sort) |
+
+**Sorting behavior**:
+- Empty cells sort last
+- Formulas use cached value for sorting
+- Boolean values sort as 0 (FALSE) / 1 (TRUE)
+- Cells outside the sorted columns in each row move together
 
 ### Merge / Unmerge Cells
 
@@ -683,6 +786,9 @@ xl -f data.xlsx -o out.xlsx --backend saxstax style A1:Z1000 --bold
 | `unmerge <range>` | Unmerge cells in range |
 | `comment <ref> <text>` | Add comment to cell (`--author` for attribution) |
 | `remove-comment <ref>` | Remove comment from cell |
+| `clear <range>` | Clear cell contents (`--styles`, `--comments`, `--all`) |
+| `fill <source> <target>` | Fill cells with source value/formula (`--right` for horizontal) |
+| `sort <range>` | Sort rows (`--by <col>`, `--desc`, `--numeric`, `--then-by`, `--header`) |
 | `stats <range>` | Calculate statistics for numeric values |
 | `batch [<file>]` | Apply JSON operations (`-` for stdin) |
 | `import <csv-file> [<ref>]` | Import CSV data with automatic type detection |

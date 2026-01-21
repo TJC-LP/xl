@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] - 2026-01-21
+
+### Added
+
+- **7 new CLI commands** for data manipulation and formatting:
+  - `csv` - Import CSV files with automatic type detection (#149)
+  - `comment` - Add, view, and remove cell comments (#151)
+  - `clear` - Clear cell ranges (contents, styles, and/or comments) (#152)
+  - `fill` - Excel-style fill down/right with formula shifting (#154)
+  - `sort` - Sort rows by one or more columns (#157)
+
+- **CLI enhancements**:
+  - Batch `put` with smart mode detection: single cell, fill pattern, or batch values (#150)
+  - `--auto-fit` flag for automatic column width calculation (#155)
+  - `&` concatenation operator in formulas (#152)
+
+### Fixed
+
+- **Cross-sheet formula evaluation**: References to formula cells on other sheets now correctly evaluate the formula instead of returning the cached value (#162)
+- **Eager recalculation**: Dependent formulas now recalculate immediately when upstream cell values change via `put`, `putf`, or `fill` commands (#164)
+
+---
+
 ## [0.5.0] - 2026-01-12
 
 ### Fixed

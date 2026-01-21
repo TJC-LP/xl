@@ -2,38 +2,44 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2025-12-27
+**Last Updated**: 2026-01-21
 
 ---
 
 ## TL;DR
 
-**Current Status**: Production-ready with **81 formula functions**, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 800+ tests passing.
+**Current Status**: Production-ready with **81 formula functions**, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 733+ tests passing.
 
-**Current Version**: 0.5.0
+**Current Version**: 0.6.0
 
 ---
 
 ## Release Roadmap
 
-### v0.5.0 (Current)
+### v0.6.0 (Current)
 
-Core security hardening complete:
+CLI expansion with 7 new commands and evaluator fixes:
 
 | Feature | Status |
 |---------|--------|
-| ZIP Bomb Detection | ✅ Done |
-| Formula Injection Guards | ✅ Done |
-| XXE Prevention | ✅ Done |
+| `csv` - CSV import | ✅ Done |
+| `comment` - Cell comments | ✅ Done |
+| `clear` - Clear ranges | ✅ Done |
+| `fill` - Excel Ctrl+D/R | ✅ Done |
+| `sort` - Row sorting | ✅ Done |
+| Batch `put` smart mode | ✅ Done |
+| `--auto-fit` flag | ✅ Done |
+| Cross-sheet formula fix | ✅ Done |
+| Eager recalculation fix | ✅ Done |
 
-### v0.6.0 (Security Polish)
+### v0.7.0 (Security Polish)
 
 | Feature | Status |
 |---------|--------|
 | File Size Limits (enforcement) | Planned |
 | XLSM Macro Handling | Planned |
 
-### v0.7.0 (Features)
+### v0.8.0+ (Features)
 
 | Feature | Status |
 |---------|--------|
