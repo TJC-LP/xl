@@ -666,3 +666,49 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
       case other =>
         fail(s"Expected error for not-found lookup, got: $other")
   }
+
+  // ===== GH-161: Negative Test Cases =====
+
+  test("GH-161: detects circular cross-sheet reference at runtime") {
+    // Create circular reference: Sheet1!A1 → Sheet2!B1 → Sheet1!A1
+    // Both cells have formulas WITHOUT cached values, so they trigger recursive evaluation
+    val sheet1 = sheetWith(
+      "Sheet1",
+      ref"A1" -> CellValue.Formula("Sheet2!B1", None) // No cache - triggers recursive eval
+    )
+    val sheet2 = sheetWith(
+      "Sheet2",
+      ref"B1" -> CellValue.Formula("Sheet1!A1", None) // No cache - triggers recursive eval
+    )
+    val wb = workbookWith(sheet1, sheet2)
+
+    val result = sheet1.evaluateFormula("=Sheet2!B1", workbook = Some(wb))
+    assert(result.isLeft, s"Expected error for circular reference but got: $result")
+    result match
+      case Left(err) =>
+        assert(
+          err.message.contains("recursion") || err.message.contains("circular"),
+          s"Error should mention recursion or circular reference: ${err.message}"
+        )
+      case _ => fail("Expected Left with circular reference error")
+  }
+
+  test("GH-161: handles parse error in referenced formula") {
+    // Cross-sheet reference points to a cell with an invalid formula
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("INVALID((", None) // Malformed formula, no cache
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    val result = main.evaluateFormula("=Data!A1", workbook = Some(wb))
+    assert(result.isLeft, s"Expected error for malformed formula but got: $result")
+    result match
+      case Left(err) =>
+        assert(
+          err.message.contains("parse") || err.message.contains("Failed"),
+          s"Error should mention parse failure: ${err.message}"
+        )
+      case _ => fail("Expected Left with parse error")
+  }

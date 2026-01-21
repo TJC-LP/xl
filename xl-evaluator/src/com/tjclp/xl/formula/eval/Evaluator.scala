@@ -118,6 +118,9 @@ object Evaluator:
               case Left(err) => Left(sheetNotFoundError(sheetName, err))
               case Right(targetSheet) => Right(targetSheet)
 
+  /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
+  private val MaxCrossSheetRecursionDepth = 100
+
   /**
    * Evaluate a formula string from a cross-sheet reference (GH-161).
    *
@@ -132,6 +135,8 @@ object Evaluator:
    *   Clock for date/time functions
    * @param workbook
    *   Workbook context for nested cross-sheet references
+   * @param depth
+   *   Current recursion depth (for cycle protection)
    * @return
    *   Either evaluation error or computed CellValue
    */
@@ -139,8 +144,18 @@ object Evaluator:
     formulaStr: String,
     targetSheet: Sheet,
     clock: Clock,
-    workbook: Option[Workbook]
+    workbook: Option[Workbook],
+    depth: Int = 0
   ): Either[EvalError, CellValue] =
+    // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
+    if depth > MaxCrossSheetRecursionDepth then
+      return Left(
+        EvalError.EvalFailed(
+          s"Cross-sheet formula recursion depth exceeded (max: $MaxCrossSheetRecursionDepth). Possible circular reference.",
+          None
+        )
+      )
+
     FormulaParser.parse(formulaStr) match
       case Left(parseErr) =>
         Left(
@@ -150,8 +165,8 @@ object Evaluator:
           )
         )
       case Right(expr) =>
-        // Recursively evaluate with the target sheet as context
-        instance.eval(expr, targetSheet, clock, workbook).map { result =>
+        // Recursively evaluate with depth-aware evaluator (GH-161 cycle protection)
+        new EvaluatorWithDepth(depth + 1).eval(expr, targetSheet, clock, workbook).map { result =>
           // Convert typed result to CellValue
           result match
             case cv: CellValue => cv
@@ -170,6 +185,8 @@ object Evaluator:
  * Implements all TExpr cases with proper error handling and short-circuit semantics.
  */
 private class EvaluatorImpl extends Evaluator:
+  /** Current recursion depth for cross-sheet formula evaluation. */
+  protected def currentDepth: Int = 0
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def eval[A](
@@ -225,9 +242,14 @@ private class EvaluatorImpl extends Evaluator:
                 cell.value match
                   case CellValue.Formula(formulaStr, None) =>
                     // Formula has no cached value - parse and evaluate against target sheet
+                    // GH-161 review: Apply decoder to Cell with evaluated result (type-safe)
+                    // GH-161 review: Pass currentDepth for cycle protection
                     Evaluator
-                      .evalCrossSheetFormula(formulaStr, targetSheet, clock, workbook)
-                      .asInstanceOf[Either[EvalError, A]]
+                      .evalCrossSheetFormula(formulaStr, targetSheet, clock, workbook, currentDepth)
+                      .flatMap { evaluatedValue =>
+                        val resultCell = Cell(at, evaluatedValue)
+                        decode(resultCell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+                      }
                   case _ =>
                     // Cached formula or non-formula cell - use decoder
                     decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
@@ -417,3 +439,12 @@ private class EvaluatorImpl extends Evaluator:
           [A] => (expr: TExpr[A]) => eval(expr, sheet, clock, workbook)
         )
         call.spec.eval(call.args, ctx)
+
+/**
+ * Depth-aware evaluator for cross-sheet formula cycle protection (GH-161).
+ *
+ * Extends EvaluatorImpl but tracks recursion depth. When a SheetRef with uncached formula triggers
+ * recursive evaluation, the depth is passed through to detect infinite loops.
+ */
+private class EvaluatorWithDepth(depth: Int) extends EvaluatorImpl:
+  override protected def currentDepth: Int = depth
