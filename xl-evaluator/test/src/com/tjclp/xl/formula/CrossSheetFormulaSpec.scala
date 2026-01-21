@@ -139,6 +139,66 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(50))))
   }
 
+  // ===== GH-161: Cross-sheet reference to formula cell without cached value =====
+
+  test("GH-161: evaluates formula WITHOUT cached value") {
+    // This is the bug case: formula with no cache should evaluate, not return 0
+    val sales = sheetWith(
+      "Sales",
+      ref"A1" -> CellValue.Formula("10*5", None) // No cached value!
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, sales)
+
+    val result = main.evaluateFormula("=Sales!A1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(50))))
+  }
+
+  test("GH-161: evaluates nested formula chain without cache") {
+    // A1 = B1 + 10, B1 = 20, both without cache
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("B1+10", None),
+      ref"B1" -> CellValue.Number(BigDecimal(20))
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    val result = main.evaluateFormula("=Data!A1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(30))))
+  }
+
+  test("GH-161: cross-sheet ref to formula with SUM") {
+    // Sales!A1 = SUM(B1:B3), B1:B3 contain values
+    val sales = sheetWith(
+      "Sales",
+      ref"A1" -> CellValue.Formula("SUM(B1:B3)", None),
+      ref"B1" -> CellValue.Number(BigDecimal(10)),
+      ref"B2" -> CellValue.Number(BigDecimal(20)),
+      ref"B3" -> CellValue.Number(BigDecimal(30))
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, sales)
+
+    val result = main.evaluateFormula("=Sales!A1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(60))))
+  }
+
+  test("GH-161: cross-sheet ref to formula with arithmetic") {
+    // Data!A1 = A2*A3 where A2=5, A3=7
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("A2*A3", None),
+      ref"A2" -> CellValue.Number(BigDecimal(5)),
+      ref"A3" -> CellValue.Number(BigDecimal(7))
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    val result = main.evaluateFormula("=Data!A1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(35))))
+  }
+
   test("SheetPolyRef: empty cell returns 0") {
     val empty = sheetWith("Empty")
     val main = sheetWith("Main")
@@ -605,4 +665,50 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
         () // Also acceptable
       case other =>
         fail(s"Expected error for not-found lookup, got: $other")
+  }
+
+  // ===== GH-161: Negative Test Cases =====
+
+  test("GH-161: detects circular cross-sheet reference at runtime") {
+    // Create circular reference: Sheet1!A1 → Sheet2!B1 → Sheet1!A1
+    // Both cells have formulas WITHOUT cached values, so they trigger recursive evaluation
+    val sheet1 = sheetWith(
+      "Sheet1",
+      ref"A1" -> CellValue.Formula("Sheet2!B1", None) // No cache - triggers recursive eval
+    )
+    val sheet2 = sheetWith(
+      "Sheet2",
+      ref"B1" -> CellValue.Formula("Sheet1!A1", None) // No cache - triggers recursive eval
+    )
+    val wb = workbookWith(sheet1, sheet2)
+
+    val result = sheet1.evaluateFormula("=Sheet2!B1", workbook = Some(wb))
+    assert(result.isLeft, s"Expected error for circular reference but got: $result")
+    result match
+      case Left(err) =>
+        assert(
+          err.message.contains("recursion") || err.message.contains("circular"),
+          s"Error should mention recursion or circular reference: ${err.message}"
+        )
+      case _ => fail("Expected Left with circular reference error")
+  }
+
+  test("GH-161: handles parse error in referenced formula") {
+    // Cross-sheet reference points to a cell with an invalid formula
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("INVALID((", None) // Malformed formula, no cache
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    val result = main.evaluateFormula("=Data!A1", workbook = Some(wb))
+    assert(result.isLeft, s"Expected error for malformed formula but got: $result")
+    result match
+      case Left(err) =>
+        assert(
+          err.message.contains("parse") || err.message.contains("Failed"),
+          s"Error should mention parse failure: ${err.message}"
+        )
+      case _ => fail("Expected Left with parse error")
   }

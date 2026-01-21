@@ -118,12 +118,75 @@ object Evaluator:
               case Left(err) => Left(sheetNotFoundError(sheetName, err))
               case Right(targetSheet) => Right(targetSheet)
 
+  /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
+  private val MaxCrossSheetRecursionDepth = 100
+
+  /**
+   * Evaluate a formula string from a cross-sheet reference (GH-161).
+   *
+   * When a cross-sheet reference points to a formula cell without a cached value, we need to
+   * recursively parse and evaluate that formula against the target sheet.
+   *
+   * @param formulaStr
+   *   The formula string (without leading =)
+   * @param targetSheet
+   *   The sheet containing the formula cell
+   * @param clock
+   *   Clock for date/time functions
+   * @param workbook
+   *   Workbook context for nested cross-sheet references
+   * @param depth
+   *   Current recursion depth (for cycle protection)
+   * @return
+   *   Either evaluation error or computed CellValue
+   */
+  private[formula] def evalCrossSheetFormula(
+    formulaStr: String,
+    targetSheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    depth: Int = 0
+  ): Either[EvalError, CellValue] =
+    // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
+    if depth > MaxCrossSheetRecursionDepth then
+      return Left(
+        EvalError.EvalFailed(
+          s"Cross-sheet formula recursion depth exceeded (max: $MaxCrossSheetRecursionDepth). Possible circular reference.",
+          None
+        )
+      )
+
+    FormulaParser.parse(formulaStr) match
+      case Left(parseErr) =>
+        Left(
+          EvalError.EvalFailed(
+            s"Failed to parse cross-sheet formula: ${ParseError.toXLError(parseErr, formulaStr).message}",
+            None
+          )
+        )
+      case Right(expr) =>
+        // Recursively evaluate with depth-aware evaluator (GH-161 cycle protection)
+        new EvaluatorWithDepth(depth + 1).eval(expr, targetSheet, clock, workbook).map { result =>
+          // Convert typed result to CellValue
+          result match
+            case cv: CellValue => cv
+            case bd: BigDecimal => CellValue.Number(bd)
+            case s: String => CellValue.Text(s)
+            case b: Boolean => CellValue.Bool(b)
+            case i: Int => CellValue.Number(BigDecimal(i))
+            case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
+            case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
+            case other => CellValue.Text(other.toString)
+        }
+
 /**
  * Private implementation of Evaluator.
  *
  * Implements all TExpr cases with proper error handling and short-circuit semantics.
  */
 private class EvaluatorImpl extends Evaluator:
+  /** Current recursion depth for cross-sheet formula evaluation. */
+  protected def currentDepth: Int = 0
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def eval[A](
@@ -175,7 +238,21 @@ private class EvaluatorImpl extends Evaluator:
                 Left(Evaluator.sheetNotFoundError(sheetName, err))
               case Right(targetSheet) =>
                 val cell = targetSheet(at)
-                decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+                // GH-161: Handle formula cells without cached values by recursively evaluating
+                cell.value match
+                  case CellValue.Formula(formulaStr, None) =>
+                    // Formula has no cached value - parse and evaluate against target sheet
+                    // GH-161 review: Apply decoder to Cell with evaluated result (type-safe)
+                    // GH-161 review: Pass currentDepth for cycle protection
+                    Evaluator
+                      .evalCrossSheetFormula(formulaStr, targetSheet, clock, workbook, currentDepth)
+                      .flatMap { evaluatedValue =>
+                        val resultCell = Cell(at, evaluatedValue)
+                        decode(resultCell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+                      }
+                  case _ =>
+                    // Cached formula or non-formula cell - use decoder
+                    decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
 
       case TExpr.SheetRange(sheetName, range) =>
         // SheetRange should be wrapped in a function (SUM, COUNT, etc.) before evaluation
@@ -362,3 +439,12 @@ private class EvaluatorImpl extends Evaluator:
           [A] => (expr: TExpr[A]) => eval(expr, sheet, clock, workbook)
         )
         call.spec.eval(call.args, ctx)
+
+/**
+ * Depth-aware evaluator for cross-sheet formula cycle protection (GH-161).
+ *
+ * Extends EvaluatorImpl but tracks recursion depth. When a SheetRef with uncached formula triggers
+ * recursive evaluation, the depth is passed through to detect infinite loops.
+ */
+private class EvaluatorWithDepth(depth: Int) extends EvaluatorImpl:
+  override protected def currentDepth: Int = depth
