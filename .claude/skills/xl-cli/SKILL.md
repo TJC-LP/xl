@@ -492,6 +492,10 @@ xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --no-type-inference
 xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --encoding "ISO-8859-1"
 ```
 
+**Header Row Behavior**:
+- **Default**: First row is treated as column headers and **skipped** (not imported to Excel)
+- **`--no-header`**: First row is imported as data (use this to preserve headers in output)
+
 **Type Inference**: Automatically detects and converts:
 - **Numbers**: `100`, `29.99`, `-5.5` → Number type with Decimal format
 - **Booleans**: `true`, `false` (case-insensitive) → Boolean type
@@ -502,7 +506,7 @@ xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --encoding "ISO-8859-1"
 
 **Options**:
 - `--delimiter <char>` - Field separator (default: `,`)
-- `--no-header` - First row is data, not headers
+- `--no-header` - Import first row as data (default: skip header row)
 - `--encoding <enc>` - Input encoding (default: UTF-8)
 - `--new-sheet <name>` - Create new sheet for imported data
 - `--no-type-inference` - Treat all values as text (useful for ZIP codes, phone numbers)
