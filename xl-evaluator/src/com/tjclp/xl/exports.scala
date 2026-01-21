@@ -40,6 +40,11 @@ object formulaExports:
   export formula.eval.WorkbookEvaluator
   export formula.eval.WorkbookEvaluator.*
 
+  // DependentRecalculation extension methods (GH-163)
+  // Note: Extension methods with default parameters must be imported directly,
+  // not via wildcard export (Scala 3 compiler bug)
+  export formula.eval.DependentRecalculation
+
   // Display strategy with formula evaluation
   // The evaluating given has higher priority than default due to LowPriority pattern
   export formula.display.EvaluatingFormulaDisplay

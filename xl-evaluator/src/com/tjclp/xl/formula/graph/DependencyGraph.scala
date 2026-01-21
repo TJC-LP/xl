@@ -343,6 +343,46 @@ object DependencyGraph:
       transitiveDependencies(graph, directDeps, visited ++ toVisit)
 
   /**
+   * Compute transitive dependents (reverse of transitiveDependencies).
+   *
+   * Returns all cells that depend on the given cells, directly or transitively. Used for eager
+   * recalculation - when cell X changes, find all formulas to recalculate.
+   *
+   * @param graph
+   *   The dependency graph to traverse
+   * @param refs
+   *   The starting cell references (modified cells)
+   * @return
+   *   Set of all cells that depend on the starting cells (transitively), excluding the starting
+   *   refs themselves
+   *
+   * Example:
+   * {{{
+   * // A1="=10", B1="=A1*2", C1="=B1+5"
+   * // transitiveDependents(graph, Set(A1))
+   * // Returns: Set(B1, C1) - all cells affected when A1 changes
+   * }}}
+   */
+  def transitiveDependents(
+    graph: DependencyGraph,
+    refs: Set[ARef]
+  ): Set[ARef] =
+    transitiveDependentsImpl(graph, refs, refs, Set.empty)
+
+  @scala.annotation.tailrec
+  private def transitiveDependentsImpl(
+    graph: DependencyGraph,
+    originalRefs: Set[ARef],
+    frontier: Set[ARef],
+    visited: Set[ARef]
+  ): Set[ARef] =
+    val toVisit = frontier -- visited
+    if toVisit.isEmpty then visited -- originalRefs // Exclude starting refs
+    else
+      val directDeps = toVisit.flatMap(ref => graph.dependents.getOrElse(ref, Set.empty))
+      transitiveDependentsImpl(graph, originalRefs, directDeps, visited ++ toVisit)
+
+  /**
    * Detect circular references using Tarjan's strongly connected components algorithm.
    *
    * A circular reference occurs when a cell's formula depends (directly or transitively) on its own
