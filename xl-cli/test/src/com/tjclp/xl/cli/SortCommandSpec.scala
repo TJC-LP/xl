@@ -360,6 +360,128 @@ class SortCommandSpec extends FunSuite:
     assertEquals(s.cells.get(ref(0, 2)).map(_.value), Some(CellValue.Number(15)))
   }
 
+  test("sort: formula references are adjusted when rows move (GH-165)") {
+    // Regression test for GitHub issue #165
+    // When rows move during sort, relative formula references should be adjusted
+    // so formulas continue referencing cells in their own row.
+    //
+    // Setup:
+    //   A1=Name, B1=Q1, C1=Q2, D1=Total (header)
+    //   A2=Charlie, B2=100, C2=200, D2=SUM(B2:C2) -> 300
+    //   A3=Bob, B3=300, C3=400, D3=SUM(B3:C3) -> 700
+    //   A4=Alice, B4=500, C4=600, D4=SUM(B4:C4) -> 1100
+    //
+    // After sorting by A (ascending with header):
+    //   Row 2: Alice, 500, 600, =SUM(B2:C2) -> should be 1100
+    //   Row 3: Bob, 300, 400, =SUM(B3:C3) -> should be 700
+    //   Row 4: Charlie, 100, 200, =SUM(B4:C4) -> should be 300
+    val sheet = Sheet("Test")
+      // Header
+      .put(ref(0, 0), CellValue.Text("Name"))
+      .put(ref(1, 0), CellValue.Text("Q1"))
+      .put(ref(2, 0), CellValue.Text("Q2"))
+      .put(ref(3, 0), CellValue.Text("Total"))
+      // Charlie (row 2)
+      .put(ref(0, 1), CellValue.Text("Charlie"))
+      .put(ref(1, 1), CellValue.Number(100))
+      .put(ref(2, 1), CellValue.Number(200))
+      .put(ref(3, 1), CellValue.Formula("SUM(B2:C2)", Some(CellValue.Number(300))))
+      // Bob (row 3)
+      .put(ref(0, 2), CellValue.Text("Bob"))
+      .put(ref(1, 2), CellValue.Number(300))
+      .put(ref(2, 2), CellValue.Number(400))
+      .put(ref(3, 2), CellValue.Formula("SUM(B3:C3)", Some(CellValue.Number(700))))
+      // Alice (row 4)
+      .put(ref(0, 3), CellValue.Text("Alice"))
+      .put(ref(1, 3), CellValue.Number(500))
+      .put(ref(2, 3), CellValue.Number(600))
+      .put(ref(3, 3), CellValue.Formula("SUM(B4:C4)", Some(CellValue.Number(1100))))
+    val wb = Workbook(sheet)
+
+    val key = SortKey("A", SortDirection.Ascending, SortMode.Alphanumeric)
+    WriteCommands
+      .sort(wb, Some(sheet), "A1:D4", List(key), true, outputPath, config)
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.head
+
+    // Header should be unchanged
+    assertEquals(s.cells.get(ref(0, 0)).map(_.value), Some(CellValue.Text("Name")))
+
+    // Row 2 should be Alice with adjusted formula
+    assertEquals(s.cells.get(ref(0, 1)).map(_.value), Some(CellValue.Text("Alice")))
+    assertEquals(s.cells.get(ref(1, 1)).map(_.value), Some(CellValue.Number(500)))
+    assertEquals(s.cells.get(ref(2, 1)).map(_.value), Some(CellValue.Number(600)))
+    // Formula should be =SUM(B2:C2) after moving from row 4 to row 2
+    s.cells.get(ref(3, 1)).map(_.value) match
+      case Some(CellValue.Formula(formula, _)) =>
+        assertEquals(formula, "SUM(B2:C2)")
+      case other =>
+        fail(s"Expected Formula, got $other")
+
+    // Row 3 should be Bob (unchanged position, unchanged formula)
+    assertEquals(s.cells.get(ref(0, 2)).map(_.value), Some(CellValue.Text("Bob")))
+    s.cells.get(ref(3, 2)).map(_.value) match
+      case Some(CellValue.Formula(formula, _)) =>
+        assertEquals(formula, "SUM(B3:C3)")
+      case other =>
+        fail(s"Expected Formula, got $other")
+
+    // Row 4 should be Charlie with adjusted formula
+    assertEquals(s.cells.get(ref(0, 3)).map(_.value), Some(CellValue.Text("Charlie")))
+    assertEquals(s.cells.get(ref(1, 3)).map(_.value), Some(CellValue.Number(100)))
+    assertEquals(s.cells.get(ref(2, 3)).map(_.value), Some(CellValue.Number(200)))
+    // Formula should be =SUM(B4:C4) after moving from row 2 to row 4
+    s.cells.get(ref(3, 3)).map(_.value) match
+      case Some(CellValue.Formula(formula, _)) =>
+        assertEquals(formula, "SUM(B4:C4)")
+      case other =>
+        fail(s"Expected Formula, got $other")
+  }
+
+  test("sort: absolute formula references ($) are preserved during sort") {
+    // Formulas with absolute row references should NOT shift
+    // Setup:
+    //   A1=Rate (header)
+    //   A2=10, B2=$A$1*2 (absolute ref to A1)
+    //   A3=5, B3=$A$1*3 (absolute ref to A1)
+    //
+    // After sorting by A ascending:
+    //   A2=5, B2=$A$1*3 (formula moved but $A$1 stays as $A$1)
+    //   A3=10, B3=$A$1*2 (formula moved but $A$1 stays as $A$1)
+    val sheet = Sheet("Test")
+      .put(ref(0, 0), CellValue.Number(10))
+      .put(ref(1, 0), CellValue.Formula("$A$1*2", Some(CellValue.Number(20))))
+      .put(ref(0, 1), CellValue.Number(5))
+      .put(ref(1, 1), CellValue.Formula("$A$1*3", Some(CellValue.Number(15))))
+    val wb = Workbook(sheet)
+
+    val key = SortKey("A", SortDirection.Ascending, SortMode.Numeric)
+    WriteCommands
+      .sort(wb, Some(sheet), "A1:B2", List(key), false, outputPath, config)
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.head
+
+    // Row 1: A=5, B=$A$1*3 (moved from row 2)
+    assertEquals(s.cells.get(ref(0, 0)).map(_.value), Some(CellValue.Number(5)))
+    s.cells.get(ref(1, 0)).map(_.value) match
+      case Some(CellValue.Formula(formula, _)) =>
+        assertEquals(formula, "$A$1*3") // Absolute ref unchanged
+      case other =>
+        fail(s"Expected Formula, got $other")
+
+    // Row 2: A=10, B=$A$1*2 (moved from row 1)
+    assertEquals(s.cells.get(ref(0, 1)).map(_.value), Some(CellValue.Number(10)))
+    s.cells.get(ref(1, 1)).map(_.value) match
+      case Some(CellValue.Formula(formula, _)) =>
+        assertEquals(formula, "$A$1*2") // Absolute ref unchanged
+      case other =>
+        fail(s"Expected Formula, got $other")
+  }
+
   // ========== Data Preservation (Regression Tests) ==========
 
   test("sort: cells outside range are preserved") {
