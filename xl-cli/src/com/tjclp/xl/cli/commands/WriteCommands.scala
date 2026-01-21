@@ -17,6 +17,7 @@ import com.tjclp.xl.formula.{
   SheetEvaluator,
   TExpr
 }
+import com.tjclp.xl.formula.eval.DependentRecalculation.*
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.styleSyntax
@@ -116,7 +117,7 @@ object WriteCommands:
   ): IO[String] =
     val value = ValueParser.parseValue(valueStr)
     val updatedSheet = sheet.put(ref, value)
-    val updatedWb = wb.put(updatedSheet)
+    val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, Set(ref))
     ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
       s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
     }
@@ -132,8 +133,9 @@ object WriteCommands:
   ): IO[String] =
     val value = ValueParser.parseValue(valueStr)
     val cellCount = range.cellCount
+    val modifiedRefs = range.cells.toSet
     val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => s.put(ref, value))
-    val updatedWb = wb.put(updatedSheet)
+    val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
     ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
       s"Filled $cellCount cells in ${range.toA1} with value ${value}\nSaved: $outputPath"
     }
@@ -157,8 +159,9 @@ object WriteCommands:
             (ref, ValueParser.parseValue(valueStr))
           }
           .toVector
+        val modifiedRefs = updates.map(_._1).toSet
         val updatedSheet = sheet.put(updates*)
-        val updatedWb = wb.put(updatedSheet)
+        val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
         ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
           s"Put ${values.length} values to ${range.toA1} (row-major)\nSaved: $outputPath"
         }
@@ -236,7 +239,7 @@ object WriteCommands:
           val mergedStyle = existingStyle.withNumFmt(numFmt)
           styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
         else sheetWithFormula
-      updatedWb = wb.put(finalSheet)
+      updatedWb = wb.put(finalSheet).recalculateDependents(sheet.name, Set(ref))
       _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
     yield s"${Format.putSuccess(ref, CellValue.Formula(formula))}\nSaved: $outputPath"
 
@@ -259,7 +262,8 @@ object WriteCommands:
       )
       // Apply formula with Excel-style dragging (existing logic)
       updatedSheet = putfDraggingLogic(sheet, wb, range, formula, parsedExpr)
-      updatedWb = wb.put(updatedSheet)
+      modifiedRefs = range.cells.toSet
+      updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
       _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
       cellCount = range.cellCount
     yield s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\nSaved: $outputPath"
@@ -295,8 +299,9 @@ object WriteCommands:
                 (ref, CellValue.Formula(formula, cachedValue))
               }
           }
+          modifiedRefs = updates.map(_._1).toSet
           updatedSheet = sheet.put(updates*)
-          updatedWb = wb.put(updatedSheet)
+          updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
           _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
         yield s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)\nSaved: $outputPath"
 
@@ -671,7 +676,8 @@ object WriteCommands:
 
       // Apply fill operation
       updatedSheet = applyFill(targetSheet, wb, sourceRange, targetRange, direction)
-      updatedWb = wb.put(updatedSheet)
+      modifiedRefs = targetRange.cells.toSet
+      updatedWb = wb.put(updatedSheet).recalculateDependents(targetSheet.name, modifiedRefs)
       _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
       dirLabel = if direction == FillDirection.Right then "right" else "down"
     yield s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)\nSaved: $outputPath"
