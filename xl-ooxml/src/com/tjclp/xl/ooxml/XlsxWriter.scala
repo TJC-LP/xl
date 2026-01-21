@@ -1442,38 +1442,28 @@ object XlsxWriter:
                 )
               writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
 
-          // Comments: copy from source if available, else generate new
+          // Comments: always write from domain model for modified sheets
+          // This ensures new/modified comments are written, not just copied from source
           val commentPath = s"xl/comments${idx + 1}.xml"
           val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
 
-          sourceContext match
-            case Some(ctx)
-                if ctx.partManifest.contains(commentPath) && commentsBySheet.contains(idx) =>
-              // Preserve existing comments only if sheet still has them
-              // This prevents preserving comments that were removed via Sheet.removeComment()
-              copyPreservedPart(ctx.sourcePath, commentPath, zip)
-              if ctx.partManifest.contains(relsPath) then
-                copyPreservedPart(ctx.sourcePath, relsPath, zip)
+          val hasComments = commentsBySheet.contains(idx)
+          val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
 
-            case _ =>
-              // No source comments OR comments were removed - write new ones if sheet has them
-              val hasComments = commentsBySheet.contains(idx)
-              val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
+          if hasComments || tableIds.nonEmpty then
+            val sheetRels =
+              buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
+            writePart(zip, relsPath, sheetRels, config)
 
-              if hasComments || tableIds.nonEmpty then
-                val sheetRels =
-                  buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
-                writePart(zip, relsPath, sheetRels, config)
+          // Write comments if present (always from domain model, not source)
+          commentsBySheet.get(idx).foreach { comments =>
+            writePart(zip, commentPath, comments, config)
 
-              // Write comments if present
-              commentsBySheet.get(idx).foreach { comments =>
-                writePart(zip, commentPath, comments, config)
-
-                // Write VML drawing for comment indicators
-                vmlDrawings.get(idx).foreach { vmlXml =>
-                  writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
-                }
-              }
+            // Write VML drawing for comment indicators
+            vmlDrawings.get(idx).foreach { vmlXml =>
+              writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
+            }
+          }
         else
           // Copy unmodified sheet from source (only if source available)
           sourceContext.foreach { ctx =>
@@ -1498,7 +1488,8 @@ object XlsxWriter:
       }
 
       // Copy preserved parts (charts, drawings, images, etc.) if source available
-      // Skip VML drawings for sheets that no longer have comments (removed via removeComment)
+      // Skip VML drawings for modified sheets - either we wrote fresh VML (if comments exist)
+      // or comments were removed (so VML should be deleted, not copied)
       sourceContext.foreach { ctx =>
         preservableParts.foreach { path =>
           val isVmlDrawing = path.startsWith("xl/drawings/vmlDrawing") && path.endsWith(".vml")
@@ -1506,8 +1497,9 @@ object XlsxWriter:
             // Extract sheet index from vmlDrawingN.vml (N is 1-based)
             val sheetIdxOpt =
               path.stripPrefix("xl/drawings/vmlDrawing").stripSuffix(".vml").toIntOption.map(_ - 1)
-            // Skip if this sheet no longer has comments
-            sheetIdxOpt.exists(idx => !commentsBySheet.contains(idx))
+            // Skip if sheet was regenerated - VML is handled by domain model write or removed
+            // For unmodified sheets, we want to copy VML from source
+            sheetIdxOpt.exists(idx => sheetsToRegenerate.contains(idx))
           }
 
           if !shouldSkip then copyPreservedPart(ctx.sourcePath, path, zip)
