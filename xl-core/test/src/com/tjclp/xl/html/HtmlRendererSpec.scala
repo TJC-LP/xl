@@ -370,14 +370,14 @@ class HtmlRendererSpec extends FunSuite:
   }
 
   test("toHtml: explicit column width is used") {
-    // Column width 20 chars → (20 * 7 + 5) = 145 pixels
+    // Column width 20 chars → (20 * 8 + 5) = 165 pixels
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Data")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(20.0)))
 
     val html = sheet.toHtml(ref"A1:A1")
 
-    assert(html.contains("width: 145px"), s"Column width should be 145px (20 chars), got: $html")
+    assert(html.contains("width: 165px"), s"Column width should be 165px (20 chars), got: $html")
   }
 
   test("toHtml: explicit row height is used") {
@@ -435,24 +435,24 @@ class HtmlRendererSpec extends FunSuite:
       .applyPatch(Sheet("Test").put(ref"A1" -> "Data"), patch)
       .toHtml(ref"A1:A1")
 
-    // Column A: 15 chars → 110px, Row 0: 24pt → 32px
-    assert(html.contains("width: 110px"), s"DSL column width should apply, got: $html")
+    // Column A: 15 chars → 125px, Row 0: 24pt → 32px
+    assert(html.contains("width: 125px"), s"DSL column width should apply, got: $html")
     assert(html.contains("height: 32px"), s"DSL row height should apply, got: $html")
   }
 
   test("toHtml: multiple columns with different widths") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> "A", ref"B1" -> "B", ref"C1" -> "C")
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
-      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(20.0))) // 145px
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 85px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(20.0))) // 165px
 
     val html = sheet.toHtml(ref"A1:C1")
 
     // Check colgroup has different widths
-    assert(html.contains("width: 75px"), s"Column A should be 75px, got: $html")
-    assert(html.contains("width: 145px"), s"Column B should be 145px, got: $html")
+    assert(html.contains("width: 85px"), s"Column A should be 85px, got: $html")
+    assert(html.contains("width: 165px"), s"Column B should be 165px, got: $html")
     // Column C uses default
-    assert(html.contains("width: 64px"), s"Column C should use default 64px, got: $html")
+    assert(html.contains("width: 72px"), s"Column C should use default 72px, got: $html")
   }
 
   // ========== Indentation Tests ==========

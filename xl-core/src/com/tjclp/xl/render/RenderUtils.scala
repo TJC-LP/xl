@@ -27,8 +27,8 @@ object RenderUtils:
   /** Default cell height in pixels (Excel default ~15pt). */
   val DefaultCellHeightPx: Int = 20
 
-  /** Default column width in pixels (Excel default ~8.43 chars). */
-  val DefaultColumnWidthPx: Int = 64
+  /** Default column width in pixels (Excel default ~8.43 chars × 8 + 5 ≈ 72). */
+  val DefaultColumnWidthPx: Int = 72
 
   /** Default font size in points (Calibri 11pt). */
   val DefaultFontSize: Int = 11
@@ -50,9 +50,15 @@ object RenderUtils:
 
   // ========== Unit Conversion ==========
 
-  /** Convert Excel column width (character units) to pixels. */
+  /**
+   * Convert Excel column width (character units) to pixels.
+   *
+   * Excel's width unit is based on the "0" character in the default font. For SVG rendering with
+   * 15px Calibri (11pt × 4/3), characters average ~8px wide. Using 8× multiplier + 5px padding
+   * provides better fidelity than the previous 7× factor.
+   */
   def excelColWidthToPixels(width: Double): Int =
-    (width * 7 + 5).toInt
+    (width * 8 + 5).toInt
 
   /** Convert Excel row height (points) to pixels. 1pt = 4/3 pixels. */
   def excelRowHeightToPixels(height: Double): Int =
