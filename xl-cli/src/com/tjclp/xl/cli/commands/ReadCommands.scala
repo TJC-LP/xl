@@ -368,9 +368,33 @@ object ReadCommands:
         for
           sheet <- SheetResolver.requireSheet(wb, sheetOpt, "eval")
           tempSheet <- applyOverrides(sheet, overrides)
+          // Pre-evaluate all formulas in dependency order to handle formula chains.
+          // This ensures both:
+          // 1. Formula chains work correctly (e.g., =C1 where C1=B1+50, B1=A1*2)
+          // 2. Overrides propagate through chains (TJC-698): A1=200 → B1=400 → C1=450
+          // Only pre-evaluate if sheet has formula cells (optimization for value-only sheets)
+          hasFormulas = sheet.cells.values.exists(_.value match {
+            case _: CellValue.Formula => true
+            case _ => false
+          })
+          evalSheet <-
+            if hasFormulas then
+              IO.fromEither(
+                SheetEvaluator
+                  .evaluateWithDependencyCheck(tempSheet)()
+                  .map { evalResults =>
+                    // Replace formula cells with their evaluated values
+                    evalResults.foldLeft(tempSheet) { case (s, (ref, value)) =>
+                      s.put(ref, value)
+                    }
+                  }
+                  .left
+                  .map(e => new Exception(e.message))
+              )
+            else IO.pure(tempSheet)
           result <- IO.fromEither(
             SheetEvaluator
-              .evaluateFormula(tempSheet)(formula, workbook = Some(wb))
+              .evaluateFormula(evalSheet)(formula, workbook = Some(wb))
               .left
               .map(e => new Exception(e.message))
           )

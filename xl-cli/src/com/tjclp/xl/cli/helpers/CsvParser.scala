@@ -24,7 +24,7 @@ object CsvParser:
   /** Configuration options for CSV import */
   final case class ImportOptions(
     delimiter: Char = ',',
-    hasHeader: Boolean = true,
+    skipHeader: Boolean = false,
     encoding: String = "UTF-8",
     sampleRows: Int = 10,
     inferTypes: Boolean = true
@@ -70,8 +70,8 @@ object CsvParser:
 
         if allRows.isEmpty then Vector.empty
         else
-          // Skip header row if configured
-          val dataRows = if options.hasHeader then allRows.drop(1) else allRows
+          // Skip header row if configured (default: import all rows)
+          val dataRows = if options.skipHeader then allRows.drop(1) else allRows
 
           if dataRows.isEmpty then Vector.empty
           else

@@ -69,7 +69,8 @@ object BatchParser:
     val objPattern = """\{[^}]+\}""".r
     val opPattern = """"op"\s*:\s*"(\w+)"""".r
     val refPattern = """"ref"\s*:\s*"([^"]+)"""".r
-    val valuePattern = """"value"\s*:\s*"((?:[^"\\]|\\.)*)"""".r
+    // Accept both quoted strings ("value": "text") and bare values ("value": 123, true, null)
+    val valuePattern = """"value"\s*:\s*("(?:[^"\\]|\\.)*"|[^,\}\s]+)""".r
 
     // Quick validation: check for common JSON syntax issues
     val objects = objPattern.findAllIn(json).toVector
@@ -95,7 +96,19 @@ object BatchParser:
         val value = valuePattern
           .findFirstMatchIn(obj)
           .map(_.group(1))
-          .map(_.replace("\\\"", "\"").replace("\\n", "\n").replace("\\\\", "\\"))
+          .map { v =>
+            // Handle both quoted strings and bare values (numbers, booleans, null)
+            if v.startsWith("\"") && v.endsWith("\"") then
+              // Quoted string - strip quotes and unescape
+              v.drop(1)
+                .dropRight(1)
+                .replace("\\\"", "\"")
+                .replace("\\n", "\n")
+                .replace("\\\\", "\\")
+            else
+              // Bare value (number, boolean, null) - use as-is
+              v.trim
+          }
 
         (op, ref, value) match
           case (Some("put"), Some(r), Some(v)) => Right(BatchOp.Put(r, v))
@@ -118,7 +131,7 @@ object BatchParser:
             Left(
               new Exception(
                 s"JSON parse error in object ${idx + 1}: Missing or malformed 'value' field. " +
-                  "Expected \"value\": \"text\" (with quotes around the value)"
+                  "Expected \"value\": \"text\" or \"value\": 123"
               )
             )
           case (None, _, _) =>

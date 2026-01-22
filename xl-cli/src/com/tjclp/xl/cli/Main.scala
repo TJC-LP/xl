@@ -406,8 +406,8 @@ object Main
   private val startRefOpt = Opts.argument[String]("start-ref").orNone
   private val delimiterOpt =
     Opts.option[Char]("delimiter", "Field separator (default: comma)").withDefault(',')
-  private val noHeaderOpt =
-    Opts.flag("no-header", "First row is data, not headers").orFalse
+  private val skipHeaderOpt =
+    Opts.flag("skip-header", "Skip first row (treat as header, do not import)").orFalse
   private val encodingOpt =
     Opts.option[String]("encoding", "Input encoding (default: UTF-8)").withDefault("UTF-8")
   private val newSheetImportOpt =
@@ -424,13 +424,13 @@ object Main
         csvPathArg,
         startRefOpt,
         delimiterOpt,
-        noHeaderOpt,
+        skipHeaderOpt,
         encodingOpt,
         newSheetImportOpt,
         noTypeInferenceOpt
       )
-        .mapN { (path, ref, delim, noHeader, enc, newSh, noInfer) =>
-          CliCommand.Import(path, ref, delim, !noHeader, enc, newSh, noInfer)
+        .mapN { (path, ref, delim, skipHeader, enc, newSh, noInfer) =>
+          CliCommand.Import(path, ref, delim, skipHeader, enc, newSh, noInfer)
         }
     }
 
@@ -860,7 +860,7 @@ object Main
     case CliCommand.Batch(source) =>
       requireOutput(outputOpt, backendOpt)(WriteCommands.batch(wb, sheetOpt, source, _, _))
 
-    case CliCommand.Import(csvPath, startRefOpt, delim, hasHeader, enc, newSheetOpt, noInfer) =>
+    case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
       requireOutput(outputOpt, backendOpt) { (outputPath, writerConfig) =>
         ImportCommands.importCsv(
           wb,
@@ -868,7 +868,7 @@ object Main
           csvPath,
           startRefOpt,
           delim,
-          hasHeader,
+          skipHeader,
           enc,
           newSheetOpt,
           noInfer,

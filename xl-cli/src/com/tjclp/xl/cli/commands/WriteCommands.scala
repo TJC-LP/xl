@@ -576,7 +576,7 @@ object WriteCommands:
     else
       val maxCharWidth = cellsInColumn.values
         .map { cell =>
-          estimateCellWidth(cell.value)
+          estimateCellWidth(cell, sheet)
         }
         .maxOption
         .getOrElse(0)
@@ -589,24 +589,38 @@ object WriteCommands:
 
   /**
    * Estimate the display width of a cell value in characters.
+   *
+   * Uses the cell's number format (if any) to calculate formatted width. This ensures currency
+   * ($45,500.00), percentage (45.5%), and date formats are properly accounted for (TJC-696).
    */
-  private def estimateCellWidth(value: CellValue): Int =
+  private def estimateCellWidth(cell: Cell, sheet: Sheet): Int =
     import com.tjclp.xl.cells.CellValue.*
-    value match
+    import com.tjclp.xl.display.NumFmtFormatter
+
+    // Get the cell's number format from its style
+    val numFmt = cell.styleId
+      .flatMap(sheet.styleRegistry.get)
+      .map(_.numFmt)
+      .getOrElse(NumFmt.General)
+
+    cell.value match
       case Text(s) => s.length
-      case Number(n) => formatNumber(n).length
+      case n @ Number(_) =>
+        // Use formatted display value for width calculation
+        NumFmtFormatter.formatValue(n, numFmt).length
       case Bool(b) => if b then 4 else 5 // "TRUE" or "FALSE"
       case Error(e) => e.toString.length
       case Empty => 0
-      case DateTime(dt) => dt.toString.length // ISO format
-      case Formula(_, Some(cached)) => estimateCellWidth(cached)
+      case dt @ DateTime(_) =>
+        // Use formatted display value for dates
+        NumFmtFormatter.formatValue(dt, numFmt).length
+      case Formula(_, Some(cached)) =>
+        // For formulas with cached values, estimate width of the cached value
+        // Create a temporary cell with the cached value to reuse formatting logic
+        val tempCell = cell.copy(value = cached)
+        estimateCellWidth(tempCell, sheet)
       case Formula(expr, None) => expr.length
       case RichText(rt) => rt.toPlainText.length
-
-  /** Format number for display width estimation */
-  private def formatNumber(n: BigDecimal): String =
-    if n.isWhole then n.toBigInt.toString
-    else n.underlying.stripTrailingZeros.toPlainString
 
   /**
    * Apply multiple operations atomically (JSON from stdin or file).

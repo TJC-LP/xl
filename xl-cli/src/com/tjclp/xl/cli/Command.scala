@@ -65,7 +65,7 @@ enum CliCommand:
     csvPath: String,
     startRef: Option[String],
     delimiter: Char,
-    hasHeader: Boolean,
+    skipHeader: Boolean,
     encoding: String,
     newSheet: Option[String],
     noTypeInference: Boolean
