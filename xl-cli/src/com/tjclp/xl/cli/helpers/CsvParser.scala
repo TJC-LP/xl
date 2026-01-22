@@ -124,8 +124,9 @@ object CsvParser:
   /**
    * Infer column types from sample rows.
    *
-   * Strategy: For each column, check if ALL sampled values match a type pattern. If unanimous →
-   * assign type, else fallback to Text.
+   * Strategy: For each column, check if MAJORITY (80%+) of sampled values match a type pattern.
+   * This handles CSVs where --no-header is used but the file has a header row - the single header
+   * value won't prevent numeric columns from being detected.
    *
    * Priority: Number → Boolean → Date → Text
    */
@@ -140,12 +141,22 @@ object CsvParser:
         val columnValues = sampleRows.flatMap(_.lift(colIdx))
         val nonEmptyValues = columnValues.filter(_.trim.nonEmpty)
 
-        // Only infer type if we have non-empty values (prevents all-empty columns from being typed as Number)
+        // Only infer type if we have non-empty values
         if nonEmptyValues.isEmpty then ColumnType.Text
-        else if nonEmptyValues.forall(isNumber) then ColumnType.Number
-        else if nonEmptyValues.forall(isBoolean) then ColumnType.Boolean
-        else if nonEmptyValues.forall(isDate) then ColumnType.Date
-        else ColumnType.Text
+        else
+          val total = nonEmptyValues.length
+          val threshold = math.max(1, (total * 0.8).toInt) // 80% threshold, minimum 1
+
+          // Count matches for each type
+          val numberCount = nonEmptyValues.count(isNumber)
+          val booleanCount = nonEmptyValues.count(isBoolean)
+          val dateCount = nonEmptyValues.count(isDate)
+
+          // Use majority-based detection (priority: Number → Boolean → Date → Text)
+          if numberCount >= threshold then ColumnType.Number
+          else if booleanCount >= threshold then ColumnType.Boolean
+          else if dateCount >= threshold then ColumnType.Date
+          else ColumnType.Text
       }.toVector
 
   /**
