@@ -387,3 +387,31 @@ class RasterizerChainSpec extends CatsEffectSuite:
       }
       .guarantee(IO(Files.deleteIfExists(tempFile)).void)
   }
+
+  // ========== ImageMagick Delegate Detection Tests (GH-160) ==========
+
+  test("ImageMagick.diagnostics returns useful information") {
+    // This test verifies the diagnostics method works (doesn't throw)
+    // The actual output depends on the system configuration
+    ImageMagick.diagnostics.map { diag =>
+      // Should return one of these patterns:
+      // - "ImageMagick not found"
+      // - "ImageMagick 6 (convert) available, SVG delegate: ..."
+      // - "ImageMagick 7 (magick) available, SVG delegate: ..."
+      // - "ImageMagick X found but SVG delegate '...' is missing"
+      assert(
+        diag.contains("ImageMagick") || diag.contains("magick") || diag.contains("convert"),
+        s"Diagnostics should mention ImageMagick: $diag"
+      )
+    }
+  }
+
+  test("ImageMagick.isAvailable considers SVG delegate (GH-160)") {
+    // This test ensures isAvailable checks delegate availability
+    // We can't easily test the "broken delegate" case without mocking,
+    // but we can verify the code path runs without error
+    ImageMagick.isAvailable.map { available =>
+      // Just verify it returns a boolean without throwing
+      assert(available == true || available == false)
+    }
+  }

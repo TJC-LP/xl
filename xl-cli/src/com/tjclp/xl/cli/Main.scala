@@ -20,6 +20,14 @@ import com.tjclp.xl.cli.commands.{
   WorkbookCommands,
   WriteCommands
 }
+import com.tjclp.xl.cli.raster.{
+  BatikRasterizer,
+  CairoSvg,
+  ImageMagick,
+  RasterizerChain,
+  Resvg,
+  RsvgConvert
+}
 import com.tjclp.xl.cli.helpers.SheetResolver
 import com.tjclp.xl.cli.output.Format
 
@@ -83,8 +91,9 @@ object Main
 
     // Info commands: no file required
     val infoOpts = functionsCmd.map(_ => runInfo())
+    val rasterOpts = rasterizersCmd.map(_ => runRasterizers())
 
-    infoOpts orElse standaloneOpts orElse headlessOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
+    rasterOpts orElse infoOpts orElse standaloneOpts orElse headlessOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
 
   // ==========================================================================
   // Global options
@@ -191,6 +200,11 @@ object Main
 
   val functionsCmd: Opts[Unit] =
     Opts.subcommand("functions", "List supported Excel functions") {
+      Opts.unit
+    }
+
+  val rasterizersCmd: Opts[Unit] =
+    Opts.subcommand("rasterizers", "List available SVG-to-raster backends") {
       Opts.unit
     }
 
@@ -545,6 +559,76 @@ object Main
 
   private def runInfo(): IO[ExitCode] =
     IO.println(formatFunctionList()).as(ExitCode.Success)
+
+  private def runRasterizers(): IO[ExitCode] =
+    formatRasterizerList().flatMap { (output, hasWorking) =>
+      IO.println(output).as(if hasWorking then ExitCode.Success else ExitCode.Error)
+    }
+
+  /**
+   * Check all rasterizers and format a status table.
+   *
+   * Returns (formatted output, true if at least one rasterizer works).
+   */
+  private def formatRasterizerList(): IO[(String, Boolean)] =
+    for
+      batikAvail <- BatikRasterizer.isAvailable
+      cairoAvail <- CairoSvg.isAvailable
+      rsvgAvail <- RsvgConvert.isAvailable
+      resvgAvail <- Resvg.isAvailable
+      imageMagickAvail <- ImageMagick.isAvailable
+      imageMagickDiag <- ImageMagick.diagnostics
+    yield
+      val sb = new StringBuilder
+      sb.append("SVG Rasterizer Status\n")
+      sb.append("=" * 60 + "\n\n")
+      sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
+      sb.append("-" * 60 + "\n")
+
+      // Batik
+      val batikStatus = if batikAvail then "available" else "unavailable"
+      val batikNote = "Built-in (requires AWT, not native image)"
+      sb.append(f"${"batik"}%-14s | ${batikStatus}%-11s | $batikNote\n")
+
+      // CairoSvg
+      val cairoStatus = if cairoAvail then "available" else "missing"
+      val cairoNote = if cairoAvail then "pip install cairosvg" else "Not in PATH"
+      sb.append(f"${"cairosvg"}%-14s | ${cairoStatus}%-11s | $cairoNote\n")
+
+      // rsvg-convert
+      val rsvgStatus = if rsvgAvail then "available" else "missing"
+      val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
+      sb.append(f"${"rsvg-convert"}%-14s | ${rsvgStatus}%-11s | $rsvgNote\n")
+
+      // resvg
+      val resvgStatus = if resvgAvail then "available" else "missing"
+      val resvgNote = if resvgAvail then "cargo install resvg" else "Not in PATH"
+      sb.append(f"${"resvg"}%-14s | ${resvgStatus}%-11s | $resvgNote\n")
+
+      // ImageMagick (with delegate check)
+      val imStatus =
+        if imageMagickAvail then "available"
+        else if imageMagickDiag.contains("missing") then "broken"
+        else "missing"
+      val imNote = imageMagickDiag
+        .replaceAll("ImageMagick \\d+ \\((magick|convert)\\) ", "")
+        .take(40)
+      sb.append(f"${"imagemagick"}%-14s | ${imStatus}%-11s | $imNote\n")
+
+      sb.append("\n")
+
+      val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
+      if anyAvailable then
+        sb.append("At least one rasterizer is available for PNG/JPEG/PDF export.\n")
+      else
+        sb.append("WARNING: No rasterizers available! PNG/JPEG/PDF export will fail.\n")
+        sb.append("\nInstall one of:\n")
+        sb.append("  pip install cairosvg           # Python, most portable\n")
+        sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
+        sb.append("  cargo install resvg            # Rust, best quality\n")
+        sb.append("  apt install imagemagick        # Last resort\n")
+
+      (sb.toString, anyAvailable)
 
   private def formatFunctionList(): String =
     // Dynamically get all functions from the registry
