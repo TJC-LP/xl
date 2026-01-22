@@ -106,17 +106,55 @@ object ImageMagick extends Rasterizer:
    * ImageMagick may be installed but its SVG delegate (e.g., rsvg-convert) may be missing. This
    * causes confusing errors like "delegate failed 'rsvg-convert' -o '%o' '%i'". We detect this
    * upfront and skip ImageMagick if the delegate is broken.
+   *
+   * Additionally, even if the delegate binary exists, the delegate *mechanism* may fail due to temp
+   * file issues (GH-694). We perform a functional test by actually converting a minimal SVG to
+   * verify the entire pipeline works.
    */
   private def isSvgDelegateFunctional(cmd: ImageMagickCommand): IO[Boolean] =
     getSvgDelegate(cmd).flatMap {
       case None =>
         // No SVG delegate configured - ImageMagick may use internal rendering
-        // This is fine, let it try
-        IO.pure(true)
+        // Still perform functional test to verify it works
+        testMinimalConversion(cmd)
       case Some(delegateBinary) =>
-        // Delegate is configured - verify the binary exists
-        isBinaryInPath(delegateBinary)
+        // Delegate is configured - verify the binary exists AND test conversion
+        isBinaryInPath(delegateBinary).flatMap {
+          case false => IO.pure(false)
+          case true => testMinimalConversion(cmd)
+        }
     }
+
+  /** Minimal SVG for testing conversion pipeline */
+  private val TestSvg =
+    """<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect fill="red" width="1" height="1"/></svg>"""
+
+  /**
+   * Test that ImageMagick can actually convert SVG to PNG.
+   *
+   * This catches delegate mechanism failures (temp file issues, permission problems) that aren't
+   * detected by simply checking if the binary exists. The test converts a 1x1 red pixel SVG to PNG
+   * and verifies we get valid output.
+   */
+  private def testMinimalConversion(cmd: ImageMagickCommand): IO[Boolean] =
+    val args = List("-background", "white", "svg:-", "png:-")
+
+    Processes[IO]
+      .spawn(ProcessBuilder(cmd.command, args))
+      .use { process =>
+        val svgBytes = TestSvg.getBytes(StandardCharsets.UTF_8)
+
+        for
+          // Write test SVG to stdin
+          _ <- fs2.Stream.emits(svgBytes).through(process.stdin).compile.drain
+          // Read stdout to get PNG bytes (don't validate, just check we got something)
+          pngBytes <- process.stdout.compile.toVector
+          // Drain stderr
+          _ <- process.stderr.compile.drain
+          exitCode <- process.exitValue
+        yield exitCode == 0 && pngBytes.nonEmpty
+      }
+      .handleError(_ => false)
 
   /**
    * Find the available ImageMagick command, preferring v7 over v6.
@@ -256,20 +294,26 @@ object ImageMagick extends Rasterizer:
         if v7Available then
           for
             delegate <- getSvgDelegate(ImageMagickCommand.Magick7)
-            delegateOk <- isSvgDelegateFunctional(ImageMagickCommand.Magick7)
+            delegateBinaryOk <- delegate.fold(IO.pure(true))(isBinaryInPath)
+            conversionOk <- testMinimalConversion(ImageMagickCommand.Magick7)
           yield
-            if delegateOk then
-              s"ImageMagick 7 (magick) available, SVG delegate: ${delegate.getOrElse("internal")}"
+            if !delegateBinaryOk then
+              s"ImageMagick 7 (magick) found but SVG delegate '${delegate.getOrElse("unknown")}' binary is missing"
+            else if !conversionOk then
+              s"ImageMagick 7 (magick) found, delegate: ${delegate.getOrElse("internal")}, but conversion test failed (temp file or delegate issue)"
             else
-              s"ImageMagick 7 (magick) found but SVG delegate '${delegate.getOrElse("unknown")}' is missing"
+              s"ImageMagick 7 (magick) available, SVG delegate: ${delegate.getOrElse("internal")}"
         else if v6Available then
           for
             delegate <- getSvgDelegate(ImageMagickCommand.Convert6)
-            delegateOk <- isSvgDelegateFunctional(ImageMagickCommand.Convert6)
+            delegateBinaryOk <- delegate.fold(IO.pure(true))(isBinaryInPath)
+            conversionOk <- testMinimalConversion(ImageMagickCommand.Convert6)
           yield
-            if delegateOk then
-              s"ImageMagick 6 (convert) available, SVG delegate: ${delegate.getOrElse("internal")}"
+            if !delegateBinaryOk then
+              s"ImageMagick 6 (convert) found but SVG delegate '${delegate.getOrElse("unknown")}' binary is missing"
+            else if !conversionOk then
+              s"ImageMagick 6 (convert) found, delegate: ${delegate.getOrElse("internal")}, but conversion test failed (temp file or delegate issue)"
             else
-              s"ImageMagick 6 (convert) found but SVG delegate '${delegate.getOrElse("unknown")}' is missing"
+              s"ImageMagick 6 (convert) available, SVG delegate: ${delegate.getOrElse("internal")}"
         else IO.pure("ImageMagick not found")
     yield result

@@ -631,9 +631,8 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // Without showGridlines, .cell class should have no stroke
-    assert(svg.contains(".cell {  }"), s"Cell class should be empty (no gridlines), got: $svg")
-    assert(!svg.contains("stroke: #D0D0D0"), s"Should not have gridline stroke, got: $svg")
+    // Without showGridlines, cell rects should not have stroke attributes
+    assert(!svg.contains("""stroke="#D0D0D0""""), s"Should not have gridline stroke, got: $svg")
   }
 
   test("toSvg: gridlines shown when showGridlines=true") {
@@ -641,10 +640,10 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1", showGridlines = true)
 
-    // With showGridlines, .cell class should have stroke
+    // With showGridlines, cell rects should have inline stroke attributes
     assert(
-      svg.contains("stroke: #D0D0D0; stroke-width: 0.5;"),
-      s"Cell class should have gridline stroke, got: $svg"
+      svg.contains("""stroke="#D0D0D0"""") && svg.contains("""stroke-width="0.5""""),
+      s"Cell rects should have inline gridline stroke attributes, got: $svg"
     )
   }
 
