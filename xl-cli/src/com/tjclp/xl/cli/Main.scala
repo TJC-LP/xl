@@ -4,6 +4,7 @@ import java.nio.file.Path
 
 import cats.effect.{ExitCode, IO}
 import cats.implicits.*
+import cats.syntax.parallel.*
 import com.monovore.decline.*
 import com.monovore.decline.effect.*
 
@@ -568,67 +569,78 @@ object Main
   /**
    * Check all rasterizers and format a status table.
    *
-   * Returns (formatted output, true if at least one rasterizer works).
+   * Returns (formatted output, true if at least one rasterizer works). Checks run in parallel for
+   * better performance.
+   *
+   * Status terminology:
+   *   - available: Works correctly
+   *   - missing: Binary not in PATH
+   *   - broken: Found but non-functional (e.g., delegate missing)
+   *   - unavailable: Cannot be used in current environment (e.g., Batik on native-image)
    */
   private def formatRasterizerList(): IO[(String, Boolean)] =
-    for
-      batikAvail <- BatikRasterizer.isAvailable
-      cairoAvail <- CairoSvg.isAvailable
-      rsvgAvail <- RsvgConvert.isAvailable
-      resvgAvail <- Resvg.isAvailable
-      imageMagickAvail <- ImageMagick.isAvailable
-      imageMagickDiag <- ImageMagick.diagnostics
-    yield
-      val sb = new StringBuilder
-      sb.append("SVG Rasterizer Status\n")
-      sb.append("=" * 60 + "\n\n")
-      sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
-      sb.append("-" * 60 + "\n")
+    // Run all availability checks in parallel
+    (
+      BatikRasterizer.isAvailable,
+      CairoSvg.isAvailable,
+      RsvgConvert.isAvailable,
+      Resvg.isAvailable,
+      ImageMagick.isAvailable,
+      ImageMagick.diagnostics
+    ).parMapN {
+      (batikAvail, cairoAvail, rsvgAvail, resvgAvail, imageMagickAvail, imageMagickDiag) =>
+        val sb = new StringBuilder
+        sb.append("SVG Rasterizer Status\n")
+        sb.append("=" * 60 + "\n\n")
+        sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
+        sb.append("-" * 60 + "\n")
 
-      // Batik
-      val batikStatus = if batikAvail then "available" else "unavailable"
-      val batikNote = "Built-in (requires AWT, not native image)"
-      sb.append(f"${"batik"}%-14s | ${batikStatus}%-11s | $batikNote\n")
+        // Batik - "unavailable" when AWT not present (native image)
+        val batikStatus = if batikAvail then "available" else "unavailable"
+        val batikNote = "Built-in (requires AWT, not native image)"
+        sb.append(f"${"batik"}%-14s | ${batikStatus}%-11s | $batikNote\n")
 
-      // CairoSvg
-      val cairoStatus = if cairoAvail then "available" else "missing"
-      val cairoNote = if cairoAvail then "pip install cairosvg" else "Not in PATH"
-      sb.append(f"${"cairosvg"}%-14s | ${cairoStatus}%-11s | $cairoNote\n")
+        // CairoSvg
+        val cairoStatus = if cairoAvail then "available" else "missing"
+        val cairoNote = if cairoAvail then "pip install cairosvg" else "Not in PATH"
+        sb.append(f"${"cairosvg"}%-14s | ${cairoStatus}%-11s | $cairoNote\n")
 
-      // rsvg-convert
-      val rsvgStatus = if rsvgAvail then "available" else "missing"
-      val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
-      sb.append(f"${"rsvg-convert"}%-14s | ${rsvgStatus}%-11s | $rsvgNote\n")
+        // rsvg-convert
+        val rsvgStatus = if rsvgAvail then "available" else "missing"
+        val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
+        sb.append(f"${"rsvg-convert"}%-14s | ${rsvgStatus}%-11s | $rsvgNote\n")
 
-      // resvg
-      val resvgStatus = if resvgAvail then "available" else "missing"
-      val resvgNote = if resvgAvail then "cargo install resvg" else "Not in PATH"
-      sb.append(f"${"resvg"}%-14s | ${resvgStatus}%-11s | $resvgNote\n")
+        // resvg
+        val resvgStatus = if resvgAvail then "available" else "missing"
+        val resvgNote = if resvgAvail then "cargo install resvg" else "Not in PATH"
+        sb.append(f"${"resvg"}%-14s | ${resvgStatus}%-11s | $resvgNote\n")
 
-      // ImageMagick (with delegate check)
-      val imStatus =
-        if imageMagickAvail then "available"
-        else if imageMagickDiag.contains("missing") then "broken"
-        else "missing"
-      val imNote = imageMagickDiag
-        .replaceAll("ImageMagick \\d+ \\((magick|convert)\\) ", "")
-        .take(40)
-      sb.append(f"${"imagemagick"}%-14s | ${imStatus}%-11s | $imNote\n")
+        // ImageMagick (with delegate check)
+        // "broken" = found but delegate missing, "missing" = not in PATH
+        val imStatus =
+          if imageMagickAvail then "available"
+          else if imageMagickDiag.contains("missing") then "broken"
+          else "missing"
+        val imNote =
+          val cleaned = imageMagickDiag.replaceAll("ImageMagick \\d+ \\((magick|convert)\\) ", "")
+          if cleaned.length > 40 then cleaned.take(37) + "..." else cleaned
+        sb.append(f"${"imagemagick"}%-14s | ${imStatus}%-11s | $imNote\n")
 
-      sb.append("\n")
+        sb.append("\n")
 
-      val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
-      if anyAvailable then
-        sb.append("At least one rasterizer is available for PNG/JPEG/PDF export.\n")
-      else
-        sb.append("WARNING: No rasterizers available! PNG/JPEG/PDF export will fail.\n")
-        sb.append("\nInstall one of:\n")
-        sb.append("  pip install cairosvg           # Python, most portable\n")
-        sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
-        sb.append("  cargo install resvg            # Rust, best quality\n")
-        sb.append("  apt install imagemagick        # Last resort\n")
+        val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
+        if anyAvailable then
+          sb.append("At least one rasterizer is available for PNG/JPEG/PDF export.\n")
+        else
+          sb.append("WARNING: No rasterizers available! PNG/JPEG/PDF export will fail.\n")
+          sb.append("\nInstall one of:\n")
+          sb.append("  pip install cairosvg           # Python, most portable\n")
+          sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
+          sb.append("  cargo install resvg            # Rust, best quality\n")
+          sb.append("  apt install imagemagick        # Last resort\n")
 
-      (sb.toString, anyAvailable)
+        (sb.toString, anyAvailable)
+    }
 
   private def formatFunctionList(): String =
     // Dynamically get all functions from the registry

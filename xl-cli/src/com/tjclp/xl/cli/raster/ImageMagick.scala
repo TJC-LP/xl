@@ -121,26 +121,29 @@ object ImageMagick extends Rasterizer:
   /**
    * Find the available ImageMagick command, preferring v7 over v6.
    *
-   * Also verifies that the SVG delegate is functional (GH-160).
+   * Also verifies that the SVG delegate is functional (GH-160). If v7 is available but its delegate
+   * is broken, falls back to try v6.
    */
   private def findCommand: IO[Option[ImageMagickCommand]] =
+    // Helper to check v6 availability and delegate
+    def tryV6: IO[Option[ImageMagickCommand]] =
+      isCommandAvailable(ImageMagickCommand.Convert6).flatMap {
+        case true =>
+          isSvgDelegateFunctional(ImageMagickCommand.Convert6).map {
+            case true => Some(ImageMagickCommand.Convert6)
+            case false => None
+          }
+        case false => IO.pure(None)
+      }
+
     isCommandAvailable(ImageMagickCommand.Magick7).flatMap {
       case true =>
         // v7 available, check SVG delegate
-        isSvgDelegateFunctional(ImageMagickCommand.Magick7).map {
-          case true => Some(ImageMagickCommand.Magick7)
-          case false => None // Delegate broken, skip ImageMagick
+        isSvgDelegateFunctional(ImageMagickCommand.Magick7).flatMap {
+          case true => IO.pure(Some(ImageMagickCommand.Magick7))
+          case false => tryV6 // v7 delegate broken, fall back to v6
         }
-      case false =>
-        isCommandAvailable(ImageMagickCommand.Convert6).flatMap {
-          case true =>
-            // v6 available, check SVG delegate
-            isSvgDelegateFunctional(ImageMagickCommand.Convert6).map {
-              case true => Some(ImageMagickCommand.Convert6)
-              case false => None // Delegate broken, skip ImageMagick
-            }
-          case false => IO.pure(None)
-        }
+      case false => tryV6
     }
 
   /**
