@@ -18,7 +18,9 @@ import com.tjclp.xl.styles.color.Color
 /**
  * Integration tests for clear command functionality.
  */
-@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
+@SuppressWarnings(
+  Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps")
+)
 class ClearCommandSpec extends FunSuite:
 
   given unsafe.IORuntime = unsafe.IORuntime.global
@@ -192,7 +194,11 @@ class ClearCommandSpec extends FunSuite:
     val wb = Workbook(sheet)
 
     // Verify formula is present
-    assert(sheet.cells.get(ref).exists(_.value.isInstanceOf[CellValue.Formula]))
+    assert(sheet.cells.get(ref).exists { cell =>
+      cell.value match
+        case _: CellValue.Formula => true
+        case _                    => false
+    })
 
     val result = CellCommands
       .clear(wb, Some(sheet), "A1", all = false, styles = false, comments = false, outputPath, config)

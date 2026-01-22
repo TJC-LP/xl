@@ -34,7 +34,13 @@ import scala.xml.Elem
 @Warmup(iterations = 3, time = 1, timeUnit = TimeUnit.SECONDS)
 @Measurement(iterations = 5, time = 2, timeUnit = TimeUnit.SECONDS)
 @Fork(value = 1)
-@SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.Null"))
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.Var",
+    "org.wartremover.warts.Null",
+    "org.wartremover.warts.OptionPartial"
+  )
+)
 class SaxWriterBenchmark {
 
   @Param(Array("1000", "10000", "100000"))

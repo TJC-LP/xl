@@ -90,11 +90,11 @@ object WriteCommands:
           // Mode 2: Fill pattern
           putFillPattern(wb, targetSheet, range, singleValue, outputPath, config)
 
-        case (Right(range), multipleValues) =>
-          // Mode 3: Batch values (validate count matches)
+        case (Right(range), multipleValues @ (_ :: _ :: _)) =>
+          // Mode 3: Batch values (validate count matches) - 2+ values
           putBatchValues(wb, targetSheet, range, multipleValues, outputPath, config)
 
-        case (Left(ref), multipleValues) =>
+        case (Left(ref), multipleValues @ (_ :: _)) =>
           IO.raiseError(
             new Exception(
               s"Cannot put ${multipleValues.length} values to single cell ${ref.toA1}. " +
@@ -191,11 +191,11 @@ object WriteCommands:
           // Mode 2: Formula dragging (existing behavior with $ anchors)
           putfFormulaDragging(wb, targetSheet, range, singleFormula, outputPath, config)
 
-        case (Right(range), multipleFormulas) =>
-          // Mode 3: Batch formulas (no dragging, apply as-is)
+        case (Right(range), multipleFormulas @ (_ :: _ :: _)) =>
+          // Mode 3: Batch formulas (no dragging, apply as-is) - 2+ formulas
           putfBatchFormulas(wb, targetSheet, range, multipleFormulas, outputPath, config)
 
-        case (Left(ref), multipleFormulas) =>
+        case (Left(ref), multipleFormulas @ (_ :: _)) =>
           IO.raiseError(
             new Exception(
               s"Cannot put ${multipleFormulas.length} formulas to single cell ${ref.toA1}. " +

@@ -15,7 +15,9 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
 /**
  * Integration tests for batch put and fill pattern functionality.
  */
-@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
+@SuppressWarnings(
+  Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps")
+)
 class BatchPutSpec extends FunSuite:
 
   given unsafe.IORuntime = unsafe.IORuntime.global
