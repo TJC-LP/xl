@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.1] - 2026-01-22
+
+### Added
+
+- **`xl rasterizers` command**: List available SVG-to-raster backends with status (#158)
+  - Shows availability, notes, and delegate info for each rasterizer
+  - Exits with code 1 if no rasterizers available (useful for CI/automation)
+  - Parallelized checks for faster execution
+
+- **ImageMagick SVG delegate detection** (#160)
+  - Detects when ImageMagick's SVG delegate (rsvg-convert) is missing
+  - Falls back to v6 if v7 delegate is broken
+  - Prevents confusing "delegate failed" errors in containerized environments
+
+### Fixed
+
+- **CSV `--no-header` type inference**: Numeric columns now correctly detected when using `--no-header` on a CSV that has a header row (#170)
+  - Changed from unanimity-based to majority-based (80% threshold) type inference
+  - Individual cells that can't parse gracefully fall back to Text
+
+---
+
 ## [0.6.0] - 2026-01-21
 
 ### Added

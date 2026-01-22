@@ -10,13 +10,23 @@
 
 **Current Status**: Production-ready with **81 formula functions**, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 733+ tests passing.
 
-**Current Version**: 0.6.0
+**Current Version**: 0.6.1
 
 ---
 
 ## Release Roadmap
 
-### v0.6.0 (Current)
+### v0.6.1 (Current)
+
+Bug fixes and agent tooling improvements:
+
+| Feature | Status |
+|---------|--------|
+| `rasterizers` - List available backends | ✅ Done |
+| ImageMagick delegate detection | ✅ Done |
+| CSV `--no-header` type inference fix | ✅ Done |
+
+### v0.6.0
 
 CLI expansion with 7 new commands and evaluator fixes:
 

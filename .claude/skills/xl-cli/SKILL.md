@@ -60,6 +60,7 @@ cd /tmp && ./install.sh
 ```bash
 # Info commands
 xl functions                           # List all 81 supported functions
+xl rasterizers                         # List available SVG-to-raster backends
 
 # Read operations
 xl -f <file> sheets                    # List sheets with stats
@@ -641,6 +642,34 @@ See [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) for detailed spec
 xl -f data.xlsx view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels
 ```
 
+### Rasterizer Discovery
+
+Use `xl rasterizers` to check which SVG-to-raster backends are available:
+
+```bash
+$ xl rasterizers
+SVG Rasterizer Status
+============================================================
+
+Backend        | Status      | Notes
+------------------------------------------------------------
+batik          | available   | Built-in (requires AWT, not native image)
+cairosvg       | missing     | Not in PATH
+rsvg-convert   | available   | librsvg2-bin
+resvg          | missing     | Not in PATH
+imagemagick    | available   | SVG delegate: rsvg-convert
+
+At least one rasterizer is available for PNG/JPEG/PDF export.
+```
+
+**Status values**:
+- `available` - Works correctly
+- `missing` - Binary not in PATH
+- `broken` - Found but non-functional (e.g., ImageMagick delegate missing)
+- `unavailable` - Cannot be used in current environment (e.g., Batik on native-image)
+
+**Exit codes**: 0 if at least one rasterizer works, 1 if none available.
+
 ---
 
 ## Workflows
@@ -810,3 +839,4 @@ xl -f data.xlsx -o out.xlsx --backend saxstax style A1:Z1000 --bold
 | Command | Description |
 |---------|-------------|
 | `functions` | List all 81 supported Excel functions (no file required) |
+| `rasterizers` | List available SVG-to-raster backends with status (no file required) |
