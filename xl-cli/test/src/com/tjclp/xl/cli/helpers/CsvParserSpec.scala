@@ -57,14 +57,14 @@ class CsvParserSpec extends FunSuite:
     }
   }
 
-  test("parseCsv: mixed types fallback to Text") {
+  test("parseCsv: mixed types use majority detection with individual fallback") {
     val csvFile = createTempCsv("Value\n100\nN/A\n200")
     val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), defaultOptions).unsafeRunSync()
 
-    // Column should be Text because of "N/A"
-    assertEquals(result(0)._2, CellValue.Text("100"))
-    assertEquals(result(1)._2, CellValue.Text("N/A"))
-    assertEquals(result(2)._2, CellValue.Text("200"))
+    // Column typed as Number (majority 2/3 >= 80% threshold), individual cells that can't parse fall back to Text
+    assertEquals(result(0)._2, CellValue.Number(BigDecimal(100)))
+    assertEquals(result(1)._2, CellValue.Text("N/A")) // Can't parse as number, falls back
+    assertEquals(result(2)._2, CellValue.Number(BigDecimal(200)))
   }
 
   test("parseCsv: empty column defaults to Text") {
@@ -97,6 +97,27 @@ class CsvParserSpec extends FunSuite:
 
     assertEquals(result.length, 4) // 2 rows × 2 columns (all rows treated as data)
     assertEquals(result(0), (ARef.from0(0, 0), CellValue.Number(BigDecimal("100"))))
+  }
+
+  test("parseCsv: no header mode with CSV that has header row (GH-170)") {
+    // When using --no-header on a CSV with a header, type inference should still work
+    // because majority-based detection ignores the single header row
+    val csvFile = createTempCsv("Name,Amount\nAlice,100\nBob,200\nCharlie,300")
+    val options = defaultOptions.copy(hasHeader = false)
+    val result = CsvParser.parseCsv(csvFile, ARef.from0(0, 0), options).unsafeRunSync()
+
+    assertEquals(result.length, 8) // 4 rows × 2 columns (header + 3 data rows)
+
+    // Column A (Name) should be Text
+    assertEquals(result(0)._2, CellValue.Text("Name"))
+    assertEquals(result(2)._2, CellValue.Text("Alice"))
+
+    // Column B (Amount) should be Number for data rows, Text for header
+    // The header "Amount" falls back to Text since it can't parse as number
+    assertEquals(result(1)._2, CellValue.Text("Amount")) // Header can't parse as number
+    assertEquals(result(3)._2, CellValue.Number(BigDecimal(100))) // Data row parsed as number
+    assertEquals(result(5)._2, CellValue.Number(BigDecimal(200)))
+    assertEquals(result(7)._2, CellValue.Number(BigDecimal(300)))
   }
 
   test("parseCsv: import at offset position (B5)") {
