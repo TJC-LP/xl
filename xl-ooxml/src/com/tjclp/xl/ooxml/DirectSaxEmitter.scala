@@ -106,7 +106,16 @@ object DirectSaxEmitter:
 
   /**
    * Emit column definitions from sheet.
+   *
+   * Performance: Uses imperative two-pointer merge algorithm for O(1) memory overhead. The
+   * .head/.tail calls are safe because we guard with nonEmpty check above.
    */
+  @SuppressWarnings(
+    Array(
+      "org.wartremover.warts.IterableOps",
+      "org.wartremover.warts.Var"
+    )
+  )
   private def emitCols(writer: SaxWriter, sheet: Sheet): Unit =
     val colProps = sheet.columnProperties
     if colProps.nonEmpty then
@@ -144,7 +153,10 @@ object DirectSaxEmitter:
 
   /**
    * Emit sheetData directly from domain cells, grouped by row.
+   *
+   * Performance: Uses imperative two-pointer merge algorithm for O(1) memory overhead.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def emitSheetData(
     writer: SaxWriter,
     sheet: Sheet,
@@ -201,7 +213,10 @@ object DirectSaxEmitter:
 
   /**
    * Emit a single row element.
+   *
+   * Performance: Uses imperative loop for O(1) memory overhead.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def emitRow(
     writer: SaxWriter,
     rowIdx: Int,

@@ -23,6 +23,9 @@ import scala.io.Source
  * @see
  *   https://github.com/TJC-LP/xl/pull/145
  */
+@SuppressWarnings(
+  Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps")
+)
 class StaxNamespaceRegressionSpec extends FunSuite:
 
   private def createTestWorkbook(): Workbook =
@@ -42,15 +45,15 @@ class StaxNamespaceRegressionSpec extends FunSuite:
   private def extractEntry(bytes: Array[Byte], entryName: String): Option[String] =
     val zis = new ZipInputStream(new java.io.ByteArrayInputStream(bytes))
     try
-      var entry = zis.getNextEntry
-      while entry != null do
-        if entry.getName == entryName then
-          val content = Source.fromInputStream(zis, "UTF-8").mkString
-          zis.closeEntry()
-          return Some(content)
-        zis.closeEntry()
-        entry = zis.getNextEntry
-      None
+      Iterator
+        .continually(zis.getNextEntry)
+        .takeWhile(_ != null)
+        .collectFirst {
+          case entry if entry.getName == entryName =>
+            val content = Source.fromInputStream(zis, "UTF-8").mkString
+            zis.closeEntry()
+            content
+        }
     finally zis.close()
 
   test("StAX backend: styles.xml has xmlns declaration (POI compatibility)") {
@@ -170,13 +173,15 @@ class StaxNamespaceRegressionSpec extends FunSuite:
     def listEntries(bytes: Array[Byte]): Set[String] =
       val zis = new ZipInputStream(new java.io.ByteArrayInputStream(bytes))
       try
-        var entries = Set.empty[String]
-        var entry = zis.getNextEntry
-        while entry != null do
-          entries += entry.getName
-          zis.closeEntry()
-          entry = zis.getNextEntry
-        entries
+        Iterator
+          .continually(zis.getNextEntry)
+          .takeWhile(_ != null)
+          .map { entry =>
+            val name = entry.getName
+            zis.closeEntry()
+            name
+          }
+          .toSet
       finally zis.close()
 
     val staxEntries = listEntries(staxBytes)

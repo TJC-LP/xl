@@ -14,6 +14,9 @@ import munit.FunSuite
  *
  * Tests eager recalculation of dependent formulas when cells are modified.
  */
+@SuppressWarnings(
+  Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps")
+)
 class DependentRecalculationSpec extends FunSuite:
   val emptySheet = new Sheet(name = SheetName.unsafe("Test"))
 

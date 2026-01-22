@@ -17,7 +17,9 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
  *
  * Note: ARef.from0(col, row) - column comes first!
  */
-@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
+@SuppressWarnings(
+  Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps")
+)
 class SortCommandSpec extends FunSuite:
 
   given unsafe.IORuntime = unsafe.IORuntime.global

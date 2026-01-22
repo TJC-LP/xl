@@ -14,6 +14,8 @@ import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.SheetName
 import com.tjclp.xl.syntax.* // Extension methods for Sheet.get, CellRange.cells, ARef.toA1
 import scala.math.BigDecimal
+import scala.util.boundary
+import scala.util.boundary.break
 
 /**
  * Pure functional formula evaluator.
@@ -147,37 +149,40 @@ object Evaluator:
     workbook: Option[Workbook],
     depth: Int = 0
   ): Either[EvalError, CellValue] =
-    // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
-    if depth > MaxCrossSheetRecursionDepth then
-      return Left(
-        EvalError.EvalFailed(
-          s"Cross-sheet formula recursion depth exceeded (max: $MaxCrossSheetRecursionDepth). Possible circular reference.",
-          None
-        )
-      )
-
-    FormulaParser.parse(formulaStr) match
-      case Left(parseErr) =>
-        Left(
-          EvalError.EvalFailed(
-            s"Failed to parse cross-sheet formula: ${ParseError.toXLError(parseErr, formulaStr).message}",
-            None
+    boundary:
+      // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
+      if depth > MaxCrossSheetRecursionDepth then
+        break(
+          Left(
+            EvalError.EvalFailed(
+              s"Cross-sheet formula recursion depth exceeded (max: $MaxCrossSheetRecursionDepth). Possible circular reference.",
+              None
+            )
           )
         )
-      case Right(expr) =>
-        // Recursively evaluate with depth-aware evaluator (GH-161 cycle protection)
-        new EvaluatorWithDepth(depth + 1).eval(expr, targetSheet, clock, workbook).map { result =>
-          // Convert typed result to CellValue
-          result match
-            case cv: CellValue => cv
-            case bd: BigDecimal => CellValue.Number(bd)
-            case s: String => CellValue.Text(s)
-            case b: Boolean => CellValue.Bool(b)
-            case i: Int => CellValue.Number(BigDecimal(i))
-            case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
-            case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
-            case other => CellValue.Text(other.toString)
-        }
+
+      FormulaParser.parse(formulaStr) match
+        case Left(parseErr) =>
+          Left(
+            EvalError.EvalFailed(
+              s"Failed to parse cross-sheet formula: ${ParseError.toXLError(parseErr, formulaStr).message}",
+              None
+            )
+          )
+        case Right(expr) =>
+          // Recursively evaluate with depth-aware evaluator (GH-161 cycle protection)
+          new EvaluatorWithDepth(depth + 1).eval(expr, targetSheet, clock, workbook).map { result =>
+            // Convert typed result to CellValue
+            result match
+              case cv: CellValue => cv
+              case bd: BigDecimal => CellValue.Number(bd)
+              case s: String => CellValue.Text(s)
+              case b: Boolean => CellValue.Bool(b)
+              case i: Int => CellValue.Number(BigDecimal(i))
+              case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
+              case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
+              case other => CellValue.Text(other.toString)
+          }
 
 /**
  * Private implementation of Evaluator.

@@ -58,7 +58,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("writeFast: creates valid XLSX file using SAX backend") { dir =>
+  tempDir.test("writeWith SaxStax: creates valid XLSX file using SAX backend") { dir =>
     val initial = Workbook("OutputFast")
     val sheet = initial.sheets(0)
       .put(ref"A1", CellValue.Text("Fast"))
@@ -68,7 +68,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val path = dir.resolve("output-fast.xlsx")
     val excel = ExcelIO.instance[IO]
 
-    excel.writeFast(wb, path).flatMap { _ =>
+    excel.writeWith(wb, path, WriterConfig.saxStax).flatMap { _ =>
       IO(Files.exists(path)).map { exists =>
         assert(exists, "File should exist")
       }
