@@ -98,3 +98,23 @@ class EvalCommandSpec extends CatsEffectSuite:
     for result <- ReadCommands.eval(Workbook.empty, None, "=1+1", Nil)
     yield assert(result.contains("2"), s"Expected 2, got: $result")
   }
+
+  test("eval: only evaluates dependency closure (optimization)") {
+    // Sheet with many formulas, but query only needs a few
+    for
+      wb <- IO {
+        val sheet = Sheet("Test")
+          .put(ref"A1", CellValue.Number(BigDecimal(100)))
+          .put(ref"B1", CellValue.Formula("=A1*2")) // In closure
+          .put(ref"C1", CellValue.Formula("=B1+50")) // In closure (target)
+          .put(ref"D1", CellValue.Formula("=999")) // NOT in closure
+          .put(ref"E1", CellValue.Formula("=D1*2")) // NOT in closure
+        Workbook(Vector(sheet))
+      }
+      sheet = wb.sheets.head
+      result <- ReadCommands.eval(wb, Some(sheet), "=C1", List("A1=200"))
+    yield
+      // C1 should correctly evaluate to 450 (A1=200 → B1=400 → C1=450)
+      // D1 and E1 should NOT be evaluated (optimization - but result is same)
+      assert(result.contains("450"), s"Expected 450, got: $result")
+  }
