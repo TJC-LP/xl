@@ -54,16 +54,96 @@ object ImageMagick extends Rasterizer:
       .handleError(_ => false)
 
   /**
+   * Check if a binary is available in PATH.
+   */
+  private def isBinaryInPath(binary: String): IO[Boolean] =
+    Processes[IO]
+      .spawn(ProcessBuilder("which", List(binary)))
+      .use { process =>
+        for
+          _ <- process.stdout.compile.drain
+          _ <- process.stderr.compile.drain
+          exitCode <- process.exitValue
+        yield exitCode == 0
+      }
+      .handleError(_ => false)
+
+  /**
+   * Get the SVG delegate configuration from ImageMagick.
+   *
+   * Runs `<cmd> -list delegate` and parses the SVG entry to find the delegate binary. Returns the
+   * binary name (e.g., "rsvg-convert") if configured, or None if SVG conversion uses internal
+   * rendering.
+   */
+  private def getSvgDelegate(cmd: ImageMagickCommand): IO[Option[String]] =
+    Processes[IO]
+      .spawn(ProcessBuilder(cmd.command, List("-list", "delegate")))
+      .use { process =>
+        for
+          output <- process.stdout.through(fs2.text.utf8.decode).compile.string
+          _ <- process.stderr.compile.drain
+          exitCode <- process.exitValue
+        yield
+          if exitCode != 0 then None
+          else
+            // Parse delegate list for SVG entry
+            // Format: "        svg =>          "rsvg-convert' --dpi-x %x ..."
+            // Note: Leading whitespace varies, and we need to match "svg =>" specifically
+            output.linesIterator
+              .find(line => line.trim.startsWith("svg") && line.contains("=>"))
+              .flatMap { line =>
+                // Extract binary name from delegate command
+                // The delegate line format is: [whitespace]svg => "binary' args..."
+                val delegatePattern = """\bsvg\s*=>\s*"([^']+)'""".r
+                delegatePattern.findFirstMatchIn(line).map(_.group(1))
+              }
+      }
+      .handleError(_ => None)
+
+  /**
+   * Check if ImageMagick's SVG delegate is functional.
+   *
+   * ImageMagick may be installed but its SVG delegate (e.g., rsvg-convert) may be missing. This
+   * causes confusing errors like "delegate failed 'rsvg-convert' -o '%o' '%i'". We detect this
+   * upfront and skip ImageMagick if the delegate is broken.
+   */
+  private def isSvgDelegateFunctional(cmd: ImageMagickCommand): IO[Boolean] =
+    getSvgDelegate(cmd).flatMap {
+      case None =>
+        // No SVG delegate configured - ImageMagick may use internal rendering
+        // This is fine, let it try
+        IO.pure(true)
+      case Some(delegateBinary) =>
+        // Delegate is configured - verify the binary exists
+        isBinaryInPath(delegateBinary)
+    }
+
+  /**
    * Find the available ImageMagick command, preferring v7 over v6.
+   *
+   * Also verifies that the SVG delegate is functional (GH-160). If v7 is available but its delegate
+   * is broken, falls back to try v6.
    */
   private def findCommand: IO[Option[ImageMagickCommand]] =
+    // Helper to check v6 availability and delegate
+    def tryV6: IO[Option[ImageMagickCommand]] =
+      isCommandAvailable(ImageMagickCommand.Convert6).flatMap {
+        case true =>
+          isSvgDelegateFunctional(ImageMagickCommand.Convert6).map {
+            case true => Some(ImageMagickCommand.Convert6)
+            case false => None
+          }
+        case false => IO.pure(None)
+      }
+
     isCommandAvailable(ImageMagickCommand.Magick7).flatMap {
-      case true => IO.pure(Some(ImageMagickCommand.Magick7))
-      case false =>
-        isCommandAvailable(ImageMagickCommand.Convert6).map {
-          case true => Some(ImageMagickCommand.Convert6)
-          case false => None
+      case true =>
+        // v7 available, check SVG delegate
+        isSvgDelegateFunctional(ImageMagickCommand.Magick7).flatMap {
+          case true => IO.pure(Some(ImageMagickCommand.Magick7))
+          case false => tryV6 // v7 delegate broken, fall back to v6
         }
+      case false => tryV6
     }
 
   /**
@@ -161,3 +241,35 @@ object ImageMagick extends Rasterizer:
           }
           .handleError(_ => None)
     }
+
+  /**
+   * Get diagnostic information about ImageMagick availability.
+   *
+   * Returns a human-readable string explaining the state of ImageMagick and its SVG delegate.
+   * Useful for debugging rasterization issues.
+   */
+  def diagnostics: IO[String] =
+    for
+      v7Available <- isCommandAvailable(ImageMagickCommand.Magick7)
+      v6Available <- isCommandAvailable(ImageMagickCommand.Convert6)
+      result <-
+        if v7Available then
+          for
+            delegate <- getSvgDelegate(ImageMagickCommand.Magick7)
+            delegateOk <- isSvgDelegateFunctional(ImageMagickCommand.Magick7)
+          yield
+            if delegateOk then
+              s"ImageMagick 7 (magick) available, SVG delegate: ${delegate.getOrElse("internal")}"
+            else
+              s"ImageMagick 7 (magick) found but SVG delegate '${delegate.getOrElse("unknown")}' is missing"
+        else if v6Available then
+          for
+            delegate <- getSvgDelegate(ImageMagickCommand.Convert6)
+            delegateOk <- isSvgDelegateFunctional(ImageMagickCommand.Convert6)
+          yield
+            if delegateOk then
+              s"ImageMagick 6 (convert) available, SVG delegate: ${delegate.getOrElse("internal")}"
+            else
+              s"ImageMagick 6 (convert) found but SVG delegate '${delegate.getOrElse("unknown")}' is missing"
+        else IO.pure("ImageMagick not found")
+    yield result
