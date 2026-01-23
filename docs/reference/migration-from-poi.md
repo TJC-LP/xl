@@ -201,7 +201,7 @@ Stream.range(1, 1_000_001)
     0 -> CellValue.Text(s"Row $i"),
     1 -> CellValue.Number(BigDecimal(i * 100))
   )))
-  .through(Excel.forIO.writeStreamTrue(path, "Data"))
+  .through(Excel.forIO.writeStream(path, "Data"))
   .compile.drain
   .unsafeRunSync()
 

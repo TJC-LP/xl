@@ -61,7 +61,7 @@ flowchart LR
   ExcelAPI -->|write(wb, path)| XW
 
   ExcelAPI -->|readStream / readSheetStream| SR
-  ExcelAPI -->|writeStreamTrue / writeStreamsSeqTrue| SW
+  ExcelAPI -->|writeStream / writeStreamsSeq| SW
 ```
 
 - **In‑memory path** (default):
@@ -71,7 +71,7 @@ flowchart LR
 
 - **Streaming path**:
   - `ExcelIO.readStream` / `readSheetStream` open the ZIP and stream a worksheet’s XML through fs2‑data‑xml, yielding a `Stream[F, RowData]` with constant memory use (SST is still materialized once if present).
-  - `ExcelIO.writeStreamTrue` / `writeStreamsSeqTrue` write static parts once, then stream worksheet XML events directly to a `ZipOutputStream` from a `Stream[F, RowData]` without ever materializing all rows.
+  - `ExcelIO.writeStream` / `writeStreamsSeq` write static parts once, then stream worksheet XML events directly to a `ZipOutputStream` from a `Stream[F, RowData]` without ever materializing all rows.
 
 See also:
 - `docs/design/io-modes.md` – deeper comparison of in-memory vs streaming modes.

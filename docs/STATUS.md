@@ -59,7 +59,7 @@
 - ✅ Excel[F[_]] algebra trait
 - ✅ ExcelIO[IO] interpreter
 - ✅ `readStream` / `readSheetStream` / `readStreamByIndex` – constant‑memory streaming read (fs2.io.readInputStream + fs2‑data‑xml)
-- ✅ `writeStreamTrue` / `writeStreamsSeqTrue` – constant‑memory streaming write (fs2‑data‑xml)
+- ✅ `writeStream` / `writeStreamsSeq` – constant‑memory streaming write (fs2‑data‑xml)
 - ✅ **`writeFast`** – SAX/StAX streaming write (opt-in via `ExcelIO.writeFast()` or `WriterConfig(backend = XmlBackend.SaxStax)`)
 - ✅ Benchmark: 100k rows in ~1.8s read (~10MB constant memory) / ~1.1s write (~10MB constant memory)
 
@@ -174,7 +174,7 @@
 ### Streaming I/O Limitations (CRITICAL)
 
 **Write Path** (✅ Working):
-- ✅ True constant-memory streaming with `writeStreamTrue`
+- ✅ True constant-memory streaming with `writeStream`
 - ✅ O(1) memory regardless of file size
 - ⚠️  No SST support (inline strings only - larger files)
 - ⚠️  Minimal styles (default only - no rich formatting)

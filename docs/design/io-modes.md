@@ -73,7 +73,7 @@ Characteristics:
 
 ### Streaming Path
 
-Write (`writeStreamTrue` / `writeStreamsSeqTrue`):
+Write (`writeStream` / `writeStreamsSeq`):
 - Static parts (`[Content_Types].xml`, workbook relationships, minimal `styles.xml`) are written once up front.
 - For each streamed `RowData`, `StreamingXmlWriter` emits XML events directly to a `ZipOutputStream` without building intermediate XML trees.
 - Output is compact XML with `Compression.Deflated` by default; by design it uses inline strings (no SST) and a minimal style set.
@@ -283,7 +283,7 @@ test("streaming write uses constant memory"):
 
   Stream.range(1, 1_000_001)
     .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
-    .through(Excel.forIO.writeStreamTrue(path, "Data"))
+    .through(Excel.forIO.writeStream(path, "Data"))
     .compile.drain
     .unsafeRunSync()
 

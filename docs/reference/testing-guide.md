@@ -101,7 +101,7 @@ xl-cats-effect/test/src/com/tjclp/xl/io/
 ### xl-cats-effect: 18 tests ✅
 
 #### Streaming I/O (18 tests)
-- **writeStreamTrue / writeStreamsSeqTrue**: Event-based ZIP write via fs2-data-xml
+- **writeStream / writeStreamsSeq**: Event-based ZIP write via fs2-data-xml
 - **readStream / readSheetStream / readStreamByIndex**: Event-based worksheet reads with fs2-data-xml + fs2.io.readInputStream
 - **Constant memory**: O(1) memory usage verified (100k rows @ ~50MB)
 - **Large files**: 100k+ row tests pass

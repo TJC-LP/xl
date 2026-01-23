@@ -67,12 +67,12 @@ trait Excel[F[_]]:
 
   // Streaming write operations
   def writeStream(path: Path, sheetName: String): fs2.Pipe[F, RowData, Unit]
-  def writeStreamTrue(
+  def writeStream(
     path: Path,
     sheetName: String,
     sheetIndex: Int = 1
   ): fs2.Pipe[F, RowData, Unit]
-  def writeStreamsSeqTrue(
+  def writeStreamsSeq(
     path: Path,
     sheets: Seq[(String, Stream[F, RowData])]
   ): F[Unit]
@@ -326,7 +326,7 @@ private def cellToString(cell: CellValue): String = cell match
 // Example 1: Log analysis
 excel.readStream("logs.xlsx")
   .through(RowQuery.matchingRegex("ERROR|FATAL".r, Set(2)))  // Column C
-  .through(excel.writeStreamTrue("errors.xlsx", "Errors"))
+  .through(excel.writeStream("errors.xlsx", "Errors"))
   .compile.drain
 
 // Example 2: Data validation
@@ -339,7 +339,7 @@ excel.readStream("customers.xlsx")
   .map(row => row.copy(
     cells = row.cells + (10 -> CellValue.Text("INVALID_EMAIL"))
   ))
-  .through(excel.writeStreamTrue("errors.xlsx", "Errors"))
+  .through(excel.writeStream("errors.xlsx", "Errors"))
   .compile.drain
 
 // Example 3: Multi-column ETL
@@ -356,7 +356,7 @@ val queries = List(
 
 excel.readStream("orders.xlsx")
   .through(RowQuery.matchingAll(queries))
-  .through(excel.writeStreamTrue("high_value.xlsx", "Orders"))
+  .through(excel.writeStream("high_value.xlsx", "Orders"))
   .compile.drain
 
 // Example 4: Aggregation
@@ -472,7 +472,7 @@ test("filter 100k rows with constant memory"):
   }
 
   for
-    _ <- rows.through(excel.writeStreamTrue(testFile, "Data")).compile.drain
+    _ <- rows.through(excel.writeStream(testFile, "Data")).compile.drain
     count <- excel.readStream(testFile)
       .through(RowQuery.containsText("ERROR"))
       .compile.count
@@ -504,7 +504,7 @@ excel.readStream(sales)
 excel.readStream(input)
   .through(RowQuery.matchingRegex("ERROR".r))
   .map(addTimestamp)
-  .through(excel.writeStreamTrue(output, "Errors"))
+  .through(excel.writeStream(output, "Errors"))
   .compile.drain
 ```
 
