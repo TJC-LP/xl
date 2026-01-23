@@ -270,6 +270,42 @@ test("Formula Roundtrip - Write and Read Back") {
 }
 
 // ============================================================================
+// Streaming (Large Files) - lines 139-153
+// ============================================================================
+test("Streaming - Read and Write") {
+  import com.tjclp.xl.io.{ExcelIO, RowData}
+  import cats.effect.IO
+  import cats.effect.unsafe.implicits.global
+  import fs2.Stream
+
+  val excel = ExcelIO.instance[IO]
+
+  // First create a test file using streaming write (from README)
+  val writePath = java.nio.file.Path.of("/tmp/readme-stream-write.xlsx")
+  Stream.range(1, 101)
+    .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+    .through(excel.writeStream(writePath, "Data"))
+    .compile
+    .drain
+    .unsafeRunSync()
+
+  assert(java.nio.file.Files.exists(writePath), "Stream write output should exist")
+
+  // Test streaming read (from README)
+  var rowCount = 0
+  excel.readStream(writePath)
+    .filter(_.rowIndex > 1)  // Skip header (matches README example)
+    .evalMap { row =>
+      IO { rowCount += 1 }
+    }
+    .compile
+    .drain
+    .unsafeRunSync()
+
+  assert(rowCount == 99, s"Should read 99 rows (100 minus header), got $rowCount")
+}
+
+// ============================================================================
 // Final Integration Test
 // ============================================================================
 test("Final Workbook Write") {

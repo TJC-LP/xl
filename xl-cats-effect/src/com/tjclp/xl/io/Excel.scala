@@ -97,23 +97,7 @@ trait Excel[F[_]]:
   def readStreamByIndex(path: Path, sheetIndex: Int): Stream[F, RowData]
 
   /**
-   * Write rows to XLSX file as a stream.
-   *
-   * Good for: Large datasets, generated data, ETL pipelines Memory: O(1) - can write unlimited rows
-   *
-   * Example:
-   * {{{
-   * Stream.range(0, 100000)
-   *   .map(i => RowData(i, Map(0 -> CellValue.Text(s"Row $i"))))
-   *   .through(excel.writeStream(path, "Data"))
-   *   .compile
-   *   .drain
-   * }}}
-   */
-  def writeStream(path: Path, sheetName: String): fs2.Pipe[F, RowData, Unit]
-
-  /**
-   * True streaming write with constant memory using fs2-data-xml.
+   * Streaming write with constant O(1) memory using fs2-data-xml.
    *
    * Uses XML event streaming - never materializes full dataset. Can write unlimited rows with ~50MB
    * memory overhead.
@@ -132,17 +116,27 @@ trait Excel[F[_]]:
    * {{{
    * Stream.range(0, 1000000)
    *   .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
-   *   .through(excel.writeStreamTrue(path, "BigData", sheetIndex = 1))
+   *   .through(excel.writeStream(path, "BigData", sheetIndex = 1))
    *   .compile
    *   .drain
    * }}}
    */
-  def writeStreamTrue(
+  def writeStream(
     path: Path,
     sheetName: String,
     sheetIndex: Int = 1,
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): fs2.Pipe[F, RowData, Unit]
+
+  /**
+   * Write rows to XLSX file, materializing all rows first.
+   *
+   * @deprecated
+   *   Use writeStream instead for true O(1) streaming. This method materializes all rows in memory
+   *   before writing, defeating the purpose of streaming.
+   */
+  @deprecated("Use writeStream for true O(1) streaming", "0.8.0")
+  def writeStreamMaterialized(path: Path, sheetName: String): fs2.Pipe[F, RowData, Unit]
 
   /**
    * Write multiple sheets sequentially with constant memory.
@@ -159,7 +153,7 @@ trait Excel[F[_]]:
    *
    * Example:
    * {{{
-   * excel.writeStreamsSeqTrue(
+   * excel.writeStreamsSeq(
    *   path,
    *   Seq(
    *     "Sales" -> salesRows,      // 100k rows
@@ -170,7 +164,7 @@ trait Excel[F[_]]:
    * // Memory: O(1) constant (~50MB for 201k total rows)
    * }}}
    */
-  def writeStreamsSeqTrue(
+  def writeStreamsSeq(
     path: Path,
     sheets: Seq[(String, Stream[F, RowData])],
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
@@ -220,19 +214,23 @@ trait ExcelR[F[_]]:
   /** Stream rows from specific sheet by index with explicit error channel */
   def readStreamByIndexR(path: Path, sheetIndex: Int): Stream[F, Either[XLError, RowData]]
 
-  /** Write stream with explicit error channel */
-  def writeStreamR(path: Path, sheetName: String): fs2.Pipe[F, RowData, Either[XLError, Unit]]
-
-  /** True streaming write with explicit error channel */
-  def writeStreamTrueR(
+  /** Streaming write with explicit error channel */
+  def writeStreamR(
     path: Path,
     sheetName: String,
     sheetIndex: Int = 1,
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): fs2.Pipe[F, RowData, Either[XLError, Unit]]
 
+  /** Write stream (materializing) with explicit error channel */
+  @deprecated("Use writeStreamR for true O(1) streaming", "0.8.0")
+  def writeStreamMaterializedR(
+    path: Path,
+    sheetName: String
+  ): fs2.Pipe[F, RowData, Either[XLError, Unit]]
+
   /** Write multiple sheets with explicit error channel */
-  def writeStreamsSeqTrueR(
+  def writeStreamsSeqR(
     path: Path,
     sheets: Seq[(String, Stream[F, RowData])],
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default

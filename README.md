@@ -139,17 +139,21 @@ sheet.evaluateWithDependencyCheck() match
 ### Streaming (Large Files)
 
 ```scala 3 ignore
-import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.io.{ExcelIO, RowData}
 import cats.effect.IO
+import fs2.Stream
 
-// Constant O(1) memory for any file size
 val excel = ExcelIO.instance[IO]
 
-// Read 1M+ rows without OOM
-excel.readStream(path).evalMap(row => process(row))
+// Read 1M+ rows with O(1) memory
+excel.readStream(path)
+  .filter(_.rowIndex > 1)  // Skip header
+  .evalMap(row => process(row))
 
-// Write with streaming backend
-excel.write(workbook, path)
+// Write 1M+ rows with O(1) memory
+Stream.range(1, 1_000_001)
+  .map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+  .through(excel.writeStream(path, "Data"))
 ```
 
 ## CLI

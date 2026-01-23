@@ -79,7 +79,7 @@ Stream.range(1, 1_000_001)
     0 -> CellValue.Text(s"Row $i"),
     1 -> CellValue.Number(BigDecimal(i))
   )))
-  .through(excel.writeStreamTrue(path, "Data"))
+  .through(excel.writeStream(path, "Data"))
   .compile.drain
   .unsafeRunSync()
 
@@ -237,7 +237,7 @@ sheet.put(cells)  // Then write
 ```scala
 database.stream()  // fs2.Stream[IO, Row]
   .map(row => RowData(/* convert */))
-  .through(excel.writeStreamTrue(path, "Data"))
+  .through(excel.writeStream(path, "Data"))
   .compile.drain
   .unsafeRunSync()
 ```
@@ -430,7 +430,7 @@ import fs2.Stream
 
 Stream.range(1, 1_000_001)
   .map(i => RowData(i, Map(0 -> CellValue.Text(s"Row $i"))))
-  .through(Excel.forIO.writeStreamTrue(path, "Data"))
+  .through(Excel.forIO.writeStream(path, "Data"))
   .compile.drain
   .unsafeRunSync()
 ```

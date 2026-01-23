@@ -654,7 +654,7 @@ excel.readStream(sales)
 excel.readStream(input)
   .through(RowQuery.matchingRegex("ERROR".r))
   .map(addErrorTimestamp)  // Add new column
-  .through(excel.writeStreamTrue(output, "Errors"))
+  .through(excel.writeStream(output, "Errors"))
   .compile.drain
 ```
 
@@ -922,7 +922,7 @@ object LogAnalysis extends IOApp.Simple:
 
     excel.readStream("logs.xlsx")
       .through(RowQuery.matchingRegex("ERROR|FATAL".r, Set(2)))  // Column C
-      .through(excel.writeStreamTrue("errors.xlsx", "Errors"))
+      .through(excel.writeStream("errors.xlsx", "Errors"))
       .compile.drain
 ```
 
@@ -945,7 +945,7 @@ excel.readStream("customers.xlsx")
   .map(row => row.copy(
     cells = row.cells + (10 -> CellValue.Text("INVALID_EMAIL"))
   ))
-  .through(excel.writeStreamTrue("validation_errors.xlsx", "Errors"))
+  .through(excel.writeStream("validation_errors.xlsx", "Errors"))
   .compile.drain
 ```
 
@@ -970,7 +970,7 @@ val queries = List(
 excel.readStream("orders.xlsx")
   .through(RowQuery.matchingAll(queries))
   .map(transformOrder)
-  .through(excel.writeStreamTrue("high_value_orders.xlsx", "Orders"))
+  .through(excel.writeStream("high_value_orders.xlsx", "Orders"))
   .compile.drain
 ```
 
@@ -1026,7 +1026,7 @@ trait Excel[F[_]]:
   def readStreamByIndex(path: String, sheetIndex: Int): Stream[F, RowData]
 
   // Write operations
-  def writeStreamTrue(
+  def writeStream(
     path: String,
     sheetName: String,
     sheetIndex: Int = 1
@@ -1047,7 +1047,7 @@ excel.readStream(path)
 // Read → Query → Write (constant memory)
 excel.readStream(input)
   .through(RowQuery.containsText(...))
-  .through(excel.writeStreamTrue(output, "Filtered"))
+  .through(excel.writeStream(output, "Filtered"))
   .compile.drain
 ```
 
@@ -1179,7 +1179,7 @@ test("filter large file with constant memory"):
   }
 
   for
-    _ <- writeRows.through(excel.writeStreamTrue(testFile, "Data")).compile.drain
+    _ <- writeRows.through(excel.writeStream(testFile, "Data")).compile.drain
 
     // Filter with regex
     count <- excel.readStream(testFile)
@@ -1195,7 +1195,7 @@ test("round-trip with filtering"):
     // Read → Filter → Write
     _ <- excel.readStream(inputFile)
       .through(RowQuery.matchingRegex("ACTIVE".r, Set(0)))
-      .through(excel.writeStreamTrue(outputFile, "Filtered"))
+      .through(excel.writeStream(outputFile, "Filtered"))
       .compile.drain
 
     // Re-read and verify
@@ -1217,7 +1217,7 @@ test("100k rows use constant memory"):
   }
 
   for
-    _ <- rows.through(excel.writeStreamTrue(testFile, "Data")).compile.drain
+    _ <- rows.through(excel.writeStream(testFile, "Data")).compile.drain
 
     // Measure memory before
     memBefore <- IO(Runtime.getRuntime.totalMemory() - Runtime.getRuntime.freeMemory())
@@ -1516,7 +1516,7 @@ text.toLowerCase()  // ❌ Locale-dependent
   excel.readStream(input)
     .through(RowQuery.containsText("EXPORT"))
     .map(row => row.copy(cells = row.cells.view.mapValues(sanitizeCell).toMap))
-    .through(excel.writeStreamTrue(output, "Sanitized"))
+    .through(excel.writeStream(output, "Sanitized"))
     .compile.drain
   ```
 - **Out of scope** for Query API; addressed at write layer or application logic level

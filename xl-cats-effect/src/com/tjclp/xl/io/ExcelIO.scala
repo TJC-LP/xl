@@ -163,34 +163,12 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       }
 
   /**
-   * Write rows to XLSX file.
-   *
-   * Current implementation: Materializes all rows then writes. Future: Will use fs2-data-xml for
-   * true streaming.
-   */
-  def writeStream(path: Path, sheetName: String): Pipe[F, RowData, Unit] =
-    rows =>
-      Stream.eval {
-        rows.compile.toVector.flatMap { rowVec =>
-          // Convert RowData to Sheet
-          val sheet = rowDataToSheet(sheetName, rowVec)
-          sheet match
-            case Right(s) =>
-              // Create workbook with single sheet
-              val wb = Workbook(Vector(s))
-              write(wb, path)
-            case Left(err) =>
-              Async[F].raiseError(new Exception(s"Failed to create sheet: ${err.message}"))
-        }
-      }
-
-  /**
-   * True streaming write with constant memory.
+   * Streaming write with constant O(1) memory.
    *
    * Uses fs2-data-xml events - never materializes full dataset. Can write unlimited rows with ~50MB
    * memory.
    */
-  def writeStreamTrue(
+  def writeStream(
     path: Path,
     sheetName: String,
     sheetIndex: Int = 1,
@@ -232,11 +210,32 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           .drain
 
   /**
+   * Write rows to XLSX file, materializing all rows first.
+   *
+   * @deprecated
+   *   Use writeStream instead for true O(1) streaming.
+   */
+  @deprecated("Use writeStream for true O(1) streaming", "0.8.0")
+  def writeStreamMaterialized(path: Path, sheetName: String): Pipe[F, RowData, Unit] =
+    rows =>
+      Stream.eval {
+        rows.compile.toVector.flatMap { rowVec =>
+          val sheet = rowDataToSheet(sheetName, rowVec)
+          sheet match
+            case Right(s) =>
+              val wb = Workbook(Vector(s))
+              write(wb, path)
+            case Left(err) =>
+              Async[F].raiseError(new Exception(s"Failed to create sheet: ${err.message}"))
+        }
+      }
+
+  /**
    * Write multiple sheets sequentially with constant memory.
    *
    * Each sheet is streamed in order without materializing the full dataset.
    */
-  def writeStreamsSeqTrue(
+  def writeStreamsSeq(
     path: Path,
     sheets: Seq[(String, Stream[F, RowData])],
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
@@ -332,32 +331,36 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       .map(Right(_))
       .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
 
-  /** Write stream with explicit error channel */
-  def writeStreamR(path: Path, sheetName: String): Pipe[F, RowData, Either[XLError, Unit]] =
-    rows =>
-      writeStream(path, sheetName)(rows)
-        .map(_ => Right(()))
-        .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
-
-  /** True streaming write with explicit error channel */
-  def writeStreamTrueR(
+  /** Streaming write with explicit error channel */
+  def writeStreamR(
     path: Path,
     sheetName: String,
     sheetIndex: Int = 1,
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): Pipe[F, RowData, Either[XLError, Unit]] =
     rows =>
-      writeStreamTrue(path, sheetName, sheetIndex, config)(rows)
+      writeStream(path, sheetName, sheetIndex, config)(rows)
+        .map(_ => Right(()))
+        .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
+
+  /** Write stream (materializing) with explicit error channel */
+  @deprecated("Use writeStreamR for true O(1) streaming", "0.8.0")
+  def writeStreamMaterializedR(
+    path: Path,
+    sheetName: String
+  ): Pipe[F, RowData, Either[XLError, Unit]] =
+    rows =>
+      writeStreamMaterialized(path, sheetName)(rows)
         .map(_ => Right(()))
         .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
 
   /** Write multiple sheets with explicit error channel */
-  def writeStreamsSeqTrueR(
+  def writeStreamsSeqR(
     path: Path,
     sheets: Seq[(String, Stream[F, RowData])],
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): F[XLResult[Unit]] =
-    writeStreamsSeqTrue(path, sheets, config)
+    writeStreamsSeq(path, sheets, config)
       .map(Right(_))
       .handleErrorWith(e => Async[F].pure(Left(XLError.IOError(e.getMessage))))
 

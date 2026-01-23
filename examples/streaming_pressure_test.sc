@@ -31,7 +31,7 @@ object StreamingPressureTest:
     val rowCount = 100_000
     val outputPath = testDir.resolve("streaming_100k.xlsx")
 
-    println(s"\n[Test 1] Writing $rowCount rows with writeStreamTrue...")
+    println(s"\n[Test 1] Writing $rowCount rows with writeStream...")
     val writeStart = System.currentTimeMillis()
 
     val rows: Stream[IO, RowData] = Stream
@@ -49,7 +49,7 @@ object StreamingPressureTest:
       }
 
     rows
-      .through(excel.writeStreamTrue(outputPath, "Data"))
+      .through(excel.writeStream(outputPath, "Data"))
       .compile
       .drain
       .unsafeRunSync()
@@ -98,7 +98,7 @@ object StreamingPressureTest:
           }
         )
       }
-      .through(excel.writeStreamTrue(transformPath, "Transformed"))
+      .through(excel.writeStream(transformPath, "Transformed"))
       .compile
       .drain
       .unsafeRunSync()

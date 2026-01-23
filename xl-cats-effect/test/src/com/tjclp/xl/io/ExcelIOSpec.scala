@@ -122,7 +122,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     IO(assertEquals(excel.getClass.getSimpleName, "ExcelIO"))
   }
 
-  tempDir.test("writeStreamTrue: creates valid XLSX with 1k rows") { dir =>
+  tempDir.test("writeStream: creates valid XLSX with 1k rows") { dir =>
     val path = dir.resolve("streamed-1k.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -136,7 +136,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
 
     // Write with true streaming
-    rows.through(excel.writeStreamTrue(path, "Data")).compile.drain.flatMap { _ =>
+    rows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
       // Verify file exists and is readable
       IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
         assert(result.isRight, "File should be readable")
@@ -150,7 +150,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("writeStreamTrue: handles 100k rows with constant memory") { dir =>
+  tempDir.test("writeStream: handles 100k rows with constant memory") { dir =>
     val path = dir.resolve("streamed-100k.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -163,7 +163,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
 
     // Write with true streaming
-    rows.through(excel.writeStreamTrue(path, "BigData")).compile.drain.flatMap { _ =>
+    rows.through(excel.writeStream(path, "BigData")).compile.drain.flatMap { _ =>
       // Verify file size is reasonable (10-20MB for 100k rows)
       IO(java.nio.file.Files.size(path)).map { size =>
         assert(size > 1_000_000, s"File should be at least 1MB, got $size bytes")
@@ -172,7 +172,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("writeStreamTrue: output readable by XlsxReader") { dir =>
+  tempDir.test("writeStream: output readable by XlsxReader") { dir =>
     val path = dir.resolve("streamed-test.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -184,7 +184,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       ))
     }
 
-    rows.through(excel.writeStreamTrue(path, "Test")).compile.drain.flatMap { _ =>
+    rows.through(excel.writeStream(path, "Test")).compile.drain.flatMap { _ =>
       // Read back with XlsxReader
       IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
         assert(result.isRight, s"Should read successfully, got: $result")
@@ -205,7 +205,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("writeStreamTrue: supports arbitrary sheet index") { dir =>
+  tempDir.test("writeStream: supports arbitrary sheet index") { dir =>
     val path = dir.resolve("sheet3.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -214,7 +214,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
 
     // Write with sheetIndex = 3
-    rows.through(excel.writeStreamTrue(path, "ThirdSheet", sheetIndex = 3)).compile.drain.flatMap { _ =>
+    rows.through(excel.writeStream(path, "ThirdSheet", sheetIndex = 3)).compile.drain.flatMap { _ =>
       // Verify ZIP contains sheet3.xml (not sheet1.xml)
       IO {
         import java.util.zip.ZipFile
@@ -246,13 +246,13 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("writeStreamTrue: rejects invalid sheet index") { dir =>
+  tempDir.test("writeStream: rejects invalid sheet index") { dir =>
     val path = dir.resolve("invalid.xlsx")
     val excel = ExcelIO.instance[IO]
     val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
 
     // sheetIndex = 0 should fail
-    rows.through(excel.writeStreamTrue(path, "Bad", sheetIndex = 0))
+    rows.through(excel.writeStream(path, "Bad", sheetIndex = 0))
       .compile.drain
       .attempt
       .map {
@@ -265,7 +265,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
   }
 
-  tempDir.test("writeStreamsSeqTrue: writes 2 sheets") { dir =>
+  tempDir.test("writeStreamsSeq: writes 2 sheets") { dir =>
     val path = dir.resolve("two-sheets.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -276,7 +276,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       RowData(i, Map(0 -> CellValue.Number(BigDecimal(i * 100))))
     }
 
-    excel.writeStreamsSeqTrue(path, Seq("First" -> sheet1Rows, "Second" -> sheet2Rows)).flatMap {
+    excel.writeStreamsSeq(path, Seq("First" -> sheet1Rows, "Second" -> sheet2Rows)).flatMap {
       _ =>
         // Verify with XlsxReader
         IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
@@ -304,7 +304,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     }
   }
 
-  tempDir.test("writeStreamsSeqTrue: writes 3 sheets with different sizes") { dir =>
+  tempDir.test("writeStreamsSeq: writes 3 sheets with different sizes") { dir =>
     val path = dir.resolve("three-sheets.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -313,7 +313,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val summary = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("Summary"))))
 
     excel
-      .writeStreamsSeqTrue(
+      .writeStreamsSeq(
         path,
         Seq("Sales" -> sales, "Inventory" -> inventory, "Summary" -> summary)
       )
@@ -333,7 +333,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
   }
 
-  tempDir.test("writeStreamsSeqTrue: handles large multi-sheet workbook") { dir =>
+  tempDir.test("writeStreamsSeq: handles large multi-sheet workbook") { dir =>
     val path = dir.resolve("large-multi-sheet.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -343,7 +343,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val sheet3 = fs2.Stream.range(1, 10001).map(i => RowData(i, Map(0 -> CellValue.Bool(i % 2 == 0))))
 
     excel
-      .writeStreamsSeqTrue(path, Seq("Numbers" -> sheet1, "Text" -> sheet2, "Booleans" -> sheet3))
+      .writeStreamsSeq(path, Seq("Numbers" -> sheet1, "Text" -> sheet2, "Booleans" -> sheet3))
       .flatMap { _ =>
         // Verify file size is reasonable
         IO(java.nio.file.Files.size(path)).map { size =>
@@ -353,12 +353,12 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
   }
 
-  tempDir.test("writeStreamsSeqTrue: rejects empty sheet list") { dir =>
+  tempDir.test("writeStreamsSeq: rejects empty sheet list") { dir =>
     val path = dir.resolve("empty.xlsx")
     val excel = ExcelIO.instance[IO]
 
     excel
-      .writeStreamsSeqTrue(path, Seq.empty)
+      .writeStreamsSeq(path, Seq.empty)
       .attempt
       .map {
         case Left(err: IllegalArgumentException) =>
@@ -370,7 +370,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
   }
 
-  tempDir.test("writeStreamsSeqTrue: rejects duplicate sheet names") { dir =>
+  tempDir.test("writeStreamsSeq: rejects duplicate sheet names") { dir =>
     val path = dir.resolve("duplicates.xlsx")
     val excel = ExcelIO.instance[IO]
 
@@ -378,7 +378,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val rows2 = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("B"))))
 
     excel
-      .writeStreamsSeqTrue(path, Seq("Sheet1" -> rows1, "Sheet1" -> rows2))
+      .writeStreamsSeq(path, Seq("Sheet1" -> rows1, "Sheet1" -> rows2))
       .attempt
       .map {
         case Left(err: IllegalArgumentException) =>
@@ -403,7 +403,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       ))
     }
 
-    writeRows.through(excel.writeStreamTrue(path, "Data")).compile.drain.flatMap { _ =>
+    writeRows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
       // Read with streaming (should use constant memory)
       excel.readStream(path).compile.count.map { count =>
         assertEquals(count, 100000L, "Should read all 100k rows")
@@ -424,7 +424,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       ))
     }
 
-    writeRows.through(excel.writeStreamTrue(path, "Test")).compile.drain.flatMap { _ =>
+    writeRows.through(excel.writeStream(path, "Test")).compile.drain.flatMap { _ =>
       // Read back with streaming
       excel.readStream(path).compile.toVector.map { rows =>
         assertEquals(rows.size, 1000)
@@ -467,7 +467,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       )
     )
 
-    rows.through(excel.writeStreamTrue(path, "Types")).compile.drain.flatMap { _ =>
+    rows.through(excel.writeStream(path, "Types")).compile.drain.flatMap { _ =>
       excel.readStream(path).compile.toVector.map { readRows =>
         assertEquals(readRows.size, 1)
         @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
@@ -492,7 +492,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       RowData(i, Map(0 -> CellValue.Number(BigDecimal(i))))
     )
 
-    writeRows.through(excel.writeStreamTrue(path, "Data")).compile.drain.flatMap { _ =>
+    writeRows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
       // Read and filter incrementally (should not materialize all rows)
       excel.readStream(path)
         .filter(_.rowIndex % 100 == 0)  // Only every 100th row
@@ -511,7 +511,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val sheet2 = fs2.Stream.range(1, 21).map(i => RowData(i, Map(0 -> CellValue.Text(s"S2-$i"))))
     val sheet3 = fs2.Stream.range(1, 31).map(i => RowData(i, Map(0 -> CellValue.Bool(i % 2 == 0))))
 
-    excel.writeStreamsSeqTrue(path, Seq("First" -> sheet1, "Second" -> sheet2, "Third" -> sheet3))
+    excel.writeStreamsSeq(path, Seq("First" -> sheet1, "Second" -> sheet2, "Third" -> sheet3))
       .flatMap { _ =>
         // Read second sheet by index
         excel.readStreamByIndex(path, 2).compile.toVector.map { rows =>
@@ -535,7 +535,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val inventory = fs2.Stream.range(1, 6).map(i => RowData(i, Map(0 -> CellValue.Text(s"Item $i"))))
     val summary = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("Done"))))
 
-    excel.writeStreamsSeqTrue(path, Seq("Sales" -> sales, "Inventory" -> inventory, "Summary" -> summary))
+    excel.writeStreamsSeq(path, Seq("Sales" -> sales, "Inventory" -> inventory, "Summary" -> summary))
       .flatMap { _ =>
         // Read "Inventory" sheet by name
         excel.readSheetStream(path, "Inventory").compile.toVector.map { rows =>
@@ -555,7 +555,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = ExcelIO.instance[IO]
 
     val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
-    rows.through(excel.writeStreamTrue(path, "Only")).compile.drain.flatMap { _ =>
+    rows.through(excel.writeStream(path, "Only")).compile.drain.flatMap { _ =>
       // Try to read sheet 5 (doesn't exist)
       excel.readStreamByIndex(path, 5)
         .compile.toList
@@ -574,7 +574,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = ExcelIO.instance[IO]
 
     val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
-    rows.through(excel.writeStreamTrue(path, "RealSheet")).compile.drain.flatMap { _ =>
+    rows.through(excel.writeStream(path, "RealSheet")).compile.drain.flatMap { _ =>
       // Try to read "FakeSheet"
       excel.readSheetStream(path, "FakeSheet")
         .compile.toList
@@ -604,7 +604,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       ))
     }
 
-    writeRows.through(excel.writeStreamTrue(path, "LargeData")).compile.drain.flatMap { _ =>
+    writeRows.through(excel.writeStream(path, "LargeData")).compile.drain.flatMap { _ =>
       // Read with true streaming (constant memory via fs2.io.readInputStream)
       // If this completes without OOM, the O(1) fix is working
       excel.readStream(path)
@@ -625,8 +625,8 @@ class ExcelIOSpec extends CatsEffectSuite:
     val writeRows2 = fs2.Stream.range(1, 100001).map(i => RowData(i, Map(0 -> CellValue.Text(s"Row-$i"))))
 
     for
-      _ <- writeRows1.through(excel.writeStreamTrue(path1, "Data1")).compile.drain
-      _ <- writeRows2.through(excel.writeStreamTrue(path2, "Data2")).compile.drain
+      _ <- writeRows1.through(excel.writeStream(path1, "Data1")).compile.drain
+      _ <- writeRows2.through(excel.writeStream(path2, "Data2")).compile.drain
 
       // Read both concurrently (should use ~constant memory, not 2x)
       count1 <- excel.readStream(path1).compile.count.start
@@ -640,7 +640,7 @@ class ExcelIOSpec extends CatsEffectSuite:
 
   // ========== Compression Tests (verify WriterConfig respected) ==========
 
-  tempDir.test("writeStreamTrue: config affects static parts compression") { dir =>
+  tempDir.test("writeStream: config affects static parts compression") { dir =>
     val excel = ExcelIO.instance[IO]
 
     // Small dataset (static parts dominate file size)
@@ -661,8 +661,8 @@ class ExcelIOSpec extends CatsEffectSuite:
     )
 
     for
-      _ <- rows.through(excel.writeStreamTrue(deflatedPath, "Data", 1, deflatedConfig)).compile.drain
-      _ <- rows.through(excel.writeStreamTrue(storedPath, "Data", 1, storedConfig)).compile.drain
+      _ <- rows.through(excel.writeStream(deflatedPath, "Data", 1, deflatedConfig)).compile.drain
+      _ <- rows.through(excel.writeStream(storedPath, "Data", 1, storedConfig)).compile.drain
       deflatedSize <- IO(java.nio.file.Files.size(deflatedPath))
       storedSize <- IO(java.nio.file.Files.size(storedPath))
     yield
@@ -670,7 +670,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       assert(deflatedSize <= storedSize, s"DEFLATED config ($deflatedSize) should be <= STORED config ($storedSize)")
   }
 
-  tempDir.test("writeStreamTrue: produces compressed output") { dir =>
+  tempDir.test("writeStream: produces compressed output") { dir =>
     val excel = ExcelIO.instance[IO]
 
     // Large dataset with repetitive content
@@ -683,7 +683,7 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     val path = dir.resolve("compressed.xlsx")
 
-    rows.through(excel.writeStreamTrue(path, "Data")).compile.drain.flatMap { _ =>
+    rows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
       IO(java.nio.file.Files.size(path)).map { size =>
         // 5000 rows with repetitive text should compress to < 500KB
         // (uncompressed would be ~2-3MB)
@@ -694,7 +694,7 @@ class ExcelIOSpec extends CatsEffectSuite:
 
   // ========== Formula Injection Tests (TJC-339) ==========
 
-  tempDir.test("writeStreamTrue: WriterConfig.secure escapes formula injection") { dir =>
+  tempDir.test("writeStream: WriterConfig.secure escapes formula injection") { dir =>
     val excel = ExcelIO.instance[IO]
 
     // Test data with potentially dangerous formula-like text
@@ -711,7 +711,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val path = dir.resolve("streaming-injection.xlsx")
 
     for
-      _ <- rows.through(excel.writeStreamTrue(path, "Data", 1, WriterConfig.secure)).compile.drain
+      _ <- rows.through(excel.writeStream(path, "Data", 1, WriterConfig.secure)).compile.drain
       wb <- IO(XlsxReader.read(path)).map(_.toOption.get)
     yield
       val sheet = wb.sheets.head
@@ -739,7 +739,7 @@ class ExcelIOSpec extends CatsEffectSuite:
         case other => fail(s"Expected Text, got: $other")
   }
 
-  tempDir.test("writeStreamTrue: WriterConfig.default does not escape text") { dir =>
+  tempDir.test("writeStream: WriterConfig.default does not escape text") { dir =>
     val excel = ExcelIO.instance[IO]
 
     val rows = fs2.Stream.emits(List(
@@ -752,7 +752,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val path = dir.resolve("streaming-no-escape.xlsx")
 
     for
-      _ <- rows.through(excel.writeStreamTrue(path, "Data", 1, WriterConfig.default)).compile.drain
+      _ <- rows.through(excel.writeStream(path, "Data", 1, WriterConfig.default)).compile.drain
       wb <- IO(XlsxReader.read(path)).map(_.toOption.get)
     yield
       val sheet = wb.sheets.head
@@ -763,7 +763,7 @@ class ExcelIOSpec extends CatsEffectSuite:
         case other => fail(s"Expected Text, got: $other")
   }
 
-  tempDir.test("writeStreamsSeqTrue: WriterConfig.secure escapes across multiple sheets") { dir =>
+  tempDir.test("writeStreamsSeq: WriterConfig.secure escapes across multiple sheets") { dir =>
     val excel = ExcelIO.instance[IO]
 
     val sheet1 = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("=DANGER"))))
@@ -772,7 +772,7 @@ class ExcelIOSpec extends CatsEffectSuite:
     val path = dir.resolve("streaming-multi-escape.xlsx")
 
     for
-      _ <- excel.writeStreamsSeqTrue(path, Seq(("Sheet1", sheet1), ("Sheet2", sheet2)), WriterConfig.secure)
+      _ <- excel.writeStreamsSeq(path, Seq(("Sheet1", sheet1), ("Sheet2", sheet2)), WriterConfig.secure)
       wb <- IO(XlsxReader.read(path)).map(_.toOption.get)
     yield
       // Both sheets should have escaped text

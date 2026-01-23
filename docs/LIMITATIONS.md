@@ -91,7 +91,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 - In‑memory:
   - `Sheet.mergedRanges: Set[CellRange]` tracks merged regions.
   - `OoxmlWorksheet.toXml` emits `<mergeCells>` / `<mergeCell>` for those ranges.
-- Streaming write (`writeStreamTrue`, `writeStreamsSeqTrue`):
+- Streaming write (`writeStream`, `writeStreamsSeq`):
   - Only writes `sheetData` with plain rows and cells; no merged cell metadata is currently generated.
 
 **Impact**:
@@ -218,7 +218,7 @@ Color.Theme(ThemeSlot.Accent1, tint = 0.5)
 **Phase**: P6 (Future)
 
 **Current State**:
-- `writeStreamTrue` uses `type="inlineStr"` for all text cells
+- `writeStream` uses `type="inlineStr"` for all text cells
 - Each cell carries full string (no deduplication)
 - File size: ~2x larger for files with repeated strings
 
@@ -415,8 +415,8 @@ XlsxWriter.writeWith(workbook, path, WriterConfig.secure)
 // All text cells starting with =, +, -, @ are automatically escaped
 
 // Streaming writes also support formula injection escaping (TJC-339)
-excel.writeStreamTrue(path, "Sheet1", config = WriterConfig.secure)(rows)
-excel.writeStreamsSeqTrue(path, sheets, config = WriterConfig.secure)
+excel.writeStream(path, "Sheet1", config = WriterConfig.secure)(rows)
+excel.writeStreamsSeq(path, sheets, config = WriterConfig.secure)
 ```
 
 **Escaping Rules**:
@@ -477,7 +477,7 @@ excel.readStream(path).through(Codec[Person].decode)
 
 // Write: Stream[F, Person] → XLSX
 people.through(Codec[Person].encode)
-  .through(excel.writeStreamTrue(path, "People"))
+  .through(excel.writeStream(path, "People"))
 ```
 
 **Effort**: 7-10 days
@@ -547,7 +547,7 @@ val headerStyle = style"font-weight: bold; background: #CCCCCC; border: all thin
 
 **Current API**:
 ```scala
-excel.writeStreamsSeqTrue(
+excel.writeStreamsSeq(
   path,
   Seq("Sheet1" -> rows1, "Sheet2" -> rows2)  // Sequential consumption
 )
@@ -797,7 +797,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 ### Q: How should I choose between streaming and in-memory?
 
 - **Need full styles/metadata or random access**: use in-memory read/write (`ExcelIO`).
-- **Need constant memory and sequential processing**: use streaming (`readStream`, `writeStreamTrue`); styles are minimal and strings are inline.
+- **Need constant memory and sequential processing**: use streaming (`readStream`, `writeStream`); styles are minimal and strings are inline.
 
 ---
 
