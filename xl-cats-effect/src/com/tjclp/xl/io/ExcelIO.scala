@@ -7,6 +7,7 @@ import java.nio.file.Path
 import java.io.{FileOutputStream, FileInputStream}
 import java.util.zip.{ZipOutputStream, ZipEntry, CRC32, ZipInputStream, ZipFile}
 import java.nio.charset.StandardCharsets
+import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
@@ -103,6 +104,16 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           }
       }
 
+  /** Stream rows from first sheet within a bounded range (rows/cols). */
+  def readStreamRange(path: Path, range: CellRange): Stream[F, RowData] =
+    Stream
+      .bracket(
+        Sync[F].delay(new ZipFile(path.toFile))
+      )(zipFile => Sync[F].delay(zipFile.close()))
+      .flatMap { zipFile =>
+        readStreamByIndex(zipFile, 1, Some(range))
+      }
+
   /**
    * Stream rows from sheet by name with constant memory.
    *
@@ -127,6 +138,26 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           }
       }
 
+  /** Stream rows from sheet by name within a bounded range (rows/cols). */
+  def readSheetStreamRange(path: Path, sheetName: String, range: CellRange): Stream[F, RowData] =
+    Stream
+      .bracket(
+        Sync[F].delay(new ZipFile(path.toFile))
+      )(zipFile => Sync[F].delay(zipFile.close()))
+      .flatMap { zipFile =>
+        Stream
+          .eval {
+            // Find sheet index by parsing workbook.xml
+            findSheetIndexByName(zipFile, sheetName)
+          }
+          .flatMap {
+            case Some(sheetIndex) =>
+              readStreamByIndex(zipFile, sheetIndex, Some(range))
+            case None =>
+              Stream.raiseError[F](new Exception(s"Sheet not found: $sheetName"))
+          }
+      }
+
   /** Stream rows from sheet by index (1-based) with constant memory. */
   def readStreamByIndex(path: Path, sheetIndex: Int): Stream[F, RowData] =
     Stream
@@ -137,8 +168,29 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         readStreamByIndex(zipFile, sheetIndex)
       }
 
+  /** Stream rows from sheet by index within a bounded range (rows/cols). */
+  def readStreamByIndexRange(
+    path: Path,
+    sheetIndex: Int,
+    range: CellRange
+  ): Stream[F, RowData] =
+    Stream
+      .bracket(
+        Sync[F].delay(new ZipFile(path.toFile))
+      )(zipFile => Sync[F].delay(zipFile.close()))
+      .flatMap { zipFile =>
+        readStreamByIndex(zipFile, sheetIndex, Some(range))
+      }
+
   // Helper: Stream rows from specific sheet index using open ZipFile
   private def readStreamByIndex(zipFile: ZipFile, sheetIndex: Int): Stream[F, RowData] =
+    readStreamByIndex(zipFile, sheetIndex, None)
+
+  private def readStreamByIndex(
+    zipFile: ZipFile,
+    sheetIndex: Int,
+    range: Option[CellRange]
+  ): Stream[F, RowData] =
     Stream
       .eval {
         // Parse SST if present
@@ -163,7 +215,9 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                 Sync[F].delay(stream.close())
               )
               .flatMap { stream =>
-                SaxStreamingReader.parseWorksheetStream[F](stream, sst)
+                val rowBounds = range.map(r => (r.start.row.index1, r.end.row.index1))
+                val colBounds = range.map(r => (r.start.col.index0, r.end.col.index0))
+                SaxStreamingReader.parseWorksheetStream[F](stream, sst, rowBounds, colBounds)
               }
           case None =>
             Stream.raiseError[F](

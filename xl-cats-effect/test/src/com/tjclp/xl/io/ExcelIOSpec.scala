@@ -6,7 +6,7 @@ import munit.CatsEffectSuite
 import java.nio.file.{Files, Path}
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
-import com.tjclp.xl.addressing.{ARef, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
@@ -566,6 +566,30 @@ class ExcelIOSpec extends CatsEffectSuite:
           case Right(_) =>
             fail("Should have failed with nonexistent sheet")
         }
+    }
+  }
+
+  tempDir.test("readStreamRange: limits rows and columns") { dir =>
+    val path = dir.resolve("range-read.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val rows = fs2.Stream.range(1, 6).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Number(BigDecimal(i)),
+        1 -> CellValue.Number(BigDecimal(i * 10)),
+        2 -> CellValue.Number(BigDecimal(i * 100))
+      ))
+    }
+
+    rows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
+      val range = CellRange.parse("B2:C4").toOption.getOrElse(fail("Bad range"))
+      excel.readStreamRange(path, range).compile.toVector.map { readRows =>
+        assertEquals(readRows.map(_.rowIndex), Vector(2, 3, 4))
+        readRows.foreach { row =>
+          assertEquals(row.cells.size, 2)
+          assert(row.cells.keySet == Set(1, 2))
+        }
+      }
     }
   }
 

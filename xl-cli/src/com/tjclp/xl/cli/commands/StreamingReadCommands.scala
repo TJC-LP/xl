@@ -77,13 +77,15 @@ object StreamingReadCommands:
   ): IO[String] =
     parseRangeFromRef(refStr).flatMap { range =>
       val rowStream = sheetNameOpt match
-        case Some(name) => excel.readSheetStream(filePath, name)
-        case None => excel.readStream(filePath)
+        case Some(name) => excel.readSheetStreamRange(filePath, name, range)
+        case None => excel.readStreamRange(filePath, range)
 
       rowStream
-        .filter(row => rowInRange(row, range))
         .flatMap(row => Stream.emits(cellsInRange(row, range)))
-        .collect { case CellValue.Number(n) => n }
+        .collect {
+          case CellValue.Number(n) => n
+          case CellValue.Formula(_, Some(CellValue.Number(n))) => n
+        }
         .compile
         .fold(StatsAccumulator.empty)(_.add(_))
         .flatMap { acc =>
@@ -141,17 +143,13 @@ object StreamingReadCommands:
         )
       case _ =>
         parseRangeFromRef(rangeStr).flatMap { range =>
-          val rowStream = sheetNameOpt match
-            case Some(name) => excel.readSheetStream(filePath, name)
-            case None => excel.readStream(filePath)
-
           // Limit rows and filter to range
           val limitedRange = limitRange(range, limit)
+          val rowStream = sheetNameOpt match
+            case Some(name) => excel.readSheetStreamRange(filePath, name, limitedRange)
+            case None => excel.readStreamRange(filePath, limitedRange)
 
-          rowStream
-            .filter(row => rowInRange(row, limitedRange))
-            .compile
-            .toVector
+          rowStream.compile.toVector
             .map { rows =>
               format match
                 case ViewFormat.Markdown =>
@@ -240,11 +238,6 @@ object StreamingReadCommands:
       case RefType.QualifiedCell(_, ref) => IO.pure(CellRange(ref, ref))
       case RefType.QualifiedRange(_, range) => IO.pure(range)
     }
-
-  /** Check if row falls within range (by row index). */
-  private def rowInRange(row: RowData, range: CellRange): Boolean =
-    val rowIdx = row.rowIndex - 1 // Convert to 0-based
-    rowIdx >= range.start.row.index0 && rowIdx <= range.end.row.index0
 
   /** Extract cells from row that fall within range columns. */
   private def cellsInRange(row: RowData, range: CellRange): Seq[CellValue] =
