@@ -197,6 +197,184 @@ object Main
       .option[String]("sheets", "Comma-separated list of sheets to search (default: all)")
       .orNone
 
+  // ==========================================================================
+  // Extended help strings
+  // ==========================================================================
+
+  private val viewHelp = """View range in multiple formats (table, JSON, image, PDF).
+
+USAGE:
+  xl -f file.xlsx -s Sheet1 view A1:D10
+  xl -f file.xlsx view "Sheet1!A1:D10"    # Qualified ref (no -s needed)
+
+FORMATS:
+  markdown (default), json, csv, html, svg, png, jpeg, webp, pdf
+
+OUTPUT FLAGS:
+  --format <fmt>      Output format
+  --formulas          Show formulas instead of values
+  --eval              Evaluate formulas (compute live values)
+  --skip-empty        Skip empty cells/rows
+  --show-labels       Include row/column headers (A, B, C / 1, 2, 3)
+  --header-row <n>    Use row N as JSON keys (1-based)
+
+RASTER FLAGS (png/jpeg/webp/pdf):
+  --raster-output <path>  Output file (required for raster formats)
+  --dpi <n>               Resolution (default: 144)
+  --quality <n>           JPEG quality 1-100 (default: 90)
+  --rasterizer <name>     Force: batik, cairosvg, rsvg-convert, resvg, imagemagick
+
+EXAMPLES:
+  xl -f data.xlsx -s Sheet1 view A1:D10                    # Markdown table
+  xl -f data.xlsx -s Sheet1 view A1:D10 --format json      # JSON array
+  xl -f data.xlsx -s Sheet1 view A1:D10 --eval             # Computed values
+  xl -f data.xlsx -s Sheet1 view A1:D10 --formulas         # Show formulas
+  xl -f data.xlsx -s Sheet1 view A1:D10 --format png --raster-output chart.png"""
+
+  private val styleHelp =
+    """Apply formatting to cells. Styles merge by default (use --replace to overwrite).
+
+USAGE:
+  xl -f file.xlsx -s Sheet1 -o out.xlsx style A1:D1 --bold --bg yellow
+
+FONT:
+  --bold, --italic, --underline
+  --font-size <pt>    Font size in points
+  --font-name <name>  Font family (e.g., "Arial", "Calibri")
+  --fg <color>        Text color
+
+FILL:
+  --bg <color>        Background color
+
+ALIGNMENT:
+  --align <left|center|right>
+  --valign <top|middle|bottom>
+  --wrap              Enable text wrapping
+
+NUMBER FORMAT:
+  --format <general|number|currency|percent|date|text>
+
+BORDERS:
+  --border <none|thin|medium|thick>      All sides
+  --border-top/right/bottom/left <style> Individual sides
+  --border-color <color>                 Border color
+
+COLORS:
+  Named: red, blue, navy, yellow, green, white, black, orange, purple, gray
+  Hex: #FF6600, #4472C4
+  RGB: rgb(100,150,200)
+
+EXAMPLES:
+  xl -f f.xlsx -s S1 -o o.xlsx style A1:E1 --bold --bg navy --fg white --align center
+  xl -f f.xlsx -s S1 -o o.xlsx style B2:B100 --format currency
+  xl -f f.xlsx -s S1 -o o.xlsx style A1 --border thin --border-color black
+  xl -f f.xlsx -s S1 -o o.xlsx style C1:C10 --replace --bg yellow  # Replace, don't merge"""
+
+  private val importHelp = """Import CSV data with automatic type detection.
+
+USAGE:
+  xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1
+  xl -f file.xlsx -o out.xlsx import data.csv --new-sheet "Data"
+
+OPTIONS:
+  --delimiter <char>      Field separator (default: ,)
+  --encoding <enc>        Input encoding (default: UTF-8)
+  --skip-header           Skip first row (treat as header, do not import)
+  --no-type-inference     Treat all values as text
+  --new-sheet <name>      Create new sheet for imported data
+
+TYPE INFERENCE:
+  Numbers:   100, 29.99, -5.5 → Number type
+  Booleans:  true, false (case-insensitive) → Boolean type
+  Dates:     2024-01-15 (ISO 8601 only) → DateTime type
+  Text:      Everything else
+
+LIMITATIONS:
+  - Entire CSV loaded into memory (not streamed)
+  - Recommended: <50k rows for optimal performance
+  - Date formats: Only ISO 8601 (YYYY-MM-DD) supported
+
+EXAMPLES:
+  xl -f f.xlsx -s S1 -o o.xlsx import data.csv A1
+  xl -f f.xlsx -o o.xlsx import data.csv --new-sheet "Imported"
+  xl -f f.xlsx -s S1 -o o.xlsx import data.csv A1 --delimiter ";" --skip-header
+  xl -f f.xlsx -s S1 -o o.xlsx import data.csv A1 --no-type-inference"""
+
+  private val putHelp = """Write value(s) to cell or range.
+
+USAGE:
+  xl -f file.xlsx -s Sheet1 -o out.xlsx put <ref> <value>
+  xl -f file.xlsx -s Sheet1 -o out.xlsx put <range> <value>        # Fill all
+  xl -f file.xlsx -s Sheet1 -o out.xlsx put <range> <v1> <v2> ...  # Batch
+
+MODES:
+  Single:   put A1 100              → Write 100 to A1
+  Fill:     put A1:A10 "TBD"        → Fill range with same value
+  Batch:    put A1:C1 "X" "Y" "Z"   → Different value per cell (row-major)
+
+NEGATIVE NUMBERS:
+  Use --value flag (- is interpreted as flag prefix):
+  ❌ put A1 -100              → Error: unknown flag
+  ✅ put A1 --value "-100"    → Writes -100 to A1
+
+EXAMPLES:
+  xl -f f.xlsx -s S1 -o o.xlsx put A1 "Hello"
+  xl -f f.xlsx -s S1 -o o.xlsx put B2:B10 0              # Fill with zeros
+  xl -f f.xlsx -s S1 -o o.xlsx put A1:D1 "Q1" "Q2" "Q3" "Q4"
+  xl -f f.xlsx -s S1 -o o.xlsx put A1 --value "-500"     # Negative number"""
+
+  private val putfHelp = """Write formula(s) to cell or range with Excel-style dragging.
+
+USAGE:
+  xl -f file.xlsx -s Sheet1 -o out.xlsx putf <ref> <formula>
+  xl -f file.xlsx -s Sheet1 -o out.xlsx putf <range> <formula>     # Drag
+  xl -f file.xlsx -s Sheet1 -o out.xlsx putf <range> <f1> <f2> ... # Batch
+
+FORMULA DRAGGING:
+  Single formula + range → references shift automatically:
+  putf B2:B10 "=A2*1.1"  →  B2: =A2*1.1, B3: =A3*1.1, B4: =A4*1.1 ...
+
+ANCHOR MODES ($ controls shifting):
+  $A$1   Absolute (never shifts)
+  $A1    Column absolute, row relative
+  A$1    Column relative, row absolute
+  A1     Fully relative (shifts both ways)
+
+RUNNING TOTALS:
+  putf C2:C10 "=SUM(\$B\$2:B2)"  →  C2: =SUM($B$2:B2), C3: =SUM($B$2:B3) ...
+
+BATCH (explicit, no dragging):
+  putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"  → Formulas applied as-is
+
+EXAMPLES:
+  xl -f f.xlsx -s S1 -o o.xlsx putf C1 "=A1+B1"
+  xl -f f.xlsx -s S1 -o o.xlsx putf B2:B100 "=A2*1.1"
+  xl -f f.xlsx -s S1 -o o.xlsx putf C2:C10 "=SUM(\$A\$1:A2)"
+  xl -f f.xlsx -s S1 -o o.xlsx putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3\""""
+
+  private val sortHelp = """Sort rows in range by one or more columns.
+
+USAGE:
+  xl -f file.xlsx -s Sheet1 -o out.xlsx sort <range> --by <col> [options]
+
+OPTIONS:
+  --by <col>        Primary sort column (required)
+  --then-by <col>   Secondary sort column (repeatable)
+  --desc            Sort descending (default: ascending)
+  --numeric         Force numeric comparison ("10" > "9")
+  --header          First row is header (exclude from sort)
+
+BEHAVIOR:
+  - Empty cells sort last
+  - Formulas use cached value for sorting
+  - Booleans sort as 0 (FALSE) / 1 (TRUE)
+  - Rows move together (columns outside range preserved)
+
+EXAMPLES:
+  xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B
+  xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B --desc --numeric
+  xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B --then-by C --header"""
+
   // --- Info commands (no --file required) ---
 
   val functionsCmd: Opts[Unit] =
@@ -237,7 +415,7 @@ object Main
   }
 
   val viewCmd: Opts[CliCommand] =
-    Opts.subcommand("view", "View range (markdown, html, svg, json, csv, png, jpeg, webp, pdf)") {
+    Opts.subcommand("view", viewHelp) {
       (
         rangeArg,
         formulasOpt,
@@ -293,7 +471,7 @@ object Main
   // Variadic values for put (supports single value, fill pattern, or batch values)
   private val valuesArg = Opts.arguments[String]("value")
 
-  val putCmd: Opts[CliCommand] = Opts.subcommand("put", "Write value(s) to cell or range") {
+  val putCmd: Opts[CliCommand] = Opts.subcommand("put", putHelp) {
     // Support both positional args and --value flag (for negative numbers)
     val valuesOrOpt = valueOpt.map(v => List(v)) orElse valuesArg.map(_.toList)
     (refArg, valuesOrOpt).mapN(CliCommand.Put.apply)
@@ -302,7 +480,7 @@ object Main
   // Variadic formulas for putf (supports single formula, dragging, or batch formulas)
   private val formulasArg = Opts.arguments[String]("formula")
 
-  val putfCmd: Opts[CliCommand] = Opts.subcommand("putf", "Write formula(s) to cell or range") {
+  val putfCmd: Opts[CliCommand] = Opts.subcommand("putf", putfHelp) {
     (refArg, formulasArg).mapN { (ref, formulas) =>
       CliCommand.PutFormula(ref, formulas.toList)
     }
@@ -339,7 +517,7 @@ object Main
     .flag("replace", "Replace entire style instead of merging with existing")
     .orFalse
 
-  val styleCmd: Opts[CliCommand] = Opts.subcommand("style", "Apply styling to cells") {
+  val styleCmd: Opts[CliCommand] = Opts.subcommand("style", styleHelp) {
     (
       rangeArg,
       boldOpt,
@@ -452,10 +630,7 @@ Operations execute in order. Use "-" to read from stdin."""
     Opts.flag("no-type-inference", "Treat all values as text").orFalse
 
   val importCmd: Opts[CliCommand] =
-    Opts.subcommand(
-      "import",
-      "Import CSV data (loads entire file into memory, <50k rows recommended)"
-    ) {
+    Opts.subcommand("import", importHelp) {
       (
         csvPathArg,
         startRefOpt,
@@ -563,7 +738,7 @@ Operations execute in order. Use "-" to read from stdin."""
     Opts.flag("header", "First row is header (exclude from sort)").orFalse
 
   val sortCmd: Opts[CliCommand] =
-    Opts.subcommand("sort", "Sort rows in range by column(s)") {
+    Opts.subcommand("sort", sortHelp) {
       (rangeArg, byOpt, descOpt, numericSortOpt, thenByOpts, sortHeaderOpt).mapN {
         (range, by, desc, numeric, thenBy, header) =>
           val direction =
