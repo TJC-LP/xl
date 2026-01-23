@@ -123,16 +123,22 @@ Showcases **Excel Table Support**:
 
 ## Adding New Examples
 
-Create a new `.sc` script file with scala-cli directives:
+Create a new `.sc` script file with shebang and project reference:
 
 ```scala
-//> using scala 3.7.4
-//> using dep com.tjclp::xl:0.7.0
+#!/usr/bin/env -S scala-cli shebang
+//> using file project.scala
 
 import com.tjclp.xl.{*, given}
 
-@main def myExample(): Unit =
-  // Your code here
+println("=== My Example ===")
+// Your code here - top-level statements execute directly
 ```
 
-Run with: `scala-cli run examples/my_example.sc`
+Make executable and run:
+```bash
+chmod +x examples/my_example.sc
+./examples/my_example.sc
+```
+
+The `project.scala` file centralizes dependencies (`com.tjclp::xl:0.7.0`) for all examples.

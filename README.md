@@ -1,6 +1,7 @@
 # XL — Pure Functional Excel Library for Scala 3
 
 [![CI](https://github.com/TJC-LP/xl/workflows/CI/badge.svg)](https://github.com/TJC-LP/xl/actions)
+[![Maven Central](https://img.shields.io/maven-central/v/com.tjclp/xl_3.svg)](https://central.sonatype.com/artifact/com.tjclp/xl_3)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 **The best Excel library for Scala.** Type-safe, purely functional, blazing fast.
@@ -37,6 +38,7 @@ import com.tjclp.xl.{*, given}
 - [CLI](#cli)
 - [Claude Code Plugin](#claude-code-plugin)
 - [Documentation](#documentation)
+- [Development](#development)
 - [Contributing](#contributing)
 
 ## Why XL?
@@ -146,8 +148,8 @@ val excel = ExcelIO.instance[IO]
 // Read 1M+ rows without OOM
 excel.readStream(path).evalMap(row => process(row))
 
-// Write with SAX backend
-excel.writeFast(workbook, path)
+// Write with streaming backend
+excel.write(workbook, path)
 ```
 
 ## CLI

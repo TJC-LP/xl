@@ -169,8 +169,8 @@ sheet.put(
 ```scala
 var s = sheet
 for i <- 1 to 1000 do
-  s = s.put(cell"A$i", s"Row $i")  // 1000 Sheet instances
-  s = s.merge(range"A$i:B$i")      // 1000 more Sheet instances
+  s = s.put(ref"A$i", s"Row $i")  // 1000 Sheet instances
+  s = s.merge(ref"A$i:B$i")       // 1000 more Sheet instances
 ```
 
 **Good** (deferred with Patch):
@@ -178,7 +178,7 @@ for i <- 1 to 1000 do
 import com.tjclp.xl.dsl.*
 
 val patch = (1 to 1000).foldLeft(Patch.empty: Patch) { (p, i) =>
-  p ++ (cell"A$i" := s"Row $i") ++ range"A$i:B$i".merge
+  p ++ (ref"A$i" := s"Row $i") ++ ref"A$i:B$i".merge
 }
 sheet.put(patch)  // Execute once at end
 ```
@@ -403,8 +403,8 @@ excel.read(largeFile)
 ```scala
 // Use simple in-memory API
 val sheet = Sheet("Data")
-  .put(cell"A1", "Title")
-  .put(cell"B1", 100)
+  .put(ref"A1", "Title")
+  .put(ref"B1", 100)
 
 ExcelIO.instance.write[IO](Workbook(Vector(sheet)), path).unsafeRunSync()
 ```
@@ -415,7 +415,7 @@ ExcelIO.instance.write[IO](Workbook(Vector(sheet)), path).unsafeRunSync()
 import com.tjclp.xl.codec.syntax.*
 
 val cells = (1 to 100_000).map(i =>
-  cell"A$i" -> s"Row $i"
+  ref"A$i" -> s"Row $i"
 )
 val sheet = Sheet("Data").put(cells*)
 
