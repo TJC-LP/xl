@@ -11,6 +11,7 @@ import com.monovore.decline.effect.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.cli.commands.{
   CellCommands,
@@ -58,21 +59,23 @@ object Main
   override def main: Opts[IO[ExitCode]] =
     // Workbook-level: only --file (no --sheet)
     val workbookSubcmds = sheetsCmd orElse namesCmd
-    val workbookOpts = (fileOpt, workbookSubcmds).mapN { (file, cmd) =>
-      run(file, None, None, None, cmd)
+    val workbookOpts = (fileOpt, maxSizeOpt, workbookSubcmds).mapN { (file, maxSize, cmd) =>
+      run(file, None, None, None, maxSize, cmd)
     }
 
     // Headless commands: --file is optional (for constant formulas like =1+1, =PI())
-    val headlessOpts = (fileOpt.orNone, sheetOpt, evalCmd).mapN { (fileOpt, sheet, cmd) =>
-      runHeadless(fileOpt, sheet, cmd)
+    val headlessOpts = (fileOpt.orNone, sheetOpt, maxSizeOpt, evalCmd).mapN {
+      (fileOpt, sheet, maxSize, cmd) =>
+        runHeadless(fileOpt, sheet, maxSize, cmd)
     }
 
     // Sheet-level read-only: --file and --sheet (no --output)
     val sheetReadOnlySubcmds =
       boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd
 
-    val sheetReadOnlyOpts = (fileOpt, sheetOpt, sheetReadOnlySubcmds).mapN { (file, sheet, cmd) =>
-      run(file, sheet, None, None, cmd)
+    val sheetReadOnlyOpts = (fileOpt, sheetOpt, maxSizeOpt, sheetReadOnlySubcmds).mapN {
+      (file, sheet, maxSize, cmd) =>
+        run(file, sheet, None, None, maxSize, cmd)
     }
 
     // Sheet-level write: --file, --sheet, and --output (required)
@@ -80,9 +83,9 @@ object Main
       putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd
 
     val sheetWriteOpts =
-      (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
-        (file, sheet, out, backend, cmd) =>
-          run(file, sheet, Some(out), backend, cmd)
+      (fileOpt, sheetOpt, outputOpt, backendOpt, maxSizeOpt, sheetWriteSubcmds).mapN {
+        (file, sheet, out, backend, maxSize, cmd) =>
+          run(file, sheet, Some(out), backend, maxSize, cmd)
       }
 
     // Standalone: no --file required (creates new files)
@@ -124,6 +127,11 @@ object Main
             s"Unknown backend: $other. Use 'scalaxml' (default) or 'saxstax' (faster)"
           )
       }
+      .orNone
+
+  private val maxSizeOpt: Opts[Option[Long]] =
+    Opts
+      .option[Long]("max-size", "Max uncompressed size in MB (default: 100, 0 = unlimited)")
       .orNone
 
   // ==========================================================================
@@ -760,9 +768,10 @@ Operations execute in order. Use "-" to read from stdin."""
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
     backendOpt: Option[XmlBackend],
+    maxSizeOpt: Option[Long],
     cmd: CliCommand
   ): IO[ExitCode] =
-    execute(filePath, sheetNameOpt, outputOpt, backendOpt, cmd).attempt.flatMap {
+    execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, cmd).attempt.flatMap {
       case Right(output) =>
         IO.println(output).as(ExitCode.Success)
       case Left(err) =>
@@ -875,10 +884,13 @@ Operations execute in order. Use "-" to read from stdin."""
   private def runHeadless(
     filePathOpt: Option[Path],
     sheetNameOpt: Option[String],
+    maxSizeOpt: Option[Long],
     cmd: CliCommand
   ): IO[ExitCode] =
+    val excel = ExcelIO.instance[IO]
+    val readerConfig = buildReaderConfig(maxSizeOpt)
     val workbookIO: IO[Workbook] = filePathOpt match
-      case Some(filePath) => ExcelIO.instance[IO].read(filePath)
+      case Some(filePath) => excel.readWith(filePath, readerConfig)
       case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
 
     (for
@@ -927,10 +939,13 @@ Operations execute in order. Use "-" to read from stdin."""
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
     backendOpt: Option[XmlBackend],
+    maxSizeOpt: Option[Long],
     cmd: CliCommand
   ): IO[String] =
+    val excel = ExcelIO.instance[IO]
+    val readerConfig = buildReaderConfig(maxSizeOpt)
     for
-      wb <- ExcelIO.instance[IO].read(filePath)
+      wb <- excel.readWith(filePath, readerConfig)
       sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
       result <- executeCommand(wb, sheet, outputOpt, backendOpt, cmd)
     yield result
@@ -1159,3 +1174,10 @@ Operations execute in order. Use "-" to read from stdin."""
     outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required")))(path =>
       f(path, config)
     )
+
+  /** Build ReaderConfig from CLI maxSize option (in MB). 0 means unlimited. */
+  private def buildReaderConfig(maxSizeOpt: Option[Long]): ReaderConfig =
+    maxSizeOpt match
+      case Some(0) => ReaderConfig.permissive
+      case Some(mb) => ReaderConfig.default.copy(maxUncompressedSize = mb * 1024 * 1024)
+      case None => ReaderConfig.default

@@ -26,7 +26,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
 
   /** Read workbook from XLSX file */
   def read(path: Path): F[Workbook] =
-    Sync[F].delay(XlsxReader.readWithWarnings(path)).flatMap {
+    readWith(path, XlsxReader.ReaderConfig.default)
+
+  /** Read workbook from XLSX file with custom configuration */
+  def readWith(path: Path, config: XlsxReader.ReaderConfig): F[Workbook] =
+    Sync[F].delay(XlsxReader.readWithWarnings(path, config)).flatMap {
       case Right(result) =>
         result.warnings.traverse_(warningHandler) *> Async[F].pure(result.workbook)
       case Left(err) => Async[F].raiseError(new Exception(s"Failed to read XLSX: ${err.message}"))
