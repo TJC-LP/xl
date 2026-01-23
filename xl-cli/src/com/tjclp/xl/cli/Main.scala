@@ -396,8 +396,44 @@ object Main
 
   // --- Batch command ---
   private val batchArg = Opts.argument[String]("operations").withDefault("-")
+  private val batchHelp = """Apply multiple operations atomically from JSON.
+
+USAGE:
+  xl -f in.xlsx -s Sheet1 -o out.xlsx batch ops.json
+  echo '[...]' | xl -f in.xlsx -s Sheet1 -o out.xlsx batch -
+
+OPERATIONS:
+  put       {"op": "put", "ref": "A1", "value": "Hello"}
+  putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}
+  style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
+  merge     {"op": "merge", "range": "A1:D1"}
+  unmerge   {"op": "unmerge", "range": "A1:D1"}
+  colwidth  {"op": "colwidth", "col": "A", "width": 15.5}
+  rowheight {"op": "rowheight", "row": 1, "height": 30}
+
+STYLE PROPERTIES:
+  Font:      bold, italic, underline, fg, fontSize, fontName
+  Fill:      bg (background color, e.g., "#FFFF00" or "yellow")
+  Align:     align (left/center/right), valign (top/middle/bottom), wrap
+  Format:    numFormat (general/number/currency/percent/date/text)
+  Border:    border (all), borderTop/Right/Bottom/Left, borderColor
+  Mode:      replace (true=replace style, false=merge with existing)
+
+EXAMPLE:
+  [
+    {"op": "put", "ref": "A1", "value": "Revenue Report"},
+    {"op": "style", "range": "A1:D1", "bold": true, "bg": "#4472C4", "fg": "#FFFFFF", "align": "center"},
+    {"op": "merge", "range": "A1:D1"},
+    {"op": "colwidth", "col": "A", "width": 25},
+    {"op": "put", "ref": "A2", "value": "Q1"},
+    {"op": "put", "ref": "B2", "value": 1000},
+    {"op": "putf", "ref": "C2", "value": "=B2*1.1"}
+  ]
+
+Operations execute in order. Use "-" to read from stdin."""
+
   val batchCmd: Opts[CliCommand] =
-    Opts.subcommand("batch", "Apply multiple operations atomically (JSON from stdin or file)") {
+    Opts.subcommand("batch", batchHelp) {
       batchArg.map(CliCommand.Batch.apply)
     }
 
