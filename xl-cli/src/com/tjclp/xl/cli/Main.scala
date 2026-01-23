@@ -135,11 +135,19 @@ object Main
 
   private val maxSizeOpt: Opts[Option[Long]] =
     Opts
-      .option[Long]("max-size", "Max uncompressed size in MB (default: 100, 0 = unlimited)")
+      .option[Long](
+        "max-size",
+        "Max uncompressed size in MB for in-memory load (default: 100, 0 = unlimited). Use for large files when --stream is not supported."
+      )
       .orNone
 
   private val streamOpt: Opts[Boolean] =
-    Opts.flag("stream", "Use streaming mode for large files (O(1) memory)").orFalse
+    Opts
+      .flag(
+        "stream",
+        "Use O(1) memory streaming for large files (100k+ rows). Supports: search, stats, bounds, view (markdown/csv/json). 7-8x faster than in-memory."
+      )
+      .orFalse
 
   // ==========================================================================
   // Command definitions

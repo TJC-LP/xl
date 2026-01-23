@@ -311,6 +311,26 @@ xl -f output.xlsx -o output.xlsx move-sheet "Summary" --to 0
 xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels
 ```
 
+### Large File Operations (100k+ rows)
+
+For files with 100k+ rows, use streaming mode for O(1) memory and 7-8x faster performance:
+
+```bash
+# Streaming mode - constant memory, stops early on limit
+xl -f huge.xlsx --stream search "pattern" --limit 10    # ~10s for 1M rows
+xl -f huge.xlsx --stream stats A1:E100000               # Aggregate without loading
+xl -f huge.xlsx --stream bounds                          # Get used range
+xl -f huge.xlsx --stream view A1:D100 --format csv      # Export range
+
+# In-memory mode - when streaming not supported
+xl -f huge.xlsx --max-size 0 sheets       # Disable 100MB limit
+xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
+```
+
+**Streaming supports**: search, stats, bounds, view (markdown/csv/json only)
+
+**Requires in-memory**: cell (dependencies), eval (formulas), HTML/SVG/PDF (styles), writes
+
 ---
 
 ## Command Reference
@@ -323,6 +343,8 @@ xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.pn
 | `--sheet <name>` | `-s` | Sheet name |
 | `--output <path>` | `-o` | Output file (for writes) |
 | `--backend <type>` | | scalaxml (default) or saxstax (36-39% faster) |
+| `--max-size <MB>` | | Override 100MB security limit (0 = unlimited) |
+| `--stream` | | O(1) memory mode for large files (100k+ rows) |
 
 ### Info Commands
 
