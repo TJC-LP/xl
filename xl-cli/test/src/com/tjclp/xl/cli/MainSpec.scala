@@ -372,3 +372,226 @@ class MainSpec extends CatsEffectSuite:
       assertEquals(evaluated.get(ref"C1"), Some(CellValue.Number(BigDecimal(25))))
     }
   }
+
+  // ========== Batch Styling Operations (GH-88) ==========
+
+  test("parseBatchJson: parses style operation with all properties") {
+    val json =
+      """[{"op": "style", "range": "A1:B2", "bold": true, "italic": true, "bg": "#FFFF00", "align": "center"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val ops = result.toOption.get
+    assertEquals(ops.size, 1)
+    ops.head match
+      case BatchOp.Style(range, props) =>
+        assertEquals(range, "A1:B2")
+        assert(props.bold)
+        assert(props.italic)
+        assertEquals(props.bg, Some("#FFFF00"))
+        assertEquals(props.align, Some("center"))
+      case other => fail(s"Expected Style op, got: $other")
+  }
+
+  test("parseBatchJson: parses merge operation") {
+    val json = """[{"op": "merge", "range": "A1:D1"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.Merge("A1:D1")))
+  }
+
+  test("parseBatchJson: parses unmerge operation") {
+    val json = """[{"op": "unmerge", "range": "A1:D1"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.Unmerge("A1:D1")))
+  }
+
+  test("parseBatchJson: parses colwidth operation") {
+    val json = """[{"op": "colwidth", "col": "A", "width": 15.5}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.ColWidth("A", 15.5)))
+  }
+
+  test("parseBatchJson: parses rowheight operation") {
+    val json = """[{"op": "rowheight", "row": 1, "height": 30.0}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.RowHeight(1, 30.0)))
+  }
+
+  test("batch: style operation applies formatting") {
+    import com.tjclp.xl.styles.color.Color
+    import com.tjclp.xl.styles.fill.Fill
+
+    val sheet = Sheet("Test").put(ref"A1" -> CellValue.Text("Hello"))
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(
+      BatchOp.Style("A1:B2", BatchParser.StyleProps(bold = true, bg = Some("#FFFF00")))
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+
+      // Check that A1 has bold font and yellow background
+      val style = updatedSheet.getCellStyle(ref"A1")
+      assert(style.isDefined, "Cell should have a style")
+      val cellStyle = style.get
+      assert(cellStyle.font.bold, "Font should be bold")
+      // Check yellow fill (#FFFF00 = RGB(255, 255, 0))
+      val expectedColor = Color.fromRgb(255, 255, 0)
+      assertEquals(cellStyle.fill, Fill.Solid(expectedColor), "Fill should be yellow")
+    }
+  }
+
+  test("batch: merge operation creates merged region") {
+    val sheet = Sheet("Test").put(ref"A1" -> CellValue.Text("Title"))
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(BatchOp.Merge("A1:D1"))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+      val range = com.tjclp.xl.addressing.CellRange.parse("A1:D1").toOption.get
+
+      assert(updatedSheet.mergedRanges.contains(range), "Should contain merged range A1:D1")
+    }
+  }
+
+  test("batch: unmerge operation removes merged region") {
+    val range = com.tjclp.xl.addressing.CellRange.parse("A1:D1").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> CellValue.Text("Title"))
+      .merge(range)
+    val wb = Workbook(Vector(sheet))
+
+    // Verify merge exists first
+    assert(sheet.mergedRanges.contains(range), "Pre-condition: range should be merged")
+
+    val ops = Vector(BatchOp.Unmerge("A1:D1"))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+      assert(!updatedSheet.mergedRanges.contains(range), "Range should be unmerged")
+    }
+  }
+
+  test("batch: colwidth operation sets column width") {
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(BatchOp.ColWidth("A", 20.0))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+      val colA = com.tjclp.xl.addressing.Column.fromLetter("A").toOption.get
+      val props = updatedSheet.getColumnProperties(colA)
+
+      assertEquals(props.width, Some(20.0))
+    }
+  }
+
+  test("batch: rowheight operation sets row height") {
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(BatchOp.RowHeight(1, 30.0))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+      val row1 = com.tjclp.xl.addressing.Row.from1(1)
+      val props = updatedSheet.getRowProperties(row1)
+
+      assertEquals(props.height, Some(30.0))
+    }
+  }
+
+  test("batch: combined put + style + merge workflow") {
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(
+      BatchOp.Put("A1", "Title"),
+      BatchOp.Style("A1:D1", BatchParser.StyleProps(bold = true, bg = Some("#0000FF"))),
+      BatchOp.Merge("A1:D1"),
+      BatchOp.ColWidth("A", 25.0)
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+
+      // Check value was put
+      val value = updatedSheet.cells.get(ref"A1").map(_.value)
+      assertEquals(value, Some(CellValue.Text("Title")))
+
+      // Check style was applied
+      val style = updatedSheet.getCellStyle(ref"A1")
+      assert(style.isDefined)
+      assert(style.get.font.bold)
+
+      // Check merge was created
+      val range = com.tjclp.xl.addressing.CellRange.parse("A1:D1").toOption.get
+      assert(updatedSheet.mergedRanges.contains(range))
+
+      // Check column width was set
+      val colA = com.tjclp.xl.addressing.Column.fromLetter("A").toOption.get
+      assertEquals(updatedSheet.getColumnProperties(colA).width, Some(25.0))
+    }
+  }
+
+  test("batch: style with replace=true overwrites existing style") {
+    // Create sheet with pre-styled cell
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> CellValue.Text("Hello"))
+      .style(ref"A1", com.tjclp.xl.styles.CellStyle.default.withFont(
+        com.tjclp.xl.styles.font.Font.default.withBold(true).withItalic(true)
+      ))
+    val wb = Workbook(Vector(sheet))
+
+    // Apply style with replace=true - should clear existing italic
+    val ops = Vector(
+      BatchOp.Style("A1", BatchParser.StyleProps(bold = true, replace = true))
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+      val style = updatedSheet.getCellStyle(ref"A1")
+
+      assert(style.isDefined)
+      // In replace mode, only the new style is applied (no merging)
+      assert(style.get.font.bold, "Bold should be applied")
+      // Since we're replacing with a fresh style that only has bold=true,
+      // italic should be the default (false)
+      assert(!style.get.font.italic, "Italic should not be preserved in replace mode")
+    }
+  }
+
+  test("batch: operations order is preserved for deterministic results") {
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+
+    // Put value, then style - order matters for style to work on existing cell
+    val ops = Vector(
+      BatchOp.Put("A1", "100"),
+      BatchOp.Style("A1", BatchParser.StyleProps(bold = true))
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+
+      // Value should exist
+      val value = updatedSheet.cells.get(ref"A1").map(_.value)
+      assertEquals(value, Some(CellValue.Number(BigDecimal(100))))
+
+      // Style should be applied
+      val style = updatedSheet.getCellStyle(ref"A1")
+      assert(style.isDefined)
+      assert(style.get.font.bold)
+    }
+  }

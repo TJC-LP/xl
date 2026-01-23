@@ -643,6 +643,11 @@ object WriteCommands:
               .map {
                 case BatchParser.BatchOp.Put(ref, value) => s"  PUT $ref = $value"
                 case BatchParser.BatchOp.PutFormula(ref, formula) => s"  PUTF $ref = $formula"
+                case BatchParser.BatchOp.Style(range, _) => s"  STYLE $range"
+                case BatchParser.BatchOp.Merge(range) => s"  MERGE $range"
+                case BatchParser.BatchOp.Unmerge(range) => s"  UNMERGE $range"
+                case BatchParser.BatchOp.ColWidth(col, width) => s"  COLWIDTH $col = $width"
+                case BatchParser.BatchOp.RowHeight(row, height) => s"  ROWHEIGHT $row = $height"
               }
               .mkString("\n")
             s"Applied ${ops.size} operations:\n$summary\nSaved: $outputPath"
