@@ -5,11 +5,13 @@ import cats.syntax.traverse.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
+import upickle.default.*
 
 /**
  * Batch operation parsing and execution for CLI.
  *
- * Handles parsing JSON batch input and applying operations to workbooks.
+ * Handles parsing JSON batch input and applying operations to workbooks. Uses uPickle for robust
+ * JSON parsing that handles all edge cases (nested braces, escaping, unicode).
  */
 object BatchParser:
 
@@ -19,6 +21,9 @@ object BatchParser:
   enum BatchOp:
     case Put(ref: String, value: String)
     case PutFormula(ref: String, formula: String)
+
+  /** JSON representation for parsing */
+  private case class BatchOpJson(op: String, ref: String, value: ujson.Value) derives ReadWriter
 
   /**
    * Read batch input from file or stdin.
@@ -57,96 +62,73 @@ object BatchParser:
     }
 
   /**
-   * Simple JSON parser for batch operations.
+   * Parse batch JSON using uPickle.
    *
-   * Handles: [{"op":"put"|"putf", "ref":"A1", "value":"..."}]
+   * Handles all JSON edge cases: nested braces, escaping, unicode, multi-line values. Format:
+   * [{"op":"put"|"putf", "ref":"A1", "value": ...}]
    *
-   * Note: Does not handle nested braces in values (e.g., {"value": "foo{bar}"}). This is acceptable
-   * for CLI batch operations where such cases are rare. See issue #67 for circe migration.
+   * Values can be strings, numbers, booleans, or null - all converted to string for cell values.
    */
   def parseBatchJson(json: String): Either[Exception, Vector[BatchOp]] =
-    // Simple JSON parsing - handles the specific format we need
-    val objPattern = """\{[^}]+\}""".r
-    val opPattern = """"op"\s*:\s*"(\w+)"""".r
-    val refPattern = """"ref"\s*:\s*"([^"]+)"""".r
-    // Accept both quoted strings ("value": "text") and bare values ("value": 123, true, null)
-    val valuePattern = """"value"\s*:\s*("(?:[^"\\]|\\.)*"|[^,\}\s]+)""".r
+    try
+      val parsed = ujson.read(json)
+      val arr = parsed.arrOpt.getOrElse(
+        throw new Exception("Batch input must be a JSON array")
+      )
 
-    // Quick validation: check for common JSON syntax issues
-    val objects = objPattern.findAllIn(json).toVector
-    if objects.isEmpty then
-      // No valid JSON objects found - try to give helpful error
-      if json.contains("{") && json.contains("}") then
-        Left(
-          new Exception(
-            "JSON parse error: Found braces but couldn't parse objects. " +
-              "Check for missing quotes around string values (use \"value\": \"text\", not value: text)"
+      val ops = arr.value.toVector.zipWithIndex.map { case (obj, idx) =>
+        val objMap = obj.objOpt.getOrElse(
+          throw new Exception(
+            s"Object ${idx + 1}: Expected JSON object, got ${obj.getClass.getSimpleName}"
           )
         )
-      else
-        Left(
-          new Exception(
-            "JSON parse error: No objects found. Expected array of {\"op\": ..., \"ref\": ..., \"value\": ...}"
+
+        val op = objMap
+          .get("op")
+          .flatMap(_.strOpt)
+          .getOrElse(
+            throw new Exception(
+              s"Object ${idx + 1}: Missing or invalid 'op' field. Expected \"op\": \"put\" or \"op\": \"putf\""
+            )
           )
-        )
-    else
-      val ops = objects.zipWithIndex.map { case (obj, idx) =>
-        val op = opPattern.findFirstMatchIn(obj).map(_.group(1))
-        val ref = refPattern.findFirstMatchIn(obj).map(_.group(1))
-        val value = valuePattern
-          .findFirstMatchIn(obj)
-          .map(_.group(1))
-          .map { v =>
-            // Handle both quoted strings and bare values (numbers, booleans, null)
-            if v.startsWith("\"") && v.endsWith("\"") then
-              // Quoted string - strip quotes and unescape
-              v.drop(1)
-                .dropRight(1)
-                .replace("\\\"", "\"")
-                .replace("\\n", "\n")
-                .replace("\\\\", "\\")
-            else
-              // Bare value (number, boolean, null) - use as-is
-              v.trim
+
+        val ref = objMap
+          .get("ref")
+          .flatMap(_.strOpt)
+          .getOrElse(
+            throw new Exception(
+              s"Object ${idx + 1}: Missing or invalid 'ref' field. Expected \"ref\": \"A1\""
+            )
+          )
+
+        val value = objMap
+          .get("value")
+          .map {
+            case v if v.strOpt.isDefined => v.str
+            case v if v.numOpt.isDefined => v.num.toString
+            case v if v.boolOpt.isDefined => v.bool.toString
+            case v if v.isNull => ""
+            case v => throw new Exception(s"Object ${idx + 1}: Unsupported value type for 'value'")
           }
+          .getOrElse(
+            throw new Exception(
+              s"Object ${idx + 1}: Missing 'value' field. Expected \"value\": \"text\" or \"value\": 123"
+            )
+          )
 
-        (op, ref, value) match
-          case (Some("put"), Some(r), Some(v)) => Right(BatchOp.Put(r, v))
-          case (Some("putf"), Some(r), Some(v)) => Right(BatchOp.PutFormula(r, v))
-          case (Some(opName), Some(_), Some(_)) =>
-            // Unknown op with valid ref and value
-            Left(
-              new Exception(
-                s"Unknown operation '$opName' in object ${idx + 1}. Valid operations: put, putf"
-              )
-            )
-          case (Some(_), None, _) =>
-            Left(
-              new Exception(
-                s"JSON parse error in object ${idx + 1}: Missing or malformed 'ref' field. " +
-                  "Expected \"ref\": \"A1\" (with quotes around the cell reference)"
-              )
-            )
-          case (Some(_), _, None) =>
-            Left(
-              new Exception(
-                s"JSON parse error in object ${idx + 1}: Missing or malformed 'value' field. " +
-                  "Expected \"value\": \"text\" or \"value\": 123"
-              )
-            )
-          case (None, _, _) =>
-            Left(
-              new Exception(
-                s"JSON parse error in object ${idx + 1}: Missing or malformed 'op' field. " +
-                  "Expected \"op\": \"put\" or \"op\": \"putf\" (with quotes)"
-              )
-            )
+        op match
+          case "put" => BatchOp.Put(ref, value)
+          case "putf" => BatchOp.PutFormula(ref, value)
+          case other =>
+            throw new Exception(s"Object ${idx + 1}: Unknown operation '$other'. Valid: put, putf")
       }
 
-      val errors = ops.collect { case Left(e) => e }
-      errors.headOption match
-        case Some(e) => Left(e)
-        case None => Right(ops.collect { case Right(op) => op })
+      Right(ops)
+    catch
+      case e: ujson.ParseException =>
+        Left(new Exception(s"JSON parse error: ${e.getMessage}"))
+      case e: Exception =>
+        Left(e)
 
   /**
    * Resolved operation with parsed ref and target sheet name.

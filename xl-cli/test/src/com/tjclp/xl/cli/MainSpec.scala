@@ -234,6 +234,79 @@ class MainSpec extends CatsEffectSuite:
     }
   }
 
+  // ========== JSON Parsing Edge Cases (GH-67 - uPickle migration) ==========
+
+  test("parseBatchJson: handles nested braces in values (GH-67 regression)") {
+    // This was broken with the old regex parser: {[^}]+} couldn't handle nested braces
+    val json = """[{"op": "put", "ref": "A1", "value": "foo{bar}baz"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "foo{bar}baz")))
+  }
+
+  test("parseBatchJson: handles JSON object syntax in string values (GH-67 regression)") {
+    // Even more complex: actual JSON-like syntax inside string value
+    val json = """[{"op": "put", "ref": "A1", "value": "{\"nested\": \"json\"}"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "{\"nested\": \"json\"}")))
+  }
+
+  test("parseBatchJson: handles escaped quotes in values") {
+    val json = """[{"op": "put", "ref": "A1", "value": "He said \"hello\""}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "He said \"hello\"")))
+  }
+
+  test("parseBatchJson: handles unicode in values") {
+    val json = """[{"op": "put", "ref": "A1", "value": "日本語 emoji: 🎉"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "日本語 emoji: 🎉")))
+  }
+
+  test("parseBatchJson: handles numeric values without quotes") {
+    val json = """[{"op": "put", "ref": "A1", "value": 12345.67}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "12345.67")))
+  }
+
+  test("parseBatchJson: handles boolean values") {
+    val json = """[{"op": "put", "ref": "A1", "value": true}, {"op": "put", "ref": "A2", "value": false}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(
+      result.toOption.get,
+      Vector(BatchOp.Put("A1", "true"), BatchOp.Put("A2", "false"))
+    )
+  }
+
+  test("parseBatchJson: handles null values as empty string") {
+    val json = """[{"op": "put", "ref": "A1", "value": null}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "")))
+  }
+
+  test("parseBatchJson: provides clear error for invalid JSON") {
+    val json = """[{"op": "put", "ref": "A1", value: unquoted}]""" // Missing quotes
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isLeft, "Should fail to parse invalid JSON")
+    // uPickle provides detailed parse errors
+    val errorMsg = result.swap.toOption.get.getMessage
+    assert(errorMsg.nonEmpty, s"Error message should not be empty: $errorMsg")
+  }
+
   // ========== Nested Formula Evaluation (TJC-350 / GH-94) ==========
 
   test("evaluateWithDependencyCheck: nested formulas evaluate correctly") {
