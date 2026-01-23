@@ -157,7 +157,7 @@ final case class Workbook(
       )
     else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
-  /** Rename sheet (marks metadata as modified since sheet names live in workbook.xml). */
+  /** Rename sheet (marks both sheet and metadata as modified). */
   def rename(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == oldName) match
       case -1 => Left(XLError.SheetNotFound(oldName.value))
@@ -166,7 +166,8 @@ final case class Workbook(
           Left(XLError.DuplicateSheet(newName.value))
         else
           val updated = sheets(index).copy(name = newName)
-          val updatedContext = sourceContext.map(_.markMetadataModified)
+          // Mark both: metadata (workbook.xml has sheet names) AND sheet (to regenerate styles)
+          val updatedContext = sourceContext.map(_.markSheetModified(index).markMetadataModified)
           Right(copy(sheets = sheets.updated(index, updated), sourceContext = updatedContext))
 
   /**
