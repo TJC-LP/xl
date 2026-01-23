@@ -55,6 +55,11 @@ cd /tmp && ./install.sh
 
 ---
 
+> **💡 Tip**: Run `xl <command> --help` for detailed usage and examples.
+> Commands like `batch`, `style`, and `view` have comprehensive built-in help.
+
+---
+
 ## Quick Reference
 
 ```bash
@@ -120,9 +125,10 @@ xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B         # Sort by column B
 xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B --desc  # Descending
 xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B --header # Exclude header row
 
-# Batch operations (require -o)
+# Batch operations (require -o) - supports put, putf, style, merge, unmerge, colwidth, rowheight
 xl -f <file> -s <sheet> -o <out> batch <json-file>
 xl -f <file> -s <sheet> -o <out> batch -              # Read from stdin
+xl batch --help                                       # Full reference with examples
 
 # Formula dragging (putf with range)
 xl -f <file> -s <sheet> -o <out> putf <range> <formula>  # Drags formula over range
@@ -521,32 +527,44 @@ xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --encoding "ISO-8859-1"
 
 ## Batch Operations
 
-Apply multiple cell operations atomically from JSON input:
+Apply multiple operations atomically from JSON. **Run `xl batch --help` for full reference.**
 
 ```bash
 # From file
 xl -f data.xlsx -s Sheet1 -o out.xlsx batch operations.json
 
-# From stdin
-echo '[{"op":"put","ref":"A1","value":"Hello"},{"op":"putf","ref":"B1","value":"=A1&\" World\""}]' \
-  | xl -f data.xlsx -s Sheet1 -o out.xlsx batch -
+# From stdin (LLM-friendly)
+echo '[...]' | xl -f data.xlsx -s Sheet1 -o out.xlsx batch -
 ```
 
-**JSON Format**:
+**Operations** (execute in order):
+
+| Operation | Example |
+|-----------|---------|
+| `put` | `{"op": "put", "ref": "A1", "value": "Hello"}` |
+| `putf` | `{"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}` |
+| `style` | `{"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}` |
+| `merge` | `{"op": "merge", "range": "A1:D1"}` |
+| `unmerge` | `{"op": "unmerge", "range": "A1:D1"}` |
+| `colwidth` | `{"op": "colwidth", "col": "A", "width": 15.5}` |
+| `rowheight` | `{"op": "rowheight", "row": 1, "height": 30}` |
+
+**Style properties**: `bold`, `italic`, `underline`, `bg`, `fg`, `fontSize`, `fontName`, `align`, `valign`, `wrap`, `numFormat`, `border`, `borderTop/Right/Bottom/Left`, `borderColor`, `replace`
+
+**Example** (complete formatted report):
 ```json
 [
-  {"op": "put", "ref": "A1", "value": "Hello"},
-  {"op": "put", "ref": "A2", "value": "123"},
-  {"op": "putf", "ref": "B1", "value": "=A1*2"},
-  {"op": "put", "ref": "Sheet2!C1", "value": "Cross-sheet"}
+  {"op": "put", "ref": "A1", "value": "Revenue Report"},
+  {"op": "style", "range": "A1:D1", "bold": true, "bg": "#4472C4", "fg": "#FFFFFF", "align": "center"},
+  {"op": "merge", "range": "A1:D1"},
+  {"op": "colwidth", "col": "A", "width": 25},
+  {"op": "put", "ref": "A2", "value": "Q1"},
+  {"op": "put", "ref": "B2", "value": 1000},
+  {"op": "putf", "ref": "C2", "value": "=B2*1.1"}
 ]
 ```
 
-| Field | Description |
-|-------|-------------|
-| `op` | Operation: `put` (value) or `putf` (formula) |
-| `ref` | Cell reference (supports qualified `Sheet!Ref`) |
-| `value` | Value or formula string |
+Cross-sheet references: `{"op": "put", "ref": "Sheet2!A1", "value": "Data"}`
 
 ---
 
@@ -823,7 +841,7 @@ xl -f data.xlsx -o out.xlsx --backend saxstax style A1:Z1000 --bold
 | `fill <source> <target>` | Fill cells with source value/formula (`--right` for horizontal) |
 | `sort <range>` | Sort rows (`--by <col>`, `--desc`, `--numeric`, `--then-by`, `--header`) |
 | `stats <range>` | Calculate statistics for numeric values |
-| `batch [<file>]` | Apply JSON operations (`-` for stdin) |
+| `batch [<file>]` | Apply JSON ops: put, putf, style, merge, unmerge, colwidth, rowheight (`xl batch --help` for full reference) |
 | `import <csv-file> [<ref>]` | Import CSV data with automatic type detection |
 
 ### Row/Column Commands
