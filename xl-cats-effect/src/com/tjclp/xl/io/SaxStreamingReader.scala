@@ -10,17 +10,36 @@ import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
 import com.tjclp.xl.cells.{CellValue, CellError}
 import com.tjclp.xl.ooxml.SharedStrings
+import java.util.concurrent.{ArrayBlockingQueue, BlockingQueue}
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * SAX-based streaming XML reader for maximum performance.
  *
  * Uses javax.xml.parsers.SAXParser (native Java parser) instead of fs2-data-xml for 3-4x speedup.
- * Zero allocation for XML structure - callbacks instead of event objects.
+ * Emits rows in chunks (default 1024) to minimize queue synchronization overhead.
  */
 object SaxStreamingReader:
+  // Chunk size for batching rows - reduces queue operations from N to N/chunkSize
+  private val chunkSize = 1024
+  // Queue capacity in chunks (not rows)
+  private val queueCapacity = 16
+
+  private sealed trait ChunkEvent
+  private object ChunkEvent:
+    final case class Rows(rows: Vector[RowData]) extends ChunkEvent
+    final case class Error(err: Throwable) extends ChunkEvent
+    case object End extends ChunkEvent
+
+  // Stackless exception for efficient early abort (no message, no stacktrace)
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private final class AbortParsing extends RuntimeException(null, null, false, false)
 
   /**
    * Stream worksheet rows using SAX parser (3-4x faster than fs2-data-xml).
+   *
+   * Uses chunked batching to minimize queue synchronization overhead. Memory usage is O(chunkSize)
+   * rather than O(total rows).
    *
    * @param stream
    *   Worksheet XML input stream
@@ -34,17 +53,80 @@ object SaxStreamingReader:
     sst: Option[SharedStrings]
   ): Stream[F, RowData] =
     Stream
-      .eval {
+      .bracket {
         Sync[F].delay {
-          val factory = SAXParserFactory.newInstance()
-          factory.setNamespaceAware(true) // Enable namespace processing
-          val parser = factory.newSAXParser()
-          val handler = new WorksheetHandler(sst)
-          parser.parse(InputSource(stream), handler)
-          handler.rows.toVector
+          val queue: BlockingQueue[ChunkEvent] = new ArrayBlockingQueue(queueCapacity)
+          val cancelled = new AtomicBoolean(false)
+          val parserThread = new Thread(
+            () => runParser(stream, sst, queue, cancelled),
+            "xl-sax-stream"
+          )
+          parserThread.setDaemon(true)
+          parserThread.start()
+          (queue, cancelled, parserThread)
+        }
+      } { case (_, cancelled, parserThread) =>
+        Sync[F].delay {
+          cancelled.set(true)
+          parserThread.interrupt()
         }
       }
-      .flatMap(Stream.emits)
+      .flatMap { case (queue, cancelled, _) =>
+        // Use interruptible instead of blocking for lower overhead
+        Stream
+          .unfoldEval(false) { done =>
+            if done then Sync[F].pure(None)
+            else
+              Sync[F].interruptible(queue.take()).map {
+                case ChunkEvent.Rows(rows) => Some((Stream.emits(rows), false))
+                case ChunkEvent.End => Some((Stream.empty, true))
+                case ChunkEvent.Error(err) => Some((Stream.raiseError[F](err), true))
+              }
+          }
+          .flatten
+      }
+
+  private def runParser(
+    stream: InputStream,
+    sst: Option[SharedStrings],
+    queue: BlockingQueue[ChunkEvent],
+    cancelled: AtomicBoolean
+  ): Unit =
+    val rowBuffer = mutable.ArrayBuffer[RowData]()
+
+    def flushBuffer(): Unit =
+      if rowBuffer.nonEmpty then
+        if cancelled.get then throw new AbortParsing
+        try queue.put(ChunkEvent.Rows(rowBuffer.toVector))
+        catch
+          case _: InterruptedException =>
+            Thread.currentThread().interrupt()
+            throw new AbortParsing
+        rowBuffer.clear()
+
+    def emitRow(row: RowData): Unit =
+      if cancelled.get then throw new AbortParsing
+      rowBuffer += row
+      if rowBuffer.size >= chunkSize then flushBuffer()
+
+    try
+      val factory = SAXParserFactory.newInstance()
+      factory.setNamespaceAware(true)
+      val parser = factory.newSAXParser()
+      val handler = new WorksheetHandler(sst, emitRow, cancelled)
+      parser.parse(InputSource(stream), handler)
+      // Flush any remaining rows
+      flushBuffer()
+      queue.put(ChunkEvent.End)
+    catch
+      case _: AbortParsing =>
+        ()
+      case _: InterruptedException =>
+        Thread.currentThread().interrupt()
+        ()
+      case t: Throwable =>
+        try queue.put(ChunkEvent.Error(t))
+        catch case _: InterruptedException => Thread.currentThread().interrupt()
 
   /**
    * SAX handler for parsing worksheet XML.
@@ -53,9 +135,12 @@ object SaxStreamingReader:
    * </row> is encountered.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private class WorksheetHandler(sst: Option[SharedStrings]) extends DefaultHandler:
+  private class WorksheetHandler(
+    sst: Option[SharedStrings],
+    emitRow: RowData => Unit,
+    cancelled: AtomicBoolean
+  ) extends DefaultHandler:
     // Mutable state for current parsing context
-    val rows = mutable.ArrayBuffer[RowData]()
     var currentRowIndex: Int = 0
     var currentRowCells: mutable.Map[Int, CellValue] = mutable.Map.empty
     var inRow = false
@@ -66,11 +151,18 @@ object SaxStreamingReader:
     var currentCellColIdx: Option[Int] = None
     var inValue = false
     var inFormula = false
-    var inInlineStr = false // Track inline string container <is>
-    var inTextElement = false // Track <t> element within <is>
-    var cachedValue: Option[String] = None // Cached value from <v> (when formula also present)
-    var formulaText: Option[String] = None // Formula from <f>
+    var inInlineStr = false
+    var inTextElement = false
+    var cachedValue: Option[String] = None
+    var formulaText: Option[String] = None
     val valueText = new StringBuilder
+
+    // Check cancelled less frequently - every 10k elements
+    private var elementCount = 0
+    private def maybeCheckCancelled(): Unit =
+      elementCount += 1
+      if (elementCount & 0x3fff) == 0 then // Check every 16384 elements
+        if cancelled.get then throw new AbortParsing
 
     override def startElement(
       uri: String,
@@ -78,9 +170,9 @@ object SaxStreamingReader:
       qName: String,
       attributes: Attributes
     ): Unit =
+      maybeCheckCancelled()
       localName match
         case "row" =>
-          // Extract row index from r="1" attribute
           currentRowIndex = Option(attributes.getValue("r"))
             .flatMap(_.toIntOption)
             .getOrElse(currentRowIndex + 1)
@@ -88,28 +180,23 @@ object SaxStreamingReader:
           inRow = true
 
         case "c" =>
-          // Start new cell - extract ref and type
           currentCellRef = Option(attributes.getValue("r"))
           currentCellType = Option(attributes.getValue("t"))
           currentCellColIdx = currentCellRef.flatMap(parseCellColumn)
           valueText.clear()
 
         case "v" =>
-          // Cell value element
           inValue = true
           valueText.clear()
 
         case "f" =>
-          // Formula element
           inFormula = true
           valueText.clear()
 
         case "is" =>
-          // Inline string container
           inInlineStr = true
 
         case "t" if inInlineStr =>
-          // Text element within inline string
           inTextElement = true
           valueText.clear()
 
@@ -121,51 +208,39 @@ object SaxStreamingReader:
     override def endElement(uri: String, localName: String, qName: String): Unit =
       localName match
         case "v" if inValue =>
-          // Store cached value (don't add to cells yet - might be overridden by formula)
           cachedValue = Some(valueText.toString)
           inValue = false
           valueText.clear()
 
         case "f" if inFormula =>
-          // Store formula text
           formulaText = Some(valueText.toString)
           inFormula = false
           valueText.clear()
 
         case "t" if inTextElement =>
-          // Complete text element in inline string
-          // Text is already accumulated in valueText
           inTextElement = false
 
         case "is" if inInlineStr =>
-          // Complete inline string - add to cells immediately (no formula possible)
           val text = valueText.toString
           for colIdx <- currentCellColIdx do currentRowCells(colIdx) = CellValue.Text(text)
           inInlineStr = false
           valueText.clear()
 
         case "c" =>
-          // Complete cell - decide which value to use
           for colIdx <- currentCellColIdx do
             val cellValue = (formulaText, cachedValue) match
               case (Some(formula), Some(cached)) =>
-                // Formula with cached value
                 val parsedCached = interpretCellValue(cached, currentCellType, sst)
                 val cachedOpt = if parsedCached == CellValue.Empty then None else Some(parsedCached)
                 CellValue.Formula(formula, cachedOpt)
               case (Some(formula), None) =>
-                // Formula without cached value
                 CellValue.Formula(formula, None)
               case (None, Some(value)) =>
-                // No formula, use cached value
                 interpretCellValue(value, currentCellType, sst)
               case (None, None) =>
-                // No value at all - empty cell (shouldn't add to map)
                 CellValue.Empty
-            // Only add non-empty cells to the map
             if cellValue != CellValue.Empty then currentRowCells(colIdx) = cellValue
 
-          // Reset ALL cell state for next cell
           currentCellRef = None
           currentCellType = None
           currentCellColIdx = None
@@ -178,13 +253,11 @@ object SaxStreamingReader:
           valueText.clear()
 
         case "row" if inRow =>
-          // Complete row - emit RowData
-          rows += RowData(currentRowIndex, currentRowCells.toMap)
+          emitRow(RowData(currentRowIndex, currentRowCells.toMap))
           inRow = false
 
         case _ => ()
 
-    /** Parse column index from cell reference (A1 → 0, B1 → 1, AA1 → 26) */
     private def parseCellColumn(cellRef: String): Option[Int] =
       val col = cellRef.takeWhile(_.isLetter)
       if col.isEmpty then None
@@ -195,7 +268,6 @@ object SaxStreamingReader:
           } - 1
         )
 
-    /** Interpret cell value based on type attribute */
     private def interpretCellValue(
       value: String,
       cellType: Option[String],
@@ -203,28 +275,24 @@ object SaxStreamingReader:
     ): CellValue =
       cellType match
         case Some("s") =>
-          // Shared string reference
           (for {
             sharedStrings <- sst
             idx <- value.toIntOption
             entry <- sharedStrings.apply(idx)
           } yield sharedStrings.toCellValue(entry))
-            .getOrElse(CellValue.Empty) // Return Empty if SST lookup fails
+            .getOrElse(CellValue.Empty)
 
         case Some("inlineStr") =>
           CellValue.Text(value)
 
         case Some("n") =>
-          // Number
           try CellValue.Number(BigDecimal(value))
           catch case _: NumberFormatException => CellValue.Empty
 
         case Some("b") =>
-          // Boolean
           CellValue.Bool(value == "1" || value.equalsIgnoreCase("true"))
 
         case Some("e") =>
-          // Error
           val errorOpt = value match
             case "#DIV/0!" => Some(CellError.Div0)
             case "#N/A" => Some(CellError.NA)
@@ -237,11 +305,9 @@ object SaxStreamingReader:
           errorOpt.map(CellValue.Error(_)).getOrElse(CellValue.Empty)
 
         case Some("str") =>
-          // Formula result string
           CellValue.Text(value)
 
         case _ =>
-          // Default: number if possible, else text
           try CellValue.Number(BigDecimal(value))
           catch
             case _: NumberFormatException =>

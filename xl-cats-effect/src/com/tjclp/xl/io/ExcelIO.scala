@@ -91,10 +91,13 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
             val wsEntry = Option(zipFile.getEntry("xl/worksheets/sheet1.xml"))
             wsEntry match
               case Some(entry) =>
-                val wsStream = Sync[F].delay(zipFile.getInputStream(entry))
-                Stream.eval(wsStream).flatMap { stream =>
-                  SaxStreamingReader.parseWorksheetStream[F](stream, sst)
-                }
+                Stream
+                  .bracket(Sync[F].delay(zipFile.getInputStream(entry)))(stream =>
+                    Sync[F].delay(stream.close())
+                  )
+                  .flatMap { stream =>
+                    SaxStreamingReader.parseWorksheetStream[F](stream, sst)
+                  }
               case None =>
                 Stream.empty
           }
@@ -155,11 +158,13 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         val wsEntry = Option(zipFile.getEntry(s"xl/worksheets/sheet$sheetIndex.xml"))
         wsEntry match
           case Some(entry) =>
-            val wsBytes = fs2.io.readInputStream[F](
-              Sync[F].delay(zipFile.getInputStream(entry)),
-              chunkSize = 4096
-            )
-            StreamingXmlReader.parseWorksheetStream(wsBytes, sst)
+            Stream
+              .bracket(Sync[F].delay(zipFile.getInputStream(entry)))(stream =>
+                Sync[F].delay(stream.close())
+              )
+              .flatMap { stream =>
+                SaxStreamingReader.parseWorksheetStream[F](stream, sst)
+              }
           case None =>
             Stream.raiseError[F](
               new Exception(s"Worksheet not found: sheet$sheetIndex.xml")
