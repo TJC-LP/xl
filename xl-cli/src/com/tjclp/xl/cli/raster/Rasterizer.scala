@@ -285,16 +285,18 @@ object RasterizerChain:
       val widthPattern = """width="(\d+)"""".r
       val heightPattern = """height="(\d+)"""".r
 
-      // Extract and scale dimensions, then apply replacements functionally
+      // Extract and scale dimensions, replacing only the first occurrence (root SVG element).
+      // Uses substring to avoid replacing matching values in child elements (e.g., rects).
       val withScaledWidth = widthPattern.findFirstMatchIn(svg).fold(svg) { m =>
         val scaled = (m.group(1).toInt * scale).toInt
-        svg.replace(m.matched, s"""width="$scaled"""")
+        svg.substring(0, m.start) + s"""width="$scaled"""" + svg.substring(m.end)
       }
 
       val withScaledHeight =
         heightPattern.findFirstMatchIn(withScaledWidth).fold(withScaledWidth) { m =>
           val scaled = (m.group(1).toInt * scale).toInt
-          withScaledWidth.replace(m.matched, s"""height="$scaled"""")
+          withScaledWidth.substring(0, m.start) + s"""height="$scaled"""" + withScaledWidth
+            .substring(m.end)
         }
 
       withScaledHeight

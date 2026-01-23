@@ -415,3 +415,40 @@ class RasterizerChainSpec extends CatsEffectSuite:
       assert(available == true || available == false)
     }
   }
+
+  // ========== SVG DPI Scaling Tests ==========
+
+  test("scaleSvgForDpi: scales root SVG dimensions correctly") {
+    val svg = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"/>"""
+    val scaled = RasterizerChain.scaleSvgForDpi(svg, 192) // 2x scale (192/96)
+
+    assert(scaled.contains("""width="200""""), s"Width should be scaled to 200: $scaled")
+    assert(scaled.contains("""height="100""""), s"Height should be scaled to 100: $scaled")
+  }
+
+  test("scaleSvgForDpi: returns unchanged at base DPI (96)") {
+    val svg = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"/>"""
+    val scaled = RasterizerChain.scaleSvgForDpi(svg, 96)
+
+    assertEquals(scaled, svg, "Should be unchanged at base DPI")
+  }
+
+  test("scaleSvgForDpi: only scales first occurrence (regression test)") {
+    // This SVG has a rect with the SAME width as the root SVG element.
+    // The old .replace() implementation would incorrectly scale BOTH.
+    // The fix uses substring to only scale the first (root) occurrence.
+    val svg =
+      """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50">""" +
+        """<rect x="0" y="0" width="100" height="25" fill="red"/>""" +
+        """</svg>"""
+
+    val scaled = RasterizerChain.scaleSvgForDpi(svg, 192) // 2x scale (192/96)
+
+    // Root SVG dimensions should be scaled
+    assert(scaled.contains("""<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">"""),
+      s"Root SVG should be scaled: $scaled")
+
+    // Rect dimensions should NOT be scaled (they define cell size, not canvas size)
+    assert(scaled.contains("""width="100" height="25" fill="red"/>"""),
+      s"Rect should NOT be scaled: $scaled")
+  }
