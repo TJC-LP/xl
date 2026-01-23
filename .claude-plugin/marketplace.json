@@ -6,7 +6,7 @@
   },
   "plugins": [
     {
-      "name": "xl-cli",
+      "name": "xl",
       "source": "./plugin",
       "description": "LLM-friendly Excel CLI for reading, writing, styling, and analyzing spreadsheets"
     }
