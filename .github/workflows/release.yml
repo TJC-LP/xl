@@ -214,13 +214,9 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           mkdir -p skill-dist/reference
 
-          # Copy skill files
+          # Copy skill files (SKILL.md now uses auto-latest, no substitution needed)
           cp .claude/skills/xl-cli/SKILL.md skill-dist/
           cp .claude/skills/xl-cli/reference/*.md skill-dist/reference/ 2>/dev/null || true
-
-          # Substitute version placeholders in SKILL.md
-          sed -i "s/__XL_VERSION__/$VERSION/g" skill-dist/SKILL.md || \
-            sed -i '' "s/__XL_VERSION__/$VERSION/g" skill-dist/SKILL.md
 
           # Create version manifest
           cat > skill-dist/VERSION << EOF
@@ -228,7 +224,7 @@ jobs:
           released=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           EOF
 
-          # Create install script that pins to this version
+          # Create install script that pins to this specific version (for reproducibility)
           cat > skill-dist/install-cli.sh << 'INSTALL_EOF'
           #!/bin/bash
           set -e
@@ -236,6 +232,7 @@ jobs:
           PLATFORM="$(uname -s)-$(uname -m)"
           case "$PLATFORM" in
             Linux-x86_64)  BINARY="xl-${VERSION}-linux-amd64" ;;
+            Linux-aarch64) BINARY="xl-${VERSION}-linux-arm64" ;;
             Darwin-x86_64) BINARY="xl-${VERSION}-darwin-amd64" ;;
             Darwin-arm64)  BINARY="xl-${VERSION}-darwin-arm64" ;;
             MINGW*|MSYS*|CYGWIN*) BINARY="xl-${VERSION}-windows-amd64.exe" ;;

@@ -32,8 +32,8 @@ object ImportCommands:
    *   Top-left cell position (e.g., "A1", "B5")
    * @param delimiter
    *   CSV field delimiter
-   * @param hasHeader
-   *   Whether first row contains headers (not imported as data)
+   * @param skipHeader
+   *   Whether to skip first row (default: false, imports all rows including headers)
    * @param encoding
    *   File encoding
    * @param newSheetName
@@ -51,7 +51,7 @@ object ImportCommands:
     csvPath: String,
     startRefStr: Option[String],
     delimiter: Char,
-    hasHeader: Boolean,
+    skipHeader: Boolean,
     encoding: String,
     newSheetName: Option[String],
     noTypeInference: Boolean,
@@ -61,7 +61,7 @@ object ImportCommands:
     val csvPathResolved = Paths.get(csvPath)
     val options = CsvParser.ImportOptions(
       delimiter = delimiter,
-      hasHeader = hasHeader,
+      skipHeader = skipHeader,
       encoding = encoding,
       sampleRows = 10,
       inferTypes = !noTypeInference

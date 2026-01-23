@@ -87,7 +87,7 @@ class SvgRendererSpec extends FunSuite:
   // ========== Row/Column Sizing Tests ==========
 
   test("toSvg: explicit column width is used") {
-    // Column width 20 chars → (20 * 7 + 5) = 145 pixels
+    // Column width 20 chars → (20 * 8 + 5) = 165 pixels
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Data")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(20.0)))
@@ -95,7 +95,7 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:A1")
 
     // The cell rect should use the explicit width
-    assert(svg.contains("""width="145""""), s"Column width should be 145px (20 chars), got: $svg")
+    assert(svg.contains("""width="165""""), s"Column width should be 165px (20 chars), got: $svg")
   }
 
   test("toSvg: explicit row height is used") {
@@ -134,15 +134,15 @@ class SvgRendererSpec extends FunSuite:
 
   test("toSvg: mixed explicit and default dimensions") {
     // A1, B1 with A=explicit width, B=default
-    // 15 chars → (15 * 7 + 5) = 110 pixels
+    // 15 chars → (15 * 8 + 5) = 125 pixels
     val sheet = Sheet("Test")
       .put(ref"A1" -> "A", ref"B1" -> "B")
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(15.0))) // 110px
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(15.0))) // 125px
 
     val svg = sheet.toSvg(ref"A1:B1")
 
     // First column should be explicit, second column should use content-based sizing
-    assert(svg.contains("""width="110""""), s"Column A should be 110px, got: $svg")
+    assert(svg.contains("""width="125""""), s"Column A should be 125px, got: $svg")
     // Column B should use default MinCellWidth (60) or content-based
   }
 
@@ -150,26 +150,26 @@ class SvgRendererSpec extends FunSuite:
     // Wide column + tall row should change viewBox
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Data")
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(30.0))) // 215px
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(30.0))) // 245px
       .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // With showLabels=false (default), viewBox is just column (215) x row (60)
-    assert(svg.contains("viewBox=\"0 0 215 60\""), s"viewBox should be 215x60, got: $svg")
+    // With showLabels=false (default), viewBox is just column (245) x row (60)
+    assert(svg.contains("viewBox=\"0 0 245 60\""), s"viewBox should be 245x60, got: $svg")
   }
 
   test("toSvg: viewBox includes headers when showLabels=true") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Data")
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(30.0))) // 215px
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(30.0))) // 245px
       .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
 
     val svg = sheet.toSvg(ref"A1:A1", showLabels = true)
 
-    // viewBox should include HeaderWidth (40) + column (215) = 255 total width
+    // viewBox should include HeaderWidth (40) + column (245) = 285 total width
     // viewBox should include HeaderHeight (24) + row (60) = 84 total height
-    assert(svg.contains("viewBox=\"0 0 255 84\""), s"viewBox should be 255x84, got: $svg")
+    assert(svg.contains("viewBox=\"0 0 285 84\""), s"viewBox should be 285x84, got: $svg")
   }
 
   test("toSvg: DSL-based sizing works") {
@@ -180,8 +180,8 @@ class SvgRendererSpec extends FunSuite:
       .applyPatch(Sheet("Test").put(ref"A1" -> "Data"), patch)
       .toSvg(ref"A1:A1")
 
-    // Column A: 15 chars → 110px, Row 0: 24pt → 32px
-    assert(sheet.contains("""width="110""""), s"DSL column width should apply, got: $sheet")
+    // Column A: 15 chars → 125px, Row 0: 24pt → 32px
+    assert(sheet.contains("""width="125""""), s"DSL column width should apply, got: $sheet")
     assert(sheet.contains("""height="32""""), s"DSL row height should apply, got: $sheet")
   }
 
@@ -259,13 +259,13 @@ class SvgRendererSpec extends FunSuite:
       .put(ref"A1" -> "Right")
       .unsafe
       .withCellStyle(ref"A1", rightIndent)
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 85px
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // With showLabels=false: colWidth (75) - CellPaddingX (6) = 69
+    // With showLabels=false: colWidth (85) - CellPaddingX (6) = 79
     // Indent is ignored for right alignment (Excel behavior)
-    assert(svg.contains("""x="69""""), s"Right-aligned text should ignore indent, got: $svg")
+    assert(svg.contains("""x="79""""), s"Right-aligned text should ignore indent, got: $svg")
     assert(svg.contains("text-anchor=\"end\""), s"Should have end anchor, got: $svg")
   }
 
@@ -353,13 +353,13 @@ class SvgRendererSpec extends FunSuite:
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Merged")
       .merge(range)
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
-      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // 75px
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 85px
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(10.0))) // 85px
 
     val svg = sheet.toSvg(ref"A1:B1")
 
-    // Merged rect should span both columns (75 + 75 = 150px)
-    assert(svg.contains("""width="150""""), s"Merged rect should be 150px wide, got: $svg")
+    // Merged rect should span both columns (85 + 85 = 170px)
+    assert(svg.contains("""width="170""""), s"Merged rect should be 170px wide, got: $svg")
     // Count cell rect elements (not the svg element itself)
     val cellRectCount = """<rect[^>]*class="cell"[^>]*>""".r.findAllIn(svg).length
     assertEquals(cellRectCount, 1, s"Should have exactly 1 cell rect (merged), got: $svg")
@@ -631,9 +631,8 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // Without showGridlines, .cell class should have no stroke
-    assert(svg.contains(".cell {  }"), s"Cell class should be empty (no gridlines), got: $svg")
-    assert(!svg.contains("stroke: #D0D0D0"), s"Should not have gridline stroke, got: $svg")
+    // Without showGridlines, cell rects should not have stroke attributes
+    assert(!svg.contains("""stroke="#D0D0D0""""), s"Should not have gridline stroke, got: $svg")
   }
 
   test("toSvg: gridlines shown when showGridlines=true") {
@@ -641,10 +640,10 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1", showGridlines = true)
 
-    // With showGridlines, .cell class should have stroke
+    // With showGridlines, cell rects should have inline stroke attributes
     assert(
-      svg.contains("stroke: #D0D0D0; stroke-width: 0.5;"),
-      s"Cell class should have gridline stroke, got: $svg"
+      svg.contains("""stroke="#D0D0D0"""") && svg.contains("""stroke-width="0.5""""),
+      s"Cell rects should have inline gridline stroke attributes, got: $svg"
     )
   }
 
@@ -912,17 +911,17 @@ class SvgRendererSpec extends FunSuite:
 
     // Should have clip paths for both cells
     assert(svg.contains("""<clipPath id="clip-0-0">"""), "Should have clip path for A1")
-    assert(svg.contains("""<clipPath id="clip-64-0">"""), "Should have clip path for B1")
+    assert(svg.contains("""<clipPath id="clip-72-0">"""), "Should have clip path for B1")
 
     // Text elements should reference their clip paths
     assert(svg.contains("""clip-path="url(#clip-0-0)">Sales Report</text>"""),
       s"A1 text should have clip-path attribute, got: $svg")
-    assert(svg.contains("""clip-path="url(#clip-64-0)">Revenue</text>"""),
+    assert(svg.contains("""clip-path="url(#clip-72-0)">Revenue</text>"""),
       s"B1 text should have clip-path attribute, got: $svg")
 
-    // Clip path for A1 should be cell width only (64px) since B1 is not empty
-    assert(svg.contains("""<clipPath id="clip-0-0"><rect x="0" y="0" width="64" height="20"/>"""),
-      s"A1 clip should be 64px (single cell), got: $svg")
+    // Clip path for A1 should be cell width only (72px) since B1 is not empty
+    assert(svg.contains("""<clipPath id="clip-0-0"><rect x="0" y="0" width="72" height="20"/>"""),
+      s"A1 clip should be 72px (single cell), got: $svg")
   }
 
   test("toSvg: text can overflow into empty cells with expanded clip region") {
@@ -936,11 +935,11 @@ class SvgRendererSpec extends FunSuite:
     assert(svg.contains("""<clipPath id="clip-0-0">"""), "Should have clip path for A1")
 
     // Clip region should be expanded to allow overflow into empty B1
-    // Width should be >64px (at least 2 cells = 128px)
+    // Width should be >72px (at least 2 cells = 144px)
     val clipPattern = """<clipPath id="clip-0-0"><rect x="0" y="0" width="(\d+)" """.r
     val widthOpt = clipPattern.findFirstMatchIn(svg).map(_.group(1).toInt)
-    assert(widthOpt.exists(_ >= 128),
-      s"Clip region should be ≥128px for overflow into empty cells, got: ${widthOpt.getOrElse(0)}")
+    assert(widthOpt.exists(_ >= 144),
+      s"Clip region should be ≥144px for overflow into empty cells, got: ${widthOpt.getOrElse(0)}")
   }
 
   test("toSvg: all cells have clip paths in defs section") {

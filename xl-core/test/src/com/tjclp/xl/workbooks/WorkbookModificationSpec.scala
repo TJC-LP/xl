@@ -46,11 +46,11 @@ class WorkbookModificationSpec extends FunSuite:
     assertEquals(tracker.modifiedSheets, Set.empty)
   }
 
-  test("rename marks metadata as modified") {
+  test("rename marks both sheet and metadata as modified") {
     val renamed = workbook.rename(SheetName.unsafe("Sheet1"), SheetName.unsafe("Sales")).fold(err => fail(s"Rename failed: $err"), identity)
     val tracker = renamed.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
-    assert(tracker.modifiedMetadata)
-    assertEquals(tracker.modifiedSheets, Set.empty)
+    assert(tracker.modifiedMetadata, "Metadata should be marked modified (workbook.xml has sheet names)")
+    assertEquals(tracker.modifiedSheets, Set(0), "Sheet should be marked modified to preserve styles")
     assertEquals(renamed.sheets(0).name.value, "Sales")
   }
 

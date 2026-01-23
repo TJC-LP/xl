@@ -46,15 +46,15 @@ class AutoFitCommandSpec extends FunSuite:
         .unsafeRunSync()
 
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
-      // Width = 26 chars * 0.85 + 1.5 = 23.6
-      assert(result.contains("23.60"), s"Expected '23.60' in output: $result")
+      // Width = 26 chars * 0.90 + 1.5 = 24.9
+      assert(result.contains("24.90"), s"Expected '24.90' in output: $result")
 
       // Verify the file was saved with the column width
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       val s = imported.sheets.headOption.getOrElse(fail("No sheets found"))
       val col = Column.fromLetter("A").toOption.getOrElse(fail("Invalid column"))
       val colProps = s.getColumnProperties(col)
-      assertEquals(colProps.width, Some(23.6))
+      assertEquals(colProps.width, Some(24.9))
     }
   }
 
@@ -72,8 +72,8 @@ class AutoFitCommandSpec extends FunSuite:
         .unsafeRunSync()
 
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
-      // Width = 10 digits * 0.85 + 1.5 = 10.0
-      assert(result.contains("10.00"), s"Expected '10.00' in output: $result")
+      // Width = 10 digits * 0.90 + 1.5 = 10.5
+      assert(result.contains("10.50"), s"Expected '10.50' in output: $result")
     }
   }
 
@@ -104,8 +104,8 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      // Width = 5 chars (FALSE) * 0.85 + 1.5 = 5.75
-      assert(result.contains("5.75"), s"Expected '5.75' in output: $result")
+      // Width = 5 chars (FALSE) * 0.90 + 1.5 = 6.0
+      assert(result.contains("6.00"), s"Expected '6.00' in output: $result")
     }
   }
 
@@ -137,8 +137,8 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      // Width = 10 chars * 0.85 + 1.5 = 10.0
-      assert(result.contains("10.00"), s"Expected '10.00' in output: $result")
+      // Width = 10 chars * 0.90 + 1.5 = 10.5
+      assert(result.contains("10.50"), s"Expected '10.50' in output: $result")
     }
   }
 
@@ -154,8 +154,8 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "A", Some(100.0), hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      // Auto-fit should win: 5 chars * 0.85 + 1.5 = 5.75
-      assert(result.contains("5.75"), s"Expected '5.75' in output: $result")
+      // Auto-fit should win: 5 chars * 0.90 + 1.5 = 6.0
+      assert(result.contains("6.00"), s"Expected '6.00' in output: $result")
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
     }
   }
@@ -203,12 +203,12 @@ class AutoFitCommandSpec extends FunSuite:
       val colB = Column.fromLetter("B").toOption.getOrElse(fail("Invalid column B"))
       val colC = Column.fromLetter("C").toOption.getOrElse(fail("Invalid column C"))
 
-      // A: 5 chars * 0.85 + 1.5 = 5.75
-      assertEquals(s.getColumnProperties(colA).width, Some(5.75))
-      // B: 18 chars * 0.85 + 1.5 = 16.8
-      assertEquals(s.getColumnProperties(colB).width, Some(16.8))
-      // C: 19 chars * 0.85 + 1.5 = 17.65
-      assertEquals(s.getColumnProperties(colC).width, Some(17.65))
+      // A: 5 chars * 0.90 + 1.5 = 6.0
+      assertEquals(s.getColumnProperties(colA).width, Some(6.0))
+      // B: 18 chars * 0.90 + 1.5 = 17.7
+      assertEquals(s.getColumnProperties(colB).width, Some(17.7))
+      // C: 19 chars * 0.90 + 1.5 = 18.6
+      assertEquals(s.getColumnProperties(colC).width, Some(18.6))
     }
   }
 
@@ -238,10 +238,10 @@ class AutoFitCommandSpec extends FunSuite:
       val colA = Column.fromLetter("A").toOption.getOrElse(fail("Invalid column A"))
       val colD = Column.fromLetter("D").toOption.getOrElse(fail("Invalid column D"))
 
-      // A: 13 chars * 0.85 + 1.5 = 12.55
-      assertEquals(s.getColumnProperties(colA).width, Some(12.55))
-      // D: 8 chars * 0.85 + 1.5 = 8.3
-      assertEquals(s.getColumnProperties(colD).width, Some(8.3))
+      // A: 13 chars * 0.90 + 1.5 = 13.2
+      assertEquals(s.getColumnProperties(colA).width, Some(13.2))
+      // D: 8 chars * 0.90 + 1.5 = 8.7
+      assertEquals(s.getColumnProperties(colD).width, Some(8.7))
     }
   }
 

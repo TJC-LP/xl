@@ -105,6 +105,9 @@ object RasterError:
  */
 object RasterizerChain:
 
+  /** Standard screen DPI (CSS reference pixel) */
+  private val BaseDpi = 96
+
   /**
    * Default fallback chain in priority order.
    *
@@ -132,6 +135,11 @@ object RasterizerChain:
   /**
    * Convert SVG to raster using the fallback chain.
    *
+   * The SVG is pre-scaled based on DPI to ensure consistent output dimensions across all
+   * rasterizers. Without this, Batik and ImageMagick treat DPI as metadata-only while rsvg-convert,
+   * CairoSvg, and Resvg scale output dimensions. By scaling the SVG's width/height attributes
+   * upfront, all rasterizers produce the expected larger pixel output at higher DPI.
+   *
    * @param svg
    *   SVG content
    * @param outputPath
@@ -139,7 +147,7 @@ object RasterizerChain:
    * @param format
    *   Output format
    * @param dpi
-   *   Resolution
+   *   Resolution (higher DPI = larger pixel dimensions)
    * @param preferredRasterizer
    *   Optional name to force a specific rasterizer
    * @return
@@ -152,6 +160,9 @@ object RasterizerChain:
     dpi: Int = 144,
     preferredRasterizer: Option[String] = None
   ): IO[String] =
+    // Scale SVG dimensions based on DPI for consistent output across all rasterizers
+    val scaledSvg = scaleSvgForDpi(svg, dpi)
+
     preferredRasterizer match
       case Some(name) =>
         // User requested specific rasterizer
@@ -160,7 +171,7 @@ object RasterizerChain:
             rasterizer.isAvailable.flatMap {
               case true =>
                 rasterizer
-                  .convertSvgToRaster(svg, outputPath, format, dpi)
+                  .convertSvgToRaster(scaledSvg, outputPath, format, dpi)
                   .as(rasterizer.name)
               case false =>
                 IO.raiseError(
@@ -180,7 +191,7 @@ object RasterizerChain:
 
       case None =>
         // Try fallback chain
-        tryChain(svg, outputPath, format, dpi, defaultChain, Nil)
+        tryChain(scaledSvg, outputPath, format, dpi, defaultChain, Nil)
 
   /**
    * Try each rasterizer in the chain until one succeeds.
@@ -248,3 +259,44 @@ object RasterizerChain:
     case "resvg" => "Install: cargo install resvg"
     case "imagemagick" => "Install: apt install imagemagick"
     case _ => s"Unknown rasterizer: $name"
+
+  /**
+   * Scale SVG width/height attributes for requested DPI.
+   *
+   * SVG uses 96 DPI as the reference (CSS px). To produce larger pixel output at higher DPI, we
+   * scale the width/height attributes while keeping viewBox unchanged. This ensures consistent
+   * behavior across all rasterizers (some treat DPI as metadata-only, others scale).
+   *
+   * Example: 300 DPI → scale = 3.125x → 100x50 SVG becomes 312x156 pixels
+   *
+   * @param svg
+   *   Original SVG content
+   * @param dpi
+   *   Target DPI
+   * @return
+   *   Scaled SVG content
+   */
+  def scaleSvgForDpi(svg: String, dpi: Int): String =
+    if dpi == BaseDpi then svg
+    else
+      val scale = dpi.toDouble / BaseDpi
+
+      // Match width="N" and height="N" attributes (integer values)
+      val widthPattern = """width="(\d+)"""".r
+      val heightPattern = """height="(\d+)"""".r
+
+      // Extract and scale dimensions, replacing only the first occurrence (root SVG element).
+      // Uses substring to avoid replacing matching values in child elements (e.g., rects).
+      val withScaledWidth = widthPattern.findFirstMatchIn(svg).fold(svg) { m =>
+        val scaled = (m.group(1).toInt * scale).toInt
+        svg.substring(0, m.start) + s"""width="$scaled"""" + svg.substring(m.end)
+      }
+
+      val withScaledHeight =
+        heightPattern.findFirstMatchIn(withScaledWidth).fold(withScaledWidth) { m =>
+          val scaled = (m.group(1).toInt * scale).toInt
+          withScaledWidth.substring(0, m.start) + s"""height="$scaled"""" + withScaledWidth
+            .substring(m.end)
+        }
+
+      withScaledHeight

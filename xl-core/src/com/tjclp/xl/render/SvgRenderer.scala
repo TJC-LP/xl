@@ -76,12 +76,10 @@ object SvgRenderer:
     sb.append(s"""width="$totalWidth" height="$totalHeight">\n""")
 
     // Embedded styles - note: 11pt = ~15px (11 * 4/3)
-    // Gridlines are optional (default: off, like HTML)
-    val gridlineStyle = if showGridlines then "stroke: #D0D0D0; stroke-width: 0.5;" else ""
+    // Gridlines are now applied via inline stroke attributes for reliable cross-renderer support
     sb.append(s"""  <style>
     .header { fill: #E0E0E0; stroke: #999999; stroke-width: 1; }
     .header-text { font-family: 'Segoe UI', Arial, sans-serif; font-size: 15px; fill: #333333; }
-    .cell { $gridlineStyle }
     .cell-text { font-family: 'Calibri', 'Segoe UI', Arial, sans-serif; font-size: 15px; }
   </style>
 """)
@@ -207,10 +205,15 @@ object SvgRenderer:
               .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet, theme) else None)
               .getOrElse("""fill="#FFFFFF"""")
 
+            // Gridlines: add explicit stroke attributes (CSS-only approach unreliable across renderers)
+            val strokeAttr =
+              if showGridlines then """ stroke="#D0D0D0" stroke-width="0.5""""
+              else ""
+
             sb.append(
               s"""    <rect x="$xPos" y="$y" width="$effectiveWidth" height="$effectiveHeight" """
             )
-            sb.append(s"""$fillAttr class="cell"/>\n""")
+            sb.append(s"""$fillAttr$strokeAttr class="cell"/>\n""")
 
             // Collect borders for second pass
             if includeStyles then

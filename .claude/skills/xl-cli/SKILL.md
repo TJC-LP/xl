@@ -9,619 +9,214 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 Check if installed: `which xl || echo "not installed"`
 
-**If not installed**, download native binary (no JDK required):
+**If not installed**, download the latest native binary (no JDK required):
 
-**macOS/Linux:**
+**macOS/Linux (recommended):**
 ```bash
-# Detect platform and install __XL_VERSION__
-PLATFORM="$(uname -s)-$(uname -m)"
-case "$PLATFORM" in
-  Linux-x86_64)  BINARY="xl-__XL_VERSION__-linux-amd64" ;;
-  Darwin-x86_64) BINARY="xl-__XL_VERSION__-darwin-amd64" ;;
-  Darwin-arm64)  BINARY="xl-__XL_VERSION__-darwin-arm64" ;;
-  *) echo "Unsupported platform: $PLATFORM" && exit 1 ;;
+# Auto-detect platform and install latest release
+REPO="TJC-LP/xl"
+LATEST=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+VERSION=${LATEST#v}
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64)  BINARY="xl-$VERSION-linux-amd64" ;;
+  Linux-aarch64) BINARY="xl-$VERSION-linux-arm64" ;;
+  Darwin-x86_64) BINARY="xl-$VERSION-darwin-amd64" ;;
+  Darwin-arm64)  BINARY="xl-$VERSION-darwin-arm64" ;;
+  *) echo "Unsupported: $(uname -s)-$(uname -m)" && exit 1 ;;
 esac
 mkdir -p ~/.local/bin
-curl -sL "https://github.com/TJC-LP/xl/releases/download/v__XL_VERSION__/$BINARY" -o ~/.local/bin/xl
+curl -sL "https://github.com/$REPO/releases/download/$LATEST/$BINARY" -o ~/.local/bin/xl
 chmod +x ~/.local/bin/xl
+echo "Installed xl $VERSION to ~/.local/bin/xl"
+```
+
+**Alternative using GitHub CLI:**
+```bash
+# If gh is installed (simpler, handles auth for private repos)
+gh release download --repo TJC-LP/xl --pattern "xl-*-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -D /tmp
+mv /tmp/xl-* ~/.local/bin/xl && chmod +x ~/.local/bin/xl
 ```
 
 **Windows (PowerShell):**
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/TJC-LP/xl/releases/download/v__XL_VERSION__/xl-__XL_VERSION__-windows-amd64.exe" -OutFile "$env:LOCALAPPDATA\xl.exe"
-# Add to PATH or move to a directory in PATH
+$repo = "TJC-LP/xl"
+$latest = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
+$version = $latest -replace '^v', ''
+$url = "https://github.com/$repo/releases/download/$latest/xl-$version-windows-amd64.exe"
+Invoke-WebRequest -Uri $url -OutFile "$env:LOCALAPPDATA\xl.exe"
+Write-Host "Installed xl $version"
 ```
 
-**Alternative** (requires JDK 17+):
-```bash
-curl -sL "https://github.com/TJC-LP/xl/releases/download/v__XL_VERSION__/xl-cli-__XL_VERSION__.tar.gz" | tar xz -C /tmp
-cd /tmp && ./install.sh
-```
+Ensure `~/.local/bin` is in your PATH: `export PATH="$HOME/.local/bin:$PATH"`
 
 ---
 
-## Contents
-
-- [Quick Reference](#quick-reference)
-- [Sheet Handling](#sheet-handling)
-- [Sheet Management](#sheet-management)
-- [Cell Operations](#cell-operations)
-- [Batch Operations](#batch-operations)
-- [Styling](#styling)
-- [Row/Column Operations](#rowcolumn-operations)
-- [Output Formats](#output-formats)
-- [Workflows](#workflows)
-- [Command Reference](#command-reference)
+> **Self-Documenting CLI**: Run `xl <command> --help` for comprehensive usage, options, and examples.
+> Commands like `view`, `style`, `put`, `putf`, `import`, `sort`, and `batch` have detailed built-in help.
 
 ---
 
 ## Quick Reference
 
+### Info Commands (no file required)
 ```bash
-# Info commands
 xl functions                           # List all 81 supported functions
-xl rasterizers                         # List available SVG-to-raster backends
+xl rasterizers                         # Check SVG-to-raster backends
+```
 
-# Read operations
+### Read Operations
+```bash
 xl -f <file> sheets                    # List sheets with stats
 xl -f <file> names                     # List defined names (named ranges)
 xl -f <file> -s <sheet> bounds         # Used range
 xl -f <file> -s <sheet> view <range>   # View as table
 xl -f <file> -s <sheet> cell <ref>     # Cell details + dependencies
 xl -f <file> -s <sheet> search <pattern>  # Find cells
-xl -f <file> -s <sheet> stats <range>  # Calculate statistics (count, sum, min, max, mean)
+xl -f <file> -s <sheet> stats <range>  # Calculate statistics
 xl -f <file> -s <sheet> eval <formula> # Evaluate formula
+```
 
-# Output formats
+### Output Formats
+```bash
 xl -f <file> -s <sheet> view <range> --format json
 xl -f <file> -s <sheet> view <range> --format csv --show-labels
 xl -f <file> -s <sheet> view <range> --format png --raster-output out.png
+xl -f <file> -s <sheet> view <range> --formulas   # Show formulas
+xl -f <file> -s <sheet> view <range> --eval       # Computed values
+```
 
-# Write operations (require -o)
+### Write Operations (require `-o`)
+```bash
 xl -f <file> -s <sheet> -o <out> put <ref> <value>
 xl -f <file> -s <sheet> -o <out> putf <ref> <formula>
-xl -f <file> -s <sheet> -o <out> import <csv-file> <ref>
-xl -f <file> -o <out> import <csv-file> --new-sheet "Data"
-
-# Style operations (require -o)
 xl -f <file> -s <sheet> -o <out> style <range> --bold --bg yellow
-xl -f <file> -s <sheet> -o <out> style <range> --bg "#FF6600" --fg white
+xl -f <file> -o <out> import <csv-file> --new-sheet "Data"
+```
 
-# Row/Column operations (require -o)
+### Row/Column Operations (require `-o`)
+```bash
 xl -f <file> -s <sheet> -o <out> row <n> --height 30
-xl -f <file> -s <sheet> -o <out> col <letter> --width 20 --hide
-xl -f <file> -s <sheet> -o <out> col <letter> --auto-fit
-xl -f <file> -s <sheet> -o <out> col A:F --auto-fit     # Column range
-xl -f <file> -s <sheet> -o <out> autofit                # All used columns
-xl -f <file> -s <sheet> -o <out> autofit --columns A:Z  # Specific range
+xl -f <file> -s <sheet> -o <out> col <letter> --width 20
+xl -f <file> -s <sheet> -o <out> col A:F --auto-fit
+xl -f <file> -s <sheet> -o <out> autofit              # All columns
+```
 
-# Sheet management (require -o)
+### Sheet Management (require `-o`)
+```bash
 xl -f <file> -o <out> add-sheet "NewSheet"
 xl -f <file> -o <out> remove-sheet "OldSheet"
 xl -f <file> -o <out> rename-sheet "Old" "New"
-xl -f <file> -o <out> move-sheet "Sheet1" --to 0
 xl -f <file> -o <out> copy-sheet "Template" "Copy"
+```
 
-# Cell operations (require -o and -s)
+### Cell Operations (require `-o` and `-s`)
+```bash
 xl -f <file> -s <sheet> -o <out> merge A1:C1
-xl -f <file> -s <sheet> -o <out> unmerge A1:C1
-xl -f <file> -s <sheet> -o <out> comment A1 "Review this" --author "John"
-xl -f <file> -s <sheet> -o <out> remove-comment A1
-xl -f <file> -s <sheet> -o <out> clear A1:D10               # Clear contents (default)
-xl -f <file> -s <sheet> -o <out> clear A1:D10 --styles      # Clear styles only
-xl -f <file> -s <sheet> -o <out> clear A1:D10 --all         # Clear everything
+xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B --header
+xl -f <file> -s <sheet> -o <out> fill A1 A2:A10           # Fill down
+xl -f <file> -s <sheet> -o <out> clear A1:D10 --all
+xl -f <file> -s <sheet> -o <out> comment A1 "Note" --author "John"
+```
 
-# Fill operations (Excel Ctrl+D / Ctrl+R)
-xl -f <file> -s <sheet> -o <out> fill A1 A2:A10             # Fill down
-xl -f <file> -s <sheet> -o <out> fill A1 B1:F1 --right      # Fill right
+### Batch Operations (require `-o`)
+```bash
+xl -f <file> -s <sheet> -o <out> batch operations.json
+echo '[...]' | xl -f <file> -s <sheet> -o <out> batch -   # From stdin
+xl batch --help                                           # Full reference
+```
 
-# Sort operations
-xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B         # Sort by column B
-xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B --desc  # Descending
-xl -f <file> -s <sheet> -o <out> sort A1:D10 --by B --header # Exclude header row
-
-# Batch operations (require -o)
-xl -f <file> -s <sheet> -o <out> batch <json-file>
-xl -f <file> -s <sheet> -o <out> batch -              # Read from stdin
-
-# Formula dragging (putf with range)
-xl -f <file> -s <sheet> -o <out> putf <range> <formula>  # Drags formula over range
-
-# Create new workbook
-xl new <output>                                          # Default Sheet1
-xl new <output> --sheet Data --sheet Summary             # Multiple sheets
+### Create New Workbook
+```bash
+xl new <output>                              # Default Sheet1
+xl new <output> --sheet Data --sheet Summary # Multiple sheets
 ```
 
 ---
 
-## Sheet Handling
+## Essential Patterns
 
-Commands default to first sheet. For multi-sheet files, always specify explicitly:
+### Sheet Selection
+
+Commands default to first sheet. For multi-sheet files, always specify:
 
 ```bash
 # Method 1: --sheet flag
 xl -f data.xlsx --sheet "P&L" view A1:D10
 
-# Method 2: Qualified A1 syntax
+# Method 2: Qualified A1 syntax (no -s needed)
 xl -f data.xlsx view "P&L!A1:D10"
 xl -f data.xlsx eval "=SUM(Revenue!A1:A10)"
 ```
 
-**Workflow**: Always start with `xl -f file.xlsx sheets` to discover sheet names.
+**Workflow**: Start with `xl -f file.xlsx sheets` to discover sheet names.
 
----
+### Formula Dragging (putf with range)
 
-## Sheet Management
-
-Modify workbook structure with these commands (all require `-o` for output):
-
-### Add / Remove Sheets
+Single formula + range = Excel-style dragging with automatic reference shifting:
 
 ```bash
-# Add new empty sheet (appends to end)
-xl -f data.xlsx -o out.xlsx add-sheet "NewSheet"
-
-# Add sheet at specific position
-xl -f data.xlsx -o out.xlsx add-sheet "Summary" --before "Sheet1"
-xl -f data.xlsx -o out.xlsx add-sheet "Notes" --after "Data"
-
-# Remove sheet
-xl -f data.xlsx -o out.xlsx remove-sheet "Scratch"
+xl -f f.xlsx -s S1 -o o.xlsx putf B2:B10 "=A2*1.1"
+# Result: B2: =A2*1.1, B3: =A3*1.1, B4: =A4*1.1, ...
 ```
 
-### Rename / Move / Copy Sheets
-
-```bash
-# Rename
-xl -f data.xlsx -o out.xlsx rename-sheet "Sheet1" "Summary"
-
-# Move to position (0-based index)
-xl -f data.xlsx -o out.xlsx move-sheet "Notes" --to 0
-
-# Move relative to another sheet
-xl -f data.xlsx -o out.xlsx move-sheet "Notes" --after "Summary"
-xl -f data.xlsx -o out.xlsx move-sheet "Notes" --before "Data"
-
-# Copy (duplicate with new name)
-xl -f data.xlsx -o out.xlsx copy-sheet "Template" "Q1 Report"
-```
-
-| Command | Description |
-|---------|-------------|
-| `add-sheet <name>` | Add empty sheet (`--after`/`--before` for position) |
-| `remove-sheet <name>` | Remove sheet from workbook |
-| `rename-sheet <old> <new>` | Rename a sheet |
-| `move-sheet <name>` | Move sheet (`--to`/`--after`/`--before`) |
-| `copy-sheet <src> <dest>` | Duplicate sheet with new name |
-
----
-
-## Cell Operations
-
-### Comments
-
-Add or remove comments from cells (yellow notes in Excel):
-
-```bash
-# Add comment
-xl -f file.xlsx -s Sheet1 -o out.xlsx comment A1 "Review this value"
-
-# Add comment with author
-xl -f file.xlsx -s Sheet1 -o out.xlsx comment A1 "Q1 data needs verification" --author "Finance Team"
-
-# Remove comment
-xl -f file.xlsx -s Sheet1 -o out.xlsx remove-comment A1
-```
-
-Comments appear as yellow notes in Excel when hovering over cells. The `cell` command shows existing comments.
-
-### Clear Cells
-
-Remove cell contents, styles, or comments from a range:
-
-```bash
-# Clear contents only (default behavior)
-xl -f file.xlsx -s Sheet1 -o out.xlsx clear A1:D10
-
-# Clear styles only (reset formatting to default)
-xl -f file.xlsx -s Sheet1 -o out.xlsx clear A1:D10 --styles
-
-# Clear comments only
-xl -f file.xlsx -s Sheet1 -o out.xlsx clear A1:D10 --comments
-
-# Clear everything (contents + styles + comments)
-xl -f file.xlsx -s Sheet1 -o out.xlsx clear A1:D10 --all
-```
-
-| Flag | Description |
-|------|-------------|
-| (none) | Clear cell contents only (default) |
-| `--styles` | Clear styles only (reset to default formatting) |
-| `--comments` | Clear comments only |
-| `--all` | Clear contents, styles, and comments |
-
-### Fill Cells
-
-Excel-style fill down/right functionality (like Ctrl+D / Ctrl+R):
-
-```bash
-# Fill down: copy A1 value/formula to A2:A10
-xl -f file.xlsx -s Sheet1 -o out.xlsx fill A1 A2:A10
-
-# Fill right: copy A1 value/formula to B1:F1
-xl -f file.xlsx -s Sheet1 -o out.xlsx fill A1 B1:F1 --right
-
-# Fill with formula (references shift automatically)
-# If A1 contains "=B1*1.1", filling to A2:A5 produces:
-# A2: =B2*1.1, A3: =B3*1.1, ...
-xl -f file.xlsx -s Sheet1 -o out.xlsx fill A1 A2:A5
-
-# Anchored references ($) are preserved
-# If A1 contains "=SUM($B$1:B1)", filling to A2:A5 produces:
-# A2: =SUM($B$1:B2), A3: =SUM($B$1:B3), ...
-```
-
-| Flag | Description |
-|------|-------------|
-| (none) | Fill downward (default) |
-| `--right` | Fill rightward instead |
-
-**Note**: The source cell must align with the target range (same column for down, same row for right).
-
-### Sort Rows
-
-Sort rows in a range by one or more columns:
-
-```bash
-# Sort by column B (ascending, alphanumeric)
-xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B
-
-# Sort descending
-xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --desc
-
-# Force numeric comparison (treats "10" > "9" instead of "10" < "9")
-xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --numeric
-
-# Exclude header row from sort
-xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --header
-
-# Multi-column sort (sort by B, then by C as tie-breaker)
-xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --then-by C
-
-# Complex: numeric descending, with header, multiple columns
-xl -f file.xlsx -s Sheet1 -o out.xlsx sort A1:D100 --by B --numeric --desc --then-by C --header
-```
-
-| Option | Description |
-|--------|-------------|
-| `--by <col>` | Primary sort column (required) |
-| `--desc` | Sort descending (default: ascending) |
-| `--numeric` | Force numeric comparison |
-| `--then-by <col>` | Additional sort column(s), repeatable |
-| `--header` | First row is header (exclude from sort) |
-
-**Sorting behavior**:
-- Empty cells sort last
-- Formulas use cached value for sorting
-- Boolean values sort as 0 (FALSE) / 1 (TRUE)
-- Cells outside the sorted columns in each row move together
-
-### Merge / Unmerge Cells
-
-Merge combines cells into one; unmerge separates them.
-
-```bash
-# Merge header row
-xl -f data.xlsx -s Sheet1 -o out.xlsx merge A1:D1
-
-# Unmerge
-xl -f data.xlsx -s Sheet1 -o out.xlsx unmerge A1:D1
-```
-
-**Note**: HTML output shows merged cells with `colspan`/`rowspan`. Markdown tables cannot represent merges.
-
-### Statistics
-
-Calculate statistics for numeric values in a range:
-
-```bash
-xl -f data.xlsx -s Sheet1 stats B2:B100
-# Output: count: 99, sum: 12345.00, min: 10.00, max: 500.00, mean: 124.70
-```
-
-### Formula Dragging
-
-When `putf` receives a range, it drags the formula Excel-style:
-
-```bash
-# Fill B2:B10 with formulas, shifting references
-xl -f data.xlsx -s Sheet1 -o out.xlsx putf B2:B10 "=A2*1.1"
-
-# Result:
-# B2: =A2*1.1
-# B3: =A3*1.1
-# ...
-
-# Use $ to anchor references
-xl -f data.xlsx -s Sheet1 -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)"
-
-# Result:
-# B2: =SUM($A$1:A2)
-# B3: =SUM($A$1:A3)
-# ...
-```
-
-**Anchor modes**:
+**Anchor modes** ($ controls shifting):
 
 | Syntax | Behavior |
 |--------|----------|
 | `$A$1` | Absolute (never shifts) |
-| `$A1` | Column absolute, row relative |
-| `A$1` | Column relative, row absolute |
-| `A1` | Fully relative (shifts both ways) |
+| `$A1`  | Column absolute, row relative |
+| `A$1`  | Column relative, row absolute |
+| `A1`   | Fully relative (shifts both ways) |
 
-### Putting Negative Numbers
-
-For negative numbers, use the `--value` flag because `-` is interpreted as a flag prefix:
-
+**Running totals**:
 ```bash
-# ❌ Wrong - interpreted as flags
-xl -f data.xlsx -s Sheet1 -o out.xlsx put A1 -100
-
-# ✅ Correct - use --value flag
-xl -f data.xlsx -s Sheet1 -o out.xlsx put A1 --value "-100"
+xl -f f.xlsx -s S1 -o o.xlsx putf C2:C10 "=SUM(\$A\$1:A2)"
+# Result: C2: =SUM($A$1:A2), C3: =SUM($A$1:A3), ...
 ```
 
-The `--value` flag works for all values, but it's required for negative numbers:
+See `xl putf --help` for full documentation.
+
+### Batch Put & Fill
+
+`put` supports three modes based on argument count:
 
 ```bash
-# Both work for non-negative values
-xl -f data.xlsx -o out.xlsx put A1 100
-xl -f data.xlsx -o out.xlsx put A1 --value "100"
+# Single cell
+xl ... put A1 100
 
-# Only --value works for negative values
-xl -f data.xlsx -o out.xlsx put A1 --value "-100"
+# Fill pattern (same value everywhere)
+xl ... put A1:A10 "TBD"
+
+# Batch values (row-major order)
+xl ... put A1:D1 "Q1" "Q2" "Q3" "Q4"
 ```
 
----
-
-## Batch Put & Fill Patterns
-
-The `put` command supports three modes automatically based on argument count:
-
-### Mode 1: Single Cell
+**Negative numbers**: Use `--value` flag (bare `-` is interpreted as flag):
 ```bash
-xl -f file.xlsx -s Sheet1 -o out.xlsx put A1 100
+xl ... put A1 --value "-100"
 ```
 
-### Mode 2: Fill Pattern
-Fill all cells in a range with the same value:
+See `xl put --help` for full documentation.
 
-```bash
-# Fill column
-xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:A10 "TBD"
+### Batch JSON Operations
 
-# Fill row
-xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:Z1 0
+Apply multiple operations atomically:
 
-# Fill 2D range
-xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:C3 "Empty"
-```
-
-### Mode 3: Batch Values
-Map different values to each cell (row-major order: left-to-right, top-to-bottom):
-
-```bash
-# Set header row
-xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:D1 "Name" "Age" "City" "Active"
-
-# Set column
-xl -f file.xlsx -s Sheet1 -o out.xlsx put B2:B4 100 200 300
-
-# Fill 2D grid (row-major)
-xl -f file.xlsx -s Sheet1 -o out.xlsx put A1:B2 1 2 3 4
-# Result: A1=1, B1=2, A2=3, B2=4
-```
-
-**Important**: Value count must match cell count:
-```bash
-xl put A1:A5 1 2 3
-# Error: Range A1:A5 has 5 cells but 3 values provided
-```
-
-## Batch Formulas
-
-The `putf` command supports three modes:
-
-### Mode 1: Single Formula
-```bash
-xl -f file.xlsx -s Sheet1 -o out.xlsx putf B1 "=A1*2"
-```
-
-### Mode 2: Formula Dragging (with $ anchors)
-Single formula with intelligent reference shifting:
-
-```bash
-# Relative references shift
-xl -f file.xlsx -s Sheet1 -o out.xlsx putf B1:B10 "=A1*2"
-# B1=A1*2, B2=A2*2, B3=A3*2, ...
-
-# $ anchors control shifting
-xl -f file.xlsx -s Sheet1 -o out.xlsx putf C1:C10 "=SUM(\$A\$1:A1)"
-# C1=SUM($A$1:A1), C2=SUM($A$1:A2), ...
-```
-
-### Mode 3: Batch Formulas (explicit, no dragging)
-Different formulas for each cell:
-
-```bash
-xl -f file.xlsx -s Sheet1 -o out.xlsx putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"
-# Formulas applied as-is, no shifting
-
-# Mix constants and references
-xl -f file.xlsx -s Sheet1 -o out.xlsx putf E1:E2 "=100" "=D1*1.1"
-```
-
-**Important**: Formula count must match cell count.
-
----
-
-## CSV Import
-
-Import CSV data into Excel workbooks with automatic type detection.
-
-```bash
-# Import to existing sheet at A1
-xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1
-
-# Import at specific position
-xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv B5
-
-# Import to new sheet
-xl -f file.xlsx -o out.xlsx import data.csv --new-sheet "Imported Data"
-
-# Custom delimiter (semicolon, tab, etc.)
-xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --delimiter ";"
-
-# Treat first row as data (not headers)
-xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --no-header
-
-# Force all values to text (disable type inference)
-xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --no-type-inference
-
-# Custom encoding
-xl -f file.xlsx -s Sheet1 -o out.xlsx import data.csv A1 --encoding "ISO-8859-1"
-```
-
-**Header Row Behavior**:
-- **Default**: First row is treated as column headers and **skipped** (not imported to Excel)
-- **`--no-header`**: First row is imported as data (use this to preserve headers in output)
-
-**Type Inference**: Automatically detects and converts:
-- **Numbers**: `100`, `29.99`, `-5.5` → Number type with Decimal format
-- **Booleans**: `true`, `false` (case-insensitive) → Boolean type
-- **Dates**: `2024-01-15` (ISO 8601 format) → DateTime type with Date format
-- **Text**: Everything else
-
-**Column-based inference**: Samples first 10 rows per column. If all values match a type, assigns that type; otherwise defaults to Text.
-
-**Options**:
-- `--delimiter <char>` - Field separator (default: `,`)
-- `--no-header` - Import first row as data (default: skip header row)
-- `--encoding <enc>` - Input encoding (default: UTF-8)
-- `--new-sheet <name>` - Create new sheet for imported data
-- `--no-type-inference` - Treat all values as text (useful for ZIP codes, phone numbers)
-
-**Limitations**:
-- **Memory**: Entire CSV loaded into memory (not streamed)
-- **Recommended size**: <50k rows for optimal performance
-- **Large files**: Split CSVs before importing or use batch operations
-- **Date formats**: Only ISO 8601 (YYYY-MM-DD) supported
-- **Boolean formats**: Only true/false (case-insensitive)
-
-## Batch Operations
-
-Apply multiple cell operations atomically from JSON input:
-
-```bash
-# From file
-xl -f data.xlsx -s Sheet1 -o out.xlsx batch operations.json
-
-# From stdin
-echo '[{"op":"put","ref":"A1","value":"Hello"},{"op":"putf","ref":"B1","value":"=A1&\" World\""}]' \
-  | xl -f data.xlsx -s Sheet1 -o out.xlsx batch -
-```
-
-**JSON Format**:
 ```json
 [
-  {"op": "put", "ref": "A1", "value": "Hello"},
-  {"op": "put", "ref": "A2", "value": "123"},
-  {"op": "putf", "ref": "B1", "value": "=A1*2"},
-  {"op": "put", "ref": "Sheet2!C1", "value": "Cross-sheet"}
+  {"op": "put", "ref": "A1", "value": "Revenue Report"},
+  {"op": "style", "range": "A1:D1", "bold": true, "bg": "#4472C4", "fg": "#FFFFFF"},
+  {"op": "merge", "range": "A1:D1"},
+  {"op": "colwidth", "col": "A", "width": 25},
+  {"op": "putf", "ref": "C2", "value": "=B2*1.1"}
 ]
 ```
 
-| Field | Description |
-|-------|-------------|
-| `op` | Operation: `put` (value) or `putf` (formula) |
-| `ref` | Cell reference (supports qualified `Sheet!Ref`) |
-| `value` | Value or formula string |
+**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight
 
----
+See `xl batch --help` for full reference with all style properties.
 
-## Styling
-
-Apply formatting with `style <range>` command.
-
-| Option | Description |
-|--------|-------------|
-| `--bold` / `--italic` / `--underline` | Text style |
-| `--bg <color>` | Background |
-| `--fg <color>` | Text color |
-| `--font-size <pt>` | Font size |
-| `--font-name <name>` | Font family |
-| `--align <left\|center\|right>` | Horizontal |
-| `--valign <top\|middle\|bottom>` | Vertical |
-| `--wrap` | Text wrap |
-| `--format <general\|number\|currency\|percent\|date\|text>` | Number format |
-| `--border <none\|thin\|medium\|thick>` | Border style (all sides) |
-| `--border-top <style>` | Top border only |
-| `--border-right <style>` | Right border only |
-| `--border-bottom <style>` | Bottom border only |
-| `--border-left <style>` | Left border only |
-| `--border-color <color>` | Border color |
-| `--replace` | Replace entire style (default: merge) |
-
-**Style Behavior**: Styles are merged by default (new properties combine with existing).
-Use `--replace` to replace the entire style instead.
-
-**Colors**: Named (`red`, `navy`), hex (`#FF6600`), or RGB (`rgb(100,150,200)`).
-See [reference/COLORS.md](reference/COLORS.md) for full color list.
-
-```bash
-# Header styling
-xl -f data.xlsx -o out.xlsx style A1:E1 --bold --bg navy --fg white --align center
-
-# Currency column
-xl -f data.xlsx -o out.xlsx style B2:B100 --format currency
-```
-
----
-
-## Row/Column Operations
-
-```bash
-# Row height and visibility
-xl -f data.xlsx -o out.xlsx row 5 --height 30
-xl -f data.xlsx -o out.xlsx row 10 --hide
-xl -f data.xlsx -o out.xlsx row 10 --show
-
-# Column width and visibility
-xl -f data.xlsx -o out.xlsx col B --width 20
-xl -f data.xlsx -o out.xlsx col C --hide
-
-# Auto-fit column width based on content
-xl -f data.xlsx -o out.xlsx col A --auto-fit            # Single column
-xl -f data.xlsx -o out.xlsx col A:F --auto-fit          # Column range
-
-# Auto-fit all columns (or specific range)
-xl -f data.xlsx -o out.xlsx autofit                     # All used columns
-xl -f data.xlsx -o out.xlsx autofit --columns A:Z       # Specific range
-```
-
-| Option | Description |
-|--------|-------------|
-| `--height <pt>` | Row height (row only) |
-| `--width <chars>` | Column width (col only) |
-| `--auto-fit` | Auto-fit column width based on content (col only) |
-| `--columns <range>` | Column range for autofit command (e.g., A:Z) |
-| `--hide` | Hide row/column |
-| `--show` | Unhide row/column |
-
----
-
-## Output Formats
+### Output Format Summary
 
 | Format | Flag | Notes |
 |--------|------|-------|
@@ -629,46 +224,13 @@ xl -f data.xlsx -o out.xlsx autofit --columns A:Z       # Specific range
 | json | `--format json` | Structured data |
 | csv | `--format csv` | Add `--show-labels` for headers |
 | html | `--format html` | Inline CSS |
-| svg | `--format svg` | Vector |
-| png/jpeg/pdf | `--format <fmt> --raster-output <path>` | Auto fallback (Batik/cairosvg/rsvg/ImageMagick) |
-| webp | `--format webp --raster-output <path>` | Requires ImageMagick |
+| svg | `--format svg` | Vector graphics |
+| png/jpeg/pdf | `--format <fmt> --raster-output <path>` | Requires rasterizer |
+| webp | `--format webp --raster-output <path>` | ImageMagick only |
 
-See [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) for detailed specs.
+**Rasterizer discovery**: `xl rasterizers` shows available backends.
 
-**Raster options**: `--dpi <n>`, `--quality <n>`, `--show-labels`, `--rasterizer <name>`
-
-```bash
-# Visual analysis (Claude vision)
-xl -f data.xlsx view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels
-```
-
-### Rasterizer Discovery
-
-Use `xl rasterizers` to check which SVG-to-raster backends are available:
-
-```bash
-$ xl rasterizers
-SVG Rasterizer Status
-============================================================
-
-Backend        | Status      | Notes
-------------------------------------------------------------
-batik          | available   | Built-in (requires AWT, not native image)
-cairosvg       | missing     | Not in PATH
-rsvg-convert   | available   | librsvg2-bin
-resvg          | missing     | Not in PATH
-imagemagick    | available   | SVG delegate: rsvg-convert
-
-At least one rasterizer is available for PNG/JPEG/PDF export.
-```
-
-**Status values**:
-- `available` - Works correctly
-- `missing` - Binary not in PATH
-- `broken` - Found but non-functional (e.g., ImageMagick delegate missing)
-- `unavailable` - Cannot be used in current environment (e.g., Batik on native-image)
-
-**Exit codes**: 0 if at least one rasterizer works, 1 if none available.
+See `xl view --help` for all options.
 
 ---
 
@@ -678,13 +240,13 @@ At least one rasterizer is available for PNG/JPEG/PDF export.
 
 ```bash
 xl -f data.xlsx sheets                     # List sheets with cell counts
-xl -f data.xlsx names                      # List defined names (named ranges)
+xl -f data.xlsx names                      # List defined names
 xl -f data.xlsx -s "Sheet1" bounds         # Get used range
-xl -f data.xlsx -s "Sheet1" view A1:E20    # View data
+xl -f data.xlsx -s "Sheet1" view A1:E20    # Preview data
 xl -f data.xlsx -s "Sheet1" stats B2:B100  # Quick statistics
 ```
 
-### Formula Analysis
+### Formula Analysis & What-If
 
 ```bash
 xl -f data.xlsx -s Sheet1 view --formulas A1:D10     # Show formulas
@@ -692,64 +254,62 @@ xl -f data.xlsx -s Sheet1 cell C5                    # Dependencies
 xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500"  # What-if
 ```
 
-See [reference/FORMULAS.md](reference/FORMULAS.md) for supported functions.
+See [reference/FORMULAS.md](reference/FORMULAS.md) for 81 supported functions.
 
 ### Create Formatted Report
 
 ```bash
+# Set data and styling
 xl -f template.xlsx -s Sheet1 -o report.xlsx put A1 "Sales Report"
 xl -f report.xlsx -s Sheet1 -o report.xlsx style A1:E1 --bold --bg navy --fg white
 xl -f report.xlsx -s Sheet1 -o report.xlsx style B2:B100 --format currency
 xl -f report.xlsx -s Sheet1 -o report.xlsx col A --width 25
 ```
 
+Or use batch for atomicity:
+```bash
+echo '[
+  {"op": "put", "ref": "A1", "value": "Sales Report"},
+  {"op": "style", "range": "A1:E1", "bold": true, "bg": "navy", "fg": "white"},
+  {"op": "style", "range": "B2:B100", "numFormat": "currency"},
+  {"op": "colwidth", "col": "A", "width": 25}
+]' | xl -f template.xlsx -s Sheet1 -o report.xlsx batch -
+```
+
+### CSV to Styled Table
+
+```bash
+# Import CSV to new sheet
+xl -f workbook.xlsx -o out.xlsx import data.csv --new-sheet "Imported"
+
+# Style the header row
+xl -f out.xlsx -s Imported -o out.xlsx style A1:Z1 --bold --bg navy --fg white
+
+# Auto-fit columns
+xl -f out.xlsx -s Imported -o out.xlsx autofit
+```
+
+Import options: `xl import --help`
+
 ### Multi-Sheet Workbook Setup
 
 ```bash
-# Create workbook (default sheet: Sheet1)
-xl new output.xlsx
-
-# Create with custom sheet name
-xl new output.xlsx --sheet-name "Data"
-
-# Create with multiple sheets in one command
+# Create with multiple sheets
 xl new output.xlsx --sheet Data --sheet Summary --sheet Notes
 
-# Add more sheets to existing workbook
+# Or add sheets to existing
 xl -f output.xlsx -o output.xlsx add-sheet "Archive" --after "Notes"
 xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
+
+# Move sheet to front
+xl -f output.xlsx -o output.xlsx move-sheet "Summary" --to 0
 ```
 
----
+### Visual Analysis (for Claude Vision)
 
-## Performance
-
-### Backend Selection
-
-Choose between two XML backends with the `--backend` flag:
-
-| Backend | Speed | Stability | Use Case |
-|---------|-------|-----------|----------|
-| `scalaxml` | Baseline | Proven | Default, general use |
-| `saxstax` | **36-39% faster** | Production-ready | Heavy writes, batch ops |
-
-**Examples**:
 ```bash
-# Use faster backend for batch operations
-xl -f data.xlsx -o out.xlsx --backend saxstax batch ops.json
-
-# Create new file with faster backend
-xl new report.xlsx --backend saxstax --sheet Data --sheet Summary
-
-# Style large range with faster backend
-xl -f data.xlsx -o out.xlsx --backend saxstax style A1:Z1000 --bold
+xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels
 ```
-
-**Recommendation**: Use `saxstax` for:
-- Large batch operations
-- Styling many cells
-- Creating files with `new` command
-- Repeated write operations in scripts
 
 ---
 
@@ -762,81 +322,85 @@ xl -f data.xlsx -o out.xlsx --backend saxstax style A1:Z1000 --bold
 | `--file <path>` | `-f` | Input file (required) |
 | `--sheet <name>` | `-s` | Sheet name |
 | `--output <path>` | `-o` | Output file (for writes) |
-| `--backend <type>` | | XML backend: scalaxml (default, stable) or saxstax (36-39% faster) |
-
-### View Options
-
-| Option | Description |
-|--------|-------------|
-| `--format <fmt>` | Output format (markdown, json, csv, html, svg, png, jpeg, webp, pdf) |
-| `--formulas` | Show formulas instead of values |
-| `--eval` | Evaluate formulas (compute live values) |
-| `--limit <n>` | Max rows (default: 50) |
-| `--skip-empty` | Skip empty cells (JSON) or empty rows/columns (tabular) |
-| `--header-row <n>` | Use row N as JSON keys (1-based) |
-| `--show-labels` | Include row/column headers |
-| `--raster-output <path>` | Image output path (required for png/jpeg/webp/pdf) |
-| `--dpi <n>` | Resolution (default: 144) |
-| `--quality <n>` | JPEG quality (default: 90) |
-| `--gridlines` | Show cell gridlines in SVG |
-| `--print-scale` | Apply print scaling |
-| `--rasterizer <name>` | Force specific rasterizer: batik, cairosvg, rsvg-convert, resvg, imagemagick |
-
-### Search Options
-
-| Option | Description |
-|--------|-------------|
-| `--limit <n>` | Max matches |
-| `--sheets <list>` | Comma-separated sheet names to search (default: all) |
-
-### Eval Options
-
-| Option | Alias | Description |
-|--------|-------|-------------|
-| `--with <overrides>` | `-w` | Cell overrides (e.g., `A1=100,B2=200`) |
-
-### Cell Options
-
-| Option | Description |
-|--------|-------------|
-| `--no-style` | Omit style info from output |
-
-### Sheet Management Commands
-
-| Command | Options | Description |
-|---------|---------|-------------|
-| `add-sheet <name>` | `--after <sheet>`, `--before <sheet>` | Add empty sheet |
-| `remove-sheet <name>` | | Remove sheet |
-| `rename-sheet <old> <new>` | | Rename sheet |
-| `move-sheet <name>` | `--to <idx>`, `--after <sheet>`, `--before <sheet>` | Move sheet |
-| `copy-sheet <src> <dest>` | | Duplicate sheet |
-
-### Cell Operation Commands
-
-| Command | Description |
-|---------|-------------|
-| `merge <range>` | Merge cells in range |
-| `unmerge <range>` | Unmerge cells in range |
-| `comment <ref> <text>` | Add comment to cell (`--author` for attribution) |
-| `remove-comment <ref>` | Remove comment from cell |
-| `clear <range>` | Clear cell contents (`--styles`, `--comments`, `--all`) |
-| `fill <source> <target>` | Fill cells with source value/formula (`--right` for horizontal) |
-| `sort <range>` | Sort rows (`--by <col>`, `--desc`, `--numeric`, `--then-by`, `--header`) |
-| `stats <range>` | Calculate statistics for numeric values |
-| `batch [<file>]` | Apply JSON operations (`-` for stdin) |
-| `import <csv-file> [<ref>]` | Import CSV data with automatic type detection |
-
-### Row/Column Commands
-
-| Command | Options | Description |
-|---------|---------|-------------|
-| `row <n>` | `--height <pt>`, `--hide`, `--show` | Set row properties |
-| `col <letter(s)>` | `--width <chars>`, `--auto-fit`, `--hide`, `--show` | Set column properties (supports ranges like A:F) |
-| `autofit` | `--columns <range>` | Auto-fit all used columns (or specific range) |
+| `--backend <type>` | | scalaxml (default) or saxstax (36-39% faster) |
 
 ### Info Commands
 
 | Command | Description |
 |---------|-------------|
-| `functions` | List all 81 supported Excel functions (no file required) |
-| `rasterizers` | List available SVG-to-raster backends with status (no file required) |
+| `functions` | List all 81 supported Excel functions |
+| `rasterizers` | List SVG-to-raster backends with status |
+
+### Workbook Commands
+
+| Command | Description |
+|---------|-------------|
+| `sheets` | List all sheets with stats |
+| `names` | List defined names (named ranges) |
+| `new <output>` | Create blank workbook (`--sheet` for names) |
+
+### Read Commands
+
+| Command | Options |
+|---------|---------|
+| `bounds` | Used range of sheet |
+| `view <range>` | `--format`, `--formulas`, `--eval`, `--raster-output`, etc. |
+| `cell <ref>` | `--no-style` |
+| `search <pattern>` | `--limit`, `--sheets` |
+| `stats <range>` | Calculate count, sum, min, max, mean |
+| `eval <formula>` | `--with` for overrides |
+
+Run `xl view --help` for complete options.
+
+### Write Commands
+
+| Command | Key Options |
+|---------|-------------|
+| `put <ref> <values>` | `--value` for negatives |
+| `putf <ref> <formulas>` | Supports dragging |
+| `style <range>` | `--bold`, `--bg`, `--fg`, `--format`, `--border`, etc. |
+| `batch <json-file>` | Operations: put, putf, style, merge, unmerge, colwidth, rowheight |
+| `import <csv> [ref]` | `--new-sheet`, `--delimiter`, `--no-type-inference` |
+
+Run `xl <command> --help` for complete options.
+
+### Sheet Management Commands
+
+| Command | Options |
+|---------|---------|
+| `add-sheet <name>` | `--after`, `--before` |
+| `remove-sheet <name>` | |
+| `rename-sheet <old> <new>` | |
+| `move-sheet <name>` | `--to`, `--after`, `--before` |
+| `copy-sheet <src> <dest>` | |
+
+### Cell Commands
+
+| Command | Options |
+|---------|---------|
+| `merge <range>` | |
+| `unmerge <range>` | |
+| `comment <ref> <text>` | `--author` |
+| `remove-comment <ref>` | |
+| `clear <range>` | `--all`, `--styles`, `--comments` |
+| `fill <source> <target>` | `--right` |
+| `sort <range>` | `--by`, `--then-by`, `--desc`, `--numeric`, `--header` |
+
+Run `xl sort --help` for sorting details.
+
+### Row/Column Commands
+
+| Command | Options |
+|---------|---------|
+| `row <n>` | `--height`, `--hide`, `--show` |
+| `col <letter(s)>` | `--width`, `--auto-fit`, `--hide`, `--show` |
+| `autofit` | `--columns` (range like A:Z) |
+
+---
+
+## Links
+
+- `xl <command> --help` for detailed usage and examples
+- [reference/FORMULAS.md](reference/FORMULAS.md) for 81 supported functions
+- [reference/COLORS.md](reference/COLORS.md) for color names
+- [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) for format specs

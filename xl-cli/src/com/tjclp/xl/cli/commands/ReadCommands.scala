@@ -368,9 +368,59 @@ object ReadCommands:
         for
           sheet <- SheetResolver.requireSheet(wb, sheetOpt, "eval")
           tempSheet <- applyOverrides(sheet, overrides)
+          // Optimization: Only pre-evaluate formulas in the dependency closure of the target.
+          // This ensures:
+          // 1. Formula chains work correctly (e.g., =C1 where C1=B1+50, B1=A1*2)
+          // 2. Overrides propagate through chains (TJC-698): A1=200 → B1=400 → C1=450
+          // 3. Performance: Only evaluate O(k) formulas in closure, not O(n) total formulas
+
+          // 1. Extract target formula's direct dependencies
+          targetDeps <- IO.fromEither(
+            FormulaParser
+              .parse(formula)
+              .map(expr => DependencyGraph.extractDependencies(expr))
+              .left
+              .map(e => new Exception(s"Parse error: $e"))
+          )
+
+          // 2. Build dependency graph and compute transitive closure
+          graph = DependencyGraph.fromSheet(tempSheet)
+          allDeps = DependencyGraph.transitiveDependencies(graph, targetDeps)
+
+          // 3. Filter to only formula cells in the closure
+          formulaDeps = allDeps.filter(ref =>
+            tempSheet(ref).value match
+              case _: CellValue.Formula => true
+              case _ => false
+          )
+
+          // 4. Get evaluation order (topological sort filtered to closure)
+          evalOrder <- IO.fromEither(
+            if formulaDeps.isEmpty then scala.util.Right(List.empty[ARef])
+            else
+              DependencyGraph
+                .topologicalSort(graph)
+                .map(_.filter(formulaDeps.contains))
+                .left
+                .map(e => new Exception(e.toString))
+          )
+
+          // 5. Evaluate only formulas in the closure
+          evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
+            sheetIO.flatMap { s =>
+              IO.fromEither(
+                SheetEvaluator
+                  .evaluateCell(s)(ref, workbook = Some(wb))
+                  .map(value => s.put(ref, value))
+                  .left
+                  .map(e => new Exception(e.message))
+              )
+            }
+          }
+
           result <- IO.fromEither(
             SheetEvaluator
-              .evaluateFormula(tempSheet)(formula, workbook = Some(wb))
+              .evaluateFormula(evalSheet)(formula, workbook = Some(wb))
               .left
               .map(e => new Exception(e.message))
           )
