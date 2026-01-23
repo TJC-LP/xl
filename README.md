@@ -35,6 +35,7 @@ import com.tjclp.xl.{*, given}
 - [Quick Start](#quick-start)
 - [Key Features](#key-features)
 - [CLI](#cli)
+- [Claude Code Plugin](#claude-code-plugin)
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 
@@ -169,6 +170,22 @@ Stateless by design — each command is self-contained:
 | `xl -f in.xlsx -o out.xlsx put B5 1000` | Write value to cell |
 
 See [docs/plan/xl-cli.md](docs/plan/xl-cli.md) for full command reference.
+
+## Claude Code Plugin
+
+Install the xl-cli skill in [Claude Code](https://claude.ai/code) for AI-assisted Excel operations:
+
+```
+/plugin marketplace add TJC-LP/xl
+/plugin install xl-marketplace@xl
+```
+
+The skill provides Claude with comprehensive knowledge of xl CLI commands, enabling natural language Excel manipulation:
+
+- "Read the data from sales.xlsx and show me the first 10 rows"
+- "Add a SUM formula to cell B10 that totals B2:B9"
+- "Style the header row with bold text and a blue background"
+- "Search for all cells containing 'Revenue'"
 
 ## Documentation
 
