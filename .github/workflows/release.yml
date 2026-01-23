@@ -209,14 +209,22 @@ jobs:
           chmod +x dist/install.sh
           tar -czvf xl-cli-${{ steps.version.outputs.version }}.tar.gz -C dist .
 
-      - name: Package skill with version
+      - name: Package plugin for Claude.ai
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          mkdir -p skill-dist/reference
 
-          # Copy skill files (SKILL.md now uses auto-latest, no substitution needed)
-          cp .claude/skills/xl-cli/SKILL.md skill-dist/
-          cp .claude/skills/xl-cli/reference/*.md skill-dist/reference/ 2>/dev/null || true
+          # Create plugin structure for Claude.ai upload
+          mkdir -p skill-dist/.claude-plugin
+          mkdir -p skill-dist/skills/xl-cli/reference
+
+          # Copy plugin manifest and skill files
+          cp plugins/xl-cli/.claude-plugin/plugin.json skill-dist/.claude-plugin/
+          cp plugins/xl-cli/skills/xl-cli/SKILL.md skill-dist/skills/xl-cli/
+          cp plugins/xl-cli/skills/xl-cli/reference/*.md skill-dist/skills/xl-cli/reference/ 2>/dev/null || true
+
+          # Update version in plugin.json
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/g" skill-dist/.claude-plugin/plugin.json || \
+            sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/g" skill-dist/.claude-plugin/plugin.json
 
           # Create version manifest
           cat > skill-dist/VERSION << EOF
@@ -251,8 +259,8 @@ jobs:
             sed -i '' "s/__VERSION__/$VERSION/g" skill-dist/install-cli.sh
           chmod +x skill-dist/install-cli.sh
 
-          # Create zip
-          cd skill-dist && zip -r ../xl-skill-$VERSION.zip . && cd ..
+          # Create zip (xl-plugin for Claude.ai upload)
+          cd skill-dist && zip -r ../xl-plugin-$VERSION.zip . && cd ..
 
       - name: Download native binaries
         uses: actions/download-artifact@v4
@@ -265,8 +273,8 @@ jobs:
           mkdir -p release-assets
           # Copy JAR tarball
           cp xl-cli-$VERSION.tar.gz release-assets/
-          # Copy skill zip
-          cp xl-skill-$VERSION.zip release-assets/
+          # Copy plugin zip (for Claude.ai upload)
+          cp xl-plugin-$VERSION.zip release-assets/
           # Copy native binaries (versioned names)
           cp native-binaries/xl-$VERSION-linux-amd64/xl-$VERSION-linux-amd64 release-assets/
           cp native-binaries/xl-$VERSION-darwin-amd64/xl-$VERSION-darwin-amd64 release-assets/
@@ -285,7 +293,7 @@ jobs:
           draft: false
           files: |
             release-assets/xl-cli-${{ steps.version.outputs.version }}.tar.gz
-            release-assets/xl-skill-${{ steps.version.outputs.version }}.zip
+            release-assets/xl-plugin-${{ steps.version.outputs.version }}.zip
             release-assets/xl-${{ steps.version.outputs.version }}-linux-amd64
             release-assets/xl-${{ steps.version.outputs.version }}-darwin-amd64
             release-assets/xl-${{ steps.version.outputs.version }}-darwin-arm64

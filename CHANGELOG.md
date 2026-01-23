@@ -11,6 +11,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.0] - 2026-01-23
+
+### Added
+
+- **Plugin marketplace support**: Repository now functions as a Claude Code plugin marketplace
+  - Install via `/plugin marketplace add TJC-LP/xl` then `/plugin install xl-cli@xl`
+  - Upload `xl-plugin-*.zip` to Claude.ai via Settings > Features
+  - Extensible structure for future plugins (xl-scripting, etc.)
+
+- **Self-documenting CLI**: Comprehensive `--help` for high-value commands
+  - `view`: formats, output flags, raster options, examples
+  - `style`: font, fill, alignment, borders, colors, examples
+  - `import`: options, type inference, limitations
+  - `put`: modes (single/fill/batch), negative numbers
+  - `putf`: formula dragging, anchor modes, running totals
+  - `sort`: options, behavior details
+
+- **Batch styling operations** in JSON batch commands (#88)
+  - Full style properties: bold, italic, underline, bg, fg, fontSize, fontName
+  - Alignment: align, valign, wrap
+  - Number formats: numFormat (general, number, currency, percent, date, text)
+  - Borders: border, borderTop/Right/Bottom/Left, borderColor
+  - Replace mode: `"replace": true` to overwrite instead of merge
+
+### Changed
+
+- **SKILL.md reduced 54%**: From 861 to 406 lines by moving reference content to CLI help
+- **Auto-latest installation**: SKILL.md now auto-detects latest release from GitHub API
+- **Skill location**: Moved from `.claude/skills/` to `plugins/xl-cli/skills/` (symlinked for compatibility)
+
+### Fixed
+
+- **Sheet rename preserves styles**: Renaming sheets no longer loses cell formatting
+- **Batch JSON parsing**: Migrated to uPickle for more robust JSON handling (#67)
+
+---
+
 ## [0.6.1] - 2026-01-22
 
 ### Added

@@ -1,0 +1,13 @@
+{
+  "name": "xl-cli",
+  "description": "LLM-friendly Excel CLI for reading, writing, styling, and analyzing spreadsheets. Run `xl <command> --help` for comprehensive usage.",
+  "version": "0.7.0",
+  "author": {
+    "name": "TJC L.P.",
+    "url": "https://github.com/TJC-LP"
+  },
+  "repository": "https://github.com/TJC-LP/xl",
+  "homepage": "https://github.com/TJC-LP/xl",
+  "license": "Apache-2.0",
+  "keywords": ["excel", "xlsx", "spreadsheet", "cli", "ooxml", "formula", "styling"]
+}
