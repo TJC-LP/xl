@@ -1,20 +1,14 @@
 {
-  "name": "xl",
+  "name": "xl-marketplace",
   "owner": {
     "name": "TJC L.P.",
     "url": "https://github.com/TJC-LP"
   },
-  "metadata": {
-    "description": "Excel tools for AI agents - CLI operations, scripting, and more",
-    "pluginRoot": "./plugins"
-  },
   "plugins": [
     {
       "name": "xl-cli",
-      "source": "./xl-cli",
-      "description": "LLM-friendly Excel CLI for reading, writing, styling, and analyzing spreadsheets",
-      "version": "0.7.0",
-      "keywords": ["excel", "xlsx", "spreadsheet", "cli", "ooxml"]
+      "source": "./.claude",
+      "description": "LLM-friendly Excel CLI for reading, writing, styling, and analyzing spreadsheets"
     }
   ]
 }

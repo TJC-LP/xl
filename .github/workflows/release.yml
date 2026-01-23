@@ -215,8 +215,8 @@ jobs:
           mkdir -p skill-dist/reference
 
           # Copy skill files (flat structure for Claude.ai upload)
-          cp plugins/xl-cli/skills/xl-cli/SKILL.md skill-dist/
-          cp plugins/xl-cli/skills/xl-cli/reference/*.md skill-dist/reference/ 2>/dev/null || true
+          cp .claude/skills/xl-cli/SKILL.md skill-dist/
+          cp .claude/skills/xl-cli/reference/*.md skill-dist/reference/ 2>/dev/null || true
 
           # Create version manifest
           cat > skill-dist/VERSION << EOF
