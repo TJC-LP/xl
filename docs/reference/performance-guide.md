@@ -141,22 +141,22 @@ excel.readStream(path)
 **Bad** (N intermediate sheets):
 ```scala
 (1 to 10000).foldLeft(sheet) { (s, i) =>
-  s.put(cell"A$i", CellValue.Number(i))
+  s.put(ref"A$i", CellValue.Number(i))
 }
 // Creates 10,000 intermediate Sheet instances
 ```
 
 **Good** (single putAll):
 ```scala
-val cells = (1 to 10000).map(i => Cell(cell"A$i", CellValue.Number(i)))
+val cells = (1 to 10000).map(i => Cell(ref"A$i", CellValue.Number(i)))
 sheet.put(cells)
 // Creates 1 Sheet instance
 ```
 
-**Best** (putMixed with type safety):
+**Best** (batch put with codecs):
 ```scala
 sheet.put(
-  (1 to 10000).map(i => cell"A$i" -> i)*
+  (1 to 10000).map(i => ref"A$i" -> i)*
 )
 // Type-safe, auto-format inference, single allocation
 ```
@@ -275,9 +275,9 @@ sheet.put(newCells)
 - Write: ~1.1s @ ~100MB memory
 - Read: ~1.8s @ ~100MB memory
 
-**XL Streaming Write**:
+**XL Streaming**:
 - Write: ~1.1s @ ~10MB memory (constant)
-- Read: ~1.8s @ ~100MB memory (NOT constant - bug)
+- Read: ~1.8s @ ~10MB memory (constant, P6.6 complete)
 
 **Apache POI SXSSF** (streaming):
 - Write: ~5s @ ~800MB memory
@@ -285,7 +285,7 @@ sheet.put(newCells)
 
 **Improvement**:
 - XL write: **4.5x faster, 80x less memory**
-- XL read: **4.4x faster, but not constant-memory yet**
+- XL read: **4.4x faster, 80x less memory**
 
 ---
 
@@ -295,11 +295,11 @@ sheet.put(newCells)
 ```scala
 // ❌ Bad: O(n) sheet copies
 val result = data.foldLeft(sheet) { (s, item) =>
-  s.put(cell"A${item.id}", item.name)
+  s.put(ref"A${item.id}", item.name)
 }
 
 // ✅ Good: Single sheet copy
-val cells = data.map(item => Cell(cell"A${item.id}", CellValue.Text(item.name)))
+val cells = data.map(item => Cell(ref"A${item.id}", CellValue.Text(item.name)))
 sheet.put(cells)
 ```
 
@@ -435,13 +435,13 @@ Stream.range(1, 1_000_001)
   .unsafeRunSync()
 ```
 
-### Reading Any Size (Until P6.6)
+### Reading Any Size (Streaming)
 ```scala
-// Use in-memory read (streaming read has bug)
-ExcelIO.instance.read[IO](path).map {
-  case Right(wb) => // Process
-  case Left(err) => // Handle
-}.unsafeRunSync()
+// Use streaming read for constant memory (O(1))
+Excel.forIO.readStream(path)
+  .evalMap(row => IO.println(row))
+  .compile.drain
+  .unsafeRunSync()
 ```
 
 ---
@@ -449,6 +449,5 @@ ExcelIO.instance.read[IO](path).map {
 ## Related Documentation
 
 - [STATUS.md](../STATUS.md) - Current performance numbers
-- [streaming-improvements.md](../plan/streaming-improvements.md) - Roadmap for fixes
 - [io-modes.md](../design/io-modes.md) - Architecture decisions
 - [examples.md](examples.md) - Code samples

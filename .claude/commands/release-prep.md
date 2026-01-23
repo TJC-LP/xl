@@ -31,7 +31,7 @@ Update all version references from current SNAPSHOT/version to the new release v
 
 ### Files to SKIP
 
-- **`.claude/skills/xl-cli/SKILL.md`** - Uses `__XL_VERSION__` placeholders that CI replaces at build time
+- **`plugin/skills/xl-cli/SKILL.md`** - Auto-detects latest release from GitHub API (no version to update)
 - **`docs/RELEASING.md`** - Contains example version strings for documentation
 
 ### Verification Steps

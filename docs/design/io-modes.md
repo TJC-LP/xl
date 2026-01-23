@@ -97,15 +97,14 @@ Open ZIP file
   ↓
 For worksheet entry:
   1. getInputStream(entry)
-  2. ❌ readAllBytes() ← BUG! Materializes in memory
-  3. Stream.emits(bytes)
-  4. fs2-data-xml parser
-  5. Convert events → RowData
+  2. fs2.io.readInputStream (true streaming)
+  3. SAX parser (3-4x faster than fs2-data-xml)
+  4. Convert events → RowData
   ↓
 Return Stream[F, RowData]
 
-Memory: ❌ O(n) (should be O(1), see P6.6)
-Time: Fast (streaming parser)
+Memory: ✅ O(1) constant (P6.6 complete)
+Time: Fast (SAX streaming parser)
 Features: Limited (reads values only, minimal style info)
 ```
 
@@ -315,20 +314,21 @@ test("streaming read uses constant memory"):
 
 ## Migration Path
 
-### Current State (As of 2025-11-11)
+### Current State (As of 2026-01)
 - In-memory: Production-ready for <100k rows
 - Streaming write: Production-ready for >100k rows (minimal styling)
-- Streaming read: Broken (use in-memory)
+- Streaming read: Production-ready for >100k rows (O(1) memory)
 
-### P6.6: Fix Streaming Read (2-3 days)
-- Replace `readAllBytes()` with `fs2.io.readInputStream`
-- Achieve true O(1) memory for reads
-- Add memory regression tests
+### ✅ P6.6: Fix Streaming Read (Complete)
+- Replaced `readAllBytes()` with `fs2.io.readInputStream`
+- SAX parser backend (3-4x faster than fs2-data-xml)
+- True O(1) memory for reads
+- Memory regression tests in place
 
-### P6.7: Compression Control (1 day)
-- Add WriterConfig(compression, prettyPrint)
-- Default to DEFLATED + compact (smaller files)
-- Keep STORED + pretty for debugging
+### ✅ P6.7: Compression Control (Complete)
+- `WriterConfig(compression, prettyPrint)` available
+- Default: DEFLATED + compact (smaller files)
+- Debug mode: STORED + pretty for inspection
 
 ### P7.5: Two-Phase Streaming Writer (3-4 weeks)
 - Support SST and styles in streaming mode

@@ -1,8 +1,8 @@
 # Implementation Scaffolds: Idiomatic Scala 3 Code Examples
 
 **Purpose**: Complete, runnable code scaffolds for AI agents and developers
-**Last Updated**: 2025-11-20
-**Companion To**: [docs/plan/strategic-implementation-plan.md](../plan/strategic-implementation-plan.md)
+**Last Updated**: 2026-01-23
+**Companion To**: [docs/plan/roadmap.md](../plan/roadmap.md)
 
 > **Note**: These are idiomatic Scala 3 scaffolds with enough structure for AI agents to expand. Assumes modules: `xl-core`, `xl-ooxml`, `xl-cats-effect`, `xl-benchmarks`.
 
@@ -1128,6 +1128,6 @@ object PartRegistry:
 
 ---
 
-**Last Updated**: 2025-11-20
+**Last Updated**: 2026-01-23
 **Maintained By**: XL Core Team
-**For Strategic Context**: See [docs/plan/strategic-implementation-plan.md](../plan/strategic-implementation-plan.md)
+**For Strategic Context**: See [docs/plan/roadmap.md](../plan/roadmap.md)

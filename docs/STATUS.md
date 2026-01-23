@@ -409,51 +409,6 @@ xl-cats-effect/src/com/tjclp/xl/io/
 
 ---
 
-## Key Files to Reference
-
-**Planning Docs**: `docs/plan/`
-- `13-streaming-and-performance.md` - Streaming targets
-- `18-roadmap.md` - Full implementation roadmap
-- `11-ooxml-mapping.md` - OOXML part specifications
-
-**Implementation Guides**:
-- `CLAUDE.md` - AI assistant context
-- `README.md` - User documentation
-- `docs/plan/29-linting.md` - Formatting setup
-
----
-
-## Next Session Quick Start
-
-### Fix StreamingXmlWriter
-```scala
-// BROKEN:
-Attr(QName("r"), ref)  // String doesn't match signature
-
-// FIX:
-Attr(QName("r"), List(XmlString(ref, false)))
-
-// OR simpler:
-private def attr(name: String, value: String): Attr =
-  Attr(QName(name), List(XmlString(value, false)))
-```
-
-### Then Complete writeStreamTrue
-1. Add to ExcelIO.scala (~100 LOC)
-2. ZIP integration with event streaming
-3. Test with 100k rows
-4. Verify <100MB memory usage
-5. Commit "P5 Part 2: True streaming write"
-
-### Then Stream Read
-1. Create StreamingXmlReader.scala
-2. Event-based parsing
-3. SST resolution
-4. Test with large files
-5. Commit "P5 Complete: True streaming read/write"
-
----
-
 ## Critical Success Factors
 
 1. **Purity maintained** - Core is 100% pure, zero side effects

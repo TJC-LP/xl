@@ -494,8 +494,6 @@ Memory: ~100MB (10x less)
 
 **Winner**: XL
 
-**Note**: XL streaming read has bug (P6.6), use in-memory for now
-
 ---
 
 ## When to Use Each Library

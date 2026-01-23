@@ -158,7 +158,11 @@ xl -f data.xlsx view "Sheet1"!A1:B4
 
 See `docs/reference/cli.md` for full command reference.
 
-**Note on CLI Skill Documentation**: The file `.claude/skills/xl-cli/SKILL.md` uses `__XL_VERSION__` placeholders for version strings. These are intentionally **not** hardcoded—CI replaces them at build/release time. Do not replace these placeholders during version bumps.
+**Directory Structure**:
+- `.claude/` - Dev-only commands (release-prep, docs-cleanup-xl)
+- `plugin/` - User-facing skill distributed via plugin marketplace
+
+The CLI skill (`plugin/skills/xl-cli/SKILL.md`) auto-detects the latest release from GitHub API—no version placeholders to maintain.
 
 ## Code Style
 

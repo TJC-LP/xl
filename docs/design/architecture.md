@@ -174,15 +174,16 @@ Implements recursive descent parser with operator precedence:
 3. **Short-circuit**: And/Or respect left-to-right evaluation semantics
 4. **Totality**: All operations return `Either[ParseError, A]` (no exceptions)
 
-### Future: Formula Evaluator (WI-08)
+### Formula Evaluator (WI-08 ✅ Complete)
 
-The evaluator will implement: `eval: TExpr[A] => Sheet => Either[EvalError, A]`
+The evaluator implements: `Evaluator.eval: TExpr[A] => Sheet => Either[EvalError, A]`
 
-**Planned capabilities**:
+**Implemented capabilities**:
 - Recursive evaluation with cell reference resolution
-- Dependency tracking (detect circular references)
-- Caching for performance (memoization)
+- Dependency tracking via `DependencyGraph` (detects circular references)
+- Topological sort for evaluation order (Kahn's algorithm)
 - Short-circuit evaluation for And/Or
-- Division by zero handling
+- Division by zero handling (returns `CellError.Div0`)
+- 81 Excel functions: SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, SUMIF, COUNTIF, NPV, IRR, and more
 
-See `docs/plan/formula-system.md` for detailed design.
+See `docs/STATUS.md` for the complete function list.

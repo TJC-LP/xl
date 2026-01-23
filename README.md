@@ -169,7 +169,7 @@ Stateless by design — each command is self-contained:
 | `xl -f data.xlsx search "pattern"` | Regex search across cells |
 | `xl -f in.xlsx -o out.xlsx put B5 1000` | Write value to cell |
 
-See [docs/plan/xl-cli.md](docs/plan/xl-cli.md) for full command reference.
+See [docs/reference/cli.md](docs/reference/cli.md) for full command reference.
 
 ## Claude Code Plugin
 

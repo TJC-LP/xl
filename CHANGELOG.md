@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **SKILL.md reduced 54%**: From 861 to 406 lines by moving reference content to CLI help
 - **Auto-latest installation**: SKILL.md now auto-detects latest release from GitHub API
-- **Skill location**: Moved from `.claude/skills/` to `plugins/xl-cli/skills/` (symlinked for compatibility)
+- **Skill location**: Moved from `.claude/skills/` to `plugin/skills/xl-cli/` (distributed via plugin marketplace)
 
 ### Fixed
 

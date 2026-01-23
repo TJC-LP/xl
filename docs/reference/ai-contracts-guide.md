@@ -333,7 +333,7 @@ When adding or reviewing AI contracts, verify:
 ## References
 
 - **CLAUDE.md** - Project instructions for AI assistant
-- **ooxml-quality.md** - Example of comprehensive AI contracts in practice
+- **style-review.md** - Example of comprehensive review with AI contracts
 - **purity-charter.md** - Design principles (totality, determinism, purity)
 - **testing-guide.md** - Aligning contracts with test coverage
 
