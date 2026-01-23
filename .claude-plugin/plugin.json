@@ -1,5 +1,5 @@
 {
-  "name": "xl-cli",
+  "name": "xl",
   "description": "LLM-friendly Excel CLI for reading, writing, styling, and analyzing spreadsheets. Run `xl <command> --help` for comprehensive usage.",
   "version": "0.7.0",
   "author": {
