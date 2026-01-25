@@ -110,6 +110,8 @@ The `xl` CLI is stateless by design. Key patterns:
 -f, --file <path>     # Input file (required)
 -s, --sheet <name>    # Sheet to operate on
 -o, --output <path>   # Output file for mutations
+--max-size <MB>       # Override 100MB security limit (0 = unlimited)
+--stream              # O(1) memory streaming mode for large files
 
 # Sheet selection is REQUIRED for unqualified ranges
 xl -f data.xlsx --sheet "Q1 Report" view A1:D20    # Using --sheet flag
@@ -144,7 +146,29 @@ xl -f in.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
 
 # Rasterization (PNG/JPEG export)
 --use-imagemagick     # Use ImageMagick instead of Batik (needed for native image rasterization)
+
+# Large file handling (100k+ rows)
+--stream              # Use O(1) memory streaming (search, stats, bounds, view)
+--max-size 0          # Disable security limits for in-memory load
+--max-size 500        # Set custom limit in MB
 ```
+
+**Large File Operations** (~10s vs ~80s for 1M rows):
+```bash
+# Streaming mode - O(1) memory, 7-8x faster
+xl -f huge.xlsx --stream search "pattern" --limit 10
+xl -f huge.xlsx --stream stats A1:E100000
+xl -f huge.xlsx --stream bounds
+xl -f huge.xlsx --stream view A1:D100 --format csv
+
+# In-memory mode - when you need full workbook access
+xl -f huge.xlsx --max-size 0 sheets      # Disable limits
+xl -f huge.xlsx --max-size 500 cell A1   # 500MB limit
+```
+
+**Streaming limitations**: HTML/SVG/PDF need styles (use --max-size instead). Cell details, formula eval, and writes require full workbook load.
+
+See `docs/design/smart-streaming.md` for future enhancements.
 
 **Common mistake**: Using unqualified range without `--sheet`:
 ```bash

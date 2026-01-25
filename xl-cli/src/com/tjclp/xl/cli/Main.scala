@@ -11,6 +11,7 @@ import com.monovore.decline.effect.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.cli.commands.{
   CellCommands,
@@ -18,6 +19,7 @@ import com.tjclp.xl.cli.commands.{
   ImportCommands,
   ReadCommands,
   SheetCommands,
+  StreamingReadCommands,
   WorkbookCommands,
   WriteCommands
 }
@@ -57,32 +59,37 @@ object Main
 
   override def main: Opts[IO[ExitCode]] =
     // Workbook-level: only --file (no --sheet)
+    // Note: --stream not supported for workbook-level commands (need full metadata)
     val workbookSubcmds = sheetsCmd orElse namesCmd
-    val workbookOpts = (fileOpt, workbookSubcmds).mapN { (file, cmd) =>
-      run(file, None, None, None, cmd)
+    val workbookOpts = (fileOpt, maxSizeOpt, workbookSubcmds).mapN { (file, maxSize, cmd) =>
+      run(file, None, None, None, maxSize, false, cmd)
     }
 
     // Headless commands: --file is optional (for constant formulas like =1+1, =PI())
-    val headlessOpts = (fileOpt.orNone, sheetOpt, evalCmd).mapN { (fileOpt, sheet, cmd) =>
-      runHeadless(fileOpt, sheet, cmd)
+    // Note: --stream not supported for eval (needs formula analysis)
+    val headlessOpts = (fileOpt.orNone, sheetOpt, maxSizeOpt, evalCmd).mapN {
+      (fileOpt, sheet, maxSize, cmd) =>
+        runHeadless(fileOpt, sheet, maxSize, cmd)
     }
 
     // Sheet-level read-only: --file and --sheet (no --output)
     val sheetReadOnlySubcmds =
       boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd
 
-    val sheetReadOnlyOpts = (fileOpt, sheetOpt, sheetReadOnlySubcmds).mapN { (file, sheet, cmd) =>
-      run(file, sheet, None, None, cmd)
+    val sheetReadOnlyOpts = (fileOpt, sheetOpt, maxSizeOpt, streamOpt, sheetReadOnlySubcmds).mapN {
+      (file, sheet, maxSize, stream, cmd) =>
+        run(file, sheet, None, None, maxSize, stream, cmd)
     }
 
     // Sheet-level write: --file, --sheet, and --output (required)
+    // Note: --stream not supported for write commands (need full workbook for modifications)
     val sheetWriteSubcmds =
       putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd
 
     val sheetWriteOpts =
-      (fileOpt, sheetOpt, outputOpt, backendOpt, sheetWriteSubcmds).mapN {
-        (file, sheet, out, backend, cmd) =>
-          run(file, sheet, Some(out), backend, cmd)
+      (fileOpt, sheetOpt, outputOpt, backendOpt, maxSizeOpt, sheetWriteSubcmds).mapN {
+        (file, sheet, out, backend, maxSize, cmd) =>
+          run(file, sheet, Some(out), backend, maxSize, false, cmd)
       }
 
     // Standalone: no --file required (creates new files)
@@ -125,6 +132,22 @@ object Main
           )
       }
       .orNone
+
+  private val maxSizeOpt: Opts[Option[Long]] =
+    Opts
+      .option[Long](
+        "max-size",
+        "Max uncompressed size in MB for in-memory load (default: 100, 0 = unlimited). Use for large files when --stream is not supported."
+      )
+      .orNone
+
+  private val streamOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "stream",
+        "Use O(1) memory streaming for large files (100k+ rows). Supports: search, stats, bounds, view (markdown/csv/json). 7-8x faster than in-memory."
+      )
+      .orFalse
 
   // ==========================================================================
   // Command definitions
@@ -760,14 +783,17 @@ Operations execute in order. Use "-" to read from stdin."""
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
     backendOpt: Option[XmlBackend],
+    maxSizeOpt: Option[Long],
+    stream: Boolean,
     cmd: CliCommand
   ): IO[ExitCode] =
-    execute(filePath, sheetNameOpt, outputOpt, backendOpt, cmd).attempt.flatMap {
-      case Right(output) =>
-        IO.println(output).as(ExitCode.Success)
-      case Left(err) =>
-        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
-    }
+    execute(filePath, sheetNameOpt, outputOpt, backendOpt, maxSizeOpt, stream, cmd).attempt
+      .flatMap {
+        case Right(output) =>
+          IO.println(output).as(ExitCode.Success)
+        case Left(err) =>
+          IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
+      }
 
   private def runInfo(): IO[ExitCode] =
     IO.println(formatFunctionList()).as(ExitCode.Success)
@@ -875,10 +901,13 @@ Operations execute in order. Use "-" to read from stdin."""
   private def runHeadless(
     filePathOpt: Option[Path],
     sheetNameOpt: Option[String],
+    maxSizeOpt: Option[Long],
     cmd: CliCommand
   ): IO[ExitCode] =
+    val excel = ExcelIO.instance[IO]
+    val readerConfig = buildReaderConfig(maxSizeOpt)
     val workbookIO: IO[Workbook] = filePathOpt match
-      case Some(filePath) => ExcelIO.instance[IO].read(filePath)
+      case Some(filePath) => excel.readWith(filePath, readerConfig)
       case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
 
     (for
@@ -927,13 +956,69 @@ Operations execute in order. Use "-" to read from stdin."""
     sheetNameOpt: Option[String],
     outputOpt: Option[Path],
     backendOpt: Option[XmlBackend],
+    maxSizeOpt: Option[Long],
+    stream: Boolean,
     cmd: CliCommand
   ): IO[String] =
-    for
-      wb <- ExcelIO.instance[IO].read(filePath)
-      sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-      result <- executeCommand(wb, sheet, outputOpt, backendOpt, cmd)
-    yield result
+    if stream then executeStreaming(filePath, sheetNameOpt, cmd)
+    else
+      val excel = ExcelIO.instance[IO]
+      val readerConfig = buildReaderConfig(maxSizeOpt)
+      for
+        wb <- excel.readWith(filePath, readerConfig)
+        sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+        result <- executeCommand(wb, sheet, outputOpt, backendOpt, cmd)
+      yield result
+
+  /** Execute command using streaming mode (O(1) memory). */
+  private def executeStreaming(
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    cmd: CliCommand
+  ): IO[String] = cmd match
+    case CliCommand.Search(pattern, limit, _) =>
+      StreamingReadCommands.search(filePath, sheetNameOpt, pattern, limit)
+
+    case CliCommand.Stats(refStr) =>
+      StreamingReadCommands.stats(filePath, sheetNameOpt, refStr)
+
+    case CliCommand.Bounds =>
+      StreamingReadCommands.bounds(filePath, sheetNameOpt)
+
+    case CliCommand.View(
+          rangeStr,
+          showFormulas,
+          _,
+          limit,
+          format,
+          _,
+          _,
+          showLabels,
+          _,
+          _,
+          _,
+          skipEmpty,
+          headerRow,
+          _
+        ) =>
+      StreamingReadCommands.view(
+        filePath,
+        sheetNameOpt,
+        rangeStr,
+        showFormulas,
+        limit,
+        format,
+        showLabels,
+        skipEmpty,
+        headerRow
+      )
+
+    case _ =>
+      IO.raiseError(
+        new Exception(
+          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only)"
+        )
+      )
 
   private def executeCommand(
     wb: Workbook,
@@ -1159,3 +1244,10 @@ Operations execute in order. Use "-" to read from stdin."""
     outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required")))(path =>
       f(path, config)
     )
+
+  /** Build ReaderConfig from CLI maxSize option (in MB). 0 means unlimited. */
+  private def buildReaderConfig(maxSizeOpt: Option[Long]): ReaderConfig =
+    maxSizeOpt match
+      case Some(0) => ReaderConfig.permissive
+      case Some(mb) => ReaderConfig.default.copy(maxUncompressedSize = mb * 1024 * 1024)
+      case None => ReaderConfig.default

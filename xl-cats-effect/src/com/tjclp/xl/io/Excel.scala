@@ -34,6 +34,16 @@ trait Excel[F[_]]:
   def read(path: Path): F[Workbook]
 
   /**
+   * Read workbook from XLSX file with custom configuration.
+   *
+   * Allows control over security limits (max size, compression ratio, etc).
+   *
+   * @param config
+   *   Reader configuration. Use ReaderConfig.permissive to disable all limits.
+   */
+  def readWith(path: Path, config: com.tjclp.xl.ooxml.XlsxReader.ReaderConfig): F[Workbook]
+
+  /**
    * Write workbook to XLSX file.
    *
    * Good for: Small workbooks, complete data available Memory: O(n) where n = total cells
