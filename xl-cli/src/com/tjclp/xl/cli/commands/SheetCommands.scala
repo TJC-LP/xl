@@ -13,12 +13,32 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
 /**
  * Sheet management command handlers.
  *
- * Commands for add, remove, rename, move, copy sheet operations.
+ * Commands for add, remove, rename, move, copy sheet operations. All methods accept a `stream`
+ * parameter for O(1) output memory.
  */
 object SheetCommands:
 
+  /** Write workbook using standard or streaming writer based on mode */
+  private def writeWorkbook(
+    wb: Workbook,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean
+  ): IO[Unit] =
+    val excel = ExcelIO.instance[IO]
+    if stream then excel.writeWorkbookStream(wb, outputPath, config)
+    else excel.writeWith(wb, outputPath, config)
+
+  /** Build save message suffix based on write mode */
+  private def saveSuffix(outputPath: Path, stream: Boolean): String =
+    if stream then s"Saved (streaming): $outputPath"
+    else s"Saved: $outputPath"
+
   /**
    * Add a new empty sheet to workbook.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def addSheet(
     wb: Workbook,
@@ -26,7 +46,8 @@ object SheetCommands:
     afterOpt: Option[String],
     beforeOpt: Option[String],
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
@@ -74,17 +95,26 @@ object SheetCommands:
         case (None, None) =>
           // Append at end (use put for simplicity - adds if not exists)
           IO.pure(wb.put(newSheet))
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       position = (afterOpt, beforeOpt) match
         case (Some(after), _) => s" (after '$after')"
         case (_, Some(before)) => s" (before '$before')"
         case _ => " (at end)"
-    yield s"Added sheet: $name$position\nSaved: $outputPath"
+    yield s"Added sheet: $name$position\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Remove sheet from workbook.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
-  def removeSheet(wb: Workbook, name: String, outputPath: Path, config: WriterConfig): IO[String] =
+  def removeSheet(
+    wb: Workbook,
+    name: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
     for
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
       updatedWb <- IO.fromEither(wb.remove(sheetName).left.map {
@@ -95,18 +125,22 @@ object SheetCommands:
         case XLError.InvalidWorkbook(reason) => new Exception(reason)
         case e => new Exception(e.message)
       })
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
-    yield s"Removed sheet: $name\nSaved: $outputPath"
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Removed sheet: $name\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Rename a sheet.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def renameSheet(
     wb: Workbook,
     oldName: String,
     newName: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       oldSheetName <- IO.fromEither(SheetName(oldName).left.map(e => new Exception(e)))
@@ -120,11 +154,14 @@ object SheetCommands:
           new Exception(s"Sheet '$newName' already exists")
         case e => new Exception(e.message)
       })
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
-    yield s"Renamed: $oldName → $newName\nSaved: $outputPath"
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Renamed: $oldName → $newName\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Move sheet to new position.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def moveSheet(
     wb: Workbook,
@@ -133,7 +170,8 @@ object SheetCommands:
     afterOpt: Option[String],
     beforeOpt: Option[String],
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
@@ -183,19 +221,23 @@ object SheetCommands:
       clampedIdx = adjustedIdx.max(0).min(withoutSheet.size)
       newOrder = withoutSheet.patch(clampedIdx, Vector(sheetName), 0)
       updatedWb <- IO.fromEither(wb.reorder(newOrder).left.map(e => new Exception(e.message)))
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       position = s"to position $clampedIdx"
-    yield s"Moved: $name $position\nSaved: $outputPath"
+    yield s"Moved: $name $position\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Copy sheet to new name.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def copySheet(
     wb: Workbook,
     sourceName: String,
     targetName: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       sourceSheetName <- IO.fromEither(SheetName(sourceName).left.map(e => new Exception(e)))
@@ -210,5 +252,5 @@ object SheetCommands:
         .whenA(wb.sheets.exists(_.name == targetSheetName))
       copiedSheet = sourceSheet.copy(name = targetSheetName)
       updatedWb = wb.put(copiedSheet)
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
-    yield s"Copied: $sourceName → $targetName\nSaved: $outputPath"
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Copied: $sourceName → $targetName\n${saveSuffix(outputPath, stream)}"

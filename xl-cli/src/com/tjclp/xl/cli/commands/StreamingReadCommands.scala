@@ -3,8 +3,9 @@ package com.tjclp.xl.cli.commands
 import java.nio.file.Path
 
 import cats.effect.IO
+import cats.implicits.*
 import fs2.Stream
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.helpers.ValueParser
@@ -32,7 +33,8 @@ object StreamingReadCommands:
     filePath: Path,
     sheetNameOpt: Option[String],
     pattern: String,
-    limit: Int
+    limit: Int,
+    sheetsFilter: Option[String]
   ): IO[String] =
     IO.fromEither(
       scala.util
@@ -41,28 +43,39 @@ object StreamingReadCommands:
         .left
         .map(e => new Exception(s"Invalid regex pattern: ${e.getMessage}"))
     ).flatMap { regex =>
-      val rowStream = sheetNameOpt match
-        case Some(name) => excel.readSheetStream(filePath, name)
-        case None => excel.readStream(filePath)
+      resolveSearchSheets(filePath, sheetNameOpt, sheetsFilter).flatMap { targetSheets =>
+        val rowStream = Stream
+          .emits(targetSheets)
+          .flatMap { sheetName =>
+            excel.readSheetStream(filePath, sheetName).map(row => (sheetName, row))
+          }
 
-      rowStream
-        .flatMap { row =>
-          Stream.emits(
-            row.cells.toSeq.collect { case (colIdx, value) =>
-              val text = ValueParser.formatCellValue(value)
-              if regex.findFirstIn(text).isDefined then
-                Some((ARef.from0(colIdx, row.rowIndex - 1), text))
-              else None
-            }.flatten
-          )
-        }
-        .take(limit)
-        .compile
-        .toVector
-        .map { results =>
-          val sheetDesc = sheetNameOpt.getOrElse("first sheet")
-          s"Found ${results.size} matches in $sheetDesc (streaming):\n\n${formatSearchResults(results)}"
-        }
+        rowStream
+          .flatMap { case (sheetName, row) =>
+            Stream.emits(
+              row.cells.toSeq.collect { case (colIdx, value) =>
+                val text = ValueParser.formatCellValue(value)
+                if regex.findFirstIn(text).isDefined then
+                  Some((sheetName, ARef.from0(colIdx, row.rowIndex - 1), text))
+                else None
+              }.flatten
+            )
+          }
+          .take(limit)
+          .compile
+          .toVector
+          .map { results =>
+            val sheetDesc =
+              if targetSheets.size == 1 then targetSheets.head
+              else s"${targetSheets.size} sheets"
+            val formatted = Markdown.renderSearchResultsWithRef(
+              results.map { case (sheetName, ref, value) =>
+                (s"$sheetName!${ref.toA1}", value)
+              }
+            )
+            s"Found ${results.size} matches in $sheetDesc (streaming):\n\n$formatted"
+          }
+      }
     }
 
   /**
@@ -75,32 +88,86 @@ object StreamingReadCommands:
     sheetNameOpt: Option[String],
     refStr: String
   ): IO[String] =
-    parseRangeFromRef(refStr).flatMap { range =>
-      val rowStream = sheetNameOpt match
-        case Some(name) => excel.readSheetStreamRange(filePath, name, range)
-        case None => excel.readStreamRange(filePath, range)
+    parseRangeFromRef(refStr).flatMap { case (refSheetOpt, range) =>
+      resolveSheetName(sheetNameOpt, refSheetOpt, "stats", refStr).flatMap { resolvedSheetOpt =>
+        val rowStream = resolvedSheetOpt match
+          case Some(name) => excel.readSheetStreamRange(filePath, name, range)
+          case None => excel.readStreamRange(filePath, range)
 
-      rowStream
-        .flatMap(row => Stream.emits(cellsInRange(row, range)))
-        .collect {
-          case CellValue.Number(n) => n
-          case CellValue.Formula(_, Some(CellValue.Number(n))) => n
-        }
-        .compile
-        .fold(StatsAccumulator.empty)(_.add(_))
-        .flatMap { acc =>
-          if acc.count == 0 then
-            IO.raiseError(new Exception(s"No numeric values in range ${range.toA1}"))
-          else IO.pure(acc.format)
-        }
+        rowStream
+          .flatMap(row => Stream.emits(cellsInRange(row, range)))
+          .collect {
+            case CellValue.Number(n) => n
+            case CellValue.Formula(_, Some(CellValue.Number(n))) => n
+          }
+          .compile
+          .fold(StatsAccumulator.empty)(_.add(_))
+          .flatMap { acc =>
+            if acc.count == 0 then
+              IO.raiseError(new Exception(s"No numeric values in range ${range.toA1}"))
+            else IO.pure(acc.format)
+          }
+      }
     }
 
   /**
-   * Compute used range bounds using streaming.
+   * Compute used range bounds using dimension element (instant for any file size).
    *
-   * Tracks min/max row/col during scan. Memory: O(1).
+   * Uses <dimension ref="..."> from worksheet metadata. Falls back to streaming scan if dimension
+   * is missing.
    */
   def bounds(
+    filePath: Path,
+    sheetNameOpt: Option[String]
+  ): IO[String] =
+    boundsDimension(filePath, sheetNameOpt)
+
+  /**
+   * Compute used range bounds using dimension element (instant).
+   *
+   * Reads only the <dimension ref="..."> element from worksheet XML. Typically completes in <100ms.
+   */
+  def boundsDimension(
+    filePath: Path,
+    sheetNameOpt: Option[String]
+  ): IO[String] =
+    excel.readMetadata(filePath).flatMap { meta =>
+      // Find sheet index
+      val sheetIndexEither: Either[String, Int] = sheetNameOpt match
+        case Some(name) =>
+          meta.sheets.indexWhere(_.name.value == name) match
+            case -1 => Left(s"Sheet not found: $name")
+            case idx => Right(idx + 1) // 1-based
+        case None => Right(1) // First sheet
+
+      sheetIndexEither match
+        case Left(err) => IO.raiseError(new Exception(err))
+        case Right(sheetIndex) =>
+          val sheetInfo = meta.sheets.lift(sheetIndex - 1)
+          val sheetName = sheetInfo.map(_.name.value).getOrElse(s"Sheet$sheetIndex")
+          val dimension = sheetInfo.flatMap(_.dimension)
+
+          dimension match
+            case Some(range) =>
+              val rowCount = range.end.row.index1 - range.start.row.index1 + 1
+              val colCount = range.end.col.index0 - range.start.col.index0 + 1
+              IO.pure(
+                s"""Sheet: $sheetName
+                   |Used range: ${range.toA1} (from dimension element)
+                   |Rows: ${range.start.row.index1}-${range.end.row.index1} ($rowCount total)
+                   |Columns: ${range.start.col.toLetter}-${range.end.col.toLetter} ($colCount total)""".stripMargin
+              )
+            case None =>
+              // Fallback to streaming scan
+              boundsScan(filePath, sheetNameOpt)
+    }
+
+  /**
+   * Compute used range bounds using streaming scan (accurate but slower).
+   *
+   * Tracks min/max row/col during full scan. Memory: O(1). Time: O(rows).
+   */
+  def boundsScan(
     filePath: Path,
     sheetNameOpt: Option[String]
   ): IO[String] =
@@ -112,7 +179,7 @@ object StreamingReadCommands:
       .fold(BoundsAccumulator.empty)(_.update(_))
       .map { acc =>
         val sheetName = sheetNameOpt.getOrElse("Sheet1")
-        acc.format(sheetName)
+        acc.format(sheetName, fromScan = true)
       }
 
   /**
@@ -142,24 +209,27 @@ object StreamingReadCommands:
           )
         )
       case _ =>
-        parseRangeFromRef(rangeStr).flatMap { range =>
-          // Limit rows and filter to range
-          val limitedRange = limitRange(range, limit)
-          val rowStream = sheetNameOpt match
-            case Some(name) => excel.readSheetStreamRange(filePath, name, limitedRange)
-            case None => excel.readStreamRange(filePath, limitedRange)
+        parseRangeFromRef(rangeStr).flatMap { case (refSheetOpt, range) =>
+          resolveSheetName(sheetNameOpt, refSheetOpt, "view", rangeStr).flatMap {
+            resolvedSheetOpt =>
+              // Limit rows and filter to range
+              val limitedRange = limitRange(range, limit)
+              val rowStream = resolvedSheetOpt match
+                case Some(name) => excel.readSheetStreamRange(filePath, name, limitedRange)
+                case None => excel.readStreamRange(filePath, limitedRange)
 
-          rowStream.compile.toVector
-            .map { rows =>
-              format match
-                case ViewFormat.Markdown =>
-                  formatMarkdown(rows, limitedRange, showFormulas, skipEmpty, showLabels)
-                case ViewFormat.Csv =>
-                  formatCsv(rows, limitedRange, showFormulas, skipEmpty, showLabels)
-                case ViewFormat.Json =>
-                  formatJson(rows, limitedRange, showFormulas, skipEmpty, headerRow)
-                case _ => "" // unreachable due to earlier check
-            }
+              rowStream.compile.toVector
+                .map { rows =>
+                  format match
+                    case ViewFormat.Markdown =>
+                      formatMarkdown(rows, limitedRange, showFormulas, skipEmpty, showLabels)
+                    case ViewFormat.Csv =>
+                      formatCsv(rows, limitedRange, showFormulas, skipEmpty, showLabels)
+                    case ViewFormat.Json =>
+                      formatJson(rows, limitedRange, showFormulas, skipEmpty, headerRow)
+                    case _ => "" // unreachable due to earlier check
+                }
+          }
         }
 
   // ==========================================================================
@@ -208,35 +278,91 @@ object StreamingReadCommands:
           cellCount = cellCount + row.cells.size
         )
 
-    def format(sheetName: String): String =
+    def format(sheetName: String, fromScan: Boolean = false): String =
+      val source = if fromScan then "(from scan)" else "(streaming)"
       (minRow, maxRow, minCol, maxCol) match
         case (Some(r1), Some(r2), Some(c1), Some(c2)) =>
           val startRef = ARef.from0(c1, r1 - 1) // rowIndex is 1-based
           val endRef = ARef.from0(c2, r2 - 1)
           val rowCount = r2 - r1 + 1
           val colCount = c2 - c1 + 1
-          s"""Sheet: $sheetName (streaming)
-             |Used range: ${startRef.toA1}:${endRef.toA1}
+          s"""Sheet: $sheetName
+             |Used range: ${startRef.toA1}:${endRef.toA1} $source
              |Rows: $r1-$r2 ($rowCount total)
              |Columns: ${Column.from0(c1).toLetter}-${Column.from0(c2).toLetter} ($colCount total)
              |Non-empty: $cellCount cells""".stripMargin
         case _ =>
-          s"""Sheet: $sheetName (streaming)
-             |Used range: (empty)
+          s"""Sheet: $sheetName
+             |Used range: (empty) $source
              |Non-empty: 0 cells""".stripMargin
 
   private object BoundsAccumulator:
     def empty: BoundsAccumulator = BoundsAccumulator(None, None, None, None, 0)
 
-  /** Parse range from ref string (handles both single cell and range). */
-  private def parseRangeFromRef(refStr: String): IO[CellRange] =
+  /** Parse range and optional sheet name from ref string (handles both single cell and range). */
+  private def parseRangeFromRef(refStr: String): IO[(Option[String], CellRange)] =
     IO.fromEither(
       RefType.parse(refStr).left.map(e => new Exception(e))
     ).flatMap {
-      case RefType.Cell(ref) => IO.pure(CellRange(ref, ref))
-      case RefType.Range(range) => IO.pure(range)
-      case RefType.QualifiedCell(_, ref) => IO.pure(CellRange(ref, ref))
-      case RefType.QualifiedRange(_, range) => IO.pure(range)
+      case RefType.Cell(ref) => IO.pure((None, CellRange(ref, ref)))
+      case RefType.Range(range) => IO.pure((None, range))
+      case RefType.QualifiedCell(sheet, ref) => IO.pure((Some(sheet.value), CellRange(ref, ref)))
+      case RefType.QualifiedRange(sheet, range) => IO.pure((Some(sheet.value), range))
+    }
+
+  /** Resolve sheet selection for streaming range commands, honoring qualified refs. */
+  private def resolveSheetName(
+    sheetNameOpt: Option[String],
+    refSheetOpt: Option[String],
+    context: String,
+    refStr: String
+  ): IO[Option[String]] =
+    (refSheetOpt, sheetNameOpt) match
+      case (Some(refSheet), Some(cliSheet)) if refSheet != cliSheet =>
+        IO.raiseError(
+          new Exception(
+            s"$context ref '$refStr' targets sheet '$refSheet' but --sheet is '$cliSheet'"
+          )
+        )
+      case (Some(refSheet), _) => IO.pure(Some(refSheet))
+      case (None, Some(cliSheet)) => IO.pure(Some(cliSheet))
+      case (None, None) => IO.pure(None)
+
+  /** Resolve target sheets for streaming search, matching --sheets/--sheet semantics. */
+  private def resolveSearchSheets(
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    sheetsFilter: Option[String]
+  ): IO[Vector[String]] =
+    excel.readMetadata(filePath).flatMap { meta =>
+      val available = meta.sheets.map(_.name.value)
+      val availableList = available.mkString(", ")
+
+      (sheetsFilter, sheetNameOpt) match
+        case (Some(filterStr), _) =>
+          val names = filterStr.split(",").map(_.trim).filter(_.nonEmpty).toVector
+          if names.isEmpty then
+            IO.raiseError(new Exception("--sheets requires at least one sheet name"))
+          else
+            names.traverse { name =>
+              IO.fromEither(SheetName(name).left.map(e => new Exception(e))).flatMap { sn =>
+                if available.contains(sn.value) then IO.pure(sn.value)
+                else
+                  IO.raiseError(
+                    new Exception(s"Sheet not found: $name. Available: $availableList")
+                  )
+              }
+            }
+        case (None, Some(sheetName)) =>
+          IO.fromEither(SheetName(sheetName).left.map(e => new Exception(e))).flatMap { sn =>
+            if available.contains(sn.value) then IO.pure(Vector(sn.value))
+            else
+              IO.raiseError(
+                new Exception(s"Sheet not found: $sheetName. Available: $availableList")
+              )
+          }
+        case (None, None) =>
+          IO.pure(available)
     }
 
   /** Extract cells from row that fall within range columns. */
@@ -254,6 +380,38 @@ object StreamingReadCommands:
     else
       val newEndRow = range.start.row.index0 + maxRows - 1
       CellRange(range.start, ARef.from0(range.end.col.index0, newEndRow))
+
+  /** Check if a streamed cell value is effectively empty. */
+  private def isCellEmptyValue(value: CellValue): Boolean =
+    value match
+      case CellValue.Empty => true
+      case CellValue.Text(s) if s.trim.isEmpty => true
+      case CellValue.Formula(_, Some(CellValue.Empty)) => true
+      case CellValue.Formula(_, Some(CellValue.Text(s))) if s.trim.isEmpty => true
+      case _ => false
+
+  /** Select rows and columns to render, honoring skipEmpty semantics. */
+  private def selectRowsAndCols(
+    rows: Vector[RowData],
+    range: CellRange,
+    skipEmpty: Boolean
+  ): (Vector[RowData], Vector[Int]) =
+    val startCol = range.start.col.index0
+    val endCol = range.end.col.index0
+    val cols = (startCol to endCol).toVector
+    if !skipEmpty then (rows, cols)
+    else
+      val nonEmptyCols = cols.filter { colIdx =>
+        rows.exists { row =>
+          row.cells.get(colIdx).exists(value => !isCellEmptyValue(value))
+        }
+      }
+      val nonEmptyRows = rows.filter { row =>
+        nonEmptyCols.exists { colIdx =>
+          row.cells.get(colIdx).exists(value => !isCellEmptyValue(value))
+        }
+      }
+      (nonEmptyRows, nonEmptyCols)
 
   /** Format search results as markdown table. */
   private def formatSearchResults(results: Vector[(ARef, String)]): String =
@@ -278,18 +436,17 @@ object StreamingReadCommands:
   ): String =
     if rows.isEmpty then return "(empty range)"
 
-    val startCol = range.start.col.index0
-    val endCol = range.end.col.index0
-    val colCount = endCol - startCol + 1
+    val (selectedRows, selectedCols) = selectRowsAndCols(rows, range, skipEmpty)
+    val colCount = selectedCols.size
 
     val sb = new StringBuilder
 
     // Header row (column letters if showLabels, else generic)
     if showLabels then
       sb.append("|   |")
-      (startCol to endCol).foreach(c => sb.append(s" ${Column.from0(c).toLetter} |"))
+      selectedCols.foreach(c => sb.append(s" ${Column.from0(c).toLetter} |"))
       sb.append("\n|---|")
-      (startCol to endCol).foreach(_ => sb.append("---|"))
+      selectedCols.foreach(_ => sb.append("---|"))
       sb.append("\n")
     else
       sb.append("|")
@@ -299,11 +456,11 @@ object StreamingReadCommands:
       sb.append("\n")
 
     // Data rows
-    rows.foreach { row =>
+    selectedRows.foreach { row =>
       if showLabels then sb.append(s"| ${row.rowIndex} |")
       else sb.append("|")
 
-      (startCol to endCol).foreach { colIdx =>
+      selectedCols.foreach { colIdx =>
         val value = row.cells.get(colIdx) match
           case Some(v) => formatCellValue(v, showFormulas)
           case None => ""
@@ -323,22 +480,21 @@ object StreamingReadCommands:
     skipEmpty: Boolean,
     showLabels: Boolean
   ): String =
-    val startCol = range.start.col.index0
-    val endCol = range.end.col.index0
+    val (selectedRows, selectedCols) = selectRowsAndCols(rows, range, skipEmpty)
 
     val sb = new StringBuilder
 
     // Header row if showLabels
     if showLabels then
       sb.append(",")
-      sb.append((startCol to endCol).map(c => Column.from0(c).toLetter).mkString(","))
+      sb.append(selectedCols.map(c => Column.from0(c).toLetter).mkString(","))
       sb.append("\n")
 
     // Data rows
-    rows.foreach { row =>
+    selectedRows.foreach { row =>
       if showLabels then sb.append(s"${row.rowIndex},")
 
-      val values = (startCol to endCol).map { colIdx =>
+      val values = selectedCols.map { colIdx =>
         row.cells.get(colIdx) match
           case Some(v) =>
             val formatted = formatCellValue(v, showFormulas)

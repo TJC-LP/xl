@@ -4,6 +4,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.SheetEvaluator
+import com.tjclp.xl.ooxml.metadata.SheetInfo
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.numfmt.NumFmt
 
@@ -117,6 +118,28 @@ object Markdown:
         range.map(_.toA1).getOrElse("(empty)"),
         cells.toString,
         formulas.toString
+      )
+    }
+
+    renderTable(headers, rows)
+
+  /**
+   * Render a list of sheets from lightweight metadata (quick mode).
+   *
+   * Shows name, dimension (from worksheet metadata), and visibility state. No cell counting.
+   */
+  def renderSheetListQuick(sheets: Vector[SheetInfo]): String =
+    val headers = Vector("#", "Name", "Dimension", "State")
+    val rows = sheets.zipWithIndex.map { case (info, idx) =>
+      val stateStr = info.state match
+        case Some("hidden") => "(hidden)"
+        case Some("veryHidden") => "(very hidden)"
+        case _ => ""
+      Vector(
+        (idx + 1).toString,
+        info.name.value,
+        info.dimension.map(_.toA1).getOrElse("(unknown)"),
+        stateStr
       )
     }
 

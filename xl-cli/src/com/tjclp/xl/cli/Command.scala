@@ -9,10 +9,10 @@ import java.nio.file.Path
  */
 enum CliCommand:
   // Read-only (workbook-level)
-  case Sheets
+  case Sheets(stats: Boolean) // stats=false: instant (metadata only), stats=true: full mode
   case Names
   // Read-only (sheet-level)
-  case Bounds
+  case Bounds(scan: Boolean) // scan=false: instant (dimension element), scan=true: full scan
   case View(
     range: String,
     showFormulas: Boolean,

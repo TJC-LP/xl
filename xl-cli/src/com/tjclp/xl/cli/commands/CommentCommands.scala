@@ -13,9 +13,26 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
 /**
  * Command handlers for cell comment operations.
  *
- * Supports adding and removing comments from cells.
+ * Supports adding and removing comments from cells. All methods accept a `stream` parameter for
+ * O(1) output memory.
  */
 object CommentCommands:
+
+  /** Write workbook using standard or streaming writer based on mode */
+  private def writeWorkbook(
+    wb: Workbook,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean
+  ): IO[Unit] =
+    val excel = ExcelIO.instance[IO]
+    if stream then excel.writeWorkbookStream(wb, outputPath, config)
+    else excel.writeWith(wb, outputPath, config)
+
+  /** Build save message suffix based on write mode */
+  private def saveSuffix(outputPath: Path, stream: Boolean): String =
+    if stream then s"Saved (streaming): $outputPath"
+    else s"Saved: $outputPath"
 
   /**
    * Add or update comment on a cell.
@@ -34,6 +51,8 @@ object CommentCommands:
    *   Output file path
    * @param config
    *   Writer configuration
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    * @return
    *   Success message
    */
@@ -44,7 +63,8 @@ object CommentCommands:
     text: String,
     author: Option[String],
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "comment")
@@ -62,11 +82,11 @@ object CommentCommands:
       updatedWb = wb.put(updatedSheet)
 
       // Write to output
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
 
       authorStr = author.map(a => s" (author: $a)").getOrElse("")
     yield s"""Added comment to ${ref.toA1}: "$text"$authorStr
-Saved: $outputPath"""
+${saveSuffix(outputPath, stream)}"""
 
   /**
    * Remove comment from a cell.
@@ -81,6 +101,8 @@ Saved: $outputPath"""
    *   Output file path
    * @param config
    *   Writer configuration
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    * @return
    *   Success message
    */
@@ -89,7 +111,8 @@ Saved: $outputPath"""
     sheetOpt: Option[Sheet],
     refStr: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "remove-comment")
@@ -107,8 +130,8 @@ Saved: $outputPath"""
       updatedWb = wb.put(updatedSheet)
 
       // Write to output
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
 
       status = if hadComment then "Removed comment from" else "No comment found at"
     yield s"""$status ${ref.toA1}
-Saved: $outputPath"""
+${saveSuffix(outputPath, stream)}"""

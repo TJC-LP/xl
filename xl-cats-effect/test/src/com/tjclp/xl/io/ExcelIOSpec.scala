@@ -810,3 +810,331 @@ class ExcelIOSpec extends CatsEffectSuite:
         case CellValue.Text(t) => assertEquals(t, "'+EVIL", "Sheet2 should be escaped")
         case other => fail(s"Expected Text, got: $other")
   }
+
+  // ========== Dimension Support Tests ==========
+
+  tempDir.test("writeStreamWithAutoDetect: includes dimension element in output") { dir =>
+    val path = dir.resolve("with-dimension.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write data spanning A1:C5
+    val rows = fs2.Stream.range(1, 6).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Text(s"A$i"),
+        1 -> CellValue.Number(BigDecimal(i * 10)),
+        2 -> CellValue.Bool(i % 2 == 0)
+      ))
+    }
+
+    rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.flatMap { _ =>
+      // Extract and verify dimension element from worksheet XML
+      IO {
+        import java.util.zip.ZipFile
+        val zipFile = new ZipFile(path.toFile)
+        try {
+          val entry = zipFile.getEntry("xl/worksheets/sheet1.xml")
+          val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+
+          // Should contain dimension element with correct range
+          assert(content.contains("""<dimension ref="A1:C5"/>"""),
+            s"Should have dimension element A1:C5, got: ${content.take(500)}")
+        } finally {
+          zipFile.close()
+        }
+      }
+    }
+  }
+
+  tempDir.test("writeStreamWithAutoDetect: dimension bounds match actual data extent") { dir =>
+    val path = dir.resolve("dimension-bounds.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write data starting at B3:D7 (not starting at A1)
+    val rows = fs2.Stream.range(3, 8).map { i =>
+      RowData(i, Map(
+        1 -> CellValue.Text(s"B$i"),  // Column B (index 1)
+        2 -> CellValue.Number(BigDecimal(i)),  // Column C (index 2)
+        3 -> CellValue.Bool(true)  // Column D (index 3)
+      ))
+    }
+
+    rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.flatMap { _ =>
+      IO {
+        import java.util.zip.ZipFile
+        val zipFile = new ZipFile(path.toFile)
+        try {
+          val entry = zipFile.getEntry("xl/worksheets/sheet1.xml")
+          val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+
+          // Should have dimension B3:D7 (not A1:D7)
+          assert(content.contains("""<dimension ref="B3:D7"/>"""),
+            s"Should have dimension B3:D7, got: ${content.take(500)}")
+        } finally {
+          zipFile.close()
+        }
+      }
+    }
+  }
+
+  tempDir.test("writeStream: empty stream produces no dimension") { dir =>
+    val path = dir.resolve("empty-dimension.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Empty stream
+    val rows = fs2.Stream.empty: fs2.Stream[IO, RowData]
+
+    rows.through(excel.writeStream(path, "Empty")).compile.drain.flatMap { _ =>
+      IO {
+        import java.util.zip.ZipFile
+        val zipFile = new ZipFile(path.toFile)
+        try {
+          val entry = zipFile.getEntry("xl/worksheets/sheet1.xml")
+          val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+
+          // Should NOT contain dimension element for empty sheet
+          assert(!content.contains("<dimension"),
+            s"Empty sheet should not have dimension element, got: ${content.take(500)}")
+        } finally {
+          zipFile.close()
+        }
+      }
+    }
+  }
+
+  tempDir.test("writeStreamWithAutoDetect: single cell produces accurate dimension") { dir =>
+    val path = dir.resolve("single-cell.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Single cell at F10
+    val rows = fs2.Stream.emit(
+      RowData(10, Map(5 -> CellValue.Text("Only cell")))  // Column F (index 5)
+    )
+
+    rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.flatMap { _ =>
+      IO {
+        import java.util.zip.ZipFile
+        val zipFile = new ZipFile(path.toFile)
+        try {
+          val entry = zipFile.getEntry("xl/worksheets/sheet1.xml")
+          val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+
+          // Dimension should be F10:F10 for single cell
+          assert(content.contains("""<dimension ref="F10:F10"/>"""),
+            s"Single cell should have dimension F10:F10, got: ${content.take(500)}")
+        } finally {
+          zipFile.close()
+        }
+      }
+    }
+  }
+
+  tempDir.test("writeStreamWithAutoDetect: dimension enables instant metadata queries") { dir =>
+    val path = dir.resolve("instant-metadata.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write 10k rows
+    val rows = fs2.Stream.range(1, 10001).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Number(BigDecimal(i)),
+        4 -> CellValue.Text(s"Row $i")  // Column E (index 4)
+      ))
+    }
+
+    rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.flatMap { _ =>
+      // Read dimension using metadata API (should be instant, not streaming)
+      excel.readDimension(path, 1).map { dim =>
+        assert(dim.isDefined, "Should have dimension")
+        val range = dim.get
+        assertEquals(range.toA1, "A1:E10000", "Dimension should match data extent")
+      }
+    }
+  }
+
+  tempDir.test("writeStreamsSeqWithAutoDetect: includes dimension for each sheet") { dir =>
+    val path = dir.resolve("multi-dimension.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val sheet1 = fs2.Stream.range(1, 11).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+    val sheet2 = fs2.Stream.range(1, 6).map(i => RowData(i, Map(
+      0 -> CellValue.Text(s"A$i"),
+      1 -> CellValue.Text(s"B$i"),
+      2 -> CellValue.Text(s"C$i")
+    )))
+
+    excel.writeStreamsSeqWithAutoDetect(path, Seq("Numbers" -> sheet1, "Text" -> sheet2)).flatMap { _ =>
+      IO {
+        import java.util.zip.ZipFile
+        val zipFile = new ZipFile(path.toFile)
+        try {
+          // Check first sheet: A1:A10
+          val entry1 = zipFile.getEntry("xl/worksheets/sheet1.xml")
+          val content1 = new String(zipFile.getInputStream(entry1).readAllBytes(), "UTF-8")
+          assert(content1.contains("""<dimension ref="A1:A10"/>"""),
+            s"Sheet1 should have dimension A1:A10")
+
+          // Check second sheet: A1:C5
+          val entry2 = zipFile.getEntry("xl/worksheets/sheet2.xml")
+          val content2 = new String(zipFile.getInputStream(entry2).readAllBytes(), "UTF-8")
+          assert(content2.contains("""<dimension ref="A1:C5"/>"""),
+            s"Sheet2 should have dimension A1:C5")
+        } finally {
+          zipFile.close()
+        }
+      }
+    }
+  }
+
+  tempDir.test("writeStreamWithAutoDetect: temp files cleaned up after write") { dir =>
+    val excel = ExcelIO.instance[IO]
+    val path = dir.resolve("cleanup-test.xlsx")
+
+    // Get temp dir before write
+    val tempDir = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"))
+
+    // Count xl-stream temp files before
+    val countTempFilesBefore = IO {
+      import scala.jdk.CollectionConverters.*
+      java.nio.file.Files.list(tempDir).iterator().asScala
+        .count(p => p.getFileName.toString.startsWith("xl-stream-"))
+    }
+
+    // Write some data using auto-detect (which creates temp files)
+    val rows = fs2.Stream.range(1, 101).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
+
+    for
+      before <- countTempFilesBefore
+      _ <- rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain
+      after <- countTempFilesBefore
+    yield
+      // Should have same number of temp files (all cleaned up)
+      assertEquals(after, before, "Temp files should be cleaned up after write")
+  }
+
+  tempDir.test("writeStreamWithAutoDetect: temp files cleaned up on error") { dir =>
+    val excel = ExcelIO.instance[IO]
+    val path = dir.resolve("error-cleanup-test.xlsx")
+
+    val tempDir = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"))
+
+    val countTempFilesBefore = IO {
+      import scala.jdk.CollectionConverters.*
+      java.nio.file.Files.list(tempDir).iterator().asScala
+        .count(p => p.getFileName.toString.startsWith("xl-stream-"))
+    }
+
+    // Create a stream that fails mid-way
+    val rows = fs2.Stream.range(1, 51).map { i =>
+      if i == 25 then throw new RuntimeException("Simulated failure")
+      RowData(i, Map(0 -> CellValue.Number(i)))
+    }
+
+    for
+      before <- countTempFilesBefore
+      result <- rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.attempt
+      after <- countTempFilesBefore
+    yield
+      // Should have failed
+      assert(result.isLeft, "Should have failed")
+      // But temp files should still be cleaned up
+      assertEquals(after, before, "Temp files should be cleaned up even on error")
+  }
+
+  // ========== Explicit Dimension Hint Tests ==========
+
+  tempDir.test("writeStream: explicit dimension hint produces dimension element") { dir =>
+    val path = dir.resolve("hint-dimension.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write data with explicit dimension hint
+    val rows = fs2.Stream.range(1, 6).map { i =>
+      RowData(i, Map(
+        0 -> CellValue.Text(s"A$i"),
+        1 -> CellValue.Number(BigDecimal(i * 10)),
+        2 -> CellValue.Bool(i % 2 == 0)
+      ))
+    }
+
+    // Provide explicit dimension hint A1:C5
+    val dimHint = CellRange.parse("A1:C5").toOption
+
+    rows.through(excel.writeStream(path, "Data", dimension = dimHint)).compile.drain.flatMap { _ =>
+      IO {
+        import java.util.zip.ZipFile
+        val zipFile = new ZipFile(path.toFile)
+        try {
+          val entry = zipFile.getEntry("xl/worksheets/sheet1.xml")
+          val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+
+          // Should contain dimension element from hint
+          assert(content.contains("""<dimension ref="A1:C5"/>"""),
+            s"Should have dimension element A1:C5 from hint, got: ${content.take(500)}")
+        } finally {
+          zipFile.close()
+        }
+      }
+    }
+  }
+
+  tempDir.test("writeStream: no dimension hint produces no dimension element") { dir =>
+    val path = dir.resolve("no-dimension.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    // Write data without dimension hint
+    val rows = fs2.Stream.range(1, 6).map { i =>
+      RowData(i, Map(0 -> CellValue.Text(s"A$i")))
+    }
+
+    rows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
+      IO {
+        import java.util.zip.ZipFile
+        val zipFile = new ZipFile(path.toFile)
+        try {
+          val entry = zipFile.getEntry("xl/worksheets/sheet1.xml")
+          val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+
+          // Should NOT contain dimension element without hint
+          assert(!content.contains("<dimension"),
+            s"Should not have dimension element without hint, got: ${content.take(500)}")
+        } finally {
+          zipFile.close()
+        }
+      }
+    }
+  }
+
+  tempDir.test("writeStream: single-pass is faster than auto-detect") { dir =>
+    val excel = ExcelIO.instance[IO]
+    val rows = fs2.Stream.range(1, 10001).map { i =>
+      RowData(i, Map(0 -> CellValue.Number(BigDecimal(i))))
+    }
+
+    // Single-pass with hint (no temp file overhead)
+    val path1 = dir.resolve("single-pass.xlsx")
+    val dimHint = CellRange.parse("A1:A10000").toOption
+
+    // Auto-detect (temp file + two passes)
+    val path2 = dir.resolve("auto-detect.xlsx")
+
+    for
+      // Time single-pass
+      start1 <- IO(System.nanoTime())
+      _ <- rows.through(excel.writeStream(path1, "Data", dimension = dimHint)).compile.drain
+      end1 <- IO(System.nanoTime())
+      singlePassMs = (end1 - start1) / 1000000
+
+      // Re-create stream (consumed by first write)
+      rows2 = fs2.Stream.range(1, 10001).map { i =>
+        RowData(i, Map(0 -> CellValue.Number(BigDecimal(i))))
+      }
+
+      // Time auto-detect
+      start2 <- IO(System.nanoTime())
+      _ <- rows2.through(excel.writeStreamWithAutoDetect(path2, "Data")).compile.drain
+      end2 <- IO(System.nanoTime())
+      autoDetectMs = (end2 - start2) / 1000000
+    yield
+      // Single-pass should be faster (roughly 2x due to no temp file I/O)
+      // We allow some tolerance since timing can vary
+      assert(singlePassMs < autoDetectMs * 1.5,
+        s"Single-pass ($singlePassMs ms) should be faster than auto-detect ($autoDetectMs ms)")
+  }

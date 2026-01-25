@@ -29,8 +29,33 @@ import com.tjclp.xl.cli.{FillDirection, SortDirection, SortKey, SortMode}
  * Write command handlers.
  *
  * Commands that modify workbook data: put, putf, style, row, col, batch.
+ *
+ * All write commands accept a `stream` parameter:
+ *   - false (default): Use standard writer (O(n) memory)
+ *   - true: Use streaming writer (O(1) output memory, preserves styles)
  */
 object WriteCommands:
+
+  /**
+   * Write workbook using standard or streaming writer based on mode.
+   *
+   * When stream=true, uses writeWorkbookStream for O(1) output memory. Styles are fully preserved
+   * in both modes.
+   */
+  private def writeWorkbook(
+    wb: Workbook,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean
+  ): IO[Unit] =
+    val excel = ExcelIO.instance[IO]
+    if stream then excel.writeWorkbookStream(wb, outputPath, config)
+    else excel.writeWith(wb, outputPath, config)
+
+  /** Build save message suffix based on write mode */
+  private def saveSuffix(outputPath: Path, stream: Boolean): String =
+    if stream then s"Saved (streaming): $outputPath"
+    else s"Saved: $outputPath"
 
   /**
    * Validate that the count of values/formulas matches the cell count in a range.
@@ -67,6 +92,9 @@ object WriteCommands:
    *   1. Single cell: put A1 100
    *   2. Fill pattern: put A1:A10 100 (all cells get same value)
    *   3. Batch values: put A1:A3 1 2 3 (values map 1:1, row-major)
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def put(
     wb: Workbook,
@@ -74,7 +102,8 @@ object WriteCommands:
     refStr: String,
     values: List[String],
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "put")
@@ -84,15 +113,15 @@ object WriteCommands:
       result <- (refOrRange, values) match
         case (Left(ref), List(singleValue)) =>
           // Mode 1: Single cell
-          putSingleCell(wb, targetSheet, ref, singleValue, outputPath, config)
+          putSingleCell(wb, targetSheet, ref, singleValue, outputPath, config, stream)
 
         case (Right(range), List(singleValue)) =>
           // Mode 2: Fill pattern
-          putFillPattern(wb, targetSheet, range, singleValue, outputPath, config)
+          putFillPattern(wb, targetSheet, range, singleValue, outputPath, config, stream)
 
         case (Right(range), multipleValues @ (_ :: _ :: _)) =>
           // Mode 3: Batch values (validate count matches) - 2+ values
-          putBatchValues(wb, targetSheet, range, multipleValues, outputPath, config)
+          putBatchValues(wb, targetSheet, range, multipleValues, outputPath, config, stream)
 
         case (Left(ref), multipleValues @ (_ :: _)) =>
           IO.raiseError(
@@ -113,13 +142,14 @@ object WriteCommands:
     ref: com.tjclp.xl.addressing.ARef,
     valueStr: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean
   ): IO[String] =
     val value = ValueParser.parseValue(valueStr)
     val updatedSheet = sheet.put(ref, value)
     val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, Set(ref))
-    ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
-      s"${Format.putSuccess(ref, value)}\nSaved: $outputPath"
+    writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
+      s"${Format.putSuccess(ref, value)}\n${saveSuffix(outputPath, stream)}"
     }
 
   /** Mode 2: Fill all cells in range with same value */
@@ -129,15 +159,16 @@ object WriteCommands:
     range: CellRange,
     valueStr: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean
   ): IO[String] =
     val value = ValueParser.parseValue(valueStr)
     val cellCount = range.cellCount
     val modifiedRefs = range.cells.toSet
     val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => s.put(ref, value))
     val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
-    ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
-      s"Filled $cellCount cells in ${range.toA1} with value ${value}\nSaved: $outputPath"
+    writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
+      s"Filled $cellCount cells in ${range.toA1} with value ${value}\n${saveSuffix(outputPath, stream)}"
     }
 
   /** Mode 3: Put different values to each cell (row-major order) */
@@ -147,7 +178,8 @@ object WriteCommands:
     range: CellRange,
     values: List[String],
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean
   ): IO[String] =
     val cellCount = range.cellCount.toInt
     validateCountMatch("put", range, cellCount, values.length, "value") match
@@ -162,12 +194,15 @@ object WriteCommands:
         val modifiedRefs = updates.map(_._1).toSet
         val updatedSheet = sheet.put(updates*)
         val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
-        ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
-          s"Put ${values.length} values to ${range.toA1} (row-major)\nSaved: $outputPath"
+        writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
+          s"Put ${values.length} values to ${range.toA1} (row-major)\n${saveSuffix(outputPath, stream)}"
         }
 
   /**
    * Write formula to cell(s).
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def putFormula(
     wb: Workbook,
@@ -175,7 +210,8 @@ object WriteCommands:
     refStr: String,
     formulas: List[String],
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "putf")
@@ -185,15 +221,15 @@ object WriteCommands:
       result <- (refOrRange, formulas) match
         case (Left(ref), List(singleFormula)) =>
           // Mode 1: Single cell
-          putfSingleCell(wb, targetSheet, ref, singleFormula, outputPath, config)
+          putfSingleCell(wb, targetSheet, ref, singleFormula, outputPath, config, stream)
 
         case (Right(range), List(singleFormula)) =>
           // Mode 2: Formula dragging (existing behavior with $ anchors)
-          putfFormulaDragging(wb, targetSheet, range, singleFormula, outputPath, config)
+          putfFormulaDragging(wb, targetSheet, range, singleFormula, outputPath, config, stream)
 
         case (Right(range), multipleFormulas @ (_ :: _ :: _)) =>
           // Mode 3: Batch formulas (no dragging, apply as-is) - 2+ formulas
-          putfBatchFormulas(wb, targetSheet, range, multipleFormulas, outputPath, config)
+          putfBatchFormulas(wb, targetSheet, range, multipleFormulas, outputPath, config, stream)
 
         case (Left(ref), multipleFormulas @ (_ :: _)) =>
           IO.raiseError(
@@ -214,7 +250,8 @@ object WriteCommands:
     ref: com.tjclp.xl.addressing.ARef,
     formulaStr: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean
   ): IO[String] =
     val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
     val fullFormula = s"=$formula"
@@ -240,8 +277,8 @@ object WriteCommands:
           styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
         else sheetWithFormula
       updatedWb = wb.put(finalSheet).recalculateDependents(sheet.name, Set(ref))
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
-    yield s"${Format.putSuccess(ref, CellValue.Formula(formula))}\nSaved: $outputPath"
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"${Format.putSuccess(ref, CellValue.Formula(formula))}\n${saveSuffix(outputPath, stream)}"
 
   /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
   private def putfFormulaDragging(
@@ -250,7 +287,8 @@ object WriteCommands:
     range: CellRange,
     formulaStr: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean
   ): IO[String] =
     val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
     val fullFormula = s"=$formula"
@@ -264,9 +302,9 @@ object WriteCommands:
       updatedSheet = putfDraggingLogic(sheet, wb, range, formula, parsedExpr)
       modifiedRefs = range.cells.toSet
       updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       cellCount = range.cellCount
-    yield s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\nSaved: $outputPath"
+    yield s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)\n${saveSuffix(outputPath, stream)}"
 
   /** Mode 3: Batch formulas (no dragging, apply as-is) */
   private def putfBatchFormulas(
@@ -275,7 +313,8 @@ object WriteCommands:
     range: CellRange,
     formulas: List[String],
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean
   ): IO[String] =
     val cellCount = range.cellCount.toInt
     validateCountMatch("putf", range, cellCount, formulas.length, "formula") match
@@ -302,8 +341,8 @@ object WriteCommands:
           modifiedRefs = updates.map(_._1).toSet
           updatedSheet = sheet.put(updates*)
           updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, modifiedRefs)
-          _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
-        yield s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)\nSaved: $outputPath"
+          _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+        yield s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)\n${saveSuffix(outputPath, stream)}"
 
   /** Helper: Apply formula dragging logic (extracted from original putFormula) */
   private def putfDraggingLogic(
@@ -347,6 +386,9 @@ object WriteCommands:
    *
    * By default, merges specified style properties with existing cell styles. Use replace=true to
    * replace the entire style instead of merging.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def style(
     wb: Workbook,
@@ -371,7 +413,8 @@ object WriteCommands:
     borderColor: Option[String],
     replace: Boolean,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "style")
@@ -415,7 +458,7 @@ object WriteCommands:
             styleSyntax.withRangeStyle(sheet)(CellRange(ref, ref), mergedStyle)
           }
       updatedWb = wb.put(updatedSheet)
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       appliedList = StyleBuilder.buildStyleDescription(
         bold,
         italic,
@@ -431,10 +474,13 @@ object WriteCommands:
         border
       )
       modeLabel = if replace then " (replace)" else " (merge)"
-    yield s"Styled: ${range.toA1}$modeLabel\nApplied: ${appliedList.mkString(", ")}\nSaved: $outputPath"
+    yield s"Styled: ${range.toA1}$modeLabel\nApplied: ${appliedList.mkString(", ")}\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Set row properties (height, hide/show).
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def row(
     wb: Workbook,
@@ -444,7 +490,8 @@ object WriteCommands:
     hide: Boolean,
     show: Boolean,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     SheetResolver.requireSheet(wb, sheetOpt, "row").flatMap { sheet =>
       val rowRef = Row.from1(rowNum)
@@ -455,19 +502,22 @@ object WriteCommands:
       )
       val updatedSheet = sheet.setRowProperties(rowRef, newProps)
       val updatedWb = wb.put(updatedSheet)
-      ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
+      writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
         val changes = List(
           height.map(h => s"height=$h"),
           if hide then Some("hidden=true") else None,
           if show then Some("hidden=false") else None
         ).flatten
-        s"Row $rowNum: ${changes.mkString(", ")}\nSaved: $outputPath"
+        s"Row $rowNum: ${changes.mkString(", ")}\n${saveSuffix(outputPath, stream)}"
       }
     }
 
   /**
    * Set column properties (width, hide/show, auto-fit). Supports single columns (A) or ranges
    * (A:F).
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def col(
     wb: Workbook,
@@ -478,7 +528,8 @@ object WriteCommands:
     show: Boolean,
     autoFit: Boolean,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     SheetResolver.requireSheet(wb, sheetOpt, "col").flatMap { sheet =>
       // Try parsing as column range (A:F) first, then single column (A)
@@ -505,23 +556,27 @@ object WriteCommands:
               (newSheet, msgs :+ msg)
           }
           val updatedWb = wb.put(updatedSheet)
-          ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
+          writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
             results match
-              case single :: Nil => s"Column $single\nSaved: $outputPath"
+              case single :: Nil => s"Column $single\n${saveSuffix(outputPath, stream)}"
               case multiple =>
-                s"Columns:\n${multiple.map("  " + _).mkString("\n")}\nSaved: $outputPath"
+                s"Columns:\n${multiple.map("  " + _).mkString("\n")}\n${saveSuffix(outputPath, stream)}"
           }
     }
 
   /**
    * Auto-fit all columns (or specified range) based on content.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def autoFit(
     wb: Workbook,
     sheetOpt: Option[Sheet],
     columnsOpt: Option[String],
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     SheetResolver.requireSheet(wb, sheetOpt, "autofit").flatMap { sheet =>
       // Determine columns to auto-fit
@@ -538,7 +593,7 @@ object WriteCommands:
       columnsResult match
         case Left(err) => IO.raiseError(new Exception(err))
         case Right(columns) if columns.isEmpty =>
-          IO.pure(s"No columns to auto-fit (empty sheet)\nSaved: $outputPath")
+          IO.pure(s"No columns to auto-fit (empty sheet)\n${saveSuffix(outputPath, stream)}")
         case Right(columns) =>
           val (updatedSheet, widths) = columns.foldLeft((sheet, List.empty[(Column, Double)])) {
             case ((s, ws), colRef) =>
@@ -548,9 +603,9 @@ object WriteCommands:
               (s.setColumnProperties(colRef, newProps), ws :+ (colRef, w))
           }
           val updatedWb = wb.put(updatedSheet)
-          ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
+          writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
             val summary = widths.map { case (c, w) => f"${c.toLetter}: $w%.2f" }.mkString(", ")
-            s"Auto-fit ${columns.size} column(s): $summary\nSaved: $outputPath"
+            s"Auto-fit ${columns.size} column(s): $summary\n${saveSuffix(outputPath, stream)}"
           }
     }
 
@@ -627,18 +682,22 @@ object WriteCommands:
 
   /**
    * Apply multiple operations atomically (JSON from stdin or file).
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def batch(
     wb: Workbook,
     sheetOpt: Option[Sheet],
     source: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     BatchParser.readBatchInput(source).flatMap { input =>
       BatchParser.parseBatchOperations(input).flatMap { ops =>
         BatchParser.applyBatchOperations(wb, sheetOpt, ops).flatMap { updatedWb =>
-          ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config).map { _ =>
+          writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
             val summary = ops
               .map {
                 case BatchParser.BatchOp.Put(ref, value) => s"  PUT $ref = $value"
@@ -650,7 +709,7 @@ object WriteCommands:
                 case BatchParser.BatchOp.RowHeight(row, height) => s"  ROWHEIGHT $row = $height"
               }
               .mkString("\n")
-            s"Applied ${ops.size} operations:\n$summary\nSaved: $outputPath"
+            s"Applied ${ops.size} operations:\n$summary\n${saveSuffix(outputPath, stream)}"
           }
         }
       }
@@ -664,6 +723,9 @@ object WriteCommands:
    *   - Right: Source column is repeated right (A1 → A1:J1, or A1:A5 → A1:J5)
    *
    * Formulas are shifted relative to the source position using Excel's anchor rules.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def fill(
     wb: Workbook,
@@ -672,7 +734,8 @@ object WriteCommands:
     targetStr: String,
     direction: FillDirection,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       // Resolve source and target
@@ -700,9 +763,9 @@ object WriteCommands:
       updatedSheet = applyFill(targetSheet, wb, sourceRange, targetRange, direction)
       modifiedRefs = targetRange.cells.toSet
       updatedWb = wb.put(updatedSheet).recalculateDependents(targetSheet.name, modifiedRefs)
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
       dirLabel = if direction == FillDirection.Right then "right" else "down"
-    yield s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)\nSaved: $outputPath"
+    yield s"Filled ${targetRange.toA1} from ${sourceRange.toA1} ($dirLabel)\n${saveSuffix(outputPath, stream)}"
 
   /** Validate that source and target ranges are compatible for fill direction */
   private def validateFillRanges(
@@ -877,6 +940,8 @@ object WriteCommands:
    *   Sort criteria (column, direction, mode) - at least one required
    * @param hasHeader
    *   If true, first row is excluded from sort
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def sort(
     wb: Workbook,
@@ -885,7 +950,8 @@ object WriteCommands:
     sortKeys: List[SortKey],
     hasHeader: Boolean,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "sort")
@@ -905,7 +971,7 @@ object WriteCommands:
       // Perform sort
       sortedSheet = applySortToRange(targetSheet, range, sortKeys, hasHeader)
       updatedWb = wb.put(sortedSheet)
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
 
       // Build result message
       keyDesc = sortKeys
@@ -914,7 +980,7 @@ object WriteCommands:
         )
         .mkString(", ")
       headerNote = if hasHeader then " (header row preserved)" else ""
-    yield s"Sorted ${range.toA1} by $keyDesc$headerNote\nSaved: $outputPath"
+    yield s"Sorted ${range.toA1} by $keyDesc$headerNote\n${saveSuffix(outputPath, stream)}"
 
   /** Validate that all sort columns are within the range */
   private def validateSortColumns(range: CellRange, keys: List[SortKey]): IO[Unit] =
