@@ -6,12 +6,15 @@ import java.util.zip.ZipFile
 
 import cats.effect.IO
 import com.tjclp.xl.api.Workbook
-import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.io.ExcelIO
-import com.tjclp.xl.io.streaming.ZipTransformer
+import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.writer.WriterConfig
-import com.tjclp.xl.cli.helpers.{StreamingCsvParser, StyleBuilder}
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.cli.helpers.{BatchParser, StreamingCsvParser, StyleBuilder, ValueParser}
 import scala.xml.Elem
 
 /**
@@ -382,6 +385,329 @@ object StreamingWriteCommands:
       s"Cells modified: ${result.cellCount}\n" +
       s"Styles added: ${result.stylesAdded}\n" +
       s"Saved (streaming): $outputPath"
+
+  /**
+   * Streaming batch: apply batch operations with O(1) worksheet memory.
+   *
+   * Uses SAX→StAX transform pipeline with worksheet metadata injection for:
+   *   - Cell patches (put, putf, style)
+   *   - Column widths (colwidth) → `<cols>` element
+   *   - Merged cells (merge, unmerge) → `<mergeCells>` element
+   *   - Row properties (rowheight) → row attributes
+   *
+   * @param sourcePath
+   *   Input XLSX file
+   * @param outputPath
+   *   Output XLSX file
+   * @param sheetNameOpt
+   *   Sheet name (required for multi-sheet files)
+   * @param batchSource
+   *   JSON file path or "-" for stdin
+   * @return
+   *   Result message with operation count
+   */
+  def batch(
+    sourcePath: Path,
+    outputPath: Path,
+    sheetNameOpt: Option[String],
+    batchSource: String
+  ): IO[String] =
+    for
+      // Resolve worksheet path first
+      worksheetPath <- resolveSheetPath(sourcePath, sheetNameOpt)
+
+      // Read and parse batch input
+      input <- BatchParser.readBatchInput(batchSource)
+      ops <- BatchParser.parseBatchOperations(input)
+
+      // Separate operations into cell patches vs worksheet metadata
+      (cellPatches, stylesXml, worksheetMetadata, summary) <-
+        buildStreamingBatchPatches(sourcePath, worksheetPath, ops)
+
+      // Execute streaming transform with metadata
+      result <- ZipTransformer.transformWithMetadata[IO](
+        sourcePath,
+        outputPath,
+        worksheetPath,
+        cellPatches,
+        worksheetMetadata,
+        stylesXml
+      )
+    yield s"Applied ${ops.size} operations (streaming):\n$summary\nCells modified: ${result.cellCount}\nSaved (streaming): $outputPath"
+
+  /**
+   * Build streaming batch patches from batch operations.
+   *
+   * Separates operations into:
+   *   - Cell patches (SetValue, SetStyle, SetStyleAndValue)
+   *   - Worksheet metadata (columns, merges, row properties)
+   *   - Updated styles.xml (if style operations present)
+   *
+   * @return
+   *   (cellPatches, updatedStylesXml, worksheetMetadata, summary)
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def buildStreamingBatchPatches(
+    sourcePath: Path,
+    worksheetPath: String,
+    ops: Vector[BatchParser.BatchOp]
+  ): IO[
+    (
+      Map[ARef, StreamingTransform.CellPatch],
+      Option[String],
+      StreamingTransform.WorksheetMetadata,
+      String
+    )
+  ] =
+    IO.delay {
+      import scala.collection.mutable
+
+      // Read current styles.xml
+      val zipFile = new ZipFile(sourcePath.toFile)
+      val stylesXml =
+        try
+          val stylesEntry = zipFile.getEntry("xl/styles.xml")
+          if stylesEntry != null then
+            new String(zipFile.getInputStream(stylesEntry).readAllBytes(), StandardCharsets.UTF_8)
+          else minimalStylesXml
+        finally zipFile.close()
+
+      // Accumulate patches and metadata
+      val cellPatches = mutable.Map[ARef, StreamingTransform.CellPatch]()
+      val columns = mutable.Map[Column, ColumnProperties]()
+      val addMerges = mutable.Set[CellRange]()
+      val removeMerges = mutable.Set[CellRange]()
+      val rowProps = mutable.Map[Row, RowProperties]()
+      val summaryLines = mutable.ListBuffer[String]()
+
+      var currentStylesXml = stylesXml
+      var stylesModified = false
+
+      ops.foreach {
+        case BatchParser.BatchOp.Put(refStr, valueStr) =>
+          val ref = ARef.parse(refStr) match
+            case Right(r) => r
+            case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
+          val value = ValueParser.parseValue(valueStr)
+          cellPatches(ref) = StreamingTransform.CellPatch.SetValue(value, preserveStyle = true)
+          summaryLines += s"  PUT $refStr = $valueStr"
+
+        case BatchParser.BatchOp.PutFormula(refStr, formula) =>
+          val ref = ARef.parse(refStr) match
+            case Right(r) => r
+            case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
+          val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
+          cellPatches(ref) = StreamingTransform.CellPatch.SetValue(
+            CellValue.Formula(formulaText, None),
+            preserveStyle = true
+          )
+          summaryLines += s"  PUTF $refStr = $formula"
+
+        case BatchParser.BatchOp.Style(rangeStr, props) =>
+          val range = CellRange.parse(rangeStr) match
+            case Right(r) => r
+            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+
+          // Build CellStyle from props using same approach as StyleBuilder
+          val cellStyle = buildCellStyleFromPropsSync(props)
+
+          // Add style to styles.xml and get ID
+          val (updatedStyles, styleId) = StylePatcher.addStyle(currentStylesXml, cellStyle) match
+            case Right(result) => result
+            case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
+          currentStylesXml = updatedStyles
+          stylesModified = true
+
+          // Apply to all cells in range, merging with existing patches
+          range.cells.foreach { ref =>
+            cellPatches.get(ref) match
+              case Some(StreamingTransform.CellPatch.SetValue(value, _)) =>
+                // Cell already has a value patch - convert to SetStyleAndValue
+                cellPatches(ref) = StreamingTransform.CellPatch.SetStyleAndValue(styleId, value)
+              case Some(StreamingTransform.CellPatch.SetStyleAndValue(_, value)) =>
+                // Cell already has SetStyleAndValue - update the style
+                cellPatches(ref) = StreamingTransform.CellPatch.SetStyleAndValue(styleId, value)
+              case Some(StreamingTransform.CellPatch.SetStyle(_)) =>
+                // Cell already has style - replace it
+                cellPatches(ref) = StreamingTransform.CellPatch.SetStyle(styleId)
+              case None =>
+                // No existing patch - just set style
+                cellPatches(ref) = StreamingTransform.CellPatch.SetStyle(styleId)
+          }
+          summaryLines += s"  STYLE $rangeStr"
+
+        case BatchParser.BatchOp.Merge(rangeStr) =>
+          val range = CellRange.parse(rangeStr) match
+            case Right(r) => r
+            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+          addMerges += range
+          summaryLines += s"  MERGE $rangeStr"
+
+        case BatchParser.BatchOp.Unmerge(rangeStr) =>
+          val range = CellRange.parse(rangeStr) match
+            case Right(r) => r
+            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+          removeMerges += range
+          summaryLines += s"  UNMERGE $rangeStr"
+
+        case BatchParser.BatchOp.ColWidth(colStr, width) =>
+          val col = Column.fromLetter(colStr) match
+            case Right(c) => c
+            case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
+          columns(col) = columns.getOrElse(col, ColumnProperties()).copy(width = Some(width))
+          summaryLines += s"  COLWIDTH $colStr = $width"
+
+        case BatchParser.BatchOp.RowHeight(rowNum, height) =>
+          val row = Row.from1(rowNum)
+          rowProps(row) = rowProps.getOrElse(row, RowProperties()).copy(height = Some(height))
+          summaryLines += s"  ROWHEIGHT $rowNum = $height"
+      }
+
+      val worksheetMetadata = StreamingTransform.WorksheetMetadata(
+        columns = columns.toMap,
+        addMerges = addMerges.toSet,
+        removeMerges = removeMerges.toSet,
+        rowProps = rowProps.toMap
+      )
+
+      val updatedStylesXml = if stylesModified then Some(currentStylesXml) else None
+
+      (cellPatches.toMap, updatedStylesXml, worksheetMetadata, summaryLines.mkString("\n"))
+    }
+
+  /**
+   * Build CellStyle from batch StyleProps (synchronous version for use inside IO.delay).
+   *
+   * Uses the same approach as StyleBuilder but without IO wrapping.
+   */
+  private def buildCellStyleFromPropsSync(props: BatchParser.StyleProps): CellStyle =
+    import scala.util.chaining.*
+    import com.tjclp.xl.cli.ColorParser
+    import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    import com.tjclp.xl.styles.fill.Fill
+    import com.tjclp.xl.styles.font.Font
+    import com.tjclp.xl.styles.numfmt.NumFmt
+
+    // Parse colors
+    val bgColor = props.bg.flatMap(s => ColorParser.parse(s).toOption)
+    val fgColor = props.fg.flatMap(s => ColorParser.parse(s).toOption)
+    val bdrColor = props.borderColor.flatMap(s => ColorParser.parse(s).toOption)
+
+    // Parse alignments
+    val hAlign = props.align.flatMap(parseHAlignSync)
+    val vAlign = props.valign.flatMap(parseVAlignSync)
+
+    // Parse border styles
+    val bdrStyle = props.border.flatMap(parseBorderStyleSync)
+    val bdrTopStyle = props.borderTop.flatMap(parseBorderStyleSync)
+    val bdrRightStyle = props.borderRight.flatMap(parseBorderStyleSync)
+    val bdrBottomStyle = props.borderBottom.flatMap(parseBorderStyleSync)
+    val bdrLeftStyle = props.borderLeft.flatMap(parseBorderStyleSync)
+
+    // Parse number format
+    val nFmt = props.numFormat.flatMap(parseNumFmtSync)
+
+    // Build font
+    val font = Font.default
+      .withBold(props.bold)
+      .withItalic(props.italic)
+      .withUnderline(props.underline)
+      .pipe(f => fgColor.fold(f)(c => f.withColor(c)))
+      .pipe(f => props.fontSize.fold(f)(s => f.withSize(s)))
+      .pipe(f => props.fontName.fold(f)(n => f.withName(n)))
+
+    // Build fill
+    val fill = bgColor.map(Fill.Solid.apply).getOrElse(Fill.None)
+
+    // Build border
+    val cellBorder =
+      buildBorderSync(bdrStyle, bdrTopStyle, bdrRightStyle, bdrBottomStyle, bdrLeftStyle, bdrColor)
+
+    // Build alignment
+    val alignment = Align.default
+      .pipe(a => hAlign.fold(a)(h => a.withHAlign(h)))
+      .pipe(a => vAlign.fold(a)(v => a.withVAlign(v)))
+      .pipe(a => if props.wrap then a.withWrap() else a)
+
+    CellStyle(
+      font = font,
+      fill = fill,
+      border = cellBorder,
+      numFmt = nFmt.getOrElse(NumFmt.General),
+      align = alignment
+    )
+
+  private def buildBorderSync(
+    allSides: Option[com.tjclp.xl.styles.border.BorderStyle],
+    top: Option[com.tjclp.xl.styles.border.BorderStyle],
+    right: Option[com.tjclp.xl.styles.border.BorderStyle],
+    bottom: Option[com.tjclp.xl.styles.border.BorderStyle],
+    left: Option[com.tjclp.xl.styles.border.BorderStyle],
+    color: Option[com.tjclp.xl.styles.color.Color]
+  ): com.tjclp.xl.styles.border.Border =
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    val base = allSides.getOrElse(BorderStyle.None)
+    val topSide = BorderSide(top.getOrElse(base), color)
+    val rightSide = BorderSide(right.getOrElse(base), color)
+    val bottomSide = BorderSide(bottom.getOrElse(base), color)
+    val leftSide = BorderSide(left.getOrElse(base), color)
+    if topSide.style == BorderStyle.None && rightSide.style == BorderStyle.None &&
+      bottomSide.style == BorderStyle.None && leftSide.style == BorderStyle.None
+    then Border.none
+    else Border(left = leftSide, right = rightSide, top = topSide, bottom = bottomSide)
+
+  private def parseHAlignSync(s: String): Option[com.tjclp.xl.styles.alignment.HAlign] =
+    import com.tjclp.xl.styles.alignment.HAlign
+    s.toLowerCase match
+      case "left" => Some(HAlign.Left)
+      case "center" => Some(HAlign.Center)
+      case "right" => Some(HAlign.Right)
+      case "justify" => Some(HAlign.Justify)
+      case "general" => Some(HAlign.General)
+      case _ => None
+
+  private def parseVAlignSync(s: String): Option[com.tjclp.xl.styles.alignment.VAlign] =
+    import com.tjclp.xl.styles.alignment.VAlign
+    s.toLowerCase match
+      case "top" => Some(VAlign.Top)
+      case "middle" | "center" => Some(VAlign.Middle)
+      case "bottom" => Some(VAlign.Bottom)
+      case _ => None
+
+  private def parseBorderStyleSync(s: String): Option[com.tjclp.xl.styles.border.BorderStyle] =
+    import com.tjclp.xl.styles.border.BorderStyle
+    s.toLowerCase match
+      case "none" => Some(BorderStyle.None)
+      case "thin" => Some(BorderStyle.Thin)
+      case "medium" => Some(BorderStyle.Medium)
+      case "thick" => Some(BorderStyle.Thick)
+      case "dashed" => Some(BorderStyle.Dashed)
+      case "dotted" => Some(BorderStyle.Dotted)
+      case "double" => Some(BorderStyle.Double)
+      case _ => None
+
+  private def parseNumFmtSync(s: String): Option[com.tjclp.xl.styles.numfmt.NumFmt] =
+    import com.tjclp.xl.styles.numfmt.NumFmt
+    s.toLowerCase match
+      case "general" => Some(NumFmt.General)
+      case "number" => Some(NumFmt.Decimal)
+      case "currency" => Some(NumFmt.Currency)
+      case "percent" => Some(NumFmt.Percent)
+      case "date" => Some(NumFmt.Date)
+      case "text" => Some(NumFmt.Text)
+      case _ => None
+
+  /** Minimal styles.xml for files that don't have one. */
+  private val minimalStylesXml: String =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      |<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      |<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      |<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      |<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+      |<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      |<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+      |</styleSheet>""".stripMargin.replaceAll("\n", "")
 
   /**
    * Resolve worksheet path from name by parsing workbook.xml and workbook.xml.rels metadata.

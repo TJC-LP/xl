@@ -4,9 +4,10 @@ import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream, Output
 import javax.xml.parsers.SAXParserFactory
 import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
-import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.ooxml.{SaxWriter, StaxSaxWriter, XmlUtil}
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import scala.collection.mutable
 
 /**
@@ -36,6 +37,50 @@ object StreamingTransform:
 
     /** Set both style and value */
     final case class SetStyleAndValue(styleId: Int, value: CellValue) extends CellPatch
+
+  /**
+   * Patch to apply worksheet-level metadata during streaming.
+   *
+   * These patches modify structural elements outside `<sheetData>`:
+   *   - `<cols>` element (before sheetData)
+   *   - `<mergeCells>` element (after sheetData)
+   *   - Row attributes (ht, customHeight, hidden)
+   */
+  sealed trait WorksheetPatch
+
+  object WorksheetPatch:
+    /** Column definitions to add or replace (widths, hidden, outlineLevel) */
+    final case class SetColumns(columns: Map[Column, ColumnProperties]) extends WorksheetPatch
+
+    /** Merged cell ranges to add */
+    final case class AddMerges(ranges: Set[CellRange]) extends WorksheetPatch
+
+    /** Merged cell ranges to remove */
+    final case class RemoveMerges(ranges: Set[CellRange]) extends WorksheetPatch
+
+    /** Row properties to apply (height, hidden, outlineLevel) */
+    final case class SetRowProps(rows: Map[Row, RowProperties]) extends WorksheetPatch
+
+  /**
+   * Combined worksheet patches for a single transform operation.
+   *
+   * @param columns
+   *   Column definitions to set (replaces existing if source has `<cols>`)
+   * @param addMerges
+   *   Merged ranges to add
+   * @param removeMerges
+   *   Merged ranges to remove
+   * @param rowProps
+   *   Row properties to apply
+   */
+  final case class WorksheetMetadata(
+    columns: Map[Column, ColumnProperties] = Map.empty,
+    addMerges: Set[CellRange] = Set.empty,
+    removeMerges: Set[CellRange] = Set.empty,
+    rowProps: Map[Row, RowProperties] = Map.empty
+  ):
+    def isEmpty: Boolean =
+      columns.isEmpty && addMerges.isEmpty && removeMerges.isEmpty && rowProps.isEmpty
 
   /**
    * Analysis of patches to enable early-abort optimization.
@@ -217,8 +262,34 @@ object StreamingTransform:
     output: OutputStream,
     patches: Map[ARef, CellPatch]
   ): Unit =
+    transformWorksheetWithMetadata(input, output, patches, WorksheetMetadata())
+
+  /**
+   * Transform worksheet XML, applying cell patches and worksheet metadata.
+   *
+   * Streams input→output with O(1) memory, modifying:
+   *   - Cell values and styles (from patches map)
+   *   - Column definitions (injected before sheetData)
+   *   - Merged cell ranges (injected after sheetData)
+   *   - Row properties (applied to row elements)
+   *
+   * @param input
+   *   Source worksheet XML stream
+   * @param output
+   *   Target worksheet XML stream
+   * @param patches
+   *   Map of cell references to patches to apply
+   * @param worksheetMetadata
+   *   Worksheet-level metadata (cols, merges, row props)
+   */
+  def transformWorksheetWithMetadata(
+    input: InputStream,
+    output: OutputStream,
+    patches: Map[ARef, CellPatch],
+    worksheetMetadata: WorksheetMetadata
+  ): Unit =
     val writer = StaxSaxWriter.create(output)
-    val handler = new TransformHandler(writer, patches)
+    val handler = new TransformHandler(writer, patches, worksheetMetadata)
 
     val factory = SAXParserFactory.newInstance()
     factory.setNamespaceAware(true)
@@ -336,7 +407,8 @@ object StreamingTransform:
   )
   private class TransformHandler(
     writer: SaxWriter,
-    patches: Map[ARef, CellPatch]
+    patches: Map[ARef, CellPatch],
+    worksheetMetadata: WorksheetMetadata = WorksheetMetadata()
   ) extends DefaultHandler:
 
     private var inDocument = false
@@ -369,6 +441,18 @@ object StreamingTransform:
     private val namespaceBindings = mutable.Map[String, String]()
     private val pendingNamespaces = mutable.ListBuffer[(String, String)]()
 
+    // Worksheet metadata state
+    private val hasColumnsToInject = worksheetMetadata.columns.nonEmpty
+    private val hasMergesToInject =
+      worksheetMetadata.addMerges.nonEmpty || worksheetMetadata.removeMerges.nonEmpty
+    private var sawOriginalCols = false
+    private var inOriginalCols = false
+    private var colsDepth = 0
+    private var sawMergeCells = false
+    private var inMergeCells = false
+    private var mergeCellsDepth = 0
+    private val existingMerges = mutable.Set[CellRange]()
+
     override def startDocument(): Unit =
       writer.startDocument()
       inDocument = true
@@ -397,8 +481,36 @@ object StreamingTransform:
       // If we're skipping content inside a value-patched cell, don't emit child elements
       if skipContent && depth > cellDepth then return
 
+      // Skip original cols if we're replacing with our own
+      if inOriginalCols && depth > colsDepth then return
+
+      // Track and skip original mergeCells if we're rebuilding it
+      if inMergeCells then
+        if localName == "mergeCell" then
+          // Collect existing merge refs
+          Option(attributes.getValue("ref")).foreach { refStr =>
+            CellRange.parse(refStr).toOption.foreach(existingMerges += _)
+          }
+        return // Skip all mergeCells content - we'll rebuild it
+
       localName match
+        case "cols" =>
+          sawOriginalCols = true
+          if hasColumnsToInject then
+            // Skip original cols - we'll inject our own before sheetData
+            inOriginalCols = true
+            colsDepth = depth
+          else
+            // Pass through original cols
+            if uri.nonEmpty then writer.startElement(qName, uri) else writer.startElement(qName)
+            emitPendingNamespaces()
+            for i <- 0 until attributes.getLength do
+              writer.writeAttribute(attributes.getQName(i), attributes.getValue(i))
+
         case "sheetData" =>
+          // Inject cols before sheetData if we have columns to inject
+          if hasColumnsToInject then writeColsElement(worksheetMetadata.columns)
+
           inSheetData = true
           if uri.nonEmpty then writer.startElement(qName, uri) else writer.startElement(qName)
           emitPendingNamespaces()
@@ -421,8 +533,23 @@ object StreamingTransform:
 
           if uri.nonEmpty then writer.startElement(qName, uri) else writer.startElement(qName)
           emitPendingNamespaces()
-          for i <- 0 until attributes.getLength do
-            writer.writeAttribute(attributes.getQName(i), attributes.getValue(i))
+
+          // Apply row properties if we have them
+          val rowProps = worksheetMetadata.rowProps.get(Row.from1(rowIndex))
+          writeRowAttributes(attributes, rowProps)
+
+        case "mergeCells" =>
+          sawMergeCells = true
+          if hasMergesToInject then
+            // Skip original mergeCells - we'll rebuild it after sheetData
+            inMergeCells = true
+            mergeCellsDepth = depth
+          else
+            // Pass through original mergeCells
+            if uri.nonEmpty then writer.startElement(qName, uri) else writer.startElement(qName)
+            emitPendingNamespaces()
+            for i <- 0 until attributes.getLength do
+              writer.writeAttribute(attributes.getQName(i), attributes.getValue(i))
 
         case "c" =>
           // Cell element - check if we need to patch it
@@ -511,6 +638,22 @@ object StreamingTransform:
         depth -= 1
         return
 
+      // Skip original cols we're replacing
+      if inOriginalCols then
+        if localName == "cols" then
+          inOriginalCols = false
+          colsDepth = 0
+        depth -= 1
+        return
+
+      // Skip original mergeCells we're rebuilding
+      if inMergeCells then
+        if localName == "mergeCells" then
+          inMergeCells = false
+          mergeCellsDepth = 0
+        depth -= 1
+        return
+
       flushCharacters()
 
       // For value-patched cells, write replacement content before closing
@@ -525,7 +668,19 @@ object StreamingTransform:
           case _ => ()
 
       if localName == "row" && inSheetData then emitRemainingCells()
-      if localName == "sheetData" then emitRemainingRows()
+      if localName == "sheetData" then
+        emitRemainingRows()
+        // Inject mergeCells after sheetData if we have merges
+        if hasMergesToInject || existingMerges.nonEmpty then
+          val finalMerges = (existingMerges.toSet ++ worksheetMetadata.addMerges) --
+            worksheetMetadata.removeMerges
+          if finalMerges.nonEmpty then
+            // Close sheetData first, then emit mergeCells
+            writer.endElement()
+            depth -= 1
+            inSheetData = false
+            writeMergeCellsElement(finalMerges)
+            return // Don't close again below
 
       writer.endElement()
       depth -= 1
@@ -544,12 +699,16 @@ object StreamingTransform:
       if localName == "sheetData" then inSheetData = false
 
     override def characters(ch: Array[Char], start: Int, length: Int): Unit =
-      // Skip content for value-patched cells
+      // Skip content for value-patched cells, cols we're replacing, or mergeCells we're rebuilding
       if skipContent && depth > cellDepth then return
+      if inOriginalCols then return
+      if inMergeCells then return
       pendingCharacters.appendAll(ch, start, length)
 
     override def ignorableWhitespace(ch: Array[Char], start: Int, length: Int): Unit =
       if skipContent && depth > cellDepth then return
+      if inOriginalCols then return
+      if inMergeCells then return
       pendingCharacters.appendAll(ch, start, length)
 
     private def emitPendingNamespaces(): Unit =
@@ -647,6 +806,152 @@ object StreamingTransform:
 
     private def writeCellContent(value: CellValue): Unit =
       StreamingTransform.writeCellContent(writer, value)
+
+    /**
+     * Write `<cols>` element with column definitions.
+     *
+     * Groups consecutive columns with identical properties to minimize XML size. Per OOXML Part 1
+     * section 18.3.1.17, columns with same width/style/hidden can be collapsed.
+     */
+    private def writeColsElement(columns: Map[Column, ColumnProperties]): Unit =
+      if columns.isEmpty then return
+
+      writer.startElement("cols")
+
+      // Sort columns by 1-based index and group consecutive identical ones
+      val sortedCols = columns.toSeq.sortBy(_._1.index1)
+      val groups = groupConsecutiveColumns(sortedCols)
+
+      groups.foreach { case (minCol, maxCol, props) =>
+        writer.startElement("col")
+        writer.writeAttribute("min", minCol.toString)
+        writer.writeAttribute("max", maxCol.toString)
+        // Default width is 8.43 (Excel default for 11pt Calibri)
+        writer.writeAttribute("width", props.width.getOrElse(8.43).toString)
+        writer.writeAttribute("customWidth", "1")
+        if props.hidden then writer.writeAttribute("hidden", "1")
+        props.outlineLevel.filter(_ > 0).foreach { lvl =>
+          writer.writeAttribute("outlineLevel", lvl.toString)
+        }
+        writer.endElement() // col
+      }
+
+      writer.endElement() // cols
+
+    /**
+     * Group consecutive columns with identical properties.
+     *
+     * @return
+     *   Sequence of (minCol1, maxCol1, props) tuples
+     */
+    @SuppressWarnings(
+      Array(
+        "org.wartremover.warts.Var",
+        "org.wartremover.warts.While",
+        "org.wartremover.warts.IterableOps"
+      )
+    )
+    private def groupConsecutiveColumns(
+      sortedCols: Seq[(Column, ColumnProperties)]
+    ): Seq[(Int, Int, ColumnProperties)] =
+      if sortedCols.isEmpty then return Seq.empty
+
+      val result = mutable.ListBuffer[(Int, Int, ColumnProperties)]()
+      var groupStart = sortedCols.head._1.index1
+      var groupEnd = groupStart
+      var groupProps = sortedCols.head._2
+
+      sortedCols.tail.foreach { case (col, props) =>
+        val colIdx = col.index1
+        if colIdx == groupEnd + 1 && props == groupProps then
+          // Extend current group
+          groupEnd = colIdx
+        else
+          // Close current group, start new one
+          result += ((groupStart, groupEnd, groupProps))
+          groupStart = colIdx
+          groupEnd = colIdx
+          groupProps = props
+      }
+      // Close final group
+      result += ((groupStart, groupEnd, groupProps))
+      result.toSeq
+
+    /**
+     * Write row attributes, merging with row properties if present.
+     */
+    private def writeRowAttributes(
+      attributes: Attributes,
+      rowProps: Option[RowProperties]
+    ): Unit =
+      rowProps match
+        case None =>
+          // No row props - pass through all attributes unchanged
+          for i <- 0 until attributes.getLength do
+            writer.writeAttribute(attributes.getQName(i), attributes.getValue(i))
+
+        case Some(props) =>
+          // Merge row props with existing attributes
+          var hasHt = false
+          var hasHidden = false
+          var hasOutlineLevel = false
+
+          for i <- 0 until attributes.getLength do
+            val attrName = attributes.getQName(i)
+            attrName match
+              case "ht" =>
+                hasHt = true
+                // Use our height if specified, else original
+                val height =
+                  props.height.getOrElse(attributes.getValue(i).toDoubleOption.getOrElse(15.0))
+                writer.writeAttribute("ht", height.toString)
+                writer.writeAttribute("customHeight", "1")
+              case "customHeight" =>
+                () // Skip - we'll set it with ht
+              case "hidden" =>
+                hasHidden = true
+                writer.writeAttribute(
+                  "hidden",
+                  if props.hidden then "1" else attributes.getValue(i)
+                )
+              case "outlineLevel" =>
+                hasOutlineLevel = true
+                val level =
+                  props.outlineLevel.getOrElse(attributes.getValue(i).toIntOption.getOrElse(0))
+                if level > 0 then writer.writeAttribute("outlineLevel", level.toString)
+              case _ =>
+                writer.writeAttribute(attrName, attributes.getValue(i))
+
+          // Add missing attributes from props
+          props.height.foreach { ht =>
+            if !hasHt then
+              writer.writeAttribute("ht", ht.toString)
+              writer.writeAttribute("customHeight", "1")
+          }
+          if props.hidden && !hasHidden then writer.writeAttribute("hidden", "1")
+          props.outlineLevel.filter(_ > 0).foreach { lvl =>
+            if !hasOutlineLevel then writer.writeAttribute("outlineLevel", lvl.toString)
+          }
+
+    /**
+     * Write `<mergeCells>` element with merged ranges.
+     */
+    private def writeMergeCellsElement(merges: Set[CellRange]): Unit =
+      if merges.isEmpty then return
+
+      // Sort by (minRow, minCol) for deterministic output
+      val sortedMerges = merges.toSeq.sortBy(r => (r.start.row.index1, r.start.col.index1))
+
+      writer.startElement("mergeCells")
+      writer.writeAttribute("count", sortedMerges.size.toString)
+
+      sortedMerges.foreach { range =>
+        writer.startElement("mergeCell")
+        writer.writeAttribute("ref", range.toA1)
+        writer.endElement()
+      }
+
+      writer.endElement() // mergeCells
 
   /**
    * SAX handler for scanning existing style IDs in a worksheet.

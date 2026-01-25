@@ -1027,6 +1027,7 @@ Operations execute in order. Use "-" to read from stdin."""
           case _: CliCommand.Style => true
           case _: CliCommand.Put => true
           case _: CliCommand.PutFormula => true
+          case _: CliCommand.Batch => true
           case _ => false
 
         if stream && isReadCmd then executeStreaming(filePath, sheetNameOpt, cmd)
@@ -1170,10 +1171,17 @@ Operations execute in order. Use "-" to read from stdin."""
         case Some(outputPath) =>
           StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
+    case CliCommand.Batch(source) =>
+      outputOpt match
+        case None =>
+          IO.raiseError(new Exception("--output is required for batch command"))
+        case Some(outputPath) =>
+          StreamingWriteCommands.batch(filePath, outputPath, sheetNameOpt, source)
+
     case _ =>
       IO.raiseError(
         new Exception(
-          "--stream for write commands only supports: put, putf, style"
+          "--stream for write commands only supports: put, putf, style, batch"
         )
       )
 

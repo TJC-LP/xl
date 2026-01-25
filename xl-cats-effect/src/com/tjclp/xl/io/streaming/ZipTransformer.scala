@@ -130,6 +130,46 @@ object ZipTransformer:
     }
 
   /**
+   * Transform XLSX file, applying cell patches and worksheet metadata with O(1) memory.
+   *
+   * This is the most comprehensive entry point - supports cell patches plus worksheet-level changes
+   * like column widths, merged cells, and row properties.
+   *
+   * @param source
+   *   Input XLSX file
+   * @param output
+   *   Output XLSX file
+   * @param worksheetPath
+   *   Worksheet entry path inside the XLSX (e.g., xl/worksheets/sheet1.xml)
+   * @param patches
+   *   Map of cell references to patches
+   * @param worksheetMetadata
+   *   Worksheet-level metadata (columns, merges, row properties)
+   * @param updatedStylesXml
+   *   Optional updated styles.xml content (if styles were modified)
+   * @return
+   *   TransformResult with operation statistics
+   */
+  def transformWithMetadata[F[_]: Sync](
+    source: Path,
+    output: Path,
+    worksheetPath: String,
+    patches: Map[ARef, StreamingTransform.CellPatch],
+    worksheetMetadata: StreamingTransform.WorksheetMetadata,
+    updatedStylesXml: Option[String] = None
+  ): F[TransformResult] =
+    Sync[F].delay {
+      transformWithMetadataSync(
+        source,
+        output,
+        worksheetPath,
+        patches,
+        worksheetMetadata,
+        updatedStylesXml
+      )
+    }
+
+  /**
    * Synchronous implementation of streaming value transform.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
@@ -165,6 +205,39 @@ object ZipTransformer:
         transformZip(source, output, worksheetPath, stylesXml, patches)
       case None =>
         transformZipNoStyleChanges(source, output, worksheetPath, patches)
+
+    TransformResult(patches.size.toLong, 0)
+
+  /**
+   * Synchronous implementation of transform with worksheet metadata.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def transformWithMetadataSync(
+    source: Path,
+    output: Path,
+    worksheetPath: String,
+    patches: Map[ARef, StreamingTransform.CellPatch],
+    worksheetMetadata: StreamingTransform.WorksheetMetadata,
+    updatedStylesXml: Option[String]
+  ): TransformResult =
+    updatedStylesXml match
+      case Some(stylesXml) =>
+        transformZipWithMetadata(
+          source,
+          output,
+          worksheetPath,
+          stylesXml,
+          patches,
+          worksheetMetadata
+        )
+      case None =>
+        transformZipNoStyleChangesWithMetadata(
+          source,
+          output,
+          worksheetPath,
+          patches,
+          worksheetMetadata
+        )
 
     TransformResult(patches.size.toLong, 0)
 
@@ -405,6 +478,148 @@ object ZipTransformer:
       case e: Exception =>
         JFiles.deleteIfExists(tempPath)
         throw e
+
+  /**
+   * Transform ZIP file with worksheet metadata, modifying both styles.xml and worksheet.
+   *
+   * Used when both styles and structural elements (cols, mergeCells) need modification.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def transformZipWithMetadata(
+    source: Path,
+    output: Path,
+    worksheetPath: String,
+    stylesXml: String,
+    patches: Map[ARef, StreamingTransform.CellPatch],
+    worksheetMetadata: StreamingTransform.WorksheetMetadata
+  ): Unit =
+    val normalizedWorksheetPath = normalizeWorksheetPath(worksheetPath)
+
+    val parent = Option(output.getParent).getOrElse(Path.of("."))
+    val tempPath = JFiles.createTempFile(parent, ".xl-stream-", ".tmp")
+
+    try
+      val zipIn = new ZipInputStream(new FileInputStream(source.toFile))
+      val zipOut = new ZipOutputStream(new FileOutputStream(tempPath.toFile))
+      zipOut.setLevel(1)
+
+      try
+        var entry = zipIn.getNextEntry
+        while entry != null do
+          val entryName = entry.getName
+
+          if entryName == "xl/styles.xml" then
+            writeEntry(zipOut, entryName, stylesXml.getBytes(StandardCharsets.UTF_8))
+            zipIn.closeEntry()
+          else if entryName == normalizedWorksheetPath then
+            val transformed = transformWorksheetEntryWithMetadata(zipIn, patches, worksheetMetadata)
+            writeEntry(zipOut, entryName, transformed)
+            zipIn.closeEntry()
+          else copyEntry(zipIn, zipOut, entry)
+
+          entry = zipIn.getNextEntry
+      finally
+        zipIn.close()
+        zipOut.close()
+
+      try
+        JFiles.move(
+          tempPath,
+          output,
+          java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+          java.nio.file.StandardCopyOption.ATOMIC_MOVE
+        )
+      catch
+        case _: java.nio.file.AtomicMoveNotSupportedException =>
+          JFiles.move(tempPath, output, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    catch
+      case e: Exception =>
+        JFiles.deleteIfExists(tempPath)
+        throw e
+
+  /**
+   * Transform ZIP file with worksheet metadata, without modifying styles.xml.
+   *
+   * Used for structural changes (cols, mergeCells) without style changes.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def transformZipNoStyleChangesWithMetadata(
+    source: Path,
+    output: Path,
+    worksheetPath: String,
+    patches: Map[ARef, StreamingTransform.CellPatch],
+    worksheetMetadata: StreamingTransform.WorksheetMetadata
+  ): Unit =
+    val normalizedWorksheetPath = normalizeWorksheetPath(worksheetPath)
+
+    val parent = Option(output.getParent).getOrElse(Path.of("."))
+    val tempPath = JFiles.createTempFile(parent, ".xl-stream-", ".tmp")
+
+    try
+      val zipIn = new ZipInputStream(new FileInputStream(source.toFile))
+      val zipOut = new ZipOutputStream(new FileOutputStream(tempPath.toFile))
+      zipOut.setLevel(1)
+
+      try
+        var entry = zipIn.getNextEntry
+        while entry != null do
+          val entryName = entry.getName
+
+          if entryName == normalizedWorksheetPath then
+            val transformed = transformWorksheetEntryWithMetadata(zipIn, patches, worksheetMetadata)
+            writeEntry(zipOut, entryName, transformed)
+            zipIn.closeEntry()
+          else copyEntry(zipIn, zipOut, entry)
+
+          entry = zipIn.getNextEntry
+      finally
+        zipIn.close()
+        zipOut.close()
+
+      try
+        JFiles.move(
+          tempPath,
+          output,
+          java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+          java.nio.file.StandardCopyOption.ATOMIC_MOVE
+        )
+      catch
+        case _: java.nio.file.AtomicMoveNotSupportedException =>
+          JFiles.move(tempPath, output, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    catch
+      case e: Exception =>
+        JFiles.deleteIfExists(tempPath)
+        throw e
+
+  /**
+   * Transform worksheet entry with metadata (cols, mergeCells, row properties).
+   *
+   * Note: Early-abort is disabled when worksheet metadata is present because we need to properly
+   * read the entire file to collect existing merges and emit the corrected cols/mergeCells
+   * elements.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def transformWorksheetEntryWithMetadata(
+    zipIn: ZipInputStream,
+    patches: Map[ARef, StreamingTransform.CellPatch],
+    worksheetMetadata: StreamingTransform.WorksheetMetadata
+  ): Array[Byte] =
+    // Read entry into buffer first (SAX doesn't work well with ZipInputStream)
+    val entryBuffer = new ByteArrayOutputStream()
+    val buffer = new Array[Byte](8192)
+    var read = zipIn.read(buffer)
+    while read != -1 do
+      entryBuffer.write(buffer, 0, read)
+      read = zipIn.read(buffer)
+
+    val entryBytes = entryBuffer.toByteArray
+
+    // Never use early-abort with worksheet metadata - we need to process the entire file
+    // to properly collect existing merges and emit the corrected structural elements
+    val entryIn = new ByteArrayInputStream(entryBytes)
+    val baos = new ByteArrayOutputStream()
+    StreamingTransform.transformWorksheetWithMetadata(entryIn, baos, patches, worksheetMetadata)
+    baos.toByteArray
 
   /**
    * Transform worksheet entry using streaming transform with early-abort optimization.
