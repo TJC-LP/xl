@@ -1310,27 +1310,43 @@ object XlsxWriter:
         // (or when metadata modified - we need fresh workbook structure)
         OoxmlWorkbook.fromDomain(workbook)
 
-    val baseContentTypes = preservedContentTypes.getOrElse(
-      ContentTypes.minimal(
-        hasStyles = true,
-        hasSharedStrings = sharedStringsInOutput,
-        sheetCount = workbook.sheets.size,
-        sheetsWithComments = sheetsWithComments
-      )
-    )
+    val baseContentTypes = preservedContentTypes match
+      case Some(preserved) =>
+        // Add sharedStrings override if we're generating it but source didn't have it
+        if sharedStringsInOutput && !sourceHasSharedStrings then
+          preserved.copy(overrides =
+            preserved.overrides + ("/xl/sharedStrings.xml" -> XmlUtil.ctSharedStrings)
+          )
+        else preserved
+      case None =>
+        ContentTypes.minimal(
+          hasStyles = true,
+          hasSharedStrings = sharedStringsInOutput,
+          sheetCount = workbook.sheets.size,
+          sheetsWithComments = sheetsWithComments
+        )
     val contentTypes = baseContentTypes
       .withCommentOverrides(sheetsWithComments)
       .withTableOverrides(totalTableCount)
 
     val rootRels = preservedRootRels.getOrElse(Relationships.root())
 
-    val workbookRels = preservedWorkbookRels.getOrElse(
-      Relationships.workbook(
-        sheetCount = workbook.sheets.size,
-        hasStyles = true,
-        hasSharedStrings = sharedStringsInOutput
-      )
-    )
+    val workbookRels = preservedWorkbookRels match
+      case Some(preserved) =>
+        // Add sharedStrings relationship if we're generating it but source didn't have it
+        if sharedStringsInOutput && !sourceHasSharedStrings then
+          val nextId = preserved.relationships.size + 1
+          preserved.copy(relationships =
+            preserved.relationships :+
+              Relationship(s"rId$nextId", XmlUtil.relTypeSharedStrings, "sharedStrings.xml")
+          )
+        else preserved
+      case None =>
+        Relationships.workbook(
+          sheetCount = workbook.sheets.size,
+          hasStyles = true,
+          hasSharedStrings = sharedStringsInOutput
+        )
 
     // Open output ZIP
     val zip = target match
