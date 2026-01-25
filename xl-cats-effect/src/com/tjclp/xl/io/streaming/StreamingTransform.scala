@@ -69,6 +69,137 @@ object StreamingTransform:
   /** Minimum rows in file to enable early abort (overhead not worth it for small files) */
   private val earlyAbortRowThreshold = 1000
 
+  // ========== Shared Utility Functions ==========
+  // These functions are extracted to reduce code duplication between
+  // TransformHandler and EarlyAbortTransformHandler.
+
+  /** Determine OOXML cell type for a CellValue */
+  private[streaming] def cellTypeForValue(value: CellValue): String =
+    value match
+      case CellValue.Text(_) => "inlineStr"
+      case CellValue.Number(_) => "" // Empty = number type
+      case CellValue.Bool(_) => "b"
+      case CellValue.Formula(_, cachedValue) =>
+        cachedValue match
+          case Some(CellValue.Number(_)) => ""
+          case Some(CellValue.Bool(_)) => "b"
+          case Some(CellValue.Error(_)) => "e"
+          case _ => "str"
+      case CellValue.Error(_) => "e"
+      case CellValue.DateTime(_) => "" // Stored as number
+      case CellValue.RichText(_) => "inlineStr"
+      case CellValue.Empty => ""
+
+  /** Write cell content for a CellValue to the given writer */
+  private[streaming] def writeCellContent(writer: SaxWriter, value: CellValue): Unit =
+    value match
+      case CellValue.Empty => ()
+
+      case CellValue.Text(s) =>
+        // <is><t>text</t></is>
+        writer.startElement("is")
+        writer.startElement("t")
+        if XmlUtil.needsXmlSpacePreserve(s) then writer.writeAttribute("xml:space", "preserve")
+        writer.writeCharacters(s)
+        writer.endElement() // t
+        writer.endElement() // is
+
+      case CellValue.Number(n) =>
+        // <v>123</v>
+        writer.startElement("v")
+        writer.writeCharacters(n.toString)
+        writer.endElement()
+
+      case CellValue.Bool(b) =>
+        // <v>1</v> or <v>0</v>
+        writer.startElement("v")
+        writer.writeCharacters(if b then "1" else "0")
+        writer.endElement()
+
+      case CellValue.Formula(expr, cachedValue) =>
+        // <f>formula</f><v>cached</v>
+        writer.startElement("f")
+        writer.writeCharacters(expr)
+        writer.endElement()
+        cachedValue.foreach(cv => writeCachedValue(writer, cv))
+
+      case CellValue.Error(err) =>
+        import com.tjclp.xl.cells.CellError.toExcel
+        writer.startElement("v")
+        writer.writeCharacters(err.toExcel)
+        writer.endElement()
+
+      case CellValue.DateTime(dt) =>
+        val serial = CellValue.dateTimeToExcelSerial(dt)
+        writer.startElement("v")
+        writer.writeCharacters(serial.toString)
+        writer.endElement()
+
+      case CellValue.RichText(rt) =>
+        // <is><r>...</r></is>
+        writer.startElement("is")
+        rt.runs.foreach { run =>
+          writer.startElement("r")
+          run.font.foreach { font =>
+            writer.startElement("rPr")
+            if font.bold then
+              writer.startElement("b")
+              writer.endElement()
+            if font.italic then
+              writer.startElement("i")
+              writer.endElement()
+            if font.underline then
+              writer.startElement("u")
+              writer.endElement()
+            font.color.foreach { color =>
+              writer.startElement("color")
+              color match
+                case com.tjclp.xl.styles.Color.Rgb(argb) =>
+                  writer.writeAttribute("rgb", f"$argb%08X")
+                case com.tjclp.xl.styles.Color.Theme(slot, tint) =>
+                  writer.writeAttribute("theme", slot.ordinal.toString)
+                  writer.writeAttribute("tint", tint.toString)
+              writer.endElement()
+            }
+            writer.startElement("sz")
+            writer.writeAttribute("val", font.sizePt.toString)
+            writer.endElement()
+            writer.startElement("name")
+            writer.writeAttribute("val", font.name)
+            writer.endElement()
+            writer.endElement() // rPr
+          }
+          writer.startElement("t")
+          if XmlUtil.needsXmlSpacePreserve(run.text) then
+            writer.writeAttribute("xml:space", "preserve")
+          writer.writeCharacters(run.text)
+          writer.endElement() // t
+          writer.endElement() // r
+        }
+        writer.endElement() // is
+
+  /** Write cached formula value to the given writer */
+  private[streaming] def writeCachedValue(writer: SaxWriter, value: CellValue): Unit =
+    value match
+      case CellValue.Number(n) =>
+        writer.startElement("v")
+        writer.writeCharacters(n.toString)
+        writer.endElement()
+      case CellValue.Text(s) =>
+        writer.startElement("v")
+        writer.writeCharacters(s)
+        writer.endElement()
+      case CellValue.Bool(b) =>
+        writer.startElement("v")
+        writer.writeCharacters(if b then "1" else "0")
+        writer.endElement()
+      case CellValue.Error(err) =>
+        import com.tjclp.xl.cells.CellError.toExcel
+        writer.startElement("v")
+        writer.writeCharacters(err.toExcel)
+        writer.endElement()
+      case _ => ()
+
   /**
    * Transform worksheet XML, applying patches to target cells.
    *
@@ -184,8 +315,7 @@ object StreamingTransform:
 
     try parser.parse(InputSource(input), handler)
     finally
-      try input.close()
-      catch case _: Exception => ()
+      scala.util.Try(input.close()) // Log-worthy but not fatal; stream may already be closed
 
     result.toMap
 
@@ -511,132 +641,12 @@ object StreamingTransform:
         case _ => ()
       writer.endElement()
 
-    /** Determine OOXML cell type for a CellValue */
+    // Delegate to companion object shared utility functions
     private def cellTypeForValue(value: CellValue): String =
-      value match
-        case CellValue.Text(_) => "inlineStr"
-        case CellValue.Number(_) => "" // Empty = number type
-        case CellValue.Bool(_) => "b"
-        case CellValue.Formula(_, cachedValue) =>
-          cachedValue match
-            case Some(CellValue.Number(_)) => ""
-            case Some(CellValue.Bool(_)) => "b"
-            case Some(CellValue.Error(_)) => "e"
-            case _ => "str"
-        case CellValue.Error(_) => "e"
-        case CellValue.DateTime(_) => "" // Stored as number
-        case CellValue.RichText(_) => "inlineStr"
-        case CellValue.Empty => ""
+      StreamingTransform.cellTypeForValue(value)
 
-    /** Write cell content for a CellValue */
     private def writeCellContent(value: CellValue): Unit =
-      value match
-        case CellValue.Empty => ()
-
-        case CellValue.Text(s) =>
-          // <is><t>text</t></is>
-          writer.startElement("is")
-          writer.startElement("t")
-          if XmlUtil.needsXmlSpacePreserve(s) then writer.writeAttribute("xml:space", "preserve")
-          writer.writeCharacters(s)
-          writer.endElement() // t
-          writer.endElement() // is
-
-        case CellValue.Number(n) =>
-          // <v>123</v>
-          writer.startElement("v")
-          writer.writeCharacters(n.toString)
-          writer.endElement()
-
-        case CellValue.Bool(b) =>
-          // <v>1</v> or <v>0</v>
-          writer.startElement("v")
-          writer.writeCharacters(if b then "1" else "0")
-          writer.endElement()
-
-        case CellValue.Formula(expr, cachedValue) =>
-          // <f>formula</f><v>cached</v>
-          writer.startElement("f")
-          writer.writeCharacters(expr)
-          writer.endElement()
-          cachedValue.foreach(writeCachedValue)
-
-        case CellValue.Error(err) =>
-          import com.tjclp.xl.cells.CellError.toExcel
-          writer.startElement("v")
-          writer.writeCharacters(err.toExcel)
-          writer.endElement()
-
-        case CellValue.DateTime(dt) =>
-          val serial = CellValue.dateTimeToExcelSerial(dt)
-          writer.startElement("v")
-          writer.writeCharacters(serial.toString)
-          writer.endElement()
-
-        case CellValue.RichText(rt) =>
-          // <is><r>...</r></is>
-          writer.startElement("is")
-          rt.runs.foreach { run =>
-            writer.startElement("r")
-            run.font.foreach { font =>
-              writer.startElement("rPr")
-              if font.bold then
-                writer.startElement("b")
-                writer.endElement()
-              if font.italic then
-                writer.startElement("i")
-                writer.endElement()
-              if font.underline then
-                writer.startElement("u")
-                writer.endElement()
-              font.color.foreach { color =>
-                writer.startElement("color")
-                color match
-                  case com.tjclp.xl.styles.Color.Rgb(argb) =>
-                    writer.writeAttribute("rgb", f"$argb%08X")
-                  case com.tjclp.xl.styles.Color.Theme(slot, tint) =>
-                    writer.writeAttribute("theme", slot.ordinal.toString)
-                    writer.writeAttribute("tint", tint.toString)
-                writer.endElement()
-              }
-              writer.startElement("sz")
-              writer.writeAttribute("val", font.sizePt.toString)
-              writer.endElement()
-              writer.startElement("name")
-              writer.writeAttribute("val", font.name)
-              writer.endElement()
-              writer.endElement() // rPr
-            }
-            writer.startElement("t")
-            if XmlUtil.needsXmlSpacePreserve(run.text) then
-              writer.writeAttribute("xml:space", "preserve")
-            writer.writeCharacters(run.text)
-            writer.endElement() // t
-            writer.endElement() // r
-          }
-          writer.endElement() // is
-
-    /** Write cached formula value */
-    private def writeCachedValue(value: CellValue): Unit =
-      value match
-        case CellValue.Number(n) =>
-          writer.startElement("v")
-          writer.writeCharacters(n.toString)
-          writer.endElement()
-        case CellValue.Text(s) =>
-          writer.startElement("v")
-          writer.writeCharacters(s)
-          writer.endElement()
-        case CellValue.Bool(b) =>
-          writer.startElement("v")
-          writer.writeCharacters(if b then "1" else "0")
-          writer.endElement()
-        case CellValue.Error(err) =>
-          import com.tjclp.xl.cells.CellError.toExcel
-          writer.startElement("v")
-          writer.writeCharacters(err.toExcel)
-          writer.endElement()
-        case _ => ()
+      StreamingTransform.writeCellContent(writer, value)
 
   /**
    * SAX handler for scanning existing style IDs in a worksheet.
@@ -1013,129 +1023,9 @@ object StreamingTransform:
         case _ => ()
       writer.endElement()
 
-    /** Determine OOXML cell type for a CellValue */
+    // Delegate to companion object shared utility functions
     private def cellTypeForValue(value: CellValue): String =
-      value match
-        case CellValue.Text(_) => "inlineStr"
-        case CellValue.Number(_) => "" // Empty = number type
-        case CellValue.Bool(_) => "b"
-        case CellValue.Formula(_, cachedValue) =>
-          cachedValue match
-            case Some(CellValue.Number(_)) => ""
-            case Some(CellValue.Bool(_)) => "b"
-            case Some(CellValue.Error(_)) => "e"
-            case _ => "str"
-        case CellValue.Error(_) => "e"
-        case CellValue.DateTime(_) => "" // Stored as number
-        case CellValue.RichText(_) => "inlineStr"
-        case CellValue.Empty => ""
+      StreamingTransform.cellTypeForValue(value)
 
-    /** Write cell content for a CellValue */
     private def writeCellContent(value: CellValue): Unit =
-      value match
-        case CellValue.Empty => ()
-
-        case CellValue.Text(s) =>
-          // <is><t>text</t></is>
-          writer.startElement("is")
-          writer.startElement("t")
-          if XmlUtil.needsXmlSpacePreserve(s) then writer.writeAttribute("xml:space", "preserve")
-          writer.writeCharacters(s)
-          writer.endElement() // t
-          writer.endElement() // is
-
-        case CellValue.Number(n) =>
-          // <v>123</v>
-          writer.startElement("v")
-          writer.writeCharacters(n.toString)
-          writer.endElement()
-
-        case CellValue.Bool(b) =>
-          // <v>1</v> or <v>0</v>
-          writer.startElement("v")
-          writer.writeCharacters(if b then "1" else "0")
-          writer.endElement()
-
-        case CellValue.Formula(expr, cachedValue) =>
-          // <f>formula</f><v>cached</v>
-          writer.startElement("f")
-          writer.writeCharacters(expr)
-          writer.endElement()
-          cachedValue.foreach(writeCachedValue)
-
-        case CellValue.Error(err) =>
-          import com.tjclp.xl.cells.CellError.toExcel
-          writer.startElement("v")
-          writer.writeCharacters(err.toExcel)
-          writer.endElement()
-
-        case CellValue.DateTime(dt) =>
-          val serial = CellValue.dateTimeToExcelSerial(dt)
-          writer.startElement("v")
-          writer.writeCharacters(serial.toString)
-          writer.endElement()
-
-        case CellValue.RichText(rt) =>
-          // <is><r>...</r></is>
-          writer.startElement("is")
-          rt.runs.foreach { run =>
-            writer.startElement("r")
-            run.font.foreach { font =>
-              writer.startElement("rPr")
-              if font.bold then
-                writer.startElement("b")
-                writer.endElement()
-              if font.italic then
-                writer.startElement("i")
-                writer.endElement()
-              if font.underline then
-                writer.startElement("u")
-                writer.endElement()
-              font.color.foreach { color =>
-                writer.startElement("color")
-                color match
-                  case com.tjclp.xl.styles.Color.Rgb(argb) =>
-                    writer.writeAttribute("rgb", f"$argb%08X")
-                  case com.tjclp.xl.styles.Color.Theme(slot, tint) =>
-                    writer.writeAttribute("theme", slot.ordinal.toString)
-                    writer.writeAttribute("tint", tint.toString)
-                writer.endElement()
-              }
-              writer.startElement("sz")
-              writer.writeAttribute("val", font.sizePt.toString)
-              writer.endElement()
-              writer.startElement("name")
-              writer.writeAttribute("val", font.name)
-              writer.endElement()
-              writer.endElement() // rPr
-            }
-            writer.startElement("t")
-            if XmlUtil.needsXmlSpacePreserve(run.text) then
-              writer.writeAttribute("xml:space", "preserve")
-            writer.writeCharacters(run.text)
-            writer.endElement() // t
-            writer.endElement() // r
-          }
-          writer.endElement() // is
-
-    /** Write cached formula value */
-    private def writeCachedValue(value: CellValue): Unit =
-      value match
-        case CellValue.Number(n) =>
-          writer.startElement("v")
-          writer.writeCharacters(n.toString)
-          writer.endElement()
-        case CellValue.Text(s) =>
-          writer.startElement("v")
-          writer.writeCharacters(s)
-          writer.endElement()
-        case CellValue.Bool(b) =>
-          writer.startElement("v")
-          writer.writeCharacters(if b then "1" else "0")
-          writer.endElement()
-        case CellValue.Error(err) =>
-          import com.tjclp.xl.cells.CellError.toExcel
-          writer.startElement("v")
-          writer.writeCharacters(err.toExcel)
-          writer.endElement()
-        case _ => ()
+      StreamingTransform.writeCellContent(writer, value)

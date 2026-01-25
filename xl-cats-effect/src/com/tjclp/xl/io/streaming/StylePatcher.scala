@@ -8,7 +8,8 @@ import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.color.Color
-import com.tjclp.xl.ooxml.XmlUtil
+import com.tjclp.xl.ooxml.{XmlSecurity, XmlUtil}
+import com.tjclp.xl.error.XLResult
 import java.util.Locale
 
 /**
@@ -28,11 +29,10 @@ object StylePatcher:
    * @param newStyle
    *   The CellStyle to add
    * @return
-   *   (updated styles.xml content, new cellXf index)
+   *   XLResult containing (updated styles.xml content, new cellXf index)
    */
-  def addStyle(stylesXml: String, newStyle: CellStyle): (String, Int) =
-    val parsed = XML.loadString(stylesXml)
-    addStyleToElem(parsed, newStyle)
+  def addStyle(stylesXml: String, newStyle: CellStyle): XLResult[(String, Int)] =
+    XmlSecurity.parseSafe(stylesXml, "styles.xml").map(parsed => addStyleToElem(parsed, newStyle))
 
   /**
    * Add multiple styles to styles.xml, returning updated XML and style ID mapping.
@@ -42,19 +42,35 @@ object StylePatcher:
    * @param newStyles
    *   Map of identifier to CellStyle to add
    * @return
-   *   (updated styles.xml content, Map[identifier -> new cellXf index])
+   *   XLResult containing (updated styles.xml content, Map[identifier -> new cellXf index])
    */
-  def addStyles[K](stylesXml: String, newStyles: Map[K, CellStyle]): (String, Map[K, Int]) =
-    var parsed = XML.loadString(stylesXml)
-    val mapping = scala.collection.mutable.Map[K, Int]()
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def addStyles[K](
+    stylesXml: String,
+    newStyles: Map[K, CellStyle]
+  ): XLResult[(String, Map[K, Int])] =
+    XmlSecurity.parseSafe(stylesXml, "styles.xml").flatMap { initialParsed =>
+      var parsed = initialParsed
+      val mapping = scala.collection.mutable.Map[K, Int]()
+      var error: Option[com.tjclp.xl.error.XLError] = None
 
-    newStyles.foreach { case (key, style) =>
-      val (updated, newId) = addStyleToElem(parsed, style)
-      parsed = XML.loadString(updated)
-      mapping(key) = newId
+      val styleSeq = newStyles.toSeq
+      var i = 0
+      while i < styleSeq.length && error.isEmpty do
+        val (key, style) = styleSeq(i)
+        val (updated, newId) = addStyleToElem(parsed, style)
+        XmlSecurity.parseSafe(updated, "styles.xml") match
+          case Right(p) =>
+            parsed = p
+            mapping(key) = newId
+          case Left(e) =>
+            error = Some(e)
+        i += 1
+
+      error match
+        case Some(e) => Left(e)
+        case None => Right((XmlUtil.compact(parsed), mapping.toMap))
     }
-
-    (XmlUtil.compact(parsed), mapping.toMap)
 
   /**
    * Get existing style by index from styles.xml.
@@ -64,11 +80,10 @@ object StylePatcher:
    * @param styleId
    *   The cellXf index
    * @return
-   *   CellStyle if found
+   *   XLResult containing CellStyle if found, None if index doesn't exist
    */
-  def getStyle(stylesXml: String, styleId: Int): Option[CellStyle] =
-    val parsed = XML.loadString(stylesXml)
-    extractStyle(parsed, styleId)
+  def getStyle(stylesXml: String, styleId: Int): XLResult[Option[CellStyle]] =
+    XmlSecurity.parseSafe(stylesXml, "styles.xml").map(parsed => extractStyle(parsed, styleId))
 
   /**
    * Merge styles: combines existing style with new style properties.

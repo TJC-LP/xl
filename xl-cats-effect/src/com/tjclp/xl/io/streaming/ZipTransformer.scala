@@ -221,7 +221,9 @@ object ZipTransformer:
 
       if replace then
         // Replace mode: All cells get same new style
-        val (updatedStyles, newStyleId) = StylePatcher.addStyle(stylesXml, style)
+        val (updatedStyles, newStyleId) = StylePatcher.addStyle(stylesXml, style) match
+          case Right(result) => result
+          case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
         val patches = targetCells.map { ref =>
           ref -> StreamingTransform.CellPatch.SetStyle(newStyleId)
         }.toMap
@@ -248,12 +250,14 @@ object ZipTransformer:
         var stylesAdded = 0
 
         cellsByStyleId.keys.foreach { oldStyleId =>
-          val existingStyle = StylePatcher
-            .getStyle(currentStylesXml, oldStyleId)
-            .getOrElse(CellStyle.default)
+          val existingStyle = StylePatcher.getStyle(currentStylesXml, oldStyleId) match
+            case Right(opt) => opt.getOrElse(CellStyle.default)
+            case Left(e) => throw new Exception(s"Failed to get style: ${e.message}")
           val mergedStyle = StylePatcher.mergeStyles(existingStyle, style)
 
-          val (updated, newId) = StylePatcher.addStyle(currentStylesXml, mergedStyle)
+          val (updated, newId) = StylePatcher.addStyle(currentStylesXml, mergedStyle) match
+            case Right(result) => result
+            case Left(e) => throw new Exception(s"Failed to add merged style: ${e.message}")
           currentStylesXml = updated
           styleIdMapping(oldStyleId) = newId
           stylesAdded += 1
@@ -267,7 +271,10 @@ object ZipTransformer:
               // Cell not in scan results - use style for default (0)
               if !styleIdMapping.contains(0) then
                 val mergedStyle = StylePatcher.mergeStyles(CellStyle.default, style)
-                val (updated, newId) = StylePatcher.addStyle(currentStylesXml, mergedStyle)
+                val (updated, newId) = StylePatcher.addStyle(currentStylesXml, mergedStyle) match
+                  case Right(result) => result
+                  case Left(e) =>
+                    throw new Exception(s"Failed to add default merged style: ${e.message}")
                 currentStylesXml = updated
                 styleIdMapping(0) = newId
                 stylesAdded += 1
