@@ -1018,7 +1018,7 @@ Operations execute in order. Use "-" to read from stdin."""
         // For read commands: stream flag enables O(1) input memory (true streaming)
         val isReadCmd = cmd match
           case _: CliCommand.Search | _: CliCommand.Stats | _: CliCommand.Bounds |
-              _: CliCommand.View =>
+              _: CliCommand.View | _: CliCommand.Cell =>
             true
           case _ => false
 
@@ -1093,10 +1093,13 @@ Operations execute in order. Use "-" to read from stdin."""
           headerRow
         )
 
+    case CliCommand.Cell(refStr, noStyle) =>
+      StreamingReadCommands.cell(filePath, sheetNameOpt, refStr, noStyle)
+
     case _ =>
       IO.raiseError(
         new Exception(
-          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only)"
+          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only), cell"
         )
       )
 

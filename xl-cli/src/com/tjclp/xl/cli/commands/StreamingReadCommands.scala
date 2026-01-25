@@ -9,8 +9,10 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.helpers.ValueParser
-import com.tjclp.xl.cli.output.{CsvRenderer, JsonRenderer, Markdown}
+import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.io.{ExcelIO, RowData}
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Streaming implementations of read-only CLI commands.
@@ -76,6 +78,238 @@ object StreamingReadCommands:
             s"Found ${results.size} matches in $sheetDesc (streaming):\n\n$formatted"
           }
       }
+    }
+
+  /**
+   * Get cell details using streaming with O(1) worksheet memory.
+   *
+   * Pre-loads styles/sharedStrings/comments once, then streams worksheet with early-abort. Memory:
+   * ~3MB max regardless of worksheet size.
+   */
+  def cell(
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    refStr: String,
+    noStyle: Boolean
+  ): IO[String] =
+    for
+      // Parse the ref (may include sheet name like "Sheet1!A1")
+      parsed <- IO.fromEither(
+        RefType
+          .parse(refStr)
+          .left
+          .map(e => new Exception(s"Invalid cell reference: $e"))
+      )
+      (refSheetOpt, ref) <- parsed match
+        case RefType.Cell(r) => IO.pure((None, r))
+        case RefType.QualifiedCell(sheet, r) => IO.pure((Some(sheet.value), r))
+        case _ =>
+          IO.raiseError(new Exception("cell command requires single cell, not range"))
+
+      // Resolve sheet name
+      targetSheet <- (refSheetOpt, sheetNameOpt) match
+        case (Some(refSheet), Some(cliSheet)) if refSheet != cliSheet =>
+          IO.raiseError(
+            new Exception(
+              s"cell ref '$refStr' targets sheet '$refSheet' but --sheet is '$cliSheet'"
+            )
+          )
+        case (Some(refSheet), _) => IO.pure(refSheet)
+        case (None, Some(cliSheet)) => IO.pure(cliSheet)
+        case (None, None) =>
+          // Use first sheet from metadata
+          excel.readMetadata(filePath).flatMap { meta =>
+            meta.sheets.headOption match
+              case Some(info) => IO.pure(info.name.value)
+              case None => IO.raiseError(new Exception("Workbook has no sheets"))
+          }
+
+      // Get streaming cell details
+      details <- excel.streamCellDetails(filePath, targetSheet, ref)
+
+      // Format output similar to non-streaming version
+      style = if noStyle then None else details.style
+      numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
+      valueToFormat = details.value match
+        case CellValue.Formula(_, Some(cached)) => cached
+        case other => other
+      formatted = NumFmtFormatter.formatValue(valueToFormat, numFmt)
+
+      // Format dependencies as strings (cell refs)
+      deps = details.dependencies
+
+      // Dependents not available in streaming mode
+      dependentsStr = "(not available in streaming mode)"
+    yield formatStreamingCellInfo(
+      details.ref,
+      details.value,
+      formatted,
+      style,
+      details.comment,
+      None, // hyperlinks not available in streaming mode
+      deps,
+      dependentsStr
+    )
+
+  /**
+   * Format streaming cell info output (similar to Format.cellInfo but with streaming-specific
+   * notes).
+   */
+  private def formatStreamingCellInfo(
+    ref: ARef,
+    value: CellValue,
+    formatted: String,
+    style: Option[com.tjclp.xl.styles.CellStyle],
+    comment: Option[com.tjclp.xl.cells.Comment],
+    hyperlink: Option[String],
+    dependencies: Vector[String],
+    dependentsStr: String
+  ): String =
+    val sb = new StringBuilder
+    sb.append(s"Cell: ${ref.toA1}\n")
+    sb.append(s"Type: ${valueType(value)}\n")
+
+    // For formulas, show expression and cached value separately
+    value match
+      case CellValue.Formula(expr, cached) =>
+        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+        sb.append(s"Formula: $displayExpr\n")
+        cached.foreach { v =>
+          sb.append(s"Cached: ${formatValue(v)}\n")
+          val cachedRaw = formatValue(v)
+          if formatted != cachedRaw && formatted != cachedRaw.stripPrefix("\"").stripSuffix("\"")
+          then sb.append(s"Formatted: $formatted\n")
+        }
+      case CellValue.Empty =>
+        sb.append("Value: (empty)\n")
+      case _ =>
+        sb.append(s"Raw: ${formatValue(value)}\n")
+        val rawStr = formatValue(value)
+        if formatted != rawStr && formatted != rawStr.stripPrefix("\"").stripSuffix("\"") then
+          sb.append(s"Formatted: $formatted\n")
+
+    // Style (non-default properties only)
+    formatStyleForStreaming(style).foreach(s => sb.append(s).append("\n"))
+
+    // Comment
+    comment.foreach { c =>
+      val authorStr = c.author.map(a => s" (Author: $a)").getOrElse("")
+      sb.append(s"""Comment: "${c.text.toPlainText}"$authorStr\n""")
+    }
+
+    // Hyperlink
+    hyperlink.foreach(h => sb.append(s"Hyperlink: $h\n"))
+
+    // Dependencies and dependents
+    val depsStr = if dependencies.isEmpty then "(none)" else dependencies.mkString(", ")
+    sb.append(s"Dependencies: $depsStr\n")
+    sb.append(s"Dependents: $dependentsStr")
+
+    sb.toString
+
+  private def valueType(value: CellValue): String =
+    value match
+      case CellValue.Text(_) => "text"
+      case CellValue.Number(_) => "number"
+      case CellValue.Bool(_) => "boolean"
+      case CellValue.DateTime(_) => "datetime"
+      case CellValue.Error(_) => "error"
+      case CellValue.RichText(_) => "richtext"
+      case CellValue.Empty => "empty"
+      case CellValue.Formula(_, _) => "formula"
+
+  private def formatValue(value: CellValue): String =
+    value match
+      case CellValue.Text(s) => s"\"$s\""
+      case CellValue.Number(n) =>
+        if n.isWhole then n.toBigInt.toString
+        else n.underlying.stripTrailingZeros.toPlainString
+      case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
+      case CellValue.DateTime(dt) => dt.toString
+      case CellValue.Error(err) => err.toExcel
+      case CellValue.RichText(rt) => s"\"${rt.toPlainText}\""
+      case CellValue.Empty => "(empty)"
+      case CellValue.Formula(expr, cached) =>
+        val displayExpr = if expr.startsWith("=") then expr else s"=$expr"
+        cached.map(formatValue).getOrElse(displayExpr)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def formatStyleForStreaming(
+    style: Option[com.tjclp.xl.styles.CellStyle]
+  ): Option[String] =
+    import com.tjclp.xl.styles.font.Font
+    import com.tjclp.xl.styles.fill.Fill
+    import com.tjclp.xl.styles.border.{Border, BorderStyle}
+    import com.tjclp.xl.styles.alignment.Align
+    import com.tjclp.xl.styles.color.Color
+
+    style.flatMap { s =>
+      val parts = Vector.newBuilder[String]
+
+      // Font (if non-default)
+      if s.font != Font.default then
+        var fontDesc = Vector(s.font.name, s"${s.font.sizePt}pt")
+        if s.font.bold then fontDesc = fontDesc :+ "bold"
+        if s.font.italic then fontDesc = fontDesc :+ "italic"
+        if s.font.underline then fontDesc = fontDesc :+ "underline"
+        s.font.color.foreach {
+          case Color.Rgb(argb) =>
+            fontDesc = fontDesc :+ f"${argb & 0xffffff}%06X"
+          case Color.Theme(slot, tint) =>
+            val tintStr = if tint == 0.0 then "" else f" tint=$tint%.2f"
+            fontDesc = fontDesc :+ s"$slot$tintStr"
+        }
+        parts += s"Font: ${fontDesc.mkString(" ")}"
+
+      // Fill (if non-default)
+      s.fill match
+        case Fill.Solid(color) =>
+          val colorStr = color match
+            case Color.Rgb(argb) => f"${argb & 0xffffff}%06X"
+            case Color.Theme(slot, tint) =>
+              val tintStr = if tint == 0.0 then "" else f" tint=$tint%.2f"
+              s"$slot$tintStr"
+          parts += s"Fill: $colorStr (solid)"
+        case Fill.Pattern(_, _, _) => parts += "Fill: (pattern)"
+        case Fill.None => ()
+
+      // NumFmt (if non-General)
+      if s.numFmt != NumFmt.General then
+        val idStr = s.numFmtId.map(id => s" (id: $id)").getOrElse("")
+        val codeStr = s.numFmt match
+          case NumFmt.Custom(code) => code
+          case other => other.toString
+        parts += s"NumFmt: $codeStr$idStr"
+
+      // Alignment (if non-default)
+      if s.align != Align.default then
+        val wrapStr = if s.align.wrapText then ", wrap" else ""
+        parts += s"Align: ${s.align.horizontal}, ${s.align.vertical}$wrapStr"
+
+      // Border (if non-default)
+      if s.border != Border.none then
+        val sides = Vector(
+          if s.border.top.style != BorderStyle.None then Some(s"top: ${s.border.top.style}")
+          else None,
+          if s.border.bottom.style != BorderStyle.None then
+            Some(s"bottom: ${s.border.bottom.style}")
+          else None,
+          if s.border.left.style != BorderStyle.None then Some(s"left: ${s.border.left.style}")
+          else None,
+          if s.border.right.style != BorderStyle.None then Some(s"right: ${s.border.right.style}")
+          else None
+        ).flatten
+        if sides.nonEmpty then
+          val allSame = s.border.top == s.border.bottom &&
+            s.border.bottom == s.border.left &&
+            s.border.left == s.border.right &&
+            s.border.top.style != BorderStyle.None
+          if allSame then parts += s"Border: ${s.border.top.style} (all sides)"
+          else parts += s"Border: ${sides.mkString(", ")}"
+
+      val result = parts.result()
+      if result.isEmpty then None
+      else Some(result.map("  " + _).mkString("Style:\n", "\n", ""))
     }
 
   /**

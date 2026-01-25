@@ -11,8 +11,20 @@ import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter, SharedStrings, XmlSecurity}
+import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.cells.Comment
+import com.tjclp.xl.ooxml.{
+  OoxmlComments,
+  Relationships,
+  XlsxReader,
+  XlsxWriter,
+  SharedStrings,
+  XmlSecurity,
+  XmlUtil
+}
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
+import com.tjclp.xl.ooxml.style.WorkbookStyles
+import com.tjclp.xl.io.streaming.{SaxSingleCellReader, StreamingCellDetails}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
 
@@ -206,6 +218,210 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       case Left(err) =>
         Async[F].raiseError(new Exception(s"Failed to read dimension: ${err.message}"))
     }
+
+  /**
+   * Read single cell details using streaming with O(1) worksheet memory.
+   *
+   * Pre-loads styles.xml (~200KB-1.5MB), sharedStrings.xml (~500KB-2MB), and comments (~10-100KB),
+   * then streams worksheet until target cell is found (early-abort optimization).
+   *
+   * Time: O(position of cell in file) Memory: ~3MB max regardless of worksheet size
+   *
+   * @param path
+   *   Path to XLSX file
+   * @param sheetName
+   *   Name of worksheet to read from
+   * @param targetRef
+   *   Cell reference to find (e.g., A1, B5)
+   * @return
+   *   StreamingCellDetails with cell value, style, comment, and dependencies
+   */
+  def streamCellDetails(
+    path: Path,
+    sheetName: String,
+    targetRef: ARef
+  ): F[StreamingCellDetails] =
+    Sync[F]
+      .delay {
+        val zipFile = new ZipFile(path.toFile)
+        try streamCellDetailsSync(zipFile, sheetName, targetRef)
+        finally zipFile.close()
+      }
+      .flatMap {
+        case Right(details) => Async[F].pure(details)
+        case Left(err) => Async[F].raiseError(new Exception(err))
+      }
+
+  // Sync helper for streamCellDetails - pure function using open ZipFile
+  private def streamCellDetailsSync(
+    zipFile: ZipFile,
+    sheetName: String,
+    targetRef: ARef
+  ): Either[String, StreamingCellDetails] =
+    for
+      // 1. Find sheet index from workbook.xml
+      sheetIndex <- findSheetIndexSync(zipFile, sheetName)
+
+      // 2. Load styles.xml (0.2-1.5MB)
+      styles <- loadStylesSync(zipFile)
+
+      // 3. Load sharedStrings.xml (0.5-2MB)
+      sst <- loadSharedStringsSync(zipFile)
+
+      // 4. Load comments for this sheet (10-100KB)
+      comments <- loadCommentsSync(zipFile, sheetIndex)
+
+      // 5. Stream worksheet with early-abort to find target cell
+      cellResult <- extractCellSync(zipFile, sheetIndex, targetRef, sst)
+
+      // 6. Resolve style from styleId
+      resolvedStyle = cellResult.flatMap(_.styleId).flatMap(styles.styleAt)
+
+      // 7. Get comment for this cell
+      comment = comments.get(targetRef)
+
+      // 8. Parse formula dependencies if cell has a formula
+      dependencies = cellResult.flatMap(_.formulaText) match
+        case Some(formula) => parseFormulaDependencies(formula)
+        case None => Vector.empty
+
+      // 9. Build result
+      value = cellResult
+        .map(_.value)
+        .getOrElse(
+          com.tjclp.xl.cells.CellValue.Empty
+        )
+    yield StreamingCellDetails(
+      ref = targetRef,
+      value = value,
+      style = resolvedStyle,
+      comment = comment,
+      dependencies = dependencies,
+      dependentsUnavailable = true
+    )
+
+  // Helper: Find sheet index by name from workbook.xml
+  private def findSheetIndexSync(zipFile: ZipFile, sheetName: String): Either[String, Int] =
+    val wbEntry = Option(zipFile.getEntry("xl/workbook.xml"))
+    wbEntry match
+      case None => Left("Missing xl/workbook.xml")
+      case Some(entry) =>
+        val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+        XmlSecurity.parseSafe(xml, "xl/workbook.xml") match
+          case Left(err) => Left(s"Failed to parse workbook.xml: ${err.message}")
+          case Right(wbXml) =>
+            val sheets = (wbXml \\ "sheet").toSeq.zipWithIndex
+            sheets.find { case (elem, _) =>
+              (elem \ "@name").text == sheetName
+            } match
+              case Some((_, idx)) => Right(idx + 1) // 1-based
+              case None =>
+                val available = (wbXml \\ "sheet").map(_ \ "@name").map(_.text).mkString(", ")
+                Left(s"Sheet not found: $sheetName. Available: $available")
+
+  // Helper: Load styles.xml and parse into WorkbookStyles
+  private def loadStylesSync(zipFile: ZipFile): Either[String, WorkbookStyles] =
+    val stylesEntry = Option(zipFile.getEntry("xl/styles.xml"))
+    stylesEntry match
+      case None => Right(WorkbookStyles.default)
+      case Some(entry) =>
+        val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+        XmlSecurity.parseSafe(xml, "xl/styles.xml") match
+          case Left(err) => Left(s"Failed to parse styles.xml: ${err.message}")
+          case Right(elem) => WorkbookStyles.fromXml(elem)
+
+  // Helper: Load sharedStrings.xml
+  private def loadSharedStringsSync(zipFile: ZipFile): Either[String, Option[SharedStrings]] =
+    val sstEntry = Option(zipFile.getEntry("xl/sharedStrings.xml"))
+    sstEntry match
+      case None => Right(None)
+      case Some(entry) =>
+        val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+        XmlSecurity.parseSafe(xml, "xl/sharedStrings.xml") match
+          case Left(err) => Left(s"Failed to parse sharedStrings.xml: ${err.message}")
+          case Right(elem) =>
+            SharedStrings.fromXml(elem) match
+              case Right(sst) => Right(Some(sst))
+              case Left(err) => Left(s"Failed to parse shared strings: $err")
+
+  // Helper: Load comments for specific sheet
+  private def loadCommentsSync(
+    zipFile: ZipFile,
+    sheetIndex: Int
+  ): Either[String, Map[ARef, Comment]] =
+    // Parse worksheet relationships to find comment path
+    val relsPath = s"xl/worksheets/_rels/sheet$sheetIndex.xml.rels"
+    val relsEntry = Option(zipFile.getEntry(relsPath))
+
+    val commentPathOpt: Option[String] = relsEntry.flatMap { entry =>
+      val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+      XmlSecurity.parseSafe(xml, relsPath).toOption.flatMap { elem =>
+        Relationships.fromXml(elem).toOption.flatMap { rels =>
+          rels.relationships.find(_.`type` == XmlUtil.relTypeComments).map { rel =>
+            // Resolve relative path (e.g., "../comments1.xml" -> "xl/comments1.xml")
+            val target = rel.target
+            val cleaned = if target.startsWith("/") then target.drop(1) else target
+            if cleaned.startsWith("xl/") then cleaned
+            else
+              // Resolve relative to xl/worksheets/
+              java.nio.file.Paths
+                .get("xl/worksheets")
+                .resolve(cleaned)
+                .normalize()
+                .toString
+                .replace('\\', '/')
+          }
+        }
+      }
+    }
+
+    commentPathOpt match
+      case None => Right(Map.empty) // No comments for this sheet
+      case Some(commentPath) =>
+        val commentsEntry = Option(zipFile.getEntry(commentPath))
+        commentsEntry match
+          case None => Right(Map.empty) // Comment file not found (graceful)
+          case Some(entry) =>
+            val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+            XmlSecurity.parseSafe(xml, commentPath) match
+              case Left(err) => Left(s"Failed to parse comments: ${err.message}")
+              case Right(elem) =>
+                OoxmlComments.fromXml(elem) match
+                  case Left(err) => Left(s"Failed to parse comments: $err")
+                  case Right(ooxmlComments) =>
+                    // Convert OOXML comments to domain comments
+                    Right(ooxmlComments.comments.map { c =>
+                      val author = ooxmlComments.authors.lift(c.authorId)
+                      c.ref -> Comment(c.text, author)
+                    }.toMap)
+
+  // Helper: Extract single cell using SAX parser with early-abort
+  private def extractCellSync(
+    zipFile: ZipFile,
+    sheetIndex: Int,
+    targetRef: ARef,
+    sst: Option[SharedStrings]
+  ): Either[String, Option[SaxSingleCellReader.CellResult]] =
+    val sheetPath = s"xl/worksheets/sheet$sheetIndex.xml"
+    val sheetEntry = Option(zipFile.getEntry(sheetPath))
+    sheetEntry match
+      case None => Left(s"Worksheet not found: $sheetPath")
+      case Some(entry) =>
+        val stream = zipFile.getInputStream(entry)
+        try Right(SaxSingleCellReader.extractCell(stream, targetRef, sst))
+        finally stream.close()
+
+  // Helper: Parse formula dependencies (referenced cells)
+  private def parseFormulaDependencies(formula: String): Vector[String] =
+    // Simple regex to extract cell references (handles A1, $A$1, Sheet1!A1)
+    val cellRefPattern = """(\$?[A-Z]+\$?[1-9][0-9]*)""".r
+    val rangePattern = """([A-Za-z0-9_!'\$]+[:!][A-Za-z0-9_'\$:]+)""".r
+
+    // Extract all cell references and ranges
+    val refs = cellRefPattern.findAllIn(formula).toVector ++
+      rangePattern.findAllIn(formula).toVector
+
+    refs.distinct.sorted
 
   // Helper: Stream rows from specific sheet index using open ZipFile
   private def readStreamByIndex(zipFile: ZipFile, sheetIndex: Int): Stream[F, RowData] =
