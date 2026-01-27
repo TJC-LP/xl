@@ -5,7 +5,7 @@ import java.nio.file.{Path, Paths}
 import cats.effect.IO
 import com.tjclp.xl.{Workbook, Sheet, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cli.helpers.CsvParser
+import com.tjclp.xl.cli.helpers.{CsvParser, StreamingCsvParser}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
 
@@ -16,8 +16,25 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
  *   - Import to existing sheet at position
  *   - Import to new sheet
  *   - Create new workbook from CSV
+ *   - True streaming import for new sheets (O(1) memory)
  */
 object ImportCommands:
+
+  /** Write workbook using standard or streaming writer based on mode */
+  private def writeWorkbook(
+    wb: Workbook,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean
+  ): IO[Unit] =
+    val excel = ExcelIO.instance[IO]
+    if stream then excel.writeWorkbookStream(wb, outputPath, config)
+    else excel.writeWith(wb, outputPath, config)
+
+  /** Build save message suffix based on write mode */
+  private def saveSuffix(outputPath: Path, stream: Boolean): String =
+    if stream then s"Saved (streaming): $outputPath"
+    else s"Saved: $outputPath"
 
   /**
    * Import CSV data into a workbook.
@@ -42,6 +59,8 @@ object ImportCommands:
    *   Output Excel file path
    * @param config
    *   Writer configuration
+   * @param stream
+   *   If true and --new-sheet, uses true streaming (O(1) memory for entire operation)
    * @return
    *   Success message with row/column count
    */
@@ -56,7 +75,8 @@ object ImportCommands:
     newSheetName: Option[String],
     noTypeInference: Boolean,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     val csvPathResolved = Paths.get(csvPath)
     val options = CsvParser.ImportOptions(
@@ -68,9 +88,13 @@ object ImportCommands:
     )
 
     newSheetName match
+      case Some(name) if stream && wb.sheets.isEmpty =>
+        // True streaming: CSV → XLSX with O(1) memory (only when creating new workbook)
+        importToNewSheetStreaming(csvPathResolved, name, options, outputPath)
+
       case Some(name) =>
-        // Import to new sheet
-        importToNewSheet(wb, csvPathResolved, name, options, outputPath, config)
+        // Hybrid or regular import to new sheet (workbook has existing sheets)
+        importToNewSheet(wb, csvPathResolved, name, options, outputPath, config, stream)
 
       case None =>
         // Import to existing sheet at position
@@ -92,13 +116,16 @@ object ImportCommands:
                 IO.pure(ARef.from0(0, 0)) // Default to A1
 
             startRef.flatMap { ref =>
-              importToPosition(wb, sheet, csvPathResolved, ref, options, outputPath, config)
+              importToPosition(wb, sheet, csvPathResolved, ref, options, outputPath, config, stream)
             }
 
   /**
    * Import CSV to an existing sheet at a specified position.
    *
    * Overwrites any existing data at that position.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory (hybrid streaming)
    */
   private def importToPosition(
     wb: Workbook,
@@ -107,7 +134,8 @@ object ImportCommands:
     startRef: ARef,
     options: CsvParser.ImportOptions,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean
   ): IO[String] =
     for
       // Parse CSV into (ARef, CellValue) tuples
@@ -120,19 +148,22 @@ object ImportCommands:
       updatedWb = wb.put(updatedSheet)
 
       // Write to output file
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
 
       // Calculate import stats
       rowCount = updates.map(_._1.row).distinct.size
       colCount = updates.map(_._1.col).distinct.size
       cellCount = updates.size
     yield s"""Imported: ${csvPath.getFileName} → ${sheet.name} (${rowCount} rows, ${colCount} cols, ${cellCount} cells)
-Saved: ${outputPath}"""
+${saveSuffix(outputPath, stream)}"""
 
   /**
    * Import CSV to a new sheet (created as part of the import).
    *
    * Sheet name must not already exist in the workbook.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory (hybrid streaming)
    */
   private def importToNewSheet(
     wb: Workbook,
@@ -140,7 +171,8 @@ Saved: ${outputPath}"""
     sheetName: String,
     options: CsvParser.ImportOptions,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean
   ): IO[String] =
     // Validate sheet name doesn't already exist
     if wb.sheets.exists(_.name.value == sheetName) then
@@ -167,11 +199,39 @@ Saved: ${outputPath}"""
         updatedWb = wb.put(newSheet)
 
         // Write to output file
-        _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+        _ <- writeWorkbook(updatedWb, outputPath, config, stream)
 
         // Calculate import stats
         rowCount = updates.map(_._1.row).distinct.size
         colCount = updates.map(_._1.col).distinct.size
         cellCount = updates.size
       yield s"""Imported: ${csvPath.getFileName} → new sheet '$sheetName' (${rowCount} rows, ${colCount} cols, ${cellCount} cells)
-Saved: ${outputPath}"""
+${saveSuffix(outputPath, stream)}"""
+
+  /**
+   * True streaming CSV import - O(1) memory for entire operation.
+   *
+   * Only available when creating a new workbook (no existing sheets to preserve). Uses
+   * StreamingCsvParser + writeStreamWithAutoDetect for end-to-end streaming.
+   */
+  private def importToNewSheetStreaming(
+    csvPath: Path,
+    sheetName: String,
+    options: CsvParser.ImportOptions,
+    outputPath: Path
+  ): IO[String] =
+    val streamingOpts = StreamingCsvParser.Options(
+      delimiter = options.delimiter,
+      skipHeader = options.skipHeader,
+      encoding = options.encoding,
+      inferTypes = options.inferTypes
+    )
+
+    StreamingCsvParser
+      .streamCsv(csvPath, streamingOpts)
+      .through(ExcelIO.instance[IO].writeStreamWithAutoDetect(outputPath, sheetName))
+      .compile
+      .drain
+      .map(_ =>
+        s"Streamed: ${csvPath.getFileName} → new sheet '$sheetName'\nSaved (streaming): $outputPath"
+      )

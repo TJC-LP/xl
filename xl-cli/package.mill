@@ -42,6 +42,7 @@ object `package` extends build.XLInternalModule with NativeImageModule {
   def nativeImageOptions = Seq(
     "--no-fallback",
     "-Os", // Optimize for size
+    "-R:MaxHeapSize=8g", // Allow up to 8GB heap for large file operations
     "-H:+ReportExceptionStackTraces",
     // Note: --install-exit-handlers is default in GraalVM 25+ (no longer needed)
     // Suppress JDK 24+ Unsafe deprecation warnings from Scala 3 LazyVals (JEP 471/498)

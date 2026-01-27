@@ -3,15 +3,28 @@ package com.tjclp.xl.io
 import cats.effect.{Async, Sync, Resource}
 import cats.syntax.all.*
 import fs2.{Stream, Pipe}
-import java.nio.file.Path
-import java.io.{FileOutputStream, FileInputStream}
+import java.nio.file.{Files as JFiles, Path}
+import java.io.{BufferedOutputStream, FileOutputStream, FileInputStream}
 import java.util.zip.{ZipOutputStream, ZipEntry, CRC32, ZipInputStream, ZipFile}
 import java.nio.charset.StandardCharsets
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.ooxml.{XlsxReader, XlsxWriter, SharedStrings, XmlSecurity}
+import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.cells.Comment
+import com.tjclp.xl.ooxml.{
+  OoxmlComments,
+  Relationships,
+  XlsxReader,
+  XlsxWriter,
+  SharedStrings,
+  XmlSecurity,
+  XmlUtil
+}
+import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
+import com.tjclp.xl.ooxml.style.WorkbookStyles
+import com.tjclp.xl.io.streaming.{SaxSingleCellReader, StreamingCellDetails}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
 
@@ -182,6 +195,234 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         readStreamByIndex(zipFile, sheetIndex, Some(range))
       }
 
+  // ===== Lightweight Metadata Operations =====
+
+  /**
+   * Read workbook metadata only (no cell data). Instant for any file size.
+   *
+   * Uses pure WorkbookMetadataReader from xl-ooxml module.
+   */
+  def readMetadata(path: Path): F[LightMetadata] =
+    Sync[F].delay(WorkbookMetadataReader.read(path)).flatMap {
+      case Right(meta) => Async[F].pure(meta)
+      case Left(err) =>
+        Async[F].raiseError(new Exception(s"Failed to read metadata: ${err.message}"))
+    }
+
+  /**
+   * Read dimension from specific worksheet (1-based index). Instant for any file size.
+   */
+  def readDimension(path: Path, sheetIndex: Int): F[Option[CellRange]] =
+    Sync[F].delay(WorkbookMetadataReader.readDimension(path, sheetIndex)).flatMap {
+      case Right(dim) => Async[F].pure(dim)
+      case Left(err) =>
+        Async[F].raiseError(new Exception(s"Failed to read dimension: ${err.message}"))
+    }
+
+  /**
+   * Read single cell details using streaming with O(1) worksheet memory.
+   *
+   * Pre-loads styles.xml (~200KB-1.5MB), sharedStrings.xml (~500KB-2MB), and comments (~10-100KB),
+   * then streams worksheet until target cell is found (early-abort optimization).
+   *
+   * Time: O(position of cell in file) Memory: ~3MB max regardless of worksheet size
+   *
+   * @param path
+   *   Path to XLSX file
+   * @param sheetName
+   *   Name of worksheet to read from
+   * @param targetRef
+   *   Cell reference to find (e.g., A1, B5)
+   * @return
+   *   StreamingCellDetails with cell value, style, comment, and dependencies
+   */
+  def streamCellDetails(
+    path: Path,
+    sheetName: String,
+    targetRef: ARef
+  ): F[StreamingCellDetails] =
+    Sync[F]
+      .delay {
+        val zipFile = new ZipFile(path.toFile)
+        try streamCellDetailsSync(zipFile, sheetName, targetRef)
+        finally zipFile.close()
+      }
+      .flatMap {
+        case Right(details) => Async[F].pure(details)
+        case Left(err) => Async[F].raiseError(new Exception(err))
+      }
+
+  // Sync helper for streamCellDetails - pure function using open ZipFile
+  private def streamCellDetailsSync(
+    zipFile: ZipFile,
+    sheetName: String,
+    targetRef: ARef
+  ): Either[String, StreamingCellDetails] =
+    for
+      // 1. Find sheet index from workbook.xml
+      sheetIndex <- findSheetIndexSync(zipFile, sheetName)
+
+      // 2. Load styles.xml (0.2-1.5MB)
+      styles <- loadStylesSync(zipFile)
+
+      // 3. Load sharedStrings.xml (0.5-2MB)
+      sst <- loadSharedStringsSync(zipFile)
+
+      // 4. Load comments for this sheet (10-100KB)
+      comments <- loadCommentsSync(zipFile, sheetIndex)
+
+      // 5. Stream worksheet with early-abort to find target cell
+      cellResult <- extractCellSync(zipFile, sheetIndex, targetRef, sst)
+
+      // 6. Resolve style from styleId
+      resolvedStyle = cellResult.flatMap(_.styleId).flatMap(styles.styleAt)
+
+      // 7. Get comment for this cell
+      comment = comments.get(targetRef)
+
+      // 8. Parse formula dependencies if cell has a formula
+      dependencies = cellResult.flatMap(_.formulaText) match
+        case Some(formula) => parseFormulaDependencies(formula)
+        case None => Vector.empty
+
+      // 9. Build result
+      value = cellResult
+        .map(_.value)
+        .getOrElse(
+          com.tjclp.xl.cells.CellValue.Empty
+        )
+    yield StreamingCellDetails(
+      ref = targetRef,
+      value = value,
+      style = resolvedStyle,
+      comment = comment,
+      dependencies = dependencies,
+      dependentsUnavailable = true
+    )
+
+  // Helper: Find sheet index by name from workbook.xml
+  private def findSheetIndexSync(zipFile: ZipFile, sheetName: String): Either[String, Int] =
+    val wbEntry = Option(zipFile.getEntry("xl/workbook.xml"))
+    wbEntry match
+      case None => Left("Missing xl/workbook.xml")
+      case Some(entry) =>
+        val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+        XmlSecurity.parseSafe(xml, "xl/workbook.xml") match
+          case Left(err) => Left(s"Failed to parse workbook.xml: ${err.message}")
+          case Right(wbXml) =>
+            val sheets = (wbXml \\ "sheet").toSeq.zipWithIndex
+            sheets.find { case (elem, _) =>
+              (elem \ "@name").text == sheetName
+            } match
+              case Some((_, idx)) => Right(idx + 1) // 1-based
+              case None =>
+                val available = (wbXml \\ "sheet").map(_ \ "@name").map(_.text).mkString(", ")
+                Left(s"Sheet not found: $sheetName. Available: $available")
+
+  // Helper: Load styles.xml and parse into WorkbookStyles
+  private def loadStylesSync(zipFile: ZipFile): Either[String, WorkbookStyles] =
+    val stylesEntry = Option(zipFile.getEntry("xl/styles.xml"))
+    stylesEntry match
+      case None => Right(WorkbookStyles.default)
+      case Some(entry) =>
+        val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+        XmlSecurity.parseSafe(xml, "xl/styles.xml") match
+          case Left(err) => Left(s"Failed to parse styles.xml: ${err.message}")
+          case Right(elem) => WorkbookStyles.fromXml(elem)
+
+  // Helper: Load sharedStrings.xml
+  private def loadSharedStringsSync(zipFile: ZipFile): Either[String, Option[SharedStrings]] =
+    val sstEntry = Option(zipFile.getEntry("xl/sharedStrings.xml"))
+    sstEntry match
+      case None => Right(None)
+      case Some(entry) =>
+        val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+        XmlSecurity.parseSafe(xml, "xl/sharedStrings.xml") match
+          case Left(err) => Left(s"Failed to parse sharedStrings.xml: ${err.message}")
+          case Right(elem) =>
+            SharedStrings.fromXml(elem) match
+              case Right(sst) => Right(Some(sst))
+              case Left(err) => Left(s"Failed to parse shared strings: $err")
+
+  // Helper: Load comments for specific sheet
+  private def loadCommentsSync(
+    zipFile: ZipFile,
+    sheetIndex: Int
+  ): Either[String, Map[ARef, Comment]] =
+    // Parse worksheet relationships to find comment path
+    val relsPath = s"xl/worksheets/_rels/sheet$sheetIndex.xml.rels"
+    val relsEntry = Option(zipFile.getEntry(relsPath))
+
+    val commentPathOpt: Option[String] = relsEntry.flatMap { entry =>
+      val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+      XmlSecurity.parseSafe(xml, relsPath).toOption.flatMap { elem =>
+        Relationships.fromXml(elem).toOption.flatMap { rels =>
+          rels.relationships.find(_.`type` == XmlUtil.relTypeComments).map { rel =>
+            // Resolve relative path (e.g., "../comments1.xml" -> "xl/comments1.xml")
+            val target = rel.target
+            val cleaned = if target.startsWith("/") then target.drop(1) else target
+            if cleaned.startsWith("xl/") then cleaned
+            else
+              // Resolve relative to xl/worksheets/
+              java.nio.file.Paths
+                .get("xl/worksheets")
+                .resolve(cleaned)
+                .normalize()
+                .toString
+                .replace('\\', '/')
+          }
+        }
+      }
+    }
+
+    commentPathOpt match
+      case None => Right(Map.empty) // No comments for this sheet
+      case Some(commentPath) =>
+        val commentsEntry = Option(zipFile.getEntry(commentPath))
+        commentsEntry match
+          case None => Right(Map.empty) // Comment file not found (graceful)
+          case Some(entry) =>
+            val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
+            XmlSecurity.parseSafe(xml, commentPath) match
+              case Left(err) => Left(s"Failed to parse comments: ${err.message}")
+              case Right(elem) =>
+                OoxmlComments.fromXml(elem) match
+                  case Left(err) => Left(s"Failed to parse comments: $err")
+                  case Right(ooxmlComments) =>
+                    // Convert OOXML comments to domain comments
+                    Right(ooxmlComments.comments.map { c =>
+                      val author = ooxmlComments.authors.lift(c.authorId)
+                      c.ref -> Comment(c.text, author)
+                    }.toMap)
+
+  // Helper: Extract single cell using SAX parser with early-abort
+  private def extractCellSync(
+    zipFile: ZipFile,
+    sheetIndex: Int,
+    targetRef: ARef,
+    sst: Option[SharedStrings]
+  ): Either[String, Option[SaxSingleCellReader.CellResult]] =
+    val sheetPath = s"xl/worksheets/sheet$sheetIndex.xml"
+    val sheetEntry = Option(zipFile.getEntry(sheetPath))
+    sheetEntry match
+      case None => Left(s"Worksheet not found: $sheetPath")
+      case Some(entry) =>
+        val stream = zipFile.getInputStream(entry)
+        try Right(SaxSingleCellReader.extractCell(stream, targetRef, sst))
+        finally stream.close()
+
+  // Helper: Parse formula dependencies (referenced cells)
+  private def parseFormulaDependencies(formula: String): Vector[String] =
+    // Simple regex to extract cell references (handles A1, $A$1, Sheet1!A1)
+    val cellRefPattern = """(\$?[A-Z]+\$?[1-9][0-9]*)""".r
+    val rangePattern = """([A-Za-z0-9_!'\$]+[:!][A-Za-z0-9_'\$:]+)""".r
+
+    // Extract all cell references and ranges
+    val refs = cellRefPattern.findAllIn(formula).toVector ++
+      rangePattern.findAllIn(formula).toVector
+
+    refs.distinct.sorted
+
   // Helper: Stream rows from specific sheet index using open ZipFile
   private def readStreamByIndex(zipFile: ZipFile, sheetIndex: Int): Stream[F, RowData] =
     readStreamByIndex(zipFile, sheetIndex, None)
@@ -228,14 +469,28 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   /**
    * Streaming write with constant O(1) memory.
    *
-   * Uses fs2-data-xml events - never materializes full dataset. Can write unlimited rows with ~50MB
-   * memory.
+   * Single-pass streaming directly to ZIP. If `dimension` hint is provided, it's written to enable
+   * instant metadata queries. Otherwise, dimension is omitted (use `writeStreamWithAutoDetect` for
+   * automatic dimension detection at the cost of 2x I/O).
+   *
+   * @param path
+   *   Output file path
+   * @param sheetName
+   *   Name of the worksheet
+   * @param sheetIndex
+   *   Sheet index (1-based, default 1)
+   * @param config
+   *   Writer configuration
+   * @param dimension
+   *   Optional dimension hint. When provided, enables instant bounds queries. Use
+   *   `CellRange(ARef.from0(0, 0), ARef.from0(maxCol, maxRow))` to specify bounds.
    */
   def writeStream(
     path: Path,
     sheetName: String,
     sheetIndex: Int = 1,
-    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default,
+    dimension: Option[CellRange] = None
   ): Pipe[F, RowData, Unit] =
     rows =>
       // Validate sheet index
@@ -250,27 +505,206 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           )(zip => Sync[F].delay(zip.close()))
           .flatMap { zip =>
             // 1. Write static parts first
-            Stream.eval(writeStaticParts(zip, sheetName, sheetIndex, config)) ++
-              // 2. Open worksheet entry (use sheetIndex for filename)
-              // Note: Must use DEFLATED for streamed worksheets (STORED requires precomputed size/CRC)
+            Stream.eval(Sync[F].delay(writeStaticPartsSync(zip, sheetName, sheetIndex, config))) ++
+              // 2. Open worksheet entry
               Stream.eval(
                 Sync[F].delay {
                   val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
-                  entry.setMethod(ZipEntry.DEFLATED) // Always DEFLATED for streamed content
+                  entry.setMethod(ZipEntry.DEFLATED)
                   zip.putNextEntry(entry)
+                  // Write header with optional dimension
+                  writeWorksheetHeader(zip, dimension)
                 }
               ) ++
               // 3. Stream XML events → bytes → ZIP
-              (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
-                StreamingXmlWriter.worksheetEvents[F](rows, config.formulaInjectionPolicy))
+              StreamingXmlWriter
+                .worksheetBody(rows, config.formulaInjectionPolicy)
                 .through(xml.render.raw())
                 .through(fs2.text.utf8.encode)
                 .chunks
                 .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
-              // 4. Close entry
-              Stream.eval(Sync[F].delay(zip.closeEntry()))
+              // 4. Write footer and close entry
+              Stream.eval(
+                Sync[F].delay {
+                  writeWorksheetFooter(zip)
+                  zip.closeEntry()
+                }
+              )
           }
           .drain
+
+  /**
+   * Streaming write with automatic dimension detection.
+   *
+   * Uses two-phase approach: streams to temp file while tracking bounds, then assembles final ZIP
+   * with accurate dimension element. This enables instant metadata queries but costs 2x I/O.
+   *
+   * For better performance when bounds are known, use `writeStream` with explicit `dimension`.
+   */
+  def writeStreamWithAutoDetect(
+    path: Path,
+    sheetName: String,
+    sheetIndex: Int = 1,
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+  ): Pipe[F, RowData, Unit] =
+    rows =>
+      if sheetIndex < 1 then
+        Stream.raiseError[F](
+          new IllegalArgumentException(s"Sheet index must be >= 1, got: $sheetIndex")
+        )
+      else
+        Stream
+          .bracket(
+            Sync[F].delay {
+              val tempFile = JFiles.createTempFile("xl-stream-", ".xml")
+              val bounds = new BoundsAccumulator()
+              (tempFile, bounds)
+            }
+          ) { case (tempFile, _) =>
+            Sync[F].delay(JFiles.deleteIfExists(tempFile)).void
+          }
+          .flatMap { case (tempFile, bounds) =>
+            // Phase 1: Stream rows to temp file, track bounds
+            val writeTemp = rows
+              .evalTap(row => Sync[F].delay(bounds.update(row)))
+              .through(rowsToTempXml(tempFile, config))
+
+            // Phase 2: Assemble final ZIP with dimension
+            val assembleZip = Stream.eval(
+              assembleWorksheetZip(path, tempFile, bounds, sheetName, sheetIndex, config)
+            )
+
+            writeTemp ++ assembleZip
+          }
+          .drain
+
+  // Helper: Stream rows to temp XML file (body only, no header/footer)
+  private def rowsToTempXml(
+    tempFile: Path,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): Pipe[F, RowData, Unit] =
+    rows =>
+      Stream
+        .bracket(
+          Sync[F].delay(new BufferedOutputStream(new FileOutputStream(tempFile.toFile)))
+        )(os => Sync[F].delay(os.close()))
+        .flatMap { os =>
+          StreamingXmlWriter
+            .worksheetBody(rows, config.formulaInjectionPolicy)
+            .through(xml.render.raw())
+            .through(fs2.text.utf8.encode)
+            .chunks
+            .evalMap(chunk => Sync[F].delay(os.write(chunk.toArray)))
+        }
+
+  // Helper: Assemble final ZIP with dimension element
+  private def assembleWorksheetZip(
+    path: Path,
+    tempBodyFile: Path,
+    bounds: BoundsAccumulator,
+    sheetName: String,
+    sheetIndex: Int,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): F[Unit] =
+    Sync[F].delay {
+      val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
+      try
+        // 1. Write static parts
+        writeStaticPartsSync(zip, sheetName, sheetIndex, config)
+
+        // 2. Write worksheet with dimension
+        val wsEntry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
+        wsEntry.setMethod(ZipEntry.DEFLATED)
+        zip.putNextEntry(wsEntry)
+
+        // Header with dimension (from tracked bounds)
+        writeWorksheetHeader(zip, bounds.dimension)
+
+        // Body from temp file
+        JFiles.copy(tempBodyFile, zip)
+
+        // Footer
+        writeWorksheetFooter(zip)
+
+        zip.closeEntry()
+      finally zip.close()
+    }
+
+  // Helper: Write worksheet header XML to output stream
+  private def writeWorksheetHeader(
+    out: java.io.OutputStream,
+    dimension: Option[CellRange]
+  ): Unit =
+    val sb = new StringBuilder
+    sb.append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""")
+    sb.append("""<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" """)
+    sb.append("""xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">""")
+    dimension.foreach { range =>
+      sb.append(s"""<dimension ref="${range.toA1}"/>""")
+    }
+    sb.append("<sheetData>")
+    out.write(sb.toString.getBytes(StandardCharsets.UTF_8))
+
+  // Helper: Write worksheet footer XML to output stream
+  private def writeWorksheetFooter(out: java.io.OutputStream): Unit =
+    out.write("</sheetData></worksheet>".getBytes(StandardCharsets.UTF_8))
+
+  // Helper: Sync version of writeStaticParts for use in assembleWorksheetZip
+  private def writeStaticPartsSync(
+    zip: ZipOutputStream,
+    sheetName: String,
+    sheetIndex: Int,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): Unit =
+    import com.tjclp.xl.ooxml.*
+    import com.tjclp.xl.addressing.SheetName
+
+    val contentTypes =
+      ContentTypes.forSheetIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
+    val rootRels = Relationships.root()
+    val workbookRels =
+      Relationships.workbookWithIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
+
+    val ooxmlWb = OoxmlWorkbook(
+      sheets = Vector(SheetRef(SheetName.unsafe(sheetName), sheetIndex, "rId1"))
+    )
+
+    val styles = OoxmlStyles.minimal
+
+    writePartSync(zip, "[Content_Types].xml", contentTypes.toXml, config)
+    writePartSync(zip, "_rels/.rels", rootRels.toXml, config)
+    writePartSync(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
+    writePartSync(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
+    writePartSync(zip, "xl/styles.xml", styles.toXml, config)
+
+  // Helper: Write a single XML part to ZIP (sync version)
+  private def writePartSync(
+    zip: ZipOutputStream,
+    entryName: String,
+    xml: scala.xml.Elem,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): Unit =
+    import com.tjclp.xl.ooxml.{XmlUtil, Compression}
+
+    val xmlString = if config.prettyPrint then XmlUtil.prettyPrint(xml) else XmlUtil.compact(xml)
+    val bytes = xmlString.getBytes(StandardCharsets.UTF_8)
+
+    val entry = new ZipEntry(entryName)
+    entry.setMethod(config.compression.zipMethod)
+
+    config.compression match
+      case Compression.Stored =>
+        entry.setSize(bytes.length)
+        entry.setCompressedSize(bytes.length)
+        val crc = new CRC32()
+        crc.update(bytes)
+        entry.setCrc(crc.getValue)
+      case Compression.Deflated =>
+        ()
+
+    zip.putNextEntry(entry)
+    zip.write(bytes)
+    zip.closeEntry()
 
   /**
    * Write rows to XLSX file, materializing all rows first.
@@ -296,9 +730,105 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   /**
    * Write multiple sheets sequentially with constant memory.
    *
-   * Each sheet is streamed in order without materializing the full dataset.
+   * Single-pass streaming directly to ZIP. Dimensions can be provided per-sheet for instant
+   * metadata queries.
+   *
+   * @param path
+   *   Output file path
+   * @param sheets
+   *   Sequence of (name, rows, optional dimension) tuples
+   * @param config
+   *   Writer configuration
    */
   def writeStreamsSeq(
+    path: Path,
+    sheets: Seq[(String, Stream[F, RowData])],
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+  ): F[Unit] =
+    writeStreamsSeqWithDimensions(
+      path,
+      sheets.map { case (name, rows) => (name, rows, None) },
+      config
+    )
+
+  /**
+   * Write multiple sheets with explicit dimension hints.
+   *
+   * Single-pass streaming directly to ZIP. When dimensions are provided, enables instant bounds
+   * queries.
+   */
+  def writeStreamsSeqWithDimensions(
+    path: Path,
+    sheets: Seq[(String, Stream[F, RowData], Option[CellRange])],
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+  ): F[Unit] =
+    // Validate inputs
+    if sheets.isEmpty then
+      Async[F].raiseError(new IllegalArgumentException("Must provide at least one sheet"))
+    else if sheets.map(_._1).distinct.size != sheets.size then
+      Async[F].raiseError(
+        new IllegalArgumentException(s"Duplicate sheet names: ${sheets.map(_._1).mkString(", ")}")
+      )
+    else
+      // Auto-assign sheet indices 1, 2, 3...
+      val sheetsWithIndices = sheets.zipWithIndex.map { case ((name, rows, dim), idx) =>
+        (name, idx + 1, rows, dim)
+      }
+
+      Stream
+        .bracket(
+          Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
+        )(zip => Sync[F].delay(zip.close()))
+        .flatMap { zip =>
+          // 1. Write static parts with all sheet metadata
+          Stream.eval(
+            Sync[F].delay {
+              writeStaticPartsMultiSync(
+                zip,
+                sheetsWithIndices.map { case (name, idx, _, _) => (name, idx) },
+                config
+              )
+            }
+          ) ++
+            // 2. Stream each sheet sequentially
+            Stream
+              .emits(sheetsWithIndices)
+              .flatMap { case (_, sheetIndex, rows, dimension) =>
+                // Open worksheet entry
+                Stream.eval(
+                  Sync[F].delay {
+                    val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
+                    entry.setMethod(ZipEntry.DEFLATED)
+                    zip.putNextEntry(entry)
+                    writeWorksheetHeader(zip, dimension)
+                  }
+                ) ++
+                  // Stream XML events → bytes → ZIP
+                  StreamingXmlWriter
+                    .worksheetBody(rows, config.formulaInjectionPolicy)
+                    .through(xml.render.raw())
+                    .through(fs2.text.utf8.encode)
+                    .chunks
+                    .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
+                  // Close entry
+                  Stream.eval(
+                    Sync[F].delay {
+                      writeWorksheetFooter(zip)
+                      zip.closeEntry()
+                    }
+                  )
+              }
+        }
+        .compile
+        .drain
+
+  /**
+   * Write multiple sheets with automatic dimension detection.
+   *
+   * Uses two-phase approach for each sheet. For better performance when bounds are known, use
+   * `writeStreamsSeqWithDimensions`.
+   */
+  def writeStreamsSeqWithAutoDetect(
     path: Path,
     sheets: Seq[(String, Stream[F, RowData])],
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
@@ -311,52 +841,304 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         new IllegalArgumentException(s"Duplicate sheet names: ${sheets.map(_._1).mkString(", ")}")
       )
     else
+      // Auto-assign sheet indices 1, 2, 3...
+      val sheetsWithIndices = sheets.zipWithIndex.map { case ((name, rows), idx) =>
+        (name, idx + 1, rows)
+      }
+
+      // Create temp file + bounds tracker for each sheet
       Stream
         .bracket(
-          Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
-        )(zip => Sync[F].delay(zip.close()))
-        .flatMap { zip =>
-          // Auto-assign sheet indices 1, 2, 3...
-          val sheetsWithIndices = sheets.zipWithIndex.map { case ((name, rows), idx) =>
-            (name, idx + 1, rows)
+          Sync[F].delay {
+            sheetsWithIndices.map { case (name, sheetIndex, _) =>
+              val tempFile = JFiles.createTempFile(s"xl-stream-$sheetIndex-", ".xml")
+              val bounds = new BoundsAccumulator()
+              (name, sheetIndex, tempFile, bounds)
+            }
           }
+        ) { resources =>
+          // Cleanup: delete all temp files
+          Sync[F].delay {
+            resources.foreach { case (_, _, tempFile, _) =>
+              JFiles.deleteIfExists(tempFile)
+            }
+          }.void
+        }
+        .flatMap { resources =>
+          // Phase 1: Stream each sheet's rows to its temp file
+          val writePhase = Stream
+            .emits(sheetsWithIndices.zip(resources))
+            .flatMap { case ((_, _, rows), (_, _, tempFile, bounds)) =>
+              rows
+                .evalTap(row => Sync[F].delay(bounds.update(row)))
+                .through(rowsToTempXml(tempFile, config))
+            }
 
-          // 1. Write static parts with all sheet metadata
-          Stream.eval(
-            writeStaticPartsMulti(
-              zip,
-              sheetsWithIndices.map { case (name, idx, _) =>
-                (name, idx)
-              },
-              config
-            )
-          ) ++
-            // 2. Stream each sheet sequentially
-            Stream
-              .emits(sheetsWithIndices)
-              .flatMap { case (name, sheetIndex, rows) =>
-                // Open worksheet entry
-                // Note: Must use DEFLATED for streamed worksheets (STORED requires precomputed size/CRC)
-                Stream.eval(
-                  Sync[F].delay {
-                    val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
-                    entry.setMethod(ZipEntry.DEFLATED) // Always DEFLATED for streamed content
-                    zip.putNextEntry(entry)
-                  }
-                ) ++
-                  // Stream XML events → bytes → ZIP
-                  (Stream.emit(XmlEvent.XmlDecl("1.0", Some("UTF-8"), Some(true))) ++
-                    StreamingXmlWriter.worksheetEvents[F](rows, config.formulaInjectionPolicy))
-                    .through(xml.render.raw())
-                    .through(fs2.text.utf8.encode)
-                    .chunks
-                    .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
-                  // Close entry
-                  Stream.eval(Sync[F].delay(zip.closeEntry()))
-              }
+          // Phase 2: Assemble final ZIP with all worksheets
+          val assemblePhase = Stream.eval(
+            assembleMultiSheetZip(path, resources, config)
+          )
+
+          writePhase ++ assemblePhase
         }
         .compile
         .drain
+
+  /**
+   * Write workbook using streaming writer with O(1) output memory and style preservation.
+   *
+   * Hybrid approach: workbook is loaded in-memory (for style extraction), but output uses streaming
+   * writer for O(1) output memory. Styles are fully preserved via the two-pass approach with
+   * StyleIndex.
+   *
+   * Best for: Large modified workbooks where output memory is the bottleneck. Trade-off: Extra I/O
+   * pass (temp file) for dimension detection.
+   *
+   * @param wb
+   *   Workbook to write (in-memory)
+   * @param path
+   *   Output file path
+   * @param config
+   *   Writer configuration
+   */
+  def writeWorkbookStream(
+    wb: Workbook,
+    path: Path,
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+  ): F[Unit] =
+    import com.tjclp.xl.ooxml.style.{StyleIndex, OoxmlStyles}
+
+    if wb.sheets.isEmpty then
+      Async[F].raiseError(new IllegalArgumentException("Workbook must have at least one sheet"))
+    else
+      Sync[F]
+        .delay {
+          // Build unified style index from workbook (extracts all styles)
+          val (styleIndex, remappings) = StyleIndex.fromWorkbook(wb)
+          val ooxmlStyles = OoxmlStyles(styleIndex)
+
+          // Prepare sheet data with remapped style IDs
+          val sheetsWithIndices = wb.sheets.zipWithIndex.map { case (sheet, idx) =>
+            val sheetIndex = idx + 1
+            val remapping = remappings.getOrElse(idx, Map.empty[Int, Int])
+            (sheet, sheetIndex, remapping)
+          }
+
+          (ooxmlStyles, sheetsWithIndices)
+        }
+        .flatMap { case (ooxmlStyles, sheetsWithIndices) =>
+          // Create temp files for two-phase approach
+          Stream
+            .bracket(
+              Sync[F].delay {
+                sheetsWithIndices.map { case (sheet, sheetIndex, _) =>
+                  val tempFile = JFiles.createTempFile(s"xl-wbstream-$sheetIndex-", ".xml")
+                  val bounds = new BoundsAccumulator()
+                  (sheet, sheetIndex, tempFile, bounds)
+                }
+              }
+            ) { resources =>
+              // Cleanup: delete all temp files
+              Sync[F].delay {
+                resources.foreach { case (_, _, tempFile, _) =>
+                  JFiles.deleteIfExists(tempFile)
+                }
+              }.void
+            }
+            .flatMap { resources =>
+              // Phase 1: Stream each sheet to temp file with style remapping
+              val writePhase = Stream
+                .emits(resources.zip(sheetsWithIndices))
+                .flatMap { case ((_, _, tempFile, bounds), (sheet, _, remapping)) =>
+                  streamSheetStyled(sheet, remapping)
+                    .evalTap(row => Sync[F].delay(bounds.update(row.toRowData)))
+                    .through(styledRowsToTempXml(tempFile, config))
+                }
+
+              // Phase 2: Assemble final ZIP with styles and dimensions
+              val assemblePhase = Stream.eval(
+                assembleWorkbookStreamZip(path, resources, ooxmlStyles, config)
+              )
+
+              writePhase ++ assemblePhase
+            }
+            .compile
+            .drain
+        }
+
+  // Helper: Stream styled rows to temp XML file (body only)
+  private def styledRowsToTempXml(
+    tempFile: Path,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): Pipe[F, StyledRowData, Unit] =
+    rows =>
+      Stream
+        .bracket(
+          Sync[F].delay(new BufferedOutputStream(new FileOutputStream(tempFile.toFile)))
+        )(os => Sync[F].delay(os.close()))
+        .flatMap { os =>
+          StreamingXmlWriter
+            .worksheetBodyStyled(rows, config.formulaInjectionPolicy)
+            .through(xml.render.raw())
+            .through(fs2.text.utf8.encode)
+            .chunks
+            .evalMap(chunk => Sync[F].delay(os.write(chunk.toArray)))
+        }
+
+  // Helper: Assemble workbook ZIP with styles
+  private def assembleWorkbookStreamZip(
+    path: Path,
+    resources: Seq[(Sheet, Int, Path, BoundsAccumulator)],
+    ooxmlStyles: com.tjclp.xl.ooxml.style.OoxmlStyles,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): F[Unit] =
+    Sync[F].delay {
+      import com.tjclp.xl.ooxml.*
+      import com.tjclp.xl.addressing.SheetName
+
+      val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
+      try
+        val sheets = resources.map { case (sheet, idx, _, _) => (sheet.name.value, idx) }
+
+        // Content types and relationships
+        val contentTypes = ContentTypes.forSheetIndices(
+          sheetIndices = sheets.map(_._2),
+          hasStyles = true,
+          hasSharedStrings = false
+        )
+        val rootRels = Relationships.root()
+        val workbookRels = Relationships.workbook(
+          sheetCount = sheets.size,
+          hasStyles = true,
+          hasSharedStrings = false
+        )
+
+        // Workbook with sheet refs
+        val sheetRefs = sheets.map { case (name, idx) =>
+          SheetRef(SheetName.unsafe(name), idx, s"rId$idx")
+        }
+        val ooxmlWb = OoxmlWorkbook(sheets = sheetRefs.toVector)
+
+        // Write static parts (with full styles, not minimal!)
+        writePartSync(zip, "[Content_Types].xml", contentTypes.toXml, config)
+        writePartSync(zip, "_rels/.rels", rootRels.toXml, config)
+        writePartSync(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
+        writePartSync(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
+        writePartSync(zip, "xl/styles.xml", ooxmlStyles.toXml, config) // Full styles!
+
+        // Write each worksheet with dimension
+        resources.foreach { case (_, sheetIndex, tempBodyFile, bounds) =>
+          val wsEntry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
+          wsEntry.setMethod(ZipEntry.DEFLATED)
+          zip.putNextEntry(wsEntry)
+
+          // Header with dimension
+          writeWorksheetHeader(zip, bounds.dimension)
+
+          // Body from temp file
+          JFiles.copy(tempBodyFile, zip)
+
+          // Footer
+          writeWorksheetFooter(zip)
+
+          zip.closeEntry()
+        }
+      finally zip.close()
+    }
+
+  // Helper: Convert Sheet to StyledRowData stream with remapped style IDs
+  private def streamSheetStyled(
+    sheet: Sheet,
+    remapping: Map[Int, Int]
+  ): Stream[F, StyledRowData] =
+    val rowMap = sheet.cells.values
+      .groupBy(_.ref.row.index1) // Group by 1-based row
+      .view
+      .mapValues { cells =>
+        val cellValues = cells.map(c => c.ref.col.index0 -> c.value).toMap
+        val cellStyles = cells.flatMap { c =>
+          c.styleId.map { sid =>
+            // Remap local styleId to global index
+            val globalId = remapping.getOrElse(sid.value, sid.value)
+            c.ref.col.index0 -> globalId
+          }
+        }.toMap
+        (cellValues, cellStyles)
+      }
+      .toMap
+
+    Stream.emits(rowMap.toSeq.sortBy(_._1)).map { case (rowIdx, (cellMap, styleMap)) =>
+      StyledRowData(rowIdx, cellMap, styleMap)
+    }
+
+  // Helper: Assemble multi-sheet ZIP with dimension elements
+  private def assembleMultiSheetZip(
+    path: Path,
+    resources: Seq[(String, Int, Path, BoundsAccumulator)],
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): F[Unit] =
+    Sync[F].delay {
+      val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
+      try
+        // 1. Write static parts with all sheet metadata
+        writeStaticPartsMultiSync(
+          zip,
+          resources.map { case (name, idx, _, _) => (name, idx) },
+          config
+        )
+
+        // 2. Write each worksheet with its dimension
+        resources.foreach { case (_, sheetIndex, tempBodyFile, bounds) =>
+          val wsEntry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
+          wsEntry.setMethod(ZipEntry.DEFLATED)
+          zip.putNextEntry(wsEntry)
+
+          // Header with dimension
+          writeWorksheetHeader(zip, bounds.dimension)
+
+          // Body from temp file
+          JFiles.copy(tempBodyFile, zip)
+
+          // Footer
+          writeWorksheetFooter(zip)
+
+          zip.closeEntry()
+        }
+      finally zip.close()
+    }
+
+  // Helper: Sync version of writeStaticPartsMulti
+  private def writeStaticPartsMultiSync(
+    zip: ZipOutputStream,
+    sheets: Seq[(String, Int)],
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): Unit =
+    import com.tjclp.xl.ooxml.*
+    import com.tjclp.xl.addressing.SheetName
+
+    val contentTypes = ContentTypes.forSheetIndices(
+      sheetIndices = sheets.map(_._2),
+      hasStyles = true,
+      hasSharedStrings = false
+    )
+    val rootRels = Relationships.root()
+    val workbookRels = Relationships.workbook(
+      sheetCount = sheets.size,
+      hasStyles = true,
+      hasSharedStrings = false
+    )
+
+    val sheetRefs = sheets.map { case (name, idx) =>
+      SheetRef(SheetName.unsafe(name), idx, s"rId$idx")
+    }
+    val ooxmlWb = OoxmlWorkbook(sheets = sheetRefs)
+    val styles = OoxmlStyles.minimal
+
+    writePartSync(zip, "[Content_Types].xml", contentTypes.toXml, config)
+    writePartSync(zip, "_rels/.rels", rootRels.toXml, config)
+    writePartSync(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
+    writePartSync(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
+    writePartSync(zip, "xl/styles.xml", styles.toXml, config)
 
   // ========== ExcelR Implementation (Explicit Error Channel) ==========
 
@@ -399,10 +1181,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     path: Path,
     sheetName: String,
     sheetIndex: Int = 1,
-    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default,
+    dimension: Option[CellRange] = None
   ): Pipe[F, RowData, Either[XLError, Unit]] =
     rows =>
-      writeStream(path, sheetName, sheetIndex, config)(rows)
+      writeStream(path, sheetName, sheetIndex, config, dimension)(rows)
         .map(_ => Right(()))
         .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
 

@@ -991,3 +991,152 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     finally out.close()
 
     path
+
+  // ===== Regression Test for SharedStrings Metadata Bug (Jan 2026) =====
+
+  test("sharedStrings.xml is properly referenced in Content_Types and workbook.xml.rels when generated") {
+    // Regression test for: SharedStrings metadata missing when SST generated from preserved source
+    // Bug: When batch operations added enough strings to trigger SST generation (SstPolicy.Auto),
+    //      the preserved Content_Types.xml and workbook.xml.rels from source didn't include
+    //      sharedStrings references, even though sharedStrings.xml was written to the ZIP.
+    // Impact: Excel shows "We found a problem with some content" corruption warning
+
+    // Create a source workbook WITHOUT sharedStrings (uses inline strings)
+    val source = createWorkbookWithoutSST()
+
+    // Read the workbook
+    val wb1 = XlsxReader.read(source).fold(err => fail(s"Failed to read: $err"), identity)
+
+    // Add strings with duplicates to trigger SST generation
+    // SST heuristic: totalCells > uniqueCount && totalCells > 10
+    // So we need more than 10 cells with some duplicates
+    val sheet = wb1.sheets.head
+    val updatedSheet = sheet
+      // 5 unique strings repeated across 15 cells = will trigger SST
+      .put(ref"A1" -> "Header A", ref"A2" -> "Header B", ref"A3" -> "Header C")
+      .put(ref"A4" -> "Data Value", ref"A5" -> "Data Value", ref"A6" -> "Data Value")
+      .put(ref"A7" -> "Header A", ref"A8" -> "Header B", ref"A9" -> "Header C")
+      .put(ref"A10" -> "Data Value", ref"A11" -> "Data Value", ref"A12" -> "Total")
+      .put(ref"A13" -> "Header A", ref"A14" -> "Total", ref"A15" -> "Data Value")
+    val wb2 = wb1.put(updatedSheet)
+
+    // Write the modified workbook
+    val output = Files.createTempFile("sst-metadata-regression", ".xlsx")
+    XlsxWriter
+      .write(wb2, output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    // Verify the output has sharedStrings.xml
+    val outputZip = new ZipFile(output.toFile)
+    val sstEntry = outputZip.getEntry("xl/sharedStrings.xml")
+    assert(sstEntry != null, "xl/sharedStrings.xml should exist when SST is generated")
+
+    // CRITICAL: Verify Content_Types.xml references sharedStrings
+    val contentTypesXml = readEntryString(outputZip, outputZip.getEntry("[Content_Types].xml"))
+    assert(
+      contentTypesXml.contains("/xl/sharedStrings.xml"),
+      "Content_Types.xml must reference /xl/sharedStrings.xml when SST is present - causes Excel corruption!"
+    )
+    assert(
+      contentTypesXml.contains("sharedStrings+xml"),
+      "Content_Types.xml must have sharedStrings content type"
+    )
+
+    // CRITICAL: Verify workbook.xml.rels references sharedStrings
+    val workbookRelsXml = readEntryString(outputZip, outputZip.getEntry("xl/_rels/workbook.xml.rels"))
+    assert(
+      workbookRelsXml.contains("sharedStrings.xml"),
+      "workbook.xml.rels must reference sharedStrings.xml when SST is present - causes Excel corruption!"
+    )
+    assert(
+      workbookRelsXml.contains("relationships/sharedStrings"),
+      "workbook.xml.rels must have sharedStrings relationship type"
+    )
+
+    // Clean up
+    outputZip.close()
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  private def createWorkbookWithoutSST(): Path =
+    // Create a minimal workbook that uses inline strings (no sharedStrings.xml)
+    val path = Files.createTempFile("test-no-sst", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1)
+
+    try
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>"""
+      )
+
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/styles.xml",
+        """<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"""
+      )
+
+      // Worksheet with NO sharedStrings - uses inline strings
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>Original</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>"""
+      )
+
+    finally out.close()
+
+    path

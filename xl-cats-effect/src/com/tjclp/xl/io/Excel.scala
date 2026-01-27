@@ -1,10 +1,11 @@
 package com.tjclp.xl.io
 
 import cats.effect.Async
-import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.ooxml.metadata.LightMetadata
 import fs2.Stream
 import java.nio.file.Path
 
@@ -13,6 +14,32 @@ case class RowData(
   rowIndex: Int, // 1-based row number
   cells: Map[Int, CellValue] // 0-based column index → value
 )
+
+/**
+ * Row data with style information for streaming writes with style preservation.
+ *
+ * Used by writeWorkbookStream to emit s="N" attributes on cells. Style IDs reference the
+ * OoxmlStyles index passed to the writer.
+ *
+ * @param rowIndex
+ *   1-based row number
+ * @param cells
+ *   0-based column index → value
+ * @param cellStyles
+ *   0-based column index → style ID (from StyleIndex)
+ */
+case class StyledRowData(
+  rowIndex: Int,
+  cells: Map[Int, CellValue],
+  cellStyles: Map[Int, Int] = Map.empty
+):
+  /** Convert to RowData (drops style info) */
+  def toRowData: RowData = RowData(rowIndex, cells)
+
+object StyledRowData:
+  /** Create from RowData with no styles */
+  def fromRowData(row: RowData): StyledRowData =
+    StyledRowData(row.rowIndex, row.cells, Map.empty)
 
 /**
  * Excel algebra for pure functional XLSX operations.
@@ -135,7 +162,8 @@ trait Excel[F[_]]:
     path: Path,
     sheetName: String,
     sheetIndex: Int = 1,
-    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default,
+    dimension: Option[CellRange] = None
   ): fs2.Pipe[F, RowData, Unit]
 
   /**
@@ -179,6 +207,42 @@ trait Excel[F[_]]:
     sheets: Seq[(String, Stream[F, RowData])],
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): F[Unit]
+
+  // ===== Lightweight Metadata Operations =====
+
+  /**
+   * Read workbook metadata only (no cell data). Instant for any file size.
+   *
+   * Parses workbook.xml for sheet names and defined names, and extracts dimension elements from
+   * worksheets without loading cell data. Typically completes in <100ms regardless of file size.
+   *
+   * Good for: Sheet listing, defined names, dimension queries Memory: O(sheets) - constant per
+   * sheet, no cell data
+   *
+   * Example:
+   * {{{
+   * excel.readMetadata(path).map { meta =>
+   *   meta.sheets.foreach(s => println(s"${s.name}: ${s.dimension}"))
+   * }
+   * }}}
+   */
+  def readMetadata(path: Path): F[LightMetadata]
+
+  /**
+   * Read dimension from specific worksheet (1-based index). Instant for any file size.
+   *
+   * Parses only the <dimension ref="..."> element from the worksheet XML using SAX, stopping at
+   * <sheetData>. Typically completes in <10ms per sheet.
+   *
+   * Note: Dimension element may be inaccurate in some Excel files. Use streaming scan for accurate
+   * bounds when needed.
+   *
+   * @param sheetIndex
+   *   1-based sheet index
+   * @return
+   *   CellRange if dimension element exists, None otherwise
+   */
+  def readDimension(path: Path, sheetIndex: Int): F[Option[CellRange]]
 
 /**
  * Excel algebra with explicit error channels (pure error handling).
@@ -229,7 +293,8 @@ trait ExcelR[F[_]]:
     path: Path,
     sheetName: String,
     sheetIndex: Int = 1,
-    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default,
+    dimension: Option[CellRange] = None
   ): fs2.Pipe[F, RowData, Either[XLError, Unit]]
 
   /** Write stream (materializing) with explicit error channel */

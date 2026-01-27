@@ -3,14 +3,74 @@ package com.tjclp.xl.io
 import fs2.Stream
 import fs2.data.xml.*
 import fs2.data.xml.XmlEvent.*
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.ooxml.{FormulaInjectionPolicy, XmlUtil}
+
+/**
+ * Tracks worksheet bounds during streaming. O(1) memory (4 integers).
+ *
+ * Thread-safety: NOT thread-safe. Use from a single fiber/thread only. The fs2 Stream processing
+ * model ensures single-threaded access when used via evalTap.
+ *
+ * @example
+ *   {{{
+ *   val bounds = new BoundsAccumulator()
+ *   rows.evalTap(row => Sync[F].delay(bounds.update(row)))
+ *   // After stream completes:
+ *   bounds.dimension // Option[CellRange] with tracked extent
+ *   }}}
+ */
+final class BoundsAccumulator:
+  private var minRow: Int = Int.MaxValue
+  private var maxRow: Int = Int.MinValue
+  private var minCol: Int = Int.MaxValue
+  private var maxCol: Int = Int.MinValue
+  private var hasData: Boolean = false
+
+  /**
+   * Update bounds with row data.
+   *
+   * @param row
+   *   Row data with 1-based rowIndex and 0-based column keys in cells map
+   */
+  def update(row: RowData): Unit =
+    if row.cells.nonEmpty then
+      hasData = true
+      minRow = minRow min row.rowIndex
+      maxRow = maxRow max row.rowIndex
+      val cols = row.cells.keys
+      minCol = minCol min cols.min
+      maxCol = maxCol max cols.max
+
+  /**
+   * Get tracked dimension as CellRange.
+   *
+   * @return
+   *   Some(CellRange) if any data was written, None if stream was empty
+   */
+  def dimension: Option[CellRange] =
+    if hasData then
+      // rowIndex is 1-based, so convert to 0-based for ARef.from0
+      Some(
+        CellRange(
+          ARef.from0(minCol, minRow - 1),
+          ARef.from0(maxCol, maxRow - 1)
+        )
+      )
+    else None
 
 /**
  * True streaming XML writer using fs2-data-xml for constant-memory writes.
  *
  * Emits XML events incrementally as rows arrive, never materializing the full document tree in
  * memory.
+ *
+ * The two-phase write approach enables dimension element support:
+ *   - Phase 1: Stream rows to temp file, track bounds with BoundsAccumulator
+ *   - Phase 2: Assemble final ZIP with dimension element (from tracked bounds)
+ *
+ * This maintains O(1) memory while producing files with instant metadata queries.
  */
 object StreamingXmlWriter:
 
@@ -46,6 +106,7 @@ object StreamingXmlWriter:
    *   - Whitespace preserved byte-for-byte for text with leading/trailing/double spaces
    *   - All events are well-formed and balance StartTag/EndTag
    *   - Formula injection escaping applied when policy is Escape
+   *   - Style attribute s="N" emitted when styleId is provided
    * DETERMINISTIC: Yes (pure transformation of inputs) ERROR CASES: None (total function over valid
    * CellValue)
    *
@@ -57,6 +118,8 @@ object StreamingXmlWriter:
    *   Cell value to serialize
    * @param injectionPolicy
    *   Formula injection escaping policy (default: None)
+   * @param styleId
+   *   Optional style index for s="N" attribute (from StyleIndex)
    * @return
    *   List of XML events representing the cell
    */
@@ -64,7 +127,8 @@ object StreamingXmlWriter:
     colIndex: Int,
     rowIndex: Int,
     value: CellValue,
-    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
+    styleId: Option[Int] = None
   ): List[XmlEvent] =
     val ref = s"${columnToLetter(colIndex)}$rowIndex"
 
@@ -249,10 +313,14 @@ object StreamingXmlWriter:
           )
         )
 
-    // Build cell element
-    val attrs =
+    // Build cell element with optional style attribute
+    val baseAttrs =
       if cellType.nonEmpty then List(attr("r", ref), attr("t", cellType))
       else List(attr("r", ref))
+    // Add s="N" attribute if styleId provided (must be > 0 to override default)
+    val attrs = styleId.filter(_ > 0) match
+      case Some(sid) => baseAttrs :+ attr("s", sid.toString)
+      case None => baseAttrs
 
     if valueEvents.isEmpty && value == CellValue.Empty then Nil // Don't emit empty cells
     else
@@ -280,8 +348,116 @@ object StreamingXmlWriter:
         cellEvents :::
         XmlEvent.EndTag(QName("row")) :: Nil
 
+  /** Generate XML events for a styled row (with s="N" attributes) */
+  def styledRowToEvents(
+    rowData: StyledRowData,
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+  ): List[XmlEvent] =
+    val rowAttrs = List(attr("r", rowData.rowIndex.toString))
+
+    // Sort cells by column for deterministic output
+    val cellEvents = rowData.cells.toList
+      .sortBy(_._1)
+      .flatMap { case (colIdx, value) =>
+        val styleId = rowData.cellStyles.get(colIdx)
+        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy, styleId)
+      }
+
+    if cellEvents.isEmpty then Nil // Skip empty rows
+    else
+      XmlEvent.StartTag(QName("row"), rowAttrs, false) ::
+        cellEvents :::
+        XmlEvent.EndTag(QName("row")) :: Nil
+
+  /**
+   * Generate worksheet header events with optional dimension element.
+   *
+   * The dimension element must appear before sheetData in OOXML. When provided, it enables instant
+   * metadata queries without streaming scan.
+   *
+   * @param dimension
+   *   Optional cell range for dimension element. None omits the element.
+   * @return
+   *   List of XML events for worksheet opening and sheetData start
+   */
+  def worksheetHeader(dimension: Option[CellRange]): List[XmlEvent] =
+    val dimEvents = dimension.toList.flatMap { range =>
+      List(
+        XmlEvent.StartTag(
+          QName("dimension"),
+          List(attr("ref", range.toA1)),
+          true // self-closing: <dimension ref="A1:Z100"/>
+        )
+      )
+    }
+
+    List(
+      XmlEvent.StartTag(
+        QName("worksheet"),
+        List(
+          attr("xmlns", nsSpreadsheetML),
+          Attr(QName(Some("xmlns"), "r"), List(XmlString(nsRelationships, false)))
+        ),
+        false
+      )
+    ) ++ dimEvents ++ List(
+      XmlEvent.StartTag(QName("sheetData"), Nil, false)
+    )
+
+  /**
+   * Generate row events for worksheet body.
+   *
+   * Emits events incrementally as rows arrive, never materializing the full dataset.
+   *
+   * @param rows
+   *   Stream of row data
+   * @param injectionPolicy
+   *   Formula injection escaping policy
+   * @return
+   *   Stream of XML events for all rows
+   */
+  def worksheetBody[F[_]](
+    rows: Stream[F, RowData],
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+  ): Stream[F, XmlEvent] =
+    rows.flatMap(row => Stream.emits(rowToEvents(row, injectionPolicy)))
+
+  /**
+   * Generate row events for styled worksheet body.
+   *
+   * Emits events incrementally as rows arrive, including s="N" style attributes. Used by
+   * writeWorkbookStream for style-preserving output.
+   *
+   * @param rows
+   *   Stream of styled row data
+   * @param injectionPolicy
+   *   Formula injection escaping policy
+   * @return
+   *   Stream of XML events for all rows with styles
+   */
+  def worksheetBodyStyled[F[_]](
+    rows: Stream[F, StyledRowData],
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+  ): Stream[F, XmlEvent] =
+    rows.flatMap(row => Stream.emits(styledRowToEvents(row, injectionPolicy)))
+
+  /**
+   * Generate worksheet footer events.
+   *
+   * @return
+   *   List of XML events for closing sheetData and worksheet
+   */
+  def worksheetFooter: List[XmlEvent] =
+    List(
+      XmlEvent.EndTag(QName("sheetData")),
+      XmlEvent.EndTag(QName("worksheet"))
+    )
+
   /**
    * Stream worksheet XML events with header/footer scaffolding.
+   *
+   * This is the original single-pass API that omits dimension. Use worksheetHeader/Body/Footer for
+   * two-phase writes with dimension support.
    *
    * @param rows
    *   Stream of row data
@@ -292,23 +468,6 @@ object StreamingXmlWriter:
     rows: Stream[F, RowData],
     injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
   ): Stream[F, XmlEvent] =
-    val header = List(
-      XmlEvent.StartTag(
-        QName("worksheet"),
-        List(
-          attr("xmlns", nsSpreadsheetML),
-          Attr(QName(Some("xmlns"), "r"), List(XmlString(nsRelationships, false)))
-        ),
-        false
-      ),
-      XmlEvent.StartTag(QName("sheetData"), Nil, false)
-    )
-
-    val footer = List(
-      XmlEvent.EndTag(QName("sheetData")),
-      XmlEvent.EndTag(QName("worksheet"))
-    )
-
-    Stream.emits(header) ++
-      rows.flatMap(row => Stream.emits(rowToEvents(row, injectionPolicy))) ++
-      Stream.emits(footer)
+    Stream.emits(worksheetHeader(None)) ++
+      worksheetBody(rows, injectionPolicy) ++
+      Stream.emits(worksheetFooter)

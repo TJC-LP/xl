@@ -313,23 +313,34 @@ xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.pn
 
 ### Large File Operations (100k+ rows)
 
-For files with 100k+ rows, use streaming mode for O(1) memory and 7-8x faster performance:
+For files with 100k+ rows, use streaming mode for O(1) memory:
 
+**Streaming Read:**
 ```bash
-# Streaming mode - constant memory, stops early on limit
 xl -f huge.xlsx --stream search "pattern" --limit 10    # ~10s for 1M rows
 xl -f huge.xlsx --stream stats A1:E100000               # Aggregate without loading
 xl -f huge.xlsx --stream bounds                          # Get used range
 xl -f huge.xlsx --stream view A1:D100 --format csv      # Export range
+```
 
-# In-memory mode - when streaming not supported
+**Streaming Write:**
+```bash
+xl -f huge.xlsx -o out.xlsx --stream put A1 "Header"           # Put values
+xl -f huge.xlsx -o out.xlsx --stream putf A2 "=B2*1.1"         # Put formulas
+xl -f huge.xlsx -o out.xlsx --stream style A1:Z1 --bold --bg navy  # Apply styles
+```
+
+**Performance:** Styling row 1 of 100k rows: ~0.3s (early-abort optimization)
+
+**In-memory mode** (when streaming not supported):
+```bash
 xl -f huge.xlsx --max-size 0 sheets       # Disable 100MB limit
 xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 ```
 
-**Streaming supports**: search, stats, bounds, view (markdown/csv/json only)
+**Streaming supports**: search, stats, bounds, view (markdown/csv/json), put, putf, style
 
-**Requires in-memory**: cell (dependencies), eval (formulas), HTML/SVG/PDF (styles), writes
+**Requires in-memory**: cell (dependencies), eval (formulas), HTML/SVG/PDF (styles), formula dragging
 
 ---
 
@@ -344,7 +355,7 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 | `--output <path>` | `-o` | Output file (for writes) |
 | `--backend <type>` | | scalaxml (default) or saxstax (36-39% faster) |
 | `--max-size <MB>` | | Override 100MB security limit (0 = unlimited) |
-| `--stream` | | O(1) memory mode for large files (100k+ rows) |
+| `--stream` | | O(1) memory mode for reads + writes (search/stats/bounds/view/put/putf/style) |
 
 ### Info Commands
 
@@ -378,9 +389,9 @@ Run `xl view --help` for complete options.
 
 | Command | Key Options |
 |---------|-------------|
-| `put <ref> <values>` | `--value` for negatives |
-| `putf <ref> <formulas>` | Supports dragging |
-| `style <range>` | `--bold`, `--bg`, `--fg`, `--format`, `--border`, etc. |
+| `put <ref> <values>` | `--value` for negatives, `--stream` for O(1) memory |
+| `putf <ref> <formulas>` | Supports dragging (no dragging with `--stream`) |
+| `style <range>` | `--bold`, `--bg`, `--fg`, `--format`, `--border`, `--stream` for O(1) memory |
 | `batch <json-file>` | Operations: put, putf, style, merge, unmerge, colwidth, rowheight |
 | `import <csv> [ref]` | `--new-sheet`, `--delimiter`, `--no-type-inference` |
 

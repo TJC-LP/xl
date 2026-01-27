@@ -20,6 +20,7 @@ import com.tjclp.xl.cli.commands.{
   ReadCommands,
   SheetCommands,
   StreamingReadCommands,
+  StreamingWriteCommands,
   WorkbookCommands,
   WriteCommands
 }
@@ -82,14 +83,15 @@ object Main
     }
 
     // Sheet-level write: --file, --sheet, and --output (required)
-    // Note: --stream not supported for write commands (need full workbook for modifications)
+    // Sheet-level write: --file, --sheet, and --output (required)
+    // --stream enables O(1) output memory with style preservation (hybrid streaming)
     val sheetWriteSubcmds =
       putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd
 
     val sheetWriteOpts =
-      (fileOpt, sheetOpt, outputOpt, backendOpt, maxSizeOpt, sheetWriteSubcmds).mapN {
-        (file, sheet, out, backend, maxSize, cmd) =>
-          run(file, sheet, Some(out), backend, maxSize, false, cmd)
+      (fileOpt, sheetOpt, outputOpt, backendOpt, maxSizeOpt, streamOpt, sheetWriteSubcmds).mapN {
+        (file, sheet, out, backend, maxSize, stream, cmd) =>
+          run(file, sheet, Some(out), backend, maxSize, stream, cmd)
       }
 
     // Standalone: no --file required (creates new files)
@@ -425,16 +427,40 @@ EXAMPLES:
 
   // --- Read-only commands ---
 
-  val sheetsCmd: Opts[CliCommand] = Opts.subcommand("sheets", "List all sheets") {
-    Opts(CliCommand.Sheets)
+  // --stats flag for sheets command (full mode with cell counts)
+  private val statsOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "stats",
+        "Show cell and formula counts (slower, requires loading all data)"
+      )
+      .orFalse
+
+  // --scan flag for bounds command (full streaming scan)
+  private val scanOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "scan",
+        "Force full streaming scan for accurate bounds (slower, but accurate)"
+      )
+      .orFalse
+
+  val sheetsCmd: Opts[CliCommand] = Opts.subcommand(
+    "sheets",
+    "List all sheets (instant by default, --stats for cell counts)"
+  ) {
+    statsOpt.map(CliCommand.Sheets.apply)
   }
 
   val namesCmd: Opts[CliCommand] = Opts.subcommand("names", "List defined names (named ranges)") {
     Opts(CliCommand.Names)
   }
 
-  val boundsCmd: Opts[CliCommand] = Opts.subcommand("bounds", "Show used range of current sheet") {
-    Opts(CliCommand.Bounds)
+  val boundsCmd: Opts[CliCommand] = Opts.subcommand(
+    "bounds",
+    "Show used range (instant from dimension element, --scan for accurate scan)"
+  ) {
+    scanOpt.map(CliCommand.Bounds.apply)
   }
 
   val viewCmd: Opts[CliCommand] =
@@ -960,15 +986,61 @@ Operations execute in order. Use "-" to read from stdin."""
     stream: Boolean,
     cmd: CliCommand
   ): IO[String] =
-    if stream then executeStreaming(filePath, sheetNameOpt, cmd)
-    else
-      val excel = ExcelIO.instance[IO]
-      val readerConfig = buildReaderConfig(maxSizeOpt)
-      for
-        wb <- excel.readWith(filePath, readerConfig)
-        sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
-        result <- executeCommand(wb, sheet, outputOpt, backendOpt, cmd)
-      yield result
+    // Handle metadata-only commands (instant for any file size)
+    cmd match
+      // Sheets: quick mode by default (--stats for full mode)
+      case CliCommand.Sheets(stats) =>
+        if stats then
+          // Full mode: load workbook and get cell counts
+          val excel = ExcelIO.instance[IO]
+          val readerConfig = buildReaderConfig(maxSizeOpt)
+          excel.readWith(filePath, readerConfig).flatMap(wb => WorkbookCommands.sheets(wb))
+        else
+          // Quick mode: metadata only (instant)
+          WorkbookCommands.sheetsQuick(filePath)
+
+      // Names: always lightweight (defined names don't require cell data)
+      case CliCommand.Names =>
+        WorkbookCommands.namesLight(filePath)
+
+      // Bounds: dimension-first by default (--scan for full scan)
+      case CliCommand.Bounds(scan) =>
+        if scan then
+          // Full streaming scan (accurate)
+          StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
+        else
+          // Dimension element (instant)
+          StreamingReadCommands.boundsDimension(filePath, sheetNameOpt)
+
+      // Other commands: regular execution path
+      case _ =>
+        // For write commands: stream flag enables O(1) output memory (hybrid streaming)
+        // For read commands: stream flag enables O(1) input memory (true streaming)
+        val isReadCmd = cmd match
+          case _: CliCommand.Search | _: CliCommand.Stats | _: CliCommand.Bounds |
+              _: CliCommand.View | _: CliCommand.Cell =>
+            true
+          case _ => false
+
+        // Check for streaming write commands (true O(1) memory transform)
+        val isStreamingWriteCmd = cmd match
+          case _: CliCommand.Style => true
+          case _: CliCommand.Put => true
+          case _: CliCommand.PutFormula => true
+          case _: CliCommand.Batch => true
+          case _ => false
+
+        if stream && isReadCmd then executeStreaming(filePath, sheetNameOpt, cmd)
+        else if stream && isStreamingWriteCmd then
+          executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd)
+        else
+          val excel = ExcelIO.instance[IO]
+          val readerConfig = buildReaderConfig(maxSizeOpt)
+          for
+            wb <- excel.readWith(filePath, readerConfig)
+            sheet <- SheetResolver.resolveSheet(wb, sheetNameOpt)
+            result <- executeCommand(wb, sheet, outputOpt, backendOpt, stream, cmd)
+          yield result
 
   /** Execute command using streaming mode (O(1) memory). */
   private def executeStreaming(
@@ -976,19 +1048,20 @@ Operations execute in order. Use "-" to read from stdin."""
     sheetNameOpt: Option[String],
     cmd: CliCommand
   ): IO[String] = cmd match
-    case CliCommand.Search(pattern, limit, _) =>
-      StreamingReadCommands.search(filePath, sheetNameOpt, pattern, limit)
+    case CliCommand.Search(pattern, limit, sheetsFilter) =>
+      StreamingReadCommands.search(filePath, sheetNameOpt, pattern, limit, sheetsFilter)
 
     case CliCommand.Stats(refStr) =>
       StreamingReadCommands.stats(filePath, sheetNameOpt, refStr)
 
-    case CliCommand.Bounds =>
-      StreamingReadCommands.bounds(filePath, sheetNameOpt)
+    case CliCommand.Bounds(scan) =>
+      if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
+      else StreamingReadCommands.boundsDimension(filePath, sheetNameOpt)
 
     case CliCommand.View(
           rangeStr,
           showFormulas,
-          _,
+          evalFormulas,
           limit,
           format,
           _,
@@ -1001,22 +1074,117 @@ Operations execute in order. Use "-" to read from stdin."""
           headerRow,
           _
         ) =>
-      StreamingReadCommands.view(
-        filePath,
-        sheetNameOpt,
-        rangeStr,
-        showFormulas,
-        limit,
-        format,
-        showLabels,
-        skipEmpty,
-        headerRow
-      )
+      if evalFormulas then
+        IO.raiseError(
+          new Exception(
+            "--eval is not supported with --stream (streaming view uses cached values only)"
+          )
+        )
+      else
+        StreamingReadCommands.view(
+          filePath,
+          sheetNameOpt,
+          rangeStr,
+          showFormulas,
+          limit,
+          format,
+          showLabels,
+          skipEmpty,
+          headerRow
+        )
+
+    case CliCommand.Cell(refStr, noStyle) =>
+      StreamingReadCommands.cell(filePath, sheetNameOpt, refStr, noStyle)
 
     case _ =>
       IO.raiseError(
         new Exception(
-          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only)"
+          "--stream not supported for this command. Supported: search, stats, bounds, view (markdown/csv/json only), cell"
+        )
+      )
+
+  /** Execute streaming write command (O(1) memory transform). */
+  private def executeStreamingWrite(
+    filePath: Path,
+    sheetNameOpt: Option[String],
+    outputOpt: Option[Path],
+    cmd: CliCommand
+  ): IO[String] = cmd match
+    case CliCommand.Style(
+          rangeStr,
+          bold,
+          italic,
+          underline,
+          bg,
+          fg,
+          fontSize,
+          fontName,
+          align,
+          valign,
+          wrap,
+          numFormat,
+          border,
+          borderTop,
+          borderRight,
+          borderBottom,
+          borderLeft,
+          borderColor,
+          replace
+        ) =>
+      outputOpt match
+        case None =>
+          IO.raiseError(new Exception("--output is required for style command"))
+        case Some(outputPath) =>
+          StreamingWriteCommands.style(
+            filePath,
+            outputPath,
+            sheetNameOpt,
+            rangeStr,
+            bold,
+            italic,
+            underline,
+            bg,
+            fg,
+            fontSize,
+            fontName,
+            align,
+            valign,
+            wrap,
+            numFormat,
+            border,
+            borderTop,
+            borderRight,
+            borderBottom,
+            borderLeft,
+            borderColor,
+            replace
+          )
+
+    case CliCommand.Put(refStr, values) =>
+      outputOpt match
+        case None =>
+          IO.raiseError(new Exception("--output is required for put command"))
+        case Some(outputPath) =>
+          StreamingWriteCommands.put(filePath, outputPath, sheetNameOpt, refStr, values)
+
+    case CliCommand.PutFormula(refStr, formulas) =>
+      outputOpt match
+        case None =>
+          IO.raiseError(new Exception("--output is required for putf command"))
+        case Some(outputPath) =>
+          StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
+
+    case CliCommand.Batch(source) =>
+      outputOpt match
+        case None =>
+          IO.raiseError(new Exception("--output is required for batch command"))
+        case Some(outputPath) =>
+          StreamingWriteCommands.batch(filePath, outputPath, sheetNameOpt, source)
+
+    case _ =>
+      IO.raiseError(
+        new Exception(
+          "--stream for write commands only supports: put, putf, style, batch"
         )
       )
 
@@ -1025,17 +1193,18 @@ Operations execute in order. Use "-" to read from stdin."""
     sheetOpt: Option[Sheet],
     outputOpt: Option[Path],
     backendOpt: Option[XmlBackend],
+    stream: Boolean,
     cmd: CliCommand
   ): IO[String] = cmd match
-    // Workbook commands
-    case CliCommand.Sheets =>
+    // Workbook commands (these are now handled in execute() before reaching here)
+    case CliCommand.Sheets(_) =>
       WorkbookCommands.sheets(wb)
 
     case CliCommand.Names =>
       WorkbookCommands.names(wb)
 
-    // Read commands
-    case CliCommand.Bounds =>
+    // Read commands (bounds is now handled in execute() before reaching here)
+    case CliCommand.Bounds(_) =>
       ReadCommands.bounds(wb, sheetOpt)
 
     case CliCommand.View(
@@ -1087,11 +1256,13 @@ Operations execute in order. Use "-" to read from stdin."""
 
     // Write commands (require output)
     case CliCommand.Put(refStr, values) =>
-      requireOutput(outputOpt, backendOpt)(WriteCommands.put(wb, sheetOpt, refStr, values, _, _))
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _)
+      )
 
     case CliCommand.PutFormula(refStr, formulas) =>
-      requireOutput(outputOpt, backendOpt)(
-        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _)
       )
 
     case CliCommand.Style(
@@ -1115,7 +1286,7 @@ Operations execute in order. Use "-" to read from stdin."""
           borderColor,
           replace
         ) =>
-      requireOutput(outputOpt, backendOpt) { (outputPath, config) =>
+      requireOutput(outputOpt, backendOpt, stream) { (outputPath, config, streamWrite) =>
         WriteCommands.style(
           wb,
           sheetOpt,
@@ -1139,25 +1310,28 @@ Operations execute in order. Use "-" to read from stdin."""
           borderColor,
           replace,
           outputPath,
-          config
+          config,
+          streamWrite
         )
       }
 
     case CliCommand.RowOp(rowNum, height, hide, show) =>
-      requireOutput(outputOpt, backendOpt)(
-        WriteCommands.row(wb, sheetOpt, rowNum, height, hide, show, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.row(wb, sheetOpt, rowNum, height, hide, show, _, _, _)
       )
 
     case CliCommand.ColOp(colStr, width, hide, show, autoFit) =>
-      requireOutput(outputOpt, backendOpt)(
-        WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, autoFit, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, autoFit, _, _, _)
       )
 
     case CliCommand.Batch(source) =>
-      requireOutput(outputOpt, backendOpt)(WriteCommands.batch(wb, sheetOpt, source, _, _))
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.batch(wb, sheetOpt, source, _, _, _)
+      )
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
-      requireOutput(outputOpt, backendOpt) { (outputPath, writerConfig) =>
+      requireOutput(outputOpt, backendOpt, stream) { (outputPath, writerConfig, streamWrite) =>
         ImportCommands.importCsv(
           wb,
           sheetOpt,
@@ -1169,67 +1343,74 @@ Operations execute in order. Use "-" to read from stdin."""
           newSheetOpt,
           noInfer,
           outputPath,
-          writerConfig
+          writerConfig,
+          streamWrite
         )
       }
 
     // Sheet management commands
     case CliCommand.AddSheet(name, afterOpt, beforeOpt) =>
-      requireOutput(outputOpt, backendOpt)(
-        SheetCommands.addSheet(wb, name, afterOpt, beforeOpt, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        SheetCommands.addSheet(wb, name, afterOpt, beforeOpt, _, _, _)
       )
 
     case CliCommand.RemoveSheet(name) =>
-      requireOutput(outputOpt, backendOpt)(SheetCommands.removeSheet(wb, name, _, _))
+      requireOutput(outputOpt, backendOpt, stream)(SheetCommands.removeSheet(wb, name, _, _, _))
 
     case CliCommand.RenameSheet(oldName, newName) =>
-      requireOutput(outputOpt, backendOpt)(SheetCommands.renameSheet(wb, oldName, newName, _, _))
+      requireOutput(outputOpt, backendOpt, stream)(
+        SheetCommands.renameSheet(wb, oldName, newName, _, _, _)
+      )
 
     case CliCommand.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>
-      requireOutput(outputOpt, backendOpt)(
-        SheetCommands.moveSheet(wb, name, toIndexOpt, afterOpt, beforeOpt, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        SheetCommands.moveSheet(wb, name, toIndexOpt, afterOpt, beforeOpt, _, _, _)
       )
 
     case CliCommand.CopySheet(sourceName, targetName) =>
-      requireOutput(outputOpt, backendOpt)(
-        SheetCommands.copySheet(wb, sourceName, targetName, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        SheetCommands.copySheet(wb, sourceName, targetName, _, _, _)
       )
 
     // Cell commands
     case CliCommand.Merge(rangeStr) =>
-      requireOutput(outputOpt, backendOpt)(CellCommands.merge(wb, sheetOpt, rangeStr, _, _))
+      requireOutput(outputOpt, backendOpt, stream)(
+        CellCommands.merge(wb, sheetOpt, rangeStr, _, _, _)
+      )
 
     case CliCommand.Unmerge(rangeStr) =>
-      requireOutput(outputOpt, backendOpt)(CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _))
+      requireOutput(outputOpt, backendOpt, stream)(
+        CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _, _)
+      )
 
     case CliCommand.AddComment(refStr, text, author) =>
-      requireOutput(outputOpt, backendOpt)(
-        CommentCommands.addComment(wb, sheetOpt, refStr, text, author, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        CommentCommands.addComment(wb, sheetOpt, refStr, text, author, _, _, _)
       )
 
     case CliCommand.RemoveComment(refStr) =>
-      requireOutput(outputOpt, backendOpt)(
-        CommentCommands.removeComment(wb, sheetOpt, refStr, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        CommentCommands.removeComment(wb, sheetOpt, refStr, _, _, _)
       )
 
     case CliCommand.Clear(rangeStr, all, styles, comments) =>
-      requireOutput(outputOpt, backendOpt)(
-        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _)
       )
 
     case CliCommand.Fill(source, target, direction) =>
-      requireOutput(outputOpt, backendOpt)(
-        WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _, _)
       )
 
     case CliCommand.AutoFit(columnsOpt) =>
-      requireOutput(outputOpt, backendOpt)(
-        WriteCommands.autoFit(wb, sheetOpt, columnsOpt, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.autoFit(wb, sheetOpt, columnsOpt, _, _, _)
       )
 
     case CliCommand.Sort(rangeStr, sortKeys, hasHeader) =>
-      requireOutput(outputOpt, backendOpt)(
-        WriteCommands.sort(wb, sheetOpt, rangeStr, sortKeys, hasHeader, _, _)
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.sort(wb, sheetOpt, rangeStr, sortKeys, hasHeader, _, _, _)
       )
 
   // ==========================================================================
@@ -1238,11 +1419,12 @@ Operations execute in order. Use "-" to read from stdin."""
 
   private def requireOutput(
     outputOpt: Option[Path],
-    backendOpt: Option[XmlBackend]
-  )(f: (Path, WriterConfig) => IO[String]): IO[String] =
+    backendOpt: Option[XmlBackend],
+    stream: Boolean = false
+  )(f: (Path, WriterConfig, Boolean) => IO[String]): IO[String] =
     val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
     outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required")))(path =>
-      f(path, config)
+      f(path, config, stream)
     )
 
   /** Build ReaderConfig from CLI maxSize option (in MB). 0 means unlimited. */

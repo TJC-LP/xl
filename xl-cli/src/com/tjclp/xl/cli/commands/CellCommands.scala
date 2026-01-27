@@ -12,19 +12,40 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
 /**
  * Cell-level command handlers.
  *
- * Commands for merge/unmerge operations.
+ * Commands for merge/unmerge operations. All methods accept a `stream` parameter for O(1) output
+ * memory.
  */
 object CellCommands:
 
+  /** Write workbook using standard or streaming writer based on mode */
+  private def writeWorkbook(
+    wb: Workbook,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean
+  ): IO[Unit] =
+    val excel = ExcelIO.instance[IO]
+    if stream then excel.writeWorkbookStream(wb, outputPath, config)
+    else excel.writeWith(wb, outputPath, config)
+
+  /** Build save message suffix based on write mode */
+  private def saveSuffix(outputPath: Path, stream: Boolean): String =
+    if stream then s"Saved (streaming): $outputPath"
+    else s"Saved: $outputPath"
+
   /**
    * Merge cells in range.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def merge(
     wb: Workbook,
     sheetOpt: Option[Sheet],
     rangeStr: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "merge")
@@ -37,18 +58,22 @@ object CellCommands:
           )
       updatedSheet = targetSheet.merge(range)
       updatedWb = wb.put(updatedSheet)
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
-    yield s"Merged: ${range.toA1}\nSaved: $outputPath"
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Merged: ${range.toA1}\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Unmerge cells in range.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def unmerge(
     wb: Workbook,
     sheetOpt: Option[Sheet],
     rangeStr: String,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "unmerge")
@@ -61,8 +86,8 @@ object CellCommands:
           )
       updatedSheet = targetSheet.unmerge(range)
       updatedWb = wb.put(updatedSheet)
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
-    yield s"Unmerged: ${range.toA1}\nSaved: $outputPath"
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Unmerged: ${range.toA1}\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Clear cell contents, styles, or comments from range.
@@ -74,6 +99,9 @@ object CellCommands:
    *   - --comments: Clear comments only
    *
    * Flags can be combined (e.g., --styles --comments clears both).
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
    */
   def clear(
     wb: Workbook,
@@ -83,7 +111,8 @@ object CellCommands:
     styles: Boolean,
     comments: Boolean,
     outputPath: Path,
-    config: WriterConfig
+    config: WriterConfig,
+    stream: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "clear")
@@ -114,7 +143,7 @@ object CellCommands:
         else sheet3
 
       updatedWb = wb.put(sheet4)
-      _ <- ExcelIO.instance[IO].writeWith(updatedWb, outputPath, config)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
 
       // Build description of what was cleared
       clearedItems = Vector(
@@ -123,4 +152,4 @@ object CellCommands:
         if clearComments then Some("comments") else None
       ).flatten
       clearedDesc = clearedItems.mkString(", ")
-    yield s"Cleared $clearedDesc from ${range.toA1}\nSaved: $outputPath"
+    yield s"Cleared $clearedDesc from ${range.toA1}\n${saveSuffix(outputPath, stream)}"
