@@ -2,9 +2,18 @@ package com.tjclp.xl.cli.helpers
 
 import cats.effect.{IO, Resource}
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{CellRange, Column, RefType, Row, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
+import com.tjclp.xl.formula.{
+  FormulaParser,
+  FormulaPrinter,
+  FormulaShifter,
+  ParseError,
+  SheetEvaluator
+}
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Batch operation parsing and execution for CLI.
@@ -42,16 +51,43 @@ object BatchParser:
   )
 
   /**
+   * Parsed value with optional explicit format.
+   *
+   * Used for typed JSON values (native numbers, booleans) and smart-detected strings (currency,
+   * percent, dates).
+   */
+  final case class ParsedValue(cellValue: CellValue, format: Option[NumFmt])
+
+  /**
    * Batch operation ADT.
    */
   enum BatchOp:
-    case Put(ref: String, value: String)
+    /** Put a single value to a cell with optional format */
+    case Put(ref: String, value: CellValue, format: Option[NumFmt])
+
+    /** Put a formula to a single cell */
     case PutFormula(ref: String, formula: String)
+
+    /** Put a formula to a range with dragging (from anchor cell) */
+    case PutFormulaDragging(range: String, formula: String, from: String)
+
+    /** Put explicit formulas to a range (no dragging) */
+    case PutFormulas(range: String, formulas: Vector[String])
     case Style(range: String, props: StyleProps)
     case Merge(range: String)
     case Unmerge(range: String)
     case ColWidth(col: String, width: Double)
     case RowHeight(row: Int, height: Double)
+
+  /**
+   * Result of batch parsing with optional warnings.
+   *
+   * @param ops
+   *   Parsed batch operations
+   * @param warnings
+   *   Non-fatal warnings (e.g., unknown properties ignored)
+   */
+  final case class ParseResult(ops: Vector[BatchOp], warnings: Vector[String])
 
   /**
    * Read batch input from file or stdin.
@@ -80,9 +116,9 @@ object BatchParser:
    * @param input
    *   JSON string
    * @return
-   *   IO containing parsed operations
+   *   IO containing parsed result with operations and warnings
    */
-  def parseBatchOperations(input: String): IO[Vector[BatchOp]] =
+  def parseBatchOperations(input: String): IO[ParseResult] =
     IO.fromEither {
       val trimmed = input.trim
       if !trimmed.startsWith("[") then Left(new Exception("Batch input must be a JSON array"))
@@ -103,12 +139,16 @@ object BatchParser:
    *   - `colwidth`: {"op": "colwidth", "col": "A", "width": 15.5}
    *   - `rowheight`: {"op": "rowheight", "row": 1, "height": 30}
    */
-  def parseBatchJson(json: String): Either[Exception, Vector[BatchOp]] =
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def parseBatchJson(json: String): Either[Exception, ParseResult] =
     try
       val parsed = ujson.read(json)
       val arr = parsed.arrOpt.getOrElse(
         throw new Exception("Batch input must be a JSON array")
       )
+
+      // Collect warnings during parsing
+      val warnings = scala.collection.mutable.ListBuffer[String]()
 
       val ops = arr.value.toVector.zipWithIndex.map { case (obj, idx) =>
         val objMap = obj.objOpt.getOrElse(
@@ -128,16 +168,36 @@ object BatchParser:
 
         op match
           case "put" =>
+            collectUnknownPropsWarning(objMap, knownPutProps, "put", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
-            val value = requireValue(objMap, idx)
-            BatchOp.Put(ref, value)
+            // detect defaults to true; set to false to disable smart detection
+            val detect = objMap.get("detect").flatMap(_.boolOpt).getOrElse(true)
+            val parsed = parseTypedValue(objMap, idx, detect)
+            BatchOp.Put(ref, parsed.cellValue, parsed.format)
 
           case "putf" =>
+            collectUnknownPropsWarning(objMap, knownPutfProps, "putf", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
-            val value = requireValue(objMap, idx)
-            BatchOp.PutFormula(ref, value)
+            // Check for explicit formulas array first
+            objMap.get("values") match
+              case Some(arr) if arr.arrOpt.isDefined =>
+                val formulas = arr.arr.toVector.zipWithIndex.map { case (v, i) =>
+                  v.strOpt.getOrElse(
+                    throw new Exception(
+                      s"Object ${idx + 1}: 'values[$i]' must be a string formula"
+                    )
+                  )
+                }
+                BatchOp.PutFormulas(ref, formulas)
+              case _ =>
+                val formula = requireStringValue(objMap, idx)
+                // Check for 'from' field for formula dragging
+                objMap.get("from").flatMap(_.strOpt) match
+                  case Some(fromRef) => BatchOp.PutFormulaDragging(ref, formula, fromRef)
+                  case None => BatchOp.PutFormula(ref, formula)
 
           case "style" =>
+            collectUnknownPropsWarning(objMap, knownStyleProps, "style", idx).foreach(warnings += _)
             val range = requireString(objMap, "range", idx)
             val props = parseStyleProps(objMap)
             BatchOp.Style(range, props)
@@ -167,7 +227,7 @@ object BatchParser:
             )
       }
 
-      Right(ops)
+      Right(ParseResult(ops, warnings.toVector))
     catch
       case e: ujson.ParseException =>
         Left(new Exception(s"JSON parse error: ${e.getMessage}"))
@@ -176,6 +236,262 @@ object BatchParser:
 
   /** Type alias for uPickle's LinkedHashMap. */
   private type ObjMap = upickle.core.LinkedHashMap[String, ujson.Value]
+
+  // ========== Known Properties for Validation ==========
+
+  /** Known properties for 'put' operation */
+  private val knownPutProps = Set("op", "ref", "value", "format", "detect")
+
+  /** Known properties for 'putf' operation */
+  private val knownPutfProps = Set("op", "ref", "value", "values", "from")
+
+  /** Known properties for 'style' operation */
+  private val knownStyleProps = Set(
+    "op",
+    "range",
+    "bold",
+    "italic",
+    "underline",
+    "bg",
+    "fg",
+    "fontSize",
+    "fontName",
+    "align",
+    "valign",
+    "wrap",
+    "numFormat",
+    "border",
+    "borderTop",
+    "borderRight",
+    "borderBottom",
+    "borderLeft",
+    "borderColor",
+    "replace"
+  )
+
+  /** Collect warning about unknown properties in a batch operation (if any) */
+  private def collectUnknownPropsWarning(
+    objMap: ObjMap,
+    known: Set[String],
+    opType: String,
+    idx: Int
+  ): Option[String] =
+    val keys = objMap.keys.toSet
+    val unknown = keys -- known
+    if unknown.nonEmpty then
+      Some(
+        s"Warning: Object ${idx + 1} ($opType): unknown properties ignored: ${unknown.mkString(", ")}"
+      )
+    else None
+
+  // ========== Format Name Parsing ==========
+
+  /**
+   * Parse format name string to NumFmt.
+   *
+   * Supports named formats (currency, percent, date, etc.) and custom Excel format codes.
+   */
+  private def parseFormatName(name: String): Option[NumFmt] =
+    name.toLowerCase match
+      case "general" => Some(NumFmt.General)
+      case "integer" => Some(NumFmt.Integer)
+      case "decimal" | "number" => Some(NumFmt.Decimal)
+      case "currency" => Some(NumFmt.Currency)
+      case "percent" => Some(NumFmt.Percent)
+      case "percent_decimal" => Some(NumFmt.PercentDecimal)
+      case "date" => Some(NumFmt.Date)
+      case "datetime" => Some(NumFmt.DateTime)
+      case "time" => Some(NumFmt.Time)
+      case "text" => Some(NumFmt.Text)
+      case custom =>
+        // Accept custom format codes that contain format characters
+        if custom.contains("#") || custom.contains("0") || custom.contains("@") ||
+          custom.toLowerCase.contains("yy") || custom.toLowerCase.contains("mm") ||
+          custom.toLowerCase.contains("dd") || custom.toLowerCase.contains("hh")
+        then Some(NumFmt.Custom(name)) // Preserve original case
+        else None
+
+  // ========== Typed Value Parsing ==========
+
+  /**
+   * Parse a JSON value with optional explicit format.
+   *
+   * Handles:
+   *   - Native JSON numbers → Number CellValue
+   *   - Native JSON booleans → Bool CellValue
+   *   - JSON null → Empty CellValue
+   *   - Strings with explicit format → parsed according to format
+   *   - Strings without format → smart detection (currency, percent, date, number, text)
+   *
+   * @param detect
+   *   If true (default), auto-detect currency/percent/date from strings. If false, treat strings as
+   *   plain text unless explicit format is provided.
+   */
+  private def parseTypedValue(objMap: ObjMap, idx: Int, detect: Boolean = true): ParsedValue =
+    val explicitFormat = objMap.get("format").flatMap(_.strOpt).flatMap(parseFormatName)
+
+    objMap
+      .get("value")
+      .map { json =>
+        // Handle native JSON types
+        json.numOpt match
+          case Some(num) =>
+            // Native JSON number - use explicit format if provided
+            ParsedValue(CellValue.Number(BigDecimal(num)), explicitFormat)
+          case None =>
+            json.boolOpt match
+              case Some(b) =>
+                // Native JSON boolean
+                ParsedValue(CellValue.Bool(b), None)
+              case None =>
+                if json.isNull then
+                  // JSON null → Empty
+                  ParsedValue(CellValue.Empty, None)
+                else
+                  json.strOpt match
+                    case Some(s) =>
+                      // String value - use explicit format or smart detection
+                      parseStringValue(s, explicitFormat, idx, detect)
+                    case None =>
+                      throw new Exception(
+                        s"Object ${idx + 1}: 'value' must be string, number, boolean, or null"
+                      )
+      }
+      .getOrElse(
+        throw new Exception(s"Object ${idx + 1}: Missing 'value' field")
+      )
+
+  /**
+   * Parse a string value with optional explicit format.
+   *
+   * With explicit format: parse according to format (currency strings become numbers, etc.) Without
+   * explicit format: smart detection for currency, percent, dates (if detect=true).
+   *
+   * @param detect
+   *   If true, auto-detect currency/percent/date patterns. If false, treat as plain text.
+   */
+  private def parseStringValue(
+    s: String,
+    explicitFormat: Option[NumFmt],
+    idx: Int,
+    detect: Boolean = true
+  ): ParsedValue =
+    explicitFormat match
+      case Some(fmt) =>
+        // Explicit format - parse string to appropriate type
+        fmt match
+          case NumFmt.Currency =>
+            FormattedParsers
+              .parseMoney(s)
+              .orElse(FormattedParsers.parseAccounting(s))
+              .map(f => ParsedValue(f.value, Some(f.numFmt)))
+              .getOrElse {
+                // If string doesn't parse as money, try as number with currency format
+                scala.util
+                  .Try(BigDecimal(s))
+                  .toOption
+                  .map(n => ParsedValue(CellValue.Number(n), Some(fmt)))
+                  .getOrElse(ParsedValue(CellValue.Text(s), Some(fmt)))
+              }
+          case NumFmt.Percent | NumFmt.PercentDecimal =>
+            FormattedParsers
+              .parsePercent(s)
+              .map(f => ParsedValue(f.value, Some(fmt)))
+              .getOrElse {
+                // Try as plain number (user wants percent display)
+                scala.util
+                  .Try(BigDecimal(s))
+                  .toOption
+                  .map(n => ParsedValue(CellValue.Number(n), Some(fmt)))
+                  .getOrElse(ParsedValue(CellValue.Text(s), Some(fmt)))
+              }
+          case NumFmt.Date =>
+            FormattedParsers
+              .parseDate(s)
+              .map(f => ParsedValue(f.value, Some(f.numFmt)))
+              .getOrElse(ParsedValue(CellValue.Text(s), Some(fmt)))
+          case NumFmt.DateTime | NumFmt.Time =>
+            // Try date parse (includes time in DateTime)
+            FormattedParsers
+              .parseDate(s)
+              .map(f => ParsedValue(f.value, Some(fmt)))
+              .getOrElse(ParsedValue(CellValue.Text(s), Some(fmt)))
+          case NumFmt.Integer | NumFmt.Decimal | NumFmt.General =>
+            // Try to parse as number
+            scala.util
+              .Try(BigDecimal(s))
+              .toOption
+              .map(n => ParsedValue(CellValue.Number(n), Some(fmt)))
+              .getOrElse(ParsedValue(CellValue.Text(s), Some(fmt)))
+          case _ =>
+            // Custom format - try number, fall back to text
+            scala.util
+              .Try(BigDecimal(s))
+              .toOption
+              .map(n => ParsedValue(CellValue.Number(n), Some(fmt)))
+              .getOrElse(ParsedValue(CellValue.Text(s), Some(fmt)))
+
+      case None =>
+        // No explicit format
+        if detect then
+          // Smart detection enabled - detect currency, percent, dates
+          detectAndParse(s)
+        else
+          // Smart detection disabled - treat as plain text
+          ParsedValue(CellValue.Text(s), None)
+
+  /**
+   * Smart detection for string values without explicit format.
+   *
+   * Detects:
+   *   - Currency: $1,234.56 or ($1,234.56)
+   *   - Percent: 59.4%
+   *   - ISO Date: 2025-11-10
+   *   - Number: 123.45
+   *   - Boolean: true/false
+   *   - Text: everything else
+   */
+  private def detectAndParse(s: String): ParsedValue =
+    val trimmed = s.trim
+
+    // Currency: starts with $ or parenthesized with $
+    if trimmed.startsWith("$") || (trimmed.startsWith("(") && trimmed.contains("$")) then
+      FormattedParsers
+        .parseMoney(trimmed)
+        .orElse(FormattedParsers.parseAccounting(trimmed))
+        .map(f => ParsedValue(f.value, Some(f.numFmt)))
+        .getOrElse(ParsedValue(CellValue.Text(s), None))
+
+    // Percent: ends with %
+    else if trimmed.endsWith("%") then
+      FormattedParsers
+        .parsePercent(trimmed)
+        .map(f => ParsedValue(f.value, Some(f.numFmt)))
+        .getOrElse(ParsedValue(CellValue.Text(s), None))
+
+    // ISO Date: YYYY-MM-DD pattern
+    else if trimmed.matches("""\d{4}-\d{2}-\d{2}""") then
+      FormattedParsers
+        .parseDate(trimmed)
+        .map(f => ParsedValue(f.value, Some(f.numFmt)))
+        .getOrElse(ParsedValue(CellValue.Text(s), None))
+
+    // Try number
+    else
+      scala.util.Try(BigDecimal(trimmed)).toOption match
+        case Some(n) => ParsedValue(CellValue.Number(n), None)
+        case None =>
+          // Boolean detection
+          trimmed.toLowerCase match
+            case "true" => ParsedValue(CellValue.Bool(true), None)
+            case "false" => ParsedValue(CellValue.Bool(false), None)
+            case _ =>
+              // Strip quotes if present
+              val text =
+                if trimmed.startsWith("\"") && trimmed.endsWith("\"") then
+                  trimmed.drop(1).dropRight(1)
+                else s
+              ParsedValue(CellValue.Text(text), None)
 
   /** Extract required string field from JSON object. */
   private def requireString(objMap: ObjMap, field: String, idx: Int): String =
@@ -209,8 +525,8 @@ object BatchParser:
         )
       )
 
-  /** Extract value field (string, number, boolean, or null). */
-  private def requireValue(objMap: ObjMap, idx: Int): String =
+  /** Extract value field as string (for formulas) */
+  private def requireStringValue(objMap: ObjMap, idx: Int): String =
     objMap
       .get("value")
       .map {
@@ -272,11 +588,17 @@ object BatchParser:
     ops.foldLeft(IO.pure(wb)) { (wbIO, op) =>
       wbIO.flatMap { currentWb =>
         op match
-          case BatchOp.Put(refStr, valueStr) =>
-            applyPut(currentWb, defaultSheetName, refStr, valueStr, isFormula = false)
+          case BatchOp.Put(refStr, cellValue, format) =>
+            applyPutTyped(currentWb, defaultSheetName, refStr, cellValue, format)
 
           case BatchOp.PutFormula(refStr, formula) =>
-            applyPut(currentWb, defaultSheetName, refStr, formula, isFormula = true)
+            applyPutFormula(currentWb, defaultSheetName, refStr, formula)
+
+          case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef) =>
+            applyPutFormulaDragging(currentWb, defaultSheetName, rangeStr, formula, fromRef)
+
+          case BatchOp.PutFormulas(rangeStr, formulas) =>
+            applyPutFormulas(currentWb, defaultSheetName, rangeStr, formulas)
 
           case BatchOp.Style(rangeStr, props) =>
             applyStyle(currentWb, defaultSheetName, rangeStr, props)
@@ -297,19 +619,55 @@ object BatchParser:
 
   // ========== Operation Helpers ==========
 
-  /** Apply a put or putf operation. */
-  private def applyPut(
+  /** Apply a typed put operation with optional format. */
+  private def applyPutTyped(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     refStr: String,
-    valueStr: String,
-    isFormula: Boolean
+    cellValue: CellValue,
+    format: Option[NumFmt]
   ): IO[Workbook] =
-    val value =
-      if isFormula then
-        val formula = if valueStr.startsWith("=") then valueStr.drop(1) else valueStr
-        CellValue.Formula(formula, None)
-      else ValueParser.parseValue(valueStr)
+    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+      case RefType.Cell(ref) =>
+        defaultSheetName match
+          case Some(sheetName) =>
+            updateSheetWithFormat(wb, sheetName, ref, cellValue, format)
+          case None =>
+            IO.raiseError(new Exception(s"batch requires --sheet for unqualified ref '$refStr'"))
+
+      case RefType.QualifiedCell(sheetName, ref) =>
+        updateSheetWithFormat(wb, sheetName, ref, cellValue, format)
+
+      case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+        IO.raiseError(new Exception(s"batch put requires single cell ref, not range: $refStr"))
+    }
+
+  /** Update sheet with value and optional format */
+  private def updateSheetWithFormat(
+    wb: Workbook,
+    sheetName: SheetName,
+    ref: ARef,
+    cellValue: CellValue,
+    format: Option[NumFmt]
+  ): IO[Workbook] =
+    format match
+      case Some(numFmt) =>
+        // Use Formatted to apply both value and style
+        val formatted = Formatted(cellValue, numFmt)
+        updateSheet(wb, sheetName)(_.put(ref, formatted))
+      case None =>
+        // No format - just put the value
+        updateSheet(wb, sheetName)(_.put(ref, cellValue))
+
+  /** Apply a single formula to a cell */
+  private def applyPutFormula(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    refStr: String,
+    formulaStr: String
+  ): IO[Workbook] =
+    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val value = CellValue.Formula(formula, None)
 
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>
@@ -323,8 +681,90 @@ object BatchParser:
         updateSheet(wb, sheetName)(_.put(ref -> value))
 
       case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
-        IO.raiseError(new Exception(s"batch put requires single cell ref, not range: $refStr"))
+        IO.raiseError(
+          new Exception(
+            s"batch putf with single formula requires single cell ref, not range: $refStr. " +
+              "Use 'from' field for formula dragging or 'values' array for explicit formulas."
+          )
+        )
     }
+
+  /** Apply formula with dragging to a range */
+  private def applyPutFormulaDragging(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    rangeStr: String,
+    formulaStr: String,
+    fromRef: String
+  ): IO[Workbook] =
+    val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+    val fullFormula = s"=$formula"
+
+    for
+      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      (sheetName, range) = rangeRef
+
+      // Parse the 'from' reference
+      fromARef <- IO.fromEither(
+        ARef.parse(fromRef).left.map(e => new Exception(s"Invalid 'from' reference: $e"))
+      )
+
+      // Parse the formula
+      parsedExpr <- IO.fromEither(
+        FormulaParser.parse(fullFormula).left.map { e =>
+          new Exception(ParseError.formatWithContext(e, fullFormula))
+        }
+      )
+
+      // Apply formula with shifting
+      result <- updateSheet(wb, sheetName) { sheet =>
+        val startCol = Column.index0(fromARef.col)
+        val startRow = Row.index0(fromARef.row)
+
+        range.cells.foldLeft(sheet) { (s, targetRef) =>
+          val colDelta = Column.index0(targetRef.col) - startCol
+          val rowDelta = Row.index0(targetRef.row) - startRow
+          val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
+          val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+          val cachedValue =
+            SheetEvaluator.evaluateFormula(s)(s"=$shiftedFormula", workbook = Some(wb)).toOption
+          s.put(targetRef, CellValue.Formula(shiftedFormula, cachedValue))
+        }
+      }
+    yield result
+
+  /** Apply explicit formulas to a range (no dragging) */
+  private def applyPutFormulas(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    rangeStr: String,
+    formulas: Vector[String]
+  ): IO[Workbook] =
+    for
+      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      (sheetName, range) = rangeRef
+
+      // Validate count matches
+      cellCount = range.cellCount.toInt
+      _ <-
+        if cellCount != formulas.length then
+          IO.raiseError(
+            new Exception(
+              s"Range ${range.toA1} has $cellCount cells but ${formulas.length} formulas provided."
+            )
+          )
+        else IO.unit
+
+      // Apply formulas
+      result <- updateSheet(wb, sheetName) { sheet =>
+        range.cellsRowMajor.zip(formulas.iterator).foldLeft(sheet) { case (s, (ref, formulaStr)) =>
+          val formula = if formulaStr.startsWith("=") then formulaStr.drop(1) else formulaStr
+          val cachedValue =
+            SheetEvaluator.evaluateFormula(s)(s"=$formula", workbook = Some(wb)).toOption
+          s.put(ref, CellValue.Formula(formula, cachedValue))
+        }
+      }
+    yield result
 
   /** Apply a style operation. */
   private def applyStyle(

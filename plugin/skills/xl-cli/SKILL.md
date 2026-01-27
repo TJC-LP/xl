@@ -214,6 +214,40 @@ Apply multiple operations atomically:
 
 **Operations**: put, putf, style, merge, unmerge, colwidth, rowheight
 
+**Native JSON types** (recommended for numeric data):
+```json
+{"op": "put", "ref": "A1", "value": 99.0}                    // Number
+{"op": "put", "ref": "A2", "value": true}                    // Boolean
+{"op": "put", "ref": "A3", "value": 99.0, "format": "currency"}  // $99.00
+{"op": "put", "ref": "A4", "value": 0.594, "format": "percent"}  // 59%
+{"op": "put", "ref": "A5", "value": 3.5, "format": "0.0x"}   // Custom: 3.5x
+```
+
+**Smart detection** (auto-formats string values):
+```json
+{"op": "put", "ref": "A1", "value": "$1,234.56"}    // → Currency
+{"op": "put", "ref": "A2", "value": "59.4%"}        // → Percent (stored as 0.594)
+{"op": "put", "ref": "A3", "value": "2025-11-10"}   // → Date
+```
+
+**Format names**: `general`, `integer`, `decimal`, `currency`, `percent`, `date`, `datetime`, `time`, `text`, or any custom Excel format code (e.g., `"0.0x"`, `"$#,##0;($#,##0)"`).
+
+**Disable detection**: Set `"detect": false` to treat strings as plain text:
+```json
+{"op": "put", "ref": "A1", "value": "$99.00", "detect": false}  // → Text, not Currency
+```
+
+**Formula dragging** (putf with range):
+```json
+// Drag formula across range (Excel-style $ anchoring)
+{"op": "putf", "ref": "B2:B10", "value": "=SUM($A$1:A2)", "from": "B2"}
+
+// Explicit formulas for each cell (no dragging)
+{"op": "putf", "ref": "B2:B4", "values": ["=A2*2", "=A3*2", "=A4*2"]}
+```
+
+**Style properties**: Use `align` (not `halign`) for horizontal alignment. Unknown properties emit warnings.
+
 See `xl batch --help` for full reference with all style properties.
 
 ### Output Format Summary

@@ -188,17 +188,27 @@ object StyleBuilder:
 
   /**
    * Parse number format string.
+   *
+   * Accepts named formats (general, number, currency, percent, date, text) and custom Excel format
+   * codes. Any string containing format characters (#, 0, @, yy, mm, dd, hh, ss) is accepted as a
+   * custom format.
    */
   def parseNumFmt(s: String): Either[String, NumFmt] =
     s.toLowerCase match
       case "general" => Right(NumFmt.General)
-      case "number" => Right(NumFmt.Decimal)
+      case "integer" => Right(NumFmt.Integer)
+      case "number" | "decimal" => Right(NumFmt.Decimal)
       case "currency" => Right(NumFmt.Currency)
       case "percent" => Right(NumFmt.Percent)
+      case "percent_decimal" => Right(NumFmt.PercentDecimal)
       case "date" => Right(NumFmt.Date)
+      case "datetime" => Right(NumFmt.DateTime)
+      case "time" => Right(NumFmt.Time)
       case "text" => Right(NumFmt.Text)
-      case other =>
-        Left(s"Unknown number format: $other. Use general, number, currency, percent, date, text")
+      case _ =>
+        // Accept any string as a custom format - Excel will interpret it
+        // This allows custom formats like "0.0x", "$#,##0;($#,##0)", "0 \"bps\"", etc.
+        Right(NumFmt.Custom(s))
 
   /**
    * Merge two CellStyles, applying non-default values from newStyle to existingStyle.

@@ -521,3 +521,116 @@ class StreamingWriteSpec extends FunSuite:
       assert(sheet.cells.contains(ARef.from0(3, 3)), "D4 should exist")
     finally Files.deleteIfExists(outputPath)
   }
+
+  // ========== Streaming Batch: Formula Dragging ==========
+
+  def tempJson(content: String): Path =
+    val file = Files.createTempFile("batch", ".json")
+    Files.writeString(file, content)
+    file
+
+  test("streaming batch: formula dragging shifts references correctly") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"putf","ref":"B1:B5","value":"=A1*2","from":"B1"}]""")
+    try
+      // Create workbook with values in A1:A5
+      val wb = Workbook(
+        Sheet("Test")
+          .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("1")))
+          .put(ARef.from0(0, 1), CellValue.Number(BigDecimal("2")))
+          .put(ARef.from0(0, 2), CellValue.Number(BigDecimal("3")))
+          .put(ARef.from0(0, 3), CellValue.Number(BigDecimal("4")))
+          .put(ARef.from0(0, 4), CellValue.Number(BigDecimal("5")))
+      )
+      ExcelIO.instance[IO].write(wb, sourcePath).unsafeRunSync()
+
+      // Use batch JSON to drag formula from B1 to B1:B5
+      val result = StreamingWriteCommands
+        .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+        .unsafeRunSync()
+
+      assert(result.contains("Saved (streaming)"), result)
+
+      // Verify formulas are shifted correctly
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val sheet = imported.sheets.head
+
+      // B1 should have =A1*2, B2 should have =A2*2, etc.
+      val b1 = sheet.cells.get(ARef.from0(1, 0)).map(_.value)
+      val b2 = sheet.cells.get(ARef.from0(1, 1)).map(_.value)
+      val b3 = sheet.cells.get(ARef.from0(1, 2)).map(_.value)
+      val b4 = sheet.cells.get(ARef.from0(1, 3)).map(_.value)
+      val b5 = sheet.cells.get(ARef.from0(1, 4)).map(_.value)
+
+      b1 match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A1*2")
+        case other => fail(s"B1: expected Formula(A1*2), got $other")
+
+      b2 match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A2*2")
+        case other => fail(s"B2: expected Formula(A2*2), got $other")
+
+      b3 match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A3*2")
+        case other => fail(s"B3: expected Formula(A3*2), got $other")
+
+      b4 match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A4*2")
+        case other => fail(s"B4: expected Formula(A4*2), got $other")
+
+      b5 match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "A5*2")
+        case other => fail(s"B5: expected Formula(A5*2), got $other")
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }
+
+  test("streaming batch: formula dragging preserves absolute references") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"putf","ref":"B2:B4","value":"=$A$1+A2","from":"B2"}]""")
+    try
+      // Create workbook with base value in A1 and values in A2:A4
+      val wb = Workbook(
+        Sheet("Test")
+          .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("100"))) // A1 = base
+          .put(ARef.from0(0, 1), CellValue.Number(BigDecimal("1")))   // A2
+          .put(ARef.from0(0, 2), CellValue.Number(BigDecimal("2")))   // A3
+          .put(ARef.from0(0, 3), CellValue.Number(BigDecimal("3")))   // A4
+      )
+      ExcelIO.instance[IO].write(wb, sourcePath).unsafeRunSync()
+
+      // Formula with absolute reference: =$A$1+A2 should shift to =$A$1+A3, =$A$1+A4
+      val result = StreamingWriteCommands
+        .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+        .unsafeRunSync()
+
+      assert(result.contains("Saved (streaming)"), result)
+
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val sheet = imported.sheets.head
+
+      // B2=$A$1+A2, B3=$A$1+A3, B4=$A$1+A4
+      val b2 = sheet.cells.get(ARef.from0(1, 1)).map(_.value)
+      val b3 = sheet.cells.get(ARef.from0(1, 2)).map(_.value)
+      val b4 = sheet.cells.get(ARef.from0(1, 3)).map(_.value)
+
+      b2 match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "$A$1+A2")
+        case other => fail(s"B2: expected Formula($$A$$1+A2), got $other")
+
+      b3 match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "$A$1+A3")
+        case other => fail(s"B3: expected Formula($$A$$1+A3), got $other")
+
+      b4 match
+        case Some(CellValue.Formula(f, _)) => assertEquals(f, "$A$1+A4")
+        case other => fail(s"B4: expected Formula($$A$$1+A4), got $other")
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }

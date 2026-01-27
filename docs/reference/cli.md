@@ -84,6 +84,7 @@ xl -f model.xlsx eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary v
 | `col` | `<letter> [options]` | Set column width, hide/show, auto-fit (requires `-o`) |
 | `fill` | `<source> <target> [--right]` | Fill cells with source value/formula (requires `-o`) |
 | `clear` | `<range> [--all\|--styles\|--comments]` | Clear cell contents/styles/comments (requires `-o`) |
+| `batch` | `<file\|->` | Apply multiple operations from JSON (requires `-o`) |
 
 ---
 
@@ -415,6 +416,181 @@ xl -f input.xlsx -o output.xlsx fill A1:A5 A1:J5 --right
 # Formula shifting example: =A1*2 in B1 fills to =A2*2, =A3*2, etc.
 xl -f input.xlsx -o output.xlsx fill B1 B1:B10
 ```
+
+---
+
+### `xl batch <file|->`
+
+Apply multiple operations atomically from JSON input.
+
+**Arguments**:
+| Arg | Type | Required | Description |
+|-----|------|----------|-------------|
+| `file` | string | Yes | JSON file path or `-` for stdin |
+
+**JSON Schema**:
+
+```json
+[
+  {"op": "put", "ref": "A1", "value": "Hello"},
+  {"op": "putf", "ref": "B1", "value": "=A1*2"},
+  {"op": "style", "range": "A1:B1", "bold": true},
+  {"op": "merge", "range": "A1:D1"},
+  {"op": "colwidth", "col": "A", "width": 15.5},
+  {"op": "rowheight", "row": 1, "height": 30}
+]
+```
+
+**Supported Operations**:
+
+| Operation | Required Fields | Optional Fields | Description |
+|-----------|-----------------|-----------------|-------------|
+| `put` | `ref`, `value` | `format` | Write value to cell |
+| `putf` | `ref`, `value` | `from`, `values` | Write formula(s) to cell(s) |
+| `style` | `range` | styling options | Apply cell styling |
+| `merge` | `range` | | Merge cells |
+| `unmerge` | `range` | | Unmerge cells |
+| `colwidth` | `col`, `width` | | Set column width |
+| `rowheight` | `row`, `height` | | Set row height |
+
+**Native JSON Types** (recommended):
+
+```json
+// Numbers are stored as numeric values (not text)
+{"op": "put", "ref": "A1", "value": 99.0}
+
+// Booleans
+{"op": "put", "ref": "A2", "value": true}
+
+// With explicit format
+{"op": "put", "ref": "A3", "value": 99.0, "format": "currency"}
+{"op": "put", "ref": "A4", "value": 0.594, "format": "percent"}
+```
+
+**Format Options**:
+
+| Format Name | Description | Example Output |
+|-------------|-------------|----------------|
+| `general` | Default format | `1234.5` |
+| `integer` | Whole numbers | `1235` |
+| `decimal` | Two decimal places | `1234.50` |
+| `currency` | Currency with symbol | `$1,234.50` |
+| `percent` | Percentage | `59%` |
+| `percent_decimal` | Percentage with decimals | `59.4%` |
+| `date` | Date format | `11/10/25` |
+| `datetime` | Date and time | `11/10/25 14:30` |
+| `time` | Time only | `14:30:00` |
+| `text` | Text format | `1234.5` |
+| *custom* | Any Excel format code | See below |
+
+**Custom Format Codes**:
+
+```json
+// MOIC/Multiple format (3.5x)
+{"op": "put", "ref": "A1", "value": 3.5, "format": "0.0x"}
+
+// Accounting format with negatives in parentheses
+{"op": "put", "ref": "A2", "value": -1234, "format": "$#,##0;($#,##0)"}
+
+// Basis points
+{"op": "put", "ref": "A3", "value": 50, "format": "0 \"bps\""}
+
+// Custom date format
+{"op": "put", "ref": "A4", "value": "2025-11-10", "format": "yyyy-mm-dd"}
+```
+
+**Smart String Detection** (enabled by default):
+
+Strings are automatically detected and formatted:
+
+```json
+// Currency detected from $ prefix
+{"op": "put", "ref": "A1", "value": "$99.00"}  // → Number(99.0), Currency
+
+// Percent detected from % suffix
+{"op": "put", "ref": "A2", "value": "59.4%"}   // → Number(0.594), Percent
+
+// ISO date detected
+{"op": "put", "ref": "A3", "value": "2025-11-10"}  // → DateTime, Date format
+
+// Plain text (no detection pattern)
+{"op": "put", "ref": "A4", "value": "Hello"}       // → Text
+```
+
+**Disable Detection**: Set `"detect": false` to treat strings as plain text:
+
+```json
+{"op": "put", "ref": "A1", "value": "$99.00", "detect": false}  // → Text "$99.00"
+{"op": "put", "ref": "A2", "value": "59.4%", "detect": false}   // → Text "59.4%"
+```
+
+**Formula Dragging** (putf with range):
+
+```json
+// Single formula dragged across range (uses Excel $ anchoring)
+{"op": "putf", "ref": "B2:B10", "value": "=SUM($A$1:A2)", "from": "B2"}
+
+// Explicit formulas for each cell (no dragging)
+{"op": "putf", "ref": "B2:B4", "values": ["=A2*2", "=A3*2", "=A4*2"]}
+```
+
+**Style Options**:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `bold` | boolean | Bold text |
+| `italic` | boolean | Italic text |
+| `underline` | boolean | Underlined text |
+| `bg` | string | Background color (hex: `#FF0000`) |
+| `fg` | string | Font color (hex: `#0000FF`) |
+| `fontSize` | number | Font size in points |
+| `fontName` | string | Font family name |
+| `align` | string | Horizontal alignment: `left`, `center`, `right`, `justify` |
+| `valign` | string | Vertical alignment: `top`, `middle`, `bottom` |
+| `wrap` | boolean | Enable text wrapping |
+| `numFormat` | string | Number format (see Format Options above) |
+| `border` | string | All borders: `none`, `thin`, `medium`, `thick` |
+| `borderTop` | string | Top border style |
+| `borderRight` | string | Right border style |
+| `borderBottom` | string | Bottom border style |
+| `borderLeft` | string | Left border style |
+| `borderColor` | string | Border color (hex) |
+| `replace` | boolean | Replace style instead of merge (default: false) |
+
+**Note**: Use `align` for horizontal alignment, not `halign`. Unknown properties are ignored with a warning.
+
+**Examples**:
+
+```bash
+# From file
+xl -f input.xlsx -o output.xlsx batch operations.json
+
+# From stdin (pipe)
+echo '[{"op": "put", "ref": "A1", "value": 100, "format": "currency"}]' | \
+  xl -f input.xlsx -s Sheet1 -o output.xlsx batch -
+
+# Complex workflow
+cat <<'EOF' | xl -f input.xlsx -s Sheet1 -o output.xlsx batch -
+[
+  {"op": "put", "ref": "A1", "value": "Revenue", "format": "text"},
+  {"op": "put", "ref": "B1", "value": 1000000, "format": "currency"},
+  {"op": "style", "range": "A1:B1", "bold": true, "bg": "#FFFF00"},
+  {"op": "merge", "range": "A1:B1"},
+  {"op": "colwidth", "col": "A", "width": 20}
+]
+EOF
+```
+
+#### Common Gotchas
+
+| Scenario | Behavior | Workaround |
+|----------|----------|------------|
+| Leading zeros: `"00123"` | Smart detection converts to number `123` | Use `"detect": false` to preserve as text |
+| Mixed patterns: `"50 (50%)"` | First pattern wins (treated as text) | Use explicit `"format"` field |
+| `values` array length mismatch | Error raised if array length ≠ range cell count | Ensure exact match |
+| Percent as decimal | `"59.4%"` stored as `0.594` | Excel displays correctly with percent format |
+| Invalid custom formats | Accepted but may render incorrectly in Excel | Test format codes in Excel first |
+| `--stream` mode | Supports formula dragging but not formula evaluation | Use non-streaming for `--eval` |
 
 ---
 
