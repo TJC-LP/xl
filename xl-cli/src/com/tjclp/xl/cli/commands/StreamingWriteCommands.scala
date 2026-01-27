@@ -484,13 +484,27 @@ object StreamingWriteCommands:
       var stylesModified = false
 
       ops.foreach {
-        case BatchParser.BatchOp.Put(refStr, valueStr) =>
+        case BatchParser.BatchOp.Put(refStr, cellValue, formatOpt) =>
           val ref = ARef.parse(refStr) match
             case Right(r) => r
             case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
-          val value = ValueParser.parseValue(valueStr)
-          cellPatches(ref) = StreamingTransform.CellPatch.SetValue(value, preserveStyle = true)
-          summaryLines += s"  PUT $refStr = $valueStr"
+          // For streaming mode with format, we'd need to add style to styles.xml
+          // For now, streaming mode just sets the value; format requires full writer
+          formatOpt match
+            case Some(numFmt) =>
+              // Build style with numFmt and add to styles.xml
+              val cellStyle = CellStyle.default.withNumFmt(numFmt)
+              val (updatedStyles, styleId) =
+                StylePatcher.addStyle(currentStylesXml, cellStyle) match
+                  case Right(result) => result
+                  case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
+              currentStylesXml = updatedStyles
+              stylesModified = true
+              cellPatches(ref) = StreamingTransform.CellPatch.SetStyleAndValue(styleId, cellValue)
+            case None =>
+              cellPatches(ref) =
+                StreamingTransform.CellPatch.SetValue(cellValue, preserveStyle = true)
+          summaryLines += s"  PUT $refStr = $cellValue"
 
         case BatchParser.BatchOp.PutFormula(refStr, formula) =>
           val ref = ARef.parse(refStr) match
@@ -502,6 +516,44 @@ object StreamingWriteCommands:
             preserveStyle = true
           )
           summaryLines += s"  PUTF $refStr = $formula"
+
+        case BatchParser.BatchOp.PutFormulaDragging(rangeStr, formula, fromRef) =>
+          // For streaming mode, apply formula dragging inline
+          val fromARef = ARef.parse(fromRef) match
+            case Right(r) => r
+            case Left(e) => throw new Exception(s"Invalid 'from' ref '$fromRef': $e")
+          val range = CellRange.parse(rangeStr) match
+            case Right(r) => r
+            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+          val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
+          val fullFormula = s"=$formulaText"
+          // Note: In streaming mode, we can't parse/shift formulas without loading formula parser
+          // Just apply the base formula to each cell (no shifting in streaming mode)
+          range.cells.foreach { ref =>
+            cellPatches(ref) = StreamingTransform.CellPatch.SetValue(
+              CellValue.Formula(formulaText, None),
+              preserveStyle = true
+            )
+          }
+          summaryLines += s"  PUTF $rangeStr = $formula (from $fromRef)"
+
+        case BatchParser.BatchOp.PutFormulas(rangeStr, formulas) =>
+          val range = CellRange.parse(rangeStr) match
+            case Right(r) => r
+            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+          val cells = range.cellsRowMajor.toVector
+          if cells.length != formulas.length then
+            throw new Exception(
+              s"Range $rangeStr has ${cells.length} cells but ${formulas.length} formulas provided"
+            )
+          cells.zip(formulas).foreach { case (ref, formula) =>
+            val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
+            cellPatches(ref) = StreamingTransform.CellPatch.SetValue(
+              CellValue.Formula(formulaText, None),
+              preserveStyle = true
+            )
+          }
+          summaryLines += s"  PUTF $rangeStr = [${formulas.length} formulas]"
 
         case BatchParser.BatchOp.Style(rangeStr, props) =>
           val range = CellRange.parse(rangeStr) match

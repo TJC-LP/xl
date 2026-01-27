@@ -7,10 +7,11 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.helpers.BatchParser
+import com.tjclp.xl.cli.helpers.{BatchParser, StyleBuilder}
 import com.tjclp.xl.cli.helpers.BatchParser.BatchOp
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Regression tests for CLI fixes from PR #44 review feedback.
@@ -160,9 +161,9 @@ class MainSpec extends CatsEffectSuite:
     val wb = Workbook(Vector(sheet))
 
     val ops = Vector(
-      BatchOp.Put("A1", "First"),
-      BatchOp.Put("B1", "Second"),
-      BatchOp.Put("C1", "Third")
+      BatchOp.Put("A1", CellValue.Text("First"), None),
+      BatchOp.Put("B1", CellValue.Text("Second"), None),
+      BatchOp.Put("C1", CellValue.Text("Third"), None)
     )
 
     BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
@@ -184,8 +185,8 @@ class MainSpec extends CatsEffectSuite:
     val wb = Workbook(Vector(sheet))
 
     val ops = Vector(
-      BatchOp.Put("A1", "100"),
-      BatchOp.Put("B1", "200"),
+      BatchOp.Put("A1", CellValue.Number(BigDecimal(100)), None),
+      BatchOp.Put("B1", CellValue.Number(BigDecimal(200)), None),
       BatchOp.PutFormula("C1", "=A1+B1")
     )
 
@@ -209,9 +210,9 @@ class MainSpec extends CatsEffectSuite:
     val wb = Workbook(Vector(sheet1, sheet2))
 
     val ops = Vector(
-      BatchOp.Put("Sheet1!A1", "InSheet1"),
-      BatchOp.Put("Sheet2!A1", "InSheet2"),
-      BatchOp.Put("Sheet1!B1", "AlsoInSheet1")
+      BatchOp.Put("Sheet1!A1", CellValue.Text("InSheet1"), None),
+      BatchOp.Put("Sheet2!A1", CellValue.Text("InSheet2"), None),
+      BatchOp.Put("Sheet1!B1", CellValue.Text("AlsoInSheet1"), None)
     )
 
     // No default sheet - all refs are qualified
@@ -242,7 +243,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "foo{bar}baz")))
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", CellValue.Text("foo{bar}baz"), None)))
   }
 
   test("parseBatchJson: handles JSON object syntax in string values (GH-67 regression)") {
@@ -251,7 +252,10 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "{\"nested\": \"json\"}")))
+    assertEquals(
+      result.toOption.get,
+      Vector(BatchOp.Put("A1", CellValue.Text("{\"nested\": \"json\"}"), None))
+    )
   }
 
   test("parseBatchJson: handles escaped quotes in values") {
@@ -259,7 +263,10 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "He said \"hello\"")))
+    assertEquals(
+      result.toOption.get,
+      Vector(BatchOp.Put("A1", CellValue.Text("He said \"hello\""), None))
+    )
   }
 
   test("parseBatchJson: handles unicode in values") {
@@ -267,34 +274,34 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "日本語 emoji: 🎉")))
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", CellValue.Text("日本語 emoji: 🎉"), None)))
   }
 
-  test("parseBatchJson: handles numeric values without quotes") {
+  test("parseBatchJson: handles native JSON numbers") {
     val json = """[{"op": "put", "ref": "A1", "value": 12345.67}]"""
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "12345.67")))
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", CellValue.Number(BigDecimal("12345.67")), None)))
   }
 
-  test("parseBatchJson: handles boolean values") {
+  test("parseBatchJson: handles native JSON booleans") {
     val json = """[{"op": "put", "ref": "A1", "value": true}, {"op": "put", "ref": "A2", "value": false}]"""
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
     assertEquals(
       result.toOption.get,
-      Vector(BatchOp.Put("A1", "true"), BatchOp.Put("A2", "false"))
+      Vector(BatchOp.Put("A1", CellValue.Bool(true), None), BatchOp.Put("A2", CellValue.Bool(false), None))
     )
   }
 
-  test("parseBatchJson: handles null values as empty string") {
+  test("parseBatchJson: handles null values as Empty") {
     val json = """[{"op": "put", "ref": "A1", "value": null}]"""
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", "")))
+    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", CellValue.Empty, None)))
   }
 
   test("parseBatchJson: provides clear error for invalid JSON") {
@@ -517,7 +524,7 @@ class MainSpec extends CatsEffectSuite:
     val wb = Workbook(Vector(sheet))
 
     val ops = Vector(
-      BatchOp.Put("A1", "Title"),
+      BatchOp.Put("A1", CellValue.Text("Title"), None),
       BatchOp.Style("A1:D1", BatchParser.StyleProps(bold = true, bg = Some("#0000FF"))),
       BatchOp.Merge("A1:D1"),
       BatchOp.ColWidth("A", 25.0)
@@ -578,7 +585,7 @@ class MainSpec extends CatsEffectSuite:
 
     // Put value, then style - order matters for style to work on existing cell
     val ops = Vector(
-      BatchOp.Put("A1", "100"),
+      BatchOp.Put("A1", CellValue.Number(BigDecimal(100)), None),
       BatchOp.Style("A1", BatchParser.StyleProps(bold = true))
     )
 
@@ -593,5 +600,196 @@ class MainSpec extends CatsEffectSuite:
       val style = updatedSheet.getCellStyle(ref"A1")
       assert(style.isDefined)
       assert(style.get.font.bold)
+    }
+  }
+
+  // ========== Batch JSON Enhanced Syntax (#179, #180, #178) ==========
+
+  test("parseBatchJson: format 'currency' applies Currency NumFmt") {
+    val json = """[{"op": "put", "ref": "A1", "value": 99.0, "format": "currency"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Currency)) =>
+        assertEquals(ref, "A1")
+        assertEquals(n, BigDecimal("99.0"))
+      case other => fail(s"Expected Put with Currency format, got $other")
+  }
+
+  test("parseBatchJson: format 'percent' stores value as-is") {
+    val json = """[{"op": "put", "ref": "A1", "value": 0.594, "format": "percent"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Percent)) =>
+        assertEquals(n, BigDecimal("0.594"))
+      case other => fail(s"Expected Put with Percent format, got $other")
+  }
+
+  test("parseBatchJson: custom format code '0.0x' creates Custom NumFmt") {
+    val json = """[{"op": "put", "ref": "A1", "value": 3.5, "format": "0.0x"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Custom(code))) =>
+        assertEquals(code, "0.0x")
+        assertEquals(n, BigDecimal("3.5"))
+      case other => fail(s"Expected Put with Custom format, got $other")
+  }
+
+  test("parseBatchJson: $99.00 auto-detected as currency") {
+    val json = """[{"op": "put", "ref": "A1", "value": "$99.00"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Currency)) =>
+        assertEquals(n, BigDecimal("99.00"))
+      case other => fail(s"Expected Put with auto-detected currency, got $other")
+  }
+
+  test("parseBatchJson: 59.4% auto-detected as percent, stored as 0.594") {
+    val json = """[{"op": "put", "ref": "A1", "value": "59.4%"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Percent)) =>
+        assertEquals(n, BigDecimal("0.594"))
+      case other => fail(s"Expected Put with auto-detected percent, got $other")
+  }
+
+  test("parseBatchJson: ISO date auto-detected") {
+    val json = """[{"op": "put", "ref": "A1", "value": "2025-11-10"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.Put(ref, CellValue.DateTime(dt), Some(NumFmt.Date)) =>
+        assertEquals(dt.toLocalDate.toString, "2025-11-10")
+      case other => fail(s"Expected Put with auto-detected date, got $other")
+  }
+
+  test("parseBatchJson: putf with range and 'from' creates PutFormulaDragging") {
+    val json = """[{"op": "putf", "ref": "B2:B10", "value": "=SUM($A$1:A2)", "from": "B2"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.PutFormulaDragging(range, formula, from) =>
+        assertEquals(range, "B2:B10")
+        assertEquals(formula, "=SUM($A$1:A2)")
+        assertEquals(from, "B2")
+      case other => fail(s"Expected PutFormulaDragging, got $other")
+  }
+
+  test("parseBatchJson: putf with 'values' array creates PutFormulas") {
+    val json = """[{"op": "putf", "ref": "B2:B4", "values": ["=A2*2", "=A3*2", "=A4*2"]}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.PutFormulas(range, formulas) =>
+        assertEquals(range, "B2:B4")
+        assertEquals(formulas, Vector("=A2*2", "=A3*2", "=A4*2"))
+      case other => fail(s"Expected PutFormulas, got $other")
+  }
+
+  test("parseBatchJson: backward compatible plain string remains text") {
+    val json = """[{"op": "put", "ref": "A1", "value": "Hello World"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.Put(ref, CellValue.Text(s), None) =>
+        assertEquals(s, "Hello World")
+      case other => fail(s"Expected Put with Text value, got $other")
+  }
+
+  test("batch: put with format applies style to cell") {
+    val sheet = Sheet("Test")
+    val wb = Workbook(Vector(sheet))
+
+    val ops = Vector(
+      BatchOp.Put("A1", CellValue.Number(BigDecimal("99.0")), Some(NumFmt.Currency))
+    )
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { updatedWb =>
+      val updatedSheet = updatedWb.sheets.head
+
+      // Value should be set
+      val value = updatedSheet.cells.get(ref"A1").map(_.value)
+      assertEquals(value, Some(CellValue.Number(BigDecimal("99.0"))))
+
+      // Style should have Currency NumFmt
+      val style = updatedSheet.getCellStyle(ref"A1")
+      assert(style.isDefined, "Style should be set")
+      assertEquals(style.get.numFmt, NumFmt.Currency)
+    }
+  }
+
+  test("parseBatchJson: detect=false disables smart detection") {
+    // With detect=false, $99.00 should stay as text, not become currency
+    val json = """[{"op": "put", "ref": "A1", "value": "$99.00", "detect": false}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.Put(ref, CellValue.Text(s), None) =>
+        assertEquals(s, "$99.00")
+      case other => fail(s"Expected Put with Text (no detection), got $other")
+  }
+
+  test("parseBatchJson: detect=true (default) enables smart detection") {
+    // Without detect flag or with detect=true, $99.00 should become currency
+    val json = """[{"op": "put", "ref": "A1", "value": "$99.00", "detect": true}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.head
+    op match
+      case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Currency)) =>
+        assertEquals(n, BigDecimal("99.00"))
+      case other => fail(s"Expected Put with Currency detection, got $other")
+  }
+
+  test("StyleBuilder.parseNumFmt: custom format codes accepted") {
+    // Test various custom format patterns
+    val formats = Seq(
+      ("0.0x", true),           // MOIC format
+      ("$#,##0;($#,##0)", true), // Accounting
+      ("0 \"bps\"", true),      // Basis points
+      ("0.00%", true),          // Explicit percent
+      ("yyyy-mm-dd", true),     // Date format
+      ("hh:mm:ss", true)        // Time format
+    )
+
+    formats.foreach { case (code, shouldSucceed) =>
+      val result = StyleBuilder.parseNumFmt(code)
+      if shouldSucceed then
+        assert(result.isRight, s"Format '$code' should parse successfully")
+        result match
+          case Right(NumFmt.Custom(parsed)) =>
+            assertEquals(parsed, code, s"Custom format should preserve original code")
+          case Right(other) =>
+            // Named format matched - that's also valid
+            assert(true)
+          case Left(err) =>
+            fail(s"Format '$code' failed: $err")
+      else
+        assert(result.isLeft, s"Format '$code' should fail")
     }
   }

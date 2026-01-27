@@ -700,8 +700,19 @@ object WriteCommands:
           writeWorkbook(updatedWb, outputPath, config, stream).map { _ =>
             val summary = ops
               .map {
-                case BatchParser.BatchOp.Put(ref, value) => s"  PUT $ref = $value"
+                case BatchParser.BatchOp.Put(ref, value, fmt) =>
+                  val fmtStr = fmt
+                    .map {
+                      case NumFmt.Custom(code) => s" ($code)"
+                      case f => s" ($f)"
+                    }
+                    .getOrElse("")
+                  s"  PUT $ref = $value$fmtStr"
                 case BatchParser.BatchOp.PutFormula(ref, formula) => s"  PUTF $ref = $formula"
+                case BatchParser.BatchOp.PutFormulaDragging(range, formula, from) =>
+                  s"  PUTF $range = $formula (from $from)"
+                case BatchParser.BatchOp.PutFormulas(range, formulas) =>
+                  s"  PUTF $range = [${formulas.length} formulas]"
                 case BatchParser.BatchOp.Style(range, _) => s"  STYLE $range"
                 case BatchParser.BatchOp.Merge(range) => s"  MERGE $range"
                 case BatchParser.BatchOp.Unmerge(range) => s"  UNMERGE $range"
