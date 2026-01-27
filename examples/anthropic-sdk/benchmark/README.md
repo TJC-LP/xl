@@ -12,6 +12,13 @@ xl CLI should demonstrate token efficiency due to:
 - **Single commands**: `xl -f file.xlsx sheets` vs multi-line Python code
 - **Purpose-built for LLMs**: Output format designed for model consumption
 
+## Features
+
+- **Token Efficiency**: Compare input/output token counts between approaches
+- **Correctness Grading**: Opus 4.5 grades each response against expected answers (A/B/C/D/F) using [structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)
+- **Parallel Execution**: Run all tasks concurrently with anyio
+- **Thread-Safe Logging**: Proper async logging for parallel runs
+
 ## Quick Start
 
 ### 1. Prerequisites
@@ -47,8 +54,11 @@ scala-cli run create_large_sample.sc
 The benchmark uses inline dependencies (PEP 723) - no manual install needed. It auto-downloads the xl binary and skill zip from GitHub releases if not present.
 
 ```bash
-# Run all tasks in parallel (default)
+# Run all tasks in parallel with grading (default)
 uv run benchmark.py
+
+# Skip correctness grading (faster, cheaper)
+uv run benchmark.py --no-grade
 
 # Run sequentially (easier to follow output)
 uv run benchmark.py --sequential
@@ -89,14 +99,26 @@ uv run benchmark.py --xlsx-only
 ### Console Output
 
 ```
-============================================================
+========================================================================================================================
 TOKEN EFFICIENCY COMPARISON: xl CLI vs Anthropic xlsx Skill
-============================================================
-Task                 | xl Input   | xl Output  | xlsx Input  | xlsx Output  | Winner   | Savings
-----------------------------------------------------------------------------------------------------
-List Sheets          |     30,541 |        156 |      28,234 |          423 |       xl |    -12%
-View Range           |     31,456 |        234 |      29,123 |        1,567 |       xl |    -35%
+========================================================================================================================
+Task                 | xl Tokens  | xl Grade | xlsx Tokens | xlsx Grade | Winner   | Savings
+------------------------------------------------------------------------------------------------------------------------
+List Sheets          |     37,837 |        A |      44,783 |          A |       xl |    -15%
+View Range           |     38,457 |        A |      44,308 |          B |       xl |    -13%
+Statistics           |     65,797 |        A |      71,563 |          A |       xl |     -8%
 ...
+------------------------------------------------------------------------------------------------------------------------
+TOTAL                |    312,304 |        A |     523,813 |          B |       xl |  -40.4%
+========================================================================================================================
+
+Summary: xl wins 7 tasks, xlsx wins 0 tasks
+Total tokens: xl=312,304, xlsx=523,813
+xl CLI uses 40.4% fewer tokens overall
+
+Grade distribution:
+  xl: A:7
+  xlsx: A:5, B:2
 ```
 
 ### JSON Results
@@ -114,10 +136,12 @@ Results are saved to `results/benchmark_YYYYMMDD_HHMMSS.json`:
       "task_name": "List Sheets",
       "approach": "xl",
       "success": true,
-      "input_tokens": 30541,
-      "output_tokens": 156,
-      "total_tokens": 30697,
-      "latency_ms": 2341
+      "input_tokens": 37319,
+      "output_tokens": 518,
+      "total_tokens": 37837,
+      "latency_ms": 22501,
+      "grade": "A",
+      "grade_reasoning": "Correctly identified both sheets with accurate cell counts."
     },
     ...
   ]
@@ -170,6 +194,8 @@ Results are saved to `results/benchmark_YYYYMMDD_HHMMSS.json`:
 | `total_tokens` | Sum of input + output |
 | `latency_ms` | Wall-clock time for the API call |
 | `success` | Whether the task completed without errors |
+| `grade` | Letter grade (A/B/C/D/F) from Opus 4.5 correctness grading |
+| `grade_reasoning` | Brief explanation from the grader |
 
 ## Files
 
@@ -206,5 +232,7 @@ To add new benchmark tasks, edit `tasks.py`:
     "description": "What this task tests",
     "xl_prompt": "Prompt for xl CLI approach",
     "xlsx_prompt": "Prompt for xlsx skill approach",
+    "expected_answer": """Ground truth for grading.
+Include the key facts that should be in the response.""",
 }
 ```

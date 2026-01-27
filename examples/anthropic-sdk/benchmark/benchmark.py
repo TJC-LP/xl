@@ -3,6 +3,8 @@
 # dependencies = [
 #     "anthropic",
 #     "anyio",
+#     "pydantic",
+#     "python-dotenv",
 # ]
 # ///
 # Run with: uv run benchmark.py (or PYTHONUNBUFFERED=1 uv run benchmark.py for live output)
@@ -22,6 +24,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -29,11 +32,28 @@ import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import anyio
 import anthropic
+from dotenv import load_dotenv
+from pydantic import BaseModel
 
 from tasks import TASKS, LARGE_FILE_TASKS
+
+# Load .env from script directory
+load_dotenv(Path(__file__).parent / ".env")
+
+# ============================================================================
+# Logging (thread-safe)
+# ============================================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
 # ============================================================================
 # Configuration
@@ -65,6 +85,8 @@ class TaskResult:
     latency_ms: int
     error: str | None = None
     response_text: str | None = None
+    grade: str | None = None  # A/B/C/D/F letter grade
+    grade_reasoning: str | None = None  # Brief explanation from grader
 
 
 @dataclass
@@ -81,6 +103,60 @@ class BenchmarkResults:
             "sample_file": self.sample_file,
             "results": [asdict(r) for r in self.results],
         }
+
+
+# ============================================================================
+# Grading (Opus 4.5 with Structured Output)
+# ============================================================================
+
+
+class GradeResult(BaseModel):
+    """Structured grading result from Opus 4.5."""
+    grade: Literal["A", "B", "C", "D", "F"]
+    reason: str
+
+
+async def grade_response(
+    client: anthropic.AsyncAnthropic,
+    task: dict,
+    response_text: str,
+) -> tuple[str, str]:
+    """Grade a task response using Opus 4.5 with structured output.
+
+    Returns: (letter_grade, reasoning)
+    """
+    grading_prompt = f"""You are grading an AI's response to an Excel analysis task.
+
+TASK: {task['name']}
+PROMPT: {task.get('xl_prompt', task.get('xlsx_prompt', ''))}
+
+EXPECTED ANSWER (ground truth):
+{task.get('expected_answer', 'No expected answer provided')}
+
+AI'S ACTUAL RESPONSE:
+{response_text}
+
+Grade the response on correctness:
+- A: Fully correct, all key information present
+- B: Mostly correct, minor details missing or slight inaccuracies
+- C: Partially correct, some key information wrong or missing
+- D: Mostly incorrect, but shows some understanding
+- F: Completely wrong or didn't answer the question"""
+
+    try:
+        response = await client.beta.messages.parse(
+            model="claude-opus-4-5-20251101",
+            max_tokens=256,
+            betas=["structured-outputs-2025-11-13"],
+            messages=[{"role": "user", "content": grading_prompt}],
+            output_format=GradeResult,
+        )
+
+        result = response.parsed_output
+        return result.grade, result.reason
+    except Exception as e:
+        log.warning(f"Grading failed: {e}")
+        return "?", f"Grading error: {e}"
 
 
 # ============================================================================
@@ -231,7 +307,7 @@ Use xl commands to complete the task. Be concise in your response."""
             output_tokens=response.usage.output_tokens,
             total_tokens=response.usage.input_tokens + response.usage.output_tokens,
             latency_ms=latency_ms,
-            response_text=response_text[:500] if response_text else None,
+            response_text=response_text or None,
         )
 
     except Exception as e:
@@ -296,7 +372,7 @@ Use Python with openpyxl to complete the task. Be concise in your response."""
             output_tokens=response.usage.output_tokens,
             total_tokens=response.usage.input_tokens + response.usage.output_tokens,
             latency_ms=latency_ms,
-            response_text=response_text[:500] if response_text else None,
+            response_text=response_text or None,
         )
 
     except Exception as e:
@@ -320,23 +396,34 @@ Use Python with openpyxl to complete the task. Be concise in your response."""
 
 
 def print_comparison_table(results: list[TaskResult]):
-    """Print a formatted comparison table."""
+    """Print a formatted comparison table with grades."""
     tasks = {}
     for r in results:
         if r.task_id not in tasks:
             tasks[r.task_id] = {"name": r.task_name}
         tasks[r.task_id][r.approach] = r
 
-    print("\n" + "=" * 100)
+    # Check if any results have grades
+    has_grades = any(r.grade for r in results)
+
+    print("\n" + "=" * 120)
     print("TOKEN EFFICIENCY COMPARISON: xl CLI vs Anthropic xlsx Skill")
-    print("=" * 100)
-    print(
-        f"{'Task':<20} | {'xl Input':>10} | {'xl Output':>10} | {'xlsx Input':>11} | {'xlsx Output':>12} | {'Winner':>8} | {'Savings':>8}"
-    )
-    print("-" * 100)
+    print("=" * 120)
+
+    if has_grades:
+        print(
+            f"{'Task':<20} | {'xl Tokens':>10} | {'xl Grade':>8} | {'xlsx Tokens':>11} | {'xlsx Grade':>10} | {'Winner':>8} | {'Savings':>8}"
+        )
+    else:
+        print(
+            f"{'Task':<20} | {'xl Input':>10} | {'xl Output':>10} | {'xlsx Input':>11} | {'xlsx Output':>12} | {'Winner':>8} | {'Savings':>8}"
+        )
+    print("-" * 120)
 
     total_xl_input = total_xl_output = total_xlsx_input = total_xlsx_output = 0
     xl_wins = xlsx_wins = 0
+    xl_grades = []
+    xlsx_grades = []
 
     for task_id, data in tasks.items():
         xl = data.get("xl")
@@ -348,6 +435,11 @@ def print_comparison_table(results: list[TaskResult]):
             total_xlsx_input += xlsx.input_tokens
             total_xlsx_output += xlsx.output_tokens
 
+            if xl.grade:
+                xl_grades.append(xl.grade)
+            if xlsx.grade:
+                xlsx_grades.append(xlsx.grade)
+
             if xl.total_tokens < xlsx.total_tokens:
                 winner, savings = "xl", f"-{((xlsx.total_tokens - xl.total_tokens) / xlsx.total_tokens * 100):.0f}%"
                 xl_wins += 1
@@ -357,21 +449,37 @@ def print_comparison_table(results: list[TaskResult]):
             else:
                 winner, savings = "tie", "0%"
 
-            print(
-                f"{data['name']:<20} | {xl.input_tokens:>10,} | {xl.output_tokens:>10,} | "
-                f"{xlsx.input_tokens:>11,} | {xlsx.output_tokens:>12,} | {winner:>8} | {savings:>8}"
-            )
+            if has_grades:
+                xl_grade_str = xl.grade or "-"
+                xlsx_grade_str = xlsx.grade or "-"
+                print(
+                    f"{data['name']:<20} | {xl.total_tokens:>10,} | {xl_grade_str:>8} | "
+                    f"{xlsx.total_tokens:>11,} | {xlsx_grade_str:>10} | {winner:>8} | {savings:>8}"
+                )
+            else:
+                print(
+                    f"{data['name']:<20} | {xl.input_tokens:>10,} | {xl.output_tokens:>10,} | "
+                    f"{xlsx.input_tokens:>11,} | {xlsx.output_tokens:>12,} | {winner:>8} | {savings:>8}"
+                )
         else:
-            xl_in = xl.input_tokens if xl and xl.success else "ERR"
-            xl_out = xl.output_tokens if xl and xl.success else "ERR"
-            xlsx_in = xlsx.input_tokens if xlsx and xlsx.success else "ERR"
-            xlsx_out = xlsx.output_tokens if xlsx and xlsx.success else "ERR"
-            print(
-                f"{data['name']:<20} | {str(xl_in):>10} | {str(xl_out):>10} | "
-                f"{str(xlsx_in):>11} | {str(xlsx_out):>12} | {'N/A':>8} | {'N/A':>8}"
-            )
+            xl_tok = xl.total_tokens if xl and xl.success else "ERR"
+            xlsx_tok = xlsx.total_tokens if xlsx and xlsx.success else "ERR"
+            if has_grades:
+                print(
+                    f"{data['name']:<20} | {str(xl_tok):>10} | {'-':>8} | "
+                    f"{str(xlsx_tok):>11} | {'-':>10} | {'N/A':>8} | {'N/A':>8}"
+                )
+            else:
+                xl_in = xl.input_tokens if xl and xl.success else "ERR"
+                xl_out = xl.output_tokens if xl and xl.success else "ERR"
+                xlsx_in = xlsx.input_tokens if xlsx and xlsx.success else "ERR"
+                xlsx_out = xlsx.output_tokens if xlsx and xlsx.success else "ERR"
+                print(
+                    f"{data['name']:<20} | {str(xl_in):>10} | {str(xl_out):>10} | "
+                    f"{str(xlsx_in):>11} | {str(xlsx_out):>12} | {'N/A':>8} | {'N/A':>8}"
+                )
 
-    print("-" * 100)
+    print("-" * 120)
 
     total_xl = total_xl_input + total_xl_output
     total_xlsx = total_xlsx_input + total_xlsx_output
@@ -384,12 +492,39 @@ def print_comparison_table(results: list[TaskResult]):
             overall_winner = "xlsx"
             overall_savings = f"-{((total_xl - total_xlsx) / total_xl * 100):.1f}%"
 
-        print(
-            f"{'TOTAL':<20} | {total_xl_input:>10,} | {total_xl_output:>10,} | "
-            f"{total_xlsx_input:>11,} | {total_xlsx_output:>12,} | {overall_winner:>8} | {overall_savings:>8}"
-        )
+        if has_grades:
+            # Calculate average grade (A=4, B=3, C=2, D=1, F=0)
+            def grade_to_num(g: str) -> int:
+                return {"A": 4, "B": 3, "C": 2, "D": 1, "F": 0}.get(g, -1)
 
-    print("=" * 100)
+            def avg_grade(grades: list[str]) -> str:
+                valid = [grade_to_num(g) for g in grades if grade_to_num(g) >= 0]
+                if not valid:
+                    return "-"
+                avg = sum(valid) / len(valid)
+                if avg >= 3.5:
+                    return "A"
+                elif avg >= 2.5:
+                    return "B"
+                elif avg >= 1.5:
+                    return "C"
+                elif avg >= 0.5:
+                    return "D"
+                return "F"
+
+            xl_avg = avg_grade(xl_grades)
+            xlsx_avg = avg_grade(xlsx_grades)
+            print(
+                f"{'TOTAL':<20} | {total_xl:>10,} | {xl_avg:>8} | "
+                f"{total_xlsx:>11,} | {xlsx_avg:>10} | {overall_winner:>8} | {overall_savings:>8}"
+            )
+        else:
+            print(
+                f"{'TOTAL':<20} | {total_xl_input:>10,} | {total_xl_output:>10,} | "
+                f"{total_xlsx_input:>11,} | {total_xlsx_output:>12,} | {overall_winner:>8} | {overall_savings:>8}"
+            )
+
+    print("=" * 120)
     print(f"\nSummary: xl wins {xl_wins} tasks, xlsx wins {xlsx_wins} tasks")
     print(f"Total tokens: xl={total_xl:,}, xlsx={total_xlsx:,}")
 
@@ -397,6 +532,14 @@ def print_comparison_table(results: list[TaskResult]):
         print(f"xl CLI uses {((total_xlsx - total_xl) / total_xlsx * 100):.1f}% fewer tokens overall")
     elif total_xlsx < total_xl:
         print(f"Anthropic xlsx uses {((total_xl - total_xlsx) / total_xl * 100):.1f}% fewer tokens overall")
+
+    # Print grade summary if available
+    if has_grades and xl_grades and xlsx_grades:
+        print(f"\nGrade distribution:")
+        for approach, grades in [("xl", xl_grades), ("xlsx", xlsx_grades)]:
+            counts = {g: grades.count(g) for g in "ABCDF" if grades.count(g) > 0}
+            grade_str = ", ".join(f"{g}:{c}" for g, c in sorted(counts.items()))
+            print(f"  {approach}: {grade_str}")
 
 
 # ============================================================================
@@ -409,52 +552,72 @@ async def run_benchmark(
     xl_only: bool,
     xlsx_only: bool,
     parallel: bool,
+    enable_grading: bool,
 ) -> list[TaskResult]:
     """Run benchmark tasks, optionally in parallel."""
     # Sync client for setup (file uploads)
     sync_client = anthropic.Anthropic()
 
-    print("\n1. Setting up...")
+    log.info("Setting up...")
 
     # Upload Excel file
-    print("   Uploading sample.xlsx...")
+    log.info("Uploading sample.xlsx...")
     with open(SAMPLE_PATH, "rb") as f:
         excel_file = sync_client.beta.files.upload(file=f, betas=["files-api-2025-04-14"])
-    print(f"   Uploaded: {excel_file.id}")
+    log.info(f"Uploaded: {excel_file.id}")
 
     xl_skill_id = None
     binary_file_id = None
 
     if not xlsx_only:
         binary_path, skill_path = download_release_assets()
-        print("   Setting up xl-cli skill...")
+        log.info("Setting up xl-cli skill...")
         xl_skill_id = get_or_create_xl_skill(sync_client, skill_path)
 
-        print(f"   Uploading {binary_path.name}...")
+        log.info(f"Uploading {binary_path.name}...")
         with open(binary_path, "rb") as f:
             binary_file = sync_client.beta.files.upload(file=f, betas=["files-api-2025-04-14"])
         binary_file_id = binary_file.id
-        print(f"   Uploaded: {binary_file_id}")
+        log.info(f"Uploaded: {binary_file_id}")
 
-    # Async client for benchmark runs
+    # Async client for benchmark runs and grading
     async_client = anthropic.AsyncAnthropic()
 
-    print(f"\n2. Running benchmarks ({'parallel' if parallel else 'sequential'})...\n")
+    log.info(f"Running benchmarks ({'parallel' if parallel else 'sequential'}, grading={'on' if enable_grading else 'off'})...")
+
+    async def run_and_grade(task: dict, approach: str, runner_coro) -> TaskResult:
+        """Run a task and optionally grade the response."""
+        result = await runner_coro
+
+        # Grade the response if enabled and task succeeded
+        if enable_grading and result.success and result.response_text:
+            grade, reason = await grade_response(async_client, task, result.response_text)
+            result.grade = grade
+            result.grade_reasoning = reason
+            grade_str = f" [{grade}]"
+        else:
+            grade_str = ""
+
+        status = "OK" if result.success else f"ERR: {result.error}"
+        log.info(f"[{task['name']}] {approach}: {result.input_tokens:,} in / {result.output_tokens:,} out ({status}){grade_str}")
+        return result
 
     async def run_task_pair(task: dict) -> list[TaskResult]:
         """Run both xl and xlsx for a single task."""
         results = []
         if not xlsx_only:
-            result = await run_xl_task(async_client, xl_skill_id, binary_file_id, excel_file.id, task)
+            result = await run_and_grade(
+                task, "xl",
+                run_xl_task(async_client, xl_skill_id, binary_file_id, excel_file.id, task)
+            )
             results.append(result)
-            status = "OK" if result.success else f"ERR: {result.error}"
-            print(f"   [{task['name']}] xl: {result.input_tokens:,} in / {result.output_tokens:,} out ({status})")
 
         if not xl_only:
-            result = await run_xlsx_task(async_client, excel_file.id, task)
+            result = await run_and_grade(
+                task, "xlsx",
+                run_xlsx_task(async_client, excel_file.id, task)
+            )
             results.append(result)
-            status = "OK" if result.success else f"ERR: {result.error}"
-            print(f"   [{task['name']}] xlsx: {result.input_tokens:,} in / {result.output_tokens:,} out ({status})")
 
         return results
 
@@ -476,10 +639,9 @@ async def run_benchmark(
     else:
         # Run sequentially
         for i, task in enumerate(tasks, 1):
-            print(f"[{i}/{len(tasks)}] {task['name']}")
+            log.info(f"[{i}/{len(tasks)}] {task['name']}")
             results = await run_task_pair(task)
             all_results.extend(results)
-            print()
 
     return all_results
 
@@ -491,18 +653,19 @@ def main():
     parser.add_argument("--xl-only", action="store_true", help="Only run xl CLI tests")
     parser.add_argument("--xlsx-only", action="store_true", help="Only run xlsx skill tests")
     parser.add_argument("--sequential", action="store_true", help="Run tasks sequentially (default: parallel)")
+    parser.add_argument("--no-grade", action="store_true", help="Skip correctness grading with Opus 4.5")
     parser.add_argument("--output", help="Output file for JSON results")
     args = parser.parse_args()
 
     # Validate prerequisites
     if not SAMPLE_PATH.exists():
-        print(f"Sample file not found: {SAMPLE_PATH}", file=sys.stderr)
-        print("  Generate it: scala-cli run examples/anthropic-sdk/create_sample.sc", file=sys.stderr)
+        log.error(f"Sample file not found: {SAMPLE_PATH}")
+        log.error("  Generate it: scala-cli run examples/anthropic-sdk/create_sample.sc")
         sys.exit(1)
 
     if not os.getenv("ANTHROPIC_API_KEY"):
-        print("ANTHROPIC_API_KEY not found", file=sys.stderr)
-        print("  Set it as environment variable or in .env file", file=sys.stderr)
+        log.error("ANTHROPIC_API_KEY not found")
+        log.error("  Set it as environment variable or in .env file")
         sys.exit(1)
 
     print("=" * 60)
@@ -516,10 +679,11 @@ def main():
     if args.task:
         tasks = [t for t in tasks if t["id"] == args.task]
         if not tasks:
-            print(f"Task '{args.task}' not found", file=sys.stderr)
+            log.error(f"Task '{args.task}' not found")
             sys.exit(1)
 
-    print(f"\nRunning {len(tasks)} tasks...")
+    grading_status = "off" if args.no_grade else "on (Opus 4.5)"
+    log.info(f"Running {len(tasks)} tasks, grading: {grading_status}")
 
     # Run benchmark
     results = anyio.run(
@@ -528,6 +692,7 @@ def main():
         args.xl_only,
         args.xlsx_only,
         not args.sequential,
+        not args.no_grade,  # enable_grading
     )
 
     # Print comparison

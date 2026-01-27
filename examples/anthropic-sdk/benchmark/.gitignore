@@ -10,3 +10,6 @@ results/
 __pycache__/
 *.pyc
 .venv/
+
+# Environment
+.env
