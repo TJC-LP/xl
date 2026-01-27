@@ -38,31 +38,54 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     args: List[NumericArg],
     ctx: EvalContext
   ): Either[EvalError, BigDecimal] =
+    // GH-187: Helper to extract numeric value, evaluating uncached formulas if needed
+    def extractOrEvalNumeric(
+      cellValue: CellValue,
+      targetSheet: com.tjclp.xl.sheets.Sheet
+    ): Either[EvalError, Option[BigDecimal]] =
+      cellValue match
+        case CellValue.Formula(formulaStr, None) =>
+          // Recursively evaluate uncached formula
+          Evaluator
+            .evalCrossSheetFormula(formulaStr, targetSheet, ctx.clock, ctx.workbook)
+            .map {
+              case CellValue.Number(n) => Some(n)
+              case _ => None // Non-numeric result, skip
+            }
+        case _ =>
+          // Fall back to standard extraction
+          Right(extractNumericValue(cellValue))
+
     // Collect all numeric values from both ranges and individual expressions
     val valuesResult: Either[EvalError, Vector[BigDecimal]] =
       args.foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
         case (Left(err), _) => Left(err)
         case (Right(acc), Left(location)) =>
           // Range argument - extract all numeric values from cells
-          Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map { targetSheet =>
-            val rangeValues = location.range.cells.flatMap { cellRef =>
-              val cellValue = targetSheet(cellRef).value
-              // Handle different cell types for aggregation
-              if agg.countsNonEmpty then
-                // COUNTA mode: count any non-empty cell
-                cellValue match
-                  case CellValue.Empty => None
-                  case _ => Some(BigDecimal(1))
-              else if agg.countsEmpty then
-                // COUNTBLANK mode: count only empty cells
-                cellValue match
-                  case CellValue.Empty => Some(BigDecimal(1))
-                  case _ => None
-              else
-                // Standard numeric mode: extract numeric values
-                extractNumericValue(cellValue)
-            }.toVector
-            acc ++ rangeValues
+          Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap { targetSheet =>
+            // GH-187: Use fold to handle potential errors from formula evaluation
+            location.range.cells.foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(acc)) {
+              case (Left(err), _) => Left(err)
+              case (Right(values), cellRef) =>
+                val cellValue = targetSheet(cellRef).value
+                // Handle different cell types for aggregation
+                if agg.countsNonEmpty then
+                  // COUNTA mode: count any non-empty cell
+                  cellValue match
+                    case CellValue.Empty => Right(values)
+                    case _ => Right(values :+ BigDecimal(1))
+                else if agg.countsEmpty then
+                  // COUNTBLANK mode: count only empty cells
+                  cellValue match
+                    case CellValue.Empty => Right(values :+ BigDecimal(1))
+                    case _ => Right(values)
+                else
+                  // Standard numeric mode: extract or evaluate formulas
+                  extractOrEvalNumeric(cellValue, targetSheet).map {
+                    case Some(n) => values :+ n
+                    case None => values
+                  }
+            }
           }
         case (Right(acc), Right(expr)) =>
           // Individual numeric expression - evaluate it

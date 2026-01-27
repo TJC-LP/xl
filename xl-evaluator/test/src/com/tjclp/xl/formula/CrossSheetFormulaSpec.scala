@@ -712,3 +712,79 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
         )
       case _ => fail("Expected Left with parse error")
   }
+
+  // ===== GH-187: SUM/Aggregate of uncached formula cells =====
+
+  test("GH-187: SUM of uncached formula cells") {
+    val sales = sheetWith(
+      "Sales",
+      ref"A1" -> CellValue.Formula("10", None),
+      ref"A2" -> CellValue.Formula("20", None),
+      ref"A3" -> CellValue.Formula("30", None)
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, sales)
+
+    val result = main.evaluateFormula("=SUM(Sales!A1:A3)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(60))))
+  }
+
+  test("GH-187: SUM of mixed cached and uncached formula cells") {
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"A2" -> CellValue.Formula("20", None), // Uncached
+      ref"A3" -> CellValue.Formula("=30", Some(CellValue.Number(BigDecimal(30)))), // Cached
+      ref"A4" -> CellValue.Formula("40", None) // Uncached
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    val result = main.evaluateFormula("=SUM(Data!A1:A4)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(100))))
+  }
+
+  test("GH-187: AVERAGE of uncached formula cells") {
+    val vals = sheetWith(
+      "Values",
+      ref"A1" -> CellValue.Formula("10", None),
+      ref"A2" -> CellValue.Formula("20", None),
+      ref"A3" -> CellValue.Formula("30", None)
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, vals)
+
+    val result = main.evaluateFormula("=AVERAGE(Values!A1:A3)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(20))))
+  }
+
+  test("GH-187: cross-sheet SUM with nested formula references") {
+    // A1 contains formula referencing B1, B1 contains uncached formula
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("B1*2", None), // References B1
+      ref"A2" -> CellValue.Formula("B2*2", None), // References B2
+      ref"B1" -> CellValue.Number(BigDecimal(5)),
+      ref"B2" -> CellValue.Number(BigDecimal(10))
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    // SUM(A1:A2) = (5*2) + (10*2) = 10 + 20 = 30
+    val result = main.evaluateFormula("=SUM(Data!A1:A2)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(30))))
+  }
+
+  test("GH-187: same-sheet SUM of uncached formula cells") {
+    // Also verify the fix works for same-sheet aggregates
+    val sheet = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Formula("10", None),
+      ref"A2" -> CellValue.Formula("20", None),
+      ref"A3" -> CellValue.Formula("30", None)
+    )
+    val wb = workbookWith(sheet)
+
+    val result = sheet.evaluateFormula("=SUM(A1:A3)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(60))))
+  }
