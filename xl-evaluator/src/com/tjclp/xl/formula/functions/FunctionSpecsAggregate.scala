@@ -234,12 +234,18 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   val countif: FunctionSpec[BigDecimal] { type Args = CountIfArgs } =
     FunctionSpec.simple[BigDecimal, CountIfArgs]("COUNTIF", Arity.two) { (args, ctx) =>
       val (range, criteria) = args
-      evalValue(ctx, criteria).map { criteriaValue =>
+      evalValue(ctx, criteria).flatMap { criteriaValue =>
         val criterion = CriteriaMatcher.parse(criteriaValue)
-        val count = range.cells.count { ref =>
-          CriteriaMatcher.matches(ctx.sheet(ref).value, criterion)
-        }
-        BigDecimal(count)
+        // GH-187: Use fold to handle uncached formula evaluation in criteria range
+        range.cells.toList
+          .foldLeft[Either[EvalError, Int]](Right(0)) {
+            case (Left(err), _) => Left(err)
+            case (Right(count), ref) =>
+              evalCellValueForMatch(ctx.sheet(ref).value, ctx.sheet, ctx).map { testValue =>
+                if CriteriaMatcher.matches(testValue, criterion) then count + 1 else count
+              }
+          }
+          .map(BigDecimal(_))
       }
     }
 
@@ -313,13 +319,28 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 dimensionError match
                   case Some(err) => Left(err)
                   case None =>
-                    val count = (0 until refCount).count { idx =>
-                      parsedConditions.forall { case (criteriaRange, criterion) =>
-                        val testRef = criteriaRange.cells.toList(idx)
-                        CriteriaMatcher.matches(ctx.sheet(testRef).value, criterion)
+                    // GH-187: Use fold to handle uncached formula evaluation in criteria ranges
+                    (0 until refCount)
+                      .foldLeft[Either[EvalError, Int]](Right(0)) {
+                        case (Left(err), _) => Left(err)
+                        case (Right(count), idx) =>
+                          // Check all conditions, evaluating uncached formulas in test cells
+                          val matchResult =
+                            parsedConditions.foldLeft[Either[EvalError, Boolean]](Right(true)) {
+                              case (Left(err), _) => Left(err)
+                              case (Right(false), _) => Right(false) // Short-circuit
+                              case (Right(true), (criteriaRange, criterion)) =>
+                                val testRef = criteriaRange.cells.toList(idx)
+                                evalCellValueForMatch(ctx.sheet(testRef).value, ctx.sheet, ctx)
+                                  .map { testValue =>
+                                    CriteriaMatcher.matches(testValue, criterion)
+                                  }
+                            }
+                          matchResult.map { allMatch =>
+                            if allMatch then count + 1 else count
+                          }
                       }
-                    }
-                    Right(BigDecimal(count))
+                      .map(BigDecimal(_))
               case Nil =>
                 Right(BigDecimal(0))
           }

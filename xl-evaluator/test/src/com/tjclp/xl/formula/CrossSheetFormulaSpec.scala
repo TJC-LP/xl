@@ -923,3 +923,37 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     val result = sheet.evaluateFormula("=SUMPRODUCT(A1:A2, B1:B2)", workbook = Some(wb))
     assertEquals(result, Right(CellValue.Number(BigDecimal(80))))
   }
+
+  test("GH-187: COUNTIF with uncached formula in criteria range") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("100", None),
+      ref"A2" -> CellValue.Formula("50", None),
+      ref"A3" -> CellValue.Formula("200", None)
+    )
+    val wb = workbookWith(sheet)
+
+    // Count where A > 60 (A1=100, A3=200 match, so count = 2)
+    val result = sheet.evaluateFormula("=COUNTIF(A1:A3, \">60\")", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(2))))
+  }
+
+  test("GH-187: COUNTIFS with uncached formula in criteria ranges") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("100", None),
+      ref"A2" -> CellValue.Formula("200", None),
+      ref"A3" -> CellValue.Formula("100", None),
+      ref"B1" -> CellValue.Text("East"),
+      ref"B2" -> CellValue.Text("West"),
+      ref"B3" -> CellValue.Text("East")
+    )
+    val wb = workbookWith(sheet)
+
+    // Count where A >= 100 and B = "East" (rows 1 and 3 match, so count = 2)
+    val result = sheet.evaluateFormula(
+      "=COUNTIFS(A1:A3, \">=100\", B1:B3, \"East\")",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(2))))
+  }
