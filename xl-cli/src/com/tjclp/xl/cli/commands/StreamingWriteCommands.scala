@@ -8,6 +8,7 @@ import cats.effect.IO
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, ParseError}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
@@ -418,7 +419,9 @@ object StreamingWriteCommands:
 
       // Read and parse batch input
       input <- BatchParser.readBatchInput(batchSource)
-      ops <- BatchParser.parseBatchOperations(input)
+      parseResult <- BatchParser.parseBatchOperations(input)
+      _ <- IO(parseResult.warnings.foreach(System.err.println))
+      ops = parseResult.ops
 
       // Separate operations into cell patches vs worksheet metadata
       (cellPatches, stylesXml, worksheetMetadata, summary) <-
@@ -518,7 +521,7 @@ object StreamingWriteCommands:
           summaryLines += s"  PUTF $refStr = $formula"
 
         case BatchParser.BatchOp.PutFormulaDragging(rangeStr, formula, fromRef) =>
-          // For streaming mode, apply formula dragging inline
+          // Parse formula and apply with shifting (same as non-streaming batch mode)
           val fromARef = ARef.parse(fromRef) match
             case Right(r) => r
             case Left(e) => throw new Exception(s"Invalid 'from' ref '$fromRef': $e")
@@ -527,15 +530,30 @@ object StreamingWriteCommands:
             case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
           val formulaText = if formula.startsWith("=") then formula.drop(1) else formula
           val fullFormula = s"=$formulaText"
-          // Note: In streaming mode, we can't parse/shift formulas without loading formula parser
-          // Just apply the base formula to each cell (no shifting in streaming mode)
-          range.cells.foreach { ref =>
-            cellPatches(ref) = StreamingTransform.CellPatch.SetValue(
-              CellValue.Formula(formulaText, None),
+
+          // Parse formula for shifting
+          val parsedExpr = FormulaParser.parse(fullFormula) match
+            case Right(expr) => expr
+            case Left(e) =>
+              throw new Exception(
+                s"Invalid formula '$fullFormula': ${ParseError.formatWithContext(e, fullFormula)}"
+              )
+
+          // Apply formula with shifting
+          val startCol = Column.index0(fromARef.col)
+          val startRow = Row.index0(fromARef.row)
+
+          range.cells.foreach { targetRef =>
+            val colDelta = Column.index0(targetRef.col) - startCol
+            val rowDelta = Row.index0(targetRef.row) - startRow
+            val shiftedExpr = FormulaShifter.shift(parsedExpr, colDelta, rowDelta)
+            val shiftedFormula = FormulaPrinter.print(shiftedExpr, includeEquals = false)
+            cellPatches(targetRef) = StreamingTransform.CellPatch.SetValue(
+              CellValue.Formula(shiftedFormula, None),
               preserveStyle = true
             )
           }
-          summaryLines += s"  PUTF $rangeStr = $formula (from $fromRef)"
+          summaryLines += s"  PUTF $rangeStr = $formula (from $fromRef, ${range.cells.size} formulas)"
 
         case BatchParser.BatchOp.PutFormulas(rangeStr, formulas) =>
           val range = CellRange.parse(rangeStr) match

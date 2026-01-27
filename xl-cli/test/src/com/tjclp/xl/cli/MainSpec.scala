@@ -243,7 +243,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", CellValue.Text("foo{bar}baz"), None)))
+    assertEquals(result.toOption.get.ops, Vector(BatchOp.Put("A1", CellValue.Text("foo{bar}baz"), None)))
   }
 
   test("parseBatchJson: handles JSON object syntax in string values (GH-67 regression)") {
@@ -253,7 +253,7 @@ class MainSpec extends CatsEffectSuite:
 
     assert(result.isRight, s"Should parse: $result")
     assertEquals(
-      result.toOption.get,
+      result.toOption.get.ops,
       Vector(BatchOp.Put("A1", CellValue.Text("{\"nested\": \"json\"}"), None))
     )
   }
@@ -264,7 +264,7 @@ class MainSpec extends CatsEffectSuite:
 
     assert(result.isRight, s"Should parse: $result")
     assertEquals(
-      result.toOption.get,
+      result.toOption.get.ops,
       Vector(BatchOp.Put("A1", CellValue.Text("He said \"hello\""), None))
     )
   }
@@ -274,7 +274,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", CellValue.Text("日本語 emoji: 🎉"), None)))
+    assertEquals(result.toOption.get.ops, Vector(BatchOp.Put("A1", CellValue.Text("日本語 emoji: 🎉"), None)))
   }
 
   test("parseBatchJson: handles native JSON numbers") {
@@ -282,7 +282,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", CellValue.Number(BigDecimal("12345.67")), None)))
+    assertEquals(result.toOption.get.ops, Vector(BatchOp.Put("A1", CellValue.Number(BigDecimal("12345.67")), None)))
   }
 
   test("parseBatchJson: handles native JSON booleans") {
@@ -291,7 +291,7 @@ class MainSpec extends CatsEffectSuite:
 
     assert(result.isRight, s"Should parse: $result")
     assertEquals(
-      result.toOption.get,
+      result.toOption.get.ops,
       Vector(BatchOp.Put("A1", CellValue.Bool(true), None), BatchOp.Put("A2", CellValue.Bool(false), None))
     )
   }
@@ -301,7 +301,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Put("A1", CellValue.Empty, None)))
+    assertEquals(result.toOption.get.ops, Vector(BatchOp.Put("A1", CellValue.Empty, None)))
   }
 
   test("parseBatchJson: provides clear error for invalid JSON") {
@@ -388,7 +388,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val ops = result.toOption.get
+    val ops = result.toOption.get.ops
     assertEquals(ops.size, 1)
     ops.head match
       case BatchOp.Style(range, props) =>
@@ -405,7 +405,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Merge("A1:D1")))
+    assertEquals(result.toOption.get.ops, Vector(BatchOp.Merge("A1:D1")))
   }
 
   test("parseBatchJson: parses unmerge operation") {
@@ -413,7 +413,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.Unmerge("A1:D1")))
+    assertEquals(result.toOption.get.ops, Vector(BatchOp.Unmerge("A1:D1")))
   }
 
   test("parseBatchJson: parses colwidth operation") {
@@ -421,7 +421,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.ColWidth("A", 15.5)))
+    assertEquals(result.toOption.get.ops, Vector(BatchOp.ColWidth("A", 15.5)))
   }
 
   test("parseBatchJson: parses rowheight operation") {
@@ -429,7 +429,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get, Vector(BatchOp.RowHeight(1, 30.0)))
+    assertEquals(result.toOption.get.ops, Vector(BatchOp.RowHeight(1, 30.0)))
   }
 
   test("batch: style operation applies formatting") {
@@ -610,7 +610,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Currency)) =>
         assertEquals(ref, "A1")
@@ -623,7 +623,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Percent)) =>
         assertEquals(n, BigDecimal("0.594"))
@@ -635,7 +635,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Custom(code))) =>
         assertEquals(code, "0.0x")
@@ -648,7 +648,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Currency)) =>
         assertEquals(n, BigDecimal("99.00"))
@@ -660,7 +660,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Percent)) =>
         assertEquals(n, BigDecimal("0.594"))
@@ -672,7 +672,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.Put(ref, CellValue.DateTime(dt), Some(NumFmt.Date)) =>
         assertEquals(dt.toLocalDate.toString, "2025-11-10")
@@ -684,7 +684,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.PutFormulaDragging(range, formula, from) =>
         assertEquals(range, "B2:B10")
@@ -698,7 +698,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.PutFormulas(range, formulas) =>
         assertEquals(range, "B2:B4")
@@ -711,7 +711,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.Put(ref, CellValue.Text(s), None) =>
         assertEquals(s, "Hello World")
@@ -746,7 +746,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.Put(ref, CellValue.Text(s), None) =>
         assertEquals(s, "$99.00")
@@ -759,7 +759,7 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    val op = result.toOption.get.head
+    val op = result.toOption.get.ops.head
     op match
       case BatchOp.Put(ref, CellValue.Number(n), Some(NumFmt.Currency)) =>
         assertEquals(n, BigDecimal("99.00"))

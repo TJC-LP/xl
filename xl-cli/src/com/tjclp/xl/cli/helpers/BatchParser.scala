@@ -80,6 +80,16 @@ object BatchParser:
     case RowHeight(row: Int, height: Double)
 
   /**
+   * Result of batch parsing with optional warnings.
+   *
+   * @param ops
+   *   Parsed batch operations
+   * @param warnings
+   *   Non-fatal warnings (e.g., unknown properties ignored)
+   */
+  final case class ParseResult(ops: Vector[BatchOp], warnings: Vector[String])
+
+  /**
    * Read batch input from file or stdin.
    *
    * @param source
@@ -106,9 +116,9 @@ object BatchParser:
    * @param input
    *   JSON string
    * @return
-   *   IO containing parsed operations
+   *   IO containing parsed result with operations and warnings
    */
-  def parseBatchOperations(input: String): IO[Vector[BatchOp]] =
+  def parseBatchOperations(input: String): IO[ParseResult] =
     IO.fromEither {
       val trimmed = input.trim
       if !trimmed.startsWith("[") then Left(new Exception("Batch input must be a JSON array"))
@@ -129,12 +139,16 @@ object BatchParser:
    *   - `colwidth`: {"op": "colwidth", "col": "A", "width": 15.5}
    *   - `rowheight`: {"op": "rowheight", "row": 1, "height": 30}
    */
-  def parseBatchJson(json: String): Either[Exception, Vector[BatchOp]] =
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def parseBatchJson(json: String): Either[Exception, ParseResult] =
     try
       val parsed = ujson.read(json)
       val arr = parsed.arrOpt.getOrElse(
         throw new Exception("Batch input must be a JSON array")
       )
+
+      // Collect warnings during parsing
+      val warnings = scala.collection.mutable.ListBuffer[String]()
 
       val ops = arr.value.toVector.zipWithIndex.map { case (obj, idx) =>
         val objMap = obj.objOpt.getOrElse(
@@ -154,7 +168,7 @@ object BatchParser:
 
         op match
           case "put" =>
-            warnUnknownProps(objMap, knownPutProps, "put", idx)
+            collectUnknownPropsWarning(objMap, knownPutProps, "put", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
             // detect defaults to true; set to false to disable smart detection
             val detect = objMap.get("detect").flatMap(_.boolOpt).getOrElse(true)
@@ -162,7 +176,7 @@ object BatchParser:
             BatchOp.Put(ref, parsed.cellValue, parsed.format)
 
           case "putf" =>
-            warnUnknownProps(objMap, knownPutfProps, "putf", idx)
+            collectUnknownPropsWarning(objMap, knownPutfProps, "putf", idx).foreach(warnings += _)
             val ref = requireString(objMap, "ref", idx)
             // Check for explicit formulas array first
             objMap.get("values") match
@@ -183,7 +197,7 @@ object BatchParser:
                   case None => BatchOp.PutFormula(ref, formula)
 
           case "style" =>
-            warnUnknownProps(objMap, knownStyleProps, "style", idx)
+            collectUnknownPropsWarning(objMap, knownStyleProps, "style", idx).foreach(warnings += _)
             val range = requireString(objMap, "range", idx)
             val props = parseStyleProps(objMap)
             BatchOp.Style(range, props)
@@ -213,7 +227,7 @@ object BatchParser:
             )
       }
 
-      Right(ops)
+      Right(ParseResult(ops, warnings.toVector))
     catch
       case e: ujson.ParseException =>
         Left(new Exception(s"JSON parse error: ${e.getMessage}"))
@@ -255,19 +269,20 @@ object BatchParser:
     "replace"
   )
 
-  /** Warn about unknown properties in a batch operation */
-  private def warnUnknownProps(
+  /** Collect warning about unknown properties in a batch operation (if any) */
+  private def collectUnknownPropsWarning(
     objMap: ObjMap,
     known: Set[String],
     opType: String,
     idx: Int
-  ): Unit =
+  ): Option[String] =
     val keys = objMap.keys.toSet
     val unknown = keys -- known
     if unknown.nonEmpty then
-      System.err.println(
+      Some(
         s"Warning: Object ${idx + 1} ($opType): unknown properties ignored: ${unknown.mkString(", ")}"
       )
+    else None
 
   // ========== Format Name Parsing ==========
 
