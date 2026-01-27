@@ -14,6 +14,60 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   // Import the ArgSpec for variadic numeric args
   protected given variadicNumeric: ArgSpec[List[NumericArg]] = ArgSpec.list[NumericArg]
 
+  // GH-187: Helper to extract numeric value, evaluating uncached formulas if needed.
+  // Moved to class level so it can be reused by conditional aggregates (SUMIF, SUMIFS, etc.)
+  private def extractOrEvalNumeric(
+    cellValue: CellValue,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, Option[BigDecimal]] =
+    cellValue match
+      case CellValue.Formula(formulaStr, None) =>
+        // Recursively evaluate uncached formula
+        Evaluator
+          .evalCrossSheetFormula(formulaStr, targetSheet, ctx.clock, ctx.workbook)
+          .map {
+            case CellValue.Number(n) => Some(n)
+            case _ => None // Non-numeric result, skip
+          }
+      case _ =>
+        // Fall back to standard extraction
+        Right(extractNumericValue(cellValue))
+
+  // GH-187: Helper to coerce cell value to numeric, evaluating uncached formulas if needed.
+  // Used by SUMPRODUCT which needs BigDecimal(0) for non-numeric values instead of None.
+  private def coerceToNumericWithEval(
+    cellValue: CellValue,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, BigDecimal] =
+    cellValue match
+      case CellValue.Formula(formulaStr, None) =>
+        // Recursively evaluate uncached formula
+        Evaluator
+          .evalCrossSheetFormula(formulaStr, targetSheet, ctx.clock, ctx.workbook)
+          .map(coerceToNumeric)
+      case _ =>
+        Right(coerceToNumeric(cellValue))
+
+  // GH-187: Helper to evaluate cell value for criteria matching.
+  // Evaluates uncached formulas before matching, returning the resolved CellValue.
+  private def evalCellValueForMatch(
+    cellValue: CellValue,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, CellValue] =
+    cellValue match
+      case CellValue.Formula(formulaStr, None) =>
+        // Recursively evaluate uncached formula
+        Evaluator
+          .evalCrossSheetFormula(formulaStr, targetSheet, ctx.clock, ctx.workbook)
+      case CellValue.Formula(_, Some(cached)) =>
+        // Use cached value
+        Right(cached)
+      case other =>
+        Right(other)
+
   /**
    * Create a variadic aggregate function spec.
    *
@@ -38,24 +92,6 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     args: List[NumericArg],
     ctx: EvalContext
   ): Either[EvalError, BigDecimal] =
-    // GH-187: Helper to extract numeric value, evaluating uncached formulas if needed
-    def extractOrEvalNumeric(
-      cellValue: CellValue,
-      targetSheet: com.tjclp.xl.sheets.Sheet
-    ): Either[EvalError, Option[BigDecimal]] =
-      cellValue match
-        case CellValue.Formula(formulaStr, None) =>
-          // Recursively evaluate uncached formula
-          Evaluator
-            .evalCrossSheetFormula(formulaStr, targetSheet, ctx.clock, ctx.workbook)
-            .map {
-              case CellValue.Number(n) => Some(n)
-              case _ => None // Non-numeric result, skip
-            }
-        case _ =>
-          // Fall back to standard extraction
-          Right(extractNumericValue(cellValue))
-
     // Collect all numeric values from both ranges and individual expressions
     val valuesResult: Either[EvalError, Vector[BigDecimal]] =
       args.foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
@@ -81,7 +117,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     case _ => Right(values)
                 else
                   // Standard numeric mode: extract or evaluate formulas
-                  extractOrEvalNumeric(cellValue, targetSheet).map {
+                  extractOrEvalNumeric(cellValue, targetSheet, ctx).map {
                     case Some(n) => values :+ n
                     case None => values
                   }
@@ -178,15 +214,20 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           )
         else
           val pairs = rangeRefsList.zip(sumRefsList)
-          val sum = pairs.foldLeft(BigDecimal(0)) { case (acc, (testRef, sumRef)) =>
-            val testCell = ctx.sheet(testRef)
-            if CriteriaMatcher.matches(testCell.value, criterion) then
-              ctx.sheet(sumRef).value match
-                case CellValue.Number(n) => acc + n
-                case _ => acc
-            else acc
+          // GH-187: Use fold to handle uncached formula evaluation in both test and sum ranges
+          pairs.foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+            case (Left(err), _) => Left(err)
+            case (Right(acc), (testRef, sumRef)) =>
+              // Evaluate test cell value (may be uncached formula)
+              evalCellValueForMatch(ctx.sheet(testRef).value, ctx.sheet, ctx).flatMap { testValue =>
+                if CriteriaMatcher.matches(testValue, criterion) then
+                  extractOrEvalNumeric(ctx.sheet(sumRef).value, ctx.sheet, ctx).map {
+                    case Some(n) => acc + n
+                    case None => acc
+                  }
+                else Right(acc)
+              }
           }
-          Right(sum)
       }
     }
 
@@ -221,18 +262,31 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           dimensionError match
             case Some(err) => Left(err)
             case None =>
-              val sum = sumRefsList.indices.foldLeft(BigDecimal(0)) { (acc, idx) =>
-                val allMatch = parsedConditions.forall { case (criteriaRange, criterion) =>
-                  val testRef = criteriaRange.cells.toList(idx)
-                  CriteriaMatcher.matches(ctx.sheet(testRef).value, criterion)
-                }
-                if allMatch then
-                  ctx.sheet(sumRefsList(idx)).value match
-                    case CellValue.Number(n) => acc + n
-                    case _ => acc
-                else acc
+              // GH-187: Use fold to handle uncached formula evaluation in both test and sum ranges
+              sumRefsList.indices.foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+                case (Left(err), _) => Left(err)
+                case (Right(acc), idx) =>
+                  // Check all conditions, evaluating uncached formulas in test cells
+                  val matchResult =
+                    parsedConditions.foldLeft[Either[EvalError, Boolean]](Right(true)) {
+                      case (Left(err), _) => Left(err)
+                      case (Right(false), _) => Right(false) // Short-circuit if already failed
+                      case (Right(true), (criteriaRange, criterion)) =>
+                        val testRef = criteriaRange.cells.toList(idx)
+                        evalCellValueForMatch(ctx.sheet(testRef).value, ctx.sheet, ctx).map {
+                          testValue =>
+                            CriteriaMatcher.matches(testValue, criterion)
+                        }
+                    }
+                  matchResult.flatMap { allMatch =>
+                    if allMatch then
+                      extractOrEvalNumeric(ctx.sheet(sumRefsList(idx)).value, ctx.sheet, ctx).map {
+                        case Some(n) => acc + n
+                        case None => acc
+                      }
+                    else Right(acc)
+                  }
               }
-              Right(sum)
         }
     }
 
@@ -289,18 +343,27 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           )
         else
           val pairs = rangeRefsList.zip(avgRefsList)
-          val (sum, count) = pairs.foldLeft((BigDecimal(0), 0)) {
-            case ((accSum, accCount), (testRef, avgRef)) =>
-              val testCell = ctx.sheet(testRef)
-              if CriteriaMatcher.matches(testCell.value, criterion) then
-                ctx.sheet(avgRef).value match
-                  case CellValue.Number(n) => (accSum + n, accCount + 1)
-                  case _ => (accSum, accCount)
-              else (accSum, accCount)
-          }
-          if count == 0 then
-            Left(EvalError.DivByZero("AVERAGEIF sum", "0 (no matching numeric cells)"))
-          else Right(sum / count)
+          // GH-187: Use fold to handle uncached formula evaluation in both test and average ranges
+          pairs
+            .foldLeft[Either[EvalError, (BigDecimal, Int)]](Right((BigDecimal(0), 0))) {
+              case (Left(err), _) => Left(err)
+              case (Right((accSum, accCount)), (testRef, avgRef)) =>
+                // Evaluate test cell value (may be uncached formula)
+                evalCellValueForMatch(ctx.sheet(testRef).value, ctx.sheet, ctx).flatMap {
+                  testValue =>
+                    if CriteriaMatcher.matches(testValue, criterion) then
+                      extractOrEvalNumeric(ctx.sheet(avgRef).value, ctx.sheet, ctx).map {
+                        case Some(n) => (accSum + n, accCount + 1)
+                        case None => (accSum, accCount)
+                      }
+                    else Right((accSum, accCount))
+                }
+            }
+            .flatMap { case (sum, count) =>
+              if count == 0 then
+                Left(EvalError.DivByZero("AVERAGEIF sum", "0 (no matching numeric cells)"))
+              else Right(sum / count)
+            }
       }
     }
 
@@ -323,21 +386,38 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           dimensionError match
             case Some(err) => Left(err)
             case None =>
-              val (sum, count) = avgRefsList.indices.foldLeft((BigDecimal(0), 0)) { (acc, idx) =>
-                val (accSum, accCount) = acc
-                val allMatch = parsedConditions.forall { case (criteriaRange, criterion) =>
-                  val testRef = criteriaRange.cells.toList(idx)
-                  CriteriaMatcher.matches(ctx.sheet(testRef).value, criterion)
+              // GH-187: Use fold to handle uncached formula evaluation in both test and average ranges
+              avgRefsList.indices
+                .foldLeft[Either[EvalError, (BigDecimal, Int)]](Right((BigDecimal(0), 0))) {
+                  case (Left(err), _) => Left(err)
+                  case (Right((accSum, accCount)), idx) =>
+                    // Check all conditions, evaluating uncached formulas in test cells
+                    val matchResult =
+                      parsedConditions.foldLeft[Either[EvalError, Boolean]](Right(true)) {
+                        case (Left(err), _) => Left(err)
+                        case (Right(false), _) => Right(false) // Short-circuit if already failed
+                        case (Right(true), (criteriaRange, criterion)) =>
+                          val testRef = criteriaRange.cells.toList(idx)
+                          evalCellValueForMatch(ctx.sheet(testRef).value, ctx.sheet, ctx).map {
+                            testValue =>
+                              CriteriaMatcher.matches(testValue, criterion)
+                          }
+                      }
+                    matchResult.flatMap { allMatch =>
+                      if allMatch then
+                        extractOrEvalNumeric(ctx.sheet(avgRefsList(idx)).value, ctx.sheet, ctx)
+                          .map {
+                            case Some(n) => (accSum + n, accCount + 1)
+                            case None => (accSum, accCount)
+                          }
+                      else Right((accSum, accCount))
+                    }
                 }
-                if allMatch then
-                  ctx.sheet(avgRefsList(idx)).value match
-                    case CellValue.Number(n) => (accSum + n, accCount + 1)
-                    case _ => (accSum, accCount)
-                else (accSum, accCount)
-              }
-              if count == 0 then
-                Left(EvalError.DivByZero("AVERAGEIFS sum", "0 (no matching numeric cells)"))
-              else Right(sum / count)
+                .flatMap { case (sum, count) =>
+                  if count == 0 then
+                    Left(EvalError.DivByZero("AVERAGEIFS sum", "0 (no matching numeric cells)"))
+                  else Right(sum / count)
+                }
         }
     }
 
@@ -364,14 +444,22 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 val cellLists = arrays.map(_.cells.toList)
                 val cellCount = cellLists.headOption.map(_.length).getOrElse(0)
 
-                val sum = (0 until cellCount).foldLeft(BigDecimal(0)) { (acc, idx) =>
-                  val values = cellLists.map { cells =>
-                    val ref = cells(idx)
-                    coerceToNumeric(ctx.sheet(ref).value)
-                  }
-                  val product = values.foldLeft(BigDecimal(1))(_ * _)
-                  acc + product
+                // GH-187: Use fold to handle uncached formula evaluation
+                (0 until cellCount).foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+                  case (Left(err), _) => Left(err)
+                  case (Right(acc), idx) =>
+                    // Evaluate each cell in the row, collecting values
+                    cellLists
+                      .foldLeft[Either[EvalError, List[BigDecimal]]](Right(List.empty)) {
+                        case (Left(err), _) => Left(err)
+                        case (Right(values), cells) =>
+                          val ref = cells(idx)
+                          coerceToNumericWithEval(ctx.sheet(ref).value, ctx.sheet, ctx)
+                            .map(n => values :+ n)
+                      }
+                      .map { values =>
+                        val product = values.foldLeft(BigDecimal(1))(_ * _)
+                        acc + product
+                      }
                 }
-
-                Right(sum)
     }
