@@ -60,9 +60,14 @@ repomix*
 *.xlsx
 ~$*.xlsx
 test-*.xlsx
+!examples/anthropic-sdk/sample.xlsx
 data
 
 ### Benchmark Logs ###
 *.log
 dist/
 tmp/
+
+# Anthropic SDK examples - downloaded binaries
+examples/anthropic-sdk/xl-linux-amd64
+examples/anthropic-sdk/xl-*-linux-amd64
