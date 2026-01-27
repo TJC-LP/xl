@@ -71,6 +71,7 @@ python examples/anthropic-sdk/xl_code_execution.py
 | `.env.example` | Template for API key configuration |
 | `.env` | Your API key (gitignored) |
 | `xl-linux-amd64` | Linux binary (downloaded from releases) |
+| `benchmark/` | Token efficiency benchmark (xl CLI vs Anthropic xlsx skill) |
 
 ## How It Works
 
@@ -161,8 +162,20 @@ cat examples/anthropic-sdk/.env
 - `anthropic`
 - `python-dotenv`
 
+## Token Efficiency Benchmark
+
+The `benchmark/` directory contains a benchmark comparing xl CLI vs Anthropic's built-in xlsx skill:
+
+```bash
+cd benchmark
+uv run benchmark.py  # Parallel execution, auto-downloads assets from GitHub
+```
+
+See [benchmark/README.md](benchmark/README.md) for details.
+
 ## Related Documentation
 
 - [XL CLI Skill](../../plugin/skills/xl-cli/SKILL.md) - Full xl CLI reference
 - [Anthropic Code Execution](https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/code-execution-tool) - API documentation
+- [Anthropic Skills API](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/using-skills) - Skills API documentation
 - [Anthropic Java SDK](https://github.com/anthropics/anthropic-sdk-java) - Java/Scala SDK

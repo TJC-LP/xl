@@ -1,0 +1,12 @@
+# Downloaded assets (auto-downloaded by benchmark.py)
+xl-*-linux-amd64
+xl-skill-*.zip
+large_sample.xlsx
+
+# Results (generated)
+results/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
