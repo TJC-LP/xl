@@ -78,7 +78,7 @@
 
 ### Test Coverage
 
-**800+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + TJC-351 cross-sheet formulas + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write + v0.3.0 regressions):
+**980+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + TJC-351 cross-sheet formulas + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write + v0.3.0 regressions):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)

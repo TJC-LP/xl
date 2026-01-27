@@ -581,6 +581,17 @@ cat <<'EOF' | xl -f input.xlsx -s Sheet1 -o output.xlsx batch -
 EOF
 ```
 
+#### Common Gotchas
+
+| Scenario | Behavior | Workaround |
+|----------|----------|------------|
+| Leading zeros: `"00123"` | Smart detection converts to number `123` | Use `"detect": false` to preserve as text |
+| Mixed patterns: `"50 (50%)"` | First pattern wins (treated as text) | Use explicit `"format"` field |
+| `values` array length mismatch | Error raised if array length ≠ range cell count | Ensure exact match |
+| Percent as decimal | `"59.4%"` stored as `0.594` | Excel displays correctly with percent format |
+| Invalid custom formats | Accepted but may render incorrectly in Excel | Test format codes in Excel first |
+| `--stream` mode | Supports formula dragging but not formula evaluation | Use non-streaming for `--eval` |
+
 ---
 
 ## Output Format

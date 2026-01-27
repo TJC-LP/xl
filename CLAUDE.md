@@ -170,6 +170,26 @@ xl -f huge.xlsx --max-size 500 cell A1   # 500MB limit
 
 See `docs/design/smart-streaming.md` for future enhancements.
 
+**Batch JSON Syntax** (typed values + smart detection):
+```bash
+# Native JSON types (numbers, booleans, null)
+echo '[{"op":"put","ref":"A1","value":123.45}]' | xl -f in.xlsx -o out.xlsx batch -
+
+# Smart detection: currency, percent, dates (opt-out with "detect":false)
+echo '[{"op":"put","ref":"A1","value":"$1,234.56"}]' | xl ...  # → Currency
+echo '[{"op":"put","ref":"A1","value":"45.5%"}]' | xl ...      # → Percent (stored as 0.455)
+echo '[{"op":"put","ref":"A1","value":"2025-01-15"}]' | xl ... # → Date
+
+# Explicit format hints
+echo '[{"op":"put","ref":"A1","value":0.455,"format":"percent"}]' | xl ...
+
+# Formula dragging (shifts references like Excel fill-down)
+echo '[{"op":"putf","ref":"B2:B10","value":"=A2*2","from":"B2"}]' | xl -f in.xlsx -o out.xlsx --stream batch -
+
+# Explicit formula array
+echo '[{"op":"putf","ref":"B2:B4","values":["=A2*2","=A3*2","=A4*2"]}]' | xl ...
+```
+
 **Common mistake**: Using unqualified range without `--sheet`:
 ```bash
 # ❌ Wrong - will error
@@ -285,12 +305,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**767+ tests**: addressing (17), patch (21), style (60), datetime (8), codec (42), batch (16), syntax (18), optics (34), OOXML (24), streaming (18), RichText (5), formula (51+), v0.3.0 regressions (36)
+**980+ tests**: addressing (17), patch (21), style (60), datetime (8), codec (42), batch (46), syntax (18), optics (34), OOXML (24), streaming (18), RichText (5), formula (51+), v0.3.0 regressions (36), CLI (100+)
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 767+ tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 980+ tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 
