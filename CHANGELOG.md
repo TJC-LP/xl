@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.0] - 2026-01-27
+
+### Added
+
+- **Streaming writes** with O(1) memory via SAX→StAX architecture (#183)
+  - Write 1M+ rows with constant memory using `excel.writeStream(path, sheetName)`
+  - Early-abort optimization for efficient large file generation
+  - Compatible with fs2 Stream pipelines
+
+- **Enhanced JSON batch syntax** with typed values and format hints (#185)
+  - Native JSON types: numbers, booleans, null parsed directly
+  - Smart detection: currency (`$1,234.56`), percent (`45.5%`), dates (`2025-01-15`)
+  - Explicit format hints: `{"value": 0.455, "format": "percent"}`
+  - Formula dragging with `from` parameter for fill-down patterns
+  - Opt-out smart detection with `"detect": false`
+
+### Changed
+
+- **12-180x streaming performance improvement** via chunked batching and range-bounded reads (#176)
+  - Streaming operations now use chunked batching for optimal throughput
+  - Range-bounded streaming avoids scanning entire files
+
+- **API rename**: `writeStreamTrue` → `writeStream` for clarity (#175)
+
+### Fixed
+
+- Plugin structure fixes for Claude Code marketplace compatibility
+
+---
+
 ## [0.7.0] - 2026-01-23
 
 ### Added
