@@ -712,3 +712,248 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
         )
       case _ => fail("Expected Left with parse error")
   }
+
+  // ===== GH-187: SUM/Aggregate of uncached formula cells =====
+
+  test("GH-187: SUM of uncached formula cells") {
+    val sales = sheetWith(
+      "Sales",
+      ref"A1" -> CellValue.Formula("10", None),
+      ref"A2" -> CellValue.Formula("20", None),
+      ref"A3" -> CellValue.Formula("30", None)
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, sales)
+
+    val result = main.evaluateFormula("=SUM(Sales!A1:A3)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(60))))
+  }
+
+  test("GH-187: SUM of mixed cached and uncached formula cells") {
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"A2" -> CellValue.Formula("20", None), // Uncached
+      ref"A3" -> CellValue.Formula("=30", Some(CellValue.Number(BigDecimal(30)))), // Cached
+      ref"A4" -> CellValue.Formula("40", None) // Uncached
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    val result = main.evaluateFormula("=SUM(Data!A1:A4)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(100))))
+  }
+
+  test("GH-187: AVERAGE of uncached formula cells") {
+    val vals = sheetWith(
+      "Values",
+      ref"A1" -> CellValue.Formula("10", None),
+      ref"A2" -> CellValue.Formula("20", None),
+      ref"A3" -> CellValue.Formula("30", None)
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, vals)
+
+    val result = main.evaluateFormula("=AVERAGE(Values!A1:A3)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(20))))
+  }
+
+  test("GH-187: cross-sheet SUM with nested formula references") {
+    // A1 contains formula referencing B1, B1 contains uncached formula
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("B1*2", None), // References B1
+      ref"A2" -> CellValue.Formula("B2*2", None), // References B2
+      ref"B1" -> CellValue.Number(BigDecimal(5)),
+      ref"B2" -> CellValue.Number(BigDecimal(10))
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data)
+
+    // SUM(A1:A2) = (5*2) + (10*2) = 10 + 20 = 30
+    val result = main.evaluateFormula("=SUM(Data!A1:A2)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(30))))
+  }
+
+  test("GH-187: same-sheet SUM of uncached formula cells") {
+    // Also verify the fix works for same-sheet aggregates
+    val sheet = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Formula("10", None),
+      ref"A2" -> CellValue.Formula("20", None),
+      ref"A3" -> CellValue.Formula("30", None)
+    )
+    val wb = workbookWith(sheet)
+
+    val result = sheet.evaluateFormula("=SUM(A1:A3)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(60))))
+  }
+
+  // ===== GH-187: Conditional Aggregate Functions with Uncached Formulas =====
+
+  test("GH-187: SUMIF with uncached formula in sum range") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Number(BigDecimal(100)),
+      ref"A2" -> CellValue.Number(BigDecimal(50)),
+      ref"B1" -> CellValue.Formula("10", None),
+      ref"B2" -> CellValue.Formula("20", None)
+    )
+    val wb = workbookWith(sheet)
+
+    // Sum B column where A > 60 (only A1=100 matches, so sum B1=10)
+    val result = sheet.evaluateFormula("=SUMIF(A1:A2, \">60\", B1:B2)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(10))))
+  }
+
+  test("GH-187: SUMIF with uncached formula in criteria range") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("100", None),
+      ref"A2" -> CellValue.Formula("50", None),
+      ref"B1" -> CellValue.Number(BigDecimal(10)),
+      ref"B2" -> CellValue.Number(BigDecimal(20))
+    )
+    val wb = workbookWith(sheet)
+
+    // Sum B column where A > 60 (A1=100 matches, so sum B1=10)
+    val result = sheet.evaluateFormula("=SUMIF(A1:A2, \">60\", B1:B2)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(10))))
+  }
+
+  test("GH-187: SUMIFS with uncached formula in sum range") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Number(BigDecimal(100)),
+      ref"A2" -> CellValue.Number(BigDecimal(200)),
+      ref"B1" -> CellValue.Text("East"),
+      ref"B2" -> CellValue.Text("West"),
+      ref"C1" -> CellValue.Formula("10", None),
+      ref"C2" -> CellValue.Formula("20", None)
+    )
+    val wb = workbookWith(sheet)
+
+    // Sum C where A > 50 and B = "East" (only row 1 matches)
+    val result =
+      sheet.evaluateFormula("=SUMIFS(C1:C2, A1:A2, \">50\", B1:B2, \"East\")", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(10))))
+  }
+
+  test("GH-187: AVERAGEIF with uncached formula in average range") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Number(BigDecimal(100)),
+      ref"A2" -> CellValue.Number(BigDecimal(50)),
+      ref"A3" -> CellValue.Number(BigDecimal(200)),
+      ref"B1" -> CellValue.Formula("10", None),
+      ref"B2" -> CellValue.Formula("20", None),
+      ref"B3" -> CellValue.Formula("30", None)
+    )
+    val wb = workbookWith(sheet)
+
+    // Average B where A > 60 (A1=100, A3=200 match, so average B1=10, B3=30 = 20)
+    val result = sheet.evaluateFormula("=AVERAGEIF(A1:A3, \">60\", B1:B3)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(20))))
+  }
+
+  test("GH-187: AVERAGEIFS with uncached formula in average range") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Number(BigDecimal(100)),
+      ref"A2" -> CellValue.Number(BigDecimal(200)),
+      ref"A3" -> CellValue.Number(BigDecimal(100)),
+      ref"B1" -> CellValue.Text("East"),
+      ref"B2" -> CellValue.Text("West"),
+      ref"B3" -> CellValue.Text("East"),
+      ref"C1" -> CellValue.Formula("10", None),
+      ref"C2" -> CellValue.Formula("20", None),
+      ref"C3" -> CellValue.Formula("30", None)
+    )
+    val wb = workbookWith(sheet)
+
+    // Average C where A >= 100 and B = "East" (rows 1 and 3 match, avg 10+30 / 2 = 20)
+    val result = sheet.evaluateFormula(
+      "=AVERAGEIFS(C1:C3, A1:A3, \">=100\", B1:B3, \"East\")",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(20))))
+  }
+
+  test("GH-187: SUMPRODUCT with uncached formula cells") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("2", None),
+      ref"A2" -> CellValue.Formula("3", None),
+      ref"B1" -> CellValue.Number(BigDecimal(10)),
+      ref"B2" -> CellValue.Number(BigDecimal(20))
+    )
+    val wb = workbookWith(sheet)
+
+    // 2*10 + 3*20 = 20 + 60 = 80
+    val result = sheet.evaluateFormula("=SUMPRODUCT(A1:A2, B1:B2)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(80))))
+  }
+
+  test("GH-187: SUMPRODUCT with all uncached formulas") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("2", None),
+      ref"A2" -> CellValue.Formula("3", None),
+      ref"B1" -> CellValue.Formula("10", None),
+      ref"B2" -> CellValue.Formula("20", None)
+    )
+    val wb = workbookWith(sheet)
+
+    // 2*10 + 3*20 = 20 + 60 = 80
+    val result = sheet.evaluateFormula("=SUMPRODUCT(A1:A2, B1:B2)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(80))))
+  }
+
+  test("GH-187: SUMPRODUCT with expression formulas") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("1+1", None), // = 2
+      ref"A2" -> CellValue.Formula("1+2", None), // = 3
+      ref"B1" -> CellValue.Number(BigDecimal(10)),
+      ref"B2" -> CellValue.Number(BigDecimal(20))
+    )
+    val wb = workbookWith(sheet)
+
+    // 2*10 + 3*20 = 20 + 60 = 80
+    val result = sheet.evaluateFormula("=SUMPRODUCT(A1:A2, B1:B2)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(80))))
+  }
+
+  test("GH-187: COUNTIF with uncached formula in criteria range") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("100", None),
+      ref"A2" -> CellValue.Formula("50", None),
+      ref"A3" -> CellValue.Formula("200", None)
+    )
+    val wb = workbookWith(sheet)
+
+    // Count where A > 60 (A1=100, A3=200 match, so count = 2)
+    val result = sheet.evaluateFormula("=COUNTIF(A1:A3, \">60\")", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(2))))
+  }
+
+  test("GH-187: COUNTIFS with uncached formula in criteria ranges") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Formula("100", None),
+      ref"A2" -> CellValue.Formula("200", None),
+      ref"A3" -> CellValue.Formula("100", None),
+      ref"B1" -> CellValue.Text("East"),
+      ref"B2" -> CellValue.Text("West"),
+      ref"B3" -> CellValue.Text("East")
+    )
+    val wb = workbookWith(sheet)
+
+    // Count where A >= 100 and B = "East" (rows 1 and 3 match, so count = 2)
+    val result = sheet.evaluateFormula(
+      "=COUNTIFS(A1:A3, \">=100\", B1:B3, \"East\")",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(2))))
+  }
