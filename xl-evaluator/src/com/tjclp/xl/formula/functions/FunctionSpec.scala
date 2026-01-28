@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.CellRange
+import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -28,7 +29,9 @@ final case class EvalContext(
   sheet: Sheet,
   clock: Clock,
   workbook: Option[Workbook],
-  evalExpr: [A] => TExpr[A] => Either[EvalError, A]
+  evalExpr: [A] => TExpr[A] => Either[EvalError, A],
+  /** Current cell being evaluated. Used by ROW() and COLUMN() with no arguments. */
+  currentCell: Option[ARef] = None
 )
 
 sealed trait ArgValue
