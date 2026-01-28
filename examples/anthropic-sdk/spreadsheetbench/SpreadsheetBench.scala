@@ -5,10 +5,11 @@ import zio.json.*
 import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import com.anthropic.core.JsonValue
+import com.anthropic.core.http.{HttpResponse, StreamResponse}
 import com.anthropic.models.beta.messages.*
 import com.anthropic.models.beta.AnthropicBeta
 import com.anthropic.models.beta.files.{FileMetadata, FileUploadParams, FileDeleteParams, FileDownloadParams, FileListParams}
-import com.anthropic.core.http.HttpResponse
+import com.anthropic.helpers.BetaMessageAccumulator
 import scala.jdk.OptionConverters.*
 import io.github.cdimascio.dotenv.Dotenv
 
@@ -17,6 +18,7 @@ import java.time.{Instant, ZoneId}
 import java.time.format.DateTimeFormatter
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
+import java.util.concurrent.atomic.AtomicBoolean
 
 // Exception for clean exit on --help
 case class HelpRequestedException() extends Exception("Help requested")
@@ -174,12 +176,11 @@ object SpreadsheetBench extends ZIOAppDefault:
       inputFile <- uploadFile(client, testCase.inputPath)
       _         <- Console.printLine(s"  [${task.id}:${testCase.caseNum}] Input uploaded, sending request...")
 
-      // Build and send the request
-      response  <- sendRequest(client, binaryId, skillId, inputFile.id(), task, testCase)
+      // Build and send the request (streams to console if verbose)
+      response  <- sendRequest(client, binaryId, skillId, inputFile.id(), task, testCase, config.verbose)
 
-      // Extract response text for logging
+      // Extract response text for logging (already streamed to console if verbose)
       responseText = extractResponseText(response)
-      _         <- ZIO.when(config.verbose)(Console.printLine(s"  [${task.id}:${testCase.caseNum}] Response:\n$responseText"))
 
       // Extract usage
       usage      = TokenUsage(response.usage().inputTokens(), response.usage().outputTokens())
@@ -218,7 +219,8 @@ object SpreadsheetBench extends ZIOAppDefault:
       skillId: String,
       inputFileId: String,
       task: BenchTask,
-      testCase: TestCase
+      testCase: TestCase,
+      verbose: Boolean
   ): Task[BetaMessage] =
     ZIO.attemptBlocking {
       val prompt = buildPrompt(task, testCase)
@@ -251,9 +253,122 @@ object SpreadsheetBench extends ZIOAppDefault:
         .putAdditionalHeader("anthropic-beta", "code-execution-2025-08-25,files-api-2025-04-14")
         .build()
 
-      // Use beta messages API for typed access to code execution output blocks
-      client.beta().messages().create(params)
+      // Use streaming for real-time output in verbose mode
+      val accumulator = BetaMessageAccumulator.create()
+      val streamResponse = client.beta().messages().createStreaming(params)
+      val streamProcessor = if verbose then Some(new StreamEventProcessor()) else None
+      val interrupted = new AtomicBoolean(false)
+
+      try
+        streamResponse.stream().forEach { event =>
+          // Check for thread interruption (Ctrl+C)
+          if Thread.currentThread().isInterrupted() then
+            interrupted.set(true)
+            streamResponse.close()
+          else
+            accumulator.accumulate(event)
+            streamProcessor.foreach(_.process(event))
+        }
+        if verbose then println() // Final newline after streaming
+
+        if interrupted.get() then
+          throw new InterruptedException("Stream interrupted by user")
+
+        accumulator.message()
+      finally
+        streamResponse.close()
     }
+
+  /** Stateful processor for stream events that tracks tool input across deltas. */
+  class StreamEventProcessor:
+    // Track accumulated input JSON per content block index
+    private val toolInputBuffers = scala.collection.mutable.Map[Long, StringBuilder]()
+
+    def process(event: BetaRawMessageStreamEvent): Unit =
+      // Handle text deltas (print text as it streams)
+      event.contentBlockDelta().toScala.foreach { delta =>
+        val index = delta.index()
+
+        delta.delta().text().toScala.foreach { textDelta =>
+          print(textDelta.text())
+        }
+
+        // Accumulate tool input JSON (includes command for code_execution)
+        delta.delta().inputJson().toScala.foreach { jsonDelta =>
+          val partial = jsonDelta.partialJson()
+          toolInputBuffers.getOrElseUpdate(index, new StringBuilder())
+            .append(partial)
+        }
+      }
+
+      // Handle content block starts (tool invocations and results)
+      event.contentBlockStart().toScala.foreach { start =>
+        val block = start.contentBlock()
+        val index = start.index()
+
+        // Server tool use (code_execution) - input streams via inputJson deltas
+        block.serverToolUse().toScala.foreach { toolUse =>
+          println(s"\n>>> TOOL: ${toolUse.name()}")
+          // Initialize buffer for streaming input
+          toolInputBuffers(index) = new StringBuilder()
+        }
+
+        // Bash execution results
+        block.bashCodeExecutionToolResult().toScala.foreach { result =>
+          result.content().betaBashCodeExecutionResultBlock().toScala.foreach { r =>
+            val stdout = r.stdout()
+            val stderr = r.stderr()
+            println("<<< RESULT")
+            if stdout.nonEmpty then
+              // Indent and truncate long output
+              val lines = stdout.split("\n")
+              lines.take(20).foreach(line => println(s"    $line"))
+              if lines.length > 20 then
+                println(s"    ... (${lines.length - 20} more lines)")
+            if stderr.nonEmpty then
+              println("    STDERR:")
+              stderr.split("\n").take(5).foreach(line => println(s"    $line"))
+          }
+
+          // Handle errors
+          result.content().betaBashCodeExecutionToolResultError().toScala.foreach { err =>
+            println(s"<<< ERROR: ${err.errorCode()}")
+          }
+        }
+      }
+
+      // Handle content block stop - print accumulated tool input
+      event.contentBlockStop().toScala.foreach { stop =>
+        val index = stop.index()
+        toolInputBuffers.get(index).foreach { buffer =>
+          val json = buffer.toString
+          if json.nonEmpty then
+            // Try to extract the code from the JSON input
+            extractCodeFromJson(json).foreach { code =>
+              println("--- CODE ---")
+              code.split("\n").take(30).foreach(line => println(s"    $line"))
+              if code.split("\n").length > 30 then
+                println(s"    ... (${code.split("\n").length - 30} more lines)")
+              println("------------")
+            }
+          toolInputBuffers.remove(index)
+        }
+      }
+
+    /** Extract the 'command' field from tool input JSON */
+    private def extractCodeFromJson(json: String): Option[String] =
+      // The JSON structure is {"command": "bash script here"}
+      Try {
+        val commandPattern = """"command"\s*:\s*"((?:[^"\\]|\\.)*)"""".r
+        commandPattern.findFirstMatchIn(json).map { m =>
+          // Unescape the JSON string
+          m.group(1)
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+        }
+      }.toOption.flatten
 
   def extractResponseText(response: BetaMessage): String =
     response.content().asScala
@@ -295,6 +410,18 @@ object SpreadsheetBench extends ZIOAppDefault:
                           Console.printLine(s"  [${task.id}:${testCase.caseNum}] Downloaded output to $outputPath")
                       case None =>
                         ZIO.fail(new Exception("No output file found in response or file list - model may not have created output.xlsx"))
+
+      // Cleanup: delete output file from Files API after download to avoid bloat
+      _          <- finalFileId match
+                      case Some(fileId) =>
+                        ZIO.attempt(client.beta().files().delete(
+                          FileDeleteParams.builder().fileId(fileId).addBeta(AnthropicBeta.FILES_API_2025_04_14).build()
+                        )).catchAll(e =>
+                          ZIO.when(config.verbose)(
+                            Console.printLine(s"  [${task.id}:${testCase.caseNum}] Warning: Failed to delete output file: ${e.getMessage}")
+                          )
+                        )
+                      case None => ZIO.unit
     yield outputPath
 
   /** Try to find the output file by listing all files and looking for xlsx files */
