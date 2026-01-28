@@ -16,3 +16,4 @@ object FunctionSpecs
     with FunctionSpecsLookup
     with FunctionSpecsReference
     with FunctionSpecsText
+    with FunctionSpecsArray

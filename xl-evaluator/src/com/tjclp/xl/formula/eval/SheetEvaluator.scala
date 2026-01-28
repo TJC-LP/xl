@@ -11,6 +11,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import java.time.{LocalDate, LocalDateTime}
@@ -322,6 +323,69 @@ object SheetEvaluator:
 
                 evalResult.map(_ => results)
 
+    /**
+     * Evaluate an array formula and spill results into adjacent cells.
+     *
+     * Array formulas like TRANSPOSE return multiple values that "spill" into adjacent cells
+     * starting from the origin cell. This method:
+     *   1. Parses and evaluates the formula
+     *   2. If result is ArrayResult, applies PutArray patch to spill values
+     *   3. If result is single value, puts it at origin only
+     *   4. Returns the updated sheet and the range of cells affected
+     *
+     * @param formula
+     *   Excel formula string (with or without leading =)
+     * @param originRef
+     *   The cell where the array formula is entered (spill starts here)
+     * @param clock
+     *   Clock for date/time functions (defaults to system clock)
+     * @param workbook
+     *   Optional workbook context for cross-sheet formula references
+     * @return
+     *   Either XLError or tuple of (updated sheet, affected range)
+     *
+     * Example:
+     * {{{
+     * // TRANSPOSE a 2x3 range into a 3x2 result
+     * sheet.evaluateArrayFormula("=TRANSPOSE(A1:C2)", ref"E1")
+     * // Returns (updatedSheet, CellRange(E1:F3)) with transposed values
+     * }}}
+     */
+    def evaluateArrayFormula(
+      formula: String,
+      originRef: ARef,
+      clock: Clock = Clock.system,
+      workbook: Option[Workbook] = None
+    ): XLResult[(Sheet, CellRange)] =
+      for
+        // Parse formula string to TExpr AST
+        expr <- FormulaParser
+          .parse(formula)
+          .left
+          .map(parseError =>
+            XLError.FormulaError(
+              formula,
+              s"Parse error: $parseError"
+            )
+          )
+
+        // Evaluate TExpr against sheet
+        result <- Evaluator.instance
+          .eval(expr, sheet, clock, workbook)
+          .left
+          .map(evalError => evalErrorToXLError(evalError, Some(formula)))
+
+        // Handle array vs scalar result
+        updated <- result match
+          case ar: ArrayResult =>
+            val patch = Patch.PutArray(originRef, ar.values)
+            val endRef = originRef.shift(ar.cols - 1, ar.rows - 1)
+            scala.util.Right((Patch.applyPatch(sheet, patch), CellRange(originRef, endRef)))
+          case other =>
+            val cv = toCellValue(other)
+            scala.util.Right((sheet.put(originRef, cv), CellRange(originRef, originRef)))
+      yield updated
+
   // ========== Helper Functions ==========
 
   /**
@@ -338,6 +402,10 @@ object SheetEvaluator:
       case i: Int => CellValue.Number(BigDecimal(i))
       case ld: LocalDate => CellValue.DateTime(ld.atStartOfDay())
       case ldt: LocalDateTime => CellValue.DateTime(ldt)
+      case ar: ArrayResult =>
+        // For non-array formula contexts, return top-left value (Excel behavior)
+        if ar.isEmpty then CellValue.Empty
+        else ar(0, 0)
       case other =>
         // Fallback for unexpected types (should never happen with well-typed TExpr)
         CellValue.Text(other.toString)

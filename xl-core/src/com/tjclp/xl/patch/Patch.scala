@@ -55,6 +55,9 @@ enum Patch:
   /** Remove all cells in range */
   case RemoveRange(range: CellRange)
 
+  /** Put a grid of values starting at origin (for array formula spill) */
+  case PutArray(origin: ARef, values: Vector[Vector[CellValue]])
+
   /** Batch multiple patches together */
   case Batch(patches: Vector[Patch])
 
@@ -131,6 +134,14 @@ object Patch:
 
     case RemoveRange(range) =>
       sheet.removeRange(range)
+
+    case PutArray(origin, values) =>
+      values.zipWithIndex.foldLeft(sheet) { case (s, (row, rowIdx)) =>
+        row.zipWithIndex.foldLeft(s) { case (s2, (value, colIdx)) =>
+          val ref = origin.shift(colIdx, rowIdx)
+          s2.put(ref, value)
+        }
+      }
 
     case Batch(patches) =>
       patches.foldLeft(sheet) { (acc, p) =>
