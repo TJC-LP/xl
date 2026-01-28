@@ -79,21 +79,29 @@ object SpreadsheetBench extends ZIOAppDefault:
       logsDir  = config.outputDir.resolve("logs")
       _       <- ZIO.attemptBlocking(Files.createDirectories(logsDir))
 
-      _       <- Console.printLine("Uploading xl binary and skill...")
-      binary  <- uploadFile(client, BinaryPath)
+      binaryPath = config.xlBinary.getOrElse(BinaryPath)
+      skillPath  = config.xlSkill.getOrElse(SkillPath)
+      _       <- Console.printLine(s"Uploading xl binary and skill...")
+      _       <- Console.printLine(s"  Binary: $binaryPath${if config.xlBinary.isDefined then " (dev override)" else ""}")
+      _       <- Console.printLine(s"  Skill: $skillPath${if config.xlSkill.isDefined then " (dev override)" else ""}")
+      binary  <- uploadFile(client, binaryPath)
       _       <- Console.printLine(s"  Binary uploaded: ${binary.id()}")
-      skill   <- uploadFile(client, SkillPath)
+      skill   <- uploadFile(client, skillPath)
       _       <- Console.printLine(s"  Skill uploaded: ${skill.id()}")
 
       tasks   <- TaskLoader.load(config)
       _       <- Console.printLine(s"Running ${tasks.length} task(s) with parallelism ${config.parallelism}")
       _       <- Console.printLine("-" * 60)
 
+      // Extract filenames for prompts
+      binaryFileName = binaryPath.getFileName.toString
+      skillFileName  = skillPath.getFileName.toString
+
       results <- (if config.parallelism == 1 then
                     // Sequential for easier debugging
-                    ZIO.foreach(tasks)(task => runTask(client, binary.id(), skill.id(), task, config, logsDir))
+                    ZIO.foreach(tasks)(task => runTask(client, binary.id(), skill.id(), binaryFileName, skillFileName, task, config, logsDir))
                   else
-                    ZIO.foreachPar(tasks)(task => runTask(client, binary.id(), skill.id(), task, config, logsDir))
+                    ZIO.foreachPar(tasks)(task => runTask(client, binary.id(), skill.id(), binaryFileName, skillFileName, task, config, logsDir))
                       .withParallelism(config.parallelism))
 
       report  <- buildReport(config, results)
@@ -113,6 +121,8 @@ object SpreadsheetBench extends ZIOAppDefault:
       client: AnthropicClient,
       binaryId: String,
       skillId: String,
+      binaryName: String,
+      skillName: String,
       task: BenchTask,
       config: BenchConfig,
       logsDir: Path
@@ -127,7 +137,7 @@ object SpreadsheetBench extends ZIOAppDefault:
 
         // Run all 3 test cases
         testResults <- ZIO.foreach(task.testCases) { testCase =>
-          runTestCase(client, binaryId, skillId, task, testCase, config, logsDir)
+          runTestCase(client, binaryId, skillId, binaryName, skillName, task, testCase, config, logsDir)
         }
 
         endTime   <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -166,6 +176,8 @@ object SpreadsheetBench extends ZIOAppDefault:
       client: AnthropicClient,
       binaryId: String,
       skillId: String,
+      binaryName: String,
+      skillName: String,
       task: BenchTask,
       testCase: TestCase,
       config: BenchConfig,
@@ -177,7 +189,7 @@ object SpreadsheetBench extends ZIOAppDefault:
       _         <- Console.printLine(s"  [${task.id}:${testCase.caseNum}] Input uploaded, sending request...")
 
       // Build and send the request (streams to console if verbose)
-      response  <- sendRequest(client, binaryId, skillId, inputFile.id(), task, testCase, config.verbose)
+      response  <- sendRequest(client, binaryId, skillId, binaryName, skillName, inputFile.id(), task, testCase, config.verbose)
 
       // Extract response text for logging (already streamed to console if verbose)
       responseText = extractResponseText(response)
@@ -217,18 +229,20 @@ object SpreadsheetBench extends ZIOAppDefault:
       client: AnthropicClient,
       binaryId: String,
       skillId: String,
+      binaryName: String,
+      skillName: String,
       inputFileId: String,
       task: BenchTask,
       testCase: TestCase,
       verbose: Boolean
   ): Task[BetaMessage] =
     ZIO.attemptBlocking {
-      val prompt = buildPrompt(task, testCase)
+      val prompt = buildPrompt(task, testCase, binaryName)
 
       val params = MessageCreateParams.builder()
         .model(Model)
         .maxTokens(8192L)
-        .system(SystemPrompt)
+        .system(systemPrompt(binaryName, skillName))
         .addUserMessage("placeholder")
         // Override messages to include container_upload blocks
         .putAdditionalBodyProperty("messages", JsonValue.from(java.util.List.of(
@@ -607,7 +621,7 @@ object SpreadsheetBench extends ZIOAppDefault:
       client.beta().files().upload(params)
     }
 
-  def buildPrompt(task: BenchTask, testCase: TestCase): String =
+  def buildPrompt(task: BenchTask, testCase: TestCase, binaryName: String): String =
     s"""You are a spreadsheet expert with access to the xl CLI for Excel operations.
 
 ## Task
@@ -615,7 +629,7 @@ ${task.instruction}
 
 ## File Locations
 - Input file: $$INPUT_DIR/${testCase.inputPath.getFileName}
-- XL binary: $$INPUT_DIR/xl-0.8.0-linux-amd64
+- XL binary: $$INPUT_DIR/$binaryName
 
 ## CRITICAL: Output Location
 You MUST save your final output to: $$OUTPUT_DIR/output.xlsx
@@ -625,8 +639,8 @@ The answer will be evaluated at position: ${task.answerPosition}
 
 ## Setup Commands (run these first)
 ```bash
-chmod +x $$INPUT_DIR/xl-0.8.0-linux-amd64
-XL="$$INPUT_DIR/xl-0.8.0-linux-amd64"
+chmod +x $$INPUT_DIR/$binaryName
+XL="$$INPUT_DIR/$binaryName"
 INPUT="$$INPUT_DIR/${testCase.inputPath.getFileName}"
 OUTPUT="$$OUTPUT_DIR/output.xlsx"
 ```
@@ -656,18 +670,18 @@ echo '[{"op":"put","ref":"A1","value":"Hello"}]' | $$XL -f $$INPUT -o $$OUTPUT b
 4. Verify your solution by viewing the output cells at ${task.answerPosition}
 """
 
-  val SystemPrompt: String =
-    """You are a spreadsheet expert assistant. You have access to the xl CLI tool for manipulating Excel files.
+  def systemPrompt(binaryName: String, skillName: String): String =
+    s"""You are a spreadsheet expert assistant. You have access to the xl CLI tool for manipulating Excel files.
 
 IMPORTANT REQUIREMENTS:
 1. Use the xl CLI tool for ALL Excel operations (not Python libraries like openpyxl)
-2. ALWAYS save output to $OUTPUT_DIR/output.xlsx using the -o flag
-3. When you finish modifying the spreadsheet, the final file MUST be at $OUTPUT_DIR/output.xlsx
+2. ALWAYS save output to $$OUTPUT_DIR/output.xlsx using the -o flag
+3. When you finish modifying the spreadsheet, the final file MUST be at $$OUTPUT_DIR/output.xlsx
 4. DO NOT modify the input data - only add formulas or values where specified
 
 AVAILABLE FILES:
-- xl-0.8.1-linux-amd64: The xl CLI binary (chmod +x it first, then use ./xl-0.8.1-linux-amd64 or move to PATH)
-- xl-skill-0.8.1.zip: Documentation for the xl CLI (unzip to read SKILL.md for command reference)
+- $binaryName: The xl CLI binary (chmod +x it first, then use ./$binaryName or move to PATH)
+- $skillName: Documentation for the xl CLI (unzip to read SKILL.md for command reference)
 - Input xlsx file: The spreadsheet to work with
 
 Your goal is to solve spreadsheet tasks efficiently and accurately. Always:
@@ -768,6 +782,12 @@ ${"=" * 60}
           case "--output" :: value :: rest =>
             config = config.copy(outputDir = Path.of(value))
             remaining = rest
+          case "--xl-binary" :: value :: rest =>
+            config = config.copy(xlBinary = Some(Path.of(value)))
+            remaining = rest
+          case "--xl-skill" :: value :: rest =>
+            config = config.copy(xlSkill = Some(Path.of(value)))
+            remaining = rest
           case "--help" :: _ =>
             println(HelpText)
             throw HelpRequestedException()
@@ -798,6 +818,10 @@ Configuration:
   --parallelism <n>     Number of parallel tasks (default: 4, use 1 for debugging)
   --output <dir>        Output directory for results (default: results)
   --verbose             Show full model responses
+
+Development:
+  --xl-binary <path>    Use local xl binary instead of released version
+  --xl-skill <path>     Use local xl skill zip instead of released version
 
 Examples:
   # Run a single task

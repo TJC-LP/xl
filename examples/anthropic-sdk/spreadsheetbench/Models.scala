@@ -221,5 +221,7 @@ case class BenchConfig(
     category: Option[String] = None,       // Filter by instruction_type
     parallelism: Int = 4,
     verbose: Boolean = false,
-    outputDir: Path = Path.of("results")
+    outputDir: Path = Path.of("results"),
+    xlBinary: Option[Path] = None,         // Override xl CLI binary path (for dev testing)
+    xlSkill: Option[Path] = None           // Override xl skill zip path (for dev testing)
 )
