@@ -1,0 +1,29 @@
+package build.`xl-agent`
+
+import mill._
+import mill.scalalib._
+
+object `package` extends build.XLInternalModule {
+
+  override def moduleDeps = Seq(
+    build.`xl-core`,
+    build.`xl-cats-effect`,
+    build.`xl-evaluator`
+  )
+
+  override def mvnDeps = Seq(
+    mvn"com.anthropic:anthropic-java:2.11.1",
+    mvn"io.circe::circe-core:0.14.10",
+    mvn"io.circe::circe-generic:0.14.10",
+    mvn"io.circe::circe-parser:0.14.10",
+    mvn"io.github.cdimascio:dotenv-java:3.1.0",
+    mvn"org.apache.commons:commons-compress:1.27.1"
+  )
+
+  object test extends ScalaTests with build.XLTestModule {
+    override def mvnDeps = Seq(
+      mvn"org.scalameta::munit:1.0.3",
+      mvn"org.typelevel::munit-cats-effect:2.1.0"
+    )
+  }
+}
