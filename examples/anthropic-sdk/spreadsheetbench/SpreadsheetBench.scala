@@ -5,12 +5,14 @@ import zio.json.*
 import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import com.anthropic.core.JsonValue
-import com.anthropic.models.messages.*
+import com.anthropic.models.beta.messages.*
 import com.anthropic.models.beta.AnthropicBeta
-import com.anthropic.models.beta.files.{FileMetadata, FileUploadParams, FileDeleteParams}
+import com.anthropic.models.beta.files.{FileMetadata, FileUploadParams, FileDeleteParams, FileDownloadParams, FileListParams}
+import com.anthropic.core.http.HttpResponse
+import scala.jdk.OptionConverters.*
 import io.github.cdimascio.dotenv.Dotenv
 
-import java.nio.file.{Files, Path, Paths, StandardOpenOption}
+import java.nio.file.{Files, Path, Paths, StandardOpenOption, StandardCopyOption}
 import java.time.{Instant, ZoneId}
 import java.time.format.DateTimeFormatter
 import scala.jdk.CollectionConverters.*
@@ -26,12 +28,12 @@ object SpreadsheetBench extends ZIOAppDefault:
   // ============================================================================
 
   // Paths relative to project root or script directory
-  lazy val BinaryPath: Path = findFile("xl-0.8.0-linux-amd64", List(
+  lazy val BinaryPath: Path = findFile("xl-0.8.1-linux-amd64", List(
     "../benchmark",
     "examples/anthropic-sdk/benchmark",
     "."
   ))
-  lazy val SkillPath: Path = findFile("xl-skill-0.8.0.zip", List(
+  lazy val SkillPath: Path = findFile("xl-skill-0.8.1.zip", List(
     "../benchmark",
     "examples/anthropic-sdk/benchmark",
     "."
@@ -43,7 +45,7 @@ object SpreadsheetBench extends ZIOAppDefault:
       .find(p => Files.exists(p))
       .getOrElse(Paths.get(dirs.head, name)) // fallback to first
 
-  val Model = "claude-sonnet-4-5-20250929"
+  val Model = "claude-opus-4-5-20251101"
 
   // ============================================================================
   // Main Entry Point
@@ -78,6 +80,8 @@ object SpreadsheetBench extends ZIOAppDefault:
       _       <- Console.printLine("Uploading xl binary and skill...")
       binary  <- uploadFile(client, BinaryPath)
       _       <- Console.printLine(s"  Binary uploaded: ${binary.id()}")
+      skill   <- uploadFile(client, SkillPath)
+      _       <- Console.printLine(s"  Skill uploaded: ${skill.id()}")
 
       tasks   <- TaskLoader.load(config)
       _       <- Console.printLine(s"Running ${tasks.length} task(s) with parallelism ${config.parallelism}")
@@ -85,9 +89,9 @@ object SpreadsheetBench extends ZIOAppDefault:
 
       results <- (if config.parallelism == 1 then
                     // Sequential for easier debugging
-                    ZIO.foreach(tasks)(task => runTask(client, binary.id(), task, config, logsDir))
+                    ZIO.foreach(tasks)(task => runTask(client, binary.id(), skill.id(), task, config, logsDir))
                   else
-                    ZIO.foreachPar(tasks)(task => runTask(client, binary.id(), task, config, logsDir))
+                    ZIO.foreachPar(tasks)(task => runTask(client, binary.id(), skill.id(), task, config, logsDir))
                       .withParallelism(config.parallelism))
 
       report  <- buildReport(config, results)
@@ -106,6 +110,7 @@ object SpreadsheetBench extends ZIOAppDefault:
   def runTask(
       client: AnthropicClient,
       binaryId: String,
+      skillId: String,
       task: BenchTask,
       config: BenchConfig,
       logsDir: Path
@@ -120,7 +125,7 @@ object SpreadsheetBench extends ZIOAppDefault:
 
         // Run all 3 test cases
         testResults <- ZIO.foreach(task.testCases) { testCase =>
-          runTestCase(client, binaryId, task, testCase, config, logsDir)
+          runTestCase(client, binaryId, skillId, task, testCase, config, logsDir)
         }
 
         endTime   <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -158,6 +163,7 @@ object SpreadsheetBench extends ZIOAppDefault:
   def runTestCase(
       client: AnthropicClient,
       binaryId: String,
+      skillId: String,
       task: BenchTask,
       testCase: TestCase,
       config: BenchConfig,
@@ -169,11 +175,11 @@ object SpreadsheetBench extends ZIOAppDefault:
       _         <- Console.printLine(s"  [${task.id}:${testCase.caseNum}] Input uploaded, sending request...")
 
       // Build and send the request
-      response  <- sendRequest(client, binaryId, inputFile.id(), task, testCase)
+      response  <- sendRequest(client, binaryId, skillId, inputFile.id(), task, testCase)
 
       // Extract response text for logging
       responseText = extractResponseText(response)
-      _         <- if config.verbose then Console.printLine(s"  [${task.id}:${testCase.caseNum}] Response:\n$responseText") else ZIO.unit
+      _         <- ZIO.when(config.verbose)(Console.printLine(s"  [${task.id}:${testCase.caseNum}] Response:\n$responseText"))
 
       // Extract usage
       usage      = TokenUsage(response.usage().inputTokens(), response.usage().outputTokens())
@@ -209,10 +215,11 @@ object SpreadsheetBench extends ZIOAppDefault:
   def sendRequest(
       client: AnthropicClient,
       binaryId: String,
+      skillId: String,
       inputFileId: String,
       task: BenchTask,
       testCase: TestCase
-  ): Task[Message] =
+  ): Task[BetaMessage] =
     ZIO.attemptBlocking {
       val prompt = buildPrompt(task, testCase)
 
@@ -228,6 +235,7 @@ object SpreadsheetBench extends ZIOAppDefault:
             "content", java.util.List.of(
               java.util.Map.of("type", "text", "text", prompt),
               java.util.Map.of("type", "container_upload", "file_id", binaryId),
+              java.util.Map.of("type", "container_upload", "file_id", skillId),
               java.util.Map.of("type", "container_upload", "file_id", inputFileId)
             )
           )
@@ -243,33 +251,157 @@ object SpreadsheetBench extends ZIOAppDefault:
         .putAdditionalHeader("anthropic-beta", "code-execution-2025-08-25,files-api-2025-04-14")
         .build()
 
-      client.messages().create(params)
+      // Use beta messages API for typed access to code execution output blocks
+      client.beta().messages().create(params)
     }
 
-  def extractResponseText(response: Message): String =
+  def extractResponseText(response: BetaMessage): String =
     response.content().asScala
-      .filter(_.isText)
-      .map(_.asText().text())
+      .flatMap(_.text().toScala)
+      .map(_.text())
       .mkString("\n")
 
   def downloadOutput(
       client: AnthropicClient,
-      response: Message,
+      response: BetaMessage,
       task: BenchTask,
       testCase: TestCase,
       config: BenchConfig
   ): Task[Path] =
     val outputDir = config.outputDir.resolve("outputs").resolve(task.id)
+    for
+      _          <- ZIO.attemptBlocking(Files.createDirectories(outputDir))
+      outputPath  = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
+
+      // Extract file_id for output.xlsx from response content blocks
+      fileIdOpt  <- ZIO.attempt(extractOutputFileId(response, config.verbose))
+      _          <- ZIO.when(config.verbose)(
+                      Console.printLine(s"  [${task.id}:${testCase.caseNum}] Found file_id from response: ${fileIdOpt.getOrElse("none")}")
+                    )
+
+      // If not found in response, try listing files to find xlsx files
+      finalFileId <- fileIdOpt match
+                       case Some(id) => ZIO.succeed(Some(id))
+                       case None =>
+                         ZIO.when(config.verbose)(
+                           Console.printLine(s"  [${task.id}:${testCase.caseNum}] Trying Files API list to find output...")
+                         ) *>
+                         findOutputFileViaList(client, config.verbose, task.id, testCase.caseNum)
+
+      // Download the file if we found a file_id, otherwise fail
+      _          <- finalFileId match
+                      case Some(fileId) =>
+                        downloadFile(client, fileId, outputPath) *>
+                          Console.printLine(s"  [${task.id}:${testCase.caseNum}] Downloaded output to $outputPath")
+                      case None =>
+                        ZIO.fail(new Exception("No output file found in response or file list - model may not have created output.xlsx"))
+    yield outputPath
+
+  /** Try to find the output file by listing all files and looking for xlsx files */
+  def findOutputFileViaList(
+      client: AnthropicClient,
+      verbose: Boolean,
+      taskId: String,
+      caseNum: Int
+  ): Task[Option[String]] =
     ZIO.attemptBlocking {
-      Files.createDirectories(outputDir)
-      val outputPath = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
+      val params = FileListParams.builder()
+        .addBeta(AnthropicBeta.FILES_API_2025_04_14)
+        .limit(100L)
+        .build()
 
-      // TODO: Implement actual file download from container
-      // For now, copy answer file as placeholder for testing evaluation logic
-      if !Files.exists(outputPath) then
-        Files.copy(testCase.answerPath, outputPath)
+      val page = client.beta().files().list(params)
+      val files = page.data().asScala.toList
 
-      outputPath
+      // Filter for xlsx files that are downloadable and named output.xlsx
+      val outputFiles = files.filter { f =>
+        f.filename() == "output.xlsx" && f.downloadable().orElse(false)
+      }
+
+      // Sort by creation time (most recent first) to get the latest output
+      val sortedFiles = outputFiles.sortBy(f => -f.createdAt().toInstant.toEpochMilli)
+
+      if verbose then
+        println(s"  [$taskId:$caseNum] DEBUG: Found ${files.size} total files, ${outputFiles.size} output.xlsx files")
+        sortedFiles.take(3).foreach { f =>
+          println(s"  [$taskId:$caseNum] DEBUG: output.xlsx: ${f.id()} (created: ${f.createdAt()})")
+        }
+
+      // Take the most recently created output.xlsx
+      sortedFiles.headOption.map(_.id())
+    }.catchAll { e =>
+      ZIO.succeed(None) // Return None if listing fails
+    }
+
+  /** Extract the file_id for output.xlsx from the response content blocks.
+    *
+    * With the Beta Messages API, we have typed access to:
+    * 1. containerUpload blocks - files uploaded/created in the container
+    * 2. bashCodeExecutionToolResult blocks - execution results with output file IDs
+    *
+    * The file_id structure:
+    *   BetaContentBlock.containerUpload() → BetaContainerUploadBlock.fileId()
+    *   BetaContentBlock.bashCodeExecutionToolResult() → BetaBashCodeExecutionToolResultBlock
+    *     .content().betaBashCodeExecutionResultBlock() → BetaBashCodeExecutionResultBlock
+    *       .content() → List[BetaBashCodeExecutionOutputBlock].fileId()
+    */
+  /** Extract output file_id from the response.
+    *
+    * Files saved to $OUTPUT_DIR appear in bashCodeExecutionToolResult blocks.
+    * We use both typed API and raw JSON traversal for robustness.
+    */
+  def extractOutputFileId(response: BetaMessage, verbose: Boolean = false): Option[String] =
+    val fileIds = response.content().asScala.flatMap { block =>
+      // Method 1: containerUpload blocks
+      val containerFileId = block.containerUpload().toScala.map(_.fileId())
+
+      // Method 2: bashCodeExecutionToolResult via typed API
+      val bashOutputFileIds = block.bashCodeExecutionToolResult().toScala.toList.flatMap { toolResult =>
+        toolResult.content().betaBashCodeExecutionResultBlock().toScala.toList.flatMap { resultBlock =>
+          resultBlock.content().asScala.map(_.fileId())
+        }
+      }
+
+      // Method 3: bashCodeExecutionToolResult via raw JSON (fallback)
+      val rawBashFileIds = block.bashCodeExecutionToolResult().toScala.toList.flatMap { toolResult =>
+        toolResult._content().asKnown().toScala.toList.flatMap { contentField =>
+          contentField._json().toScala.toList.flatMap { json =>
+            json.asObject().toScala.toList.flatMap { obj =>
+              obj.asScala.get("content").toList.flatMap { contentArray =>
+                contentArray.asArray().toScala.toList.flatMap { arr =>
+                  arr.asScala.flatMap { item =>
+                    item.asObject().toScala.flatMap { outputBlock =>
+                      outputBlock.asScala.get("file_id").flatMap(_.asString().toScala)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      (containerFileId.toList ++ bashOutputFileIds ++ rawBashFileIds).distinct
+    }.distinct
+
+    if verbose && fileIds.nonEmpty then
+      println(s"    DEBUG: Found file_ids: $fileIds")
+
+    fileIds.lastOption
+
+  /** Download a file from the Anthropic Files API. */
+  def downloadFile(client: AnthropicClient, fileId: String, outputPath: Path): Task[Unit] =
+    ZIO.attemptBlocking {
+      val params = FileDownloadParams.builder()
+        .fileId(fileId)
+        .addBeta(AnthropicBeta.FILES_API_2025_04_14)
+        .build()
+
+      val httpResponse = client.beta().files().download(params)
+      try
+        Files.copy(httpResponse.body(), outputPath, StandardCopyOption.REPLACE_EXISTING)
+      finally
+        httpResponse.close()
     }
 
   // ============================================================================
@@ -354,56 +486,71 @@ object SpreadsheetBench extends ZIOAppDefault:
 ## Task
 ${task.instruction}
 
-## Input File
-The input file is uploaded at: /mnt/user/${testCase.inputPath.getFileName}
+## File Locations
+- Input file: $$INPUT_DIR/${testCase.inputPath.getFileName}
+- XL binary: $$INPUT_DIR/xl-0.8.0-linux-amd64
 
-## Output Requirements
-Save your solution to: /mnt/user/output.xlsx
+## CRITICAL: Output Location
+You MUST save your final output to: $$OUTPUT_DIR/output.xlsx
+The $$OUTPUT_DIR environment variable is set by the system. Using it ensures the file is properly captured.
 
 The answer will be evaluated at position: ${task.answerPosition}
 
-## Available Commands
-
-First, make the xl binary executable:
+## Setup Commands (run these first)
 ```bash
-chmod +x /mnt/user/xl-0.8.0-linux-amd64
+chmod +x $$INPUT_DIR/xl-0.8.0-linux-amd64
+XL="$$INPUT_DIR/xl-0.8.0-linux-amd64"
+INPUT="$$INPUT_DIR/${testCase.inputPath.getFileName}"
+OUTPUT="$$OUTPUT_DIR/output.xlsx"
 ```
 
-Then use these commands:
+## xl CLI Commands
 ```bash
 # List sheets
-/mnt/user/xl-0.8.0-linux-amd64 -f <file> sheets
+$$XL -f $$INPUT sheets
 
 # View data (use quotes for sheet names with spaces)
-/mnt/user/xl-0.8.0-linux-amd64 -f <file> -s "<sheet>" view <range>
+$$XL -f $$INPUT -s "<sheet>" view <range>
 
-# Write a value
-/mnt/user/xl-0.8.0-linux-amd64 -f <file> -o <output> put <ref> <value>
+# Write a value (always use -o $$OUTPUT to save)
+$$XL -f $$INPUT -o $$OUTPUT put <ref> <value>
 
-# Write a formula
-/mnt/user/xl-0.8.0-linux-amd64 -f <file> -o <output> putf <ref> "=FORMULA"
+# Write a formula (always use -o $$OUTPUT to save)
+$$XL -f $$INPUT -o $$OUTPUT putf <ref> "=FORMULA"
 
-# Batch operations (JSON on stdin)
-echo '[{"op":"put","ref":"A1","value":"Hello"}]' | /mnt/user/xl-0.8.0-linux-amd64 -f <file> -o <output> batch -
+# Batch operations (always use -o $$OUTPUT to save)
+echo '[{"op":"put","ref":"A1","value":"Hello"}]' | $$XL -f $$INPUT -o $$OUTPUT batch -
 ```
 
 ## Instructions
-1. First explore the input file to understand its structure
+1. Explore the input file to understand its structure
 2. Implement the solution using xl CLI commands
-3. Save the result to /mnt/user/output.xlsx
+3. IMPORTANT: Always use -o $$OUTPUT (which is $$OUTPUT_DIR/output.xlsx) when writing
 4. Verify your solution by viewing the output cells at ${task.answerPosition}
 """
 
   val SystemPrompt: String =
     """You are a spreadsheet expert assistant. You have access to the xl CLI tool for manipulating Excel files.
 
+IMPORTANT REQUIREMENTS:
+1. Use the xl CLI tool for ALL Excel operations (not Python libraries like openpyxl)
+2. ALWAYS save output to $OUTPUT_DIR/output.xlsx using the -o flag
+3. When you finish modifying the spreadsheet, the final file MUST be at $OUTPUT_DIR/output.xlsx
+4. DO NOT modify the input data - only add formulas or values where specified
+
+AVAILABLE FILES:
+- xl-0.8.1-linux-amd64: The xl CLI binary (chmod +x it first, then use ./xl-0.8.1-linux-amd64 or move to PATH)
+- xl-skill-0.8.1.zip: Documentation for the xl CLI (unzip to read SKILL.md for command reference)
+- Input xlsx file: The spreadsheet to work with
+
 Your goal is to solve spreadsheet tasks efficiently and accurately. Always:
 1. Explore the input file first to understand its structure
 2. Plan your solution before executing
-3. Use the most appropriate xl commands for the task
-4. Verify your solution before finishing
+3. Use xl CLI commands with -o /files/output/output.xlsx for writing
+4. Verify your solution by viewing the output cells
+5. NEVER modify input data cells - only add to the cells specified in the task
 
-The xl CLI supports common operations like viewing data, writing values, writing formulas, and batch operations."""
+The xl CLI supports viewing data, writing values, writing formulas, and batch operations."""
 
   // ============================================================================
   // Reporting

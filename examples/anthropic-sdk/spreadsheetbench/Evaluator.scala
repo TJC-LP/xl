@@ -48,10 +48,15 @@ object Evaluator:
       range: String,
       xlPath: String
   ): Task[Map[String, ComparableValue]] =
-    val sheetArgs = sheetOpt.toList.flatMap(s => List("--sheet", s))
-    val cmd = List(xlPath, "-f", path.toString) ++ sheetArgs ++ List("view", range, "--format", "json")
-
     for
+      // If no sheet specified, detect the first sheet in the workbook
+      sheet <- sheetOpt match
+        case Some(s) => ZIO.succeed(s)
+        case None => detectFirstSheet(path, xlPath)
+
+      sheetArgs = List("--sheet", sheet)
+      cmd = List(xlPath, "-f", path.toString) ++ sheetArgs ++ List("view", range, "--format", "json", "--eval")
+
       result <- ZIO.attemptBlocking {
         val output = cmd.!!
         output
@@ -59,6 +64,25 @@ object Evaluator:
       json   <- ZIO.fromEither(result.fromJson[ViewOutput])
                   .mapError(e => new Exception(s"JSON parse error: $e"))
     yield json.rows.flatMap(_.cells).map(c => c.ref -> normalizeCell(c)).toMap
+
+  /** Detect the first sheet name in a workbook */
+  private def detectFirstSheet(path: Path, xlPath: String): Task[String] =
+    ZIO.attemptBlocking {
+      val cmd = List(xlPath, "-f", path.toString, "sheets")
+      val output = cmd.!!
+      // Parse markdown table output:
+      // | #   | Name   | Dimension | State |
+      // |-----|--------|-----------|-------|
+      // | 1   | Sheet1 | D2:H5     |       |
+      //
+      // Skip header rows (first 2 lines), then extract Name column from first data row
+      val lines = output.linesIterator.toList
+      val dataLines = lines.drop(2) // Skip header and separator
+      dataLines.headOption.flatMap { line =>
+        val cols = line.split("\\|").map(_.trim).filter(_.nonEmpty)
+        cols.lift(1) // Name is the second column (after #)
+      }.getOrElse("Sheet1")
+    }.mapError(e => new Exception(s"Failed to detect sheet: ${e.getMessage}"))
 
   /** Normalize a cell value for comparison */
   private def normalizeCell(cell: CellJson): ComparableValue =
@@ -79,7 +103,16 @@ object Evaluator:
 
       case "formula" =>
         // Use the cached/formatted value for formulas
-        cell.formatted.flatMap(tryParseFormatted).getOrElse(ComparableValue.Empty)
+        cell.formatted match
+          case Some(f) if f.startsWith("=") =>
+            // Formula wasn't evaluated - this is an error condition
+            // Return the formula text as Text so it can be compared/logged
+            ComparableValue.Text(f)
+          case Some(f) =>
+            // Have a cached value - try to parse as number or text
+            tryParseFormatted(f).getOrElse(ComparableValue.Text(f.trim))
+          case None =>
+            ComparableValue.Empty
 
       case "boolean" =>
         cell.value match
