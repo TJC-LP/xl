@@ -310,8 +310,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Add(
-                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
-                    TExpr.asNumericExpr(right)
+                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                    TExpr.asNumericOrRangeExpr(right)
                   ),
                   s4
                 )
@@ -322,8 +322,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Sub(
-                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
-                    TExpr.asNumericExpr(right)
+                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                    TExpr.asNumericOrRangeExpr(right)
                   ),
                   s4
                 )
@@ -349,8 +349,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Mul(
-                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
-                    TExpr.asNumericExpr(right)
+                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                    TExpr.asNumericOrRangeExpr(right)
                   ),
                   s4
                 )
@@ -361,8 +361,8 @@ object FormulaParser:
               case Right((right, s4)) =>
                 loop(
                   TExpr.Div(
-                    TExpr.asNumericExpr(acc), // Convert PolyRef to typed Ref
-                    TExpr.asNumericExpr(right)
+                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                    TExpr.asNumericOrRangeExpr(right)
                   ),
                   s4
                 )

@@ -295,43 +295,22 @@ private class EvaluatorImpl extends Evaluator:
         decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
 
       // ===== Arithmetic Operators =====
+      // These support array arithmetic with broadcasting when operands are ranges or array results
       case TExpr.Add(x, y) =>
-        // Add: evaluate both operands, sum results
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv + yv
+        evalArithmetic(x, y, ArrayArithmetic.add, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Sub(x, y) =>
-        // Subtract: evaluate both operands, subtract second from first
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv - yv
+        evalArithmetic(x, y, ArrayArithmetic.sub, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Mul(x, y) =>
-        // Multiply: evaluate both operands, multiply results
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv * yv
+        evalArithmetic(x, y, ArrayArithmetic.mul, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Div(x, y) =>
-        // Divide: evaluate both operands, check for division by zero
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-          result <-
-            if yv == BigDecimal(0) then
-              // Division by zero: provide helpful error message with expressions
-              Left(
-                EvalError.DivByZero(
-                  FormulaPrinter.print(x, includeEquals = false),
-                  FormulaPrinter.print(y, includeEquals = false)
-                )
-              )
-            else Right(xv / yv)
-        yield result
+        evalArithmetic(x, y, ArrayArithmetic.div, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       // ===== String Operators =====
       case TExpr.Concat(x, y) =>
@@ -450,6 +429,79 @@ private class EvaluatorImpl extends Evaluator:
           currentCell
         )
         call.spec.eval(call.args, ctx)
+
+  // ===== Array Arithmetic Helpers =====
+
+  /**
+   * Evaluate expression, allowing ArrayResult or RangeRef results.
+   *
+   * Unlike eval(), this method handles RangeRef by converting to ArrayResult, enabling array
+   * arithmetic with broadcasting.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalMaybeArray(
+    expr: TExpr[?],
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    expr match
+      case TExpr.RangeRef(range) =>
+        // Convert range to ArrayResult directly
+        Right(ArrayArithmetic.rangeToArray(range, sheet))
+      case TExpr.SheetRange(sheetName, range) =>
+        Evaluator
+          .resolveRangeLocation(
+            TExpr.RangeLocation.CrossSheet(sheetName, range),
+            sheet,
+            workbook
+          )
+          .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+      case other =>
+        eval(other.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+
+  /**
+   * Convert evaluation result to ArrayOperand.
+   */
+  private def toOperand(value: Any, sheet: Sheet): Either[EvalError, ArrayArithmetic.ArrayOperand] =
+    value match
+      case bd: BigDecimal => Right(ArrayArithmetic.ArrayOperand.Scalar(bd))
+      case ar: ArrayResult => Right(ArrayArithmetic.ArrayOperand.Array(ar))
+      case i: Int => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(i)))
+      case l: Long => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(l)))
+      case d: Double => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(d)))
+      case _ => Left(EvalError.TypeMismatch("arithmetic", "number or array", value.toString))
+
+  /**
+   * Evaluate binary arithmetic with array support.
+   *
+   * Handles:
+   *   - Scalar * Scalar -> Scalar (fast path)
+   *   - Scalar * Array -> Array (broadcast)
+   *   - Array * Scalar -> Array (broadcast)
+   *   - Array * Array -> Array (element-wise with broadcasting)
+   *   - RangeRef -> automatically converted to Array
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalArithmetic(
+    xExpr: TExpr[BigDecimal],
+    yExpr: TExpr[BigDecimal],
+    op: ArrayArithmetic.BinaryOp,
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    for
+      xVal <- evalMaybeArray(xExpr, sheet, clock, workbook, currentCell)
+      yVal <- evalMaybeArray(yExpr, sheet, clock, workbook, currentCell)
+      xOp <- toOperand(xVal, sheet)
+      yOp <- toOperand(yVal, sheet)
+      result <- ArrayArithmetic.broadcast(xOp, yOp, op)
+    yield result match
+      case ArrayArithmetic.ArrayOperand.Scalar(v) => v
+      case ArrayArithmetic.ArrayOperand.Array(arr) => arr
 
 /**
  * Depth-aware evaluator for cross-sheet formula cycle protection (GH-161).
