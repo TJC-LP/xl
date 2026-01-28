@@ -318,12 +318,17 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
             val serial = com.tjclp.xl.cells.CellValue.dateTimeToExcelSerial(dt)
             ("n", com.tjclp.xl.cells.CellValue.Number(BigDecimal(serial)))
           case com.tjclp.xl.cells.CellValue.Formula(_, cachedValue) =>
-            // Use cached value's type if available, otherwise "str"
+            // Cell type determined by cached value. When no cached value,
+            // omit type attribute (empty string) to let Excel infer.
+            // Using "str" for formulas without cached values causes
+            // Excel to show a corruption warning.
             val cellType = cachedValue match
               case Some(com.tjclp.xl.cells.CellValue.Number(_)) => "n"
               case Some(com.tjclp.xl.cells.CellValue.Bool(_)) => "b"
               case Some(com.tjclp.xl.cells.CellValue.Error(_)) => "e"
-              case _ => "str"
+              case Some(com.tjclp.xl.cells.CellValue.Text(_)) => "str"
+              case Some(com.tjclp.xl.cells.CellValue.DateTime(_)) => "n"
+              case _ => "" // No type attr
             (cellType, cell.value)
           case com.tjclp.xl.cells.CellValue.Error(_) => ("e", cell.value)
           case com.tjclp.xl.cells.CellValue.Empty => ("", cell.value)

@@ -67,7 +67,8 @@ object SheetEvaluator:
     def evaluateFormula(
       formula: String,
       clock: Clock = Clock.system,
-      workbook: Option[Workbook] = None
+      workbook: Option[Workbook] = None,
+      currentCell: Option[ARef] = None
     ): XLResult[CellValue] =
       for
         // Parse formula string to TExpr AST
@@ -83,7 +84,7 @@ object SheetEvaluator:
 
         // Evaluate TExpr against sheet
         result <- Evaluator.instance
-          .eval(expr, sheet, clock, workbook)
+          .eval(expr, sheet, clock, workbook, currentCell)
           .left
           .map(evalError => evalErrorToXLError(evalError, Some(formula)))
 
@@ -124,7 +125,8 @@ object SheetEvaluator:
       val cell = sheet(ref)
       cell.value match
         case CellValue.Formula(expr, _) =>
-          evaluateFormula(expr, clock, workbook)
+          // Pass the current cell ref for ROW()/COLUMN() without arguments
+          evaluateFormula(expr, clock, workbook, Some(ref))
         case other =>
           scala.util.Right(other)
 

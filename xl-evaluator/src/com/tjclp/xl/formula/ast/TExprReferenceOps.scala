@@ -9,20 +9,36 @@ import TExpr.*
 @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 trait TExprReferenceOps:
   /**
-   * Create ROW expression.
+   * Create ROW expression with a cell reference argument.
    *
    * Example: TExpr.row(TExpr.PolyRef(ref"A5", Anchor.Relative))
    */
   def row(ref: TExpr[?]): TExpr[BigDecimal] =
-    Call(FunctionSpecs.row, ref.asInstanceOf[TExpr[Any]])
+    Call(FunctionSpecs.row, Some(ref.asInstanceOf[TExpr[Any]]))
 
   /**
-   * Create COLUMN expression.
+   * Create ROW expression with no arguments (returns row of current cell).
+   *
+   * Example: TExpr.row() in cell B5 returns 5
+   */
+  def row(): TExpr[BigDecimal] =
+    Call(FunctionSpecs.row, None)
+
+  /**
+   * Create COLUMN expression with a cell reference argument.
    *
    * Example: TExpr.column(TExpr.PolyRef(ref"C1", Anchor.Relative))
    */
   def column(ref: TExpr[?]): TExpr[BigDecimal] =
-    Call(FunctionSpecs.column, ref.asInstanceOf[TExpr[Any]])
+    Call(FunctionSpecs.column, Some(ref.asInstanceOf[TExpr[Any]]))
+
+  /**
+   * Create COLUMN expression with no arguments (returns column of current cell).
+   *
+   * Example: TExpr.column() in cell C5 returns 3
+   */
+  def column(): TExpr[BigDecimal] =
+    Call(FunctionSpecs.column, None)
 
   /**
    * Create ROWS expression.
