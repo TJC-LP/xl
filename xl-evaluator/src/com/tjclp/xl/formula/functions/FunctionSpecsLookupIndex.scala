@@ -42,24 +42,42 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
           case Some(expr) => ctx.evalExpr(expr).map(Some(_))
           case None => Right(None)
         result <- {
-          val rowIdx = rowNum.toInt - 1
-          val colIdx = colNum.map(_.toInt - 1).getOrElse(0)
           val startCol = array.colStart.index0
           val startRow = array.rowStart.index0
           val numCols = array.colEnd.index0 - startCol + 1
           val numRows = array.rowEnd.index0 - startRow + 1
 
+          // Excel INDEX behavior for 2-arg form:
+          // - Single-row array: second arg is col_num
+          // - Single-column array: second arg is row_num
+          // - Multi-dimensional: second arg is row_num, col defaults to 1
+          val (rowIdx, colIdx) = colNum match
+            case Some(c) =>
+              // 3-arg form: explicit row and column
+              (rowNum.toInt - 1, c.toInt - 1)
+            case None =>
+              // 2-arg form: interpretation depends on array shape
+              if numRows == 1 then
+                // Single-row array: second arg is column number
+                (0, rowNum.toInt - 1)
+              else if numCols == 1 then
+                // Single-column array: second arg is row number
+                (rowNum.toInt - 1, 0)
+              else
+                // Multi-dimensional array: second arg is row, column defaults to 1
+                (rowNum.toInt - 1, 0)
+
           if rowIdx < 0 || rowIdx >= numRows then
             Left(
               EvalError.EvalFailed(
-                s"INDEX: row_num ${rowNum.toInt} is out of bounds (array has $numRows rows, valid range: 1-$numRows) (#REF!)",
+                s"INDEX: row_num ${rowIdx + 1} is out of bounds (array has $numRows rows, valid range: 1-$numRows) (#REF!)",
                 Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
               )
             )
           else if colIdx < 0 || colIdx >= numCols then
             Left(
               EvalError.EvalFailed(
-                s"INDEX: col_num ${colNum.map(_.toInt).getOrElse(1)} is out of bounds (array has $numCols columns, valid range: 1-$numCols) (#REF!)",
+                s"INDEX: col_num ${colIdx + 1} is out of bounds (array has $numCols columns, valid range: 1-$numCols) (#REF!)",
                 Some(s"INDEX(${array.toA1}, $rowNum${colNum.map(c => s", $c").getOrElse("")})")
               )
             )
