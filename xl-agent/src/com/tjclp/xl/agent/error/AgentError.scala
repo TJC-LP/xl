@@ -14,6 +14,8 @@ enum AgentError extends Exception with NoStackTrace:
   case ConfigError(message: String)
   case TaskLoadError(cause: String)
   case ParseError(json: String, cause: String)
+  case SkillsApiError(cause: String)
+  case GradingFailed(cause: String)
 
   override def getMessage: String = this match
     case ApiKeyMissing(msg) => s"API key missing: $msg"
@@ -26,3 +28,5 @@ enum AgentError extends Exception with NoStackTrace:
     case ConfigError(msg) => s"Configuration error: $msg"
     case TaskLoadError(c) => s"Failed to load tasks: $c"
     case ParseError(json, c) => s"JSON parse error: $c (json: ${json.take(100)})"
+    case SkillsApiError(c) => s"Skills API error: $c"
+    case GradingFailed(c) => s"Grading failed: $c"

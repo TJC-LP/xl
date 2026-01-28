@@ -57,9 +57,9 @@ object Agent:
         // Upload input file
         inputFile <- client.uploadFile(task.inputFile)
 
-        // Build prompts
-        systemPrompt = buildSystemPrompt(task.binaryName, task.skillName)
-        userPrompt = buildUserPrompt(task, task.binaryName)
+        // Build prompts using actual uploaded filenames
+        systemPrompt = buildSystemPrompt(binaryFile.filename, skillFile.filename)
+        userPrompt = buildUserPrompt(task, binaryFile.filename)
 
         // Send request with streaming
         response <- CodeExecution.sendRequest(

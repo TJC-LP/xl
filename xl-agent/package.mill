@@ -17,7 +17,8 @@ object `package` extends build.XLInternalModule {
     mvn"io.circe::circe-generic:0.14.10",
     mvn"io.circe::circe-parser:0.14.10",
     mvn"io.github.cdimascio:dotenv-java:3.1.0",
-    mvn"org.apache.commons:commons-compress:1.27.1"
+    mvn"org.apache.commons:commons-compress:1.27.1",
+    mvn"com.squareup.okhttp3:okhttp:4.12.0"
   )
 
   object test extends ScalaTests with build.XLTestModule {

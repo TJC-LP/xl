@@ -1,10 +1,12 @@
-package com.tjclp.xl.agent.benchmark
+package com.tjclp.xl.agent.benchmark.spreadsheetbench
 
 import cats.effect.{ExitCode, IO, IOApp, Resource}
 import cats.syntax.all.*
 import cats.effect.std.Semaphore
 import com.tjclp.xl.agent.{Agent, AgentConfig, AgentEvent, AgentTask, TokenUsage, UploadedFile}
 import com.tjclp.xl.agent.anthropic.AnthropicClientIO
+import com.tjclp.xl.agent.benchmark.*
+import com.tjclp.xl.agent.benchmark.common.FileManager
 import com.tjclp.xl.agent.error.AgentError
 
 import java.nio.file.{Files, Path, StandardOpenOption}
@@ -85,8 +87,8 @@ object Runner extends IOApp:
     config: BenchConfig,
     logsDir: Path
   ): IO[TaskResult] =
-    if task.isVba then
-      IO.println(s"[${task.id}] SKIPPED (VBA/Macro task)") *>
+    if task.isVba && config.taskIds.isEmpty then
+      IO.println(s"[${task.id}] SKIPPED (VBA/Macro task - use --task to run explicitly)") *>
         IO.pure(TaskResult.skipped(task, "VBA/Macro task"))
     else
       (for
@@ -301,31 +303,10 @@ ${"=" * 60}
     }
 
   private def resolveBinaryPath(config: BenchConfig): IO[Path] =
-    config.xlBinary match
-      case Some(p) => IO.pure(p)
-      case None =>
-        findFile(
-          "xl-0.8.1-linux-amd64",
-          List("../benchmark", "examples/anthropic-sdk/benchmark", ".")
-        )
+    FileManager.resolveBinaryPath(config.xlBinary)
 
   private def resolveSkillPath(config: BenchConfig): IO[Path] =
-    config.xlSkill match
-      case Some(p) => IO.pure(p)
-      case None =>
-        findFile(
-          "xl-skill-0.8.1.zip",
-          List("../benchmark", "examples/anthropic-sdk/benchmark", ".")
-        )
-
-  private def findFile(name: String, dirs: List[String]): IO[Path] =
-    IO.blocking {
-      import java.nio.file.Paths
-      dirs.view
-        .map(d => Paths.get(d, name))
-        .find(p => Files.exists(p))
-        .getOrElse(Paths.get(dirs.head, name))
-    }
+    FileManager.resolveSkillPath(config.xlSkill)
 
   private def parseArgs(args: List[String]): IO[BenchConfig] =
     IO {
@@ -383,7 +364,7 @@ ${"=" * 60}
 SpreadsheetBench - Evaluate LLM spreadsheet capabilities
 
 Usage:
-  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.Runner -- [options]
+  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- [options]
 
 Task Selection:
   --task <id>           Run a single task by ID
@@ -404,10 +385,10 @@ Development:
 
 Examples:
   # Run a single task
-  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.Runner -- --task 59196
+  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --task 59196
 
   # Run first 5 tasks sequentially with verbose output
-  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.Runner -- --limit 5 --parallelism 1 --verbose
+  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --limit 5 --parallelism 1 --verbose
 
 Output:
   results/

@@ -54,24 +54,16 @@ scala-cli run examples/anthropic-sdk/create_sample.sc
 scala-cli run examples/anthropic-sdk/xl_code_execution.sc
 ```
 
-**Python:**
-```bash
-pip install anthropic python-dotenv
-python examples/anthropic-sdk/xl_code_execution.py
-```
-
 ## Files
 
 | File | Description |
 |------|-------------|
 | `xl_code_execution.sc` | Scala-CLI example using Anthropic Java SDK |
-| `xl_code_execution.py` | Python example using Anthropic Python SDK |
 | `create_sample.sc` | Script to generate sample.xlsx |
 | `sample.xlsx` | Sample spreadsheet with formulas and styling |
 | `.env.example` | Template for API key configuration |
 | `.env` | Your API key (gitignored) |
-| `xl-linux-amd64` | Linux binary (downloaded from releases) |
-| `benchmark/` | Token efficiency benchmark (xl CLI vs Anthropic xlsx skill) |
+| `benchmark/` | Contains xl binaries and skill files (assets only) |
 
 ## How It Works
 
@@ -117,11 +109,6 @@ Usage: 30541 input, 1664 output
 
 Replace the file paths in the examples:
 
-```python
-# Python
-SAMPLE_PATH = SCRIPT_DIR / "your-file.xlsx"
-```
-
 ```scala
 // Scala
 val samplePath = scriptDir.resolve("your-file.xlsx")
@@ -129,7 +116,7 @@ val samplePath = scriptDir.resolve("your-file.xlsx")
 
 ### Modifying Skill Instructions
 
-Edit `SKILL_INSTRUCTIONS` / `skillInstructions` to:
+Edit `skillInstructions` to:
 - Add more xl commands
 - Include domain-specific guidance
 - Reference additional uploaded files
@@ -158,20 +145,23 @@ cat examples/anthropic-sdk/.env
 - `com.anthropic:anthropic-java:2.11.1`
 - `io.github.cdimascio:dotenv-java:3.2.0`
 
-**Python:**
-- `anthropic`
-- `python-dotenv`
+## Benchmarks
 
-## Token Efficiency Benchmark
+All benchmarks have been migrated to the `xl-agent` module for better integration and maintainability.
 
-The `benchmark/` directory contains a benchmark comparing xl CLI vs Anthropic's built-in xlsx skill:
-
+### SpreadsheetBench
+Evaluates LLM spreadsheet capabilities using the SpreadsheetBench dataset:
 ```bash
-cd benchmark
-uv run benchmark.py  # Parallel execution, auto-downloads assets from GitHub
+./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --task 59196 --verbose
 ```
 
-See [benchmark/README.md](benchmark/README.md) for details.
+### Token Efficiency Benchmark
+Compares token usage between xl CLI and Anthropic's built-in xlsx skill:
+```bash
+./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.token.TokenRunner -- --task list_sheets --verbose
+```
+
+See the [xl-agent module](../../xl-agent/) for full benchmark documentation.
 
 ## Related Documentation
 
