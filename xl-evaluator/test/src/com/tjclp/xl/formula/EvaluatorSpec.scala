@@ -859,6 +859,26 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case other => fail(s"Expected Number(20), got $other")
   }
 
+  test("INDEX: single row array treats second arg as column") {
+    // Excel behavior: INDEX(single_row, n) treats n as column number
+    // This is the pattern used in =INDEX($D$2:$G$2, MATCH(MAX(D3:G3), D3:G3, 0))
+    val sheet = sheetWith(
+      ARef.from0(3, 1) -> CellValue.Text("A"), // D2
+      ARef.from0(4, 1) -> CellValue.Text("B"), // E2
+      ARef.from0(5, 1) -> CellValue.Text("C"), // F2
+      ARef.from0(6, 1) -> CellValue.Text("D") // G2
+    )
+    // INDEX(D2:G2, 4) should return "D" (4th column)
+    sheet.evaluateFormula("=INDEX(D2:G2, 4)") match
+      case Right(CellValue.Text(s)) => assertEquals(s, "D")
+      case other => fail(s"Expected Text(D), got $other")
+
+    // INDEX(D2:G2, 1) should return "A" (1st column)
+    sheet.evaluateFormula("=INDEX(D2:G2, 1)") match
+      case Right(CellValue.Text(s)) => assertEquals(s, "A")
+      case other => fail(s"Expected Text(A), got $other")
+  }
+
   test("INDEX: out of bounds returns descriptive #REF! error") {
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal(10)), // A1
