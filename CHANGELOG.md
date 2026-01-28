@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.1] - 2026-01-28
+
+### Fixed
+
+- **Aggregate functions**: Evaluate uncached formulas in SUM, AVERAGE, COUNT, etc. (#188)
+  - Formula cells with no cached value are now evaluated before aggregation
+  - Fixes incorrect results when aggregating ranges containing unevaluated formulas
+
+- **INDEX function**: 2-argument form now correctly treats second arg as column number for single-row arrays (#189)
+  - `INDEX(D2:G2, 4)` now returns the 4th column (was incorrectly treating as row number)
+  - Fixes header lookup patterns like `=INDEX($D$2:$G$2, MATCH(MAX(D3:G3), D3:G3, 0))`
+  - Single-column arrays still correctly treat second arg as row number
+
+---
+
 ## [0.8.0] - 2026-01-27
 
 ### Added
