@@ -135,6 +135,11 @@ xl -f in.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
 --eval                # Evaluate formulas (compute live values)
 --formulas            # Show formulas instead of values
 
+# Array formula evaluation (evala command)
+xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)"           # Evaluate and display result
+xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)" --at E1   # Spill result starting at E1
+xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                   # Array arithmetic with broadcasting
+
 # Style command flags (styles merge by default, use --replace for full replacement)
 --replace             # Replace entire style instead of merging
 --border <style>      # Border style for all sides: none, thin, medium, thick

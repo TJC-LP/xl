@@ -140,7 +140,7 @@ class ArrayArithmeticSpec extends FunSuite:
     )
 
     assert(result.isLeft, s"Expected Left (error), got $result")
-    assert(result.swap.toOption.get.toString.contains("incompatible"))
+    assert(result.swap.toOption.get.toString.contains("mismatch"))
   }
 
   test("division by zero in array returns error") {

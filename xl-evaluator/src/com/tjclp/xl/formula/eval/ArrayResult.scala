@@ -44,7 +44,7 @@ final case class ArrayResult(values: Vector[Vector[CellValue]]):
     else CellValue.Empty
 
   /** Check if array is empty (0x0). */
-  def isEmpty: Boolean = values.isEmpty || values.forall(_.isEmpty)
+  def isEmpty: Boolean = rows == 0 || cols == 0
 
 object ArrayResult:
   /** Empty array result. */

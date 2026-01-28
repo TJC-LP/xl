@@ -150,7 +150,7 @@ object ArrayArithmetic:
     else
       Left(
         EvalError.EvalFailed(
-          s"Cannot broadcast arrays: incompatible $dimName ($l vs $r)",
+          s"Cannot broadcast arrays: $dimName mismatch ($l vs $r). Broadcasting requires dimensions to match or be 1.",
           None
         )
       )
