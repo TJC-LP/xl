@@ -135,6 +135,11 @@ xl -f in.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
 --eval                # Evaluate formulas (compute live values)
 --formulas            # Show formulas instead of values
 
+# Array formula evaluation (evala command)
+xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)"           # Evaluate and display result
+xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)" --at E1   # Spill result starting at E1
+xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                   # Array arithmetic with broadcasting
+
 # Style command flags (styles merge by default, use --replace for full replacement)
 --replace             # Replace entire style instead of merging
 --border <style>      # Border style for all sides: none, thin, medium, thick
@@ -273,7 +278,7 @@ sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
 sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
 ```
 
-**81 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, MIN, MAX, IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, VLOOKUP, XLOOKUP, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+**82 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, MIN, MAX, IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, VLOOKUP, XLOOKUP, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE
 
 ### Rich Text
 ```scala

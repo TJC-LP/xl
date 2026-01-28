@@ -73,6 +73,20 @@ trait TExprCoercions:
       other.asInstanceOf[TExpr[BigDecimal]] // Safe: non-PolyRef already has correct type
 
   /**
+   * Convert any TExpr to BigDecimal type, preserving RangeRef for array arithmetic.
+   *
+   * Unlike asNumericExpr which converts all expressions, this preserves RangeRef and SheetRange so
+   * the evaluator can convert them to ArrayResult for array arithmetic with broadcasting.
+   *
+   * Used by binary arithmetic operators (+, -, *, /) to support array formulas.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def asNumericOrRangeExpr(expr: TExpr[?]): TExpr[BigDecimal] = expr match
+    case r: TExpr.RangeRef => r.asInstanceOf[TExpr[BigDecimal]] // Preserve for array eval
+    case sr: TExpr.SheetRange => sr.asInstanceOf[TExpr[BigDecimal]] // Preserve for array eval
+    case other => asNumericExpr(other)
+
+  /**
    * Convert any TExpr to Boolean type.
    *
    * Used by logical functions (AND, OR, NOT, IF) to handle PolyRef arguments.

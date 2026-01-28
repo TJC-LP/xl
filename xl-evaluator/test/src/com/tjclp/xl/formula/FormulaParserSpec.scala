@@ -1029,7 +1029,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("PV"))
     assert(functions.contains("RATE"))
     assert(functions.contains("NPER"))
-    assertEquals(functions.length, 81)
+    // Array functions
+    assert(functions.contains("TRANSPOSE"))
+    assertEquals(functions.length, 82)
   }
 
   test("FunctionRegistry.lookup finds spec-based functions") {
