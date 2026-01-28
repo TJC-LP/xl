@@ -370,8 +370,8 @@ object SheetEvaluator:
           )
 
         // Evaluate TExpr against sheet
-        result <- Evaluator.instance
-          .eval(expr, sheet, clock, workbook)
+        result <- Evaluator.arrayInstance
+          .eval(expr, sheet, clock, workbook, Some(originRef))
           .left
           .map(evalError => evalErrorToXLError(evalError, Some(formula)))
 

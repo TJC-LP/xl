@@ -69,7 +69,14 @@ object Evaluator:
    *
    * Pure functional implementation with short-circuit evaluation for And/Or.
    */
-  def instance: Evaluator = new EvaluatorImpl
+  def instance: Evaluator = new EvaluatorImpl()
+
+  /**
+   * Evaluator instance that allows array results to propagate.
+   *
+   * Used for array formula evaluation where arithmetic over ranges should spill arrays.
+   */
+  def arrayInstance: Evaluator = new EvaluatorImpl(allowArrayResults = true)
 
   /**
    * Convenience method for direct evaluation (forwards to instance.eval).
@@ -193,7 +200,7 @@ object Evaluator:
  *
  * Implements all TExpr cases with proper error handling and short-circuit semantics.
  */
-private class EvaluatorImpl extends Evaluator:
+private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
@@ -421,11 +428,17 @@ private class EvaluatorImpl extends Evaluator:
             }
 
       case call: TExpr.Call[?] =>
+        def evalArg[A](expr: TExpr[A]): Either[EvalError, A] =
+          eval(expr, sheet, clock, workbook, currentCell).flatMap {
+            case _: ArrayResult =>
+              Left(EvalError.TypeMismatch("function argument", "scalar", "array"))
+            case value => Right(value.asInstanceOf[A])
+          }
         val ctx = EvalContext(
           sheet,
           clock,
           workbook,
-          [A] => (expr: TExpr[A]) => eval(expr, sheet, clock, workbook, currentCell),
+          [A] => (expr: TExpr[A]) => evalArg(expr),
           currentCell
         )
         call.spec.eval(call.args, ctx)
@@ -499,9 +512,12 @@ private class EvaluatorImpl extends Evaluator:
       xOp <- toOperand(xVal, sheet)
       yOp <- toOperand(yVal, sheet)
       result <- ArrayArithmetic.broadcast(xOp, yOp, op)
-    yield result match
-      case ArrayArithmetic.ArrayOperand.Scalar(v) => v
-      case ArrayArithmetic.ArrayOperand.Array(arr) => arr
+      output <- result match
+        case ArrayArithmetic.ArrayOperand.Scalar(v) => Right(v)
+        case ArrayArithmetic.ArrayOperand.Array(arr) =>
+          if allowArrayResults then Right(arr)
+          else Left(EvalError.TypeMismatch("arithmetic", "number", "array"))
+    yield output
 
 /**
  * Depth-aware evaluator for cross-sheet formula cycle protection (GH-161).
@@ -509,5 +525,6 @@ private class EvaluatorImpl extends Evaluator:
  * Extends EvaluatorImpl but tracks recursion depth. When a SheetRef with uncached formula triggers
  * recursive evaluation, the depth is passed through to detect infinite loops.
  */
-private class EvaluatorWithDepth(depth: Int) extends EvaluatorImpl:
+private class EvaluatorWithDepth(depth: Int, allowArrayResults: Boolean = false)
+    extends EvaluatorImpl(allowArrayResults):
   override protected def currentDepth: Int = depth

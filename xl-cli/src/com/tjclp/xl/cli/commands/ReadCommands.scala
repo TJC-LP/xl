@@ -464,13 +464,48 @@ object ReadCommands:
       for
         sheet <- SheetResolver.requireSheet(wb, sheetOpt, "evala")
         tempSheet <- applyOverrides(sheet, overrides)
+        // Pre-evaluate formulas in the dependency closure (same as eval)
+        targetDeps <- IO.fromEither(
+          FormulaParser
+            .parse(formula)
+            .map(expr => DependencyGraph.extractDependencies(expr))
+            .left
+            .map(e => new Exception(s"Parse error: $e"))
+        )
+        graph = DependencyGraph.fromSheet(tempSheet)
+        allDeps = DependencyGraph.transitiveDependencies(graph, targetDeps)
+        formulaDeps = allDeps.filter(ref =>
+          tempSheet(ref).value match
+            case _: CellValue.Formula => true
+            case _ => false
+        )
+        evalOrder <- IO.fromEither(
+          if formulaDeps.isEmpty then scala.util.Right(List.empty[ARef])
+          else
+            DependencyGraph
+              .topologicalSort(graph)
+              .map(_.filter(formulaDeps.contains))
+              .left
+              .map(e => new Exception(e.toString))
+        )
+        evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
+          sheetIO.flatMap { s =>
+            IO.fromEither(
+              SheetEvaluator
+                .evaluateCell(s)(ref, workbook = Some(wb))
+                .map(value => s.put(ref, value))
+                .left
+                .map(e => new Exception(e.message))
+            )
+          }
+        }
         // Parse target ref or use a virtual cell far from data
         originRef = targetRefOpt
           .flatMap(ARef.parse(_).toOption)
           .getOrElse(ARef.from0(25, 999)) // Z1000
         result <- IO.fromEither(
           SheetEvaluator
-            .evaluateArrayFormula(tempSheet)(formula, originRef, workbook = Some(wb))
+            .evaluateArrayFormula(evalSheet)(formula, originRef, workbook = Some(wb))
             .left
             .map(e => new Exception(e.message))
         )

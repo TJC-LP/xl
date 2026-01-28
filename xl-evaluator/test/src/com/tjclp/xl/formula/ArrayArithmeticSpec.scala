@@ -303,3 +303,87 @@ class ArrayArithmeticSpec extends FunSuite:
     assertEquals(updatedSheet(ref"C2").value, CellValue.Number(102))
     assertEquals(updatedSheet(ref"C3").value, CellValue.Number(103))
   }
+
+  // ========== Dependency Evaluation Tests ==========
+
+  test("array formula uses cached values from formula cells") {
+    // When formula cells have cached values, array evaluation should use them
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Formula("=10*2", Some(CellValue.Number(20))))
+      .put(ref"A2", CellValue.Formula("=15*2", Some(CellValue.Number(30))))
+
+    val result = sheet.evaluateArrayFormula("=A1:A2*3", ref"C1")
+
+    assert(result.isRight, s"Expected Right, got $result")
+    val (updatedSheet, spillRange) = result.toOption.get
+
+    assertEquals(spillRange.height, 2)
+    assertEquals(updatedSheet(ref"C1").value, CellValue.Number(60)) // 20 * 3
+    assertEquals(updatedSheet(ref"C2").value, CellValue.Number(90)) // 30 * 3
+  }
+
+  test("array formula with formula dependencies (dependency chain)") {
+    // B1 depends on A1, array formula depends on B1
+    // This tests that formula dependencies are resolved
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(5))
+      .put(ref"A2", CellValue.Number(10))
+      .put(ref"B1", CellValue.Formula("=A1*2", Some(CellValue.Number(10))))
+      .put(ref"B2", CellValue.Formula("=A2*2", Some(CellValue.Number(20))))
+
+    val result = sheet.evaluateArrayFormula("=B1:B2+100", ref"D1")
+
+    assert(result.isRight, s"Expected Right, got $result")
+    val (updatedSheet, spillRange) = result.toOption.get
+
+    assertEquals(spillRange.height, 2)
+    assertEquals(updatedSheet(ref"D1").value, CellValue.Number(110)) // 10 + 100
+    assertEquals(updatedSheet(ref"D2").value, CellValue.Number(120)) // 20 + 100
+  }
+
+  // ========== Array Mode Distinction Tests ==========
+
+  test("regular evaluateFormula errors on range arithmetic (GH-array-mode)") {
+    // Regular evaluation should NOT allow array results to propagate
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"A2", CellValue.Number(2))
+      .put(ref"B1", CellValue.Number(10))
+      .put(ref"B2", CellValue.Number(20))
+
+    // Range * Range would produce array in array mode, but should error in regular mode
+    val result = sheet.evaluateFormula("=A1:A2*B1:B2")
+
+    assert(result.isLeft, s"Expected Left (array not allowed), got $result")
+  }
+
+  test("evaluateArrayFormula allows range arithmetic") {
+    // Array evaluation SHOULD allow array results
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"A2", CellValue.Number(2))
+      .put(ref"B1", CellValue.Number(10))
+      .put(ref"B2", CellValue.Number(20))
+
+    val result = sheet.evaluateArrayFormula("=A1:A2*B1:B2", ref"D1")
+
+    assert(result.isRight, s"Expected Right, got $result")
+    val (updatedSheet, spillRange) = result.toOption.get
+
+    assertEquals(spillRange.height, 2)
+    assertEquals(updatedSheet(ref"D1").value, CellValue.Number(10)) // 1 * 10
+    assertEquals(updatedSheet(ref"D2").value, CellValue.Number(40)) // 2 * 20
+  }
+
+  test("regular evaluateFormula still allows scalar ops on ranges via SUM/etc") {
+    // Regular evaluation should still work with aggregate functions on ranges
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"A2", CellValue.Number(2))
+      .put(ref"A3", CellValue.Number(3))
+
+    val result = sheet.evaluateFormula("=SUM(A1:A3)*10")
+
+    assert(result.isRight, s"Expected Right, got $result")
+    assertEquals(result.toOption.get, CellValue.Number(60)) // (1+2+3) * 10
+  }
