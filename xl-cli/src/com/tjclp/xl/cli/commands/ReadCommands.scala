@@ -438,6 +438,45 @@ object ReadCommands:
         )
       yield Format.evalSuccess(formula, result, overrides)
 
+  /**
+   * Evaluate array formula and display result as table.
+   *
+   * Array formulas like TRANSPOSE return multiple values that are displayed as a grid. Unlike
+   * regular eval which returns a single value, evala shows the full spilled array.
+   */
+  def evalArray(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    formulaStr: String,
+    targetRefOpt: Option[String],
+    overrides: List[String]
+  ): IO[String] =
+    val formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
+
+    // Array formulas always need a sheet context
+    if wb.sheets.isEmpty then
+      IO.raiseError(
+        new Exception(
+          "Array formula evaluation requires a file. Use --file to specify an Excel file."
+        )
+      )
+    else
+      for
+        sheet <- SheetResolver.requireSheet(wb, sheetOpt, "evala")
+        tempSheet <- applyOverrides(sheet, overrides)
+        // Parse target ref or use a virtual cell far from data
+        originRef = targetRefOpt
+          .flatMap(ARef.parse(_).toOption)
+          .getOrElse(ARef.from0(25, 999)) // Z1000
+        result <- IO.fromEither(
+          SheetEvaluator
+            .evaluateArrayFormula(tempSheet)(formula, originRef, workbook = Some(wb))
+            .left
+            .map(e => new Exception(e.message))
+        )
+        (updatedSheet, spillRange) = result
+      yield Format.evalArraySuccess(formula, updatedSheet, spillRange, overrides)
+
   // ==========================================================================
   // Private helpers
   // ==========================================================================

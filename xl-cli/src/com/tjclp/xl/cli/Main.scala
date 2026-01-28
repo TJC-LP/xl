@@ -68,7 +68,8 @@ object Main
 
     // Headless commands: --file is optional (for constant formulas like =1+1, =PI())
     // Note: --stream not supported for eval (needs formula analysis)
-    val headlessOpts = (fileOpt.orNone, sheetOpt, maxSizeOpt, evalCmd).mapN {
+    // evala requires --file (array formulas need sheet context)
+    val headlessOpts = (fileOpt.orNone, sheetOpt, maxSizeOpt, evalCmd orElse evalArrayCmd).mapN {
       (fileOpt, sheet, maxSize, cmd) =>
         runHeadless(fileOpt, sheet, maxSize, cmd)
     }
@@ -515,6 +516,17 @@ EXAMPLES:
       }
     }
 
+  private val atOpt =
+    Opts.option[String]("at", "Target cell for array spill (default: virtual cell)").orNone
+
+  val evalArrayCmd: Opts[CliCommand] =
+    Opts.subcommand("evala", "Evaluate array formula and display result grid") {
+      (formulaArg, atOpt, withOpt).mapN { (formula, target, withStr) =>
+        val overrides = withStr.toList.flatMap(_.split(",").map(_.trim).filter(_.nonEmpty))
+        CliCommand.EvalArray(formula, target, overrides)
+      }
+    }
+
   // --- Mutate (require -o) ---
 
   // Variadic values for put (supports single value, fill pattern, or batch values)
@@ -942,6 +954,8 @@ Operations execute in order. Use "-" to read from stdin."""
       result <- cmd match
         case CliCommand.Eval(formulaStr, overrides) =>
           ReadCommands.eval(wb, sheet, formulaStr, overrides)
+        case CliCommand.EvalArray(formulaStr, targetRef, overrides) =>
+          ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides)
         case other =>
           IO.raiseError(new Exception(s"Unexpected headless command: $other"))
     yield result).attempt.flatMap {
@@ -1253,6 +1267,9 @@ Operations execute in order. Use "-" to read from stdin."""
 
     case CliCommand.Eval(formulaStr, overrides) =>
       ReadCommands.eval(wb, sheetOpt, formulaStr, overrides)
+
+    case CliCommand.EvalArray(formulaStr, targetRef, overrides) =>
+      ReadCommands.evalArray(wb, sheetOpt, formulaStr, targetRef, overrides)
 
     // Write commands (require output)
     case CliCommand.Put(refStr, values) =>
