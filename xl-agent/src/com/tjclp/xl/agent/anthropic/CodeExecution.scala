@@ -24,7 +24,9 @@ object CodeExecution:
     systemPrompt: String,
     userPrompt: String,
     containerUploads: List[String], // File IDs to upload to container
-    eventQueue: Queue[IO, AgentEvent]
+    eventQueue: Queue[IO, AgentEvent],
+    configureRequest: MessageCreateParams.Builder => MessageCreateParams.Builder =
+      identity // Strategy-specific configuration (tools, betas, container)
   ): IO[BetaMessage] =
     IO.blocking {
       import java.util.{List as JList, Map as JMap}
@@ -36,7 +38,7 @@ object CodeExecution:
         contentBlocks.add(JMap.of("type", "container_upload", "file_id", fileId))
       }
 
-      val params = MessageCreateParams
+      val baseBuilder = MessageCreateParams
         .builder()
         .model(config.model)
         .maxTokens(config.maxTokens.toLong)
@@ -56,23 +58,9 @@ object CodeExecution:
             )
           )
         )
-        // Add code execution tool
-        .putAdditionalBodyProperty(
-          "tools",
-          JsonValue.from(
-            JList.of(
-              JMap.of(
-                "type",
-                "code_execution_20250825",
-                "name",
-                "code_execution"
-              )
-            )
-          )
-        )
-        // Add beta headers
-        .putAdditionalHeader("anthropic-beta", "code-execution-2025-08-25,files-api-2025-04-14")
-        .build()
+
+      // Apply strategy-specific configuration (tools, betas, container)
+      val params = configureRequest(baseBuilder).build()
 
       // Stream response
       val accumulator = BetaMessageAccumulator.create()

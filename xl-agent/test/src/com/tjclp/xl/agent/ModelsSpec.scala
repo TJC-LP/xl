@@ -22,14 +22,19 @@ class ModelsSpec extends CatsEffectSuite:
   test("AgentEvent JSON encoding") {
     val event: AgentEvent = AgentEvent.TextOutput("Hello")
     val json = event.asJson
-    assertEquals(json.hcursor.get[String]("type").toOption, Some("text"))
+    assertEquals(json.hcursor.get[String]("type").toOption, Some("TextOutput"))
     assertEquals(json.hcursor.get[String]("text").toOption, Some("Hello"))
   }
 
   test("AgentEvent.ToolInvocation JSON encoding") {
-    val event: AgentEvent = AgentEvent.ToolInvocation("code_execution", "ls -la")
+    val event: AgentEvent = AgentEvent.ToolInvocation(
+      name = "code_execution",
+      toolUseId = "tool-123",
+      input = io.circe.Json.obj(),
+      command = Some("ls -la")
+    )
     val json = event.asJson
-    assertEquals(json.hcursor.get[String]("type").toOption, Some("tool_invocation"))
+    assertEquals(json.hcursor.get[String]("type").toOption, Some("ToolInvocation"))
     assertEquals(json.hcursor.get[String]("name").toOption, Some("code_execution"))
     assertEquals(json.hcursor.get[String]("command").toOption, Some("ls -la"))
   }

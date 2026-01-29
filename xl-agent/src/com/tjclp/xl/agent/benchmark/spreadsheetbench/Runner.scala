@@ -4,9 +4,19 @@ import cats.effect.{ExitCode, IO, IOApp, Resource}
 import cats.syntax.all.*
 import cats.effect.std.Semaphore
 import com.tjclp.xl.agent.{Agent, AgentConfig, AgentEvent, AgentTask, TokenUsage, UploadedFile}
-import com.tjclp.xl.agent.anthropic.AnthropicClientIO
+import com.tjclp.xl.agent.anthropic.{AnthropicClientIO, SkillsApi}
+import com.tjclp.xl.agent.approach.{ApproachStrategy, XlApproachStrategy, XlsxApproachStrategy}
 import com.tjclp.xl.agent.benchmark.*
-import com.tjclp.xl.agent.benchmark.common.FileManager
+import com.tjclp.xl.agent.benchmark.common.{
+  ApproachResult,
+  ComparisonReport,
+  ComparisonReporter,
+  ComparisonStats,
+  FileManager,
+  ModelPricing,
+  TaskComparison,
+  UsageBreakdown
+}
 import com.tjclp.xl.agent.error.AgentError
 
 import java.nio.file.{Files, Path, StandardOpenOption}
@@ -33,53 +43,302 @@ object Runner extends IOApp:
         logsDir = config.outputDir.resolve("logs")
         _ <- IO.blocking(Files.createDirectories(logsDir))
 
-        // Resolve and upload binary and skill files
-        binaryPath <- resolveBinaryPath(config)
-        skillPath <- resolveSkillPath(config)
-        _ <- IO.println(s"Uploading xl binary and skill...")
-        _ <- IO.println(
-          s"  Binary: $binaryPath${if config.xlBinary.isDefined then " (dev override)" else ""}"
-        )
-        _ <- IO.println(
-          s"  Skill: $skillPath${if config.xlSkill.isDefined then " (dev override)" else ""}"
-        )
-
-        binary <- client.uploadFile(binaryPath)
-        _ <- IO.println(s"  Binary uploaded: ${binary.id}")
-        skill <- client.uploadFile(skillPath)
-        _ <- IO.println(s"  Skill uploaded: ${skill.id}")
-
         // Load tasks
         tasks <- TaskLoader.load(config)
-        _ <- IO.println(s"Running ${tasks.length} task(s) with parallelism ${config.parallelism}")
-        _ <- IO.println("-" * 60)
 
-        // Run tasks
-        agentConfig = AgentConfig(
-          verbose = config.verbose,
-          xlBinaryPath = config.xlBinary,
-          xlSkillPath = config.xlSkill
-        )
-        agent = Agent.create(client, agentConfig, binary, skill)
-
-        results <-
-          if config.parallelism == 1 then
-            tasks.traverse(task => runTask(agent, task, config, logsDir))
-          else
-            Semaphore[IO](config.parallelism.toLong).flatMap { sem =>
-              tasks.parTraverse(task => sem.permit.use(_ => runTask(agent, task, config, logsDir)))
-            }
-
-        // Build and save report
-        report <- buildReport(config, results)
-        _ <- saveReport(config, report)
-        _ <- printSummary(report)
-
-        // Cleanup
-        _ <- client.deleteFile(binary.id).attempt
-        _ <- client.deleteFile(skill.id).attempt
+        // Branch on comparison mode
+        _ <-
+          if config.compare then runComparisonBenchmark(config, client, tasks, logsDir)
+          else runSingleApproachBenchmark(config, client, tasks, logsDir)
       yield ()
     }
+
+  /** Run benchmark with a single approach (original behavior) */
+  private def runSingleApproachBenchmark(
+    config: BenchConfig,
+    client: AnthropicClientIO,
+    tasks: List[BenchTask],
+    logsDir: Path
+  ): IO[Unit] =
+    for
+      // Create approach strategy and track files for cleanup
+      _ <- IO.println(s"Approach: ${config.approach}")
+      strategyAndCleanup <- createStrategy(config, client)
+      (strategy, cleanupFiles) = strategyAndCleanup
+
+      _ <- IO.println(s"Running ${tasks.length} task(s) with parallelism ${config.parallelism}")
+      _ <- IO.println("-" * 60)
+
+      // Run tasks
+      agentConfig = AgentConfig(
+        verbose = config.verbose,
+        xlBinaryPath = config.xlBinary,
+        xlSkillPath = config.xlSkill
+      )
+      agent = Agent.create(client, agentConfig, strategy)
+
+      results <-
+        if config.parallelism == 1 then
+          tasks.traverse(task => runTask(agent, task, config, logsDir))
+        else
+          Semaphore[IO](config.parallelism.toLong).flatMap { sem =>
+            tasks.parTraverse(task => sem.permit.use(_ => runTask(agent, task, config, logsDir)))
+          }
+
+      // Build and save report
+      report <- buildReport(config, results)
+      _ <- saveReport(config, report)
+      _ <- printSummary(report)
+
+      // Cleanup uploaded files
+      _ <- cleanupFiles.traverse_(id => client.deleteFile(id).attempt)
+    yield ()
+
+  /** Run benchmark comparing both xl and xlsx approaches */
+  private def runComparisonBenchmark(
+    config: BenchConfig,
+    client: AnthropicClientIO,
+    tasks: List[BenchTask],
+    logsDir: Path
+  ): IO[Unit] =
+    for
+      _ <- IO.println("Comparison mode: running both xl and xlsx approaches")
+      _ <- IO.println("-" * 60)
+
+      // Setup xl approach (unless xlsx-only)
+      xlSetup <-
+        if config.xlsxOnly then IO.pure(None)
+        else
+          for
+            binaryPath <- resolveBinaryPath(config)
+            skillPath <- resolveSkillPath(config)
+            _ <- IO.println(s"Setting up xl approach...")
+            binary <- client.uploadFile(binaryPath)
+            _ <- IO.println(s"  Binary uploaded: ${binary.id}")
+            apiKey <- AnthropicClientIO.loadApiKey
+            skillId <- SkillsApi.getOrCreateXlSkill(apiKey, skillPath)
+            _ <- IO.println(s"  Skill ID: $skillId")
+            strategy = XlApproachStrategy(binary, skillId)
+          yield Some((strategy, binary.id))
+
+      // Setup xlsx approach (unless xl-only)
+      xlsxStrategy <-
+        if config.xlOnly then IO.pure(None)
+        else
+          IO.println("Setting up xlsx approach (openpyxl)...") *>
+            IO.pure(Some(XlsxApproachStrategy()))
+
+      _ <- IO.println(s"Running ${tasks.length} task(s) with parallelism ${config.parallelism}")
+      _ <- IO.println("-" * 60)
+
+      agentConfig = AgentConfig(
+        verbose = config.verbose,
+        xlBinaryPath = config.xlBinary,
+        xlSkillPath = config.xlSkill
+      )
+
+      // Run tasks with both approaches in parallel
+      comparisons <-
+        if config.parallelism == 1 then
+          tasks.traverse(task =>
+            runTaskComparison(client, agentConfig, xlSetup, xlsxStrategy, task, config, logsDir)
+          )
+        else
+          Semaphore[IO](config.parallelism.toLong).flatMap { sem =>
+            tasks.parTraverse(task =>
+              sem.permit.use(_ =>
+                runTaskComparison(client, agentConfig, xlSetup, xlsxStrategy, task, config, logsDir)
+              )
+            )
+          }
+
+      // Print comparison table
+      pricing = ModelPricing.forModel(agentConfig.model)
+      _ <- ComparisonReporter.printTable("SpreadsheetBench: xl vs xlsx", comparisons, pricing)
+
+      // Save comparison report
+      _ <- saveComparisonReport(config, agentConfig.model, comparisons, pricing)
+
+      // Cleanup
+      _ <- xlSetup.traverse_ { case (_, fileId) => client.deleteFile(fileId).attempt }
+    yield ()
+
+  /** Save comparison report to JSON file */
+  private def saveComparisonReport(
+    config: BenchConfig,
+    model: String,
+    comparisons: List[TaskComparison],
+    pricing: ModelPricing
+  ): IO[Unit] =
+    IO.blocking {
+      val timestamp = DateTimeFormatter
+        .ofPattern("yyyy-MM-dd'T'HH-mm-ss")
+        .format(Instant.now.atZone(ZoneId.systemDefault()))
+
+      val report = ComparisonReport(
+        timestamp = timestamp,
+        dataset = config.dataset,
+        model = model,
+        pricing = pricing,
+        stats = ComparisonStats.fromResults(comparisons, pricing),
+        results = comparisons
+      )
+
+      Files.createDirectories(config.outputDir)
+      val reportPath = config.outputDir.resolve(s"comparison_${timestamp}.json")
+      Files.writeString(reportPath, report.toJsonPretty)
+      println(s"\nComparison report saved to: $reportPath")
+    }
+
+  /** Run a single task with both approaches */
+  private def runTaskComparison(
+    client: AnthropicClientIO,
+    agentConfig: AgentConfig,
+    xlSetup: Option[(ApproachStrategy, String)],
+    xlsxStrategy: Option[ApproachStrategy],
+    task: BenchTask,
+    config: BenchConfig,
+    logsDir: Path
+  ): IO[TaskComparison] =
+    if task.isVba && config.taskIds.isEmpty then
+      IO.println(s"[${task.id}] SKIPPED (VBA/Macro task)") *>
+        IO.pure(TaskComparison(task.id, task.instruction.take(40), None, None))
+    else
+      for
+        _ <- IO.println(s"[${task.id}] Starting comparison...")
+
+        // Run xl approach
+        xlResult <- xlSetup.traverse { case (strategy, _) =>
+          val agent = Agent.create(client, agentConfig, strategy)
+          runTaskForComparison(agent, task, config, logsDir, "xl")
+        }
+
+        // Run xlsx approach
+        xlsxResult <- xlsxStrategy.traverse { strategy =>
+          val agent = Agent.create(client, agentConfig, strategy)
+          runTaskForComparison(agent, task, config, logsDir, "xlsx")
+        }
+
+        // Log summary
+        xlSummary = xlResult
+          .map(r => s"${r.usage.inputTokens}in/${r.usage.outputTokens}out")
+          .getOrElse("-")
+        xlsxSummary = xlsxResult
+          .map(r => s"${r.usage.inputTokens}in/${r.usage.outputTokens}out")
+          .getOrElse("-")
+        xlPass = xlResult.map(r => if r.passed then "\u2713" else "\u2717").getOrElse("-")
+        xlsxPass = xlsxResult.map(r => if r.passed then "\u2713" else "\u2717").getOrElse("-")
+        _ <- IO.println(s"[${task.id}] xl=$xlSummary $xlPass, xlsx=$xlsxSummary $xlsxPass")
+      yield TaskComparison(task.id, task.instruction.take(40), xlResult, xlsxResult)
+
+  /** Run a task with a single approach and convert to ApproachResult */
+  private def runTaskForComparison(
+    agent: Agent,
+    task: BenchTask,
+    config: BenchConfig,
+    logsDir: Path,
+    approach: String
+  ): IO[ApproachResult] =
+    (for
+      startTime <- IO.realTimeInstant.map(_.toEpochMilli)
+
+      // Run all test cases
+      testResults <- task.testCases.traverse { testCase =>
+        val outputDir = config.outputDir.resolve("outputs").resolve(task.id).resolve(approach)
+        val outputPath = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
+
+        IO.blocking(Files.createDirectories(outputDir)) *>
+          runSingleTestCase(agent, task, testCase, outputPath, config)
+      }
+
+      endTime <- IO.realTimeInstant.map(_.toEpochMilli)
+      latencyMs = endTime - startTime
+
+      // Aggregate results
+      totalUsage = testResults.foldLeft(TokenUsage.zero)((acc, r) => acc + r._1)
+      allPassed = testResults.forall(_._2)
+    yield ApproachResult(
+      approach = approach,
+      success = true,
+      passed = allPassed,
+      usage = UsageBreakdown.fromTokenUsage(totalUsage.inputTokens, totalUsage.outputTokens),
+      latencyMs = latencyMs
+    )).handleErrorWith { e =>
+      IO.pure(
+        ApproachResult(
+          approach = approach,
+          success = false,
+          passed = false,
+          usage = UsageBreakdown(0, 0),
+          latencyMs = 0,
+          error = Some(e.getMessage)
+        )
+      )
+    }
+
+  /** Run a single test case and return (usage, passed) */
+  private def runSingleTestCase(
+    agent: Agent,
+    task: BenchTask,
+    testCase: TestCase,
+    outputPath: Path,
+    config: BenchConfig
+  ): IO[(TokenUsage, Boolean)] =
+    val agentTask = AgentTask(
+      instruction = task.instruction,
+      inputFile = testCase.inputPath,
+      outputFile = outputPath,
+      answerPosition = Some(task.answerPosition)
+    )
+
+    for
+      result <- agent.run(agentTask)
+
+      // Evaluate
+      rangeResults <- result.outputPath match
+        case Some(path) =>
+          Evaluator.compare(path, testCase.answerPath, task.answerPosition)
+        case None =>
+          IO.pure(List(RangeResult(task.answerPosition, false, Nil)))
+
+      passed = rangeResults.forall(_.passed)
+    yield (result.usage, passed)
+
+  /** Create approach strategy and return file IDs to cleanup */
+  private def createStrategy(
+    config: BenchConfig,
+    client: AnthropicClientIO
+  ): IO[(ApproachStrategy, List[String])] =
+    config.approach match
+      case Approach.Xl =>
+        for
+          // Resolve paths
+          binaryPath <- resolveBinaryPath(config)
+          skillPath <- resolveSkillPath(config)
+
+          _ <- IO.println(s"Uploading xl binary...")
+          _ <- IO.println(
+            s"  Binary: $binaryPath${if config.xlBinary.isDefined then " (dev override)" else ""}"
+          )
+
+          binary <- client.uploadFile(binaryPath)
+          _ <- IO.println(s"  Binary uploaded: ${binary.id}")
+
+          // Register skill via Skills API (like TokenRunner)
+          apiKey <- AnthropicClientIO.loadApiKey
+          _ <- IO.println(s"Registering xl-cli skill via Skills API...")
+          _ <- IO.println(
+            s"  Skill: $skillPath${if config.xlSkill.isDefined then " (dev override)" else ""}"
+          )
+          skillId <- SkillsApi.getOrCreateXlSkill(apiKey, skillPath)
+          _ <- IO.println(s"  Skill ID: $skillId")
+
+          strategy = XlApproachStrategy(binary, skillId)
+        yield (strategy, List(binary.id)) // No skill file to cleanup
+
+      case Approach.Xlsx =>
+        IO.println("Using built-in xlsx skill (openpyxl)") *>
+          IO.pure((XlsxApproachStrategy(), Nil))
 
   private def runTask(
     agent: Agent,
@@ -103,9 +362,10 @@ object Runner extends IOApp:
         endTime <- IO.realTimeInstant.map(_.toEpochMilli)
         latencyMs = endTime - startTime
 
-        // Aggregate usage
+        // Aggregate usage and collect transcripts
         totalUsage = testResults.foldLeft(TokenUsage.zero)((acc, r) => acc + r._2)
         responseTexts = testResults.map(_._3)
+        transcripts = testResults.map(_._4)
 
         score = TaskScore.fromResults(testResults.map(_._1))
         statusEmoji =
@@ -129,7 +389,8 @@ object Runner extends IOApp:
             if flatResponses.nonEmpty then Some(flatResponses.mkString("\n---\n")) else None
         )
 
-        _ <- saveTaskLog(logsDir, task, result, responseTexts)
+        approach = config.approach.toString.toLowerCase
+        _ <- saveTaskLog(logsDir, task, result, responseTexts, transcripts, approach)
       yield result).handleErrorWith { e =>
         IO.println(s"[${task.id}] ERROR: ${e.getMessage}") *>
           IO.pure(
@@ -152,7 +413,7 @@ object Runner extends IOApp:
     testCase: TestCase,
     config: BenchConfig,
     logsDir: Path
-  ): IO[(TestCaseResult, TokenUsage, Option[String])] =
+  ): IO[(TestCaseResult, TokenUsage, Option[String], Vector[AgentEvent])] =
     val outputDir = config.outputDir.resolve("outputs").resolve(task.id)
     val outputPath = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
 
@@ -190,7 +451,8 @@ object Runner extends IOApp:
     yield (
       TestCaseResult(testCase.caseNum, passed, rangeResults),
       result.usage,
-      result.responseText
+      result.responseText,
+      result.transcript
     ))
       .handleErrorWith { e =>
         IO.println(s"  [${task.id}:${testCase.caseNum}] ERROR: ${e.getMessage}") *>
@@ -198,7 +460,8 @@ object Runner extends IOApp:
             (
               TestCaseResult(testCase.caseNum, false, Nil, Some(e.getMessage)),
               TokenUsage.zero,
-              None
+              None,
+              Vector.empty
             )
           )
       }
@@ -214,6 +477,7 @@ object Runner extends IOApp:
         timestamp = timestamp,
         dataset = config.dataset,
         model = "claude-opus-4-5-20251101",
+        approach = config.approach.toString.toLowerCase,
         aggregate = AggregateStats.fromResults(results),
         results = results
       )
@@ -222,7 +486,8 @@ object Runner extends IOApp:
   private def saveReport(config: BenchConfig, report: BenchmarkReport): IO[Unit] =
     IO.blocking {
       Files.createDirectories(config.outputDir)
-      val reportPath = config.outputDir.resolve(s"report_${report.timestamp}.json")
+      val reportPath =
+        config.outputDir.resolve(s"report_${report.approach}_${report.timestamp}.json")
       Files.writeString(reportPath, report.toJsonPretty)
       println(s"\nReport saved to: $reportPath")
     }
@@ -234,6 +499,7 @@ SpreadsheetBench Results Summary
 ${"=" * 60}
 Dataset: ${report.dataset}
 Model: ${report.model}
+Approach: ${report.approach}
 Timestamp: ${report.timestamp}
 ${"-" * 60}
 Total Tasks: ${report.aggregate.totalTasks}
@@ -253,13 +519,19 @@ ${"=" * 60}
     logsDir: Path,
     task: BenchTask,
     result: TaskResult,
-    responses: List[Option[String]]
+    responses: List[Option[String]],
+    transcripts: List[Vector[AgentEvent]],
+    approach: String
   ): IO[Unit] =
     IO.blocking {
-      val logPath = logsDir.resolve(s"${task.id}.md")
+      import io.circe.syntax.*
+
+      // Markdown log (with approach in filename)
+      val logPath = logsDir.resolve(s"${task.id}_${approach}.md")
       val content = new StringBuilder()
 
       content.append(s"# Task ${task.id}\n\n")
+      content.append(s"**Approach:** $approach\n\n")
       content.append(s"**Type:** ${task.instructionType}\n\n")
       content.append(
         s"**Score:** soft=${result.score.softRestriction}, hard=${result.score.hardRestriction}\n\n"
@@ -287,6 +559,19 @@ ${"=" * 60}
           }
           content.append("\n")
 
+        // Tool calls from transcript
+        transcripts.lift(idx).foreach { events =>
+          val toolCalls = events.collect { case AgentEvent.ToolInvocation(_, _, _, Some(cmd)) =>
+            cmd
+          }
+          if toolCalls.nonEmpty then
+            content.append(s"**Tool Calls:** ${toolCalls.length}\n\n")
+            toolCalls.zipWithIndex.foreach { case (cmd, i) =>
+              val truncated = if cmd.length > 500 then cmd.take(500) + "..." else cmd
+              content.append(s"${i + 1}. ```bash\n$truncated\n```\n\n")
+            }
+        }
+
         responses.lift(idx).flatten.foreach { resp =>
           content.append("**Model Response:**\n\n```\n")
           content.append(resp)
@@ -297,6 +582,32 @@ ${"=" * 60}
       Files.writeString(
         logPath,
         content.toString,
+        StandardOpenOption.CREATE,
+        StandardOpenOption.TRUNCATE_EXISTING
+      )
+
+      // JSON transcript (with approach in filename)
+      val transcriptPath = logsDir.resolve(s"${task.id}_${approach}_transcript.json")
+      val timestamp = java.time.format.DateTimeFormatter
+        .ofPattern("yyyy-MM-dd'T'HH-mm-ss")
+        .format(java.time.Instant.now.atZone(java.time.ZoneId.systemDefault()))
+
+      val transcriptJson = io.circe.Json.obj(
+        "taskId" -> task.id.asJson,
+        "approach" -> approach.asJson,
+        "timestamp" -> timestamp.asJson,
+        "testCases" -> transcripts.zipWithIndex.map { case (events, idx) =>
+          io.circe.Json.obj(
+            "caseNum" -> (idx + 1).asJson,
+            "eventCount" -> events.length.asJson,
+            "events" -> events.asJson
+          )
+        }.asJson
+      )
+
+      Files.writeString(
+        transcriptPath,
+        transcriptJson.spaces2,
         StandardOpenOption.CREATE,
         StandardOpenOption.TRUNCATE_EXISTING
       )
@@ -348,6 +659,24 @@ ${"=" * 60}
           case "--xl-skill" :: value :: rest =>
             config = config.copy(xlSkill = Some(Path.of(value)))
             remaining = rest
+          case "--approach" :: value :: rest =>
+            val approach = value.toLowerCase match
+              case "xl" => Approach.Xl
+              case "xlsx" => Approach.Xlsx
+              case _ =>
+                println(s"Unknown approach: $value (valid: xl, xlsx)")
+                Approach.Xl
+            config = config.copy(approach = approach)
+            remaining = rest
+          case "--compare" :: rest =>
+            config = config.copy(compare = true)
+            remaining = rest
+          case "--xl-only" :: rest =>
+            config = config.copy(xlOnly = true)
+            remaining = rest
+          case "--xlsx-only" :: rest =>
+            config = config.copy(xlsxOnly = true)
+            remaining = rest
           case "--help" :: _ =>
             println(HelpText)
             throw new RuntimeException("Help requested")
@@ -375,17 +704,32 @@ Task Selection:
 
 Configuration:
   --dataset <name>      Dataset to use (default: sample_data_200)
+  --approach <name>     Approach to use: xl (custom xl-cli) or xlsx (built-in openpyxl)
   --parallelism <n>     Number of parallel tasks (default: 4, use 1 for debugging)
   --output <dir>        Output directory for results (default: results)
   --verbose             Show full model responses
+
+Comparison Mode:
+  --compare             Run BOTH xl and xlsx approaches and compare results
+  --xl-only             With --compare: only run xl approach
+  --xlsx-only           With --compare: only run xlsx approach
 
 Development:
   --xl-binary <path>    Use local xl binary instead of released version
   --xl-skill <path>     Use local xl skill zip instead of released version
 
 Examples:
-  # Run a single task
+  # Run a single task with xl-cli approach (default)
   ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --task 59196
+
+  # Run a single task with xlsx approach (openpyxl)
+  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --task 59196 --approach xlsx
+
+  # Compare both approaches on the same task (single command!)
+  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --task 59196 --compare
+
+  # Compare on multiple tasks in parallel
+  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --tasks 59196,59197 --compare --parallelism 4
 
   # Run first 5 tasks sequentially with verbose output
   ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --limit 5 --parallelism 1 --verbose

@@ -33,37 +33,61 @@ object TokenUsage:
 
 /** Events emitted during agent execution */
 enum AgentEvent:
-  case TextOutput(text: String)
-  case ToolInvocation(name: String, command: String)
-  case ToolResult(stdout: String, stderr: String, exitCode: Option[Int] = None)
+  case TextOutput(text: String, contentIndex: Int = 0)
+  case ToolInvocation(
+    name: String,
+    toolUseId: String,
+    input: Json,
+    command: Option[String] = None
+  )
+  case ToolResult(
+    toolUseId: String,
+    stdout: String,
+    stderr: String,
+    exitCode: Option[Int] = None,
+    files: List[String] = Nil
+  )
   case FileCreated(fileId: String, filename: String)
   case Error(message: String)
 
 object AgentEvent:
+  import io.circe.syntax.*
+
   given Encoder[AgentEvent] = Encoder.instance {
-    case TextOutput(text) =>
-      Json.obj("type" -> Json.fromString("text"), "text" -> Json.fromString(text))
-    case ToolInvocation(name, command) =>
+    case TextOutput(text, idx) =>
       Json.obj(
-        "type" -> Json.fromString("tool_invocation"),
-        "name" -> Json.fromString(name),
-        "command" -> Json.fromString(command)
+        "type" -> "TextOutput".asJson,
+        "text" -> text.asJson,
+        "contentIndex" -> idx.asJson
       )
-    case ToolResult(stdout, stderr, exitCode) =>
+    case ToolInvocation(name, toolUseId, input, command) =>
       Json.obj(
-        "type" -> Json.fromString("tool_result"),
-        "stdout" -> Json.fromString(stdout),
-        "stderr" -> Json.fromString(stderr),
-        "exitCode" -> exitCode.fold(Json.Null)(Json.fromInt)
+        "type" -> "ToolInvocation".asJson,
+        "name" -> name.asJson,
+        "toolUseId" -> toolUseId.asJson,
+        "input" -> input,
+        "command" -> command.asJson
+      )
+    case ToolResult(toolUseId, stdout, stderr, exitCode, files) =>
+      Json.obj(
+        "type" -> "ToolResult".asJson,
+        "toolUseId" -> toolUseId.asJson,
+        "stdout" -> stdout.asJson,
+        "stderr" -> stderr.asJson,
+        "exitCode" -> exitCode.asJson,
+        "files" -> files.asJson
       )
     case FileCreated(fileId, filename) =>
       Json.obj(
-        "type" -> Json.fromString("file_created"),
-        "fileId" -> Json.fromString(fileId),
-        "filename" -> Json.fromString(filename)
+        "type" -> "FileCreated".asJson,
+        "fileId" -> fileId.asJson,
+        "filename" -> filename.asJson
       )
     case Error(message) =>
-      Json.obj("type" -> Json.fromString("error"), "message" -> Json.fromString(message))
+      Json.obj(
+        "type" -> "Error".asJson,
+        "message" -> message.asJson
+      )
   }
 
 /** Result of an agent execution */

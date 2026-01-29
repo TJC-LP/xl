@@ -3,7 +3,8 @@ package com.tjclp.xl.agent
 import cats.effect.{Clock, IO, Ref, Resource}
 import cats.effect.std.Queue
 import cats.syntax.all.*
-import com.tjclp.xl.agent.anthropic.{AnthropicClientIO, CodeExecution}
+import com.tjclp.xl.agent.anthropic.{AnthropicClientIO, CodeExecution, SkillsApi}
+import com.tjclp.xl.agent.approach.{ApproachStrategy, XlApproachStrategy}
 import com.tjclp.xl.agent.error.AgentError
 
 import java.nio.file.{Files, Path}
@@ -32,12 +33,11 @@ trait Agent:
 
 object Agent:
 
-  /** Create an Agent instance with the given configuration */
+  /** Create an Agent instance with the given configuration and approach strategy */
   def create(
     client: AnthropicClientIO,
     config: AgentConfig,
-    binaryFile: UploadedFile,
-    skillFile: UploadedFile
+    strategy: ApproachStrategy
   ): Agent = new Agent:
 
     override def run(task: AgentTask): IO[AgentResult] =
@@ -57,9 +57,9 @@ object Agent:
         // Upload input file
         inputFile <- client.uploadFile(task.inputFile)
 
-        // Build prompts using actual uploaded filenames
-        systemPrompt = buildSystemPrompt(binaryFile.filename, skillFile.filename)
-        userPrompt = buildUserPrompt(task, binaryFile.filename)
+        // Build prompts using strategy
+        systemPrompt = strategy.systemPrompt
+        userPrompt = strategy.userPrompt(task, task.inputFile.getFileName.toString)
 
         // Send request with streaming
         response <- CodeExecution.sendRequest(
@@ -67,8 +67,9 @@ object Agent:
           config,
           systemPrompt,
           userPrompt,
-          containerUploads = List(binaryFile.id, skillFile.id, inputFile.id),
-          eventQueue
+          containerUploads = strategy.containerUploads(inputFile.id),
+          eventQueue,
+          configureRequest = strategy.configureRequest
         )
 
         // Drain event queue and collect events
@@ -119,7 +120,7 @@ object Agent:
         }
       loop *> events.get
 
-  /** Create an Agent resource that manages uploaded files */
+  /** Create an Agent resource that manages uploaded files (xl-cli approach) */
   def resource(config: AgentConfig): Resource[IO, Agent] =
     for
       client <- AnthropicClientIO.fromEnv
@@ -128,14 +129,18 @@ object Agent:
       binaryPath <- Resource.eval(resolveBinaryPath(config))
       skillPath <- Resource.eval(resolveSkillPath(config))
 
-      // Upload binary and skill files
+      // Upload binary file
       binaryFile <- Resource.make(client.uploadFile(binaryPath))(f =>
         client.deleteFile(f.id).attempt.void
       )
-      skillFile <- Resource.make(client.uploadFile(skillPath))(f =>
-        client.deleteFile(f.id).attempt.void
-      )
-    yield create(client, config, binaryFile, skillFile)
+
+      // Register skill via Skills API (SKILL.md auto-indexed for token efficiency)
+      apiKey <- Resource.eval(AnthropicClientIO.loadApiKey)
+      skillId <- Resource.eval(SkillsApi.getOrCreateXlSkill(apiKey, skillPath))
+
+      // Create xl-cli approach strategy with skill ID
+      strategy = XlApproachStrategy(binaryFile, skillId)
+    yield create(client, config, strategy)
 
   private def resolveBinaryPath(config: AgentConfig): IO[Path] =
     config.xlBinaryPath match
@@ -163,79 +168,3 @@ object Agent:
         .find(p => Files.exists(p))
         .getOrElse(Paths.get(dirs.head, name))
     }
-
-  private def buildSystemPrompt(binaryName: String, skillName: String): String =
-    s"""You are a spreadsheet expert assistant. You have access to the xl CLI tool for manipulating Excel files.
-
-IMPORTANT REQUIREMENTS:
-1. Use the xl CLI tool for ALL Excel operations (not Python libraries like openpyxl)
-2. ALWAYS save output to $$OUTPUT_DIR/output.xlsx using the -o flag
-3. When you finish modifying the spreadsheet, the final file MUST be at $$OUTPUT_DIR/output.xlsx
-4. DO NOT modify the input data - only add formulas or values where specified
-
-AVAILABLE FILES:
-- $binaryName: The xl CLI binary (chmod +x it first, then use ./$binaryName or move to PATH)
-- $skillName: Documentation for the xl CLI (unzip to read SKILL.md for command reference)
-- Input xlsx file: The spreadsheet to work with
-
-Your goal is to solve spreadsheet tasks efficiently and accurately. Always:
-1. Explore the input file first to understand its structure
-2. Plan your solution before executing
-3. Use xl CLI commands with -o /files/output/output.xlsx for writing
-4. Verify your solution by viewing the output cells
-5. NEVER modify input data cells - only add to the cells specified in the task
-
-The xl CLI supports viewing data, writing values, writing formulas, and batch operations."""
-
-  private def buildUserPrompt(task: AgentTask, binaryName: String): String =
-    val answerSection = task.answerPosition
-      .map(pos => s"\nThe answer will be evaluated at position: $pos\n")
-      .getOrElse("")
-
-    s"""You are a spreadsheet expert with access to the xl CLI for Excel operations.
-
-## Task
-${task.instruction}
-
-## File Locations
-- Input file: $$INPUT_DIR/${task.inputFile.getFileName}
-- XL binary: $$INPUT_DIR/$binaryName
-$answerSection
-## CRITICAL: Output Location
-You MUST save your final output to: $$OUTPUT_DIR/output.xlsx
-The $$OUTPUT_DIR environment variable is set by the system. Using it ensures the file is properly captured.
-
-## Setup Commands (run these first)
-```bash
-chmod +x $$INPUT_DIR/$binaryName
-XL="$$INPUT_DIR/$binaryName"
-INPUT="$$INPUT_DIR/${task.inputFile.getFileName}"
-OUTPUT="$$OUTPUT_DIR/output.xlsx"
-```
-
-## xl CLI Commands
-```bash
-# List sheets
-$$XL -f $$INPUT sheets
-
-# View data (use quotes for sheet names with spaces)
-$$XL -f $$INPUT -s "<sheet>" view <range>
-
-# Write a value (always use -o $$OUTPUT to save)
-$$XL -f $$INPUT -o $$OUTPUT put <ref> <value>
-
-# Write a formula (always use -o $$OUTPUT to save)
-$$XL -f $$INPUT -o $$OUTPUT putf <ref> "=FORMULA"
-
-# Batch operations (always use -o $$OUTPUT to save)
-echo '[{"op":"put","ref":"A1","value":"Hello"}]' | $$XL -f $$INPUT -o $$OUTPUT batch -
-```
-
-## Instructions
-1. Explore the input file to understand its structure
-2. Implement the solution using xl CLI commands
-3. IMPORTANT: Always use -o $$OUTPUT (which is $$OUTPUT_DIR/output.xlsx) when writing
-4. Verify your solution by viewing the output cells${task.answerPosition
-        .map(p => s" at $p")
-        .getOrElse("")}
-"""

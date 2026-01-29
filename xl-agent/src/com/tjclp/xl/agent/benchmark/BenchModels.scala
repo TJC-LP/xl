@@ -192,6 +192,7 @@ case class BenchmarkReport(
   timestamp: String,
   dataset: String,
   model: String,
+  approach: String,
   aggregate: AggregateStats,
   results: List[TaskResult]
 ):
@@ -203,6 +204,18 @@ object BenchmarkReport:
   given Encoder[BenchmarkReport] = deriveEncoder
 
 // ============================================================================
+// Approach Configuration
+// ============================================================================
+
+/** Benchmark approach for spreadsheet operations */
+enum Approach derives CanEqual:
+  case Xl // Custom xl-cli skill with uploaded binary
+  case Xlsx // Built-in Anthropic xlsx skill (openpyxl)
+
+object Approach:
+  given Encoder[Approach] = Encoder.encodeString.contramap(_.toString.toLowerCase)
+
+// ============================================================================
 // CLI Config
 // ============================================================================
 
@@ -210,6 +223,7 @@ case class BenchConfig(
   dataset: String = "sample_data_200",
   dataDir: Path =
     Path.of(Option(java.lang.System.getenv("HOME")).getOrElse("."), "git/SpreadsheetBench/data"),
+  approach: Approach = Approach.Xl,
   limit: Option[Int] = None,
   taskIds: Option[List[String]] = None,
   skipIds: Set[String] = Set.empty,
@@ -218,5 +232,9 @@ case class BenchConfig(
   verbose: Boolean = false,
   outputDir: Path = Path.of("results"),
   xlBinary: Option[Path] = None,
-  xlSkill: Option[Path] = None
+  xlSkill: Option[Path] = None,
+  // Comparison mode options
+  compare: Boolean = false,
+  xlOnly: Boolean = false,
+  xlsxOnly: Boolean = false
 )

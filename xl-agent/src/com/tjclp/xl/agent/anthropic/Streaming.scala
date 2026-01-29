@@ -5,6 +5,7 @@ import cats.effect.std.Queue
 import cats.syntax.all.*
 import com.anthropic.models.beta.messages.*
 import com.tjclp.xl.agent.AgentEvent
+import io.circe.{Json, parser as circeParser}
 
 import scala.collection.mutable
 import scala.jdk.OptionConverters.*
@@ -17,6 +18,10 @@ class StreamEventProcessor(
 ):
   // Track accumulated input JSON per content block index
   private val toolInputBuffers = mutable.Map[Long, StringBuilder]()
+  // Track tool use IDs per content block index
+  private val toolUseIds = mutable.Map[Long, String]()
+  // Track current tool result's tool use ID
+  private var lastToolUseId: String = ""
 
   /** Process a single streaming event, potentially emitting AgentEvents */
   def process(event: BetaRawMessageStreamEvent): IO[Unit] =
@@ -55,8 +60,10 @@ class StreamEventProcessor(
         block.serverToolUse().toScala match
           case Some(toolUse) =>
             IO {
-              if verbose then println(s"\n>>> TOOL: ${toolUse.name()}")
+              if verbose then println(s"\n>>> TOOL: ${toolUse.name()} [${toolUse.id()}]")
               toolInputBuffers(index) = new StringBuilder()
+              toolUseIds(index) = toolUse.id()
+              lastToolUseId = toolUse.id()
             }
           case None => IO.unit
 
@@ -74,11 +81,16 @@ class StreamEventProcessor(
               case Some(r) =>
                 val stdout = r.stdout()
                 val stderr = r.stderr()
-                val emitResult = eventQueue.offer(AgentEvent.ToolResult(stdout, stderr))
+                // Extract file IDs from result content
+                import scala.jdk.CollectionConverters.*
+                val fileIds = r.content().asScala.map(_.fileId()).toList
+                val emitResult = eventQueue.offer(
+                  AgentEvent.ToolResult(lastToolUseId, stdout, stderr, None, fileIds)
+                )
 
                 val printIO = IO.whenA(verbose) {
                   IO {
-                    println("<<< RESULT")
+                    println(s"<<< RESULT [${lastToolUseId.take(20)}...]")
                     if stdout.nonEmpty then
                       val lines = stdout.split("\n")
                       lines.take(20).foreach(line => println(s"    $line"))
@@ -87,6 +99,7 @@ class StreamEventProcessor(
                     if stderr.nonEmpty then
                       println("    STDERR:")
                       stderr.split("\n").take(5).foreach(line => println(s"    $line"))
+                    if fileIds.nonEmpty then println(s"    FILES: ${fileIds.mkString(", ")}")
                   }
                 }
 
@@ -112,23 +125,32 @@ class StreamEventProcessor(
         val index = stop.index()
         toolInputBuffers.get(index) match
           case Some(buffer) =>
-            val json = buffer.toString
+            val jsonStr = buffer.toString
+            val toolUseId = toolUseIds.getOrElse(index, "")
             toolInputBuffers.remove(index)
-            if json.nonEmpty then
-              extractCodeFromJson(json) match
-                case Some(code) =>
-                  val emitTool = eventQueue.offer(AgentEvent.ToolInvocation("code_execution", code))
-                  val printIO = IO.whenA(verbose) {
-                    IO {
-                      println("--- CODE ---")
-                      code.split("\n").take(30).foreach(line => println(s"    $line"))
-                      if code.split("\n").length > 30 then
-                        println(s"    ... (${code.split("\n").length - 30} more lines)")
-                      println("------------")
-                    }
+            toolUseIds.remove(index)
+
+            if jsonStr.nonEmpty then
+              // Parse full JSON input
+              val fullInput = circeParser.parse(jsonStr).getOrElse(Json.Null)
+              // Also extract command for convenience
+              val command = extractCodeFromJson(jsonStr)
+
+              val emitTool = eventQueue.offer(
+                AgentEvent.ToolInvocation("code_execution", toolUseId, fullInput, command)
+              )
+              val printIO = IO.whenA(verbose) {
+                IO {
+                  command.foreach { code =>
+                    println("--- CODE ---")
+                    code.split("\n").take(30).foreach(line => println(s"    $line"))
+                    if code.split("\n").length > 30 then
+                      println(s"    ... (${code.split("\n").length - 30} more lines)")
+                    println("------------")
                   }
-                  emitTool *> printIO
-                case None => IO.unit
+                }
+              }
+              emitTool *> printIO
             else IO.unit
           case None => IO.unit
       case None => IO.unit
