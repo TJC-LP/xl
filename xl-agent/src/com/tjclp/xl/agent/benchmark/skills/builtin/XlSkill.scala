@@ -1,5 +1,7 @@
-package com.tjclp.xl.agent.approach
+package com.tjclp.xl.agent.benchmark.skills.builtin
 
+import cats.effect.IO
+import cats.syntax.all.*
 import com.anthropic.models.beta.AnthropicBeta
 import com.anthropic.models.beta.messages.{
   BetaCodeExecutionTool20250825,
@@ -7,19 +9,69 @@ import com.anthropic.models.beta.messages.{
   BetaSkillParams,
   MessageCreateParams
 }
-import com.tjclp.xl.agent.{AgentTask, UploadedFile}
+import com.tjclp.xl.agent.{Agent, AgentConfig, AgentTask, UploadedFile}
+import com.tjclp.xl.agent.anthropic.{AnthropicClientIO, SkillsApi}
+import com.tjclp.xl.agent.approach.ApproachStrategy
+import com.tjclp.xl.agent.benchmark.common.FileManager
+import com.tjclp.xl.agent.benchmark.skills.{Skill, SkillContext, SkillRegistry}
 
-/** Approach using the custom xl-cli skill with uploaded binary and Skills API */
-class XlApproachStrategy(
-  binaryFile: UploadedFile,
+import java.nio.file.Path
+
+/** Skill using the custom xl-cli tool with the Skills API */
+object XlSkill extends Skill:
+
+  override val name: String = "xl"
+  override val displayName: String = "xl-cli"
+  override val description: String = "Custom xl-cli tool for Excel operations"
+
+  override def setup(client: AnthropicClientIO, config: AgentConfig): IO[SkillContext] =
+    for
+      // Resolve paths
+      binaryPath <- FileManager.resolveBinaryPath(config.xlBinaryPath)
+      skillPath <- FileManager.resolveSkillPath(config.xlSkillPath)
+
+      _ <- IO.println(s"  [$name] Uploading binary: ${binaryPath.getFileName}")
+      binaryFile <- client.uploadFile(binaryPath)
+
+      _ <- IO.println(s"  [$name] Registering skill via Skills API...")
+      apiKey <- AnthropicClientIO.loadApiKey
+      skillId <- SkillsApi.getOrCreateXlSkill(apiKey, skillPath)
+      _ <- IO.println(s"  [$name] Skill ID: $skillId")
+    yield SkillContext(
+      fileIds = List(binaryFile.id),
+      skillId = Some(skillId),
+      metadata = Map(
+        "binaryFilename" -> binaryFile.filename,
+        "binaryFileId" -> binaryFile.id
+      )
+    )
+
+  override def teardown(client: AnthropicClientIO, ctx: SkillContext): IO[Unit] =
+    ctx.fileIds.traverse_(id => client.deleteFile(id).attempt.void)
+
+  override def createAgent(
+    client: AnthropicClientIO,
+    ctx: SkillContext,
+    config: AgentConfig
+  ): Agent =
+    val strategy = XlSkillStrategy(
+      binaryFilename = ctx.metadata.getOrElse("binaryFilename", "xl"),
+      binaryFileId = ctx.metadata.getOrElse("binaryFileId", ""),
+      skillId = ctx.skillId.getOrElse("")
+    )
+    Agent.create(client, config, strategy)
+
+/** Internal strategy for XlSkill */
+private class XlSkillStrategy(
+  binaryFilename: String,
+  binaryFileId: String,
   skillId: String
 ) extends ApproachStrategy:
 
   override def name: String = "xl"
 
-  // Only binary + input file (skill is registered via Skills API)
   override def containerUploads(inputFileId: String): List[String] =
-    List(binaryFile.id, inputFileId)
+    List(binaryFileId, inputFileId)
 
   override def systemPrompt: String =
     s"""You are a spreadsheet expert assistant. You have access to the xl CLI tool for manipulating Excel files.
@@ -37,7 +89,7 @@ The $$OUTPUT_DIR path changes with each tool invocation. To work around this:
 - Or do all work (write + verify + save) in a SINGLE tool call
 
 AVAILABLE FILES:
-- ${binaryFile.filename}: The xl CLI binary (chmod +x it first, then use ./${binaryFile.filename} or move to PATH)
+- $binaryFilename: The xl CLI binary (chmod +x it first, then use ./$binaryFilename or move to PATH)
 - Input xlsx file: The spreadsheet to work with
 
 The xl-cli skill documentation is available. Use xl commands to complete the task.
@@ -63,7 +115,7 @@ ${task.instruction}
 
 ## File Locations
 - Input file: $$INPUT_DIR/$inputFilename
-- XL binary: $$INPUT_DIR/${binaryFile.filename}
+- XL binary: $$INPUT_DIR/$binaryFilename
 $answerSection
 ## CRITICAL: Output Location
 You MUST save your final output to: $$OUTPUT_DIR/output.xlsx
@@ -71,8 +123,8 @@ The $$OUTPUT_DIR environment variable is set by the system. Using it ensures the
 
 ## Setup Commands (run these first)
 ```bash
-chmod +x $$INPUT_DIR/${binaryFile.filename}
-XL="$$INPUT_DIR/${binaryFile.filename}"
+chmod +x $$INPUT_DIR/$binaryFilename
+XL="$$INPUT_DIR/$binaryFilename"
 INPUT="$$INPUT_DIR/$inputFilename"
 OUTPUT="$$OUTPUT_DIR/output.xlsx"
 ```
@@ -105,7 +157,6 @@ echo '[{"op":"put","ref":"A1","value":"Hello"}]' | $$XL -f $$INPUT -o $$OUTPUT b
 """
 
   override def configureRequest(builder: MessageCreateParams.Builder): MessageCreateParams.Builder =
-    // Build custom skill container (xl-cli registered via Skills API)
     val xlSkill = BetaSkillParams
       .builder()
       .skillId(skillId)

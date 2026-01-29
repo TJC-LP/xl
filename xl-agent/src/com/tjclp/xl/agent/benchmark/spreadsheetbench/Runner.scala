@@ -17,41 +17,319 @@ import com.tjclp.xl.agent.benchmark.common.{
   TaskComparison,
   UsageBreakdown
 }
+import com.tjclp.xl.agent.benchmark.skills.{Skill, SkillContext, SkillRegistry}
+import com.tjclp.xl.agent.benchmark.tracing.{ConversationTracer, StreamingConsole}
 import com.tjclp.xl.agent.error.AgentError
 
 import java.nio.file.{Files, Path, StandardOpenOption}
 import java.time.{Instant, ZoneId}
 import java.time.format.DateTimeFormatter
 
-/** SpreadsheetBench benchmark runner */
+/** SpreadsheetBench benchmark runner with N-skill comparison support */
 object Runner extends IOApp:
 
   override def run(args: List[String]): IO[ExitCode] =
+    // Initialize skill registry
+    SkillRegistry.initialize()
     parseArgs(args)
       .flatMap { config =>
-        runBenchmark(config).as(ExitCode.Success)
+        if config.listSkills then listSkills().as(ExitCode.Success)
+        else runBenchmark(config).as(ExitCode.Success)
       }
       .handleErrorWith { e =>
         IO.println(s"Error: ${e.getMessage}").as(ExitCode.Error)
       }
 
+  /** List all registered skills */
+  private def listSkills(): IO[Unit] =
+    IO {
+      println("\nAvailable skills:")
+      println("-" * 40)
+      SkillRegistry.all.foreach { skill =>
+        println(f"  ${skill.name}%-15s ${skill.displayName}%-20s ${skill.description}")
+      }
+      println()
+    }
+
   def runBenchmark(config: BenchConfig): IO[Unit] =
     AnthropicClientIO.fromEnv.use { client =>
       for
-        // Create output directories
-        _ <- IO.blocking(Files.createDirectories(config.outputDir))
-        logsDir = config.outputDir.resolve("logs")
+        // Create timestamped output directory
+        timestamp <- IO.realTimeInstant.map { i =>
+          DateTimeFormatter
+            .ofPattern("yyyy-MM-dd'T'HH-mm-ss")
+            .format(i.atZone(ZoneId.systemDefault()))
+        }
+        outputDir = config.outputDir.resolve(timestamp)
+        _ <- IO.blocking(Files.createDirectories(outputDir))
+        logsDir = outputDir.resolve("logs")
         _ <- IO.blocking(Files.createDirectories(logsDir))
 
-        // Load tasks
-        tasks <- TaskLoader.load(config)
+        updatedConfig = config.copy(outputDir = outputDir)
 
-        // Branch on comparison mode
+        // Load tasks
+        tasks <- TaskLoader.load(updatedConfig)
+
+        // Branch based on mode
         _ <-
-          if config.compare then runComparisonBenchmark(config, client, tasks, logsDir)
-          else runSingleApproachBenchmark(config, client, tasks, logsDir)
+          if config.skills.isDefined then runSkillsBenchmark(updatedConfig, client, tasks)
+          else if config.compare then runComparisonBenchmark(updatedConfig, client, tasks, logsDir)
+          else runSingleApproachBenchmark(updatedConfig, client, tasks, logsDir)
       yield ()
     }
+
+  /** Run benchmark with N skills (new unified approach) */
+  private def runSkillsBenchmark(
+    config: BenchConfig,
+    client: AnthropicClientIO,
+    tasks: List[BenchTask]
+  ): IO[Unit] =
+    val skillNames = config.skills.getOrElse(List("xl"))
+
+    for
+      _ <- IO.println(s"Running ${tasks.length} task(s) with skills: ${skillNames.mkString(", ")}")
+      _ <- IO.println(s"Streaming: ${if config.stream then "enabled" else "disabled"}")
+      _ <- IO.println("-" * 60)
+
+      // Setup all skills
+      skills <- skillNames.traverse { name =>
+        SkillRegistry.get(name) match
+          case Some(skill) => IO.pure(skill)
+          case None =>
+            IO.raiseError(
+              AgentError.ConfigError(
+                s"Unknown skill: $name. Available: ${SkillRegistry.names.mkString(", ")}"
+              )
+            )
+      }
+
+      agentConfig = AgentConfig(
+        verbose = config.verbose,
+        xlBinaryPath = config.xlBinary,
+        xlSkillPath = config.xlSkill
+      )
+
+      // Setup each skill and run benchmark
+      results <- skills.traverse { skill =>
+        runSkillBenchmark(config, client, agentConfig, skill, tasks)
+      }
+
+      // Generate unified report
+      _ <- saveUnifiedReport(config, agentConfig.model, results)
+    yield ()
+
+  /** Run benchmark for a single skill */
+  private def runSkillBenchmark(
+    config: BenchConfig,
+    client: AnthropicClientIO,
+    agentConfig: AgentConfig,
+    skill: Skill,
+    tasks: List[BenchTask]
+  ): IO[SkillBenchmarkResult] =
+    for
+      _ <- IO.println(s"\nSetting up skill: ${skill.displayName}")
+      ctx <- skill.setup(client, agentConfig)
+      agent = skill.createAgent(client, ctx, agentConfig)
+
+      _ <- IO.whenA(config.stream)(StreamingConsole.printSkillHeader(skill.displayName))
+
+      // Run tasks
+      taskResults <-
+        if config.parallelism == 1 then
+          tasks.traverse(task => runTaskWithSkill(agent, skill, task, config))
+        else
+          Semaphore[IO](config.parallelism.toLong).flatMap { sem =>
+            tasks.parTraverse(task =>
+              sem.permit.use(_ => runTaskWithSkill(agent, skill, task, config))
+            )
+          }
+
+      // Cleanup
+      _ <- skill.teardown(client, ctx)
+
+      // Aggregate results
+      pricing = ModelPricing.forModel(agentConfig.model)
+      results = taskResults.map { case (taskId, results) =>
+        SkillTaskResult(
+          taskId = taskId,
+          caseResults = results,
+          totalUsage = results.map(_.usage).foldLeft(UsageBreakdown(0, 0)) { (acc, u) =>
+            UsageBreakdown(acc.inputTokens + u.inputTokens, acc.outputTokens + u.outputTokens)
+          },
+          allPassed = results.forall(_.passed)
+        )
+      }
+
+      totalInputTokens = results.map(_.totalUsage.inputTokens).sum
+      totalOutputTokens = results.map(_.totalUsage.outputTokens).sum
+      passedCount = results.count(_.allPassed)
+
+      _ <- IO.println(
+        s"\n${skill.name}: $passedCount/${results.length} passed, " +
+          s"${totalInputTokens} in / ${totalOutputTokens} out"
+      )
+    yield SkillBenchmarkResult(
+      skillName = skill.name,
+      displayName = skill.displayName,
+      taskResults = results,
+      totalInputTokens = totalInputTokens,
+      totalOutputTokens = totalOutputTokens,
+      passedCount = passedCount
+    )
+
+  /** Run a single task with a skill, handling all test cases */
+  private def runTaskWithSkill(
+    agent: Agent,
+    skill: Skill,
+    task: BenchTask,
+    config: BenchConfig
+  ): IO[(String, List[CaseResult])] =
+    if task.isVba && config.taskIds.isEmpty then
+      IO.println(s"[${task.id}] SKIPPED (VBA/Macro task)") *>
+        IO.pure((task.id, Nil))
+    else
+      for
+        _ <- IO.println(s"[${task.id}] Running with ${skill.name}...")
+        caseResults <- task.testCases.traverse { testCase =>
+          runTestCaseWithTracing(agent, skill, task, testCase, config)
+        }
+
+        passed = caseResults.forall(_.passed)
+        statusEmoji = if passed then "\u2713" else "\u2717"
+        _ <- IO.println(s"[${task.id}] $statusEmoji ${skill.name}")
+      yield (task.id, caseResults)
+
+  /** Run a single test case with conversation tracing */
+  private def runTestCaseWithTracing(
+    agent: Agent,
+    skill: Skill,
+    task: BenchTask,
+    testCase: TestCase,
+    config: BenchConfig
+  ): IO[CaseResult] =
+    val outputDir = config.outputDir.resolve("outputs").resolve(task.id).resolve(skill.name)
+    val outputPath = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
+
+    (for
+      _ <- IO.blocking(Files.createDirectories(outputDir))
+      _ <- IO.whenA(config.stream)(
+        StreamingConsole.printTaskHeader(task.id, testCase.caseNum)
+      )
+
+      // Create tracer
+      tracer <- ConversationTracer.create(
+        outputDir = config.outputDir,
+        taskId = task.id,
+        skillName = skill.name,
+        caseNum = testCase.caseNum,
+        streaming = config.stream
+      )
+
+      agentTask = AgentTask(
+        instruction = task.instruction,
+        inputFile = testCase.inputPath,
+        outputFile = outputPath,
+        answerPosition = Some(task.answerPosition)
+      )
+
+      // Run with streaming callbacks
+      result <- agent.runStreaming(agentTask, tracer.onEvent)
+
+      // Evaluate
+      rangeResults <- result.outputPath match
+        case Some(path) =>
+          Evaluator.compare(path, testCase.answerPath, task.answerPosition)
+        case None =>
+          IO.pure(List(RangeResult(task.answerPosition, false, Nil)))
+
+      passed = rangeResults.forall(_.passed)
+
+      // Complete and save trace
+      _ <- tracer.complete(result.usage, passed, result.error)
+      _ <- tracer.save()
+
+      _ <- IO.whenA(config.stream)(
+        StreamingConsole
+          .printComplete(skill.name, task.id, testCase.caseNum, passed, result.latencyMs)
+      )
+    yield CaseResult(
+      caseNum = testCase.caseNum,
+      passed = passed,
+      usage = UsageBreakdown.fromTokenUsage(result.usage.inputTokens, result.usage.outputTokens),
+      latencyMs = result.latencyMs
+    )).handleErrorWith { e =>
+      IO.println(s"  [${task.id}:${testCase.caseNum}] ERROR: ${e.getMessage}") *>
+        IO.pure(CaseResult(testCase.caseNum, false, UsageBreakdown(0, 0), 0, Some(e.getMessage)))
+    }
+
+  /** Save unified report for N-skill comparison */
+  private def saveUnifiedReport(
+    config: BenchConfig,
+    model: String,
+    results: List[SkillBenchmarkResult]
+  ): IO[Unit] =
+    IO.blocking {
+      import io.circe.syntax.*
+      import io.circe.generic.semiauto.*
+
+      val pricing = ModelPricing.forModel(model)
+
+      // Build summary JSON
+      val summaryJson = io.circe.Json.obj(
+        "timestamp" -> DateTimeFormatter
+          .ofPattern("yyyy-MM-dd'T'HH:mm:ss")
+          .format(Instant.now.atZone(ZoneId.systemDefault()))
+          .asJson,
+        "dataset" -> config.dataset.asJson,
+        "model" -> model.asJson,
+        "skills" -> results.map { r =>
+          io.circe.Json.obj(
+            "name" -> r.skillName.asJson,
+            "displayName" -> r.displayName.asJson,
+            "passed" -> r.passedCount.asJson,
+            "total" -> r.taskResults.length.asJson,
+            "inputTokens" -> r.totalInputTokens.asJson,
+            "outputTokens" -> r.totalOutputTokens.asJson,
+            "estimatedCost" -> ((r.totalInputTokens * pricing.inputPerMillion +
+              r.totalOutputTokens * pricing.outputPerMillion) / 1_000_000.0).asJson
+          )
+        }.asJson
+      )
+
+      // Save summary.json
+      val summaryPath = config.outputDir.resolve("summary.json")
+      Files.writeString(summaryPath, summaryJson.spaces2)
+
+      // Save summary.md
+      val mdBuilder = new StringBuilder()
+      mdBuilder.append("# Benchmark Summary\n\n")
+      mdBuilder.append(s"**Dataset:** ${config.dataset}\n")
+      mdBuilder.append(s"**Model:** $model\n\n")
+
+      mdBuilder.append("## Results by Skill\n\n")
+      mdBuilder.append("| Skill | Passed | Total | Input Tokens | Output Tokens | Cost |\n")
+      mdBuilder.append("|-------|--------|-------|--------------|---------------|------|\n")
+
+      results.foreach { r =>
+        val cost = (r.totalInputTokens * pricing.inputPerMillion +
+          r.totalOutputTokens * pricing.outputPerMillion) / 1_000_000.0
+        mdBuilder.append(
+          f"| ${r.displayName} | ${r.passedCount} | ${r.taskResults.length} | ${r.totalInputTokens} | ${r.totalOutputTokens} | $$${cost}%.2f |\n"
+        )
+      }
+
+      val mdPath = config.outputDir.resolve("summary.md")
+      Files.writeString(mdPath, mdBuilder.toString)
+
+      println(s"\nResults saved to: ${config.outputDir}")
+      println(s"  summary.json - Full results")
+      println(s"  summary.md   - Human-readable summary")
+      println(s"  tasks/       - Per-task conversation traces")
+    }
+
+  // ============================================================================
+  // Legacy comparison mode (--compare flag)
+  // ============================================================================
 
   /** Run benchmark with a single approach (original behavior) */
   private def runSingleApproachBenchmark(
@@ -677,6 +955,16 @@ ${"=" * 60}
           case "--xlsx-only" :: rest =>
             config = config.copy(xlsxOnly = true)
             remaining = rest
+          // New N-skill flags
+          case "--skills" :: value :: rest =>
+            config = config.copy(skills = Some(value.split(",").map(_.trim).toList))
+            remaining = rest
+          case "--stream" :: rest =>
+            config = config.copy(stream = true)
+            remaining = rest
+          case "--list-skills" :: rest =>
+            config = config.copy(listSkills = true)
+            remaining = rest
           case "--help" :: _ =>
             println(HelpText)
             throw new RuntimeException("Help requested")
@@ -709,10 +997,15 @@ Configuration:
   --output <dir>        Output directory for results (default: results)
   --verbose             Show full model responses
 
-Comparison Mode:
+Comparison Mode (legacy):
   --compare             Run BOTH xl and xlsx approaches and compare results
   --xl-only             With --compare: only run xl approach
   --xlsx-only           With --compare: only run xlsx approach
+
+N-Skill Comparison (new):
+  --skills <s1,s2,...>  Run specified skills (comma-separated names)
+  --stream              Stream conversation output in real-time
+  --list-skills         List all available skills
 
 Development:
   --xl-binary <path>    Use local xl binary instead of released version
@@ -728,15 +1021,50 @@ Examples:
   # Compare both approaches on the same task (single command!)
   ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --task 59196 --compare
 
-  # Compare on multiple tasks in parallel
-  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --tasks 59196,59197 --compare --parallelism 4
+  # N-skill comparison with streaming (new!)
+  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --task 59196 --skills xl,xlsx --stream
+
+  # List available skills
+  ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --list-skills
 
   # Run first 5 tasks sequentially with verbose output
   ./mill xl-agent.runMain com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner -- --limit 5 --parallelism 1 --verbose
 
 Output:
-  results/
-    report_<timestamp>.json     # Full benchmark results
-    logs/<task_id>.md           # Per-task detailed logs with model responses
-    outputs/<task_id>/          # Output files for evaluation
+  results/<timestamp>/
+    summary.json              # Full benchmark results
+    summary.md                # Human-readable summary
+    tasks/<task_id>/<skill>/  # Per-task conversation traces
+      case1/conversation.md   # Readable transcript
+      case1/conversation.json # Structured for analysis
+    logs/<task_id>.md         # Per-task detailed logs (legacy)
+    outputs/<task_id>/        # Output files for evaluation
 """
+
+// ============================================================================
+// Internal models for N-skill benchmarking
+// ============================================================================
+
+private case class CaseResult(
+  caseNum: Int,
+  passed: Boolean,
+  usage: UsageBreakdown,
+  latencyMs: Long,
+  error: Option[String] = None
+)
+
+private case class SkillTaskResult(
+  taskId: String,
+  caseResults: List[CaseResult],
+  totalUsage: UsageBreakdown,
+  allPassed: Boolean
+)
+
+private case class SkillBenchmarkResult(
+  skillName: String,
+  displayName: String,
+  taskResults: List[SkillTaskResult],
+  totalInputTokens: Long,
+  totalOutputTokens: Long,
+  passedCount: Int
+)

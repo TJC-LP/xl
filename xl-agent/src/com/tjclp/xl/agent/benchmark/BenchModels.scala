@@ -236,5 +236,9 @@ case class BenchConfig(
   // Comparison mode options
   compare: Boolean = false,
   xlOnly: Boolean = false,
-  xlsxOnly: Boolean = false
+  xlsxOnly: Boolean = false,
+  // N-skill comparison (new)
+  skills: Option[List[String]] = None,
+  stream: Boolean = false,
+  listSkills: Boolean = false
 )

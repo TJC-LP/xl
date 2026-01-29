@@ -32,23 +32,30 @@ class StreamEventProcessor(
     textIO *> toolStartIO *> toolResultIO *> toolStopIO
 
   private def processTextDelta(event: BetaRawMessageStreamEvent): IO[Unit] =
-    IO {
-      event.contentBlockDelta().toScala.foreach { delta =>
+    event.contentBlockDelta().toScala match
+      case Some(delta) =>
         val index = delta.index()
 
-        // Handle text deltas
-        delta.delta().text().toScala.foreach { textDelta =>
-          val text = textDelta.text()
-          if verbose then print(text) // Real-time streaming to console
-        }
+        // Handle text deltas - emit to queue AND print if verbose
+        val textIO = delta.delta().text().toScala match
+          case Some(textDelta) =>
+            val text = textDelta.text()
+            val printIO = IO.whenA(verbose)(IO(print(text)))
+            val emitIO = eventQueue.offer(AgentEvent.TextOutput(text, index.toInt))
+            printIO *> emitIO.void
+          case None => IO.unit
 
         // Accumulate tool input JSON
-        delta.delta().inputJson().toScala.foreach { jsonDelta =>
-          val partial = jsonDelta.partialJson()
-          toolInputBuffers.getOrElseUpdate(index, new StringBuilder()).append(partial)
+        val jsonIO = IO {
+          delta.delta().inputJson().toScala.foreach { jsonDelta =>
+            val partial = jsonDelta.partialJson()
+            toolInputBuffers.getOrElseUpdate(index, new StringBuilder()).append(partial)
+          }
         }
-      }
-    }
+
+        textIO *> jsonIO
+
+      case None => IO.unit
 
   private def processToolStart(event: BetaRawMessageStreamEvent): IO[Unit] =
     event.contentBlockStart().toScala match

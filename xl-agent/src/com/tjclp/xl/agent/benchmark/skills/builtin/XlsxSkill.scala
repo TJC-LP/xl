@@ -1,5 +1,6 @@
-package com.tjclp.xl.agent.approach
+package com.tjclp.xl.agent.benchmark.skills.builtin
 
+import cats.effect.IO
 import com.anthropic.models.beta.AnthropicBeta
 import com.anthropic.models.beta.messages.{
   BetaCodeExecutionTool20250825,
@@ -7,10 +8,34 @@ import com.anthropic.models.beta.messages.{
   BetaSkillParams,
   MessageCreateParams
 }
-import com.tjclp.xl.agent.AgentTask
+import com.tjclp.xl.agent.{Agent, AgentConfig, AgentTask}
+import com.tjclp.xl.agent.anthropic.AnthropicClientIO
+import com.tjclp.xl.agent.approach.ApproachStrategy
+import com.tjclp.xl.agent.benchmark.skills.{Skill, SkillContext, SkillRegistry}
 
-/** Approach using Anthropic's built-in xlsx skill (openpyxl) */
-class XlsxApproachStrategy extends ApproachStrategy:
+/** Skill using Anthropic's built-in xlsx skill (openpyxl) */
+object XlsxSkill extends Skill:
+
+  override val name: String = "xlsx"
+  override val displayName: String = "OpenPyXL"
+  override val description: String = "Anthropic built-in xlsx skill using openpyxl"
+
+  override def setup(client: AnthropicClientIO, config: AgentConfig): IO[SkillContext] =
+    IO.println(s"  [$name] Using built-in xlsx skill (no setup required)") *>
+      IO.pure(SkillContext.empty)
+
+  override def teardown(client: AnthropicClientIO, ctx: SkillContext): IO[Unit] =
+    IO.unit // Nothing to clean up
+
+  override def createAgent(
+    client: AnthropicClientIO,
+    ctx: SkillContext,
+    config: AgentConfig
+  ): Agent =
+    Agent.create(client, config, XlsxSkillStrategy)
+
+/** Internal strategy for XlsxSkill */
+private object XlsxSkillStrategy extends ApproachStrategy:
 
   override def name: String = "xlsx"
 
