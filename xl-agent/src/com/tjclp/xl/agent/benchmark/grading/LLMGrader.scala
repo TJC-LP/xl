@@ -1,6 +1,7 @@
 package com.tjclp.xl.agent.benchmark.grading
 
 import cats.effect.IO
+import cats.effect.syntax.concurrent.*
 import cats.syntax.all.*
 import com.anthropic.client.AnthropicClient as JAnthropicClient
 import com.anthropic.core.JsonValue
@@ -16,10 +17,15 @@ import scala.jdk.OptionConverters.*
 // LLM-Based Grader (Opus 4.5 as Judge)
 // ============================================================================
 
-/** Grader that uses Opus 4.5 with structured outputs for evaluation */
+/**
+ * Grader that uses Opus 4.5 with structured outputs for evaluation.
+ *
+ * Supports parallel grading via `gradeAll` with configurable concurrency.
+ */
 class OpusLLMGrader(
   client: JAnthropicClient,
-  model: String = OpusLLMGrader.DefaultModel
+  model: String = OpusLLMGrader.DefaultModel,
+  parallelism: Int = OpusLLMGrader.DefaultParallelism
 ) extends Grader[Score.LetterGrade]:
 
   val name: String = "llm"
@@ -144,6 +150,46 @@ class OpusLLMGrader(
       )
     }
 
+  /**
+   * Grade multiple contexts in parallel with configured concurrency.
+   *
+   * @param contexts
+   *   List of grading contexts to evaluate
+   * @return
+   *   Aggregated results with summary statistics
+   */
+  def gradeAll(contexts: List[GraderContext]): IO[ParallelGradeResults] =
+    gradeAllWithParallelism(contexts, parallelism)
+
+  /**
+   * Grade multiple contexts with explicit parallelism level.
+   *
+   * @param contexts
+   *   List of grading contexts to evaluate
+   * @param n
+   *   Maximum number of concurrent API calls
+   * @return
+   *   Aggregated results with summary statistics
+   */
+  def gradeAllWithParallelism(contexts: List[GraderContext], n: Int): IO[ParallelGradeResults] =
+    contexts
+      .parTraverseN(n.max(1))(grade)
+      .map { results =>
+        val byGrade = results.groupBy(_.score)
+        val passing = results.count(_.passed)
+        val total = results.length
+
+        ParallelGradeResults(
+          results = results,
+          summary = GradeSummary(
+            total = total,
+            passing = passing,
+            failing = total - passing,
+            byGrade = byGrade.map { case (grade, rs) => grade.toString -> rs.length }
+          )
+        )
+      }
+
   private def buildGradingPrompt(
     taskId: String,
     responseText: String,
@@ -168,12 +214,46 @@ Grade the response on correctness:
 
 object OpusLLMGrader:
   val DefaultModel: String = "claude-opus-4-5-20251101"
+  val DefaultParallelism: Int = 4
 
   def apply(client: JAnthropicClient): OpusLLMGrader =
     new OpusLLMGrader(client)
 
   def apply(client: JAnthropicClient, model: String): OpusLLMGrader =
     new OpusLLMGrader(client, model)
+
+  def apply(client: JAnthropicClient, model: String, parallelism: Int): OpusLLMGrader =
+    new OpusLLMGrader(client, model, parallelism)
+
+  def withParallelism(client: JAnthropicClient, parallelism: Int): OpusLLMGrader =
+    new OpusLLMGrader(client, DefaultModel, parallelism)
+
+// ============================================================================
+// Parallel Grading Results
+// ============================================================================
+
+/** Results from parallel grading with summary statistics */
+case class ParallelGradeResults(
+  results: List[GradeResult[Score.LetterGrade]],
+  summary: GradeSummary
+):
+  def passRate: Double =
+    if summary.total == 0 then 0.0
+    else summary.passing.toDouble / summary.total
+
+  def averageGrade: Option[Score.LetterGrade] =
+    if results.isEmpty then None
+    else
+      val avg = results.map(_.score.toNumeric).sum.toDouble / results.length
+      Some(Score.LetterGrade.fromNumeric(avg.round.toInt))
+
+/** Summary statistics for grading results */
+case class GradeSummary(
+  total: Int,
+  passing: Int,
+  failing: Int,
+  byGrade: Map[String, Int]
+)
 
 /** Internal response structure for LLM grading */
 private case class LLMGradeResponse(
@@ -194,8 +274,8 @@ private object LLMGradeResponse:
 // ============================================================================
 
 /** Grader that uses Sonnet for faster/cheaper evaluation */
-class SonnetLLMGrader(client: JAnthropicClient)
-    extends OpusLLMGrader(client, SonnetLLMGrader.Model):
+class SonnetLLMGrader(client: JAnthropicClient, parallelism: Int = OpusLLMGrader.DefaultParallelism)
+    extends OpusLLMGrader(client, SonnetLLMGrader.Model, parallelism):
   override val name: String = "llm-sonnet"
 
 object SonnetLLMGrader:
@@ -203,6 +283,9 @@ object SonnetLLMGrader:
 
   def apply(client: JAnthropicClient): SonnetLLMGrader =
     new SonnetLLMGrader(client)
+
+  def apply(client: JAnthropicClient, parallelism: Int): SonnetLLMGrader =
+    new SonnetLLMGrader(client, parallelism)
 
 // ============================================================================
 // No-Op LLM Grader (for when LLM grading is disabled)
