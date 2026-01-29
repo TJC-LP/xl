@@ -14,6 +14,7 @@ import scala.util.Try
 /** Processes streaming events from the Anthropic API and emits AgentEvents */
 class StreamEventProcessor(
   eventQueue: Queue[IO, AgentEvent],
+  onEvent: AgentEvent => IO[Unit] = _ => IO.unit,
   verbose: Boolean = false
 ):
   // Track accumulated input JSON per content block index
@@ -36,13 +37,15 @@ class StreamEventProcessor(
       case Some(delta) =>
         val index = delta.index()
 
-        // Handle text deltas - emit to queue AND print if verbose
+        // Handle text deltas - emit to queue, call callback, AND print if verbose
         val textIO = delta.delta().text().toScala match
           case Some(textDelta) =>
             val text = textDelta.text()
+            val event = AgentEvent.TextOutput(text, index.toInt)
             val printIO = IO.whenA(verbose)(IO(print(text)))
-            val emitIO = eventQueue.offer(AgentEvent.TextOutput(text, index.toInt))
-            printIO *> emitIO.void
+            val emitIO = eventQueue.offer(event)
+            val callbackIO = onEvent(event)
+            printIO *> emitIO *> callbackIO.void
           case None => IO.unit
 
         // Accumulate tool input JSON
@@ -81,19 +84,19 @@ class StreamEventProcessor(
       case Some(start) =>
         val block = start.contentBlock()
 
+        import scala.jdk.CollectionConverters.*
+
         // Bash execution results
-        block.bashCodeExecutionToolResult().toScala match
+        val bashIO = block.bashCodeExecutionToolResult().toScala match
           case Some(result) =>
             result.content().betaBashCodeExecutionResultBlock().toScala match
               case Some(r) =>
                 val stdout = r.stdout()
                 val stderr = r.stderr()
-                // Extract file IDs from result content
-                import scala.jdk.CollectionConverters.*
                 val fileIds = r.content().asScala.map(_.fileId()).toList
-                val emitResult = eventQueue.offer(
-                  AgentEvent.ToolResult(lastToolUseId, stdout, stderr, None, fileIds)
-                )
+                val event = AgentEvent.ToolResult(lastToolUseId, stdout, stderr, None, fileIds)
+                val emitResult = eventQueue.offer(event)
+                val callbackIO = onEvent(event)
 
                 val printIO = IO.whenA(verbose) {
                   IO {
@@ -110,19 +113,74 @@ class StreamEventProcessor(
                   }
                 }
 
-                emitResult *> printIO
+                emitResult *> callbackIO *> printIO
 
               case None =>
                 // Handle errors
                 result.content().betaBashCodeExecutionToolResultError().toScala match
                   case Some(err) =>
                     val errMsg = err.errorCode().toString
-                    val emitError = eventQueue.offer(AgentEvent.Error(errMsg))
+                    val event = AgentEvent.Error(errMsg)
+                    val emitError = eventQueue.offer(event)
+                    val callbackIO = onEvent(event)
                     val printIO = IO.whenA(verbose)(IO(println(s"<<< ERROR: $errMsg")))
-                    emitError *> printIO
+                    emitError *> callbackIO *> printIO
                   case None => IO.unit
 
           case None => IO.unit
+
+        // MCP tool results (skill documentation, etc.)
+        val mcpIO = block.mcpToolResult().toScala match
+          case Some(result) =>
+            val content = extractMcpContent(result)
+            val isError = result.isError()
+            val toolUseId = result.toolUseId()
+            val event = AgentEvent.McpToolResult(toolUseId, content, isError)
+            val emitMcp = eventQueue.offer(event)
+            val callbackIO = onEvent(event)
+            val printIO = IO.whenA(verbose) {
+              IO {
+                val header = if isError then "<<< MCP ERROR" else "<<< MCP RESULT"
+                println(s"$header [$toolUseId]")
+                content.split("\n").take(10).foreach(line => println(s"    $line"))
+                if content.split("\n").length > 10 then
+                  println(s"    ... (${content.split("\n").length - 10} more lines)")
+              }
+            }
+            emitMcp *> callbackIO *> printIO
+          case None => IO.unit
+
+        // Text editor code execution results (includes view results)
+        val viewIO = block.textEditorCodeExecutionToolResult().toScala match
+          case Some(toolResult) =>
+            // Extract content from the result - it may have different structures
+            val content = Try {
+              toolResult
+                ._content()
+                .asKnown()
+                .toScala
+                .flatMap(_._json().toScala)
+                .map(_.toString)
+                .getOrElse("")
+            }.getOrElse("")
+
+            if content.nonEmpty then
+              val event = AgentEvent.ViewResult(content)
+              val emitView = eventQueue.offer(event)
+              val callbackIO = onEvent(event)
+              val printIO = IO.whenA(verbose) {
+                IO {
+                  println(s"<<< VIEW RESULT")
+                  content.split("\n").take(10).foreach(line => println(s"    $line"))
+                  if content.split("\n").length > 10 then
+                    println(s"    ... (${content.split("\n").length - 10} more lines)")
+                }
+              }
+              emitView *> callbackIO *> printIO
+            else IO.unit
+          case None => IO.unit
+
+        bashIO *> mcpIO *> viewIO
 
       case None => IO.unit
 
@@ -143,9 +201,9 @@ class StreamEventProcessor(
               // Also extract command for convenience
               val command = extractCodeFromJson(jsonStr)
 
-              val emitTool = eventQueue.offer(
-                AgentEvent.ToolInvocation("code_execution", toolUseId, fullInput, command)
-              )
+              val event = AgentEvent.ToolInvocation("code_execution", toolUseId, fullInput, command)
+              val emitTool = eventQueue.offer(event)
+              val callbackIO = onEvent(event)
               val printIO = IO.whenA(verbose) {
                 IO {
                   command.foreach { code =>
@@ -157,7 +215,7 @@ class StreamEventProcessor(
                   }
                 }
               }
-              emitTool *> printIO
+              emitTool *> callbackIO *> printIO
             else IO.unit
           case None => IO.unit
       case None => IO.unit
@@ -174,3 +232,19 @@ class StreamEventProcessor(
           .replace("\\\\", "\\")
       }
     }.toOption.flatten
+
+  /** Extract content from MCP tool result (handles String | List[BetaTextBlock] union) */
+  private def extractMcpContent(result: BetaMcpToolResultBlock): String =
+    import scala.jdk.CollectionConverters.*
+    Try {
+      // Try to get as string first (using Optional accessor)
+      result.content().string().toScala.getOrElse {
+        // Fall back to text blocks
+        result
+          .content()
+          .betaMcpToolResultBlock()
+          .toScala
+          .map(_.asScala.map(_.text()).mkString("\n"))
+          .getOrElse("")
+      }
+    }.getOrElse("")

@@ -3,8 +3,10 @@ package com.tjclp.xl.agent.benchmark.runner
 import cats.effect.{ExitCode, IO, IOApp}
 import cats.syntax.all.*
 import com.anthropic.client.AnthropicClient as JAnthropicClient
+import com.tjclp.xl.agent.AgentConfig
 import com.tjclp.xl.agent.anthropic.AnthropicClientIO
 import com.tjclp.xl.agent.benchmark.common.BenchmarkUtils
+import com.tjclp.xl.agent.benchmark.execution.*
 import com.tjclp.xl.agent.benchmark.grading.*
 import com.tjclp.xl.agent.benchmark.reporting.*
 import com.tjclp.xl.agent.benchmark.skills.{Skill, SkillRegistry}
@@ -12,7 +14,7 @@ import com.tjclp.xl.agent.benchmark.task.*
 import com.tjclp.xl.agent.benchmark.task.UnifiedTaskLoader.*
 
 import java.nio.file.Path
-import java.time.Instant
+import java.time.{Duration, Instant}
 
 // ============================================================================
 // Unified Benchmark Runner
@@ -27,23 +29,102 @@ object UnifiedRunner extends IOApp:
       _ <- config.listSkills.fold(IO.unit)(listSkillsAndExit)
       _ <- IO.println(s"${Console.BOLD}Unified Benchmark Runner${Console.RESET}")
       _ <- IO(SkillRegistry.initialize())
-      report <- runBenchmark(config)
-      _ <- writeReport(config, report)
+      benchmarkRun <- runBenchmarkWithEngine(config)
+      _ <- writeUnifiedReport(config, benchmarkRun)
     yield ExitCode.Success
 
-  /** Run the benchmark with the given configuration */
-  def runBenchmark(config: UnifiedConfig): IO[BenchmarkReport] =
+  /** Run the benchmark using BenchmarkEngine */
+  def runBenchmarkWithEngine(config: UnifiedConfig): IO[BenchmarkRun] =
     AnthropicClientIO.fromEnv.use { client =>
       for
-        startTime <- IO(Instant.now())
         tasks <- loadTasks(config)
         _ <- IO.println(s"Loaded ${tasks.length} tasks")
         skills <- loadSkills(config)
         _ <- IO.println(s"Using skills: ${skills.map(_.name).mkString(", ")}")
-        graders <- createGraders(config, client.underlying)
-        results <- runAllTasks(config, tasks, skills, graders, client)
-        report <- buildReport(config, startTime, skills.map(_.name), results)
-      yield report
+
+        // Create graders for the engine
+        // Both graders are always available - CaseDetails determines which is used per-task
+        fileGrader: Option[Grader[? <: Score]] =
+          Some(SpreadsheetBenchGrader(config.xlCliPath))
+
+        llmGrader: Option[Grader[? <: Score]] =
+          if config.enableGrading then Some(OpusLLMGrader(client.underlying))
+          else Some(NoOpLLMGrader)
+
+        // Create engine and config
+        engine = BenchmarkEngine.default(client, fileGrader, llmGrader)
+
+        agentConfig = AgentConfig(
+          model = config.model,
+          verbose = false
+        )
+
+        engineConfig = EngineConfig(
+          parallelism = config.parallelism,
+          graderType = config.graderType,
+          enableTracing = true,
+          outputDir = config.outputDir,
+          stream = config.stream,
+          xlCliPath = config.xlCliPath
+        )
+
+        // Run with streaming callback if enabled
+        benchmarkRun <-
+          if config.stream then
+            StreamingReportWriter.writeHeader(skills.map(_.name), tasks.length * skills.length) >>
+              engine.runStreaming(
+                tasks = tasks,
+                skills = skills,
+                agentConfig = agentConfig,
+                config = engineConfig,
+                onResult = result => IO.println(formatExecutionResult(result))
+              )
+          else engine.run(tasks, skills, agentConfig, engineConfig)
+
+        _ <- printSummary(benchmarkRun)
+      yield benchmarkRun
+    }
+
+  /** Format an ExecutionResult for streaming output */
+  private def formatExecutionResult(result: ExecutionResult): String =
+    val status =
+      if result.passed then Console.GREEN + "✓" + Console.RESET
+      else if result.error.isDefined then Console.RED + "✗" + Console.RESET
+      else Console.YELLOW + "○" + Console.RESET
+
+    f"$status ${result.skill}%-8s ${result.taskIdValue}%-12s " +
+      f"${result.passedCases}/${result.totalCases} cases " +
+      f"tokens=${result.totalTokens}%6d latency=${result.latencyMs}%5dms"
+
+  /** Print summary after benchmark completion */
+  private def printSummary(run: BenchmarkRun): IO[Unit] =
+    IO.println(s"""
+${Console.BOLD}${"=" * 60}${Console.RESET}
+${Console.BOLD}Benchmark Complete${Console.RESET}
+${"=" * 60}
+Duration: ${formatDuration(run.duration)}
+Tasks: ${run.tasks.length}
+Overall Pass Rate: ${(run.overallPassRate * 100).toInt}%
+Total Tokens: ${run.totalUsage.total}
+${"-" * 60}
+${run.skillResults.values
+        .map { sr =>
+          f"${sr.displayName}%-15s ${sr.summary.passed}/${sr.summary.total} passed (${sr.summary.passRatePercent}%%)"
+        }
+        .mkString("\n")}
+${"=" * 60}
+""")
+
+  private def formatDuration(d: Duration): String =
+    val secs = d.toSeconds
+    val mins = secs / 60
+    val remSecs = secs % 60
+    if mins > 0 then f"${mins}m ${remSecs}s" else s"${secs}s"
+
+  // Legacy method for backward compatibility
+  def runBenchmark(config: UnifiedConfig): IO[BenchmarkReport] =
+    runBenchmarkWithEngine(config).flatMap { run =>
+      buildReportFromRun(config, run)
     }
 
   // --------------------------------------------------------------------------
@@ -79,178 +160,67 @@ object UnifiedRunner extends IOApp:
     IO(config.skills.map(SkillRegistry.apply))
 
   // --------------------------------------------------------------------------
-  // Grader Creation
+  // Report Building and Writing
   // --------------------------------------------------------------------------
 
-  private def createGraders(
-    config: UnifiedConfig,
-    client: JAnthropicClient
-  ): IO[Vector[Grader[? <: Score]]] =
-    IO.pure {
-      val fileGrader: Option[Grader[? <: Score]] =
-        if config.graderType == GraderType.File || config.graderType == GraderType.FileAndLLM then
-          Some(SpreadsheetBenchGrader(config.xlCliPath))
-        else None
-
-      val llmGrader: Option[Grader[? <: Score]] =
-        if config.graderType == GraderType.LLM || config.graderType == GraderType.FileAndLLM then
-          if config.enableGrading then Some(OpusLLMGrader(client))
-          else Some(NoOpLLMGrader)
-        else None
-
-      Vector(fileGrader, llmGrader).flatten
-    }
-
-  // --------------------------------------------------------------------------
-  // Task Execution
-  // --------------------------------------------------------------------------
-
-  private def runAllTasks(
-    config: UnifiedConfig,
-    tasks: List[BenchmarkTask],
-    skills: List[Skill],
-    graders: Vector[Grader[? <: Score]],
-    client: AnthropicClientIO
-  ): IO[List[TaskResultEntry]] =
-    // Create task-skill combinations
-    val combinations = for
-      task <- tasks
-      skill <- skills
-    yield (task, skill)
-
-    if config.stream then
-      StreamingReportWriter.writeHeader(skills.map(_.name), combinations.length) >>
-        combinations.traverse { case (task, skill) =>
-          runSingleTask(config, task, skill, graders, client).flatTap { result =>
-            StreamingReportWriter.writeResult(result)
-          }
-        }
-    else
-      // Run with parallelism
-      combinations
-        .grouped(config.parallelism.max(1))
-        .toList
-        .flatTraverse { batch =>
-          batch.parTraverse { case (task, skill) =>
-            runSingleTask(config, task, skill, graders, client)
-          }
-        }
-
-  private def runSingleTask(
-    config: UnifiedConfig,
-    task: BenchmarkTask,
-    skill: Skill,
-    graders: Vector[Grader[? <: Score]],
-    client: AnthropicClientIO
-  ): IO[TaskResultEntry] =
-    // For now, create a placeholder result
-    // Full implementation would integrate with the existing skill execution
-    val startTime = System.currentTimeMillis()
-
-    task.inputSource match
-      case InputSource.TestCases(cases) =>
-        // Run each test case
-        runTestCases(config, task, skill, cases.toList, graders, client)
-
-      case InputSource.SingleFile(path) =>
-        // Single file execution
-        runSingleFileTask(config, task, skill, path, graders, client)
-
-      case InputSource.NoInput =>
-        // No input file needed
-        runNoInputTask(config, task, skill, graders, client)
-
-      case InputSource.DataDirectory(dir, pattern) =>
-        // Dynamic file resolution
-        IO.pure(
-          TaskResultEntry.skipped(task.taskIdValue, skill.name, "DataDirectory not implemented")
-        )
-
-  private def runTestCases(
-    config: UnifiedConfig,
-    task: BenchmarkTask,
-    skill: Skill,
-    cases: List[TestCaseFile],
-    graders: Vector[Grader[? <: Score]],
-    client: AnthropicClientIO
-  ): IO[TaskResultEntry] =
-    // This would integrate with the existing SpreadsheetBench Runner logic
-    // For now, return a placeholder that indicates integration needed
-    IO.pure(
-      TaskResultEntry(
-        taskId = task.taskIdValue,
-        skill = skill.name,
-        caseNum = None,
-        instruction = task.instruction.take(100),
-        category = task.category.toString,
-        score = Score.FractionalScore(0, cases.length),
-        gradeDetails = GradeDetails.fail("Integration with existing runner needed"),
-        usage = TokenSummary.zero,
-        latencyMs = 0,
-        error = Some("Use spreadsheetbench.Runner for full execution")
-      )
-    )
-
-  private def runSingleFileTask(
-    config: UnifiedConfig,
-    task: BenchmarkTask,
-    skill: Skill,
-    inputPath: Path,
-    graders: Vector[Grader[? <: Score]],
-    client: AnthropicClientIO
-  ): IO[TaskResultEntry] =
-    // This would integrate with TokenRunner execution logic
-    IO.pure(
-      TaskResultEntry(
-        taskId = task.taskIdValue,
-        skill = skill.name,
-        caseNum = None,
-        instruction = task.instruction.take(100),
-        category = task.category.toString,
-        score = Score.BinaryScore.Fail,
-        gradeDetails = GradeDetails.fail("Integration with existing runner needed"),
-        usage = TokenSummary.zero,
-        latencyMs = 0,
-        error = Some("Use token.TokenRunner for full execution")
-      )
-    )
-
-  private def runNoInputTask(
-    config: UnifiedConfig,
-    task: BenchmarkTask,
-    skill: Skill,
-    graders: Vector[Grader[? <: Score]],
-    client: AnthropicClientIO
-  ): IO[TaskResultEntry] =
-    IO.pure(TaskResultEntry.skipped(task.taskIdValue, skill.name, "No input file"))
-
-  // --------------------------------------------------------------------------
-  // Report Building
-  // --------------------------------------------------------------------------
-
-  private def buildReport(
-    config: UnifiedConfig,
-    startTime: Instant,
-    skills: List[String],
-    results: List[TaskResultEntry]
-  ): IO[BenchmarkReport] =
+  /** Build a BenchmarkReport from a BenchmarkRun (for legacy compatibility) */
+  private def buildReportFromRun(config: UnifiedConfig, run: BenchmarkRun): IO[BenchmarkReport] =
     IO {
+      // Convert ExecutionResults to TaskResultEntries
+      val entries = run.allResults.flatMap { result =>
+        result.caseResults.map { caseResult =>
+          TaskResultEntry(
+            taskId = result.taskIdValue,
+            skill = result.skill,
+            caseNum = Some(caseResult.caseNum),
+            instruction = run.tasks
+              .find(_.taskIdValue == result.taskIdValue)
+              .map(_.instruction.take(100))
+              .getOrElse(""),
+            category = run.tasks
+              .find(_.taskIdValue == result.taskIdValue)
+              .map(_.category.toString)
+              .getOrElse(""),
+            score = Score.BinaryScore.fromBoolean(caseResult.passed),
+            gradeDetails =
+              if caseResult.passed then GradeDetails.passed
+              else GradeDetails.fail("Case failed").withMismatches(caseResult.mismatches),
+            usage = TokenSummary(
+              inputTokens = caseResult.usage.inputTokens,
+              outputTokens = caseResult.usage.outputTokens
+            ),
+            latencyMs = caseResult.latencyMs,
+            error = result.error
+          )
+        }
+      }.toList
+
       ReportBuilder()
         .withTitle(s"${config.benchmarkType} Benchmark Results")
         .withBenchmarkType(config.benchmarkType.toString)
-        .withStartTime(startTime)
+        .withStartTime(run.startTime)
         .withModel(config.model)
-        .withSkills(skills)
+        .withSkills(run.skillResults.keys.toList)
         .withMetadata(
           ReportMetadata(
             dataset = Some(config.dataset),
             dataDir = Some(config.dataDir.toString)
           )
         )
-        .addResults(results)
+        .addResults(entries)
         .build()
     }
 
+  /** Write unified report using UnifiedReportWriter */
+  private def writeUnifiedReport(config: UnifiedConfig, run: BenchmarkRun): IO[Unit] =
+    for
+      paths <- UnifiedReportWriter.write(run, config.outputDir)
+      _ <- IO.println(s"\nReport written to:")
+      _ <- IO.println(s"  JSON: ${paths.json}")
+      _ <- IO.println(s"  Markdown: ${paths.markdown}")
+    yield ()
+
+  /** Legacy writeReport for backward compatibility */
   private def writeReport(config: UnifiedConfig, report: BenchmarkReport): IO[Unit] =
     for
       paths <- ReportWriter.write(config.outputDir, report)

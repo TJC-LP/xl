@@ -47,6 +47,12 @@ enum AgentEvent:
     exitCode: Option[Int] = None,
     files: List[String] = Nil
   )
+
+  /** MCP/skill tool result (e.g., skill documentation from view command) */
+  case McpToolResult(toolUseId: String, content: String, isError: Boolean = false)
+
+  /** Text editor view result */
+  case ViewResult(content: String)
   case FileCreated(fileId: String, filename: String)
   case Error(message: String)
 
@@ -76,6 +82,18 @@ object AgentEvent:
         "stderr" -> stderr.asJson,
         "exitCode" -> exitCode.asJson,
         "files" -> files.asJson
+      )
+    case McpToolResult(toolUseId, content, isError) =>
+      Json.obj(
+        "type" -> "McpToolResult".asJson,
+        "toolUseId" -> toolUseId.asJson,
+        "content" -> content.asJson,
+        "isError" -> isError.asJson
+      )
+    case ViewResult(content) =>
+      Json.obj(
+        "type" -> "ViewResult".asJson,
+        "content" -> content.asJson
       )
     case FileCreated(fileId, filename) =>
       Json.obj(

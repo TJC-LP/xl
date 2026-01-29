@@ -61,7 +61,7 @@ object Agent:
         systemPrompt = strategy.systemPrompt
         userPrompt = strategy.userPrompt(task, task.inputFile.getFileName.toString)
 
-        // Send request with streaming
+        // Send request with streaming - pass onEvent for real-time tracing
         response <- CodeExecution.sendRequest(
           client.underlying,
           config,
@@ -69,7 +69,8 @@ object Agent:
           userPrompt,
           containerUploads = strategy.containerUploads(inputFile.id),
           eventQueue,
-          configureRequest = strategy.configureRequest
+          configureRequest = strategy.configureRequest,
+          onEvent = onEvent
         )
 
         // Drain event queue and collect events
@@ -95,15 +96,18 @@ object Agent:
 
         endTime <- Clock[IO].monotonic.map(_.toMillis)
         latencyMs = endTime - startTime
+      // For file modification tasks, success = output file created.
+      // For analysis tasks (no expected output), success = agent completed.
+      // Don't set error for missing output files - let grading layer handle this.
       yield AgentResult(
-        success = outputPath.isDefined,
+        success = outputPath.isDefined || responseText.nonEmpty,
         outputFileId = outputFileId,
         outputPath = outputPath,
         usage = usage,
         latencyMs = latencyMs,
         transcript = collectedEvents,
         responseText = Some(responseText),
-        error = if outputPath.isEmpty then Some("No output file created") else None
+        error = None // Grading determines correctness, not output file presence
       )
 
     private def drainQueue(

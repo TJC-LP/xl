@@ -57,35 +57,12 @@ object `package` extends build.XLInternalModule {
     // Merge: .env overrides system env
     sysEnv ++ dotEnv
 
-  /** Run SpreadsheetBench (N-skill file comparison) */
-  def spreadsheetbench(args: String*): Command[Unit] = Task.Command {
-    val cp = runClasspath().map(_.path).mkString(java.io.File.pathSeparator)
-    val mainClass = "com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner"
-    val benchEnv = loadBenchEnv()
-    os.proc("java", benchJvmArgs, "-cp", cp, mainClass, args).call(
-      cwd = repoRoot,
-      stdin = os.Inherit,
-      stdout = os.Inherit,
-      stderr = os.Inherit,
-      env = benchEnv
-    )
-  }
-
-  /** Run token efficiency benchmark (xl vs xlsx comparison) */
-  def tokenbench(args: String*): Command[Unit] = Task.Command {
-    val cp = runClasspath().map(_.path).mkString(java.io.File.pathSeparator)
-    val mainClass = "com.tjclp.xl.agent.benchmark.token.TokenRunner"
-    val benchEnv = loadBenchEnv()
-    os.proc("java", benchJvmArgs, "-cp", cp, mainClass, args).call(
-      cwd = repoRoot,
-      stdin = os.Inherit,
-      stdout = os.Inherit,
-      stderr = os.Inherit,
-      env = benchEnv
-    )
-  }
-
-  /** Run unified benchmark runner */
+  /** Run unified benchmark runner - supports all benchmark types
+    *
+    * Usage:
+    *   ./mill xl-agent.benchmark --benchmark spreadsheetbench --skills xl --task 59196
+    *   ./mill xl-agent.benchmark --benchmark token --skills xl,xlsx --stream
+    */
   def benchmark(args: String*): Command[Unit] = Task.Command {
     val cp = runClasspath().map(_.path).mkString(java.io.File.pathSeparator)
     val mainClass = "com.tjclp.xl.agent.benchmark.runner.UnifiedRunner"

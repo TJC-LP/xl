@@ -88,6 +88,23 @@ object TraceFormat:
 
         case AgentEvent.Error(message) =>
           sb.append(s"**ERROR:** $message\n\n")
+
+        case AgentEvent.McpToolResult(toolUseId, content, isError) =>
+          val header = if isError then "**MCP Error:**" else "**MCP Result:**"
+          sb.append(s"$header\n")
+          if content.nonEmpty then
+            sb.append("```\n")
+            sb.append(truncate(content, 2000))
+            sb.append("\n```\n")
+          sb.append("\n---\n\n")
+
+        case AgentEvent.ViewResult(content) =>
+          sb.append("**View Result:**\n")
+          if content.nonEmpty then
+            sb.append("```markdown\n")
+            sb.append(truncate(content, 2000))
+            sb.append("\n```\n")
+          sb.append("\n---\n\n")
     }
 
     // Flush any remaining text

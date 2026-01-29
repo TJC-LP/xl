@@ -53,6 +53,22 @@ object StreamingConsole:
 
         case AgentEvent.Error(message) =>
           Console.println(s"$Red$timeStr ERROR: $message$Reset")
+
+        case AgentEvent.McpToolResult(_, content, isError) =>
+          // MCP/skill result (skill documentation, etc.)
+          val color = if isError then Red else Green
+          val header = if isError then "MCP ERROR" else "MCP RESULT"
+          Console.println(s"$color$timeStr $header$Reset")
+          if content.nonEmpty then
+            val truncated = truncateLines(content, 10)
+            Console.println(s"$Gray$truncated$Reset")
+
+        case AgentEvent.ViewResult(content) =>
+          // Text editor view result
+          Console.println(s"$Green$timeStr VIEW RESULT$Reset")
+          if content.nonEmpty then
+            val truncated = truncateLines(content, 10)
+            Console.println(s"$Gray$truncated$Reset")
     }
 
   /** Print a skill header */

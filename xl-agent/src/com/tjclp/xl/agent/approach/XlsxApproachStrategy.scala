@@ -17,66 +17,46 @@ class XlsxApproachStrategy extends ApproachStrategy:
   override def containerUploads(inputFileId: String): List[String] =
     List(inputFileId)
 
-  override def systemPrompt: String =
-    """You are a spreadsheet expert assistant. You have access to the xlsx skill for manipulating Excel files using Python and openpyxl.
+  override def toolSystemPrompt: String =
+    """You have access to Python with openpyxl for Excel operations.
 
-IMPORTANT REQUIREMENTS:
-1. Use Python with openpyxl for ALL Excel operations
-2. ALWAYS save output to $OUTPUT_DIR/output.xlsx
-3. When you finish modifying the spreadsheet, the final file MUST be at $OUTPUT_DIR/output.xlsx
-4. DO NOT modify the input data - only add formulas or values where specified
+PYTHON PATTERNS:
+```python
+from openpyxl import load_workbook
+import os, shutil
 
-CRITICAL: OUTPUT_DIR CHANGES BETWEEN TOOL CALLS
-The $OUTPUT_DIR path changes with each tool invocation. To work around this:
-- Save to /tmp/output.xlsx for intermediate work and verification
-- In your FINAL tool call, copy to $OUTPUT_DIR: shutil.copy('/tmp/output.xlsx', os.path.join(os.environ['OUTPUT_DIR'], 'output.xlsx'))
-- Or do all work (write + verify + save) in a SINGLE tool call
+wb = load_workbook(os.path.join(os.environ['INPUT_DIR'], 'file.xlsx'))
+ws = wb.active  # or wb['SheetName']
 
-Your goal is to solve spreadsheet tasks efficiently and accurately. Always:
-1. Explore the input file first to understand its structure
-2. Plan your solution before executing
-3. Save to /tmp/output.xlsx first, then copy to $OUTPUT_DIR in your final tool call
-4. Verify your solution by reading back the output cells
-5. NEVER modify input data cells - only add to the cells specified in the task"""
+# Read: ws['A1'].value, ws.iter_rows()
+# Write: ws['A1'] = value, ws['A1'] = '=SUM(B:B)'
+# Save: wb.save('/tmp/output.xlsx')
+# Copy to OUTPUT_DIR in final call
+shutil.copy('/tmp/output.xlsx', os.path.join(os.environ['OUTPUT_DIR'], 'output.xlsx'))
+```"""
 
-  override def userPrompt(task: AgentTask, inputFilename: String): String =
+  override def toolUserPrompt(task: AgentTask, inputFilename: String): String =
     val answerSection = task.answerPosition
-      .map(pos => s"\nThe answer will be evaluated at position: $pos\n")
+      .map(pos => s"\nThe answer will be evaluated at position: $pos")
       .getOrElse("")
 
-    s"""You are a spreadsheet expert with access to Python and openpyxl for Excel operations.
-
-## Task
+    s"""## Task
 ${task.instruction}
+$answerSection
 
 ## File Locations
-- Input file: $$INPUT_DIR/$inputFilename
-$answerSection
-## CRITICAL: Output Location
-You MUST save your final output to: $$OUTPUT_DIR/output.xlsx
-The $$OUTPUT_DIR environment variable is set by the system. Using it ensures the file is properly captured.
+- Input: $$INPUT_DIR/$inputFilename
+- Output: $$OUTPUT_DIR/output.xlsx (or /tmp/output.xlsx then copy)
 
-## Python Setup
+## Setup
 ```python
-import os
+import os, shutil
 from openpyxl import load_workbook
 
-# Load input file
 INPUT = os.path.join(os.environ['INPUT_DIR'], '$inputFilename')
-OUTPUT = os.path.join(os.environ['OUTPUT_DIR'], 'output.xlsx')
-
 wb = load_workbook(INPUT)
-ws = wb.active  # or wb['Sheet1'] for specific sheet
-```
-
-## Instructions
-1. Explore the input file to understand its structure
-2. Implement the solution using openpyxl
-3. IMPORTANT: Always save to OUTPUT (which is $$OUTPUT_DIR/output.xlsx)
-4. Verify your solution by reading the output cells${task.answerPosition
-        .map(p => s" at $p")
-        .getOrElse("")}
-"""
+ws = wb.active
+```"""
 
   override def configureRequest(builder: MessageCreateParams.Builder): MessageCreateParams.Builder =
     val xlsxSkill = BetaSkillParams

@@ -1,17 +1,18 @@
 package com.tjclp.xl.agent.benchmark.skills.builtin
 
-import cats.effect.IO
-import com.anthropic.models.beta.AnthropicBeta
-import com.anthropic.models.beta.messages.{
-  BetaCodeExecutionTool20250825,
-  BetaContainerParams,
-  BetaSkillParams,
-  MessageCreateParams
-}
+import cats.effect.{Clock, IO}
+import cats.syntax.all.*
 import com.tjclp.xl.agent.{Agent, AgentConfig, AgentTask}
 import com.tjclp.xl.agent.anthropic.AnthropicClientIO
-import com.tjclp.xl.agent.approach.ApproachStrategy
+import com.tjclp.xl.agent.approach.XlsxApproachStrategy
+import com.tjclp.xl.agent.benchmark.{Evaluator, RangeResult}
+import com.tjclp.xl.agent.benchmark.execution.*
+import com.tjclp.xl.agent.benchmark.grading.{CellMismatch, Score}
 import com.tjclp.xl.agent.benchmark.skills.{Skill, SkillContext, SkillRegistry}
+import com.tjclp.xl.agent.benchmark.task.*
+import com.tjclp.xl.agent.benchmark.tracing.ConversationTracer
+
+import java.nio.file.{Files, Path}
 
 /** Skill using Anthropic's built-in xlsx skill (openpyxl) */
 object XlsxSkill extends Skill:
@@ -32,93 +33,242 @@ object XlsxSkill extends Skill:
     ctx: SkillContext,
     config: AgentConfig
   ): Agent =
-    Agent.create(client, config, XlsxSkillStrategy)
+    Agent.create(client, config, XlsxApproachStrategy())
 
-/** Internal strategy for XlsxSkill */
-private object XlsxSkillStrategy extends ApproachStrategy:
+  override def execute(
+    task: BenchmarkTask,
+    ctx: SkillContext,
+    client: AnthropicClientIO,
+    agentConfig: AgentConfig,
+    engineConfig: EngineConfig
+  ): IO[ExecutionResult] =
+    task.inputSource match
+      case InputSource.TestCases(cases) =>
+        runTestCases(task, cases.toList, ctx, client, agentConfig, engineConfig)
 
-  override def name: String = "xlsx"
+      case InputSource.SingleFile(path) =>
+        runSingleFile(task, path, ctx, client, agentConfig, engineConfig)
 
-  override def containerUploads(inputFileId: String): List[String] =
-    List(inputFileId)
+      case InputSource.NoInput =>
+        runNoInput(task, ctx, client, agentConfig, engineConfig)
 
-  override def systemPrompt: String =
-    """You are a spreadsheet expert assistant. You have access to the xlsx skill for manipulating Excel files using Python and openpyxl.
+      case InputSource.DataDirectory(dir, pattern) =>
+        IO.blocking {
+          import scala.jdk.CollectionConverters.*
+          val glob = dir.getFileSystem.getPathMatcher(s"glob:$pattern")
+          Files
+            .walk(dir)
+            .iterator()
+            .asScala
+            .filter(p => Files.isRegularFile(p) && glob.matches(p.getFileName))
+            .map(p => TestCaseFile(1, p, p))
+            .toVector
+        }.flatMap { cases =>
+          if cases.isEmpty then
+            IO.pure(ExecutionResult.skipped(task.id, name, "No files matched pattern"))
+          else runTestCases(task, cases.toList, ctx, client, agentConfig, engineConfig)
+        }
 
-IMPORTANT REQUIREMENTS:
-1. Use Python with openpyxl for ALL Excel operations
-2. ALWAYS save output to $OUTPUT_DIR/output.xlsx
-3. When you finish modifying the spreadsheet, the final file MUST be at $OUTPUT_DIR/output.xlsx
-4. DO NOT modify the input data - only add formulas or values where specified
+  /** Run task with multiple test cases (SpreadsheetBench style) */
+  private def runTestCases(
+    task: BenchmarkTask,
+    cases: List[TestCaseFile],
+    ctx: SkillContext,
+    client: AnthropicClientIO,
+    agentConfig: AgentConfig,
+    engineConfig: EngineConfig
+  ): IO[ExecutionResult] =
+    for
+      startTime <- Clock[IO].monotonic.map(_.toMillis)
 
-CRITICAL: OUTPUT_DIR CHANGES BETWEEN TOOL CALLS
-The $OUTPUT_DIR path changes with each tool invocation. To work around this:
-- Save to /tmp/output.xlsx for intermediate work and verification
-- In your FINAL tool call, copy to $OUTPUT_DIR: shutil.copy('/tmp/output.xlsx', os.path.join(os.environ['OUTPUT_DIR'], 'output.xlsx'))
-- Or do all work (write + verify + save) in a SINGLE tool call
+      agent = createAgent(client, ctx, agentConfig)
 
-Your goal is to solve spreadsheet tasks efficiently and accurately. Always:
-1. Explore the input file first to understand its structure
-2. Plan your solution before executing
-3. Save to /tmp/output.xlsx first, then copy to $OUTPUT_DIR in your final tool call
-4. Verify your solution by reading back the output cells
-5. NEVER modify input data cells - only add to the cells specified in the task"""
+      caseResults <- cases.traverse { testCase =>
+        runSingleTestCase(
+          agent = agent,
+          task = task,
+          testCase = testCase,
+          engineConfig = engineConfig,
+          agentConfig = agentConfig
+        )
+      }
 
-  override def userPrompt(task: AgentTask, inputFilename: String): String =
-    val answerSection = task.answerPosition
-      .map(pos => s"\nThe answer will be evaluated at position: $pos\n")
-      .getOrElse("")
+      endTime <- Clock[IO].monotonic.map(_.toMillis)
+      latencyMs = endTime - startTime
 
-    s"""You are a spreadsheet expert with access to Python and openpyxl for Excel operations.
+      totalUsage = caseResults.foldLeft(TokenUsage.zero)(_ + _.usage)
 
-## Task
-${task.instruction}
+      result = ExecutionResult.fromCases(
+        taskId = task.id,
+        skill = name,
+        caseResults = caseResults.toVector,
+        usage = totalUsage,
+        latencyMs = latencyMs
+      )
 
-## File Locations
-- Input file: $$INPUT_DIR/$inputFilename
-$answerSection
-## CRITICAL: Output Location
-You MUST save your final output to: $$OUTPUT_DIR/output.xlsx
-The $$OUTPUT_DIR environment variable is set by the system. Using it ensures the file is properly captured.
+      traces = caseResults.flatMap(_.tracePath).toVector
+    yield result.withTraces(traces)
 
-## Python Setup
-```python
-import os
-from openpyxl import load_workbook
+  /** Run a single test case and evaluate against expected answer */
+  private def runSingleTestCase(
+    agent: Agent,
+    task: BenchmarkTask,
+    testCase: TestCaseFile,
+    engineConfig: EngineConfig,
+    agentConfig: AgentConfig
+  ): IO[CaseResult] =
+    val outputDir =
+      engineConfig.outputDir.resolve("outputs").resolve(task.taskIdValue).resolve(name)
+    val outputPath = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
 
-# Load input file
-INPUT = os.path.join(os.environ['INPUT_DIR'], '$inputFilename')
-OUTPUT = os.path.join(os.environ['OUTPUT_DIR'], 'output.xlsx')
+    (for
+      _ <- IO.blocking(Files.createDirectories(outputDir))
+      startTime <- Clock[IO].monotonic.map(_.toMillis)
 
-wb = load_workbook(INPUT)
-ws = wb.active  # or wb['Sheet1'] for specific sheet
-```
+      // Create tracer for conversation logs
+      tracer <- ConversationTracer.create(
+        outputDir = engineConfig.outputDir,
+        taskId = task.taskIdValue,
+        skillName = name,
+        caseNum = testCase.caseNum,
+        streaming = engineConfig.stream
+      )
 
-## Instructions
-1. Explore the input file to understand its structure
-2. Implement the solution using openpyxl
-3. IMPORTANT: Always save to OUTPUT (which is $$OUTPUT_DIR/output.xlsx)
-4. Verify your solution by reading the output cells${task.answerPosition
-        .map(p => s" at $p")
-        .getOrElse("")}
-"""
+      agentTask = AgentTask(
+        instruction = task.instruction,
+        inputFile = testCase.inputPath,
+        outputFile = outputPath,
+        answerPosition = task.evaluation.answerPosition
+      )
 
-  override def configureRequest(builder: MessageCreateParams.Builder): MessageCreateParams.Builder =
-    val xlsxSkill = BetaSkillParams
-      .builder()
-      .skillId("xlsx")
-      .`type`(BetaSkillParams.Type.ANTHROPIC)
-      .version("latest")
-      .build()
+      // Run agent with streaming to capture conversation
+      result <- agent.runStreaming(agentTask, tracer.onEvent)
 
-    val container = BetaContainerParams
-      .builder()
-      .addSkill(xlsxSkill)
-      .build()
+      rangeResults <- result.outputPath match
+        case Some(path) =>
+          val answerPos = task.evaluation.answerPosition.getOrElse("A1")
+          Evaluator.compare(path, testCase.answerPath, answerPos, engineConfig.xlCliPath)
+        case None =>
+          IO.pure(List(RangeResult("N/A", false, Nil)))
 
-    builder
-      .container(container)
-      .addTool(BetaCodeExecutionTool20250825.builder().build())
-      .addBeta(AnthropicBeta.of("code-execution-2025-08-25"))
-      .addBeta(AnthropicBeta.SKILLS_2025_10_02)
-      .addBeta(AnthropicBeta.FILES_API_2025_04_14)
+      passed = rangeResults.forall(_.passed)
+
+      endTime <- Clock[IO].monotonic.map(_.toMillis)
+      latencyMs = endTime - startTime
+
+      // Complete and save tracer
+      _ <- tracer.complete(result.usage, passed, result.error)
+      tracePath <- tracer.save()
+
+      mismatches = rangeResults.flatMap(_.mismatches).map { m =>
+        CellMismatch(
+          ref = m.ref,
+          expected = m.expected.toString,
+          actual = m.actual.toString
+        )
+      }
+
+      details =
+        if passed then CaseDetails.filePass
+        else CaseDetails.fileFail(mismatches)
+    yield CaseResult(
+      caseNum = testCase.caseNum,
+      passed = passed,
+      usage = TokenUsage.fromAgentUsage(result.usage),
+      latencyMs = latencyMs,
+      details = details,
+      tracePath = Some(tracePath)
+    )).handleErrorWith { e =>
+      IO.pure(
+        CaseResult(
+          caseNum = testCase.caseNum,
+          passed = false,
+          usage = TokenUsage.zero,
+          latencyMs = 0,
+          details = CaseDetails.NoDetails
+        )
+      )
+    }
+
+  /** Run task with single input file (TokenBenchmark style) */
+  private def runSingleFile(
+    task: BenchmarkTask,
+    inputPath: Path,
+    ctx: SkillContext,
+    client: AnthropicClientIO,
+    agentConfig: AgentConfig,
+    engineConfig: EngineConfig
+  ): IO[ExecutionResult] =
+    for
+      startTime <- Clock[IO].monotonic.map(_.toMillis)
+
+      agent = createAgent(client, ctx, agentConfig)
+
+      outputDir = engineConfig.outputDir.resolve("outputs").resolve(task.taskIdValue).resolve(name)
+      outputPath = outputDir.resolve("output.xlsx")
+      _ <- IO.blocking(Files.createDirectories(outputDir))
+
+      // Create tracer for conversation logs
+      tracer <- ConversationTracer.create(
+        outputDir = engineConfig.outputDir,
+        taskId = task.taskIdValue,
+        skillName = name,
+        caseNum = 1,
+        streaming = engineConfig.stream
+      )
+
+      agentTask = AgentTask(
+        instruction = task.instruction,
+        inputFile = inputPath,
+        outputFile = outputPath,
+        answerPosition = task.evaluation.answerPosition
+      )
+
+      // Run agent with streaming to capture conversation
+      result <- agent.runStreaming(agentTask, tracer.onEvent)
+
+      endTime <- Clock[IO].monotonic.map(_.toMillis)
+      latencyMs = endTime - startTime
+
+      usage = TokenUsage.fromAgentUsage(result.usage)
+
+      // For analysis tasks, "success" means agent ran without error.
+      // Actual correctness is determined by LLM grading (via CaseDetails.TokenComparison).
+      agentSucceeded = result.error.isEmpty
+
+      // Complete and save tracer
+      _ <- tracer.complete(result.usage, agentSucceeded, result.error)
+      tracePath <- tracer.save()
+
+      // For single file tasks (analysis), we defer correctness to LLM grading.
+      // Set passed = true here; the grader will update aggregateScore based on response quality.
+      caseResult = CaseResult(
+        caseNum = 1,
+        passed = agentSucceeded, // Agent ran without error; grading determines correctness
+        usage = usage,
+        latencyMs = latencyMs,
+        details = CaseDetails.token(
+          result.responseText.getOrElse(""),
+          task.evaluation.expectedAnswer
+        ),
+        tracePath = Some(tracePath)
+      )
+    yield ExecutionResult
+      .fromSingleCase(
+        taskId = task.id,
+        skill = name,
+        caseResult = caseResult,
+        usage = usage,
+        latencyMs = latencyMs
+      )
+      .withTraces(Vector(tracePath))
+
+  /** Run task without input file */
+  private def runNoInput(
+    task: BenchmarkTask,
+    ctx: SkillContext,
+    client: AnthropicClientIO,
+    agentConfig: AgentConfig,
+    engineConfig: EngineConfig
+  ): IO[ExecutionResult] =
+    IO.pure(ExecutionResult.skipped(task.id, name, "NoInput tasks not yet implemented"))

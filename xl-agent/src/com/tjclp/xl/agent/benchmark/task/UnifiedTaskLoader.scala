@@ -2,6 +2,7 @@ package com.tjclp.xl.agent.benchmark.task
 
 import cats.effect.IO
 import cats.syntax.all.*
+import com.tjclp.xl.agent.benchmark.common.SampleGenerator
 import com.tjclp.xl.agent.benchmark.grading.GraderType
 import com.tjclp.xl.agent.benchmark.token.{TokenTask, TokenTasks}
 import com.tjclp.xl.agent.benchmark.{
@@ -113,13 +114,26 @@ object UnifiedTaskLoader:
     samplePath: Option[Path],
     filter: TaskFilter
   ): IO[List[BenchmarkTask]] =
-    IO.pure {
-      TokenTasks
-        .allTasks(includeLarge = false)
-        .map(convertFromTokenTask(_, samplePath))
-        .filter(filter.matches)
-        .take(filter.limit.getOrElse(Int.MaxValue))
-    }
+    for
+      // Use provided path or ensure default sample exists (creating it if needed)
+      effectivePath <- samplePath match
+        case Some(p) =>
+          // User provided explicit path - verify it exists
+          IO.blocking(Files.exists(p)).flatMap {
+            case true => IO.pure(p)
+            case false =>
+              IO.raiseError(
+                AgentError.ConfigError(s"Sample file not found: $p")
+              )
+          }
+        case None =>
+          // Use default path, creating sample if needed
+          SampleGenerator.ensureSampleExists()
+    yield TokenTasks
+      .allTasks(includeLarge = false)
+      .map(convertFromTokenTask(_, Some(effectivePath)))
+      .filter(filter.matches)
+      .take(filter.limit.getOrElse(Int.MaxValue))
 
   /** Convert TokenTask to unified BenchmarkTask */
   private def convertFromTokenTask(tt: TokenTask, samplePath: Option[Path]): BenchmarkTask =

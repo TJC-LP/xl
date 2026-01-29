@@ -26,7 +26,8 @@ object CodeExecution:
     containerUploads: List[String], // File IDs to upload to container
     eventQueue: Queue[IO, AgentEvent],
     configureRequest: MessageCreateParams.Builder => MessageCreateParams.Builder =
-      identity // Strategy-specific configuration (tools, betas, container)
+      identity, // Strategy-specific configuration (tools, betas, container)
+    onEvent: AgentEvent => IO[Unit] = _ => IO.unit // Real-time event callback for tracing
   ): IO[BetaMessage] =
     IO.blocking {
       import java.util.{List as JList, Map as JMap}
@@ -65,7 +66,7 @@ object CodeExecution:
       // Stream response
       val accumulator = BetaMessageAccumulator.create()
       val streamResponse = client.beta().messages().createStreaming(params)
-      val streamProcessor = new StreamEventProcessor(eventQueue, config.verbose)
+      val streamProcessor = new StreamEventProcessor(eventQueue, onEvent, config.verbose)
       val interrupted = new AtomicBoolean(false)
 
       try
