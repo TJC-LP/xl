@@ -23,6 +23,30 @@ class DirectSaxEmitterParitySpec extends FunSuite:
     assertEquals(normalize(expected.toXml), normalize(actual))
   }
 
+  test("formula without cached value omits type attribute (no Excel corruption)") {
+    // Regression test: formulas without cached values were written with t="str"
+    // which caused Excel to show a "We found a problem" recovery dialog.
+    // The fix is to omit the type attribute entirely.
+    val a1 = ARef.from1(1, 1)
+    val sheet = Sheet(SheetName.unsafe("Test"))
+      .put(a1, CellValue.Formula("SUM(B1:B10)", None)) // No cached value
+
+    val xml = emitDirect(sheet, None)
+    val cellElem = (xml \\ "c").head
+
+    // Should NOT have t="str" - either no t attribute or empty
+    val typeAttr = cellElem.attribute("t").map(_.text)
+    assert(
+      typeAttr.isEmpty || typeAttr.contains(""),
+      s"Formula without cached value should not have type attribute, got: $typeAttr"
+    )
+
+    // Should have formula element
+    val formulaElem = (cellElem \ "f").headOption
+    assert(formulaElem.isDefined, "Cell should have <f> element")
+    assertEquals(formulaElem.get.text, "SUM(B1:B10)")
+  }
+
   private def emitDirect(sheet: Sheet, tableParts: Option[Elem]): Elem =
     val output = new ByteArrayOutputStream()
     val writer = StaxSaxWriter.create(output)

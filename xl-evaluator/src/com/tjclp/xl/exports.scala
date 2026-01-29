@@ -32,6 +32,9 @@ object formulaExports:
   export formula.eval.EvalError
   export formula.parser.ParseError
 
+  // Array formula support
+  export formula.eval.ArrayResult
+
   // SheetEvaluator object and extension methods
   export formula.eval.SheetEvaluator
   export formula.eval.SheetEvaluator.*

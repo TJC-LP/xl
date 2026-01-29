@@ -1,7 +1,8 @@
 package com.tjclp.xl.cli.output
 
-import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{CellValue, Comment}
+import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.styles.{CellStyle, StyleId}
 import com.tjclp.xl.styles.alignment.Align
@@ -72,6 +73,26 @@ object Format:
       else s"\nWith: ${overrides.mkString(", ")}"
     s"""Formula: $formula
        |Result: $resultStr ($typeStr)$overridesStr""".stripMargin
+
+  /**
+   * Format an array formula evaluation result.
+   *
+   * Shows the formula, spill range dimensions, and renders the result as a markdown table.
+   */
+  def evalArraySuccess(
+    formula: String,
+    sheet: Sheet,
+    spillRange: CellRange,
+    overrides: List[String]
+  ): String =
+    val sb = new StringBuilder
+    sb.append(s"Array Formula: $formula\n")
+    sb.append(
+      s"Spill Range: ${spillRange.toA1} (${spillRange.height}\u00d7${spillRange.width})\n\n"
+    )
+    sb.append(Markdown.renderRange(sheet, spillRange))
+    if overrides.nonEmpty then sb.append(s"\nWith: ${overrides.mkString(", ")}")
+    sb.toString
 
   /**
    * Format a sheet select success message.

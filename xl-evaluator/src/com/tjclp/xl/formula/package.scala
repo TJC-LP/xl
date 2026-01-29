@@ -28,6 +28,7 @@ package object formula:
   export eval.CriteriaMatcher
   export eval.SheetEvaluator
   export eval.WorkbookEvaluator
+  export eval.ArrayResult
 
   // Functions
   export functions.FunctionSpec

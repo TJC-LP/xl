@@ -2,7 +2,7 @@ package com.tjclp.xl.patch
 
 import cats.Monoid
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
@@ -54,6 +54,9 @@ enum Patch:
 
   /** Remove all cells in range */
   case RemoveRange(range: CellRange)
+
+  /** Put a grid of values starting at origin (for array formula spill) */
+  case PutArray(origin: ARef, values: Vector[Vector[CellValue]])
 
   /** Batch multiple patches together */
   case Batch(patches: Vector[Patch])
@@ -131,6 +134,18 @@ object Patch:
 
     case RemoveRange(range) =>
       sheet.removeRange(range)
+
+    case PutArray(origin, values) =>
+      val newCells = values.zipWithIndex.foldLeft(sheet.cells) { case (cellsAcc, (row, rowIdx)) =>
+        row.zipWithIndex.foldLeft(cellsAcc) { case (cellsAcc2, (value, colIdx)) =>
+          val ref = origin.shift(colIdx, rowIdx)
+          val cell = cellsAcc2.get(ref) match
+            case Some(existing) => existing.withValue(value)
+            case None => Cell(ref, value)
+          cellsAcc2.updated(ref, cell)
+        }
+      }
+      sheet.copy(cells = newCells)
 
     case Batch(patches) =>
       patches.foldLeft(sheet) { (acc, p) =>

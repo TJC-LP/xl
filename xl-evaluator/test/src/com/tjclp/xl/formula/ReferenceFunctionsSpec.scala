@@ -48,6 +48,31 @@ class ReferenceFunctionsSpec extends FunSuite:
     assertEquals(result, Right(BigDecimal(10)))
   }
 
+  test("ROW: zero-argument returns row of current cell") {
+    val expr = TExpr.row()
+    // Evaluate with currentCell = B5, so ROW() should return 5
+    val result = evaluator.eval(expr, emptySheet, Clock.system, None, Some(ref"B5"))
+    assertEquals(result, Right(BigDecimal(5)))
+  }
+
+  test("ROW: zero-argument returns row 1 when currentCell is A1") {
+    val expr = TExpr.row()
+    val result = evaluator.eval(expr, emptySheet, Clock.system, None, Some(ref"A1"))
+    assertEquals(result, Right(BigDecimal(1)))
+  }
+
+  test("ROW: zero-argument returns row 100 when currentCell is Z100") {
+    val expr = TExpr.row()
+    val result = evaluator.eval(expr, emptySheet, Clock.system, None, Some(ref"Z100"))
+    assertEquals(result, Right(BigDecimal(100)))
+  }
+
+  test("ROW: zero-argument fails when no current cell context") {
+    val expr = TExpr.row()
+    val result = evaluator.eval(expr, emptySheet, Clock.system, None, None)
+    assert(result.isLeft, "ROW() without current cell should fail")
+  }
+
   // ===== COLUMN Tests =====
 
   test("COLUMN: returns column number of reference A1 = 1") {
@@ -72,6 +97,31 @@ class ReferenceFunctionsSpec extends FunSuite:
     val expr = TExpr.column(TExpr.PolyRef(ref"AA1", Anchor.Relative))
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right(BigDecimal(27)))
+  }
+
+  test("COLUMN: zero-argument returns column of current cell") {
+    val expr = TExpr.column()
+    // Evaluate with currentCell = C5, so COLUMN() should return 3
+    val result = evaluator.eval(expr, emptySheet, Clock.system, None, Some(ref"C5"))
+    assertEquals(result, Right(BigDecimal(3)))
+  }
+
+  test("COLUMN: zero-argument returns column 1 when currentCell is A1") {
+    val expr = TExpr.column()
+    val result = evaluator.eval(expr, emptySheet, Clock.system, None, Some(ref"A1"))
+    assertEquals(result, Right(BigDecimal(1)))
+  }
+
+  test("COLUMN: zero-argument returns column 26 when currentCell is Z1") {
+    val expr = TExpr.column()
+    val result = evaluator.eval(expr, emptySheet, Clock.system, None, Some(ref"Z1"))
+    assertEquals(result, Right(BigDecimal(26)))
+  }
+
+  test("COLUMN: zero-argument fails when no current cell context") {
+    val expr = TExpr.column()
+    val result = evaluator.eval(expr, emptySheet, Clock.system, None, None)
+    assert(result.isLeft, "COLUMN() without current cell should fail")
   }
 
   // ===== ROWS Tests =====
@@ -265,12 +315,30 @@ class ReferenceFunctionsSpec extends FunSuite:
     }
   }
 
+  test("ROW: parse zero-argument form") {
+    val result = FormulaParser.parse("=ROW()")
+    assert(result.isRight, s"Failed to parse ROW(): $result")
+    result.foreach { expr =>
+      val printed = FormulaPrinter.print(expr)
+      assertEquals(printed, "=ROW()")
+    }
+  }
+
   test("COLUMN: parse from string") {
     val result = FormulaParser.parse("=COLUMN(C1)")
     assert(result.isRight, s"Failed to parse COLUMN: $result")
     result.foreach { expr =>
       val printed = FormulaPrinter.print(expr)
       assertEquals(printed, "=COLUMN(C1)")
+    }
+  }
+
+  test("COLUMN: parse zero-argument form") {
+    val result = FormulaParser.parse("=COLUMN()")
+    assert(result.isRight, s"Failed to parse COLUMN(): $result")
+    result.foreach { expr =>
+      val printed = FormulaPrinter.print(expr)
+      assertEquals(printed, "=COLUMN()")
     }
   }
 
@@ -308,4 +376,35 @@ class ReferenceFunctionsSpec extends FunSuite:
       val printed = FormulaPrinter.print(expr)
       assertEquals(printed, "=ADDRESS(1, 1, 1, TRUE, \"Sheet1\")")
     }
+  }
+
+  // ===== SheetEvaluator Integration Tests =====
+
+  import com.tjclp.xl.formula.eval.SheetEvaluator.*
+
+  test("evaluateCell: ROW() formula returns row of containing cell") {
+    // Put =ROW() formula in cell B5 - should evaluate to 5
+    val sheet = emptySheet.put(ref"B5", CellValue.Formula("ROW()", None))
+    val result = sheet.evaluateCell(ref"B5")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(5))))
+  }
+
+  test("evaluateCell: COLUMN() formula returns column of containing cell") {
+    // Put =COLUMN() formula in cell D3 - should evaluate to 4 (D is 4th column)
+    val sheet = emptySheet.put(ref"D3", CellValue.Formula("COLUMN()", None))
+    val result = sheet.evaluateCell(ref"D3")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(4))))
+  }
+
+  test("evaluateCell: ROW()+COLUMN() formula in C7 returns 10") {
+    // C7: row=7, column=3, sum=10
+    val sheet = emptySheet.put(ref"C7", CellValue.Formula("ROW()+COLUMN()", None))
+    val result = sheet.evaluateCell(ref"C7")
+    assertEquals(result, Right(CellValue.Number(BigDecimal(10))))
+  }
+
+  test("evaluateFormula: ROW() without cell context fails gracefully") {
+    // When evaluateFormula is called without cell context, ROW() should fail
+    val result = emptySheet.evaluateFormula("=ROW()")
+    assert(result.isLeft, "ROW() without cell context should fail")
   }

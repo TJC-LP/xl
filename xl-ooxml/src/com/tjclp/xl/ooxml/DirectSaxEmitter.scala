@@ -307,11 +307,17 @@ object DirectSaxEmitter:
         ("n", CellValue.Number(BigDecimal(serial)))
 
       case CellValue.Formula(_, cachedValue) =>
+        // Cell type is determined by cached value type.
+        // When no cached value exists, omit type attribute (empty string)
+        // to let Excel infer the type. Using "str" for formulas without
+        // cached values causes Excel to show a corruption warning.
         val cType = cachedValue match
           case Some(CellValue.Number(_)) => "n"
           case Some(CellValue.Bool(_)) => "b"
           case Some(CellValue.Error(_)) => "e"
-          case _ => "str"
+          case Some(CellValue.Text(_)) => "str"
+          case Some(CellValue.DateTime(_)) => "n"
+          case _ => "" // No type attr - Excel infers
         (cType, value)
 
       case CellValue.Error(_) => ("e", value)
