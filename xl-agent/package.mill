@@ -21,6 +21,84 @@ object `package` extends build.XLInternalModule {
     mvn"com.squareup.okhttp3:okhttp:4.12.0"
   )
 
+  // ============================================================================
+  // Benchmark Commands
+  // ============================================================================
+
+  /** JVM args for benchmark runners (suppress LazyVals warnings) */
+  private def benchJvmArgs: Seq[String] = Seq(
+    "--add-opens=java.base/sun.misc=ALL-UNNAMED",
+    "-XX:+IgnoreUnrecognizedVMOptions"
+  )
+
+  /** Repository root directory (parent of xl-agent module) */
+  private def repoRoot: os.Path = millSourcePath0 / os.up
+
+  /** Load environment from .env file, merged with system env for benchmark runners */
+  private def loadBenchEnv(): Map[String, String] =
+    import scala.jdk.CollectionConverters.*
+    // Start with system environment
+    val sysEnv = System.getenv().asScala.toMap
+    // Load .env file from repo root
+    val envFile = repoRoot / ".env"
+    val dotEnv =
+      if os.exists(envFile) then
+        os.read.lines(envFile)
+          .filter(_.contains("="))
+          .filterNot(_.startsWith("#"))
+          .map { line =>
+            val idx = line.indexOf("=")
+            val key = line.substring(0, idx).trim
+            val value = line.substring(idx + 1).trim.stripPrefix("\"").stripSuffix("\"")
+            key -> value
+          }
+          .toMap
+      else Map.empty[String, String]
+    // Merge: .env overrides system env
+    sysEnv ++ dotEnv
+
+  /** Run SpreadsheetBench (N-skill file comparison) */
+  def spreadsheetbench(args: String*): Command[Unit] = Task.Command {
+    val cp = runClasspath().map(_.path).mkString(java.io.File.pathSeparator)
+    val mainClass = "com.tjclp.xl.agent.benchmark.spreadsheetbench.Runner"
+    val benchEnv = loadBenchEnv()
+    os.proc("java", benchJvmArgs, "-cp", cp, mainClass, args).call(
+      cwd = repoRoot,
+      stdin = os.Inherit,
+      stdout = os.Inherit,
+      stderr = os.Inherit,
+      env = benchEnv
+    )
+  }
+
+  /** Run token efficiency benchmark (xl vs xlsx comparison) */
+  def tokenbench(args: String*): Command[Unit] = Task.Command {
+    val cp = runClasspath().map(_.path).mkString(java.io.File.pathSeparator)
+    val mainClass = "com.tjclp.xl.agent.benchmark.token.TokenRunner"
+    val benchEnv = loadBenchEnv()
+    os.proc("java", benchJvmArgs, "-cp", cp, mainClass, args).call(
+      cwd = repoRoot,
+      stdin = os.Inherit,
+      stdout = os.Inherit,
+      stderr = os.Inherit,
+      env = benchEnv
+    )
+  }
+
+  /** Run unified benchmark runner */
+  def benchmark(args: String*): Command[Unit] = Task.Command {
+    val cp = runClasspath().map(_.path).mkString(java.io.File.pathSeparator)
+    val mainClass = "com.tjclp.xl.agent.benchmark.runner.UnifiedRunner"
+    val benchEnv = loadBenchEnv()
+    os.proc("java", benchJvmArgs, "-cp", cp, mainClass, args).call(
+      cwd = repoRoot,
+      stdin = os.Inherit,
+      stdout = os.Inherit,
+      stderr = os.Inherit,
+      env = benchEnv
+    )
+  }
+
   object test extends ScalaTests with build.XLTestModule {
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.0.3",

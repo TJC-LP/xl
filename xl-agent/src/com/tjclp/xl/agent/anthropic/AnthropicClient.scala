@@ -34,9 +34,15 @@ object AnthropicClientIO:
   /** Load API key from environment or .env file */
   def loadApiKey: IO[String] =
     IO.blocking {
-      // Try multiple directories for .env file
-      val directories =
-        List(".", "..", "examples/anthropic-sdk", "examples/anthropic-sdk/spreadsheetbench")
+      // Try multiple directories for .env file (supports running from different locations)
+      val directories = List(
+        ".", // Current directory (typical for mill)
+        "..", // Parent directory
+        "xl-agent", // Mill submodule directory
+        "../xl-agent", // From sibling module
+        "examples/anthropic-sdk",
+        "examples/anthropic-sdk/spreadsheetbench"
+      )
       val dotenv = directories.view
         .map(dir => Dotenv.configure().directory(dir).ignoreIfMissing().load())
         .find(d => d.get("ANTHROPIC_API_KEY") != null)
