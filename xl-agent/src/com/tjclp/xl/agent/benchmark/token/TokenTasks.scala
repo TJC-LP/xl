@@ -17,8 +17,10 @@ object TokenTasks:
       id = "list_sheets",
       name = "List Sheets",
       description = "List all sheets in the workbook with basic info",
-      xlPrompt = "List all sheets in the Excel file with their cell counts.",
-      xlsxPrompt = "List all sheets in the Excel file with their cell counts.",
+      xlPrompt =
+        "List all sheets in the Excel file. For each sheet, report its name, dimension (used range), and cell count.",
+      xlsxPrompt =
+        "List all sheets in the Excel file. For each sheet, report its name, dimension (used range), and cell count.",
       expectedAnswer = Some("""The workbook contains 2 sheets:
 1. Sales - Dimension A1:F6 (36 cells)
 2. Summary - Dimension A1:B6 (12 cells)""")
@@ -27,38 +29,44 @@ object TokenTasks:
       id = "view_range",
       name = "View Range",
       description = "Display a range of cells as a table",
-      xlPrompt = "Show the data in the Sales sheet from A1 to F6.",
-      xlsxPrompt = "Show the data in the Sales sheet from A1 to F6.",
-      expectedAnswer = Some("""Sales A1:F6 contains product sales data:
-- Row 1: Headers (Product, Q1, Q2, Q3, Q4, Total)
-- Row 2: Widget A with quarterly values $12,500, $14,200, $13,800, $15,600 and Total formula
-- Row 3: Widget B with quarterly values $8,900, $9,100, $8,700, $9,500 and Total formula
-- Row 4: Widget C with quarterly values $21,000, $19,500, $22,100, $23,400 and Total formula
-- Row 5: Total row with SUM formulas (42400, 42800, 44600, 48500, 178300)
-- Row 6: Average row with AVERAGE formulas""")
+      xlPrompt =
+        "Display the contents of Sales sheet range A1:F6. Show all cell values including the specific dollar amounts and formulas.",
+      xlsxPrompt =
+        "Display the contents of Sales sheet range A1:F6. Show all cell values including the specific dollar amounts and formulas.",
+      expectedAnswer = Some("""Sales A1:F6 contents:
+| Row | A        | B          | C          | D          | E          | F           |
+|-----|----------|------------|------------|------------|------------|-------------|
+| 1   | Product  | Q1         | Q2         | Q3         | Q4         | Total       |
+| 2   | Widget A | $12,500    | $14,200    | $13,800    | $15,600    | =SUM(B2:E2) |
+| 3   | Widget B | $8,900     | $9,100     | $8,700     | $9,500     | =SUM(B3:E3) |
+| 4   | Widget C | $21,000    | $19,500    | $22,100    | $23,400    | =SUM(B4:E4) |
+| 5   | Total    | =SUM(B2:B4)| =SUM(C2:C4)| =SUM(D2:D4)| =SUM(E2:E4)| =SUM(F2:F4) |
+| 6   | Average  | =AVERAGE   | =AVERAGE   | =AVERAGE   | =AVERAGE   | =AVERAGE    |""")
     ),
     TokenTask(
       id = "statistics",
       name = "Calculate Statistics",
       description = "Compute statistics on a numeric range",
       xlPrompt =
-        "Calculate statistics (count, sum, min, max, mean) for the quarterly data in Sales B2:E4.",
+        "Calculate statistics for the quarterly data in Sales B2:E4. Report the count, sum, min, max, and mean with their numeric values.",
       xlsxPrompt =
-        "Calculate statistics (count, sum, min, max, mean) for the quarterly data in Sales B2:E4.",
-      expectedAnswer = Some("""Statistics for B2:E4 (12 quarterly values):
-- Count: 12
-- Sum: 178,300
-- Min: 8,700
-- Max: 23,400
-- Mean/Average: ~14,858""")
+        "Calculate statistics for the quarterly data in Sales B2:E4. Report the count, sum, min, max, and mean with their numeric values.",
+      expectedAnswer = Some("""Statistics for Sales B2:E4:
+- Count: 12 values
+- Sum: $178,300
+- Min: $8,700
+- Max: $23,400
+- Mean: $14,858.33""")
     ),
     TokenTask(
       id = "show_formulas",
       name = "Show Formulas",
       description = "Display formulas instead of computed values",
-      xlPrompt = "Show the formulas in the Sales sheet column F (F2:F6).",
-      xlsxPrompt = "Show the formulas in the Sales sheet column F (F2:F6).",
-      expectedAnswer = Some("""Formulas in Sales column F (F2:F6):
+      xlPrompt =
+        "List all formulas in Sales sheet column F (cells F2 through F6). Show each cell reference and its exact formula.",
+      xlsxPrompt =
+        "List all formulas in Sales sheet column F (cells F2 through F6). Show each cell reference and its exact formula.",
+      expectedAnswer = Some("""Formulas in Sales column F:
 - F2: =SUM(B2:E2)
 - F3: =SUM(B3:E3)
 - F4: =SUM(B4:E4)
@@ -69,8 +77,10 @@ object TokenTasks:
       id = "search",
       name = "Search Content",
       description = "Find cells containing a specific pattern",
-      xlPrompt = "Search for cells containing 'Widget' in the workbook.",
-      xlsxPrompt = "Search for cells containing 'Widget' in the workbook.",
+      xlPrompt =
+        "Search for all cells containing 'Widget' in the workbook. List each match with its sheet name, cell reference, and cell value.",
+      xlsxPrompt =
+        "Search for all cells containing 'Widget' in the workbook. List each match with its sheet name, cell reference, and cell value.",
       expectedAnswer = Some("""Found 3 cells containing 'Widget':
 - Sales!A2: Widget A
 - Sales!A3: Widget B
@@ -81,27 +91,27 @@ object TokenTasks:
       name = "Cell Details",
       description = "Get detailed info about a specific cell including dependencies",
       xlPrompt =
-        "Get details about cell F5 in the Sales sheet including its formula and what it depends on.",
+        "Get details about cell F5 in the Sales sheet. Report: cell type, formula (if any), cell dependencies, and what the cell represents.",
       xlsxPrompt =
-        "Get details about cell F5 in the Sales sheet including its formula and what it depends on.",
-      expectedAnswer = Some("""Cell F5 in Sales sheet:
+        "Get details about cell F5 in the Sales sheet. Report: cell type, formula (if any), cell dependencies, and what the cell represents.",
+      expectedAnswer = Some("""Cell Sales!F5 details:
 - Type: Formula
 - Formula: =SUM(F2:F4)
-- Dependencies: F2, F3, F4
-- F5 is the grand total summing the individual product totals""")
+- Dependencies: F2, F3, F4 (the individual product totals)
+- Purpose: Grand total summing all product totals""")
     ),
     TokenTask(
       id = "cross_sheet_ref",
       name = "Cross-Sheet Reference",
       description = "Understand cross-sheet formula references",
       xlPrompt =
-        "What does cell B4 in the Summary sheet reference? Show the formula and its value.",
+        "Examine cell B4 in the Summary sheet. Report its formula, what sheet/cell it references, and its computed value.",
       xlsxPrompt =
-        "What does cell B4 in the Summary sheet reference? Show the formula and its value.",
-      expectedAnswer = Some("""Cell B4 in Summary sheet:
+        "Examine cell B4 in the Summary sheet. Report its formula, what sheet/cell it references, and its computed value.",
+      expectedAnswer = Some("""Cell Summary!B4:
 - Formula: =Sales!F5
-- This references the grand total from the Sales sheet
-- Value: 178,300 (sum of all product totals)""")
+- References: Cell F5 in the Sales sheet (grand total)
+- Value: $178,300""")
     )
   )
 
@@ -111,24 +121,30 @@ object TokenTasks:
       id = "large_view",
       name = "View Large Range",
       description = "Display first 20 rows of a large dataset",
-      xlPrompt = "Show the first 20 rows of data in the Data sheet.",
-      xlsxPrompt = "Show the first 20 rows of data in the Data sheet.",
+      xlPrompt =
+        "Display the first 20 rows of data in the Data sheet as a table showing all columns and their values.",
+      xlsxPrompt =
+        "Display the first 20 rows of data in the Data sheet as a table showing all columns and their values.",
       expectedAnswer = None
     ),
     TokenTask(
       id = "large_stats",
       name = "Large Statistics",
       description = "Compute statistics on a large range",
-      xlPrompt = "Calculate statistics for column B (B2:B1001) in the Data sheet.",
-      xlsxPrompt = "Calculate statistics for column B (B2:B1001) in the Data sheet.",
+      xlPrompt =
+        "Calculate statistics for column B (B2:B1001) in the Data sheet. Report count, sum, min, max, and mean with their numeric values.",
+      xlsxPrompt =
+        "Calculate statistics for column B (B2:B1001) in the Data sheet. Report count, sum, min, max, and mean with their numeric values.",
       expectedAnswer = None
     ),
     TokenTask(
       id = "large_search",
       name = "Large Search",
       description = "Search in a large file",
-      xlPrompt = "Find the first 5 cells containing 'Row 500' in the workbook.",
-      xlsxPrompt = "Find the first 5 cells containing 'Row 500' in the workbook.",
+      xlPrompt =
+        "Find the first 5 cells containing 'Row 500' in the workbook. List each match with sheet name, cell reference, and cell value.",
+      xlsxPrompt =
+        "Find the first 5 cells containing 'Row 500' in the workbook. List each match with sheet name, cell reference, and cell value.",
       expectedAnswer = None
     )
   )

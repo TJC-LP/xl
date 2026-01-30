@@ -281,6 +281,17 @@ object UnifiedReportWriter:
           }
           .getOrElse(Json.Null)
 
+        // Per-case results with mismatches
+        val caseResultsJson = Json.arr(r.caseResults.map { cr =>
+          val mismatchRefs = cr.mismatches.take(5).map(_.ref)
+          Json.obj(
+            "caseNum" -> Json.fromInt(cr.caseNum),
+            "passed" -> Json.fromBoolean(cr.passed),
+            "mismatches" -> (if mismatchRefs.isEmpty then Json.Null
+                             else Json.arr(mismatchRefs.map(Json.fromString)*))
+          )
+        }*)
+
         Json.obj(
           "taskId" -> Json.fromString(r.taskIdValue),
           "skill" -> Json.fromString(r.skill),
@@ -293,6 +304,7 @@ object UnifiedReportWriter:
           "outputTokens" -> Json.fromLong(r.usage.outputTokens),
           "latencyMs" -> Json.fromLong(r.latencyMs),
           "gradeResult" -> gradeJson,
+          "caseResults" -> caseResultsJson,
           "error" -> r.error.map(Json.fromString).getOrElse(Json.Null)
         )
       }
@@ -363,6 +375,27 @@ object UnifiedReportWriter:
         )
       }
       sb.append("\n")
+
+      // Per-Case Results (for multi-case tasks only)
+      val maxCases = run.allResults.map(_.totalCases).maxOption.getOrElse(1)
+      if maxCases > 1 then
+        sb.append("## Per-Case Results\n\n")
+        val caseHeaders = (1 to maxCases).map(i => s"Case $i").mkString(" | ")
+        sb.append(s"| Task | Skill | $caseHeaders | Score |\n")
+        sb.append(s"|------|-------|${(1 to maxCases).map(_ => "------").mkString("|")}|-------|\n")
+
+        run.allResults.sortBy(r => (r.taskIdValue, r.skill)).foreach { r =>
+          val caseStatuses = (1 to maxCases)
+            .map { i =>
+              r.caseResults.find(_.caseNum == i) match
+                case Some(cr) => if cr.passed then "✓" else "✗"
+                case None => "-"
+            }
+            .mkString(" | ")
+          val scorePct = s"${(r.passRate * 100).toInt}%"
+          sb.append(s"| ${r.taskIdValue} | ${r.skill} | $caseStatuses | $scorePct |\n")
+        }
+        sb.append("\n")
 
       // Per-task comparison (multi-skill only)
       if run.skillResults.size > 1 then

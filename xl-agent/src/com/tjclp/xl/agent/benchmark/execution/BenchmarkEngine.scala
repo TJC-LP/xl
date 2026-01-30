@@ -353,7 +353,8 @@ private class DefaultBenchmarkEngine(
                   taskId = result.taskIdValue,
                   skill = result.skill,
                   responseText = response,
-                  expectedAnswer = exp
+                  expectedAnswer = exp,
+                  taskInstruction = Some(task.instruction)
                 )
               )
 

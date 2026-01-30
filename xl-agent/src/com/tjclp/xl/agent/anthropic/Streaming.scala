@@ -1,10 +1,10 @@
 package com.tjclp.xl.agent.anthropic
 
-import cats.effect.IO
+import cats.effect.{IO, Ref}
 import cats.effect.std.Queue
 import cats.syntax.all.*
 import com.anthropic.models.beta.messages.*
-import com.tjclp.xl.agent.{AgentEvent, TurnUsage}
+import com.tjclp.xl.agent.{AgentEvent, SubTurnUsage, TurnUsage}
 import io.circe.{Json, parser as circeParser}
 
 import java.time.Instant
@@ -12,11 +12,27 @@ import scala.collection.mutable
 import scala.jdk.OptionConverters.*
 import scala.util.Try
 
+/** Per-turn token tracking state (immutable, used with Ref for thread safety) */
+case class ProcessorState(
+  turnNum: Int = 0,
+  turnStartTime: Option[Instant] = None,
+  prevCumulativeInput: Long = 0L,
+  prevCumulativeOutput: Long = 0L,
+  lastCumulativeInput: Long = 0L,
+  lastCumulativeOutput: Long = 0L,
+  // Sub-turn tracking for code execution (assistant → tool → result cycles)
+  subTurnNum: Int = 0,
+  subTurnStartTime: Option[Instant] = None,
+  subTurnAnchorTime: Option[Instant] = None,
+  pendingToolCall: Boolean = false
+)
+
 /** Processes streaming events from the Anthropic API and emits AgentEvents */
-class StreamEventProcessor(
+class StreamEventProcessor private (
   eventQueue: Queue[IO, AgentEvent],
-  onEvent: AgentEvent => IO[Unit] = _ => IO.unit,
-  verbose: Boolean = false
+  state: Ref[IO, ProcessorState],
+  onEvent: AgentEvent => IO[Unit],
+  verbose: Boolean
 ):
   // Track accumulated input JSON per content block index
   private val toolInputBuffers = mutable.Map[Long, StringBuilder]()
@@ -25,13 +41,48 @@ class StreamEventProcessor(
   // Track current tool result's tool use ID
   private var lastToolUseId: String = ""
 
-  // Per-turn token tracking state
-  private var turnNum: Int = 0
-  private var turnStartTime: Option[Instant] = None
-  private var prevCumulativeInput: Long = 0L
-  private var prevCumulativeOutput: Long = 0L
-  private var lastCumulativeInput: Long = 0L
-  private var lastCumulativeOutput: Long = 0L
+  private def startSubTurnIfNeeded(now: Instant, toolCall: Boolean): IO[Unit] =
+    state.update { s =>
+      if s.subTurnStartTime.isEmpty then
+        val startTime = s.subTurnAnchorTime.getOrElse(now)
+        s.copy(
+          subTurnNum = s.subTurnNum + 1,
+          subTurnStartTime = Some(startTime),
+          subTurnAnchorTime = None,
+          pendingToolCall = toolCall
+        )
+      else if toolCall && !s.pendingToolCall then s.copy(pendingToolCall = true)
+      else s
+    }
+
+  private def emitSubTurnComplete(endTime: Instant): IO[Unit] =
+    for
+      s <- state.get
+      _ <- s.subTurnStartTime match
+        case Some(startTime) =>
+          val durationMs = java.time.Duration.between(startTime, endTime).toMillis
+          val usage = SubTurnUsage(
+            subTurnNum = s.subTurnNum,
+            durationMs = durationMs,
+            hasToolCall = s.pendingToolCall
+          )
+          val subTurnEvent = AgentEvent.SubTurnComplete(usage)
+          val emitSubTurn = eventQueue.offer(subTurnEvent)
+          val callbackSubTurn = onEvent(subTurnEvent)
+          val resetSubTurn =
+            state.update(
+              _.copy(
+                subTurnStartTime = None,
+                subTurnAnchorTime = Some(endTime),
+                pendingToolCall = false
+              )
+            )
+          val printSubTurnIO = IO.whenA(verbose) {
+            IO(println(s"\n>>> Sub-turn ${s.subTurnNum} complete [${durationMs}ms]"))
+          }
+          emitSubTurn *> callbackSubTurn *> resetSubTurn *> printSubTurnIO
+        case None => IO.unit
+    yield ()
 
   /** Process a single streaming event, potentially emitting AgentEvents */
   def process(event: BetaRawMessageStreamEvent): IO[Unit] =
@@ -58,7 +109,10 @@ class StreamEventProcessor(
             val printIO = IO.whenA(verbose)(IO(print(text)))
             val emitIO = eventQueue.offer(event)
             val callbackIO = onEvent(event)
-            printIO *> emitIO *> callbackIO.void
+            // Start a new sub-turn if not already in one (first text after a tool result)
+            val startSubTurnIO =
+              IO.realTimeInstant.flatMap(now => startSubTurnIfNeeded(now, toolCall = false))
+            startSubTurnIO *> printIO *> emitIO *> callbackIO.void
           case None => IO.unit
 
         // Accumulate tool input JSON
@@ -80,15 +134,27 @@ class StreamEventProcessor(
         val index = start.index()
 
         // Server tool use (code_execution)
-        block.serverToolUse().toScala match
+        val serverToolIO = block.serverToolUse().toScala match
           case Some(toolUse) =>
-            IO {
-              if verbose then println(s"\n>>> TOOL: ${toolUse.name()} [${toolUse.id()}]")
-              toolInputBuffers(index) = new StringBuilder()
-              toolUseIds(index) = toolUse.id()
-              lastToolUseId = toolUse.id()
-            }
+            for
+              now <- IO.realTimeInstant
+              _ <- startSubTurnIfNeeded(now, toolCall = true)
+              _ <- IO {
+                if verbose then println(s"\n>>> TOOL: ${toolUse.name()} [${toolUse.id()}]")
+                toolInputBuffers(index) = new StringBuilder()
+                toolUseIds(index) = toolUse.id()
+                lastToolUseId = toolUse.id()
+              }
+            yield ()
           case None => IO.unit
+
+        // MCP tool use (skill invocations) - marks that a tool call is pending
+        val mcpToolIO = block.mcpToolUse().toScala match
+          case Some(_) =>
+            IO.realTimeInstant.flatMap(now => startSubTurnIfNeeded(now, toolCall = true))
+          case None => IO.unit
+
+        serverToolIO *> mcpToolIO
 
       case None => IO.unit
 
@@ -99,8 +165,14 @@ class StreamEventProcessor(
 
         import scala.jdk.CollectionConverters.*
 
+        val bashResultOpt = block.bashCodeExecutionToolResult().toScala
+        val mcpResultOpt = block.mcpToolResult().toScala
+        val viewResultOpt = block.textEditorCodeExecutionToolResult().toScala
+        val hasToolResult =
+          bashResultOpt.isDefined || mcpResultOpt.isDefined || viewResultOpt.isDefined
+
         // Bash execution results
-        val bashIO = block.bashCodeExecutionToolResult().toScala match
+        val bashIO = bashResultOpt match
           case Some(result) =>
             result.content().betaBashCodeExecutionResultBlock().toScala match
               case Some(r) =>
@@ -143,7 +215,7 @@ class StreamEventProcessor(
           case None => IO.unit
 
         // MCP tool results (skill documentation, etc.)
-        val mcpIO = block.mcpToolResult().toScala match
+        val mcpIO = mcpResultOpt match
           case Some(result) =>
             val content = extractMcpContent(result)
             val isError = result.isError()
@@ -164,7 +236,7 @@ class StreamEventProcessor(
           case None => IO.unit
 
         // Text editor code execution results (includes view results)
-        val viewIO = block.textEditorCodeExecutionToolResult().toScala match
+        val viewIO = viewResultOpt match
           case Some(toolResult) =>
             // Extract content from the result - it may have different structures
             val content = Try {
@@ -193,7 +265,16 @@ class StreamEventProcessor(
             else IO.unit
           case None => IO.unit
 
-        bashIO *> mcpIO *> viewIO
+        val resultsIO = bashIO *> mcpIO *> viewIO
+
+        if !hasToolResult then IO.unit
+        else
+          for
+            endTime <- IO.realTimeInstant
+            _ <- startSubTurnIfNeeded(endTime, toolCall = true)
+            _ <- resultsIO
+            _ <- emitSubTurnComplete(endTime)
+          yield ()
 
       case None => IO.unit
 
@@ -237,27 +318,37 @@ class StreamEventProcessor(
   private def processMessageStart(event: BetaRawMessageStreamEvent): IO[Unit] =
     event.messageStart().toScala match
       case Some(start) =>
-        IO {
-          turnNum += 1
-          turnStartTime = Some(Instant.now())
-          // Record the previous cumulative values as starting point for this turn
-          prevCumulativeInput = lastCumulativeInput
-          prevCumulativeOutput = lastCumulativeOutput
-          // Capture input tokens from the message's usage (includes prompt tokens)
-          val usage = start.message().usage()
-          lastCumulativeInput = usage.inputTokens()
-        }
+        for
+          now <- IO.realTimeInstant
+          usage = start.message().usage()
+          _ <- state.update { s =>
+            s.copy(
+              turnNum = s.turnNum + 1,
+              turnStartTime = Some(now),
+              prevCumulativeInput = s.lastCumulativeInput,
+              prevCumulativeOutput = s.lastCumulativeOutput,
+              lastCumulativeInput = usage.inputTokens(),
+              subTurnStartTime = None,
+              subTurnAnchorTime = Some(now),
+              pendingToolCall = false
+            )
+          }
+        yield ()
       case None => IO.unit
 
   /** Capture cumulative token usage from message_delta events */
   private def processMessageDelta(event: BetaRawMessageStreamEvent): IO[Unit] =
     event.messageDelta().toScala match
       case Some(delta) =>
-        IO {
-          // Extract cumulative usage from the delta event
-          // BetaMessageDeltaUsage provides cumulative tokens for the entire message
-          val usage = delta.usage()
-          lastCumulativeOutput = usage.outputTokens()
+        // Extract cumulative usage from the delta event
+        // BetaMessageDeltaUsage provides cumulative tokens for the entire message
+        val usage = delta.usage()
+        state.update { s =>
+          s.copy(
+            lastCumulativeInput =
+              usage.inputTokens().toScala.map(_.toLong).getOrElse(s.lastCumulativeInput),
+            lastCumulativeOutput = usage.outputTokens()
+          )
         }
       case None => IO.unit
 
@@ -265,51 +356,47 @@ class StreamEventProcessor(
   private def processMessageStop(event: BetaRawMessageStreamEvent): IO[Unit] =
     event.messageStop().toScala match
       case Some(_) =>
-        val now = Instant.now()
-        val durationMs = turnStartTime
-          .map { start =>
-            java.time.Duration.between(start, now).toMillis
+        for
+          now <- IO.realTimeInstant
+          _ <- emitSubTurnComplete(now)
+          s <- state.get
+          durationMs = s.turnStartTime
+            .map { start =>
+              java.time.Duration.between(start, now).toMillis
+            }
+            .getOrElse(0L)
+
+          inputDelta = s.lastCumulativeInput - s.prevCumulativeInput
+          outputDelta = s.lastCumulativeOutput - s.prevCumulativeOutput
+
+          usage = TurnUsage(
+            turnNum = s.turnNum,
+            inputTokens = inputDelta,
+            outputTokens = outputDelta,
+            cumulativeInputTokens = s.lastCumulativeInput,
+            cumulativeOutputTokens = s.lastCumulativeOutput,
+            durationMs = durationMs
+          )
+
+          turnEvent = AgentEvent.TurnComplete(usage)
+          _ <- eventQueue.offer(turnEvent)
+          _ <- onEvent(turnEvent)
+          _ <- IO.whenA(verbose) {
+            IO {
+              println(
+                s"\n>>> TURN ${s.turnNum} complete: +$inputDelta in / +$outputDelta out (cumulative: ${s.lastCumulativeInput} / ${s.lastCumulativeOutput}) [${durationMs}ms]"
+              )
+            }
           }
-          .getOrElse(0L)
-
-        val inputDelta = lastCumulativeInput - prevCumulativeInput
-        val outputDelta = lastCumulativeOutput - prevCumulativeOutput
-
-        val usage = TurnUsage(
-          turnNum = turnNum,
-          inputTokens = inputDelta,
-          outputTokens = outputDelta,
-          cumulativeInputTokens = lastCumulativeInput,
-          cumulativeOutputTokens = lastCumulativeOutput,
-          durationMs = durationMs
-        )
-
-        val turnEvent = AgentEvent.TurnComplete(usage)
-        val emitTurn = eventQueue.offer(turnEvent)
-        val callbackIO = onEvent(turnEvent)
-        val printIO = IO.whenA(verbose) {
-          IO {
-            println(
-              s"\n>>> TURN $turnNum complete: +$inputDelta in / +$outputDelta out (cumulative: ${lastCumulativeInput} / ${lastCumulativeOutput}) [${durationMs}ms]"
-            )
-          }
-        }
-        emitTurn *> callbackIO *> printIO
+        yield ()
 
       case None => IO.unit
 
   /** Extract the 'command' field from tool input JSON */
   private def extractCodeFromJson(json: String): Option[String] =
-    Try {
-      val commandPattern = """"command"\s*:\s*"((?:[^"\\]|\\.)*)"""".r
-      commandPattern.findFirstMatchIn(json).map { m =>
-        m.group(1)
-          .replace("\\n", "\n")
-          .replace("\\t", "\t")
-          .replace("\\\"", "\"")
-          .replace("\\\\", "\\")
-      }
-    }.toOption.flatten
+    circeParser.parse(json).toOption.flatMap { parsed =>
+      parsed.hcursor.get[String]("command").toOption
+    }
 
   /** Extract content from MCP tool result (handles String | List[BetaTextBlock] union) */
   private def extractMcpContent(result: BetaMcpToolResultBlock): String =
@@ -326,3 +413,14 @@ class StreamEventProcessor(
           .getOrElse("")
       }
     }.getOrElse("")
+
+object StreamEventProcessor:
+  /** Create a new StreamEventProcessor with thread-safe atomic state */
+  def create(
+    eventQueue: Queue[IO, AgentEvent],
+    onEvent: AgentEvent => IO[Unit] = _ => IO.unit,
+    verbose: Boolean = false
+  ): IO[StreamEventProcessor] =
+    Ref.of[IO, ProcessorState](ProcessorState()).map { stateRef =>
+      new StreamEventProcessor(eventQueue, stateRef, onEvent, verbose)
+    }

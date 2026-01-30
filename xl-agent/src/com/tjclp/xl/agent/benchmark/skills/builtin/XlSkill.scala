@@ -1,6 +1,7 @@
 package com.tjclp.xl.agent.benchmark.skills.builtin
 
 import cats.effect.{Clock, IO}
+import cats.effect.syntax.concurrent.*
 import cats.syntax.all.*
 import com.tjclp.xl.agent.{Agent, AgentConfig, AgentTask, UploadedFile}
 import com.tjclp.xl.agent.anthropic.{AnthropicClientIO, SkillsApi}
@@ -106,10 +107,9 @@ object XlSkill extends Skill:
     for
       startTime <- Clock[IO].monotonic.map(_.toMillis)
 
-      agent = createAgent(client, ctx, agentConfig)
-
-      // Run each test case
-      caseResults <- cases.traverse { testCase =>
+      // Run test cases in parallel (each with its own agent instance)
+      caseResults <- cases.parTraverseN(engineConfig.parallelism) { testCase =>
+        val agent = createAgent(client, ctx, agentConfig)
         runSingleTestCase(
           agent = agent,
           task = task,

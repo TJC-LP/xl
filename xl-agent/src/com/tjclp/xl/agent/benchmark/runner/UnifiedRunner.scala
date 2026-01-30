@@ -375,4 +375,7 @@ object BenchmarkType:
       case "spreadsheetbench" | "spreadsheet" | "sb" => SpreadsheetBench
       case "token" | "tokenefficiency" => Token
       case "custom" => Custom
-      case _ => SpreadsheetBench
+      case other =>
+        throw new IllegalArgumentException(
+          s"Unknown benchmark type: '$other'. Valid types: spreadsheetbench, token, custom"
+        )

@@ -73,8 +73,8 @@ object Agent:
           onEvent = onEvent
         )
 
-        // Drain event queue and collect events
-        collectedEvents <- drainQueue(eventQueue, events, onEvent)
+        // Drain event queue and collect events (onEvent already called during streaming)
+        collectedEvents <- drainQueue(eventQueue, events)
 
         // Extract response info
         responseText = CodeExecution.extractResponseText(response)
@@ -112,13 +112,13 @@ object Agent:
 
     private def drainQueue(
       queue: Queue[IO, AgentEvent],
-      events: Ref[IO, Vector[AgentEvent]],
-      onEvent: AgentEvent => IO[Unit]
+      events: Ref[IO, Vector[AgentEvent]]
     ): IO[Vector[AgentEvent]] =
+      // Just collect events from queue - onEvent was already called during streaming
       def loop: IO[Unit] =
         queue.tryTake.flatMap {
           case Some(event) =>
-            events.update(_ :+ event) *> onEvent(event) *> loop
+            events.update(_ :+ event) *> loop
           case None =>
             IO.unit
         }

@@ -23,10 +23,10 @@ CRITICAL EXECUTION GUIDELINES:
 3. Do NOT explore or verify unless the task explicitly requires it
 4. For simple tasks, accomplish everything in 1-2 tool calls
 
-OUTPUT_DIR WORKFLOW:
-The $OUTPUT_DIR path changes between tool calls. To work around this:
-- Save intermediate work to /tmp/output.xlsx
-- Your FINAL tool call must copy to $OUTPUT_DIR: cp /tmp/output.xlsx "$OUTPUT_DIR/output.xlsx"
+BASH ENVIRONMENT:
+Shell variables DO NOT persist between tool calls. Each bash execution starts fresh.
+- Always re-set variables (XL, INPUT, etc.) at the start of EVERY script
+- $OUTPUT_DIR changes between calls - save to /tmp then copy in your FINAL call
 - Or do all work in a SINGLE tool call that writes directly to $OUTPUT_DIR
 
 AVOID:

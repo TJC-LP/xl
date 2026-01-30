@@ -47,8 +47,28 @@ object TurnUsage:
   given Encoder[TurnUsage] = deriveEncoder
   given Decoder[TurnUsage] = deriveDecoder
 
+/**
+ * Sub-turn tracking for code execution.
+ *
+ * Code execution runs as a single API message but has multiple internal "sub-turns" (assistant text
+ * → tool call → result cycles). The API only reports total tokens at the end, so we track timing
+ * per sub-turn but can't split tokens.
+ */
+case class SubTurnUsage(
+  subTurnNum: Int,
+  durationMs: Long,
+  hasToolCall: Boolean
+)
+
+object SubTurnUsage:
+  given Encoder[SubTurnUsage] = deriveEncoder
+  given Decoder[SubTurnUsage] = deriveDecoder
+
 /** Events emitted during agent execution */
 enum AgentEvent:
+  /** Emitted at the start with the system and user prompts for tracing */
+  case Prompts(systemPrompt: String, userPrompt: String)
+
   case TextOutput(text: String, contentIndex: Int = 0)
   case ToolInvocation(
     name: String,
@@ -75,10 +95,24 @@ enum AgentEvent:
   /** Emitted when a turn (assistant response cycle) completes */
   case TurnComplete(usage: TurnUsage)
 
+  /**
+   * Emitted when a sub-turn completes within code execution.
+   *
+   * A sub-turn is one assistant-text → tool-call → result cycle. Multiple sub-turns can occur
+   * within a single API message during code execution.
+   */
+  case SubTurnComplete(usage: SubTurnUsage)
+
 object AgentEvent:
   import io.circe.syntax.*
 
   given Encoder[AgentEvent] = Encoder.instance {
+    case Prompts(systemPrompt, userPrompt) =>
+      Json.obj(
+        "type" -> "Prompts".asJson,
+        "systemPrompt" -> systemPrompt.asJson,
+        "userPrompt" -> userPrompt.asJson
+      )
     case TextOutput(text, idx) =>
       Json.obj(
         "type" -> "TextOutput".asJson,
@@ -134,6 +168,13 @@ object AgentEvent:
         "cumulativeInputTokens" -> usage.cumulativeInputTokens.asJson,
         "cumulativeOutputTokens" -> usage.cumulativeOutputTokens.asJson,
         "durationMs" -> usage.durationMs.asJson
+      )
+    case SubTurnComplete(usage) =>
+      Json.obj(
+        "type" -> "SubTurnComplete".asJson,
+        "subTurnNum" -> usage.subTurnNum.asJson,
+        "durationMs" -> usage.durationMs.asJson,
+        "hasToolCall" -> usage.hasToolCall.asJson
       )
   }
 

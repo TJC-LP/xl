@@ -2,7 +2,7 @@ package com.tjclp.xl.agent.benchmark.tracing
 
 import cats.effect.{IO, Ref}
 import cats.syntax.all.*
-import com.tjclp.xl.agent.{AgentEvent, TokenUsage, TurnUsage}
+import com.tjclp.xl.agent.{AgentEvent, SubTurnUsage, TokenUsage, TurnUsage}
 import io.circe.*
 import io.circe.syntax.*
 
@@ -81,6 +81,18 @@ case class ConversationTrace(
       usage
     }
 
+  /** Extract sub-turn usage from SubTurnComplete events (code execution cycles) */
+  def subTurnUsages: Vector[SubTurnUsage] =
+    events.collect { case TracedEvent(_, _, AgentEvent.SubTurnComplete(usage)) =>
+      usage
+    }
+
+  /** Extract prompts from the Prompts event (if present) */
+  def prompts: Option[(String, String)] =
+    events.collectFirst { case TracedEvent(_, _, AgentEvent.Prompts(sys, user)) =>
+      (sys, user)
+    }
+
 object ConversationTrace:
   given Encoder[ConversationTrace] = Encoder.instance { ct =>
     val turnUsagesJson = ct.turnUsages.map { u =>
@@ -94,13 +106,23 @@ object ConversationTrace:
       )
     }
 
+    val subTurnUsagesJson = ct.subTurnUsages.map { u =>
+      Json.obj(
+        "subTurnNum" -> u.subTurnNum.asJson,
+        "durationMs" -> u.durationMs.asJson,
+        "hasToolCall" -> u.hasToolCall.asJson
+      )
+    }
+
     Json.obj(
       "metadata" -> ct.metadata.asJson,
       "summary" -> Json.obj(
         "turnCount" -> ct.turnCount.asJson,
+        "subTurnCount" -> ct.subTurnUsages.size.asJson,
         "toolCallCount" -> ct.toolCallCount.asJson,
         "errorCount" -> ct.errorCount.asJson,
-        "turnUsages" -> turnUsagesJson.asJson
+        "turnUsages" -> turnUsagesJson.asJson,
+        "subTurnUsages" -> subTurnUsagesJson.asJson
       ),
       "events" -> ct.events.asJson
     )

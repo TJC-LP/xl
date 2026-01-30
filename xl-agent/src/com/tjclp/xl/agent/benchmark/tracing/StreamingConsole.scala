@@ -21,6 +21,10 @@ object StreamingConsole:
       val timeStr = f"[${traced.relativeMs / 1000.0}%6.2fs]"
 
       traced.event match
+        case AgentEvent.Prompts(_, _) =>
+          // Prompts are captured for tracing but not displayed during streaming
+          ()
+
         case AgentEvent.TextOutput(text, _) =>
           // Stream text in real-time (cyan)
           Console.print(s"$Cyan$text$Reset")
@@ -74,6 +78,13 @@ object StreamingConsole:
           // Turn complete with token usage
           Console.println(
             s"$Gray$timeStr Turn ${usage.turnNum}: +${usage.inputTokens} in / +${usage.outputTokens} out (cumulative: ${usage.cumulativeInputTokens}/${usage.cumulativeOutputTokens})$Reset"
+          )
+
+        case AgentEvent.SubTurnComplete(usage) =>
+          // Sub-turn complete (code execution cycle)
+          val toolStr = if usage.hasToolCall then " [tool]" else ""
+          Console.println(
+            s"$Gray$timeStr Sub-turn ${usage.subTurnNum}$toolStr: ${usage.durationMs}ms$Reset"
           )
     }
 

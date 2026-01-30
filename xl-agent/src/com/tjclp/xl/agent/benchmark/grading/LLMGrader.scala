@@ -36,7 +36,7 @@ class OpusLLMGrader(
   def grade(ctx: GraderContext): IO[GradeResult[Score.LetterGrade]] =
     (ctx.responseText, ctx.expectedAnswer) match
       case (Some(response), Some(expected)) =>
-        gradeInternal(ctx.taskId, ctx.skill, response, expected)
+        gradeInternal(ctx.taskId, ctx.skill, ctx.taskInstruction, response, expected)
       case _ =>
         IO.pure(
           GradeResult(
@@ -49,11 +49,12 @@ class OpusLLMGrader(
   private def gradeInternal(
     taskId: String,
     skill: String,
+    taskInstruction: Option[String],
     responseText: String,
     expectedAnswer: String
   ): IO[GradeResult[Score.LetterGrade]] =
     IO.blocking {
-      val prompt = buildGradingPrompt(taskId, responseText, expectedAnswer)
+      val prompt = buildGradingPrompt(taskId, taskInstruction, responseText, expectedAnswer)
 
       // Build JSON schema for structured output
       val gradeSchema = BetaJsonOutputFormat.Schema
@@ -192,13 +193,15 @@ class OpusLLMGrader(
 
   private def buildGradingPrompt(
     taskId: String,
+    taskInstruction: Option[String],
     responseText: String,
     expectedAnswer: String
   ): String =
+    val instructionSection = taskInstruction.map(i => s"\nTASK INSTRUCTION:\n$i\n").getOrElse("")
     s"""You are grading an AI's response to an Excel analysis task.
 
 TASK ID: $taskId
-
+$instructionSection
 EXPECTED ANSWER (ground truth):
 $expectedAnswer
 

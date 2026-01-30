@@ -29,66 +29,74 @@ object CodeExecution:
       identity, // Strategy-specific configuration (tools, betas, container)
     onEvent: AgentEvent => IO[Unit] = _ => IO.unit // Real-time event callback for tracing
   ): IO[BetaMessage] =
-    IO.blocking {
-      import java.util.{List as JList, Map as JMap}
+    val promptsEvent = AgentEvent.Prompts(systemPrompt, userPrompt)
+    for
+      // Emit prompts for tracing
+      _ <- eventQueue.offer(promptsEvent)
+      _ <- onEvent(promptsEvent)
+      streamProcessor <- StreamEventProcessor.create(eventQueue, onEvent, config.verbose)
+      result <- IO
+        .blocking {
+          import java.util.{List as JList, Map as JMap}
 
-      // Build content blocks: text + container uploads
-      val contentBlocks = new java.util.ArrayList[JMap[String, Any]]()
-      contentBlocks.add(JMap.of("type", "text", "text", userPrompt))
-      containerUploads.foreach { fileId =>
-        contentBlocks.add(JMap.of("type", "container_upload", "file_id", fileId))
-      }
+          // Build content blocks: text + container uploads
+          val contentBlocks = new java.util.ArrayList[JMap[String, Any]]()
+          contentBlocks.add(JMap.of("type", "text", "text", userPrompt))
+          containerUploads.foreach { fileId =>
+            contentBlocks.add(JMap.of("type", "container_upload", "file_id", fileId))
+          }
 
-      val baseBuilder = MessageCreateParams
-        .builder()
-        .model(config.model)
-        .maxTokens(config.maxTokens.toLong)
-        .system(systemPrompt)
-        .addUserMessage("placeholder")
-        // Override messages to include container_upload blocks
-        .putAdditionalBodyProperty(
-          "messages",
-          JsonValue.from(
-            JList.of(
-              JMap.of(
-                "role",
-                "user",
-                "content",
-                contentBlocks
+          val baseBuilder = MessageCreateParams
+            .builder()
+            .model(config.model)
+            .maxTokens(config.maxTokens.toLong)
+            .system(systemPrompt)
+            .addUserMessage("placeholder")
+            // Override messages to include container_upload blocks
+            .putAdditionalBodyProperty(
+              "messages",
+              JsonValue.from(
+                JList.of(
+                  JMap.of(
+                    "role",
+                    "user",
+                    "content",
+                    contentBlocks
+                  )
+                )
               )
             )
-          )
-        )
 
-      // Apply strategy-specific configuration (tools, betas, container)
-      val params = configureRequest(baseBuilder).build()
+          // Apply strategy-specific configuration (tools, betas, container)
+          val params = configureRequest(baseBuilder).build()
 
-      // Stream response
-      val accumulator = BetaMessageAccumulator.create()
-      val streamResponse = client.beta().messages().createStreaming(params)
-      val streamProcessor = new StreamEventProcessor(eventQueue, onEvent, config.verbose)
-      val interrupted = new AtomicBoolean(false)
+          // Stream response
+          val accumulator = BetaMessageAccumulator.create()
+          val streamResponse = client.beta().messages().createStreaming(params)
+          val interrupted = new AtomicBoolean(false)
 
-      try
-        streamResponse.stream().forEach { event =>
-          if Thread.currentThread().isInterrupted() then
-            interrupted.set(true)
-            streamResponse.close()
-          else
-            accumulator.accumulate(event)
-            // Process event synchronously (we're already in IO.blocking)
-            import cats.effect.unsafe.implicits.global
-            streamProcessor.process(event).unsafeRunSync()
+          try
+            streamResponse.stream().forEach { event =>
+              if Thread.currentThread().isInterrupted() then
+                interrupted.set(true)
+                streamResponse.close()
+              else
+                accumulator.accumulate(event)
+                // Process event synchronously (we're already in IO.blocking)
+                import cats.effect.unsafe.implicits.global
+                streamProcessor.process(event).unsafeRunSync()
+            }
+            if config.verbose then println() // Final newline after streaming
+
+            if interrupted.get() then throw new InterruptedException("Stream interrupted by user")
+
+            accumulator.message()
+          finally streamResponse.close()
         }
-        if config.verbose then println() // Final newline after streaming
-
-        if interrupted.get() then throw new InterruptedException("Stream interrupted by user")
-
-        accumulator.message()
-      finally streamResponse.close()
-    }.adaptError { case e: Exception =>
-      AgentError.StreamingError(e.getMessage)
-    }
+        .adaptError { case e: Exception =>
+          AgentError.StreamingError(e.getMessage)
+        }
+    yield result
 
   /** Extract text content from response */
   def extractResponseText(response: BetaMessage): String =

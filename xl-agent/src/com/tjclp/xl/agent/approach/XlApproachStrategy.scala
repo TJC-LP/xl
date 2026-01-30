@@ -22,20 +22,7 @@ class XlApproachStrategy(
     List(binaryFile.id, inputFileId)
 
   override def toolSystemPrompt: String =
-    s"""You have access to the xl CLI tool for Excel operations.
-
-AVAILABLE FILES:
-- ${binaryFile.filename}: The xl CLI binary (chmod +x first)
-- Input xlsx file in $$INPUT_DIR
-
-xl CLI COMMANDS:
-- $$XL -f $$INPUT sheets                    # List sheets
-- $$XL -f $$INPUT -s "Sheet" view A1:B10    # View range
-- $$XL -f $$INPUT -o $$OUTPUT put A1 value  # Write value
-- $$XL -f $$INPUT -o $$OUTPUT putf A1 "=SUM(B:B)"  # Write formula
-- echo '[{"op":"put","ref":"A1","value":123}]' | $$XL -f $$INPUT -o $$OUTPUT batch -
-
-Use -o $$OUTPUT_DIR/output.xlsx or save to /tmp then copy."""
+    "You have the xl CLI for Excel operations. Use the xl-cli skill documentation for command reference."
 
   override def toolUserPrompt(task: AgentTask, inputFilename: String): String =
     val answerSection = task.answerPosition

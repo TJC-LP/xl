@@ -37,6 +37,9 @@ trait GraderContext:
   /** Expected answer for LLM grading */
   def expectedAnswer: Option[String]
 
+  /** Original task instruction for grader context */
+  def taskInstruction: Option[String]
+
 object GraderContext:
 
   /** Create a context for file-based grading (SpreadsheetBench) */
@@ -46,7 +49,8 @@ object GraderContext:
     caseNum: Int,
     outputPath: Path,
     answerPath: Path,
-    answerPosition: String
+    answerPosition: String,
+    taskInstruction: Option[String] = None
   ): GraderContext = FileGraderContext(
     taskId = taskId,
     skill = skill,
@@ -55,7 +59,8 @@ object GraderContext:
     answerPath = Some(answerPath),
     answerPosition = Some(answerPosition),
     responseText = None,
-    expectedAnswer = None
+    expectedAnswer = None,
+    taskInstruction = taskInstruction
   )
 
   /** Create a context for LLM-based grading (TokenBenchmark) */
@@ -63,7 +68,8 @@ object GraderContext:
     taskId: String,
     skill: String,
     responseText: String,
-    expectedAnswer: String
+    expectedAnswer: String,
+    taskInstruction: Option[String] = None
   ): GraderContext = LLMGraderContext(
     taskId = taskId,
     skill = skill,
@@ -72,7 +78,8 @@ object GraderContext:
     answerPath = None,
     answerPosition = None,
     responseText = Some(responseText),
-    expectedAnswer = Some(expectedAnswer)
+    expectedAnswer = Some(expectedAnswer),
+    taskInstruction = taskInstruction
   )
 
   /** Create a composite context for both grader types */
@@ -84,7 +91,8 @@ object GraderContext:
     answerPath: Path,
     answerPosition: String,
     responseText: String,
-    expectedAnswer: String
+    expectedAnswer: String,
+    taskInstruction: Option[String] = None
   ): GraderContext = CompositeGraderContext(
     taskId = taskId,
     skill = skill,
@@ -93,7 +101,8 @@ object GraderContext:
     answerPath = Some(answerPath),
     answerPosition = Some(answerPosition),
     responseText = Some(responseText),
-    expectedAnswer = Some(expectedAnswer)
+    expectedAnswer = Some(expectedAnswer),
+    taskInstruction = taskInstruction
   )
 
 /** Context implementation for file-based grading */
@@ -105,7 +114,8 @@ private case class FileGraderContext(
   answerPath: Option[Path],
   answerPosition: Option[String],
   responseText: Option[String],
-  expectedAnswer: Option[String]
+  expectedAnswer: Option[String],
+  taskInstruction: Option[String]
 ) extends GraderContext
 
 /** Context implementation for LLM grading */
@@ -117,7 +127,8 @@ private case class LLMGraderContext(
   answerPath: Option[Path],
   answerPosition: Option[String],
   responseText: Option[String],
-  expectedAnswer: Option[String]
+  expectedAnswer: Option[String],
+  taskInstruction: Option[String]
 ) extends GraderContext
 
 /** Context implementation for composite grading */
@@ -129,7 +140,8 @@ private case class CompositeGraderContext(
   answerPath: Option[Path],
   answerPosition: Option[String],
   responseText: Option[String],
-  expectedAnswer: Option[String]
+  expectedAnswer: Option[String],
+  taskInstruction: Option[String]
 ) extends GraderContext
 
 // ============================================================================

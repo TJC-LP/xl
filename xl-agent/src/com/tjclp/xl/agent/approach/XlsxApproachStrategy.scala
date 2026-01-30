@@ -18,22 +18,7 @@ class XlsxApproachStrategy extends ApproachStrategy:
     List(inputFileId)
 
   override def toolSystemPrompt: String =
-    """You have access to Python with openpyxl for Excel operations.
-
-PYTHON PATTERNS:
-```python
-from openpyxl import load_workbook
-import os, shutil
-
-wb = load_workbook(os.path.join(os.environ['INPUT_DIR'], 'file.xlsx'))
-ws = wb.active  # or wb['SheetName']
-
-# Read: ws['A1'].value, ws.iter_rows()
-# Write: ws['A1'] = value, ws['A1'] = '=SUM(B:B)'
-# Save: wb.save('/tmp/output.xlsx')
-# Copy to OUTPUT_DIR in final call
-shutil.copy('/tmp/output.xlsx', os.path.join(os.environ['OUTPUT_DIR'], 'output.xlsx'))
-```"""
+    "You have Python with openpyxl for Excel operations. Use the xlsx skill documentation for reference."
 
   override def toolUserPrompt(task: AgentTask, inputFilename: String): String =
     val answerSection = task.answerPosition
