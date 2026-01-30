@@ -28,8 +28,8 @@ object XlSkill extends Skill:
       binaryPath <- FileManager.resolveBinaryPath(config.xlBinaryPath)
       skillPath <- FileManager.resolveSkillPath(config.xlSkillPath)
 
-      _ <- IO.println(s"  [$name] Uploading binary: ${binaryPath.getFileName}")
-      binaryFile <- client.uploadFile(binaryPath)
+      _ <- IO.println(s"  [$name] Checking binary: ${binaryPath.getFileName}")
+      binaryFile <- client.uploadFileIfNeeded(binaryPath)
 
       _ <- IO.println(s"  [$name] Registering skill via Skills API...")
       apiKey <- AnthropicClientIO.loadApiKey

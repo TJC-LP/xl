@@ -17,6 +17,12 @@ trait AnthropicClientIO:
   /** Upload a file to the Anthropic Files API */
   def uploadFile(path: Path): IO[UploadedFile]
 
+  /**
+   * Upload a file, reusing existing upload if filename and size match. This avoids re-uploading
+   * large binaries on slow connections.
+   */
+  def uploadFileIfNeeded(path: Path): IO[UploadedFile]
+
   /** Download a file from the Anthropic Files API */
   def downloadFile(fileId: String, outputPath: Path): IO[Unit]
 
@@ -84,6 +90,24 @@ object AnthropicClientIO:
             }.adaptError { case e: Exception =>
               AgentError.FileUploadFailed(path.toString, e.getMessage)
             }
+
+          override def uploadFileIfNeeded(path: Path): IO[UploadedFile] =
+            for
+              localSize <- IO.blocking(Files.size(path))
+              localName = path.getFileName.toString
+              existing <- listFiles(100)
+              found = existing.find { meta =>
+                meta.filename() == localName && meta.sizeBytes() == localSize
+              }
+              result <- found match
+                case Some(meta) =>
+                  IO.println(
+                    s"    [cache] Reusing existing upload: ${meta.filename()} (${meta.id()})"
+                  ) *>
+                    IO.pure(UploadedFile(meta.id(), meta.filename()))
+                case None =>
+                  uploadFile(path)
+            yield result
 
           override def downloadFile(fileId: String, outputPath: Path): IO[Unit] =
             IO.blocking {
