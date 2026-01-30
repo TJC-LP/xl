@@ -95,7 +95,11 @@ trait TExprAggregateOps:
   ): TExpr[BigDecimal] =
     Call(
       FunctionSpecs.sumif,
-      (range, criteria.asInstanceOf[TExpr[Any]], sumRange)
+      (
+        RangeLocation.Local(range),
+        criteria.asInstanceOf[TExpr[Any]],
+        sumRange.map(RangeLocation.Local(_))
+      )
     )
 
   /**
@@ -104,7 +108,7 @@ trait TExprAggregateOps:
    * Example: TExpr.countIf(CellRange("A1:A10"), TExpr.Lit(">100"))
    */
   def countIf(range: CellRange, criteria: TExpr[?]): TExpr[BigDecimal] =
-    Call(FunctionSpecs.countif, (range, criteria.asInstanceOf[TExpr[Any]]))
+    Call(FunctionSpecs.countif, (RangeLocation.Local(range), criteria.asInstanceOf[TExpr[Any]]))
 
   /**
    * SUMIFS: sum with multiple criteria (AND logic).
@@ -117,7 +121,10 @@ trait TExprAggregateOps:
   ): TExpr[BigDecimal] =
     Call(
       FunctionSpecs.sumifs,
-      (sumRange, conditions.map { case (r, c) => (r, c.asInstanceOf[TExpr[Any]]) })
+      (
+        RangeLocation.Local(sumRange),
+        conditions.map { case (r, c) => (RangeLocation.Local(r), c.asInstanceOf[TExpr[Any]]) }
+      )
     )
 
   /**
@@ -128,7 +135,7 @@ trait TExprAggregateOps:
   def countIfs(conditions: List[(CellRange, TExpr[?])]): TExpr[BigDecimal] =
     Call(
       FunctionSpecs.countifs,
-      conditions.map { case (r, c) => (r, c.asInstanceOf[TExpr[Any]]) }
+      conditions.map { case (r, c) => (RangeLocation.Local(r), c.asInstanceOf[TExpr[Any]]) }
     )
 
   /**
@@ -143,7 +150,11 @@ trait TExprAggregateOps:
   ): TExpr[BigDecimal] =
     Call(
       FunctionSpecs.averageif,
-      (range, criteria.asInstanceOf[TExpr[Any]], averageRange)
+      (
+        RangeLocation.Local(range),
+        criteria.asInstanceOf[TExpr[Any]],
+        averageRange.map(RangeLocation.Local(_))
+      )
     )
 
   /**
@@ -157,7 +168,10 @@ trait TExprAggregateOps:
   ): TExpr[BigDecimal] =
     Call(
       FunctionSpecs.averageifs,
-      (averageRange, conditions.map { case (r, c) => (r, c.asInstanceOf[TExpr[Any]]) })
+      (
+        RangeLocation.Local(averageRange),
+        conditions.map { case (r, c) => (RangeLocation.Local(r), c.asInstanceOf[TExpr[Any]]) }
+      )
     )
 
   // Array and advanced lookup function smart constructors
@@ -169,4 +183,4 @@ trait TExprAggregateOps:
    * CellRange.parse("B1:B3").toOption.get))
    */
   def sumProduct(arrays: List[CellRange]): TExpr[BigDecimal] =
-    Call(FunctionSpecs.sumproduct, arrays)
+    Call(FunctionSpecs.sumproduct, arrays.map(RangeLocation.Local(_)))

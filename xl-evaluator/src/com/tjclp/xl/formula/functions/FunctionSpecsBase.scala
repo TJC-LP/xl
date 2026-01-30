@@ -60,13 +60,13 @@ trait FunctionSpecsBase:
   // Used for Excel-compatible SUM(1,2,3) / SUM(A1:A5,B1:B5) / SUM(A1,5,B1:B3)
   type NumericArg = Either[TExpr.RangeLocation, TExpr[BigDecimal]]
   type VariadicNumeric = List[NumericArg]
-  type RangeCriteriaList = List[(CellRange, TExpr[Any])]
-  type SumIfArgs = (CellRange, TExpr[Any], Option[CellRange])
-  type CountIfArgs = (CellRange, TExpr[Any])
-  type SumIfsArgs = (CellRange, RangeCriteriaList)
+  type RangeCriteriaList = List[(TExpr.RangeLocation, TExpr[Any])]
+  type SumIfArgs = (TExpr.RangeLocation, TExpr[Any], Option[TExpr.RangeLocation])
+  type CountIfArgs = (TExpr.RangeLocation, TExpr[Any])
+  type SumIfsArgs = (TExpr.RangeLocation, RangeCriteriaList)
   type CountIfsArgs = RangeCriteriaList
-  type AverageIfArgs = (CellRange, TExpr[Any], Option[CellRange])
-  type AverageIfsArgs = (CellRange, RangeCriteriaList)
+  type AverageIfArgs = (TExpr.RangeLocation, TExpr[Any], Option[TExpr.RangeLocation])
+  type AverageIfsArgs = (TExpr.RangeLocation, RangeCriteriaList)
   type DateInt = (TExpr[LocalDate], TExpr[Int])
   type DatePairUnit = (TExpr[LocalDate], TExpr[LocalDate], TExpr[String])
   type DatePairOptRange = (TExpr[LocalDate], TExpr[LocalDate], Option[CellRange])
@@ -81,7 +81,7 @@ trait FunctionSpecsBase:
   type NpvArgs = (TExpr[BigDecimal], CellRange)
   type IrrArgs = (CellRange, Option[TExpr[BigDecimal]])
   type VlookupArgs = (TExpr[CellValue], TExpr.RangeLocation, TExpr[Int], Option[TExpr[Boolean]])
-  type SumProductArgs = List[CellRange]
+  type SumProductArgs = List[TExpr.RangeLocation]
   type XLookupArgs = (
     AnyExpr,
     CellRange,

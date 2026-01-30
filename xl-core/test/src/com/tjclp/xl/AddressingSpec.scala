@@ -379,3 +379,23 @@ class AddressingSpec extends ScalaCheckSuite:
     assertEquals(cells.length, 1)
     assertEquals(cells(0), ARef.from0(5, 10))
   }
+
+  // ==================== CellRange.empty tests ====================
+
+  test("CellRange.empty: iteration yields no cells") {
+    val cells = CellRange.empty.cells.toList
+    assertEquals(cells, Nil)
+  }
+
+  test("CellRange.empty: cellsRowMajor yields no cells") {
+    val cells = CellRange.empty.cellsRowMajor.toList
+    assertEquals(cells, Nil)
+  }
+
+  test("CellRange.empty: used for constraining ranges on empty sheets") {
+    // Simulates what happens when constrainToUsedRange is called with empty usedRange
+    val fullCol = CellRange.parse("A:A").toOption.get
+    val emptyUsedRange: Option[CellRange] = None
+    val constrained = emptyUsedRange.flatMap(fullCol.intersect).getOrElse(CellRange.empty)
+    assertEquals(constrained.cells.toList, Nil)
+  }
