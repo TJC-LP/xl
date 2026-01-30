@@ -113,23 +113,74 @@ object SkillsApi:
       finally response.close()
     }
 
-  /** Get existing xl-cli skill or create a new one from zip file */
-  def getOrCreateXlSkill(apiKey: String, skillZipPath: Path): IO[String] =
+  /** Delete a custom skill by ID */
+  def deleteSkill(apiKey: String, skillId: String): IO[Unit] =
+    IO.blocking {
+      val client = new OkHttpClient()
+      val request = new Request.Builder()
+        .url(s"$ApiBase/skills/$skillId")
+        .addHeader("x-api-key", apiKey)
+        .addHeader("anthropic-version", "2023-06-01")
+        .addHeader("anthropic-beta", SkillsBeta)
+        .delete()
+        .build()
+
+      val response = client.newCall(request).execute()
+      try
+        if !response.isSuccessful then
+          throw AgentError.SkillsApiError(
+            s"Failed to delete skill: ${response.code()} ${response.message()}"
+          )
+      finally response.close()
+    }
+
+  /**
+   * Get existing xl-cli skill or create a new one from zip file.
+   *
+   * @param apiKey
+   *   Anthropic API key
+   * @param skillZipPath
+   *   Path to the skill zip file
+   * @param forceUpload
+   *   If true, delete existing skill and create fresh
+   */
+  def getOrCreateXlSkill(
+    apiKey: String,
+    skillZipPath: Path,
+    forceUpload: Boolean = false
+  ): IO[String] =
     for
       // Check for existing skill
       existingSkills <- listCustomSkills(apiKey)
       existingId = existingSkills.find(_.displayTitle == "xl-cli").map(_.id)
 
-      skillId <- existingId match
-        case Some(id) =>
-          IO.println(s"   Found existing xl-cli skill: $id") *> IO.pure(id)
-        case None =>
+      // Delete existing skill if force upload requested
+      _ <- (existingId, forceUpload) match
+        case (Some(id), true) =>
+          IO.println(s"   [force] Deleting existing xl-cli skill: $id") *>
+            deleteSkill(apiKey, id)
+        case _ => IO.unit
+
+      // Get or create
+      skillId <-
+        if forceUpload then
           for
             _ <- IO.println(s"   Creating xl-cli skill from ${skillZipPath.getFileName}...")
             files <- extractZipFiles(skillZipPath)
             skill <- createSkill(apiKey, "xl-cli", files)
             _ <- IO.println(s"   Created skill: ${skill.id}")
           yield skill.id
+        else
+          existingId match
+            case Some(id) =>
+              IO.println(s"   Found existing xl-cli skill: $id") *> IO.pure(id)
+            case None =>
+              for
+                _ <- IO.println(s"   Creating xl-cli skill from ${skillZipPath.getFileName}...")
+                files <- extractZipFiles(skillZipPath)
+                skill <- createSkill(apiKey, "xl-cli", files)
+                _ <- IO.println(s"   Created skill: ${skill.id}")
+              yield skill.id
     yield skillId
 
   /** Extract files from a zip archive with xl-cli/ prefix */

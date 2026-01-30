@@ -14,7 +14,8 @@ case class AgentConfig(
   maxTokens: Int = 8192,
   verbose: Boolean = false,
   xlBinaryPath: Option[Path] = None,
-  xlSkillPath: Option[Path] = None
+  xlSkillPath: Option[Path] = None,
+  forceUpload: Boolean = false
 )
 
 /** Token usage from API */

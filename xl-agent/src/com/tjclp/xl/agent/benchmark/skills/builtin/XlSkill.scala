@@ -30,11 +30,12 @@ object XlSkill extends Skill:
       skillPath <- FileManager.resolveSkillPath(config.xlSkillPath)
 
       _ <- IO.println(s"  [$name] Checking binary: ${binaryPath.getFileName}")
-      binaryFile <- client.uploadFileIfNeeded(binaryPath)
+      binaryFile <- client.uploadFileIfNeeded(binaryPath, config.forceUpload)
 
       _ <- IO.println(s"  [$name] Registering skill via Skills API...")
       apiKey <- AnthropicClientIO.loadApiKey
-      skillId <- SkillsApi.getOrCreateXlSkill(apiKey, skillPath)
+      // Note: forceUpload only affects binary, not skill (skill rarely changes)
+      skillId <- SkillsApi.getOrCreateXlSkill(apiKey, skillPath, forceUpload = false)
       _ <- IO.println(s"  [$name] Skill ID: $skillId")
     yield SkillContext(
       fileIds = List(binaryFile.id),

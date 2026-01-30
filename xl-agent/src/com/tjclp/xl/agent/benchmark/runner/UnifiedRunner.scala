@@ -56,7 +56,10 @@ object UnifiedRunner extends IOApp:
 
         agentConfig = AgentConfig(
           model = config.model,
-          verbose = false
+          verbose = false,
+          xlBinaryPath = config.xlBinaryPath,
+          xlSkillPath = config.xlSkillPath,
+          forceUpload = config.forceUpload
         )
 
         engineConfig = EngineConfig(
@@ -278,6 +281,12 @@ ${"=" * 60}
             parse(rest, config.copy(listSkills = Some(())))
           case "--xl-cli" :: value :: rest =>
             parse(rest, config.copy(xlCliPath = value))
+          case "--xl-binary" :: value :: rest =>
+            parse(rest, config.copy(xlBinaryPath = Some(Path.of(value))))
+          case "--xl-skill" :: value :: rest =>
+            parse(rest, config.copy(xlSkillPath = Some(Path.of(value))))
+          case "--force-upload" :: rest =>
+            parse(rest, config.copy(forceUpload = true))
           case ("--help" | "-h") :: _ =>
             printHelp()
             throw new RuntimeException("Help requested")
@@ -324,7 +333,10 @@ ${"=" * 60}
       |Execution:
       |  --model <name>         Model to use (default: claude-sonnet-4-20250514)
       |  --parallelism <n>      Number of parallel tasks (default: 4)
-      |  --xl-cli <path>        Path to xl CLI (default: xl)
+      |  --xl-cli <path>        Path to xl CLI for local grading (default: xl)
+      |  --xl-binary <path>     Path to xl binary for upload (default: auto-download)
+      |  --xl-skill <path>      Path to xl skill zip for upload (default: auto-download)
+      |  --force-upload         Force re-upload of binary and skill (bypass cache)
       |""".stripMargin)
 
   private def listSkillsAndExit(unit: Unit): IO[Nothing] =
@@ -360,7 +372,10 @@ case class UnifiedConfig(
   stream: Boolean = false,
   enableGrading: Boolean = true,
   xlCliPath: String = "xl",
-  listSkills: Option[Unit] = None
+  xlBinaryPath: Option[Path] = None,
+  xlSkillPath: Option[Path] = None,
+  listSkills: Option[Unit] = None,
+  forceUpload: Boolean = false
 )
 
 /** Benchmark type enum */
