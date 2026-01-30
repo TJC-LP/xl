@@ -71,7 +71,19 @@ object CriteriaMatcher:
     case ExprValue.Bool(bool) => Exact(ExprValue.Bool(bool))
     case ExprValue.Date(date) => Exact(ExprValue.Date(date))
     case ExprValue.DateTime(dateTime) => Exact(ExprValue.DateTime(dateTime))
-    case ExprValue.Cell(cellValue) => Exact(ExprValue.Cell(cellValue))
+    case ExprValue.Cell(cellValue) =>
+      // Unwrap CellValue to appropriate ExprValue for proper matching.
+      // This enables cell references used as criteria (e.g., =SUMIFS(..., A2))
+      cellValue match
+        case CellValue.Text(s) => parseString(s)
+        case CellValue.Number(n) => Exact(ExprValue.Number(n))
+        case CellValue.Bool(b) => Exact(ExprValue.Bool(b))
+        case CellValue.DateTime(dt) => Exact(ExprValue.DateTime(dt))
+        case CellValue.RichText(rt) => parseString(rt.toPlainText)
+        case CellValue.Formula(_, Some(cached)) => parse(ExprValue.Cell(cached))
+        case CellValue.Formula(_, None) => Exact(ExprValue.Cell(cellValue))
+        case CellValue.Empty => Exact(ExprValue.Text(""))
+        case CellValue.Error(_) => Exact(ExprValue.Cell(cellValue))
     case ExprValue.Opaque(other) => Exact(ExprValue.Opaque(other))
 
   /**

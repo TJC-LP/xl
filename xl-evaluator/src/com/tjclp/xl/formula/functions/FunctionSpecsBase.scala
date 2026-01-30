@@ -119,7 +119,12 @@ trait FunctionSpecsBase:
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   protected def evalAny(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
-    ctx.evalExpr[Any](expr.asInstanceOf[TExpr[Any]])
+    // Resolve PolyRef/SheetPolyRef to typed Ref before evaluation.
+    // This fixes cell references used as criteria in SUMIFS, COUNTIF, etc.
+    val resolved = expr match
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef => TExpr.asResolvedValueExpr(expr)
+      case other => other
+    ctx.evalExpr[Any](resolved.asInstanceOf[TExpr[Any]])
 
   protected def evalValue(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, ExprValue] =
     evalAny(ctx, expr).map(ExprValue.from)

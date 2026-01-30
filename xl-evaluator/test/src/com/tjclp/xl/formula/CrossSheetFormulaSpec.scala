@@ -1387,3 +1387,153 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     )
     assertEquals(result, Right(CellValue.Number(BigDecimal(0))))
   }
+
+  // ===== Cell reference as criteria (PolyRef resolution) =====
+
+  test("SUMIFS with cell reference as criteria") {
+    // Main!A1 contains the lookup value, Data has values to sum
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Text("Apple"),
+      ref"A2" -> CellValue.Text("Apple"),
+      ref"A3" -> CellValue.Text("Banana"),
+      ref"B1" -> CellValue.Number(BigDecimal(100)),
+      ref"B2" -> CellValue.Number(BigDecimal(200)),
+      ref"B3" -> CellValue.Number(BigDecimal(150))
+    )
+    val main = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Text("Apple") // Criteria value in a cell
+    )
+    val wb = workbookWith(main, data)
+
+    // =SUMIFS(Data!B:B, Data!A:A, A1) where A1="Apple" -> 100+200=300
+    val result = main.evaluateFormula(
+      "=SUMIFS(Data!B:B, Data!A:A, A1)",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(300))))
+  }
+
+  test("SUMIF with cell reference as criteria") {
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Text("X"),
+      ref"A2" -> CellValue.Text("Y"),
+      ref"A3" -> CellValue.Text("X"),
+      ref"B1" -> CellValue.Number(BigDecimal(10)),
+      ref"B2" -> CellValue.Number(BigDecimal(20)),
+      ref"B3" -> CellValue.Number(BigDecimal(30))
+    )
+    val main = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Text("X")
+    )
+    val wb = workbookWith(main, data)
+
+    // =SUMIF(Data!A:A, A1, Data!B:B) where A1="X" -> 10+30=40
+    val result = main.evaluateFormula(
+      "=SUMIF(Data!A:A, A1, Data!B:B)",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(40))))
+  }
+
+  test("COUNTIF with cell reference as criteria") {
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Text("Red"),
+      ref"A2" -> CellValue.Text("Blue"),
+      ref"A3" -> CellValue.Text("Red"),
+      ref"A4" -> CellValue.Text("Red")
+    )
+    val main = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Text("Red")
+    )
+    val wb = workbookWith(main, data)
+
+    // =COUNTIF(Data!A:A, A1) where A1="Red" -> 3
+    val result = main.evaluateFormula(
+      "=COUNTIF(Data!A:A, A1)",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(3))))
+  }
+
+  test("AVERAGEIF with cell reference as criteria") {
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Text("A"),
+      ref"A2" -> CellValue.Text("B"),
+      ref"A3" -> CellValue.Text("A"),
+      ref"B1" -> CellValue.Number(BigDecimal(10)),
+      ref"B2" -> CellValue.Number(BigDecimal(50)),
+      ref"B3" -> CellValue.Number(BigDecimal(30))
+    )
+    val main = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Text("A")
+    )
+    val wb = workbookWith(main, data)
+
+    // =AVERAGEIF(Data!A:A, A1, Data!B:B) where A1="A" -> (10+30)/2=20
+    val result = main.evaluateFormula(
+      "=AVERAGEIF(Data!A:A, A1, Data!B:B)",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(20))))
+  }
+
+  test("SUMIFS with multiple cell reference criteria") {
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Text("1001"),
+      ref"A2" -> CellValue.Text("1001"),
+      ref"A3" -> CellValue.Text("1002"),
+      ref"B1" -> CellValue.Text("Sales"),
+      ref"B2" -> CellValue.Text("Marketing"),
+      ref"B3" -> CellValue.Text("Sales"),
+      ref"C1" -> CellValue.Number(BigDecimal(100)),
+      ref"C2" -> CellValue.Number(BigDecimal(200)),
+      ref"C3" -> CellValue.Number(BigDecimal(150))
+    )
+    val main = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Text("1001"),
+      ref"A2" -> CellValue.Text("Sales")
+    )
+    val wb = workbookWith(main, data)
+
+    // =SUMIFS(Data!C:C, Data!A:A, A1, Data!B:B, A2)
+    // where A1="1001" and A2="Sales" -> only row 1 matches -> 100
+    val result = main.evaluateFormula(
+      "=SUMIFS(Data!C:C, Data!A:A, A1, Data!B:B, A2)",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(100))))
+  }
+
+  test("SUMIFS with numeric cell reference as criteria") {
+    val data = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Number(BigDecimal(100)),
+      ref"A2" -> CellValue.Number(BigDecimal(200)),
+      ref"A3" -> CellValue.Number(BigDecimal(100)),
+      ref"B1" -> CellValue.Number(BigDecimal(10)),
+      ref"B2" -> CellValue.Number(BigDecimal(20)),
+      ref"B3" -> CellValue.Number(BigDecimal(30))
+    )
+    val main = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Number(BigDecimal(100))
+    )
+    val wb = workbookWith(main, data)
+
+    // =SUMIFS(Data!B:B, Data!A:A, A1) where A1=100 -> 10+30=40
+    val result = main.evaluateFormula(
+      "=SUMIFS(Data!B:B, Data!A:A, A1)",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(40))))
+  }
