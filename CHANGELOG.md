@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.0] - 2026-01-30
+
+### Added
+
+- **Cross-sheet SUMIFS with full-column optimization** (#195)
+  - SUMIFS, COUNTIFS, AVERAGEIFS now work correctly with cross-sheet references
+  - Full-column references (A:A) optimized via bounds computation to avoid iterating 1M+ rows
+  - Cell references as criteria now resolve correctly (e.g., `=SUMIFS(Sheet2!D:D, Sheet2!A:A, A1)`)
+  - Fixed PolyRef resolution in criteria evaluation
+
+- **Array formula support with TRANSPOSE and broadcasting** (#191)
+  - TRANSPOSE function for array transposition
+  - Array arithmetic with broadcasting (scalar, row, column operations)
+  - `evala` command for array formula evaluation with optional spill to cells
+
+### Fixed
+
+- **Formula cell type detection** (#190)
+  - ROW() and COLUMN() with zero arguments now correctly use formula position
+  - Proper cell type inference for formula results
+
+---
+
 ## [0.8.1] - 2026-01-28
 
 ### Fixed
