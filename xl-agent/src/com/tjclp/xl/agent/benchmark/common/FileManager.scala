@@ -12,7 +12,7 @@ import scala.sys.process.*
 object FileManager:
 
   // Default binary/skill versions
-  private val DefaultBinaryVersion = "0.8.1"
+  private val DefaultBinaryVersion = "0.9.0"
   private val DefaultBinaryName = s"xl-$DefaultBinaryVersion-linux-amd64"
   private val DefaultSkillName = s"xl-skill-$DefaultBinaryVersion.zip"
 

@@ -151,7 +151,7 @@ object Agent:
       case Some(p) => IO.pure(p)
       case None =>
         findFile(
-          "xl-0.8.1-linux-amd64",
+          "xl-0.9.0-linux-amd64",
           List("../benchmark", "examples/anthropic-sdk/benchmark", ".")
         )
 
@@ -160,7 +160,7 @@ object Agent:
       case Some(p) => IO.pure(p)
       case None =>
         findFile(
-          "xl-skill-0.8.1.zip",
+          "xl-skill-0.9.0.zip",
           List("../benchmark", "examples/anthropic-sdk/benchmark", ".")
         )
 
