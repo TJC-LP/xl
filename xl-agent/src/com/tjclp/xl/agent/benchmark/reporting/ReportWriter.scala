@@ -400,8 +400,9 @@ object UnifiedReportWriter:
       // Per-task comparison (multi-skill only)
       if run.skillResults.size > 1 then
         sb.append("## Per-Task Comparison\n\n")
-        sb.append("| Task ID | " + run.skillResults.keys.mkString(" | ") + " |\n")
-        sb.append("|---------|" + run.skillResults.keys.map(_ => "-----").mkString("|") + "|\n")
+        val skillNames = run.skillResults.keys.toList
+        sb.append("| Task ID | " + skillNames.mkString(" | ") + " |\n")
+        sb.append("|---------|" + skillNames.map(_ => "------").mkString(" | ") + " |\n")
 
         run.tasks.foreach { task =>
           val results = run.skillResults.map { case (skill, sr) =>
@@ -417,20 +418,25 @@ object UnifiedReportWriter:
         }
         sb.append("\n")
 
-      // Failed tasks
-      val failed = run.allResults.filter(!_.passed)
-      if failed.nonEmpty then
-        sb.append("## Failed Tasks\n\n")
-        failed.foreach { r =>
-          sb.append(s"### ${r.taskIdValue} (${r.skill})\n\n")
-          r.error.foreach(e => sb.append(s"**Error:** $e\n\n"))
-          r.caseResults.filter(!_.passed).foreach { cr =>
-            sb.append(
-              s"- Case ${cr.caseNum}: ${cr.mismatches.take(3).map(m => s"${m.ref}").mkString(", ")}\n"
-            )
+      // Failed cases (from ALL results, not just failed tasks)
+      val failedCases = run.allResults.flatMap { r =>
+        r.caseResults.filter(!_.passed).map(cr => (r, cr))
+      }
+      if failedCases.nonEmpty then
+        sb.append("## Failed Cases\n\n")
+        failedCases
+          .groupBy { case (r, _) => (r.taskIdValue, r.skill) }
+          .toList
+          .sortBy(_._1)
+          .foreach { case ((taskId, skill), cases) =>
+            sb.append(s"### $taskId ($skill)\n\n")
+            cases.foreach { case (r, cr) =>
+              val refs = cr.mismatches.take(3).map(_.ref).mkString(", ")
+              val refsDisplay = if refs.nonEmpty then s": $refs" else ""
+              sb.append(s"- Case ${cr.caseNum}$refsDisplay\n")
+            }
+            sb.append("\n")
           }
-          sb.append("\n")
-        }
 
       Files.writeString(path, sb.toString)
     }
