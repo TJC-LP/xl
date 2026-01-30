@@ -34,8 +34,7 @@ object XlSkill extends Skill:
 
       _ <- IO.println(s"  [$name] Registering skill via Skills API...")
       apiKey <- AnthropicClientIO.loadApiKey
-      // Note: forceUpload only affects binary, not skill (skill rarely changes)
-      skillId <- SkillsApi.getOrCreateXlSkill(apiKey, skillPath, forceUpload = false)
+      skillId <- SkillsApi.getOrCreateXlSkill(apiKey, skillPath, config.forceUpload)
       _ <- IO.println(s"  [$name] Skill ID: $skillId")
     yield SkillContext(
       fileIds = List(binaryFile.id),
