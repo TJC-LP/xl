@@ -134,6 +134,54 @@ object SkillsApi:
       finally response.close()
     }
 
+  /** Create a new version of an existing skill */
+  def createSkillVersion(
+    apiKey: String,
+    skillId: String,
+    files: List[(String, Array[Byte])]
+  ): IO[SkillMetadata] =
+    IO.blocking {
+      val client = new OkHttpClient()
+
+      // Build multipart form with files
+      val bodyBuilder = new MultipartBody.Builder()
+        .setType(MultipartBody.FORM)
+
+      // Add each file
+      files.foreach { case (filename, content) =>
+        bodyBuilder.addFormDataPart(
+          "files",
+          filename,
+          RequestBody.create(content, OctetMediaType)
+        )
+      }
+
+      val request = new Request.Builder()
+        .url(s"$ApiBase/skills/$skillId/versions")
+        .addHeader("x-api-key", apiKey)
+        .addHeader("anthropic-version", "2023-06-01")
+        .addHeader("anthropic-beta", SkillsBeta)
+        .post(bodyBuilder.build())
+        .build()
+
+      val response = client.newCall(request).execute()
+      try
+        if !response.isSuccessful then
+          val errorBody = Option(response.body()).map(_.string()).getOrElse("")
+          throw AgentError.SkillsApiError(
+            s"Failed to create skill version: ${response.code()} ${response.message()} - $errorBody"
+          )
+
+        val body = response.body().string()
+        decode[SkillMetadata](body) match
+          case Right(skill) => skill
+          case Left(e) =>
+            throw AgentError.SkillsApiError(
+              s"Failed to parse skill version response: ${e.getMessage}"
+            )
+      finally response.close()
+    }
+
   /**
    * Get existing xl-cli skill or create a new one from zip file.
    *
@@ -142,7 +190,7 @@ object SkillsApi:
    * @param skillZipPath
    *   Path to the skill zip file
    * @param forceUpload
-   *   If true, delete existing skill and create fresh
+   *   If true, create a new version of existing skill (or create new if none exists)
    */
   def getOrCreateXlSkill(
     apiKey: String,
@@ -154,33 +202,29 @@ object SkillsApi:
       existingSkills <- listCustomSkills(apiKey)
       existingId = existingSkills.find(_.displayTitle == "xl-cli").map(_.id)
 
-      // Delete existing skill if force upload requested
-      _ <- (existingId, forceUpload) match
+      // Get, create, or update
+      skillId <- (existingId, forceUpload) match
+        // Existing skill + force upload = create new version
         case (Some(id), true) =>
-          IO.println(s"   [force] Deleting existing xl-cli skill: $id") *>
-            deleteSkill(apiKey, id)
-        case _ => IO.unit
+          for
+            _ <- IO.println(s"   [force] Creating new version of xl-cli skill: $id")
+            files <- extractZipFiles(skillZipPath)
+            skill <- createSkillVersion(apiKey, id, files)
+            _ <- IO.println(s"   Created new version: ${skill.version.getOrElse("latest")}")
+          yield id
 
-      // Get or create
-      skillId <-
-        if forceUpload then
+        // Existing skill + no force = reuse
+        case (Some(id), false) =>
+          IO.println(s"   Found existing xl-cli skill: $id") *> IO.pure(id)
+
+        // No existing skill = create new
+        case (None, _) =>
           for
             _ <- IO.println(s"   Creating xl-cli skill from ${skillZipPath.getFileName}...")
             files <- extractZipFiles(skillZipPath)
             skill <- createSkill(apiKey, "xl-cli", files)
             _ <- IO.println(s"   Created skill: ${skill.id}")
           yield skill.id
-        else
-          existingId match
-            case Some(id) =>
-              IO.println(s"   Found existing xl-cli skill: $id") *> IO.pure(id)
-            case None =>
-              for
-                _ <- IO.println(s"   Creating xl-cli skill from ${skillZipPath.getFileName}...")
-                files <- extractZipFiles(skillZipPath)
-                skill <- createSkill(apiKey, "xl-cli", files)
-                _ <- IO.println(s"   Created skill: ${skill.id}")
-              yield skill.id
     yield skillId
 
   /** Extract files from a zip archive with xl-cli/ prefix */
