@@ -1008,6 +1008,29 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(70))))
   }
 
+  test("GH-192: SUMIFS with cross-sheet full-column ranges uses original dimensions") {
+    val data1 = sheetWith(
+      "Data1",
+      ref"C1" -> CellValue.Number(BigDecimal(10)),
+      ref"C2" -> CellValue.Number(BigDecimal(20)),
+      ref"C3" -> CellValue.Number(BigDecimal(30))
+    )
+    val data2 = sheetWith(
+      "Data2",
+      ref"A1" -> CellValue.Text("X"),
+      ref"A2" -> CellValue.Text("Y")
+    )
+    val main = sheetWith("Main")
+    val wb = workbookWith(main, data1, data2)
+
+    // Sum Data1!C:C where Data2!A:A = "X" -> row 1 only -> 10
+    val result = main.evaluateFormula(
+      "=SUMIFS(Data1!C:C, Data2!A:A, \"X\")",
+      workbook = Some(wb)
+    )
+    assertEquals(result, Right(CellValue.Number(BigDecimal(10))))
+  }
+
   test("GH-192: COUNTIFS with cross-sheet ranges") {
     val data = sheetWith(
       "Data",
@@ -1175,6 +1198,26 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
       workbook = Some(wb)
     )
     assertEquals(result, Right(CellValue.Number(BigDecimal(40))))
+  }
+
+  test("GH-192: SUMIF rejects mismatched range sizes even with full-column refs") {
+    val sheet = sheetWith(
+      "Data",
+      ref"A1" -> CellValue.Text("Apple"),
+      ref"B1" -> CellValue.Number(BigDecimal(10)),
+      ref"B2" -> CellValue.Number(BigDecimal(20))
+    )
+    val wb = workbookWith(sheet)
+
+    val result = sheet.evaluateFormula(
+      "=SUMIF(A:A, \"Apple\", B1:B2)",
+      workbook = Some(wb)
+    )
+    result match
+      case Left(err) =>
+        assert(err.message.contains("SUMIF: range and sum_range must have same dimensions"))
+      case other =>
+        fail(s"Expected FormulaError, got $other")
   }
 
   test("GH-192: COUNTIF with full-column reference (same sheet)") {

@@ -439,7 +439,8 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
           clock,
           workbook,
           [A] => (expr: TExpr[A]) => evalArg(expr),
-          currentCell
+          currentCell,
+          currentDepth
         )
         call.spec.eval(call.args, ctx)
 
