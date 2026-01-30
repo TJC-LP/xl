@@ -31,7 +31,9 @@ final case class EvalContext(
   workbook: Option[Workbook],
   evalExpr: [A] => TExpr[A] => Either[EvalError, A],
   /** Current cell being evaluated. Used by ROW() and COLUMN() with no arguments. */
-  currentCell: Option[ARef] = None
+  currentCell: Option[ARef] = None,
+  /** Recursion depth for cross-sheet formula evaluation. */
+  depth: Int = 0
 )
 
 sealed trait ArgValue
