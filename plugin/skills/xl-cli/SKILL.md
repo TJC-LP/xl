@@ -176,6 +176,33 @@ xl -f f.xlsx -s S1 -o o.xlsx putf C2:C10 "=SUM(\$A\$1:A2)"
 
 See `xl putf --help` for full documentation.
 
+### Cross-Sheet References in Formulas
+
+**CRITICAL**: Cross-sheet references use Excel's `!` operator (NOT `.` or other separators):
+
+```bash
+# Single cell from another sheet
+xl -f f.xlsx -s Summary -o o.xlsx putf A1 "=Data!B5"
+
+# Range from another sheet
+xl -f f.xlsx -s Summary -o o.xlsx putf A1 "=SUM(Data!A1:A100)"
+
+# SUMIFS with cross-sheet references (common pattern)
+xl -f f.xlsx -s Summary -o o.xlsx putf H2 "=SUMIFS(Data!D:D,Data!A:A,A2,Data!C:C,E2)"
+
+# Sheet names with spaces require single quotes AROUND the sheet name
+xl -f f.xlsx -s Summary -o o.xlsx putf A1 "=SUM('Q1 Sales'!A1:A100)"
+```
+
+**Shell escaping**: The `!` character has special meaning in bash. Use single quotes around the formula:
+```bash
+# ✓ Correct - single quotes protect !
+xl -f f.xlsx -s S1 putf A1 '=Sheet2!B1'
+
+# ✗ Wrong - double quotes allow ! expansion in bash
+xl -f f.xlsx -s S1 putf A1 "=Sheet2!B1"  # May fail with "event not found"
+```
+
 ### Batch Put & Fill
 
 `put` supports three modes based on argument count:
