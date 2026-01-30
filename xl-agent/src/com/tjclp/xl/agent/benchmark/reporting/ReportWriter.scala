@@ -345,7 +345,26 @@ object UnifiedReportWriter:
       }
       sb.append("\n")
 
-      // Per-task results
+      // Per-task breakdown (always shown)
+      sb.append("## Per-Task Results\n\n")
+      sb.append("| Task | Skill | Grade | Score | Tokens | Latency | Reasoning |\n")
+      sb.append("|------|-------|-------|-------|--------|---------|----------|\n")
+      run.allResults.sortBy(_.taskIdValue).foreach { r =>
+        val grade = r.gradeResult.map(_.score.toString).getOrElse("-")
+        val score = f"${r.aggregateScore.normalized}%.2f"
+        val tokens = formatNumber(r.totalTokens)
+        val latency = formatDuration(r.latencyMs)
+        val reasoning = r.gradeResult
+          .flatMap(_.details.reasoning)
+          .map(s => truncateText(s, 40))
+          .getOrElse("-")
+        sb.append(
+          s"| ${r.taskIdValue} | ${r.skill} | $grade | $score | $tokens | $latency | $reasoning |\n"
+        )
+      }
+      sb.append("\n")
+
+      // Per-task comparison (multi-skill only)
       if run.skillResults.size > 1 then
         sb.append("## Per-Task Comparison\n\n")
         sb.append("| Task ID | " + run.skillResults.keys.mkString(" | ") + " |\n")
@@ -459,3 +478,8 @@ object UnifiedReportWriter:
     if ms >= 60_000 then f"${ms / 60_000.0}%.1fm"
     else if ms >= 1_000 then f"${ms / 1_000.0}%.1fs"
     else s"${ms}ms"
+
+  private def truncateText(s: String, maxLen: Int): String =
+    val clean = s.replace("|", "\\|").replace("\n", " ").trim
+    if clean.length <= maxLen then clean
+    else clean.take(maxLen) + "..."

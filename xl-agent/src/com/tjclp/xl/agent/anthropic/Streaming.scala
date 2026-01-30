@@ -4,9 +4,10 @@ import cats.effect.IO
 import cats.effect.std.Queue
 import cats.syntax.all.*
 import com.anthropic.models.beta.messages.*
-import com.tjclp.xl.agent.AgentEvent
+import com.tjclp.xl.agent.{AgentEvent, TurnUsage}
 import io.circe.{Json, parser as circeParser}
 
+import java.time.Instant
 import scala.collection.mutable
 import scala.jdk.OptionConverters.*
 import scala.util.Try
@@ -24,13 +25,25 @@ class StreamEventProcessor(
   // Track current tool result's tool use ID
   private var lastToolUseId: String = ""
 
+  // Per-turn token tracking state
+  private var turnNum: Int = 0
+  private var turnStartTime: Option[Instant] = None
+  private var prevCumulativeInput: Long = 0L
+  private var prevCumulativeOutput: Long = 0L
+  private var lastCumulativeInput: Long = 0L
+  private var lastCumulativeOutput: Long = 0L
+
   /** Process a single streaming event, potentially emitting AgentEvents */
   def process(event: BetaRawMessageStreamEvent): IO[Unit] =
     val textIO = processTextDelta(event)
     val toolStartIO = processToolStart(event)
     val toolResultIO = processToolResult(event)
     val toolStopIO = processToolStop(event)
-    textIO *> toolStartIO *> toolResultIO *> toolStopIO
+    val messageStartIO = processMessageStart(event)
+    val messageDeltaIO = processMessageDelta(event)
+    val messageStopIO = processMessageStop(event)
+    textIO *> toolStartIO *> toolResultIO *> toolStopIO *>
+      messageStartIO *> messageDeltaIO *> messageStopIO
 
   private def processTextDelta(event: BetaRawMessageStreamEvent): IO[Unit] =
     event.contentBlockDelta().toScala match
@@ -218,6 +231,71 @@ class StreamEventProcessor(
               emitTool *> callbackIO *> printIO
             else IO.unit
           case None => IO.unit
+      case None => IO.unit
+
+  /** Track message start for per-turn timing and capture input tokens */
+  private def processMessageStart(event: BetaRawMessageStreamEvent): IO[Unit] =
+    event.messageStart().toScala match
+      case Some(start) =>
+        IO {
+          turnNum += 1
+          turnStartTime = Some(Instant.now())
+          // Record the previous cumulative values as starting point for this turn
+          prevCumulativeInput = lastCumulativeInput
+          prevCumulativeOutput = lastCumulativeOutput
+          // Capture input tokens from the message's usage (includes prompt tokens)
+          val usage = start.message().usage()
+          lastCumulativeInput = usage.inputTokens()
+        }
+      case None => IO.unit
+
+  /** Capture cumulative token usage from message_delta events */
+  private def processMessageDelta(event: BetaRawMessageStreamEvent): IO[Unit] =
+    event.messageDelta().toScala match
+      case Some(delta) =>
+        IO {
+          // Extract cumulative usage from the delta event
+          // BetaMessageDeltaUsage provides cumulative tokens for the entire message
+          val usage = delta.usage()
+          lastCumulativeOutput = usage.outputTokens()
+        }
+      case None => IO.unit
+
+  /** Emit TurnComplete event when a message (turn) ends */
+  private def processMessageStop(event: BetaRawMessageStreamEvent): IO[Unit] =
+    event.messageStop().toScala match
+      case Some(_) =>
+        val now = Instant.now()
+        val durationMs = turnStartTime
+          .map { start =>
+            java.time.Duration.between(start, now).toMillis
+          }
+          .getOrElse(0L)
+
+        val inputDelta = lastCumulativeInput - prevCumulativeInput
+        val outputDelta = lastCumulativeOutput - prevCumulativeOutput
+
+        val usage = TurnUsage(
+          turnNum = turnNum,
+          inputTokens = inputDelta,
+          outputTokens = outputDelta,
+          cumulativeInputTokens = lastCumulativeInput,
+          cumulativeOutputTokens = lastCumulativeOutput,
+          durationMs = durationMs
+        )
+
+        val turnEvent = AgentEvent.TurnComplete(usage)
+        val emitTurn = eventQueue.offer(turnEvent)
+        val callbackIO = onEvent(turnEvent)
+        val printIO = IO.whenA(verbose) {
+          IO {
+            println(
+              s"\n>>> TURN $turnNum complete: +$inputDelta in / +$outputDelta out (cumulative: ${lastCumulativeInput} / ${lastCumulativeOutput}) [${durationMs}ms]"
+            )
+          }
+        }
+        emitTurn *> callbackIO *> printIO
+
       case None => IO.unit
 
   /** Extract the 'command' field from tool input JSON */

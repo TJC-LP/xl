@@ -2,7 +2,7 @@ package com.tjclp.xl.agent.benchmark.tracing
 
 import cats.effect.{IO, Ref}
 import cats.syntax.all.*
-import com.tjclp.xl.agent.{AgentEvent, TokenUsage}
+import com.tjclp.xl.agent.{AgentEvent, TokenUsage, TurnUsage}
 import io.circe.*
 import io.circe.syntax.*
 
@@ -59,8 +59,9 @@ case class ConversationTrace(
   metadata: ConversationMetadata,
   events: Vector[TracedEvent]
 ):
+  /** Count of turns (assistant response cycles) */
   def turnCount: Int = events.count {
-    case TracedEvent(_, _, AgentEvent.ToolInvocation(_, _, _, _)) => true
+    case TracedEvent(_, _, AgentEvent.TurnComplete(_)) => true
     case _ => false
   }
 
@@ -74,14 +75,32 @@ case class ConversationTrace(
     case _ => false
   }
 
+  /** Extract per-turn token usage from TurnComplete events */
+  def turnUsages: Vector[TurnUsage] =
+    events.collect { case TracedEvent(_, _, AgentEvent.TurnComplete(usage)) =>
+      usage
+    }
+
 object ConversationTrace:
   given Encoder[ConversationTrace] = Encoder.instance { ct =>
+    val turnUsagesJson = ct.turnUsages.map { u =>
+      Json.obj(
+        "turnNum" -> u.turnNum.asJson,
+        "inputTokens" -> u.inputTokens.asJson,
+        "outputTokens" -> u.outputTokens.asJson,
+        "cumulativeInputTokens" -> u.cumulativeInputTokens.asJson,
+        "cumulativeOutputTokens" -> u.cumulativeOutputTokens.asJson,
+        "durationMs" -> u.durationMs.asJson
+      )
+    }
+
     Json.obj(
       "metadata" -> ct.metadata.asJson,
       "summary" -> Json.obj(
         "turnCount" -> ct.turnCount.asJson,
         "toolCallCount" -> ct.toolCallCount.asJson,
-        "errorCount" -> ct.errorCount.asJson
+        "errorCount" -> ct.errorCount.asJson,
+        "turnUsages" -> turnUsagesJson.asJson
       ),
       "events" -> ct.events.asJson
     )

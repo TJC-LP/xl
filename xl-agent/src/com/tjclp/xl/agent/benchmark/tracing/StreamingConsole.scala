@@ -69,6 +69,12 @@ object StreamingConsole:
           if content.nonEmpty then
             val truncated = truncateLines(content, 10)
             Console.println(s"$Gray$truncated$Reset")
+
+        case AgentEvent.TurnComplete(usage) =>
+          // Turn complete with token usage
+          Console.println(
+            s"$Gray$timeStr Turn ${usage.turnNum}: +${usage.inputTokens} in / +${usage.outputTokens} out (cumulative: ${usage.cumulativeInputTokens}/${usage.cumulativeOutputTokens})$Reset"
+          )
     }
 
   /** Print a skill header */

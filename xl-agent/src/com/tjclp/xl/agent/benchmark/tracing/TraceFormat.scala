@@ -1,7 +1,9 @@
 package com.tjclp.xl.agent.benchmark.tracing
 
-import com.tjclp.xl.agent.AgentEvent
+import com.tjclp.xl.agent.{AgentEvent, TurnUsage}
 import com.tjclp.xl.agent.benchmark.common.ModelPricing
+
+import scala.collection.mutable
 
 /** Formatters for conversation traces */
 object TraceFormat:
@@ -38,6 +40,21 @@ object TraceFormat:
 
     sb.append("\n---\n\n")
 
+    // Collect turn usage info from TurnComplete events
+    val turnUsages = mutable.Map[Int, TurnUsage]()
+    trace.events.foreach { traced =>
+      traced.event match
+        case AgentEvent.TurnComplete(usage) => turnUsages(usage.turnNum) = usage
+        case _ => ()
+    }
+
+    // Helper to format turn usage if available
+    def turnUsageStr(turn: Int): String =
+      turnUsages.get(turn) match
+        case Some(u) =>
+          f" (tokens: +${u.inputTokens} in / +${u.outputTokens} out)"
+        case None => ""
+
     // Events
     var turnNum = 0
     var currentText = new StringBuilder()
@@ -45,7 +62,8 @@ object TraceFormat:
     def flushText(): Unit =
       if currentText.nonEmpty then
         turnNum += 1
-        sb.append(s"## Turn $turnNum\n\n")
+        val usageInfo = turnUsageStr(turnNum)
+        sb.append(s"## Turn $turnNum$usageInfo\n\n")
         sb.append("**Assistant:**\n")
         sb.append(currentText.toString.trim)
         sb.append("\n\n---\n\n")
@@ -60,7 +78,8 @@ object TraceFormat:
           flushText()
           turnNum += 1
           val timeStr = f"[${traced.relativeMs / 1000.0}%.2fs]"
-          sb.append(s"## Turn $turnNum $timeStr\n\n")
+          val usageInfo = turnUsageStr(turnNum)
+          sb.append(s"## Turn $turnNum $timeStr$usageInfo\n\n")
           sb.append(s"**Tool Call:** `$name`\n")
           command.foreach { cmd =>
             sb.append("```bash\n")
@@ -68,6 +87,10 @@ object TraceFormat:
             sb.append("\n```\n")
           }
           sb.append("\n")
+
+        case AgentEvent.TurnComplete(_) =>
+          // Already processed above for display purposes
+          ()
 
         case AgentEvent.ToolResult(_, stdout, stderr, exitCode, files) =>
           val exitStr = exitCode.map(c => s" (exit: $c)").getOrElse("")
@@ -129,6 +152,21 @@ object TraceFormat:
       .distinct
 
     if xlCommands.nonEmpty then sb.append(s"| xl commands | ${xlCommands.mkString(", ")} |\n")
+
+    // Per-turn token breakdown if available
+    if turnUsages.nonEmpty then
+      sb.append("\n### Per-Turn Token Usage\n\n")
+      sb.append(
+        "| Turn | Input Tokens | Output Tokens | Cumulative In | Cumulative Out | Duration |\n"
+      )
+      sb.append(
+        "|------|--------------|---------------|---------------|----------------|----------|\n"
+      )
+      turnUsages.toList.sortBy(_._1).foreach { case (_, u) =>
+        sb.append(
+          s"| ${u.turnNum} | +${u.inputTokens} | +${u.outputTokens} | ${u.cumulativeInputTokens} | ${u.cumulativeOutputTokens} | ${formatDuration(u.durationMs)} |\n"
+        )
+      }
 
     sb.toString
 

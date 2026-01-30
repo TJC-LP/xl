@@ -31,6 +31,22 @@ object TokenUsage:
   given Encoder[TokenUsage] = deriveEncoder
   given Decoder[TokenUsage] = deriveDecoder
 
+/** Per-turn token usage tracking */
+case class TurnUsage(
+  turnNum: Int,
+  inputTokens: Long,
+  outputTokens: Long,
+  cumulativeInputTokens: Long,
+  cumulativeOutputTokens: Long,
+  durationMs: Long
+):
+  def totalTokens: Long = inputTokens + outputTokens
+  def cumulativeTotalTokens: Long = cumulativeInputTokens + cumulativeOutputTokens
+
+object TurnUsage:
+  given Encoder[TurnUsage] = deriveEncoder
+  given Decoder[TurnUsage] = deriveDecoder
+
 /** Events emitted during agent execution */
 enum AgentEvent:
   case TextOutput(text: String, contentIndex: Int = 0)
@@ -55,6 +71,9 @@ enum AgentEvent:
   case ViewResult(content: String)
   case FileCreated(fileId: String, filename: String)
   case Error(message: String)
+
+  /** Emitted when a turn (assistant response cycle) completes */
+  case TurnComplete(usage: TurnUsage)
 
 object AgentEvent:
   import io.circe.syntax.*
@@ -105,6 +124,16 @@ object AgentEvent:
       Json.obj(
         "type" -> "Error".asJson,
         "message" -> message.asJson
+      )
+    case TurnComplete(usage) =>
+      Json.obj(
+        "type" -> "TurnComplete".asJson,
+        "turnNum" -> usage.turnNum.asJson,
+        "inputTokens" -> usage.inputTokens.asJson,
+        "outputTokens" -> usage.outputTokens.asJson,
+        "cumulativeInputTokens" -> usage.cumulativeInputTokens.asJson,
+        "cumulativeOutputTokens" -> usage.cumulativeOutputTokens.asJson,
+        "durationMs" -> usage.durationMs.asJson
       )
   }
 
