@@ -97,20 +97,21 @@ clean:
 
 # Package skill files only for Anthropic Skills API (<1MB)
 # Does NOT include JAR - CLI must be pre-installed in container
+# Creates xl-cli/ as top-level folder (required by Skills API)
 package-skill:
 	@echo "Packaging skill files for Anthropic API..."
-	@rm -rf dist/xl-skill
-	@mkdir -p dist/xl-skill/reference
-	@cp .claude/skills/xl-cli/SKILL.md dist/xl-skill/
-	@cp .claude/skills/xl-cli/reference/*.md dist/xl-skill/reference/
-	@cd dist && zip -r xl-skill.zip xl-skill
+	@rm -rf dist/xl-cli
+	@mkdir -p dist/xl-cli/reference
+	@cp plugin/skills/xl-cli/SKILL.md dist/xl-cli/
+	@cp plugin/skills/xl-cli/reference/*.md dist/xl-cli/reference/
+	@cd dist && zip -r xl-skill.zip xl-cli
 	@echo ""
 	@echo "Created dist/xl-skill.zip"
 	@unzip -l dist/xl-skill.zip
 	@du -h dist/xl-skill.zip
 	@echo ""
 	@echo "Upload to Anthropic Skills API:"
-	@echo "  - Upload .claude/skills/xl-cli/ directory, OR"
+	@echo "  - Upload plugin/skills/xl-cli/ directory, OR"
 	@echo "  - Upload dist/xl-skill.zip"
 	@echo ""
 	@echo "Note: xl CLI must be pre-installed in the container."
