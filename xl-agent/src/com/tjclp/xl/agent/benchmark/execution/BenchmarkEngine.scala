@@ -1,6 +1,7 @@
 package com.tjclp.xl.agent.benchmark.execution
 
-import cats.effect.IO
+import cats.effect.{Clock, IO}
+import cats.effect.syntax.concurrent.*
 import cats.syntax.all.*
 import com.tjclp.xl.agent.AgentConfig
 import com.tjclp.xl.agent.anthropic.AnthropicClientIO
@@ -249,22 +250,19 @@ private class DefaultBenchmarkEngine(
         skill.setup(client, agentConfig).map(ctx => skill -> ctx)
       }
 
-      // Create task-skill combinations
-      combinations =
-        for
-          task <- tasks
-          (skill, ctx) <- skillContexts
-        yield (task, skill, ctx)
+      // Expand all work units upfront (flattened scheduling)
+      // Each (task, skill, case) becomes an independent work unit
+      workUnits <- expandWorkUnits(tasks, skillContexts)
 
-      // Execute with parallelism using parTraverseN
-      results <- combinations
-        .grouped(config.parallelism.max(1))
-        .toList
-        .flatTraverse { batch =>
-          batch.parTraverse { case (task, skill, ctx) =>
-            executeTaskWithSkill(task, skill, ctx, agentConfig, config).flatTap(onResult)
-          }
-        }
+      // Execute ALL work units with single parTraverseN
+      // This provides: single parallelism control point, better load balancing,
+      // more accurate progress tracking, and no nested parallelism
+      unitResults <- workUnits.parTraverseN(config.parallelism.max(1)) { unit =>
+        executeWorkUnit(unit, agentConfig, config)
+      }
+
+      // Aggregate results by (task, skill)
+      results <- aggregateAndGradeResults(unitResults, tasks, config, onResult)
 
       // Teardown all skills
       _ <- skillContexts.traverse_ { case (skill, ctx) =>
@@ -294,30 +292,89 @@ private class DefaultBenchmarkEngine(
     )
 
   /**
-   * Execute a single task with a specific skill.
+   * Expand all (task, skill, case) combinations into independent work units.
+   *
+   * This flattened approach provides:
+   *   - Single parallelism control point (one parTraverseN)
+   *   - Better load balancing across all cases
+   *   - More accurate progress tracking
+   *   - No nested parallelism (avoids thread explosion)
    */
-  private def executeTaskWithSkill(
-    task: BenchmarkTask,
-    skill: Skill,
-    ctx: SkillContext,
+  private def expandWorkUnits(
+    tasks: List[BenchmarkTask],
+    skillContexts: List[(Skill, SkillContext)]
+  ): IO[Vector[WorkUnit]] =
+    val expansions = for
+      task <- tasks
+      (skill, ctx) <- skillContexts
+    yield skill.enumerateCases(task).map { cases =>
+      cases.zipWithIndex.map { (testCase, idx) =>
+        WorkUnit(task, skill, ctx, testCase, idx, cases.length)
+      }
+    }
+
+    expansions.parSequence.map(_.flatten.toVector)
+
+  /**
+   * Execute a single work unit (one case for one skill on one task).
+   */
+  private def executeWorkUnit(
+    unit: WorkUnit,
     agentConfig: AgentConfig,
     config: EngineConfig
-  ): IO[ExecutionResult] =
-    skill
-      .execute(task, ctx, client, agentConfig, config)
-      .flatMap { result =>
-        // Apply grading based on task's evaluation spec
-        applyGrading(task, result, config)
+  ): IO[WorkUnitResult] =
+    unit.skill
+      .executeCase(unit.testCase, unit.task, unit.skillContext, client, agentConfig, config)
+      .map { caseResult =>
+        WorkUnitResult(unit.taskId, unit.skillName, caseResult)
       }
       .handleErrorWith { e =>
         IO.pure(
-          ExecutionResult.failed(
-            taskId = task.id,
-            skill = skill.name,
-            error = e.getMessage
+          WorkUnitResult(
+            unit.taskId,
+            unit.skillName,
+            CaseResult(
+              caseNum = unit.testCase.caseNum,
+              passed = false,
+              usage = TokenUsage.zero,
+              latencyMs = 0,
+              details = CaseDetails.NoDetails
+            )
           )
         )
       }
+
+  /**
+   * Aggregate work unit results by (task, skill) and apply grading.
+   */
+  private def aggregateAndGradeResults(
+    unitResults: Vector[WorkUnitResult],
+    tasks: List[BenchmarkTask],
+    config: EngineConfig,
+    onResult: ExecutionResult => IO[Unit]
+  ): IO[List[ExecutionResult]] =
+    val taskMap = tasks.map(t => t.id -> t).toMap
+
+    // Group by (taskId, skillName)
+    val grouped = unitResults.groupBy(r => (r.taskId, r.skillName))
+
+    grouped.toList.traverse { case ((taskId, skillName), results) =>
+      val caseResults = results.map(_.caseResult).sortBy(_.caseNum)
+      val usage = caseResults.foldLeft(TokenUsage.zero)(_ + _.usage)
+      val latencyMs = caseResults.map(_.latencyMs).foldLeft(0L)(_.max(_))
+      val traces = caseResults.flatMap(_.tracePath)
+
+      val executionResult = ExecutionResult
+        .fromCases(taskId, skillName, caseResults, usage, latencyMs)
+        .withTraces(traces)
+
+      // Apply grading and notify callback
+      val task = taskMap.get(taskId)
+      for
+        graded <- task.fold(IO.pure(executionResult))(t => applyGrading(t, executionResult, config))
+        _ <- onResult(graded)
+      yield graded
+    }
 
   /**
    * Apply appropriate grading to an execution result.

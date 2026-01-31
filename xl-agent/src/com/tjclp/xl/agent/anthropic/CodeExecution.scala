@@ -1,7 +1,7 @@
 package com.tjclp.xl.agent.anthropic
 
 import cats.effect.{IO, Ref}
-import cats.effect.std.Queue
+import cats.effect.std.{Dispatcher, Queue}
 import cats.syntax.all.*
 import com.anthropic.client.AnthropicClient as JAnthropicClient
 import com.anthropic.core.JsonValue
@@ -30,73 +30,78 @@ object CodeExecution:
     onEvent: AgentEvent => IO[Unit] = _ => IO.unit // Real-time event callback for tracing
   ): IO[BetaMessage] =
     val promptsEvent = AgentEvent.Prompts(systemPrompt, userPrompt)
-    for
-      // Emit prompts for tracing
-      _ <- eventQueue.offer(promptsEvent)
-      _ <- onEvent(promptsEvent)
-      streamProcessor <- StreamEventProcessor.create(eventQueue, onEvent, config.verbose)
-      result <- IO
-        .blocking {
-          import java.util.{List as JList, Map as JMap}
 
-          // Build content blocks: text + container uploads
-          val contentBlocks = new java.util.ArrayList[JMap[String, Any]]()
-          contentBlocks.add(JMap.of("type", "text", "text", userPrompt))
-          containerUploads.foreach { fileId =>
-            contentBlocks.add(JMap.of("type", "container_upload", "file_id", fileId))
-          }
+    // Use Dispatcher.sequential to preserve event order while avoiding unsafeRunSync()
+    // which blocks the CE compute pool and causes CPU starvation warnings
+    Dispatcher.sequential[IO].use { dispatcher =>
+      for
+        // Emit prompts for tracing
+        _ <- eventQueue.offer(promptsEvent)
+        _ <- onEvent(promptsEvent)
+        streamProcessor <- StreamEventProcessor.create(eventQueue, onEvent, config.verbose)
+        result <- IO
+          .blocking {
+            import java.util.{List as JList, Map as JMap}
 
-          val baseBuilder = MessageCreateParams
-            .builder()
-            .model(config.model)
-            .maxTokens(config.maxTokens.toLong)
-            .system(systemPrompt)
-            .addUserMessage("placeholder")
-            // Override messages to include container_upload blocks
-            .putAdditionalBodyProperty(
-              "messages",
-              JsonValue.from(
-                JList.of(
-                  JMap.of(
-                    "role",
-                    "user",
-                    "content",
-                    contentBlocks
+            // Build content blocks: text + container uploads
+            val contentBlocks = new java.util.ArrayList[JMap[String, Any]]()
+            contentBlocks.add(JMap.of("type", "text", "text", userPrompt))
+            containerUploads.foreach { fileId =>
+              contentBlocks.add(JMap.of("type", "container_upload", "file_id", fileId))
+            }
+
+            val baseBuilder = MessageCreateParams
+              .builder()
+              .model(config.model)
+              .maxTokens(config.maxTokens.toLong)
+              .system(systemPrompt)
+              .addUserMessage("placeholder")
+              // Override messages to include container_upload blocks
+              .putAdditionalBodyProperty(
+                "messages",
+                JsonValue.from(
+                  JList.of(
+                    JMap.of(
+                      "role",
+                      "user",
+                      "content",
+                      contentBlocks
+                    )
                   )
                 )
               )
-            )
 
-          // Apply strategy-specific configuration (tools, betas, container)
-          val params = configureRequest(baseBuilder).build()
+            // Apply strategy-specific configuration (tools, betas, container)
+            val params = configureRequest(baseBuilder).build()
 
-          // Stream response
-          val accumulator = BetaMessageAccumulator.create()
-          val streamResponse = client.beta().messages().createStreaming(params)
-          val interrupted = new AtomicBoolean(false)
+            // Stream response
+            val accumulator = BetaMessageAccumulator.create()
+            val streamResponse = client.beta().messages().createStreaming(params)
+            val interrupted = new AtomicBoolean(false)
 
-          try
-            streamResponse.stream().forEach { event =>
-              if Thread.currentThread().isInterrupted() then
-                interrupted.set(true)
-                streamResponse.close()
-              else
-                accumulator.accumulate(event)
-                // Process event synchronously (we're already in IO.blocking)
-                import cats.effect.unsafe.implicits.global
-                streamProcessor.process(event).unsafeRunSync()
-            }
-            if config.verbose then println() // Final newline after streaming
+            try
+              streamResponse.stream().forEach { event =>
+                if Thread.currentThread().isInterrupted() then
+                  interrupted.set(true)
+                  streamResponse.close()
+                else
+                  accumulator.accumulate(event)
+                  // Fire-and-forget: doesn't block the OkHttp callback thread
+                  // Dispatcher.sequential ensures events are processed in order
+                  dispatcher.unsafeRunAndForget(streamProcessor.process(event))
+              }
+              if config.verbose then println() // Final newline after streaming
 
-            if interrupted.get() then throw new InterruptedException("Stream interrupted by user")
+              if interrupted.get() then throw new InterruptedException("Stream interrupted by user")
 
-            accumulator.message()
-          finally streamResponse.close()
-        }
-        .adaptError { case e: Exception =>
-          AgentError.StreamingError(e.getMessage)
-        }
-    yield result
+              accumulator.message()
+            finally streamResponse.close()
+          }
+          .adaptError { case e: Exception =>
+            AgentError.StreamingError(e.getMessage)
+          }
+      yield result
+    }
 
   /** Extract text content from response */
   def extractResponseText(response: BetaMessage): String =

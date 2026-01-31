@@ -31,6 +31,22 @@ object SkillMetadata:
     yield SkillMetadata(id, displayTitle, version)
   }
 
+/** Response from creating a skill version */
+case class VersionResponse(
+  id: String,
+  skillId: String,
+  version: String
+)
+
+object VersionResponse:
+  given Decoder[VersionResponse] = Decoder.instance { c =>
+    for
+      id <- c.get[String]("id")
+      skillId <- c.get[String]("skill_id")
+      version <- c.get[String]("version")
+    yield VersionResponse(id, skillId, version)
+  }
+
 /** Wrapper for Anthropic Skills API (beta) */
 object SkillsApi:
 
@@ -139,18 +155,19 @@ object SkillsApi:
     apiKey: String,
     skillId: String,
     files: List[(String, Array[Byte])]
-  ): IO[SkillMetadata] =
+  ): IO[VersionResponse] =
     IO.blocking {
       val client = new OkHttpClient()
 
       // Build multipart form with files
+      // Note: versions endpoint requires files[] (array notation)
       val bodyBuilder = new MultipartBody.Builder()
         .setType(MultipartBody.FORM)
 
-      // Add each file
+      // Add each file with array notation
       files.foreach { case (filename, content) =>
         bodyBuilder.addFormDataPart(
-          "files",
+          "files[]",
           filename,
           RequestBody.create(content, OctetMediaType)
         )
@@ -173,8 +190,8 @@ object SkillsApi:
           )
 
         val body = response.body().string()
-        decode[SkillMetadata](body) match
-          case Right(skill) => skill
+        decode[VersionResponse](body) match
+          case Right(ver) => ver
           case Left(e) =>
             throw AgentError.SkillsApiError(
               s"Failed to parse skill version response: ${e.getMessage}"
@@ -209,8 +226,8 @@ object SkillsApi:
           for
             _ <- IO.println(s"   [force] Creating new version of xl-cli skill: $id")
             files <- extractZipFiles(skillZipPath)
-            skill <- createSkillVersion(apiKey, id, files)
-            _ <- IO.println(s"   Created new version: ${skill.version.getOrElse("latest")}")
+            ver <- createSkillVersion(apiKey, id, files)
+            _ <- IO.println(s"   Created new version: ${ver.version}")
           yield id
 
         // Existing skill + no force = reuse
@@ -227,7 +244,12 @@ object SkillsApi:
           yield skill.id
     yield skillId
 
-  /** Extract files from a zip archive with xl-cli/ prefix */
+  /**
+   * Extract files from a zip archive.
+   *
+   * The zip should have xl-cli/ as the top-level folder with SKILL.md at the root. This matches the
+   * Skills API requirement.
+   */
   private def extractZipFiles(zipPath: Path): IO[List[(String, Array[Byte])]] =
     IO.blocking {
       Using.resource(new ZipFile(zipPath.toFile)) { zip =>
@@ -237,8 +259,8 @@ object SkillsApi:
             val content = Using.resource(zip.getInputStream(entry)) { is =>
               is.readAllBytes()
             }
-            // Add xl-cli/ prefix for Skills API requirement
-            Some((s"xl-cli/${entry.getName}", content))
+            // Use the path as-is from the zip (should already be xl-cli/...)
+            Some((entry.getName, content))
         }
       }
     }

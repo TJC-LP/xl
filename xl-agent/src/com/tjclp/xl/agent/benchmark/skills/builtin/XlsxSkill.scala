@@ -1,7 +1,6 @@
 package com.tjclp.xl.agent.benchmark.skills.builtin
 
 import cats.effect.{Clock, IO}
-import cats.effect.syntax.concurrent.*
 import cats.syntax.all.*
 import com.tjclp.xl.agent.{Agent, AgentConfig, AgentTask}
 import com.tjclp.xl.agent.anthropic.AnthropicClientIO
@@ -43,81 +42,53 @@ object XlsxSkill extends Skill:
     agentConfig: AgentConfig,
     engineConfig: EngineConfig
   ): IO[ExecutionResult] =
-    task.inputSource match
-      case InputSource.TestCases(cases) =>
-        runTestCases(task, cases.toList, ctx, client, agentConfig, engineConfig)
+    // Default implementation uses enumerateCases + executeCase for compatibility
+    // The engine now calls executeCase directly for flattened scheduling
+    for
+      startTime <- Clock[IO].monotonic.map(_.toMillis)
+      cases <- enumerateCases(task)
+      caseResults <-
+        if cases.isEmpty then IO.pure(Vector.empty[CaseResult])
+        else
+          cases.toList.traverse(c => executeCase(c, task, ctx, client, agentConfig, engineConfig))
+      endTime <- Clock[IO].monotonic.map(_.toMillis)
+      latencyMs = endTime - startTime
+      totalUsage = caseResults.foldLeft(TokenUsage.zero)(_ + _.usage)
+      traces = caseResults.flatMap(_.tracePath).toVector
+    yield
+      if cases.isEmpty then ExecutionResult.skipped(task.id, name, "No test cases found")
+      else
+        ExecutionResult
+          .fromCases(task.id, name, caseResults.toVector, totalUsage, latencyMs)
+          .withTraces(traces)
 
-      case InputSource.SingleFile(path) =>
-        runSingleFile(task, path, ctx, client, agentConfig, engineConfig)
-
-      case InputSource.NoInput =>
-        runNoInput(task, ctx, client, agentConfig, engineConfig)
-
-      case InputSource.DataDirectory(dir, pattern) =>
-        IO.blocking {
-          import scala.jdk.CollectionConverters.*
-          val glob = dir.getFileSystem.getPathMatcher(s"glob:$pattern")
-          Files
-            .walk(dir)
-            .iterator()
-            .asScala
-            .filter(p => Files.isRegularFile(p) && glob.matches(p.getFileName))
-            .map(p => TestCaseFile(1, p, p))
-            .toVector
-        }.flatMap { cases =>
-          if cases.isEmpty then
-            IO.pure(ExecutionResult.skipped(task.id, name, "No files matched pattern"))
-          else runTestCases(task, cases.toList, ctx, client, agentConfig, engineConfig)
-        }
-
-  /** Run task with multiple test cases (SpreadsheetBench style) */
-  private def runTestCases(
+  override def executeCase(
+    testCase: TestCaseFile,
     task: BenchmarkTask,
-    cases: List[TestCaseFile],
     ctx: SkillContext,
     client: AnthropicClientIO,
     agentConfig: AgentConfig,
     engineConfig: EngineConfig
-  ): IO[ExecutionResult] =
-    for
-      startTime <- Clock[IO].monotonic.map(_.toMillis)
-
-      // Run test cases in parallel (each with its own agent instance)
-      caseResults <- cases.parTraverseN(engineConfig.parallelism) { testCase =>
-        val agent = createAgent(client, ctx, agentConfig)
-        runSingleTestCase(
-          agent = agent,
-          task = task,
-          testCase = testCase,
-          engineConfig = engineConfig,
-          agentConfig = agentConfig
-        )
-      }
-
-      endTime <- Clock[IO].monotonic.map(_.toMillis)
-      latencyMs = endTime - startTime
-
-      totalUsage = caseResults.foldLeft(TokenUsage.zero)(_ + _.usage)
-
-      result = ExecutionResult.fromCases(
-        taskId = task.id,
-        skill = name,
-        caseResults = caseResults.toVector,
-        usage = totalUsage,
-        latencyMs = latencyMs
-      )
-
-      traces = caseResults.flatMap(_.tracePath).toVector
-    yield result.withTraces(traces)
-
-  /** Run a single test case and evaluate against expected answer */
-  private def runSingleTestCase(
-    agent: Agent,
-    task: BenchmarkTask,
-    testCase: TestCaseFile,
-    engineConfig: EngineConfig,
-    agentConfig: AgentConfig
   ): IO[CaseResult] =
+    // Determine execution type based on task's input source
+    task.inputSource match
+      case InputSource.SingleFile(_) =>
+        // Token comparison task (analysis) - no answer file comparison
+        runTokenComparisonCase(testCase, task, ctx, client, agentConfig, engineConfig)
+      case _ =>
+        // File comparison task (SpreadsheetBench style)
+        runFileComparisonCase(testCase, task, ctx, client, agentConfig, engineConfig)
+
+  /** Run a file comparison test case (SpreadsheetBench style) */
+  private def runFileComparisonCase(
+    testCase: TestCaseFile,
+    task: BenchmarkTask,
+    ctx: SkillContext,
+    client: AnthropicClientIO,
+    agentConfig: AgentConfig,
+    engineConfig: EngineConfig
+  ): IO[CaseResult] =
+    val agent = createAgent(client, ctx, agentConfig)
     val outputDir =
       engineConfig.outputDir.resolve("outputs").resolve(task.taskIdValue).resolve(name)
     val outputPath = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
@@ -191,36 +162,36 @@ object XlsxSkill extends Skill:
       )
     }
 
-  /** Run task with single input file (TokenBenchmark style) */
-  private def runSingleFile(
+  /** Run a token comparison test case (TokenBenchmark/analysis style) */
+  private def runTokenComparisonCase(
+    testCase: TestCaseFile,
     task: BenchmarkTask,
-    inputPath: Path,
     ctx: SkillContext,
     client: AnthropicClientIO,
     agentConfig: AgentConfig,
     engineConfig: EngineConfig
-  ): IO[ExecutionResult] =
-    for
-      startTime <- Clock[IO].monotonic.map(_.toMillis)
+  ): IO[CaseResult] =
+    val agent = createAgent(client, ctx, agentConfig)
+    val outputDir =
+      engineConfig.outputDir.resolve("outputs").resolve(task.taskIdValue).resolve(name)
+    val outputPath = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
 
-      agent = createAgent(client, ctx, agentConfig)
-
-      outputDir = engineConfig.outputDir.resolve("outputs").resolve(task.taskIdValue).resolve(name)
-      outputPath = outputDir.resolve("output.xlsx")
+    (for
       _ <- IO.blocking(Files.createDirectories(outputDir))
+      startTime <- Clock[IO].monotonic.map(_.toMillis)
 
       // Create tracer for conversation logs
       tracer <- ConversationTracer.create(
         outputDir = engineConfig.outputDir,
         taskId = task.taskIdValue,
         skillName = name,
-        caseNum = 1,
+        caseNum = testCase.caseNum,
         streaming = engineConfig.stream
       )
 
       agentTask = AgentTask(
         instruction = task.instruction,
-        inputFile = inputPath,
+        inputFile = testCase.inputPath,
         outputFile = outputPath,
         answerPosition = task.evaluation.answerPosition
       )
@@ -240,36 +211,24 @@ object XlsxSkill extends Skill:
       // Complete and save tracer
       _ <- tracer.complete(result.usage, agentSucceeded, result.error)
       tracePath <- tracer.save()
-
-      // For single file tasks (analysis), we defer correctness to LLM grading.
-      // Set passed = true here; the grader will update aggregateScore based on response quality.
-      caseResult = CaseResult(
-        caseNum = 1,
-        passed = agentSucceeded, // Agent ran without error; grading determines correctness
-        usage = usage,
-        latencyMs = latencyMs,
-        details = CaseDetails.token(
-          result.responseText.getOrElse(""),
-          task.evaluation.expectedAnswer
-        ),
-        tracePath = Some(tracePath)
+    yield CaseResult(
+      caseNum = testCase.caseNum,
+      passed = agentSucceeded, // Agent ran without error; grading determines correctness
+      usage = usage,
+      latencyMs = latencyMs,
+      details = CaseDetails.token(
+        result.responseText.getOrElse(""),
+        task.evaluation.expectedAnswer
+      ),
+      tracePath = Some(tracePath)
+    )).handleErrorWith { e =>
+      IO.pure(
+        CaseResult(
+          caseNum = testCase.caseNum,
+          passed = false,
+          usage = TokenUsage.zero,
+          latencyMs = 0,
+          details = CaseDetails.NoDetails
+        )
       )
-    yield ExecutionResult
-      .fromSingleCase(
-        taskId = task.id,
-        skill = name,
-        caseResult = caseResult,
-        usage = usage,
-        latencyMs = latencyMs
-      )
-      .withTraces(Vector(tracePath))
-
-  /** Run task without input file */
-  private def runNoInput(
-    task: BenchmarkTask,
-    ctx: SkillContext,
-    client: AnthropicClientIO,
-    agentConfig: AgentConfig,
-    engineConfig: EngineConfig
-  ): IO[ExecutionResult] =
-    IO.pure(ExecutionResult.skipped(task.id, name, "NoInput tasks not yet implemented"))
+    }

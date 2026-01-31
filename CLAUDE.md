@@ -34,6 +34,7 @@ xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based
 xl-benchmarks/   → JMH performance benchmarks
 xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 81 functions, dependency graphs)
 xl-testkit/      → Test laws, generators, helpers [future]
+xl-agent/        → AI agent benchmark runner (Anthropic API, skill comparison)
 ```
 
 ## Import Patterns
@@ -100,6 +101,61 @@ make install               # Install xl CLI to ~/.local/bin/xl
 ```
 
 **IMPORTANT**: After modifying CLI code, always run `make install` to update the installed CLI. Do NOT manually copy jars.
+
+## xl-agent Benchmark Runner
+
+The `xl-agent` module runs AI agent benchmarks comparing different Excel manipulation skills (xl-cli vs openpyxl).
+
+### Running Benchmarks
+
+```bash
+# Basic benchmark run (no -- needed with Mill)
+./mill xl-agent.run --benchmark spreadsheetbench --task 2768 --skills xl
+
+# With streaming console output
+./mill xl-agent.run --benchmark spreadsheetbench --task 2768 --skills xl --stream
+
+# Parallel execution (default: 4)
+./mill xl-agent.run --benchmark spreadsheetbench --skills xl --parallelism 8
+
+# Compare multiple skills
+./mill xl-agent.run --benchmark spreadsheetbench --task 2768 --skills xl,xlsx
+
+# List available tasks
+./mill xl-agent.run --benchmark spreadsheetbench --list-tasks
+
+# List available skills
+./mill xl-agent.run --list-skills
+
+# Force re-upload of skill files (bypasses cache)
+./mill xl-agent.run --benchmark spreadsheetbench --task 2768 --skills xl --force-upload
+```
+
+### Key Options
+
+| Flag | Description |
+|------|-------------|
+| `--benchmark <name>` | Benchmark suite: `spreadsheetbench`, `tokenbenchmark` |
+| `--task <id>` | Run specific task ID (can repeat) |
+| `--skills <list>` | Comma-separated: `xl`, `xlsx`, or `xl,xlsx` |
+| `--parallelism <n>` | Number of parallel work units (default: 4) |
+| `--stream` | Real-time colored console output |
+| `--force-upload` | Bypass file cache, re-upload skill |
+| `--output-dir <path>` | Results directory (default: `results/`) |
+
+### Architecture
+
+- **BenchmarkEngine**: Orchestrates execution with flattened work scheduling
+- **Skill**: Abstraction for different approaches (XlSkill, XlsxSkill)
+- **WorkUnit**: Single (task, skill, case) combination for parallel execution
+- **ConversationTracer**: Captures agent conversation for debugging
+
+### Output
+
+Results are written to `results/` directory:
+- `outputs/<taskId>/<skill>/` - Output xlsx files
+- `traces/<taskId>/<skill>/` - Conversation traces (JSON)
+- `summary.json` - Aggregated results
 
 ## CLI Usage
 

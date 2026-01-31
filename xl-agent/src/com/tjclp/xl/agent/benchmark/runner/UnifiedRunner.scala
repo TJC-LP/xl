@@ -12,6 +12,7 @@ import com.tjclp.xl.agent.benchmark.reporting.*
 import com.tjclp.xl.agent.benchmark.skills.{Skill, SkillRegistry}
 import com.tjclp.xl.agent.benchmark.task.*
 import com.tjclp.xl.agent.benchmark.task.UnifiedTaskLoader.*
+import com.tjclp.xl.agent.benchmark.tracing.StreamingConsole
 
 import java.nio.file.Path
 import java.time.{Duration, Instant}
@@ -74,14 +75,16 @@ object UnifiedRunner extends IOApp:
         // Run with streaming callback if enabled
         benchmarkRun <-
           if config.stream then
-            StreamingReportWriter.writeHeader(skills.map(_.name), tasks.length * skills.length) >>
-              engine.runStreaming(
-                tasks = tasks,
-                skills = skills,
-                agentConfig = agentConfig,
-                config = engineConfig,
-                onResult = result => IO.println(formatExecutionResult(result))
-              )
+            StreamingConsole.withStreaming(true) {
+              StreamingReportWriter.writeHeader(skills.map(_.name), tasks.length * skills.length) >>
+                engine.runStreaming(
+                  tasks = tasks,
+                  skills = skills,
+                  agentConfig = agentConfig,
+                  config = engineConfig,
+                  onResult = result => IO.println(formatExecutionResult(result))
+                )
+            }
           else engine.run(tasks, skills, agentConfig, engineConfig)
 
         _ <- printSummary(benchmarkRun)

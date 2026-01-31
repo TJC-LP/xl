@@ -143,6 +143,7 @@ class ConversationTracer private (
   outputDir: Path,
   initialMetadata: ConversationMetadata,
   streaming: Boolean,
+  streamContext: StreamingConsole.StreamContext,
   events: Ref[IO, Vector[TracedEvent]],
   metadata: Ref[IO, ConversationMetadata]
 ):
@@ -155,7 +156,7 @@ class ConversationTracer private (
       relativeMs = Duration.between(meta.startTime, now).toMillis
       traced = TracedEvent(now, relativeMs, event)
       _ <- events.update(_ :+ traced)
-      _ <- IO.whenA(streaming)(StreamingConsole.print(traced))
+      _ <- IO.whenA(streaming)(StreamingConsole.enqueueEvent(streamContext, traced))
     yield ()
 
   /** Mark the conversation as complete with final results */
@@ -166,6 +167,8 @@ class ConversationTracer private (
   ): IO[Unit] =
     for
       now <- IO.realTimeInstant
+      meta <- metadata.get
+      durationMs = Duration.between(meta.startTime, now).toMillis
       _ <- metadata.update(
         _.copy(
           endTime = Some(now),
@@ -173,6 +176,9 @@ class ConversationTracer private (
           passed = Some(passed),
           error = error
         )
+      )
+      _ <- IO.whenA(streaming)(
+        StreamingConsole.enqueueCaseComplete(streamContext, passed, durationMs)
       )
     yield ()
 
@@ -219,4 +225,13 @@ object ConversationTracer:
       initialMeta = ConversationMetadata(taskId, skillName, caseNum, now)
       eventsRef <- Ref.of[IO, Vector[TracedEvent]](Vector.empty)
       metaRef <- Ref.of[IO, ConversationMetadata](initialMeta)
-    yield new ConversationTracer(outputDir, initialMeta, streaming, eventsRef, metaRef)
+      streamContext = StreamingConsole.StreamContext(taskId, skillName, caseNum)
+      _ <- IO.whenA(streaming)(StreamingConsole.enqueueCaseStart(streamContext))
+    yield new ConversationTracer(
+      outputDir,
+      initialMeta,
+      streaming,
+      streamContext,
+      eventsRef,
+      metaRef
+    )
