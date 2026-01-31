@@ -709,8 +709,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
   private final case class RangeArray(
     sheet: com.tjclp.xl.sheets.Sheet,
-    range: CellRange,
-    ctx: EvalContext
+    range: CellRange
   ) extends ResolvedArray:
     def rows: Int = range.height
     def cols: Int = range.width
@@ -722,7 +721,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     def rows: Int = matrix.length
     def cols: Int = matrix.headOption.map(_.length).getOrElse(0)
     def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
-      Right(matrix(row)(col))
+      if row < 0 || row >= rows || col < 0 || col >= cols then
+        Left(
+          EvalError.EvalFailed(
+            s"SUMPRODUCT: index out of bounds ($row, $col) for ${rows}x$cols matrix",
+            None
+          )
+        )
+      else Right(matrix(row)(col))
 
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
     FunctionSpec.simple[BigDecimal, SumProductArgs]("SUMPRODUCT", Arity.atLeastOne) { (args, ctx) =>
@@ -800,7 +806,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case (Right(acc), Left(loc)) =>
                   // Range location - resolve to sheet and constrain
                   Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map { sheet =>
-                    acc :+ RangeArray(sheet, constrainRange(loc.range, bounds), ctx)
+                    acc :+ RangeArray(sheet, constrainRange(loc.range, bounds))
                   }
                 case (Right(acc), Right(expr)) =>
                   // GH-197: Expression - constrain ranges, then evaluate with array support
