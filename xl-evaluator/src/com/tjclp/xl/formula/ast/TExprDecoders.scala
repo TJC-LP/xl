@@ -20,9 +20,17 @@ trait TExprDecoders:
   def decodeNumeric(cell: Cell): Either[CodecError, BigDecimal] =
     cell.value match
       case CellValue.Number(value) => scala.util.Right(value)
+      // GH-196: Coerce booleans to numeric (TRUE→1, FALSE→0)
+      case CellValue.Bool(true) => scala.util.Right(BigDecimal(1))
+      case CellValue.Bool(false) => scala.util.Right(BigDecimal(0))
       case CellValue.Formula(_, Some(CellValue.Number(cached))) =>
         // Extract cached numeric value from formula cell
         scala.util.Right(cached)
+      // GH-196: Handle cached boolean values in formulas
+      case CellValue.Formula(_, Some(CellValue.Bool(true))) =>
+        scala.util.Right(BigDecimal(1))
+      case CellValue.Formula(_, Some(CellValue.Bool(false))) =>
+        scala.util.Right(BigDecimal(0))
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(

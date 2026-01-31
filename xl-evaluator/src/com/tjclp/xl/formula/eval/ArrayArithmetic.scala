@@ -115,6 +115,148 @@ object ArrayArithmetic:
       case (ArrayOperand.Array(l), ArrayOperand.Array(r)) =>
         broadcastArrays(l, r, op).map(ArrayOperand.Array(_))
 
+  /** Comparison operation type (returns Boolean, not Either) */
+  type CompareOp = (BigDecimal, BigDecimal) => Boolean
+
+  /**
+   * GH-197: Perform broadcasting comparison operation.
+   *
+   * Like `broadcast`, but for comparison operators (>, <, =, etc.). Returns ArrayResult of
+   * booleans.
+   *
+   * @param left
+   *   Left operand (scalar or array)
+   * @param right
+   *   Right operand (scalar or array)
+   * @param op
+   *   Comparison operation to apply element-wise
+   * @return
+   *   ArrayResult of CellValue.Bool values
+   */
+  def broadcastCompare(
+    left: ArrayOperand,
+    right: ArrayOperand,
+    op: CompareOp
+  ): Either[EvalError, ArrayResult] =
+    (left, right) match
+      // scalar vs scalar -> 1x1 boolean array
+      case (ArrayOperand.Scalar(l), ArrayOperand.Scalar(r)) =>
+        Right(ArrayResult.single(CellValue.Bool(op(l, r))))
+
+      // scalar vs array -> broadcast scalar to all elements
+      case (ArrayOperand.Scalar(s), ArrayOperand.Array(arr)) =>
+        arrayToNumeric(arr).map { nums =>
+          ArrayResult(nums.map(_.map(v => CellValue.Bool(op(s, v)))))
+        }
+
+      // array vs scalar -> broadcast scalar to all elements
+      case (ArrayOperand.Array(arr), ArrayOperand.Scalar(s)) =>
+        arrayToNumeric(arr).map { nums =>
+          ArrayResult(nums.map(_.map(v => CellValue.Bool(op(v, s)))))
+        }
+
+      // array vs array -> broadcast with dimension matching
+      case (ArrayOperand.Array(l), ArrayOperand.Array(r)) =>
+        broadcastCompareArrays(l, r, op)
+
+  /**
+   * GH-197: Broadcast compare two arrays together.
+   */
+  private def broadcastCompareArrays(
+    left: ArrayResult,
+    right: ArrayResult,
+    op: CompareOp
+  ): Either[EvalError, ArrayResult] =
+    for
+      outRows <- broadcastDim(left.rows, right.rows, "rows")
+      outCols <- broadcastDim(left.cols, right.cols, "columns")
+      leftNums <- arrayToNumeric(left)
+      rightNums <- arrayToNumeric(right)
+    yield
+      val result = (0 until outRows).toVector.map { row =>
+        (0 until outCols).toVector.map { col =>
+          val lVal = getWithBroadcast(leftNums, row, col, left.rows, left.cols)
+          val rVal = getWithBroadcast(rightNums, row, col, right.rows, right.cols)
+          CellValue.Bool(op(lVal, rVal))
+        }
+      }
+      ArrayResult(result)
+
+  /**
+   * GH-197: Element-wise equality/inequality comparison with broadcasting.
+   *
+   * Unlike `broadcastCompare`, this works on CellValue directly for polymorphic equality (strings,
+   * numbers, booleans). Used by Eq/Neq operators.
+   */
+  def broadcastEqualityCompare(
+    left: ArrayResult,
+    right: Either[ArrayResult, Any],
+    negate: Boolean
+  ): Either[EvalError, ArrayResult] =
+    right match
+      case Right(scalar) =>
+        // Array vs scalar - compare each element to the scalar
+        val scalarCV = anyToCellValue(scalar)
+        Right(ArrayResult(left.values.map(_.map { cv =>
+          val eq = cellValueEquals(cv, scalarCV)
+          CellValue.Bool(if negate then !eq else eq)
+        })))
+      case Left(rightArr) =>
+        // Array vs array - broadcast
+        for
+          outRows <- broadcastDim(left.rows, rightArr.rows, "rows")
+          outCols <- broadcastDim(left.cols, rightArr.cols, "columns")
+        yield
+          val result = (0 until outRows).toVector.map { row =>
+            (0 until outCols).toVector.map { col =>
+              val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
+              val rVal = getWithBroadcastCV(rightArr.values, row, col, rightArr.rows, rightArr.cols)
+              val eq = cellValueEquals(lVal, rVal)
+              CellValue.Bool(if negate then !eq else eq)
+            }
+          }
+          ArrayResult(result)
+
+  /** Get CellValue with broadcasting. */
+  private def getWithBroadcastCV(
+    arr: Vector[Vector[CellValue]],
+    row: Int,
+    col: Int,
+    arrRows: Int,
+    arrCols: Int
+  ): CellValue =
+    val r = if arrRows == 1 then 0 else row
+    val c = if arrCols == 1 then 0 else col
+    arr(r)(c)
+
+  /** Convert any value to CellValue for comparison. */
+  def anyToCellValue(v: Any): CellValue = v match
+    case cv: CellValue => cv
+    case s: String => CellValue.Text(s)
+    case n: BigDecimal => CellValue.Number(n)
+    case n: Int => CellValue.Number(BigDecimal(n))
+    case n: Long => CellValue.Number(BigDecimal(n))
+    case n: Double => CellValue.Number(BigDecimal(n))
+    case b: Boolean => CellValue.Bool(b)
+    case _ => CellValue.Text(v.toString)
+
+  /** Compare CellValues for equality (case-insensitive for text). */
+  private def cellValueEquals(a: CellValue, b: CellValue): Boolean = (a, b) match
+    case (CellValue.Text(t1), CellValue.Text(t2)) =>
+      t1.equalsIgnoreCase(t2)
+    case (CellValue.Number(n1), CellValue.Number(n2)) =>
+      n1 == n2
+    case (CellValue.Bool(b1), CellValue.Bool(b2)) =>
+      b1 == b2
+    case (CellValue.Empty, CellValue.Empty) =>
+      true
+    case (CellValue.Formula(_, Some(c1)), other) =>
+      cellValueEquals(c1, other)
+    case (other, CellValue.Formula(_, Some(c2))) =>
+      cellValueEquals(other, c2)
+    case _ =>
+      false
+
   /**
    * Broadcast two arrays together.
    */

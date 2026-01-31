@@ -81,7 +81,8 @@ trait FunctionSpecsBase:
   type NpvArgs = (TExpr[BigDecimal], CellRange)
   type IrrArgs = (CellRange, Option[TExpr[BigDecimal]])
   type VlookupArgs = (TExpr[CellValue], TExpr.RangeLocation, TExpr[Int], Option[TExpr[Boolean]])
-  type SumProductArgs = List[TExpr.RangeLocation]
+  // GH-197: Changed to accept both ranges AND array expressions
+  type SumProductArgs = List[ArgSpec.SumProductArg]
   type XLookupArgs = (
     AnyExpr,
     CellRange,

@@ -4,6 +4,8 @@ import com.tjclp.xl.formula.functions.{FunctionSpecs, ArgValue}
 import com.tjclp.xl.formula.eval.EvalError
 import com.tjclp.xl.formula.functions.EvalContext
 
+import com.tjclp.xl.{CellRange, SheetName}
+
 import TExpr.*
 
 trait TExprAnalysis:
@@ -76,3 +78,86 @@ trait TExprAnalysis:
     case ToInt(e) => containsTimeFunction(e)
     // Default: no time function
     case _ => false
+
+  // ===== Range Collection and Transformation =====
+  // GH-197: Used by SUMPRODUCT to bound full-column ranges in array expressions
+
+  /**
+   * Collect all CellRange references from an expression.
+   *
+   * Returns local ranges as (None, range) and cross-sheet ranges as (Some(sheetName), range). Used
+   * by SUMPRODUCT to compute shared bounds across all ranges in array expressions.
+   */
+  def collectRanges(expr: TExpr[?]): List[(Option[SheetName], CellRange)] = expr match
+    case RangeRef(range) => List((None, range))
+    case SheetRange(sheet, range) => List((Some(sheet), range))
+    case call: Call[?] =>
+      call.spec.argSpec
+        .toValues(call.args)
+        .flatMap {
+          case ArgValue.Expr(e) => collectRanges(e)
+          case ArgValue.Range(l) => List((l.sheetName, l.range))
+          case _ => Nil
+        }
+    // Arithmetic - recursively collect from operands
+    case Add(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Sub(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Mul(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Div(l, r) => collectRanges(l) ++ collectRanges(r)
+    // Comparisons
+    case Eq(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Neq(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Lt(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Lte(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Gt(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Gte(l, r) => collectRanges(l) ++ collectRanges(r)
+    // Type conversion
+    case ToInt(e) => collectRanges(e)
+    // Default: no ranges (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, etc.)
+    case _ => Nil
+
+  /**
+   * Transform all range references in an expression using a mapping function.
+   *
+   * Used to constrain full-column/row ranges to shared bounds before evaluation.
+   *
+   * @param expr
+   *   The expression to transform
+   * @param f
+   *   Function that takes (optional sheet name, original range) and returns constrained range
+   * @return
+   *   New expression with transformed ranges
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def transformRanges[A](expr: TExpr[A], f: (Option[SheetName], CellRange) => CellRange): TExpr[A] =
+    (expr match
+      case RangeRef(range) => RangeRef(f(None, range))
+      case SheetRange(sheet, range) => SheetRange(sheet, f(Some(sheet), range))
+      // Arithmetic - recursively transform operands
+      case Add(l, r) =>
+        Add(transformRanges(l, f), transformRanges(r, f))
+      case Sub(l, r) =>
+        Sub(transformRanges(l, f), transformRanges(r, f))
+      case Mul(l, r) =>
+        Mul(transformRanges(l, f), transformRanges(r, f))
+      case Div(l, r) =>
+        Div(transformRanges(l, f), transformRanges(r, f))
+      // Comparisons
+      case Eq(l, r) =>
+        Eq(transformRanges(l, f), transformRanges(r, f))
+      case Neq(l, r) =>
+        Neq(transformRanges(l, f), transformRanges(r, f))
+      case Lt(l, r) =>
+        Lt(transformRanges(l, f), transformRanges(r, f))
+      case Lte(l, r) =>
+        Lte(transformRanges(l, f), transformRanges(r, f))
+      case Gt(l, r) =>
+        Gt(transformRanges(l, f), transformRanges(r, f))
+      case Gte(l, r) =>
+        Gte(transformRanges(l, f), transformRanges(r, f))
+      // Type conversion
+      case ToInt(e) =>
+        ToInt(transformRanges(e, f))
+      // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, Call, etc.)
+      case other => other
+    ).asInstanceOf[TExpr[A]]

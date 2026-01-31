@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, CriteriaMatcher, Aggregator}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, CriteriaMatcher, Aggregator, ArrayResult}
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
@@ -695,74 +695,179 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         }
     }
 
+  /**
+   * GH-197: Resolved array for SUMPRODUCT.
+   *
+   * Represents a resolved argument as either:
+   *   - A range with its sheet reference for cell-by-cell access
+   *   - A pre-computed numeric matrix from an evaluated expression
+   */
+  private sealed trait ResolvedArray:
+    def rows: Int
+    def cols: Int
+    def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal]
+
+  private final case class RangeArray(
+    sheet: com.tjclp.xl.sheets.Sheet,
+    range: CellRange,
+    ctx: EvalContext
+  ) extends ResolvedArray:
+    def rows: Int = range.height
+    def cols: Int = range.width
+    def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
+      val ref = ARef.from0(range.colStart.index0 + col, range.rowStart.index0 + row)
+      coerceToNumericWithEval(sheet(ref).value, sheet, ctx)
+
+  private final case class MatrixArray(matrix: Vector[Vector[BigDecimal]]) extends ResolvedArray:
+    def rows: Int = matrix.length
+    def cols: Int = matrix.headOption.map(_.length).getOrElse(0)
+    def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
+      Right(matrix(row)(col))
+
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
-    FunctionSpec.simple[BigDecimal, SumProductArgs]("SUMPRODUCT", Arity.atLeastOne) {
-      (arrayLocations, ctx) =>
-        arrayLocations match
-          case Nil => Right(BigDecimal(0))
-          case first :: rest =>
-            val dimensionError = rest.collectFirst {
-              case loc
-                  if loc.range.width != first.range.width ||
-                    loc.range.height != first.range.height =>
-                EvalError.EvalFailed(
-                  s"SUMPRODUCT: all arrays must have same dimensions (first is ${first.range.height}×${first.range.width}, got ${loc.range.height}×${loc.range.width})",
-                  Some(s"SUMPRODUCT(...)")
-                )
-            }
+    FunctionSpec.simple[BigDecimal, SumProductArgs]("SUMPRODUCT", Arity.atLeastOne) { (args, ctx) =>
+      import com.tjclp.xl.formula.ast.TExpr
 
-            dimensionError match
-              case Some(err) => Left(err)
-              case None =>
-                // GH-192: Resolve all arrays to their target sheets FIRST
-                val resolvedArrays: Either[
-                  EvalError,
-                  List[(com.tjclp.xl.sheets.Sheet, TExpr.RangeLocation)]
-                ] =
-                  arrayLocations.foldLeft[Either[
-                    EvalError,
-                    List[(com.tjclp.xl.sheets.Sheet, TExpr.RangeLocation)]
-                  ]](Right(List.empty)) {
-                    case (Left(err), _) => Left(err)
-                    case (Right(acc), loc) =>
-                      Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map { sheet =>
-                        acc :+ (sheet, loc)
-                      }
-                  }
-
-                resolvedArrays.flatMap { resolved =>
-                  val bounds = computeBounds(resolved.map { case (sheet, loc) =>
-                    (loc.range, sheet)
-                  })
-                  // GH-192: Constrain full-column/row ranges to shared bounds
-                  val constrainedArrays = resolved.map { case (sheet, loc) =>
-                    (sheet, constrainRange(loc.range, bounds))
-                  }
-
-                  // GH-192: Use iterator-based folding with index tracking
-                  val arrayCells = constrainedArrays.map { case (sheet, range) =>
-                    (sheet, range.cells.toVector)
-                  }
-                  val cellCount = arrayCells.headOption.map(_._2.length).getOrElse(0)
-
-                  (0 until cellCount).foldLeft[Either[EvalError, BigDecimal]](
-                    Right(BigDecimal(0))
+      args match
+        case Nil => Right(BigDecimal(0))
+        case _ =>
+          // GH-197: First collect ALL ranges from both locations and expressions for bounds calc
+          val allRangesWithSheets: Either[EvalError, List[(CellRange, com.tjclp.xl.sheets.Sheet)]] =
+            args.foldLeft[Either[EvalError, List[(CellRange, com.tjclp.xl.sheets.Sheet)]]](
+              Right(List.empty)
+            ) {
+              case (Left(err), _) => Left(err)
+              case (Right(acc), Left(loc)) =>
+                // Range location argument
+                Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map { sheet =>
+                  acc :+ (loc.range, sheet)
+                }
+              case (Right(acc), Right(expr)) =>
+                // Expression argument - collect ranges from AST
+                val exprRanges = TExpr.collectRanges(expr)
+                exprRanges
+                  .foldLeft[Either[EvalError, List[(CellRange, com.tjclp.xl.sheets.Sheet)]]](
+                    Right(acc)
                   ) {
                     case (Left(err), _) => Left(err)
-                    case (Right(acc), idx) =>
-                      // Evaluate each cell in the row, collecting values
-                      arrayCells
-                        .foldLeft[Either[EvalError, List[BigDecimal]]](Right(List.empty)) {
-                          case (Left(err), _) => Left(err)
-                          case (Right(values), (sheet, cells)) =>
-                            val ref = cells(idx)
-                            coerceToNumericWithEval(sheet(ref).value, sheet, ctx)
-                              .map(n => values :+ n)
-                        }
-                        .map { values =>
-                          val product = values.foldLeft(BigDecimal(1))(_ * _)
-                          acc + product
-                        }
+                    case (Right(innerAcc), (sheetOpt, range)) =>
+                      sheetOpt match
+                        case Some(sheetName) =>
+                          // Cross-sheet range - resolve sheet
+                          ctx.workbook match
+                            case Some(wb) =>
+                              wb(sheetName) match
+                                case Right(targetSheet) => Right(innerAcc :+ (range, targetSheet))
+                                case Left(_) =>
+                                  Left(
+                                    EvalError.EvalFailed(
+                                      s"Sheet '$sheetName' not found",
+                                      Some("SUMPRODUCT")
+                                    )
+                                  )
+                            case None =>
+                              Left(
+                                EvalError.EvalFailed(
+                                  "Cross-sheet reference requires workbook context",
+                                  Some("SUMPRODUCT")
+                                )
+                              )
+                        case None =>
+                          // Local range - use current sheet
+                          Right(innerAcc :+ (range, ctx.sheet))
                   }
+            }
+
+          allRangesWithSheets.flatMap { rangesWithSheets =>
+            // GH-192/197: Compute shared bounds across ALL ranges (locations + expressions)
+            val bounds: (Option[RowBounds], Option[ColBounds]) =
+              if rangesWithSheets.nonEmpty then computeBounds(rangesWithSheets)
+              else (None, None)
+
+            // Helper to constrain ranges in expressions
+            def constrainExprRanges(expr: TExpr[Any]): TExpr[Any] =
+              TExpr.transformRanges(
+                expr,
+                { (sheetOpt, range) =>
+                  constrainRange(range, bounds)
                 }
+              )
+
+            // GH-197: Resolve each argument to a ResolvedArray with bounded ranges
+            val resolvedResult: Either[EvalError, List[ResolvedArray]] =
+              args.foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
+                case (Left(err), _) => Left(err)
+                case (Right(acc), Left(loc)) =>
+                  // Range location - resolve to sheet and constrain
+                  Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map { sheet =>
+                    acc :+ RangeArray(sheet, constrainRange(loc.range, bounds), ctx)
+                  }
+                case (Right(acc), Right(expr)) =>
+                  // GH-197: Expression - constrain ranges, then evaluate with array support
+                  val boundedExpr = constrainExprRanges(expr)
+                  ctx.evalArrayExpr(boundedExpr).flatMap {
+                    case ar: ArrayResult =>
+                      // Convert ArrayResult to numeric matrix with boolean coercion
+                      val matrix = (0 until ar.rows).map { row =>
+                        (0 until ar.cols).map { col =>
+                          coerceToNumeric(ar.values(row)(col))
+                        }.toVector
+                      }.toVector
+                      Right(acc :+ MatrixArray(matrix))
+                    case bd: BigDecimal =>
+                      // Scalar treated as 1x1 matrix
+                      Right(acc :+ MatrixArray(Vector(Vector(bd))))
+                    case b: Boolean =>
+                      // Boolean coerced to 1/0
+                      val n = if b then BigDecimal(1) else BigDecimal(0)
+                      Right(acc :+ MatrixArray(Vector(Vector(n))))
+                    case cv: CellValue =>
+                      // CellValue coerced to numeric
+                      Right(acc :+ MatrixArray(Vector(Vector(coerceToNumeric(cv)))))
+                    case other =>
+                      Left(EvalError.TypeMismatch("SUMPRODUCT", "array or number", other.toString))
+                  }
+              }
+
+            resolvedResult.flatMap { resolved =>
+              resolved match
+                case Nil => Right(BigDecimal(0))
+                case first :: rest =>
+                  // Validate dimensions match
+                  val dimensionError = rest.collectFirst {
+                    case arr if arr.rows != first.rows || arr.cols != first.cols =>
+                      EvalError.EvalFailed(
+                        s"SUMPRODUCT: all arrays must have same dimensions (first is ${first.rows}×${first.cols}, got ${arr.rows}×${arr.cols})",
+                        Some("SUMPRODUCT(...)")
+                      )
+                  }
+
+                  dimensionError match
+                    case Some(err) => Left(err)
+                    case None =>
+                      // Compute final dimensions
+                      val finalRows = resolved.headOption.map(_.rows).getOrElse(0)
+                      val finalCols = resolved.headOption.map(_.cols).getOrElse(0)
+
+                      // Element-wise multiplication and sum
+                      (0 until finalRows).foldLeft[Either[EvalError, BigDecimal]](
+                        Right(BigDecimal(0))
+                      ) {
+                        case (Left(err), _) => Left(err)
+                        case (Right(acc), row) =>
+                          (0 until finalCols).foldLeft[Either[EvalError, BigDecimal]](Right(acc)) {
+                            case (Left(err), _) => Left(err)
+                            case (Right(rowAcc), col) =>
+                              // Get values from all arrays at this position
+                              resolved
+                                .foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(1))) {
+                                  case (Left(err), _) => Left(err)
+                                  case (Right(product), arr) =>
+                                    arr.valueAt(row, col, ctx).map(v => product * v)
+                                }
+                                .map(product => rowAcc + product)
+                          }
+                      }
+            }
+          }
     }

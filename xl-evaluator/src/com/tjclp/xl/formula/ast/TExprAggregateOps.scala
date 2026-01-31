@@ -183,4 +183,5 @@ trait TExprAggregateOps:
    * CellRange.parse("B1:B3").toOption.get))
    */
   def sumProduct(arrays: List[CellRange]): TExpr[BigDecimal] =
-    Call(FunctionSpecs.sumproduct, arrays.map(RangeLocation.Local(_)))
+    // GH-197: Wrap in Left to match SumProductArg = Either[RangeLocation, TExpr[Any]]
+    Call(FunctionSpecs.sumproduct, arrays.map(r => Left(RangeLocation.Local(r))))
