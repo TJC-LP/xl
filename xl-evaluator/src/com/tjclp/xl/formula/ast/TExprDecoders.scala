@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.functions.EvalContext
 
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec.CodecError
+import com.tjclp.xl.formula.eval.ArrayArithmetic
 
 trait TExprDecoders:
   // Decoder functions for cell coercion
@@ -20,9 +21,17 @@ trait TExprDecoders:
   def decodeNumeric(cell: Cell): Either[CodecError, BigDecimal] =
     cell.value match
       case CellValue.Number(value) => scala.util.Right(value)
+      // GH-196: Coerce booleans to numeric (TRUE→1, FALSE→0)
+      case CellValue.Bool(true) => scala.util.Right(BigDecimal(1))
+      case CellValue.Bool(false) => scala.util.Right(BigDecimal(0))
       case CellValue.Formula(_, Some(CellValue.Number(cached))) =>
         // Extract cached numeric value from formula cell
         scala.util.Right(cached)
+      // GH-196: Handle cached boolean values in formulas
+      case CellValue.Formula(_, Some(CellValue.Bool(true))) =>
+        scala.util.Right(BigDecimal(1))
+      case CellValue.Formula(_, Some(CellValue.Bool(false))) =>
+        scala.util.Right(BigDecimal(0))
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(
@@ -164,7 +173,7 @@ trait TExprDecoders:
   def decodeAsInt(cell: Cell): Either[CodecError, Int] =
     cell.value match
       case CellValue.Number(n) if n.isValidInt => scala.util.Right(n.toInt)
-      case CellValue.Bool(b) => scala.util.Right(if b then 1 else 0)
+      case CellValue.Bool(b) => scala.util.Right(ArrayArithmetic.boolToNumeric(b).toInt)
       case CellValue.Number(n) =>
         scala.util.Left(
           CodecError.TypeMismatch(

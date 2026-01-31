@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, ArrayArithmetic}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -81,7 +81,8 @@ trait FunctionSpecsBase:
   type NpvArgs = (TExpr[BigDecimal], CellRange)
   type IrrArgs = (CellRange, Option[TExpr[BigDecimal]])
   type VlookupArgs = (TExpr[CellValue], TExpr.RangeLocation, TExpr[Int], Option[TExpr[Boolean]])
-  type SumProductArgs = List[TExpr.RangeLocation]
+  // GH-197: Changed to accept both ranges AND array expressions
+  type SumProductArgs = List[ArgSpec.SumProductArg]
   type XLookupArgs = (
     AnyExpr,
     CellRange,
@@ -147,8 +148,7 @@ trait FunctionSpecsBase:
   protected def coerceToNumeric(value: CellValue): BigDecimal =
     value match
       case CellValue.Number(n) => n
-      case CellValue.Bool(true) => BigDecimal(1)
-      case CellValue.Bool(false) => BigDecimal(0)
+      case CellValue.Bool(b) => ArrayArithmetic.boolToNumeric(b)
       case CellValue.Formula(_, Some(cached)) => coerceToNumeric(cached)
       case _ => BigDecimal(0)
 
@@ -173,7 +173,7 @@ trait FunctionSpecsBase:
     cv match
       case CellValue.Number(n) => Some(n)
       case CellValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
-      case CellValue.Bool(b) => Some(if b then BigDecimal(1) else BigDecimal(0))
+      case CellValue.Bool(b) => Some(ArrayArithmetic.boolToNumeric(b))
       case CellValue.Formula(_, Some(cached)) => extractNumericForMatch(cached)
       case _ => None
 
