@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.functions.EvalContext
 
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.codec.CodecError
+import com.tjclp.xl.formula.eval.ArrayArithmetic
 
 trait TExprDecoders:
   // Decoder functions for cell coercion
@@ -172,7 +173,7 @@ trait TExprDecoders:
   def decodeAsInt(cell: Cell): Either[CodecError, Int] =
     cell.value match
       case CellValue.Number(n) if n.isValidInt => scala.util.Right(n.toInt)
-      case CellValue.Bool(b) => scala.util.Right(if b then 1 else 0)
+      case CellValue.Bool(b) => scala.util.Right(ArrayArithmetic.boolToNumeric(b).toInt)
       case CellValue.Number(n) =>
         scala.util.Left(
           CodecError.TypeMismatch(

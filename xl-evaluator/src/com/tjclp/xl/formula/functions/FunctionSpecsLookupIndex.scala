@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, ArrayArithmetic}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -23,12 +23,11 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     value match
       case ExprValue.Number(n) => n
       case ExprValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).getOrElse(BigDecimal(0))
-      case ExprValue.Bool(b) => if b then BigDecimal(1) else BigDecimal(0)
+      case ExprValue.Bool(b) => ArrayArithmetic.boolToNumeric(b)
       case ExprValue.Cell(CellValue.Number(n)) => n
       case ExprValue.Cell(CellValue.Text(s)) =>
         scala.util.Try(BigDecimal(s.trim)).getOrElse(BigDecimal(0))
-      case ExprValue.Cell(CellValue.Bool(true)) => BigDecimal(1)
-      case ExprValue.Cell(CellValue.Bool(false)) => BigDecimal(0)
+      case ExprValue.Cell(CellValue.Bool(b)) => ArrayArithmetic.boolToNumeric(b)
       case ExprValue.Cell(CellValue.Formula(_, Some(cached))) =>
         coerceToBigDecimal(ExprValue.Cell(cached))
       case _ => BigDecimal(0)

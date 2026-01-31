@@ -15,6 +15,9 @@ import com.tjclp.xl.sheets.Sheet
  */
 object ArrayArithmetic:
 
+  /** GH-196: Convert boolean to numeric (TRUE→1, FALSE→0). */
+  def boolToNumeric(b: Boolean): BigDecimal = if b then BigDecimal(1) else BigDecimal(0)
+
   /** Sealed ADT for operand types in array arithmetic */
   sealed trait ArrayOperand
   object ArrayOperand:
@@ -47,7 +50,7 @@ object ArrayArithmetic:
   def cellValueToNumeric(cv: CellValue): Either[EvalError, BigDecimal] = cv match
     case CellValue.Number(n) => Right(n)
     case CellValue.Empty => Right(BigDecimal(0))
-    case CellValue.Bool(b) => Right(if b then BigDecimal(1) else BigDecimal(0))
+    case CellValue.Bool(b) => Right(boolToNumeric(b))
     case CellValue.Formula(_, Some(cached)) => cellValueToNumeric(cached)
     case CellValue.Text(s) =>
       scala.util.Try(BigDecimal(s.trim)).toOption match
