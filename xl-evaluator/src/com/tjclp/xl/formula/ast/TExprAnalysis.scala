@@ -128,7 +128,9 @@ trait TExprAnalysis:
    * @return
    *   New expression with transformed ranges
    */
+  // GADT type erasure requires asInstanceOf; @nowarn for exhaustive pattern match false positives
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  @annotation.nowarn("msg=Unreachable case")
   def transformRanges[A](expr: TExpr[A], f: (Option[SheetName], CellRange) => CellRange): TExpr[A] =
     (expr match
       case RangeRef(range) => RangeRef(f(None, range))

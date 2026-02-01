@@ -10,6 +10,8 @@ import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
 
+// Test code uses .get/.head for brevity in assertions
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
 class ArrayFunctionsSpec extends FunSuite:
 
   // ========== ArrayResult Tests ==========

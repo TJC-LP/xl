@@ -4,6 +4,8 @@ import munit.FunSuite
 import com.tjclp.xl.*
 import com.tjclp.xl.formula.ast.TExpr
 
+// Test code uses .get for brevity in assertions (guarded by isDefined check)
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class RangeTransformSpec extends FunSuite:
 
   test("collectRanges extracts ranges from SUMPRODUCT array expression") {

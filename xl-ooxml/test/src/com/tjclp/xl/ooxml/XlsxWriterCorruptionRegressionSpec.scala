@@ -32,7 +32,8 @@ import munit.FunSuite
  *   - e1f36fe: Row attribute preservation
  *   - 802e020: SST handling (9 fixes)
  */
-@SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
+// Test code uses .get/.head for brevity in assertions
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
 class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 
   test("preserves mc:Ignorable namespace attribute on workbook root (PRIMARY corruption fix)") {
