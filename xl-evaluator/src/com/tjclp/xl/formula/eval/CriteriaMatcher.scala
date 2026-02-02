@@ -8,6 +8,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.Clock
 
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.eval.ArrayArithmetic
 import scala.util.boundary
 import boundary.break
 import scala.util.matching.Regex
@@ -71,7 +72,19 @@ object CriteriaMatcher:
     case ExprValue.Bool(bool) => Exact(ExprValue.Bool(bool))
     case ExprValue.Date(date) => Exact(ExprValue.Date(date))
     case ExprValue.DateTime(dateTime) => Exact(ExprValue.DateTime(dateTime))
-    case ExprValue.Cell(cellValue) => Exact(ExprValue.Cell(cellValue))
+    case ExprValue.Cell(cellValue) =>
+      // Unwrap CellValue to appropriate ExprValue for proper matching.
+      // This enables cell references used as criteria (e.g., =SUMIFS(..., A2))
+      cellValue match
+        case CellValue.Text(s) => parseString(s)
+        case CellValue.Number(n) => Exact(ExprValue.Number(n))
+        case CellValue.Bool(b) => Exact(ExprValue.Bool(b))
+        case CellValue.DateTime(dt) => Exact(ExprValue.DateTime(dt))
+        case CellValue.RichText(rt) => parseString(rt.toPlainText)
+        case CellValue.Formula(_, Some(cached)) => parse(ExprValue.Cell(cached))
+        case CellValue.Formula(_, None) => Exact(ExprValue.Cell(cellValue))
+        case CellValue.Empty => Exact(ExprValue.Text(""))
+        case CellValue.Error(_) => Exact(ExprValue.Cell(cellValue))
     case ExprValue.Opaque(other) => Exact(ExprValue.Opaque(other))
 
   /**
@@ -303,11 +316,13 @@ object CriteriaMatcher:
     cellValue match
       case CellValue.Number(n) => Some(n)
       case CellValue.Text(s) => parseNumeric(s)
-      case CellValue.Bool(b) => Some(if b then BigDecimal(1) else BigDecimal(0))
+      case CellValue.Bool(b) => Some(ArrayArithmetic.boolToNumeric(b))
       case CellValue.DateTime(dt) =>
         // Convert to Excel serial number for comparison
         Some(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
       case CellValue.Formula(_, Some(cached)) => extractNumeric(cached)
+      // GH-197: Uncached formula - can't extract numeric without evaluation context
+      case CellValue.Formula(_, None) => None
       case _ => None
 
   /**
@@ -341,6 +356,8 @@ object CriteriaMatcher:
       case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
       case CellValue.RichText(rt) => Some(rt.toPlainText)
       case CellValue.Formula(_, Some(cached)) => extractText(cached)
+      // GH-197: Uncached formula - can't extract text without evaluation context
+      case CellValue.Formula(_, None) => None
       case _ => None
 
   /**

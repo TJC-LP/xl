@@ -5,6 +5,8 @@ import java.nio.file.Path
 import java.time.{LocalDate, LocalDateTime}
 import java.time.format.DateTimeFormatter
 import scala.util.Try
+import scala.util.boundary
+import scala.util.boundary.break
 
 import cats.effect.IO
 import fs2.{Stream, Pipe, text}
@@ -126,6 +128,8 @@ object StreamingCsvParser:
    * Note: This is a simplified parser that handles most common cases. For complex CSVs with
    * embedded newlines, consider a specialized library.
    */
+  // Imperative parsing for performance; early-return pattern for clarity
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def parseCsvLine(line: String, delimiter: Char): Vector[String] =
     val result = Vector.newBuilder[String]
     val field = new StringBuilder
@@ -163,26 +167,26 @@ object StreamingCsvParser:
    * Each cell is independently typed based on its content. This differs from batch CsvParser which
    * uses column-based sampling.
    */
-  private def inferAndParse(value: String): CellValue =
+  private def inferAndParse(value: String): CellValue = boundary:
     val trimmed = value.trim
 
     // Empty check
-    if trimmed.isEmpty then return CellValue.Empty
+    if trimmed.isEmpty then break(CellValue.Empty)
 
     // Number check (integers and decimals)
     Try(BigDecimal(trimmed)).toOption match
-      case Some(n) => return CellValue.Number(n)
+      case Some(n) => break(CellValue.Number(n))
       case None => ()
 
     // Boolean check (case-insensitive)
     trimmed.toLowerCase match
-      case "true" => return CellValue.Bool(true)
-      case "false" => return CellValue.Bool(false)
+      case "true" => break(CellValue.Bool(true))
+      case "false" => break(CellValue.Bool(false))
       case _ => ()
 
     // Date check (ISO 8601: YYYY-MM-DD)
     Try(LocalDate.parse(trimmed, DateTimeFormatter.ISO_LOCAL_DATE)).toOption match
-      case Some(date) => return CellValue.DateTime(date.atStartOfDay())
+      case Some(date) => break(CellValue.DateTime(date.atStartOfDay()))
       case None => ()
 
     // Default to text

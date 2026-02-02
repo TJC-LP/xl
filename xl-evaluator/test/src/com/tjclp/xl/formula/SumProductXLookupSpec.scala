@@ -214,6 +214,141 @@ class SumProductXLookupSpec extends FunSuite:
     assertEquals(printed, formula)
   }
 
+  // ===== GH-197: SUMPRODUCT Array Expression Tests =====
+
+  test("SUMPRODUCT: array expression with numeric comparison") {
+    val sheet = sheetWith(
+      ref"A1" -> 10, ref"B1" -> 1,
+      ref"A2" -> 20, ref"B2" -> 2,
+      ref"A3" -> 30, ref"B3" -> 3
+    )
+    // (A1:A3>15)*B1:B3 = [0,1,1]*[1,2,3] = [0,2,3], sum = 5
+    assertEval("=SUMPRODUCT((A1:A3>15)*B1:B3)", sheet, 5)
+  }
+
+  test("SUMPRODUCT: single array multiplication expression") {
+    val sheet = sheetWith(
+      ref"A1" -> 10, ref"B1" -> 2,
+      ref"A2" -> 20, ref"B2" -> 3,
+      ref"A3" -> 30, ref"B3" -> 4
+    )
+    // SUMPRODUCT(A1:A3*B1:B3) = sum of [20,60,120] = 200
+    assertEval("=SUMPRODUCT(A1:A3*B1:B3)", sheet, 200)
+  }
+
+  test("SUMPRODUCT: multiple boolean criteria") {
+    val sheet = sheetWith(
+      ref"A1" -> 100, ref"B1" -> 50, ref"C1" -> 10,
+      ref"A2" -> 200, ref"B2" -> 30, ref"C2" -> 20,
+      ref"A3" -> 300, ref"B3" -> 70, ref"C3" -> 30
+    )
+    // (A1:A3>150)*(B1:B3>40)*C1:C3
+    // = [0,1,1]*[1,0,1]*[10,20,30] = [0,0,30]
+    // Sum = 30
+    assertEval("=SUMPRODUCT((A1:A3>150)*(B1:B3>40)*C1:C3)", sheet, 30)
+  }
+
+  test("SUMPRODUCT: mixed ranges and expressions") {
+    val sheet = sheetWith(
+      ref"A1" -> 1, ref"B1" -> 2, ref"C1" -> true,
+      ref"A2" -> 3, ref"B2" -> 4, ref"C2" -> false,
+      ref"A3" -> 5, ref"B3" -> 6, ref"C3" -> true
+    )
+    // SUMPRODUCT(A1:A3, (C1:C3)*B1:B3)
+    // C1:C3 = [1,0,1], B1:B3 = [2,4,6]
+    // (C1:C3)*B1:B3 = [2,0,6]
+    // A1:A3 * [2,0,6] = [1*2,3*0,5*6] = [2,0,30]
+    // Sum = 32
+    assertEval("=SUMPRODUCT(A1:A3, (C1:C3)*B1:B3)", sheet, 32)
+  }
+
+  test("SUMPRODUCT: all-true boolean array") {
+    val sheet = sheetWith(
+      ref"A1" -> 1, ref"B1" -> 10,
+      ref"A2" -> 2, ref"B2" -> 20,
+      ref"A3" -> 3, ref"B3" -> 30
+    )
+    // All A values are >0, so (A1:A3>0) = [1,1,1]
+    // SUMPRODUCT((A1:A3>0)*B1:B3) = [1,1,1]*[10,20,30] = 60
+    assertEval("=SUMPRODUCT((A1:A3>0)*B1:B3)", sheet, 60)
+  }
+
+  test("SUMPRODUCT: all-false boolean array") {
+    val sheet = sheetWith(
+      ref"A1" -> 1, ref"B1" -> 10,
+      ref"A2" -> 2, ref"B2" -> 20,
+      ref"A3" -> 3, ref"B3" -> 30
+    )
+    // All A values are <0 is false, so (A1:A3<0) = [0,0,0]
+    // SUMPRODUCT((A1:A3<0)*B1:B3) = [0,0,0]*[10,20,30] = 0
+    assertEval("=SUMPRODUCT((A1:A3<0)*B1:B3)", sheet, 0)
+  }
+
+  test("SUMPRODUCT: nested arithmetic in expression") {
+    val sheet = sheetWith(
+      ref"A1" -> 1, ref"B1" -> 2,
+      ref"A2" -> 3, ref"B2" -> 4
+    )
+    // SUMPRODUCT((A1:A2+B1:B2)*2) = sum of ([3,7]*2) = sum of [6,14] = 20
+    assertEval("=SUMPRODUCT((A1:A2+B1:B2)*2)", sheet, 20)
+  }
+
+  test("SUMPRODUCT: expression dimension mismatch error") {
+    val sheet = sheetWith(
+      ref"A1" -> 1, ref"A2" -> 2, ref"A3" -> 3,
+      ref"B1" -> 1, ref"B2" -> 2
+    )
+    // A1:A3 is 3x1, B1:B2 is 2x1 - should fail with dimension error
+    val result = evalFormula("=SUMPRODUCT((A1:A3>0), B1:B2)", sheet)
+    assert(result.isLeft)
+    assert(result.left.exists(_.contains("dimension")))
+  }
+
+  test("SUMPRODUCT: scalar expression treated as 1x1") {
+    val sheet = sheetWith(
+      ref"A1" -> 10
+    )
+    // SUMPRODUCT(A1:A1, 2) - scalar 2 treated as 1x1
+    // = [10] * [2] = 20
+    assertEval("=SUMPRODUCT(A1:A1, 2)", sheet, 20)
+  }
+
+  test("SUMPRODUCT: GH-197 full-column ranges in expressions are bounded") {
+    // GH-197: Full-column ranges in array expressions should be bounded to shared usedRange
+    // Without bounding, A:A and B:B would create 1M+ row arrays
+    val sheet = sheetWith(
+      ref"A1" -> 10, ref"B1" -> 1,
+      ref"A2" -> 20, ref"B2" -> 2,
+      ref"A3" -> 30, ref"B3" -> 3
+    )
+    // Full-column ranges: (A:A>15)*B:B should be bounded to rows 1-3
+    // = [0,1,1]*[1,2,3] = [0,2,3], sum = 5
+    assertEval("=SUMPRODUCT((A:A>15)*B:B)", sheet, 5)
+  }
+
+  test("SUMPRODUCT: GH-197 mixed full-column and bounded ranges") {
+    val sheet = sheetWith(
+      ref"A1" -> 5, ref"B1" -> 10,
+      ref"A2" -> 15, ref"B2" -> 20,
+      ref"A3" -> 25, ref"B3" -> 30
+    )
+    // Mix of full-column expression and bounded range
+    // (A:A>10)*B1:B3 should bound A:A to rows 1-3
+    // = [0,1,1]*[10,20,30] = [0,20,30], sum = 50
+    assertEval("=SUMPRODUCT((A:A>10)*B1:B3)", sheet, 50)
+  }
+
+  test("SUMPRODUCT: GH-197 equality comparison with full-column ranges") {
+    val sheet = sheetWith(
+      ref"A1" -> "Yes", ref"B1" -> 10,
+      ref"A2" -> "No", ref"B2" -> 20,
+      ref"A3" -> "Yes", ref"B3" -> 30
+    )
+    // (A:A="Yes")*B:B with full-column ranges
+    // = [1,0,1]*[10,20,30] = [10,0,30], sum = 40
+    assertEval("=SUMPRODUCT((A:A=\"Yes\")*B:B)", sheet, 40)
+  }
+
   // ===== XLOOKUP Basic Tests =====
 
   test("XLOOKUP: exact match - text lookup") {

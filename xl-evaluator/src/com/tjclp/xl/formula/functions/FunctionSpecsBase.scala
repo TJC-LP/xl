@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, ArrayArithmetic}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -60,13 +60,13 @@ trait FunctionSpecsBase:
   // Used for Excel-compatible SUM(1,2,3) / SUM(A1:A5,B1:B5) / SUM(A1,5,B1:B3)
   type NumericArg = Either[TExpr.RangeLocation, TExpr[BigDecimal]]
   type VariadicNumeric = List[NumericArg]
-  type RangeCriteriaList = List[(CellRange, TExpr[Any])]
-  type SumIfArgs = (CellRange, TExpr[Any], Option[CellRange])
-  type CountIfArgs = (CellRange, TExpr[Any])
-  type SumIfsArgs = (CellRange, RangeCriteriaList)
+  type RangeCriteriaList = List[(TExpr.RangeLocation, TExpr[Any])]
+  type SumIfArgs = (TExpr.RangeLocation, TExpr[Any], Option[TExpr.RangeLocation])
+  type CountIfArgs = (TExpr.RangeLocation, TExpr[Any])
+  type SumIfsArgs = (TExpr.RangeLocation, RangeCriteriaList)
   type CountIfsArgs = RangeCriteriaList
-  type AverageIfArgs = (CellRange, TExpr[Any], Option[CellRange])
-  type AverageIfsArgs = (CellRange, RangeCriteriaList)
+  type AverageIfArgs = (TExpr.RangeLocation, TExpr[Any], Option[TExpr.RangeLocation])
+  type AverageIfsArgs = (TExpr.RangeLocation, RangeCriteriaList)
   type DateInt = (TExpr[LocalDate], TExpr[Int])
   type DatePairUnit = (TExpr[LocalDate], TExpr[LocalDate], TExpr[String])
   type DatePairOptRange = (TExpr[LocalDate], TExpr[LocalDate], Option[CellRange])
@@ -81,7 +81,8 @@ trait FunctionSpecsBase:
   type NpvArgs = (TExpr[BigDecimal], CellRange)
   type IrrArgs = (CellRange, Option[TExpr[BigDecimal]])
   type VlookupArgs = (TExpr[CellValue], TExpr.RangeLocation, TExpr[Int], Option[TExpr[Boolean]])
-  type SumProductArgs = List[CellRange]
+  // GH-197: Changed to accept both ranges AND array expressions
+  type SumProductArgs = List[ArgSpec.SumProductArg]
   type XLookupArgs = (
     AnyExpr,
     CellRange,
@@ -119,7 +120,12 @@ trait FunctionSpecsBase:
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   protected def evalAny(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
-    ctx.evalExpr[Any](expr.asInstanceOf[TExpr[Any]])
+    // Resolve PolyRef/SheetPolyRef to typed Ref before evaluation.
+    // This fixes cell references used as criteria in SUMIFS, COUNTIF, etc.
+    val resolved = expr match
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef => TExpr.asResolvedValueExpr(expr)
+      case other => other
+    ctx.evalExpr[Any](resolved.asInstanceOf[TExpr[Any]])
 
   protected def evalValue(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, ExprValue] =
     evalAny(ctx, expr).map(ExprValue.from)
@@ -142,8 +148,7 @@ trait FunctionSpecsBase:
   protected def coerceToNumeric(value: CellValue): BigDecimal =
     value match
       case CellValue.Number(n) => n
-      case CellValue.Bool(true) => BigDecimal(1)
-      case CellValue.Bool(false) => BigDecimal(0)
+      case CellValue.Bool(b) => ArrayArithmetic.boolToNumeric(b)
       case CellValue.Formula(_, Some(cached)) => coerceToNumeric(cached)
       case _ => BigDecimal(0)
 
@@ -168,7 +173,7 @@ trait FunctionSpecsBase:
     cv match
       case CellValue.Number(n) => Some(n)
       case CellValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
-      case CellValue.Bool(b) => Some(if b then BigDecimal(1) else BigDecimal(0))
+      case CellValue.Bool(b) => Some(ArrayArithmetic.boolToNumeric(b))
       case CellValue.Formula(_, Some(cached)) => extractNumericForMatch(cached)
       case _ => None
 

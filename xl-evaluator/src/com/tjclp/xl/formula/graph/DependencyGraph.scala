@@ -119,6 +119,61 @@ object DependencyGraph:
     DependencyGraph(dependencies, dependents)
 
   /**
+   * Check if an expression contains any cell references.
+   *
+   * GH-197: This is a structural check that doesn't enumerate cells in ranges. Use this for quick
+   * boolean checks (e.g., "does this formula need a sheet?") instead of extractDependencies which
+   * would enumerate 1M+ cells for full-column ranges.
+   *
+   * @param expr
+   *   The expression to analyze
+   * @return
+   *   true if the expression contains any Ref, PolyRef, RangeRef, or cross-sheet references
+   */
+  @nowarn("msg=Unreachable case")
+  def containsCellReferences[A](expr: TExpr[A]): Boolean =
+    expr match
+      // Cell references
+      case TExpr.Ref(_, _, _) => true
+      case TExpr.PolyRef(_, _) => true
+      case TExpr.RangeRef(_) => true
+      case TExpr.SheetRef(_, _, _, _) => true
+      case TExpr.SheetPolyRef(_, _, _) => true
+      case TExpr.SheetRange(_, _) => true
+      case TExpr.Aggregate(_, _) => true
+
+      // Function calls - check arguments
+      case call: TExpr.Call[?] =>
+        call.spec.argSpec
+          .toValues(call.args)
+          .exists {
+            case ArgValue.Expr(e) => containsCellReferences(e)
+            case ArgValue.Range(_) => true
+            case ArgValue.Cells(_) => true
+          }
+
+      // Binary operators - check both sides
+      case TExpr.Add(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Sub(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Mul(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Div(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Concat(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Eq(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Neq(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Lt(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Lte(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Gt(l, r) => containsCellReferences(l) || containsCellReferences(r)
+      case TExpr.Gte(l, r) => containsCellReferences(l) || containsCellReferences(r)
+
+      // Unary operators
+      case TExpr.ToInt(e) => containsCellReferences(e)
+      case TExpr.DateToSerial(e) => containsCellReferences(e)
+      case TExpr.DateTimeToSerial(e) => containsCellReferences(e)
+
+      // Literals and constants
+      case TExpr.Lit(_) => false
+
+  /**
    * Extract all cell references from TExpr.
    *
    * Recursively traverses the expression AST and collects all cell references, including:

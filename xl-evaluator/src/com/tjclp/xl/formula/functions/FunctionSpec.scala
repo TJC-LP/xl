@@ -30,8 +30,16 @@ final case class EvalContext(
   clock: Clock,
   workbook: Option[Workbook],
   evalExpr: [A] => TExpr[A] => Either[EvalError, A],
+  /**
+   * GH-197: Array-aware expression evaluator. Unlike `evalExpr`, this allows ArrayResult to be
+   * returned (doesn't reject arrays). Used by SUMPRODUCT to evaluate array expressions like
+   * `(A1:A3>15)*B1:B3`.
+   */
+  evalArrayExpr: TExpr[Any] => Either[EvalError, Any],
   /** Current cell being evaluated. Used by ROW() and COLUMN() with no arguments. */
-  currentCell: Option[ARef] = None
+  currentCell: Option[ARef] = None,
+  /** Recursion depth for cross-sheet formula evaluation. */
+  depth: Int = 0
 )
 
 sealed trait ArgValue
@@ -359,3 +367,46 @@ object ArgSpec:
       args match
         case Left(loc) => Left(mapRange(loc))
         case Right(expr) => Right(mapExpr(expr).asInstanceOf[TExpr[BigDecimal]])
+
+  /**
+   * GH-197: SUMPRODUCT arg that accepts either a range location OR an array-producing expression.
+   *
+   * Unlike NumericArg which coerces to TExpr[BigDecimal], this accepts TExpr[Any] to handle array
+   * expressions like `(A1:A5="Yes")*B1:B5` which evaluate to ArrayResult.
+   */
+  type SumProductArg = Either[TExpr.RangeLocation, TExpr[Any]]
+
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  given sumProductArg: ArgSpec[SumProductArg] with
+    def describeParts: List[String] = List("array or range")
+
+    def parse(
+      args: List[TExpr[?]],
+      pos: Int,
+      fnName: String
+    ): Either[ParseError, (SumProductArg, List[TExpr[?]])] =
+      args match
+        case TExpr.RangeRef(range) :: tail =>
+          Right((Left(TExpr.RangeLocation.Local(range)), tail))
+        case TExpr.SheetRange(sheet, range) :: tail =>
+          Right((Left(TExpr.RangeLocation.CrossSheet(sheet, range)), tail))
+        case head :: tail =>
+          Right((Right(head.asInstanceOf[TExpr[Any]]), tail))
+        case Nil =>
+          Left(ParseError.InvalidArguments(fnName, pos, describe, "0 arguments"))
+
+    def toValues(args: SumProductArg): List[ArgValue] =
+      args match
+        case Left(loc) => List(ArgValue.Range(loc))
+        case Right(expr) => List(ArgValue.Expr(expr))
+
+    def map(
+      args: SumProductArg
+    )(
+      mapExpr: TExpr[?] => TExpr[?],
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
+      mapCells: CellRange => CellRange
+    ): SumProductArg =
+      args match
+        case Left(loc) => Left(mapRange(loc))
+        case Right(expr) => Right(mapExpr(expr).asInstanceOf[TExpr[Any]])

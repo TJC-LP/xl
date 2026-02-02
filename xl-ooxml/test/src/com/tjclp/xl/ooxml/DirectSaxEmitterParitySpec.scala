@@ -11,6 +11,8 @@ import com.tjclp.xl.richtext.RichText.*
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
 // DirectSaxEmitter is in the same package
 
+// Test code uses .get/.head for brevity in assertions
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
 class DirectSaxEmitterParitySpec extends FunSuite:
 
   test("direct SAX emission matches worksheet XML structure") {

@@ -345,12 +345,13 @@ object ReadCommands:
   ): IO[String] =
     val formula = if formulaStr.startsWith("=") then formulaStr else s"=$formulaStr"
 
-    // Check if formula needs a sheet by parsing and extracting dependencies
+    // Check if formula needs a sheet by parsing and checking for cell references
+    // GH-197: Use containsCellReferences instead of extractDependencies to avoid
+    // enumerating 1M+ cells for full-column ranges like A:A
     val needsSheet = FormulaParser.parse(formula) match
       case Right(expr) =>
-        val deps = DependencyGraph.extractDependencies(expr)
         // If formula has cell references or overrides are specified, require a sheet
-        deps.nonEmpty || overrides.nonEmpty
+        DependencyGraph.containsCellReferences(expr) || overrides.nonEmpty
       case Left(_) =>
         // Parse error - let SheetEvaluator handle it (it will give a better error message)
         false
@@ -375,10 +376,11 @@ object ReadCommands:
           // 3. Performance: Only evaluate O(k) formulas in closure, not O(n) total formulas
 
           // 1. Extract target formula's direct dependencies
+          // GH-197: Use bounded extraction to avoid enumerating 1M+ cells for full-column ranges
           targetDeps <- IO.fromEither(
             FormulaParser
               .parse(formula)
-              .map(expr => DependencyGraph.extractDependencies(expr))
+              .map(expr => DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange))
               .left
               .map(e => new Exception(s"Parse error: $e"))
           )
@@ -465,10 +467,11 @@ object ReadCommands:
         sheet <- SheetResolver.requireSheet(wb, sheetOpt, "evala")
         tempSheet <- applyOverrides(sheet, overrides)
         // Pre-evaluate formulas in the dependency closure (same as eval)
+        // GH-197: Use bounded extraction to avoid enumerating 1M+ cells for full-column ranges
         targetDeps <- IO.fromEither(
           FormulaParser
             .parse(formula)
-            .map(expr => DependencyGraph.extractDependencies(expr))
+            .map(expr => DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange))
             .left
             .map(e => new Exception(s"Parse error: $e"))
         )

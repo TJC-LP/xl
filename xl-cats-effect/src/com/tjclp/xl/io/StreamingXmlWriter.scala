@@ -21,6 +21,8 @@ import com.tjclp.xl.ooxml.{FormulaInjectionPolicy, XmlUtil}
  *   bounds.dimension // Option[CellRange] with tracked extent
  *   }}}
  */
+// Mutable accumulator for O(1) memory bounds tracking during streaming
+@SuppressWarnings(Array("org.wartremover.warts.Var"))
 final class BoundsAccumulator:
   private var minRow: Int = Int.MaxValue
   private var maxRow: Int = Int.MinValue
@@ -34,6 +36,8 @@ final class BoundsAccumulator:
    * @param row
    *   Row data with 1-based rowIndex and 0-based column keys in cells map
    */
+  // IterableOps: .min/.max safe because row.cells.nonEmpty checked first
+  @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
   def update(row: RowData): Unit =
     if row.cells.nonEmpty then
       hasData = true

@@ -328,47 +328,36 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
         yield xv + yv
 
       // ===== Comparison Operators =====
+      // GH-197: Use evalComparison for array-aware comparisons
       case TExpr.Lt(x, y) =>
-        // Less than: numeric comparison
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv < yv
+        // Less than: numeric comparison (array-aware)
+        evalComparison(x, y, _ < _, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Lte(x, y) =>
-        // Less than or equal: numeric comparison
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv <= yv
+        // Less than or equal: numeric comparison (array-aware)
+        evalComparison(x, y, _ <= _, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Gt(x, y) =>
-        // Greater than: numeric comparison
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv > yv
+        // Greater than: numeric comparison (array-aware)
+        evalComparison(x, y, _ > _, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Gte(x, y) =>
-        // Greater than or equal: numeric comparison
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv >= yv
+        // Greater than or equal: numeric comparison (array-aware)
+        evalComparison(x, y, _ >= _, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Eq(x, y) =>
-        // Equality: polymorphic comparison
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv == yv
+        // Equality: polymorphic comparison (array-aware)
+        evalEqualityComparison(x, y, negate = false, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Neq(x, y) =>
-        // Inequality: polymorphic comparison
-        for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv != yv
+        // Inequality: polymorphic comparison (array-aware)
+        evalEqualityComparison(x, y, negate = true, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
 
       // ===== Type Conversions =====
       case TExpr.ToInt(expr) =>
@@ -434,12 +423,18 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
               Left(EvalError.TypeMismatch("function argument", "scalar", "array"))
             case value => Right(value.asInstanceOf[A])
           }
+        // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions
+        def evalArrayArg(expr: TExpr[Any]): Either[EvalError, Any] =
+          Evaluator.arrayInstance.eval(expr, sheet, clock, workbook, currentCell)
+
         val ctx = EvalContext(
           sheet,
           clock,
           workbook,
           [A] => (expr: TExpr[A]) => evalArg(expr),
-          currentCell
+          evalArrayArg,
+          currentCell,
+          currentDepth
         )
         call.spec.eval(call.args, ctx)
 
@@ -481,6 +476,9 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
     value match
       case bd: BigDecimal => Right(ArrayArithmetic.ArrayOperand.Scalar(bd))
       case ar: ArrayResult => Right(ArrayArithmetic.ArrayOperand.Array(ar))
+      // GH-196: Coerce booleans to numeric in arithmetic (TRUE→1, FALSE→0)
+      case b: Boolean =>
+        Right(ArrayArithmetic.ArrayOperand.Scalar(if b then BigDecimal(1) else BigDecimal(0)))
       case i: Int => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(i)))
       case l: Long => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(l)))
       case d: Double => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(d)))
@@ -518,6 +516,91 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
           if allowArrayResults then Right(arr)
           else Left(EvalError.TypeMismatch("arithmetic", "number", "array"))
     yield output
+
+  /**
+   * GH-197: Evaluate comparison with array support.
+   *
+   * When either operand is a range or array:
+   *   - Convert to arrays and perform element-wise comparison
+   *   - Return ArrayResult of booleans
+   *
+   * When both operands are scalars:
+   *   - Return plain Boolean (fast path)
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalComparison(
+    xExpr: TExpr[BigDecimal],
+    yExpr: TExpr[BigDecimal],
+    op: ArrayArithmetic.CompareOp,
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    for
+      xVal <- evalMaybeArray(xExpr, sheet, clock, workbook, currentCell)
+      yVal <- evalMaybeArray(yExpr, sheet, clock, workbook, currentCell)
+      result <- (xVal, yVal) match
+        // Both scalars -> plain boolean (fast path)
+        case (x: BigDecimal, y: BigDecimal) =>
+          Right(op(x, y))
+        // At least one array -> element-wise comparison
+        case _ =>
+          for
+            xOp <- toOperand(xVal, sheet)
+            yOp <- toOperand(yVal, sheet)
+            compared <- ArrayArithmetic.broadcastCompare(xOp, yOp, op)
+            output <-
+              if allowArrayResults then Right(compared)
+              else Left(EvalError.TypeMismatch("comparison", "boolean", "array"))
+          yield output
+    yield result
+
+  /**
+   * GH-197: Evaluate equality/inequality with array support.
+   *
+   * Unlike evalComparison (which is numeric), this handles polymorphic equality for strings,
+   * numbers, booleans. Enables patterns like `(A1:A3="Yes")*B1:B3`.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalEqualityComparison[A](
+    xExpr: TExpr[A],
+    yExpr: TExpr[A],
+    negate: Boolean,
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    for
+      xVal <- evalMaybeArray(xExpr.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+      yVal <- evalMaybeArray(yExpr.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+      result <- (xVal, yVal) match
+        // Array vs Array -> element-wise comparison
+        case (lArr: ArrayResult, rArr: ArrayResult) =>
+          ArrayArithmetic.broadcastEqualityCompare(lArr, Left(rArr), negate).flatMap { compared =>
+            if allowArrayResults then Right(compared)
+            else Left(EvalError.TypeMismatch("comparison", "boolean", "array"))
+          }
+        // Left is array, right is scalar -> element-wise comparison
+        case (arr: ArrayResult, scalar) =>
+          ArrayArithmetic.broadcastEqualityCompare(arr, Right(scalar), negate).flatMap { compared =>
+            if allowArrayResults then Right(compared)
+            else Left(EvalError.TypeMismatch("comparison", "boolean", "array"))
+          }
+        // Left is scalar, right is array -> create 1x1 array and broadcast
+        case (scalar, arr: ArrayResult) =>
+          val scalarArr = ArrayResult.single(ArrayArithmetic.anyToCellValue(scalar))
+          ArrayArithmetic.broadcastEqualityCompare(scalarArr, Left(arr), negate).flatMap {
+            compared =>
+              if allowArrayResults then Right(compared)
+              else Left(EvalError.TypeMismatch("comparison", "boolean", "array"))
+          }
+        // Both scalars -> plain boolean (fast path)
+        case (x, y) =>
+          val eq = x == y
+          Right(if negate then !eq else eq)
+    yield result
 
 /**
  * Depth-aware evaluator for cross-sheet formula cycle protection (GH-161).

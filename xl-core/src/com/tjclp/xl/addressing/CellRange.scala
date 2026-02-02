@@ -168,6 +168,23 @@ final case class CellRange(
 
 object CellRange:
   /**
+   * An empty range representing no cells.
+   *
+   * Used as a sentinel value when range intersection produces no overlap, or when constraining a
+   * range to an empty sheet's used area. Iterating over an empty range yields no cells.
+   *
+   * Implementation: We use a range where start > end, which causes the iterator's for-comprehension
+   * over `(start to end)` to yield an empty sequence. This is a standard Scala idiom where
+   * `(1 to 0)` produces an empty Range.
+   */
+  val empty: CellRange = new CellRange(
+    ARef(Column.from0(1), Row.from0(1)), // start at B2 (1,1)
+    ARef(Column.from0(0), Row.from0(0)), // end at A1 (0,0) - before start
+    Anchor.Relative,
+    Anchor.Relative
+  )
+
+  /**
    * Create range from two references (order doesn't matter).
    *
    * Normalizes so start is top-left and end is bottom-right. Anchor modes default to Relative.

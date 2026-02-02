@@ -61,10 +61,18 @@ object Main
   override def main: Opts[IO[ExitCode]] =
     // Workbook-level: only --file (no --sheet)
     // Note: --stream not supported for workbook-level commands (need full metadata)
-    val workbookSubcmds = sheetsCmd orElse namesCmd
+    val workbookSubcmds = namesCmd
     val workbookOpts = (fileOpt, maxSizeOpt, workbookSubcmds).mapN { (file, maxSize, cmd) =>
       run(file, None, None, None, maxSize, false, cmd)
     }
+
+    // Sheets command: --file required, --output optional (required for hide/show, not for list)
+    // This needs its own opts chain because list doesn't need output but hide/show do
+    val sheetsOpts =
+      (fileOpt, outputOpt.orNone, backendOpt, maxSizeOpt, streamOpt, sheetsCmd).mapN {
+        (file, output, backend, maxSize, stream, cmd) =>
+          run(file, None, output, backend, maxSize, stream, cmd)
+      }
 
     // Headless commands: --file is optional (for constant formulas like =1+1, =PI())
     // Note: --stream not supported for eval (needs formula analysis)
@@ -104,7 +112,7 @@ object Main
     val infoOpts = functionsCmd.map(_ => runInfo())
     val rasterOpts = rasterizersCmd.map(_ => runRasterizers())
 
-    rasterOpts orElse infoOpts orElse standaloneOpts orElse headlessOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
+    rasterOpts orElse infoOpts orElse standaloneOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
 
   // ==========================================================================
   // Global options
@@ -446,11 +454,39 @@ EXAMPLES:
       )
       .orFalse
 
+  // --very flag for sheets hide subcommand
+  private val veryHideOpt: Opts[Boolean] =
+    Opts
+      .flag("very", "Make sheet very hidden (not accessible from Excel UI, only via VBA)")
+      .orFalse
+
   val sheetsCmd: Opts[CliCommand] = Opts.subcommand(
     "sheets",
-    "List all sheets (instant by default, --stats for cell counts)"
+    "Sheet operations: list, hide, show"
   ) {
-    statsOpt.map(CliCommand.Sheets.apply)
+    // Sheet name argument for hide/show subcommands (local to sheetsCmd)
+    val targetSheetArg: Opts[String] = Opts.argument[String]("sheet-name")
+
+    // List subcommand (explicit)
+    val listSubCmd = Opts.subcommand("list", "List all sheets") {
+      statsOpt.map(SheetsAction.List.apply)
+    }
+
+    // Hide subcommand
+    val hideSubCmd = Opts.subcommand("hide", "Hide a sheet from the sheet tabs") {
+      (targetSheetArg, veryHideOpt).mapN(SheetsAction.Hide.apply)
+    }
+
+    // Show subcommand
+    val showSubCmd = Opts.subcommand("show", "Show a hidden sheet") {
+      targetSheetArg.map(SheetsAction.Show.apply)
+    }
+
+    // Default to list if no subcommand (backwards compat: `xl sheets` = `xl sheets list`)
+    val defaultList = statsOpt.map(SheetsAction.List.apply)
+
+    (listSubCmd orElse hideSubCmd orElse showSubCmd orElse defaultList)
+      .map(CliCommand.Sheets.apply)
   }
 
   val namesCmd: Opts[CliCommand] = Opts.subcommand("names", "List defined names (named ranges)") {
@@ -1002,16 +1038,38 @@ Operations execute in order. Use "-" to read from stdin."""
   ): IO[String] =
     // Handle metadata-only commands (instant for any file size)
     cmd match
-      // Sheets: quick mode by default (--stats for full mode)
-      case CliCommand.Sheets(stats) =>
-        if stats then
-          // Full mode: load workbook and get cell counts
-          val excel = ExcelIO.instance[IO]
-          val readerConfig = buildReaderConfig(maxSizeOpt)
-          excel.readWith(filePath, readerConfig).flatMap(wb => WorkbookCommands.sheets(wb))
-        else
-          // Quick mode: metadata only (instant)
-          WorkbookCommands.sheetsQuick(filePath)
+      // Sheets: list/hide/show operations
+      case CliCommand.Sheets(action) =>
+        action match
+          case SheetsAction.List(stats) =>
+            if stats then
+              // Full mode: load workbook and get cell counts
+              val excel = ExcelIO.instance[IO]
+              val readerConfig = buildReaderConfig(maxSizeOpt)
+              excel.readWith(filePath, readerConfig).flatMap(wb => WorkbookCommands.sheets(wb))
+            else
+              // Quick mode: metadata only (instant)
+              WorkbookCommands.sheetsQuick(filePath)
+          case SheetsAction.Hide(name, veryHide) =>
+            // Hide requires loading workbook and writing output
+            requireOutputAction(outputOpt, "sheets hide") { outputPath =>
+              val excel = ExcelIO.instance[IO]
+              val readerConfig = buildReaderConfig(maxSizeOpt)
+              val config = buildWriterConfig(backendOpt)
+              excel.readWith(filePath, readerConfig).flatMap { wb =>
+                SheetCommands.hideSheet(wb, name, veryHide, outputPath, config, stream)
+              }
+            }
+          case SheetsAction.Show(name) =>
+            // Show requires loading workbook and writing output
+            requireOutputAction(outputOpt, "sheets show") { outputPath =>
+              val excel = ExcelIO.instance[IO]
+              val readerConfig = buildReaderConfig(maxSizeOpt)
+              val config = buildWriterConfig(backendOpt)
+              excel.readWith(filePath, readerConfig).flatMap { wb =>
+                SheetCommands.showSheet(wb, name, outputPath, config, stream)
+              }
+            }
 
       // Names: always lightweight (defined names don't require cell data)
       case CliCommand.Names =>
@@ -1211,8 +1269,17 @@ Operations execute in order. Use "-" to read from stdin."""
     cmd: CliCommand
   ): IO[String] = cmd match
     // Workbook commands (these are now handled in execute() before reaching here)
-    case CliCommand.Sheets(_) =>
-      WorkbookCommands.sheets(wb)
+    case CliCommand.Sheets(action) =>
+      action match
+        case SheetsAction.List(_) => WorkbookCommands.sheets(wb)
+        case SheetsAction.Hide(name, veryHide) =>
+          requireOutput(outputOpt, backendOpt, stream)(
+            SheetCommands.hideSheet(wb, name, veryHide, _, _, _)
+          )
+        case SheetsAction.Show(name) =>
+          requireOutput(outputOpt, backendOpt, stream)(
+            SheetCommands.showSheet(wb, name, _, _, _)
+          )
 
     case CliCommand.Names =>
       WorkbookCommands.names(wb)
@@ -1443,6 +1510,19 @@ Operations execute in order. Use "-" to read from stdin."""
     outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required")))(path =>
       f(path, config, stream)
     )
+
+  /** Require output path or raise user-friendly error, providing path to action */
+  private def requireOutputAction(outputOpt: Option[Path], commandName: String)(
+    f: Path => IO[String]
+  ): IO[String] =
+    outputOpt match
+      case Some(path) => f(path)
+      case None =>
+        IO.raiseError(new Exception(s"$commandName requires -o/--output"))
+
+  /** Build WriterConfig from CLI backend option */
+  private def buildWriterConfig(backendOpt: Option[XmlBackend]): WriterConfig =
+    backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
 
   /** Build ReaderConfig from CLI maxSize option (in MB). 0 means unlimited. */
   private def buildReaderConfig(maxSizeOpt: Option[Long]): ReaderConfig =

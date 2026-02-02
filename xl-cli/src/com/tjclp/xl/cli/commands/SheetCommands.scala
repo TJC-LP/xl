@@ -254,3 +254,59 @@ object SheetCommands:
       updatedWb = wb.put(copiedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
     yield s"Copied: $sourceName → $targetName\n${saveSuffix(outputPath, stream)}"
+
+  /**
+   * Hide a sheet from the sheet tabs.
+   *
+   * @param veryHide
+   *   If true, uses "veryHidden" state (not accessible from Excel UI, only via VBA)
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
+   */
+  def hideSheet(
+    wb: Workbook,
+    name: String,
+    veryHide: Boolean,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
+      state = if veryHide then Some("veryHidden") else Some("hidden")
+      updatedWb <- IO.fromEither(wb.setSheetState(sheetName, state).left.map {
+        case XLError.SheetNotFound(_) =>
+          new Exception(
+            s"Sheet '$name' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+          )
+        case XLError.InvalidWorkbook(reason) => new Exception(reason)
+        case e => new Exception(e.message)
+      })
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+      stateDesc = if veryHide then "very hidden" else "hidden"
+    yield s"Sheet '$name' is now $stateDesc\n${saveSuffix(outputPath, stream)}"
+
+  /**
+   * Show a hidden sheet (make it visible).
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
+   */
+  def showSheet(
+    wb: Workbook,
+    name: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
+      updatedWb <- IO.fromEither(wb.setSheetState(sheetName, None).left.map {
+        case XLError.SheetNotFound(_) =>
+          new Exception(
+            s"Sheet '$name' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+          )
+        case e => new Exception(e.message)
+      })
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Sheet '$name' is now visible\n${saveSuffix(outputPath, stream)}"

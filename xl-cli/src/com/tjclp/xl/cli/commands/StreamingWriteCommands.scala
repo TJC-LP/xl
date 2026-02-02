@@ -807,6 +807,8 @@ object StreamingWriteCommands:
 
             if sheets.isEmpty then throw new Exception("Workbook has no sheets")
 
+            // IterableOps: .head safe because sheets.isEmpty checked above and size>1 throws
+            @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
             val targetSheet = sheetNameOpt match
               case None =>
                 if sheets.size > 1 then
