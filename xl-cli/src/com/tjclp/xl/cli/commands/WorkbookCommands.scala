@@ -3,9 +3,10 @@ package com.tjclp.xl.cli.commands
 import java.nio.file.Path
 
 import cats.effect.IO
+import cats.syntax.all.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cli.output.Markdown
-import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.io.{ExcelIO, RowData}
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, SheetInfo}
 
 /**
@@ -35,12 +36,75 @@ object WorkbookCommands:
    * List all sheets with dimensions only (quick mode - no cell data).
    *
    * Uses lightweight metadata reader for instant response on large files. Shows: name, dimension
-   * (from worksheet metadata), visibility state.
+   * (from worksheet metadata or streaming scan if missing), visibility state.
+   *
+   * When dimension metadata is missing from the worksheet XML, falls back to streaming scan to
+   * compute accurate bounds (O(rows) time, O(1) memory per sheet).
    */
   def sheetsQuick(filePath: Path): IO[String] =
-    excel.readMetadata(filePath).map { meta =>
-      Markdown.renderSheetListQuick(meta.sheets)
+    excel.readMetadata(filePath).flatMap { meta =>
+      // Find sheets with missing dimensions
+      val missingIndices = meta.sheets.zipWithIndex.collect {
+        case (info, idx) if info.dimension.isEmpty => idx
+      }
+
+      if missingIndices.isEmpty then
+        // All sheets have dimensions from metadata - fast path
+        IO.pure(Markdown.renderSheetListQuick(meta.sheets))
+      else
+        // Scan missing dimensions sequentially (to avoid multiple zip file handles)
+        missingIndices
+          .traverse { idx =>
+            scanSheetBounds(filePath, idx + 1).map(bounds => (idx, bounds)) // 1-based index
+          }
+          .map { scannedBounds =>
+            // Build map of index -> scanned dimension
+            val boundsMap = scannedBounds.toMap
+            // Update sheets with scanned dimensions
+            val updatedSheets = meta.sheets.zipWithIndex.map { case (info, idx) =>
+              if info.dimension.isEmpty then
+                boundsMap.get(idx).flatten match
+                  case Some(range) => info.copy(dimension = Some(range))
+                  case None => info // Empty sheet, keep as unknown
+              else info
+            }
+            Markdown.renderSheetListQuick(updatedSheets)
+          }
     }
+
+  /**
+   * Scan a sheet to compute its bounds using streaming.
+   *
+   * Returns the bounding range of all non-empty cells, or None if sheet is empty. Uses O(1) memory
+   * via streaming, O(rows) time.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
+  private def scanSheetBounds(filePath: Path, sheetIndex: Int): IO[Option[CellRange]] =
+    excel
+      .readStreamByIndex(filePath, sheetIndex)
+      .compile
+      .fold((Int.MaxValue, Int.MaxValue, Int.MinValue, Int.MinValue)) {
+        case ((minR, minC, maxR, maxC), row) =>
+          if row.cells.isEmpty then (minR, minC, maxR, maxC)
+          else
+            val cols = row.cells.keys
+            (
+              minR min row.rowIndex,
+              cols.min min minC,
+              maxR max row.rowIndex,
+              cols.max max maxC
+            )
+      }
+      .map { case (minR, minC, maxR, maxC) =>
+        if minR == Int.MaxValue then None // No cells found - sheet is empty
+        else
+          Some(
+            CellRange(
+              ARef.from0(minC, minR - 1), // rowIndex is 1-based, ARef.from0 expects 0-based row
+              ARef.from0(maxC, maxR - 1)
+            )
+          )
+      }
 
   /**
    * List defined names (named ranges) from full workbook.

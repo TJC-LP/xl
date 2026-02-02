@@ -66,7 +66,7 @@ xl rasterizers                         # Check SVG-to-raster backends
 
 ### Read Operations
 ```bash
-xl -f <file> sheets                    # List sheets with stats
+xl -f <file> sheets                    # List sheets with visibility state
 xl -f <file> names                     # List defined names (named ranges)
 xl -f <file> -s <sheet> bounds         # Used range
 xl -f <file> -s <sheet> view <range>   # View as table
@@ -107,6 +107,9 @@ xl -f <file> -o <out> add-sheet "NewSheet"
 xl -f <file> -o <out> remove-sheet "OldSheet"
 xl -f <file> -o <out> rename-sheet "Old" "New"
 xl -f <file> -o <out> copy-sheet "Template" "Copy"
+xl -f <file> -o <out> sheets hide "Archive"        # Hide from tabs
+xl -f <file> -o <out> sheets hide "Internal" --very # Very hidden (VBA only)
+xl -f <file> -o <out> sheets show "Archive"        # Unhide
 ```
 
 ### Cell Operations (require `-o` and `-s`)
@@ -364,6 +367,10 @@ xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
 
 # Move sheet to front
 xl -f output.xlsx -o output.xlsx move-sheet "Summary" --to 0
+
+# Hide internal sheets from users
+xl -f output.xlsx -o output.xlsx sheets hide "Notes"
+xl -f output.xlsx -o output.xlsx sheets hide "Config" --very  # VBA-only
 ```
 
 ### Visual Analysis (for Claude Vision)
@@ -429,7 +436,10 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 
 | Command | Description |
 |---------|-------------|
-| `sheets` | List all sheets with stats |
+| `sheets` | List sheets with visibility state |
+| `sheets list` | Explicit list (`--stats` for cell counts) |
+| `sheets hide <name>` | Hide sheet (`--very` for VBA-only access) |
+| `sheets show <name>` | Unhide sheet |
 | `names` | List defined names (named ranges) |
 | `new <output>` | Create blank workbook (`--sheet` for names) |
 
@@ -462,6 +472,8 @@ Run `xl <command> --help` for complete options.
 
 | Command | Options |
 |---------|---------|
+| `sheets hide <name>` | `--very` (VBA-only access) |
+| `sheets show <name>` | |
 | `add-sheet <name>` | `--after`, `--before` |
 | `remove-sheet <name>` | |
 | `rename-sheet <old> <new>` | |
