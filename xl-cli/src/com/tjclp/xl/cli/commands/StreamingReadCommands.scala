@@ -2,6 +2,9 @@ package com.tjclp.xl.cli.commands
 
 import java.nio.file.Path
 
+import scala.util.boundary
+import scala.util.boundary.break
+
 import cats.effect.IO
 import cats.implicits.*
 import fs2.Stream
@@ -67,9 +70,9 @@ object StreamingReadCommands:
           .compile
           .toVector
           .map { results =>
-            val sheetDesc =
-              if targetSheets.size == 1 then targetSheets.head
-              else s"${targetSheets.size} sheets"
+            val sheetDesc = targetSheets match
+              case Vector(single) => single
+              case multiple => s"${multiple.size} sheets"
             val formatted = Markdown.renderSearchResultsWithRef(
               results.map { case (sheetName, ref, value) =>
                 (s"$sheetName!${ref.toA1}", value)
@@ -500,6 +503,8 @@ object StreamingReadCommands:
     maxCol: Option[Int],
     cellCount: Long
   ):
+    // IterableOps: .min/.max safe because row.cells.isEmpty checked first
+    @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
     def update(row: RowData): BoundsAccumulator =
       if row.cells.isEmpty then this
       else
@@ -667,8 +672,8 @@ object StreamingReadCommands:
     showFormulas: Boolean,
     skipEmpty: Boolean,
     showLabels: Boolean
-  ): String =
-    if rows.isEmpty then return "(empty range)"
+  ): String = boundary:
+    if rows.isEmpty then break("(empty range)")
 
     val (selectedRows, selectedCols) = selectRowsAndCols(rows, range, skipEmpty)
     val colCount = selectedCols.size

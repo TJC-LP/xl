@@ -9,6 +9,8 @@ import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
 
+// Test code uses .get/.head for brevity in assertions
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
 class ArrayArithmeticSpec extends FunSuite:
 
   // ========== Broadcasting Unit Tests ==========

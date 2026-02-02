@@ -32,8 +32,14 @@ import com.tjclp.xl.styles.font.Font
  *   - Hybrid streaming: Load workbook → mutate → stream output (O(1) output memory)
  *   - True streaming: CSV → XLSX with O(1) memory throughout (for --new-sheet)
  */
+// Test uses imperative zip manipulation for test fixtures
 @SuppressWarnings(
-  Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps")
+  Array(
+    "org.wartremover.warts.OptionPartial",
+    "org.wartremover.warts.IterableOps",
+    "org.wartremover.warts.Var",
+    "org.wartremover.warts.While"
+  )
 )
 class StreamingWriteSpec extends FunSuite:
 

@@ -8,6 +8,8 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.ooxml.XlsxWriter
 
+// Test code uses .get/.head for brevity in assertions
+@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
 class WorkbookMetadataReaderSpec extends FunSuite:
 
   // Helper to create a temp xlsx file with given sheets

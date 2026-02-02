@@ -44,7 +44,7 @@ object StylePatcher:
    * @return
    *   XLResult containing (updated styles.xml content, Map[identifier -> new cellXf index])
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def addStyles[K](
     stylesXml: String,
     newStyles: Map[K, CellStyle]
