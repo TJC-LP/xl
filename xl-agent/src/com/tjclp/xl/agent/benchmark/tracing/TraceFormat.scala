@@ -28,7 +28,7 @@ object TraceFormat:
       .getOrElse("")
     val costStr = meta.usage
       .map { u =>
-        val pricing = ModelPricing.Opus4
+        val pricing = ModelPricing.Opus45
         val cost =
           (u.inputTokens * pricing.inputPerMillion + u.outputTokens * pricing.outputPerMillion) / 1_000_000.0
         f"**Cost:** $$$cost%.2f"

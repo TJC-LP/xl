@@ -16,6 +16,26 @@ import java.time.Duration
 /** Writes benchmark reports in JSON and Markdown formats */
 object ReportWriter:
 
+  // --------------------------------------------------------------------------
+  // Report formatting constants (package-private for use by UnifiedReportWriter)
+  // --------------------------------------------------------------------------
+
+  /** Max mismatches to show per failed case in markdown report */
+  private[reporting] val MaxMismatchesPerCase: Int = 3
+
+  /** Max characters for escaped markdown text in table cells */
+  private[reporting] val MaxMarkdownCellLength: Int = 50
+
+  /** Max characters for reasoning text in per-task results table */
+  private[reporting] val MaxReasoningLength: Int = 40
+
+  /** Max cell refs to show in failed case summary */
+  private[reporting] val MaxCellRefsInSummary: Int = 5
+
+  // --------------------------------------------------------------------------
+  // Public API
+  // --------------------------------------------------------------------------
+
   /** Write a report to the specified directory */
   def write(outputDir: Path, report: BenchmarkReport): IO[ReportPaths] =
     for
@@ -161,7 +181,7 @@ object ReportWriter:
     else s"${ms}ms"
 
   private def escapeMarkdown(s: String): String =
-    s.replace("|", "\\|").replace("\n", " ").take(50)
+    s.replace("|", "\\|").replace("\n", " ").take(MaxMarkdownCellLength)
 
 /** Paths to generated report files */
 case class ReportPaths(
@@ -283,7 +303,7 @@ object UnifiedReportWriter:
 
         // Per-case results with mismatches
         val caseResultsJson = Json.arr(r.caseResults.map { cr =>
-          val mismatchRefs = cr.mismatches.take(5).map(_.ref)
+          val mismatchRefs = cr.mismatches.take(ReportWriter.MaxCellRefsInSummary).map(_.ref)
           Json.obj(
             "caseNum" -> Json.fromInt(cr.caseNum),
             "passed" -> Json.fromBoolean(cr.passed),
@@ -368,7 +388,7 @@ object UnifiedReportWriter:
         val latency = formatDuration(r.latencyMs)
         val reasoning = r.gradeResult
           .flatMap(_.details.reasoning)
-          .map(s => truncateText(s, 40))
+          .map(s => truncateText(s, ReportWriter.MaxReasoningLength))
           .getOrElse("-")
         sb.append(
           s"| ${r.taskIdValue} | ${r.skill} | $grade | $score | $tokens | $latency | $reasoning |\n"
@@ -431,9 +451,13 @@ object UnifiedReportWriter:
           .foreach { case ((taskId, skill), cases) =>
             sb.append(s"### $taskId ($skill)\n\n")
             cases.foreach { case (r, cr) =>
-              val refs = cr.mismatches.take(3).map(_.ref).mkString(", ")
+              val refs =
+                cr.mismatches.take(ReportWriter.MaxMismatchesPerCase).map(_.ref).mkString(", ")
               val refsDisplay = if refs.nonEmpty then s": $refs" else ""
-              sb.append(s"- Case ${cr.caseNum}$refsDisplay\n")
+              val errorDisplay = cr.error
+                .map(e => s" - Error: ${e.take(ReportWriter.MaxReasoningLength)}")
+                .getOrElse("")
+              sb.append(s"- Case ${cr.caseNum}$refsDisplay$errorDisplay\n")
             }
             sb.append("\n")
           }

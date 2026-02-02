@@ -41,7 +41,8 @@ class ModelsSpec extends CatsEffectSuite:
 
   test("AgentConfig defaults") {
     val config = AgentConfig()
-    assertEquals(config.model, "claude-opus-4-5-20251101")
+    // Default is Sonnet 4.5 (balanced capability and cost)
+    assertEquals(config.model, "claude-sonnet-4-5-20250929")
     assertEquals(config.maxTokens, 8192)
     assertEquals(config.verbose, false)
   }

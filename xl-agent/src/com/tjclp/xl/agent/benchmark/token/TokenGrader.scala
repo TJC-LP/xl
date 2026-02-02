@@ -6,6 +6,7 @@ import com.anthropic.client.AnthropicClient as JAnthropicClient
 import com.anthropic.core.JsonValue
 import com.anthropic.models.beta.AnthropicBeta
 import com.anthropic.models.beta.messages.{BetaJsonOutputFormat, MessageCreateParams}
+import com.tjclp.xl.agent.benchmark.Models
 import com.tjclp.xl.agent.error.AgentError
 import io.circe.*
 import io.circe.parser.*
@@ -31,7 +32,7 @@ object GradeResult:
 /** Grades task responses using Opus 4.5 with structured outputs */
 object TokenGrader:
 
-  private val Model = "claude-opus-4-5-20251101"
+  private val Model = Models.DefaultGrader
 
   /** Grade a task response */
   def grade(

@@ -10,7 +10,7 @@ import java.nio.file.Path
 
 /** Configuration for the agent */
 case class AgentConfig(
-  model: String = "claude-opus-4-5-20251101",
+  model: String = benchmark.Models.DefaultAgent,
   maxTokens: Int = 8192,
   verbose: Boolean = false,
   xlBinaryPath: Option[Path] = None,

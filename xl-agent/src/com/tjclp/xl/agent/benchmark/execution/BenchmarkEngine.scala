@@ -21,7 +21,9 @@ import java.time.{Duration, Instant}
  * Configuration for the benchmark engine.
  *
  * @param parallelism
- *   Number of parallel task executions (default: 4)
+ *   Number of parallel work units. This controls how many (task, skill, case) combinations run
+ *   concurrently. The default of 4 balances throughput vs API rate limits. Higher values may hit
+ *   rate limits; lower values increase total runtime.
  * @param graderType
  *   Type of grading to apply (File, LLM, or FileAndLLM)
  * @param enableTracing
@@ -32,9 +34,11 @@ import java.time.{Duration, Instant}
  *   Whether to stream results in real-time
  * @param verbose
  *   Enable verbose logging
+ * @param xlCliPath
+ *   Path to the xl CLI binary for local grading
  */
 case class EngineConfig(
-  parallelism: Int = 4,
+  parallelism: Int = EngineConfig.DefaultParallelism,
   graderType: GraderType = GraderType.File,
   enableTracing: Boolean = true,
   outputDir: Path = Path.of("results"),
@@ -44,6 +48,9 @@ case class EngineConfig(
 )
 
 object EngineConfig:
+  /** Default parallelism balances throughput vs API rate limits */
+  val DefaultParallelism: Int = 4
+
   val default: EngineConfig = EngineConfig()
 
 /**
@@ -338,7 +345,8 @@ private class DefaultBenchmarkEngine(
               passed = false,
               usage = TokenUsage.zero,
               latencyMs = 0,
-              details = CaseDetails.NoDetails
+              details = CaseDetails.NoDetails,
+              error = Some(s"Execution failed: ${e.getClass.getSimpleName}: ${e.getMessage}")
             )
           )
         )

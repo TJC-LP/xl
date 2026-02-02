@@ -174,6 +174,8 @@ object ExecutionResult:
  *   Additional details about the result
  * @param tracePath
  *   Path to the trace file for this case
+ * @param error
+ *   Error message if execution failed (for debugging)
  */
 case class CaseResult(
   caseNum: Int,
@@ -181,7 +183,8 @@ case class CaseResult(
   usage: TokenUsage,
   latencyMs: Long,
   details: CaseDetails = CaseDetails.NoDetails,
-  tracePath: Option[Path] = None
+  tracePath: Option[Path] = None,
+  error: Option[String] = None
 ):
   /** Get mismatches if this is a file comparison result */
   def mismatches: List[CellMismatch] = details match
@@ -201,7 +204,8 @@ object CaseResult:
       "usage" -> r.usage.asJson,
       "latencyMs" -> r.latencyMs.asJson,
       "details" -> r.details.asJson,
-      "tracePath" -> r.tracePath.map(_.toString).asJson
+      "tracePath" -> r.tracePath.map(_.toString).asJson,
+      "error" -> r.error.asJson
     )
   }
 

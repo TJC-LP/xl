@@ -184,7 +184,8 @@ object XlSkill extends Skill:
           passed = false,
           usage = TokenUsage.zero,
           latencyMs = 0,
-          details = CaseDetails.NoDetails
+          details = CaseDetails.NoDetails,
+          error = Some(s"${e.getClass.getSimpleName}: ${e.getMessage}")
         )
       )
     }
@@ -255,7 +256,8 @@ object XlSkill extends Skill:
           passed = false,
           usage = TokenUsage.zero,
           latencyMs = 0,
-          details = CaseDetails.NoDetails
+          details = CaseDetails.NoDetails,
+          error = Some(s"${e.getClass.getSimpleName}: ${e.getMessage}")
         )
       )
     }

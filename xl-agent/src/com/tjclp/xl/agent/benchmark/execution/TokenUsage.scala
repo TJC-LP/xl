@@ -1,6 +1,7 @@
 package com.tjclp.xl.agent.benchmark.execution
 
 import cats.kernel.Monoid
+import com.tjclp.xl.agent.benchmark.Models
 import io.circe.*
 import io.circe.generic.semiauto.*
 
@@ -88,53 +89,28 @@ object TokenUsage:
   }
 
 // ============================================================================
-// Model Pricing
+// Model Pricing (delegates to centralized Models object)
 // ============================================================================
 
 /**
- * Pricing information for token cost estimation.
+ * Type alias for backward compatibility.
  *
- * All prices are in dollars per million tokens.
+ * All pricing definitions are centralized in [[Models.Pricing]].
  */
-case class ModelPricing(
-  inputPerMillion: BigDecimal,
-  outputPerMillion: BigDecimal,
-  cacheWritePerMillion: BigDecimal = BigDecimal(0),
-  cacheReadPerMillion: BigDecimal = BigDecimal(0)
-)
+type ModelPricing = Models.Pricing
 
 object ModelPricing:
-  /** Claude Opus 4.5 pricing (as of Jan 2025) */
-  val opus45: ModelPricing = ModelPricing(
-    inputPerMillion = BigDecimal("15.00"),
-    outputPerMillion = BigDecimal("75.00"),
-    cacheWritePerMillion = BigDecimal("18.75"),
-    cacheReadPerMillion = BigDecimal("1.50")
-  )
+  /** Claude Opus 4.5 pricing */
+  val opus45: ModelPricing = Models.OpusPricing
 
   /** Claude Sonnet 4 pricing */
-  val sonnet4: ModelPricing = ModelPricing(
-    inputPerMillion = BigDecimal("3.00"),
-    outputPerMillion = BigDecimal("15.00"),
-    cacheWritePerMillion = BigDecimal("3.75"),
-    cacheReadPerMillion = BigDecimal("0.30")
-  )
+  val sonnet4: ModelPricing = Models.SonnetPricing
 
   /** Claude Haiku 3.5 pricing */
-  val haiku35: ModelPricing = ModelPricing(
-    inputPerMillion = BigDecimal("0.80"),
-    outputPerMillion = BigDecimal("4.00"),
-    cacheWritePerMillion = BigDecimal("1.00"),
-    cacheReadPerMillion = BigDecimal("0.08")
-  )
+  val haiku35: ModelPricing = Models.HaikuPricing
 
   /** Default pricing (Sonnet 4) */
-  val default: ModelPricing = sonnet4
+  val default: ModelPricing = Models.DefaultPricing
 
   /** Get pricing for a model by name */
-  def forModel(model: String): ModelPricing =
-    model.toLowerCase match
-      case m if m.contains("opus") => opus45
-      case m if m.contains("sonnet") => sonnet4
-      case m if m.contains("haiku") => haiku35
-      case _ => default
+  def forModel(model: String): ModelPricing = Models.pricingFor(model)

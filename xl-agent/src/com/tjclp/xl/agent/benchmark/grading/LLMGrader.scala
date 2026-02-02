@@ -7,6 +7,7 @@ import com.anthropic.client.AnthropicClient as JAnthropicClient
 import com.anthropic.core.JsonValue
 import com.anthropic.models.beta.AnthropicBeta
 import com.anthropic.models.beta.messages.{BetaJsonOutputFormat, MessageCreateParams}
+import com.tjclp.xl.agent.benchmark.Models
 import io.circe.*
 import io.circe.parser.*
 
@@ -216,7 +217,7 @@ Grade the response on correctness:
 - F: Completely wrong or didn't answer the question"""
 
 object OpusLLMGrader:
-  val DefaultModel: String = "claude-opus-4-5-20251101"
+  val DefaultModel: String = Models.DefaultGrader
   val DefaultParallelism: Int = 4
 
   def apply(client: JAnthropicClient): OpusLLMGrader =

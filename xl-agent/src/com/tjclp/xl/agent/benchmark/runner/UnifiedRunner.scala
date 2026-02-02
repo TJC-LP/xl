@@ -7,6 +7,7 @@ import com.tjclp.xl.agent.AgentConfig
 import com.tjclp.xl.agent.anthropic.AnthropicClientIO
 import com.tjclp.xl.agent.benchmark.common.BenchmarkUtils
 import com.tjclp.xl.agent.benchmark.execution.*
+import com.tjclp.xl.agent.benchmark.Models
 import com.tjclp.xl.agent.benchmark.grading.*
 import com.tjclp.xl.agent.benchmark.reporting.*
 import com.tjclp.xl.agent.benchmark.skills.{Skill, SkillRegistry}
@@ -370,7 +371,7 @@ case class UnifiedConfig(
   samplePath: Option[Path] = None,
   tasksFile: Option[Path] = None,
   outputDir: Path = Path.of("results", BenchmarkUtils.formatTimestamp),
-  model: String = "claude-sonnet-4-20250514",
+  model: String = Models.DefaultAgent,
   parallelism: Int = 4,
   stream: Boolean = false,
   enableGrading: Boolean = true,

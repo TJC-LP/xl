@@ -1,5 +1,6 @@
 package com.tjclp.xl.agent.benchmark.common
 
+import com.tjclp.xl.agent.benchmark.Models
 import io.circe.*
 import io.circe.generic.semiauto.*
 
@@ -49,25 +50,26 @@ object ModelPricing:
   given Encoder[ModelPricing] = deriveEncoder
   given Decoder[ModelPricing] = deriveDecoder
 
-  // Claude Opus 4.5 pricing (as of Jan 2026)
-  val Opus4 = ModelPricing(
-    inputPerMillion = 15.0,
-    outputPerMillion = 75.0,
-    cacheWritePerMillion = 18.75,
-    cacheReadPerMillion = 1.50
-  )
+  /** Create from centralized Models.Pricing */
+  def fromModels(p: Models.Pricing): ModelPricing =
+    ModelPricing(
+      inputPerMillion = p.inputPerMillion.toDouble,
+      outputPerMillion = p.outputPerMillion.toDouble,
+      cacheWritePerMillion = p.cacheWritePerMillion.toDouble,
+      cacheReadPerMillion = p.cacheReadPerMillion.toDouble
+    )
 
-  // Claude Sonnet 4 pricing
-  val Sonnet4 = ModelPricing(
-    inputPerMillion = 3.0,
-    outputPerMillion = 15.0,
-    cacheWritePerMillion = 3.75,
-    cacheReadPerMillion = 0.30
-  )
+  // Claude Opus 4.5 pricing (delegates to Models)
+  val Opus45: ModelPricing = fromModels(Models.OpusPricing)
+
+  // Claude Sonnet 4.5 pricing (delegates to Models)
+  val Sonnet45: ModelPricing = fromModels(Models.SonnetPricing)
+
+  // Claude Haiku 4.5 pricing (delegates to Models)
+  val Haiku45: ModelPricing = fromModels(Models.HaikuPricing)
 
   def forModel(modelName: String): ModelPricing =
-    if modelName.contains("opus") then Opus4
-    else Sonnet4
+    fromModels(Models.pricingFor(modelName))
 
 /** Result of running one approach on a task */
 case class ApproachResult(
