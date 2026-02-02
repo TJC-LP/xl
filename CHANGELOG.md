@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.1] - 2026-02-02
+
+### Added
+
+- **Boolean coercion and SUMPRODUCT array expressions** (#199)
+  - SUMPRODUCT now supports array conditions: `=SUMPRODUCT((A:A="X")*(B:B))`
+  - Boolean-to-numeric coercion: TRUE→1, FALSE→0 in arithmetic contexts
+  - Enables Excel-style conditional aggregation patterns
+
+### Changed
+
+- **Eliminate WartRemover warnings across codebase** (#200)
+  - All `var`/`while` constructs refactored to tail-recursive functions
+  - Replaced `.head`/`.tail` with `.headOption` or pattern matching
+  - Silenced legitimate uses in macros with `@SuppressWarnings`
+
+---
+
 ## [0.9.0] - 2026-01-30
 
 ### Added
