@@ -3,13 +3,29 @@ package com.tjclp.xl.cli
 import java.nio.file.Path
 
 /**
+ * Sheets subcommand actions.
+ *
+ * Supports list, hide, and show operations on sheets.
+ */
+sealed trait SheetsAction derives CanEqual
+object SheetsAction:
+  /** List all sheets (instant by default, --stats for cell counts) */
+  case class List(stats: Boolean) extends SheetsAction
+
+  /** Hide a sheet from the sheet tabs */
+  case class Hide(name: String, veryHide: Boolean) extends SheetsAction
+
+  /** Show a hidden sheet (make it visible) */
+  case class Show(name: String) extends SheetsAction
+
+/**
  * Command ADT representing all CLI operations.
  *
  * Named CliCommand to avoid conflict with com.monovore.decline.Command.
  */
 enum CliCommand:
   // Read-only (workbook-level)
-  case Sheets(stats: Boolean) // stats=false: instant (metadata only), stats=true: full mode
+  case Sheets(action: SheetsAction)
   case Names
   // Read-only (sheet-level)
   case Bounds(scan: Boolean) // scan=false: instant (dimension element), scan=true: full scan

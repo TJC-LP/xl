@@ -1303,8 +1303,8 @@ object XlsxWriter:
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
-        // Update sheets in preserved structure (names/order may have changed)
-        preserved.updateSheets(workbook.sheets)
+        // Update sheets in preserved structure (names/order/visibility may have changed)
+        preserved.updateSheets(workbook.sheets, workbook.metadata.sheetStates)
       case None =>
         // Fallback to minimal for programmatically created workbooks
         // (or when metadata modified - we need fresh workbook structure)

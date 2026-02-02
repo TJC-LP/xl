@@ -334,8 +334,22 @@ object XlsxReader:
       // Parse defined names from workbook.xml
       definedNames = parseDefinedNames(ooxmlWb.definedNames)
 
+      // Extract sheet visibility states from OOXML
+      sheetStates = ooxmlWb.sheets
+        .filter(_.state.nonEmpty)
+        .map(ref => ref.name -> ref.state)
+        .toMap
+
       // Assemble workbook with optional SourceContext
-      workbook <- assembleWorkbook(sheets, source, manifest, fingerprint, theme, definedNames)
+      workbook <- assembleWorkbook(
+        sheets,
+        source,
+        manifest,
+        fingerprint,
+        theme,
+        definedNames,
+        sheetStates
+      )
     yield ReadResult(workbook, styleWarnings)
 
   /** Parse optional shared strings table */
@@ -813,6 +827,10 @@ object XlsxReader:
    *   Manifest of all ZIP entries (known + unknown)
    * @param theme
    *   Theme palette parsed from xl/theme/theme1.xml
+   * @param definedNames
+   *   Defined names from workbook.xml
+   * @param sheetStates
+   *   Sheet visibility states from workbook.xml
    * @return
    *   Workbook with optional SourceContext
    */
@@ -822,7 +840,8 @@ object XlsxReader:
     manifest: PartManifest,
     fingerprint: Option[SourceFingerprint],
     theme: ThemePalette,
-    definedNames: Vector[DefinedName]
+    definedNames: Vector[DefinedName],
+    sheetStates: Map[SheetName, Option[String]]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -836,7 +855,8 @@ object XlsxReader:
           case (None, Some(_)) =>
             Left(XLError.IOError("Unexpected source fingerprint without source handle"))
 
-      val metadata = WorkbookMetadata(theme = theme, definedNames = definedNames)
+      val metadata =
+        WorkbookMetadata(theme = theme, definedNames = definedNames, sheetStates = sheetStates)
       sourceContextEither.map(ctx =>
         Workbook(sheets = sheets, metadata = metadata, sourceContext = ctx)
       )

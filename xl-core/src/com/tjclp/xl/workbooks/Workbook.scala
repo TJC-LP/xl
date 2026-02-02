@@ -285,6 +285,51 @@ final case class Workbook(
   /** Number of sheets */
   def sheetCount: Int = sheets.size
 
+  // ========== Sheet Visibility ==========
+
+  /**
+   * Get sheet visibility state.
+   *
+   * @return
+   *   None if visible (default), Some("hidden") if hidden, Some("veryHidden") if very hidden
+   */
+  def getSheetState(name: SheetName): Option[String] =
+    metadata.sheetStates.get(name).flatten
+
+  /**
+   * Set sheet visibility state.
+   *
+   * @param name
+   *   Sheet name
+   * @param state
+   *   None for visible, Some("hidden") for hidden, Some("veryHidden") for very hidden
+   * @return
+   *   Updated workbook or error if sheet not found or last visible sheet
+   */
+  def setSheetState(name: SheetName, state: Option[String]): XLResult[Workbook] =
+    if !sheets.exists(_.name == name) then Left(XLError.SheetNotFound(name.value))
+    else
+      state match
+        case Some(_) =>
+          // Count currently visible sheets (those not marked as hidden)
+          val visibleCount = sheets.count { s =>
+            metadata.sheetStates.get(s.name).flatten.isEmpty
+          }
+          val isCurrentlyVisible = metadata.sheetStates.get(name).flatten.isEmpty
+          if isCurrentlyVisible && visibleCount <= 1 then
+            Left(XLError.InvalidWorkbook("Cannot hide the last visible sheet"))
+          else
+            val newStates = metadata.sheetStates + (name -> state)
+            val newMetadata = metadata.copy(sheetStates = newStates)
+            val updatedContext = sourceContext.map(_.markMetadataModified)
+            Right(copy(metadata = newMetadata, sourceContext = updatedContext))
+        case None =>
+          // Making visible is always allowed
+          val newStates = metadata.sheetStates + (name -> state)
+          val newMetadata = metadata.copy(sheetStates = newStates)
+          val updatedContext = sourceContext.map(_.markMetadataModified)
+          Right(copy(metadata = newMetadata, sourceContext = updatedContext))
+
 object Workbook:
   /**
    * Create workbook from a single sheet.

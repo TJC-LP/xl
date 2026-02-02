@@ -78,20 +78,33 @@ case class OoxmlWorkbook(
   /**
    * Update sheets while preserving all workbook metadata.
    *
-   * Maps domain sheets to SheetRefs, preserving original sheetIds and visibility from the source
-   * file. For new sheets, generates new IDs.
+   * Maps domain sheets to SheetRefs, preserving original sheetIds from the source file. For new
+   * sheets, generates new IDs. Applies state overrides from domain metadata.
+   *
+   * @param newSheets
+   *   Domain sheets to update
+   * @param stateOverrides
+   *   Visibility overrides from domain metadata (SheetName -> state)
    */
-  def updateSheets(newSheets: Vector[com.tjclp.xl.api.Sheet]): OoxmlWorkbook =
+  def updateSheets(
+    newSheets: Vector[com.tjclp.xl.api.Sheet],
+    stateOverrides: Map[SheetName, Option[String]] = Map.empty
+  ): OoxmlWorkbook =
     val updatedRefs = newSheets.zipWithIndex.map { case (sheet, idx) =>
-      // Try to find original SheetRef to preserve sheetId and visibility
+      // Check for explicit state override from domain metadata
+      val overriddenState = stateOverrides.get(sheet.name)
+
+      // Try to find original SheetRef to preserve sheetId
       sheets.find(_.name == sheet.name) match
         case Some(original) =>
-          // Preserve original ID and visibility, update relationship ID
-          original.copy(relationshipId = s"rId${idx + 1}")
+          // Use override if present, otherwise preserve original state
+          val finalState = overriddenState.getOrElse(original.state)
+          original.copy(relationshipId = s"rId${idx + 1}", state = finalState)
         case None =>
-          // New sheet - generate new ID (use max existing ID + 1)
+          // New sheet - generate new ID, use override or default to visible
           val newId = sheets.map(_.sheetId).maxOption.getOrElse(0) + 1
-          SheetRef(sheet.name, newId, s"rId${idx + 1}", None)
+          val finalState = overriddenState.getOrElse(None)
+          SheetRef(sheet.name, newId, s"rId${idx + 1}", finalState)
     }
     copy(sheets = updatedRefs)
 
@@ -191,7 +204,8 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   /** Create workbook from domain model */
   def fromDomain(wb: Workbook): OoxmlWorkbook =
     val sheetRefs = wb.sheets.zipWithIndex.map { case (sheet, idx) =>
-      SheetRef(sheet.name, idx + 1, s"rId${idx + 1}")
+      val state = wb.metadata.sheetStates.get(sheet.name).flatten
+      SheetRef(sheet.name, idx + 1, s"rId${idx + 1}", state)
     }
     OoxmlWorkbook(sheetRefs)
 
