@@ -304,31 +304,39 @@ final case class Workbook(
    * @param state
    *   None for visible, Some("hidden") for hidden, Some("veryHidden") for very hidden
    * @return
-   *   Updated workbook or error if sheet not found or last visible sheet
+   *   Updated workbook or error if sheet not found, invalid state, or last visible sheet
    */
   def setSheetState(name: SheetName, state: Option[String]): XLResult[Workbook] =
     if !sheets.exists(_.name == name) then Left(XLError.SheetNotFound(name.value))
     else
       state match
+        case Some(s) if s != "hidden" && s != "veryHidden" =>
+          Left(
+            XLError.InvalidWorkbook(s"Invalid sheet state: '$s' (must be 'hidden' or 'veryHidden')")
+          )
         case Some(_) =>
-          // Count currently visible sheets (those not marked as hidden)
-          val visibleCount = sheets.count { s =>
-            metadata.sheetStates.get(s.name).flatten.isEmpty
+          // Single-pass: count visible sheets and check if target is currently visible
+          val (visibleCount, isCurrentlyVisible) = sheets.foldLeft((0, false)) {
+            case ((count, found), sheet) =>
+              val isVisible = metadata.sheetStates.get(sheet.name).flatten.isEmpty
+              (
+                if isVisible then count + 1 else count,
+                found || (sheet.name == name && isVisible)
+              )
           }
-          val isCurrentlyVisible = metadata.sheetStates.get(name).flatten.isEmpty
           if isCurrentlyVisible && visibleCount <= 1 then
             Left(XLError.InvalidWorkbook("Cannot hide the last visible sheet"))
-          else
-            val newStates = metadata.sheetStates + (name -> state)
-            val newMetadata = metadata.copy(sheetStates = newStates)
-            val updatedContext = sourceContext.map(_.markMetadataModified)
-            Right(copy(metadata = newMetadata, sourceContext = updatedContext))
+          else Right(withUpdatedSheetState(name, state))
         case None =>
           // Making visible is always allowed
-          val newStates = metadata.sheetStates + (name -> state)
-          val newMetadata = metadata.copy(sheetStates = newStates)
-          val updatedContext = sourceContext.map(_.markMetadataModified)
-          Right(copy(metadata = newMetadata, sourceContext = updatedContext))
+          Right(withUpdatedSheetState(name, state))
+
+  /** Helper: update sheet state in metadata and mark as modified. */
+  private def withUpdatedSheetState(name: SheetName, state: Option[String]): Workbook =
+    val newStates = metadata.sheetStates + (name -> state)
+    val newMetadata = metadata.copy(sheetStates = newStates)
+    val updatedContext = sourceContext.map(_.markMetadataModified)
+    copy(metadata = newMetadata, sourceContext = updatedContext)
 
 object Workbook:
   /**
