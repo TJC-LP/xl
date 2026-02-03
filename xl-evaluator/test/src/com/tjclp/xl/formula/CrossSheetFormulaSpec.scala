@@ -51,21 +51,50 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(printed, Right("=SUM(Sales!A1:B10)"))
   }
 
-  // Note: Quoted sheet names ('Q1 Report'!A1) are NOT yet supported by the parser.
-  // The FormulaPrinter.formatSheetName correctly outputs them, but parsing is a TODO.
-  // Tests below document current behavior (parse failure).
-  // TODO: TJC-360 - Add parser support for quoted sheet names in formulas
+  // Quoted sheet names ('Q1 Report'!A1) are supported via parseQuotedSheetRef.
+  // The parser handles spaces, special characters, hyphens, and escaped quotes ('').
 
-  test("quoted sheet names are not yet supported (parse limitation)".ignore) {
-    // When implemented, these should parse:
-    // - ='Q1 Report'!A1
-    // - ='Sales&Marketing'!A1
-    // - ='O''Brien''s Data'!A1
-    // - ='2024Q1'!A1
-    // - ='Jan-Mar'!A1
-    val result = FormulaParser.parse("='Q1 Report'!A1")
-    // Currently fails - this test documents the limitation
-    assert(result.isLeft, "Quoted sheet names not yet supported")
+  test("quoted sheet names parse correctly") {
+    // Sheet names with spaces
+    val result1 = FormulaParser.parse("='Q1 Report'!A1")
+    assert(result1.isRight, s"Parse failed: $result1")
+
+    // Sheet names with special characters
+    val result2 = FormulaParser.parse("='Sales&Marketing'!A1")
+    assert(result2.isRight, s"Parse failed: $result2")
+
+    // Sheet names starting with digits
+    val result3 = FormulaParser.parse("='2024Q1'!A1")
+    assert(result3.isRight, s"Parse failed: $result3")
+
+    // Sheet names with hyphens (the Shortcut LBO model case)
+    val result4 = FormulaParser.parse("='Jan-Mar'!A1")
+    assert(result4.isRight, s"Parse failed: $result4")
+
+    val result5 = FormulaParser.parse("='Debt-Schedule'!H29")
+    assert(result5.isRight, s"Parse failed: $result5")
+  }
+
+  test("quoted sheet names with escaped quotes parse correctly") {
+    // Escaped single quotes: '' becomes '
+    val result = FormulaParser.parse("='O''Brien''s Data'!A1")
+    assert(result.isRight, s"Parse failed: $result")
+  }
+
+  test("quoted sheet name round-trip: parse . print = id") {
+    val formula = "='Q1 Report'!A1"
+    val result = FormulaParser.parse(formula)
+    assert(result.isRight, s"Parse failed: $result")
+    val printed = result.map(FormulaPrinter.print(_))
+    assertEquals(printed, Right(formula))
+  }
+
+  test("quoted sheet name range round-trip: parse . print = id") {
+    val formula = "=SUM('Jan-Mar'!A1:A10)"
+    val result = FormulaParser.parse(formula)
+    assert(result.isRight, s"Parse failed: $result")
+    val printed = result.map(FormulaPrinter.print(_))
+    assertEquals(printed, Right(formula))
   }
 
   // ===== Round-Trip Property Tests =====
@@ -413,11 +442,9 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(150))))
   }
 
-  // Note: Tests for quoted sheet names are skipped because parsing is not yet implemented.
-  // See the ignored test above documenting this limitation.
-  // TODO: TJC-360 - Add parser support for quoted sheet names in formulas
+  // Tests for quoted sheet names with evaluation:
 
-  test("cross-sheet reference with quoted sheet name (not yet supported)".ignore) {
+  test("cross-sheet reference with quoted sheet name") {
     // When quoted sheet name parsing is implemented, this should work:
     val quarterly = sheetWith("Q1 Report", ref"A1" -> CellValue.Number(BigDecimal(1000)))
     val main = sheetWith("Main")
@@ -427,7 +454,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(1000))))
   }
 
-  test("cross-sheet SUM with quoted sheet name (not yet supported)".ignore) {
+  test("cross-sheet SUM with quoted sheet name") {
     // When quoted sheet name parsing is implemented, this should work:
     val quarterly = sheetWith(
       "Q1 Report",

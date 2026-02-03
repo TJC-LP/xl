@@ -193,7 +193,7 @@ object FormulaPrinter:
     location match
       case TExpr.RangeLocation.Local(range) => formatRange(range)
       case TExpr.RangeLocation.CrossSheet(sheet, range) =>
-        s"${sheet.value}!${formatRange(range)}"
+        s"${formatSheetName(sheet)}!${formatRange(range)}"
 
   /**
    * Format ARef to A1 notation with anchor support.

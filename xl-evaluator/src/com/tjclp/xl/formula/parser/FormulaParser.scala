@@ -429,6 +429,9 @@ object FormulaParser:
       case Some('$') =>
         // Anchored cell reference (e.g., $A$1, $A1)
         parseAnchoredCellRef(s)
+      case Some('\'') =>
+        // Quoted sheet name reference (e.g., 'Q1 Report'!A1, 'Debt-Schedule'!H29)
+        parseQuotedSheetRef(s)
       case Some(c) =>
         Left(ParseError.UnexpectedChar(c, s.pos, "expected expression"))
 
@@ -652,6 +655,57 @@ object FormulaParser:
         Right((TExpr.PolyRef(aref.asInstanceOf[ARef], anchor), state))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(refStr, startPos, err))
+
+  /**
+   * Parse quoted sheet name reference: 'Sheet Name'!A1 or 'Sheet-Name'!A1:B10
+   *
+   * Handles:
+   *   - Sheet names with spaces: 'Q1 Report'!A1
+   *   - Sheet names with special characters: 'Sales&Marketing'!A1, 'Jan-Mar'!A1
+   *   - Escaped single quotes: 'O''Brien''s Data'!A1 ('' becomes ')
+   *   - Sheet names starting with digits: '2024Q1'!A1
+   *
+   * @param state
+   *   Parser state positioned at the opening single quote
+   */
+  private def parseQuotedSheetRef(state: ParserState): ParseResult[TExpr[?]] =
+    val startPos = state.pos
+
+    // Skip opening quote
+    val s1 = state.advance()
+
+    // Read sheet name until closing quote, handling escaped quotes ('')
+    @tailrec
+    def readQuotedName(
+      s: ParserState,
+      acc: StringBuilder
+    ): Either[ParseError, (String, ParserState)] =
+      s.currentChar match
+        case None =>
+          Left(ParseError.UnexpectedEOF(s.pos, "unterminated quoted sheet name"))
+        case Some('\'') =>
+          // Check for escaped quote ('') vs closing quote
+          s.advance().currentChar match
+            case Some('\'') =>
+              // Escaped quote - add single quote and continue
+              readQuotedName(s.advance(2), acc.append('\''))
+            case _ =>
+              // Closing quote - done reading sheet name
+              Right((acc.toString, s.advance()))
+        case Some(c) =>
+          readQuotedName(s.advance(), acc.append(c))
+
+    readQuotedName(s1, new StringBuilder).flatMap { case (sheetName, s2) =>
+      // Expect '!' after closing quote
+      s2.currentChar match
+        case Some('!') =>
+          // Delegate to existing sheet-qualified ref parser
+          parseSheetQualifiedRef(sheetName, s2.advance(), startPos)
+        case Some(c) =>
+          Left(ParseError.UnexpectedChar(c, s2.pos, "expected '!' after quoted sheet name"))
+        case None =>
+          Left(ParseError.UnexpectedEOF(s2.pos, "expected '!' after quoted sheet name"))
+    }
 
   /**
    * Parse sheet-qualified reference: Sheet1!A1 or Sheet1!A1:B10
