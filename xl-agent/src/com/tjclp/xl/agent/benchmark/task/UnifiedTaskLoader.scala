@@ -82,7 +82,8 @@ object UnifiedTaskLoader:
       taskIds = filter.taskIds,
       skipIds = filter.skipIds,
       category = filter.category,
-      limit = filter.limit
+      limit = filter.limit,
+      includeVba = filter.includeVba
     )
     LegacyTaskLoader.load(legacyConfig).map { benchTasks =>
       benchTasks

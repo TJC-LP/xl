@@ -228,6 +228,7 @@ case class BenchConfig(
   taskIds: Option[List[String]] = None,
   skipIds: Set[String] = Set.empty,
   category: Option[String] = None,
+  includeVba: Boolean = false,
   parallelism: Int = 4,
   verbose: Boolean = false,
   outputDir: Path = Path.of("results"),

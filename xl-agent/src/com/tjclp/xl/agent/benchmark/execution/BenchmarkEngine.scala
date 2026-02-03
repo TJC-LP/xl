@@ -430,7 +430,18 @@ private class DefaultBenchmarkEngine(
       graderAndContext match
         case Some((grader, ctx)) if grader.canHandle(ctx) =>
           grader.grade(ctx).map { gradeResult =>
-            result.withGrade(gradeResult)
+            val updatedCaseResults = result.caseResults.map { caseResult =>
+              caseResult.details match
+                case CaseDetails.TokenComparison(_, _) =>
+                  caseResult.copy(passed = gradeResult.passed)
+                case _ => caseResult
+            }
+
+            result.copy(
+              caseResults = updatedCaseResults,
+              aggregateScore = gradeResult.score,
+              gradeResult = Some(gradeResult)
+            )
           }
         case _ =>
           IO.pure(result)

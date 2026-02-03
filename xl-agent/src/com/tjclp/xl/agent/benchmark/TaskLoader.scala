@@ -46,8 +46,8 @@ object TaskLoader:
         result = result.filter(_.instruction_type.toLowerCase.contains(cat.toLowerCase))
       case None => ()
 
-    // Filter VBA tasks (always, unless specific task IDs were requested)
-    if config.taskIds.isEmpty then result = result.filterNot(isVbaTask)
+    // Filter VBA tasks unless explicitly included or task IDs were requested
+    if config.taskIds.isEmpty && !config.includeVba then result = result.filterNot(isVbaTask)
 
     // Apply limit
     config.limit match
