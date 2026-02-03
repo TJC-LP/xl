@@ -114,8 +114,10 @@ object FormulaPrinter:
         parenthesizeIf(result, precedence > Precedence.MulDiv)
 
       case TExpr.Pow(x, y) =>
-        // Right-associative: use Pow - 1 for right operand to avoid parentheses on nested ^
-        val result = s"${printExpr(x, Precedence.Pow)}^${printExpr(y, Precedence.Pow - 1)}"
+        // Right-associative: allow nested powers on the right, but parenthesize ambiguous bases.
+        val base = printPowBase(x)
+        val exponent = printPowExponent(y)
+        val result = s"$base^$exponent"
         parenthesizeIf(result, precedence > Precedence.Pow)
 
       // String operators
@@ -233,6 +235,26 @@ object FormulaPrinter:
    */
   private def parenthesizeIf(s: String, condition: Boolean): String =
     if condition then s"($s)" else s
+
+  private def printPowBase(expr: TExpr[?]): String =
+    val rendered = printExpr(expr, Precedence.Pow)
+    if needsPowBaseParens(expr) then s"($rendered)" else rendered
+
+  private def printPowExponent(expr: TExpr[?]): String =
+    printExpr(expr, Precedence.Pow)
+
+  private def needsPowBaseParens(expr: TExpr[?]): Boolean =
+    unwrapTransparent(expr) match
+      case TExpr.Pow(_, _) => true
+      case TExpr.Sub(TExpr.Lit(n: BigDecimal), _) if n == BigDecimal(0) => true
+      case _ => false
+
+  private def unwrapTransparent(expr: TExpr[?]): TExpr[?] =
+    expr match
+      case TExpr.ToInt(inner) => unwrapTransparent(inner)
+      case TExpr.DateToSerial(inner) => unwrapTransparent(inner)
+      case TExpr.DateTimeToSerial(inner) => unwrapTransparent(inner)
+      case other => other
 
   /**
    * Escape string literal for Excel (double quotes).

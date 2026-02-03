@@ -785,6 +785,36 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertEquals(result, "=1+2")
   }
 
+  test("print exponentiation: parenthesize negative base") {
+    val expr = TExpr.Pow(
+      TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.Lit(BigDecimal(2))),
+      TExpr.Lit(BigDecimal(2))
+    )
+    val result = FormulaPrinter.print(expr)
+    assertEquals(result, "=(-2)^2")
+    assertEquals(FormulaParser.parse(result), Right(expr))
+  }
+
+  test("print exponentiation: parenthesize nested base") {
+    val expr = TExpr.Pow(
+      TExpr.Pow(TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3))),
+      TExpr.Lit(BigDecimal(2))
+    )
+    val result = FormulaPrinter.print(expr)
+    assertEquals(result, "=(2^3)^2")
+    assertEquals(FormulaParser.parse(result), Right(expr))
+  }
+
+  test("print exponentiation: parenthesize multiplicative exponent") {
+    val expr = TExpr.Pow(
+      TExpr.Lit(BigDecimal(2)),
+      TExpr.Mul(TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(4)))
+    )
+    val result = FormulaPrinter.print(expr)
+    assertEquals(result, "=2^(3*4)")
+    assertEquals(FormulaParser.parse(result), Right(expr))
+  }
+
   test("print SUM function") {
     val range = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
     val expr = TExpr.sum(range)
