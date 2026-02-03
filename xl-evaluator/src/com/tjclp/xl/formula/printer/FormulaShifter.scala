@@ -98,6 +98,9 @@ object FormulaShifter:
       case Div(x, y) =>
         Div(shiftInternal(x, colDelta, rowDelta), shiftInternal(y, colDelta, rowDelta))
           .asInstanceOf[TExpr[A]]
+      case Pow(x, y) =>
+        Pow(shiftInternal(x, colDelta, rowDelta), shiftInternal(y, colDelta, rowDelta))
+          .asInstanceOf[TExpr[A]]
 
       // String operators
       case Concat(x, y) =>

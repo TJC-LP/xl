@@ -319,6 +319,10 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
         evalArithmetic(x, y, ArrayArithmetic.div, sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
 
+      case TExpr.Pow(x, y) =>
+        evalArithmetic(x, y, ArrayArithmetic.pow, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
+
       // ===== String Operators =====
       case TExpr.Concat(x, y) =>
         // Concatenate: join two strings

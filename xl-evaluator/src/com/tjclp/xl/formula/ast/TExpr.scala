@@ -157,6 +157,13 @@ enum TExpr[A] derives CanEqual:
    */
   case Div(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
 
+  /**
+   * Exponentiation: x ^ y
+   *
+   * Note: Right-associative (2^3^2 = 2^(3^2) = 512) Excel convention: 0^0 = 1
+   */
+  case Pow(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]
+
   // String operators
 
   /**

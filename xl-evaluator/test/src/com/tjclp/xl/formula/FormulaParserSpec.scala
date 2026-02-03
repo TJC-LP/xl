@@ -393,6 +393,144 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
+  // ==================== Exponentiation (^) Tests ====================
+
+  test("parse exponentiation: simple") {
+    val result = FormulaParser.parse("=2^3")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach {
+      case TExpr.Pow(TExpr.Lit(x: BigDecimal), TExpr.Lit(y: BigDecimal)) =>
+        assertEquals(x, BigDecimal(2))
+        assertEquals(y, BigDecimal(3))
+      case other => fail(s"Expected Pow(2, 3), got $other")
+    }
+  }
+
+  test("parse exponentiation: right-associative (2^3^2 = 2^(3^2) = 512)") {
+    val result = FormulaParser.parse("=2^3^2")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach {
+      case TExpr.Pow(TExpr.Lit(_), TExpr.Pow(_, _)) =>
+        // 2^(3^2) structure - right-associative
+        ()
+      case other => fail(s"Expected Pow(2, Pow(3, 2)), got $other")
+    }
+  }
+
+  test("parse exponentiation: higher precedence than multiplication") {
+    // 2*3^2 should parse as 2*(3^2) = 18, not (2*3)^2 = 36
+    val result = FormulaParser.parse("=2*3^2")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach {
+      case TExpr.Mul(TExpr.Lit(_), TExpr.Pow(_, _)) =>
+        // 2*(3^2) structure
+        ()
+      case other => fail(s"Expected Mul(2, Pow(3, 2)), got $other")
+    }
+  }
+
+  test("parse exponentiation: unary minus precedence (Excel-compatible)") {
+    // Excel parses -2^2 as -(2^2) = -4, not (-2)^2 = 4
+    // Our parser matches Excel behavior: ^ binds tighter than unary minus
+    val result = FormulaParser.parse("=-2^2")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach {
+      case TExpr.Sub(TExpr.Lit(zero: BigDecimal), TExpr.Pow(_, _)) =>
+        assertEquals(zero, BigDecimal(0))
+      case other => fail(s"Expected Sub(0, Pow(2, 2)), got $other")
+    }
+  }
+
+  test("parse exponentiation: with parentheses") {
+    val result = FormulaParser.parse("=(2^3)^2")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach {
+      case TExpr.Pow(TExpr.Pow(_, _), TExpr.Lit(_)) =>
+        // (2^3)^2 structure - parentheses override right-associativity
+        ()
+      case other => fail(s"Expected Pow(Pow(2, 3), 2), got $other")
+    }
+  }
+
+  test("parse exponentiation: with cell references") {
+    val result = FormulaParser.parse("=A1^B1")
+    assert(result.isRight, s"Expected success, got $result")
+    result.foreach {
+      case TExpr.Pow(_, _) => ()
+      case other           => fail(s"Expected Pow, got $other")
+    }
+  }
+
+  test("evaluate exponentiation: 2^3 = 8") {
+    val sheet = Sheet("Test")
+    val result = for
+      expr <- FormulaParser.parse("=2^3")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right(BigDecimal(8)))
+  }
+
+  test("evaluate exponentiation: 2^3^2 = 512 (right-associative)") {
+    val sheet = Sheet("Test")
+    val result = for
+      expr <- FormulaParser.parse("=2^3^2")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    // 2^(3^2) = 2^9 = 512
+    assertEquals(result, Right(BigDecimal(512)))
+  }
+
+  test("evaluate exponentiation: 2^-1 = 0.5 (negative exponent)") {
+    val sheet = Sheet("Test")
+    val result = for
+      expr <- FormulaParser.parse("=2^-1")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right(BigDecimal(0.5)))
+  }
+
+  test("evaluate exponentiation: 0^0 = 1 (Excel convention)") {
+    val sheet = Sheet("Test")
+    val result = for
+      expr <- FormulaParser.parse("=0^0")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right(BigDecimal(1)))
+  }
+
+  test("evaluate exponentiation: 4^0.5 = 2 (square root)") {
+    val sheet = Sheet("Test")
+    val result = for
+      expr <- FormulaParser.parse("=4^0.5")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right(BigDecimal(2)))
+  }
+
+  test("print exponentiation: round-trip") {
+    val result = FormulaParser.parse("=2^3")
+    assert(result.isRight)
+    result.foreach { expr =>
+      val printed = FormulaPrinter.print(expr)
+      assertEquals(printed, "=2^3")
+      // Verify round-trip
+      val reparsed = FormulaParser.parse(printed)
+      assert(reparsed.isRight)
+    }
+  }
+
+  test("print exponentiation: nested right-associative") {
+    val result = FormulaParser.parse("=2^3^2")
+    assert(result.isRight)
+    result.foreach { expr =>
+      val printed = FormulaPrinter.print(expr)
+      assertEquals(printed, "=2^3^2")
+      // Verify round-trip
+      val reparsed = FormulaParser.parse(printed)
+      assert(reparsed.isRight)
+    }
+  }
+
   test("parse SUM function") {
     val result = FormulaParser.parse("=SUM(A1:B10)")
     assert(result.isRight)
@@ -645,6 +783,36 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val expr = TExpr.Add(TExpr.Lit(BigDecimal(1)), TExpr.Lit(BigDecimal(2)))
     val result = FormulaPrinter.print(expr)
     assertEquals(result, "=1+2")
+  }
+
+  test("print exponentiation: parenthesize negative base") {
+    val expr = TExpr.Pow(
+      TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.Lit(BigDecimal(2))),
+      TExpr.Lit(BigDecimal(2))
+    )
+    val result = FormulaPrinter.print(expr)
+    assertEquals(result, "=(-2)^2")
+    assertEquals(FormulaParser.parse(result), Right(expr))
+  }
+
+  test("print exponentiation: parenthesize nested base") {
+    val expr = TExpr.Pow(
+      TExpr.Pow(TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3))),
+      TExpr.Lit(BigDecimal(2))
+    )
+    val result = FormulaPrinter.print(expr)
+    assertEquals(result, "=(2^3)^2")
+    assertEquals(FormulaParser.parse(result), Right(expr))
+  }
+
+  test("print exponentiation: parenthesize multiplicative exponent") {
+    val expr = TExpr.Pow(
+      TExpr.Lit(BigDecimal(2)),
+      TExpr.Mul(TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(4)))
+    )
+    val result = FormulaPrinter.print(expr)
+    assertEquals(result, "=2^(3*4)")
+    assertEquals(FormulaParser.parse(result), Right(expr))
   }
 
   test("print SUM function") {
