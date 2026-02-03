@@ -38,6 +38,11 @@ object ArrayArithmetic:
   val mul: BinaryOp = (x, y) => Right(x * y)
   val div: BinaryOp = safeDivide
 
+  /** Exponentiation with Excel conventions (0^0 = 1) */
+  val pow: BinaryOp = (x, y) =>
+    try Right(BigDecimal(scala.math.pow(x.toDouble, y.toDouble)))
+    catch case e: Exception => Left(EvalError.EvalFailed(s"Power failed: ${e.getMessage}", None))
+
   /**
    * Convert a CellValue to BigDecimal for arithmetic.
    *

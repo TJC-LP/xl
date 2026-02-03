@@ -54,8 +54,9 @@ object FormulaPrinter:
     val Concat = 4
     val AddSub = 5
     val MulDiv = 6
-    val Unary = 7
-    val Primary = 8
+    val Pow = 7
+    val Unary = 8
+    val Primary = 9
 
   /**
    * Print expression with appropriate parentheses based on precedence.
@@ -111,6 +112,11 @@ object FormulaPrinter:
       case TExpr.Div(x, y) =>
         val result = s"${printExpr(x, Precedence.MulDiv)}/${printExpr(y, Precedence.MulDiv)}"
         parenthesizeIf(result, precedence > Precedence.MulDiv)
+
+      case TExpr.Pow(x, y) =>
+        // Right-associative: use Pow - 1 for right operand to avoid parentheses on nested ^
+        val result = s"${printExpr(x, Precedence.Pow)}^${printExpr(y, Precedence.Pow - 1)}"
+        parenthesizeIf(result, precedence > Precedence.Pow)
 
       // String operators
       case TExpr.Concat(x, y) =>
@@ -321,6 +327,8 @@ object FormulaPrinter:
         s"Mul(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Div(x, y) =>
         s"Div(${printWithTypes(x)}, ${printWithTypes(y)})"
+      case TExpr.Pow(x, y) =>
+        s"Pow(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Concat(x, y) =>
         s"Concat(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Eq(x, y) =>

@@ -29,7 +29,7 @@ import scala.annotation.tailrec
  *   1. Parentheses ()
  *   2. Function calls
  *   3. Unary minus -
- *   4. Exponentiation ^ (future)
+ *   4. Exponentiation ^ (right-associative)
  *   5. Multiplication *, Division /
  *   6. Addition +, Subtraction -
  *   7. Concatenation &
@@ -338,14 +338,14 @@ object FormulaParser:
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseMulDiv(state: ParserState): ParseResult[TExpr[?]] =
-    parseUnary(state).flatMap { case (left, s1) =>
+    parsePow(state).flatMap { case (left, s1) =>
       @tailrec
       def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
         val s2 = skipWhitespace(s)
         s2.currentChar match
           case Some('*') =>
             val s3 = skipWhitespace(s2.advance())
-            parseUnary(s3) match
+            parsePow(s3) match
               case Right((right, s4)) =>
                 loop(
                   TExpr.Mul(
@@ -357,7 +357,7 @@ object FormulaParser:
               case Left(err) => Left(err)
           case Some('/') =>
             val s3 = skipWhitespace(s2.advance())
-            parseUnary(s3) match
+            parsePow(s3) match
               case Right((right, s4)) =>
                 loop(
                   TExpr.Div(
@@ -370,6 +370,30 @@ object FormulaParser:
           case _ => Right((acc, s2))
 
       loop(left, s1)
+    }
+
+  /**
+   * Parse exponentiation (right-associative).
+   *
+   * Right-associativity: 2^3^2 = 2^(3^2) = 512, not (2^3)^2 = 64
+   */
+  private def parsePow(state: ParserState): ParseResult[TExpr[?]] =
+    parseUnary(state).flatMap { case (left, s1) =>
+      val s2 = skipWhitespace(s1)
+      s2.currentChar match
+        case Some('^') =>
+          val s3 = skipWhitespace(s2.advance())
+          parsePow(s3).map {
+            case (right, s4) => // Recursive call for right-associativity
+              (
+                TExpr.Pow(
+                  TExpr.asNumericExpr(left),
+                  TExpr.asNumericExpr(right)
+                ),
+                s4
+              )
+          }
+        case _ => Right((left, s2))
     }
 
   /**
