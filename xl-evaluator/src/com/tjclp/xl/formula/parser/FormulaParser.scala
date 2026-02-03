@@ -25,11 +25,11 @@ import scala.annotation.tailrec
  *   - Functions: SUM, COUNT, IF, AND, OR, NOT, etc.
  *   - Parentheses for grouping
  *
- * Operator precedence (highest to lowest):
+ * Operator precedence (highest to lowest, Excel-compatible):
  *   1. Parentheses ()
  *   2. Function calls
- *   3. Unary minus -
- *   4. Exponentiation ^ (right-associative)
+ *   3. Exponentiation ^ (right-associative)
+ *   4. Unary minus -
  *   5. Multiplication *, Division /
  *   6. Addition +, Subtraction -
  *   7. Concatenation &
@@ -338,14 +338,14 @@ object FormulaParser:
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseMulDiv(state: ParserState): ParseResult[TExpr[?]] =
-    parsePow(state).flatMap { case (left, s1) =>
+    parseUnary(state).flatMap { case (left, s1) =>
       @tailrec
       def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
         val s2 = skipWhitespace(s)
         s2.currentChar match
           case Some('*') =>
             val s3 = skipWhitespace(s2.advance())
-            parsePow(s3) match
+            parseUnary(s3) match
               case Right((right, s4)) =>
                 loop(
                   TExpr.Mul(
@@ -357,7 +357,7 @@ object FormulaParser:
               case Left(err) => Left(err)
           case Some('/') =>
             val s3 = skipWhitespace(s2.advance())
-            parsePow(s3) match
+            parseUnary(s3) match
               case Right((right, s4)) =>
                 loop(
                   TExpr.Div(
@@ -373,17 +373,19 @@ object FormulaParser:
     }
 
   /**
-   * Parse exponentiation (right-associative).
+   * Parse exponentiation (right-associative, highest arithmetic precedence).
    *
-   * Right-associativity: 2^3^2 = 2^(3^2) = 512, not (2^3)^2 = 64
+   * Right-associativity: 2^3^2 = 2^(3^2) = 512, not (2^3)^2 = 64 Excel precedence: ^ binds tighter
+   * than unary minus, so -2^2 = -(2^2) = -4 But the exponent can have unary minus: 2^-1 = 0.5
    */
   private def parsePow(state: ParserState): ParseResult[TExpr[?]] =
-    parseUnary(state).flatMap { case (left, s1) =>
+    parsePrimary(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
       s2.currentChar match
         case Some('^') =>
           val s3 = skipWhitespace(s2.advance())
-          parsePow(s3).map {
+          // Allow unary minus in the exponent (2^-1 = 0.5)
+          parsePowExponent(s3).map {
             case (right, s4) => // Recursive call for right-associativity
               (
                 TExpr.Pow(
@@ -397,7 +399,23 @@ object FormulaParser:
     }
 
   /**
+   * Parse the exponent of a power expression, allowing unary minus. This handles cases like 2^-1 =
+   * 0.5 while keeping -2^2 = -(2^2) = -4
+   */
+  private def parsePowExponent(state: ParserState): ParseResult[TExpr[?]] =
+    val s = skipWhitespace(state)
+    s.currentChar match
+      case Some('-') =>
+        val s2 = skipWhitespace(s.advance())
+        parsePowExponent(s2).map { case (expr, s3) =>
+          (TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), s3)
+        }
+      case _ => parsePow(s)
+
+  /**
    * Parse unary operators: -, NOT
+   *
+   * Excel precedence: unary minus has lower precedence than ^, so -2^2 = -(2^2) = -4
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseUnary(state: ParserState): ParseResult[TExpr[?]] =
@@ -417,7 +435,7 @@ object FormulaParser:
         parseUnary(s2).map { case (expr, s3) =>
           (TExpr.Call(FunctionSpecs.not, TExpr.asBooleanExpr(expr)), s3) // Convert PolyRef
         }
-      case _ => parsePrimary(s)
+      case _ => parsePow(s)
 
   /**
    * Parse primary expressions: literals, cell refs, functions, parentheses.

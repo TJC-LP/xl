@@ -389,3 +389,20 @@ class ArrayArithmeticSpec extends FunSuite:
     assert(result.isRight, s"Expected Right, got $result")
     assertEquals(result.toOption.get, CellValue.Number(60)) // (1+2+3) * 10
   }
+
+  // ========== Exponentiation Tests ==========
+
+  test("range ^ scalar via evaluateArrayFormula") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(2))
+      .put(ref"A2", CellValue.Number(3))
+      .put(ref"A3", CellValue.Number(4))
+
+    val result = sheet.evaluateArrayFormula("=A1:A3^2", ref"C1")
+
+    assert(result.isRight, s"Expected Right, got $result")
+    val (updatedSheet, spillRange) = result.toOption.get
+    assertEquals(updatedSheet(ref"C1").value, CellValue.Number(4)) // 2^2
+    assertEquals(updatedSheet(ref"C2").value, CellValue.Number(9)) // 3^2
+    assertEquals(updatedSheet(ref"C3").value, CellValue.Number(16)) // 4^2
+  }

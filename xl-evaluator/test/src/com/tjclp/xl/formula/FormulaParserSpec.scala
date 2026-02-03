@@ -429,12 +429,16 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("parse exponentiation: unary minus has higher precedence") {
-    // -2^2 should parse as (-2)^2 = 4, not -(2^2) = -4
-    // Note: Excel actually treats this as -(2^2), but our parser follows standard math convention
+  test("parse exponentiation: unary minus precedence (Excel-compatible)") {
+    // Excel parses -2^2 as -(2^2) = -4, not (-2)^2 = 4
+    // Our parser matches Excel behavior: ^ binds tighter than unary minus
     val result = FormulaParser.parse("=-2^2")
     assert(result.isRight, s"Expected success, got $result")
-    // Result depends on implementation - verify it parses
+    result.foreach {
+      case TExpr.Sub(TExpr.Lit(zero: BigDecimal), TExpr.Pow(_, _)) =>
+        assertEquals(zero, BigDecimal(0))
+      case other => fail(s"Expected Sub(0, Pow(2, 2)), got $other")
+    }
   }
 
   test("parse exponentiation: with parentheses") {
