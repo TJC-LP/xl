@@ -173,6 +173,8 @@ object Main
 
   private val formulasOpt = Opts.flag("formulas", "Show formulas instead of values").orFalse
   private val evalOpt = Opts.flag("eval", "Evaluate formulas (compute live values)").orFalse
+  private val strictOpt =
+    Opts.flag("strict", "Fail on formula evaluation errors (use with --eval)").orFalse
   private val limitOpt = Opts.option[Int]("limit", "Maximum rows to display").withDefault(50)
   private val formatOpt = Opts
     .option[String]("format", "Output format: markdown, html, svg, json, csv, png, jpeg, webp, pdf")
@@ -248,6 +250,7 @@ OUTPUT FLAGS:
   --format <fmt>      Output format
   --formulas          Show formulas instead of values
   --eval              Evaluate formulas (compute live values)
+  --strict            Fail on formula evaluation errors (use with --eval)
   --skip-empty        Skip empty cells/rows
   --show-labels       Include row/column headers (A, B, C / 1, 2, 3)
   --header-row <n>    Use row N as JSON keys (1-based)
@@ -262,6 +265,7 @@ EXAMPLES:
   xl -f data.xlsx -s Sheet1 view A1:D10                    # Markdown table
   xl -f data.xlsx -s Sheet1 view A1:D10 --format json      # JSON array
   xl -f data.xlsx -s Sheet1 view A1:D10 --eval             # Computed values
+  xl -f data.xlsx -s Sheet1 view A1:D10 --eval --strict    # Fail on eval errors
   xl -f data.xlsx -s Sheet1 view A1:D10 --formulas         # Show formulas
   xl -f data.xlsx -s Sheet1 view A1:D10 --format png --raster-output chart.png"""
 
@@ -506,6 +510,7 @@ EXAMPLES:
         rangeArg,
         formulasOpt,
         evalOpt,
+        strictOpt,
         limitOpt,
         formatOpt,
         printScaleOpt,
@@ -1134,6 +1139,7 @@ Operations execute in order. Use "-" to read from stdin."""
           rangeStr,
           showFormulas,
           evalFormulas,
+          _, // strict - not used in streaming mode
           limit,
           format,
           _,
@@ -1292,6 +1298,7 @@ Operations execute in order. Use "-" to read from stdin."""
           rangeStr,
           showFormulas,
           evalFormulas,
+          strict,
           limit,
           format,
           printScale,
@@ -1310,6 +1317,7 @@ Operations execute in order. Use "-" to read from stdin."""
         rangeStr,
         showFormulas,
         evalFormulas,
+        strict,
         limit,
         format,
         printScale,

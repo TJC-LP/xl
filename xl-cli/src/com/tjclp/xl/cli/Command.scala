@@ -33,6 +33,7 @@ enum CliCommand:
     range: String,
     showFormulas: Boolean,
     evalFormulas: Boolean,
+    strict: Boolean,
     limit: Int,
     format: ViewFormat,
     printScale: Boolean,
