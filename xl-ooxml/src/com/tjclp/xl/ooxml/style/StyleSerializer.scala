@@ -341,7 +341,7 @@ final case class OoxmlStyles(
       case Color.Rgb(argb) =>
         elem("color", "rgb" -> f"$argb%08X")()
       case Color.Theme(slot, tint) =>
-        val slotIdx = slot.ordinal
+        val slotIdx = ColorHelpers.themeSlotToIndex(slot)
         elem("color", "theme" -> slotIdx.toString, "tint" -> tint.toString)()
 
   /**
@@ -508,7 +508,7 @@ final case class OoxmlStyles(
       case Color.Rgb(argb) =>
         writer.writeAttribute("rgb", f"$argb%08X")
       case Color.Theme(slot, tint) =>
-        writer.writeAttribute("theme", slot.ordinal.toString)
+        writer.writeAttribute("theme", ColorHelpers.themeSlotToIndex(slot).toString)
         writer.writeAttribute("tint", tint.toString)
 
 object OoxmlStyles:
