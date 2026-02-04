@@ -11,12 +11,18 @@ import scala.collection.immutable.ArraySeq
  * Captures metadata about the physical XLSX that produced a [[Workbook]]. The context enables
  * surgical write operations by preserving the manifest of ZIP entries. The PreservedPartStore can
  * be reconstructed from the sourcePath when needed for IO operations.
+ *
+ * @param commentPathMapping
+ *   Mapping from 0-based sheet index to comment file path (e.g., "xl/comments1.xml"). Excel numbers
+ *   comment files sequentially across only sheets that have comments, NOT by sheet index. This
+ *   mapping preserves the original paths to enable correct surgical writes.
  */
 final case class SourceContext(
   sourcePath: Path,
   partManifest: PartManifest,
   modificationTracker: ModificationTracker,
-  fingerprint: SourceFingerprint
+  fingerprint: SourceFingerprint,
+  commentPathMapping: Map[Int, String] = Map.empty
 ) derives CanEqual:
 
   /** True when no workbook modifications have been recorded. */
@@ -39,6 +45,17 @@ final case class SourceContext(
     copy(modificationTracker = modificationTracker.markMetadata)
 
 object SourceContext:
-  /** Construct a context for a workbook that originated from a file. */
-  def fromFile(path: Path, manifest: PartManifest, fingerprint: SourceFingerprint): SourceContext =
-    SourceContext(path, manifest, ModificationTracker.clean, fingerprint)
+  /**
+   * Construct a context for a workbook that originated from a file.
+   *
+   * @param commentPathMapping
+   *   Mapping from 0-based sheet index to comment file path. Excel numbers comment files
+   *   sequentially (comments1.xml, comments2.xml...) across only sheets that have comments.
+   */
+  def fromFile(
+    path: Path,
+    manifest: PartManifest,
+    fingerprint: SourceFingerprint,
+    commentPathMapping: Map[Int, String] = Map.empty
+  ): SourceContext =
+    SourceContext(path, manifest, ModificationTracker.clean, fingerprint, commentPathMapping)

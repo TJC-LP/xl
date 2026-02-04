@@ -7,6 +7,7 @@ private[ooxml] object ColorHelpers:
 
   // OOXML theme color indices (ECMA-376 Part 1, 18.8.3):
   // 0=lt1, 1=dk1, 2=lt2, 3=dk2, 4-9=accent1-6, 10=hlink, 11=folHlink
+  // NOTE: OOXML order differs from ThemeSlot enum order (Dark1, Light1, Dark2, Light2, ...)
   def themeSlotFromIndex(idx: Int): Option[ThemeSlot] = idx match
     case 0 => Some(ThemeSlot.Light1)
     case 1 => Some(ThemeSlot.Dark1)
@@ -19,6 +20,19 @@ private[ooxml] object ColorHelpers:
     case 8 => Some(ThemeSlot.Accent5)
     case 9 => Some(ThemeSlot.Accent6)
     case _ => None
+
+  /** Convert ThemeSlot to OOXML theme index. Inverse of themeSlotFromIndex. */
+  def themeSlotToIndex(slot: ThemeSlot): Int = slot match
+    case ThemeSlot.Light1 => 0
+    case ThemeSlot.Dark1 => 1
+    case ThemeSlot.Light2 => 2
+    case ThemeSlot.Dark2 => 3
+    case ThemeSlot.Accent1 => 4
+    case ThemeSlot.Accent2 => 5
+    case ThemeSlot.Accent3 => 6
+    case ThemeSlot.Accent4 => 7
+    case ThemeSlot.Accent5 => 8
+    case ThemeSlot.Accent6 => 9
 
   // Standard Excel indexed color palette (0-63)
   // Based on ECMA-376 Part 1, 18.8.27 and legacy BIFF8 color table
