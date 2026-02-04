@@ -1085,6 +1085,222 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
+  test("non-sequential comment files are preserved during surgical write (regression GH-comment-numbering)") {
+    // This test validates the fix for the comment file numbering bug where:
+    // - Excel numbers comment files sequentially (comments1.xml, comments2.xml...)
+    //   across only sheets that HAVE comments, NOT by sheet index
+    // - XlsxWriter was using sheet indices (comments3.xml for sheet 3)
+    // - This caused Content_Types to reference non-existent files
+    //
+    // Scenario: 3-sheet workbook with comments only on sheets 1 and 3 (not 2)
+    // Source should have: comments1.xml (sheet 1), comments2.xml (sheet 3)
+    // NOT: comments1.xml (sheet 1), comments3.xml (sheet 3)
+
+    val source = createWorkbookWithNonSequentialComments()
+
+    // Verify source has correct comment numbering
+    val sourceZip = new ZipFile(source.toFile)
+    assert(sourceZip.getEntry("xl/comments1.xml") != null, "Source should have comments1.xml")
+    assert(sourceZip.getEntry("xl/comments2.xml") != null, "Source should have comments2.xml")
+    assert(sourceZip.getEntry("xl/comments3.xml") == null, "Source should NOT have comments3.xml")
+    sourceZip.close()
+
+    // Read and modify sheet 3 (which has comments in comments2.xml)
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+    val modified = for
+      sheet3 <- wb("Sheet3")
+      updatedSheet = sheet3.put(ref"A1" -> "Modified")
+    yield wb.put(updatedSheet)
+
+    val modifiedWb = modified.fold(err => fail(s"Modification failed: $err"), identity)
+
+    // Write back
+    val output = Files.createTempFile("non-seq-comments-test", ".xlsx")
+    XlsxWriter.write(modifiedWb, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    // Verify output preserves sequential comment numbering
+    val outputZip = new ZipFile(output.toFile)
+    assert(outputZip.getEntry("xl/comments1.xml") != null, "Output should have comments1.xml")
+    assert(outputZip.getEntry("xl/comments2.xml") != null, "Output should have comments2.xml")
+    assert(outputZip.getEntry("xl/comments3.xml") == null, "Output should NOT have comments3.xml")
+
+    // Verify Content_Types doesn't have spurious entries
+    val ctEntry = outputZip.getEntry("[Content_Types].xml")
+    val ctContent = new String(readEntryBytes(outputZip, ctEntry), "UTF-8")
+    assert(!ctContent.contains("/xl/comments3.xml"), "Content_Types should NOT reference comments3.xml")
+
+    // Verify comments are preserved
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    val sheet1Comments = reloaded("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity).comments
+    val sheet3Comments = reloaded("Sheet3").fold(err => fail(s"Sheet3 missing: $err"), identity).comments
+    assertEquals(sheet1Comments.size, 1, "Sheet1 should have 1 comment")
+    assertEquals(sheet3Comments.size, 1, "Sheet3 should have 1 comment")
+
+    // Verify modification was saved
+    val modifiedCell = reloaded("Sheet3")
+      .flatMap(s => Right(s.cells.get(ref"A1")))
+      .fold(err => fail(s"Get cell failed: $err"), identity)
+    assertEquals(modifiedCell.map(_.value), Some(CellValue.Text("Modified")))
+
+    outputZip.close()
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  // Helper: Create workbook with non-sequential comment files (sheets 1 and 3 have comments, not 2)
+  private def createWorkbookWithNonSequentialComments(): Path =
+    val path = Files.createTempFile("non-seq-comments-source", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1)
+
+    try
+      // Content Types with comments1.xml and comments2.xml (not comments3.xml!)
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>
+  <Override PartName="/xl/comments2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>
+</Types>"""
+      )
+
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
+    <sheet name="Sheet3" sheetId="3" r:id="rId3"/>
+  </sheets>
+</workbook>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet3.xml"/>
+</Relationships>"""
+      )
+
+      // Sheet 1: has comments (comments1.xml)
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>Sheet1 Data</t></is></c></row>
+  </sheetData>
+</worksheet>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/worksheets/_rels/sheet1.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/comments1.xml",
+        """<?xml version="1.0"?>
+<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <authors><author>Author1</author></authors>
+  <commentList>
+    <comment ref="A1" authorId="0"><text><t>Comment on Sheet1</t></text></comment>
+  </commentList>
+</comments>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/drawings/vmlDrawing1.vml",
+        """<xml xmlns:v="urn:schemas-microsoft-com:vml"><v:shape type="#_x0000_t202"><v:textbox/></v:shape></xml>"""
+      )
+
+      // Sheet 2: NO comments
+      writeEntry(
+        out,
+        "xl/worksheets/sheet2.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>Sheet2 Data (no comments)</t></is></c></row>
+  </sheetData>
+</worksheet>"""
+      )
+
+      // Sheet 3: has comments (comments2.xml - note: NOT comments3.xml!)
+      writeEntry(
+        out,
+        "xl/worksheets/sheet3.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>Sheet3 Data</t></is></c></row>
+  </sheetData>
+</worksheet>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/worksheets/_rels/sheet3.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="../comments2.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="../drawings/vmlDrawing2.vml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/comments2.xml",
+        """<?xml version="1.0"?>
+<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <authors><author>Author2</author></authors>
+  <commentList>
+    <comment ref="B2" authorId="0"><text><t>Comment on Sheet3</t></text></comment>
+  </commentList>
+</comments>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/drawings/vmlDrawing2.vml",
+        """<xml xmlns:v="urn:schemas-microsoft-com:vml"><v:shape type="#_x0000_t202"><v:textbox/></v:shape></xml>"""
+      )
+
+    finally out.close()
+
+    path
+
   // Helper: Write ZIP entry with deterministic timestamp
   private def writeEntry(out: ZipOutputStream, name: String, content: String): Unit =
     val entry = new ZipEntry(name)

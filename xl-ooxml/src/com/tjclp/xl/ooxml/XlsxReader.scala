@@ -328,8 +328,8 @@ object XlsxReader:
       // Parse theme (optional, falls back to Office theme)
       theme = parseTheme(parts)
 
-      // Parse sheets
-      sheets <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
+      // Parse sheets and collect comment path mapping
+      (sheets, commentPathMapping) <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
 
       // Parse defined names from workbook.xml
       definedNames = parseDefinedNames(ooxmlWb.definedNames)
@@ -348,7 +348,8 @@ object XlsxReader:
         fingerprint,
         theme,
         definedNames,
-        sheetStates
+        sheetStates,
+        commentPathMapping
       )
     yield ReadResult(workbook, styleWarnings)
 
@@ -633,44 +634,57 @@ object XlsxReader:
           case Right(palette) => palette
           case Left(_) => ThemePalette.office
 
-  /** Parse all worksheets */
+  /**
+   * Parse all worksheets and collect comment path mapping.
+   *
+   * Returns both the parsed sheets and a mapping from 0-based sheet index to comment file path.
+   * Excel numbers comment files sequentially (comments1.xml, comments2.xml...) across only sheets
+   * that have comments, NOT by sheet index. This mapping preserves the original paths.
+   */
   private def parseSheets(
     parts: Map[String, String],
     sheetRefs: Seq[SheetRef],
     sst: Option[SharedStrings],
     styles: WorkbookStyles,
     relationships: Relationships
-  ): XLResult[Vector[Sheet]] =
+  ): XLResult[(Vector[Sheet], Map[Int, String])] =
     val relMap = relationships.relationships.map(rel => rel.id -> rel).toMap
-    sheetRefs.toVector.zipWithIndex.traverse { case (ref, idx) =>
-      val sheetPath = relMap
-        .get(ref.relationshipId)
-        .map(rel => resolveSheetPath(rel.target))
-        .getOrElse(defaultSheetPath(ref.sheetId))
+    val commentPathBuilder = Map.newBuilder[Int, String]
 
-      for
-        xml <- parts
-          .get(sheetPath)
-          .toRight(XLError.ParseError(sheetPath, s"Missing worksheet: $sheetPath"))
-        elem <- parseXml(xml, sheetPath)
-        ooxmlSheet <- OoxmlWorksheet
-          .fromXmlWithSST(elem, sst)
-          .left
-          .map(err => XLError.ParseError(sheetPath, err): XLError)
-        // Parse worksheet relationships to find comment/table references (1-based sheet index)
-        (commentTarget, tableTargets) <- parseWorksheetRelationships(parts, idx + 1)
+    sheetRefs.toVector.zipWithIndex
+      .traverse { case (ref, idx) =>
+        val sheetPath = relMap
+          .get(ref.relationshipId)
+          .map(rel => resolveSheetPath(rel.target))
+          .getOrElse(defaultSheetPath(ref.sheetId))
 
-        // Parse comments if relationship exists
-        comments <- commentTarget match
-          case Some(target) => parseCommentsForSheet(parts, target)
-          case None => Right(Map.empty)
+        for
+          xml <- parts
+            .get(sheetPath)
+            .toRight(XLError.ParseError(sheetPath, s"Missing worksheet: $sheetPath"))
+          elem <- parseXml(xml, sheetPath)
+          ooxmlSheet <- OoxmlWorksheet
+            .fromXmlWithSST(elem, sst)
+            .left
+            .map(err => XLError.ParseError(sheetPath, err): XLError)
+          // Parse worksheet relationships to find comment/table references (1-based sheet index)
+          (commentTarget, tableTargets) <- parseWorksheetRelationships(parts, idx + 1)
 
-        // Parse tables if relationships exist
-        tables <- parseTablesForSheet(parts, tableTargets)
+          // Parse comments if relationship exists
+          comments <- commentTarget match
+            case Some(target) =>
+              // Track the mapping from sheet index to comment file path
+              commentPathBuilder += (idx -> target)
+              parseCommentsForSheet(parts, target)
+            case None => Right(Map.empty)
 
-        domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles, comments, tables)
-      yield domainSheet
-    }
+          // Parse tables if relationships exist
+          tables <- parseTablesForSheet(parts, tableTargets)
+
+          domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles, comments, tables)
+        yield domainSheet
+      }
+      .map(sheets => (sheets, commentPathBuilder.result()))
 
   private def defaultSheetPath(sheetId: Int): String = s"xl/worksheets/sheet$sheetId.xml"
 
@@ -831,6 +845,8 @@ object XlsxReader:
    *   Defined names from workbook.xml
    * @param sheetStates
    *   Sheet visibility states from workbook.xml
+   * @param commentPathMapping
+   *   Mapping from 0-based sheet index to comment file path (e.g., "xl/comments1.xml")
    * @return
    *   Workbook with optional SourceContext
    */
@@ -841,14 +857,15 @@ object XlsxReader:
     fingerprint: Option[SourceFingerprint],
     theme: ThemePalette,
     definedNames: Vector[DefinedName],
-    sheetStates: Map[SheetName, Option[String]]
+    sheetStates: Map[SheetName, Option[String]],
+    commentPathMapping: Map[Int, String]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
       val sourceContextEither: XLResult[Option[SourceContext]] =
         (source, fingerprint) match
           case (Some(handle), Some(fp)) =>
-            Right(Some(SourceContext.fromFile(handle.path, manifest, fp)))
+            Right(Some(SourceContext.fromFile(handle.path, manifest, fp, commentPathMapping)))
           case (None, None) => Right(None)
           case (Some(_), None) =>
             Left(XLError.IOError("Missing source fingerprint for workbook"))

@@ -371,18 +371,36 @@ object XlsxWriter:
     hasComments: Boolean,
     tableIds: Seq[Long]
   ): Relationships =
+    val commentPath = s"xl/comments$sheetIndex.xml"
+    buildWorksheetRelationshipsWithCommentsPath(commentPath, hasComments, tableIds)
+
+  /**
+   * Build worksheet relationships using the actual comment file path.
+   *
+   * Excel numbers comment files sequentially (comments1.xml, comments2.xml...) across only sheets
+   * that have comments, NOT by sheet index. This method accepts the correct path to ensure surgical
+   * writes preserve the source file's comment numbering.
+   */
+  private def buildWorksheetRelationshipsWithCommentsPath(
+    commentPath: String,
+    hasComments: Boolean,
+    tableIds: Seq[Long]
+  ): Relationships =
+    // Extract file number from comment path (e.g., "xl/comments3.xml" → "3")
+    val commentFileNum = commentPath.stripPrefix("xl/comments").stripSuffix(".xml")
+
     val commentRels =
       if hasComments then
         Seq(
           Relationship(
             id = "rId1",
             `type` = XmlUtil.relTypeComments,
-            target = s"../comments$sheetIndex.xml"
+            target = s"../comments$commentFileNum.xml"
           ),
           Relationship(
             id = "rId2",
             `type` = XmlUtil.relTypeVmlDrawing,
-            target = s"../drawings/vmlDrawing$sheetIndex.vml"
+            target = s"../drawings/vmlDrawing$commentFileNum.vml"
           )
         )
       else Seq.empty
@@ -1310,24 +1328,31 @@ object XlsxWriter:
         // (or when metadata modified - we need fresh workbook structure)
         OoxmlWorkbook.fromDomain(workbook)
 
-    val baseContentTypes = preservedContentTypes match
+    // Content types: preserve from source when available, otherwise generate minimal.
+    // IMPORTANT: Don't call withCommentOverrides when preserving - the source already has
+    // correct comment entries with Excel's sequential numbering (comments1.xml, comments2.xml...)
+    // which differs from sheet-index-based numbering.
+    val contentTypes = preservedContentTypes match
       case Some(preserved) =>
         // Add sharedStrings override if we're generating it but source didn't have it
-        if sharedStringsInOutput && !sourceHasSharedStrings then
-          preserved.copy(overrides =
-            preserved.overrides + ("/xl/sharedStrings.xml" -> XmlUtil.ctSharedStrings)
-          )
-        else preserved
+        val withSst =
+          if sharedStringsInOutput && !sourceHasSharedStrings then
+            preserved.copy(overrides =
+              preserved.overrides + ("/xl/sharedStrings.xml" -> XmlUtil.ctSharedStrings)
+            )
+          else preserved
+        // Only add table overrides (comments already in preserved Content_Types)
+        withSst.withTableOverrides(totalTableCount)
       case None =>
-        ContentTypes.minimal(
-          hasStyles = true,
-          hasSharedStrings = sharedStringsInOutput,
-          sheetCount = workbook.sheets.size,
-          sheetsWithComments = sheetsWithComments
-        )
-    val contentTypes = baseContentTypes
-      .withCommentOverrides(sheetsWithComments)
-      .withTableOverrides(totalTableCount)
+        ContentTypes
+          .minimal(
+            hasStyles = true,
+            hasSharedStrings = sharedStringsInOutput,
+            sheetCount = workbook.sheets.size,
+            sheetsWithComments = sheetsWithComments
+          )
+          .withCommentOverrides(sheetsWithComments)
+          .withTableOverrides(totalTableCount)
 
     val rootRels = preservedRootRels.getOrElse(Relationships.root())
 
@@ -1458,26 +1483,37 @@ object XlsxWriter:
                 )
               writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
 
-          // Comments: always write from domain model for modified sheets
-          // This ensures new/modified comments are written, not just copied from source
-          val commentPath = s"xl/comments${idx + 1}.xml"
+          // For modified sheets:
+          // 1. Copy relationships from source (preserves printerSettings, drawings, customProperty)
+          // 2. Regenerate comments/VML from domain model (handles comment add/remove/modify)
           val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+          val commentPath = sourceContext
+            .flatMap(_.commentPathMapping.get(idx))
+            .getOrElse(s"xl/comments${idx + 1}.xml")
+          val commentFileNum = commentPath.stripPrefix("xl/comments").stripSuffix(".xml")
+          val vmlPath = s"xl/drawings/vmlDrawing$commentFileNum.vml"
 
           val hasComments = commentsBySheet.contains(idx)
           val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
 
-          if hasComments || tableIds.nonEmpty then
-            val sheetRels =
-              buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
-            writePart(zip, relsPath, sheetRels, config)
+          // Copy relationships from source if available (preserves non-comment relationships)
+          // Otherwise regenerate minimal relationships
+          sourceContext match
+            case Some(ctx) if ctx.partManifest.contains(relsPath) =>
+              copyPreservedPart(ctx.sourcePath, relsPath, zip)
+            case _ if hasComments || tableIds.nonEmpty =>
+              val sheetRels =
+                buildWorksheetRelationshipsWithCommentsPath(commentPath, hasComments, tableIds)
+              writePart(zip, relsPath, sheetRels, config)
+            case _ => // No relationships needed
 
-          // Write comments if present (always from domain model, not source)
+          // Always regenerate comments/VML from domain model for modified sheets
+          // This ensures comment add/remove/modify is reflected in output
           commentsBySheet.get(idx).foreach { comments =>
             writePart(zip, commentPath, comments, config)
 
-            // Write VML drawing for comment indicators
             vmlDrawings.get(idx).foreach { vmlXml =>
-              writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
+              writeVmlPart(zip, vmlPath, vmlXml, config)
             }
           }
         else
@@ -1486,10 +1522,11 @@ object XlsxWriter:
             val sheetPath = graph.pathForSheet(idx)
             copyPreservedPart(ctx.sourcePath, sheetPath, zip)
 
-            // Copy comments and relationships if they exist (unchanged sheets)
-            val commentPath = s"xl/comments${idx + 1}.xml"
-            if ctx.partManifest.contains(commentPath) then
-              copyPreservedPart(ctx.sourcePath, commentPath, zip)
+            // Copy comments and relationships using source's actual paths (from mapping)
+            ctx.commentPathMapping.get(idx).foreach { commentPath =>
+              if ctx.partManifest.contains(commentPath) then
+                copyPreservedPart(ctx.sourcePath, commentPath, zip)
+            }
 
             val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
             if ctx.partManifest.contains(relsPath) then
@@ -1504,19 +1541,19 @@ object XlsxWriter:
       }
 
       // Copy preserved parts (charts, drawings, images, etc.) if source available
-      // Skip VML drawings for modified sheets - either we wrote fresh VML (if comments exist)
-      // or comments were removed (so VML should be deleted, not copied)
+      // Skip VML drawings for regenerated sheets - we regenerate VML from domain model
+      // (or omit it if comments were removed)
       sourceContext.foreach { ctx =>
+        val vmlPathsToSkip = sheetsToRegenerate.flatMap { idx =>
+          ctx.commentPathMapping.get(idx).map { commentPath =>
+            val fileNum = commentPath.stripPrefix("xl/comments").stripSuffix(".xml")
+            s"xl/drawings/vmlDrawing$fileNum.vml"
+          }
+        }
+
         preservableParts.foreach { path =>
           val isVmlDrawing = path.startsWith("xl/drawings/vmlDrawing") && path.endsWith(".vml")
-          val shouldSkip = isVmlDrawing && {
-            // Extract sheet index from vmlDrawingN.vml (N is 1-based)
-            val sheetIdxOpt =
-              path.stripPrefix("xl/drawings/vmlDrawing").stripSuffix(".vml").toIntOption.map(_ - 1)
-            // Skip if sheet was regenerated - VML is handled by domain model write or removed
-            // For unmodified sheets, we want to copy VML from source
-            sheetIdxOpt.exists(idx => sheetsToRegenerate.contains(idx))
-          }
+          val shouldSkip = isVmlDrawing && vmlPathsToSkip.contains(path)
 
           if !shouldSkip then copyPreservedPart(ctx.sourcePath, path, zip)
         }

@@ -407,6 +407,13 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
     preservedMetadata match
       case Some(preserved) =>
+        // Ensure rootScope includes 'r:' namespace if we're adding a new legacyDrawing element
+        // (source worksheet might not have had comments, so its scope might lack the r: prefix)
+        val needsRNamespace = sheet.comments.nonEmpty && preserved.legacyDrawing.isEmpty
+        val adjustedScope =
+          if needsRNamespace && !scopeHasPrefix(preserved.rootScope, "r") then
+            NamespaceBinding("r", nsRelationships, preserved.rootScope)
+          else preserved.rootScope
         OoxmlWorksheet(
           allRows, // Use merged rows (with cells + empty rows)
           sheet.mergedRanges,
@@ -435,7 +442,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           preserved.extLst,
           preserved.otherElements,
           preserved.rootAttributes,
-          preserved.rootScope
+          adjustedScope
         )
       case None =>
         // No preserved metadata - create minimal worksheet with cols from domain

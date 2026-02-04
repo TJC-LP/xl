@@ -12,6 +12,15 @@ import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
 private[ooxml] val defaultWorksheetScope: NamespaceBinding =
   NamespaceBinding(null, nsSpreadsheetML, NamespaceBinding("r", XmlUtil.nsRelationships, TopScope))
 
+/** Check if a NamespaceBinding chain contains a given prefix. */
+private[ooxml] def scopeHasPrefix(scope: NamespaceBinding, prefix: String): Boolean =
+  @annotation.tailrec
+  def loop(s: NamespaceBinding): Boolean =
+    if s == null || s == TopScope then false
+    else if s.prefix == prefix then true
+    else loop(s.parent)
+  loop(scope)
+
 private[ooxml] def cleanNamespaces(elem: Elem): Elem =
   val cleanedChildren = elem.child.map {
     case e: Elem => cleanNamespaces(e)
