@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.2] - 2026-02-04
+
+### Added
+
+- **`--strict` flag for `--eval` error handling** (#204)
+  - `xl view --eval --strict` fails with non-zero exit code on formula evaluation errors
+  - Default behavior unchanged: warnings to stderr, shows original formula
+  - Useful for CI/CD pipelines and scripts requiring reliable error detection
+
+- **xl-agent benchmark module** (#194)
+  - LLM skill comparison framework for Excel manipulation tasks
+  - Parallel execution of benchmark work units
+  - Conversation tracing for debugging agent behavior
+
+- **Exponentiation operator** (#203)
+  - Formula parser now supports `^` for exponentiation: `=2^10` → 1024
+
+- **Sheet hide/show commands** (#201)
+  - `xl sheets hide <name>` and `xl sheets show <name>`
+  - Support for `veryHidden` sheets (only visible via code)
+
+### Fixed
+
+- **Issues triaged and closed**: #192, #196, #197, #178, #179, #180, #182
+
+---
+
 ## [0.9.1] - 2026-02-02
 
 ### Added
