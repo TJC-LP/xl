@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.3] - 2026-02-04
+
+### Fixed
+
+- **Surgical write comment file path mapping** (#205)
+  - Excel numbers comment files sequentially (comments1.xml, comments2.xml...) across only sheets that have comments, NOT by sheet index
+  - XlsxWriter was incorrectly using sheet indices, causing Content_Types.xml to reference non-existent files
+  - Fixed by preserving original comment file paths in SourceContext during read
+
+- **Theme color serialization** (#205)
+  - ThemeSlot enum ordinals didn't match OOXML spec indices (Light1/Dark1 were swapped)
+  - Caused black backgrounds to appear where light fills should be
+  - Fixed by adding themeSlotToIndex() for correct mapping during write
+
+---
+
 ## [0.9.2] - 2026-02-04
 
 ### Added
