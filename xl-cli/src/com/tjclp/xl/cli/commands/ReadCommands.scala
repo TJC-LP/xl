@@ -54,6 +54,7 @@ object ReadCommands:
     rangeStr: String,
     showFormulas: Boolean,
     evalFormulas: Boolean,
+    strict: Boolean,
     limit: Int,
     format: ViewFormat,
     printScale: Boolean,
@@ -78,7 +79,8 @@ object ReadCommands:
         case ViewFormat.Markdown =>
           // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            if evalFormulas then
+              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
           IO.pure(
             Markdown.renderRange(
@@ -92,7 +94,8 @@ object ReadCommands:
         case ViewFormat.Html =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            if evalFormulas then
+              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
           IO.pure(
             sheetToRender.toHtml(
@@ -105,7 +108,8 @@ object ReadCommands:
         case ViewFormat.Svg =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            if evalFormulas then
+              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
           IO.pure(
             sheetToRender.toSvg(
@@ -118,7 +122,8 @@ object ReadCommands:
         case ViewFormat.Json =>
           // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            if evalFormulas then
+              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
           IO.pure(
             JsonRenderer.renderRange(
@@ -133,7 +138,8 @@ object ReadCommands:
         case ViewFormat.Csv =>
           // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
           val sheetToRender =
-            if evalFormulas then evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange))
+            if evalFormulas then
+              evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
           IO.pure(
             CsvRenderer.renderRange(
@@ -588,7 +594,8 @@ object ReadCommands:
   private def evaluateSheetFormulas(
     sheet: Sheet,
     workbook: Option[Workbook] = None,
-    range: Option[CellRange] = None
+    range: Option[CellRange] = None,
+    strict: Boolean = false
   ): Sheet =
     val evalResult = range match
       case Some(r) =>
@@ -605,6 +612,8 @@ object ReadCommands:
           acc.put(ref, value)
         }
       case Left(error) =>
-        // Warn on stderr but return original sheet
-        Console.err.println(s"Warning: Formula evaluation failed: ${error.message}")
-        sheet
+        if strict then throw new Exception(s"Formula evaluation failed: ${error.message}")
+        else
+          // Warn on stderr but return original sheet
+          Console.err.println(s"Warning: Formula evaluation failed: ${error.message}")
+          sheet
