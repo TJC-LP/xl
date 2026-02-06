@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.4] - 2026-02-06
+
+### Fixed
+
+- **Batch `put` now supports `values` array** (TJC-740, #206)
+  - `{"op":"put","ref":"A1:C1","values":["Q1","Q2","Q3"]}` works like CLI `put A1:C1 "Q1" "Q2" "Q3"`
+  - Per-element smart detection for numbers, booleans, dates, currency, percent
+  - Consistent with existing `putf` `values` support
+
+- **Sort now moves comments with data rows** (TJC-741, #206)
+  - `Sheet.comments` (rich comments with author) are remapped to follow data during sort
+  - Cell styles were already correctly preserved (confirmed via new tests)
+
+### Added
+
+- **SVG date rendering regression tests** (TJC-742, #206)
+  - Verified date formatting works correctly in SVG output for both `Number` with `NumFmt.Date` and `DateTime` values
+
+### Changed
+
+- **SKILL.md documentation improvements** (#206)
+  - Added batch JSON style property mapping table (CLI flags → JSON property names)
+  - Documented batch `put` with `values` array
+
+---
+
 ## [0.9.3] - 2026-02-04
 
 ### Fixed
