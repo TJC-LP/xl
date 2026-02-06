@@ -716,6 +716,8 @@ object WriteCommands:
                     s"  PUTF $range = $formula (from $from)"
                   case BatchParser.BatchOp.PutFormulas(range, formulas) =>
                     s"  PUTF $range = [${formulas.length} formulas]"
+                  case BatchParser.BatchOp.PutValues(range, values) =>
+                    s"  PUT $range = [${values.length} values]"
                   case BatchParser.BatchOp.Style(range, _) => s"  STYLE $range"
                   case BatchParser.BatchOp.Merge(range) => s"  MERGE $range"
                   case BatchParser.BatchOp.Unmerge(range) => s"  UNMERGE $range"
@@ -1150,8 +1152,18 @@ object WriteCommands:
       }
     }
 
+    // Build old→new ref mapping for remapping Sheet.comments
+    val refMapping: Map[ARef, ARef] = sortedRows.zipWithIndex.flatMap {
+      case ((originalRowIdx, cellMap), newRowOffset) =>
+        val newRowIdx = dataRowStart + newRowOffset
+        cellMap.keys.map { colIdx =>
+          com.tjclp.xl.addressing.ARef.from0(colIdx, originalRowIdx) ->
+            com.tjclp.xl.addressing.ARef.from0(colIdx, newRowIdx)
+        }
+    }.toMap
+
     // Insert sorted cells at new positions
-    sortedRows.zipWithIndex.foldLeft(sheetWithoutDataCells) {
+    val sheetWithSortedCells = sortedRows.zipWithIndex.foldLeft(sheetWithoutDataCells) {
       case (s, ((originalRowIdx, cellMap), newRowOffset)) =>
         val newRowIdx = dataRowStart + newRowOffset
         val rowDelta = newRowIdx - originalRowIdx
@@ -1164,6 +1176,12 @@ object WriteCommands:
           s2.put(newCell)
         }
     }
+
+    // Remap Sheet.comments to new cell positions (comments move with their data rows)
+    val remappedComments = sheetWithSortedCells.comments.map { (ref, comment) =>
+      refMapping.getOrElse(ref, ref) -> comment
+    }
+    sheetWithSortedCells.copy(comments = remappedComments)
 
   /**
    * Shift formula references when a cell moves to a different row during sorting.

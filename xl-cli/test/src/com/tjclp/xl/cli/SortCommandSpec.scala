@@ -9,8 +9,12 @@ import com.tjclp.xl.{Workbook, Sheet}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.cli.commands.WriteCommands
+import com.tjclp.xl.cells.Comment
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.sheets.styleSyntax.*
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Integration tests for sort command functionality.
@@ -553,4 +557,89 @@ class SortCommandSpec extends FunSuite:
     assertEquals(s.cells.get(ref(0, 3)).map(_.value), Some(CellValue.Number(3)))
     // Row 4 (A5) unchanged
     assertEquals(s.cells.get(ref(0, 4)).map(_.value), Some(CellValue.Text("Footer")))
+  }
+
+  // ========== Style & Comment Preservation (TJC-741) ==========
+
+  test("sort: cell styles move with data rows (TJC-741)") {
+    // Apply currency style to B column values
+    val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
+    val sheet = Sheet("Test")
+      .put(ref(0, 0), CellValue.Text("Name"))
+      .put(ref(1, 0), CellValue.Text("Amount"))
+      .put(ref(0, 1), CellValue.Text("Charlie"))
+      .put(ref(1, 1), CellValue.Number(300))
+      .withCellStyle(ref(1, 1), currencyStyle)
+      .put(ref(0, 2), CellValue.Text("Alice"))
+      .put(ref(1, 2), CellValue.Number(100))
+      .withCellStyle(ref(1, 2), currencyStyle)
+      .put(ref(0, 3), CellValue.Text("Bob"))
+      .put(ref(1, 3), CellValue.Number(200))
+      .withCellStyle(ref(1, 3), currencyStyle)
+    val wb = Workbook(sheet)
+
+    // Verify styles are set before sort
+    assert(sheet.cells.get(ref(1, 1)).flatMap(_.styleId).isDefined, "B2 should have style before sort")
+
+    val key = SortKey("A", SortDirection.Ascending, SortMode.Alphanumeric)
+    WriteCommands
+      .sort(wb, Some(sheet), "A1:B4", List(key), true, outputPath, config)
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.head
+
+    // After sort: Alice=100, Bob=200, Charlie=300 (all with currency)
+    assertEquals(s.cells.get(ref(0, 1)).map(_.value), Some(CellValue.Text("Alice")))
+    assertEquals(s.cells.get(ref(1, 1)).map(_.value), Some(CellValue.Number(100)))
+
+    // Verify styles survived the sort + round-trip
+    val b2Style = s.cells.get(ref(1, 1)).flatMap(_.styleId).flatMap(s.styleRegistry.get)
+    assert(b2Style.isDefined, "B2 should have style after sort")
+    assertEquals(b2Style.get.numFmt, NumFmt.Currency, "B2 should have Currency format after sort")
+
+    val b3Style = s.cells.get(ref(1, 2)).flatMap(_.styleId).flatMap(s.styleRegistry.get)
+    assert(b3Style.isDefined, "B3 should have style after sort")
+    assertEquals(b3Style.get.numFmt, NumFmt.Currency, "B3 should have Currency format after sort")
+
+    val b4Style = s.cells.get(ref(1, 3)).flatMap(_.styleId).flatMap(s.styleRegistry.get)
+    assert(b4Style.isDefined, "B4 should have style after sort")
+    assertEquals(b4Style.get.numFmt, NumFmt.Currency, "B4 should have Currency format after sort")
+  }
+
+  test("sort: Sheet.comments move with data rows (TJC-741)") {
+    val sheet = Sheet("Test")
+      .put(ref(0, 0), CellValue.Text("Name"))
+      .put(ref(0, 1), CellValue.Text("Charlie"))
+      .put(ref(0, 2), CellValue.Text("Alice"))
+      .put(ref(0, 3), CellValue.Text("Bob"))
+      .comment(ref(0, 1), Comment.plainText("Note about Charlie"))
+      .comment(ref(0, 3), Comment.plainText("Note about Bob"))
+    val wb = Workbook(sheet)
+
+    // Verify comments exist before sort
+    assert(sheet.comments.contains(ref(0, 1)), "A2 should have comment before sort")
+    assert(sheet.comments.contains(ref(0, 3)), "A4 should have comment before sort")
+
+    val key = SortKey("A", SortDirection.Ascending, SortMode.Alphanumeric)
+    WriteCommands
+      .sort(wb, Some(sheet), "A1:A4", List(key), true, outputPath, config)
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.head
+
+    // After sort: Alice, Bob, Charlie
+    assertEquals(s.cells.get(ref(0, 1)).map(_.value), Some(CellValue.Text("Alice")))
+    assertEquals(s.cells.get(ref(0, 2)).map(_.value), Some(CellValue.Text("Bob")))
+    assertEquals(s.cells.get(ref(0, 3)).map(_.value), Some(CellValue.Text("Charlie")))
+
+    // Comments should move with their data:
+    // "Note about Charlie" was at A2, Charlie moved to A4 → comment at A4
+    // "Note about Bob" was at A4, Bob moved to A3 → comment at A3
+    val charlieComment = s.comments.get(ref(0, 3))
+    assert(charlieComment.isDefined, "Charlie's comment should be at A4 after sort")
+
+    val bobComment = s.comments.get(ref(0, 2))
+    assert(bobComment.isDefined, "Bob's comment should be at A3 after sort")
   }

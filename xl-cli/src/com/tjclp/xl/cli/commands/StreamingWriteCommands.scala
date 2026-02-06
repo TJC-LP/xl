@@ -573,6 +573,33 @@ object StreamingWriteCommands:
           }
           summaryLines += s"  PUTF $rangeStr = [${formulas.length} formulas]"
 
+        case BatchParser.BatchOp.PutValues(rangeStr, values) =>
+          val range = CellRange.parse(rangeStr) match
+            case Right(r) => r
+            case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+          val cells = range.cellsRowMajor.toVector
+          if cells.length != values.length then
+            throw new Exception(
+              s"Range $rangeStr has ${cells.length} cells but ${values.length} values provided"
+            )
+          cells.zip(values).foreach { case (ref, pv) =>
+            pv.format match
+              case Some(numFmt) =>
+                val cellStyle = CellStyle.default.withNumFmt(numFmt)
+                val (updatedStyles, styleId) =
+                  StylePatcher.addStyle(currentStylesXml, cellStyle) match
+                    case Right(result) => result
+                    case Left(e) => throw new Exception(s"Failed to add style: ${e.message}")
+                currentStylesXml = updatedStyles
+                stylesModified = true
+                cellPatches(ref) =
+                  StreamingTransform.CellPatch.SetStyleAndValue(styleId, pv.cellValue)
+              case None =>
+                cellPatches(ref) =
+                  StreamingTransform.CellPatch.SetValue(pv.cellValue, preserveStyle = true)
+          }
+          summaryLines += s"  PUT $rangeStr = [${values.length} values]"
+
         case BatchParser.BatchOp.Style(rangeStr, props) =>
           val range = CellRange.parse(rangeStr) match
             case Right(r) => r

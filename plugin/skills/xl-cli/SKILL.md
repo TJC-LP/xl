@@ -267,8 +267,13 @@ Apply multiple operations atomically:
 {"op": "put", "ref": "A1", "value": "$99.00", "detect": false}  // → Text, not Currency
 ```
 
-**Formula dragging** (putf with range):
+**Batch values** (put/putf with range):
 ```json
+// Put multiple values in row-major order (supports smart detection)
+{"op": "put", "ref": "A1:E1", "values": ["Date", "Company", "Revenue", "Growth", "Status"]}
+{"op": "put", "ref": "B2:B4", "values": [1234.56, 5678.90, 9012.34]}
+{"op": "put", "ref": "C2:C4", "values": ["$1,234", "$5,678", "$9,012"]}
+
 // Drag formula across range (Excel-style $ anchoring)
 {"op": "putf", "ref": "B2:B10", "value": "=SUM($A$1:A2)", "from": "B2"}
 
@@ -276,9 +281,28 @@ Apply multiple operations atomically:
 {"op": "putf", "ref": "B2:B4", "values": ["=A2*2", "=A3*2", "=A4*2"]}
 ```
 
-**Style properties**: Use `align` (not `halign`) for horizontal alignment. Unknown properties emit warnings.
+**Style properties** (batch JSON property names):
 
-See `xl batch --help` for full reference with all style properties.
+| CLI Flag | JSON Property | Type |
+|----------|--------------|------|
+| `--bold` | `bold` | boolean |
+| `--italic` | `italic` | boolean |
+| `--underline` | `underline` | boolean |
+| `--bg` | `bg` | string (color name or #hex) |
+| `--fg` | `fg` | string (color name or #hex) |
+| `--font-size` | `fontSize` | number |
+| `--font-name` | `fontName` | string |
+| `--format` | `numFormat` | string (format name or code) |
+| `--align` | `align` | string (left/center/right) |
+| `--valign` | `valign` | string (top/center/bottom) |
+| `--wrap` | `wrap` | boolean |
+| `--border` | `border` | string (thin/medium/thick) |
+| `--border-color` | `borderColor` | string (color) |
+| `--replace` | `replace` | boolean (default: merge) |
+
+Use `align` (not `halign`) for horizontal alignment. Unknown properties emit warnings.
+
+See `xl batch --help` for full reference.
 
 ### Output Format Summary
 

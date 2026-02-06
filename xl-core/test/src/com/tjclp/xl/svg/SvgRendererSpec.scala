@@ -978,3 +978,41 @@ class SvgRendererSpec extends FunSuite:
     assert(defsIdx < cellsIdx,
       s"Defs section should appear before cells group, defs at $defsIdx, cells at $cellsIdx")
   }
+
+  // ========== Date Formatting (TJC-742 regression) ==========
+
+  test("toSvg: date values render as formatted dates, not serial numbers (TJC-742)") {
+    import com.tjclp.xl.styles.numfmt.NumFmt
+    import java.time.LocalDateTime
+
+    // Simulate what happens after OOXML round-trip: date stored as serial number with Date numFmt
+    val dateStyle = CellStyle.default.withNumFmt(NumFmt.Date)
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(BigDecimal(45691))) // Excel serial for 2025-02-03
+      .withCellStyle(ref"A1", dateStyle)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Should show formatted date, not raw serial number
+    assert(svg.contains("2/3/25"), s"SVG should contain formatted date '2/3/25', got: $svg")
+    assert(!svg.contains("45691"), s"SVG should NOT contain serial number '45691'")
+  }
+
+  test("toSvg: DateTime value renders as formatted date") {
+    import com.tjclp.xl.styles.numfmt.NumFmt
+    import java.time.LocalDateTime
+    import com.tjclp.xl.formatted.Formatted
+
+    // Simulate in-memory DateTime (before OOXML round-trip)
+    val formatted = Formatted(
+      CellValue.DateTime(LocalDateTime.of(2025, 2, 3, 0, 0)),
+      NumFmt.Date
+    )
+    val sheet = Sheet("Test").put(ref"A1", formatted)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    // Should show formatted date, not raw toString
+    assert(svg.contains("2/3/25"), s"SVG should contain formatted date '2/3/25', got: $svg")
+    assert(!svg.contains("2025-02-03T"), s"SVG should NOT contain ISO format")
+  }
