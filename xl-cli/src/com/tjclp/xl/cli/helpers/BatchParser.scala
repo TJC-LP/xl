@@ -73,6 +73,9 @@ object BatchParser:
 
     /** Put explicit formulas to a range (no dragging) */
     case PutFormulas(range: String, formulas: Vector[String])
+
+    /** Put explicit values to a range (row-major order) */
+    case PutValues(range: String, values: Vector[ParsedValue])
     case Style(range: String, props: StyleProps)
     case Merge(range: String)
     case Unmerge(range: String)
@@ -172,8 +175,16 @@ object BatchParser:
             val ref = requireString(objMap, "ref", idx)
             // detect defaults to true; set to false to disable smart detection
             val detect = objMap.get("detect").flatMap(_.boolOpt).getOrElse(true)
-            val parsed = parseTypedValue(objMap, idx, detect)
-            BatchOp.Put(ref, parsed.cellValue, parsed.format)
+            // Check for explicit values array first (like putf's "values" support)
+            objMap.get("values") match
+              case Some(arr) if arr.arrOpt.isDefined =>
+                val values = arr.arr.toVector.zipWithIndex.map { case (v, i) =>
+                  parseJsonValue(v, idx, i, detect)
+                }
+                BatchOp.PutValues(ref, values)
+              case _ =>
+                val parsed = parseTypedValue(objMap, idx, detect)
+                BatchOp.Put(ref, parsed.cellValue, parsed.format)
 
           case "putf" =>
             collectUnknownPropsWarning(objMap, knownPutfProps, "putf", idx).foreach(warnings += _)
@@ -240,7 +251,7 @@ object BatchParser:
   // ========== Known Properties for Validation ==========
 
   /** Known properties for 'put' operation */
-  private val knownPutProps = Set("op", "ref", "value", "format", "detect")
+  private val knownPutProps = Set("op", "ref", "value", "values", "format", "detect")
 
   /** Known properties for 'putf' operation */
   private val knownPutfProps = Set("op", "ref", "value", "values", "from")
@@ -493,6 +504,35 @@ object BatchParser:
                 else s
               ParsedValue(CellValue.Text(text), None)
 
+  /**
+   * Parse a single JSON value element (from a "values" array).
+   *
+   * Handles native JSON types and smart string detection, mirroring parseTypedValue but operating
+   * on a bare ujson.Value instead of an ObjMap with a "value" key.
+   */
+  private def parseJsonValue(
+    json: ujson.Value,
+    objIdx: Int,
+    elemIdx: Int,
+    detect: Boolean
+  ): ParsedValue =
+    json.numOpt match
+      case Some(num) =>
+        ParsedValue(CellValue.Number(BigDecimal(num)), None)
+      case None =>
+        json.boolOpt match
+          case Some(b) => ParsedValue(CellValue.Bool(b), None)
+          case None =>
+            if json.isNull then ParsedValue(CellValue.Empty, None)
+            else
+              json.strOpt match
+                case Some(s) =>
+                  parseStringValue(s, None, objIdx, detect)
+                case None =>
+                  throw new Exception(
+                    s"Object ${objIdx + 1}: 'values[$elemIdx]' must be string, number, boolean, or null"
+                  )
+
   /** Extract required string field from JSON object. */
   private def requireString(objMap: ObjMap, field: String, idx: Int): String =
     objMap
@@ -599,6 +639,9 @@ object BatchParser:
 
           case BatchOp.PutFormulas(rangeStr, formulas) =>
             applyPutFormulas(currentWb, defaultSheetName, rangeStr, formulas)
+
+          case BatchOp.PutValues(rangeStr, values) =>
+            applyPutValues(currentWb, defaultSheetName, rangeStr, values)
 
           case BatchOp.Style(rangeStr, props) =>
             applyStyle(currentWb, defaultSheetName, rangeStr, props)
@@ -762,6 +805,41 @@ object BatchParser:
           val cachedValue =
             SheetEvaluator.evaluateFormula(s)(s"=$formula", workbook = Some(wb)).toOption
           s.put(ref, CellValue.Formula(formula, cachedValue))
+        }
+      }
+    yield result
+
+  /** Apply explicit values to a range (row-major order, like applyPutFormulas). */
+  private def applyPutValues(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    rangeStr: String,
+    values: Vector[ParsedValue]
+  ): IO[Workbook] =
+    for
+      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      (sheetName, range) = rangeRef
+
+      // Validate count matches
+      cellCount = range.cellCount.toInt
+      _ <-
+        if cellCount != values.length then
+          IO.raiseError(
+            new Exception(
+              s"Range ${range.toA1} has $cellCount cells but ${values.length} values provided."
+            )
+          )
+        else IO.unit
+
+      // Apply values
+      result <- updateSheet(wb, sheetName) { sheet =>
+        range.cellsRowMajor.zip(values.iterator).foldLeft(sheet) { case (s, (ref, pv)) =>
+          pv.format match
+            case Some(numFmt) =>
+              val formatted = Formatted(pv.cellValue, numFmt)
+              s.put(ref, formatted)
+            case None =>
+              s.put(ref, pv.cellValue)
         }
       }
     yield result

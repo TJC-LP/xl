@@ -716,6 +716,8 @@ object WriteCommands:
                     s"  PUTF $range = $formula (from $from)"
                   case BatchParser.BatchOp.PutFormulas(range, formulas) =>
                     s"  PUTF $range = [${formulas.length} formulas]"
+                  case BatchParser.BatchOp.PutValues(range, values) =>
+                    s"  PUT $range = [${values.length} values]"
                   case BatchParser.BatchOp.Style(range, _) => s"  STYLE $range"
                   case BatchParser.BatchOp.Merge(range) => s"  MERGE $range"
                   case BatchParser.BatchOp.Unmerge(range) => s"  UNMERGE $range"
