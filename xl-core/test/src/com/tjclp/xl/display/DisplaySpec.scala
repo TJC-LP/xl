@@ -72,6 +72,48 @@ class DisplaySpec extends FunSuite:
     assertEquals(result, "123.45")
   }
 
+  test("formatValue - General format (zero)") {
+    val value = CellValue.Number(BigDecimal("0"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
+    assertEquals(result, "0")
+  }
+
+  test("formatValue - General format (9 sig digits stays plain)") {
+    val value = CellValue.Number(BigDecimal("0.000123456789"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
+    assertEquals(result, "0.000123456789")
+  }
+
+  test("formatValue - General format (10 sig digits negative stays plain)") {
+    val value = CellValue.Number(BigDecimal("-99999999.99"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
+    assertEquals(result, "-99999999.99")
+  }
+
+  test("formatValue - General format (exactly 11 sig digits stays plain)") {
+    val value = CellValue.Number(BigDecimal("12345678.901"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
+    assertEquals(result, "12345678.901")
+  }
+
+  test("formatValue - General format (12 sig digits medium rounds to plain)") {
+    val value = CellValue.Number(BigDecimal("123456789.012"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
+    assertEquals(result, "123456789.01")
+  }
+
+  test("formatValue - General format (13 sig digits very small triggers scientific)") {
+    val value = CellValue.Number(BigDecimal("0.0000123456789012"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
+    assert(result.contains("E"), s"Expected scientific notation, got: $result")
+  }
+
+  test("formatValue - General format (15 sig digits very large triggers scientific)") {
+    val value = CellValue.Number(BigDecimal("9999999999999.12"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
+    assert(result.contains("E"), s"Expected scientific notation, got: $result")
+  }
+
   test("formatValue - Text value") {
     val value = CellValue.Text("Hello World")
     val result = NumFmtFormatter.formatValue(value, NumFmt.General)

@@ -143,7 +143,9 @@ object NumFmtFormatter:
     if s.contains('.') then
       val stripped = s.stripPrefix("0.").dropWhile(_ == '0')
       stripped.replace(".", "").length
-    else s.reverse.dropWhile(_ == '0').length
+    else
+      val trimmed = s.reverse.dropWhile(_ == '0')
+      if trimmed.isEmpty then 1 else trimmed.length
 
   /**
    * Format a date/time value.
