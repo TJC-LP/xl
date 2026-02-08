@@ -546,14 +546,19 @@ EXAMPLES:
   // --- Analyze ---
 
   private val formulaArg = Opts.argument[String]("formula")
-  private val withOpt =
-    Opts.option[String]("with", "Comma-separated overrides (e.g., A1=100,B2=200)", "w").orNone
+  private val withOpts =
+    Opts
+      .options[String]("with", "Cell overrides (e.g., A1=100,B2=200). Repeatable.", "w")
+      .map(_.toList)
+      .withDefault(Nil)
+
+  private def parseOverrides(withStrs: List[String]): List[String] =
+    withStrs.flatMap(_.split(",").map(_.trim).filter(_.nonEmpty))
 
   val evalCmd: Opts[CliCommand] =
     Opts.subcommand("eval", "Evaluate formula without modifying sheet") {
-      (formulaArg, withOpt).mapN { (formula, withStr) =>
-        val overrides = withStr.toList.flatMap(_.split(",").map(_.trim).filter(_.nonEmpty))
-        CliCommand.Eval(formula, overrides)
+      (formulaArg, withOpts).mapN { (formula, withStrs) =>
+        CliCommand.Eval(formula, parseOverrides(withStrs))
       }
     }
 
@@ -562,9 +567,8 @@ EXAMPLES:
 
   val evalArrayCmd: Opts[CliCommand] =
     Opts.subcommand("evala", "Evaluate array formula and display result grid") {
-      (formulaArg, atOpt, withOpt).mapN { (formula, target, withStr) =>
-        val overrides = withStr.toList.flatMap(_.split(",").map(_.trim).filter(_.nonEmpty))
-        CliCommand.EvalArray(formula, target, overrides)
+      (formulaArg, atOpt, withOpts).mapN { (formula, target, withStrs) =>
+        CliCommand.EvalArray(formula, target, parseOverrides(withStrs))
       }
     }
 

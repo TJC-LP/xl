@@ -122,15 +122,28 @@ object NumFmtFormatter:
    * Rules:
    *   - Integers: No decimal point
    *   - Decimals: Up to 11 significant digits
-   *   - Scientific: For very large/small numbers
+   *   - Scientific: For very large/small numbers (>= 1e12 or < 1e-4)
    */
   private def formatGeneral(n: BigDecimal): String =
     if n.isWhole then n.toBigInt.toString
     else
-      val str = n.underlying.stripTrailingZeros.toPlainString
-      // Excel's General format shows up to 11 significant digits
-      if str.length > 11 then f"${n.toDouble}%.6E"
-      else str
+      val plain = n.underlying.stripTrailingZeros.toPlainString
+      val sigDigits = countSignificantDigits(plain)
+      if sigDigits > 11 then
+        val mc = new java.math.MathContext(11)
+        val rounded = n.underlying.round(mc)
+        val roundedPlain = rounded.stripTrailingZeros.toPlainString
+        val abs = n.abs
+        if abs >= BigDecimal("1E12") || abs < BigDecimal("1E-4") then f"${rounded.doubleValue}%.6E"
+        else roundedPlain
+      else plain
+
+  private def countSignificantDigits(plain: String): Int =
+    val s = if plain.startsWith("-") then plain.substring(1) else plain
+    if s.contains('.') then
+      val stripped = s.stripPrefix("0.").dropWhile(_ == '0')
+      stripped.replace(".", "").length
+    else s.reverse.dropWhile(_ == '0').length
 
   /**
    * Format a date/time value.
