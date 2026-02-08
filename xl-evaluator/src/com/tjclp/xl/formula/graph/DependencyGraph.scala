@@ -207,7 +207,10 @@ object DependencyGraph:
           .toValues(call.args)
           .exists {
             case ArgValue.Expr(e) => containsUnqualifiedCellReferences(e)
-            case ArgValue.Range(_) => true
+            case ArgValue.Range(loc) =>
+              loc match
+                case TExpr.RangeLocation.Local(_) => true
+                case TExpr.RangeLocation.CrossSheet(_, _) => false
             case ArgValue.Cells(_) => true
           }
 
