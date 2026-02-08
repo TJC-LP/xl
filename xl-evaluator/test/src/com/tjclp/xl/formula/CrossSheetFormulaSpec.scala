@@ -1564,3 +1564,84 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     )
     assertEquals(result, Right(CellValue.Number(BigDecimal(40))))
   }
+
+  // ===== GH-208: Same-Sheet Multi-Hop Uncached Formula Evaluation =====
+
+  test("GH-208: same-sheet 2-hop uncached formula chain") {
+    // A1=100 (literal), B1=Formula("A1*2", None), C1=Formula("B1+50", None)
+    // Eval =C1 → expect 250
+    val sheet = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Number(BigDecimal(100)),
+      ref"B1" -> CellValue.Formula("A1*2", None),
+      ref"C1" -> CellValue.Formula("B1+50", None)
+    )
+    val wb = workbookWith(sheet)
+
+    val result = sheet.evaluateFormula("=C1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(250))))
+  }
+
+  test("GH-208: same-sheet 3-hop uncached formula chain") {
+    // A1=10, B1=Formula("A1+5", None), C1=Formula("B1*3", None), D1=Formula("C1-10", None)
+    // Eval =D1 → expect 35
+    val sheet = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"B1" -> CellValue.Formula("A1+5", None),
+      ref"C1" -> CellValue.Formula("B1*3", None),
+      ref"D1" -> CellValue.Formula("C1-10", None)
+    )
+    val wb = workbookWith(sheet)
+
+    val result = sheet.evaluateFormula("=D1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(35))))
+  }
+
+  test("GH-208: same-sheet uncached formula in arithmetic") {
+    // A1=Formula("100", None), B1=Number(50)
+    // Eval =A1+B1 → expect 150
+    val sheet = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Formula("100", None),
+      ref"B1" -> CellValue.Number(BigDecimal(50))
+    )
+    val wb = workbookWith(sheet)
+
+    val result = sheet.evaluateFormula("=A1+B1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(150))))
+  }
+
+  test("GH-208: cross-sheet to same-sheet uncached chain") {
+    // Sheet "Main" has A1=Formula("Other!A1*2", None)
+    // Sheet "Other" has A1=Formula("B1+10", None), B1=Number(5)
+    // Eval =A1 on Main → expect 30
+    val other = sheetWith(
+      "Other",
+      ref"A1" -> CellValue.Formula("B1+10", None),
+      ref"B1" -> CellValue.Number(BigDecimal(5))
+    )
+    val main = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Formula("Other!A1*2", None)
+    )
+    val wb = workbookWith(main, other)
+
+    val result = main.evaluateFormula("=A1", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(30))))
+  }
+
+  test("GH-208: same-sheet SUM over uncached formulas") {
+    // A1=Formula("10", None), A2=Formula("20", None), A3=Formula("30", None)
+    // Eval =SUM(A1:A3) → expect 60
+    val sheet = sheetWith(
+      "Main",
+      ref"A1" -> CellValue.Formula("10", None),
+      ref"A2" -> CellValue.Formula("20", None),
+      ref"A3" -> CellValue.Formula("30", None)
+    )
+    val wb = workbookWith(sheet)
+
+    val result = sheet.evaluateFormula("=SUM(A1:A3)", workbook = Some(wb))
+    assertEquals(result, Right(CellValue.Number(BigDecimal(60))))
+  }
