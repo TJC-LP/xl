@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.5] - 2026-02-08
+
+### Fixed
+
+- **move-sheet silent data corruption** (#207, #213)
+  - `move-sheet` reordered sheet names but left cell data in original positions, causing cross-sheet formula references to point to wrong data
+  - Surgical writer now regenerates all sheets when reorder flag is set
+
+- **Multi-hop same-sheet formula evaluation** (#208, #214)
+  - Formulas referencing cells containing uncached formulas (e.g., `=C1` where C1=`B1+50`, B1=`A1*2`) now recursively evaluate instead of failing with `TypeMismatch`
+  - Mirrors the cross-sheet recursive evaluation pattern already in place
+
+- **`cell` command scientific notation** (#211, #216)
+  - `NumFmtFormatter.formatGeneral` now uses `toPlainString` instead of `toString`, preventing BigDecimal from producing scientific notation like `5.809440E-01`
+
+- **`eval` requires `-s` for fully-qualified formulas** (#210, #216, #217)
+  - `=SUM(Revenue!A1:A3)` no longer requires `--sheet` flag since all references are qualified
+  - New `containsUnqualifiedCellReferences` method distinguishes qualified vs unqualified refs
+
+- **Style log says "(merge)"** (#210, #216)
+  - Changed to "(additive)" to avoid confusion with cell merging
+
+- **`rasterizers` returns exit code 1** (#210, #216)
+  - Informational command now always returns exit code 0
+
+### Changed
+
+- **Documentation updates** (#209, #212, #215)
+  - Function count corrected from 81 to 82
+  - Added shell quoting guide for sheet names with spaces
+  - Added accounting format, custom format string, and rasterizer install examples
+  - Clarified `putf` vs `put`, batch JSON `numFormat` key, HTML export limitations
+  - Added `move-sheet` cross-sheet reference warning
+
+---
+
 ## [0.9.4] - 2026-02-06
 
 ### Fixed
