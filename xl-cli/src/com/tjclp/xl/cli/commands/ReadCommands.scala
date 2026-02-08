@@ -354,16 +354,21 @@ object ReadCommands:
     // Check if formula needs a sheet by parsing and checking for cell references
     // GH-197: Use containsCellReferences instead of extractDependencies to avoid
     // enumerating 1M+ cells for full-column ranges like A:A
-    val needsSheet = FormulaParser.parse(formula) match
+    // GH-210: Distinguish between formulas that need an ambient sheet (unqualified refs)
+    // and those where all refs are qualified (e.g., =SUM(Revenue!B2:B5)).
+    // Qualified-only formulas still need a workbook but can use any sheet as context.
+    val (needsSheet, hasAnyCellRefs) = FormulaParser.parse(formula) match
       case Right(expr) =>
-        // If formula has cell references or overrides are specified, require a sheet
-        DependencyGraph.containsCellReferences(expr) || overrides.nonEmpty
+        val unqualified =
+          DependencyGraph.containsUnqualifiedCellReferences(expr) || overrides.nonEmpty
+        val anyRefs = DependencyGraph.containsCellReferences(expr) || overrides.nonEmpty
+        (unqualified, anyRefs)
       case Left(_) =>
         // Parse error - let SheetEvaluator handle it (it will give a better error message)
-        false
+        (false, false)
 
     if needsSheet then
-      // Formula references cells - require sheet
+      // Formula references unqualified cells - require sheet selection
       // Check if workbook is empty (no file provided)
       if wb.sheets.isEmpty then
         IO.raiseError(
@@ -414,6 +419,66 @@ object ReadCommands:
           )
 
           // 5. Evaluate only formulas in the closure
+          evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
+            sheetIO.flatMap { s =>
+              IO.fromEither(
+                SheetEvaluator
+                  .evaluateCell(s)(ref, workbook = Some(wb))
+                  .map(value => s.put(ref, value))
+                  .left
+                  .map(e => new Exception(e.message))
+              )
+            }
+          }
+
+          result <- IO.fromEither(
+            SheetEvaluator
+              .evaluateFormula(evalSheet)(formula, workbook = Some(wb))
+              .left
+              .map(e => new Exception(e.message))
+          )
+        yield Format.evalSuccess(formula, result, overrides)
+    else if hasAnyCellRefs then
+      // GH-210: All cell refs are qualified (e.g., =SUM(Revenue!B2:B5)) - need workbook but
+      // any sheet works as the ambient context since the evaluator resolves cross-sheet refs by name
+      if wb.sheets.isEmpty then
+        IO.raiseError(
+          new Exception(
+            "Formula references cells but no file provided. Use --file to specify an Excel file."
+          )
+        )
+      else
+        val sheet = sheetOpt.getOrElse(wb.sheets.head)
+        for
+          tempSheet <- applyOverrides(sheet, overrides)
+
+          targetDeps <- IO.fromEither(
+            FormulaParser
+              .parse(formula)
+              .map(expr => DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange))
+              .left
+              .map(e => new Exception(s"Parse error: $e"))
+          )
+
+          graph = DependencyGraph.fromSheet(tempSheet)
+          allDeps = DependencyGraph.transitiveDependencies(graph, targetDeps)
+
+          formulaDeps = allDeps.filter(ref =>
+            tempSheet(ref).value match
+              case _: CellValue.Formula => true
+              case _ => false
+          )
+
+          evalOrder <- IO.fromEither(
+            if formulaDeps.isEmpty then scala.util.Right(List.empty[ARef])
+            else
+              DependencyGraph
+                .topologicalSort(graph)
+                .map(_.filter(formulaDeps.contains))
+                .left
+                .map(e => new Exception(e.toString))
+          )
+
           evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
             sheetIO.flatMap { s =>
               IO.fromEither(

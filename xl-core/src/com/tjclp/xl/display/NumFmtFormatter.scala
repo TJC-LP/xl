@@ -127,7 +127,7 @@ object NumFmtFormatter:
   private def formatGeneral(n: BigDecimal): String =
     if n.isWhole then n.toBigInt.toString
     else
-      val str = n.toString
+      val str = n.underlying.stripTrailingZeros.toPlainString
       // Excel's General format shows up to 11 significant digits
       if str.length > 11 then f"${n.toDouble}%.6E"
       else str
