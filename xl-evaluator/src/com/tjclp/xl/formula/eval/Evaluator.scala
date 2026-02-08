@@ -299,7 +299,17 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
         // Ref: resolve cell, decode value with codec
         // Note: sheet(at) returns empty cell if not present, decode handles empty cells
         val cell = sheet(at)
-        decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+        // GH-208: Handle same-sheet formula cells without cached values by recursively evaluating
+        cell.value match
+          case CellValue.Formula(formulaStr, None) =>
+            Evaluator
+              .evalCrossSheetFormula(formulaStr, sheet, clock, workbook, currentDepth)
+              .flatMap { evaluatedValue =>
+                val resultCell = Cell(at, evaluatedValue)
+                decode(resultCell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
+              }
+          case _ =>
+            decode(cell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
 
       // ===== Arithmetic Operators =====
       // These support array arithmetic with broadcasting when operands are ranges or array results
