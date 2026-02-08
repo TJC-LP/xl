@@ -1008,10 +1008,10 @@ object XlsxWriter:
     if tracker.modifiedSheets.nonEmpty || tracker.modifiedMetadata then
       regenerate += "xl/sharedStrings.xml"
 
-    // When metadata is modified (add/remove/rename/reorder), regenerate ALL sheets.
-    // New sheets don't exist in source ZIP, and removed sheets change indices.
-    // This is the correct behavior - metadata changes are structural.
-    if tracker.modifiedMetadata then
+    // When metadata is modified or sheets are reordered, regenerate ALL sheets.
+    // New sheets don't exist in source ZIP, removed sheets change indices,
+    // and reordered sheets must be written to new positions.
+    if tracker.modifiedMetadata || tracker.reorderedSheets then
       // Metadata modified → regenerate all sheets and their relationships
       wb.sheets.indices.foreach { idx =>
         regenerate += s"xl/worksheets/sheet${idx + 1}.xml"
@@ -1404,10 +1404,11 @@ object XlsxWriter:
       else if sourceHasSharedStrings then
         sourceContext.foreach(ctx => copyPreservedPart(ctx.sourcePath, sharedStringsPath, zip))
 
-      // When metadata is modified (add/remove/rename/reorder), we must regenerate ALL sheets
-      // because new sheets don't exist in source and sheet indices may have changed.
+      // When metadata is modified or sheets are reordered, we must regenerate ALL sheets
+      // because new sheets don't exist in source, sheet indices may have changed,
+      // or sheet positions must be remapped to match the new order.
       val sheetsToRegenerate =
-        if tracker.modifiedMetadata then workbook.sheets.indices.toSet
+        if tracker.modifiedMetadata || tracker.reorderedSheets then workbook.sheets.indices.toSet
         else tracker.modifiedSheets
 
       // Write sheets: regenerate modified, copy unmodified (if source available)
