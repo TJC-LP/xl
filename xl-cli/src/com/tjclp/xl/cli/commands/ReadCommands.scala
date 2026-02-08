@@ -448,7 +448,9 @@ object ReadCommands:
           )
         )
       else
-        val sheet = sheetOpt.getOrElse(wb.sheets.head)
+        // Safe: wb.sheets.isEmpty is checked above, so headOption is always Some
+        val sheet = (sheetOpt.orElse(wb.sheets.headOption): @unchecked) match
+          case Some(s) => s
         for
           tempSheet <- applyOverrides(sheet, overrides)
 
