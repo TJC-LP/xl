@@ -32,7 +32,7 @@ xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), ma
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
 xl-benchmarks/   → JMH performance benchmarks
-xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 81 functions, dependency graphs)
+xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 82 functions, dependency graphs)
 xl-testkit/      → Test laws, generators, helpers [future]
 xl-agent/        → AI agent benchmark runner (Anthropic API, skill comparison)
 ```
@@ -186,6 +186,9 @@ xl -f in.xlsx -o out.xlsx putf C5 "=B5*1.1"        # Write formula
 
 # Formula dragging with $ anchoring
 xl -f in.xlsx -o out.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
+
+# Sheet names with spaces: use double quotes around the formula argument
+xl -f in.xlsx -s Summary -o out.xlsx putf B4 "='Income Statement'!G8"
 
 # View command flags
 --eval                # Evaluate formulas (compute live values)
