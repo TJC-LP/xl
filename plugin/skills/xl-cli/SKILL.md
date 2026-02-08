@@ -60,7 +60,7 @@ Ensure `~/.local/bin` is in your PATH: `export PATH="$HOME/.local/bin:$PATH"`
 
 ### Info Commands (no file required)
 ```bash
-xl functions                           # List all 81 supported functions
+xl functions                           # List all 82 supported functions
 xl rasterizers                         # Check SVG-to-raster backends
 ```
 
@@ -84,6 +84,8 @@ xl -f <file> -s <sheet> view <range> --format png --raster-output out.png
 xl -f <file> -s <sheet> view <range> --formulas   # Show formulas
 xl -f <file> -s <sheet> view <range> --eval       # Computed values
 ```
+
+**Note**: `--eval` may show formula text instead of computed values for cells with deep multi-hop cross-sheet formula dependencies. The xlsx file will compute correctly when opened in Excel.
 
 ### Write Operations (require `-o`)
 ```bash
@@ -179,6 +181,8 @@ xl -f f.xlsx -s S1 -o o.xlsx putf C2:C10 "=SUM(\$A\$1:A2)"
 
 See `xl putf --help` for full documentation.
 
+**put vs putf**: `putf` always interprets input as a formula. Using `putf` for text like "Total Revenue" will cause a parse error. Use `put` for text labels, `putf` for formulas.
+
 ### Cross-Sheet References in Formulas
 
 **CRITICAL**: Cross-sheet references use Excel's `!` operator (NOT `.` or other separators):
@@ -205,6 +209,22 @@ xl -f f.xlsx -s S1 putf A1 '=Sheet2!B1'
 # ✗ Wrong - double quotes allow ! expansion in bash
 xl -f f.xlsx -s S1 putf A1 "=Sheet2!B1"  # May fail with "event not found"
 ```
+
+### Shell Quoting for Sheet Names with Spaces
+
+The parser fully supports `='Sheet Name'!A1` syntax. Use double quotes around the CLI argument so the shell passes the string intact:
+
+```bash
+xl -f f.xlsx -s Summary -o o.xlsx putf B4 "='Income Statement'!G8"
+xl -f f.xlsx -s Summary -o o.xlsx putf A1 "=SUM('Q1 Sales'!A1:A100)"
+```
+
+For complex cases, batch JSON avoids shell quoting entirely:
+```bash
+echo '[{"op":"putf","ref":"B4","value":"='"'"'Income Statement'"'"'!G8"}]' | xl -f f.xlsx -s Summary -o o.xlsx batch -
+```
+
+Alternatively, rename sheets to avoid spaces when CLI manipulation is planned.
 
 ### Batch Put & Fill
 
@@ -260,7 +280,7 @@ Apply multiple operations atomically:
 {"op": "put", "ref": "A3", "value": "2025-11-10"}   // → Date
 ```
 
-**Format names**: `general`, `integer`, `decimal`, `currency`, `percent`, `date`, `datetime`, `time`, `text`, or any custom Excel format code (e.g., `"0.0x"`, `"$#,##0;($#,##0)"`).
+**Format names**: `general`, `integer`, `decimal`, `currency`, `percent`, `date`, `datetime`, `time`, `text`, or any custom Excel format code (e.g., `"0.0x"`, `"$#,##0;($#,##0)"`, `"#,##0.0_);(#,##0.0)"` for accounting).
 
 **Disable detection**: Set `"detect": false` to treat strings as plain text:
 ```json
@@ -300,7 +320,7 @@ Apply multiple operations atomically:
 | `--border-color` | `borderColor` | string (color) |
 | `--replace` | `replace` | boolean (default: merge) |
 
-Use `align` (not `halign`) for horizontal alignment. Unknown properties emit warnings.
+Use `align` (not `halign`) for horizontal alignment. The JSON property for number format is `numFormat` (camelCase), not `format`. Unknown properties emit warnings.
 
 See `xl batch --help` for full reference.
 
@@ -316,7 +336,21 @@ See `xl batch --help` for full reference.
 | png/jpeg/pdf | `--format <fmt> --raster-output <path>` | Requires rasterizer |
 | webp | `--format webp --raster-output <path>` | ImageMagick only |
 
+**Note**: `--format html` does not apply cell styles or number formats. Use `--format png` (via rasterizer) for styled output.
+
 **Rasterizer discovery**: `xl rasterizers` shows available backends.
+
+**Installing a rasterizer** (needed for PNG/JPEG/PDF/WebP export):
+```bash
+# macOS
+brew install librsvg
+
+# Linux (Debian/Ubuntu)
+apt install librsvg2-bin
+
+# Python alternative
+pip install cairosvg
+```
 
 See `xl view --help` for all options.
 
@@ -342,7 +376,7 @@ xl -f data.xlsx -s Sheet1 cell C5                    # Dependencies
 xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500"  # What-if
 ```
 
-See [reference/FORMULAS.md](reference/FORMULAS.md) for 81 supported functions.
+See [reference/FORMULAS.md](reference/FORMULAS.md) for 82 supported functions.
 
 ### Create Formatted Report
 
@@ -351,6 +385,10 @@ See [reference/FORMULAS.md](reference/FORMULAS.md) for 81 supported functions.
 xl -f template.xlsx -s Sheet1 -o report.xlsx put A1 "Sales Report"
 xl -f report.xlsx -s Sheet1 -o report.xlsx style A1:E1 --bold --bg navy --fg white
 xl -f report.xlsx -s Sheet1 -o report.xlsx style B2:B100 --format currency
+xl -f report.xlsx -s Sheet1 -o report.xlsx style C2:C100 --format "#,##0.00"   # Custom decimal
+xl -f report.xlsx -s Sheet1 -o report.xlsx style D2:D100 --format "0.0%"       # Custom percent
+xl -f report.xlsx -s Sheet1 -o report.xlsx style E2:E100 --format "yyyy-mm-dd" # Custom date
+xl -f report.xlsx -s Sheet1 -o report.xlsx style F2:F100 --format "0.0x"       # Multiples
 xl -f report.xlsx -s Sheet1 -o report.xlsx col A --width 25
 ```
 
@@ -389,7 +427,7 @@ xl new output.xlsx --sheet Data --sheet Summary --sheet Notes
 xl -f output.xlsx -o output.xlsx add-sheet "Archive" --after "Notes"
 xl -f output.xlsx -o output.xlsx copy-sheet "Summary" "Q1 Summary"
 
-# Move sheet to front
+# Move sheet to front (may affect cross-sheet formula references; verify formulas after reordering)
 xl -f output.xlsx -o output.xlsx move-sheet "Summary" --to 0
 
 # Hide internal sheets from users
@@ -453,7 +491,7 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 
 | Command | Description |
 |---------|-------------|
-| `functions` | List all 81 supported Excel functions |
+| `functions` | List all 82 supported Excel functions |
 | `rasterizers` | List SVG-to-raster backends with status |
 
 ### Workbook Commands
@@ -501,7 +539,7 @@ Run `xl <command> --help` for complete options.
 | `add-sheet <name>` | `--after`, `--before` |
 | `remove-sheet <name>` | |
 | `rename-sheet <old> <new>` | |
-| `move-sheet <name>` | `--to`, `--after`, `--before` |
+| `move-sheet <name>` | `--to`, `--after`, `--before` (may affect cross-sheet refs) |
 | `copy-sheet <src> <dest>` | |
 
 ### Cell Commands
@@ -531,6 +569,6 @@ Run `xl sort --help` for sorting details.
 ## Links
 
 - `xl <command> --help` for detailed usage and examples
-- [reference/FORMULAS.md](reference/FORMULAS.md) for 81 supported functions
+- [reference/FORMULAS.md](reference/FORMULAS.md) for 82 supported functions
 - [reference/COLORS.md](reference/COLORS.md) for color names
 - [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) for format specs
