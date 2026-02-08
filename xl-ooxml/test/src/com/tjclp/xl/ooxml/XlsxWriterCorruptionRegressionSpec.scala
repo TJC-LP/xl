@@ -1060,6 +1060,74 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
+  // ===== Regression Test for move-sheet Data Corruption (GH-207) =====
+
+  test("move-sheet preserves sheet data in correct positions after reorder (GH-207)") {
+    // Regression test for: move-sheet causes silent data corruption
+    // Bug: Workbook.reorder() sets reorderedSheets=true but NOT modifiedMetadata=true.
+    //      The surgical writer only checked modifiedMetadata, so unmodified sheets were
+    //      copied from the source ZIP in original positions while workbook.xml referenced
+    //      them in the new order — causing name/data mismatch.
+    // Impact: P0 - Silent data corruption, sheet names point to wrong data
+
+    // Create a workbook with 3 sheets, each with distinct content
+    val sheetA = Sheet("A").put(ref"A1" -> "I am Sheet A")
+    val sheetB = Sheet("B").put(ref"A1" -> "I am Sheet B")
+    val sheetC = Sheet("C").put(ref"A1" -> "I am Sheet C")
+    val wb = Workbook(Vector(sheetA, sheetB, sheetC))
+
+    // Write the initial workbook
+    val initial = Files.createTempFile("move-sheet-initial", ".xlsx")
+    XlsxWriter
+      .write(wb, initial)
+      .fold(err => fail(s"Failed to write initial: $err"), identity)
+
+    // Read it back (to get SourceContext for surgical writes)
+    val wb2 = XlsxReader.read(initial).fold(err => fail(s"Failed to read: $err"), identity)
+
+    // Reorder: move C to position 0 → order becomes [C, A, B]
+    val reordered = wb2
+      .reorder(Vector(SheetName.unsafe("C"), SheetName.unsafe("A"), SheetName.unsafe("B")))
+      .fold(err => fail(s"Failed to reorder: $err"), identity)
+
+    // Write the reordered workbook
+    val output = Files.createTempFile("move-sheet-reordered", ".xlsx")
+    XlsxWriter
+      .write(reordered, output)
+      .fold(err => fail(s"Failed to write reordered: $err"), identity)
+
+    // Read back and verify each sheet name maps to its correct data
+    val result = XlsxReader.read(output).fold(err => fail(s"Failed to read result: $err"), identity)
+
+    // Verify sheet order
+    assertEquals(result.sheetNames.map(_.value), Vector("C", "A", "B"))
+
+    // CRITICAL: Verify data integrity — each sheet must have its own data
+    val resultC = result("C").fold(err => fail(s"Sheet C not found: $err"), identity)
+    val resultA = result("A").fold(err => fail(s"Sheet A not found: $err"), identity)
+    val resultB = result("B").fold(err => fail(s"Sheet B not found: $err"), identity)
+
+    assertEquals(
+      resultC(ref"A1").value,
+      CellValue.Text("I am Sheet C"),
+      "Sheet C has wrong data after reorder — data corruption!"
+    )
+    assertEquals(
+      resultA(ref"A1").value,
+      CellValue.Text("I am Sheet A"),
+      "Sheet A has wrong data after reorder — data corruption!"
+    )
+    assertEquals(
+      resultB(ref"A1").value,
+      CellValue.Text("I am Sheet B"),
+      "Sheet B has wrong data after reorder — data corruption!"
+    )
+
+    // Clean up
+    Files.deleteIfExists(initial)
+    Files.deleteIfExists(output)
+  }
+
   private def createWorkbookWithoutSST(): Path =
     // Create a minimal workbook that uses inline strings (no sharedStrings.xml)
     val path = Files.createTempFile("test-no-sst", ".xlsx")
