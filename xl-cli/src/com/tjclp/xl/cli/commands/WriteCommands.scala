@@ -473,7 +473,7 @@ object WriteCommands:
         numFormat,
         border
       )
-      modeLabel = if replace then " (replace)" else " (merge)"
+      modeLabel = if replace then " (replace)" else " (additive)"
     yield s"Styled: ${range.toA1}$modeLabel\nApplied: ${appliedList.mkString(", ")}\n${saveSuffix(outputPath, stream)}"
 
   /**

@@ -366,7 +366,7 @@ object StreamingWriteCommands:
       )
 
       // Build result message
-      modeLabel = if replace then "(replace, streaming)" else "(merge, streaming)"
+      modeLabel = if replace then "(replace, streaming)" else "(additive, streaming)"
       appliedList = StyleBuilder.buildStyleDescription(
         bold,
         italic,

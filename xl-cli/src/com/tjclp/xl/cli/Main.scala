@@ -879,7 +879,7 @@ Operations execute in order. Use "-" to read from stdin."""
 
   private def runRasterizers(): IO[ExitCode] =
     formatRasterizerList().flatMap { (output, hasWorking) =>
-      IO.println(output).as(if hasWorking then ExitCode.Success else ExitCode.Error)
+      IO.println(output).as(ExitCode.Success)
     }
 
   /**

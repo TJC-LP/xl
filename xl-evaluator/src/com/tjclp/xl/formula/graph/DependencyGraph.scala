@@ -175,6 +175,77 @@ object DependencyGraph:
       case TExpr.Lit(_) => false
 
   /**
+   * Check if an expression contains any **unqualified** cell references.
+   *
+   * GH-210: Fully-qualified references (SheetRef, SheetPolyRef, SheetRange, CrossSheet aggregates)
+   * already name their target sheet, so the formula doesn't require a `-s` flag. Only unqualified
+   * refs (Ref, PolyRef, RangeRef, Local aggregates) need an ambient sheet context.
+   *
+   * @param expr
+   *   The expression to analyze
+   * @return
+   *   true if the expression contains any unqualified cell reference
+   */
+  @nowarn("msg=Unreachable case")
+  def containsUnqualifiedCellReferences[A](expr: TExpr[A]): Boolean =
+    expr match
+      // Unqualified cell references - need ambient sheet
+      case TExpr.Ref(_, _, _) => true
+      case TExpr.PolyRef(_, _) => true
+      case TExpr.RangeRef(_) => true
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Local(_)) => true
+
+      // Qualified cell references - sheet already specified
+      case TExpr.SheetRef(_, _, _, _) => false
+      case TExpr.SheetPolyRef(_, _, _) => false
+      case TExpr.SheetRange(_, _) => false
+      case TExpr.Aggregate(_, TExpr.RangeLocation.CrossSheet(_, _)) => false
+
+      // Function calls - check arguments
+      case call: TExpr.Call[?] =>
+        call.spec.argSpec
+          .toValues(call.args)
+          .exists {
+            case ArgValue.Expr(e) => containsUnqualifiedCellReferences(e)
+            case ArgValue.Range(_) => true
+            case ArgValue.Cells(_) => true
+          }
+
+      // Binary operators - check both sides
+      case TExpr.Add(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Sub(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Mul(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Div(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Pow(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Concat(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Eq(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Neq(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Lt(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Lte(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Gt(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+      case TExpr.Gte(l, r) =>
+        containsUnqualifiedCellReferences(l) || containsUnqualifiedCellReferences(r)
+
+      // Unary operators
+      case TExpr.ToInt(e) => containsUnqualifiedCellReferences(e)
+      case TExpr.DateToSerial(e) => containsUnqualifiedCellReferences(e)
+      case TExpr.DateTimeToSerial(e) => containsUnqualifiedCellReferences(e)
+
+      // Literals and constants
+      case TExpr.Lit(_) => false
+
+  /**
    * Extract all cell references from TExpr.
    *
    * Recursively traverses the expression AST and collects all cell references, including:
