@@ -114,6 +114,18 @@ class DisplaySpec extends FunSuite:
     assert(result.contains("E"), s"Expected scientific notation, got: $result")
   }
 
+  test("formatValue - General format (0.0001 at threshold stays plain)") {
+    val value = CellValue.Number(BigDecimal("0.0001"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
+    assertEquals(result, "0.0001")
+  }
+
+  test("formatValue - General format (below 1e-4 with >11 sig digits triggers scientific)") {
+    val value = CellValue.Number(BigDecimal("0.0000999999999999"))
+    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
+    assert(result.contains("E"), s"Expected scientific notation, got: $result")
+  }
+
   test("formatValue - Text value") {
     val value = CellValue.Text("Hello World")
     val result = NumFmtFormatter.formatValue(value, NumFmt.General)
