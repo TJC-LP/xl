@@ -74,6 +74,8 @@ xl -f <file> -s <sheet> cell <ref>     # Cell details + dependencies
 xl -f <file> -s <sheet> search <pattern>  # Find cells
 xl -f <file> -s <sheet> stats <range>  # Calculate statistics
 xl -f <file> -s <sheet> eval <formula> # Evaluate formula
+xl -f <file> -s <sheet> evala <formula>          # Array formula result grid
+xl -f <file> -s <sheet> evala <formula> --at <ref>  # Spill to target cell
 ```
 
 ### Output Formats
@@ -374,6 +376,7 @@ xl -f data.xlsx -s "Sheet1" stats B2:B100  # Quick statistics
 xl -f data.xlsx -s Sheet1 view --formulas A1:D10     # Show formulas
 xl -f data.xlsx -s Sheet1 cell C5                    # Dependencies
 xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500"  # What-if
+xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A5)" --with "A1=0,A5=0"  # Multiple overrides (comma-separated)
 ```
 
 See [reference/FORMULAS.md](reference/FORMULAS.md) for 82 supported functions.
@@ -468,6 +471,8 @@ xl -f huge.xlsx --max-size 0 sheets       # Disable 100MB limit
 xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 ```
 
+**Note**: Streaming CSV shows formula expressions without the `=` prefix (streaming mode reads raw cell content).
+
 **Streaming supports**: search, stats, bounds, view (markdown/csv/json), put, putf, style
 
 **Requires in-memory**: cell (dependencies), eval (formulas), HTML/SVG/PDF (styles), formula dragging
@@ -483,7 +488,7 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 | `--file <path>` | `-f` | Input file (required) |
 | `--sheet <name>` | `-s` | Sheet name |
 | `--output <path>` | `-o` | Output file (for writes) |
-| `--backend <type>` | | scalaxml (default) or saxstax (36-39% faster) |
+| `--backend <type>` | | Write backend: scalaxml (default) or saxstax (36-39% faster). Reads always use StAX. |
 | `--max-size <MB>` | | Override 100MB security limit (0 = unlimited) |
 | `--stream` | | O(1) memory mode for reads + writes (search/stats/bounds/view/put/putf/style) |
 
@@ -514,7 +519,8 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 | `cell <ref>` | `--no-style` |
 | `search <pattern>` | `--limit`, `--sheets` |
 | `stats <range>` | Calculate count, sum, min, max, mean |
-| `eval <formula>` | `--with` for overrides |
+| `eval <formula>` | `--with` for overrides (comma-separated: `--with "A1=0,A5=0"`) |
+| `evala <formula>` | `--at` to spill result starting at ref |
 
 Run `xl view --help` for complete options.
 
