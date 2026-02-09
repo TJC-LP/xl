@@ -658,6 +658,43 @@ object StreamingWriteCommands:
           val row = Row.from1(rowNum)
           rowProps(row) = rowProps.getOrElse(row, RowProperties()).copy(height = Some(height))
           summaryLines += s"  ROWHEIGHT $rowNum = $height"
+
+        case BatchParser.BatchOp.ColHide(colStr) =>
+          val col = Column.fromLetter(colStr) match
+            case Right(c) => c
+            case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
+          val existing = columns.getOrElse(col, ColumnProperties())
+          columns(col) = existing.copy(hidden = true)
+          summaryLines += s"  COL-HIDE $colStr"
+
+        case BatchParser.BatchOp.ColShow(colStr) =>
+          val col = Column.fromLetter(colStr) match
+            case Right(c) => c
+            case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
+          val existing = columns.getOrElse(col, ColumnProperties())
+          columns(col) = existing.copy(hidden = false)
+          summaryLines += s"  COL-SHOW $colStr"
+
+        case BatchParser.BatchOp.RowHide(rowNum) =>
+          val row = Row.from1(rowNum)
+          val existing = rowProps.getOrElse(row, RowProperties())
+          rowProps(row) = existing.copy(hidden = true)
+          summaryLines += s"  ROW-HIDE $rowNum"
+
+        case BatchParser.BatchOp.RowShow(rowNum) =>
+          val row = Row.from1(rowNum)
+          val existing = rowProps.getOrElse(row, RowProperties())
+          rowProps(row) = existing.copy(hidden = false)
+          summaryLines += s"  ROW-SHOW $rowNum"
+
+        // Ops that require full workbook context (not supported in streaming mode)
+        case _: BatchParser.BatchOp.AddComment | _: BatchParser.BatchOp.RemoveComment |
+            _: BatchParser.BatchOp.Clear | _: BatchParser.BatchOp.AutoFit |
+            _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet =>
+          throw new Exception(
+            "This batch operation is not supported in streaming mode. " +
+              "Remove --stream to use full workbook mode."
+          )
       }
 
       val worksheetMetadata = StreamingTransform.WorksheetMetadata(

@@ -395,15 +395,21 @@ xl -f report.xlsx -s Sheet1 -o report.xlsx style F2:F100 --format "0.0x"       #
 xl -f report.xlsx -s Sheet1 -o report.xlsx col A --width 25
 ```
 
-Or use batch for atomicity:
+Or use batch for atomicity (preferred for multi-step operations):
 ```bash
 echo '[
   {"op": "put", "ref": "A1", "value": "Sales Report"},
   {"op": "style", "range": "A1:E1", "bold": true, "bg": "navy", "fg": "white"},
   {"op": "style", "range": "B2:B100", "numFormat": "currency"},
-  {"op": "colwidth", "col": "A", "width": 25}
+  {"op": "colwidth", "col": "A", "width": 25},
+  {"op": "comment", "ref": "A1", "text": "Generated report", "author": "Agent"},
+  {"op": "autofit", "columns": "A:E"},
+  {"op": "row-hide", "row": 2},
+  {"op": "add-sheet", "name": "Summary", "after": "Sheet1"}
 ]' | xl -f template.xlsx -s Sheet1 -o report.xlsx batch -
 ```
+
+**All batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`
 
 ### CSV to Styled Table
 
@@ -531,7 +537,7 @@ Run `xl view --help` for complete options.
 | `put <ref> <values>` | `--value` for negatives, `--stream` for O(1) memory |
 | `putf <ref> <formulas>` | Supports dragging (no dragging with `--stream`) |
 | `style <range>` | `--bold`, `--bg`, `--fg`, `--format`, `--border`, `--stream` for O(1) memory |
-| `batch <json-file>` | Operations: put, putf, style, merge, unmerge, colwidth, rowheight |
+| `batch <json-file>` | 17 operations (see below) |
 | `import <csv> [ref]` | `--new-sheet`, `--delimiter`, `--no-type-inference` |
 
 Run `xl <command> --help` for complete options.

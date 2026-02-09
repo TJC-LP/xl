@@ -3,7 +3,7 @@ package com.tjclp.xl.cli.helpers
 import cats.effect.{IO, Resource}
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
 import com.tjclp.xl.formula.{
   FormulaParser,
@@ -81,6 +81,16 @@ object BatchParser:
     case Unmerge(range: String)
     case ColWidth(col: String, width: Double)
     case RowHeight(row: Int, height: Double)
+    case AddComment(ref: String, text: String, author: Option[String])
+    case RemoveComment(ref: String)
+    case Clear(range: String, all: Boolean, styles: Boolean, comments: Boolean)
+    case ColHide(col: String)
+    case ColShow(col: String)
+    case RowHide(row: Int)
+    case RowShow(row: Int)
+    case AutoFit(columns: Option[String])
+    case AddSheet(name: String, after: Option[String])
+    case RenameSheet(from: String, to: String)
 
   /**
    * Result of batch parsing with optional warnings.
@@ -141,6 +151,16 @@ object BatchParser:
    *   - `unmerge`: {"op": "unmerge", "range": "A1:D1"}
    *   - `colwidth`: {"op": "colwidth", "col": "A", "width": 15.5}
    *   - `rowheight`: {"op": "rowheight", "row": 1, "height": 30}
+   *   - `comment`: {"op": "comment", "ref": "A1", "text": "Note", "author": "User"}
+   *   - `remove-comment`: {"op": "remove-comment", "ref": "A1"}
+   *   - `clear`: {"op": "clear", "range": "A1:B10", "all": true}
+   *   - `col-hide`: {"op": "col-hide", "col": "C"}
+   *   - `col-show`: {"op": "col-show", "col": "C"}
+   *   - `row-hide`: {"op": "row-hide", "row": 5}
+   *   - `row-show`: {"op": "row-show", "row": 5}
+   *   - `autofit`: {"op": "autofit", "columns": "A:F"}
+   *   - `add-sheet`: {"op": "add-sheet", "name": "New Sheet", "after": "Sheet1"}
+   *   - `rename-sheet`: {"op": "rename-sheet", "from": "Old", "to": "New"}
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def parseBatchJson(json: String): Either[Exception, ParseResult] =
@@ -231,10 +251,69 @@ object BatchParser:
             val height = requireNumber(objMap, "height", idx)
             BatchOp.RowHeight(row, height)
 
+          case "comment" =>
+            collectUnknownPropsWarning(objMap, knownCommentProps, "comment", idx)
+              .foreach(warnings += _)
+            val ref = requireString(objMap, "ref", idx)
+            val text = requireString(objMap, "text", idx)
+            val author = objMap.get("author").flatMap(_.strOpt)
+            BatchOp.AddComment(ref, text, author)
+
+          case "remove-comment" =>
+            val ref = requireString(objMap, "ref", idx)
+            BatchOp.RemoveComment(ref)
+
+          case "clear" =>
+            collectUnknownPropsWarning(objMap, knownClearProps, "clear", idx)
+              .foreach(warnings += _)
+            val range = requireString(objMap, "range", idx)
+            val all = objMap.get("all").flatMap(_.boolOpt).getOrElse(false)
+            val stylesFlag = objMap.get("styles").flatMap(_.boolOpt).getOrElse(false)
+            val commentsFlag = objMap.get("comments").flatMap(_.boolOpt).getOrElse(false)
+            BatchOp.Clear(range, all, stylesFlag, commentsFlag)
+
+          case "col-hide" =>
+            val col = requireString(objMap, "col", idx)
+            BatchOp.ColHide(col)
+
+          case "col-show" =>
+            val col = requireString(objMap, "col", idx)
+            BatchOp.ColShow(col)
+
+          case "row-hide" =>
+            val row = requireInt(objMap, "row", idx)
+            BatchOp.RowHide(row)
+
+          case "row-show" =>
+            val row = requireInt(objMap, "row", idx)
+            BatchOp.RowShow(row)
+
+          case "autofit" =>
+            collectUnknownPropsWarning(objMap, knownAutoFitProps, "autofit", idx)
+              .foreach(warnings += _)
+            val columns = objMap.get("columns").flatMap(_.strOpt)
+            BatchOp.AutoFit(columns)
+
+          case "add-sheet" =>
+            collectUnknownPropsWarning(objMap, knownAddSheetProps, "add-sheet", idx)
+              .foreach(warnings += _)
+            val name = requireString(objMap, "name", idx)
+            val after = objMap.get("after").flatMap(_.strOpt)
+            BatchOp.AddSheet(name, after)
+
+          case "rename-sheet" =>
+            collectUnknownPropsWarning(objMap, knownRenameSheetProps, "rename-sheet", idx)
+              .foreach(warnings += _)
+            val from = requireString(objMap, "from", idx)
+            val to = requireString(objMap, "to", idx)
+            BatchOp.RenameSheet(from, to)
+
           case other =>
             throw new Exception(
               s"Object ${idx + 1}: Unknown operation '$other'. " +
-                "Valid: put, putf, style, merge, unmerge, colwidth, rowheight"
+                "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
+                "comment, remove-comment, clear, col-hide, col-show, row-hide, row-show, " +
+                "autofit, add-sheet, rename-sheet"
             )
       }
 
@@ -279,6 +358,21 @@ object BatchParser:
     "borderColor",
     "replace"
   )
+
+  /** Known properties for 'comment' operation */
+  private val knownCommentProps = Set("op", "ref", "text", "author")
+
+  /** Known properties for 'clear' operation */
+  private val knownClearProps = Set("op", "range", "all", "styles", "comments")
+
+  /** Known properties for 'autofit' operation */
+  private val knownAutoFitProps = Set("op", "columns")
+
+  /** Known properties for 'add-sheet' operation */
+  private val knownAddSheetProps = Set("op", "name", "after")
+
+  /** Known properties for 'rename-sheet' operation */
+  private val knownRenameSheetProps = Set("op", "from", "to")
 
   /** Collect warning about unknown properties in a batch operation (if any) */
   private def collectUnknownPropsWarning(
@@ -657,6 +751,36 @@ object BatchParser:
 
           case BatchOp.RowHeight(row, height) =>
             applyRowHeight(currentWb, defaultSheetName, row, height)
+
+          case BatchOp.AddComment(refStr, text, author) =>
+            applyAddComment(currentWb, defaultSheetName, refStr, text, author)
+
+          case BatchOp.RemoveComment(refStr) =>
+            applyRemoveComment(currentWb, defaultSheetName, refStr)
+
+          case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
+            applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag)
+
+          case BatchOp.ColHide(colStr) =>
+            applyColVisibility(currentWb, defaultSheetName, colStr, hidden = true)
+
+          case BatchOp.ColShow(colStr) =>
+            applyColVisibility(currentWb, defaultSheetName, colStr, hidden = false)
+
+          case BatchOp.RowHide(row) =>
+            applyRowVisibility(currentWb, defaultSheetName, row, hidden = true)
+
+          case BatchOp.RowShow(row) =>
+            applyRowVisibility(currentWb, defaultSheetName, row, hidden = false)
+
+          case BatchOp.AutoFit(columnsOpt) =>
+            applyAutoFit(currentWb, defaultSheetName, columnsOpt)
+
+          case BatchOp.AddSheet(name, after) =>
+            applyAddSheet(currentWb, name, after)
+
+          case BatchOp.RenameSheet(from, to) =>
+            applyRenameSheet(currentWb, from, to)
       }
     }
 
@@ -945,6 +1069,256 @@ object BatchParser:
         val props = sheet.getRowProperties(row).copy(height = Some(height))
         sheet.setRowProperties(row, props)
       }
+    yield result
+
+  /** Add a comment to a cell. */
+  private def applyAddComment(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    refStr: String,
+    text: String,
+    author: Option[String]
+  ): IO[Workbook] =
+    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+      case RefType.Cell(ref) =>
+        defaultSheetName match
+          case Some(sheetName) =>
+            updateSheet(wb, sheetName)(_.comment(ref, Comment.plainText(text, author)))
+          case None =>
+            IO.raiseError(
+              new Exception(s"batch comment requires --sheet for unqualified ref '$refStr'")
+            )
+
+      case RefType.QualifiedCell(sheetName, ref) =>
+        updateSheet(wb, sheetName)(_.comment(ref, Comment.plainText(text, author)))
+
+      case _ =>
+        IO.raiseError(new Exception(s"batch comment requires single cell ref, not range: $refStr"))
+    }
+
+  /** Remove a comment from a cell. */
+  private def applyRemoveComment(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    refStr: String
+  ): IO[Workbook] =
+    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+      case RefType.Cell(ref) =>
+        defaultSheetName match
+          case Some(sheetName) =>
+            updateSheet(wb, sheetName)(_.removeComment(ref))
+          case None =>
+            IO.raiseError(
+              new Exception(s"batch remove-comment requires --sheet for unqualified ref '$refStr'")
+            )
+
+      case RefType.QualifiedCell(sheetName, ref) =>
+        updateSheet(wb, sheetName)(_.removeComment(ref))
+
+      case _ =>
+        IO.raiseError(
+          new Exception(s"batch remove-comment requires single cell ref, not range: $refStr")
+        )
+    }
+
+  /** Clear contents, styles, and/or comments from a range. */
+  private def applyClear(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    rangeStr: String,
+    all: Boolean,
+    stylesFlag: Boolean,
+    commentsFlag: Boolean
+  ): IO[Workbook] =
+    for
+      rangeRef <- parseRangeRef(rangeStr, defaultSheetName)
+      (sheetName, range) = rangeRef
+      result <- updateSheet(wb, sheetName) { sheet =>
+        val clearContents = all || (!stylesFlag && !commentsFlag)
+        val clearStyles = all || stylesFlag
+        val clearComments = all || commentsFlag
+
+        val s1 = if clearContents then sheet.removeRange(range) else sheet
+        val s2 = if clearStyles then s1.clearStylesInRange(range) else s1
+        val s3 = if clearComments then s2.clearCommentsInRange(range) else s2
+
+        // Unmerge overlapping regions when clearing contents
+        if clearContents then
+          val overlapping = s3.mergedRanges.filter(_.intersects(range))
+          overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr))
+        else s3
+      }
+    yield result
+
+  /** Set column visibility (hide/show). */
+  private def applyColVisibility(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    colStr: String,
+    hidden: Boolean
+  ): IO[Workbook] =
+    for
+      col <- IO.fromEither(Column.fromLetter(colStr).left.map(e => new Exception(e)))
+      sheetName <- defaultSheetName match
+        case Some(name) => IO.pure(name)
+        case None =>
+          IO.raiseError(
+            new Exception(s"batch col-${if hidden then "hide" else "show"} requires --sheet")
+          )
+      result <- updateSheet(wb, sheetName) { sheet =>
+        val props = sheet.getColumnProperties(col).copy(hidden = hidden)
+        sheet.setColumnProperties(col, props)
+      }
+    yield result
+
+  /** Set row visibility (hide/show). */
+  private def applyRowVisibility(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    rowNum: Int,
+    hidden: Boolean
+  ): IO[Workbook] =
+    for
+      row <- IO.pure(Row.from1(rowNum))
+      sheetName <- defaultSheetName match
+        case Some(name) => IO.pure(name)
+        case None =>
+          IO.raiseError(
+            new Exception(s"batch row-${if hidden then "hide" else "show"} requires --sheet")
+          )
+      result <- updateSheet(wb, sheetName) { sheet =>
+        val props = sheet.getRowProperties(row).copy(hidden = hidden)
+        sheet.setRowProperties(row, props)
+      }
+    yield result
+
+  /** Auto-fit column widths. */
+  private def applyAutoFit(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    columnsOpt: Option[String]
+  ): IO[Workbook] =
+    import com.tjclp.xl.cells.CellValue.*
+    import com.tjclp.xl.display.NumFmtFormatter
+
+    for
+      sheetName <- defaultSheetName match
+        case Some(name) => IO.pure(name)
+        case None => IO.raiseError(new Exception("batch autofit requires --sheet"))
+      result <- updateSheet(wb, sheetName) { sheet =>
+        // Determine columns to auto-fit
+        val columns: List[Column] = columnsOpt match
+          case Some(spec) =>
+            if spec.contains(':') then
+              CellRange.parse(spec) match
+                case Right(range) =>
+                  (range.colStart.index0 to range.colEnd.index0).map(Column.from0).toList
+                case Left(_) => List.empty
+            else
+              Column.fromLetter(spec) match
+                case Right(c) => List(c)
+                case Left(_) => List.empty
+          case None =>
+            sheet.usedRange match
+              case Some(range) =>
+                (range.colStart.index0 to range.colEnd.index0).map(Column.from0).toList
+              case None => List.empty
+
+        columns.foldLeft(sheet) { (s, col) =>
+          val w = autoFitWidth(s, col)
+          val props = s.getColumnProperties(col).copy(width = Some(w))
+          s.setColumnProperties(col, props)
+        }
+      }
+    yield result
+
+  /** Calculate auto-fit width for a column (character units). */
+  private def autoFitWidth(sheet: Sheet, col: Column): Double =
+    import com.tjclp.xl.cells.CellValue.*
+    import com.tjclp.xl.display.NumFmtFormatter
+
+    val cellsInColumn = sheet.cells.filter { case (ref, _) => ref.col == col }
+
+    if cellsInColumn.isEmpty then 8.43
+    else
+      val maxCharWidth = cellsInColumn.values
+        .map { cell =>
+          val styleOpt = cell.styleId.flatMap(sheet.styleRegistry.get)
+          val numFmt = styleOpt.map(_.numFmt).getOrElse(NumFmt.General)
+          val boldFactor = if styleOpt.exists(_.font.bold) then 1.1 else 1.0
+
+          val baseWidth: Double = cell.value match
+            case Text(s) => s.length.toDouble
+            case n @ Number(_) => NumFmtFormatter.formatValue(n, numFmt).length.toDouble
+            case Bool(b) => if b then 4.0 else 5.0
+            case Error(e) => e.toString.length.toDouble
+            case Empty => 0.0
+            case dt @ DateTime(_) => NumFmtFormatter.formatValue(dt, numFmt).length.toDouble
+            case Formula(_, Some(cached)) =>
+              val tempCell = cell.copy(value = cached)
+              val tempStyleOpt = tempCell.styleId.flatMap(sheet.styleRegistry.get)
+              val tempNumFmt = tempStyleOpt.map(_.numFmt).getOrElse(NumFmt.General)
+              NumFmtFormatter.formatValue(cached, tempNumFmt).length.toDouble
+            case Formula(expr, None) => expr.length.toDouble
+            case RichText(rt) => rt.toPlainText.length.toDouble
+
+          baseWidth * boldFactor
+        }
+        .maxOption
+        .getOrElse(0.0)
+
+      val width =
+        BigDecimal(maxCharWidth * 0.90 + 1.5).setScale(2, BigDecimal.RoundingMode.HALF_UP).toDouble
+      math.max(width, 5.0)
+
+  /** Add a new sheet to the workbook. */
+  private def applyAddSheet(
+    wb: Workbook,
+    name: String,
+    afterOpt: Option[String]
+  ): IO[Workbook] =
+    for
+      sheetName <- IO.fromEither(SheetName(name).left.map(e => new Exception(e)))
+      _ <-
+        if wb.sheets.exists(_.name == sheetName) then
+          IO.raiseError(
+            new Exception(
+              s"Sheet '$name' already exists. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+            )
+          )
+        else IO.unit
+      newSheet = Sheet(sheetName)
+      result <- afterOpt match
+        case Some(after) =>
+          for
+            afterName <- IO.fromEither(SheetName(after).left.map(e => new Exception(e)))
+            idx = wb.sheets.indexWhere(_.name == afterName)
+            _ <-
+              if idx < 0 then
+                IO.raiseError(
+                  new Exception(
+                    s"Sheet '$after' not found. Available: ${wb.sheetNames.map(_.value).mkString(", ")}"
+                  )
+                )
+              else IO.unit
+            inserted <- IO.fromEither(
+              wb.insertAt(idx + 1, newSheet).left.map(e => new Exception(e.message))
+            )
+          yield inserted
+        case None =>
+          IO.pure(wb.put(newSheet))
+    yield result
+
+  /** Rename a sheet. */
+  private def applyRenameSheet(
+    wb: Workbook,
+    from: String,
+    to: String
+  ): IO[Workbook] =
+    for
+      oldName <- IO.fromEither(SheetName(from).left.map(e => new Exception(e)))
+      newName <- IO.fromEither(SheetName(to).left.map(e => new Exception(e)))
+      result <- IO.fromEither(wb.rename(oldName, newName).left.map(e => new Exception(e.message)))
     yield result
 
   // ========== Utilities ==========
