@@ -235,6 +235,205 @@ class MainSpec extends CatsEffectSuite:
     }
   }
 
+  test("batch autofit: invalid column spec fails fast") {
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Text("x"))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.AutoFit(Some("A::C")))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).attempt.map {
+      case Left(err) =>
+        assert(
+          err.getMessage.contains("Invalid autofit columns"),
+          s"Expected invalid autofit error, got: ${err.getMessage}"
+        )
+      case Right(_) =>
+        fail("Invalid autofit columns spec should fail")
+    }
+  }
+
+  // ========== New Batch Operations (GH-88 - batch completeness) ==========
+
+  test("batch: comment adds cell comment with author") {
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Text("Revenue"))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.AddComment("A1", "Q1 note", Some("Analyst")))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      val s = result.sheets.head
+      assert(s.hasComment(ref"A1"), "Cell should have a comment")
+      val comment = s.comments(ref"A1")
+      assertEquals(comment.text.toPlainText, "Q1 note")
+      assertEquals(comment.author, Some("Analyst"))
+    }
+  }
+
+  test("batch: remove-comment removes existing comment") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Text("Revenue"))
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Old note", None))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.RemoveComment("A1"))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      val s = result.sheets.head
+      assert(!s.hasComment(ref"A1"), "Comment should be removed")
+    }
+  }
+
+  test("batch: clear with all flag removes contents, styles, and comments") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Text("Data"))
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Note", None))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.Clear("A1", all = true, styles = false, comments = false))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      val s = result.sheets.head
+      assert(!s.hasComment(ref"A1"), "Comment should be cleared")
+      assertEquals(s.cells.get(ref"A1"), None)
+    }
+  }
+
+  test("batch: clear with styles flag preserves contents") {
+    val sheet = Sheet("Test").put(ref"A1", CellValue.Text("Keep"))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.Clear("A1", all = false, styles = true, comments = false))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      val s = result.sheets.head
+      // Content preserved (only styles cleared)
+      val cell = s.cells.get(ref"A1")
+      assert(cell.isDefined, "Cell content should be preserved when only clearing styles")
+    }
+  }
+
+  test("batch: col-hide sets column hidden property") {
+    val sheet = Sheet("Test").put(ref"B1", CellValue.Text("Data"))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.ColHide("B"))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      val s = result.sheets.head
+      val col = com.tjclp.xl.addressing.Column.fromLetter("B").toOption.get
+      assert(s.getColumnProperties(col).hidden, "Column B should be hidden")
+    }
+  }
+
+  test("batch: col-show clears column hidden property") {
+    val col = com.tjclp.xl.addressing.Column.fromLetter("B").toOption.get
+    val sheet = Sheet("Test")
+      .put(ref"B1", CellValue.Text("Data"))
+      .setColumnProperties(col, com.tjclp.xl.sheets.ColumnProperties(hidden = true))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.ColShow("B"))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      val s = result.sheets.head
+      assert(!s.getColumnProperties(col).hidden, "Column B should be visible")
+    }
+  }
+
+  test("batch: row-hide sets row hidden property") {
+    val sheet = Sheet("Test").put(ref"A2", CellValue.Text("Data"))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.RowHide(2))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      val s = result.sheets.head
+      val row = com.tjclp.xl.addressing.Row.from1(2)
+      assert(s.getRowProperties(row).hidden, "Row 2 should be hidden")
+    }
+  }
+
+  test("batch: row-show clears row hidden property") {
+    val row = com.tjclp.xl.addressing.Row.from1(2)
+    val sheet = Sheet("Test")
+      .put(ref"A2", CellValue.Text("Data"))
+      .setRowProperties(row, com.tjclp.xl.sheets.RowProperties(hidden = true))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.RowShow(2))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      val s = result.sheets.head
+      assert(!s.getRowProperties(row).hidden, "Row 2 should be visible")
+    }
+  }
+
+  test("batch: autofit adjusts column width based on content") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Text("Short"))
+      .put(ref"A2", CellValue.Text("A much longer text value"))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.AutoFit(Some("A")))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      val s = result.sheets.head
+      val col = com.tjclp.xl.addressing.Column.fromLetter("A").toOption.get
+      val width = s.getColumnProperties(col).width
+      assert(width.isDefined, "Column A should have a width set")
+      assert(width.get > 8.43, "Width should be wider than default for long text")
+    }
+  }
+
+  test("batch: add-sheet creates new sheet") {
+    val sheet = Sheet("Sheet1").put(ref"A1", CellValue.Text("Original"))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.AddSheet("Sheet2", None))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      assertEquals(result.sheets.length, 2)
+      assertEquals(result.sheets(1).name.value, "Sheet2")
+    }
+  }
+
+  test("batch: add-sheet with after positions correctly") {
+    val sheet1 = Sheet("Sheet1")
+    val sheet2 = Sheet("Sheet3")
+    val wb = Workbook(Vector(sheet1, sheet2))
+    val ops = Vector(BatchOp.AddSheet("Sheet2", Some("Sheet1")))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet1), ops).map { result =>
+      assertEquals(result.sheets.length, 3)
+      assertEquals(result.sheets(0).name.value, "Sheet1")
+      assertEquals(result.sheets(1).name.value, "Sheet2")
+      assertEquals(result.sheets(2).name.value, "Sheet3")
+    }
+  }
+
+  test("batch: add-sheet rejects duplicate name") {
+    val sheet = Sheet("Sheet1")
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.AddSheet("Sheet1", None))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).attempt.map {
+      case Left(err) =>
+        assert(err.getMessage.contains("already exists"), s"Expected duplicate error: ${err.getMessage}")
+      case Right(_) =>
+        fail("Duplicate sheet name should fail")
+    }
+  }
+
+  test("batch: rename-sheet changes sheet name") {
+    val sheet = Sheet("OldName").put(ref"A1", CellValue.Text("Data"))
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.RenameSheet("OldName", "NewName"))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).map { result =>
+      assertEquals(result.sheets.head.name.value, "NewName")
+    }
+  }
+
+  test("batch: rename-sheet error on missing source") {
+    val sheet = Sheet("Sheet1")
+    val wb = Workbook(Vector(sheet))
+    val ops = Vector(BatchOp.RenameSheet("NoSuchSheet", "NewName"))
+
+    BatchParser.applyBatchOperations(wb, Some(sheet), ops).attempt.map {
+      case Left(_) => () // Expected
+      case Right(_) => fail("Renaming non-existent sheet should fail")
+    }
+  }
+
   // ========== JSON Parsing Edge Cases (GH-67 - uPickle migration) ==========
 
   test("parseBatchJson: handles nested braces in values (GH-67 regression)") {

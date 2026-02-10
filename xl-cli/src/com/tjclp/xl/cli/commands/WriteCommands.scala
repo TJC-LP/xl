@@ -723,6 +723,19 @@ object WriteCommands:
                   case BatchParser.BatchOp.Unmerge(range) => s"  UNMERGE $range"
                   case BatchParser.BatchOp.ColWidth(col, width) => s"  COLWIDTH $col = $width"
                   case BatchParser.BatchOp.RowHeight(row, height) => s"  ROWHEIGHT $row = $height"
+                  case BatchParser.BatchOp.AddComment(ref, text, _) =>
+                    s"  COMMENT $ref = \"$text\""
+                  case BatchParser.BatchOp.RemoveComment(ref) => s"  REMOVE-COMMENT $ref"
+                  case BatchParser.BatchOp.Clear(range, _, _, _) => s"  CLEAR $range"
+                  case BatchParser.BatchOp.ColHide(col) => s"  COL-HIDE $col"
+                  case BatchParser.BatchOp.ColShow(col) => s"  COL-SHOW $col"
+                  case BatchParser.BatchOp.RowHide(row) => s"  ROW-HIDE $row"
+                  case BatchParser.BatchOp.RowShow(row) => s"  ROW-SHOW $row"
+                  case BatchParser.BatchOp.AutoFit(cols) =>
+                    s"  AUTOFIT ${cols.getOrElse("all")}"
+                  case BatchParser.BatchOp.AddSheet(name, _) => s"  ADD-SHEET $name"
+                  case BatchParser.BatchOp.RenameSheet(from, to) =>
+                    s"  RENAME-SHEET $from -> $to"
                 }
                 .mkString("\n")
               s"Applied ${ops.size} operations:\n$summary\n${saveSuffix(outputPath, stream)}"

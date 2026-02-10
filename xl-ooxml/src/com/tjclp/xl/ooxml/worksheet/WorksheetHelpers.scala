@@ -97,8 +97,8 @@ private[ooxml] def applyDomainRowProps(row: OoxmlRow, props: RowProperties): Oox
   row.copy(
     height = props.height.orElse(row.height),
     customHeight = props.height.isDefined || row.customHeight,
-    hidden = props.hidden || row.hidden,
+    hidden = props.hidden, // Domain always wins (allows unhide)
     outlineLevel = props.outlineLevel.orElse(row.outlineLevel),
-    collapsed = props.collapsed || row.collapsed
+    collapsed = props.collapsed // Domain always wins (allows uncollapse)
     // Note: styleId would need remapping to workbook-level index (deferred)
   )

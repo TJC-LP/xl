@@ -437,7 +437,10 @@ Apply multiple operations atomically from JSON input.
   {"op": "style", "range": "A1:B1", "bold": true},
   {"op": "merge", "range": "A1:D1"},
   {"op": "colwidth", "col": "A", "width": 15.5},
-  {"op": "rowheight", "row": 1, "height": 30}
+  {"op": "rowheight", "row": 1, "height": 30},
+  {"op": "comment", "ref": "A1", "text": "Revenue figure", "author": "Analyst"},
+  {"op": "autofit", "columns": "A:D"},
+  {"op": "add-sheet", "name": "Summary", "after": "Sheet1"}
 ]
 ```
 
@@ -445,13 +448,23 @@ Apply multiple operations atomically from JSON input.
 
 | Operation | Required Fields | Optional Fields | Description |
 |-----------|-----------------|-----------------|-------------|
-| `put` | `ref`, `value` | `format` | Write value to cell |
+| `put` | `ref`, `value` | `format`, `values`, `detect` | Write value to cell |
 | `putf` | `ref`, `value` | `from`, `values` | Write formula(s) to cell(s) |
 | `style` | `range` | styling options | Apply cell styling |
 | `merge` | `range` | | Merge cells |
 | `unmerge` | `range` | | Unmerge cells |
 | `colwidth` | `col`, `width` | | Set column width |
 | `rowheight` | `row`, `height` | | Set row height |
+| `comment` | `ref`, `text` | `author` | Add cell comment |
+| `remove-comment` | `ref` | | Remove cell comment |
+| `clear` | `range` | `all`, `styles`, `comments` | Clear cell contents/styles/comments |
+| `col-hide` | `col` | | Hide column |
+| `col-show` | `col` | | Show column |
+| `row-hide` | `row` | | Hide row |
+| `row-show` | `row` | | Show row |
+| `autofit` | | `columns` | Auto-fit column widths |
+| `add-sheet` | `name` | `after` | Add new sheet |
+| `rename-sheet` | `from`, `to` | | Rename sheet |
 
 **Native JSON Types** (recommended):
 
