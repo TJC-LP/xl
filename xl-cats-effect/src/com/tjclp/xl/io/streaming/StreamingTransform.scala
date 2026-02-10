@@ -826,13 +826,18 @@ object StreamingTransform:
         writer.startElement("col")
         writer.writeAttribute("min", minCol.toString)
         writer.writeAttribute("max", maxCol.toString)
-        // Default width is 8.43 (Excel default for 11pt Calibri)
-        writer.writeAttribute("width", props.width.getOrElse(8.43).toString)
-        writer.writeAttribute("customWidth", "1")
+        props.width.foreach { width =>
+          writer.writeAttribute("width", width.toString)
+          writer.writeAttribute("customWidth", "1")
+        }
         if props.hidden then writer.writeAttribute("hidden", "1")
+        props.styleId.foreach { sid =>
+          writer.writeAttribute("style", sid.toString)
+        }
         props.outlineLevel.filter(_ > 0).foreach { lvl =>
           writer.writeAttribute("outlineLevel", lvl.toString)
         }
+        if props.collapsed then writer.writeAttribute("collapsed", "1")
         writer.endElement() // col
       }
 
@@ -910,10 +915,7 @@ object StreamingTransform:
                 () // Skip - we'll set it with ht
               case "hidden" =>
                 hasHidden = true
-                writer.writeAttribute(
-                  "hidden",
-                  if props.hidden then "1" else attributes.getValue(i)
-                )
+                if props.hidden then writer.writeAttribute("hidden", "1")
               case "outlineLevel" =>
                 hasOutlineLevel = true
                 val level =

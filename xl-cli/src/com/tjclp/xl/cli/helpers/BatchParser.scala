@@ -1198,31 +1198,26 @@ object BatchParser:
     defaultSheetName: Option[SheetName],
     columnsOpt: Option[String]
   ): IO[Workbook] =
-    import com.tjclp.xl.cells.CellValue.*
-    import com.tjclp.xl.display.NumFmtFormatter
-
     for
       sheetName <- defaultSheetName match
         case Some(name) => IO.pure(name)
         case None => IO.raiseError(new Exception("batch autofit requires --sheet"))
+      parsedColumnsOpt <- columnsOpt match
+        case Some(spec) =>
+          IO.fromEither(parseAutoFitColumnsSpec(spec).left.map(msg => new Exception(msg)))
+            .map(
+              Some(_)
+            )
+        case None =>
+          IO.pure(None)
       result <- updateSheet(wb, sheetName) { sheet =>
         // Determine columns to auto-fit
-        val columns: List[Column] = columnsOpt match
-          case Some(spec) =>
-            if spec.contains(':') then
-              CellRange.parse(spec) match
-                case Right(range) =>
-                  (range.colStart.index0 to range.colEnd.index0).map(Column.from0).toList
-                case Left(_) => List.empty
-            else
-              Column.fromLetter(spec) match
-                case Right(c) => List(c)
-                case Left(_) => List.empty
-          case None =>
-            sheet.usedRange match
-              case Some(range) =>
-                (range.colStart.index0 to range.colEnd.index0).map(Column.from0).toList
-              case None => List.empty
+        val columns: List[Column] = parsedColumnsOpt.getOrElse {
+          sheet.usedRange match
+            case Some(range) =>
+              (range.colStart.index0 to range.colEnd.index0).map(Column.from0).toList
+            case None => List.empty
+        }
 
         columns.foldLeft(sheet) { (s, col) =>
           val w = autoFitWidth(s, col)
@@ -1270,6 +1265,21 @@ object BatchParser:
       val width =
         BigDecimal(maxCharWidth * 0.90 + 1.5).setScale(2, BigDecimal.RoundingMode.HALF_UP).toDouble
       math.max(width, 5.0)
+
+  /** Parse autofit columns spec: single column (A) or range (A:F). */
+  private def parseAutoFitColumnsSpec(spec: String): Either[String, List[Column]] =
+    if spec.contains(':') then
+      CellRange
+        .parse(spec)
+        .left
+        .map(err => s"Invalid autofit columns '$spec': $err")
+        .map(range => (range.colStart.index0 to range.colEnd.index0).map(Column.from0).toList)
+    else
+      Column
+        .fromLetter(spec)
+        .left
+        .map(err => s"Invalid autofit columns '$spec': $err")
+        .map(col => List(col))
 
   /** Add a new sheet to the workbook. */
   private def applyAddSheet(

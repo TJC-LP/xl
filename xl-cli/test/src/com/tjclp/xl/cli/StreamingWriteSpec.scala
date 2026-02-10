@@ -9,7 +9,7 @@ import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{Workbook, Sheet, given}
-import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.extensions.style
 import com.tjclp.xl.cli.commands.{
@@ -22,6 +22,7 @@ import com.tjclp.xl.cli.commands.{
 import com.tjclp.xl.cli.helpers.{CsvParser, StreamingCsvParser}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.font.Font
 
@@ -534,6 +535,82 @@ class StreamingWriteSpec extends FunSuite:
     val file = Files.createTempFile("batch", ".json")
     Files.writeString(file, content)
     file
+
+  test("streaming batch: col-hide preserves existing column metadata") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"col-hide","col":"B"}]""")
+    val colB = Column.fromLetter("B").toOption.getOrElse(fail("Invalid column B"))
+    val colC = Column.fromLetter("C").toOption.getOrElse(fail("Invalid column C"))
+    try
+      val sheet = Sheet("Test")
+        .put(ARef.from0(1, 0), CellValue.Text("B data"))
+        .put(ARef.from0(2, 0), CellValue.Text("C data"))
+        .setColumnProperties(
+          colB,
+          ColumnProperties(width = Some(22.5), hidden = false, outlineLevel = Some(2))
+        )
+        .setColumnProperties(
+          colC,
+          ColumnProperties(width = Some(13.75), hidden = false, outlineLevel = Some(1))
+        )
+      ExcelIO.instance[IO].write(Workbook(sheet), sourcePath).unsafeRunSync()
+
+      val result = StreamingWriteCommands
+        .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+        .unsafeRunSync()
+
+      assert(result.contains("Saved (streaming)"), result)
+
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val outSheet = imported.sheets.head
+      val outB = outSheet.getColumnProperties(colB)
+      val outC = outSheet.getColumnProperties(colC)
+
+      assertEquals(outB.hidden, true)
+      assertEquals(outB.width, Some(22.5))
+      assertEquals(outB.outlineLevel, Some(2))
+
+      // Ensure untouched column metadata survives the cols rewrite.
+      assertEquals(outC.hidden, false)
+      assertEquals(outC.width, Some(13.75))
+      assertEquals(outC.outlineLevel, Some(1))
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }
+
+  test("streaming batch: row-show clears hidden while preserving other row metadata") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"row-show","row":2}]""")
+    val row2 = Row.from1(2)
+    try
+      val sheet = Sheet("Test")
+        .put(ARef.from0(0, 1), CellValue.Text("Row 2"))
+        .setRowProperties(
+          row2,
+          RowProperties(height = Some(21.0), hidden = true, outlineLevel = Some(1))
+        )
+      ExcelIO.instance[IO].write(Workbook(sheet), sourcePath).unsafeRunSync()
+
+      val result = StreamingWriteCommands
+        .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+        .unsafeRunSync()
+
+      assert(result.contains("Saved (streaming)"), result)
+
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val rowProps = imported.sheets.head.getRowProperties(row2)
+      assertEquals(rowProps.hidden, false)
+      assertEquals(rowProps.height, Some(21.0))
+      assertEquals(rowProps.outlineLevel, Some(1))
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }
 
   test("streaming batch: formula dragging shifts references correctly") {
     val sourcePath = tempXlsx()

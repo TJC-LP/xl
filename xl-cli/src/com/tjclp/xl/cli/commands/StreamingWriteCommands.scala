@@ -3,6 +3,7 @@ package com.tjclp.xl.cli.commands
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.zip.ZipFile
+import javax.xml.parsers.SAXParserFactory
 
 import cats.effect.IO
 import com.tjclp.xl.api.Workbook
@@ -14,8 +15,12 @@ import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransform
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
+import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.cli.helpers.{BatchParser, StreamingCsvParser, StyleBuilder, ValueParser}
+import org.xml.sax.{Attributes, SAXException}
+import org.xml.sax.helpers.DefaultHandler
+import scala.collection.mutable
 import scala.xml.Elem
 
 /**
@@ -463,8 +468,6 @@ object StreamingWriteCommands:
     )
   ] =
     IO.delay {
-      import scala.collection.mutable
-
       // Read current styles.xml
       val zipFile = new ZipFile(sourcePath.toFile)
       val stylesXml =
@@ -475,12 +478,26 @@ object StreamingWriteCommands:
           else minimalStylesXml
         finally zipFile.close()
 
+      val needsColumnMetadata = ops.exists {
+        case BatchParser.BatchOp.ColWidth(_, _) | BatchParser.BatchOp.ColHide(_) |
+            BatchParser.BatchOp.ColShow(_) =>
+          true
+        case _ => false
+      }
+      val targetRows = ops.collect {
+        case BatchParser.BatchOp.RowHeight(rowNum, _) => Row.from1(rowNum)
+        case BatchParser.BatchOp.RowHide(rowNum) => Row.from1(rowNum)
+        case BatchParser.BatchOp.RowShow(rowNum) => Row.from1(rowNum)
+      }.toSet
+      val existingMetadata =
+        readExistingWorksheetMetadata(sourcePath, worksheetPath, needsColumnMetadata, targetRows)
+
       // Accumulate patches and metadata
       val cellPatches = mutable.Map[ARef, StreamingTransform.CellPatch]()
-      val columns = mutable.Map[Column, ColumnProperties]()
+      val columns = mutable.Map[Column, ColumnProperties]() ++ existingMetadata.columns
       val addMerges = mutable.Set[CellRange]()
       val removeMerges = mutable.Set[CellRange]()
-      val rowProps = mutable.Map[Row, RowProperties]()
+      val rowProps = mutable.Map[Row, RowProperties]() ++ existingMetadata.rowProps
       val summaryLines = mutable.ListBuffer[String]()
 
       var currentStylesXml = stylesXml
@@ -708,6 +725,124 @@ object StreamingWriteCommands:
 
       (cellPatches.toMap, updatedStylesXml, worksheetMetadata, summaryLines.mkString("\n"))
     }
+
+  private final case class ExistingWorksheetMetadata(
+    columns: Map[Column, ColumnProperties],
+    rowProps: Map[Row, RowProperties]
+  )
+
+  private final class StopWorksheetScan extends SAXException("stop worksheet scan")
+
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private def readExistingWorksheetMetadata(
+    sourcePath: Path,
+    worksheetPath: String,
+    needsColumns: Boolean,
+    targetRows: Set[Row]
+  ): ExistingWorksheetMetadata =
+    if !needsColumns && targetRows.isEmpty then ExistingWorksheetMetadata(Map.empty, Map.empty)
+    else
+      val parsedColumns = mutable.Map.empty[Column, ColumnProperties]
+      val parsedRows = mutable.Map.empty[Row, RowProperties]
+      val pendingRows = mutable.Set.empty[Int] ++ targetRows.map(_.index1)
+
+      val zipFile = new ZipFile(sourcePath.toFile)
+      try
+        val worksheetEntry = zipFile.getEntry(worksheetPath)
+        if worksheetEntry == null then
+          throw new Exception(s"Worksheet not found while loading metadata: $worksheetPath")
+
+        val parserFactory = SAXParserFactory.newInstance()
+        parserFactory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        parserFactory.setFeature("http://xml.org/sax/features/external-general-entities", false)
+        parserFactory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+        parserFactory.setFeature(
+          "http://apache.org/xml/features/nonvalidating/load-external-dtd",
+          false
+        )
+        parserFactory.setXIncludeAware(false)
+        parserFactory.setNamespaceAware(true)
+        val parser = parserFactory.newSAXParser()
+
+        val inputStream = zipFile.getInputStream(worksheetEntry)
+        try
+          val handler = new DefaultHandler:
+            override def startElement(
+              uri: String,
+              localName: String,
+              qName: String,
+              attributes: Attributes
+            ): Unit =
+              val name = if localName.nonEmpty then localName else qName
+
+              if needsColumns && name == "col" then
+                parseColumnPropertiesFromAttributes(attributes).foreach {
+                  case (minCol, maxCol, props) =>
+                    (minCol to maxCol).foreach { index1 =>
+                      parsedColumns(Column.from1(index1)) = props
+                    }
+                }
+
+              if pendingRows.nonEmpty && name == "row" then
+                Option(attributes.getValue("r")).flatMap(_.toIntOption).filter(_ > 0).foreach {
+                  rowIndex =>
+                    if pendingRows.contains(rowIndex) then
+                      parsedRows(Row.from1(rowIndex)) = parseRowPropertiesFromAttributes(attributes)
+                      pendingRows -= rowIndex
+                      if pendingRows.isEmpty then throw new StopWorksheetScan
+                    else
+                      val maxPendingRow =
+                        pendingRows.foldLeft(Int.MinValue)((currentMax, nextRow) =>
+                          math.max(currentMax, nextRow)
+                        )
+                      if rowIndex > maxPendingRow then
+                        // Row indices are ascending in worksheet XML, so remaining targets won't appear.
+                        throw new StopWorksheetScan
+                }
+
+              if name == "sheetData" && needsColumns && pendingRows.isEmpty then
+                // Column definitions are fully parsed before sheetData.
+                throw new StopWorksheetScan
+
+          try parser.parse(inputStream, handler)
+          catch case _: StopWorksheetScan => ()
+        finally inputStream.close()
+
+        ExistingWorksheetMetadata(parsedColumns.toMap, parsedRows.toMap)
+      finally zipFile.close()
+
+  private def parseColumnPropertiesFromAttributes(
+    attributes: Attributes
+  ): Option[(Int, Int, ColumnProperties)] =
+    for
+      minCol <- Option(attributes.getValue("min")).flatMap(_.toIntOption).filter(_ > 0)
+      maxCol <- Option(attributes.getValue("max")).flatMap(_.toIntOption).filter(_ >= minCol)
+    yield
+      val width = Option(attributes.getValue("width")).flatMap(_.toDoubleOption)
+      val styleId = Option(attributes.getValue("style")).flatMap(_.toIntOption).map(StyleId.apply)
+      val outlineLevel =
+        Option(attributes.getValue("outlineLevel")).flatMap(_.toIntOption).filter(_ > 0)
+      val props = ColumnProperties(
+        width = width,
+        hidden = isXmlTrue(attributes.getValue("hidden")),
+        styleId = styleId,
+        outlineLevel = outlineLevel,
+        collapsed = isXmlTrue(attributes.getValue("collapsed"))
+      )
+      (minCol, maxCol, props)
+
+  private def parseRowPropertiesFromAttributes(attributes: Attributes): RowProperties =
+    RowProperties(
+      height = Option(attributes.getValue("ht")).flatMap(_.toDoubleOption),
+      hidden = isXmlTrue(attributes.getValue("hidden")),
+      styleId = Option(attributes.getValue("s")).flatMap(_.toIntOption).map(StyleId.apply),
+      outlineLevel =
+        Option(attributes.getValue("outlineLevel")).flatMap(_.toIntOption).filter(_ > 0),
+      collapsed = isXmlTrue(attributes.getValue("collapsed"))
+    )
+
+  private def isXmlTrue(value: String): Boolean =
+    Option(value).exists(v => v == "1" || v.equalsIgnoreCase("true"))
 
   /**
    * Build CellStyle from batch StyleProps (synchronous version for use inside IO.delay).
