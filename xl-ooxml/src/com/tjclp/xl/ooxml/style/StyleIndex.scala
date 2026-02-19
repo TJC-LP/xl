@@ -160,22 +160,20 @@ object StyleIndex:
    * Build style index for workbook with source, preserving original styles.
    *
    * This variant is used during surgical modification to avoid corruption:
-   *   - Deduplicates styles ONLY from modified sheets (optimal compression)
-   *   - Preserves original styles from source for unmodified sheets (no remapping needed)
-   *   - Ensures unmodified sheets' style references remain valid after write
+   *   - Preserves ALL original styles from source (including duplicates)
+   *   - Deduplicates only truly new styles from modified sheets
+   *   - Generates remappings for ALL sheets (not just modified ones)
    *
-   * Strategy:
-   *   1. Parse original styles.xml to get complete WorkbookStyles
-   *   2. Deduplicate styles from modified sheets only
-   *   3. Ensure all original styles are present in output (fill gaps if needed)
-   *   4. Return remappings ONLY for modified sheets (unmodified sheets use original IDs)
+   * All sheets need remappings because metadata-only changes (add-sheet, reorder) cause ALL sheets
+   * to be regenerated from the domain model, not copied verbatim from source. Without remappings,
+   * unmodified-but-regenerated sheets would fall back to styleId 0, stripping all styles (TJC-751).
    *
    * @param wb
    *   The workbook with modified sheets
    * @param ctx
    *   Source context providing modification tracker and original file path
    * @return
-   *   (StyleIndex with all original + deduplicated styles, Map[modifiedSheetIdx -> remapping])
+   *   (StyleIndex with all original + new styles, Map[sheetIdx -> remapping])
    */
   @SuppressWarnings(
     Array(
@@ -188,9 +186,6 @@ object StyleIndex:
     wb: Workbook,
     ctx: SourceContext
   ): (StyleIndex, Map[Int, Map[Int, Int]]) =
-    // Extract values from context
-    val tracker = ctx.modificationTracker
-    val modifiedSheetIndices = tracker.modifiedSheets
     val sourcePath = ctx.sourcePath
     import scala.collection.mutable
     import java.util.zip.ZipInputStream
@@ -251,61 +246,60 @@ object StyleIndex:
     }))
     var nextNumFmtId = if numFmtsBuilder.isEmpty then 164 else numFmtsBuilder.map(_._1).max + 1
 
-    // Step 4: Process ONLY modified sheets for style remapping
-    val remappings = wb.sheets.zipWithIndex.flatMap { case (sheet, sheetIdx) =>
-      if modifiedSheetIndices.contains(sheetIdx) then
-        val registry = sheet.styleRegistry
-        val remapping = mutable.Map[Int, Int]()
+    // Step 4: Process ALL sheets for style remapping
+    // Even unmodified sheets need remappings because metadata-only changes (add-sheet,
+    // reorder) cause ALL sheets to be regenerated from domain model. Without remappings,
+    // unmodified sheets fall back to styleId 0, stripping all styles (TJC-751).
+    val remappings = wb.sheets.zipWithIndex.map { case (sheet, sheetIdx) =>
+      val registry = sheet.styleRegistry
+      val remapping = mutable.Map[Int, Int]()
 
-        // Map each local styleId to global index
-        registry.styles.zipWithIndex.foreach { case (style, localIdx) =>
-          val key = style.canonicalKey
+      // Map each local styleId to global index
+      registry.styles.zipWithIndex.foreach { case (style, localIdx) =>
+        val key = style.canonicalKey
 
-          // First, check if this key exists in original styles
-          unifiedIndex.get(key) match
-            case Some(indices) =>
-              // Style exists in original - use FIRST matching index
-              // This preserves original layout and avoids adding duplicates
-              remapping(localIdx) = indices.head
-            case None =>
-              // Not in original - check if we've already added it
-              additionalStyles.get(key) match
-                case Some(addedIdx) =>
-                  // Already added by earlier sheet processing
-                  remapping(localIdx) = addedIdx
-                case None =>
-                  // Truly new style - add it now
-                  unifiedStyles = unifiedStyles :+ style
-                  additionalStyles(key) = nextIdx
-                  remapping(localIdx) = nextIdx
-                  nextIdx += 1
+        // First, check if this key exists in original styles
+        unifiedIndex.get(key) match
+          case Some(indices) =>
+            // Style exists in original - use FIRST matching index
+            // This preserves original layout and avoids adding duplicates
+            remapping(localIdx) = indices.head
+          case None =>
+            // Not in original - check if we've already added it
+            additionalStyles.get(key) match
+              case Some(addedIdx) =>
+                // Already added by earlier sheet processing
+                remapping(localIdx) = addedIdx
+              case None =>
+                // Truly new style - add it now
+                unifiedStyles = unifiedStyles :+ style
+                additionalStyles(key) = nextIdx
+                remapping(localIdx) = nextIdx
+                nextIdx += 1
 
-                  // CRITICAL: Also add new font/fill/border/numFmt if not already present
-                  // Without this, new styles reference non-existent component indices
-                  if !fontSet.contains(style.font) then
-                    fontSet += style.font
-                    fontsBuilder += style.font
+                // CRITICAL: Also add new font/fill/border/numFmt if not already present
+                // Without this, new styles reference non-existent component indices
+                if !fontSet.contains(style.font) then
+                  fontSet += style.font
+                  fontsBuilder += style.font
 
-                  if !fillSet.contains(style.fill) then
-                    fillSet += style.fill
-                    fillsBuilder += style.fill
+                if !fillSet.contains(style.fill) then
+                  fillSet += style.fill
+                  fillsBuilder += style.fill
 
-                  if !borderSet.contains(style.border) then
-                    borderSet += style.border
-                    bordersBuilder += style.border
+                if !borderSet.contains(style.border) then
+                  borderSet += style.border
+                  bordersBuilder += style.border
 
-                  style.numFmt match
-                    case NumFmt.Custom(code) if !numFmtCodeSet.contains(code) =>
-                      numFmtCodeSet += code
-                      numFmtsBuilder += ((nextNumFmtId, NumFmt.Custom(code)))
-                      nextNumFmtId += 1
-                    case _ => ()
-        }
+                style.numFmt match
+                  case NumFmt.Custom(code) if !numFmtCodeSet.contains(code) =>
+                    numFmtCodeSet += code
+                    numFmtsBuilder += ((nextNumFmtId, NumFmt.Custom(code)))
+                    nextNumFmtId += 1
+                  case _ => ()
+      }
 
-        Some(sheetIdx -> remapping.toMap)
-      else
-        // Unmodified sheet - no remapping needed (uses original style IDs)
-        None
+      sheetIdx -> remapping.toMap
     }.toMap
 
     // Step 5: Finalize component vectors (original + any new components)

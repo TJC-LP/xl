@@ -1128,6 +1128,201 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
+  // ===== Regression Test for Style Stripping on Untouched Sheets (TJC-751) =====
+
+  test("add-sheet preserves styles on untouched sheets (TJC-751)") {
+    // Regression test for: styles stripped on ALL untouched sheets during metadata-only writes
+    // Bug: StyleIndex.fromWorkbookWithSource only created remappings for modified sheets,
+    //      but metadata changes (add-sheet) force ALL sheets to be regenerated from domain model.
+    //      Unmodified sheets got Map.empty remapping → all styles fell back to styleId 0 (default).
+    // Impact: P0 - All styling (bold, colors, number formats) silently stripped from untouched sheets
+
+    val source = createWorkbookWithRichStyles()
+
+    // Read the workbook (populates SourceContext)
+    val wb = XlsxReader.read(source).fold(err => fail(s"Failed to read: $err"), identity)
+    assertEquals(wb.sheets.size, 2, "Source should have 2 sheets")
+
+    // Add a new sheet — triggers modifiedMetadata=true, modifiedSheets stays empty
+    val withNewSheet = wb.put(Sheet("NewComps").put(ref"A1" -> "New data"))
+
+    // Verify tracker state: metadata modified but no existing sheets marked modified
+    val tracker = withNewSheet.sourceContext.get.modificationTracker
+    assert(tracker.modifiedMetadata, "modifiedMetadata should be true after add-sheet")
+    assert(
+      !tracker.modifiedSheets.contains(0) && !tracker.modifiedSheets.contains(1),
+      "Existing sheets should NOT be in modifiedSheets"
+    )
+
+    // Write the modified workbook
+    val output = Files.createTempFile("tjc-751-add-sheet", ".xlsx")
+    XlsxWriter
+      .write(withNewSheet, output)
+      .fold(err => fail(s"Failed to write: $err"), identity)
+
+    // Read back and verify
+    val result = XlsxReader.read(output).fold(err => fail(s"Failed to reload: $err"), identity)
+    assertEquals(result.sheets.size, 3, "Output should have 3 sheets")
+
+    // CRITICAL: Verify styles on "Styled" sheet are preserved (not stripped to default)
+    val styled = result("Styled").fold(err => fail(s"Sheet Styled not found: $err"), identity)
+
+    // A1 should be bold
+    val a1Style = styled(ref"A1").styleId
+      .flatMap(id => styled.styleRegistry.get(id))
+    assert(a1Style.isDefined, "A1 should have a style")
+    assert(a1Style.get.font.bold, "A1 should be bold (was stripped to default!)")
+
+    // B1 should have a colored fill
+    val b1Style = styled(ref"B1").styleId
+      .flatMap(id => styled.styleRegistry.get(id))
+    assert(b1Style.isDefined, "B1 should have a style")
+    assert(
+      b1Style.get.fill != Fill.default,
+      "B1 should have colored fill (was stripped to default!)"
+    )
+
+    // CRITICAL: Verify styles on "AlsoStyled" sheet are preserved
+    val alsoStyled = result("AlsoStyled").fold(err => fail(s"Sheet AlsoStyled not found: $err"), identity)
+
+    val a1Style2 = alsoStyled(ref"A1").styleId
+      .flatMap(id => alsoStyled.styleRegistry.get(id))
+    assert(a1Style2.isDefined, "AlsoStyled A1 should have a style")
+    assert(a1Style2.get.font.bold, "AlsoStyled A1 should be bold (was stripped!)")
+
+    // Also verify at the raw XML level: check that cells in untouched sheets have s= attributes
+    val outputZip = new ZipFile(output.toFile)
+    val sheet1Xml = readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
+
+    // Cells with styles should have s="N" where N > 0
+    val cellsWithStyles = """s="(\d+)"""".r.findAllMatchIn(sheet1Xml).map(_.group(1).toInt).toList
+    assert(
+      cellsWithStyles.exists(_ > 0),
+      s"Sheet1 cells should have non-zero style indices but found: $cellsWithStyles"
+    )
+
+    // Clean up
+    outputZip.close()
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  private def createWorkbookWithRichStyles(): Path =
+    val path = Files.createTempFile("test-rich-styles", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1)
+
+    try
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>"""
+      )
+
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Styled" sheetId="1" r:id="rId1"/>
+    <sheet name="AlsoStyled" sheetId="2" r:id="rId2"/>
+  </sheets>
+</workbook>"""
+      )
+
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"""
+      )
+
+      // Styles: bold font, red solid fill, currency number format
+      writeEntry(
+        out,
+        "xl/styles.xml",
+        """<?xml version="1.0"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="1">
+    <numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0.00"/>
+  </numFmts>
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="3">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/></patternFill></fill>
+  </fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="4">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+    <xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0" applyFill="1"/>
+    <xf numFmtId="164" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"""
+      )
+
+      // Sheet 1: "Styled" — A1 is bold, B1 has red fill, C1 has currency format
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" s="1" t="inlineStr"><is><t>Bold Header</t></is></c>
+      <c r="B1" s="2" t="inlineStr"><is><t>Red Cell</t></is></c>
+      <c r="C1" s="3"><v>1234.56</v></c>
+    </row>
+  </sheetData>
+</worksheet>"""
+      )
+
+      // Sheet 2: "AlsoStyled" — A1 is bold
+      writeEntry(
+        out,
+        "xl/worksheets/sheet2.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" s="1" t="inlineStr"><is><t>Bold in Sheet 2</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>"""
+      )
+
+    finally out.close()
+
+    path
+
   private def createWorkbookWithoutSST(): Path =
     // Create a minimal workbook that uses inline strings (no sharedStrings.xml)
     val path = Files.createTempFile("test-no-sst", ".xlsx")
