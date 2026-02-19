@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.6] - 2026-02-19
+
+### Added
+
+- **Batch completeness — 17 operations** (#219, GH-88)
+  - 10 new batch ops: `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`
+  - Makes `batch` the primary interface for atomic multi-step workbook modifications
+  - Streaming mode supports col/row visibility ops; other new ops require full workbook mode with clear error message
+  - SAX-based `readExistingWorksheetMetadata` preserves col/row properties (widths, outline levels, styles, visibility) during streaming writes
+
+### Fixed
+
+- **Significant digit counting in `formatGeneral`** (#218)
+  - Now counts significant digits (not characters) to match Excel's General format threshold
+  - Fixes edge case where `countSignificantDigits` returned 0 for `"0"` input
+
+- **Repeatable `--with` flag** (#218)
+  - `eval`/`evala` commands now support multiple `--with` flags
+
+- **Domain row/col hidden properties override original XML** (#219)
+  - `applyDomainRowProps` used OR logic making it impossible to unhide rows once hidden; domain properties now always override preserved XML attributes
+
+- **Preserve styles on untouched sheets during metadata writes** (#220, TJC-751)
+  - `StyleIndex.fromWorkbookWithSource` only created style remappings for modified sheets, but metadata-only changes (add-sheet, reorder) regenerate all sheets — unmodified sheets silently lost all styling
+  - Now generates remappings for all sheets unconditionally when full regeneration is triggered, with a performance guard skipping unmodified sheets in the normal surgical path
+
+---
+
 ## [0.9.5] - 2026-02-08
 
 ### Fixed
