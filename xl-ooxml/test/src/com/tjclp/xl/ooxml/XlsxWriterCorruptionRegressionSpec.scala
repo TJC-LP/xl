@@ -1138,73 +1138,119 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     // Impact: P0 - All styling (bold, colors, number formats) silently stripped from untouched sheets
 
     val source = createWorkbookWithRichStyles()
-
-    // Read the workbook (populates SourceContext)
-    val wb = XlsxReader.read(source).fold(err => fail(s"Failed to read: $err"), identity)
-    assertEquals(wb.sheets.size, 2, "Source should have 2 sheets")
-
-    // Add a new sheet — triggers modifiedMetadata=true, modifiedSheets stays empty
-    val withNewSheet = wb.put(Sheet("NewComps").put(ref"A1" -> "New data"))
-
-    // Verify tracker state: metadata modified but no existing sheets marked modified
-    val tracker = withNewSheet.sourceContext.get.modificationTracker
-    assert(tracker.modifiedMetadata, "modifiedMetadata should be true after add-sheet")
-    assert(
-      !tracker.modifiedSheets.contains(0) && !tracker.modifiedSheets.contains(1),
-      "Existing sheets should NOT be in modifiedSheets"
-    )
-
-    // Write the modified workbook
     val output = Files.createTempFile("tjc-751-add-sheet", ".xlsx")
-    XlsxWriter
-      .write(withNewSheet, output)
-      .fold(err => fail(s"Failed to write: $err"), identity)
 
-    // Read back and verify
-    val result = XlsxReader.read(output).fold(err => fail(s"Failed to reload: $err"), identity)
-    assertEquals(result.sheets.size, 3, "Output should have 3 sheets")
+    try
+      // Read the workbook (populates SourceContext)
+      val wb = XlsxReader.read(source).fold(err => fail(s"Failed to read: $err"), identity)
+      assertEquals(wb.sheets.size, 2, "Source should have 2 sheets")
 
-    // CRITICAL: Verify styles on "Styled" sheet are preserved (not stripped to default)
-    val styled = result("Styled").fold(err => fail(s"Sheet Styled not found: $err"), identity)
+      // Add a new sheet — triggers modifiedMetadata=true, modifiedSheets stays empty
+      val withNewSheet = wb.put(Sheet("NewComps").put(ref"A1" -> "New data"))
 
-    // A1 should be bold
-    val a1Style = styled(ref"A1").styleId
-      .flatMap(id => styled.styleRegistry.get(id))
-    assert(a1Style.isDefined, "A1 should have a style")
-    assert(a1Style.get.font.bold, "A1 should be bold (was stripped to default!)")
+      // Verify tracker state: metadata modified but no existing sheets marked modified
+      val tracker = withNewSheet.sourceContext.get.modificationTracker
+      assert(tracker.modifiedMetadata, "modifiedMetadata should be true after add-sheet")
+      assert(
+        !tracker.modifiedSheets.contains(0) && !tracker.modifiedSheets.contains(1),
+        "Existing sheets should NOT be in modifiedSheets"
+      )
 
-    // B1 should have a colored fill
-    val b1Style = styled(ref"B1").styleId
-      .flatMap(id => styled.styleRegistry.get(id))
-    assert(b1Style.isDefined, "B1 should have a style")
-    assert(
-      b1Style.get.fill != Fill.default,
-      "B1 should have colored fill (was stripped to default!)"
-    )
+      // Write the modified workbook
+      XlsxWriter
+        .write(withNewSheet, output)
+        .fold(err => fail(s"Failed to write: $err"), identity)
 
-    // CRITICAL: Verify styles on "AlsoStyled" sheet are preserved
-    val alsoStyled = result("AlsoStyled").fold(err => fail(s"Sheet AlsoStyled not found: $err"), identity)
+      // Read back and verify
+      val result = XlsxReader.read(output).fold(err => fail(s"Failed to reload: $err"), identity)
+      assertEquals(result.sheets.size, 3, "Output should have 3 sheets")
 
-    val a1Style2 = alsoStyled(ref"A1").styleId
-      .flatMap(id => alsoStyled.styleRegistry.get(id))
-    assert(a1Style2.isDefined, "AlsoStyled A1 should have a style")
-    assert(a1Style2.get.font.bold, "AlsoStyled A1 should be bold (was stripped!)")
+      // CRITICAL: Verify styles on "Styled" sheet are preserved (not stripped to default)
+      val styled = result("Styled").fold(err => fail(s"Sheet Styled not found: $err"), identity)
 
-    // Also verify at the raw XML level: check that cells in untouched sheets have s= attributes
-    val outputZip = new ZipFile(output.toFile)
-    val sheet1Xml = readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
+      // A1 should be bold
+      val a1Style = styled(ref"A1").styleId
+        .flatMap(id => styled.styleRegistry.get(id))
+      assert(a1Style.isDefined, "A1 should have a style")
+      assert(a1Style.get.font.bold, "A1 should be bold (was stripped to default!)")
 
-    // Cells with styles should have s="N" where N > 0
-    val cellsWithStyles = """s="(\d+)"""".r.findAllMatchIn(sheet1Xml).map(_.group(1).toInt).toList
-    assert(
-      cellsWithStyles.exists(_ > 0),
-      s"Sheet1 cells should have non-zero style indices but found: $cellsWithStyles"
-    )
+      // B1 should have a colored fill
+      val b1Style = styled(ref"B1").styleId
+        .flatMap(id => styled.styleRegistry.get(id))
+      assert(b1Style.isDefined, "B1 should have a style")
+      assert(
+        b1Style.get.fill != Fill.default,
+        "B1 should have colored fill (was stripped to default!)"
+      )
 
-    // Clean up
-    outputZip.close()
-    Files.deleteIfExists(source)
-    Files.deleteIfExists(output)
+      // CRITICAL: Verify styles on "AlsoStyled" sheet are preserved
+      val alsoStyled =
+        result("AlsoStyled").fold(err => fail(s"Sheet AlsoStyled not found: $err"), identity)
+
+      val a1Style2 = alsoStyled(ref"A1").styleId
+        .flatMap(id => alsoStyled.styleRegistry.get(id))
+      assert(a1Style2.isDefined, "AlsoStyled A1 should have a style")
+      assert(a1Style2.get.font.bold, "AlsoStyled A1 should be bold (was stripped!)")
+
+      // Also verify at the raw XML level: check that cells in untouched sheets have s= attributes
+      val outputZip = new ZipFile(output.toFile)
+      try
+        val sheet1Xml = readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
+
+        // Cells with styles should have s="N" where N > 0
+        val cellsWithStyles =
+          """s="(\d+)"""".r.findAllMatchIn(sheet1Xml).map(_.group(1).toInt).toList
+        assert(
+          cellsWithStyles.exists(_ > 0),
+          s"Sheet1 cells should have non-zero style indices but found: $cellsWithStyles"
+        )
+      finally outputZip.close()
+    finally
+      Files.deleteIfExists(source)
+      Files.deleteIfExists(output)
+  }
+
+  test("reorder preserves styles on all sheets (TJC-751 variant)") {
+    // Same bug trigger via reorderedSheets=true instead of modifiedMetadata=true
+    val source = createWorkbookWithRichStyles()
+    val output = Files.createTempFile("tjc-751-reorder", ".xlsx")
+
+    try
+      val wb = XlsxReader.read(source).fold(err => fail(s"Failed to read: $err"), identity)
+
+      // Reorder sheets: [Styled, AlsoStyled] → [AlsoStyled, Styled]
+      val reordered = wb
+        .reorder(Vector(SheetName.unsafe("AlsoStyled"), SheetName.unsafe("Styled")))
+        .fold(err => fail(s"Failed to reorder: $err"), identity)
+
+      val tracker = reordered.sourceContext.get.modificationTracker
+      assert(tracker.reorderedSheets, "reorderedSheets should be true")
+
+      XlsxWriter
+        .write(reordered, output)
+        .fold(err => fail(s"Failed to write: $err"), identity)
+
+      val result = XlsxReader.read(output).fold(err => fail(s"Failed to reload: $err"), identity)
+      assertEquals(result.sheetNames.map(_.value), Vector("AlsoStyled", "Styled"))
+
+      // Verify styles survived the reorder
+      val styled = result("Styled").fold(err => fail(s"Sheet not found: $err"), identity)
+      val a1Style = styled(ref"A1").styleId.flatMap(id => styled.styleRegistry.get(id))
+      assert(a1Style.isDefined, "A1 should have a style after reorder")
+      assert(a1Style.get.font.bold, "A1 should be bold after reorder (was stripped!)")
+
+      val b1Style = styled(ref"B1").styleId.flatMap(id => styled.styleRegistry.get(id))
+      assert(b1Style.isDefined, "B1 should have a style after reorder")
+      assert(b1Style.get.fill != Fill.default, "B1 fill stripped after reorder!")
+
+      val alsoStyled =
+        result("AlsoStyled").fold(err => fail(s"Sheet not found: $err"), identity)
+      val a1Style2 = alsoStyled(ref"A1").styleId.flatMap(id => alsoStyled.styleRegistry.get(id))
+      assert(a1Style2.isDefined, "AlsoStyled A1 should have a style after reorder")
+      assert(a1Style2.get.font.bold, "AlsoStyled A1 should be bold after reorder!")
+    finally
+      Files.deleteIfExists(source)
+      Files.deleteIfExists(output)
   }
 
   private def createWorkbookWithRichStyles(): Path =
