@@ -160,22 +160,20 @@ object StyleIndex:
    * Build style index for workbook with source, preserving original styles.
    *
    * This variant is used during surgical modification to avoid corruption:
-   *   - Deduplicates styles ONLY from modified sheets (optimal compression)
-   *   - Preserves original styles from source for unmodified sheets (no remapping needed)
-   *   - Ensures unmodified sheets' style references remain valid after write
+   *   - Preserves ALL original styles from source (including duplicates)
+   *   - Deduplicates only truly new styles from modified sheets
+   *   - Generates remappings for ALL sheets (not just modified ones)
    *
-   * Strategy:
-   *   1. Parse original styles.xml to get complete WorkbookStyles
-   *   2. Deduplicate styles from modified sheets only
-   *   3. Ensure all original styles are present in output (fill gaps if needed)
-   *   4. Return remappings ONLY for modified sheets (unmodified sheets use original IDs)
+   * All sheets need remappings because metadata-only changes (add-sheet, reorder) cause ALL sheets
+   * to be regenerated from the domain model, not copied verbatim from source. Without remappings,
+   * unmodified-but-regenerated sheets would fall back to styleId 0, stripping all styles (TJC-751).
    *
    * @param wb
    *   The workbook with modified sheets
    * @param ctx
    *   Source context providing modification tracker and original file path
    * @return
-   *   (StyleIndex with all original + deduplicated styles, Map[modifiedSheetIdx -> remapping])
+   *   (StyleIndex with all original + new styles, Map[sheetIdx -> remapping])
    */
   @SuppressWarnings(
     Array(
@@ -188,9 +186,8 @@ object StyleIndex:
     wb: Workbook,
     ctx: SourceContext
   ): (StyleIndex, Map[Int, Map[Int, Int]]) =
-    // Extract values from context
     val tracker = ctx.modificationTracker
-    val modifiedSheetIndices = tracker.modifiedSheets
+    val needsRemappingForAll = tracker.modifiedMetadata || tracker.reorderedSheets
     val sourcePath = ctx.sourcePath
     import scala.collection.mutable
     import java.util.zip.ZipInputStream
@@ -251,9 +248,13 @@ object StyleIndex:
     }))
     var nextNumFmtId = if numFmtsBuilder.isEmpty then 164 else numFmtsBuilder.map(_._1).max + 1
 
-    // Step 4: Process ONLY modified sheets for style remapping
-    val remappings = wb.sheets.zipWithIndex.flatMap { case (sheet, sheetIdx) =>
-      if modifiedSheetIndices.contains(sheetIdx) then
+    // Step 4: Process sheets for style remapping
+    // When metadata or reorder changes force ALL sheets to be regenerated from domain model,
+    // every sheet needs a remapping — otherwise unmodified sheets fall back to styleId 0,
+    // stripping all styles (TJC-751). When only specific sheets are modified, unmodified
+    // sheets are copied verbatim from source and don't need remappings.
+    val remappings = wb.sheets.zipWithIndex.map { case (sheet, sheetIdx) =>
+      if needsRemappingForAll || tracker.modifiedSheets.contains(sheetIdx) then
         val registry = sheet.styleRegistry
         val remapping = mutable.Map[Int, Int]()
 
@@ -302,10 +303,10 @@ object StyleIndex:
                     case _ => ()
         }
 
-        Some(sheetIdx -> remapping.toMap)
+        sheetIdx -> remapping.toMap
       else
-        // Unmodified sheet - no remapping needed (uses original style IDs)
-        None
+        // Unmodified sheet copied verbatim from source — remapping unused
+        sheetIdx -> Map.empty[Int, Int]
     }.toMap
 
     // Step 5: Finalize component vectors (original + any new components)
