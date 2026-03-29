@@ -113,11 +113,15 @@ object Main
     val rasterOpts = rasterizersCmd.map(_ => runRasterizers())
 
     // Batch dry-run: only needs batch source, no --file or --output
+    val dryRunFlag =
+      Opts.flag("dry-run", "Validate batch JSON without writing")
     val batchDryRunOpts =
-      Opts.subcommand("batch", batchHelp) {
-        (batchArg, Opts.flag("dry-run", "Validate batch JSON and show summary without writing"))
-          .mapN((src, _) => CliCommand.Batch(src, dryRun = true))
-      }.map(cmd => runBatchDryRun(cmd))
+      Opts
+        .subcommand("batch", batchHelp) {
+          (batchArg, dryRunFlag)
+            .mapN((src, _) => CliCommand.Batch(src, dryRun = true))
+        }
+        .map(runBatchDryRun)
 
     rasterOpts orElse infoOpts orElse standaloneOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
 
