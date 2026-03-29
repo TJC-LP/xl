@@ -247,11 +247,17 @@ echo '[{"op":"put","ref":"A1","value":"2025-01-15"}]' | xl ... # → Date
 # Explicit format hints
 echo '[{"op":"put","ref":"A1","value":0.455,"format":"percent"}]' | xl ...
 
+# Batch putf: "formula" accepted as alias for "value"
+echo '[{"op":"putf","ref":"D14","formula":"=SUM(D5:D12)"}]' | xl -f in.xlsx -o out.xlsx batch -
+
 # Formula dragging (shifts references like Excel fill-down)
 echo '[{"op":"putf","ref":"B2:B10","value":"=A2*2","from":"B2"}]' | xl -f in.xlsx -o out.xlsx --stream batch -
 
 # Explicit formula array
 echo '[{"op":"putf","ref":"B2:B4","values":["=A2*2","=A3*2","=A4*2"]}]' | xl ...
+
+# Dry-run: validate batch JSON without writing (no --file or --output needed)
+echo '[{"op":"putf","ref":"A1","formula":"=1+1"}]' | xl batch --dry-run -
 
 # Comments, visibility, autofit, sheet management
 echo '[{"op":"comment","ref":"A1","text":"Note","author":"User"}]' | xl ...

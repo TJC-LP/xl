@@ -102,6 +102,43 @@ object BatchParser:
    */
   final case class ParseResult(ops: Vector[BatchOp], warnings: Vector[String])
 
+  /** Format a human-readable summary of batch operations. */
+  def formatSummary(ops: Vector[BatchOp]): String =
+    ops
+      .map {
+        case BatchOp.Put(ref, value, fmt) =>
+          val fmtStr = fmt
+            .map {
+              case NumFmt.Custom(code) => s" ($code)"
+              case f => s" ($f)"
+            }
+            .getOrElse("")
+          s"  PUT $ref = $value$fmtStr"
+        case BatchOp.PutFormula(ref, formula) => s"  PUTF $ref = $formula"
+        case BatchOp.PutFormulaDragging(range, formula, from) =>
+          s"  PUTF $range = $formula (from $from)"
+        case BatchOp.PutFormulas(range, formulas) =>
+          s"  PUTF $range = [${formulas.length} formulas]"
+        case BatchOp.PutValues(range, values) =>
+          s"  PUT $range = [${values.length} values]"
+        case BatchOp.Style(range, _) => s"  STYLE $range"
+        case BatchOp.Merge(range) => s"  MERGE $range"
+        case BatchOp.Unmerge(range) => s"  UNMERGE $range"
+        case BatchOp.ColWidth(col, width) => s"  COLWIDTH $col = $width"
+        case BatchOp.RowHeight(row, height) => s"  ROWHEIGHT $row = $height"
+        case BatchOp.AddComment(ref, text, _) => s"  COMMENT $ref = \"$text\""
+        case BatchOp.RemoveComment(ref) => s"  REMOVE-COMMENT $ref"
+        case BatchOp.Clear(range, _, _, _) => s"  CLEAR $range"
+        case BatchOp.ColHide(col) => s"  COL-HIDE $col"
+        case BatchOp.ColShow(col) => s"  COL-SHOW $col"
+        case BatchOp.RowHide(row) => s"  ROW-HIDE $row"
+        case BatchOp.RowShow(row) => s"  ROW-SHOW $row"
+        case BatchOp.AutoFit(cols) => s"  AUTOFIT ${cols.getOrElse("all")}"
+        case BatchOp.AddSheet(name, _) => s"  ADD-SHEET $name"
+        case BatchOp.RenameSheet(from, to) => s"  RENAME-SHEET $from -> $to"
+      }
+      .mkString("\n")
+
   /**
    * Read batch input from file or stdin.
    *
@@ -333,7 +370,7 @@ object BatchParser:
   private val knownPutProps = Set("op", "ref", "value", "values", "format", "detect")
 
   /** Known properties for 'putf' operation */
-  private val knownPutfProps = Set("op", "ref", "value", "values", "from")
+  private val knownPutfProps = Set("op", "ref", "value", "formula", "values", "from")
 
   /** Known properties for 'style' operation */
   private val knownStyleProps = Set(
@@ -659,10 +696,11 @@ object BatchParser:
         )
       )
 
-  /** Extract value field as string (for formulas) */
+  /** Extract value field as string (for formulas). Accepts "formula" as alias for "value". */
   private def requireStringValue(objMap: ObjMap, idx: Int): String =
     objMap
       .get("value")
+      .orElse(objMap.get("formula"))
       .map {
         case v if v.strOpt.isDefined => v.str
         case v if v.numOpt.isDefined => v.num.toString
@@ -671,7 +709,7 @@ object BatchParser:
         case _ => throw new Exception(s"Object ${idx + 1}: Unsupported value type for 'value'")
       }
       .getOrElse(
-        throw new Exception(s"Object ${idx + 1}: Missing 'value' field")
+        throw new Exception(s"Object ${idx + 1}: Missing 'value' (or 'formula') field")
       )
 
   /** Parse style properties from JSON object. */
