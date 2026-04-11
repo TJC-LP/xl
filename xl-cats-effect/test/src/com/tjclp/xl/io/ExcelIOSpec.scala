@@ -3,7 +3,10 @@ package com.tjclp.xl.io
 import cats.effect.IO
 import munit.CatsEffectSuite
 
+import java.io.{ByteArrayOutputStream, FileInputStream, FileOutputStream}
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
@@ -12,7 +15,14 @@ import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
 
 /** Tests for Excel streaming API */
-@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.OptionPartial",
+    "org.wartremover.warts.IterableOps",
+    "org.wartremover.warts.Var",
+    "org.wartremover.warts.While"
+  )
+)
 class ExcelIOSpec extends CatsEffectSuite:
 
   val tempDir: FunFixture[Path] = FunFixture[Path](
@@ -22,6 +32,48 @@ class ExcelIOSpec extends CatsEffectSuite:
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
   )
+
+  private def remapWorksheetEntry(source: Path, from: String, to: String): Path =
+    val output = Files.createTempFile("xl-stream-remap", ".xlsx")
+    val zipIn = new ZipInputStream(new FileInputStream(source.toFile))
+    val zipOut = new ZipOutputStream(new FileOutputStream(output.toFile))
+    zipOut.setLevel(1)
+    try
+      var entry = zipIn.getNextEntry
+      while entry != null do
+        val entryName = entry.getName
+        val targetName =
+          if entryName == s"xl/worksheets/$from" then s"xl/worksheets/$to" else entryName
+        val data = readEntryBytes(zipIn)
+        val updatedData =
+          if entryName == "xl/_rels/workbook.xml.rels" then
+            val xml = new String(data, StandardCharsets.UTF_8)
+            xml
+              .replace(s"""Target="worksheets/$from"""", s"""Target="worksheets/$to"""")
+              .getBytes(StandardCharsets.UTF_8)
+          else data
+
+        val outEntry = new ZipEntry(targetName)
+        outEntry.setTime(0L)
+        outEntry.setMethod(ZipEntry.DEFLATED)
+        zipOut.putNextEntry(outEntry)
+        zipOut.write(updatedData)
+        zipOut.closeEntry()
+        zipIn.closeEntry()
+        entry = zipIn.getNextEntry
+    finally
+      zipIn.close()
+      zipOut.close()
+    output
+
+  private def readEntryBytes(zipIn: ZipInputStream): Array[Byte] =
+    val buffer = new Array[Byte](8192)
+    val baos = new ByteArrayOutputStream()
+    var read = zipIn.read(buffer)
+    while read != -1 do
+      baos.write(buffer, 0, read)
+      read = zipIn.read(buffer)
+    baos.toByteArray
 
   tempDir.test("read: loads workbook into memory") { dir =>
     // Create test file using current writer
@@ -590,6 +642,54 @@ class ExcelIOSpec extends CatsEffectSuite:
           assert(row.cells.keySet == Set(1, 2))
         }
       }
+    }
+  }
+
+  tempDir.test("readSheetStreamRange: resolves worksheet path via workbook relationships") { dir =>
+    val source = dir.resolve("range-remap-source.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val wb = Workbook(
+      Sheet("Summary").put(ref"A1", CellValue.Text("first")),
+      Sheet("Data")
+        .put(ref"B10", CellValue.Text("Q4"))
+        .put(ref"C11", CellValue.Number(BigDecimal(42)))
+        .put(ref"B12", CellValue.Text("Tail"))
+    )
+
+    excel.write(wb, source).flatMap { _ =>
+      val remapped = remapWorksheetEntry(source, "sheet2.xml", "sheet3.xml")
+      val range = CellRange.parse("B10:C12").toOption.getOrElse(fail("Bad range"))
+
+      excel.readSheetStreamRange(remapped, "Data", range).compile.toVector
+        .guarantee(IO(Files.deleteIfExists(remapped)).void)
+        .map { rows =>
+          assertEquals(rows.map(_.rowIndex), Vector(10, 11, 12))
+          assertEquals(rows(0).cells.get(1), Some(CellValue.Text("Q4")))
+          assertEquals(rows(1).cells.get(2), Some(CellValue.Number(BigDecimal(42))))
+          assertEquals(rows(2).cells.get(1), Some(CellValue.Text("Tail")))
+        }
+    }
+  }
+
+  tempDir.test("streamCellDetails: resolves worksheet path via workbook relationships") { dir =>
+    val source = dir.resolve("cell-remap-source.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1", CellValue.Text("left")),
+      Sheet("Sheet2").put(ref"C5", CellValue.Text("target"))
+    )
+
+    excel.write(wb, source).flatMap { _ =>
+      val remapped = remapWorksheetEntry(source, "sheet2.xml", "sheet4.xml")
+
+      excel.streamCellDetails(remapped, "Sheet2", ARef.from0(2, 4))
+        .guarantee(IO(Files.deleteIfExists(remapped)).void)
+        .map { details =>
+          assertEquals(details.value, CellValue.Text("target"))
+          assertEquals(details.ref, ARef.from0(2, 4))
+        }
     }
   }
 
