@@ -171,6 +171,17 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         Async[F].raiseError(new Exception(s"Failed to read dimension: ${err.message}"))
     }
 
+  /** Load workbook styles for number format resolution in streaming mode. */
+  def loadStyles(path: Path): F[WorkbookStyles] =
+    Sync[F].delay {
+      val zipFile = new ZipFile(path.toFile)
+      try
+        loadStylesSync(zipFile) match
+          case Right(styles) => styles
+          case Left(err) => throw new Exception(s"Failed to load styles: $err")
+      finally zipFile.close()
+    }
+
   /**
    * Read single cell details using streaming with O(1) worksheet memory.
    *

@@ -159,6 +159,7 @@ object SaxStreamingReader:
     // Mutable state for current parsing context
     var currentRowIndex: Int = 0
     var currentRowCells: mutable.Map[Int, CellValue] = mutable.Map.empty
+    var currentRowStyles: mutable.Map[Int, Int] = mutable.Map.empty
     var inRow = false
     var skipRow = false
 
@@ -166,6 +167,7 @@ object SaxStreamingReader:
     var currentCellRef: Option[String] = None
     var currentCellType: Option[String] = None
     var currentCellColIdx: Option[Int] = None
+    var currentCellStyleId: Option[Int] = None
     var skipCell = false
     var inValue = false
     var inFormula = false
@@ -199,11 +201,13 @@ object SaxStreamingReader:
             case Some((_, endRow)) if currentRowIndex > endRow => throw new AbortParsing
             case _ => false
           currentRowCells = mutable.Map.empty
+          currentRowStyles = mutable.Map.empty
           inRow = true
 
         case "c" =>
           currentCellRef = Option(attributes.getValue("r"))
           currentCellType = Option(attributes.getValue("t"))
+          currentCellStyleId = Option(attributes.getValue("s")).flatMap(_.toIntOption)
           currentCellColIdx = currentCellRef.flatMap(parseCellColumn)
           skipCell = skipRow || colBounds.exists { case (startCol, endCol) =>
             currentCellColIdx.forall(colIdx => colIdx < startCol || colIdx > endCol)
@@ -269,10 +273,12 @@ object SaxStreamingReader:
                 case (None, None) =>
                   CellValue.Empty
               if cellValue != CellValue.Empty then currentRowCells(colIdx) = cellValue
+              currentCellStyleId.foreach(sid => currentRowStyles(colIdx) = sid)
 
           currentCellRef = None
           currentCellType = None
           currentCellColIdx = None
+          currentCellStyleId = None
           skipCell = false
           cachedValue = None
           formulaText = None
@@ -283,7 +289,8 @@ object SaxStreamingReader:
           valueText.clear()
 
         case "row" if inRow =>
-          if !skipRow then emitRow(RowData(currentRowIndex, currentRowCells.toMap))
+          if !skipRow then
+            emitRow(RowData(currentRowIndex, currentRowCells.toMap, currentRowStyles.toMap))
           inRow = false
           skipRow = false
 

@@ -12,6 +12,7 @@ import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
 
 /** Tests for Excel streaming API */
@@ -690,6 +691,93 @@ class ExcelIOSpec extends CatsEffectSuite:
           assertEquals(details.value, CellValue.Text("target"))
           assertEquals(details.ref, ARef.from0(2, 4))
         }
+    }
+  }
+
+  tempDir.test("readStream: cellStyles populated from styled workbook") { dir =>
+    val path = dir.resolve("styled-stream.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
+    val percentStyle = CellStyle.default.withNumFmt(NumFmt.Percent)
+
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1", CellValue.Number(BigDecimal("1234.56")))
+        .put(ref"B1", CellValue.Number(BigDecimal("0.125")))
+        .style(ref"A1", currencyStyle)
+        .style(ref"B1", percentStyle)
+    )
+
+    excel.write(wb, path).flatMap { _ =>
+      excel.readStream(path).compile.toVector.map { rows =>
+        assertEquals(rows.size, 1)
+        val row = rows.head
+        // Both cells should have style IDs
+        assert(row.cellStyles.contains(0), s"A1 should have style ID, got ${row.cellStyles}")
+        assert(row.cellStyles.contains(1), s"B1 should have style ID, got ${row.cellStyles}")
+      }
+    }
+  }
+
+  tempDir.test("loadStyles: returns WorkbookStyles with numFmt") { dir =>
+    val path = dir.resolve("styles-load.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1", CellValue.Number(BigDecimal("100")))
+        .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
+    )
+
+    excel.write(wb, path).flatMap { _ =>
+      excel.loadStyles(path).map { styles =>
+        // Should have at least one style entry
+        assert(styles.cellStyles.nonEmpty, "Should have cell styles")
+        // Find a currency style
+        val hasCurrency = styles.cellStyles.exists(_.numFmt == NumFmt.Currency)
+        assert(hasCurrency, s"Should have a Currency numFmt, got: ${styles.cellStyles.map(_.numFmt)}")
+      }
+    }
+  }
+
+  tempDir.test("readStream + loadStyles: formatted values match in-memory") { dir =>
+    val path = dir.resolve("format-parity.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1", CellValue.Number(BigDecimal("1234.56")))
+        .put(ref"B1", CellValue.Number(BigDecimal("0.455")))
+        .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
+        .style(ref"B1", CellStyle.default.withNumFmt(NumFmt.Percent))
+    )
+
+    excel.write(wb, path).flatMap { _ =>
+      for
+        styles <- excel.loadStyles(path)
+        rows <- excel.readStream(path).compile.toVector
+        inMemory <- excel.read(path)
+      yield
+        val row = rows.head
+        // Resolve formatted values from streaming
+        val streamA1 = row.cellStyles.get(0).flatMap(styles.styleAt).map(_.numFmt)
+        val streamB1 = row.cellStyles.get(1).flatMap(styles.styleAt).map(_.numFmt)
+
+        // In-memory formatted values
+        val sheet = inMemory.sheets.head
+        val memA1 = sheet.displayCell(ref"A1").toString
+        val memB1 = sheet.displayCell(ref"B1").toString
+
+        // Streaming should resolve to same NumFmt types
+        assertEquals(streamA1, Some(NumFmt.Currency))
+        assertEquals(streamB1, Some(NumFmt.Percent))
+
+        // Formatted output should match
+        val fmtA1 = NumFmtFormatter.formatValue(row.cells(0), streamA1.getOrElse(NumFmt.General))
+        val fmtB1 = NumFmtFormatter.formatValue(row.cells(1), streamB1.getOrElse(NumFmt.General))
+        assertEquals(fmtA1, memA1)
+        assertEquals(fmtB1, memB1)
     }
   }
 

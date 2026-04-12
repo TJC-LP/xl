@@ -6,13 +6,15 @@ import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ooxml.metadata.LightMetadata
+import com.tjclp.xl.ooxml.style.WorkbookStyles
 import fs2.Stream
 import java.nio.file.Path
 
 /** Row-level streaming data for efficient processing */
 case class RowData(
   rowIndex: Int, // 1-based row number
-  cells: Map[Int, CellValue] // 0-based column index → value
+  cells: Map[Int, CellValue], // 0-based column index → value
+  cellStyles: Map[Int, Int] = Map.empty // 0-based column index → style index from styles.xml
 )
 
 /**
@@ -33,13 +35,13 @@ case class StyledRowData(
   cells: Map[Int, CellValue],
   cellStyles: Map[Int, Int] = Map.empty
 ):
-  /** Convert to RowData (drops style info) */
-  def toRowData: RowData = RowData(rowIndex, cells)
+  /** Convert to RowData (preserves style info) */
+  def toRowData: RowData = RowData(rowIndex, cells, cellStyles)
 
 object StyledRowData:
-  /** Create from RowData with no styles */
+  /** Create from RowData (preserves style info) */
   def fromRowData(row: RowData): StyledRowData =
-    StyledRowData(row.rowIndex, row.cells, Map.empty)
+    StyledRowData(row.rowIndex, row.cells, row.cellStyles)
 
 /**
  * Excel algebra for pure functional XLSX operations.
@@ -209,6 +211,22 @@ trait Excel[F[_]]:
   ): F[Unit]
 
   // ===== Lightweight Metadata Operations =====
+
+  /**
+   * Load workbook styles for number format resolution in streaming mode.
+   *
+   * Parses only xl/styles.xml (~0.2-1.5MB). O(1) time regardless of worksheet size. Use with
+   * streaming reads to resolve number formats per cell:
+   * {{{
+   * for
+   *   styles <- excel.loadStyles(path)
+   *   row    <- excel.readStream(path)
+   * yield row.cellStyles.view.mapValues(sid =>
+   *   styles.styleAt(sid).map(_.numFmt).getOrElse(NumFmt.General)
+   * )
+   * }}}
+   */
+  def loadStyles(path: Path): F[WorkbookStyles]
 
   /**
    * Read workbook metadata only (no cell data). Instant for any file size.
