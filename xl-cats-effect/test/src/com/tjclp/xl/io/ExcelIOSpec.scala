@@ -76,6 +76,20 @@ class ExcelIOSpec extends CatsEffectSuite:
       read = zipIn.read(buffer)
     baos.toByteArray
 
+  private def writeZipEntries(path: Path, entries: (String, String)*): Unit =
+    val zipOut = new ZipOutputStream(new FileOutputStream(path.toFile))
+    zipOut.setLevel(1)
+    try
+      entries.foreach { (entryName, content) =>
+        val entry = new ZipEntry(entryName)
+        entry.setTime(0L)
+        entry.setMethod(ZipEntry.DEFLATED)
+        zipOut.putNextEntry(entry)
+        zipOut.write(content.getBytes(StandardCharsets.UTF_8))
+        zipOut.closeEntry()
+      }
+    finally zipOut.close()
+
   tempDir.test("read: loads workbook into memory") { dir =>
     // Create test file using current writer
     val initial = Workbook("Test")
@@ -146,6 +160,78 @@ class ExcelIOSpec extends CatsEffectSuite:
         assert(rows.forall(_.cells.nonEmpty))
       }
     }
+  }
+
+  tempDir.test("readStream: shared strings keep correct indices after rich text SST entries") {
+    dir =>
+      val path = dir.resolve("rich-sst.xlsx")
+
+      val workbookXml =
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          |          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          |  <sheets>
+          |    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+          |  </sheets>
+          |</workbook>
+          |""".stripMargin
+
+      val workbookRelsXml =
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          |  <Relationship Id="rId1"
+          |                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+          |                Target="worksheets/sheet1.xml"/>
+          |</Relationships>
+          |""".stripMargin
+
+      val sheetXml =
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          |  <sheetData>
+          |    <row r="1">
+          |      <c r="A1" t="s"><v>0</v></c>
+          |      <c r="B1" t="s"><v>1</v></c>
+          |      <c r="C1" t="s"><v>2</v></c>
+          |    </row>
+          |  </sheetData>
+          |</worksheet>
+          |""".stripMargin
+
+      val sharedStringsXml =
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          |     count="3"
+          |     uniqueCount="3">
+          |  <si>
+          |    <r><rPr><b/></rPr><t>Alpha</t></r>
+          |    <r><t>Beta</t></r>
+          |  </si>
+          |  <si><t>Gamma</t></si>
+          |  <si><t>Delta</t></si>
+          |</sst>
+          |""".stripMargin
+
+      IO(
+        writeZipEntries(
+          path,
+          "xl/workbook.xml" -> workbookXml,
+          "xl/_rels/workbook.xml.rels" -> workbookRelsXml,
+          "xl/worksheets/sheet1.xml" -> sheetXml,
+          "xl/sharedStrings.xml" -> sharedStringsXml
+        )
+      ) *> ExcelIO.instance[IO].readStream(path).compile.toList.map { rows =>
+        val row = rows.headOption.getOrElse(fail("Expected one streamed row"))
+
+        row.cells.get(0) match
+          case Some(CellValue.RichText(rt)) =>
+            assertEquals(rt.toPlainText, "AlphaBeta")
+          case other =>
+            fail(s"Expected rich text in A1, got: $other")
+
+        assertEquals(row.cells.get(1), Some(CellValue.Text("Gamma")))
+        assertEquals(row.cells.get(2), Some(CellValue.Text("Delta")))
+      }
   }
 
   tempDir.test("writeStream: creates file from row stream") { dir =>

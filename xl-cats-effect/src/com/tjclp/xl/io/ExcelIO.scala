@@ -395,19 +395,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     range: Option[CellRange]
   ): Stream[F, RowData] =
     Stream
-      .eval {
-        // Parse SST if present
-        val sstEntry = Option(zipFile.getEntry("xl/sharedStrings.xml"))
-        sstEntry match
-          case Some(entry) =>
-            val sstBytes = fs2.io.readInputStream[F](
-              Sync[F].delay(zipFile.getInputStream(entry)),
-              chunkSize = 4096
-            )
-            StreamingXmlReader.parseSharedStrings[F](sstBytes)
-          case None =>
-            Sync[F].pure(None)
-      }
+      .eval(
+        // Shared strings may contain rich-text runs. Parse the SST with the same OOXML reader
+        // used by the correct single-cell streaming path so shared-string indices stay aligned.
+        Sync[F].fromEither(loadSharedStringsSync(zipFile).leftMap(new Exception(_)))
+      )
       .flatMap { sst =>
         // Stream specified worksheet
         val wsEntry = Option(zipFile.getEntry(worksheetPath))
