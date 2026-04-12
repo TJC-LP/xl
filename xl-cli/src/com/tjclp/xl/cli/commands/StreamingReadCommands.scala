@@ -728,6 +728,7 @@ object StreamingReadCommands:
     val (selectedRows, selectedCols) = selectRowsAndCols(rows, range, skipEmpty)
 
     val sb = new StringBuilder
+    val lastRowIndex = selectedRows.lastOption.map(_.rowIndex)
 
     // Header row if showLabels
     if showLabels then
@@ -749,7 +750,7 @@ object StreamingReadCommands:
           case None => ""
       }
       sb.append(values.mkString(","))
-      sb.append("\n")
+      if !lastRowIndex.contains(row.rowIndex) then sb.append("\n")
     }
 
     sb.toString
