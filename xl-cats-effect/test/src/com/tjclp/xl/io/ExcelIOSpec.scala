@@ -234,6 +234,67 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
   }
 
+  tempDir.test("readStream: skips non-worksheet tabs when resolving stream targets") { dir =>
+    val path = dir.resolve("chartsheet-first.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val workbookXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        |          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        |  <sheets>
+        |    <sheet name="Chart" sheetId="1" r:id="rId1"/>
+        |    <sheet name="Data" sheetId="2" r:id="rId2"/>
+        |  </sheets>
+        |</workbook>
+        |""".stripMargin
+
+    val workbookRelsXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        |  <Relationship Id="rId1"
+        |                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"
+        |                Target="chartsheets/sheet1.xml"/>
+        |  <Relationship Id="rId2"
+        |                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+        |                Target="worksheets/data-sheet.xml"/>
+        |</Relationships>
+        |""".stripMargin
+
+    val chartsheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>
+        |""".stripMargin
+
+    val worksheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="A1"><v>42</v></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>
+        |""".stripMargin
+
+    IO(
+      writeZipEntries(
+        path,
+        "xl/workbook.xml" -> workbookXml,
+        "xl/_rels/workbook.xml.rels" -> workbookRelsXml,
+        "xl/chartsheets/sheet1.xml" -> chartsheetXml,
+        "xl/worksheets/data-sheet.xml" -> worksheetXml
+      )
+    ) *> (
+      for
+        defaultRows <- excel.readStream(path).compile.toVector
+        indexedRows <- excel.readStreamByIndex(path, 1).compile.toVector
+      yield
+        assertEquals(defaultRows, Vector(RowData(1, Map(0 -> CellValue.Number(BigDecimal(42))))))
+        assertEquals(indexedRows, defaultRows)
+    )
+  }
+
   tempDir.test("writeStream: creates file from row stream") { dir =>
     val path = dir.resolve("streamed.xlsx")
     val excel = ExcelIO.instance[IO]

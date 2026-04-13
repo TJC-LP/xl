@@ -218,12 +218,13 @@ trait Excel[F[_]]:
    * Parses only xl/styles.xml (~0.2-1.5MB). O(1) time regardless of worksheet size. Use with
    * streaming reads to resolve number formats per cell:
    * {{{
-   * for
-   *   styles <- excel.loadStyles(path)
-   *   row    <- excel.readStream(path)
-   * yield row.cellStyles.view.mapValues(sid =>
-   *   styles.styleAt(sid).map(_.numFmt).getOrElse(NumFmt.General)
-   * )
+   * excel.loadStyles(path).flatMap { styles =>
+   *   excel.readStream(path).map { row =>
+   *     row.cellStyles.view.mapValues(sid =>
+   *       styles.styleAt(sid).map(_.numFmt).getOrElse(NumFmt.General)
+   *     )
+   *   }.compile.toVector
+   * }
    * }}}
    */
   def loadStyles(path: Path): F[WorkbookStyles]

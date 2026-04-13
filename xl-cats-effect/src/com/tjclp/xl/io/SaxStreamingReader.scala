@@ -272,8 +272,9 @@ object SaxStreamingReader:
                   interpretCellValue(value, currentCellType, sst)
                 case (None, None) =>
                   CellValue.Empty
-              if cellValue != CellValue.Empty then currentRowCells(colIdx) = cellValue
-              currentCellStyleId.foreach(sid => currentRowStyles(colIdx) = sid)
+              if cellValue != CellValue.Empty then
+                currentRowCells(colIdx) = cellValue
+                currentCellStyleId.foreach(sid => currentRowStyles(colIdx) = sid)
 
           currentCellRef = None
           currentCellType = None

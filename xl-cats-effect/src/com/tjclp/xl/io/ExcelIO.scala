@@ -24,7 +24,7 @@ import com.tjclp.xl.ooxml.{
 }
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
 import com.tjclp.xl.ooxml.style.WorkbookStyles
-import com.tjclp.xl.io.streaming.{SaxSingleCellReader, StreamingCellDetails}
+import com.tjclp.xl.io.streaming.{SaxSharedStringsReader, SaxSingleCellReader, StreamingCellDetails}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
 
@@ -173,14 +173,13 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
 
   /** Load workbook styles for number format resolution in streaming mode. */
   def loadStyles(path: Path): F[WorkbookStyles] =
-    Sync[F].delay {
-      val zipFile = new ZipFile(path.toFile)
-      try
-        loadStylesSync(zipFile) match
-          case Right(styles) => styles
-          case Left(err) => throw new Exception(s"Failed to load styles: $err")
-      finally zipFile.close()
-    }
+    Resource
+      .make(Sync[F].blocking(new ZipFile(path.toFile)))(zf => Sync[F].blocking(zf.close()))
+      .use { zipFile =>
+        Sync[F].fromEither(
+          loadStylesSync(zipFile).leftMap(msg => new Exception(s"Failed to load styles: $msg"))
+        )
+      }
 
   /**
    * Read single cell details using streaming with O(1) worksheet memory.
@@ -395,11 +394,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     range: Option[CellRange]
   ): Stream[F, RowData] =
     Stream
-      .eval(
-        // Shared strings may contain rich-text runs. Parse the SST with the same OOXML reader
-        // used by the correct single-cell streaming path so shared-string indices stay aligned.
-        Sync[F].fromEither(loadSharedStringsSync(zipFile).leftMap(new Exception(_)))
-      )
+      .eval(loadSharedStringsForStream(zipFile))
       .flatMap { sst =>
         // Stream specified worksheet
         val wsEntry = Option(zipFile.getEntry(worksheetPath))
@@ -420,10 +415,35 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
             )
       }
 
+  private def loadSharedStringsForStream(zipFile: ZipFile): F[Option[SharedStrings]] =
+    Option(zipFile.getEntry("xl/sharedStrings.xml")) match
+      case None => Sync[F].pure(None)
+      case Some(entry) =>
+        Resource
+          .make(Sync[F].blocking(zipFile.getInputStream(entry)))(stream =>
+            Sync[F].blocking(stream.close())
+          )
+          .use { stream =>
+            Sync[F]
+              .blocking(SaxSharedStringsReader.parse(stream))
+              .flatMap(result =>
+                Sync[F].fromEither(
+                  result
+                    .leftMap(err => new Exception(s"Failed to parse shared strings: $err"))
+                    .map(Some(_))
+                )
+              )
+          }
+
   private final case class WorksheetRef(
     name: String,
     sheetId: Int,
     path: String
+  )
+
+  private final case class WorkbookRelationshipTarget(
+    relType: String,
+    target: String
   )
 
   private val relsNamespace =
@@ -438,7 +458,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         case Some(ref) => Right(ref.path)
         case None =>
           Left(
-            s"Worksheet not found for sheet index $sheetIndex (workbook has ${refs.size} sheets)"
+            s"Worksheet not found for sheet index $sheetIndex (workbook has ${refs.size} worksheets)"
           )
     }
 
@@ -466,52 +486,64 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
             val sheets = (wbXml \ "sheets" \ "sheet").toVector
             if sheets.isEmpty then Left("Workbook has no sheets")
             else
-              val relTargets = loadWorkbookRelationshipTargetsSync(zipFile)
-              val builder = Vector.newBuilder[WorksheetRef]
-              sheets
-                .foldLeft[Either[String, Unit]](Right(())) { (acc, sheetElem) =>
-                  for
-                    _ <- acc
-                    sheetIdStr = sheetElem \@ "sheetId"
-                    sheetId <- sheetIdStr.toIntOption.toRight(s"Invalid sheetId: $sheetIdStr")
-                    name = sheetElem \@ "name"
-                    rId = sheetElem.attribute(relsNamespace, "id").map(_.text).getOrElse("")
-                    defaultPath = s"xl/worksheets/sheet$sheetId.xml"
-                    targetPath = relTargets
-                      .get(rId)
-                      .map(target => resolveRelatedPartPath("xl/workbook.xml", target))
-                      .getOrElse(defaultPath)
-                    _ <-
-                      Either.cond(
-                        zipFile.getEntry(targetPath) != null,
-                        (),
-                        s"Worksheet not found: $targetPath"
-                      )
-                  yield
-                    builder += WorksheetRef(name, sheetId, targetPath)
-                    ()
-                }
-                .map(_ => builder.result())
+              loadWorkbookRelationshipTargetsSync(zipFile).flatMap { relTargets =>
+                val builder = Vector.newBuilder[WorksheetRef]
+                sheets
+                  .foldLeft[Either[String, Unit]](Right(())) { (acc, sheetElem) =>
+                    for
+                      _ <- acc
+                      sheetIdStr = sheetElem \@ "sheetId"
+                      sheetId <- sheetIdStr.toIntOption.toRight(s"Invalid sheetId: $sheetIdStr")
+                      name = sheetElem \@ "name"
+                      rId = sheetElem.attribute(relsNamespace, "id").map(_.text).getOrElse("")
+                      relationship = relTargets.get(rId)
+                      maybeWorksheetPath = relationship match
+                        case Some(rel) if rel.relType != XmlUtil.relTypeWorksheet => None
+                        case Some(rel) =>
+                          Some(resolveRelatedPartPath("xl/workbook.xml", rel.target))
+                        case None =>
+                          Some(s"xl/worksheets/sheet$sheetId.xml")
+                      _ <- maybeWorksheetPath match
+                        case None => Right(())
+                        case Some(targetPath) =>
+                          Either.cond(
+                            zipFile.getEntry(targetPath) != null,
+                            (),
+                            s"Worksheet not found: $targetPath"
+                          )
+                    yield
+                      maybeWorksheetPath
+                        .foreach(path => builder += WorksheetRef(name, sheetId, path))
+                      ()
+                  }
+                  .map(_ => builder.result())
+              }
 
-  private def loadWorkbookRelationshipTargetsSync(zipFile: ZipFile): Map[String, String] =
+  private def loadWorkbookRelationshipTargetsSync(
+    zipFile: ZipFile
+  ): Either[String, Map[String, WorkbookRelationshipTarget]] =
     Option(zipFile.getEntry("xl/_rels/workbook.xml.rels")) match
-      case None => Map.empty
+      case None => Right(Map.empty)
       case Some(entry) =>
         val xml = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
-        XmlSecurity.parseSafe(xml, "xl/_rels/workbook.xml.rels").toOption match
-          case None => Map.empty
-          case Some(relsElem) =>
-            (relsElem \\ "Relationship").map { relElem =>
-              (relElem \@ "Id") -> (relElem \@ "Target")
-            }.toMap
+        XmlSecurity.parseSafe(xml, "xl/_rels/workbook.xml.rels") match
+          case Left(err) => Left(s"Failed to parse workbook.xml.rels: ${err.message}")
+          case Right(relsElem) =>
+            Right(
+              (relsElem \ "Relationship").map { relElem =>
+                (relElem \@ "Id") -> WorkbookRelationshipTarget(
+                  relType = relElem \@ "Type",
+                  target = relElem \@ "Target"
+                )
+              }.toMap
+            )
 
   private def resolveRelatedPartPath(basePartPath: String, target: String): String =
-    val cleaned = if target.startsWith("/") then target.drop(1) else target
-    if cleaned.startsWith("xl/") then cleaned
+    if target.startsWith("/") then target.drop(1) // absolute package path
     else
       val baseDir = Option(java.nio.file.Paths.get(basePartPath).getParent)
         .getOrElse(java.nio.file.Paths.get(""))
-      baseDir.resolve(cleaned).normalize().toString.replace('\\', '/')
+      baseDir.resolve(target).normalize().toString.replace('\\', '/')
 
   private def relatedRelsPath(partPath: String): String =
     val path = java.nio.file.Paths.get(partPath)
@@ -1406,25 +1438,6 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     }
 
   // Helper: Find sheet index by name from workbook.xml
-  private def findSheetIndexByName(zipFile: ZipFile, sheetName: String): F[Option[Int]] =
-    Sync[F].delay {
-      val wbEntry = Option(zipFile.getEntry("xl/workbook.xml"))
-      wbEntry.flatMap { entry =>
-        val xmlContent = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
-        XmlSecurity.parseSafe(xmlContent, "xl/workbook.xml").toOption.flatMap { wbXml =>
-          // Parse sheet elements
-          val sheets = (wbXml \\ "sheet").toSeq
-          sheets
-            .find { sheetElem =>
-              (sheetElem \ "@name").text == sheetName
-            }
-            .map { sheetElem =>
-              (sheetElem \ "@sheetId").text.toInt
-            }
-        }
-      }
-    }
-
 object ExcelIO:
   /** Create default ExcelIO instance */
   def instance[F[_]: Async]: ExcelIO[F] = new ExcelIO[F](_ => Async[F].unit)
