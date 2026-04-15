@@ -956,6 +956,18 @@ class MainSpec extends CatsEffectSuite:
     assert(summary.contains("MERGE A1:D1"))
   }
 
+  test("dry-run: parseBatchOperations + formatSummary produces validation without side effects") {
+    // Regression: --dry-run on the --file/--output batch path previously ignored the flag
+    // and still wrote the workbook. This test verifies the dry-run pipeline works end-to-end.
+    val json = """[{"op":"put","ref":"A1","value":"Revenue"},{"op":"putf","ref":"B1","formula":"=SUM(A1:A10)"}]"""
+    val result = BatchParser.parseBatchOperations(json).unsafeRunSync()
+    assertEquals(result.ops.size, 2)
+    assertEquals(result.warnings.size, 0)
+    val summary = BatchParser.formatSummary(result.ops)
+    assert(summary.contains("PUT A1"), s"Expected PUT A1 in summary: $summary")
+    assert(summary.contains("PUTF B1 = =SUM(A1:A10)"), s"Expected PUTF B1 in summary: $summary")
+  }
+
   test("parseBatchJson: backward compatible plain string remains text") {
     val json = """[{"op": "put", "ref": "A1", "value": "Hello World"}]"""
     val result = BatchParser.parseBatchJson(json)

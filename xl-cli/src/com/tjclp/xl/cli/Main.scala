@@ -1282,6 +1282,9 @@ Use --dry-run to validate JSON without writing."""
         case Some(outputPath) =>
           StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
+    case CliCommand.Batch(source, dryRun) if dryRun =>
+      batchDryRun(source)
+
     case CliCommand.Batch(source, _) =>
       outputOpt match
         case None =>
@@ -1446,6 +1449,9 @@ Use --dry-run to validate JSON without writing."""
       requireOutput(outputOpt, backendOpt, stream)(
         WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, autoFit, _, _, _)
       )
+
+    case CliCommand.Batch(source, dryRun) if dryRun =>
+      batchDryRun(source)
 
     case CliCommand.Batch(source, _) =>
       requireOutput(outputOpt, backendOpt, stream)(
