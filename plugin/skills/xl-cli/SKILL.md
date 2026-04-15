@@ -413,9 +413,13 @@ echo '[
 ]' | xl -f template.xlsx -s Sheet1 -o report.xlsx batch -
 ```
 
-**Dry-run validation** (validate JSON without writing — no `--file` or `--output` needed):
+**Dry-run validation** (validate JSON and show summary without writing):
 ```bash
+# Standalone (no --file or --output needed)
 echo '[{"op":"putf","ref":"A1","formula":"=SUM(B1:B10)"},{"op":"style","range":"A1","bold":true}]' | xl batch --dry-run -
+
+# Also works on existing batch invocations — skips read/write, just validates
+echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
 ```
 
 **All batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`

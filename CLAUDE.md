@@ -256,8 +256,10 @@ echo '[{"op":"putf","ref":"B2:B10","value":"=A2*2","from":"B2"}]' | xl -f in.xls
 # Explicit formula array
 echo '[{"op":"putf","ref":"B2:B4","values":["=A2*2","=A3*2","=A4*2"]}]' | xl ...
 
-# Dry-run: validate batch JSON without writing (no --file or --output needed)
+# Dry-run: validate batch JSON without writing
 echo '[{"op":"putf","ref":"A1","formula":"=1+1"}]' | xl batch --dry-run -
+# Also works with --file/--output (skips read/write, just validates)
+echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
 
 # Comments, visibility, autofit, sheet management
 echo '[{"op":"comment","ref":"A1","text":"Note","author":"User"}]' | xl ...
