@@ -3,16 +3,27 @@ package com.tjclp.xl.io
 import cats.effect.IO
 import munit.CatsEffectSuite
 
+import java.io.{ByteArrayOutputStream, FileInputStream, FileOutputStream}
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
 
 /** Tests for Excel streaming API */
-@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
+@SuppressWarnings(
+  Array(
+    "org.wartremover.warts.OptionPartial",
+    "org.wartremover.warts.IterableOps",
+    "org.wartremover.warts.Var",
+    "org.wartremover.warts.While"
+  )
+)
 class ExcelIOSpec extends CatsEffectSuite:
 
   val tempDir: FunFixture[Path] = FunFixture[Path](
@@ -22,6 +33,62 @@ class ExcelIOSpec extends CatsEffectSuite:
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
   )
+
+  private def remapWorksheetEntry(source: Path, from: String, to: String): Path =
+    val output = Files.createTempFile("xl-stream-remap", ".xlsx")
+    val zipIn = new ZipInputStream(new FileInputStream(source.toFile))
+    val zipOut = new ZipOutputStream(new FileOutputStream(output.toFile))
+    zipOut.setLevel(1)
+    try
+      var entry = zipIn.getNextEntry
+      while entry != null do
+        val entryName = entry.getName
+        val targetName =
+          if entryName == s"xl/worksheets/$from" then s"xl/worksheets/$to" else entryName
+        val data = readEntryBytes(zipIn)
+        val updatedData =
+          if entryName == "xl/_rels/workbook.xml.rels" then
+            val xml = new String(data, StandardCharsets.UTF_8)
+            xml
+              .replace(s"""Target="worksheets/$from"""", s"""Target="worksheets/$to"""")
+              .getBytes(StandardCharsets.UTF_8)
+          else data
+
+        val outEntry = new ZipEntry(targetName)
+        outEntry.setTime(0L)
+        outEntry.setMethod(ZipEntry.DEFLATED)
+        zipOut.putNextEntry(outEntry)
+        zipOut.write(updatedData)
+        zipOut.closeEntry()
+        zipIn.closeEntry()
+        entry = zipIn.getNextEntry
+    finally
+      zipIn.close()
+      zipOut.close()
+    output
+
+  private def readEntryBytes(zipIn: ZipInputStream): Array[Byte] =
+    val buffer = new Array[Byte](8192)
+    val baos = new ByteArrayOutputStream()
+    var read = zipIn.read(buffer)
+    while read != -1 do
+      baos.write(buffer, 0, read)
+      read = zipIn.read(buffer)
+    baos.toByteArray
+
+  private def writeZipEntries(path: Path, entries: (String, String)*): Unit =
+    val zipOut = new ZipOutputStream(new FileOutputStream(path.toFile))
+    zipOut.setLevel(1)
+    try
+      entries.foreach { (entryName, content) =>
+        val entry = new ZipEntry(entryName)
+        entry.setTime(0L)
+        entry.setMethod(ZipEntry.DEFLATED)
+        zipOut.putNextEntry(entry)
+        zipOut.write(content.getBytes(StandardCharsets.UTF_8))
+        zipOut.closeEntry()
+      }
+    finally zipOut.close()
 
   tempDir.test("read: loads workbook into memory") { dir =>
     // Create test file using current writer
@@ -93,6 +160,139 @@ class ExcelIOSpec extends CatsEffectSuite:
         assert(rows.forall(_.cells.nonEmpty))
       }
     }
+  }
+
+  tempDir.test("readStream: shared strings keep correct indices after rich text SST entries") {
+    dir =>
+      val path = dir.resolve("rich-sst.xlsx")
+
+      val workbookXml =
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          |          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          |  <sheets>
+          |    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+          |  </sheets>
+          |</workbook>
+          |""".stripMargin
+
+      val workbookRelsXml =
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+          |  <Relationship Id="rId1"
+          |                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+          |                Target="worksheets/sheet1.xml"/>
+          |</Relationships>
+          |""".stripMargin
+
+      val sheetXml =
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+          |  <sheetData>
+          |    <row r="1">
+          |      <c r="A1" t="s"><v>0</v></c>
+          |      <c r="B1" t="s"><v>1</v></c>
+          |      <c r="C1" t="s"><v>2</v></c>
+          |    </row>
+          |  </sheetData>
+          |</worksheet>
+          |""".stripMargin
+
+      val sharedStringsXml =
+        """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          |<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          |     count="3"
+          |     uniqueCount="3">
+          |  <si>
+          |    <r><rPr><b/></rPr><t>Alpha</t></r>
+          |    <r><t>Beta</t></r>
+          |  </si>
+          |  <si><t>Gamma</t></si>
+          |  <si><t>Delta</t></si>
+          |</sst>
+          |""".stripMargin
+
+      IO(
+        writeZipEntries(
+          path,
+          "xl/workbook.xml" -> workbookXml,
+          "xl/_rels/workbook.xml.rels" -> workbookRelsXml,
+          "xl/worksheets/sheet1.xml" -> sheetXml,
+          "xl/sharedStrings.xml" -> sharedStringsXml
+        )
+      ) *> ExcelIO.instance[IO].readStream(path).compile.toList.map { rows =>
+        val row = rows.headOption.getOrElse(fail("Expected one streamed row"))
+
+        row.cells.get(0) match
+          case Some(CellValue.RichText(rt)) =>
+            assertEquals(rt.toPlainText, "AlphaBeta")
+          case other =>
+            fail(s"Expected rich text in A1, got: $other")
+
+        assertEquals(row.cells.get(1), Some(CellValue.Text("Gamma")))
+        assertEquals(row.cells.get(2), Some(CellValue.Text("Delta")))
+      }
+  }
+
+  tempDir.test("readStream: skips non-worksheet tabs when resolving stream targets") { dir =>
+    val path = dir.resolve("chartsheet-first.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val workbookXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        |          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        |  <sheets>
+        |    <sheet name="Chart" sheetId="1" r:id="rId1"/>
+        |    <sheet name="Data" sheetId="2" r:id="rId2"/>
+        |  </sheets>
+        |</workbook>
+        |""".stripMargin
+
+    val workbookRelsXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        |  <Relationship Id="rId1"
+        |                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet"
+        |                Target="chartsheets/sheet1.xml"/>
+        |  <Relationship Id="rId2"
+        |                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+        |                Target="worksheets/data-sheet.xml"/>
+        |</Relationships>
+        |""".stripMargin
+
+    val chartsheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>
+        |""".stripMargin
+
+    val worksheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="A1"><v>42</v></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>
+        |""".stripMargin
+
+    IO(
+      writeZipEntries(
+        path,
+        "xl/workbook.xml" -> workbookXml,
+        "xl/_rels/workbook.xml.rels" -> workbookRelsXml,
+        "xl/chartsheets/sheet1.xml" -> chartsheetXml,
+        "xl/worksheets/data-sheet.xml" -> worksheetXml
+      )
+    ) *> (
+      for
+        defaultRows <- excel.readStream(path).compile.toVector
+        indexedRows <- excel.readStreamByIndex(path, 1).compile.toVector
+      yield
+        assertEquals(defaultRows, Vector(RowData(1, Map(0 -> CellValue.Number(BigDecimal(42))))))
+        assertEquals(indexedRows, defaultRows)
+    )
   }
 
   tempDir.test("writeStream: creates file from row stream") { dir =>
@@ -590,6 +790,141 @@ class ExcelIOSpec extends CatsEffectSuite:
           assert(row.cells.keySet == Set(1, 2))
         }
       }
+    }
+  }
+
+  tempDir.test("readSheetStreamRange: resolves worksheet path via workbook relationships") { dir =>
+    val source = dir.resolve("range-remap-source.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val wb = Workbook(
+      Sheet("Summary").put(ref"A1", CellValue.Text("first")),
+      Sheet("Data")
+        .put(ref"B10", CellValue.Text("Q4"))
+        .put(ref"C11", CellValue.Number(BigDecimal(42)))
+        .put(ref"B12", CellValue.Text("Tail"))
+    )
+
+    excel.write(wb, source).flatMap { _ =>
+      val remapped = remapWorksheetEntry(source, "sheet2.xml", "sheet3.xml")
+      val range = CellRange.parse("B10:C12").toOption.getOrElse(fail("Bad range"))
+
+      excel.readSheetStreamRange(remapped, "Data", range).compile.toVector
+        .guarantee(IO(Files.deleteIfExists(remapped)).void)
+        .map { rows =>
+          assertEquals(rows.map(_.rowIndex), Vector(10, 11, 12))
+          assertEquals(rows(0).cells.get(1), Some(CellValue.Text("Q4")))
+          assertEquals(rows(1).cells.get(2), Some(CellValue.Number(BigDecimal(42))))
+          assertEquals(rows(2).cells.get(1), Some(CellValue.Text("Tail")))
+        }
+    }
+  }
+
+  tempDir.test("streamCellDetails: resolves worksheet path via workbook relationships") { dir =>
+    val source = dir.resolve("cell-remap-source.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1", CellValue.Text("left")),
+      Sheet("Sheet2").put(ref"C5", CellValue.Text("target"))
+    )
+
+    excel.write(wb, source).flatMap { _ =>
+      val remapped = remapWorksheetEntry(source, "sheet2.xml", "sheet4.xml")
+
+      excel.streamCellDetails(remapped, "Sheet2", ARef.from0(2, 4))
+        .guarantee(IO(Files.deleteIfExists(remapped)).void)
+        .map { details =>
+          assertEquals(details.value, CellValue.Text("target"))
+          assertEquals(details.ref, ARef.from0(2, 4))
+        }
+    }
+  }
+
+  tempDir.test("readStream: cellStyles populated from styled workbook") { dir =>
+    val path = dir.resolve("styled-stream.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
+    val percentStyle = CellStyle.default.withNumFmt(NumFmt.Percent)
+
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1", CellValue.Number(BigDecimal("1234.56")))
+        .put(ref"B1", CellValue.Number(BigDecimal("0.125")))
+        .style(ref"A1", currencyStyle)
+        .style(ref"B1", percentStyle)
+    )
+
+    excel.write(wb, path).flatMap { _ =>
+      excel.readStream(path).compile.toVector.map { rows =>
+        assertEquals(rows.size, 1)
+        val row = rows.head
+        // Both cells should have style IDs
+        assert(row.cellStyles.contains(0), s"A1 should have style ID, got ${row.cellStyles}")
+        assert(row.cellStyles.contains(1), s"B1 should have style ID, got ${row.cellStyles}")
+      }
+    }
+  }
+
+  tempDir.test("loadStyles: returns WorkbookStyles with numFmt") { dir =>
+    val path = dir.resolve("styles-load.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1", CellValue.Number(BigDecimal("100")))
+        .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
+    )
+
+    excel.write(wb, path).flatMap { _ =>
+      excel.loadStyles(path).map { styles =>
+        // Should have at least one style entry
+        assert(styles.cellStyles.nonEmpty, "Should have cell styles")
+        // Find a currency style
+        val hasCurrency = styles.cellStyles.exists(_.numFmt == NumFmt.Currency)
+        assert(hasCurrency, s"Should have a Currency numFmt, got: ${styles.cellStyles.map(_.numFmt)}")
+      }
+    }
+  }
+
+  tempDir.test("readStream + loadStyles: formatted values match in-memory") { dir =>
+    val path = dir.resolve("format-parity.xlsx")
+    val excel = ExcelIO.instance[IO]
+
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ref"A1", CellValue.Number(BigDecimal("1234.56")))
+        .put(ref"B1", CellValue.Number(BigDecimal("0.455")))
+        .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
+        .style(ref"B1", CellStyle.default.withNumFmt(NumFmt.Percent))
+    )
+
+    excel.write(wb, path).flatMap { _ =>
+      for
+        styles <- excel.loadStyles(path)
+        rows <- excel.readStream(path).compile.toVector
+        inMemory <- excel.read(path)
+      yield
+        val row = rows.head
+        // Resolve formatted values from streaming
+        val streamA1 = row.cellStyles.get(0).flatMap(styles.styleAt).map(_.numFmt)
+        val streamB1 = row.cellStyles.get(1).flatMap(styles.styleAt).map(_.numFmt)
+
+        // In-memory formatted values
+        val sheet = inMemory.sheets.head
+        val memA1 = sheet.displayCell(ref"A1").toString
+        val memB1 = sheet.displayCell(ref"B1").toString
+
+        // Streaming should resolve to same NumFmt types
+        assertEquals(streamA1, Some(NumFmt.Currency))
+        assertEquals(streamB1, Some(NumFmt.Percent))
+
+        // Formatted output should match
+        val fmtA1 = NumFmtFormatter.formatValue(row.cells(0), streamA1.getOrElse(NumFmt.General))
+        val fmtB1 = NumFmtFormatter.formatValue(row.cells(1), streamB1.getOrElse(NumFmt.General))
+        assertEquals(fmtA1, memA1)
+        assertEquals(fmtB1, memB1)
     }
   }
 

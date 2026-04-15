@@ -15,6 +15,7 @@ import com.tjclp.xl.cli.helpers.ValueParser
 import com.tjclp.xl.cli.output.{CsvRenderer, Format, JsonRenderer, Markdown}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.io.{ExcelIO, RowData}
+import com.tjclp.xl.ooxml.style.WorkbookStyles
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -455,17 +456,20 @@ object StreamingReadCommands:
                 case Some(name) => excel.readSheetStreamRange(filePath, name, limitedRange)
                 case None => excel.readStreamRange(filePath, limitedRange)
 
-              rowStream.compile.toVector
-                .map { rows =>
-                  format match
-                    case ViewFormat.Markdown =>
-                      formatMarkdown(rows, limitedRange, showFormulas, skipEmpty, showLabels)
-                    case ViewFormat.Csv =>
-                      formatCsv(rows, limitedRange, showFormulas, skipEmpty, showLabels)
-                    case ViewFormat.Json =>
-                      formatJson(rows, limitedRange, showFormulas, skipEmpty, headerRow)
-                    case _ => "" // unreachable due to earlier check
-                }
+              excel.loadStyles(filePath).flatMap { styles =>
+                rowStream.compile.toVector
+                  .map { rows =>
+                    val s = Some(styles)
+                    format match
+                      case ViewFormat.Markdown =>
+                        formatMarkdown(rows, limitedRange, showFormulas, skipEmpty, showLabels, s)
+                      case ViewFormat.Csv =>
+                        formatCsv(rows, limitedRange, showFormulas, skipEmpty, showLabels, s)
+                      case ViewFormat.Json =>
+                        formatJson(rows, limitedRange, showFormulas, skipEmpty, headerRow, s)
+                      case _ => "" // unreachable due to earlier check
+                  }
+              }
           }
         }
 
@@ -671,7 +675,8 @@ object StreamingReadCommands:
     range: CellRange,
     showFormulas: Boolean,
     skipEmpty: Boolean,
-    showLabels: Boolean
+    showLabels: Boolean,
+    styles: Option[WorkbookStyles] = None
   ): String = boundary:
     if rows.isEmpty then break("(empty range)")
 
@@ -701,7 +706,7 @@ object StreamingReadCommands:
 
       selectedCols.foreach { colIdx =>
         val value = row.cells.get(colIdx) match
-          case Some(v) => formatCellValue(v, showFormulas)
+          case Some(v) => formatCellValue(v, showFormulas, resolveNumFmt(colIdx, row, styles))
           case None => ""
         val escaped = value.replace("|", "\\|")
         sb.append(s" $escaped |")
@@ -717,11 +722,13 @@ object StreamingReadCommands:
     range: CellRange,
     showFormulas: Boolean,
     skipEmpty: Boolean,
-    showLabels: Boolean
+    showLabels: Boolean,
+    styles: Option[WorkbookStyles] = None
   ): String =
     val (selectedRows, selectedCols) = selectRowsAndCols(rows, range, skipEmpty)
 
     val sb = new StringBuilder
+    val lastRowIndex = selectedRows.lastOption.map(_.rowIndex)
 
     // Header row if showLabels
     if showLabels then
@@ -736,14 +743,14 @@ object StreamingReadCommands:
       val values = selectedCols.map { colIdx =>
         row.cells.get(colIdx) match
           case Some(v) =>
-            val formatted = formatCellValue(v, showFormulas)
+            val formatted = formatCellValue(v, showFormulas, resolveNumFmt(colIdx, row, styles))
             if formatted.contains(",") || formatted.contains("\"") || formatted.contains("\n") then
               "\"" + formatted.replace("\"", "\"\"") + "\""
             else formatted
           case None => ""
       }
       sb.append(values.mkString(","))
-      sb.append("\n")
+      if !lastRowIndex.contains(row.rowIndex) then sb.append("\n")
     }
 
     sb.toString
@@ -754,7 +761,8 @@ object StreamingReadCommands:
     range: CellRange,
     showFormulas: Boolean,
     skipEmpty: Boolean,
-    headerRow: Option[Int]
+    headerRow: Option[Int],
+    styles: Option[WorkbookStyles] = None
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
@@ -763,7 +771,9 @@ object StreamingReadCommands:
     val headers: Option[Map[Int, String]] = headerRow.flatMap { hr =>
       rows.find(_.rowIndex == hr).map { row =>
         (startCol to endCol).flatMap { colIdx =>
-          row.cells.get(colIdx).map(v => colIdx -> formatCellValue(v, false))
+          row.cells
+            .get(colIdx)
+            .map(v => colIdx -> formatCellValue(v, false, resolveNumFmt(colIdx, row, styles)))
         }.toMap
       }
     }
@@ -778,7 +788,9 @@ object StreamingReadCommands:
         if skipEmpty && valueOpt.isEmpty then None
         else
           val key = headers.flatMap(_.get(colIdx)).getOrElse(Column.from0(colIdx).toLetter)
-          val value = valueOpt.map(v => formatCellValue(v, showFormulas)).getOrElse("")
+          val value = valueOpt
+            .map(v => formatCellValue(v, showFormulas, resolveNumFmt(colIdx, row, styles)))
+            .getOrElse("")
           Some(s""""$key":"${escapeJson(value)}"""")
       }
       "{" + cells.mkString(",") + "}"
@@ -794,10 +806,26 @@ object StreamingReadCommands:
       .replace("\r", "\\r")
       .replace("\t", "\\t")
 
-  /** Format cell value for display. */
-  private def formatCellValue(value: CellValue, showFormulas: Boolean): String =
+  /** Resolve NumFmt for a cell from streaming style info. */
+  private def resolveNumFmt(
+    colIdx: Int,
+    row: RowData,
+    styles: Option[WorkbookStyles]
+  ): NumFmt =
+    (for
+      s <- styles
+      sid <- row.cellStyles.get(colIdx)
+      cs <- s.styleAt(sid)
+    yield cs.numFmt).getOrElse(NumFmt.General)
+
+  /** Format cell value for display, applying number format when available. */
+  private def formatCellValue(
+    value: CellValue,
+    showFormulas: Boolean,
+    numFmt: NumFmt = NumFmt.General
+  ): String =
     value match
-      case CellValue.Formula(formula, cached) if showFormulas => formula
-      case CellValue.Formula(_, Some(cached)) => formatCellValue(cached, false)
+      case CellValue.Formula(formula, _) if showFormulas => formula
+      case CellValue.Formula(_, Some(cached)) => formatCellValue(cached, false, numFmt)
       case CellValue.Formula(formula, None) => formula
-      case other => ValueParser.formatCellValue(other)
+      case other => NumFmtFormatter.formatValue(other, numFmt)
