@@ -118,10 +118,9 @@ object Main
     val batchDryRunOpts =
       Opts
         .subcommand("batch", batchHelp) {
-          (batchArg, dryRunFlag)
-            .mapN((src, _) => CliCommand.Batch(src, dryRun = true))
+          (batchArg, dryRunFlag).mapN((src, _) => src)
         }
-        .map(runBatchDryRun)
+        .map(src => batchDryRun(src).flatMap(IO.println).as(ExitCode.Success))
 
     rasterOpts orElse infoOpts orElse standaloneOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
 
@@ -901,10 +900,6 @@ Use --dry-run to validate JSON without writing."""
       IO.println(output).as(ExitCode.Success)
     }
 
-  private def runBatchDryRun(cmd: CliCommand): IO[ExitCode] =
-    val CliCommand.Batch(source, _) = cmd: @unchecked
-    batchDryRun(source).flatMap(IO.println).as(ExitCode.Success)
-
   /**
    * Check all rasterizers and format a status table.
    *
@@ -1207,10 +1202,12 @@ Use --dry-run to validate JSON without writing."""
   /** Validate batch JSON and show summary without writing. */
   private def batchDryRun(source: String): IO[String] =
     BatchParser.readBatchInput(source).flatMap { input =>
-      BatchParser.parseBatchOperations(input).map { result =>
-        result.warnings.foreach(System.err.println)
-        val summary = BatchParser.formatSummary(result.ops)
-        s"Dry run - ${result.ops.size} operations parsed:\n$summary"
+      BatchParser.parseBatchOperations(input).flatMap { result =>
+        IO(result.warnings.foreach(System.err.println)) *>
+          IO.pure {
+            val summary = BatchParser.formatSummary(result.ops)
+            s"Dry run - ${result.ops.size} operations parsed:\n$summary"
+          }
       }
     }
 
