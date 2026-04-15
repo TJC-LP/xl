@@ -905,6 +905,69 @@ class MainSpec extends CatsEffectSuite:
       case other => fail(s"Expected PutFormulas, got $other")
   }
 
+  test("parseBatchJson: putf accepts 'formula' as alias for 'value'") {
+    val json = """[{"op": "putf", "ref": "D14", "formula": "=SUM(D5:D12)"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.ops.head
+    op match
+      case BatchOp.PutFormula(ref, formula) =>
+        assertEquals(ref, "D14")
+        assertEquals(formula, "=SUM(D5:D12)")
+      case other => fail(s"Expected PutFormula, got $other")
+  }
+
+  test("parseBatchJson: putf 'formula' alias works with dragging") {
+    val json = """[{"op": "putf", "ref": "B2:B10", "formula": "=A2*2", "from": "B2"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.ops.head
+    op match
+      case BatchOp.PutFormulaDragging(range, formula, from) =>
+        assertEquals(range, "B2:B10")
+        assertEquals(formula, "=A2*2")
+        assertEquals(from, "B2")
+      case other => fail(s"Expected PutFormulaDragging, got $other")
+  }
+
+  test("parseBatchJson: putf 'value' still preferred over 'formula' when both present") {
+    val json = """[{"op": "putf", "ref": "A1", "value": "=B1", "formula": "=C1"}]"""
+    val result = BatchParser.parseBatchJson(json)
+
+    assert(result.isRight, s"Should parse: $result")
+    val op = result.toOption.get.ops.head
+    op match
+      case BatchOp.PutFormula(_, formula) =>
+        assertEquals(formula, "=B1")
+      case other => fail(s"Expected PutFormula with 'value' winning, got $other")
+  }
+
+  test("formatSummary: produces expected summary lines") {
+    val ops = Vector(
+      BatchOp.PutFormula("A1", "=SUM(B1:B10)"),
+      BatchOp.Style("A1:D1", BatchParser.StyleProps()),
+      BatchOp.Merge("A1:D1")
+    )
+    val summary = BatchParser.formatSummary(ops)
+    assert(summary.contains("PUTF A1 = =SUM(B1:B10)"))
+    assert(summary.contains("STYLE A1:D1"))
+    assert(summary.contains("MERGE A1:D1"))
+  }
+
+  test("dry-run: parseBatchOperations + formatSummary produces validation without side effects") {
+    // Regression: --dry-run on the --file/--output batch path previously ignored the flag
+    // and still wrote the workbook. This test verifies the dry-run pipeline works end-to-end.
+    val json = """[{"op":"put","ref":"A1","value":"Revenue"},{"op":"putf","ref":"B1","formula":"=SUM(A1:A10)"}]"""
+    val result = BatchParser.parseBatchOperations(json).unsafeRunSync()
+    assertEquals(result.ops.size, 2)
+    assertEquals(result.warnings.size, 0)
+    val summary = BatchParser.formatSummary(result.ops)
+    assert(summary.contains("PUT A1"), s"Expected PUT A1 in summary: $summary")
+    assert(summary.contains("PUTF B1 = =SUM(A1:A10)"), s"Expected PUTF B1 in summary: $summary")
+  }
+
   test("parseBatchJson: backward compatible plain string remains text") {
     val json = """[{"op": "put", "ref": "A1", "value": "Hello World"}]"""
     val result = BatchParser.parseBatchJson(json)

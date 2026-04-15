@@ -296,6 +296,10 @@ Apply multiple operations atomically:
 {"op": "put", "ref": "B2:B4", "values": [1234.56, 5678.90, 9012.34]}
 {"op": "put", "ref": "C2:C4", "values": ["$1,234", "$5,678", "$9,012"]}
 
+// Single formula (use "value" or "formula" — both accepted)
+{"op": "putf", "ref": "D14", "value": "=SUM(D5:D12)"}
+{"op": "putf", "ref": "D14", "formula": "=SUM(D5:D12)"}
+
 // Drag formula across range (Excel-style $ anchoring)
 {"op": "putf", "ref": "B2:B10", "value": "=SUM($A$1:A2)", "from": "B2"}
 
@@ -409,6 +413,15 @@ echo '[
 ]' | xl -f template.xlsx -s Sheet1 -o report.xlsx batch -
 ```
 
+**Dry-run validation** (validate JSON and show summary without writing):
+```bash
+# Standalone (no --file or --output needed)
+echo '[{"op":"putf","ref":"A1","formula":"=SUM(B1:B10)"},{"op":"style","range":"A1","bold":true}]' | xl batch --dry-run -
+
+# Also works on existing batch invocations — skips read/write, just validates
+echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
+```
+
 **All batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`
 
 ### CSV to Styled Table
@@ -497,6 +510,7 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 | `--backend <type>` | | Write backend: scalaxml (default) or saxstax (36-39% faster). Reads always use StAX. |
 | `--max-size <MB>` | | Override 100MB security limit (0 = unlimited) |
 | `--stream` | | O(1) memory mode for reads + writes (search/stats/bounds/view/put/putf/style) |
+| `--dry-run` | | Validate batch JSON and show summary without writing (batch only) |
 
 ### Info Commands
 

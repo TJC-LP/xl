@@ -32,7 +32,7 @@ import com.tjclp.xl.cli.raster.{
   Resvg,
   RsvgConvert
 }
-import com.tjclp.xl.cli.helpers.SheetResolver
+import com.tjclp.xl.cli.helpers.{BatchParser, SheetResolver}
 import com.tjclp.xl.cli.output.Format
 
 /** Read version from generated resource, fallback to dev */
@@ -112,7 +112,17 @@ object Main
     val infoOpts = functionsCmd.map(_ => runInfo())
     val rasterOpts = rasterizersCmd.map(_ => runRasterizers())
 
-    rasterOpts orElse infoOpts orElse standaloneOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse sheetWriteOpts
+    // Batch dry-run: only needs batch source, no --file or --output
+    val dryRunFlag =
+      Opts.flag("dry-run", "Validate batch JSON without writing")
+    val batchDryRunOpts =
+      Opts
+        .subcommand("batch", batchHelp) {
+          (batchArg, dryRunFlag).mapN((src, _) => src)
+        }
+        .map(src => batchDryRun(src).flatMap(IO.println).as(ExitCode.Success))
+
+    rasterOpts orElse infoOpts orElse standaloneOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
 
   // ==========================================================================
   // Global options
@@ -688,7 +698,7 @@ USAGE:
 
 OPERATIONS:
   put       {"op": "put", "ref": "A1", "value": "Hello"}
-  putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}
+  putf      {"op": "putf", "ref": "A1", "value": "=SUM(B1:B10)"}  (also accepts "formula")
   style     {"op": "style", "range": "A1:D1", "bold": true, "bg": "#FFFF00"}
   merge     {"op": "merge", "range": "A1:D1"}
   unmerge   {"op": "unmerge", "range": "A1:D1"}
@@ -714,11 +724,15 @@ EXAMPLE:
     {"op": "putf", "ref": "C2", "value": "=B2*1.1"}
   ]
 
-Operations execute in order. Use "-" to read from stdin."""
+Operations execute in order. Use "-" to read from stdin.
+Use --dry-run to validate JSON without writing."""
+
+  private val dryRunOpt =
+    Opts.flag("dry-run", "Validate batch JSON and show summary without writing").orFalse
 
   val batchCmd: Opts[CliCommand] =
     Opts.subcommand("batch", batchHelp) {
-      batchArg.map(CliCommand.Batch.apply)
+      (batchArg, dryRunOpt).mapN(CliCommand.Batch.apply)
     }
 
   // --- Import command ---
@@ -1185,6 +1199,18 @@ Operations execute in order. Use "-" to read from stdin."""
         )
       )
 
+  /** Validate batch JSON and show summary without writing. */
+  private def batchDryRun(source: String): IO[String] =
+    BatchParser.readBatchInput(source).flatMap { input =>
+      BatchParser.parseBatchOperations(input).flatMap { result =>
+        IO(result.warnings.foreach(System.err.println)) *>
+          IO.pure {
+            val summary = BatchParser.formatSummary(result.ops)
+            s"Dry run - ${result.ops.size} operations parsed:\n$summary"
+          }
+      }
+    }
+
   /** Execute streaming write command (O(1) memory transform). */
   private def executeStreamingWrite(
     filePath: Path,
@@ -1256,7 +1282,10 @@ Operations execute in order. Use "-" to read from stdin."""
         case Some(outputPath) =>
           StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
-    case CliCommand.Batch(source) =>
+    case CliCommand.Batch(source, dryRun) if dryRun =>
+      batchDryRun(source)
+
+    case CliCommand.Batch(source, _) =>
       outputOpt match
         case None =>
           IO.raiseError(new Exception("--output is required for batch command"))
@@ -1421,7 +1450,10 @@ Operations execute in order. Use "-" to read from stdin."""
         WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, autoFit, _, _, _)
       )
 
-    case CliCommand.Batch(source) =>
+    case CliCommand.Batch(source, dryRun) if dryRun =>
+      batchDryRun(source)
+
+    case CliCommand.Batch(source, _) =>
       requireOutput(outputOpt, backendOpt, stream)(
         WriteCommands.batch(wb, sheetOpt, source, _, _, _)
       )
