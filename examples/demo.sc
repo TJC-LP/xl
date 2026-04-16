@@ -8,7 +8,7 @@
 
 import com.tjclp.xl.{*, given}
 
-println("=== XL - Pure Scala 3.7 Excel Library Demo ===\n")
+println("=== XL - Pure Scala 3.8 Excel Library Demo ===\n")
 
 // Compile-time validated literals (unified ref macro)
 val cellRef = ref"A1"

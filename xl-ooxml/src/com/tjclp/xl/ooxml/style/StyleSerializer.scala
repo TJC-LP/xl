@@ -109,7 +109,7 @@ final case class OoxmlStyles(
         }
 
         // Serialize alignment as child element if non-default
-        val alignmentChild = alignmentToXml(style.align).toSeq
+        val alignmentChild = alignmentToXml(style.align).toList
         val hasAlignment = alignmentChild.nonEmpty
 
         elem(

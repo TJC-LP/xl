@@ -1,6 +1,6 @@
 //| mvnDeps: ["com.lihaoyi::mill-contrib-jmh:$MILL_VERSION"]
-// Mill 1.1.0-RC3 is used for improved Scala 3.7.x support and build performance.
-// Tested across all CI platforms (Linux/macOS/Windows). Will upgrade to 1.1.0 stable when released.
+// Mill 1.1.5 is used for Scala 3.8.x support and build performance.
+// Tested across all CI platforms (Linux/macOS/Windows).
 // Version is controlled via .mill-version file.
 import mill._
 import mill.scalalib._
@@ -8,7 +8,7 @@ import mill.scalalib.publish._
 import mill.scalalib.scalafmt._
 import contrib.jmh.JmhModule
 
-val scala3Version = "3.7.4"
+val scala3Version = "3.8.3"
 val organization = "com.tjclp"
 
 /** Shared build configuration constants */
@@ -30,7 +30,7 @@ trait XLModuleBase extends ScalaModule with ScalafmtModule {
 
   // WartRemover compiler plugin for enhanced code quality
   def scalacPluginMvnDeps = Seq(
-    mvn"org.wartremover:::wartremover:3.4.1"
+    mvn"org.wartremover:::wartremover:3.5.6"
   )
 
   override def scalacOptions = Seq(
@@ -81,7 +81,7 @@ trait XLModule extends XLModuleBase with PublishModule {
   )
 
   /** Override in each module to provide module-specific description */
-  def artifactDescription: String = "Pure Scala 3.7 Excel (OOXML) Library"
+  def artifactDescription: String = "Pure Scala 3.8 Excel (OOXML) Library"
 }
 
 /** Trait for internal modules that should not be published (CLI, benchmarks, testkit) */

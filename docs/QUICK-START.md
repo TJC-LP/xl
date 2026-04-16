@@ -11,14 +11,14 @@ XL is published as JVM libraries to Maven Central. Use the aggregate `xl` artifa
 import mill._, scalalib._
 
 object myproject extends ScalaModule {
-  def scalaVersion = "3.7.4"
+  def scalaVersion = "3.8.3"
   def ivyDeps = Agg(ivy"com.tjclp::xl:0.9.7")
 }
 ```
 
 ### With sbt (build.sbt)
 ```scala
-scalaVersion := "3.7.4"
+scalaVersion := "3.8.3"
 libraryDependencies += "com.tjclp" %% "xl" % "0.9.7"
 ```
 
