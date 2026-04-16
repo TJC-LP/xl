@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-*No unreleased changes*
+### Changed
+
+- **Scala 3.7.4 -> 3.8.3** — Language upgrade with betterFors stabilization and VarHandle-based lazy vals
+- **Mill 1.1.0-RC3 -> 1.1.5** — Stable release with Scala 3.8 support
+- **WartRemover 3.4.1 -> 3.5.6** — Required for Scala 3.8.3 compiler plugin compatibility
+
+### Fixed
+
+- **Option2Iterable WartRemover violations** — Replaced `.toSeq` on `Option` with `.toList` in Comments, Table, StyleSerializer, and StylePatcher (newly caught by WartRemover 3.5.6)
 
 ---
 

@@ -1,7 +1,7 @@
 package com.tjclp.xl
 
 /**
- * Pure Scala 3.7 Excel (OOXML) Library.
+ * Pure Scala 3.8 Excel (OOXML) Library.
  *
  * Import `com.tjclp.xl.api.*` for the full domain model (cells, sheets, workbooks, styles, etc.)
  * and `com.tjclp.xl.syntax.*` for helpers like `col`, `row`, `ref`, and `String` parsing extensions

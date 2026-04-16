@@ -329,7 +329,7 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
           )
         else elem("t")(Text(run.text))
 
-      elem("r")(rPrElem.toSeq :+ textElem*)
+      elem("r")(rPrElem.toList :+ textElem*)
     }
 
     elem("text")(runElems*)

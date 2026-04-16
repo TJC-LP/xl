@@ -7,7 +7,7 @@
 **The best Excel library for Scala.** Type-safe, purely functional, blazing fast.
 
 ```scala 3 raw
-//> using scala 3.7.4
+//> using scala 3.8.3
 //> using dep com.tjclp::xl:0.9.7
 
 import com.tjclp.xl.{*, given}
@@ -233,4 +233,4 @@ Apache License 2.0 - see [LICENSE](LICENSE)
 
 ---
 
-**XL** is maintained by [TJC-LP](https://github.com/TJC-LP). Built with Scala 3.7, Mill, Cats Effect, and fs2.
+**XL** is maintained by [TJC-LP](https://github.com/TJC-LP). Built with Scala 3.8, Mill, Cats Effect, and fs2.

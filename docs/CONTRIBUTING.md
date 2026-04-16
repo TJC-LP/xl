@@ -2,7 +2,7 @@
 
 ## Code Quality
 
-- Use Scala 3.7; run `./mill __.reformat` before committing.
+- Use Scala 3.8; run `./mill __.reformat` before committing.
 - All code must pass `./mill __.compile` (includes WartRemover checks).
 - Run `./mill __.test` to verify all tests pass.
 - Pre-commit hooks will automatically check formatting and compilation.

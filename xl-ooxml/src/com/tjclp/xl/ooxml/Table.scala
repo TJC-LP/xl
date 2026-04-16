@@ -370,9 +370,9 @@ object OoxmlTable extends XmlReadable[OoxmlTable]:
     )
 
     val children = Seq(
-      autoFilterElem.toSeq,
+      autoFilterElem.toList,
       Seq(tableColumnsElem),
-      table.styleInfo.map(encodeStyleInfo).toSeq,
+      table.styleInfo.map(encodeStyleInfo).toList,
       table.otherChildren
     ).flatten
 

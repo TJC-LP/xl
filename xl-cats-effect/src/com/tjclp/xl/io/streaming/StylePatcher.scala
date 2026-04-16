@@ -446,7 +446,7 @@ object StylePatcher:
           case Color.Theme(slot, tint) =>
             <color theme={slot.ordinal.toString} tint={tint.toString}/>
         }
-        Elem(null, label, styleAttr, TopScope, minimizeEmpty = colorElem.isEmpty, colorElem.toSeq*)
+        Elem(null, label, styleAttr, TopScope, minimizeEmpty = colorElem.isEmpty, colorElem.toList*)
 
     val sides = Seq(
       sideToXml("left", border.left),

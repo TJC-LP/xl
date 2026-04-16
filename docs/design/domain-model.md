@@ -1,4 +1,4 @@
-# Domain Model (Scala 3.7, Deep Dive)
+# Domain Model (Scala 3.8, Deep Dive)
 
 This document mirrors the **current** xl-core data model. All types derive `CanEqual` and lean on opaque types for zero-overhead safety. Package references use `com.tjclp.xl` (macros and syntax live in the same module).
 
