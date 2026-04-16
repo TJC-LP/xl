@@ -492,15 +492,16 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
             case (true, false) => "topRight"
             case _ => "bottomLeft"
 
-          val paneAttrs = scala.collection.mutable.ListBuffer[(String, String)]()
-          if colSplit > 0 then paneAttrs += ("xSplit" -> colSplit.toString)
-          if rowSplit > 0 then paneAttrs += ("ySplit" -> rowSplit.toString)
-          paneAttrs += ("topLeftCell" -> ref.toA1)
-          paneAttrs += ("activePane" -> activePane)
-          paneAttrs += ("state" -> "frozen")
+          val paneAttrs: Vector[(String, String)] =
+            (if colSplit > 0 then Vector("xSplit" -> colSplit.toString) else Vector.empty) ++
+              (if rowSplit > 0 then Vector("ySplit" -> rowSplit.toString) else Vector.empty) ++
+              Vector(
+                "topLeftCell" -> ref.toA1,
+                "activePane" -> activePane,
+                "state" -> "frozen"
+              )
 
-          val paneElem = elem("pane", paneAttrs.toSeq*)(
-          )
+          val paneElem = elem("pane", paneAttrs*)()
 
           // Inject pane into existing sheetViews or create new
           existing match

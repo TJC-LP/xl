@@ -15,6 +15,16 @@ import scala.util.boundary, boundary.break
  *
  * Immutable design: all operations return new Sheet instances. Uses persistent data structures for
  * efficient updates.
+ *
+ * @param freezePane
+ *   Freeze pane override with three-valued semantics:
+ *   - `None`: preserve existing `<sheetViews>` XML (no change on write)
+ *   - `Some(FreezePane.At(ref))`: inject/replace `<pane>` in sheetViews
+ *   - `Some(FreezePane.Remove)`: strip any existing `<pane>` from sheetViews
+ *
+ * The distinction between `None` and `Some(Remove)` matters: `None` is the passive default
+ * (round-trip preserves the original); `Some(Remove)` is the active intent to remove freeze panes
+ * even when the source XML had them.
  */
 final case class Sheet(
   name: SheetName,

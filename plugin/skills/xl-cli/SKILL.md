@@ -246,11 +246,11 @@ xl ... put A1:A10 "TBD"
 # Batch values (row-major order)
 xl ... put A1:D1 "Q1" "Q2" "Q3" "Q4"
 
-# CSV auto-split (comma-separated values distributed across range)
-xl ... put A1:D1 "Q1,Q2,Q3,Q4"
+# CSV split (opt-in: requires --csv flag)
+xl ... put A1:D1 "Q1,Q2,Q3,Q4" --csv
 ```
 
-**CSV auto-split**: When a single value contains commas and the count matches the range size, values are automatically distributed. Smart type detection applies to each split value.
+**`--csv`**: Opt-in flag that splits a single comma-separated value across the target range. Required because comma-containing values are common in real data (`"Smith, John"`); without `--csv`, the value is written as literal text. The split count must match the range size exactly, otherwise the command errors. Smart type detection applies to each split value.
 
 **Negative numbers**: Use `--value` flag (bare `-` is interpreted as flag):
 ```bash
@@ -566,7 +566,7 @@ Run `xl view --help` for complete options.
 
 | Command | Key Options |
 |---------|-------------|
-| `put <ref> <values>` | `--value` for negatives, `--stream` for O(1) memory, CSV auto-split |
+| `put <ref> <values>` | `--value` for negatives, `--stream` for O(1) memory, `--csv` to split comma-separated value |
 | `putf <ref> <formulas>` | Supports dragging (no dragging with `--stream`) |
 | `style <range>` | `--bold`, `--bg`, `--fg`, `--format`, `--border`, `--stream` for O(1) memory |
 | `copy <source> <target>` | `--values-only` (no formula adjustment) |

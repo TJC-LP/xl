@@ -53,7 +53,7 @@ enum CliCommand:
   case Eval(formula: String, overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
   // Mutate (require -o)
-  case Put(ref: String, values: List[String])
+  case Put(ref: String, values: List[String], csvSplit: Boolean = false)
   case PutFormula(ref: String, formulas: List[String])
   case Style(
     range: String,
@@ -103,10 +103,10 @@ enum CliCommand:
   case Fill(source: String, target: String, direction: FillDirection)
   case AutoFit(columns: Option[String]) // None = all used columns, Some("A:F") = specific range
   case Sort(range: String, sortKeys: List[SortKey], hasHeader: Boolean)
-  // View operations (require -o)
+  // Freeze pane operations (require -o)
   case Freeze(ref: String) // Freeze panes at ref (rows above + columns left)
   case Unfreeze // Remove freeze panes
-  // Range operations
+  // Range operations (require -o)
   case Copy(source: String, target: String, valuesOnly: Boolean)
 
 /** Fill direction for the fill command */

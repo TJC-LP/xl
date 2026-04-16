@@ -1418,7 +1418,14 @@ object BatchParser:
       result <- IO.fromEither(wb.rename(oldName, newName).left.map(e => new Exception(e.message)))
     yield result
 
-  /** Apply a copy range operation. */
+  /**
+   * Apply a copy range operation, respecting qualified sheet refs on each side.
+   *
+   * Source and target may each be qualified (e.g. `Sheet2!A1`). If unqualified, the default sheet
+   * is used. An error is raised if the default is missing and either side lacks qualification.
+   * Delegates actual cell copying to [[CopyOps.copyRange]] which handles overlapping copies,
+   * formula shifting, and style preservation.
+   */
   private def applyCopyRange(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
@@ -1426,59 +1433,65 @@ object BatchParser:
     targetStr: String,
     valuesOnly: Boolean
   ): IO[Workbook] =
-    val sheetName = defaultSheetName.getOrElse(
-      throw new Exception("copy requires --sheet")
-    )
-    IO.fromEither(wb(sheetName).left.map(e => new Exception(e.message))).flatMap { sheet =>
-      // Parse source as range
-      val sourceRange = RefType.parse(sourceStr) match
-        case Right(RefType.Cell(ref)) => CellRange(ref, ref)
-        case Right(RefType.Range(r)) => r
-        case Right(RefType.QualifiedCell(_, ref)) => CellRange(ref, ref)
-        case Right(RefType.QualifiedRange(_, r)) => r
-        case Left(err) => throw new Exception(s"Invalid source ref '$sourceStr': $err")
 
-      // Parse target as ref or range
-      val targetStart = RefType.parse(targetStr) match
-        case Right(RefType.Cell(ref)) => ref
-        case Right(RefType.Range(r)) => r.start
-        case Right(RefType.QualifiedCell(_, ref)) => ref
-        case Right(RefType.QualifiedRange(_, r)) => r.start
-        case Left(err) => throw new Exception(s"Invalid target ref '$targetStr': $err")
-
-      val colDelta = targetStart.col.index0 - sourceRange.start.col.index0
-      val rowDelta = targetStart.row.index0 - sourceRange.start.row.index0
-
-      // Copy each cell from source to target
-      val updatedSheet = sourceRange.cells.foldLeft(sheet) { (s, srcRef) =>
-        val tgtRef = ARef(
-          Column.from0(srcRef.col.index0 + colDelta),
-          Row.from0(srcRef.row.index0 + rowDelta)
-        )
-        val srcCell = s(srcRef)
-        if srcCell.value == CellValue.Empty then s
-        else if valuesOnly then s.put(tgtRef, srcCell.value)
-        else
-          // Copy with formula shifting
-          val newValue = srcCell.value match
-            case CellValue.Formula(expr, _) =>
-              val fullFormula = s"=$expr"
-              FormulaParser.parse(fullFormula) match
-                case Right(parsed) =>
-                  val shifted = FormulaShifter.shift(parsed, colDelta, rowDelta)
-                  CellValue.Formula(FormulaPrinter.print(shifted, includeEquals = false))
-                case Left(_) => CellValue.Formula(expr) // Unparseable: copy as-is
-            case other => other
-          val updated = s.put(tgtRef, newValue)
-          // Preserve style
-          srcCell.styleId.flatMap(s.styleRegistry.get) match
-            case Some(style) =>
-              import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-              updated.withCellStyle(tgtRef, style)
-            case None => updated
+    def parseSide(label: String, s: String): IO[(Option[SheetName], Either[ARef, CellRange])] =
+      IO.fromEither(
+        RefType.parse(s).left.map(e => new Exception(s"Invalid $label ref '$s': $e"))
+      ).map {
+        case RefType.Cell(ref) => (None, Left(ref))
+        case RefType.Range(r) => (None, Right(r))
+        case RefType.QualifiedCell(sheet, ref) => (Some(sheet), Left(ref))
+        case RefType.QualifiedRange(sheet, r) => (Some(sheet), Right(r))
       }
-      IO.pure(wb.put(updatedSheet))
-    }
+
+    def resolveSheetName(label: String, qualified: Option[SheetName]): IO[SheetName] =
+      qualified.orElse(defaultSheetName) match
+        case Some(name) => IO.pure(name)
+        case None =>
+          IO.raiseError(
+            new Exception(s"copy $label requires --sheet or a qualified ref")
+          )
+
+    for
+      (srcQualified, srcEither) <- parseSide("source", sourceStr)
+      (tgtQualified, tgtEither) <- parseSide("target", targetStr)
+      sourceSheetName <- resolveSheetName("source", srcQualified)
+      targetSheetName <- resolveSheetName("target", tgtQualified)
+      sourceSheet <- IO.fromEither(wb(sourceSheetName).left.map(e => new Exception(e.message)))
+      targetSheet <- IO.fromEither(wb(targetSheetName).left.map(e => new Exception(e.message)))
+
+      sourceRange = srcEither match
+        case Left(ref) => CellRange(ref, ref)
+        case Right(r) => r
+
+      // Auto-expand single-cell target to match source dimensions
+      targetRange = tgtEither match
+        case Right(r) => r
+        case Left(ref) =>
+          val srcCols =
+            Column.index0(sourceRange.colEnd) - Column.index0(sourceRange.colStart)
+          val srcRows =
+            Row.index0(sourceRange.rowEnd) - Row.index0(sourceRange.rowStart)
+          val endRef = ARef.from0(
+            Column.index0(ref.col) + srcCols,
+            Row.index0(ref.row) + srcRows
+          )
+          CellRange(ref, endRef)
+
+      srcRowCount = Row.index0(sourceRange.rowEnd) - Row.index0(sourceRange.rowStart) + 1
+      srcColCount = Column.index0(sourceRange.colEnd) - Column.index0(sourceRange.colStart) + 1
+      tgtRowCount = Row.index0(targetRange.rowEnd) - Row.index0(targetRange.rowStart) + 1
+      tgtColCount = Column.index0(targetRange.colEnd) - Column.index0(targetRange.colStart) + 1
+      _ <-
+        if srcRowCount != tgtRowCount || srcColCount != tgtColCount then
+          IO.raiseError(
+            new Exception(
+              s"Source (${srcRowCount}x${srcColCount}) and target " +
+                s"(${tgtRowCount}x${tgtColCount}) dimensions mismatch"
+            )
+          )
+        else IO.unit
+    yield CopyOps.copyRange(wb, sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
 
   // ========== Utilities ==========
 

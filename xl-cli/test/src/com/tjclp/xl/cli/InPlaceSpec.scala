@@ -2,7 +2,7 @@ package com.tjclp.xl.cli
 
 import java.nio.file.{Files, Path}
 
-import cats.effect.IO
+import cats.effect.{ExitCode, IO}
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
@@ -11,20 +11,19 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 
 /**
- * Tests for the --in-place (-i) flag.
+ * Tests for the `--in-place` (`-i`) flag and its atomic-write semantics.
  *
  * Verifies:
- *   - `-i` resolves output to the input file path
- *   - `-i` and `-o` together produce an error
- *   - Neither `-i` nor `-o` returns None (no output)
- *   - In-place write actually modifies the original file
+ *   - `-i` alone writes to a sibling temp file, then atomically moves onto the input
+ *   - `-i` + `-o` together is an error (mutually exclusive)
+ *   - A failed execution leaves the original file untouched and cleans up the temp
+ *   - A successful execution produces the expected output in place
  */
 @SuppressWarnings(
   Array(
     "org.wartremover.warts.Var",
     "org.wartremover.warts.OptionPartial",
-    "org.wartremover.warts.IterableOps",
-    "org.wartremover.warts.IsInstanceOf"
+    "org.wartremover.warts.IterableOps"
   )
 )
 class InPlaceSpec extends CatsEffectSuite:
@@ -45,47 +44,116 @@ class InPlaceSpec extends CatsEffectSuite:
       excel.write(wb, tempFile) *> test(tempFile)
     }
 
-  test("resolveOutput: -i sets output to input file") {
-    val file = Path.of("/tmp/test.xlsx")
-    Main.resolveOutput(None, inPlace = true, file).assertEquals(Some(file))
-  }
-
-  test("resolveOutput: -o takes precedence when -i is false") {
+  test("runWithOutput: -o alone passes the output path through") {
     val file = Path.of("/tmp/input.xlsx")
     val out = Path.of("/tmp/output.xlsx")
-    Main.resolveOutput(Some(out), inPlace = false, file).assertEquals(Some(out))
+    var captured: Option[Path] = None
+    Main
+      .runWithOutput(Some(out), inPlace = false, file) { received =>
+        captured = received
+        IO.pure(ExitCode.Success)
+      }
+      .map { code =>
+        assertEquals(code, ExitCode.Success)
+        assertEquals(captured, Some(out))
+      }
   }
 
-  test("resolveOutput: -i and -o together is an error") {
+  test("runWithOutput: neither flag passes None through") {
+    val file = Path.of("/tmp/input.xlsx")
+    var captured: Option[Path] = Some(Path.of("/sentinel"))
+    Main
+      .runWithOutput(None, inPlace = false, file) { received =>
+        captured = received
+        IO.pure(ExitCode.Success)
+      }
+      .map { code =>
+        assertEquals(code, ExitCode.Success)
+        assertEquals(captured, None)
+      }
+  }
+
+  test("runWithOutput: -i and -o together exits with error code") {
     val file = Path.of("/tmp/input.xlsx")
     val out = Path.of("/tmp/output.xlsx")
-    Main.resolveOutput(Some(out), inPlace = true, file).attempt.map { result =>
-      assert(result.isLeft, "Should be an error")
-      val msg = result.left.toOption.get.getMessage
-      assert(
-        msg.contains("mutually exclusive"),
-        s"Error should mention mutual exclusivity, got: $msg"
-      )
+    Main
+      .runWithOutput(Some(out), inPlace = true, file)(_ => IO.pure(ExitCode.Success))
+      .map { code => assertEquals(code, ExitCode.Error) }
+  }
+
+  test("runWithOutput: -i writes to temp, atomically moves to input on success") {
+    withTempExcelFile { tempFile =>
+      // Capture the actual path we were asked to write to (should NOT be tempFile)
+      var writePath: Option[Path] = None
+      val result = Main.runWithOutput(None, inPlace = true, tempFile) { outOpt =>
+        val out = outOpt.get
+        writePath = Some(out)
+        // Verify we're writing to a temp file, not the original
+        assert(out != tempFile, s"In-place should write to temp, got: $out")
+        assert(
+          out.getFileName.toString.startsWith(".xl-inplace-"),
+          s"Temp should have .xl-inplace- prefix, got: ${out.getFileName}"
+        )
+        // Simulate a successful write
+        val wb = Workbook(
+          Vector(Sheet("Test").put(ref"A1", CellValue.Text("Updated")))
+        )
+        excel.write(wb, out).as(ExitCode.Success)
+      }
+
+      for
+        code <- result
+        // After success, original file should have new content
+        wb <- excel.read(tempFile)
+        value = wb.sheets.head.cells.get(ref"A1").map(_.value)
+        // And temp file should be gone
+        tempExists = writePath.exists(p => Files.exists(p))
+      yield
+        assertEquals(code, ExitCode.Success)
+        assertEquals(value, Some(CellValue.Text("Updated")))
+        assert(!tempExists, "Temp file should be cleaned up after atomic move")
     }
   }
 
-  test("resolveOutput: neither -i nor -o returns None") {
-    val file = Path.of("/tmp/test.xlsx")
-    Main.resolveOutput(None, inPlace = false, file).assertEquals(None)
+  test("runWithOutput: -i leaves original untouched on error exit") {
+    withTempExcelFile { tempFile =>
+      var writePath: Option[Path] = None
+      val result = Main.runWithOutput(None, inPlace = true, tempFile) { outOpt =>
+        writePath = outOpt
+        // Simulate a failure: return Error exit code without writing anything useful
+        IO.pure(ExitCode.Error)
+      }
+
+      for
+        code <- result
+        // Original file should be unchanged (still has original "Hello" / 42)
+        wb <- excel.read(tempFile)
+        a1 = wb.sheets.head.cells.get(ref"A1").map(_.value)
+        // And temp file should be gone
+        tempExists = writePath.exists(p => Files.exists(p))
+      yield
+        assertEquals(code, ExitCode.Error)
+        assertEquals(a1, Some(CellValue.Text("Hello")))
+        assert(!tempExists, "Temp file should be cleaned up on failure")
+    }
   }
 
-  test("in-place write modifies original file") {
+  test("runWithOutput: -i leaves original untouched when execute throws") {
     withTempExcelFile { tempFile =>
+      var writePath: Option[Path] = None
+      val result = Main.runWithOutput(None, inPlace = true, tempFile) { outOpt =>
+        writePath = outOpt
+        IO.raiseError(new RuntimeException("simulated crash"))
+      }
+
       for
-        // Read → modify → write back to same path (this is what -i does)
+        outcome <- result.attempt
         wb <- excel.read(tempFile)
-        sheet = wb.sheets.head.put(ref"A1", CellValue.Text("Updated"))
-        modifiedWb = Workbook(Vector(sheet))
-        _ <- excel.write(modifiedWb, tempFile)
-        // Read back and verify the file was modified
-        wb2 <- excel.read(tempFile)
-        sheet2 = wb2.sheets.head
-        value = sheet2.cells.get(ref"A1").map(_.value)
-      yield assertEquals(value, Some(CellValue.Text("Updated")))
+        a1 = wb.sheets.head.cells.get(ref"A1").map(_.value)
+        tempExists = writePath.exists(p => Files.exists(p))
+      yield
+        assert(outcome.isLeft, "Expected error to propagate")
+        assertEquals(a1, Some(CellValue.Text("Hello")))
+        assert(!tempExists, "Temp file should be cleaned up on exception")
     }
   }

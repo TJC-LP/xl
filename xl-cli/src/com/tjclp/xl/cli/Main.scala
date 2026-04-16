@@ -71,8 +71,8 @@ object Main
     val sheetsOpts =
       (fileOpt, outputOpt.orNone, inPlaceOpt, backendOpt, maxSizeOpt, streamOpt, sheetsCmd).mapN {
         (file, outOpt, inPlace, backend, maxSize, stream, cmd) =>
-          resolveOutput(outOpt, inPlace, file).flatMap { effectiveOutput =>
-            run(file, None, effectiveOutput, backend, maxSize, stream, cmd)
+          runWithOutput(outOpt, inPlace, file) { out =>
+            run(file, None, out, backend, maxSize, stream, cmd)
           }
       }
 
@@ -110,8 +110,8 @@ object Main
         streamOpt,
         sheetWriteSubcmds
       ).mapN { (file, sheet, outOpt, inPlace, backend, maxSize, stream, cmd) =>
-        resolveOutput(outOpt, inPlace, file).flatMap { effectiveOutput =>
-          run(file, sheet, effectiveOutput, backend, maxSize, stream, cmd)
+        runWithOutput(outOpt, inPlace, file) { out =>
+          run(file, sheet, out, backend, maxSize, stream, cmd)
         }
       }
 
@@ -602,10 +602,18 @@ EXAMPLES:
   // Variadic values for put (supports single value, fill pattern, or batch values)
   private val valuesArg = Opts.arguments[String]("value")
 
+  private val csvOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "csv",
+        "Split a single comma-separated value across the target range (count must match)"
+      )
+      .orFalse
+
   val putCmd: Opts[CliCommand] = Opts.subcommand("put", putHelp) {
     // Support both positional args and --value flag (for negative numbers)
     val valuesOrOpt = valueOpt.map(v => List(v)) orElse valuesArg.map(_.toList)
-    (refArg, valuesOrOpt).mapN(CliCommand.Put.apply)
+    (refArg, valuesOrOpt, csvOpt).mapN(CliCommand.Put.apply)
   }
 
   // Variadic formulas for putf (supports single formula, dragging, or batch formulas)
@@ -1309,12 +1317,19 @@ Use --dry-run to validate JSON without writing."""
             replace
           )
 
-    case CliCommand.Put(refStr, values) =>
-      outputOpt match
-        case None =>
-          IO.raiseError(new Exception("--output is required for put command"))
-        case Some(outputPath) =>
-          StreamingWriteCommands.put(filePath, outputPath, sheetNameOpt, refStr, values)
+    case CliCommand.Put(refStr, values, csvSplit) =>
+      if csvSplit then
+        IO.raiseError(
+          new Exception(
+            "--csv auto-split is not supported with --stream. Omit --stream to use --csv."
+          )
+        )
+      else
+        outputOpt match
+          case None =>
+            IO.raiseError(new Exception("--output is required for put command"))
+          case Some(outputPath) =>
+            StreamingWriteCommands.put(filePath, outputPath, sheetNameOpt, refStr, values)
 
     case CliCommand.PutFormula(refStr, formulas) =>
       outputOpt match
@@ -1421,9 +1436,9 @@ Use --dry-run to validate JSON without writing."""
       ReadCommands.evalArray(wb, sheetOpt, formulaStr, targetRef, overrides)
 
     // Write commands (require output)
-    case CliCommand.Put(refStr, values) =>
+    case CliCommand.Put(refStr, values, csvSplit) =>
       requireOutput(outputOpt, backendOpt, stream)(
-        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _)
+        WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit)
       )
 
     case CliCommand.PutFormula(refStr, formulas) =>
@@ -1611,20 +1626,50 @@ Use --dry-run to validate JSON without writing."""
       f(path, config, stream)
     )
 
-  /** Resolve effective output from --output and --in-place flags. */
-  private[cli] def resolveOutput(
+  /**
+   * Dispatch `run` with effective output path from --output / --in-place flags.
+   *
+   * Cases:
+   *   - `-o` only: writes directly to the output path
+   *   - `-i` only: writes to a sibling temp file then atomically moves onto input. If the command
+   *     exits with a non-success code OR throws, the temp is deleted and the original is untouched
+   *   - Neither: passes `None` through (for read-only subcommands that don't need output)
+   *   - Both: errors with "mutually exclusive"
+   */
+  private[cli] def runWithOutput(
     outOpt: Option[Path],
     inPlace: Boolean,
     file: Path
-  ): IO[Option[Path]] =
+  )(execute: Option[Path] => IO[ExitCode]): IO[ExitCode] =
     (outOpt, inPlace) match
       case (Some(_), true) =>
-        IO.raiseError(
-          new IllegalArgumentException("--in-place (-i) and --output (-o) are mutually exclusive")
-        )
-      case (Some(out), false) => IO.pure(Some(out))
-      case (None, true) => IO.pure(Some(file))
-      case (None, false) => IO.pure(None)
+        IO.println(
+          Format.errorSimple("--in-place (-i) and --output (-o) are mutually exclusive")
+        ).as(ExitCode.Error)
+      case (Some(out), false) => execute(Some(out))
+      case (None, false) => execute(None)
+      case (None, true) =>
+        val tmpDir = Option(file.getParent).getOrElse(java.nio.file.Paths.get("."))
+        val tmpResource = cats.effect.Resource.make(
+          IO.blocking(java.nio.file.Files.createTempFile(tmpDir, ".xl-inplace-", ".xlsx"))
+        )(tmp => IO.blocking(java.nio.file.Files.deleteIfExists(tmp)).void)
+
+        tmpResource.use { tmp =>
+          execute(Some(tmp)).flatMap {
+            case ExitCode.Success =>
+              // Atomic move: same directory guarantees same filesystem on POSIX/NTFS
+              IO.blocking(
+                java.nio.file.Files.move(
+                  tmp,
+                  file,
+                  java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+              ).as(ExitCode.Success)
+            case other =>
+              // Non-success exit: leave original file alone; Resource cleans up temp
+              IO.pure(other)
+          }
+        }
 
   /** Require output path or raise user-friendly error, providing path to action */
   private def requireOutputAction(outputOpt: Option[Path], commandName: String)(
