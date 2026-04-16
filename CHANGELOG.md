@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.7] - 2026-04-15
+
+### Added
+
+- **`formula` alias for `putf` batch ops + `--dry-run` flag** (#224)
+  - Batch JSON `putf` operations now accept `"formula"` as an alias for `"value"`, matching natural user intent
+  - New `--dry-run` flag validates batch JSON without reading or writing files
+
+### Fixed
+
+- **Resolve worksheet paths via workbook relationships** (#226, GH-225)
+  - Streaming reader now resolves worksheet paths from `xl/workbook.xml.rels` instead of assuming `xl/worksheets/sheet{N}.xml` naming convention
+  - Fixes failures on workbooks with non-standard worksheet paths (e.g., files produced by third-party tools)
+
+---
+
 ## [0.9.6] - 2026-02-19
 
 ### Added
