@@ -270,7 +270,7 @@ echo '[{"op":"add-sheet","name":"Summary","after":"Sheet1"}]' | xl ...
 echo '[{"op":"rename-sheet","from":"Old","to":"New"}]' | xl ...
 ```
 
-**All 17 batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`
+**All 20 batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`
 
 **Common mistake**: Using unqualified range without `--sheet`:
 ```bash
