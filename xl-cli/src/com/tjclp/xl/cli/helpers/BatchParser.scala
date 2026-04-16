@@ -91,6 +91,9 @@ object BatchParser:
     case AutoFit(columns: Option[String])
     case AddSheet(name: String, after: Option[String])
     case RenameSheet(from: String, to: String)
+    case Freeze(ref: String)
+    case Unfreeze
+    case CopyRange(source: String, target: String, valuesOnly: Boolean)
 
   /**
    * Result of batch parsing with optional warnings.
@@ -136,6 +139,10 @@ object BatchParser:
         case BatchOp.AutoFit(cols) => s"  AUTOFIT ${cols.getOrElse("all")}"
         case BatchOp.AddSheet(name, _) => s"  ADD-SHEET $name"
         case BatchOp.RenameSheet(from, to) => s"  RENAME-SHEET $from -> $to"
+        case BatchOp.Freeze(ref) => s"  FREEZE $ref"
+        case BatchOp.Unfreeze => "  UNFREEZE"
+        case BatchOp.CopyRange(src, tgt, vo) =>
+          s"  COPY $src -> $tgt${if vo then " (values-only)" else ""}"
       }
       .mkString("\n")
 
@@ -345,12 +352,25 @@ object BatchParser:
             val to = requireString(objMap, "to", idx)
             BatchOp.RenameSheet(from, to)
 
+          case "freeze" =>
+            val ref = requireString(objMap, "ref", idx)
+            BatchOp.Freeze(ref)
+
+          case "unfreeze" =>
+            BatchOp.Unfreeze
+
+          case "copy" =>
+            val source = requireString(objMap, "source", idx)
+            val target = requireString(objMap, "target", idx)
+            val valuesOnly = objMap.get("valuesOnly").flatMap(_.boolOpt).getOrElse(false)
+            BatchOp.CopyRange(source, target, valuesOnly)
+
           case other =>
             throw new Exception(
               s"Object ${idx + 1}: Unknown operation '$other'. " +
                 "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
                 "comment, remove-comment, clear, col-hide, col-show, row-hide, row-show, " +
-                "autofit, add-sheet, rename-sheet"
+                "autofit, add-sheet, rename-sheet, freeze, unfreeze, copy"
             )
       }
 
@@ -819,6 +839,35 @@ object BatchParser:
 
           case BatchOp.RenameSheet(from, to) =>
             applyRenameSheet(currentWb, from, to)
+
+          case BatchOp.Freeze(refStr) =>
+            IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e))).flatMap { ref =>
+              defaultSheetName match
+                case Some(sheetName) =>
+                  IO.fromEither(
+                    currentWb(sheetName)
+                      .map(s => currentWb.put(s.freezeAt(ref)))
+                      .left
+                      .map(e => new Exception(e.message))
+                  )
+                case None =>
+                  IO.raiseError(new Exception("freeze requires --sheet"))
+            }
+
+          case BatchOp.Unfreeze =>
+            defaultSheetName match
+              case Some(sheetName) =>
+                IO.fromEither(
+                  currentWb(sheetName)
+                    .map(s => currentWb.put(s.unfreeze))
+                    .left
+                    .map(e => new Exception(e.message))
+                )
+              case None =>
+                IO.raiseError(new Exception("unfreeze requires --sheet"))
+
+          case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
+            applyCopyRange(currentWb, defaultSheetName, sourceStr, targetStr, valuesOnly)
       }
     }
 
@@ -1368,6 +1417,68 @@ object BatchParser:
       newName <- IO.fromEither(SheetName(to).left.map(e => new Exception(e)))
       result <- IO.fromEither(wb.rename(oldName, newName).left.map(e => new Exception(e.message)))
     yield result
+
+  /** Apply a copy range operation. */
+  private def applyCopyRange(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    sourceStr: String,
+    targetStr: String,
+    valuesOnly: Boolean
+  ): IO[Workbook] =
+    val sheetName = defaultSheetName.getOrElse(
+      throw new Exception("copy requires --sheet")
+    )
+    IO.fromEither(wb(sheetName).left.map(e => new Exception(e.message))).flatMap { sheet =>
+      // Parse source as range
+      val sourceRange = RefType.parse(sourceStr) match
+        case Right(RefType.Cell(ref)) => CellRange(ref, ref)
+        case Right(RefType.Range(r)) => r
+        case Right(RefType.QualifiedCell(_, ref)) => CellRange(ref, ref)
+        case Right(RefType.QualifiedRange(_, r)) => r
+        case Left(err) => throw new Exception(s"Invalid source ref '$sourceStr': $err")
+
+      // Parse target as ref or range
+      val targetStart = RefType.parse(targetStr) match
+        case Right(RefType.Cell(ref)) => ref
+        case Right(RefType.Range(r)) => r.start
+        case Right(RefType.QualifiedCell(_, ref)) => ref
+        case Right(RefType.QualifiedRange(_, r)) => r.start
+        case Left(err) => throw new Exception(s"Invalid target ref '$targetStr': $err")
+
+      val colDelta = targetStart.col.index0 - sourceRange.start.col.index0
+      val rowDelta = targetStart.row.index0 - sourceRange.start.row.index0
+
+      // Copy each cell from source to target
+      val updatedSheet = sourceRange.cells.foldLeft(sheet) { (s, srcRef) =>
+        val tgtRef = ARef(
+          Column.from0(srcRef.col.index0 + colDelta),
+          Row.from0(srcRef.row.index0 + rowDelta)
+        )
+        val srcCell = s(srcRef)
+        if srcCell.value == CellValue.Empty then s
+        else if valuesOnly then s.put(tgtRef, srcCell.value)
+        else
+          // Copy with formula shifting
+          val newValue = srcCell.value match
+            case CellValue.Formula(expr, _) =>
+              val fullFormula = s"=$expr"
+              FormulaParser.parse(fullFormula) match
+                case Right(parsed) =>
+                  val shifted = FormulaShifter.shift(parsed, colDelta, rowDelta)
+                  CellValue.Formula(FormulaPrinter.print(shifted, includeEquals = false))
+                case Left(_) => CellValue.Formula(expr) // Unparseable: copy as-is
+            case other => other
+          val updated = s.put(tgtRef, newValue)
+          // Preserve style
+          srcCell.styleId.flatMap(s.styleRegistry.get) match
+            case Some(style) =>
+              import com.tjclp.xl.sheets.styleSyntax.withCellStyle
+              updated.withCellStyle(tgtRef, style)
+            case None => updated
+      }
+      IO.pure(wb.put(updatedSheet))
+    }
 
   // ========== Utilities ==========
 

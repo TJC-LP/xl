@@ -27,7 +27,8 @@ final case class Sheet(
   styleRegistry: StyleRegistry = StyleRegistry.default,
   comments: Map[ARef, Comment] = Map.empty,
   tables: Map[String, TableSpec] = Map.empty,
-  pageSetup: Option[PageSetup] = None
+  pageSetup: Option[PageSetup] = None,
+  freezePane: Option[FreezePane] = None
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -463,6 +464,12 @@ final case class Sheet(
           ARef.from0(maxCol, maxRow)
         )
       )
+
+  /** Freeze panes at the given cell (rows above and columns left are frozen). */
+  def freezeAt(ref: ARef): Sheet = copy(freezePane = Some(FreezePane.At(ref)))
+
+  /** Remove freeze panes. */
+  def unfreeze: Sheet = copy(freezePane = Some(FreezePane.Remove))
 
   /** Count of non-empty cells */
   def cellCount: Int = cells.size

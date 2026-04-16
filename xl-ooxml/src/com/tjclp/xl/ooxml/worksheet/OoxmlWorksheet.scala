@@ -5,7 +5,7 @@ import scala.xml.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Row}
 import com.tjclp.xl.ooxml.XmlUtil.{elem, nsRelationships}
 import com.tjclp.xl.ooxml.{SaxSerializable, SaxWriter, SharedStrings, XmlWritable}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{FreezePane, Sheet}
 
 /**
  * Worksheet for xl/worksheets/sheet#.xml
@@ -422,7 +422,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           calculatedDimension.orElse(
             preserved.dimension
           ), // Use calculated dimension, fallback to preserved
-          preserved.sheetViews,
+          applyFreezePaneOverride(preserved.sheetViews, sheet.freezePane),
           preserved.sheetFormatPr,
           generatedCols.orElse(preserved.cols), // Prefer domain props over preserved XML
           preserved.conditionalFormatting,
@@ -450,7 +450,76 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           rowsWithCells,
           sheet.mergedRanges,
           dimension = calculatedDimension,
+          sheetViews = applyFreezePaneOverride(None, sheet.freezePane),
           cols = generatedCols,
           legacyDrawing = legacyDrawingElem,
           tableParts = tableParts
         )
+
+  /**
+   * Apply freeze pane override to sheetViews XML.
+   *
+   * When `freezeOverride` is `Some(FreezePane.At(ref))`, injects a `<pane>` element. When
+   * `Some(FreezePane.Remove)`, strips `<pane>` from existing sheetViews. When `None`, preserves
+   * existing sheetViews unchanged.
+   */
+  private def applyFreezePaneOverride(
+    existing: Option[Elem],
+    freezeOverride: Option[FreezePane]
+  ): Option[Elem] =
+    freezeOverride match
+      case None => existing
+      case Some(FreezePane.Remove) =>
+        existing.map { sv =>
+          val newChildren = sv.child.map {
+            case e: Elem if e.label == "sheetView" =>
+              e.copy(child = e.child.filterNot {
+                case c: Elem => c.label == "pane"
+                case _ => false
+              })
+            case other => other
+          }
+          sv.copy(child = newChildren)
+        }
+      case Some(FreezePane.At(ref)) =>
+        val colSplit = ref.col.index0
+        val rowSplit = ref.row.index0
+        if colSplit == 0 && rowSplit == 0 then existing
+        else
+          val activePane = (colSplit > 0, rowSplit > 0) match
+            case (true, true) => "bottomRight"
+            case (false, true) => "bottomLeft"
+            case (true, false) => "topRight"
+            case _ => "bottomLeft"
+
+          val paneAttrs = scala.collection.mutable.ListBuffer[(String, String)]()
+          if colSplit > 0 then paneAttrs += ("xSplit" -> colSplit.toString)
+          if rowSplit > 0 then paneAttrs += ("ySplit" -> rowSplit.toString)
+          paneAttrs += ("topLeftCell" -> ref.toA1)
+          paneAttrs += ("activePane" -> activePane)
+          paneAttrs += ("state" -> "frozen")
+
+          val paneElem = elem("pane", paneAttrs.toSeq*)(
+          )
+
+          // Inject pane into existing sheetViews or create new
+          existing match
+            case Some(sv) =>
+              val newChildren = sv.child.map {
+                case e: Elem if e.label == "sheetView" =>
+                  // Remove old pane, add new one at the beginning (before selection elements)
+                  val withoutPane = e.child.filterNot {
+                    case c: Elem => c.label == "pane"
+                    case _ => false
+                  }
+                  e.copy(child = paneElem +: withoutPane)
+                case other => other
+              }
+              Some(sv.copy(child = newChildren))
+            case None =>
+              // Create minimal sheetViews from scratch
+              val sheetView = elem(
+                "sheetView",
+                "workbookViewId" -> "0"
+              )(paneElem)
+              Some(elem("sheetViews")(sheetView))

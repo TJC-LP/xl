@@ -103,6 +103,11 @@ enum CliCommand:
   case Fill(source: String, target: String, direction: FillDirection)
   case AutoFit(columns: Option[String]) // None = all used columns, Some("A:F") = specific range
   case Sort(range: String, sortKeys: List[SortKey], hasHeader: Boolean)
+  // View operations (require -o)
+  case Freeze(ref: String) // Freeze panes at ref (rows above + columns left)
+  case Unfreeze // Remove freeze panes
+  // Range operations
+  case Copy(source: String, target: String, valuesOnly: Boolean)
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:

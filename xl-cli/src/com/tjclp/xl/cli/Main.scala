@@ -69,9 +69,11 @@ object Main
     // Sheets command: --file required, --output optional (required for hide/show, not for list)
     // This needs its own opts chain because list doesn't need output but hide/show do
     val sheetsOpts =
-      (fileOpt, outputOpt.orNone, backendOpt, maxSizeOpt, streamOpt, sheetsCmd).mapN {
-        (file, output, backend, maxSize, stream, cmd) =>
-          run(file, None, output, backend, maxSize, stream, cmd)
+      (fileOpt, outputOpt.orNone, inPlaceOpt, backendOpt, maxSizeOpt, streamOpt, sheetsCmd).mapN {
+        (file, outOpt, inPlace, backend, maxSize, stream, cmd) =>
+          resolveOutput(outOpt, inPlace, file).flatMap { effectiveOutput =>
+            run(file, None, effectiveOutput, backend, maxSize, stream, cmd)
+          }
       }
 
     // Headless commands: --file is optional (for constant formulas like =1+1, =PI())
@@ -95,12 +97,22 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream enables O(1) output memory with style preservation (hybrid streaming)
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd
 
     val sheetWriteOpts =
-      (fileOpt, sheetOpt, outputOpt, backendOpt, maxSizeOpt, streamOpt, sheetWriteSubcmds).mapN {
-        (file, sheet, out, backend, maxSize, stream, cmd) =>
-          run(file, sheet, Some(out), backend, maxSize, stream, cmd)
+      (
+        fileOpt,
+        sheetOpt,
+        outputOpt.orNone,
+        inPlaceOpt,
+        backendOpt,
+        maxSizeOpt,
+        streamOpt,
+        sheetWriteSubcmds
+      ).mapN { (file, sheet, outOpt, inPlace, backend, maxSize, stream, cmd) =>
+        resolveOutput(outOpt, inPlace, file).flatMap { effectiveOutput =>
+          run(file, sheet, effectiveOutput, backend, maxSize, stream, cmd)
+        }
       }
 
     // Standalone: no --file required (creates new files)
@@ -169,6 +181,9 @@ object Main
         "Use O(1) memory streaming for large files (100k+ rows). Supports: search, stats, bounds, view (markdown/csv/json). 7-8x faster than in-memory."
       )
       .orFalse
+
+  private val inPlaceOpt: Opts[Boolean] =
+    Opts.flag("in-place", "Edit file in-place (same as -o matching -f)", "i").orFalse
 
   // ==========================================================================
   // Command definitions
@@ -871,6 +886,32 @@ Use --dry-run to validate JSON without writing."""
       }
     }
 
+  // --- Freeze/Unfreeze commands ---
+
+  private val freezeCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "freeze",
+      "Freeze panes at cell reference (rows above and columns left are locked)"
+    ) {
+      refArg.map(CliCommand.Freeze.apply)
+    }
+
+  private val unfreezeCmd: Opts[CliCommand] =
+    Opts.subcommand("unfreeze", "Remove freeze panes") {
+      Opts(CliCommand.Unfreeze)
+    }
+
+  // --- Copy command ---
+
+  private val copyCmd: Opts[CliCommand] =
+    Opts.subcommand("copy", "Copy range to another location (with formula adjustment)") {
+      val copySrcArg = Opts.argument[String]("source")
+      val copyTgtArg = Opts.argument[String]("target")
+      val valuesOnlyOpt =
+        Opts.flag("values-only", "Copy values only (no formula adjustment)").orFalse
+      (copySrcArg, copyTgtArg, valuesOnlyOpt).mapN(CliCommand.Copy.apply)
+    }
+
   // ==========================================================================
   // Command execution
   // ==========================================================================
@@ -1541,6 +1582,21 @@ Use --dry-run to validate JSON without writing."""
         WriteCommands.sort(wb, sheetOpt, rangeStr, sortKeys, hasHeader, _, _, _)
       )
 
+    case CliCommand.Freeze(refStr) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.freeze(wb, sheetOpt, refStr, _, _, _)
+      )
+
+    case CliCommand.Unfreeze =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.unfreeze(wb, sheetOpt, _, _, _)
+      )
+
+    case CliCommand.Copy(source, target, valuesOnly) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _)
+      )
+
   // ==========================================================================
   // Helpers
   // ==========================================================================
@@ -1554,6 +1610,21 @@ Use --dry-run to validate JSON without writing."""
     outputOpt.fold(IO.raiseError[String](new Exception("Internal: output required")))(path =>
       f(path, config, stream)
     )
+
+  /** Resolve effective output from --output and --in-place flags. */
+  private[cli] def resolveOutput(
+    outOpt: Option[Path],
+    inPlace: Boolean,
+    file: Path
+  ): IO[Option[Path]] =
+    (outOpt, inPlace) match
+      case (Some(_), true) =>
+        IO.raiseError(
+          new IllegalArgumentException("--in-place (-i) and --output (-o) are mutually exclusive")
+        )
+      case (Some(out), false) => IO.pure(Some(out))
+      case (None, true) => IO.pure(Some(file))
+      case (None, false) => IO.pure(None)
 
   /** Require output path or raise user-friendly error, providing path to action */
   private def requireOutputAction(outputOpt: Option[Path], commandName: String)(
