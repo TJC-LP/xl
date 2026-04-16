@@ -23,11 +23,10 @@ object `package` extends build.XLInternalModule with NativeImageModule {
   override def mainClass = Some("com.tjclp.xl.cli.Main")
 
   // Generate version.properties resource at build time
-  // Reads PUBLISH_VERSION env var (set by CI), or defaults to "dev" for local builds
+  // Uses shared BuildConfig.version (CI sets PUBLISH_VERSION, local uses build.mill fallback)
   def generatedVersionResource: T[PathRef] = Task {
-    val version = Task.env.getOrElse("PUBLISH_VERSION", "dev")
     val dest = Task.dest / "version.properties"
-    os.write(dest, s"version=$version\n")
+    os.write(dest, s"version=${build.BuildConfig.version}\n")
     PathRef(Task.dest)
   }
 
