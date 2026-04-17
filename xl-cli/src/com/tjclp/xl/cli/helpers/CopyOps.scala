@@ -18,9 +18,14 @@ import com.tjclp.xl.sheets.styleSyntax.withCellStyle
  *   - Formula adjustment: relative references shifted by the source-to-target displacement.
  *   - `valuesOnly` mode: formulas materialized to their cached value, or evaluated against the
  *     source sheet if no cache is present.
+ *   - Formula cache population against the final target-sheet state, so copied formulas see the
+ *     destination context and any copied dependencies in the target range.
  *   - Style preservation in all modes (source cell styles applied to target cells).
  */
 object CopyOps:
+
+  /** Formula cell written in phase 1; cache is populated after the target sheet is complete. */
+  private final case class PendingFormulaCache(ref: ARef, expr: String)
 
   /**
    * Copy `sourceRange` cells from `sourceSheet` into `targetSheet` at `targetRange`.
@@ -53,44 +58,57 @@ object CopyOps:
     val sameSheet = sourceSheet.name == targetSheet.name
     val workingSheet = if sameSheet then sourceSheet else targetSheet
 
-    val updated = sourceRange.cells.foldLeft(workingSheet) { (s, srcRef) =>
-      val tgtRef = ARef.from0(
-        Column.index0(srcRef.col) + colDelta,
-        Row.index0(srcRef.row) + rowDelta
-      )
-      snapshot.get(srcRef) match
-        case None => s // Empty source cell: skip, leave target unchanged.
-        case Some(srcCell) =>
-          val withValue =
-            writeCopiedValue(s, sourceSheet, wb, srcCell, tgtRef, colDelta, rowDelta, valuesOnly)
-          // Preserve style from source (looked up in source's registry, registered into target's).
-          srcCell.styleId.flatMap(sourceSheet.styleRegistry.get) match
-            case Some(style) => withValue.withCellStyle(tgtRef, style)
-            case None => withValue
-    }
+    val (phase1Sheet, pendingFormulaCaches) =
+      sourceRange.cells.foldLeft((workingSheet, Vector.empty[PendingFormulaCache])) {
+        case ((s, pending), srcRef) =>
+          val tgtRef = ARef.from0(
+            Column.index0(srcRef.col) + colDelta,
+            Row.index0(srcRef.row) + rowDelta
+          )
+          snapshot.get(srcRef) match
+            case None => (s, pending) // Empty source cell: skip, leave target unchanged.
+            case Some(srcCell) =>
+              val (copiedValue, pendingFormula) =
+                copiedCellValue(sourceSheet, wb, srcCell, colDelta, rowDelta, valuesOnly)
+              val withValue = s.put(tgtRef, copiedValue)
+              // Preserve style from source (looked up in source's registry, registered into target's).
+              val withStyle = srcCell.styleId.flatMap(sourceSheet.styleRegistry.get) match
+                case Some(style) => withValue.withCellStyle(tgtRef, style)
+                case None => withValue
+              val updatedPending = pendingFormula match
+                case Some(expr) => pending :+ PendingFormulaCache(tgtRef, expr)
+                case None => pending
+              (withStyle, updatedPending)
+      }
+
+    val updated =
+      if pendingFormulaCaches.isEmpty then phase1Sheet
+      else populateFormulaCaches(phase1Sheet, wb, pendingFormulaCaches)
 
     wb.put(updated)
 
-  /** Write the cell value at `tgtRef`, adjusting formulas unless `valuesOnly` is set. */
-  private def writeCopiedValue(
-    target: Sheet,
+  /** Compute the copied value, shifting formulas unless `valuesOnly` is set. */
+  private def copiedCellValue(
     sourceSheet: Sheet,
     wb: Workbook,
     srcCell: Cell,
-    tgtRef: ARef,
     colDelta: Int,
     rowDelta: Int,
     valuesOnly: Boolean
-  ): Sheet =
+  ): (CellValue, Option[String]) =
     srcCell.value match
       case CellValue.Formula(expr, cachedOpt) if valuesOnly =>
         // Materialize: prefer cached value, fall back to evaluating against source sheet.
         val materialized = cachedOpt.getOrElse {
           SheetEvaluator
-            .evaluateFormula(sourceSheet)(s"=$expr", workbook = Some(wb))
+            .evaluateFormula(sourceSheet)(
+              s"=$expr",
+              workbook = Some(wb),
+              currentCell = Some(srcCell.ref)
+            )
             .getOrElse(CellValue.Empty)
         }
-        target.put(tgtRef, materialized)
+        (materialized, None)
 
       case CellValue.Formula(expr, _) =>
         // Shift formula references by the displacement.
@@ -98,16 +116,25 @@ object CopyOps:
           case Right(parsed) =>
             val shifted = FormulaShifter.shift(parsed, colDelta, rowDelta)
             val shiftedExpr = FormulaPrinter.print(shifted, includeEquals = false)
-            val cached = SheetEvaluator
-              .evaluateFormula(sourceSheet)(s"=$shiftedExpr", workbook = Some(wb))
-              .toOption
-            target.put(tgtRef, CellValue.Formula(shiftedExpr, cached))
+            (CellValue.Formula(shiftedExpr, None), Some(shiftedExpr))
           case Left(_) =>
-            // Unparseable formula: preserve as-is, try to cache.
-            val cached = SheetEvaluator
-              .evaluateFormula(sourceSheet)(s"=$expr", workbook = Some(wb))
-              .toOption
-            target.put(tgtRef, CellValue.Formula(expr, cached))
+            // Unparseable formula: preserve as-is and try to cache in phase 2.
+            (CellValue.Formula(expr, None), Some(expr))
 
       case other =>
-        target.put(tgtRef, other)
+        (other, None)
+
+  /** Populate caches for copied formulas after the final target-sheet state has been assembled. */
+  private def populateFormulaCaches(
+    sheet: Sheet,
+    wb: Workbook,
+    pendingFormulaCaches: Vector[PendingFormulaCache]
+  ): Sheet =
+    pendingFormulaCaches.foldLeft(sheet) { case (s, PendingFormulaCache(ref, expr)) =>
+      val workbookWithCurrentSheet = wb.put(s)
+      val cached =
+        SheetEvaluator
+          .evaluateCell(s)(ref, workbook = Some(workbookWithCurrentSheet))
+          .toOption
+      s.put(ref, CellValue.Formula(expr, cached))
+    }

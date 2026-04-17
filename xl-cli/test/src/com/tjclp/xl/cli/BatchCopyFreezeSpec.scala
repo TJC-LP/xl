@@ -57,6 +57,27 @@ class BatchCopyFreezeSpec extends FunSuite:
     assertEquals(cellValueAt(source, 1, 0), None, "Source sheet must not be written to")
   }
 
+  test("batch copy: shifted formula cache uses destination-sheet context") {
+    val source = Sheet("Source")
+      .put(ARef.from0(0, 0), CellValue.Number(10)) // A1
+      .put(ARef.from0(1, 0), CellValue.Formula("A1", Some(CellValue.Number(10)))) // B1
+      .put(ARef.from0(2, 0), CellValue.Number(5)) // C1
+    val dest = Sheet("Dest")
+      .put(ARef.from0(2, 0), CellValue.Number(99)) // C1
+    val wb = Workbook(Vector(source, dest))
+
+    val json = """[{"op":"copy","source":"Source!B1","target":"Dest!D1"}]"""
+    val result = runBatch(wb, None, json)
+    val updatedDest = result.sheets.find(_.name.value == "Dest").get
+
+    cellValueAt(updatedDest, 3, 0) match
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+        assert(expr.contains("C1"), s"Expected shifted formula to reference C1, got: $expr")
+        assertEquals(n, BigDecimal(99), "Cache must be evaluated against Dest, not Source")
+      case other =>
+        fail(s"Expected Formula(C1, Some(Number(99))), got: $other")
+  }
+
   test("batch copy: unqualified refs fall back to default sheet") {
     val s1 = Sheet("Main")
       .put(ARef.from0(0, 0), CellValue.Number(10))
@@ -143,6 +164,24 @@ class BatchCopyFreezeSpec extends FunSuite:
     assertEquals(cellValueAt(s, 0, 1), Some(CellValue.Number(1)), "A2 = source A1")
     assertEquals(cellValueAt(s, 0, 2), Some(CellValue.Number(2)), "A3 = source A2")
     assertEquals(cellValueAt(s, 0, 3), Some(CellValue.Number(3)), "A4 = source A3")
+  }
+
+  test("batch copy: formula cache sees copied dependencies in the final target range") {
+    val sheet = Sheet("Test")
+      .put(ARef.from0(0, 0), CellValue.Formula("B1", Some(CellValue.Number(2)))) // A1
+      .put(ARef.from0(1, 0), CellValue.Number(2)) // B1
+    val wb = Workbook(sheet)
+
+    val json = """[{"op":"copy","source":"A1:B1","target":"B1"}]"""
+    val result = runBatch(wb, Some(sheet), json)
+    val s = result.sheets.head
+
+    cellValueAt(s, 1, 0) match
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+        assert(expr.contains("C1"), s"Expected shifted formula to reference C1, got: $expr")
+        assertEquals(n, BigDecimal(2), "Cache must see copied B1 -> C1 value in final target state")
+      case other =>
+        fail(s"Expected Formula(C1, Some(Number(2))), got: $other")
   }
 
   // =========================================================================
