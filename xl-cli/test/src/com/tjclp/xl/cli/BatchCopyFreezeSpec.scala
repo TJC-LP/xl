@@ -184,6 +184,103 @@ class BatchCopyFreezeSpec extends FunSuite:
       case other => fail(s"Expected D1 = Formula(B1, Some(Number(999))), got: $other")
   }
 
+  test("batch copy: copied formula with sheet-qualified self-range caches correctly") {
+    // Reviewer's repro: A1=1, B1=VLOOKUP(1, Test!A1:C1, 3, FALSE) with NO cache, C1=42.
+    // Copy A1:C1 to D1:F1. The shifted formula at E1 references Test!D1:F1 which
+    // includes E1 itself — the cache eval must not get confused by the self-reference
+    // and must resolve to 42 (the value at F1).
+    val sheet = Sheet("Test")
+      .put(ARef.from0(0, 0), CellValue.Number(1)) // A1
+      .put(
+        ARef.from0(1, 0),
+        CellValue.Formula("VLOOKUP(1,Test!A1:C1,3,FALSE)", None)
+      ) // B1 — no prior cache
+      .put(ARef.from0(2, 0), CellValue.Number(42)) // C1
+    val wb = Workbook(sheet)
+
+    val json = """[{"op":"copy","source":"A1:C1","target":"D1:F1"}]"""
+    val result = runBatch(wb, Some(sheet), json)
+    val s = result.sheets.head
+
+    cellValueAt(s, 4, 0) match
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+        assert(expr.contains("D1:F1"), s"Expected shifted range D1:F1, got: $expr")
+        assertEquals(n, BigDecimal(42), "Cache must be 42 (copied formula sees copied siblings)")
+      case other =>
+        fail(s"Expected Formula(VLOOKUP(...,Test!D1:F1,...), Some(Number(42))), got: $other")
+  }
+
+  test("batch copy: copied formula with sheet-qualified self-range sees copied formula sibling cache") {
+    // Stronger cache regression: the lookup key itself is a copied formula sibling.
+    // D1 comes from A1 (=1) and E1 comes from B1 (=VLOOKUP(1, Test!A1:C1, 3, FALSE)).
+    // E1's cache should only resolve if the copy path makes D1's copied formula cache visible.
+    val sheet = Sheet("Test")
+      .put(ARef.from0(0, 0), CellValue.Formula("1", None)) // A1
+      .put(
+        ARef.from0(1, 0),
+        CellValue.Formula("VLOOKUP(1,Test!A1:C1,3,FALSE)", None)
+      ) // B1
+      .put(ARef.from0(2, 0), CellValue.Number(42)) // C1
+    val wb = Workbook(sheet)
+
+    val json = """[{"op":"copy","source":"A1:C1","target":"D1:F1"}]"""
+    val result = runBatch(wb, Some(sheet), json)
+    val s = result.sheets.head
+
+    cellValueAt(s, 3, 0) match
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+        assertEquals(expr, "1")
+        assertEquals(n, BigDecimal(1), "D1 should cache before E1 evaluates its lookup")
+      case other =>
+        fail(s"Expected D1 = Formula(1, Some(Number(1))), got: $other")
+
+    cellValueAt(s, 4, 0) match
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+        assert(expr.contains("D1:F1"), s"Expected shifted range D1:F1, got: $expr")
+        assertEquals(
+          n,
+          BigDecimal(42),
+          "E1 should cache once D1's copied formula cache is available"
+        )
+      case other =>
+        fail(s"Expected E1 = Formula(VLOOKUP(...,Test!D1:F1,...), Some(Number(42))), got: $other")
+  }
+
+  test("batch copy: cache population converges across multiple copied-formula passes") {
+    // D1 depends on E1 via a sheet-qualified range. Row-major iteration sees D1 before E1,
+    // so a single pass is not enough: E1 must cache first, then D1 on a later pass.
+    val sheet = Sheet("Test")
+      .put(
+        ARef.from0(0, 0),
+        CellValue.Formula("VLOOKUP(1,Test!B1:C1,2,FALSE)", None)
+      ) // A1
+      .put(ARef.from0(1, 0), CellValue.Formula("1", None)) // B1
+      .put(ARef.from0(2, 0), CellValue.Number(42)) // C1
+    val wb = Workbook(sheet)
+
+    val json = """[{"op":"copy","source":"A1:C1","target":"D1:F1"}]"""
+    val result = runBatch(wb, Some(sheet), json)
+    val s = result.sheets.head
+
+    cellValueAt(s, 3, 0) match
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+        assert(expr.contains("E1:F1"), s"Expected shifted range E1:F1, got: $expr")
+        assertEquals(
+          n,
+          BigDecimal(42),
+          "D1 should cache after a later pass once E1's copied formula cache exists"
+        )
+      case other =>
+        fail(s"Expected D1 = Formula(VLOOKUP(...,Test!E1:F1,...), Some(Number(42))), got: $other")
+
+    cellValueAt(s, 4, 0) match
+      case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+        assertEquals(expr, "1")
+        assertEquals(n, BigDecimal(1))
+      case other =>
+        fail(s"Expected E1 = Formula(1, Some(Number(1))), got: $other")
+  }
+
   test("batch copy: formula cache sees copied dependencies in the final target range") {
     val sheet = Sheet("Test")
       .put(ARef.from0(0, 0), CellValue.Formula("B1", Some(CellValue.Number(2)))) // A1

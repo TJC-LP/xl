@@ -8,6 +8,8 @@ import com.tjclp.xl.formula.eval.DependentRecalculation.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.sheets.styleSyntax.withCellStyle
 
+import scala.annotation.tailrec
+
 /**
  * Shared copy logic used by both the `copy` CLI command and the `copy` batch operation.
  *
@@ -152,19 +154,34 @@ object CopyOps:
   /**
    * Populate caches for copied formulas against the final target-sheet state.
    *
-   * Each formula's cache is independent: we don't need to see sibling caches to evaluate one
-   * formula, so the workbook-with-sheet is constructed once outside the fold rather than per cell.
+   * Some evaluator paths (notably lookup/match functions over ranges) only consult formula caches
+   * rather than recursively evaluating uncached sibling formulas. We therefore iterate until the
+   * copied formula caches reach a fixed point, rebuilding workbook context from the current sheet
+   * state on each step so same-sheet-qualified refs like `Sheet1!A1:B2` also see freshly-populated
+   * sibling caches.
+   *
+   * The pass count is bounded by the number of copied formulas. In the worst acyclic case, each
+   * pass resolves one more layer of dependencies. Cyclic or otherwise unevaluable formulas remain
+   * uncached (`None`), matching the prior best-effort behavior.
    */
   private def populateFormulaCaches(
     sheet: Sheet,
     wb: Workbook,
     pendingFormulaCaches: Vector[PendingFormulaCache]
   ): Sheet =
-    val wbForEval = wb.put(sheet)
-    pendingFormulaCaches.foldLeft(sheet) { case (s, PendingFormulaCache(ref, expr)) =>
-      val cached =
-        SheetEvaluator
-          .evaluateCell(s)(ref, workbook = Some(wbForEval))
-          .toOption
-      s.put(ref, CellValue.Formula(expr, cached))
-    }
+    @tailrec
+    def loop(currentSheet: Sheet, passesRemaining: Int): Sheet =
+      val nextSheet = pendingFormulaCaches.foldLeft(currentSheet) {
+        case (s, PendingFormulaCache(ref, expr)) =>
+          val currentWorkbook = wb.put(s)
+          val cached =
+            SheetEvaluator
+              .evaluateCell(s)(ref, workbook = Some(currentWorkbook))
+              .toOption
+          s.put(ref, CellValue.Formula(expr, cached))
+      }
+
+      if nextSheet == currentSheet || passesRemaining <= 1 then nextSheet
+      else loop(nextSheet, passesRemaining - 1)
+
+    loop(sheet, pendingFormulaCaches.length.max(1))

@@ -205,6 +205,43 @@ class CopyCommandSpec extends FunSuite:
       case other => fail(s"Expected Formula, got: $other")
   }
 
+  outputFixture.test("copy: copied sheet-qualified lookup sees copied formula sibling caches") {
+    outputPath =>
+      val sheet = Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Formula("1", None)) // A1
+        .put(
+          ARef.from0(1, 0),
+          CellValue.Formula("VLOOKUP(1,Test!A1:C1,3,FALSE)", None)
+        ) // B1
+        .put(ARef.from0(2, 0), CellValue.Number(42)) // C1
+      val wb = Workbook(sheet)
+
+      WriteCommands
+        .copyRange(wb, Some(sheet), "A1:C1", "D1:F1", valuesOnly = false, outputPath, config)
+        .unsafeRunSync()
+
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val s = imported.sheets.head
+
+      cellValueAt(s, 3, 0) match
+        case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+          assertEquals(expr, "1")
+          assertEquals(n, BigDecimal(1))
+        case other =>
+          fail(s"Expected D1 = Formula(1, Some(Number(1))), got: $other")
+
+      cellValueAt(s, 4, 0) match
+        case Some(CellValue.Formula(expr, Some(CellValue.Number(n)))) =>
+          assert(expr.contains("D1:F1"), s"Expected shifted range D1:F1, got: $expr")
+          assertEquals(
+            n,
+            BigDecimal(42),
+            "E1 should cache after seeing the copied D1 formula cache"
+          )
+        case other =>
+          fail(s"Expected E1 = Formula(VLOOKUP(...,Test!D1:F1,...), Some(Number(42))), got: $other")
+  }
+
   // =========================================================================
   // Style preservation (both modes)
   // =========================================================================
