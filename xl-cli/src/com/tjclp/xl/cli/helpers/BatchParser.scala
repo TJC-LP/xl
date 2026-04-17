@@ -91,6 +91,9 @@ object BatchParser:
     case AutoFit(columns: Option[String])
     case AddSheet(name: String, after: Option[String])
     case RenameSheet(from: String, to: String)
+    case Freeze(ref: String)
+    case Unfreeze
+    case CopyRange(source: String, target: String, valuesOnly: Boolean)
 
   /**
    * Result of batch parsing with optional warnings.
@@ -136,6 +139,10 @@ object BatchParser:
         case BatchOp.AutoFit(cols) => s"  AUTOFIT ${cols.getOrElse("all")}"
         case BatchOp.AddSheet(name, _) => s"  ADD-SHEET $name"
         case BatchOp.RenameSheet(from, to) => s"  RENAME-SHEET $from -> $to"
+        case BatchOp.Freeze(ref) => s"  FREEZE $ref"
+        case BatchOp.Unfreeze => "  UNFREEZE"
+        case BatchOp.CopyRange(src, tgt, vo) =>
+          s"  COPY $src -> $tgt${if vo then " (values-only)" else ""}"
       }
       .mkString("\n")
 
@@ -345,12 +352,25 @@ object BatchParser:
             val to = requireString(objMap, "to", idx)
             BatchOp.RenameSheet(from, to)
 
+          case "freeze" =>
+            val ref = requireString(objMap, "ref", idx)
+            BatchOp.Freeze(ref)
+
+          case "unfreeze" =>
+            BatchOp.Unfreeze
+
+          case "copy" =>
+            val source = requireString(objMap, "source", idx)
+            val target = requireString(objMap, "target", idx)
+            val valuesOnly = objMap.get("valuesOnly").flatMap(_.boolOpt).getOrElse(false)
+            BatchOp.CopyRange(source, target, valuesOnly)
+
           case other =>
             throw new Exception(
               s"Object ${idx + 1}: Unknown operation '$other'. " +
                 "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
                 "comment, remove-comment, clear, col-hide, col-show, row-hide, row-show, " +
-                "autofit, add-sheet, rename-sheet"
+                "autofit, add-sheet, rename-sheet, freeze, unfreeze, copy"
             )
       }
 
@@ -819,6 +839,59 @@ object BatchParser:
 
           case BatchOp.RenameSheet(from, to) =>
             applyRenameSheet(currentWb, from, to)
+
+          case BatchOp.Freeze(refStr) =>
+            // Accept either bare ref ("B2") or qualified ref ("Sheet2!B2").
+            IO.fromEither(
+              RefType
+                .parse(refStr)
+                .left
+                .map(e => new Exception(s"Invalid freeze ref '$refStr': $e"))
+            ).flatMap {
+              case RefType.Cell(ref) =>
+                defaultSheetName match
+                  case Some(sheetName) =>
+                    IO.fromEither(
+                      currentWb(sheetName)
+                        .map(s => currentWb.put(s.freezeAt(ref)))
+                        .left
+                        .map(e => new Exception(e.message))
+                    )
+                  case None =>
+                    IO.raiseError(
+                      new Exception(
+                        "freeze requires --sheet or a qualified ref (e.g., 'Sheet1!B2')"
+                      )
+                    )
+              case RefType.QualifiedCell(sheetName, ref) =>
+                IO.fromEither(
+                  currentWb(sheetName)
+                    .map(s => currentWb.put(s.freezeAt(ref)))
+                    .left
+                    .map(e => new Exception(e.message))
+                )
+              case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+                IO.raiseError(
+                  new Exception(s"freeze expects a single cell reference, got range: $refStr")
+                )
+            }
+
+          case BatchOp.Unfreeze =>
+            defaultSheetName match
+              case Some(sheetName) =>
+                IO.fromEither(
+                  currentWb(sheetName)
+                    .map(s => currentWb.put(s.unfreeze))
+                    .left
+                    .map(e => new Exception(e.message))
+                )
+              case None =>
+                IO.raiseError(
+                  new Exception("unfreeze requires --sheet (specify which sheet to unfreeze)")
+                )
+
+          case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
+            applyCopyRange(currentWb, defaultSheetName, sourceStr, targetStr, valuesOnly)
       }
     }
 
@@ -1368,6 +1441,71 @@ object BatchParser:
       newName <- IO.fromEither(SheetName(to).left.map(e => new Exception(e)))
       result <- IO.fromEither(wb.rename(oldName, newName).left.map(e => new Exception(e.message)))
     yield result
+
+  /**
+   * Apply a copy range operation, respecting qualified sheet refs on each side.
+   *
+   * Source and target may each be qualified (e.g. `Sheet2!A1`). If unqualified, the default sheet
+   * is used. An error is raised if the default is missing and either side lacks qualification.
+   * Delegates actual cell copying to [[CopyOps.copyRange]] which handles overlapping copies,
+   * formula shifting, and style preservation.
+   */
+  private def applyCopyRange(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    sourceStr: String,
+    targetStr: String,
+    valuesOnly: Boolean
+  ): IO[Workbook] =
+
+    def parseSide(label: String, s: String): IO[(Option[SheetName], Either[ARef, CellRange])] =
+      IO.fromEither(
+        RefType.parse(s).left.map(e => new Exception(s"Invalid $label ref '$s': $e"))
+      ).map {
+        case RefType.Cell(ref) => (None, Left(ref))
+        case RefType.Range(r) => (None, Right(r))
+        case RefType.QualifiedCell(sheet, ref) => (Some(sheet), Left(ref))
+        case RefType.QualifiedRange(sheet, r) => (Some(sheet), Right(r))
+      }
+
+    def resolveSheetName(label: String, qualified: Option[SheetName]): IO[SheetName] =
+      qualified.orElse(defaultSheetName) match
+        case Some(name) => IO.pure(name)
+        case None =>
+          IO.raiseError(
+            new Exception(s"copy $label requires --sheet or a qualified ref")
+          )
+
+    for
+      (srcQualified, srcEither) <- parseSide("source", sourceStr)
+      (tgtQualified, tgtEither) <- parseSide("target", targetStr)
+      sourceSheetName <- resolveSheetName("source", srcQualified)
+      targetSheetName <- resolveSheetName("target", tgtQualified)
+      sourceSheet <- IO.fromEither(wb(sourceSheetName).left.map(e => new Exception(e.message)))
+      targetSheet <- IO.fromEither(wb(targetSheetName).left.map(e => new Exception(e.message)))
+
+      sourceRange = srcEither match
+        case Left(ref) => CellRange(ref, ref)
+        case Right(r) => r
+
+      // Auto-expand single-cell target to match source dimensions
+      targetRange = tgtEither match
+        case Right(r) => r
+        case Left(ref) =>
+          val srcCols =
+            Column.index0(sourceRange.colEnd) - Column.index0(sourceRange.colStart)
+          val srcRows =
+            Row.index0(sourceRange.rowEnd) - Row.index0(sourceRange.rowStart)
+          val endRef = ARef.from0(
+            Column.index0(ref.col) + srcCols,
+            Row.index0(ref.row) + srcRows
+          )
+          CellRange(ref, endRef)
+
+      _ <- IO.fromEither(
+        CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
+      )
+    yield CopyOps.copyRange(wb, sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
 
   // ========== Utilities ==========
 

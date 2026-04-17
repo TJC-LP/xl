@@ -89,11 +89,15 @@ xl -f <file> -s <sheet> view <range> --eval       # Computed values
 
 **Note**: `--eval` may show formula text instead of computed values for cells with deep multi-hop cross-sheet formula dependencies. The xlsx file will compute correctly when opened in Excel.
 
-### Write Operations (require `-o`)
+### Write Operations (require `-o` or `-i`)
 ```bash
 xl -f <file> -s <sheet> -o <out> put <ref> <value>
+xl -f <file> -s <sheet> -i put <ref> <value>         # In-place edit (no -o needed)
 xl -f <file> -s <sheet> -o <out> putf <ref> <formula>
 xl -f <file> -s <sheet> -o <out> style <range> --bold --bg yellow
+xl -f <file> -s <sheet> -o <out> copy <source> <target>  # Range copy with formula shift
+xl -f <file> -s <sheet> -o <out> freeze <ref>         # Freeze panes
+xl -f <file> -s <sheet> -o <out> unfreeze             # Remove freeze panes
 xl -f <file> -o <out> import <csv-file> --new-sheet "Data"
 ```
 
@@ -241,7 +245,12 @@ xl ... put A1:A10 "TBD"
 
 # Batch values (row-major order)
 xl ... put A1:D1 "Q1" "Q2" "Q3" "Q4"
+
+# CSV split (opt-in: requires --csv flag)
+xl ... put A1:D1 "Q1,Q2,Q3,Q4" --csv
 ```
+
+**`--csv`**: Opt-in flag that splits a single comma-separated value across the target range. Required because comma-containing values are common in real data (`"Smith, John"`); without `--csv`, the value is written as literal text. The split count must match the range size exactly, otherwise the command errors. Smart type detection applies to each split value.
 
 **Negative numbers**: Use `--value` flag (bare `-` is interpreted as flag):
 ```bash
@@ -422,7 +431,15 @@ echo '[{"op":"putf","ref":"A1","formula":"=SUM(B1:B10)"},{"op":"style","range":"
 echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
 ```
 
-**All batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`
+**All batch operations** (20): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`
+
+**Freeze/unfreeze/copy in batch:**
+```json
+{"op": "freeze", "ref": "B2"}
+{"op": "unfreeze"}
+{"op": "copy", "source": "A1:D10", "target": "F1"}
+{"op": "copy", "source": "A1:D10", "target": "F1", "valuesOnly": true}
+```
 
 ### CSV to Styled Table
 
@@ -494,7 +511,7 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 
 **Streaming supports**: search, stats, bounds, view (markdown/csv/json), put, putf, style
 
-**Requires in-memory**: cell (dependencies), eval (formulas), HTML/SVG/PDF (styles), formula dragging
+**Requires in-memory**: cell (dependencies), eval (formulas), HTML/SVG/PDF (styles), formula dragging, `put --csv` (CSV auto-split)
 
 ---
 
@@ -507,6 +524,7 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 | `--file <path>` | `-f` | Input file (required) |
 | `--sheet <name>` | `-s` | Sheet name |
 | `--output <path>` | `-o` | Output file (for writes) |
+| `--in-place` | `-i` | Edit file in-place (mutually exclusive with `-o`) |
 | `--backend <type>` | | Write backend: scalaxml (default) or saxstax (36-39% faster). Reads always use StAX. |
 | `--max-size <MB>` | | Override 100MB security limit (0 = unlimited) |
 | `--stream` | | O(1) memory mode for reads + writes (search/stats/bounds/view/put/putf/style) |
@@ -548,10 +566,13 @@ Run `xl view --help` for complete options.
 
 | Command | Key Options |
 |---------|-------------|
-| `put <ref> <values>` | `--value` for negatives, `--stream` for O(1) memory |
+| `put <ref> <values>` | `--value` for negatives, `--stream` for O(1) memory, `--csv` to split comma-separated value |
 | `putf <ref> <formulas>` | Supports dragging (no dragging with `--stream`) |
 | `style <range>` | `--bold`, `--bg`, `--fg`, `--format`, `--border`, `--stream` for O(1) memory |
-| `batch <json-file>` | 17 operations (see below) |
+| `copy <source> <target>` | `--values-only` (no formula adjustment) |
+| `freeze <ref>` | Freeze panes (rows above + columns left of ref) |
+| `unfreeze` | Remove freeze panes |
+| `batch <json-file>` | 20 operations (see below) |
 | `import <csv> [ref]` | `--new-sheet`, `--delimiter`, `--no-type-inference` |
 
 Run `xl <command> --help` for complete options.
@@ -574,6 +595,9 @@ Run `xl <command> --help` for complete options.
 |---------|---------|
 | `merge <range>` | |
 | `unmerge <range>` | |
+| `copy <source> <target>` | `--values-only` |
+| `freeze <ref>` | Rows above + columns left of ref are locked |
+| `unfreeze` | |
 | `comment <ref> <text>` | `--author` |
 | `remove-comment <ref>` | |
 | `clear <range>` | `--all`, `--styles`, `--comments` |

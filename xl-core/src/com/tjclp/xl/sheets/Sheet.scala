@@ -15,6 +15,16 @@ import scala.util.boundary, boundary.break
  *
  * Immutable design: all operations return new Sheet instances. Uses persistent data structures for
  * efficient updates.
+ *
+ * @param freezePane
+ *   Freeze pane override with three-valued semantics:
+ *   - `None`: preserve existing `<sheetViews>` XML (no change on write)
+ *   - `Some(FreezePane.At(ref))`: inject/replace `<pane>` in sheetViews
+ *   - `Some(FreezePane.Remove)`: strip any existing `<pane>` from sheetViews
+ *
+ * The distinction between `None` and `Some(Remove)` matters: `None` is the passive default
+ * (round-trip preserves the original); `Some(Remove)` is the active intent to remove freeze panes
+ * even when the source XML had them.
  */
 final case class Sheet(
   name: SheetName,
@@ -27,7 +37,8 @@ final case class Sheet(
   styleRegistry: StyleRegistry = StyleRegistry.default,
   comments: Map[ARef, Comment] = Map.empty,
   tables: Map[String, TableSpec] = Map.empty,
-  pageSetup: Option[PageSetup] = None
+  pageSetup: Option[PageSetup] = None,
+  freezePane: Option[FreezePane] = None
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -463,6 +474,12 @@ final case class Sheet(
           ARef.from0(maxCol, maxRow)
         )
       )
+
+  /** Freeze panes at the given cell (rows above and columns left are frozen). */
+  def freezeAt(ref: ARef): Sheet = copy(freezePane = Some(FreezePane.At(ref)))
+
+  /** Remove freeze panes. */
+  def unfreeze: Sheet = copy(freezePane = Some(FreezePane.Remove))
 
   /** Count of non-empty cells */
   def cellCount: Int = cells.size

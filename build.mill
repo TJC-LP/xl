@@ -13,6 +13,9 @@ val organization = "com.tjclp"
 
 /** Shared build configuration constants */
 object BuildConfig {
+  /** Project version: CI sets PUBLISH_VERSION; local builds use this fallback */
+  val version: String = sys.env.getOrElse("PUBLISH_VERSION", "0.9.7")
+
   /** JVM options to silence Scala 3 LazyVals sun.misc.Unsafe deprecation warnings (JDK 21+) */
   val lazyValsJvmArgs: Seq[String] = Seq(
     "--add-opens=java.base/sun.misc=ALL-UNNAMED",
@@ -65,9 +68,8 @@ trait XLModuleBase extends ScalaModule with ScalafmtModule {
 /** Trait for publishable library modules - publishes to Maven Central via Sonatype */
 trait XLModule extends XLModuleBase with PublishModule {
 
-  /** Version derived from PUBLISH_VERSION env var (set by CI), or SNAPSHOT for local dev */
-  override def publishVersion: T[String] =
-    sys.env.getOrElse("PUBLISH_VERSION", "0.9.7")
+  /** Version derived from PUBLISH_VERSION env var (set by CI), or fallback from BuildConfig */
+  override def publishVersion: T[String] = BuildConfig.version
 
   override def pomSettings: T[PomSettings] = PomSettings(
     description = artifactDescription,

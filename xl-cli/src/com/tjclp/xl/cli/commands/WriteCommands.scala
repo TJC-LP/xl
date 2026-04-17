@@ -5,9 +5,9 @@ import java.nio.file.Path
 import cats.effect.IO
 import cats.implicits.*
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.helpers.{BatchParser, SheetResolver, StyleBuilder, ValueParser}
+import com.tjclp.xl.cli.helpers.{BatchParser, CopyOps, SheetResolver, StyleBuilder, ValueParser}
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formula.{
   FormulaParser,
@@ -90,9 +90,16 @@ object WriteCommands:
    *
    * Supports three modes:
    *   1. Single cell: put A1 100
-   *   2. Fill pattern: put A1:A10 100 (all cells get same value)
+   *   2. Fill pattern: put A1:A10 100 (all cells get same value — literal, even if it contains
+   *      commas)
    *   3. Batch values: put A1:A3 1 2 3 (values map 1:1, row-major)
    *
+   * When `csvSplit` is true and Mode 2 input contains commas, the value is split on commas and
+   * distributed across the range (requires exact count match). This is opt-in to avoid regressing
+   * legitimate fills like `put A1:B1 "Smith, John"`.
+   *
+   * @param csvSplit
+   *   Enable CSV auto-split in Mode 2 (fill pattern with comma-containing value)
    * @param stream
    *   If true, uses streaming writer for O(1) output memory
    */
@@ -103,7 +110,8 @@ object WriteCommands:
     values: List[String],
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    csvSplit: Boolean = false
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "put")
@@ -112,12 +120,21 @@ object WriteCommands:
       // Determine mode based on ref type and value count
       result <- (refOrRange, values) match
         case (Left(ref), List(singleValue)) =>
-          // Mode 1: Single cell
-          putSingleCell(wb, targetSheet, ref, singleValue, outputPath, config, stream)
+          // Mode 1: Single cell (--csv is meaningless here)
+          if csvSplit then
+            IO.raiseError(
+              new Exception(
+                s"--csv requires a range target; ${ref.toA1} is a single cell."
+              )
+            )
+          else putSingleCell(wb, targetSheet, ref, singleValue, outputPath, config, stream)
 
         case (Right(range), List(singleValue)) =>
-          // Mode 2: Fill pattern
-          putFillPattern(wb, targetSheet, range, singleValue, outputPath, config, stream)
+          // Mode 2: Fill pattern (opt-in CSV split with --csv)
+          if csvSplit then
+            putCsvSplit(wb, targetSheet, range, singleValue, outputPath, config, stream)
+          else
+            putFillPatternLiteral(wb, targetSheet, range, singleValue, outputPath, config, stream)
 
         case (Right(range), multipleValues @ (_ :: _ :: _)) =>
           // Mode 3: Batch values (validate count matches) - 2+ values
@@ -152,8 +169,29 @@ object WriteCommands:
       s"${Format.putSuccess(ref, value)}\n${saveSuffix(outputPath, stream)}"
     }
 
-  /** Mode 2: Fill all cells in range with same value */
-  private def putFillPattern(
+  /** Mode 2 with --csv: split a comma-separated value across the range. Requires exact count. */
+  private def putCsvSplit(
+    wb: Workbook,
+    sheet: Sheet,
+    range: CellRange,
+    valueStr: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean
+  ): IO[String] =
+    val parts = valueStr.split(",", -1).map(_.trim).toList
+    val cellCount = range.cellCount.toInt
+    if parts.length != cellCount then
+      IO.raiseError(
+        new Exception(
+          s"--csv: value split into ${parts.length} element(s) but range ${range.toA1} has $cellCount cell(s). " +
+            "Adjust the range size or value count to match."
+        )
+      )
+    else putBatchValues(wb, sheet, range, parts, outputPath, config, stream)
+
+  /** Fill all cells in range with the same literal value (no CSV splitting) */
+  private def putFillPatternLiteral(
     wb: Workbook,
     sheet: Sheet,
     range: CellRange,
@@ -974,6 +1012,125 @@ object WriteCommands:
         .mkString(", ")
       headerNote = if hasHeader then " (header row preserved)" else ""
     yield s"Sorted ${range.toA1} by $keyDesc$headerNote\n${saveSuffix(outputPath, stream)}"
+
+  /**
+   * Freeze panes at the given cell reference.
+   *
+   * Rows above and columns to the left of the reference are locked in place when scrolling.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
+   */
+  def freeze(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    refStr: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "freeze")
+      (sheet, refOrRange) = resolved
+      ref <- refOrRange match
+        case Left(r) => IO.pure(r)
+        case Right(range) =>
+          IO.raiseError(
+            new Exception(
+              s"freeze expects a single cell reference, got range: ${range.toA1}"
+            )
+          )
+      updatedSheet = sheet.freezeAt(ref)
+      updatedWb = wb.put(updatedSheet)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Froze panes at ${ref.toA1} on sheet '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+
+  /**
+   * Remove freeze panes from the sheet.
+   *
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory
+   */
+  def unfreeze(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      sheet <- SheetResolver.requireSheet(wb, sheetOpt, "unfreeze")
+      updatedSheet = sheet.unfreeze
+      updatedWb = wb.put(updatedSheet)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Removed freeze panes from sheet '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+
+  /**
+   * Copy a range of cells to another location with optional formula adjustment.
+   *
+   * Source can be a single cell (treated as 1x1 range) or a range. If the target is a single cell,
+   * it auto-expands to match the source dimensions. Formulas are shifted relative to the
+   * displacement unless `valuesOnly` is true. The target may live on a different sheet than the
+   * source (via qualified refs like `Sheet2!A1`).
+   *
+   * Overlapping copies within the same sheet are safe: source cells are snapshotted before any
+   * mutation, so `copy A1:A3 A2` produces the expected result regardless of iteration order.
+   *
+   * @param valuesOnly
+   *   If true, formula cells are materialized to their cached/computed value.
+   * @param stream
+   *   If true, uses streaming writer for O(1) output memory.
+   */
+  def copyRange(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    sourceStr: String,
+    targetStr: String,
+    valuesOnly: Boolean,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      // Resolve source sheet + ref/range
+      sourceResolved <- SheetResolver.resolveRef(wb, sheetOpt, sourceStr, "copy")
+      (sourceSheet, sourceRefOrRange) = sourceResolved
+      sourceRange = sourceRefOrRange match
+        case Left(ref) => CellRange(ref, ref)
+        case Right(range) => range
+
+      // Resolve target sheet + ref/range — target sheet may differ from source (qualified refs)
+      targetResolved <- SheetResolver.resolveRef(wb, sheetOpt, targetStr, "copy")
+      (targetSheet, targetRefOrRange) = targetResolved
+
+      // Auto-expand single-cell target to match source dimensions
+      targetRange = targetRefOrRange match
+        case Right(range) => range
+        case Left(ref) =>
+          val srcRows = Row.index0(sourceRange.rowEnd) - Row.index0(sourceRange.rowStart)
+          val srcCols = Column.index0(sourceRange.colEnd) - Column.index0(sourceRange.colStart)
+          val endRef = ARef.from0(
+            Column.index0(ref.col) + srcCols,
+            Row.index0(ref.row) + srcRows
+          )
+          CellRange(ref, endRef)
+
+      // Validate dimensions (shared helper keeps CLI + batch error text aligned)
+      _ <- IO.fromEither(
+        CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
+      )
+
+      // Delegate to shared helper (handles overlap, cross-sheet, style preservation, recalc)
+      finalWb =
+        CopyOps.copyRange(wb, sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
+      _ <- writeWorkbook(finalWb, outputPath, config, stream)
+
+      crossSheetLabel =
+        if sourceSheet.name != targetSheet.name then
+          s" (${sourceSheet.name.value} → ${targetSheet.name.value})"
+        else ""
+      modeLabel = if valuesOnly then " (values only)" else " (with formula adjustment)"
+    yield s"Copied ${sourceRange.toA1} to ${targetRange.toA1}$crossSheetLabel$modeLabel\n${saveSuffix(outputPath, stream)}"
 
   /** Validate that all sort columns are within the range */
   private def validateSortColumns(range: CellRange, keys: List[SortKey]): IO[Unit] =
