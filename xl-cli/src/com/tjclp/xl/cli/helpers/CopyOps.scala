@@ -4,6 +4,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, SheetEvaluator}
+import com.tjclp.xl.formula.eval.DependentRecalculation.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.sheets.styleSyntax.withCellStyle
 
@@ -20,6 +21,7 @@ import com.tjclp.xl.sheets.styleSyntax.withCellStyle
  *     source sheet if no cache is present.
  *   - Formula cache population against the final target-sheet state, so copied formulas see the
  *     destination context and any copied dependencies in the target range.
+ *   - Transitive dependent recalculation on the target sheet after the copy completes.
  *   - Style preservation in all modes (source cell styles applied to target cells).
  */
 object CopyOps:
@@ -28,16 +30,37 @@ object CopyOps:
   private final case class PendingFormulaCache(ref: ARef, expr: String)
 
   /**
+   * Validate that `source` and `target` have identical dimensions.
+   *
+   * Returns `Left` with a user-facing message when they differ, `Right(())` when they match.
+   * Extracted so both CLI and batch paths produce the same error text.
+   */
+  def validateDimensions(source: CellRange, target: CellRange): Either[String, Unit] =
+    val srcRowCount = Row.index0(source.rowEnd) - Row.index0(source.rowStart) + 1
+    val srcColCount = Column.index0(source.colEnd) - Column.index0(source.colStart) + 1
+    val tgtRowCount = Row.index0(target.rowEnd) - Row.index0(target.rowStart) + 1
+    val tgtColCount = Column.index0(target.colEnd) - Column.index0(target.colStart) + 1
+    if srcRowCount == tgtRowCount && srcColCount == tgtColCount then Right(())
+    else
+      Left(
+        s"Source (${srcRowCount}x${srcColCount}) and target (${tgtRowCount}x${tgtColCount}) dimensions mismatch. " +
+          "Use a single target cell to auto-expand, or specify matching range."
+      )
+
+  /**
    * Copy `sourceRange` cells from `sourceSheet` into `targetSheet` at `targetRange`.
    *
    * Requires `sourceRange.cells.size == targetRange.cells.size`; the caller must validate
-   * dimensions first.
+   * dimensions first (see [[validateDimensions]]).
    *
    * When `sourceSheet.name == targetSheet.name` (same sheet), a single updated sheet is written
    * back. When they differ, only `targetSheet` is updated; the source sheet is untouched.
    *
    * Empty source cells (absent from `sourceSheet.cells`) are skipped — the target cell is left
    * unchanged rather than cleared.
+   *
+   * After phase-2 cache population, transitive dependents on the target sheet are recalculated so
+   * that pre-existing formulas pointing into the target range see the new values.
    */
   def copyRange(
     wb: Workbook,
@@ -81,11 +104,13 @@ object CopyOps:
               (withStyle, updatedPending)
       }
 
-    val updated =
+    val cachedSheet =
       if pendingFormulaCaches.isEmpty then phase1Sheet
       else populateFormulaCaches(phase1Sheet, wb, pendingFormulaCaches)
 
-    wb.put(updated)
+    // Recalculate transitive dependents (pre-existing formulas that reference the target range).
+    val wbWithCopied = wb.put(cachedSheet)
+    wbWithCopied.recalculateDependents(cachedSheet.name, targetRange.cells.toSet)
 
   /** Compute the copied value, shifting formulas unless `valuesOnly` is set. */
   private def copiedCellValue(
@@ -124,17 +149,22 @@ object CopyOps:
       case other =>
         (other, None)
 
-  /** Populate caches for copied formulas after the final target-sheet state has been assembled. */
+  /**
+   * Populate caches for copied formulas against the final target-sheet state.
+   *
+   * Each formula's cache is independent: we don't need to see sibling caches to evaluate one
+   * formula, so the workbook-with-sheet is constructed once outside the fold rather than per cell.
+   */
   private def populateFormulaCaches(
     sheet: Sheet,
     wb: Workbook,
     pendingFormulaCaches: Vector[PendingFormulaCache]
   ): Sheet =
+    val wbForEval = wb.put(sheet)
     pendingFormulaCaches.foldLeft(sheet) { case (s, PendingFormulaCache(ref, expr)) =>
-      val workbookWithCurrentSheet = wb.put(s)
       val cached =
         SheetEvaluator
-          .evaluateCell(s)(ref, workbook = Some(workbookWithCurrentSheet))
+          .evaluateCell(s)(ref, workbook = Some(wbForEval))
           .toOption
       s.put(ref, CellValue.Formula(expr, cached))
     }

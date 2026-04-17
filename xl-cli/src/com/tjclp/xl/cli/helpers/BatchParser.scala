@@ -841,17 +841,39 @@ object BatchParser:
             applyRenameSheet(currentWb, from, to)
 
           case BatchOp.Freeze(refStr) =>
-            IO.fromEither(ARef.parse(refStr).left.map(e => new Exception(e))).flatMap { ref =>
-              defaultSheetName match
-                case Some(sheetName) =>
-                  IO.fromEither(
-                    currentWb(sheetName)
-                      .map(s => currentWb.put(s.freezeAt(ref)))
-                      .left
-                      .map(e => new Exception(e.message))
-                  )
-                case None =>
-                  IO.raiseError(new Exception("freeze requires --sheet"))
+            // Accept either bare ref ("B2") or qualified ref ("Sheet2!B2").
+            IO.fromEither(
+              RefType
+                .parse(refStr)
+                .left
+                .map(e => new Exception(s"Invalid freeze ref '$refStr': $e"))
+            ).flatMap {
+              case RefType.Cell(ref) =>
+                defaultSheetName match
+                  case Some(sheetName) =>
+                    IO.fromEither(
+                      currentWb(sheetName)
+                        .map(s => currentWb.put(s.freezeAt(ref)))
+                        .left
+                        .map(e => new Exception(e.message))
+                    )
+                  case None =>
+                    IO.raiseError(
+                      new Exception(
+                        "freeze requires --sheet or a qualified ref (e.g., 'Sheet1!B2')"
+                      )
+                    )
+              case RefType.QualifiedCell(sheetName, ref) =>
+                IO.fromEither(
+                  currentWb(sheetName)
+                    .map(s => currentWb.put(s.freezeAt(ref)))
+                    .left
+                    .map(e => new Exception(e.message))
+                )
+              case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+                IO.raiseError(
+                  new Exception(s"freeze expects a single cell reference, got range: $refStr")
+                )
             }
 
           case BatchOp.Unfreeze =>
@@ -864,7 +886,9 @@ object BatchParser:
                     .map(e => new Exception(e.message))
                 )
               case None =>
-                IO.raiseError(new Exception("unfreeze requires --sheet"))
+                IO.raiseError(
+                  new Exception("unfreeze requires --sheet (specify which sheet to unfreeze)")
+                )
 
           case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
             applyCopyRange(currentWb, defaultSheetName, sourceStr, targetStr, valuesOnly)
@@ -1478,19 +1502,9 @@ object BatchParser:
           )
           CellRange(ref, endRef)
 
-      srcRowCount = Row.index0(sourceRange.rowEnd) - Row.index0(sourceRange.rowStart) + 1
-      srcColCount = Column.index0(sourceRange.colEnd) - Column.index0(sourceRange.colStart) + 1
-      tgtRowCount = Row.index0(targetRange.rowEnd) - Row.index0(targetRange.rowStart) + 1
-      tgtColCount = Column.index0(targetRange.colEnd) - Column.index0(targetRange.colStart) + 1
-      _ <-
-        if srcRowCount != tgtRowCount || srcColCount != tgtColCount then
-          IO.raiseError(
-            new Exception(
-              s"Source (${srcRowCount}x${srcColCount}) and target " +
-                s"(${tgtRowCount}x${tgtColCount}) dimensions mismatch"
-            )
-          )
-        else IO.unit
+      _ <- IO.fromEither(
+        CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
+      )
     yield CopyOps.copyRange(wb, sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
 
   // ========== Utilities ==========

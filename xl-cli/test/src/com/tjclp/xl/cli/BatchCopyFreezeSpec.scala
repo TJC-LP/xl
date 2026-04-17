@@ -166,6 +166,24 @@ class BatchCopyFreezeSpec extends FunSuite:
     assertEquals(cellValueAt(s, 0, 3), Some(CellValue.Number(3)), "A4 = source A3")
   }
 
+  test("batch copy: pre-existing dependents on target range are recalculated") {
+    // D1 depends on B1; copying A1 → B1 should cause D1's cache to refresh to the new value.
+    val sheet = Sheet("Test")
+      .put(ARef.from0(0, 0), CellValue.Number(999)) // A1 = 999
+      .put(ARef.from0(1, 0), CellValue.Number(1)) // B1 = 1 (pre-existing)
+      .put(ARef.from0(3, 0), CellValue.Formula("B1", Some(CellValue.Number(1)))) // D1 = B1, cached 1
+    val wb = Workbook(sheet)
+
+    val json = """[{"op":"copy","source":"A1","target":"B1"}]"""
+    val result = runBatch(wb, Some(sheet), json)
+    val s = result.sheets.head
+
+    cellValueAt(s, 3, 0) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) =>
+        assertEquals(n, BigDecimal(999), "D1's cache must be recalculated after B1 is overwritten")
+      case other => fail(s"Expected D1 = Formula(B1, Some(Number(999))), got: $other")
+  }
+
   test("batch copy: formula cache sees copied dependencies in the final target range") {
     val sheet = Sheet("Test")
       .put(ARef.from0(0, 0), CellValue.Formula("B1", Some(CellValue.Number(2)))) // A1
@@ -219,6 +237,25 @@ class BatchCopyFreezeSpec extends FunSuite:
       .unsafeRunSync()
 
     assert(err.isLeft, "Expected error when freeze has no sheet to target")
+    val msg = err.swap.getOrElse(throw new Exception("expected left")).getMessage
+    assert(
+      msg.contains("qualified ref"),
+      s"Error should mention qualified ref as an alternative: $msg"
+    )
+  }
+
+  test("batch freeze: qualified ref targets named sheet without default") {
+    val s1 = Sheet("Sheet1")
+    val s2 = Sheet("Sheet2")
+    val wb = Workbook(Vector(s1, s2))
+
+    val json = """[{"op":"freeze","ref":"Sheet2!C3"}]"""
+    val result = runBatch(wb, None, json)
+
+    val sheet1 = result.sheets.find(_.name.value == "Sheet1").get
+    val sheet2 = result.sheets.find(_.name.value == "Sheet2").get
+    assertEquals(sheet1.freezePane, None)
+    assertEquals(sheet2.freezePane, Some(FreezePane.At(ARef.from0(2, 2))))
   }
 
   test("batch copy: invalid ref produces user-facing error (not bypass JVM exception)") {

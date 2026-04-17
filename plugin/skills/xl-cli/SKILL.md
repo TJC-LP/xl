@@ -511,7 +511,7 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 
 **Streaming supports**: search, stats, bounds, view (markdown/csv/json), put, putf, style
 
-**Requires in-memory**: cell (dependencies), eval (formulas), HTML/SVG/PDF (styles), formula dragging
+**Requires in-memory**: cell (dependencies), eval (formulas), HTML/SVG/PDF (styles), formula dragging, `put --csv` (CSV auto-split)
 
 ---
 

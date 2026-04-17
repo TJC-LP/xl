@@ -230,7 +230,7 @@ xl -f huge.xlsx --max-size 0 sheets      # Disable limits
 xl -f huge.xlsx --max-size 500 cell A1   # 500MB limit
 ```
 
-**Streaming limitations**: HTML/SVG/PDF need styles (use --max-size instead). Cell details, formula eval, and writes require full workbook load.
+**Streaming limitations**: HTML/SVG/PDF need styles (use --max-size instead). Cell details, formula eval, writes, and `put --csv` auto-split require full workbook load.
 
 See `docs/design/smart-streaming.md` for future enhancements.
 

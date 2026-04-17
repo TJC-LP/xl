@@ -24,6 +24,8 @@ import com.tjclp.xl.sheets.styleSyntax.withCellStyle
  *   - Values-only mode materializes formulas instead of keeping them
  *   - Styles are preserved in both modes
  *   - Formulas shift relative references by the correct delta
+ *
+ * Each test gets a fresh temp output file via `outputFixture` — no cross-test coupling.
  */
 @SuppressWarnings(
   Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps")
@@ -32,11 +34,13 @@ class CopyCommandSpec extends FunSuite:
 
   given unsafe.IORuntime = unsafe.IORuntime.global
 
-  val outputPath: Path = Files.createTempFile("copy-test-", ".xlsx")
   val config: WriterConfig = WriterConfig.default
 
-  override def afterEach(context: AfterEach): Unit =
-    if Files.exists(outputPath) then Files.delete(outputPath)
+  /** Per-test temp output path; MUnit handles setup/teardown around each test body. */
+  val outputFixture: FunFixture[Path] = FunFixture[Path](
+    setup = _ => Files.createTempFile("copy-test-", ".xlsx"),
+    teardown = path => if Files.exists(path) then Files.delete(path)
+  )
 
   private def cellValueAt(sheet: Sheet, col: Int, row: Int): Option[CellValue] =
     sheet.cells.get(ARef.from0(col, row)).map(_.value)
@@ -45,103 +49,82 @@ class CopyCommandSpec extends FunSuite:
   // Overlapping copies within a sheet (P1 correctness)
   // =========================================================================
 
-  test("copy: overlapping A1:A3 -> A2 preserves source snapshot (1,2,3 -> 1,1,2,3)") {
-    // A1=1, A2=2, A3=3. Copy A1:A3 down by 1. Result should be A1=1, A2=1, A3=2, A4=3
-    // (i.e., the original sequence, not 1,1,1,1 from reading already-copied values)
-    val sheet = Sheet("Test")
-      .put(ARef.from0(0, 0), CellValue.Number(1))
-      .put(ARef.from0(0, 1), CellValue.Number(2))
-      .put(ARef.from0(0, 2), CellValue.Number(3))
-    val wb = Workbook(sheet)
+  outputFixture.test("copy: overlapping A1:A3 -> A2 preserves source snapshot (1,2,3 -> 1,1,2,3)") {
+    outputPath =>
+      // A1=1, A2=2, A3=3. Copy A1:A3 down by 1. Result should be A1=1, A2=1, A3=2, A4=3
+      // (i.e., the original sequence, not 1,1,1,1 from reading already-copied values)
+      val sheet = Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Number(1))
+        .put(ARef.from0(0, 1), CellValue.Number(2))
+        .put(ARef.from0(0, 2), CellValue.Number(3))
+      val wb = Workbook(sheet)
 
-    WriteCommands
-      .copyRange(
-        wb,
-        Some(sheet),
-        "A1:A3",
-        "A2",
-        valuesOnly = false,
-        outputPath,
-        config
-      )
-      .unsafeRunSync()
+      WriteCommands
+        .copyRange(wb, Some(sheet), "A1:A3", "A2", valuesOnly = false, outputPath, config)
+        .unsafeRunSync()
 
-    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
-    val s = imported.sheets.head
-    assertEquals(cellValueAt(s, 0, 0), Some(CellValue.Number(1)), "A1 unchanged")
-    assertEquals(cellValueAt(s, 0, 1), Some(CellValue.Number(1)), "A2 = source A1")
-    assertEquals(cellValueAt(s, 0, 2), Some(CellValue.Number(2)), "A3 = source A2")
-    assertEquals(cellValueAt(s, 0, 3), Some(CellValue.Number(3)), "A4 = source A3")
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val s = imported.sheets.head
+      assertEquals(cellValueAt(s, 0, 0), Some(CellValue.Number(1)), "A1 unchanged")
+      assertEquals(cellValueAt(s, 0, 1), Some(CellValue.Number(1)), "A2 = source A1")
+      assertEquals(cellValueAt(s, 0, 2), Some(CellValue.Number(2)), "A3 = source A2")
+      assertEquals(cellValueAt(s, 0, 3), Some(CellValue.Number(3)), "A4 = source A3")
   }
 
-  test("copy: overlapping B1:D1 -> A1 shifts left without corruption") {
-    // B1=10, C1=20, D1=30. Copy B1:D1 left by 1. Result: A1=10, B1=20, C1=30
-    val sheet = Sheet("Test")
-      .put(ARef.from0(1, 0), CellValue.Number(10))
-      .put(ARef.from0(2, 0), CellValue.Number(20))
-      .put(ARef.from0(3, 0), CellValue.Number(30))
-    val wb = Workbook(sheet)
+  outputFixture.test("copy: overlapping B1:D1 -> A1 shifts left without corruption") {
+    outputPath =>
+      // B1=10, C1=20, D1=30. Copy B1:D1 left by 1. Result: A1=10, B1=20, C1=30
+      val sheet = Sheet("Test")
+        .put(ARef.from0(1, 0), CellValue.Number(10))
+        .put(ARef.from0(2, 0), CellValue.Number(20))
+        .put(ARef.from0(3, 0), CellValue.Number(30))
+      val wb = Workbook(sheet)
 
-    WriteCommands
-      .copyRange(wb, Some(sheet), "B1:D1", "A1", valuesOnly = false, outputPath, config)
-      .unsafeRunSync()
+      WriteCommands
+        .copyRange(wb, Some(sheet), "B1:D1", "A1", valuesOnly = false, outputPath, config)
+        .unsafeRunSync()
 
-    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
-    val s = imported.sheets.head
-    assertEquals(cellValueAt(s, 0, 0), Some(CellValue.Number(10)), "A1 = source B1")
-    assertEquals(cellValueAt(s, 1, 0), Some(CellValue.Number(20)), "B1 = source C1")
-    assertEquals(cellValueAt(s, 2, 0), Some(CellValue.Number(30)), "C1 = source D1")
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val s = imported.sheets.head
+      assertEquals(cellValueAt(s, 0, 0), Some(CellValue.Number(10)), "A1 = source B1")
+      assertEquals(cellValueAt(s, 1, 0), Some(CellValue.Number(20)), "B1 = source C1")
+      assertEquals(cellValueAt(s, 2, 0), Some(CellValue.Number(30)), "C1 = source D1")
   }
 
   // =========================================================================
   // Cross-sheet copy (qualified target — P2 bug)
   // =========================================================================
 
-  test("copy: cross-sheet with qualified target writes to target sheet, not source") {
-    val s1 = Sheet("Source").put(ARef.from0(0, 0), CellValue.Text("hello"))
-    val s2 = Sheet("Dest")
-    val wb = Workbook(Vector(s1, s2))
+  outputFixture.test("copy: cross-sheet with qualified target writes to target sheet, not source") {
+    outputPath =>
+      val s1 = Sheet("Source").put(ARef.from0(0, 0), CellValue.Text("hello"))
+      val s2 = Sheet("Dest")
+      val wb = Workbook(Vector(s1, s2))
 
-    WriteCommands
-      .copyRange(
-        wb,
-        Some(s1),
-        "A1",
-        "Dest!B1",
-        valuesOnly = false,
-        outputPath,
-        config
-      )
-      .unsafeRunSync()
+      WriteCommands
+        .copyRange(wb, Some(s1), "A1", "Dest!B1", valuesOnly = false, outputPath, config)
+        .unsafeRunSync()
 
-    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
-    val source = imported.sheets.find(_.name.value == "Source").get
-    val dest = imported.sheets.find(_.name.value == "Dest").get
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val source = imported.sheets.find(_.name.value == "Source").get
+      val dest = imported.sheets.find(_.name.value == "Dest").get
 
-    // Destination should have the value at B1
-    assertEquals(cellValueAt(dest, 1, 0), Some(CellValue.Text("hello")))
-    // Source should be unchanged — particularly, B1 on the source sheet must be empty
-    assertEquals(cellValueAt(source, 1, 0), None, "Source B1 must not be written")
-    // And the original source A1 is still intact
-    assertEquals(cellValueAt(source, 0, 0), Some(CellValue.Text("hello")))
+      // Destination should have the value at B1
+      assertEquals(cellValueAt(dest, 1, 0), Some(CellValue.Text("hello")))
+      // Source should be unchanged — particularly, B1 on the source sheet must be empty
+      assertEquals(cellValueAt(source, 1, 0), None, "Source B1 must not be written")
+      // And the original source A1 is still intact
+      assertEquals(cellValueAt(source, 0, 0), Some(CellValue.Text("hello")))
   }
 
-  test("copy: fully-qualified source and destination sheets") {
+  outputFixture.test("copy: fully-qualified source and destination sheets") { outputPath =>
     val s1 = Sheet("Income").put(ARef.from0(0, 0), CellValue.Number(1000))
     val s2 = Sheet("Summary")
     val wb = Workbook(Vector(s1, s2))
 
     // Both sides qualified, no --sheet fallback provided
     WriteCommands
-      .copyRange(
-        wb,
-        None,
-        "Income!A1",
-        "Summary!C3",
-        valuesOnly = false,
-        outputPath,
-        config
-      )
+      .copyRange(wb, None, "Income!A1", "Summary!C3", valuesOnly = false, outputPath, config)
       .unsafeRunSync()
 
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
@@ -153,52 +136,54 @@ class CopyCommandSpec extends FunSuite:
   // Values-only mode (P2 bug: batch version kept formulas)
   // =========================================================================
 
-  test("copy --values-only: formula with cached value materializes to cached") {
-    val formulaCell = CellValue.Formula("A1+A2", Some(CellValue.Number(30)))
-    val sheet = Sheet("Test")
-      .put(ARef.from0(0, 0), CellValue.Number(10))
-      .put(ARef.from0(0, 1), CellValue.Number(20))
-      .put(ARef.from0(0, 2), formulaCell)
-    val wb = Workbook(sheet)
+  outputFixture.test("copy --values-only: formula with cached value materializes to cached") {
+    outputPath =>
+      val formulaCell = CellValue.Formula("A1+A2", Some(CellValue.Number(30)))
+      val sheet = Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Number(10))
+        .put(ARef.from0(0, 1), CellValue.Number(20))
+        .put(ARef.from0(0, 2), formulaCell)
+      val wb = Workbook(sheet)
 
-    WriteCommands
-      .copyRange(wb, Some(sheet), "A3", "B3", valuesOnly = true, outputPath, config)
-      .unsafeRunSync()
+      WriteCommands
+        .copyRange(wb, Some(sheet), "A3", "B3", valuesOnly = true, outputPath, config)
+        .unsafeRunSync()
 
-    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
-    val s = imported.sheets.head
-    // B3 should hold 30 (the cached value), NOT "=A1+A2" (formula)
-    cellValueAt(s, 1, 2) match
-      case Some(CellValue.Number(n)) =>
-        assertEquals(n, BigDecimal(30), "values-only should materialize formula to cached value")
-      case other => fail(s"Expected Number(30), got: $other")
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val s = imported.sheets.head
+      // B3 should hold 30 (the cached value), NOT "=A1+A2" (formula)
+      cellValueAt(s, 1, 2) match
+        case Some(CellValue.Number(n)) =>
+          assertEquals(n, BigDecimal(30), "values-only should materialize formula to cached value")
+        case other => fail(s"Expected Number(30), got: $other")
   }
 
-  test("copy --values-only: formula with no cache evaluates against source") {
-    val sheet = Sheet("Test")
-      .put(ARef.from0(0, 0), CellValue.Number(5))
-      .put(ARef.from0(0, 1), CellValue.Number(7))
-      // Formula with no cached value
-      .put(ARef.from0(0, 2), CellValue.Formula("A1+A2", None))
-    val wb = Workbook(sheet)
+  outputFixture.test("copy --values-only: formula with no cache evaluates against source") {
+    outputPath =>
+      val sheet = Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Number(5))
+        .put(ARef.from0(0, 1), CellValue.Number(7))
+        // Formula with no cached value
+        .put(ARef.from0(0, 2), CellValue.Formula("A1+A2", None))
+      val wb = Workbook(sheet)
 
-    WriteCommands
-      .copyRange(wb, Some(sheet), "A3", "B3", valuesOnly = true, outputPath, config)
-      .unsafeRunSync()
+      WriteCommands
+        .copyRange(wb, Some(sheet), "A3", "B3", valuesOnly = true, outputPath, config)
+        .unsafeRunSync()
 
-    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
-    val s = imported.sheets.head
-    cellValueAt(s, 1, 2) match
-      case Some(CellValue.Number(n)) =>
-        assertEquals(n, BigDecimal(12), "Expected evaluated result 5+7=12")
-      case other => fail(s"Expected Number(12), got: $other")
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val s = imported.sheets.head
+      cellValueAt(s, 1, 2) match
+        case Some(CellValue.Number(n)) =>
+          assertEquals(n, BigDecimal(12), "Expected evaluated result 5+7=12")
+        case other => fail(s"Expected Number(12), got: $other")
   }
 
   // =========================================================================
   // Formula shifting (non-values-only mode)
   // =========================================================================
 
-  test("copy: formulas shift relative references by the delta") {
+  outputFixture.test("copy: formulas shift relative references by the delta") { outputPath =>
     val sheet = Sheet("Test")
       .put(ARef.from0(0, 0), CellValue.Number(10)) // A1
       .put(ARef.from0(1, 0), CellValue.Number(20)) // B1
@@ -224,7 +209,7 @@ class CopyCommandSpec extends FunSuite:
   // Style preservation (both modes)
   // =========================================================================
 
-  test("copy: preserves source cell style on target") {
+  outputFixture.test("copy: preserves source cell style on target") { outputPath =>
     val boldStyle = CellStyle.default.bold
     val sheet = Sheet("Test")
       .put(ARef.from0(0, 0), CellValue.Text("Bold"))
@@ -242,7 +227,7 @@ class CopyCommandSpec extends FunSuite:
     assert(c1Style.exists(_.font.bold), s"Expected bold style on C1, got: $c1Style")
   }
 
-  test("copy --values-only: preserves source cell style on target") {
+  outputFixture.test("copy --values-only: preserves source cell style on target") { outputPath =>
     val italicStyle = CellStyle.default.italic
     val sheet = Sheet("Test")
       .put(ARef.from0(0, 0), CellValue.Text("Italic"))
@@ -264,7 +249,7 @@ class CopyCommandSpec extends FunSuite:
   // Dimension handling
   // =========================================================================
 
-  test("copy: single-cell target auto-expands to source dimensions") {
+  outputFixture.test("copy: single-cell target auto-expands to source dimensions") { outputPath =>
     val sheet = Sheet("Test")
       .put(ARef.from0(0, 0), CellValue.Text("a"))
       .put(ARef.from0(1, 0), CellValue.Text("b"))
@@ -285,7 +270,7 @@ class CopyCommandSpec extends FunSuite:
     assertEquals(cellValueAt(s, 4, 1), Some(CellValue.Text("d")))
   }
 
-  test("copy: dimension mismatch errors") {
+  outputFixture.test("copy: dimension mismatch errors") { outputPath =>
     val sheet = Sheet("Test").put(ARef.from0(0, 0), CellValue.Number(1))
     val wb = Workbook(sheet)
 

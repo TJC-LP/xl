@@ -36,24 +36,35 @@ class FreezePaneSpec extends FunSuite:
 
   /** Extract the `<pane>` element from `<sheetViews>` of the first sheet, if present. */
   private def readPaneXml(path: Path): Option[scala.xml.Elem] =
+    readAllPaneXmls(path).headOption.flatMap(_._2)
+
+  /**
+   * Return a map from worksheet entry name (e.g. "xl/worksheets/sheet1.xml") to its `<pane>`
+   * element, if present. Lets tests check per-sheet pane state.
+   */
+  private def readAllPaneXmls(path: Path): Vector[(String, Option[scala.xml.Elem])] =
     val bytes = Files.readAllBytes(path)
     val zip = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
     try
+      val result = Vector.newBuilder[(String, Option[scala.xml.Elem])]
       LazyList
         .continually(Option(zip.getNextEntry))
         .takeWhile(_.isDefined)
         .flatten
-        .find(_.getName.startsWith("xl/worksheets/sheet"))
-        .flatMap { _ =>
-          val buf = new java.io.ByteArrayOutputStream()
-          val data = new Array[Byte](4096)
-          LazyList
-            .continually(zip.read(data))
-            .takeWhile(_ != -1)
-            .foreach(n => buf.write(data, 0, n))
-          val xml = scala.xml.XML.loadString(buf.toString("UTF-8"))
-          (xml \\ "pane").headOption.collect { case e: scala.xml.Elem => e }
+        .foreach { entry =>
+          val name = entry.getName
+          if name.startsWith("xl/worksheets/sheet") && name.endsWith(".xml") then
+            val buf = new java.io.ByteArrayOutputStream()
+            val data = new Array[Byte](4096)
+            LazyList
+              .continually(zip.read(data))
+              .takeWhile(_ != -1)
+              .foreach(n => buf.write(data, 0, n))
+            val xml = scala.xml.XML.loadString(buf.toString("UTF-8"))
+            val pane = (xml \\ "pane").headOption.collect { case e: scala.xml.Elem => e }
+            result += ((name, pane))
         }
+      result.result().sortBy(_._1)
     finally zip.close()
 
   // =========================================================================
@@ -145,4 +156,41 @@ class FreezePaneSpec extends FunSuite:
       Some(FreezePane.Remove),
       "unfreeze sets Remove, distinct from None (preserve)"
     )
+  }
+
+  // =========================================================================
+  // Qualified-ref support (freeze with `Sheet2!B2` syntax)
+  // =========================================================================
+
+  test("freeze Sheet2!B2: qualified ref targets the named sheet without -s") {
+    val s1 = Sheet("Sheet1")
+    val s2 = Sheet("Sheet2")
+    val wb = Workbook(Vector(s1, s2))
+
+    // No default sheet passed; qualified ref selects Sheet2.
+    WriteCommands
+      .freeze(wb, None, "Sheet2!B2", outputPath, config)
+      .unsafeRunSync()
+
+    // Verify per-worksheet XML: only sheet2.xml should carry a <pane> element.
+    val panes = readAllPaneXmls(outputPath)
+    assertEquals(panes.length, 2, "Should have two worksheets")
+    assertEquals(panes(0)._2, None, "sheet1.xml must not have a pane")
+    val sheet2Pane = panes(1)._2
+    assert(sheet2Pane.isDefined, "sheet2.xml should carry the pane element")
+    assertEquals(sheet2Pane.get.attribute("topLeftCell").map(_.text), Some("B2"))
+  }
+
+  test("freeze: range argument errors with clear message") {
+    val sheet = Sheet("Test")
+    val wb = Workbook(sheet)
+
+    val err = WriteCommands
+      .freeze(wb, Some(sheet), "A1:B2", outputPath, config)
+      .attempt
+      .unsafeRunSync()
+
+    assert(err.isLeft, "Expected range-arg rejection")
+    val msg = err.swap.getOrElse(throw new Exception("expected left")).getMessage
+    assert(msg.contains("single cell"), s"Expected 'single cell' in message: $msg")
   }

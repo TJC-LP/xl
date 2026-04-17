@@ -1030,10 +1030,16 @@ object WriteCommands:
     stream: Boolean = false
   ): IO[String] =
     for
-      sheet <- SheetResolver.requireSheet(wb, sheetOpt, "freeze")
-      ref <- IO.fromEither(
-        ARef.parse(refStr).left.map(e => new Exception(s"Invalid cell reference: $e"))
-      )
+      resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "freeze")
+      (sheet, refOrRange) = resolved
+      ref <- refOrRange match
+        case Left(r) => IO.pure(r)
+        case Right(range) =>
+          IO.raiseError(
+            new Exception(
+              s"freeze expects a single cell reference, got range: ${range.toA1}"
+            )
+          )
       updatedSheet = sheet.freezeAt(ref)
       updatedWb = wb.put(updatedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
@@ -1109,25 +1115,14 @@ object WriteCommands:
           )
           CellRange(ref, endRef)
 
-      // Validate dimensions
-      srcRowCount = Row.index0(sourceRange.rowEnd) - Row.index0(sourceRange.rowStart) + 1
-      srcColCount = Column.index0(sourceRange.colEnd) - Column.index0(sourceRange.colStart) + 1
-      tgtRowCount = Row.index0(targetRange.rowEnd) - Row.index0(targetRange.rowStart) + 1
-      tgtColCount = Column.index0(targetRange.colEnd) - Column.index0(targetRange.colStart) + 1
-      _ <-
-        if srcRowCount != tgtRowCount || srcColCount != tgtColCount then
-          IO.raiseError(
-            new Exception(
-              s"Source (${srcRowCount}x${srcColCount}) and target (${tgtRowCount}x${tgtColCount}) dimensions mismatch. " +
-                "Use a single target cell to auto-expand, or specify matching range."
-            )
-          )
-        else IO.unit
+      // Validate dimensions (shared helper keeps CLI + batch error text aligned)
+      _ <- IO.fromEither(
+        CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
+      )
 
-      // Delegate to shared helper (handles overlap, cross-sheet, style preservation)
-      updatedWb =
+      // Delegate to shared helper (handles overlap, cross-sheet, style preservation, recalc)
+      finalWb =
         CopyOps.copyRange(wb, sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
-      finalWb = updatedWb.recalculateDependents(targetSheet.name, targetRange.cells.toSet)
       _ <- writeWorkbook(finalWb, outputPath, config, stream)
 
       crossSheetLabel =
