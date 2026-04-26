@@ -26,6 +26,7 @@ Mill auto-imports these as `MILL_*` prefixed environment variables.
 
 | Module | Artifact ID | Description |
 |--------|-------------|-------------|
+| xl | `xl_3` | Aggregate artifact for the full XL library |
 | xl-core | `xl-core_3` | Core domain model, macros, DSL |
 | xl-ooxml | `xl-ooxml_3` | OOXML readers and writers |
 | xl-cats-effect | `xl-cats-effect_3` | IO interpreters, streaming |

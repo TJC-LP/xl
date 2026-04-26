@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-01-21
+**Last Updated**: 2026-04-26
 
 ## Current State
 
@@ -60,6 +60,7 @@
 - ✅ ExcelIO[IO] interpreter
 - ✅ `readStream` / `readSheetStream` / `readStreamByIndex` – constant‑memory streaming read (fs2.io.readInputStream + fs2‑data‑xml)
 - ✅ `writeStream` / `writeStreamsSeq` – constant‑memory streaming write (fs2‑data‑xml)
+- ✅ `writeWorkbookStream` – lower-allocation SAX/StAX write for in-memory workbooks; preserves merges, comments, tables, row/column properties, and freeze panes
 - ✅ **`writeFast`** – SAX/StAX streaming write (opt-in via `ExcelIO.writeFast()` or `WriterConfig(backend = XmlBackend.SaxStax)`)
 - ✅ Benchmark: 100k rows in ~1.8s read (~10MB constant memory) / ~1.1s write (~10MB constant memory)
 
@@ -149,7 +150,7 @@
   - Precedent/dependent queries: O(1) lookups via adjacency lists
   - Safe evaluation: sheet.evaluateWithDependencyCheck() (production-ready)
   - Performance: Handles 10k formula cells in <10ms
-- ⚠️ Merged cells are fully supported in the in-memory OOXML path, but not emitted by streaming writers.
+- ⚠️ Merged cells are supported by the in-memory OOXML path and `writeWorkbookStream`. Pure row-stream generation (`writeStream` / `writeStreamsSeq`) has no merge API.
 - ❌ Hyperlinks not serialized.
 - ✅ Column/row properties (width, height, hidden, outlineLevel, collapsed) are fully serialized via DirectSaxEmitter.
 
@@ -171,14 +172,19 @@
 - ❌ Data validation
 - ❌ Named ranges
 
-### Streaming I/O Limitations (CRITICAL)
+### Streaming I/O Limitations
 
-**Write Path** (✅ Working):
-- ✅ True constant-memory streaming with `writeStream`
+**Row-stream write path** (✅ Working):
+- ✅ True constant-memory row streaming with `writeStream` / `writeStreamsSeq`
 - ✅ O(1) memory regardless of file size
 - ⚠️  No SST support (inline strings only - larger files)
 - ⚠️  Minimal styles (default only - no rich formatting)
-- ⚠️  [Content_Types].xml written before SST decision made
+- ⚠️  No row-stream API for workbook metadata such as merged ranges, comments, tables, and freeze panes
+
+**In-memory workbook SAX/StAX write path** (✅ Working):
+- ✅ `writeWorkbookStream` writes an already-materialized `Workbook` through the SAX/StAX backend
+- ✅ Preserves full workbook metadata handled by the OOXML writer, including merges, comments, tables, row/column properties, and freeze panes
+- ⚠️  Not a row-input streaming API; the `Workbook` is already in memory
 
 **Read Path** (✅ P6.6 Complete):
 - ✅ **True constant-memory streaming** - uses `fs2.io.readInputStream`
@@ -196,12 +202,14 @@
 
 ### Security & Safety
 
-**Not Implemented** (P11):
-- ❌ ZIP bomb detection
-- ❌ XXE (XML External Entity) prevention
-- ❌ Formula injection guards
-- ❌ XLSM macro preservation (should never execute)
-- ❌ File size limits
+**Implemented**:
+- ✅ ZIP bomb detection
+- ✅ XXE (XML External Entity) prevention
+- ✅ Formula injection guards in in-memory and streaming writes
+
+**Remaining**:
+- ❌ XLSM macro preservation policy and tests (macros are never executed)
+- ❌ Configurable file size limits
 
 ### Advanced Features
 
@@ -214,6 +222,7 @@
 - ✅ **Excel Tables** (WI-10): Structured data with headers, AutoFilter, styling
 - ✅ **Benchmarks** (WI-15): JMH performance suite (XL vs POI)
 - ✅ **SAX Write** (WI-17): Fast SAX/StAX streaming write path
+- ✅ **Security Hardening** (WI-30): ZIP bomb detection, XXE prevention, formula injection guards
 
 **Not Started** (Future):
 - ❌ P6b: Full case class codec derivation (Magnolia/Shapeless)
@@ -221,7 +230,6 @@
 - ❌ P10: Drawings (images, shapes)
 - ❌ P11: Charts
 - ❌ Pivot Tables (remaining part of P12)
-- ❌ P13: Security hardening (ZIP bomb, XXE prevention)
 
 ---
 
