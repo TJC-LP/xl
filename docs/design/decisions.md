@@ -89,13 +89,13 @@
 - **Alternatives Considered**:
   - Streaming-only: Would lose SST/styles (unacceptable for <100k row use cases)
   - In-memory only: Would OOM on large files (unacceptable for ETL pipelines)
-  - Two-phase streaming: Deferred to P7.5 (complex, not MVP-critical)
+  - Full-feature row streaming: Deferred; workbook-level SST/styles/metadata make it substantially more complex than row emission
 - **Consequences**:
   - ✅ Best-of-both-worlds (full features OR constant memory)
   - ✅ Users choose based on needs
   - ❌ Two implementations to maintain
   - ❌ Potential confusion about which to use
-- **Mitigation**: Clear documentation in README and performance-guide.md; streaming read was fixed in P6.6 (fs2.io.readInputStream) and now matches streaming write on O(1) memory.
+- **Mitigation**: Clear documentation in README and performance-guide.md; streaming read was fixed in P6.6 (fs2.io.readInputStream), and in-memory workbook writes can use the SAX/StAX backend through `writeWorkbookStream`.
 
 ## ADR-012: Compression defaults to DEFLATED
 **Date**: 2025-11 (P6.7 planned)

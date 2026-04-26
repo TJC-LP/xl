@@ -32,15 +32,15 @@ import com.tjclp.xl.cli.{FillDirection, SortDirection, SortKey, SortMode}
  *
  * All write commands accept a `stream` parameter:
  *   - false (default): Use standard writer (O(n) memory)
- *   - true: Use streaming writer (O(1) output memory, preserves styles)
+ *   - true: Use the lower-allocation SAX/StAX workbook writer
  */
 object WriteCommands:
 
   /**
-   * Write workbook using standard or streaming writer based on mode.
+   * Write workbook using the standard or SAX/StAX backend based on mode.
    *
-   * When stream=true, uses writeWorkbookStream for O(1) output memory. Styles are fully preserved
-   * in both modes.
+   * When stream=true, uses writeWorkbookStream. Styles and workbook metadata are preserved in both
+   * modes.
    */
   private def writeWorkbook(
     wb: Workbook,
@@ -101,7 +101,7 @@ object WriteCommands:
    * @param csvSplit
    *   Enable CSV auto-split in Mode 2 (fill pattern with comma-containing value)
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def put(
     wb: Workbook,
@@ -240,7 +240,7 @@ object WriteCommands:
    * Write formula to cell(s).
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def putFormula(
     wb: Workbook,
@@ -426,7 +426,7 @@ object WriteCommands:
    * replace the entire style instead of merging.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def style(
     wb: Workbook,
@@ -518,7 +518,7 @@ object WriteCommands:
    * Set row properties (height, hide/show).
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def row(
     wb: Workbook,
@@ -555,7 +555,7 @@ object WriteCommands:
    * (A:F).
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def col(
     wb: Workbook,
@@ -606,7 +606,7 @@ object WriteCommands:
    * Auto-fit all columns (or specified range) based on content.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def autoFit(
     wb: Workbook,
@@ -722,7 +722,7 @@ object WriteCommands:
    * Apply multiple operations atomically (JSON from stdin or file).
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def batch(
     wb: Workbook,
@@ -756,7 +756,7 @@ object WriteCommands:
    * Formulas are shifted relative to the source position using Excel's anchor rules.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def fill(
     wb: Workbook,
@@ -972,7 +972,7 @@ object WriteCommands:
    * @param hasHeader
    *   If true, first row is excluded from sort
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def sort(
     wb: Workbook,
@@ -1019,7 +1019,7 @@ object WriteCommands:
    * Rows above and columns to the left of the reference are locked in place when scrolling.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def freeze(
     wb: Workbook,
@@ -1049,7 +1049,7 @@ object WriteCommands:
    * Remove freeze panes from the sheet.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def unfreeze(
     wb: Workbook,
@@ -1079,7 +1079,7 @@ object WriteCommands:
    * @param valuesOnly
    *   If true, formula cells are materialized to their cached/computed value.
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory.
+   *   If true, uses the SAX/StAX workbook writer.
    */
   def copyRange(
     wb: Workbook,

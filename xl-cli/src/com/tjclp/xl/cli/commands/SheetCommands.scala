@@ -14,11 +14,11 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
  * Sheet management command handlers.
  *
  * Commands for add, remove, rename, move, copy sheet operations. All methods accept a `stream`
- * parameter for O(1) output memory.
+ * parameter to use the SAX/StAX workbook writer.
  */
 object SheetCommands:
 
-  /** Write workbook using standard or streaming writer based on mode */
+  /** Write workbook using the standard or SAX/StAX backend based on mode */
   private def writeWorkbook(
     wb: Workbook,
     outputPath: Path,
@@ -38,7 +38,7 @@ object SheetCommands:
    * Add a new empty sheet to workbook.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def addSheet(
     wb: Workbook,
@@ -106,7 +106,7 @@ object SheetCommands:
    * Remove sheet from workbook.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def removeSheet(
     wb: Workbook,
@@ -132,7 +132,7 @@ object SheetCommands:
    * Rename a sheet.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def renameSheet(
     wb: Workbook,
@@ -161,7 +161,7 @@ object SheetCommands:
    * Move sheet to new position.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def moveSheet(
     wb: Workbook,
@@ -229,7 +229,7 @@ object SheetCommands:
    * Copy sheet to new name.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def copySheet(
     wb: Workbook,
@@ -261,7 +261,7 @@ object SheetCommands:
    * @param veryHide
    *   If true, uses "veryHidden" state (not accessible from Excel UI, only via VBA)
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def hideSheet(
     wb: Workbook,
@@ -290,7 +290,7 @@ object SheetCommands:
    * Show a hidden sheet (make it visible).
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def showSheet(
     wb: Workbook,

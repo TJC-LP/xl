@@ -27,9 +27,7 @@ import munit.FunSuite
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
 
-  // TODO: Enable when rawRPrXml preservation is fully implemented
-  // Currently family attribute may not be preserved in all cases
-  test("preserves RichText rPr formatting byte-perfect (rawRPrXml)".ignore) {
+  test("preserves RichText rPr formatting byte-perfect (rawRPrXml)") {
     // Regression test for commit 802e020
     // Bug: RichText formatting lost (Times New Roman, underline styles)
     // Solution: Added rawRPrXml field to TextRun for preserving original <rPr> XML
@@ -73,9 +71,9 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
       "Vertical alignment (superscript/subscript) lost"
     )
 
-    // Should have font family attribute
+    // Should have font family element and attribute
     assert(
-      sstXml.contains("family="),
+      sstXml.contains("<family") && sstXml.contains("""val="1""""),
       "Font family attribute lost"
     )
 
@@ -85,9 +83,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
-  // TODO: Enable when inline text xml:space preservation is fully implemented
-  // Currently xml:space may only be added for SST entries, not inline strings
-  test("xml:space preserve for text with double spaces and leading/trailing whitespace".ignore) {
+  test("xml:space preserve for text with double spaces and leading/trailing whitespace") {
     // Regression test for commits 802e020, 4998af2
     // Bug: Leading/trailing/double spaces lost in RichText
     // Solution: Added needsXmlSpacePreserve() helper, apply to both simple text and RichText runs
@@ -109,17 +105,18 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
       .write(wb, output)
       .fold(err => fail(s"Failed to write: $err"), identity)
 
-    // Verify sheet1.xml and SST have xml:space="preserve"
+    // Verify sheet1.xml points at SST and SST has xml:space="preserve"
     val outputZip = new ZipFile(output.toFile)
     val sheetXml = readEntryString(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
     val sstXml = readEntryString(outputZip, outputZip.getEntry("xl/sharedStrings.xml"))
 
-    // Simple text with leading space (A1)
+    // Simple text with leading space (A1) is stored in sharedStrings.xml.
     val a1Match = """<c r="A1"[^>]*>.*?</c>""".r.findFirstIn(sheetXml)
     assert(a1Match.isDefined, "Cell A1 not found")
+    assert(a1Match.get.contains("""t="s""""), "A1 should reference sharedStrings.xml")
     assert(
-      a1Match.get.contains("""xml:space="preserve""""),
-      "A1 (leading space) should have xml:space=\"preserve\""
+      sstXml.contains("""<t xml:space="preserve"> Leading space</t>"""),
+      "A1 shared string should have xml:space=\"preserve\""
     )
 
     // RichText with double spaces (B1)
@@ -149,9 +146,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
-  // TODO: Enable when empty row preservation is fully implemented in regenerated sheets
-  // Currently empty rows may get cells during modification (expected behavior for regenerated sheets)
-  test("preserves empty rows from original (row with no cells but with attributes)".ignore) {
+  test("preserves empty rows from original (row with no cells but with attributes)") {
     // Regression test for commit e1f36fe
     // Bug: Empty rows (like Row 1) were dropped during regeneration
     // Solution: Filter and preserve preserved.rows.filter(_.cells.isEmpty), combine with rows containing cells
@@ -184,7 +179,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     )
 
     // Row 1 should have attributes but no cells
-    val row1Match = """<row r="1"[^>]*>.*?</row>""".r.findFirstIn(sheetXml)
+    val row1Match = """<row r="1"[^>]*/>|<row r="1"[^>]*></row>""".r.findFirstIn(sheetXml)
     assert(row1Match.isDefined, "Row 1 element not found")
     assert(
       !row1Match.get.contains("<c "),
@@ -200,7 +195,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
       sheetXml.contains("""<row r="2""""),
       "Empty row 2 should be preserved"
     )
-    val row2Match = """<row r="2"[^>]*>.*?</row>""".r.findFirstIn(sheetXml)
+    val row2Match = """<row r="2"[^>]*/>|<row r="2"[^>]*></row>""".r.findFirstIn(sheetXml)
     assert(row2Match.isDefined, "Row 2 element not found")
     assert(
       row2Match.get.contains("s="),
@@ -223,9 +218,7 @@ class XlsxWriterRichTextEdgeCasesSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
-  // TODO: Enable when row-level style output in regenerated sheets matches exact Excel pattern
-  // Currently row-level styles may be validated/removed during regeneration (per OOXML spec)
-  test("preserves row-level style when cells have different styles (Excel pattern)".ignore) {
+  test("preserves row-level style when cells have different styles (Excel pattern)") {
     // Regression test for commit 802e020
     // Bug: Row s and customFormat invalid when cells have varied styles
     // Solution: Validate and remove if cells have different styles (per OOXML spec)

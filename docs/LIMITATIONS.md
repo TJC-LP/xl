@@ -1,6 +1,6 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2025-12-27 (Docs Cleanup)
+**Last Updated**: 2026-04-26
 **Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**81 functions** + cross-sheet support); tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
@@ -84,18 +84,20 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 ### 🟡 Medium Impact (Reduces Functionality)
 
-#### 4. Merged Cells in Streaming Writes
-**Status**: Fully supported in the in‑memory OOXML path; not emitted by streaming writers.
+#### 4. Merged Cells in Pure Row-Stream Writes
+**Status**: Fully supported in the in‑memory OOXML path and `writeWorkbookStream`; not available in pure row-stream generation.
 
 **Current State**:
 - In‑memory:
   - `Sheet.mergedRanges: Set[CellRange]` tracks merged regions.
   - `OoxmlWorksheet.toXml` emits `<mergeCells>` / `<mergeCell>` for those ranges.
-- Streaming write (`writeStream`, `writeStreamsSeq`):
-  - Only writes `sheetData` with plain rows and cells; no merged cell metadata is currently generated.
+- In-memory workbook SAX/StAX write (`writeWorkbookStream`):
+  - Delegates to the full OOXML writer and preserves merged cell metadata.
+- Pure row-stream write (`writeStream`, `writeStreamsSeq`):
+  - Writes rows from `Stream[RowData]`; there is no API for supplying merged cell metadata.
 
 **Impact**:
-- In‑memory read/write round‑trips preserve merges.
+- In‑memory read/write and CLI workbook writes preserve merges.
 - Pure streaming‑generated workbooks will not contain merged ranges.
 
 ---

@@ -12,12 +12,12 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
 /**
  * Cell-level command handlers.
  *
- * Commands for merge/unmerge operations. All methods accept a `stream` parameter for O(1) output
- * memory.
+ * Commands for merge/unmerge operations. All methods accept a `stream` parameter to use the
+ * SAX/StAX workbook writer.
  */
 object CellCommands:
 
-  /** Write workbook using standard or streaming writer based on mode */
+  /** Write workbook using the standard or SAX/StAX backend based on mode */
   private def writeWorkbook(
     wb: Workbook,
     outputPath: Path,
@@ -37,7 +37,7 @@ object CellCommands:
    * Merge cells in range.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def merge(
     wb: Workbook,
@@ -65,7 +65,7 @@ object CellCommands:
    * Unmerge cells in range.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def unmerge(
     wb: Workbook,
@@ -101,7 +101,7 @@ object CellCommands:
    * Flags can be combined (e.g., --styles --comments clears both).
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    */
   def clear(
     wb: Workbook,

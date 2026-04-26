@@ -13,11 +13,12 @@ import com.tjclp.xl.addressing.{ARef, Column, Row}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.extensions.style
 import com.tjclp.xl.cli.commands.{
+  CommentCommands,
+  CellCommands,
   ImportCommands,
   SheetCommands,
   StreamingWriteCommands,
-  WriteCommands,
-  CellCommands
+  WriteCommands
 }
 import com.tjclp.xl.cli.helpers.{CsvParser, StreamingCsvParser}
 import com.tjclp.xl.io.ExcelIO
@@ -271,11 +272,7 @@ class StreamingWriteSpec extends FunSuite:
 
   // ========== Cell Operations in Streaming Mode ==========
 
-  // Note: Streaming mode currently uses a simplified XML writer that doesn't
-  // include mergeCells element in the output. This is a known limitation.
-  // Merged cell metadata is stored in-memory but not serialized via streaming path.
-  // For full fidelity, use non-streaming mode.
-  test("streaming: merge cells (values preserved, merge metadata may not be)".ignore) {
+  test("streaming: merge cells preserves merge metadata") {
     val outputPath = tempXlsx()
     try
       val wb = Workbook(Sheet("Test").put(ARef.from0(0, 0), CellValue.Text("Merged")))
@@ -289,6 +286,33 @@ class StreamingWriteSpec extends FunSuite:
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       val sheet = imported.sheets.head
       assert(sheet.mergedRanges.nonEmpty, "Should have merged range")
+    finally Files.deleteIfExists(outputPath)
+  }
+
+  test("streaming: comments are preserved") {
+    val outputPath = tempXlsx()
+    try
+      val wb = Workbook(Sheet("Test").put(ARef.from0(0, 0), CellValue.Text("Commented")))
+      val result = CommentCommands
+        .addComment(
+          wb,
+          Some(wb.sheets.head),
+          "A1",
+          "Review this value",
+          Some("QA"),
+          outputPath,
+          config,
+          stream = true
+        )
+        .unsafeRunSync()
+
+      assert(result.contains("Added comment to A1"), result)
+      assert(result.contains("Saved (streaming)"), result)
+
+      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+      val comment = imported.sheets.head.comments.get(ARef.from0(0, 0))
+      assertEquals(comment.flatMap(_.author), Some("QA"))
+      assertEquals(comment.map(_.text.toPlainText), Some("Review this value"))
     finally Files.deleteIfExists(outputPath)
   }
 
@@ -606,6 +630,47 @@ class StreamingWriteSpec extends FunSuite:
       assertEquals(rowProps.hidden, false)
       assertEquals(rowProps.height, Some(21.0))
       assertEquals(rowProps.outlineLevel, Some(1))
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }
+
+  test("streaming batch: freeze is rejected with clear unsupported message") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"freeze","ref":"B2"}]""")
+    try
+      ExcelIO.instance[IO].write(Workbook(Sheet("Test")), sourcePath).unsafeRunSync()
+
+      val ex = intercept[Exception] {
+        StreamingWriteCommands
+          .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+          .unsafeRunSync()
+      }
+
+      assert(ex.getMessage.contains("not supported in streaming mode"), ex.getMessage)
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+      Files.deleteIfExists(jsonPath)
+  }
+
+  test("streaming batch: copy range is rejected with clear unsupported message") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    val jsonPath = tempJson("""[{"op":"copy","source":"A1","target":"B1"}]""")
+    try
+      val wb = Workbook(Sheet("Test").put(ARef.from0(0, 0), CellValue.Text("copy me")))
+      ExcelIO.instance[IO].write(wb, sourcePath).unsafeRunSync()
+
+      val ex = intercept[Exception] {
+        StreamingWriteCommands
+          .batch(sourcePath, outputPath, Some("Test"), jsonPath.toString)
+          .unsafeRunSync()
+      }
+
+      assert(ex.getMessage.contains("not supported in streaming mode"), ex.getMessage)
     finally
       Files.deleteIfExists(sourcePath)
       Files.deleteIfExists(outputPath)

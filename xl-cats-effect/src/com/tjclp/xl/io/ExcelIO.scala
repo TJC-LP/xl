@@ -4,8 +4,8 @@ import cats.effect.{Async, Sync, Resource}
 import cats.syntax.all.*
 import fs2.{Stream, Pipe}
 import java.nio.file.{Files as JFiles, Path}
-import java.io.{BufferedOutputStream, FileOutputStream, FileInputStream}
-import java.util.zip.{ZipOutputStream, ZipEntry, CRC32, ZipInputStream, ZipFile}
+import java.io.{BufferedOutputStream, FileOutputStream}
+import java.util.zip.{ZipOutputStream, ZipEntry, CRC32, ZipFile}
 import java.nio.charset.StandardCharsets
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.api.Workbook
@@ -26,7 +26,6 @@ import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
 import com.tjclp.xl.ooxml.style.WorkbookStyles
 import com.tjclp.xl.io.streaming.{SaxSharedStringsReader, SaxSingleCellReader, StreamingCellDetails}
 import fs2.data.xml
-import fs2.data.xml.XmlEvent
 
 /**
  * Cats Effect interpreter for Excel operations.
@@ -972,191 +971,26 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         .drain
 
   /**
-   * Write workbook using streaming writer with O(1) output memory and style preservation.
+   * Write an in-memory workbook using the SAX/StAX OOXML writer.
    *
-   * Hybrid approach: workbook is loaded in-memory (for style extraction), but output uses streaming
-   * writer for O(1) output memory. Styles are fully preserved via the two-pass approach with
-   * StyleIndex.
+   * This path is intended for CLI `--stream` operations that already materialize a Workbook for
+   * command semantics but want the lower-allocation writer. It delegates to the full OOXML writer
+   * so workbook metadata such as merges, comments, tables, row/column properties, and freeze panes
+   * is preserved.
    *
-   * Best for: Large modified workbooks where output memory is the bottleneck. Trade-off: Extra I/O
-   * pass (temp file) for dimension detection.
-   *
-   * @param wb
-   *   Workbook to write (in-memory)
-   * @param path
-   *   Output file path
-   * @param config
-   *   Writer configuration
+   * For true O(1) row input, use `writeStream`, `writeStreamsSeq`, or
+   * `writeStreamsSeqWithAutoDetect`.
    */
   def writeWorkbookStream(
     wb: Workbook,
     path: Path,
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): F[Unit] =
-    import com.tjclp.xl.ooxml.style.{StyleIndex, OoxmlStyles}
-
     if wb.sheets.isEmpty then
       Async[F].raiseError(new IllegalArgumentException("Workbook must have at least one sheet"))
     else
-      Sync[F]
-        .delay {
-          // Build unified style index from workbook (extracts all styles)
-          val (styleIndex, remappings) = StyleIndex.fromWorkbook(wb)
-          val ooxmlStyles = OoxmlStyles(styleIndex)
-
-          // Prepare sheet data with remapped style IDs
-          val sheetsWithIndices = wb.sheets.zipWithIndex.map { case (sheet, idx) =>
-            val sheetIndex = idx + 1
-            val remapping = remappings.getOrElse(idx, Map.empty[Int, Int])
-            (sheet, sheetIndex, remapping)
-          }
-
-          (ooxmlStyles, sheetsWithIndices)
-        }
-        .flatMap { case (ooxmlStyles, sheetsWithIndices) =>
-          // Create temp files for two-phase approach
-          Stream
-            .bracket(
-              Sync[F].delay {
-                sheetsWithIndices.map { case (sheet, sheetIndex, _) =>
-                  val tempFile = JFiles.createTempFile(s"xl-wbstream-$sheetIndex-", ".xml")
-                  val bounds = new BoundsAccumulator()
-                  (sheet, sheetIndex, tempFile, bounds)
-                }
-              }
-            ) { resources =>
-              // Cleanup: delete all temp files
-              Sync[F].delay {
-                resources.foreach { case (_, _, tempFile, _) =>
-                  JFiles.deleteIfExists(tempFile)
-                }
-              }.void
-            }
-            .flatMap { resources =>
-              // Phase 1: Stream each sheet to temp file with style remapping
-              val writePhase = Stream
-                .emits(resources.zip(sheetsWithIndices))
-                .flatMap { case ((_, _, tempFile, bounds), (sheet, _, remapping)) =>
-                  streamSheetStyled(sheet, remapping)
-                    .evalTap(row => Sync[F].delay(bounds.update(row.toRowData)))
-                    .through(styledRowsToTempXml(tempFile, config))
-                }
-
-              // Phase 2: Assemble final ZIP with styles and dimensions
-              val assemblePhase = Stream.eval(
-                assembleWorkbookStreamZip(path, resources, ooxmlStyles, config)
-              )
-
-              writePhase ++ assemblePhase
-            }
-            .compile
-            .drain
-        }
-
-  // Helper: Stream styled rows to temp XML file (body only)
-  private def styledRowsToTempXml(
-    tempFile: Path,
-    config: com.tjclp.xl.ooxml.WriterConfig
-  ): Pipe[F, StyledRowData, Unit] =
-    rows =>
-      Stream
-        .bracket(
-          Sync[F].delay(new BufferedOutputStream(new FileOutputStream(tempFile.toFile)))
-        )(os => Sync[F].delay(os.close()))
-        .flatMap { os =>
-          StreamingXmlWriter
-            .worksheetBodyStyled(rows, config.formulaInjectionPolicy)
-            .through(xml.render.raw())
-            .through(fs2.text.utf8.encode)
-            .chunks
-            .evalMap(chunk => Sync[F].delay(os.write(chunk.toArray)))
-        }
-
-  // Helper: Assemble workbook ZIP with styles
-  private def assembleWorkbookStreamZip(
-    path: Path,
-    resources: Seq[(Sheet, Int, Path, BoundsAccumulator)],
-    ooxmlStyles: com.tjclp.xl.ooxml.style.OoxmlStyles,
-    config: com.tjclp.xl.ooxml.WriterConfig
-  ): F[Unit] =
-    Sync[F].delay {
-      import com.tjclp.xl.ooxml.*
-      import com.tjclp.xl.addressing.SheetName
-
-      val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
-      try
-        val sheets = resources.map { case (sheet, idx, _, _) => (sheet.name.value, idx) }
-
-        // Content types and relationships
-        val contentTypes = ContentTypes.forSheetIndices(
-          sheetIndices = sheets.map(_._2),
-          hasStyles = true,
-          hasSharedStrings = false
-        )
-        val rootRels = Relationships.root()
-        val workbookRels = Relationships.workbook(
-          sheetCount = sheets.size,
-          hasStyles = true,
-          hasSharedStrings = false
-        )
-
-        // Workbook with sheet refs
-        val sheetRefs = sheets.map { case (name, idx) =>
-          SheetRef(SheetName.unsafe(name), idx, s"rId$idx")
-        }
-        val ooxmlWb = OoxmlWorkbook(sheets = sheetRefs.toVector)
-
-        // Write static parts (with full styles, not minimal!)
-        writePartSync(zip, "[Content_Types].xml", contentTypes.toXml, config)
-        writePartSync(zip, "_rels/.rels", rootRels.toXml, config)
-        writePartSync(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
-        writePartSync(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
-        writePartSync(zip, "xl/styles.xml", ooxmlStyles.toXml, config) // Full styles!
-
-        // Write each worksheet with dimension
-        resources.foreach { case (_, sheetIndex, tempBodyFile, bounds) =>
-          val wsEntry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
-          wsEntry.setMethod(ZipEntry.DEFLATED)
-          zip.putNextEntry(wsEntry)
-
-          // Header with dimension
-          writeWorksheetHeader(zip, bounds.dimension)
-
-          // Body from temp file
-          JFiles.copy(tempBodyFile, zip)
-
-          // Footer
-          writeWorksheetFooter(zip)
-
-          zip.closeEntry()
-        }
-      finally zip.close()
-    }
-
-  // Helper: Convert Sheet to StyledRowData stream with remapped style IDs
-  private def streamSheetStyled(
-    sheet: Sheet,
-    remapping: Map[Int, Int]
-  ): Stream[F, StyledRowData] =
-    val rowMap = sheet.cells.values
-      .groupBy(_.ref.row.index1) // Group by 1-based row
-      .view
-      .mapValues { cells =>
-        val cellValues = cells.map(c => c.ref.col.index0 -> c.value).toMap
-        val cellStyles = cells.flatMap { c =>
-          c.styleId.map { sid =>
-            // Remap local styleId to global index
-            val globalId = remapping.getOrElse(sid.value, sid.value)
-            c.ref.col.index0 -> globalId
-          }
-        }.toMap
-        (cellValues, cellStyles)
-      }
-      .toMap
-
-    Stream.emits(rowMap.toSeq.sortBy(_._1)).map { case (rowIdx, (cellMap, styleMap)) =>
-      StyledRowData(rowIdx, cellMap, styleMap)
-    }
+      val saxConfig = config.copy(backend = com.tjclp.xl.ooxml.XmlBackend.SaxStax)
+      writeWith(wb, path, saxConfig)
 
   // Helper: Assemble multi-sheet ZIP with dimension elements
   private def assembleMultiSheetZip(
