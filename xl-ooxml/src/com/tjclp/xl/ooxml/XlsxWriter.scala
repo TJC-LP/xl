@@ -93,8 +93,10 @@ object XlsxWriter:
     config: WriterConfig
   ): XLResult[Unit] =
     try
+      val escapeFormulas = formulaEscapingRequested(config)
+
       workbook.sourceContext match
-        case Some(ctx) if ctx.isClean =>
+        case Some(ctx) if ctx.isClean && !escapeFormulas =>
           // Clean workbook + file target → verbatim copy (ultra-fast)
           target match
             case OutputPath(path) =>
@@ -156,6 +158,9 @@ object XlsxWriter:
       case e: Exception =>
         Files.deleteIfExists(tempPath)
         throw e
+
+  private def formulaEscapingRequested(config: WriterConfig): Boolean =
+    config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
 
   /**
    * Copy source file verbatim to destination (for clean workbooks).
@@ -1194,6 +1199,8 @@ object XlsxWriter:
     target: OutputTarget,
     config: WriterConfig
   ): Unit =
+    val escapeFormulas = formulaEscapingRequested(config)
+
     // Determine modification tracking (all sheets modified if no source)
     val tracker = sourceContext.map(_.modificationTracker).getOrElse {
       ModificationTracker(
@@ -1212,6 +1219,13 @@ object XlsxWriter:
       case None =>
         (RelationshipGraph.empty, Set.empty[String], Set.empty[String])
 
+    // Escaping must be applied to every text-bearing worksheet part; preserved sheets can contain
+    // dangerous inline strings or shared-string references that would bypass WriterConfig.secure.
+    val sheetsToRegenerate =
+      if escapeFormulas || tracker.modifiedMetadata || tracker.reorderedSheets then
+        workbook.sheets.indices.toSet
+      else tracker.modifiedSheets
+
     val sharedStringsPath = "xl/sharedStrings.xml"
     val sourceHasSharedStrings = sourceContext.exists(_.partManifest.contains(sharedStringsPath))
 
@@ -1220,7 +1234,9 @@ object XlsxWriter:
     // - If modified sheets only use existing SST strings → copy verbatim (byte-perfect preservation)
     // - If no source SST → generate according to policy
     val (sst, regenerateSharedStrings) =
-      if sourceHasSharedStrings then
+      if escapeFormulas && sourceHasSharedStrings then
+        (Some(SharedStrings.fromWorkbook(workbook, escapeFormulas = true)), true)
+      else if sourceHasSharedStrings then
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
         val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.sourcePath)).getOrElse(None)
 
@@ -1281,10 +1297,11 @@ object XlsxWriter:
       else
         // No source SST - generate if policy allows
         val generated = config.sstPolicy match
-          case SstPolicy.Always => Some(SharedStrings.fromWorkbook(workbook))
+          case SstPolicy.Always => Some(SharedStrings.fromWorkbook(workbook, escapeFormulas))
           case SstPolicy.Never => None
           case SstPolicy.Auto =>
-            if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
+            if SharedStrings.shouldUseSST(workbook) then
+              Some(SharedStrings.fromWorkbook(workbook, escapeFormulas))
             else None
         (generated, generated.isDefined)
 
@@ -1404,13 +1421,6 @@ object XlsxWriter:
       else if sourceHasSharedStrings then
         sourceContext.foreach(ctx => copyPreservedPart(ctx.sourcePath, sharedStringsPath, zip))
 
-      // When metadata is modified or sheets are reordered, we must regenerate ALL sheets
-      // because new sheets don't exist in source, sheet indices may have changed,
-      // or sheet positions must be remapped to match the new order.
-      val sheetsToRegenerate =
-        if tracker.modifiedMetadata || tracker.reorderedSheets then workbook.sheets.indices.toSet
-        else tracker.modifiedSheets
-
       // Write sheets: regenerate modified, copy unmodified (if source available)
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
         if sheetsToRegenerate.contains(idx) then
@@ -1455,8 +1465,6 @@ object XlsxWriter:
                   .elem("tableParts", "count" -> tablesForSheet.size.toString)(tablePartElems*)
               )
           }
-
-          val escapeFormulas = config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
 
           // For SaxStax backend with no preserved metadata, use direct SAX emission
           // (bypasses intermediate OOXML types for 5-7x performance improvement)

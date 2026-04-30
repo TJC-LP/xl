@@ -6,7 +6,9 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.Sheet
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.util.zip.ZipFile
 
 /**
  * Security tests for formula injection prevention.
@@ -22,6 +24,15 @@ import java.nio.file.{Files, Path}
  */
 @SuppressWarnings(Array("org.wartremover.warts.IterableOps"))
 class FormulaInjectionSpec extends FunSuite:
+
+  private def readZipEntry(path: Path, entryName: String): String =
+    val zip = new ZipFile(path.toFile)
+    try
+      val entry = Option(zip.getEntry(entryName)).getOrElse(fail(s"Missing ZIP entry $entryName"))
+      val input = zip.getInputStream(entry)
+      try new String(input.readAllBytes(), StandardCharsets.UTF_8)
+      finally input.close()
+    finally zip.close()
 
   // ========== CellValue.escape() tests ==========
 
@@ -256,6 +267,55 @@ class FormulaInjectionSpec extends FunSuite:
             case other => fail(s"Expected Text, got: $other")
 
     finally Files.deleteIfExists(tempFile)
+  }
+
+  test("WriterConfig.secure escapes clean read workbook instead of preserving source sheets") {
+    val sheet = Sheet("Test")
+      .put("A1" -> "=DANGER")
+      .put("A2" -> "+EVIL")
+      .put("A3" -> "Normal text")
+
+    val wb = Workbook(sheet)
+    val source = Files.createTempFile("test-secure-source-", ".xlsx")
+    val output = Files.createTempFile("test-secure-output-", ".xlsx")
+
+    try
+      XlsxWriter.writeWith(
+        wb,
+        source,
+        WriterConfig.default.copy(sstPolicy = SstPolicy.Always)
+      ) match
+        case Left(err) => fail(s"Source write failed: $err")
+        case Right(()) => ()
+
+      val readWb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+      assert(readWb.sourceContext.exists(_.isClean), "Read workbook should be clean")
+
+      XlsxWriter.writeWith(readWb, output, WriterConfig.secure) match
+        case Left(err) => fail(s"Secure write failed: $err")
+        case Right(()) => ()
+
+      val rewritten = XlsxReader.read(output).fold(err => fail(s"Re-read failed: $err"), identity)
+      val readSheet = rewritten.sheets.head
+
+      readSheet.cells.get(ref"A1").map(_.value) match
+        case Some(CellValue.Text(t)) => assertEquals(t, "'=DANGER")
+        case other => fail(s"Expected Text, got: $other")
+
+      readSheet.cells.get(ref"A2").map(_.value) match
+        case Some(CellValue.Text(t)) => assertEquals(t, "'+EVIL")
+        case other => fail(s"Expected Text, got: $other")
+
+      val sharedStringsXml = readZipEntry(output, "xl/sharedStrings.xml")
+      assert(sharedStringsXml.contains("'=DANGER"), "SST should contain escaped dangerous text")
+      assert(
+        !sharedStringsXml.contains("<t>=DANGER</t>"),
+        "SST should not preserve raw dangerous text"
+      )
+
+    finally
+      Files.deleteIfExists(source)
+      Files.deleteIfExists(output)
   }
 
   test("FormulaInjectionPolicy enum values") {
