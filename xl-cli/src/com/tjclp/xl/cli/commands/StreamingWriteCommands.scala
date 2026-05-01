@@ -28,7 +28,7 @@ import scala.xml.Elem
  *
  * Provides two modes:
  *   1. True streaming (CSV import): End-to-end O(1) memory
- *   2. Hybrid streaming (workbook write): In-memory workbook → O(1) output memory
+ *   2. SAX/StAX workbook write: In-memory workbook → lower-allocation full OOXML writer
  */
 object StreamingWriteCommands:
 
@@ -70,10 +70,10 @@ object StreamingWriteCommands:
   /**
    * Hybrid streaming workbook write.
    *
-   * Takes an in-memory workbook and writes it using the streaming writer for O(1) output memory.
-   * Styles are fully preserved via StyleIndex.
+   * Takes an in-memory workbook and writes it using the SAX/StAX OOXML backend. Styles and workbook
+   * metadata are preserved via the full writer pipeline.
    *
-   * Best for: Large modified workbooks where output memory is the bottleneck.
+   * Best for: Modified workbooks that need the full OOXML feature set with lower writer allocation.
    *
    * @param wb
    *   Workbook to write (already in memory)
@@ -707,7 +707,9 @@ object StreamingWriteCommands:
         // Ops that require full workbook context (not supported in streaming mode)
         case _: BatchParser.BatchOp.AddComment | _: BatchParser.BatchOp.RemoveComment |
             _: BatchParser.BatchOp.Clear | _: BatchParser.BatchOp.AutoFit |
-            _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet =>
+            _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
+            _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
+            _: BatchParser.BatchOp.CopyRange =>
           throw new Exception(
             "This batch operation is not supported in streaming mode. " +
               "Remove --stream to use full workbook mode."

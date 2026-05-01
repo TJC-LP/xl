@@ -429,8 +429,8 @@ object StreamingXmlWriter:
   /**
    * Generate row events for styled worksheet body.
    *
-   * Emits events incrementally as rows arrive, including s="N" style attributes. Used by
-   * writeWorkbookStream for style-preserving output.
+   * Emits events incrementally as rows arrive, including s="N" style attributes, for row-streaming
+   * paths that provide explicit style ids.
    *
    * @param rows
    *   Stream of styled row data

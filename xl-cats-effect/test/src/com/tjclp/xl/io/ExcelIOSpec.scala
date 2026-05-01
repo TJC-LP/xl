@@ -13,7 +13,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.display.NumFmtFormatter
-import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader}
+import com.tjclp.xl.ooxml.{SstPolicy, WriterConfig, XlsxReader, XlsxWriter}
 
 /** Tests for Excel streaming API */
 @SuppressWarnings(
@@ -1143,6 +1143,47 @@ class ExcelIOSpec extends CatsEffectSuite:
       val s2 = wb.sheets.find(_.name.value == "Sheet2").get
       s2(ref"A1").value match
         case CellValue.Text(t) => assertEquals(t, "'+EVIL", "Sheet2 should be escaped")
+        case other => fail(s"Expected Text, got: $other")
+  }
+
+  tempDir.test("writeWorkbookStream: WriterConfig.secure escapes clean read workbook") { dir =>
+    val excel = ExcelIO.instance[IO]
+    val initial = Workbook("Data")
+    val sheet = initial.sheets(0)
+      .put(ref"A1", CellValue.Text("=DANGER"))
+      .put(ref"A2", CellValue.Text("+EVIL"))
+      .put(ref"A3", CellValue.Text("Normal text"))
+    val sourceWb =
+      initial
+        .update(initial.sheets(0).name, _ => sheet)
+        .getOrElse(fail("Failed to create workbook"))
+
+    val source = dir.resolve("secure-source.xlsx")
+    val output = dir.resolve("secure-output.xlsx")
+
+    for
+      _ <- IO {
+        XlsxWriter.writeWith(
+          sourceWb,
+          source,
+          WriterConfig.default.copy(sstPolicy = SstPolicy.Always)
+        ) match
+          case Left(err) => fail(s"Source write failed: $err")
+          case Right(()) => ()
+      }
+      readWb <- IO(XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity))
+      _ = assert(readWb.sourceContext.exists(_.isClean), "Read workbook should be clean")
+      _ <- excel.writeWorkbookStream(readWb, output, WriterConfig.secure)
+      rewritten <- IO(XlsxReader.read(output).fold(err => fail(s"Re-read failed: $err"), identity))
+    yield
+      val readSheet = rewritten.sheets.head
+
+      readSheet(ref"A1").value match
+        case CellValue.Text(t) => assertEquals(t, "'=DANGER", "= should be escaped")
+        case other => fail(s"Expected Text, got: $other")
+
+      readSheet(ref"A2").value match
+        case CellValue.Text(t) => assertEquals(t, "'+EVIL", "+ should be escaped")
         case other => fail(s"Expected Text, got: $other")
   }
 

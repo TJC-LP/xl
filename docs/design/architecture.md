@@ -19,7 +19,7 @@ graph TD
   end
 
   subgraph Evaluator
-    Eval[xl-evaluator<br/>Formula Parser]
+    Eval[xl-evaluator<br/>Formula parser + evaluator]
   end
 
   subgraph Test
@@ -37,7 +37,7 @@ graph TD
 - `xl-core`: Pure domain model (`Cell`, `Sheet`, `Workbook`, styles, codecs, optics, macros).
 - `xl-ooxml`: Pure OOXML mapping layer (`XlsxReader` / `XlsxWriter`, `OoxmlWorkbook`, `OoxmlWorksheet`, `SharedStrings`, `Styles`).
 - `xl-cats-effect`: Effectful interpreters (`Excel[F]` / `ExcelIO`) and true streaming I/O built on Cats Effect, fs2, and fs2-data-xml.
-- `xl-evaluator`: Formula parser (`TExpr` GADT, `FormulaParser`, `FormulaPrinter`); evaluator planned (WI-08).
+- `xl-evaluator`: Formula parser, printer, evaluator, function registry, dependency graph, and cross-sheet formula support.
 - `xl-testkit`: Reusable generators and law test helpers for the other modules.
 
 ## I/O Flow
@@ -72,6 +72,7 @@ flowchart LR
 - **Streaming path**:
   - `ExcelIO.readStream` / `readSheetStream` open the ZIP and stream a worksheet’s XML through fs2‑data‑xml, yielding a `Stream[F, RowData]` with constant memory use (SST is still materialized once if present).
   - `ExcelIO.writeStream` / `writeStreamsSeq` write static parts once, then stream worksheet XML events directly to a `ZipOutputStream` from a `Stream[F, RowData]` without ever materializing all rows.
+  - `ExcelIO.writeWorkbookStream` is different: it accepts an already-materialized `Workbook`, then uses the SAX/StAX OOXML backend to reduce writer allocation while preserving the full metadata handled by `XlsxWriter`.
 
 See also:
 - `docs/design/io-modes.md` – deeper comparison of in-memory vs streaming modes.
