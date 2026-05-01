@@ -6,6 +6,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.syntax.*
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
@@ -270,8 +271,9 @@ class FormulaInjectionSpec extends FunSuite:
   }
 
   test("WriterConfig.secure escapes clean read workbook instead of preserving source sheets") {
+    val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
     val sheet = Sheet("Test")
-      .put("A1" -> "=DANGER")
+      .put(ref"A1", CellValue.Text("=DANGER"), boldStyle)
       .put("A2" -> "+EVIL")
       .put("A3" -> "Normal text")
 
@@ -301,6 +303,10 @@ class FormulaInjectionSpec extends FunSuite:
       readSheet.cells.get(ref"A1").map(_.value) match
         case Some(CellValue.Text(t)) => assertEquals(t, "'=DANGER")
         case other => fail(s"Expected Text, got: $other")
+
+      val a1Style = readSheet.getCellStyle(ref"A1")
+      assert(a1Style.nonEmpty, "A1 style should survive secure clean-source rewrite")
+      assertEquals(a1Style.map(_.font.bold), Some(true))
 
       readSheet.cells.get(ref"A2").map(_.value) match
         case Some(CellValue.Text(t)) => assertEquals(t, "'+EVIL")

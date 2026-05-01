@@ -1308,8 +1308,10 @@ object XlsxWriter:
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
     val sstForSheets = if regenerateSharedStrings then sst else None
 
-    // Build style index (automatic optimization based on sourceContext)
-    val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
+    // Build style index (automatic optimization based on sourceContext). Any sheet regenerated
+    // from a source-backed workbook needs a local-to-workbook style remapping.
+    val (styleIndex, sheetRemappings) =
+      StyleIndex.fromWorkbook(workbook, sheetsRequiringRemapping = sheetsToRegenerate)
 
     // Parse preserved styles metadata (namespaces and dxfs) if source available
     val (preservedStylesAttrs, preservedStylesScope, preservedDxfs) = sourceContext match

@@ -54,14 +54,20 @@ object StyleIndex:
    *
    * @param wb
    *   The workbook to index
+   * @param sheetsRequiringRemapping
+   *   Source-backed sheets that will be regenerated from the domain model and therefore need
+   *   sheet-local style IDs remapped to workbook-level style IDs.
    * @return
    *   (StyleIndex for writing, Map[sheetIndex -> Map[localStyleId -> globalStyleId]])
    */
-  def fromWorkbook(wb: Workbook): (StyleIndex, Map[Int, Map[Int, Int]]) =
+  def fromWorkbook(
+    wb: Workbook,
+    sheetsRequiringRemapping: Set[Int] = Set.empty
+  ): (StyleIndex, Map[Int, Map[Int, Int]]) =
     wb.sourceContext match
       case Some(ctx) =>
         // Has source: surgical mode (preserve original structure)
-        fromWorkbookWithSource(wb, ctx)
+        fromWorkbookWithSource(wb, ctx, sheetsRequiringRemapping)
       case None =>
         // No source: full deduplication (optimal compression)
         fromWorkbookWithoutSource(wb)
@@ -162,16 +168,20 @@ object StyleIndex:
    * This variant is used during surgical modification to avoid corruption:
    *   - Preserves ALL original styles from source (including duplicates)
    *   - Deduplicates only truly new styles from modified sheets
-   *   - Generates remappings for ALL sheets (not just modified ones)
+   *   - Generates remappings for regenerated sheets (not just modified ones)
    *
-   * All sheets need remappings because metadata-only changes (add-sheet, reorder) cause ALL sheets
-   * to be regenerated from the domain model, not copied verbatim from source. Without remappings,
-   * unmodified-but-regenerated sheets would fall back to styleId 0, stripping all styles (TJC-751).
+   * Sheets need remappings when they are regenerated from the domain model, not copied verbatim
+   * from source. Metadata-only changes (add-sheet, reorder) and escape-driven secure writes can
+   * force otherwise-unmodified sheets through regeneration. Without remappings, those sheets would
+   * fall back to styleId 0, stripping all styles (TJC-751).
    *
    * @param wb
    *   The workbook with modified sheets
    * @param ctx
    *   Source context providing modification tracker and original file path
+   * @param sheetsRequiringRemapping
+   *   Additional sheet indices that the writer will regenerate even if the modification tracker is
+   *   clean, such as secure formula-escaping rewrites.
    * @return
    *   (StyleIndex with all original + new styles, Map[sheetIdx -> remapping])
    */
@@ -184,7 +194,8 @@ object StyleIndex:
   )
   private def fromWorkbookWithSource(
     wb: Workbook,
-    ctx: SourceContext
+    ctx: SourceContext,
+    sheetsRequiringRemapping: Set[Int]
   ): (StyleIndex, Map[Int, Map[Int, Int]]) =
     val tracker = ctx.modificationTracker
     val needsRemappingForAll = tracker.modifiedMetadata || tracker.reorderedSheets
@@ -251,10 +262,15 @@ object StyleIndex:
     // Step 4: Process sheets for style remapping
     // When metadata or reorder changes force ALL sheets to be regenerated from domain model,
     // every sheet needs a remapping — otherwise unmodified sheets fall back to styleId 0,
-    // stripping all styles (TJC-751). When only specific sheets are modified, unmodified
-    // sheets are copied verbatim from source and don't need remappings.
+    // stripping all styles (TJC-751). Secure writes can also force clean sheets through
+    // regeneration, so the writer passes those sheet indices explicitly.
     val remappings = wb.sheets.zipWithIndex.map { case (sheet, sheetIdx) =>
-      if needsRemappingForAll || tracker.modifiedSheets.contains(sheetIdx) then
+      val needsRemapping =
+        needsRemappingForAll ||
+          tracker.modifiedSheets.contains(sheetIdx) ||
+          sheetsRequiringRemapping.contains(sheetIdx)
+
+      if needsRemapping then
         val registry = sheet.styleRegistry
         val remapping = mutable.Map[Int, Int]()
 
