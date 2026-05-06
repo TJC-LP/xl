@@ -1,9 +1,12 @@
 package com.tjclp.xl.formula.functions
 
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 trait FunctionSpecsText extends FunctionSpecsBase:
   val concatenate: FunctionSpec[String] { type Args = TextList } =
@@ -185,6 +188,23 @@ trait FunctionSpecsText extends FunctionSpecsBase:
           Left(EvalError.EvalFailed(s"VALUE: cannot parse '$input'"))
 
   val text: FunctionSpec[String] { type Args = TextArgs } =
-    FunctionSpec.simple[String, TextArgs]("TEXT", Arity.two) { (_, _) =>
-      Left(EvalError.EvalFailed("TEXT: not yet implemented"))
+    FunctionSpec.simple[String, TextArgs]("TEXT", Arity.two) { (args, ctx) =>
+      val (valueExpr, formatExpr) = args
+      for
+        formatStr <- ctx.evalExpr(formatExpr)
+        exprValue <- evalValue(ctx, valueExpr)
+      yield
+        if formatStr.isEmpty then ""
+        else
+          val cv = exprValueForTextFn(exprValue)
+          NumFmtFormatter.formatValue(cv, NumFmt.Custom(formatStr))
     }
+
+  /**
+   * Coerce ExprValue → CellValue for TEXT. Empty cells are treated as Number(0) per Excel
+   * convention; other types pass through the standard toCellValue path.
+   */
+  private def exprValueForTextFn(ev: ExprValue): CellValue =
+    ev match
+      case ExprValue.Cell(CellValue.Empty) => CellValue.Number(BigDecimal(0))
+      case other => toCellValue(other)
