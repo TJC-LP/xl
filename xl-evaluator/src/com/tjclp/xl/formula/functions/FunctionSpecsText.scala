@@ -58,3 +58,33 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     FunctionSpec.simple[String, UnaryText]("LOWER", Arity.one) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.toLowerCase)
     }
+
+  val trim: FunctionSpec[String] { type Args = UnaryText } =
+    FunctionSpec.simple[String, UnaryText]("TRIM", Arity.one) { (_, _) =>
+      Left(EvalError.EvalFailed("TRIM: not yet implemented"))
+    }
+
+  val mid: FunctionSpec[String] { type Args = TextIntInt } =
+    FunctionSpec.simple[String, TextIntInt]("MID", Arity.three) { (_, _) =>
+      Left(EvalError.EvalFailed("MID: not yet implemented"))
+    }
+
+  val find: FunctionSpec[BigDecimal] { type Args = FindArgs } =
+    FunctionSpec.simple[BigDecimal, FindArgs]("FIND", Arity.Range(2, 3)) { (_, _) =>
+      Left(EvalError.EvalFailed("FIND: not yet implemented"))
+    }
+
+  val substitute: FunctionSpec[String] { type Args = SubstituteArgs } =
+    FunctionSpec.simple[String, SubstituteArgs]("SUBSTITUTE", Arity.Range(3, 4)) { (_, _) =>
+      Left(EvalError.EvalFailed("SUBSTITUTE: not yet implemented"))
+    }
+
+  val value: FunctionSpec[BigDecimal] { type Args = UnaryText } =
+    FunctionSpec.simple[BigDecimal, UnaryText]("VALUE", Arity.one) { (_, _) =>
+      Left(EvalError.EvalFailed("VALUE: not yet implemented"))
+    }
+
+  val text: FunctionSpec[String] { type Args = TextArgs } =
+    FunctionSpec.simple[String, TextArgs]("TEXT", Arity.two) { (_, _) =>
+      Left(EvalError.EvalFailed("TEXT: not yet implemented"))
+    }
