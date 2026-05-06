@@ -92,8 +92,24 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     }
 
   val find: FunctionSpec[BigDecimal] { type Args = FindArgs } =
-    FunctionSpec.simple[BigDecimal, FindArgs]("FIND", Arity.Range(2, 3)) { (_, _) =>
-      Left(EvalError.EvalFailed("FIND: not yet implemented"))
+    FunctionSpec.simple[BigDecimal, FindArgs]("FIND", Arity.Range(2, 3)) { (args, ctx) =>
+      val (findExpr, withinExpr, startOpt) = args
+      for
+        needle <- ctx.evalExpr(findExpr)
+        haystack <- ctx.evalExpr(withinExpr)
+        start <- startOpt.fold[Either[EvalError, Int]](Right(1))(e => ctx.evalExpr(e))
+        result <-
+          if start < 1 then
+            Left(EvalError.EvalFailed(s"FIND: start must be >= 1, got $start"))
+          else if start > haystack.length + 1 then
+            Left(EvalError.EvalFailed(s"FIND: start ($start) is past end of text"))
+          else if needle.isEmpty then Right(BigDecimal(start))
+          else
+            val idx = haystack.indexOf(needle, start - 1)
+            if idx < 0 then
+              Left(EvalError.EvalFailed(s"FIND: '$needle' not found in '$haystack'"))
+            else Right(BigDecimal(idx + 1))
+      yield result
     }
 
   val substitute: FunctionSpec[String] { type Args = SubstituteArgs } =

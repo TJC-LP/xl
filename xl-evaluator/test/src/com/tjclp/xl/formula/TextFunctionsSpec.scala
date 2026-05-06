@@ -50,6 +50,19 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   private val smallNeedle: Gen[String] =
     Gen.choose(1, 4).flatMap(n => Gen.listOfN(n, Gen.alphaNumChar).map(_.mkString))
 
+  /**
+   * Generate (haystack, needle) pairs where needle is guaranteed to be a substring of haystack.
+   *
+   * Avoids the high-discard-rate trap of `forAll(s, x){ s.contains(x) ==> ... }` where random
+   * alphanumeric pairs almost never satisfy the precondition.
+   */
+  private val haystackWithNeedle: Gen[(String, String)] =
+    for
+      s <- smallString.suchThat(_.nonEmpty)
+      start <- Gen.choose(0, s.length - 1)
+      len <- Gen.choose(1, s.length - start)
+    yield (s, s.substring(start, start + len))
+
   // ============================================================
   // §1. TRIM scalars (8)
   // ============================================================
@@ -420,21 +433,18 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   }
 
   property("FIND/MID/LEN coupling: MID(s, FIND(x,s), LEN(x)) == x when x ⊆ s") {
-    forAll(smallString, smallNeedle) { (s, x) =>
-      s.contains(x) ==> {
-        val findR =
-          evaluator.eval(TExpr.find(TExpr.Lit(x), TExpr.Lit(s)), emptySheet)
-        val lenR = evaluator.eval(TExpr.len(TExpr.Lit(x)), emptySheet)
-        val combined = for
-          k <- findR
-          n <- lenR
-          got <- evaluator.eval(
-            TExpr.mid(TExpr.Lit(s), TExpr.Lit(k.toInt), TExpr.Lit(n.toInt)),
-            emptySheet
-          )
-        yield got
-        combined == Right(x)
-      }
+    forAll(haystackWithNeedle) { case (s, x) =>
+      val findR = evaluator.eval(TExpr.find(TExpr.Lit(x), TExpr.Lit(s)), emptySheet)
+      val lenR = evaluator.eval(TExpr.len(TExpr.Lit(x)), emptySheet)
+      val combined = for
+        k <- findR
+        n <- lenR
+        got <- evaluator.eval(
+          TExpr.mid(TExpr.Lit(s), TExpr.Lit(k.toInt), TExpr.Lit(n.toInt)),
+          emptySheet
+        )
+      yield got
+      combined == Right(x)
     }
   }
 
