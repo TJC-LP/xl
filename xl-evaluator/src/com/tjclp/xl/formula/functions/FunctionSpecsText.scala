@@ -154,9 +154,35 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     else s.substring(0, pos) + newS + s.substring(pos + oldS.length)
 
   val value: FunctionSpec[BigDecimal] { type Args = UnaryText } =
-    FunctionSpec.simple[BigDecimal, UnaryText]("VALUE", Arity.one) { (_, _) =>
-      Left(EvalError.EvalFailed("VALUE: not yet implemented"))
+    FunctionSpec.simple[BigDecimal, UnaryText]("VALUE", Arity.one) { (textExpr, ctx) =>
+      ctx.evalExpr(textExpr).flatMap(parseExcelNumber)
     }
+
+  /**
+   * Parse an Excel-style numeric string. Handles currency ($), thousands commas, percent suffix
+   * (×1/100), accounting parentheses (negative), scientific notation, sign, and whitespace.
+   *
+   * Date and time strings are rejected (deferred per TJC-1055 scope decision).
+   */
+  private def parseExcelNumber(input: String): Either[EvalError, BigDecimal] =
+    val trimmed = input.trim
+    if trimmed.isEmpty then Right(BigDecimal(0))
+    else
+      val (negFromParens, afterParens) =
+        if trimmed.startsWith("(") && trimmed.endsWith(")") then
+          (true, trimmed.substring(1, trimmed.length - 1))
+        else (false, trimmed)
+      val (isPercent, afterPercent) =
+        if afterParens.endsWith("%") then
+          (true, afterParens.substring(0, afterParens.length - 1))
+        else (false, afterParens)
+      val cleaned = afterPercent.replace(",", "").replace("$", "").trim
+      scala.util.Try(BigDecimal(cleaned)).toEither match
+        case Right(n) =>
+          val signed = if negFromParens then -n else n
+          Right(if isPercent then signed / 100 else signed)
+        case Left(_) =>
+          Left(EvalError.EvalFailed(s"VALUE: cannot parse '$input'"))
 
   val text: FunctionSpec[String] { type Args = TextArgs } =
     FunctionSpec.simple[String, TextArgs]("TEXT", Arity.two) { (_, _) =>
