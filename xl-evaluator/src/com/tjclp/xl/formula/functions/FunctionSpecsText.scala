@@ -72,8 +72,23 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     s.split(' ').iterator.filter(_.nonEmpty).mkString(" ")
 
   val mid: FunctionSpec[String] { type Args = TextIntInt } =
-    FunctionSpec.simple[String, TextIntInt]("MID", Arity.three) { (_, _) =>
-      Left(EvalError.EvalFailed("MID: not yet implemented"))
+    FunctionSpec.simple[String, TextIntInt]("MID", Arity.three) { (args, ctx) =>
+      val (textExpr, startExpr, lengthExpr) = args
+      for
+        text <- ctx.evalExpr(textExpr)
+        start <- ctx.evalExpr(startExpr)
+        length <- ctx.evalExpr(lengthExpr)
+        result <-
+          if start < 1 then
+            Left(EvalError.EvalFailed(s"MID: start must be >= 1, got $start"))
+          else if length < 0 then
+            Left(EvalError.EvalFailed(s"MID: length must be >= 0, got $length"))
+          else if start > text.length then Right("")
+          else
+            val from = start - 1
+            val to = math.min(from.toLong + length.toLong, text.length.toLong).toInt
+            Right(text.substring(from, to))
+      yield result
     }
 
   val find: FunctionSpec[BigDecimal] { type Args = FindArgs } =
