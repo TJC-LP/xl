@@ -113,9 +113,45 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     }
 
   val substitute: FunctionSpec[String] { type Args = SubstituteArgs } =
-    FunctionSpec.simple[String, SubstituteArgs]("SUBSTITUTE", Arity.Range(3, 4)) { (_, _) =>
-      Left(EvalError.EvalFailed("SUBSTITUTE: not yet implemented"))
+    FunctionSpec.simple[String, SubstituteArgs]("SUBSTITUTE", Arity.Range(3, 4)) { (args, ctx) =>
+      val (textExpr, oldExpr, newExpr, instExpr) = args
+      for
+        text <- ctx.evalExpr(textExpr)
+        oldS <- ctx.evalExpr(oldExpr)
+        newS <- ctx.evalExpr(newExpr)
+        instOpt <-
+          instExpr.fold[Either[EvalError, Option[Int]]](Right(None))(e =>
+            ctx.evalExpr(e).map(Some(_))
+          )
+        result <- substituteImpl(text, oldS, newS, instOpt)
+      yield result
     }
+
+  private def substituteImpl(
+    text: String,
+    oldS: String,
+    newS: String,
+    instOpt: Option[Int]
+  ): Either[EvalError, String] =
+    if oldS.isEmpty then Right(text)
+    else
+      instOpt match
+        case Some(n) if n < 1 =>
+          Left(EvalError.EvalFailed(s"SUBSTITUTE: instance must be >= 1, got $n"))
+        case Some(n) => Right(replaceNthOccurrence(text, oldS, newS, n))
+        case None => Right(text.replace(oldS, newS))
+
+  /** Replace only the nth (1-indexed) forward, non-overlapping occurrence. */
+  private def replaceNthOccurrence(s: String, oldS: String, newS: String, n: Int): String =
+    @annotation.tailrec
+    def findNth(idx: Int, count: Int): Int =
+      val next = s.indexOf(oldS, idx)
+      if next < 0 then -1
+      else if count == n then next
+      else findNth(next + oldS.length, count + 1)
+    val pos = findNth(0, 1)
+    if pos < 0 then s
+    else s.substring(0, pos) + newS + s.substring(pos + oldS.length)
 
   val value: FunctionSpec[BigDecimal] { type Args = UnaryText } =
     FunctionSpec.simple[BigDecimal, UnaryText]("VALUE", Arity.one) { (_, _) =>
