@@ -82,8 +82,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         start <- ctx.evalExpr(startExpr)
         length <- ctx.evalExpr(lengthExpr)
         result <-
-          if start < 1 then
-            Left(EvalError.EvalFailed(s"MID: start must be >= 1, got $start"))
+          if start < 1 then Left(EvalError.EvalFailed(s"MID: start must be >= 1, got $start"))
           else if length < 0 then
             Left(EvalError.EvalFailed(s"MID: length must be >= 0, got $length"))
           else if start > text.length then Right("")
@@ -102,15 +101,13 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         haystack <- ctx.evalExpr(withinExpr)
         start <- startOpt.fold[Either[EvalError, Int]](Right(1))(e => ctx.evalExpr(e))
         result <-
-          if start < 1 then
-            Left(EvalError.EvalFailed(s"FIND: start must be >= 1, got $start"))
+          if start < 1 then Left(EvalError.EvalFailed(s"FIND: start must be >= 1, got $start"))
           else if start > haystack.length + 1 then
             Left(EvalError.EvalFailed(s"FIND: start ($start) is past end of text"))
           else if needle.isEmpty then Right(BigDecimal(start))
           else
             val idx = haystack.indexOf(needle, start - 1)
-            if idx < 0 then
-              Left(EvalError.EvalFailed(s"FIND: '$needle' not found in '$haystack'"))
+            if idx < 0 then Left(EvalError.EvalFailed(s"FIND: '$needle' not found in '$haystack'"))
             else Right(BigDecimal(idx + 1))
       yield result
     }
@@ -176,8 +173,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
           (true, trimmed.substring(1, trimmed.length - 1))
         else (false, trimmed)
       val (isPercent, afterPercent) =
-        if afterParens.endsWith("%") then
-          (true, afterParens.substring(0, afterParens.length - 1))
+        if afterParens.endsWith("%") then (true, afterParens.substring(0, afterParens.length - 1))
         else (false, afterParens)
       val cleaned = afterPercent.replace(",", "").replace("$", "").trim
       scala.util.Try(BigDecimal(cleaned)).toEither match
