@@ -60,9 +60,16 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     }
 
   val trim: FunctionSpec[String] { type Args = UnaryText } =
-    FunctionSpec.simple[String, UnaryText]("TRIM", Arity.one) { (_, _) =>
-      Left(EvalError.EvalFailed("TRIM: not yet implemented"))
+    FunctionSpec.simple[String, UnaryText]("TRIM", Arity.one) { (textExpr, ctx) =>
+      ctx.evalExpr(textExpr).map(trimAsciiSpaces)
     }
+
+  /**
+   * Excel TRIM rule: collapse runs of ASCII space (0x20) to a single space and strip leading /
+   * trailing 0x20s. All other whitespace (tab, newline, nbsp, BOM, ZWSP) is preserved verbatim.
+   */
+  private def trimAsciiSpaces(s: String): String =
+    s.split(' ').iterator.filter(_.nonEmpty).mkString(" ")
 
   val mid: FunctionSpec[String] { type Args = TextIntInt } =
     FunctionSpec.simple[String, TextIntInt]("MID", Arity.three) { (_, _) =>
