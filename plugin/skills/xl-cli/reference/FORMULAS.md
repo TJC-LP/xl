@@ -61,6 +61,12 @@ The `eval` command supports 81 Excel functions.
 | LEN | `=LEN(text)` | `=LEN(A1)` |
 | UPPER | `=UPPER(text)` | `=UPPER(A1)` |
 | LOWER | `=LOWER(text)` | `=LOWER(A1)` |
+| TRIM | `=TRIM(text)` | `=TRIM(A1)` → strips ASCII spaces, collapses internal runs |
+| MID | `=MID(text, start, length)` | `=MID(A1, 2, 3)` → 1-indexed substring |
+| FIND | `=FIND(find_text, within_text, [start])` | `=FIND("@", A1)` → 1-indexed position, case-sensitive |
+| SUBSTITUTE | `=SUBSTITUTE(text, old, new, [instance])` | `=SUBSTITUTE(A1,"old","new")` → all by default, or Nth |
+| VALUE | `=VALUE(text)` | `=VALUE("$1,234.56")` → 1234.56; handles currency, percent, accounting parens |
+| TEXT | `=TEXT(value, format_code)` | `=TEXT(A1,"#,##0.00")` → formatted string; supports `0`, `#`, `,`, `%`, `$`, date tokens |
 
 ## Date Functions
 

@@ -252,6 +252,7 @@ scala-cli examples/dependency-analysis.sc
 scala-cli examples/data-validation.sc
 scala-cli examples/sales-pipeline.sc
 scala-cli examples/evaluator-demo.sc
+scala-cli examples/text_functions_demo.sc   # TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT
 ```
 
 ## 4) Chart spec (Future - WI-11)

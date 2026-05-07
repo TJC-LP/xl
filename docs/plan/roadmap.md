@@ -8,7 +8,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **81 formula functions**, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 733+ tests passing.
+**Current Status**: Production-ready with **87 formula functions**, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 1075+ tests passing.
 
 **Current Version**: 0.6.1
 
@@ -74,6 +74,7 @@ All completed phases are documented in git history. Key milestones:
 
 - **P0-P8**: Foundation, OOXML, streaming, codecs, macros
 - **WI-07/08/09**: Formula parser, evaluator, 81 functions
+- **TJC-1055** (closes GH-116): Text functions — TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT (87 functions total)
 - **WI-10**: Excel table support
 - **WI-17**: SAX streaming write (36% faster than POI)
 - **WI-19**: Row/column property serialization

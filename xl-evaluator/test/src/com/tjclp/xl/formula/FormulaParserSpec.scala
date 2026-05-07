@@ -1114,7 +1114,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("Known functions include all 81 functions") {
+  test("Known functions include all 88 functions") {
     val functions = FunctionRegistry.allNames
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -1199,7 +1199,14 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("NPER"))
     // Array functions
     assert(functions.contains("TRANSPOSE"))
-    assertEquals(functions.length, 82)
+    // TJC-1055 text functions
+    assert(functions.contains("TRIM"))
+    assert(functions.contains("MID"))
+    assert(functions.contains("FIND"))
+    assert(functions.contains("SUBSTITUTE"))
+    assert(functions.contains("VALUE"))
+    assert(functions.contains("TEXT"))
+    assertEquals(functions.length, 88)
   }
 
   test("FunctionRegistry.lookup finds spec-based functions") {
