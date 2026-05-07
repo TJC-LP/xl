@@ -53,6 +53,13 @@ trait TExprCoercions:
       ToInt(call.asInstanceOf[TExpr[BigDecimal]])
     case call: TExpr.Call[?] if call.spec == FunctionSpecs.len =>
       ToInt(call.asInstanceOf[TExpr[BigDecimal]])
+    case call: TExpr.Call[?] if call.spec == FunctionSpecs.find =>
+      ToInt(call.asInstanceOf[TExpr[BigDecimal]])
+    // Arithmetic expressions return BigDecimal — wrap in ToInt to avoid
+    // a runtime ClassCastException when used in Int-arg positions
+    // (e.g. =MID(A1, FIND("@", A1) + 1, 100)).
+    case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow =>
+      ToInt(expr.asInstanceOf[TExpr[BigDecimal]])
     case other => other.asInstanceOf[TExpr[Int]] // Safe: non-PolyRef already has correct type
 
   /**
