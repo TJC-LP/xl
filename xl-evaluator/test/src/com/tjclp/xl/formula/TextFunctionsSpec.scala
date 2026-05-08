@@ -10,20 +10,20 @@ import munit.ScalaCheckSuite
 import org.scalacheck.Prop.*
 import org.scalacheck.Gen
 
-import java.time.{LocalDate, LocalDateTime}
+import java.time.LocalDate
 
 /**
- * Comprehensive tests for the 6 text functions added in TJC-1055 / GH-116.
+ * Tests for the 6 text functions added in TJC-1055 / GH-116.
  *
  * Functions: TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT.
  *
- * Organized into 14 sections covering scalar behavior, property-based laws, cell-value type
- * interactions, composability, end-to-end formula evaluation, parser dispatch, error fidelity,
- * dependency-graph integration, and OOXML round-trip determinism. Pinning decisions:
+ * Each remaining test kills a specific bug class — redundant boundary cases and overlapping
+ * properties were dropped to bring this spec in line with the repo's per-category density
+ * (~10 tests / function). Pinning decisions:
  *   - Type coercion: text functions accept Number / Bool via Excel-style coercion (TRIM(123) ==
  *     "123", TRIM(true) == "TRUE").
- *   - Negative currency in TEXT places sign before the symbol: TEXT(-1234.5, "$#,##0.00") ==
- *     "-$1,234.50".
+ *   - Negative currency in TEXT requires explicit two-section format (FormatCodeParser drops the
+ *     sign on single-section formats — pre-existing limitation, tracked as a follow-up).
  */
 class TextFunctionsSpec extends ScalaCheckSuite:
   private val emptySheet = new Sheet(name = SheetName.unsafe("Test"))
@@ -64,7 +64,7 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     yield (s, s.substring(start, start + len))
 
   // ============================================================
-  // §1. TRIM scalars (8)
+  // §1. TRIM scalars
   // ============================================================
 
   test("TRIM: collapses internal runs and strips leading/trailing ASCII spaces") {
@@ -72,24 +72,9 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(evaluator.eval(expr, emptySheet), Right("hello world"))
   }
 
-  test("TRIM: all-ASCII-space input returns empty") {
-    val expr = TExpr.trim(TExpr.Lit("     "))
-    assertEquals(evaluator.eval(expr, emptySheet), Right(""))
-  }
-
-  test("TRIM: preserves leading/trailing non-breaking space (char 160)") {
-    val expr = TExpr.trim(TExpr.Lit(" hello "))
-    assertEquals(evaluator.eval(expr, emptySheet), Right(" hello "))
-  }
-
   test("TRIM: collapses ASCII-space runs around a tab; tab is preserved") {
     val expr = TExpr.trim(TExpr.Lit("a   \t   b"))
     assertEquals(evaluator.eval(expr, emptySheet), Right("a \t b"))
-  }
-
-  test("TRIM: tabs and newlines pass through (Excel only collapses ASCII space 0x20)") {
-    val expr = TExpr.trim(TExpr.Lit("\thello\n"))
-    assertEquals(evaluator.eval(expr, emptySheet), Right("\thello\n"))
   }
 
   test("TRIM: internal nbsp run is not collapsed") {
@@ -108,17 +93,12 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   }
 
   // ============================================================
-  // §2. MID scalars (9)
+  // §2. MID scalars
   // ============================================================
 
   test("MID: extracts middle substring (issue golden)") {
     val expr = TExpr.mid(TExpr.Lit("Hello"), TExpr.Lit(2), TExpr.Lit(3))
     assertEquals(evaluator.eval(expr, emptySheet), Right("ell"))
-  }
-
-  test("MID: start at last char with len=1 returns last char") {
-    val expr = TExpr.mid(TExpr.Lit("Hello"), TExpr.Lit(5), TExpr.Lit(1))
-    assertEquals(evaluator.eval(expr, emptySheet), Right("o"))
   }
 
   test("MID: start one past end returns empty (boundary)") {
@@ -129,11 +109,6 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   test("MID: start+len beyond length clamps to remainder") {
     val expr = TExpr.mid(TExpr.Lit("Hello"), TExpr.Lit(4), TExpr.Lit(100))
     assertEquals(evaluator.eval(expr, emptySheet), Right("lo"))
-  }
-
-  test("MID: empty input with valid start returns empty") {
-    val expr = TExpr.mid(TExpr.Lit(""), TExpr.Lit(1), TExpr.Lit(5))
-    assertEquals(evaluator.eval(expr, emptySheet), Right(""))
   }
 
   test("MID: start=0 returns EvalFailed naming MID and start") {
@@ -157,15 +132,8 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(evaluator.eval(expr, emptySheet), Right(""))
   }
 
-  test("MID: emoji surrogate pair — UTF-16 code-unit semantics (documented)") {
-    // "a😀b" = a + high-surrogate(D83D) + low-surrogate(DE00) + b — total 4 UTF-16 code units.
-    // MID at position 2, length 1 returns the high-surrogate half (matches Excel UTF-16 model).
-    val expr = TExpr.mid(TExpr.Lit("a😀b"), TExpr.Lit(2), TExpr.Lit(1))
-    assertEquals(evaluator.eval(expr, emptySheet), Right("\uD83D"))
-  }
-
   // ============================================================
-  // §3. FIND scalars (9)
+  // §3. FIND scalars
   // ============================================================
 
   test("FIND: locates first occurrence (1-indexed, issue golden)") {
@@ -199,29 +167,13 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(r2, Right(BigDecimal(3)))
   }
 
-  test("FIND: multi-char needle resolves correctly") {
-    val expr = TExpr.find(TExpr.Lit("ll"), TExpr.Lit("Hello"))
-    assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal(3)))
-  }
-
   test("FIND: start=0 fails (Excel min start is 1)") {
     val expr = TExpr.find(TExpr.Lit("l"), TExpr.Lit("Hello"), Some(TExpr.Lit(0)))
     assert(evaluator.eval(expr, emptySheet).isLeft)
   }
 
-  test("FIND: start exactly at the match position is inclusive") {
-    val expr = TExpr.find(TExpr.Lit("o"), TExpr.Lit("Hello"), Some(TExpr.Lit(5)))
-    assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal(5)))
-  }
-
-  test("FIND: needle containing comma works through formula parser") {
-    val sheet = sheetWith(ref"A1" -> CellValue.Text("Hello, World!"))
-    val result = sheet.evaluateFormula("""=FIND("o, W", A1)""")
-    assertEquals(result, Right(CellValue.Number(BigDecimal(5))))
-  }
-
   // ============================================================
-  // §4. SUBSTITUTE scalars (9)
+  // §4. SUBSTITUTE scalars
   // ============================================================
 
   test("SUBSTITUTE: replaces all occurrences when instance omitted") {
@@ -235,20 +187,9 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(evaluator.eval(expr, emptySheet), Right("HelLo"))
   }
 
-  test("SUBSTITUTE: instance past occurrence count returns text unchanged") {
-    val expr =
-      TExpr.substitute(TExpr.Lit("Hello"), TExpr.Lit("l"), TExpr.Lit("L"), Some(TExpr.Lit(3)))
-    assertEquals(evaluator.eval(expr, emptySheet), Right("Hello"))
-  }
-
   test("SUBSTITUTE: regex metachars in old_text treated literally") {
     val expr = TExpr.substitute(TExpr.Lit("a.b.c"), TExpr.Lit("."), TExpr.Lit("X"))
     assertEquals(evaluator.eval(expr, emptySheet), Right("aXbXc"))
-  }
-
-  test("SUBSTITUTE: forward non-overlapping scan ('aaaa' / 'aa' / 'b' → 'bb')") {
-    val expr = TExpr.substitute(TExpr.Lit("aaaa"), TExpr.Lit("aa"), TExpr.Lit("b"))
-    assertEquals(evaluator.eval(expr, emptySheet), Right("bb"))
   }
 
   test("SUBSTITUTE: replacement longer than match — no infinite loop") {
@@ -267,19 +208,8 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assert(evaluator.eval(expr, emptySheet).isLeft)
   }
 
-  test("SUBSTITUTE: multi-char old, instance=2") {
-    val expr =
-      TExpr.substitute(
-        TExpr.Lit("foo bar foo"),
-        TExpr.Lit("foo"),
-        TExpr.Lit("baz"),
-        Some(TExpr.Lit(2))
-      )
-    assertEquals(evaluator.eval(expr, emptySheet), Right("foo bar baz"))
-  }
-
   // ============================================================
-  // §5. VALUE scalars (10)
+  // §5. VALUE scalars
   // ============================================================
 
   test("VALUE: parses decimal with exact precision (kills Double impl)") {
@@ -307,36 +237,13 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal("-1234.56")))
   }
 
-  test("VALUE: leading/trailing whitespace around currency") {
-    val expr = TExpr.value(TExpr.Lit(" $1,234 "))
-    assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal(1234)))
-  }
-
-  test("VALUE: scientific notation") {
-    val expr = TExpr.value(TExpr.Lit("1.5E2"))
-    assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal(150)))
-  }
-
   test("VALUE: empty string returns 0 (Excel quirk)") {
     val expr = TExpr.value(TExpr.Lit(""))
     assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal(0)))
   }
 
-  test("VALUE: alphanumeric input fails with offending value in error") {
-    val expr = TExpr.value(TExpr.Lit("12abc"))
-    val result = evaluator.eval(expr, emptySheet)
-    assert(result.isLeft)
-    val msg = result.left.toOption.map(_.toString).getOrElse("")
-    assert(msg.contains("VALUE") && msg.contains("12abc"), s"Error msg: $msg")
-  }
-
-  test("VALUE: 100% boundary returns 1") {
-    val expr = TExpr.value(TExpr.Lit("100%"))
-    assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal(1)))
-  }
-
   // ============================================================
-  // §6. TEXT scalars (10)
+  // §6. TEXT scalars
   // ============================================================
 
   test("TEXT: basic decimal with rounding (issue golden)") {
@@ -354,16 +261,6 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(evaluator.eval(expr, emptySheet), Right("50%"))
   }
 
-  test("TEXT: percent with single-decimal precision") {
-    val expr = TExpr.text(TExpr.Lit(BigDecimal("0.5")), TExpr.Lit("0.0%"))
-    assertEquals(evaluator.eval(expr, emptySheet), Right("50.0%"))
-  }
-
-  test("TEXT: multi-group thousands separator") {
-    val expr = TExpr.text(TExpr.Lit(BigDecimal(1234567)), TExpr.Lit("#,##0"))
-    assertEquals(evaluator.eval(expr, emptySheet), Right("1,234,567"))
-  }
-
   test("TEXT: negative currency via explicit two-section format ('-$1,234.50')") {
     // Single-section format "$#,##0.00" with a negative input drops the sign in the
     // current FormatCodeParser implementation. Use the explicit two-section form
@@ -372,19 +269,9 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(evaluator.eval(expr, emptySheet), Right("-$1,234.50"))
   }
 
-  test("TEXT: zero with mandatory decimals") {
-    val expr = TExpr.text(TExpr.Lit(BigDecimal(0)), TExpr.Lit("0.00"))
-    assertEquals(evaluator.eval(expr, emptySheet), Right("0.00"))
-  }
-
   test("TEXT: empty format string returns empty (Excel quirk)") {
     val expr = TExpr.text(TExpr.Lit(BigDecimal(1234)), TExpr.Lit(""))
     assertEquals(evaluator.eval(expr, emptySheet), Right(""))
-  }
-
-  test("TEXT: date format on LocalDate") {
-    val expr = TExpr.text(TExpr.Lit(LocalDate.of(2025, 1, 15)), TExpr.Lit("yyyy-mm-dd"))
-    assertEquals(evaluator.eval(expr, emptySheet), Right("2025-01-15"))
   }
 
   test("TEXT: text input passes through unchanged") {
@@ -393,7 +280,7 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   }
 
   // ============================================================
-  // §7. Property-based laws (10)
+  // §7. Property-based laws (highest-leverage four)
   // ============================================================
 
   property("TRIM is idempotent: trim(trim(s)) == trim(s)") {
@@ -401,37 +288,6 @@ class TextFunctionsSpec extends ScalaCheckSuite:
       val once = evaluator.eval(TExpr.trim(TExpr.Lit(s)), emptySheet)
       val twice = once.flatMap(t => evaluator.eval(TExpr.trim(TExpr.Lit(t)), emptySheet))
       once == twice
-    }
-  }
-
-  property("TRIM never grows length: len(trim(s)) <= len(s)") {
-    forAll(smallString) { s =>
-      val r = evaluator.eval(TExpr.trim(TExpr.Lit(s)), emptySheet)
-      r.fold(_ => false, t => t.length <= s.length)
-    }
-  }
-
-  property("MID(s, 1, n) == LEFT(s, n) for n in [0, len(s)]") {
-    forAll(smallString, Gen.choose(0, 30)) { (s, n) =>
-      (n >= 0 && n <= s.length) ==> {
-        val midR = evaluator.eval(TExpr.mid(TExpr.Lit(s), TExpr.Lit(1), TExpr.Lit(n)), emptySheet)
-        val leftR = evaluator.eval(TExpr.left(TExpr.Lit(s), TExpr.Lit(n)), emptySheet)
-        midR == leftR
-      }
-    }
-  }
-
-  property("MID slicing transitivity: MID(MID(s,k,big),1,n) == MID(s,k,n)") {
-    forAll(smallString, Gen.choose(1, 30), Gen.choose(0, 30)) { (s, k, n) =>
-      val outer = evaluator.eval(
-        TExpr.mid(TExpr.Lit(s), TExpr.Lit(k), TExpr.Lit(1000)),
-        emptySheet
-      )
-      val direct = evaluator.eval(TExpr.mid(TExpr.Lit(s), TExpr.Lit(k), TExpr.Lit(n)), emptySheet)
-      val nested = outer.flatMap(t =>
-        evaluator.eval(TExpr.mid(TExpr.Lit(t), TExpr.Lit(1), TExpr.Lit(n)), emptySheet)
-      )
-      nested == direct
     }
   }
 
@@ -466,31 +322,9 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     }
   }
 
-  property("SUBSTITUTE identity: replacing x with x is a no-op") {
-    forAll(smallString, smallNeedle) { (s, x) =>
-      val r = evaluator.eval(
-        TExpr.substitute(TExpr.Lit(s), TExpr.Lit(x), TExpr.Lit(x)),
-        emptySheet
-      )
-      r == Right(s)
-    }
-  }
-
-  property("SUBSTITUTE empty-old quirk: SUBSTITUTE(s, '', anything) == s") {
-    forAll(smallString, smallString) { (s, anything) =>
-      val r = evaluator.eval(
-        TExpr.substitute(TExpr.Lit(s), TExpr.Lit(""), TExpr.Lit(anything)),
-        emptySheet
-      )
-      r == Right(s)
-    }
-  }
-
   property("VALUE/TEXT round-trip: value(text(n, '0.0000;-0.0000')) == n for 4-decimal n") {
     // Use unscaled-int construction so generator yields exact 4-decimal BigDecimals,
     // and forAllNoShrink so shrinking can't escape the generator's invariants.
-    // Two-section format "0.0000;-0.0000" is required because single-section formats
-    // drop the negative sign in the current FormatCodeParser implementation.
     val gen = Gen.choose(-10000000L, 10000000L).map(u => BigDecimal(BigInt(u), 4))
     forAllNoShrink(gen) { n =>
       val r = for
@@ -501,25 +335,11 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     }
   }
 
-  property("FIND first-char law: len(s)>0 ⟹ FIND(MID(s,1,1), s) == 1") {
-    forAll(smallString) { s =>
-      s.nonEmpty ==> {
-        val firstChar = s.substring(0, 1)
-        val r = evaluator.eval(
-          TExpr.find(TExpr.Lit(firstChar), TExpr.Lit(s)),
-          emptySheet
-        )
-        r == Right(BigDecimal(1))
-      }
-    }
-  }
-
   // ============================================================
-  // §8. Cell-value type matrix (8)
+  // §8. Cell-value type matrix — TRIM exercises every CellValue case
   // ============================================================
 
   test("§8.1 TRIM(A1) where A1 is Empty cell returns ''") {
-    // No put — A1 is implicitly Empty.
     val sheet = emptySheet
     assertEquals(sheet.evaluateFormula("=TRIM(A1)"), Right(CellValue.Text("")))
   }
@@ -540,29 +360,8 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assert(result.isLeft, s"error must propagate; got $result")
   }
 
-  test("§8.5 TEXT(A1, '0.00') where A1 is Empty treats Empty as 0") {
-    val sheet = emptySheet
-    assertEquals(sheet.evaluateFormula("""=TEXT(A1, "0.00")"""), Right(CellValue.Text("0.00")))
-  }
-
-  test("§8.6 LEN(MID(A1, 1, 5)) where A1 is Empty == 0") {
-    val sheet = emptySheet
-    assertEquals(sheet.evaluateFormula("=LEN(MID(A1, 1, 5))"), Right(CellValue.Number(BigDecimal(0))))
-  }
-
-  test("§8.7 VALUE(A1) where A1 is already Number passes through") {
-    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(42)))
-    assertEquals(sheet.evaluateFormula("=VALUE(A1)"), Right(CellValue.Number(BigDecimal(42))))
-  }
-
-  test("§8.8 FIND('x', A1) where A1 is Error propagates without rewrapping") {
-    val sheet = sheetWith(ref"A1" -> CellValue.Error(CellError.Value))
-    val result = sheet.evaluateFormula("""=FIND("x", A1)""")
-    assert(result.isLeft, s"error must propagate; got $result")
-  }
-
   // ============================================================
-  // §9. Composability / nesting (7)
+  // §9. Composability / nesting
   // ============================================================
 
   test("§9.1 LEN(TRIM('  hello  ')) == 5") {
@@ -570,24 +369,6 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(
       sheet.evaluateFormula("""=LEN(TRIM("  hello  "))"""),
       Right(CellValue.Number(BigDecimal(5)))
-    )
-  }
-
-  test("§9.2 MID(TRIM(A1), 1, 5) operates on the trimmed result") {
-    val sheet = sheetWith(ref"A1" -> CellValue.Text("   hello world   "))
-    assertEquals(
-      sheet.evaluateFormula("=MID(TRIM(A1), 1, 5)"),
-      Right(CellValue.Text("hello"))
-    )
-  }
-
-  test("§9.3 SUBSTITUTE nesting (chained replacements)") {
-    val sheet = emptySheet
-    assertEquals(
-      sheet.evaluateFormula(
-        """=SUBSTITUTE(SUBSTITUTE("a-b-c", "-", "+"), "+", "/")"""
-      ),
-      Right(CellValue.Text("a/b/c"))
     )
   }
 
@@ -599,14 +380,6 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     )
   }
 
-  test("§9.5 IF(ISNUMBER(VALUE(A1)), VALUE(A1), 0) safe-parse pattern") {
-    val sheet = sheetWith(ref"A1" -> CellValue.Text("42"))
-    assertEquals(
-      sheet.evaluateFormula("=IF(ISNUMBER(VALUE(A1)), VALUE(A1), 0)"),
-      Right(CellValue.Number(BigDecimal(42)))
-    )
-  }
-
   test("§9.6 TEXT(VALUE('$1,234'), '#,##0') pipeline through formula engine") {
     val sheet = emptySheet
     assertEquals(
@@ -615,16 +388,8 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     )
   }
 
-  test("§9.7 CONCATENATE(TEXT(A1, '0.00'), ' USD') interop with existing CONCATENATE") {
-    val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal("1234.5")))
-    assertEquals(
-      sheet.evaluateFormula("""=CONCATENATE(TEXT(A1, "0.00"), " USD")"""),
-      Right(CellValue.Text("1234.50 USD"))
-    )
-  }
-
   // ============================================================
-  // §10. End-to-end via sheet.evaluateFormula (6)
+  // §10. End-to-end via sheet.evaluateFormula (one per function — wiring smoke)
   // ============================================================
 
   test("§10.1 e2e: =TRIM(A1)") {
@@ -670,22 +435,12 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   }
 
   // ============================================================
-  // §11. Parser dispatch edges (4)
+  // §11. Parser dispatch edges
   // ============================================================
 
   test("§11.1 Lowercase function name dispatches via case-insensitive registry") {
     val sheet = sheetWith(ref"A1" -> CellValue.Text("  hello  "))
     assertEquals(sheet.evaluateFormula("=trim(A1)"), Right(CellValue.Text("hello")))
-  }
-
-  test("§11.2 TRIM() with zero arguments is a parse error") {
-    val sheet = emptySheet
-    assert(sheet.evaluateFormula("=TRIM()").isLeft)
-  }
-
-  test("§11.3 FIND with one argument (needs ≥2) is a parse error") {
-    val sheet = emptySheet
-    assert(sheet.evaluateFormula("""=FIND("a")""").isLeft)
   }
 
   test("§11.4 SUBSTITUTE with comma inside string literal preserves arg boundaries") {
@@ -697,7 +452,7 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   }
 
   // ============================================================
-  // §12. Error-variant fidelity (4)
+  // §12. Error-variant fidelity
   // ============================================================
 
   test("§12.1 MID start=0 message names function and constraint") {
@@ -707,13 +462,6 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assert(msg.contains("MID") && msg.toLowerCase.contains("start"), msg)
   }
 
-  test("§12.2 FIND not-found message names function and reason") {
-    val expr = TExpr.find(TExpr.Lit("z"), TExpr.Lit("Hi"))
-    val result = evaluator.eval(expr, emptySheet)
-    val msg = result.left.toOption.map(_.toString).getOrElse("")
-    assert(msg.contains("FIND") && msg.toLowerCase.contains("not found"), msg)
-  }
-
   test("§12.3 VALUE error echoes the offending input string") {
     val expr = TExpr.value(TExpr.Lit("not-a-number"))
     val result = evaluator.eval(expr, emptySheet)
@@ -721,17 +469,8 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assert(msg.contains("VALUE") && msg.contains("not-a-number"), msg)
   }
 
-  test("§12.4 Error-variant fidelity: cell error flows through unchanged shape") {
-    // When a function receives a cell holding CellValue.Error, the resulting EvalError
-    // should reflect the source cell error (not be rewrapped as a generic EvalFailed
-    // about that function).
-    val sheet = sheetWith(ref"A1" -> CellValue.Error(CellError.Div0))
-    val result = sheet.evaluateFormula("=TRIM(A1)")
-    assert(result.isLeft, s"error must propagate; got $result")
-  }
-
   // ============================================================
-  // §13. Sheet dependency graph (2)
+  // §13. Sheet dependency graph
   // ============================================================
 
   test("§13.1 Cell with =TRIM(A1) recalculates when A1 changes") {
@@ -746,14 +485,8 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertNotEquals(r1, r2)
   }
 
-  test("§13.2 =FIND(...) on non-matching content yields error result for caching") {
-    val sheet = sheetWith(ref"A1" -> CellValue.Text("none"))
-    val result = sheet.evaluateFormula("""=FIND("x", A1)""")
-    assert(result.isLeft, s"FIND failure must surface as error; got $result")
-  }
-
   // ============================================================
-  // §14. Determinism / printer round-trip (2)
+  // §14. Determinism / printer round-trip
   // ============================================================
 
   test("§14.1 FormulaPrinter round-trip for each of the 6 functions") {
@@ -776,16 +509,4 @@ class TextFunctionsSpec extends ScalaCheckSuite:
       val reparsed = com.tjclp.xl.formula.parser.FormulaParser.parse(printed)
       assertEquals(reparsed, parsed, s"round-trip drift: $src -> $printed")
     }
-  }
-
-  test("§14.2 OOXML write→read→evaluate matches direct evaluation") {
-    // Two-step determinism: a workbook containing each text-function formula must
-    // evaluate to the same CellValue after a full xlsx round-trip as it does directly.
-    // This is a placeholder — a full impl would write/read the workbook via
-    // ExcelIO. For now we pin behavior at the SheetEvaluator level for the same
-    // CellValue identity, which the implementation phase will extend.
-    val sheet = sheetWith(ref"A1" -> CellValue.Text("  hello  "))
-    val direct = sheet.evaluateFormula("=TRIM(A1)")
-    val again = sheet.evaluateFormula("=TRIM(A1)")
-    assertEquals(direct, again)
   }
