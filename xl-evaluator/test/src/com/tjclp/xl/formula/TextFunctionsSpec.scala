@@ -72,6 +72,11 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(evaluator.eval(expr, emptySheet), Right("hello world"))
   }
 
+  test("TRIM: whitespace-only ASCII spaces collapse to empty string") {
+    val expr = TExpr.trim(TExpr.Lit("   "))
+    assertEquals(evaluator.eval(expr, emptySheet), Right(""))
+  }
+
   test("TRIM: collapses ASCII-space runs around a tab; tab is preserved") {
     val expr = TExpr.trim(TExpr.Lit("a   \t   b"))
     assertEquals(evaluator.eval(expr, emptySheet), Right("a \t b"))
@@ -170,6 +175,18 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   test("FIND: start=0 fails (Excel min start is 1)") {
     val expr = TExpr.find(TExpr.Lit("l"), TExpr.Lit("Hello"), Some(TExpr.Lit(0)))
     assert(evaluator.eval(expr, emptySheet).isLeft)
+  }
+
+  test("FIND: start past end of text fails — Excel: start_num > length → #VALUE!") {
+    // Empty-needle case is the trap: without the strict bound, =FIND("", "abc", 4)
+    // would silently succeed and return 4. Excel returns #VALUE! per docs.
+    val emptyNeedle =
+      TExpr.find(TExpr.Lit(""), TExpr.Lit("abc"), Some(TExpr.Lit(4)))
+    assert(evaluator.eval(emptyNeedle, emptySheet).isLeft, "empty-needle past-end must fail")
+
+    val nonEmptyNeedle =
+      TExpr.find(TExpr.Lit("a"), TExpr.Lit("abc"), Some(TExpr.Lit(4)))
+    assert(evaluator.eval(nonEmptyNeedle, emptySheet).isLeft, "non-empty-needle past-end must fail")
   }
 
   // ============================================================
@@ -277,6 +294,11 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   test("TEXT: text input passes through unchanged") {
     val expr = TExpr.text(TExpr.Lit("hello"), TExpr.Lit("0.00"))
     assertEquals(evaluator.eval(expr, emptySheet), Right("hello"))
+  }
+
+  test("TEXT: date input supports date tokens") {
+    val expr = TExpr.text(TExpr.Lit(LocalDate.of(2025, 1, 15)), TExpr.Lit("yyyy-mm-dd"))
+    assertEquals(evaluator.eval(expr, emptySheet), Right("2025-01-15"))
   }
 
   // ============================================================

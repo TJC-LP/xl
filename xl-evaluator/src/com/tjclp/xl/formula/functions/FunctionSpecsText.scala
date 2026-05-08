@@ -102,7 +102,10 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         start <- startOpt.fold[Either[EvalError, Int]](Right(1))(e => ctx.evalExpr(e))
         result <-
           if start < 1 then Left(EvalError.EvalFailed(s"FIND: start must be >= 1, got $start"))
-          else if start > haystack.length + 1 then
+          else if start > haystack.length then
+            // Excel: "If start_num is greater than the length of within_text,
+            // FIND returns the #VALUE! error value." This applies to both empty
+            // and non-empty needles — start past length is invalid regardless.
             Left(EvalError.EvalFailed(s"FIND: start ($start) is past end of text"))
           else if needle.isEmpty then Right(BigDecimal(start))
           else
