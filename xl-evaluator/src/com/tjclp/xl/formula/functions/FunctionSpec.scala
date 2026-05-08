@@ -16,7 +16,13 @@ import com.tjclp.xl.workbooks.Workbook
  */
 final case class FunctionFlags(
   returnsDate: Boolean = false,
-  returnsTime: Boolean = false
+  returnsTime: Boolean = false,
+  /**
+   * True for functions returning `BigDecimal`. Lets coercion code (e.g. `asIntExpr`) wrap any
+   * numeric-returning Call in `ToInt` without listing each function by name. Mutually exclusive
+   * with `returnsDate` / `returnsTime` — a function returns one type.
+   */
+  returnsNumeric: Boolean = false
 )
 
 final case class ArgPrinter(

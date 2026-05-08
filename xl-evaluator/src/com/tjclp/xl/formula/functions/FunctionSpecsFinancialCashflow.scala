@@ -23,7 +23,11 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       .toList
 
   val npv: FunctionSpec[BigDecimal] { type Args = NpvArgs } =
-    FunctionSpec.simple[BigDecimal, NpvArgs]("NPV", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, NpvArgs](
+      "NPV",
+      Arity.two,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (rateExpr, range) = args
       ctx.evalExpr(rateExpr).flatMap { rate =>
         val onePlusR = BigDecimal(1) + rate
@@ -47,7 +51,11 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
     }
 
   val irr: FunctionSpec[BigDecimal] { type Args = IrrArgs } =
-    FunctionSpec.simple[BigDecimal, IrrArgs]("IRR", Arity.Range(1, 2)) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, IrrArgs](
+      "IRR",
+      Arity.Range(1, 2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (range, guessOpt) = args
       val cashFlows = numericValues(range, ctx)
 
@@ -112,7 +120,11 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
     }
 
   val xnpv: FunctionSpec[BigDecimal] { type Args = XnpvArgs } =
-    FunctionSpec.simple[BigDecimal, XnpvArgs]("XNPV", Arity.three) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, XnpvArgs](
+      "XNPV",
+      Arity.three,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (rateExpr, valuesRange, datesRange) = args
       for
         rate <- ctx.evalExpr(rateExpr)
@@ -152,7 +164,11 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
     }
 
   val xirr: FunctionSpec[BigDecimal] { type Args = XirrArgs } =
-    FunctionSpec.simple[BigDecimal, XirrArgs]("XIRR", Arity.Range(2, 3)) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, XirrArgs](
+      "XIRR",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (valuesRange, datesRange, guessOpt) = args
       val values = numericValues(valuesRange, ctx)
       val dates = dateValues(datesRange, ctx)

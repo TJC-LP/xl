@@ -394,7 +394,7 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     )
   }
 
-  test("§9.4 ISERROR(FIND('x','abc')) == TRUE — daily safe-search idiom") {
+  test("§9.2 ISERROR(FIND('x','abc')) == TRUE — daily safe-search idiom") {
     val sheet = emptySheet
     assertEquals(
       sheet.evaluateFormula("""=ISERROR(FIND("x", "abc"))"""),
@@ -402,11 +402,38 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     )
   }
 
-  test("§9.6 TEXT(VALUE('$1,234'), '#,##0') pipeline through formula engine") {
+  test("§9.3 TEXT(VALUE('$1,234'), '#,##0') pipeline through formula engine") {
     val sheet = emptySheet
     assertEquals(
       sheet.evaluateFormula("""=TEXT(VALUE("$1,234"), "#,##0")"""),
       Right(CellValue.Text("1,234"))
+    )
+  }
+
+  test("§9.4 numeric-returning calls work as Int args (returnsNumeric flag)") {
+    // Pre-flag, only FIND + arithmetic were wrapped; SUM/ROUND/ABS in Int-arg
+    // positions silently crashed at runtime via the asInstanceOf catch-all.
+    // After flagging every BigDecimal-returning spec, any of them composes safely.
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Text("Hello, World"),
+      ref"B1" -> CellValue.Number(BigDecimal(2)),
+      ref"B2" -> CellValue.Number(BigDecimal(1)),
+      ref"B3" -> CellValue.Number(BigDecimal(2))
+    )
+    // =MID(A1, SUM(B1:B3), 5) → start=5 (sum of 2+1+2), substring "o, Wo"
+    assertEquals(
+      sheet.evaluateFormula("=MID(A1, SUM(B1:B3), 5)"),
+      Right(CellValue.Text("o, Wo"))
+    )
+    // =LEFT(A1, ROUND(B1 + 0.4, 0)) → ROUND(2.4, 0) = 2 → "He"
+    assertEquals(
+      sheet.evaluateFormula("=LEFT(A1, ROUND(B1 + 0.4, 0))"),
+      Right(CellValue.Text("He"))
+    )
+    // =MID(A1, ABS(-3), 5) → start=3 → "llo, "
+    assertEquals(
+      sheet.evaluateFormula("=MID(A1, ABS(-3), 5)"),
+      Right(CellValue.Text("llo, "))
     )
   }
 
@@ -465,7 +492,7 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(sheet.evaluateFormula("=trim(A1)"), Right(CellValue.Text("hello")))
   }
 
-  test("§11.4 SUBSTITUTE with comma inside string literal preserves arg boundaries") {
+  test("§11.2 SUBSTITUTE with comma inside string literal preserves arg boundaries") {
     val sheet = emptySheet
     assertEquals(
       sheet.evaluateFormula("""=SUBSTITUTE("a,b", ",", ";")"""),
@@ -484,7 +511,7 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assert(msg.contains("MID") && msg.toLowerCase.contains("start"), msg)
   }
 
-  test("§12.3 VALUE error echoes the offending input string") {
+  test("§12.2 VALUE error echoes the offending input string") {
     val expr = TExpr.value(TExpr.Lit("not-a-number"))
     val result = evaluator.eval(expr, emptySheet)
     val msg = result.left.toOption.map(_.toString).getOrElse("")

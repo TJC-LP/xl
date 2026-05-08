@@ -92,7 +92,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all
-./mill __.test             # Run all tests (1075+)
+./mill __.test             # Run all tests (1080+)
 ./mill xl-core.test        # Test specific module
 ./mill __.reformat         # Format (Scalafmt 3.10.1)
 ./mill __.checkFormat      # CI check
@@ -387,12 +387,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**1075+ tests**: addressing (17), patch (21), style (60), datetime (8), codec (42), batch (46), syntax (18), optics (34), OOXML (24), streaming (18), RichText (5), formula (51+), v0.3.0 regressions (36), CLI (100+)
+**1080+ tests**: addressing (17), patch (21), style (60), datetime (8), codec (42), batch (46), syntax (18), optics (34), OOXML (24), streaming (18), RichText (5), formula (51+), v0.3.0 regressions (36), CLI (100+)
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 1075+ tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 1080+ tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 

@@ -78,7 +78,7 @@
 
 ### Test Coverage
 
-**1075+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + TJC-351 cross-sheet formulas + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write + v0.3.0 regressions + TJC-1055 text functions):
+**1080+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + TJC-351 cross-sheet formulas + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write + v0.3.0 regressions + TJC-1055 text functions):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -102,7 +102,7 @@
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
-- **xl-evaluator**: ~280 tests (parser, evaluator, function library, evaluation API, dependency graph, cross-sheet formulas, integration)
+- **xl-evaluator**: ~284 tests (parser, evaluator, function library, evaluation API, dependency graph, cross-sheet formulas, integration)
   - **Parser (WI-07)**: 57 tests
     - 7 property-based round-trip tests (parse ∘ print = id)
     - 26 parser unit tests (literals, operators, functions, edge cases)
@@ -130,7 +130,7 @@
 **Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
 - ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **87 built-in functions**, extensible type class parser, evaluation API, 232 tests
+- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **87 built-in functions**, extensible type class parser, evaluation API, 236 tests
   - **Aggregate** (9): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
   - **Conditional** (6): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
   - **Logical** (8): IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR

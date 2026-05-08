@@ -48,7 +48,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     }
 
   val len: FunctionSpec[BigDecimal] { type Args = UnaryText } =
-    FunctionSpec.simple[BigDecimal, UnaryText]("LEN", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[BigDecimal, UnaryText](
+      "LEN",
+      Arity.one,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(text => BigDecimal(text.length))
     }
 
@@ -94,7 +98,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     }
 
   val find: FunctionSpec[BigDecimal] { type Args = FindArgs } =
-    FunctionSpec.simple[BigDecimal, FindArgs]("FIND", Arity.Range(2, 3)) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, FindArgs](
+      "FIND",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (findExpr, withinExpr, startOpt) = args
       for
         needle <- ctx.evalExpr(findExpr)
@@ -157,7 +165,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     else s.substring(0, pos) + newS + s.substring(pos + oldS.length)
 
   val value: FunctionSpec[BigDecimal] { type Args = UnaryText } =
-    FunctionSpec.simple[BigDecimal, UnaryText]("VALUE", Arity.one) { (textExpr, ctx) =>
+    FunctionSpec.simple[BigDecimal, UnaryText](
+      "VALUE",
+      Arity.one,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (textExpr, ctx) =>
       ctx.evalExpr(textExpr).flatMap(parseExcelNumber)
     }
 
