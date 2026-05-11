@@ -141,7 +141,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   private def variadicAggregateSpec(
     name: String
   ): FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
-    FunctionSpec.simple[BigDecimal, List[NumericArg]](name, Arity.atLeastOne) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, List[NumericArg]](
+      name,
+      Arity.atLeastOne,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       Aggregator.lookup(name) match
         case None =>
           Left(EvalError.EvalFailed(s"Unknown aggregator: $name", None))
@@ -264,7 +268,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     variadicAggregateSpec("VARP")
 
   val sumif: FunctionSpec[BigDecimal] { type Args = SumIfArgs } =
-    FunctionSpec.simple[BigDecimal, SumIfArgs]("SUMIF", Arity.Range(2, 3)) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, SumIfArgs](
+      "SUMIF",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (rangeLocation, criteria, sumRangeLocationOpt) = args
       evalValue(ctx, criteria).flatMap { criteriaValue =>
         val criterion = CriteriaMatcher.parse(criteriaValue)
@@ -319,7 +327,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     }
 
   val countif: FunctionSpec[BigDecimal] { type Args = CountIfArgs } =
-    FunctionSpec.simple[BigDecimal, CountIfArgs]("COUNTIF", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, CountIfArgs](
+      "COUNTIF",
+      Arity.two,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (rangeLocation, criteria) = args
       evalValue(ctx, criteria).flatMap { criteriaValue =>
         val criterion = CriteriaMatcher.parse(criteriaValue)
@@ -345,7 +357,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     }
 
   val sumifs: FunctionSpec[BigDecimal] { type Args = SumIfsArgs } =
-    FunctionSpec.simple[BigDecimal, SumIfsArgs]("SUMIFS", Arity.AtLeast(3)) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, SumIfsArgs](
+      "SUMIFS",
+      Arity.AtLeast(3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (sumRangeLocation, conditions) = args
       evalCriteriaValues(ctx, conditions)
         .flatMap { criteriaValues =>
@@ -441,100 +457,106 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     }
 
   val countifs: FunctionSpec[BigDecimal] { type Args = CountIfsArgs } =
-    FunctionSpec.simple[BigDecimal, CountIfsArgs]("COUNTIFS", Arity.AtLeast(2)) {
-      (conditions, ctx) =>
-        evalCriteriaValues(ctx, conditions)
-          .flatMap { criteriaValues =>
-            val parsedConditions = parseConditions(conditions, criteriaValues)
+    FunctionSpec.simple[BigDecimal, CountIfsArgs](
+      "COUNTIFS",
+      Arity.AtLeast(2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (conditions, ctx) =>
+      evalCriteriaValues(ctx, conditions)
+        .flatMap { criteriaValues =>
+          val parsedConditions = parseConditions(conditions, criteriaValues)
 
-            parsedConditions match
-              case Nil => Right(BigDecimal(0))
-              case (firstLoc, _) :: rest =>
-                val dimensionError = rest.collectFirst {
-                  case (loc, _)
-                      if loc.range.width != firstLoc.range.width ||
-                        loc.range.height != firstLoc.range.height =>
-                    EvalError.EvalFailed(
-                      s"COUNTIFS: all ranges must have same dimensions (first is ${firstLoc.range.height}×${firstLoc.range.width}, this is ${loc.range.height}×${loc.range.width})",
-                      Some(s"COUNTIFS(...)")
-                    )
-                }
+          parsedConditions match
+            case Nil => Right(BigDecimal(0))
+            case (firstLoc, _) :: rest =>
+              val dimensionError = rest.collectFirst {
+                case (loc, _)
+                    if loc.range.width != firstLoc.range.width ||
+                      loc.range.height != firstLoc.range.height =>
+                  EvalError.EvalFailed(
+                    s"COUNTIFS: all ranges must have same dimensions (first is ${firstLoc.range.height}×${firstLoc.range.width}, this is ${loc.range.height}×${loc.range.width})",
+                    Some(s"COUNTIFS(...)")
+                  )
+              }
 
-                dimensionError match
-                  case Some(err) => Left(err)
-                  case None =>
-                    // GH-192: Resolve all criteria ranges to their target sheets FIRST
-                    val resolvedConditions: Either[
+              dimensionError match
+                case Some(err) => Left(err)
+                case None =>
+                  // GH-192: Resolve all criteria ranges to their target sheets FIRST
+                  val resolvedConditions: Either[
+                    EvalError,
+                    List[
+                      (com.tjclp.xl.sheets.Sheet, TExpr.RangeLocation, CriteriaMatcher.Criterion)
+                    ]
+                  ] =
+                    parsedConditions.foldLeft[Either[
                       EvalError,
                       List[
-                        (com.tjclp.xl.sheets.Sheet, TExpr.RangeLocation, CriteriaMatcher.Criterion)
+                        (
+                          com.tjclp.xl.sheets.Sheet,
+                          TExpr.RangeLocation,
+                          CriteriaMatcher.Criterion
+                        )
                       ]
-                    ] =
-                      parsedConditions.foldLeft[Either[
-                        EvalError,
-                        List[
-                          (
-                            com.tjclp.xl.sheets.Sheet,
-                            TExpr.RangeLocation,
-                            CriteriaMatcher.Criterion
-                          )
-                        ]
-                      ]](Right(List.empty)) {
+                    ]](Right(List.empty)) {
+                      case (Left(err), _) => Left(err)
+                      case (Right(acc), (loc, criterion)) =>
+                        Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map { sheet =>
+                          acc :+ (sheet, loc, criterion)
+                        }
+                    }
+
+                  resolvedConditions.flatMap { resolved =>
+                    val bounds = computeBounds(resolved.map { case (sheet, loc, _) =>
+                      (loc.range, sheet)
+                    })
+                    // GH-192: Constrain full-column/row ranges to shared bounds
+                    val constrainedConditions = resolved.map { case (sheet, loc, criterion) =>
+                      (sheet, constrainRange(loc.range, bounds), criterion)
+                    }
+
+                    // GH-192: Use iterator-based folding with index tracking
+                    val criteriaCells =
+                      constrainedConditions.map { case (sheet, range, criterion) =>
+                        (sheet, range.cells.toVector, criterion)
+                      }
+                    val refCount = criteriaCells.headOption.map(_._2.length).getOrElse(0)
+
+                    (0 until refCount)
+                      .foldLeft[Either[EvalError, Int]](Right(0)) {
                         case (Left(err), _) => Left(err)
-                        case (Right(acc), (loc, criterion)) =>
-                          Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
-                            sheet =>
-                              acc :+ (sheet, loc, criterion)
+                        case (Right(count), idx) =>
+                          // Check all conditions
+                          val matchResult =
+                            criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
+                              case (Left(err), _) => Left(err)
+                              case (Right(false), _) => Right(false) // Short-circuit
+                              case (Right(true), (criteriaSheet, cells, criterion)) =>
+                                val testRef = cells(idx)
+                                evalCellValueForMatch(
+                                  criteriaSheet(testRef).value,
+                                  criteriaSheet,
+                                  ctx
+                                )
+                                  .map { testValue =>
+                                    CriteriaMatcher.matches(testValue, criterion)
+                                  }
+                            }
+                          matchResult.map { allMatch =>
+                            if allMatch then count + 1 else count
                           }
                       }
-
-                    resolvedConditions.flatMap { resolved =>
-                      val bounds = computeBounds(resolved.map { case (sheet, loc, _) =>
-                        (loc.range, sheet)
-                      })
-                      // GH-192: Constrain full-column/row ranges to shared bounds
-                      val constrainedConditions = resolved.map { case (sheet, loc, criterion) =>
-                        (sheet, constrainRange(loc.range, bounds), criterion)
-                      }
-
-                      // GH-192: Use iterator-based folding with index tracking
-                      val criteriaCells =
-                        constrainedConditions.map { case (sheet, range, criterion) =>
-                          (sheet, range.cells.toVector, criterion)
-                        }
-                      val refCount = criteriaCells.headOption.map(_._2.length).getOrElse(0)
-
-                      (0 until refCount)
-                        .foldLeft[Either[EvalError, Int]](Right(0)) {
-                          case (Left(err), _) => Left(err)
-                          case (Right(count), idx) =>
-                            // Check all conditions
-                            val matchResult =
-                              criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
-                                case (Left(err), _) => Left(err)
-                                case (Right(false), _) => Right(false) // Short-circuit
-                                case (Right(true), (criteriaSheet, cells, criterion)) =>
-                                  val testRef = cells(idx)
-                                  evalCellValueForMatch(
-                                    criteriaSheet(testRef).value,
-                                    criteriaSheet,
-                                    ctx
-                                  )
-                                    .map { testValue =>
-                                      CriteriaMatcher.matches(testValue, criterion)
-                                    }
-                              }
-                            matchResult.map { allMatch =>
-                              if allMatch then count + 1 else count
-                            }
-                        }
-                        .map(BigDecimal(_))
-                    }
-          }
+                      .map(BigDecimal(_))
+                  }
+        }
     }
 
   val averageif: FunctionSpec[BigDecimal] { type Args = AverageIfArgs } =
-    FunctionSpec.simple[BigDecimal, AverageIfArgs]("AVERAGEIF", Arity.Range(2, 3)) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, AverageIfArgs](
+      "AVERAGEIF",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (rangeLocation, criteria, avgRangeLocationOpt) = args
       evalValue(ctx, criteria).flatMap { criteriaValue =>
         val criterion = CriteriaMatcher.parse(criteriaValue)
@@ -594,7 +616,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     }
 
   val averageifs: FunctionSpec[BigDecimal] { type Args = AverageIfsArgs } =
-    FunctionSpec.simple[BigDecimal, AverageIfsArgs]("AVERAGEIFS", Arity.AtLeast(3)) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, AverageIfsArgs](
+      "AVERAGEIFS",
+      Arity.AtLeast(3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (avgRangeLocation, conditions) = args
       evalCriteriaValues(ctx, conditions)
         .flatMap { criteriaValues =>
@@ -731,7 +757,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       else Right(matrix(row)(col))
 
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
-    FunctionSpec.simple[BigDecimal, SumProductArgs]("SUMPRODUCT", Arity.atLeastOne) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, SumProductArgs](
+      "SUMPRODUCT",
+      Arity.atLeastOne,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       import com.tjclp.xl.formula.ast.TExpr
 
       args match

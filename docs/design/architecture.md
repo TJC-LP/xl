@@ -184,6 +184,6 @@ The evaluator implements: `Evaluator.eval: TExpr[A] => Sheet => Either[EvalError
 - Topological sort for evaluation order (Kahn's algorithm)
 - Short-circuit evaluation for And/Or
 - Division by zero handling (returns `CellError.Div0`)
-- 81 Excel functions: SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, SUMIF, COUNTIF, NPV, IRR, and more
+- 88 Excel functions: SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, SUMIF, COUNTIF, NPV, IRR, and more
 
 See `docs/STATUS.md` for the complete function list.

@@ -42,7 +42,7 @@
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
-- ✅ **Function Library** (WI-09a-h complete): **81 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math), extensible type class parser, evaluation API
+- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **88 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math), extensible type class parser, evaluation API. Text functions include TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT (added in TJC-1055 / GH-116).
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 - ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
 
@@ -78,7 +78,7 @@
 
 ### Test Coverage
 
-**980+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + TJC-351 cross-sheet formulas + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write + v0.3.0 regressions):
+**1080+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + TJC-351 cross-sheet formulas + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write + v0.3.0 regressions + TJC-1055 text functions):
 - **xl-core**: ~500+ tests
   - 17 addressing (Column, Row, ARef, CellRange laws)
   - 21 patch (Monoid laws, application semantics)
@@ -102,7 +102,7 @@
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
-- **xl-evaluator**: ~280 tests (parser, evaluator, function library, evaluation API, dependency graph, cross-sheet formulas, integration)
+- **xl-evaluator**: ~338 tests (parser, evaluator, function library, evaluation API, dependency graph, cross-sheet formulas, integration)
   - **Parser (WI-07)**: 57 tests
     - 7 property-based round-trip tests (parse ∘ print = id)
     - 26 parser unit tests (literals, operators, functions, edge cases)
@@ -130,16 +130,17 @@
 **Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
 - ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function Library** (WI-09a-h complete): **81 built-in functions**, extensible type class parser, evaluation API, 174 tests
-  - **Aggregate** (9): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
-  - **Conditional** (6): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
-  - **Logical** (8): IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
-  - **Text** (12): CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, SUBSTITUTE, TEXT, VALUE
-  - **Date** (13): TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
+- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **88 built-in functions**, extensible type class parser, evaluation API, 236 tests
+  - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
+  - **Conditional** (7): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
+  - **Logical** (9): IF, IFERROR, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
+  - **Text** (12): CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE
+  - **Date** (12): TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
   - **Math** (16): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
-  - **Financial** (7): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
+  - **Financial** (9): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
   - **Lookup** (4): VLOOKUP, XLOOKUP, INDEX, MATCH
-  - **Info** (4): ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+  - **Info** (5): ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+  - **Array** (1): TRANSPOSE
   - FunctionSpec registry: macro-collected specs with extensible registry
   - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
   - Clock trait for pure date/time functions (deterministic testing)
@@ -210,7 +211,7 @@
 - ✅ P7: String interpolation Phase 1 (runtime validation for all macros)
 - ✅ P8: String interpolation Phase 2 (compile-time optimization)
 - ✅ P31: Optics, RichText, HTML export, enhanced ergonomics
-- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 81 functions, dependency graph, cycle detection
+- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 88 functions, dependency graph, cycle detection
 - ✅ **Excel Tables** (WI-10): Structured data with headers, AutoFilter, styling
 - ✅ **Benchmarks** (WI-15): JMH performance suite (XL vs POI)
 - ✅ **SAX Write** (WI-17): Fast SAX/StAX streaming write path
@@ -304,7 +305,7 @@ xl-cats-effect/src/com/tjclp/xl/io/
 ```
 
 ### Completed Modules (Additional)
-- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 81 functions, dependency graph)
+- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 88 functions, dependency graph)
 - `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)
 
 ### Not Started (Future Phases)

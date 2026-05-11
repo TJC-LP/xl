@@ -50,6 +50,10 @@ trait FunctionSpecsBase:
   type BinaryNumericOpt = (TExpr[BigDecimal], Option[TExpr[BigDecimal]])
   type UnaryText = TExpr[String]
   type BinaryTextInt = (TExpr[String], TExpr[Int])
+  type TextIntInt = (TExpr[String], TExpr[Int], TExpr[Int])
+  type FindArgs = (TExpr[String], TExpr[String], Option[TExpr[Int]])
+  type SubstituteArgs = (TExpr[String], TExpr[String], TExpr[String], Option[TExpr[Int]])
+  type TextArgs = (TExpr[Any], TExpr[String])
   type TextList = List[TExpr[String]]
   type UnaryBoolean = TExpr[Boolean]
   type BooleanList = List[TExpr[Boolean]]

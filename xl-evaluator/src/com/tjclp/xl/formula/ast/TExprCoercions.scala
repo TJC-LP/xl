@@ -19,6 +19,11 @@ trait TExprCoercions:
   def asStringExpr(expr: TExpr[?]): TExpr[String] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsString)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsString)
+    case TExpr.Lit(value: String) => TExpr.Lit(value)
+    case TExpr.Lit(value: BigDecimal) => TExpr.Lit(value.toString)
+    case TExpr.Lit(value: Boolean) => TExpr.Lit(if value then "TRUE" else "FALSE")
+    case TExpr.Lit(value: java.time.LocalDate) => TExpr.Lit(value.toString)
+    case TExpr.Lit(value: java.time.LocalDateTime) => TExpr.Lit(value.toString)
     case other => other.asInstanceOf[TExpr[String]] // Safe: non-PolyRef already has correct type
 
   /**
@@ -44,15 +49,16 @@ trait TExprCoercions:
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsInt)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsInt)
     case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
-    // Convert BigDecimal expressions to Int (YEAR/MONTH/DAY/LEN return BigDecimal)
-    case call: TExpr.Call[?] if call.spec == FunctionSpecs.year =>
+    // Any function call returning BigDecimal (flagged via returnsNumeric) — wrap in ToInt.
+    // Covers SUM, COUNT, AVERAGE, ROUND, ABS, MOD, ROW, COLUMN, MATCH, PMT, FIND, LEN,
+    // YEAR/MONTH/DAY, etc. — every numeric-returning function in the registry.
+    case call: TExpr.Call[?] if call.spec.flags.returnsNumeric =>
       ToInt(call.asInstanceOf[TExpr[BigDecimal]])
-    case call: TExpr.Call[?] if call.spec == FunctionSpecs.month =>
-      ToInt(call.asInstanceOf[TExpr[BigDecimal]])
-    case call: TExpr.Call[?] if call.spec == FunctionSpecs.day =>
-      ToInt(call.asInstanceOf[TExpr[BigDecimal]])
-    case call: TExpr.Call[?] if call.spec == FunctionSpecs.len =>
-      ToInt(call.asInstanceOf[TExpr[BigDecimal]])
+    // Arithmetic expressions return BigDecimal — wrap in ToInt to avoid
+    // a runtime ClassCastException when used in Int-arg positions
+    // (e.g. =MID(A1, FIND("@", A1) + 1, 100)).
+    case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow =>
+      ToInt(expr.asInstanceOf[TExpr[BigDecimal]])
     case other => other.asInstanceOf[TExpr[Int]] // Safe: non-PolyRef already has correct type
 
   /**
