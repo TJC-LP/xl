@@ -1,6 +1,6 @@
 # Supported Formula Functions
 
-The `eval` command supports 81 Excel functions.
+The `eval` command supports 88 Excel functions.
 
 ## Math Functions
 

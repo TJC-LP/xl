@@ -225,6 +225,12 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assert(evaluator.eval(expr, emptySheet).isLeft)
   }
 
+  test("SUBSTITUTE: empty old_text with instance<1 still errors (instance validates first)") {
+    val expr =
+      TExpr.substitute(TExpr.Lit("Hello"), TExpr.Lit(""), TExpr.Lit("X"), Some(TExpr.Lit(0)))
+    assert(evaluator.eval(expr, emptySheet).isLeft)
+  }
+
   // ============================================================
   // §5. VALUE scalars
   // ============================================================
@@ -257,6 +263,21 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   test("VALUE: empty string returns 0 (Excel quirk)") {
     val expr = TExpr.value(TExpr.Lit(""))
     assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal(0)))
+  }
+
+  test("VALUE: accounting parens with inner negative sign is rejected (no double-negate)") {
+    val expr = TExpr.value(TExpr.Lit("(-5)"))
+    assert(evaluator.eval(expr, emptySheet).isLeft)
+  }
+
+  test("VALUE: accounting parens with inner positive sign is rejected") {
+    val expr = TExpr.value(TExpr.Lit("(+5)"))
+    assert(evaluator.eval(expr, emptySheet).isLeft)
+  }
+
+  test("VALUE: accounting parens with inner signed currency is rejected") {
+    val expr = TExpr.value(TExpr.Lit("(-1,234.56)"))
+    assert(evaluator.eval(expr, emptySheet).isLeft)
   }
 
   // ============================================================

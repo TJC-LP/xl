@@ -144,13 +144,12 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     newS: String,
     instOpt: Option[Int]
   ): Either[EvalError, String] =
-    if oldS.isEmpty then Right(text)
-    else
-      instOpt match
-        case Some(n) if n < 1 =>
-          Left(EvalError.EvalFailed(s"SUBSTITUTE: instance must be >= 1, got $n"))
-        case Some(n) => Right(replaceNthOccurrence(text, oldS, newS, n))
-        case None => Right(text.replace(oldS, newS))
+    instOpt match
+      case Some(n) if n < 1 =>
+        Left(EvalError.EvalFailed(s"SUBSTITUTE: instance must be >= 1, got $n"))
+      case _ if oldS.isEmpty => Right(text)
+      case Some(n) => Right(replaceNthOccurrence(text, oldS, newS, n))
+      case None => Right(text.replace(oldS, newS))
 
   /** Replace only the nth (1-indexed) forward, non-overlapping occurrence. */
   private def replaceNthOccurrence(s: String, oldS: String, newS: String, n: Int): String =
@@ -187,16 +186,24 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         if trimmed.startsWith("(") && trimmed.endsWith(")") then
           (true, trimmed.substring(1, trimmed.length - 1))
         else (false, trimmed)
-      val (isPercent, afterPercent) =
-        if afterParens.endsWith("%") then (true, afterParens.substring(0, afterParens.length - 1))
-        else (false, afterParens)
-      val cleaned = afterPercent.replace(",", "").replace("$", "").trim
-      scala.util.Try(BigDecimal(cleaned)).toEither match
-        case Right(n) =>
-          val signed = if negFromParens then -n else n
-          Right(if isPercent then signed / 100 else signed)
-        case Left(_) =>
-          Left(EvalError.EvalFailed(s"VALUE: cannot parse '$input'"))
+      // Reject "(-N)" / "(+N)": accounting parens combined with an inner sign
+      // double-negates. Excel returns #VALUE! for this pattern.
+      val innerStartsWithSign =
+        val inner = afterParens.trim
+        inner.startsWith("-") || inner.startsWith("+")
+      if negFromParens && innerStartsWithSign then
+        Left(EvalError.EvalFailed(s"VALUE: cannot parse '$input'"))
+      else
+        val (isPercent, afterPercent) =
+          if afterParens.endsWith("%") then (true, afterParens.substring(0, afterParens.length - 1))
+          else (false, afterParens)
+        val cleaned = afterPercent.replace(",", "").replace("$", "").trim
+        scala.util.Try(BigDecimal(cleaned)).toEither match
+          case Right(n) =>
+            val signed = if negFromParens then -n else n
+            Right(if isPercent then signed / 100 else signed)
+          case Left(_) =>
+            Left(EvalError.EvalFailed(s"VALUE: cannot parse '$input'"))
 
   val text: FunctionSpec[String] { type Args = TextArgs } =
     FunctionSpec.simple[String, TextArgs]("TEXT", Arity.two) { (args, ctx) =>

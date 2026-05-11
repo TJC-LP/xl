@@ -42,7 +42,7 @@
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
-- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **87 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math), extensible type class parser, evaluation API. Text functions include TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT (added in TJC-1055 / GH-116).
+- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **88 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math), extensible type class parser, evaluation API. Text functions include TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT (added in TJC-1055 / GH-116).
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 - ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
 
@@ -102,7 +102,7 @@
 - **xl-cats-effect**: ~30+ tests
   - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
   - Memory tests (O(1) verification, concurrent streams)
-- **xl-evaluator**: ~284 tests (parser, evaluator, function library, evaluation API, dependency graph, cross-sheet formulas, integration)
+- **xl-evaluator**: ~338 tests (parser, evaluator, function library, evaluation API, dependency graph, cross-sheet formulas, integration)
   - **Parser (WI-07)**: 57 tests
     - 7 property-based round-trip tests (parse ∘ print = id)
     - 26 parser unit tests (literals, operators, functions, edge cases)
@@ -130,16 +130,17 @@
 **Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
 - ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **87 built-in functions**, extensible type class parser, evaluation API, 236 tests
-  - **Aggregate** (9): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
-  - **Conditional** (6): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
-  - **Logical** (8): IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
+- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **88 built-in functions**, extensible type class parser, evaluation API, 236 tests
+  - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
+  - **Conditional** (7): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
+  - **Logical** (9): IF, IFERROR, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
   - **Text** (12): CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE
-  - **Date** (13): TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
+  - **Date** (12): TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
   - **Math** (16): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
-  - **Financial** (7): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
+  - **Financial** (9): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
   - **Lookup** (4): VLOOKUP, XLOOKUP, INDEX, MATCH
-  - **Info** (4): ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+  - **Info** (5): ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+  - **Array** (1): TRANSPOSE
   - FunctionSpec registry: macro-collected specs with extensible registry
   - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
   - Clock trait for pure date/time functions (deterministic testing)
