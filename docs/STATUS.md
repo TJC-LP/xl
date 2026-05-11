@@ -211,7 +211,7 @@
 - ✅ P7: String interpolation Phase 1 (runtime validation for all macros)
 - ✅ P8: String interpolation Phase 2 (compile-time optimization)
 - ✅ P31: Optics, RichText, HTML export, enhanced ergonomics
-- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 81 functions, dependency graph, cycle detection
+- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 88 functions, dependency graph, cycle detection
 - ✅ **Excel Tables** (WI-10): Structured data with headers, AutoFilter, styling
 - ✅ **Benchmarks** (WI-15): JMH performance suite (XL vs POI)
 - ✅ **SAX Write** (WI-17): Fast SAX/StAX streaming write path
@@ -305,7 +305,7 @@ xl-cats-effect/src/com/tjclp/xl/io/
 ```
 
 ### Completed Modules (Additional)
-- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 81 functions, dependency graph)
+- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 88 functions, dependency graph)
 - `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)
 
 ### Not Started (Future Phases)

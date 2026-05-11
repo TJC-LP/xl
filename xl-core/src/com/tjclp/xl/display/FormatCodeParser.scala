@@ -429,7 +429,10 @@ object FormatCodeParser:
 
     val color = section.condition.collect { case Condition.Color(c) => c }
     val formatted = applyPattern(effectiveValue, section.pattern)
-    (formatted, color)
+    val withDefaultSign =
+      if value < 0 && format.negative.isEmpty && !formatted.startsWith("-") then s"-$formatted"
+      else formatted
+    (withDefaultSign, color)
 
   /**
    * Apply a format pattern to a number.

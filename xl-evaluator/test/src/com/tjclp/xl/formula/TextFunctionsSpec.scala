@@ -22,8 +22,8 @@ import java.time.LocalDate
  * (~10 tests / function). Pinning decisions:
  *   - Type coercion: text functions accept Number / Bool via Excel-style coercion (TRIM(123) ==
  *     "123", TRIM(true) == "TRUE").
- *   - Negative currency in TEXT requires explicit two-section format (FormatCodeParser drops the
- *     sign on single-section formats — pre-existing limitation, tracked as a follow-up).
+ *   - Negative TEXT formatting preserves the default minus sign for single-section formats and also
+ *     supports explicit two-section negative formats.
  */
 class TextFunctionsSpec extends ScalaCheckSuite:
   private val emptySheet = new Sheet(name = SheetName.unsafe("Test"))
@@ -75,6 +75,11 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   test("TRIM: whitespace-only ASCII spaces collapse to empty string") {
     val expr = TExpr.trim(TExpr.Lit("   "))
     assertEquals(evaluator.eval(expr, emptySheet), Right(""))
+  }
+
+  test("TRIM: scalar literals coerce to text") {
+    assertEquals(emptySheet.evaluateFormula("=TRIM(123)"), Right(CellValue.Text("123")))
+    assertEquals(emptySheet.evaluateFormula("=TRIM(TRUE)"), Right(CellValue.Text("TRUE")))
   }
 
   test("TRIM: collapses ASCII-space runs around a tab; tab is preserved") {
@@ -276,8 +281,14 @@ class TextFunctionsSpec extends ScalaCheckSuite:
   }
 
   test("VALUE: accounting parens with inner signed currency is rejected") {
-    val expr = TExpr.value(TExpr.Lit("(-1,234.56)"))
-    assert(evaluator.eval(expr, emptySheet).isLeft)
+    val beforeCurrency = TExpr.value(TExpr.Lit("(-$1,234.56)"))
+    assert(evaluator.eval(beforeCurrency, emptySheet).isLeft)
+
+    val afterCurrencyNegative = TExpr.value(TExpr.Lit("($-5)"))
+    assert(evaluator.eval(afterCurrencyNegative, emptySheet).isLeft)
+
+    val afterCurrencyPositive = TExpr.value(TExpr.Lit("($+5)"))
+    assert(evaluator.eval(afterCurrencyPositive, emptySheet).isLeft)
   }
 
   // ============================================================
@@ -299,10 +310,14 @@ class TextFunctionsSpec extends ScalaCheckSuite:
     assertEquals(evaluator.eval(expr, emptySheet), Right("50%"))
   }
 
+  test("TEXT: negative number with single-section format preserves minus sign") {
+    val expr = TExpr.text(TExpr.Lit(BigDecimal("-1234.5")), TExpr.Lit("0.00"))
+    assertEquals(evaluator.eval(expr, emptySheet), Right("-1234.50"))
+  }
+
   test("TEXT: negative currency via explicit two-section format ('-$1,234.50')") {
-    // Single-section format "$#,##0.00" with a negative input drops the sign in the
-    // current FormatCodeParser implementation. Use the explicit two-section form
-    // which Excel itself normalizes to internally for sign-with-currency display.
+    // Explicit negative sections use the absolute value and place the sign/currency
+    // exactly as the format code specifies.
     val expr = TExpr.text(TExpr.Lit(BigDecimal("-1234.5")), TExpr.Lit("$#,##0.00;-$#,##0.00"))
     assertEquals(evaluator.eval(expr, emptySheet), Right("-$1,234.50"))
   }

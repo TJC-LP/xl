@@ -73,7 +73,7 @@ CLI expansion with 7 new commands and evaluator fixes:
 All completed phases are documented in git history. Key milestones:
 
 - **P0-P8**: Foundation, OOXML, streaming, codecs, macros
-- **WI-07/08/09**: Formula parser, evaluator, 81 functions
+- **WI-07/08/09**: Formula parser, evaluator, 88 functions
 - **TJC-1055** (closes GH-116): Text functions — TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT (88 functions total)
 - **WI-10**: Excel table support
 - **WI-17**: SAX streaming write (36% faster than POI)

@@ -190,7 +190,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
       // double-negates. Excel returns #VALUE! for this pattern.
       val innerStartsWithSign =
         val inner = afterParens.trim
-        inner.startsWith("-") || inner.startsWith("+")
+        val afterCurrency = if inner.startsWith("$") then inner.drop(1).trim else inner
+        val innerHasLeadingSign = inner.startsWith("-") || inner.startsWith("+")
+        val currencyStrippedHasLeadingSign =
+          afterCurrency.startsWith("-") || afterCurrency.startsWith("+")
+        innerHasLeadingSign || currencyStrippedHasLeadingSign
       if negFromParens && innerStartsWithSign then
         Left(EvalError.EvalFailed(s"VALUE: cannot parse '$input'"))
       else

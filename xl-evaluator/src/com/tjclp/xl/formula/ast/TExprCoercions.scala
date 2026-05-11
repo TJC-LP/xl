@@ -19,6 +19,11 @@ trait TExprCoercions:
   def asStringExpr(expr: TExpr[?]): TExpr[String] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsString)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsString)
+    case TExpr.Lit(value: String) => TExpr.Lit(value)
+    case TExpr.Lit(value: BigDecimal) => TExpr.Lit(value.toString)
+    case TExpr.Lit(value: Boolean) => TExpr.Lit(if value then "TRUE" else "FALSE")
+    case TExpr.Lit(value: java.time.LocalDate) => TExpr.Lit(value.toString)
+    case TExpr.Lit(value: java.time.LocalDateTime) => TExpr.Lit(value.toString)
     case other => other.asInstanceOf[TExpr[String]] // Safe: non-PolyRef already has correct type
 
   /**

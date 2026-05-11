@@ -175,6 +175,12 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(formatted, "1,234.50")
   }
 
+  test("applyFormat: negative with single section preserves default minus sign") {
+    val code = FormatCodeParser.parse("#,##0.00").toOption.get
+    val (formatted, _) = FormatCodeParser.applyFormat(BigDecimal("-1234.5"), code)
+    assertEquals(formatted, "-1,234.50")
+  }
+
   test("applyFormat: percent") {
     val code = FormatCodeParser.parse("0%").toOption.get
     val (formatted, _) = FormatCodeParser.applyFormat(BigDecimal("0.15"), code)
