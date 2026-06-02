@@ -60,7 +60,7 @@ Ensure `~/.local/bin` is in your PATH: `export PATH="$HOME/.local/bin:$PATH"`
 
 ### Info Commands (no file required)
 ```bash
-xl functions                           # List all 82 supported functions
+xl functions                           # List all 88 supported functions
 xl rasterizers                         # Check SVG-to-raster backends
 ```
 
@@ -392,7 +392,7 @@ xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500"  # What-if
 xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A5)" --with "A1=0,A5=0"  # Multiple overrides (comma-separated)
 ```
 
-See [reference/FORMULAS.md](reference/FORMULAS.md) for 82 supported functions.
+See [reference/FORMULAS.md](reference/FORMULAS.md) for 88 supported functions.
 
 ### Create Formatted Report
 
@@ -534,7 +534,7 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 
 | Command | Description |
 |---------|-------------|
-| `functions` | List all 82 supported Excel functions |
+| `functions` | List all 88 supported Excel functions |
 | `rasterizers` | List SVG-to-raster backends with status |
 
 ### Workbook Commands
@@ -619,6 +619,6 @@ Run `xl sort --help` for sorting details.
 ## Links
 
 - `xl <command> --help` for detailed usage and examples
-- [reference/FORMULAS.md](reference/FORMULAS.md) for 82 supported functions
+- [reference/FORMULAS.md](reference/FORMULAS.md) for 88 supported functions
 - [reference/COLORS.md](reference/COLORS.md) for color names
 - [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) for format specs

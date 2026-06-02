@@ -34,7 +34,11 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
       else columnToLetter(quotient, letter.toString + acc)
 
   val row: FunctionSpec[BigDecimal] { type Args = Option[AnyExpr] } =
-    FunctionSpec.simple[BigDecimal, Option[AnyExpr]]("ROW", Arity.Range(0, 1)) { (exprOpt, ctx) =>
+    FunctionSpec.simple[BigDecimal, Option[AnyExpr]](
+      "ROW",
+      Arity.Range(0, 1),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (exprOpt, ctx) =>
       exprOpt match
         case Some(expr) =>
           extractARef(expr) match
@@ -60,34 +64,41 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     }
 
   val column: FunctionSpec[BigDecimal] { type Args = Option[AnyExpr] } =
-    FunctionSpec.simple[BigDecimal, Option[AnyExpr]]("COLUMN", Arity.Range(0, 1)) {
-      (exprOpt, ctx) =>
-        exprOpt match
-          case Some(expr) =>
-            extractARef(expr) match
-              case Some(aref) => Right(BigDecimal(aref.col.index0 + 1))
-              case None =>
-                Left(
-                  EvalError.EvalFailed(
-                    "COLUMN requires a cell reference",
-                    Some(s"COLUMN($expr)")
-                  )
+    FunctionSpec.simple[BigDecimal, Option[AnyExpr]](
+      "COLUMN",
+      Arity.Range(0, 1),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (exprOpt, ctx) =>
+      exprOpt match
+        case Some(expr) =>
+          extractARef(expr) match
+            case Some(aref) => Right(BigDecimal(aref.col.index0 + 1))
+            case None =>
+              Left(
+                EvalError.EvalFailed(
+                  "COLUMN requires a cell reference",
+                  Some(s"COLUMN($expr)")
                 )
-          case None =>
-            // Zero-argument form: COLUMN() returns column of current cell
-            ctx.currentCell match
-              case Some(ref) => Right(BigDecimal(ref.col.index0 + 1))
-              case None =>
-                Left(
-                  EvalError.EvalFailed(
-                    "COLUMN() with no arguments requires a cell context",
-                    Some("COLUMN()")
-                  )
+              )
+        case None =>
+          // Zero-argument form: COLUMN() returns column of current cell
+          ctx.currentCell match
+            case Some(ref) => Right(BigDecimal(ref.col.index0 + 1))
+            case None =>
+              Left(
+                EvalError.EvalFailed(
+                  "COLUMN() with no arguments requires a cell context",
+                  Some("COLUMN()")
                 )
+              )
     }
 
   val rows: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
-    FunctionSpec.simple[BigDecimal, AnyExpr]("ROWS", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[BigDecimal, AnyExpr](
+      "ROWS",
+      Arity.one,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (expr, ctx) =>
       extractCellRange(expr) match
         case Some(range) =>
           val rowCount = range.rowEnd.index0 - range.rowStart.index0 + 1
@@ -102,7 +113,11 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     }
 
   val columns: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
-    FunctionSpec.simple[BigDecimal, AnyExpr]("COLUMNS", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[BigDecimal, AnyExpr](
+      "COLUMNS",
+      Arity.one,
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (expr, ctx) =>
       extractCellRange(expr) match
         case Some(range) =>
           val colCount = range.colEnd.index0 - range.colStart.index0 + 1

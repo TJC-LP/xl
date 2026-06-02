@@ -32,7 +32,7 @@ xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), ma
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
 xl-benchmarks/   → JMH performance benchmarks
-xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 82 functions, dependency graphs)
+xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 88 functions, dependency graphs)
 xl-testkit/      → Test laws, generators, helpers [future]
 xl-agent/        → AI agent benchmark runner (Anthropic API, skill comparison)
 ```
@@ -92,7 +92,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all
-./mill __.test             # Run all tests (731+)
+./mill __.test             # Run all tests (1080+)
 ./mill xl-core.test        # Test specific module
 ./mill __.reformat         # Format (Scalafmt 3.10.1)
 ./mill __.checkFormat      # CI check
@@ -355,7 +355,7 @@ sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
 sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
 ```
 
-**82 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, MIN, MAX, IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, VLOOKUP, XLOOKUP, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE
+**88 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, MIN, MAX, IF, IFERROR, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, VLOOKUP, XLOOKUP, INDEX, MATCH, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE
 
 ### Rich Text
 ```scala
@@ -387,12 +387,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**980+ tests**: addressing (17), patch (21), style (60), datetime (8), codec (42), batch (46), syntax (18), optics (34), OOXML (24), streaming (18), RichText (5), formula (51+), v0.3.0 regressions (36), CLI (100+)
+**1080+ tests**: addressing (17), patch (21), style (60), datetime (8), codec (42), batch (46), syntax (18), optics (34), OOXML (24), streaming (18), RichText (5), formula (51+), v0.3.0 regressions (36), CLI (100+)
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 980+ tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 1080+ tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 

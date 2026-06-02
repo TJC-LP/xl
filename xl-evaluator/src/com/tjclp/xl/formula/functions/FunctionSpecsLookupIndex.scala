@@ -88,7 +88,11 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     }
 
   val matchFn: FunctionSpec[BigDecimal] { type Args = MatchArgs } =
-    FunctionSpec.simple[BigDecimal, MatchArgs]("MATCH", Arity.Range(2, 3)) { (args, ctx) =>
+    FunctionSpec.simple[BigDecimal, MatchArgs](
+      "MATCH",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
       val (lookupValue, lookupArray, matchTypeOpt) = args
       val matchTypeExpr = matchTypeOpt.getOrElse(TExpr.Lit(BigDecimal(1)))
       for

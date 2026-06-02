@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
 **Last Updated**: 2026-04-26
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**81 functions** + cross-sheet support); tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**88 functions** + cross-sheet support); tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -115,7 +115,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 #### 6. Formula System ✅ **PRODUCTION READY**
 **Status**: Complete (WI-07, WI-08, WI-09a-h + TJC-351 cross-sheet formulas)
-**Features**: Parser, evaluator, **81 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, INDEX, MATCH, XIRR, XNPV), dependency graph, cycle detection, cross-sheet references
+**Features**: Parser, evaluator, **88 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, INDEX, MATCH, XIRR, XNPV), dependency graph, cycle detection, cross-sheet references
 **Plan**: [Formula System](plan/formula-system.md)
 **Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions + Cross-Sheet Formulas
 
@@ -702,7 +702,7 @@ See: [plan/23-security.md](plan/23-security.md)
 | **Streaming Read** | ✅ | ✅ | XL: 55k rows/s, POI: ~40k rows/s |
 | **Multi-sheet** | ✅ | ✅ | XL: Arbitrary, POI: Sequential |
 | **Styles** | ✅ | ✅ | XL: Full in-memory; streaming uses minimal default styles |
-| **Formulas (eval)** | ✅ | ✅ | XL: 81 functions, dependency graph, cycle detection |
+| **Formulas (eval)** | ✅ | ✅ | XL: 88 functions, dependency graph, cycle detection |
 | **Tables** | ✅ | ✅ | XL: Full table support with AutoFilter, structured refs |
 | **Charts** | ❌ | ✅ | POI: Full support |
 | **Drawings** | ❌ | ✅ | POI: Images/shapes |
@@ -759,7 +759,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 - Multi-sheet workbooks
 - Core cell types and rich text
 - Styling in in-memory workflows (full styles supported)
-- Formula evaluation (81 functions, dependency graph, cycle detection)
+- Formula evaluation (88 functions, dependency graph, cycle detection)
 - Excel Tables (structured data with AutoFilter, headers, styling)
 - Performance-critical workloads (benchmarked vs POI)
 
