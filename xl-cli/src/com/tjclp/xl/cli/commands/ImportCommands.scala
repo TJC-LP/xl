@@ -20,7 +20,7 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
  */
 object ImportCommands:
 
-  /** Write workbook using standard or streaming writer based on mode */
+  /** Write workbook using the standard or SAX/StAX backend based on mode */
   private def writeWorkbook(
     wb: Workbook,
     outputPath: Path,
@@ -125,7 +125,7 @@ object ImportCommands:
    * Overwrites any existing data at that position.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory (hybrid streaming)
+   *   If true, uses the SAX/StAX workbook writer
    */
   private def importToPosition(
     wb: Workbook,
@@ -163,7 +163,7 @@ ${saveSuffix(outputPath, stream)}"""
    * Sheet name must not already exist in the workbook.
    *
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory (hybrid streaming)
+   *   If true, uses the SAX/StAX workbook writer
    */
   private def importToNewSheet(
     wb: Workbook,

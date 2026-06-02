@@ -13,12 +13,12 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
 /**
  * Command handlers for cell comment operations.
  *
- * Supports adding and removing comments from cells. All methods accept a `stream` parameter for
- * O(1) output memory.
+ * Supports adding and removing comments from cells. All methods accept a `stream` parameter to use
+ * the SAX/StAX workbook writer.
  */
 object CommentCommands:
 
-  /** Write workbook using standard or streaming writer based on mode */
+  /** Write workbook using the standard or SAX/StAX backend based on mode */
   private def writeWorkbook(
     wb: Workbook,
     outputPath: Path,
@@ -52,7 +52,7 @@ object CommentCommands:
    * @param config
    *   Writer configuration
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    * @return
    *   Success message
    */
@@ -102,7 +102,7 @@ ${saveSuffix(outputPath, stream)}"""
    * @param config
    *   Writer configuration
    * @param stream
-   *   If true, uses streaming writer for O(1) output memory
+   *   If true, uses the SAX/StAX workbook writer
    * @return
    *   Success message
    */

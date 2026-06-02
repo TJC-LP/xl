@@ -275,7 +275,7 @@ object ImageMagick extends Rasterizer:
             for
               versionOutput <- process.stdout.through(fs2.text.utf8.decode).compile.string
               _ <- process.stderr.compile.drain
-            yield versionOutput.linesIterator.nextOption
+            yield versionOutput.linesIterator.nextOption()
           }
           .handleError(_ => None)
     }

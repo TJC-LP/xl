@@ -12,7 +12,7 @@ XL provides two distinct I/O implementations with different performance characte
 | **10k-50k rows** | Full styling | In-memory | In-memory | ~25-50MB | Good |
 | **50k-100k rows** | Full styling | In-memory | In-memory | ~50-100MB | Fair |
 | **100k+ rows** | Minimal | **Streaming** (sequential) | **Streaming** | ~10-50MB (SST dependent) | Excellent |
-| **100k+ rows** | Full styling | In-memory for now | In-memory for now | O(n) | See roadmap P7.5 |
+| **100k+ rows** | Full styling / metadata | In-memory | `writeWorkbookStream` if already materialized | O(n) workbook, lower writer allocation | Good |
 
 ## I/O Modes Explained
 
@@ -56,14 +56,15 @@ excel.read(path).map { wb =>
 
 ---
 
-### Streaming Write Mode
+### Row-Stream Write Mode
 
 **Use For**: Large data generation (100k+ rows) when you can live with minimal styling and inline strings.
 
 **Characteristics**:
 - O(1) constant memory for worksheet data (~10MB regardless of row count).
 - fs2‑data‑xml event streaming; no intermediate XML trees.
-- **Limitations**: No SST support (inline strings only), minimal styles (no rich formatting or merged cells).
+- **Limitations**: No SST support (inline strings only), minimal styles, and no API for workbook metadata such as merged cells.
+- For an already-materialized workbook that needs metadata preservation with lower writer allocation, use `ExcelIO.writeWorkbookStream`.
 
 **API**:
 ```scala
@@ -385,10 +386,10 @@ excel.read(largeFile)
 - ✅ DEFLATED compression by default (5-10x smaller files)
 - ✅ Configurable compression mode
 
-### P7.5 (3-4 weeks)
-- ✅ Two-phase streaming writer with full SST/styles
-- ✅ O(1) memory for writes with rich formatting
-- ✅ Disk-backed SST for very large datasets
+### SAX/StAX OOXML Writer
+- ✅ Lower-allocation `writeWorkbookStream` path for already-materialized workbooks
+- ✅ Preserves full OOXML metadata handled by `XlsxWriter`
+- ✅ Pure row-stream writers remain available for true O(1) row input
 
 ### Future (Post-1.0)
 - ⬜ Parallel XML serialization (4-8 threads)

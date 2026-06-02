@@ -298,12 +298,14 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    * @return
    *   SharedStrings with deduplicated entries and total count
    */
-  def fromWorkbook(wb: Workbook): SharedStrings =
+  def fromWorkbook(wb: Workbook, escapeFormulas: Boolean = false): SharedStrings =
     // Stream entries using iterator for lazy evaluation
     val allEntries = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.values.iterator.flatMap { cell =>
         cell.value match
-          case com.tjclp.xl.cells.CellValue.Text(s) => Iterator.single(Left(s): SSTEntry)
+          case com.tjclp.xl.cells.CellValue.Text(s) =>
+            val safeText = if escapeFormulas then CellValue.escape(s) else s
+            Iterator.single(Left(safeText): SSTEntry)
           case com.tjclp.xl.cells.CellValue.RichText(rt) => Iterator.single(Right(rt): SSTEntry)
           case _ => Iterator.empty
       }

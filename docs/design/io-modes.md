@@ -71,7 +71,7 @@ Characteristics:
 
 ---
 
-### Streaming Path
+### Row-Streaming Path
 
 Write (`writeStream` / `writeStreamsSeq`):
 - Static parts (`[Content_Types].xml`, workbook relationships, minimal `styles.xml`) are written once up front.
@@ -86,8 +86,10 @@ Read (`readStream` / `readSheetStream` / `readStreamByIndex`):
 Characteristics:
 - Memory: **O(1)** for worksheet data (plus the in‑memory SST and minimal bookkeeping).
 - Features:
-  - Write: inline strings only, default styles, no merged cells or advanced sheet metadata.
+  - Write: inline strings only, default styles, no row-stream API for merged cells or advanced sheet metadata.
   - Read: values and basic types; you typically use it for ETL/analytics rather than formatting‑preserving workflows.
+
+For an already-materialized `Workbook`, `writeWorkbookStream` uses the SAX/StAX OOXML backend. It is a lower-allocation full-workbook write path, not a row-input streaming API, and it preserves the full metadata handled by `XlsxWriter`.
 
 ```
 Read:
@@ -124,7 +126,7 @@ Features: Limited (reads values only, minimal style info)
 **Alternatives Considered**:
 1. **Streaming only**: Would lose SST/styles (larger files, no formatting)
 2. **In-memory only**: Would OOM on large files
-3. **Two-phase streaming**: Adds complexity, still under development (P7.5)
+3. **Full-feature row streaming**: Adds complexity because SST/styles/metadata require workbook-level state
 
 **Chosen**: Two modes with clear guidance on when to use each
 
@@ -232,12 +234,12 @@ Today:
 
 ## Why Not a Unified Implementation?
 
-**Could we make streaming support full features?**
+**Could pure row streaming support full features?**
 
 **Challenge 1**: SST requires string deduplication
 - Need to see all strings before writing sharedStrings.xml
 - But [Content_Types].xml written first (before strings known)
-- **Solution**: Two-phase approach (P7.5) or optimistic SST inclusion
+- **Solution**: Two-phase row streaming or optimistic SST inclusion
 
 **Challenge 2**: Styles require deduplication across workbook
 - Need to merge all sheet style registries
@@ -251,12 +253,12 @@ Today:
   - Relationships typically before referenced parts
   - Changing order might break some readers (untested)
 
-**Conclusion**: Streaming with full features is possible (P7.5) but requires:
+**Conclusion**: Pure row streaming with full features is possible but requires:
 - Two-pass approach (scan data, write with indices)
 - OR disk-backed registries for SST/styles
 - OR optimistic overhead (include SST/styles even if empty)
 
-**Timeline**: 3-4 weeks of implementation (deferred to post-MVP)
+For already-materialized workbooks, the implemented `writeWorkbookStream` path uses the SAX/StAX backend and preserves the full metadata handled by `XlsxWriter`.
 
 ---
 
@@ -330,11 +332,10 @@ test("streaming read uses constant memory"):
 - Default: DEFLATED + compact (smaller files)
 - Debug mode: STORED + pretty for inspection
 
-### P7.5: Two-Phase Streaming Writer (3-4 weeks)
-- Support SST and styles in streaming mode
-- Two-pass approach: scan → write
-- Disk-backed registries for very large datasets
-- Achieves O(1) memory with full features
+### SAX/StAX Workbook Writer
+- `writeWorkbookStream` writes an already-materialized workbook through the SAX/StAX backend.
+- Preserves SST, styles, merged cells, comments, tables, row/column properties, and freeze panes handled by `XlsxWriter`.
+- Pure row-stream writers remain the true O(1) row-input path for generated datasets.
 
 ---
 

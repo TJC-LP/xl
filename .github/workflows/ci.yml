@@ -15,7 +15,7 @@ jobs:
       - name: Set up JDK
         uses: coursier/setup-action@v1
         with:
-          jvm: temurin:21
+          jvm: temurin:25
 
       - name: Cache Coursier
         uses: actions/cache@v4

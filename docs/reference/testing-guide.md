@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: 636/636 tests passing across 4 modules
+**Current Status**: CI runs the full Mill test graph across the library, evaluator, CLI, and support modules. Use `./mill __.test` as the authoritative count.
 
 ## Test Infrastructure
 
@@ -14,11 +14,14 @@
 xl-core/test/src/com/tjclp/xl/
 xl-ooxml/test/src/com/tjclp/xl/ooxml/
 xl-cats-effect/test/src/com/tjclp/xl/io/
+xl-evaluator/test/src/com/tjclp/xl/formula/
+xl-cli/test/src/com/tjclp/xl/cli/
+xl-testkit/test/src/com/tjclp/xl/testkit/
 ```
 
 ## Test Coverage by Module
 
-### xl-core: 221 tests ✅
+### xl-core: domain, style, codec, optics, and law suites ✅
 
 #### Addressing Laws (17 tests)
 - **Column/Row round-trips**: `from0` → `index0` identity
@@ -83,9 +86,9 @@ xl-cats-effect/test/src/com/tjclp/xl/io/
 - **Whitespace**: Preserved correctly with `xml:space="preserve"`
 - **OOXML mapping**: `TextRun` → `<r><rPr>...</rPr><t>...</t></r>`
 
-### xl-ooxml: 24 tests ✅
+### xl-ooxml: OOXML round-trip, surgical write, metadata, table, security, and performance suites ✅
 
-#### Round-Trip Tests (24 tests)
+#### Round-Trip and Regression Tests
 - **Text cells**: String values preserve exactly
 - **Number cells**: Numeric precision maintained
 - **Boolean cells**: True/false round-trip
@@ -98,9 +101,9 @@ xl-cats-effect/test/src/com/tjclp/xl/io/
 - **RichText**: Multi-run formatted text preserved
 - **XML determinism**: Same input → same byte output
 
-### xl-cats-effect: 18 tests ✅
+### xl-cats-effect: streaming and effectful IO suites ✅
 
-#### Streaming I/O (18 tests)
+#### Streaming I/O
 - **writeStream / writeStreamsSeq**: Event-based ZIP write via fs2-data-xml
 - **readStream / readSheetStream / readStreamByIndex**: Event-based worksheet reads with fs2-data-xml + fs2.io.readInputStream
 - **Constant memory**: O(1) memory usage verified (100k rows @ ~50MB)
@@ -184,10 +187,12 @@ property("get-set") {
 
 ### Run All Tests
 ```bash
-./mill __.test               # All modules (263 tests)
-./mill xl-core.test          # Core only (221 tests)
-./mill xl-ooxml.test         # OOXML only (24 tests)
-./mill xl-cats-effect.test   # Streaming only (18 tests)
+./mill __.test                 # All test modules
+./mill xl-core.test            # Core only
+./mill xl-ooxml.test           # OOXML only
+./mill xl-cats-effect.test     # Streaming/IO only
+./mill xl-evaluator.test       # Formula parser/evaluator only
+./mill xl-cli.test             # CLI only
 ```
 
 ### Run Specific Test
@@ -201,7 +206,7 @@ property("get-set") {
 GitHub Actions runs:
 1. `./mill __.checkFormat` (Scalafmt verification)
 2. `./mill __.compile` (Compilation check)
-3. `./mill __.test` (All 263 tests)
+3. `./mill __.test` (All test modules)
 
 ## Coverage Goals
 
@@ -215,9 +220,9 @@ GitHub Actions runs:
 
 ## Test Quality Metrics
 
-- **All tests pass**: 263/263 ✅
+- **All tests pass**: enforced by `./mill __.test` in CI ✅
 - **Zero flaky tests**: Deterministic, reproducible
-- **Fast execution**: <5 seconds for full suite
+- **Fast execution**: focused suites run quickly; full-suite time is tracked by CI
 - **Property-based**: 60%+ of tests use ScalaCheck
 - **Law coverage**: All algebras (Monoid, Lens, Optional) verified
 - **Edge cases**: Boundary values, error paths tested
