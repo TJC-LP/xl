@@ -704,7 +704,9 @@ object StreamingWriteCommands:
           rowProps(row) = existing.copy(hidden = false)
           summaryLines += s"  ROW-SHOW $rowNum"
 
-        // Ops that require full workbook context (not supported in streaming mode)
+        // Ops that require full workbook context (not supported in streaming mode).
+        // Unfreeze is a parameterless (singleton) enum case, so it is matched by
+        // value reference rather than the `_:` typed pattern used for the others.
         case _: BatchParser.BatchOp.AddComment | _: BatchParser.BatchOp.RemoveComment |
             _: BatchParser.BatchOp.Clear | _: BatchParser.BatchOp.AutoFit |
             _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
