@@ -1073,10 +1073,28 @@ object WriteCommands:
     if n >= 1 then IO.unit
     else IO.raiseError(new Exception(s"$label must be >= 1, got $n"))
 
-  private def colIndexOf(col: String): IO[Int] =
+  private def singleColIndex(col: String): IO[Int] =
     IO.fromEither(
       ARef.parse(col.trim + "1").left.map(e => new Exception(s"Invalid column '$col': $e"))
     ).map(ref => Column.index0(ref.col))
+
+  /**
+   * Resolve a column argument to (0-based start index, count). Accepts a single column ("C", with
+   * `fallbackCount` columns) or an inclusive range ("C:E", whose count is derived and overrides the
+   * positional count). GH-129.
+   */
+  private def colSpec(col: String, fallbackCount: Int): IO[(Int, Int)] =
+    val trimmed = col.trim
+    if trimmed.contains(":") then
+      trimmed.split(":", -1).toList match
+        case startStr :: endStr :: Nil =>
+          for
+            startIdx <- singleColIndex(startStr)
+            endIdx <- singleColIndex(endStr)
+          yield (math.min(startIdx, endIdx), math.abs(endIdx - startIdx) + 1)
+        case _ =>
+          IO.raiseError(new Exception(s"Invalid column range '$col' (expected e.g. C:E)"))
+    else singleColIndex(trimmed).map(idx => (idx, fallbackCount))
 
   def insertRows(
     wb: Workbook,
@@ -1124,10 +1142,11 @@ object WriteCommands:
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-cols")
       _ <- requirePositive(count, "count")
-      at0 <- colIndexOf(col)
-      updatedWb = StructuralEditor.insertColumns(wb, sheet.name, at0, count)
+      spec <- colSpec(col, count)
+      (at0, n) = spec
+      updatedWb = StructuralEditor.insertColumns(wb, sheet.name, at0, n)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Inserted $count column(s) before column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+    yield s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
 
   def deleteColumns(
     wb: Workbook,
@@ -1141,10 +1160,11 @@ object WriteCommands:
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-cols")
       _ <- requirePositive(count, "count")
-      at0 <- colIndexOf(col)
-      updatedWb = StructuralEditor.deleteColumns(wb, sheet.name, at0, count)
+      spec <- colSpec(col, count)
+      (at0, n) = spec
+      updatedWb = StructuralEditor.deleteColumns(wb, sheet.name, at0, n)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Deleted $count column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+    yield s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Copy a range of cells to another location with optional formula adjustment.
