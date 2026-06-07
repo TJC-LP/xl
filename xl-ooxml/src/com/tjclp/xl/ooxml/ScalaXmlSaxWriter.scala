@@ -40,9 +40,11 @@ class ScalaXmlSaxWriter extends SaxWriter:
       case Nil => ()
 
   def writeCharacters(text: String): Unit =
+    // GH-237: strip XML-illegal control chars so this backend matches StAX byte-for-byte.
+    val safe = XmlUtil.sanitizeXmlText(text)
     stack match
       case head :: tail =>
-        stack = head.copy(children = Text(text) :: head.children) :: tail
+        stack = head.copy(children = Text(safe) :: head.children) :: tail
       case Nil => ()
 
   def endElement(): Unit =

@@ -355,7 +355,7 @@ object DirectSaxEmitter:
 
       case CellValue.Number(num) =>
         writer.startElement("v")
-        writer.writeCharacters(num.toString)
+        writer.writeCharacters(XmlUtil.plainNumber(num))
         writer.endElement()
 
       case CellValue.Bool(b) =>
@@ -378,7 +378,7 @@ object DirectSaxEmitter:
       case CellValue.DateTime(dt) =>
         val serial = CellValue.dateTimeToExcelSerial(dt)
         writer.startElement("v")
-        writer.writeCharacters(serial.toString)
+        writer.writeCharacters(XmlUtil.plainNumber(serial))
         writer.endElement()
 
   /**
@@ -388,7 +388,7 @@ object DirectSaxEmitter:
     cachedValue.foreach {
       case CellValue.Number(num) =>
         writer.startElement("v")
-        writer.writeCharacters(num.toString)
+        writer.writeCharacters(XmlUtil.plainNumber(num))
         writer.endElement()
       case CellValue.Text(s) =>
         writer.startElement("v")

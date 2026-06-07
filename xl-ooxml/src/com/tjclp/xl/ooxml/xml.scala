@@ -164,6 +164,36 @@ object XmlUtil:
       s.contains("\n") || s.contains("\r") || s.contains("\t"))
 
   /**
+   * True if `c` is a valid XML 1.0 character. Tab/LF/CR are allowed; the other C0 control chars
+   * (U+0000–08, 0B, 0C, 0E–1F) are forbidden. Everything >= U+0020 is kept — including surrogate
+   * code units, so astral characters (emoji) encoded as surrogate pairs survive intact.
+   */
+  def isLegalXmlChar(c: Char): Boolean =
+    c == '\t' || c == '\n' || c == '\r' || c >= ' '
+
+  /**
+   * Strip XML 1.0-illegal control characters from text content (GH-237). Such characters occur in
+   * DB/CSV-imported data; left raw, the StAX backend silently DROPS them while the ScalaXml backend
+   * emits them raw — divergent, and a determinism/validity breach. Applying this identically on
+   * both write paths makes output backend-independent. Fast path returns the input unchanged.
+   */
+  def sanitizeXmlText(s: String): String =
+    if s.forall(isLegalXmlChar) then s else s.filter(isLegalXmlChar)
+
+  /**
+   * Format a BigDecimal for an OOXML `<v>` element as a plain decimal, never scientific notation
+   * (GH-238). Excel never writes `1.0E+10` in `<v>` and stricter consumers reject it.
+   */
+  def plainNumber(n: BigDecimal): String = n.bigDecimal.toPlainString
+
+  /**
+   * Plain-decimal rendering of a Double serial (date/time). Routes through the Double's shortest
+   * round-trip string so normal serials are byte-identical to the previous `toString` output while
+   * scientific notation (if it ever arose) is expanded.
+   */
+  def plainNumber(d: Double): String = BigDecimal(d.toString).bigDecimal.toPlainString
+
+  /**
    * Extract text content from XML element, preserving whitespace.
    *
    * Unlike `.text` which normalizes whitespace, this method preserves exact whitespace (including
