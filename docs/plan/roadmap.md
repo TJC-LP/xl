@@ -2,7 +2,11 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-01-21
+**Last Updated**: 2026-06-07
+
+> ⚠️ **This file is mid-rewrite (tracked as the 0.10.0 doc-truth pass).** For current release work see
+> **[v0.10.0-execution.md](v0.10.0-execution.md)** (live tracker) and **[v0.10.0-triage.md](v0.10.0-triage.md)** (rationale + per-issue verdicts).
+> Sections below are stale pending that pass.
 
 ---
 
@@ -10,7 +14,7 @@
 
 **Current Status**: Production-ready with **88 formula functions**, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 1080+ tests passing.
 
-**Current Version**: 0.6.1
+**Current Version**: 0.9.7 → **0.10.0 "Trust & Author"** in progress
 
 ---
 
