@@ -211,6 +211,114 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       yield result
     }
 
+  /** Render an ExprValue to text for HLOOKUP text matching / diagnostics. */
+  private def exprValueToText(value: ExprValue): String =
+    value match
+      case ExprValue.Text(s) => s
+      case ExprValue.Number(n) => n.toString
+      case ExprValue.Bool(b) => b.toString
+      case ExprValue.Date(d) => d.toString
+      case ExprValue.DateTime(dt) => dt.toString
+      case ExprValue.Cell(cv) => cv.toString
+      case ExprValue.Opaque(other) => other.toString
+
+  /**
+   * HLOOKUP(lookup, table, row_index_num, [range_lookup])
+   *
+   * Horizontal transpose of VLOOKUP: searches the first ROW of the table, returns the cell from the
+   * 1-based row_index_num in the matched COLUMN. range_lookup TRUE (default) = approximate.
+   */
+  val hlookup: FunctionSpec[CellValue] { type Args = VlookupArgs } =
+    FunctionSpec.simple[CellValue, VlookupArgs]("HLOOKUP", Arity.Range(3, 4)) { (args, ctx) =>
+      val (lookupExpr, table, rowIndexExpr, rangeLookupOpt) = args
+      val rangeLookupExpr = rangeLookupOpt.getOrElse(TExpr.Lit(true))
+      for
+        lookupValue <- evalValue(ctx, lookupExpr)
+        rowIndex <- ctx.evalExpr(rowIndexExpr)
+        rangeMatch <- ctx.evalExpr(rangeLookupExpr)
+        targetSheet <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
+        result <-
+          if rowIndex < 1 || rowIndex > table.range.height then
+            Left(
+              EvalError.EvalFailed(
+                s"HLOOKUP: row_index_num $rowIndex is outside 1..${table.range.height}",
+                Some(s"HLOOKUP(…, ${table.range.toA1})")
+              )
+            )
+          else
+            val colIndices = 0 until table.range.width
+            val keyRow0 = table.range.rowStart.index0
+            val colStart0 = table.range.colStart.index0
+            val resultRow0 = keyRow0 + (rowIndex - 1)
+
+            val normalizedLookup: ExprValue = lookupValue match
+              case ExprValue.Cell(cv) =>
+                cv match
+                  case CellValue.Number(n) => ExprValue.Number(n)
+                  case CellValue.Text(s) => ExprValue.Text(s)
+                  case CellValue.Bool(b) => ExprValue.Bool(b)
+                  case CellValue.Formula(_, Some(cached)) =>
+                    cached match
+                      case CellValue.Number(n) => ExprValue.Number(n)
+                      case CellValue.Text(s) => ExprValue.Text(s)
+                      case CellValue.Bool(b) => ExprValue.Bool(b)
+                      case other => ExprValue.Cell(other)
+                  case other => ExprValue.Cell(other)
+              case other => other
+
+            val isTextLookup = normalizedLookup match
+              case ExprValue.Text(_) => true
+              case ExprValue.Number(_) => false
+              case ExprValue.Bool(_) => false
+              case _ => true
+
+            val chosenColOpt: Option[Int] =
+              if rangeMatch then
+                val numericLookup: Option[BigDecimal] = normalizedLookup match
+                  case ExprValue.Number(n) => Some(n)
+                  case ExprValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
+                  case _ => None
+                numericLookup.flatMap { lookup =>
+                  val keyedCols: List[(Int, BigDecimal)] =
+                    colIndices.toList.flatMap { i =>
+                      val keyRef = ARef.from0(colStart0 + i, keyRow0)
+                      extractNumericForMatch(targetSheet(keyRef).value).map(k => (i, k))
+                    }
+                  keyedCols.filter(_._2 <= lookup).sortBy(_._2).lastOption.map(_._1)
+                }
+              else if isTextLookup then
+                val lookupText = exprValueToText(normalizedLookup).toLowerCase
+                colIndices.find { i =>
+                  val keyRef = ARef.from0(colStart0 + i, keyRow0)
+                  extractTextForMatch(targetSheet(keyRef).value).exists(_.toLowerCase == lookupText)
+                }
+              else
+                val numericLookup: Option[BigDecimal] = normalizedLookup match
+                  case ExprValue.Number(n) => Some(n)
+                  case _ => None
+                numericLookup.flatMap { lookup =>
+                  colIndices.find { i =>
+                    val keyRef = ARef.from0(colStart0 + i, keyRow0)
+                    extractNumericForMatch(targetSheet(keyRef).value).contains(lookup)
+                  }
+                }
+
+            chosenColOpt match
+              case Some(colIdx) =>
+                Right(targetSheet(ARef.from0(colStart0 + colIdx, resultRow0)).value)
+              case None =>
+                Left(
+                  EvalError.EvalFailed(
+                    if rangeMatch then "HLOOKUP approximate match not found"
+                    else "HLOOKUP exact match not found",
+                    Some(
+                      s"HLOOKUP(${exprValueToText(normalizedLookup)}, ${table.range.toA1}, $rowIndex, $rangeMatch)"
+                    )
+                  )
+                )
+      yield result
+    }
+
   val xlookup: FunctionSpec[CellValue] { type Args = XLookupArgs } =
     FunctionSpec.simple[CellValue, XLookupArgs]("XLOOKUP", Arity.Range(3, 6)) { (args, ctx) =>
       val (lookupValue, lookupArray, returnArray, ifNotFoundOpt, matchModeOpt, searchModeOpt) =

@@ -82,3 +82,64 @@ class Phase3FunctionsSpec extends FunSuite:
       Right(CellValue.Number(BigDecimal(4)))
     )
   }
+
+  // GH-122: HLOOKUP (transpose of VLOOKUP).
+  private val htable = s
+    .put("A1" -> "a")
+    .put("B1" -> "b")
+    .put("C1" -> "c")
+    .put("A2" -> 10)
+    .put("B2" -> 20)
+    .put("C2" -> 30)
+    .put("A3" -> 100)
+    .put("B3" -> 200)
+    .put("C3" -> 300)
+
+  test("HLOOKUP exact match returns from the given row index") {
+    assertEquals(
+      htable.evaluateFormula("=HLOOKUP(\"b\",A1:C3,2,FALSE)"),
+      Right(CellValue.Number(BigDecimal(20)))
+    )
+    assertEquals(
+      htable.evaluateFormula("=HLOOKUP(\"c\",A1:C3,3,FALSE)"),
+      Right(CellValue.Number(BigDecimal(300)))
+    )
+  }
+
+  test("HLOOKUP approximate (default) finds the largest key <= lookup") {
+    val t = s.put("A1" -> 1).put("B1" -> 5).put("C1" -> 10).put("A2" -> "x").put("B2" -> "y").put(
+      "C2" -> "z"
+    )
+    assertEquals(t.evaluateFormula("=HLOOKUP(7,A1:C2,2)"), Right(CellValue.Text("y")))
+  }
+
+  // GH-122: MAXIFS / MINIFS (criteria aggregates).
+  private val crit = s
+    .put("A1" -> 10)
+    .put("A2" -> 20)
+    .put("A3" -> 30)
+    .put("A4" -> 40)
+    .put("A5" -> 50)
+    .put("B1" -> "x")
+    .put("B2" -> "y")
+    .put("B3" -> "x")
+    .put("B4" -> "y")
+    .put("B5" -> "x")
+
+  test("MAXIFS / MINIFS reduce over matching cells") {
+    assertEquals(
+      crit.evaluateFormula("=MAXIFS(A1:A5,B1:B5,\"x\")"),
+      Right(CellValue.Number(BigDecimal(50)))
+    )
+    assertEquals(
+      crit.evaluateFormula("=MINIFS(A1:A5,B1:B5,\"x\")"),
+      Right(CellValue.Number(BigDecimal(10)))
+    )
+  }
+
+  test("MAXIFS returns 0 when nothing matches") {
+    assertEquals(
+      crit.evaluateFormula("=MAXIFS(A1:A5,B1:B5,\"z\")"),
+      Right(CellValue.Number(BigDecimal(0)))
+    )
+  }

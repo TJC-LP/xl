@@ -587,6 +587,116 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         }
     }
 
+  /**
+   * GH-76: Collect the numeric values from `valueRangeLocation` at positions where ALL criteria
+   * match. Mirrors the SUMIFS resolve/constrain/iterate pipeline but accumulates the matched values
+   * (rather than summing) so MAXIFS/MINIFS can reduce them. Empty result = no matches.
+   */
+  private def collectIfsValues(
+    valueRangeLocation: TExpr.RangeLocation,
+    conditions: RangeCriteriaList,
+    fnName: String,
+    ctx: EvalContext
+  ): Either[EvalError, Vector[BigDecimal]] =
+    evalCriteriaValues(ctx, conditions).flatMap { criteriaValues =>
+      val parsedConditions = parseConditions(conditions, criteriaValues)
+      val dimensionError = parsedConditions.collectFirst {
+        case (loc, _)
+            if loc.range.width != valueRangeLocation.range.width ||
+              loc.range.height != valueRangeLocation.range.height =>
+          EvalError.EvalFailed(
+            s"$fnName: all ranges must have same dimensions (value_range is ${valueRangeLocation.range.height}×${valueRangeLocation.range.width}, criteria_range is ${loc.range.height}×${loc.range.width})",
+            Some(s"$fnName(${valueRangeLocation.toA1}, ...)")
+          )
+      }
+      dimensionError match
+        case Some(err) => Left(err)
+        case None =>
+          Evaluator.resolveRangeLocation(valueRangeLocation, ctx.sheet, ctx.workbook).flatMap {
+            valueSheet =>
+              val resolvedConditions: Either[
+                EvalError,
+                List[(com.tjclp.xl.sheets.Sheet, TExpr.RangeLocation, CriteriaMatcher.Criterion)]
+              ] =
+                parsedConditions.foldLeft[Either[
+                  EvalError,
+                  List[(com.tjclp.xl.sheets.Sheet, TExpr.RangeLocation, CriteriaMatcher.Criterion)]
+                ]](Right(List.empty)) {
+                  case (Left(err), _) => Left(err)
+                  case (Right(acc), (loc, criterion)) =>
+                    Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map { sheet =>
+                      acc :+ (sheet, loc, criterion)
+                    }
+                }
+              resolvedConditions.flatMap { resolved =>
+                val bounds = computeBounds(
+                  (valueRangeLocation.range, valueSheet) ::
+                    resolved.map { case (sheet, loc, _) => (loc.range, sheet) }
+                )
+                val constrainedValueRange = constrainRange(valueRangeLocation.range, bounds)
+                val constrainedConditions = resolved.map { case (sheet, loc, criterion) =>
+                  (sheet, constrainRange(loc.range, bounds), criterion)
+                }
+                val valueCells = constrainedValueRange.cells.toVector
+                val criteriaCells = constrainedConditions.map { case (sheet, range, criterion) =>
+                  (sheet, range.cells.toVector, criterion)
+                }
+                valueCells.indices.foldLeft[Either[EvalError, Vector[BigDecimal]]](
+                  Right(Vector.empty)
+                ) {
+                  case (Left(err), _) => Left(err)
+                  case (Right(acc), idx) =>
+                    val matchResult =
+                      criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
+                        case (Left(err), _) => Left(err)
+                        case (Right(false), _) => Right(false)
+                        case (Right(true), (criteriaSheet, cells, criterion)) =>
+                          evalCellValueForMatch(
+                            criteriaSheet(cells(idx)).value,
+                            criteriaSheet,
+                            ctx
+                          ).map(tv => CriteriaMatcher.matches(tv, criterion))
+                      }
+                    matchResult.flatMap { allMatch =>
+                      if allMatch then
+                        extractOrEvalNumeric(valueSheet(valueCells(idx)).value, valueSheet, ctx)
+                          .map {
+                            case Some(n) => acc :+ n
+                            case None => acc
+                          }
+                      else Right(acc)
+                    }
+                }
+              }
+          }
+    }
+
+  /** MAXIFS(max_range, criteria_range1, criteria1, ...) — max over matching cells, 0 if none. */
+  val maxifs: FunctionSpec[BigDecimal] { type Args = SumIfsArgs } =
+    FunctionSpec.simple[BigDecimal, SumIfsArgs](
+      "MAXIFS",
+      Arity.AtLeast(3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (valueRange, conditions) = args
+      collectIfsValues(valueRange, conditions, "MAXIFS", ctx).map { vs =>
+        if vs.isEmpty then BigDecimal(0) else vs.max
+      }
+    }
+
+  /** MINIFS(min_range, criteria_range1, criteria1, ...) — min over matching cells, 0 if none. */
+  val minifs: FunctionSpec[BigDecimal] { type Args = SumIfsArgs } =
+    FunctionSpec.simple[BigDecimal, SumIfsArgs](
+      "MINIFS",
+      Arity.AtLeast(3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (valueRange, conditions) = args
+      collectIfsValues(valueRange, conditions, "MINIFS", ctx).map { vs =>
+        if vs.isEmpty then BigDecimal(0) else vs.min
+      }
+    }
+
   val countifs: FunctionSpec[BigDecimal] { type Args = CountIfsArgs } =
     FunctionSpec.simple[BigDecimal, CountIfsArgs](
       "COUNTIFS",
