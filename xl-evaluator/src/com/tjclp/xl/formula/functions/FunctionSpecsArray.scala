@@ -4,7 +4,7 @@ import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator}
 import com.tjclp.xl.formula.Arity
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellValue, CellError}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
@@ -34,6 +34,40 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
           val range = location.range
           val values = extractRangeAsMatrix(range, targetSheet)
           Right(ArrayResult(values.transpose))
+    }
+
+  /**
+   * OFFSET(reference, rows, cols, [height], [width])
+   *
+   * Returns the range `rows`/`cols` away from the anchor reference, sized height×width (both
+   * default to 1). Returned as an ArrayResult, so it spills standalone, collapses to a scalar when
+   * 1×1, and composes with aggregates (e.g. SUM(OFFSET(...))). Out-of-bounds or non-positive size
+   * yields #REF!. Note: a cross-sheet anchor's sheet is not tracked (same-sheet result).
+   */
+  val offset: FunctionSpec[ArrayResult] { type Args = OffsetArgs } =
+    FunctionSpec.simple[ArrayResult, OffsetArgs]("OFFSET", Arity.Range(3, 5)) { (args, ctx) =>
+      val (refExpr, rowsExpr, colsExpr, hOpt, wOpt) = args
+      extractARef(refExpr) match
+        case None =>
+          Left(EvalError.EvalFailed("OFFSET requires a cell reference", Some("OFFSET(...)")))
+        case Some(anchor) =>
+          for
+            dRows <- ctx.evalExpr(rowsExpr)
+            dCols <- ctx.evalExpr(colsExpr)
+            height <- hOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
+            width <- wOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
+            result <-
+              val r0 = anchor.row.index0 + dRows
+              val c0 = anchor.col.index0 + dCols
+              if height < 1 || width < 1 ||
+                r0 < 0 || c0 < 0 ||
+                r0 + height - 1 > Row.MaxIndex0 || c0 + width - 1 > Column.MaxIndex0
+              then Right(ArrayResult.single(CellValue.Error(CellError.Ref)))
+              else
+                val range =
+                  CellRange(ARef.from0(c0, r0), ARef.from0(c0 + width - 1, r0 + height - 1))
+                Right(ArrayResult(extractRangeAsMatrix(range, ctx.sheet)))
+          yield result
     }
 
   /**

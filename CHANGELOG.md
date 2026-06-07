@@ -20,9 +20,11 @@ formula library. See `docs/plan/v0.10.0-triage.md` for rationale.
   Shifts cells, merges, row/column properties and freeze panes, then rewrites
   every affected formula (including cross-sheet) with correct `#REF!` generation
   and range shrinking. Pure `Workbook => Workbook`, byte-identical on re-run.
-- **15 formula functions** (#76, #120, #122) — IFS, SWITCH, CHOOSE, LARGE, SMALL,
-  RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, and the dynamic-array
-  functions SEQUENCE, SORT, UNIQUE, FILTER. **Registry 88 → 103.**
+- **16 formula functions** (#76, #120, #122) — IFS, SWITCH, CHOOSE, LARGE, SMALL,
+  RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, and the dynamic-array
+  functions SEQUENCE, SORT, UNIQUE, FILTER. **Registry 88 → 104.** OFFSET returns a
+  range (spills standalone, collapses to a scalar when 1×1) and composes with
+  aggregates — `SUM(OFFSET(...))` works.
 - **XLOOKUP binary-search modes** (#55) — `search_mode` 2 (ascending) and -2
   (descending) now accepted with correct iteration direction.
 - **Named ranges** — `DefinedName` serialization (previously read-only) plus a

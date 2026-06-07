@@ -5,17 +5,10 @@ import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.CellRange
 
 trait FunctionSpecsReference extends FunctionSpecsBase:
-  private def extractARef(expr: TExpr[?]): Option[ARef] = expr match
-    case TExpr.PolyRef(ref, _) => Some(ref)
-    case TExpr.Ref(ref, _, _) => Some(ref)
-    case TExpr.SheetPolyRef(_, ref, _) => Some(ref)
-    case TExpr.SheetRef(_, ref, _, _) => Some(ref)
-    case TExpr.RangeRef(range) => Some(range.start)
-    case TExpr.SheetRange(_, range) => Some(range.start)
-    case _ => None
+  // extractARef is inherited from FunctionSpecsBase (shared with OFFSET).
 
   private def extractCellRange(expr: TExpr[?]): Option[CellRange] = expr match
     case TExpr.RangeRef(range) => Some(range)

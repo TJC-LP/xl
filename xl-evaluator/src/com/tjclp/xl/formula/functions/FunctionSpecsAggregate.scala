@@ -1,7 +1,14 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, CriteriaMatcher, Aggregator, ArrayResult}
+import com.tjclp.xl.formula.eval.{
+  EvalError,
+  Evaluator,
+  CriteriaMatcher,
+  Aggregator,
+  ArrayResult,
+  ArrayArithmetic
+}
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
@@ -195,12 +202,32 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             }
           }
         case (Right(acc), Right(expr)) =>
-          // Individual numeric expression - evaluate it
-          ctx.evalExpr(expr).map { value =>
-            if agg.countsNonEmpty || agg.countsEmpty then
-              // For COUNT/COUNTA/COUNTBLANK, individual values always count
-              acc :+ BigDecimal(1)
-            else acc :+ value
+          // GH-122: evaluate array-aware so a range-returning call (e.g. OFFSET) flattens into the
+          // aggregate exactly like a literal range would; scalars keep their existing behavior.
+          ctx.evalArrayExpr(expr.asInstanceOf[TExpr[Any]]).map {
+            case ar: ArrayResult =>
+              ar.values.flatten.foldLeft(acc) { (values, cellValue) =>
+                if agg.countsNonEmpty then
+                  cellValue match
+                    case CellValue.Empty => values
+                    case _ => values :+ BigDecimal(1)
+                else if agg.countsEmpty then
+                  cellValue match
+                    case CellValue.Empty => values :+ BigDecimal(1)
+                    case _ => values
+                else
+                  extractNumericValue(cellValue) match
+                    case Some(n) => values :+ n
+                    case None => values
+              }
+            case value: BigDecimal =>
+              if agg.countsNonEmpty || agg.countsEmpty then acc :+ BigDecimal(1) else acc :+ value
+            case other =>
+              if agg.countsNonEmpty || agg.countsEmpty then acc :+ BigDecimal(1)
+              else
+                extractNumericValue(ArrayArithmetic.anyToCellValue(other)) match
+                  case Some(n) => acc :+ n
+                  case None => acc
           }
       }
 

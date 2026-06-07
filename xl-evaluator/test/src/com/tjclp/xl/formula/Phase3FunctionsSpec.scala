@@ -143,3 +143,40 @@ class Phase3FunctionsSpec extends FunSuite:
       Right(CellValue.Number(BigDecimal(0)))
     )
   }
+
+  // GH-122: OFFSET — single cell, #REF!, and composition with aggregates.
+  test("OFFSET single cell returns the shifted value") {
+    val grid = s.put("D3" -> 99)
+    // A1 + (2 rows, 3 cols) = D3
+    assertEquals(grid.evaluateFormula("=OFFSET(A1,2,3)"), Right(CellValue.Number(BigDecimal(99))))
+  }
+
+  test("OFFSET out-of-bounds or non-positive size yields #REF!") {
+    assertEquals(s.evaluateFormula("=OFFSET(A1,-1,0)"), Right(CellValue.Error(CellError.Ref)))
+    assertEquals(s.evaluateFormula("=OFFSET(A1,0,0,0,1)"), Right(CellValue.Error(CellError.Ref)))
+  }
+
+  test("aggregates consume OFFSET as a range") {
+    // crit A1:A5 = 10,20,30,40,50; OFFSET(A1,0,0,3,1) = A1:A3
+    assertEquals(
+      crit.evaluateFormula("=SUM(OFFSET(A1,0,0,3,1))"),
+      Right(CellValue.Number(BigDecimal(60)))
+    )
+    assertEquals(
+      crit.evaluateFormula("=AVERAGE(OFFSET(A1,0,0,3,1))"),
+      Right(CellValue.Number(BigDecimal(20)))
+    )
+    assertEquals(
+      crit.evaluateFormula("=MAX(OFFSET(A1,0,0,3,1))"),
+      Right(CellValue.Number(BigDecimal(30)))
+    )
+    assertEquals(
+      crit.evaluateFormula("=COUNT(OFFSET(A1,0,0,3,1))"),
+      Right(CellValue.Number(BigDecimal(3)))
+    )
+  }
+
+  test("aggregate scalar/range fast paths still work (regression guard)") {
+    assertEquals(crit.evaluateFormula("=SUM(A1:A5)"), Right(CellValue.Number(BigDecimal(150))))
+    assertEquals(crit.evaluateFormula("=SUM(1,2,3)"), Right(CellValue.Number(BigDecimal(6))))
+  }
