@@ -18,6 +18,7 @@ import com.tjclp.xl.formula.{
   TExpr
 }
 import com.tjclp.xl.formula.eval.DependentRecalculation.*
+import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.sheets.styleSyntax
@@ -1064,6 +1065,86 @@ object WriteCommands:
       updatedWb = wb.put(updatedSheet)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
     yield s"Removed freeze panes from sheet '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+
+  // ===== Structural editing: insert/delete rows & columns (GH-128, GH-129) =====
+  // Cell shift (xl-core) + formula rewriting across all sheets (StructuralEditor). #REF! on loss.
+
+  private def requirePositive(n: Int, label: String): IO[Unit] =
+    if n >= 1 then IO.unit
+    else IO.raiseError(new Exception(s"$label must be >= 1, got $n"))
+
+  private def colIndexOf(col: String): IO[Int] =
+    IO.fromEither(
+      ARef.parse(col.trim + "1").left.map(e => new Exception(s"Invalid column '$col': $e"))
+    ).map(ref => Column.index0(ref.col))
+
+  def insertRows(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    at: Int,
+    count: Int,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-rows")
+      _ <- requirePositive(at, "row number")
+      _ <- requirePositive(count, "count")
+      updatedWb = StructuralEditor.insertRows(wb, sheet.name, at - 1, count)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Inserted $count row(s) before row $at on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+
+  def deleteRows(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    at: Int,
+    count: Int,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-rows")
+      _ <- requirePositive(at, "row number")
+      _ <- requirePositive(count, "count")
+      updatedWb = StructuralEditor.deleteRows(wb, sheet.name, at - 1, count)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Deleted $count row(s) from row $at on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+
+  def insertColumns(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    col: String,
+    count: Int,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-cols")
+      _ <- requirePositive(count, "count")
+      at0 <- colIndexOf(col)
+      updatedWb = StructuralEditor.insertColumns(wb, sheet.name, at0, count)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Inserted $count column(s) before column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
+
+  def deleteColumns(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    col: String,
+    count: Int,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    for
+      sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-cols")
+      _ <- requirePositive(count, "count")
+      at0 <- colIndexOf(col)
+      updatedWb = StructuralEditor.deleteColumns(wb, sheet.name, at0, count)
+      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+    yield s"Deleted $count column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
 
   /**
    * Copy a range of cells to another location with optional formula adjustment.

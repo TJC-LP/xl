@@ -209,3 +209,187 @@ object FormulaShifter:
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def shiftWildcard(expr: TExpr[?], colDelta: Int, rowDelta: Int): TExpr[?] =
     shiftInternal(expr.asInstanceOf[TExpr[Any]], colDelta, rowDelta)
+
+  // ============================================================================
+  // GH-128 / GH-129: structural shifting for row/column insert & delete.
+  //
+  // Unlike `shift` (uniform fill-drag, anchor-aware), this is POSITION-CONDITIONAL and
+  // ANCHOR-INDEPENDENT — structural edits move absolute refs too:
+  //   - delta > 0: insert `delta` rows/cols at index `at`; refs at index >= at move +delta.
+  //   - delta < 0: delete `-delta` rows/cols starting at `at`; refs after the band move by
+  //     +delta; a ref/range that lands entirely inside the deleted band makes the whole
+  //     formula `#REF!` (the traversal returns None so the caller can replace the cell with
+  //     CellValue.Error(Ref)). Partially-overlapped ranges shrink to the surviving span.
+  //
+  // Only references that point at the EDITED sheet move: local refs move iff `shiftLocal`
+  // (the formula lives on the edited sheet); sheet-qualified refs move iff their sheet name
+  // equals `editedSheet` (case-insensitive).
+  // ============================================================================
+
+  /**
+   * Structurally shift references in `expr` for a row/column insert (delta > 0) or delete (delta <
+   * 0). Returns None when the formula references a fully-deleted cell or range.
+   */
+  def shiftStructural[A](
+    expr: TExpr[A],
+    shiftLocal: Boolean,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Option[TExpr[A]] =
+    shiftStructuralInternal(expr, shiftLocal, editedSheet, isRow, at, delta)
+
+  /** Map a 0-based position through a structural edit. None = the position was deleted. */
+  private def shiftPos(p: Int, at: Int, delta: Int): Option[Int] =
+    if delta >= 0 then Some(if p >= at then p + delta else p)
+    else
+      val n = -delta
+      if p < at then Some(p)
+      else if p < at + n then None
+      else Some(p - n)
+
+  /** Map an inclusive [s,e] position range through a structural edit. None = fully deleted. */
+  private def shiftRangePos(s: Int, e: Int, at: Int, delta: Int): Option[(Int, Int)] =
+    if delta >= 0 then Some((if s >= at then s + delta else s, if e >= at then e + delta else e))
+    else
+      val n = -delta
+      val ns = if s < at then s else if s < at + n then at else s - n
+      val ne = if e < at then e else if e < at + n then at - 1 else e - n
+      if ns > ne then None else Some((ns, ne))
+
+  private def shiftARefStructural(
+    cellRef: ARef,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Option[ARef] =
+    val colIdx = Column.index0(cellRef.col)
+    val rowIdx = Row.index0(cellRef.row)
+    if isRow then shiftPos(rowIdx, at, delta).map(nr => ARef.from0(colIdx, nr))
+    else shiftPos(colIdx, at, delta).map(nc => ARef.from0(nc, rowIdx))
+
+  private def shiftRangeStructural(
+    range: CellRange,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Option[CellRange] =
+    val (sPos, ePos) =
+      if isRow then (Row.index0(range.start.row), Row.index0(range.end.row))
+      else (Column.index0(range.start.col), Column.index0(range.end.col))
+    shiftRangePos(sPos, ePos, at, delta).map { case (ns, ne) =>
+      if isRow then
+        new CellRange(
+          ARef.from0(Column.index0(range.start.col), ns),
+          ARef.from0(Column.index0(range.end.col), ne),
+          range.startAnchor,
+          range.endAnchor
+        )
+      else
+        new CellRange(
+          ARef.from0(ns, Row.index0(range.start.row)),
+          ARef.from0(ne, Row.index0(range.end.row)),
+          range.startAnchor,
+          range.endAnchor
+        )
+    }
+
+  private def shiftLocationStructural(
+    location: RangeLocation,
+    shiftLocal: Boolean,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Option[RangeLocation] =
+    location match
+      case RangeLocation.Local(range) =>
+        if shiftLocal then
+          shiftRangeStructural(range, isRow, at, delta).map(RangeLocation.Local.apply)
+        else Some(location)
+      case RangeLocation.CrossSheet(sheet, range) =>
+        if sheet.value.equalsIgnoreCase(editedSheet) then
+          shiftRangeStructural(range, isRow, at, delta).map(r => RangeLocation.CrossSheet(sheet, r))
+        else Some(location)
+
+  @SuppressWarnings(
+    Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var")
+  )
+  @nowarn("msg=Unreachable case")
+  private def shiftStructuralInternal[A](
+    expr: TExpr[A],
+    shiftLocal: Boolean,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Option[TExpr[A]] =
+    import TExpr.*
+    def go[B](e: TExpr[B]): Option[TExpr[B]] =
+      shiftStructuralInternal(e, shiftLocal, editedSheet, isRow, at, delta)
+
+    expr match
+      case Ref(at0, anchor, decode) =>
+        if shiftLocal then
+          shiftARefStructural(at0, isRow, at, delta).map(r => Ref(r, anchor, decode))
+        else Some(expr)
+      case PolyRef(at0, anchor) =>
+        if shiftLocal then
+          shiftARefStructural(at0, isRow, at, delta).map(r =>
+            PolyRef(r, anchor).asInstanceOf[TExpr[A]]
+          )
+        else Some(expr)
+      case SheetRef(sheet, at0, anchor, decode) =>
+        if sheet.value.equalsIgnoreCase(editedSheet) then
+          shiftARefStructural(at0, isRow, at, delta).map(r => SheetRef(sheet, r, anchor, decode))
+        else Some(expr)
+      case SheetPolyRef(sheet, at0, anchor) =>
+        if sheet.value.equalsIgnoreCase(editedSheet) then
+          shiftARefStructural(at0, isRow, at, delta).map(r =>
+            SheetPolyRef(sheet, r, anchor).asInstanceOf[TExpr[A]]
+          )
+        else Some(expr)
+      case RangeRef(range) =>
+        if shiftLocal then
+          shiftRangeStructural(range, isRow, at, delta).map(r => RangeRef(r).asInstanceOf[TExpr[A]])
+        else Some(expr)
+      case SheetRange(sheet, range) =>
+        if sheet.value.equalsIgnoreCase(editedSheet) then
+          shiftRangeStructural(range, isRow, at, delta).map(r =>
+            SheetRange(sheet, r).asInstanceOf[TExpr[A]]
+          )
+        else Some(expr)
+      case lit: Lit[?] => Some(lit.asInstanceOf[TExpr[A]])
+      case Add(x, y) => for sx <- go(x); sy <- go(y) yield Add(sx, sy).asInstanceOf[TExpr[A]]
+      case Sub(x, y) => for sx <- go(x); sy <- go(y) yield Sub(sx, sy).asInstanceOf[TExpr[A]]
+      case Mul(x, y) => for sx <- go(x); sy <- go(y) yield Mul(sx, sy).asInstanceOf[TExpr[A]]
+      case Div(x, y) => for sx <- go(x); sy <- go(y) yield Div(sx, sy).asInstanceOf[TExpr[A]]
+      case Pow(x, y) => for sx <- go(x); sy <- go(y) yield Pow(sx, sy).asInstanceOf[TExpr[A]]
+      case Concat(x, y) => for sx <- go(x); sy <- go(y) yield Concat(sx, sy).asInstanceOf[TExpr[A]]
+      case Eq(x, y) => for sx <- go(x); sy <- go(y) yield Eq(sx, sy).asInstanceOf[TExpr[A]]
+      case Neq(x, y) => for sx <- go(x); sy <- go(y) yield Neq(sx, sy).asInstanceOf[TExpr[A]]
+      case Lt(x, y) => for sx <- go(x); sy <- go(y) yield Lt(sx, sy).asInstanceOf[TExpr[A]]
+      case Lte(x, y) => for sx <- go(x); sy <- go(y) yield Lte(sx, sy).asInstanceOf[TExpr[A]]
+      case Gt(x, y) => for sx <- go(x); sy <- go(y) yield Gt(sx, sy).asInstanceOf[TExpr[A]]
+      case Gte(x, y) => for sx <- go(x); sy <- go(y) yield Gte(sx, sy).asInstanceOf[TExpr[A]]
+      case ToInt(e) => go(e).map(se => ToInt(se).asInstanceOf[TExpr[A]])
+      case Aggregate(aggId, location) =>
+        shiftLocationStructural(location, shiftLocal, editedSheet, isRow, at, delta)
+          .map(l => Aggregate(aggId, l).asInstanceOf[TExpr[A]])
+      case call: Call[?] =>
+        var deleted = false
+        val shifted = call.spec.argSpec.map(call.args)(
+          e => go(e).getOrElse { deleted = true; e },
+          loc =>
+            shiftLocationStructural(loc, shiftLocal, editedSheet, isRow, at, delta).getOrElse {
+              deleted = true; loc
+            },
+          range =>
+            if shiftLocal then
+              shiftRangeStructural(range, isRow, at, delta).getOrElse { deleted = true; range }
+            else range
+        )
+        if deleted then None else Some(Call(call.spec, shifted).asInstanceOf[TExpr[A]])
+      case DateToSerial(e) => go(e).map(se => DateToSerial(se).asInstanceOf[TExpr[A]])
+      case DateTimeToSerial(e) => go(e).map(se => DateTimeToSerial(se).asInstanceOf[TExpr[A]])

@@ -119,6 +119,11 @@ enum CliCommand:
   case Unfreeze // Remove freeze panes
   // Range operations (require -o)
   case Copy(source: String, target: String, valuesOnly: Boolean)
+  // Structural editing: insert/delete rows & columns with formula rewriting (require -o)
+  case InsertRows(at: Int, count: Int) // Insert `count` rows before 1-based row `at`
+  case DeleteRows(at: Int, count: Int) // Delete `count` rows starting at 1-based row `at`
+  case InsertColumns(col: String, count: Int) // Insert `count` columns before column `col`
+  case DeleteColumns(col: String, count: Int) // Delete `count` columns starting at column `col`
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:

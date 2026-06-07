@@ -76,6 +76,103 @@ final case class Sheet(
   def put(cell: Cell): Sheet =
     copy(cells = cells.updated(cell.ref, cell))
 
+  // ===== Structural editing: insert/delete rows & columns (GH-128, GH-129) =====
+  // PURE cell/merge/property/freeze shifting along one axis. Formula-reference rewriting is layered
+  // on top in xl-evaluator (Sheet lives in xl-core, which has no access to the formula engine).
+
+  /**
+   * Insert `count` blank rows at 0-based row index `at`; cells in that row and below shift down.
+   */
+  def insertRows(at: Int, count: Int): Sheet =
+    if count <= 0 then this else shiftAxis(rowAxis = true, at, count, deleting = false)
+
+  /**
+   * Delete `count` rows from 0-based row index `at`; deleted cells removed, rows below shift up.
+   */
+  def deleteRows(at: Int, count: Int): Sheet =
+    if count <= 0 then this else shiftAxis(rowAxis = true, at, count, deleting = true)
+
+  /** Insert `count` blank columns at 0-based column index `at`; columns at/right shift right. */
+  def insertColumns(at: Int, count: Int): Sheet =
+    if count <= 0 then this else shiftAxis(rowAxis = false, at, count, deleting = false)
+
+  /**
+   * Delete `count` columns from 0-based column index `at`; deleted cells removed, right shifts
+   * left.
+   */
+  def deleteColumns(at: Int, count: Int): Sheet =
+    if count <= 0 then this else shiftAxis(rowAxis = false, at, count, deleting = true)
+
+  /**
+   * Shared structural-shift engine for one axis (row or column).
+   *
+   * Maps a 0-based index on the active axis: insert shifts indices `>= at` by `+count`; delete
+   * drops indices in `[at, at+count)` and shifts those `>= at+count` by `-count`. Cells/comments
+   * are remapped (dropped cells removed), row/column properties shifted, merged ranges and freeze
+   * panes split/clamped/dropped, all on the active axis only.
+   */
+  private def shiftAxis(rowAxis: Boolean, at: Int, count: Int, deleting: Boolean): Sheet =
+    // Index transform on the active axis. None = the index was deleted.
+    def idx(i: Int): Option[Int] =
+      if !deleting then Some(if i >= at then i + count else i)
+      else if i < at then Some(i)
+      else if i >= at + count then Some(i - count)
+      else None
+    // Active-axis index of an ARef, and a rebuilder that replaces it.
+    def axisOf(ref: ARef): Int = if rowAxis then ref.row.index0 else ref.col.index0
+    def rebuild(ref: ARef, newIdx: Int): ARef =
+      if rowAxis then ARef.from0(ref.col.index0, newIdx) else ARef.from0(newIdx, ref.row.index0)
+
+    val newCells = cells.flatMap { case (ref, cell) =>
+      idx(axisOf(ref)).map { ni =>
+        val nr = rebuild(ref, ni); nr -> cell.copy(ref = nr)
+      }
+    }
+    val newComments = comments.flatMap { case (ref, c) =>
+      idx(axisOf(ref)).map(ni => rebuild(ref, ni) -> c)
+    }
+    val newRowProps =
+      if !rowAxis then rowProperties
+      else rowProperties.flatMap { case (row, p) => idx(row.index0).map(ni => Row.from0(ni) -> p) }
+    val newColProps =
+      if rowAxis then columnProperties
+      else
+        columnProperties.flatMap { case (col, p) =>
+          idx(col.index0).map(ni => Column.from0(ni) -> p)
+        }
+
+    // Merged ranges: clamp the active-axis span; drop if it collapses entirely into the deletion.
+    val newMerges = mergedRanges.flatMap { range =>
+      val s = axisOf(range.start)
+      val e = axisOf(range.end)
+      val (ns, ne) =
+        if !deleting then (if s >= at then s + count else s, if e >= at then e + count else e)
+        else
+          val ns0 = if s < at then s else if s >= at + count then s - count else at
+          val ne0 = if e < at then e else if e >= at + count then e - count else at - 1
+          (ns0, ne0)
+      if ns > ne then None
+      else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
+    }
+
+    // Freeze pane: shift/clamp its anchor on the active axis (clamp a deleted anchor to `at`).
+    val newFreeze = freezePane.map {
+      case FreezePane.At(ref) =>
+        val cur = axisOf(ref)
+        val ni = idx(cur).getOrElse(at)
+        FreezePane.At(rebuild(ref, ni))
+      case other => other
+    }
+
+    copy(
+      cells = newCells,
+      comments = newComments,
+      rowProperties = newRowProps,
+      columnProperties = newColProps,
+      mergedRanges = newMerges,
+      freezePane = newFreeze
+    )
+
   /** Put CellValue at reference (always succeeds - CellValue is pre-validated) */
   def put(ref: ARef, value: CellValue): Sheet =
     val updatedCell = cells.get(ref) match
