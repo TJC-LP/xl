@@ -60,7 +60,12 @@ object StructuralEditor:
       //    sheet-qualified refs to the edited sheet on all sheets).
       rewriteFormulas(shifted, shiftLocal = s.name == target, editedName, isRow, at, delta)
     }
-    wb.copy(sheets = updatedSheets)
+    // A structural edit can touch any sheet's formulas (cross-sheet refs), so mark every sheet
+    // modified — otherwise the writer's clean/verbatim fast-path would copy stale bytes from the
+    // source file and silently drop the edit.
+    val updatedContext =
+      wb.sourceContext.map(ctx => wb.sheets.indices.foldLeft(ctx)((c, i) => c.markSheetModified(i)))
+    wb.copy(sheets = updatedSheets, sourceContext = updatedContext)
 
   private def rewriteFormulas(
     sheet: Sheet,

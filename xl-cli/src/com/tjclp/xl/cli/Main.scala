@@ -96,7 +96,7 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream uses SAX/StAX workbook writes for modifying commands.
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd
 
     val sheetWriteOpts =
       (
@@ -932,6 +932,42 @@ Use --dry-run to validate JSON without writing."""
       (copySrcArg, copyTgtArg, valuesOnlyOpt).mapN(CliCommand.Copy.apply)
     }
 
+  // --- Structural editing commands (insert/delete rows & columns) ---
+
+  private val insertRowsCmd: Opts[CliCommand] =
+    Opts.subcommand("insert-rows", "Insert rows (shifts cells & rewrites formulas)") {
+      val atArg = Opts.argument[Int]("at-row")
+      val countArg = Opts.argument[Int]("count").withDefault(1)
+      (atArg, countArg).mapN(CliCommand.InsertRows.apply)
+    }
+
+  private val deleteRowsCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "delete-rows",
+      "Delete rows (shifts cells & rewrites formulas; #REF! on loss)"
+    ) {
+      val atArg = Opts.argument[Int]("at-row")
+      val countArg = Opts.argument[Int]("count").withDefault(1)
+      (atArg, countArg).mapN(CliCommand.DeleteRows.apply)
+    }
+
+  private val insertColsCmd: Opts[CliCommand] =
+    Opts.subcommand("insert-cols", "Insert columns (shifts cells & rewrites formulas)") {
+      val colArg = Opts.argument[String]("at-col")
+      val countArg = Opts.argument[Int]("count").withDefault(1)
+      (colArg, countArg).mapN(CliCommand.InsertColumns.apply)
+    }
+
+  private val deleteColsCmd: Opts[CliCommand] =
+    Opts.subcommand(
+      "delete-cols",
+      "Delete columns (shifts cells & rewrites formulas; #REF! on loss)"
+    ) {
+      val colArg = Opts.argument[String]("at-col")
+      val countArg = Opts.argument[Int]("count").withDefault(1)
+      (colArg, countArg).mapN(CliCommand.DeleteColumns.apply)
+    }
+
   // ==========================================================================
   // Command execution
   // ==========================================================================
@@ -1631,6 +1667,26 @@ Use --dry-run to validate JSON without writing."""
     case CliCommand.Copy(source, target, valuesOnly) =>
       requireOutput(outputOpt, backendOpt, stream)(
         WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _)
+      )
+
+    case CliCommand.InsertRows(at, count) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.insertRows(wb, sheetOpt, at, count, _, _, _)
+      )
+
+    case CliCommand.DeleteRows(at, count) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.deleteRows(wb, sheetOpt, at, count, _, _, _)
+      )
+
+    case CliCommand.InsertColumns(col, count) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.insertColumns(wb, sheetOpt, col, count, _, _, _)
+      )
+
+    case CliCommand.DeleteColumns(col, count) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _)
       )
 
   // ==========================================================================
