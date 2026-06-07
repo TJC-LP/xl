@@ -377,10 +377,10 @@ object XlsxReader:
   private def parseWorksheetRelationships(
     parts: Map[String, String],
     sheetIndex: Int
-  ): XLResult[(Option[String], Seq[String])] =
+  ): XLResult[(Option[String], Seq[String], Map[String, String])] =
     val relsPath = s"xl/worksheets/_rels/sheet$sheetIndex.xml.rels"
     parts.get(relsPath) match
-      case None => Right((None, Seq.empty)) // No relationships for this sheet
+      case None => Right((None, Seq.empty, Map.empty)) // No relationships for this sheet
       case Some(xml) =>
         for
           elem <- parseXml(xml, relsPath)
@@ -398,7 +398,13 @@ object XlsxReader:
           // Extract table relationships (NEW)
           tableRels = rels.relationships.filter(_.`type` == XmlUtil.relTypeTable)
           tableTargets <- resolveTablePaths(tableRels, relsPath)
-        yield (commentTarget, tableTargets)
+
+          // GH-235: hyperlink relationships (rId -> external target URL)
+          hyperlinkRels = rels.relationships
+            .filter(_.`type` == XmlUtil.relTypeHyperlink)
+            .map(r => r.id -> r.target)
+            .toMap
+        yield (commentTarget, tableTargets, hyperlinkRels)
 
   private def resolveCommentPath(target: String, relsPath: String): XLResult[String] =
     val cleanedTarget = if target.startsWith("/") then target.drop(1) else target
@@ -668,7 +674,10 @@ object XlsxReader:
             .left
             .map(err => XLError.ParseError(sheetPath, err): XLError)
           // Parse worksheet relationships to find comment/table references (1-based sheet index)
-          (commentTarget, tableTargets) <- parseWorksheetRelationships(parts, idx + 1)
+          (commentTarget, tableTargets, hyperlinkRels) <- parseWorksheetRelationships(
+            parts,
+            idx + 1
+          )
 
           // Parse comments if relationship exists
           comments <- commentTarget match
@@ -681,7 +690,15 @@ object XlsxReader:
           // Parse tables if relationships exist
           tables <- parseTablesForSheet(parts, tableTargets)
 
-          domainSheet <- convertToDomainSheet(ref.name, ooxmlSheet, sst, styles, comments, tables)
+          domainSheet <- convertToDomainSheet(
+            ref.name,
+            ooxmlSheet,
+            sst,
+            styles,
+            comments,
+            tables,
+            hyperlinkRels
+          )
         yield domainSheet
       }
       .map(sheets => (sheets, commentPathBuilder.result()))
@@ -707,7 +724,8 @@ object XlsxReader:
     sst: Option[SharedStrings],
     styles: WorkbookStyles,
     comments: Map[ARef, com.tjclp.xl.cells.Comment],
-    tables: Map[String, TableSpec]
+    tables: Map[String, TableSpec],
+    hyperlinkRels: Map[String, String]
   ): XLResult[Sheet] =
     val (preRegisteredRegistry, styleMapping) = buildStyleRegistry(styles)
 
@@ -727,6 +745,27 @@ object XlsxReader:
 
     val cellsMap = builder.result()
 
+    // GH-235: populate Cell.hyperlink from the worksheet <hyperlinks> element. External targets
+    // resolve through the sheet rels (rId -> URL); internal targets use the `location` attribute.
+    val cellsWithHyperlinks = ooxmlSheet.preservedKnown.get("hyperlinks") match
+      case None => cellsMap
+      case Some(hls) =>
+        (hls \ "hyperlink").foldLeft(cellsMap) {
+          case (m, e: Elem) =>
+            val refStr = e \@ "ref"
+            val rid = e.attributes.collectFirst {
+              case a: PrefixedAttribute if a.key == "id" => a.value.text
+            }
+            val loc = Option(e \@ "location").filter(_.nonEmpty)
+            val target = rid.flatMap(hyperlinkRels.get).orElse(loc)
+            (ARef.parse(refStr).toOption, target) match
+              case (Some(ref), Some(t)) =>
+                val base = m.getOrElse(ref, Cell(ref, com.tjclp.xl.cells.CellValue.Empty))
+                m.updated(ref, base.withHyperlink(t))
+              case _ => m
+          case (m, _) => m
+        }
+
     // Parse column properties from <cols> element
     val columnProperties = ooxmlSheet.cols match
       case Some(colsElem) => parseColumnProperties(colsElem)
@@ -741,7 +780,7 @@ object XlsxReader:
     Right(
       Sheet(
         name = name,
-        cells = cellsMap,
+        cells = cellsWithHyperlinks,
         mergedRanges = ooxmlSheet.mergedRanges,
         styleRegistry = preRegisteredRegistry,
         comments = comments,

@@ -94,6 +94,7 @@ object BatchParser:
     case Freeze(ref: String)
     case Unfreeze
     case CopyRange(source: String, target: String, valuesOnly: Boolean)
+    case Hyperlink(ref: String, target: Option[String]) // GH-235: target None clears
 
   /**
    * Result of batch parsing with optional warnings.
@@ -131,6 +132,7 @@ object BatchParser:
         case BatchOp.RowHeight(row, height) => s"  ROWHEIGHT $row = $height"
         case BatchOp.AddComment(ref, text, _) => s"  COMMENT $ref = \"$text\""
         case BatchOp.RemoveComment(ref) => s"  REMOVE-COMMENT $ref"
+        case BatchOp.Hyperlink(ref, target) => s"  HYPERLINK $ref = ${target.getOrElse("(clear)")}"
         case BatchOp.Clear(range, _, _, _) => s"  CLEAR $range"
         case BatchOp.ColHide(col) => s"  COL-HIDE $col"
         case BatchOp.ColShow(col) => s"  COL-SHOW $col"
@@ -307,6 +309,13 @@ object BatchParser:
             val ref = requireString(objMap, "ref", idx)
             BatchOp.RemoveComment(ref)
 
+          case "hyperlink" =>
+            collectUnknownPropsWarning(objMap, knownHyperlinkProps, "hyperlink", idx)
+              .foreach(warnings += _)
+            val ref = requireString(objMap, "ref", idx)
+            val target = objMap.get("target").flatMap(_.strOpt)
+            BatchOp.Hyperlink(ref, target)
+
           case "clear" =>
             collectUnknownPropsWarning(objMap, knownClearProps, "clear", idx)
               .foreach(warnings += _)
@@ -418,6 +427,7 @@ object BatchParser:
 
   /** Known properties for 'comment' operation */
   private val knownCommentProps = Set("op", "ref", "text", "author")
+  private val knownHyperlinkProps = Set("op", "ref", "target")
 
   /** Known properties for 'clear' operation */
   private val knownClearProps = Set("op", "range", "all", "styles", "comments")
@@ -816,6 +826,9 @@ object BatchParser:
           case BatchOp.RemoveComment(refStr) =>
             applyRemoveComment(currentWb, defaultSheetName, refStr)
 
+          case BatchOp.Hyperlink(refStr, target) =>
+            applyHyperlink(currentWb, defaultSheetName, refStr, target)
+
           case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
             applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag)
 
@@ -1208,6 +1221,31 @@ object BatchParser:
     }
 
   /** Remove a comment from a cell. */
+  private def applyHyperlink(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    refStr: String,
+    target: Option[String]
+  ): IO[Workbook] =
+    def setOn(sheetName: SheetName, ref: ARef): IO[Workbook] =
+      updateSheet(wb, sheetName)(s =>
+        s.put(target.fold(s(ref).clearHyperlink)(s(ref).withHyperlink))
+      )
+    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+      case RefType.Cell(ref) =>
+        defaultSheetName match
+          case Some(sheetName) => setOn(sheetName, ref)
+          case None =>
+            IO.raiseError(
+              new Exception(s"batch hyperlink requires --sheet for unqualified ref '$refStr'")
+            )
+      case RefType.QualifiedCell(sheetName, ref) => setOn(sheetName, ref)
+      case _ =>
+        IO.raiseError(
+          new Exception(s"batch hyperlink requires single cell ref, not range: $refStr")
+        )
+    }
+
   private def applyRemoveComment(
     wb: Workbook,
     defaultSheetName: Option[SheetName],

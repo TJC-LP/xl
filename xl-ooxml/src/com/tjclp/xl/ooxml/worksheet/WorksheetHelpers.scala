@@ -2,7 +2,7 @@ package com.tjclp.xl.ooxml.worksheet
 
 import scala.xml.*
 
-import com.tjclp.xl.addressing.Column
+import com.tjclp.xl.addressing.{ARef, Column}
 import com.tjclp.xl.ooxml.XmlUtil
 import com.tjclp.xl.ooxml.XmlUtil.nsSpreadsheetML
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
@@ -106,6 +106,54 @@ private[ooxml] val worksheetKnownElements: Set[String] = Set(
   "legacyDrawingHF",
   "webPublishItems"
 )
+
+// ===== Hyperlink authoring (GH-235) =====
+// Cell.hyperlink is the typed model. On write we emit a <hyperlinks> element (and, for external
+// targets, sheet .rels relationships) so the model is no longer a silent no-op.
+
+/** A hyperlink to emit: cell ref, target, whether external (needs a rel), and its rel id. */
+private[ooxml] case class HyperlinkEntry(
+  ref: ARef,
+  target: String,
+  external: Boolean,
+  relId: String
+)
+
+/** External hyperlinks (URLs/mailto/file) need a relationship; others are internal `location`s. */
+private[ooxml] def isExternalHyperlink(target: String): Boolean =
+  target.contains("://") || target.startsWith("mailto:") || target.startsWith("file:")
+
+/**
+ * Collect a sheet's hyperlinks in deterministic order (by cell ref). External targets get a stable
+ * relationship id ("rIdHL{n}") used by BOTH the `<hyperlink r:id>` attribute and the sheet .rels,
+ * so the two agree without explicit plumbing (GH-235).
+ */
+private[ooxml] def collectHyperlinks(sheet: Sheet): Seq[HyperlinkEntry] =
+  val sorted = sheet.cells.values.toSeq
+    .filter(_.hyperlink.isDefined)
+    .sortBy(c => (c.ref.row.index0, c.ref.col.index0))
+  val relIdByRef = sorted
+    .filter(c => isExternalHyperlink(c.hyperlink.getOrElse("")))
+    .zipWithIndex
+    .map { case (c, i) => c.ref -> s"rIdHL${i + 1}" }
+    .toMap
+  sorted.map { c =>
+    val target = c.hyperlink.getOrElse("")
+    HyperlinkEntry(c.ref, target, isExternalHyperlink(target), relIdByRef.getOrElse(c.ref, ""))
+  }
+
+/** Build a `<hyperlinks>` element from collected entries (GH-235), or None if empty. */
+private[ooxml] def buildHyperlinksElem(entries: Seq[HyperlinkEntry]): Option[Elem] =
+  if entries.isEmpty then None
+  else
+    val children = entries.map { e =>
+      val tail: MetaData =
+        if e.external then new PrefixedAttribute("r", "id", e.relId, Null)
+        else new UnprefixedAttribute("location", e.target, Null)
+      val attrs = new UnprefixedAttribute("ref", e.ref.toA1, tail)
+      Elem(null, "hyperlink", attrs, TopScope, minimizeEmpty = true)
+    }
+    Some(Elem(null, "hyperlinks", Null, TopScope, minimizeEmpty = false, children*))
 
 /**
  * Group consecutive columns with identical properties into spans.
