@@ -1114,7 +1114,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("Known functions include all 94 functions") {
+  test("Known functions include all 96 functions") {
     val functions = FunctionRegistry.allNames
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -1214,7 +1214,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("LARGE"))
     assert(functions.contains("SMALL"))
     assert(functions.contains("RANK"))
-    assertEquals(functions.length, 94)
+    assert(functions.contains("PERCENTILE"))
+    assert(functions.contains("QUARTILE"))
+    assertEquals(functions.length, 96)
   }
 
   test("FunctionRegistry.lookup finds spec-based functions") {

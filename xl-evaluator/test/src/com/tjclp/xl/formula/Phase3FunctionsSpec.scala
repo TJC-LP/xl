@@ -58,3 +58,16 @@ class Phase3FunctionsSpec extends FunSuite:
     assertEquals(nums.evaluateFormula("=RANK(4,A1:A5)"), Right(CellValue.Number(BigDecimal(2))))
     assertEquals(nums.evaluateFormula("=RANK(4,A1:A5,1)"), Right(CellValue.Number(BigDecimal(4))))
   }
+
+  test("PERCENTILE inclusive, with interpolation") {
+    // A1:A5 sorted = 1,1,3,4,5
+    assertEquals(nums.evaluateFormula("=PERCENTILE(A1:A5,0.5)"), Right(CellValue.Number(BigDecimal(3))))
+    assertEquals(nums.evaluateFormula("=PERCENTILE(A1:A5,0)"), Right(CellValue.Number(BigDecimal(1))))
+    // A1:A4 sorted = 1,1,3,4; p=0.5 → 1 + 0.5*(3-1) = 2
+    assertEquals(nums.evaluateFormula("=PERCENTILE(A1:A4,0.5)"), Right(CellValue.Number(BigDecimal(2))))
+  }
+
+  test("QUARTILE maps quart to percentiles") {
+    assertEquals(nums.evaluateFormula("=QUARTILE(A1:A5,2)"), Right(CellValue.Number(BigDecimal(3))))
+    assertEquals(nums.evaluateFormula("=QUARTILE(A1:A5,4)"), Right(CellValue.Number(BigDecimal(5))))
+  }

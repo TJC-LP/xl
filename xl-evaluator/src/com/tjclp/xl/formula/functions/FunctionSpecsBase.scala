@@ -80,6 +80,7 @@ trait FunctionSpecsBase:
   // GH-120 statistical functions over a range
   type RangeIntArgs = (TExpr.RangeLocation, TExpr[Int])
   type RankArgs = (TExpr[BigDecimal], TExpr.RangeLocation, Option[TExpr[Int]])
+  type RangeNumArgs = (TExpr.RangeLocation, TExpr[BigDecimal])
   type IfErrorArgs = (TExpr[CellValue], TExpr[CellValue])
   type NoArgs = EmptyTuple
   type DateTripleInt = (TExpr[Int], TExpr[Int], TExpr[Int])

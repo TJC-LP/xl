@@ -345,6 +345,59 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       yield result
     }
 
+  /** Excel PERCENTILE.INC linear interpolation over a sorted-ascending vector; None if invalid. */
+  private def percentileInc(sortedAsc: Vector[BigDecimal], p: BigDecimal): Option[BigDecimal] =
+    if sortedAsc.isEmpty || p < 0 || p > 1 then None
+    else
+      val n = sortedAsc.length
+      if n == 1 then Some(sortedAsc(0))
+      else
+        val rank = p * BigDecimal(n - 1)
+        val lo = rank.toInt
+        if lo >= n - 1 then Some(sortedAsc(n - 1))
+        else
+          val frac = rank - BigDecimal(lo)
+          Some(sortedAsc(lo) + frac * (sortedAsc(lo + 1) - sortedAsc(lo)))
+
+  /** PERCENTILE(range, p) — p in [0,1], inclusive linear interpolation. */
+  val percentile: FunctionSpec[BigDecimal] { type Args = RangeNumArgs } =
+    FunctionSpec.simple[BigDecimal, RangeNumArgs](
+      "PERCENTILE",
+      Arity.Exact(2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (loc, pExpr) = args
+      for
+        nums <- collectRangeNumerics(loc, ctx)
+        p <- ctx.evalExpr(pExpr)
+        result <- percentileInc(nums.sorted, p) match
+          case Some(v) => Right(v)
+          case None =>
+            Left(EvalError.EvalFailed(s"PERCENTILE: invalid p=$p or empty range (#NUM!)", None))
+      yield result
+    }
+
+  /** QUARTILE(range, quart) — quart 0..4 maps to PERCENTILE p = quart/4. */
+  val quartile: FunctionSpec[BigDecimal] { type Args = RangeIntArgs } =
+    FunctionSpec.simple[BigDecimal, RangeIntArgs](
+      "QUARTILE",
+      Arity.Exact(2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (loc, qExpr) = args
+      for
+        nums <- collectRangeNumerics(loc, ctx)
+        q <- ctx.evalExpr(qExpr)
+        result <-
+          if q < 0 || q > 4 then
+            Left(EvalError.EvalFailed(s"QUARTILE: quart=$q must be 0-4 (#NUM!)", None))
+          else
+            percentileInc(nums.sorted, BigDecimal(q) / 4) match
+              case Some(v) => Right(v)
+              case None => Left(EvalError.EvalFailed("QUARTILE: empty range (#NUM!)", None))
+      yield result
+    }
+
   val sumif: FunctionSpec[BigDecimal] { type Args = SumIfArgs } =
     FunctionSpec.simple[BigDecimal, SumIfArgs](
       "SUMIF",
