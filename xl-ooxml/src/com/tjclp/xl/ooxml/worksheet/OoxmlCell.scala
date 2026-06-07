@@ -48,7 +48,7 @@ case class OoxmlCell(
 
         case CellValue.Number(num) =>
           writer.startElement("v")
-          writer.writeCharacters(num.toString)
+          writer.writeCharacters(XmlUtil.plainNumber(num))
           writer.endElement() // v
 
         case CellValue.Bool(b) =>
@@ -64,7 +64,7 @@ case class OoxmlCell(
           cachedValue.foreach {
             case CellValue.Number(num) =>
               writer.startElement("v")
-              writer.writeCharacters(num.toString)
+              writer.writeCharacters(XmlUtil.plainNumber(num))
               writer.endElement()
             case CellValue.Text(s) =>
               writer.startElement("v")
@@ -91,7 +91,7 @@ case class OoxmlCell(
         case CellValue.DateTime(dt) =>
           val serial = CellValue.dateTimeToExcelSerial(dt)
           writer.startElement("v")
-          writer.writeCharacters(serial.toString)
+          writer.writeCharacters(XmlUtil.plainNumber(serial))
           writer.endElement() // v
     }
 
@@ -183,12 +183,14 @@ case class OoxmlCell(
               PrefixedAttribute("xml", "space", "preserve", Null),
               TopScope,
               true,
-              Text(text)
+              Text(XmlUtil.sanitizeXmlText(text))
             )
-          else elem("t")(Text(text))
+          else elem("t")(Text(XmlUtil.sanitizeXmlText(text)))
         Seq(elem("is")(tElem))
       case CellValue.Text(text) => // SST index
-        Seq(elem("v")(Text(text))) // text here would be the SST index as string
+        Seq(
+          elem("v")(Text(XmlUtil.sanitizeXmlText(text)))
+        ) // text here would be the SST index as string
       case CellValue.RichText(richText) =>
         // Rich text: <is> with multiple <r> (text run) elements
         val runElems = richText.runs.map { run =>
@@ -240,9 +242,9 @@ case class OoxmlCell(
                 PrefixedAttribute("xml", "space", "preserve", Null),
                 TopScope,
                 true,
-                Text(run.text)
+                Text(XmlUtil.sanitizeXmlText(run.text))
               )
-            else elem("t")(Text(run.text))
+            else elem("t")(Text(XmlUtil.sanitizeXmlText(run.text)))
 
           elem("r")(
             rPrElems ++ Seq(textElem)*
@@ -251,7 +253,7 @@ case class OoxmlCell(
 
         Seq(elem("is")(runElems*))
       case CellValue.Number(num) =>
-        Seq(elem("v")(Text(num.toString)))
+        Seq(elem("v")(Text(XmlUtil.plainNumber(num))))
       case CellValue.Bool(b) =>
         Seq(elem("v")(Text(if b then "1" else "0")))
       case CellValue.Formula(expr, cachedValue) =>
@@ -259,7 +261,7 @@ case class OoxmlCell(
         val formulaElem = elem("f")(Text(expr))
         // Write cached value if present
         val cachedElem = cachedValue.flatMap {
-          case CellValue.Number(num) => Some(elem("v")(Text(num.toString)))
+          case CellValue.Number(num) => Some(elem("v")(Text(XmlUtil.plainNumber(num))))
           case CellValue.Text(s) => Some(elem("v")(Text(s)))
           case CellValue.Bool(b) => Some(elem("v")(Text(if b then "1" else "0")))
           case CellValue.Error(err) =>
@@ -274,6 +276,6 @@ case class OoxmlCell(
       case CellValue.DateTime(dt) =>
         // DateTime is serialized as number with Excel serial format
         val serial = CellValue.dateTimeToExcelSerial(dt)
-        Seq(elem("v")(Text(serial.toString)))
+        Seq(elem("v")(Text(XmlUtil.plainNumber(serial))))
 
     elemOrdered("c", finalAttrs*)(valueElem*)

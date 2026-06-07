@@ -28,6 +28,85 @@ private[ooxml] def cleanNamespaces(elem: Elem): Elem =
   }
   elem.copy(scope = TopScope, child = cleanedChildren)
 
+// ===== Preserved inline worksheet elements (GH-232) =====
+// Inline CT_Worksheet children that are listed in WorksheetReader.knownElements (so they are
+// excluded from the `otherElements` catch-all) but have NO dedicated field on OoxmlWorksheet.
+// Without capturing these, any modification of a sheet silently DROPS data validations, sheet
+// protection, autofilters, hyperlinks, etc. They are captured into OoxmlWorksheet.preservedKnown
+// and re-emitted at their correct OOXML schema positions (ECMA-376 18.3.1.99) by the groups below.
+private[worksheet] val preservedAfterSheetData: Seq[String] =
+  Seq(
+    "sheetCalcPr",
+    "sheetProtection",
+    "protectedRanges",
+    "scenarios",
+    "autoFilter",
+    "sortState",
+    "dataConsolidate",
+    "customSheetViews"
+  )
+private[worksheet] val preservedAfterMergeCells: Seq[String] = Seq("phoneticPr")
+private[worksheet] val preservedAfterCondFmt: Seq[String] = Seq("dataValidations", "hyperlinks")
+private[worksheet] val preservedAfterCustomProps: Seq[String] =
+  Seq("cellWatches", "ignoredErrors", "smartTags")
+private[worksheet] val preservedAfterLegacyDrawing: Seq[String] = Seq("legacyDrawingHF")
+private[worksheet] val preservedAfterControls: Seq[String] = Seq("webPublishItems")
+
+/** Union of all inline labels preserved via OoxmlWorksheet.preservedKnown (used by the reader). */
+private[ooxml] val preservedKnownLabels: Set[String] =
+  (preservedAfterSheetData ++ preservedAfterMergeCells ++ preservedAfterCondFmt ++
+    preservedAfterCustomProps ++ preservedAfterLegacyDrawing ++ preservedAfterControls).toSet
+
+/**
+ * All inline CT_Worksheet child labels the reader recognizes (excluded from the `otherElements`
+ * verbatim catch-all). INVARIANT: every label here MUST be either modeled by a dedicated
+ * OoxmlWorksheet field, regenerated (sheetData, mergeCells), OR captured in `preservedKnownLabels`.
+ * A label that is none of these is silently dropped on modification — the GH-232 class of bug. The
+ * invariant is enforced by WorksheetPreservationInvariantSpec.
+ */
+private[ooxml] val worksheetKnownElements: Set[String] = Set(
+  // Modeled by a dedicated field or regenerated
+  "sheetPr",
+  "dimension",
+  "sheetViews",
+  "sheetFormatPr",
+  "cols",
+  "sheetData",
+  "mergeCells",
+  "conditionalFormatting",
+  "printOptions",
+  "rowBreaks",
+  "colBreaks",
+  "customProperties",
+  "pageMargins",
+  "pageSetup",
+  "headerFooter",
+  "drawing",
+  "legacyDrawing",
+  "picture",
+  "oleObjects",
+  "controls",
+  "tableParts",
+  "extLst",
+  // Preserved via OoxmlWorksheet.preservedKnown (GH-232)
+  "sheetCalcPr",
+  "sheetProtection",
+  "protectedRanges",
+  "scenarios",
+  "autoFilter",
+  "sortState",
+  "dataConsolidate",
+  "customSheetViews",
+  "phoneticPr",
+  "dataValidations",
+  "hyperlinks",
+  "cellWatches",
+  "ignoredErrors",
+  "smartTags",
+  "legacyDrawingHF",
+  "webPublishItems"
+)
+
 /**
  * Group consecutive columns with identical properties into spans.
  *

@@ -75,8 +75,9 @@ object CellValue:
    * Convert LocalDateTime to Excel serial number.
    *
    * Excel represents dates as the number of days since December 30, 1899, with fractional days
-   * representing time. Note: Excel has a bug where it treats 1900 as a leap year (it wasn't), so
-   * dates before March 1, 1900 are off by one day. This implementation matches Excel's behavior.
+   * representing time. Excel has a bug where it treats 1900 as a leap year (it wasn't); this
+   * implementation reproduces that quirk so serials match Excel exactly: 1900-01-01 = 1, 1900-02-28 =
+   * 59, the phantom 1900-02-29 = 60, 1900-03-01 = 61.
    *
    * @param dt
    *   The LocalDateTime to convert
@@ -90,7 +91,11 @@ object CellValue:
     val epoch1900 = LocalDateTime.of(1899, 12, 30, 0, 0, 0)
 
     // Calculate days since epoch
-    val days = ChronoUnit.DAYS.between(epoch1900, dt)
+    val rawDays = ChronoUnit.DAYS.between(epoch1900, dt)
+    // Excel 1900 leap-year bug: it counts a phantom 1900-02-29 (serial 60), so real dates before
+    // 1900-03-01 (rawDays < 61 from the 1899-12-30 epoch) are one higher than Excel. Subtract it
+    // back so 1900-01-01 -> 1 and 1900-02-28 -> 59. Dates on/after 1900-03-01 are already correct.
+    val days = if rawDays < 61 then rawDays - 1 else rawDays
 
     // Calculate fractional day for time component
     val dayStart = dt.toLocalDate.atStartOfDay
@@ -121,8 +126,10 @@ object CellValue:
     val fractionOfDay = serial - wholeDays
     val seconds = (fractionOfDay * 86400.0).toLong
 
-    // Add days and seconds to epoch
-    epoch1900.plusDays(wholeDays).plusSeconds(seconds)
+    // Inverse of the 1900 leap-year adjustment: serials below 60 are shifted one day forward;
+    // serial 60 is Excel's phantom 1900-02-29, mapped here to 1900-02-28. Serials >= 61 are exact.
+    val dayShift = if wholeDays < 60 then 1L else 0L
+    epoch1900.plusDays(wholeDays + dayShift).plusSeconds(seconds)
 
   /**
    * Characters that trigger formula injection when at the start of a cell value.

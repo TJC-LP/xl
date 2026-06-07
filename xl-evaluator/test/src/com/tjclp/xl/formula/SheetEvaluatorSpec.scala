@@ -65,6 +65,79 @@ class SheetEvaluatorSpec extends FunSuite:
     assertEquals(result, Right(CellValue.Bool(true)))
   }
 
+  // ===== Eq/Neq with cell references (GH-233) + case-insensitive equality (GH-234) =====
+  // Regression: =A1=B1 / =IF(A1=B1,…) previously returned Left("Unresolved PolyRef")
+  // because the parser left bare-ref operands as PolyRef. They must now evaluate.
+
+  test("GH-233: =A1=B1 with equal numeric cells -> TRUE") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"B1" -> CellValue.Number(BigDecimal(10))
+    )
+    assertEquals(sheet.evaluateFormula("=A1=B1"), Right(CellValue.Bool(true)))
+  }
+
+  test("GH-233: =A1=B1 with unequal numeric cells -> FALSE") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"B1" -> CellValue.Number(BigDecimal(20))
+    )
+    assertEquals(sheet.evaluateFormula("=A1=B1"), Right(CellValue.Bool(false)))
+  }
+
+  test("GH-233: =A1<>B1 with unequal cells -> TRUE") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"B1" -> CellValue.Number(BigDecimal(20))
+    )
+    assertEquals(sheet.evaluateFormula("=A1<>B1"), Right(CellValue.Bool(true)))
+  }
+
+  test("GH-233: =IF(A1=B1,...) — the headline regression — evaluates") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(5)),
+      ref"B1" -> CellValue.Number(BigDecimal(5))
+    )
+    assertEquals(sheet.evaluateFormula("=IF(A1=B1,\"match\",\"no\")"), Right(CellValue.Text("match")))
+  }
+
+  test("GH-233: cross-sheet-style ref equality with text cells") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Text("Hello"),
+      ref"B1" -> CellValue.Text("Hello")
+    )
+    assertEquals(sheet.evaluateFormula("=A1=B1"), Right(CellValue.Bool(true)))
+  }
+
+  test("GH-234: text equality is case-INSENSITIVE for cell refs (Excel parity)") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Text("Hello"),
+      ref"B1" -> CellValue.Text("hELLO")
+    )
+    assertEquals(sheet.evaluateFormula("=A1=B1"), Right(CellValue.Bool(true)))
+  }
+
+  test("GH-234: scalar text equality is case-insensitive (=\"A\"=\"a\" -> TRUE)") {
+    assertEquals(emptySheet.evaluateFormula("=\"A\"=\"a\""), Right(CellValue.Bool(true)))
+  }
+
+  test("GH-234: scalar text inequality respects case-insensitivity (=\"A\"<>\"a\" -> FALSE)") {
+    assertEquals(emptySheet.evaluateFormula("=\"A\"<>\"a\""), Right(CellValue.Bool(false)))
+  }
+
+  test("GH-234: number vs text are not equal (=1=\"1\" -> FALSE, Excel parity)") {
+    assertEquals(emptySheet.evaluateFormula("=1=\"1\""), Right(CellValue.Bool(false)))
+  }
+
+  test("GH-233: date cell equality via refs") {
+    val d = LocalDate.of(2025, 6, 1).atStartOfDay()
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.DateTime(d),
+      ref"B1" -> CellValue.DateTime(d)
+    )
+    assertEquals(sheet.evaluateFormula("=A1=B1"), Right(CellValue.Bool(true)))
+  }
+
   test("evaluateFormula: date result with TODAY") {
     val clock = Clock.fixedDate(LocalDate.of(2025, 11, 21))
     val result = emptySheet.evaluateFormula("=TODAY()", clock)

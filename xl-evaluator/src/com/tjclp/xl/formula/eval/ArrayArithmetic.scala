@@ -256,14 +256,21 @@ object ArrayArithmetic:
     case b: Boolean => CellValue.Bool(b)
     case _ => CellValue.Text(v.toString)
 
-  /** Compare CellValues for equality (case-insensitive for text). */
-  private def cellValueEquals(a: CellValue, b: CellValue): Boolean = (a, b) match
+  /**
+   * Compare CellValues for equality (case-insensitive for text), matching Excel.
+   *
+   * Shared with the scalar equality fast path in Evaluator (GH-234) so scalar `=A1=B1` and array
+   * `=A1:A3=B1:B3` equality use identical semantics.
+   */
+  def cellValueEquals(a: CellValue, b: CellValue): Boolean = (a, b) match
     case (CellValue.Text(t1), CellValue.Text(t2)) =>
       t1.equalsIgnoreCase(t2)
     case (CellValue.Number(n1), CellValue.Number(n2)) =>
       n1 == n2
     case (CellValue.Bool(b1), CellValue.Bool(b2)) =>
       b1 == b2
+    case (CellValue.DateTime(d1), CellValue.DateTime(d2)) =>
+      d1.isEqual(d2)
     case (CellValue.Empty, CellValue.Empty) =>
       true
     case (CellValue.Formula(_, Some(c1)), other) =>

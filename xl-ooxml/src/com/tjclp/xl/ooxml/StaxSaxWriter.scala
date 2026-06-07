@@ -97,7 +97,10 @@ class StaxSaxWriter(underlying: XMLStreamWriter) extends SaxWriter:
             underlying.writeAttribute(prefix, ns.getOrElse(""), local, value)
           case _ =>
             underlying.writeAttribute(name, value)
-  def writeCharacters(text: String): Unit = underlying.writeCharacters(text)
+  // GH-237: strip XML-illegal control chars (StAX would otherwise silently drop them, diverging
+  // from the ScalaXml backend). XmlUtil.sanitizeXmlText is a no-op fast path for clean text.
+  def writeCharacters(text: String): Unit =
+    underlying.writeCharacters(XmlUtil.sanitizeXmlText(text))
   def endElement(): Unit =
     underlying.writeEndElement()
     if !namespaceStack.isEmpty then popScope()
