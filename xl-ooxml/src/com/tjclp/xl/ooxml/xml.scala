@@ -44,6 +44,8 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing"
   val relTypeTable =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table"
+  val relTypeHyperlink =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
 
   /** Content type URIs */
   val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"

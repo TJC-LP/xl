@@ -452,6 +452,13 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
         val endRef = ARef.from0(maxCol, maxRow)
         elem("dimension", "ref" -> s"${startRef.toA1}:${endRef.toA1}")()
 
+    // GH-235: build <hyperlinks> from Cell.hyperlink (model-driven). External links also get
+    // matching sheet .rels from the writer via the same rIdHL{n} scheme (collectHyperlinks).
+    val hyperlinksMap: Map[String, Elem] =
+      buildHyperlinksElem(collectHyperlinks(sheet))
+        .map(e => Map("hyperlinks" -> e))
+        .getOrElse(Map.empty)
+
     // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
     preservedMetadata match
       case Some(preserved) =>
@@ -491,7 +498,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           preserved.otherElements,
           preserved.rootAttributes,
           adjustedScope,
-          preserved.preservedKnown // GH-232: carry preserved inline elements through surgical write
+          // GH-232 preserve inline elements + GH-235 model-driven hyperlinks (overrides any raw)
+          preserved.preservedKnown ++ hyperlinksMap
         )
       case None =>
         // No preserved metadata - create minimal worksheet with cols from domain
@@ -502,7 +510,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           sheetViews = applyFreezePaneOverride(None, sheet.freezePane),
           cols = generatedCols,
           legacyDrawing = legacyDrawingElem,
-          tableParts = tableParts
+          tableParts = tableParts,
+          preservedKnown = hyperlinksMap
         )
 
   /**

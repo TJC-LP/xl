@@ -286,6 +286,34 @@ object SheetCommands:
       stateDesc = if veryHide then "very hidden" else "hidden"
     yield s"Sheet '$name' is now $stateDesc\n${saveSuffix(outputPath, stream)}"
 
+  /** Add or replace a workbook-scoped named range, then write (GH-236). */
+  def nameAdd(
+    wb: Workbook,
+    name: String,
+    refersTo: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    val updated = wb.withDefinedName(name, refersTo)
+    writeWorkbook(updated, outputPath, config, stream)
+      .as(s"Added named range '$name' -> $refersTo\n${saveSuffix(outputPath, stream)}")
+
+  /** Remove a workbook-scoped named range, then write (GH-236). */
+  def nameRemove(
+    wb: Workbook,
+    name: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean = false
+  ): IO[String] =
+    if !wb.metadata.definedNames.exists(d => d.name == name && d.localSheetId.isEmpty) then
+      IO.raiseError(new Exception(s"Named range '$name' not found"))
+    else
+      val updated = wb.removeDefinedName(name)
+      writeWorkbook(updated, outputPath, config, stream)
+        .as(s"Removed named range '$name'\n${saveSuffix(outputPath, stream)}")
+
   /**
    * Show a hidden sheet (make it visible).
    *

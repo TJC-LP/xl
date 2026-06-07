@@ -13,6 +13,7 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.tables.TableSpec
+import com.tjclp.xl.ooxml.worksheet.collectHyperlinks
 
 // Re-export writer config types for backward compatibility
 export writer.{
@@ -685,16 +686,18 @@ object XlsxWriter:
         case _ =>
           writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet, config)
 
-      // Write worksheet relationships if this sheet has comments or tables
+      // Write worksheet relationships if this sheet has comments, tables, or hyperlinks (GH-235)
       val hasComments = commentsBySheet.contains(idx)
       val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
+      val hlRels =
+        domainWorkbook.map(dwb => hyperlinkRelationships(dwb.sheets(idx))).getOrElse(Seq.empty)
 
-      if hasComments || tableIds.nonEmpty then
-        val sheetRels = buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
+      if hasComments || tableIds.nonEmpty || hlRels.nonEmpty then
+        val base = buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
         writePart(
           zip,
           s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels",
-          sheetRels,
+          Relationships(base.relationships ++ hlRels),
           config
         )
     }
@@ -1047,6 +1050,15 @@ object XlsxWriter:
       f(zip)
     })
 
+  /**
+   * GH-235: external-hyperlink relationships for a sheet (rIdHL{n} <-> URL), matching the
+   * worksheet.
+   */
+  private def hyperlinkRelationships(sheet: Sheet): Seq[Relationship] =
+    collectHyperlinks(sheet).filter(_.external).map { e =>
+      Relationship(e.relId, XmlUtil.relTypeHyperlink, e.target, Some("External"))
+    }
+
   /** Read the contents of a ZIP entry as UTF-8 string if it exists. */
   private def readZipEntry(zip: ZipFile, entryName: String): Option[String] =
     Option(zip.getEntry(entryName)).map { entry =>
@@ -1340,11 +1352,13 @@ object XlsxWriter:
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
-        // Update sheets in preserved structure (names/order/visibility may have changed)
+        // Update sheets in preserved structure (names/order/visibility may have changed).
+        // Named ranges (definedNames) ride through verbatim here (byte-identical). Authoring a
+        // name marks metadata modified, which routes to the fromDomain branch below (GH-236).
         preserved.updateSheets(workbook.sheets, workbook.metadata.sheetStates)
       case None =>
-        // Fallback to minimal for programmatically created workbooks
-        // (or when metadata modified - we need fresh workbook structure)
+        // Fallback for programmatically created workbooks OR when metadata was modified — fresh
+        // workbook structure; fromDomain now serializes wb.metadata.definedNames (GH-236).
         OoxmlWorkbook.fromDomain(workbook)
 
     // Content types: preserve from source when available, otherwise generate minimal.
@@ -1506,16 +1520,26 @@ object XlsxWriter:
 
           val hasComments = commentsBySheet.contains(idx)
           val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
+          val hlRels = hyperlinkRelationships(sheet) // GH-235
 
-          // Copy relationships from source if available (preserves non-comment relationships)
-          // Otherwise regenerate minimal relationships
+          // Copy relationships from source if available (preserves non-comment relationships).
+          // Otherwise regenerate minimal relationships. Authored hyperlinks (hlRels) are merged in.
           sourceContext match
             case Some(ctx) if ctx.partManifest.contains(relsPath) =>
-              copyPreservedPart(ctx.sourcePath, relsPath, zip)
-            case _ if hasComments || tableIds.nonEmpty =>
-              val sheetRels =
+              if hlRels.isEmpty then copyPreservedPart(ctx.sourcePath, relsPath, zip)
+              else
+                // Merge authored hyperlink rels into the preserved sheet rels (parse + append)
+                val preserved = withZipFile(ctx.sourcePath) { z =>
+                  parseOptionalEntry(z, relsPath)(Relationships.fromXml)
+                }.getOrElse(Relationships(Seq.empty))
+                // Drop the source's hyperlink rels (we regenerate them from the model) to avoid
+                // orphans, but keep everything else (printerSettings, drawings, ...).
+                val kept = preserved.relationships.filterNot(_.`type` == XmlUtil.relTypeHyperlink)
+                writePart(zip, relsPath, Relationships(kept ++ hlRels), config)
+            case _ if hasComments || tableIds.nonEmpty || hlRels.nonEmpty =>
+              val base =
                 buildWorksheetRelationshipsWithCommentsPath(commentPath, hasComments, tableIds)
-              writePart(zip, relsPath, sheetRels, config)
+              writePart(zip, relsPath, Relationships(base.relationships ++ hlRels), config)
             case _ => // No relationships needed
 
           // Always regenerate comments/VML from domain model for modified sheets
