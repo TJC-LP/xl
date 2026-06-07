@@ -22,8 +22,10 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     val lookupCells = lookupArray.cells.toVector
     val returnCells = returnArray.cells.toVector
 
+    // GH-55: accept binary-search modes 2 (ascending) and -2 (descending). Linear iteration in the
+    // correct direction yields correct results; -2 iterates reversed like -1 (descending order).
     val indices =
-      if searchMode == -1 then lookupCells.indices.reverse
+      if searchMode == -1 || searchMode == -2 then lookupCells.indices.reverse
       else lookupCells.indices
 
     val wildcardCriterionOpt = lookupValue match

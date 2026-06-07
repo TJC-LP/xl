@@ -71,3 +71,14 @@ class Phase3FunctionsSpec extends FunSuite:
     assertEquals(nums.evaluateFormula("=QUARTILE(A1:A5,2)"), Right(CellValue.Number(BigDecimal(3))))
     assertEquals(nums.evaluateFormula("=QUARTILE(A1:A5,4)"), Right(CellValue.Number(BigDecimal(5))))
   }
+
+  test("GH-55: XLOOKUP accepts binary search modes 2 and -2") {
+    assertEquals(
+      nums.evaluateFormula("=XLOOKUP(4,A1:A5,A1:A5,\"NA\",0,2)"),
+      Right(CellValue.Number(BigDecimal(4)))
+    )
+    assertEquals(
+      nums.evaluateFormula("=XLOOKUP(4,A1:A5,A1:A5,\"NA\",0,-2)"),
+      Right(CellValue.Number(BigDecimal(4)))
+    )
+  }
