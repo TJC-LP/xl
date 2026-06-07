@@ -71,50 +71,10 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
 
       extLst = (elem \ "extLst").headOption.collect { case e: Elem => cleanNamespaces(e) }
 
-      // Collect any other elements we don't explicitly handle
-      knownElements = Set(
-        "sheetPr",
-        "dimension",
-        "sheetViews",
-        "sheetFormatPr",
-        "cols",
-        "sheetData",
-        "mergeCells",
-        "pageMargins",
-        "pageSetup",
-        "headerFooter",
-        "drawing",
-        "legacyDrawing",
-        "picture",
-        "oleObjects",
-        "controls",
-        "extLst",
-        // Additional elements from OOXML spec
-        "sheetCalcPr",
-        "sheetProtection",
-        "protectedRanges",
-        "scenarios",
-        "autoFilter",
-        "sortState",
-        "dataConsolidate",
-        "customSheetViews",
-        "phoneticPr",
-        "conditionalFormatting",
-        "dataValidations",
-        "hyperlinks",
-        "printOptions",
-        "rowBreaks",
-        "colBreaks",
-        "customProperties",
-        "cellWatches",
-        "ignoredErrors",
-        "smartTags",
-        "legacyDrawingHF",
-        "webPublishItems",
-        "tableParts"
-      )
+      // Inline labels we recognize (single source of truth in WorksheetHelpers so the
+      // preservation invariant can be guarded by a test — see worksheetKnownElements).
       otherElements = elem.child.collect {
-        case e: Elem if !knownElements.contains(e.label) => e
+        case e: Elem if !worksheetKnownElements.contains(e.label) => e
       }
       // GH-232: capture inline known elements that have NO dedicated field (dataValidations,
       // sheetProtection, autoFilter, hyperlinks, ...) so they survive a sheet modification.

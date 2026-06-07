@@ -53,9 +53,59 @@ private[worksheet] val preservedAfterLegacyDrawing: Seq[String] = Seq("legacyDra
 private[worksheet] val preservedAfterControls: Seq[String] = Seq("webPublishItems")
 
 /** Union of all inline labels preserved via OoxmlWorksheet.preservedKnown (used by the reader). */
-private[worksheet] val preservedKnownLabels: Set[String] =
+private[ooxml] val preservedKnownLabels: Set[String] =
   (preservedAfterSheetData ++ preservedAfterMergeCells ++ preservedAfterCondFmt ++
     preservedAfterCustomProps ++ preservedAfterLegacyDrawing ++ preservedAfterControls).toSet
+
+/**
+ * All inline CT_Worksheet child labels the reader recognizes (excluded from the `otherElements`
+ * verbatim catch-all). INVARIANT: every label here MUST be either modeled by a dedicated
+ * OoxmlWorksheet field, regenerated (sheetData, mergeCells), OR captured in `preservedKnownLabels`.
+ * A label that is none of these is silently dropped on modification — the GH-232 class of bug. The
+ * invariant is enforced by WorksheetPreservationInvariantSpec.
+ */
+private[ooxml] val worksheetKnownElements: Set[String] = Set(
+  // Modeled by a dedicated field or regenerated
+  "sheetPr",
+  "dimension",
+  "sheetViews",
+  "sheetFormatPr",
+  "cols",
+  "sheetData",
+  "mergeCells",
+  "conditionalFormatting",
+  "printOptions",
+  "rowBreaks",
+  "colBreaks",
+  "customProperties",
+  "pageMargins",
+  "pageSetup",
+  "headerFooter",
+  "drawing",
+  "legacyDrawing",
+  "picture",
+  "oleObjects",
+  "controls",
+  "tableParts",
+  "extLst",
+  // Preserved via OoxmlWorksheet.preservedKnown (GH-232)
+  "sheetCalcPr",
+  "sheetProtection",
+  "protectedRanges",
+  "scenarios",
+  "autoFilter",
+  "sortState",
+  "dataConsolidate",
+  "customSheetViews",
+  "phoneticPr",
+  "dataValidations",
+  "hyperlinks",
+  "cellWatches",
+  "ignoredErrors",
+  "smartTags",
+  "legacyDrawingHF",
+  "webPublishItems"
+)
 
 /**
  * Group consecutive columns with identical properties into spans.
