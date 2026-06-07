@@ -81,6 +81,12 @@ trait FunctionSpecsBase:
   type RangeIntArgs = (TExpr.RangeLocation, TExpr[Int])
   type RankArgs = (TExpr[BigDecimal], TExpr.RangeLocation, Option[TExpr[Int]])
   type RangeNumArgs = (TExpr.RangeLocation, TExpr[BigDecimal])
+  // GH-76 dynamic arrays (spill engine)
+  type SequenceArgs =
+    (TExpr[Int], Option[TExpr[Int]], Option[TExpr[BigDecimal]], Option[TExpr[BigDecimal]])
+  type SortArgs = (TExpr.RangeLocation, Option[TExpr[Int]], Option[TExpr[Int]])
+  type UniqueArgs = (TExpr.RangeLocation, Option[TExpr[Boolean]], Option[TExpr[Boolean]])
+  type FilterArgs = (TExpr.RangeLocation, TExpr.RangeLocation, Option[TExpr[Any]])
   type IfErrorArgs = (TExpr[CellValue], TExpr[CellValue])
   type NoArgs = EmptyTuple
   type DateTripleInt = (TExpr[Int], TExpr[Int], TExpr[Int])

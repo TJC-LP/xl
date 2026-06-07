@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator}
 import com.tjclp.xl.formula.Arity
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, CellError}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
 
@@ -35,6 +35,145 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
           val values = extractRangeAsMatrix(range, targetSheet)
           Right(ArrayResult(values.transpose))
     }
+
+  /**
+   * SEQUENCE(rows, [cols], [start], [step])
+   *
+   * Generates a row-major grid of sequential numbers. Defaults: cols=1, start=1, step=1.
+   */
+  val sequence: FunctionSpec[ArrayResult] { type Args = SequenceArgs } =
+    FunctionSpec.simple[ArrayResult, SequenceArgs]("SEQUENCE", Arity.Range(1, 4)) { (args, ctx) =>
+      val (rowsExpr, colsOpt, startOpt, stepOpt) = args
+      for
+        nRows <- ctx.evalExpr(rowsExpr)
+        nCols <- colsOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
+        start <- startOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(BigDecimal(1)))
+        step <- stepOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(BigDecimal(1)))
+        result <-
+          if nRows < 1 || nCols < 1 then
+            Left(EvalError.EvalFailed("SEQUENCE: rows and columns must be >= 1", None))
+          else if nRows.toLong * nCols.toLong > 1048576L then
+            Left(EvalError.EvalFailed("SEQUENCE: result exceeds 1,048,576 cells", None))
+          else
+            val values = (0 until nRows).toVector.map { r =>
+              (0 until nCols).toVector.map { c =>
+                (CellValue.Number(start + step * BigDecimal(r * nCols + c)): CellValue)
+              }
+            }
+            Right(ArrayResult(values))
+      yield result
+    }
+
+  /**
+   * SORT(array, [sort_index], [sort_order])
+   *
+   * Sorts the rows of a range by a 1-based column index (default 1). sort_order 1 = ascending
+   * (default), -1 = descending. Sort key: numbers < text (case-insensitive) < booleans.
+   */
+  val sortFn: FunctionSpec[ArrayResult] { type Args = SortArgs } =
+    FunctionSpec.simple[ArrayResult, SortArgs]("SORT", Arity.Range(1, 3)) { (args, ctx) =>
+      val (location, idxOpt, orderOpt) = args
+      for
+        sortIndex <- idxOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
+        sortOrder <- orderOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
+        targetSheet <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        result <-
+          val matrix = extractRangeAsMatrix(location.range, targetSheet)
+          val width = matrix.headOption.map(_.size).getOrElse(0)
+          val colIdx = sortIndex - 1
+          if matrix.isEmpty then Right(ArrayResult(matrix))
+          else if colIdx < 0 || colIdx >= width then
+            Left(EvalError.EvalFailed(s"SORT: sort_index $sortIndex is outside 1..$width", None))
+          else
+            val asc = matrix.sortBy(row => cellSortKey(row(colIdx)))
+            Right(ArrayResult(if sortOrder < 0 then asc.reverse else asc))
+      yield result
+    }
+
+  /**
+   * UNIQUE(array, [by_col], [exactly_once])
+   *
+   * Returns distinct rows (or columns when by_col=TRUE), preserving first-seen order. When
+   * exactly_once=TRUE, returns only the rows that occur exactly once. Text comparison is
+   * case-insensitive (Excel parity).
+   */
+  val unique: FunctionSpec[ArrayResult] { type Args = UniqueArgs } =
+    FunctionSpec.simple[ArrayResult, UniqueArgs]("UNIQUE", Arity.Range(1, 3)) { (args, ctx) =>
+      val (location, byColOpt, onceOpt) = args
+      for
+        byCol <- byColOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
+        exactlyOnce <- onceOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
+        targetSheet <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+      yield
+        val matrix0 = extractRangeAsMatrix(location.range, targetSheet)
+        val matrix = if byCol then matrix0.transpose else matrix0
+        val resultRows =
+          if exactlyOnce then
+            val keys = matrix.map(_.map(cellKey))
+            val counts = keys.groupBy(identity).view.mapValues(_.size).toMap
+            matrix.zip(keys).collect { case (row, k) if counts.getOrElse(k, 0) == 1 => row }
+          else
+            matrix
+              .foldLeft((Vector.empty[Vector[CellValue]], Set.empty[Vector[String]])) {
+                case ((acc, seen), row) =>
+                  val k = row.map(cellKey)
+                  if seen.contains(k) then (acc, seen) else (acc :+ row, seen + k)
+              }
+              ._1
+        ArrayResult(if byCol then resultRows.transpose else resultRows)
+    }
+
+  /**
+   * FILTER(array, include, [if_empty])
+   *
+   * Keeps the rows of `array` whose corresponding entry in the single-column `include` range is
+   * truthy (TRUE or a non-zero number). Returns `if_empty` (or #N/A) when nothing matches.
+   */
+  val filterFn: FunctionSpec[ArrayResult] { type Args = FilterArgs } =
+    FunctionSpec.simple[ArrayResult, FilterArgs]("FILTER", Arity.Range(2, 3)) { (args, ctx) =>
+      val (arrayLoc, includeLoc, ifEmptyOpt) = args
+      for
+        arraySheet <- Evaluator.resolveRangeLocation(arrayLoc, ctx.sheet, ctx.workbook)
+        includeSheet <- Evaluator.resolveRangeLocation(includeLoc, ctx.sheet, ctx.workbook)
+        result <-
+          val matrix = extractRangeAsMatrix(arrayLoc.range, arraySheet)
+          val flags = extractRangeAsMatrix(includeLoc.range, includeSheet)
+            .map(row => row.headOption.exists(isTruthy))
+          val kept = matrix.zip(flags).collect { case (row, true) => row }
+          if kept.nonEmpty then Right(ArrayResult(kept))
+          else
+            ifEmptyOpt match
+              case Some(expr) => evalValue(ctx, expr).map(v => ArrayResult.single(toCellValue(v)))
+              case None => Right(ArrayResult.single(CellValue.Error(CellError.NA)))
+      yield result
+    }
+
+  /** Sort key: numbers (by value) < text (case-insensitive) < booleans < everything else. */
+  private def cellSortKey(cv: CellValue): (Int, BigDecimal, String) =
+    cv match
+      case CellValue.Number(n) => (0, n, "")
+      case CellValue.Text(s) => (1, BigDecimal(0), s.toLowerCase)
+      case CellValue.Bool(b) => (2, if b then BigDecimal(1) else BigDecimal(0), "")
+      case CellValue.Formula(_, Some(c)) => cellSortKey(c)
+      case _ => (3, BigDecimal(0), "")
+
+  /** Canonical equality key for UNIQUE (case-insensitive text, normalized numbers). */
+  private def cellKey(cv: CellValue): String =
+    cv match
+      case CellValue.Number(n) => "n:" + n.bigDecimal.stripTrailingZeros.toPlainString
+      case CellValue.Text(s) => "t:" + s.toLowerCase
+      case CellValue.Bool(b) => "b:" + b
+      case CellValue.Empty => "e:"
+      case CellValue.Formula(_, Some(c)) => cellKey(c)
+      case other => "o:" + other.toString
+
+  /** Truthiness for FILTER include flags. */
+  private def isTruthy(cv: CellValue): Boolean =
+    cv match
+      case CellValue.Bool(b) => b
+      case CellValue.Number(n) => n.signum != 0
+      case CellValue.Formula(_, Some(c)) => isTruthy(c)
+      case _ => false
 
   /**
    * Extract a range from sheet as a 2D matrix of CellValues.

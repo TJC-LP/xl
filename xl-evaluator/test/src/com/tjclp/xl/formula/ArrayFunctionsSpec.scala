@@ -186,3 +186,103 @@ class ArrayFunctionsSpec extends FunSuite:
     assertEquals(updated(ref"B3").value, CellValue.Number(3))
     assertEquals(updated(ref"C3").value, CellValue.Number(4))
   }
+
+  // ========== GH-76 Dynamic Arrays ==========
+
+  test("SEQUENCE(2,3) generates a 2x3 grid 1..6") {
+    val result = Sheet("Test").evaluateArrayFormula("=SEQUENCE(2,3)", ref"E1")
+    assert(result.isRight, s"$result")
+    val (s, range) = result.toOption.get
+    assertEquals(range.height, 2)
+    assertEquals(range.width, 3)
+    assertEquals(s(ref"E1").value, CellValue.Number(1))
+    assertEquals(s(ref"G1").value, CellValue.Number(3))
+    assertEquals(s(ref"E2").value, CellValue.Number(4))
+    assertEquals(s(ref"G2").value, CellValue.Number(6))
+  }
+
+  test("SEQUENCE(3,1,10,5) honors start and step") {
+    val (s, _) = Sheet("Test").evaluateArrayFormula("=SEQUENCE(3,1,10,5)", ref"E1").toOption.get
+    assertEquals(s(ref"E1").value, CellValue.Number(10))
+    assertEquals(s(ref"E2").value, CellValue.Number(15))
+    assertEquals(s(ref"E3").value, CellValue.Number(20))
+  }
+
+  test("SORT sorts rows ascending by the first column") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(3))
+      .put(ref"B1", CellValue.Text("c"))
+      .put(ref"A2", CellValue.Number(1))
+      .put(ref"B2", CellValue.Text("a"))
+      .put(ref"A3", CellValue.Number(2))
+      .put(ref"B3", CellValue.Text("b"))
+    val (s, range) = sheet.evaluateArrayFormula("=SORT(A1:B3)", ref"E1").toOption.get
+    assertEquals(range.height, 3)
+    assertEquals(range.width, 2)
+    assertEquals(s(ref"E1").value, CellValue.Number(1))
+    assertEquals(s(ref"F1").value, CellValue.Text("a"))
+    assertEquals(s(ref"E3").value, CellValue.Number(3))
+  }
+
+  test("SORT descending with sort_order -1") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"A2", CellValue.Number(3))
+      .put(ref"A3", CellValue.Number(2))
+    val (s, _) = sheet.evaluateArrayFormula("=SORT(A1:A3,1,-1)", ref"E1").toOption.get
+    assertEquals(s(ref"E1").value, CellValue.Number(3))
+    assertEquals(s(ref"E2").value, CellValue.Number(2))
+    assertEquals(s(ref"E3").value, CellValue.Number(1))
+  }
+
+  test("UNIQUE returns distinct rows in first-seen order") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"A2", CellValue.Number(1))
+      .put(ref"A3", CellValue.Number(2))
+      .put(ref"A4", CellValue.Number(3))
+      .put(ref"A5", CellValue.Number(3))
+    val (s, range) = sheet.evaluateArrayFormula("=UNIQUE(A1:A5)", ref"E1").toOption.get
+    assertEquals(range.height, 3)
+    assertEquals(s(ref"E1").value, CellValue.Number(1))
+    assertEquals(s(ref"E2").value, CellValue.Number(2))
+    assertEquals(s(ref"E3").value, CellValue.Number(3))
+  }
+
+  test("UNIQUE exactly_once keeps only singletons") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"A2", CellValue.Number(1))
+      .put(ref"A3", CellValue.Number(2))
+      .put(ref"A4", CellValue.Number(3))
+      .put(ref"A5", CellValue.Number(3))
+    val (s, range) = sheet.evaluateArrayFormula("=UNIQUE(A1:A5,FALSE,TRUE)", ref"E1").toOption.get
+    assertEquals(range.height, 1)
+    assertEquals(s(ref"E1").value, CellValue.Number(2))
+  }
+
+  test("FILTER keeps rows where include is truthy") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(10))
+      .put(ref"A2", CellValue.Number(20))
+      .put(ref"A3", CellValue.Number(30))
+      .put(ref"A4", CellValue.Number(40))
+      .put(ref"B1", CellValue.Number(1))
+      .put(ref"B2", CellValue.Number(0))
+      .put(ref"B3", CellValue.Number(1))
+      .put(ref"B4", CellValue.Number(0))
+    val (s, range) = sheet.evaluateArrayFormula("=FILTER(A1:A4,B1:B4)", ref"E1").toOption.get
+    assertEquals(range.height, 2)
+    assertEquals(s(ref"E1").value, CellValue.Number(10))
+    assertEquals(s(ref"E2").value, CellValue.Number(30))
+  }
+
+  test("FILTER returns if_empty when nothing matches") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(10))
+      .put(ref"A2", CellValue.Number(20))
+      .put(ref"B1", CellValue.Number(0))
+      .put(ref"B2", CellValue.Number(0))
+    val (s, _) = sheet.evaluateArrayFormula("=FILTER(A1:A2,B1:B2,\"none\")", ref"E1").toOption.get
+    assertEquals(s(ref"E1").value, CellValue.Text("none"))
+  }
