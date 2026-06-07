@@ -286,3 +286,18 @@ class ArrayFunctionsSpec extends FunSuite:
     val (s, _) = sheet.evaluateArrayFormula("=FILTER(A1:A2,B1:B2,\"none\")", ref"E1").toOption.get
     assertEquals(s(ref"E1").value, CellValue.Text("none"))
   }
+
+  test("OFFSET spills a block (=OFFSET(A1,0,0,2,2))") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(1))
+      .put(ref"B1", CellValue.Number(2))
+      .put(ref"A2", CellValue.Number(3))
+      .put(ref"B2", CellValue.Number(4))
+    val (s, range) = sheet.evaluateArrayFormula("=OFFSET(A1,0,0,2,2)", ref"E1").toOption.get
+    assertEquals(range.height, 2)
+    assertEquals(range.width, 2)
+    assertEquals(s(ref"E1").value, CellValue.Number(1))
+    assertEquals(s(ref"F1").value, CellValue.Number(2))
+    assertEquals(s(ref"E2").value, CellValue.Number(3))
+    assertEquals(s(ref"F2").value, CellValue.Number(4))
+  }

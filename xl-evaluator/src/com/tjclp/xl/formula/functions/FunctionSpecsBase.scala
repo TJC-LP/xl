@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.eval.{EvalError, Evaluator, ArrayArithmetic}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
 import java.time.LocalDate
 
@@ -87,6 +87,8 @@ trait FunctionSpecsBase:
   type SortArgs = (TExpr.RangeLocation, Option[TExpr[Int]], Option[TExpr[Int]])
   type UniqueArgs = (TExpr.RangeLocation, Option[TExpr[Boolean]], Option[TExpr[Boolean]])
   type FilterArgs = (TExpr.RangeLocation, TExpr.RangeLocation, Option[TExpr[Any]])
+  // GH-122 OFFSET: anchor ref + row/col offsets + optional height/width
+  type OffsetArgs = (AnyExpr, TExpr[Int], TExpr[Int], Option[TExpr[Int]], Option[TExpr[Int]])
   type IfErrorArgs = (TExpr[CellValue], TExpr[CellValue])
   type NoArgs = EmptyTuple
   type DateTripleInt = (TExpr[Int], TExpr[Int], TExpr[Int])
@@ -171,6 +173,17 @@ trait FunctionSpecsBase:
     value match
       case CellValue.Number(n) => Some(n)
       case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+      case _ => None
+
+  /** Extract the anchor ARef from a reference expression (cell ref, or the start of a range). */
+  protected def extractARef(expr: TExpr[?]): Option[ARef] =
+    expr match
+      case TExpr.PolyRef(ref, _) => Some(ref)
+      case TExpr.Ref(ref, _, _) => Some(ref)
+      case TExpr.SheetPolyRef(_, ref, _) => Some(ref)
+      case TExpr.SheetRef(_, ref, _, _) => Some(ref)
+      case TExpr.RangeRef(range) => Some(range.start)
+      case TExpr.SheetRange(_, range) => Some(range.start)
       case _ => None
 
   /** Extract text for matching, coercing numbers and booleans to strings. */
