@@ -267,6 +267,84 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   val variancep: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
     variadicAggregateSpec("VARP")
 
+  // ===== GH-120: statistical functions over a single range =====
+
+  /** Collect numeric values from one range (standard numeric mode), for LARGE/SMALL/RANK/etc. */
+  private def collectRangeNumerics(
+    location: TExpr.RangeLocation,
+    ctx: EvalContext
+  ): Either[EvalError, Vector[BigDecimal]] =
+    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap { targetSheet =>
+      val bounds = computeBounds(List((location.range, targetSheet)))
+      val constrainedRange = constrainRange(location.range, bounds)
+      constrainedRange.cells.foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
+        case (Left(err), _) => Left(err)
+        case (Right(values), cellRef) =>
+          extractOrEvalNumeric(targetSheet(cellRef).value, targetSheet, ctx).map {
+            case Some(n) => values :+ n
+            case None => values
+          }
+      }
+    }
+
+  /** LARGE(range, k) — k-th largest value (1-based). */
+  val large: FunctionSpec[BigDecimal] { type Args = RangeIntArgs } =
+    FunctionSpec.simple[BigDecimal, RangeIntArgs](
+      "LARGE",
+      Arity.Exact(2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (loc, kExpr) = args
+      for
+        nums <- collectRangeNumerics(loc, ctx)
+        k <- ctx.evalExpr(kExpr)
+        result <-
+          val desc = nums.sorted.reverse
+          if k >= 1 && k <= desc.length then Right(desc(k - 1))
+          else Left(EvalError.EvalFailed(s"LARGE: k=$k out of range (#NUM!)", None))
+      yield result
+    }
+
+  /** SMALL(range, k) — k-th smallest value (1-based). */
+  val small: FunctionSpec[BigDecimal] { type Args = RangeIntArgs } =
+    FunctionSpec.simple[BigDecimal, RangeIntArgs](
+      "SMALL",
+      Arity.Exact(2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (loc, kExpr) = args
+      for
+        nums <- collectRangeNumerics(loc, ctx)
+        k <- ctx.evalExpr(kExpr)
+        result <-
+          val asc = nums.sorted
+          if k >= 1 && k <= asc.length then Right(asc(k - 1))
+          else Left(EvalError.EvalFailed(s"SMALL: k=$k out of range (#NUM!)", None))
+      yield result
+    }
+
+  /** RANK(number, ref, [order]) — rank of number in ref; order 0/omitted = descending. */
+  val rank: FunctionSpec[BigDecimal] { type Args = RankArgs } =
+    FunctionSpec.simple[BigDecimal, RankArgs](
+      "RANK",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (numExpr, loc, orderOpt) = args
+      for
+        num <- ctx.evalExpr(numExpr)
+        nums <- collectRangeNumerics(loc, ctx)
+        order <- orderOpt match
+          case Some(e) => ctx.evalExpr(e)
+          case None => Right(0)
+        result <-
+          if !nums.contains(num) then
+            Left(EvalError.EvalFailed(s"RANK: $num not found in range (#N/A)", None))
+          else if order == 0 then Right(BigDecimal(nums.count(_ > num) + 1))
+          else Right(BigDecimal(nums.count(_ < num) + 1))
+      yield result
+    }
+
   val sumif: FunctionSpec[BigDecimal] { type Args = SumIfArgs } =
     FunctionSpec.simple[BigDecimal, SumIfArgs](
       "SUMIF",

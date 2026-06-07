@@ -39,3 +39,22 @@ class Phase3FunctionsSpec extends FunSuite:
   test("CHOOSE out of range returns #VALUE!") {
     assertEquals(s.evaluateFormula("=CHOOSE(9,\"a\")"), Right(CellValue.Error(CellError.Value)))
   }
+
+  // GH-120: statistical functions over a range. Data A1:A5 = 3,1,4,1,5.
+  private val nums =
+    s.put("A1" -> 3).put("A2" -> 1).put("A3" -> 4).put("A4" -> 1).put("A5" -> 5)
+
+  test("LARGE returns the k-th largest") {
+    assertEquals(nums.evaluateFormula("=LARGE(A1:A5,1)"), Right(CellValue.Number(BigDecimal(5))))
+    assertEquals(nums.evaluateFormula("=LARGE(A1:A5,2)"), Right(CellValue.Number(BigDecimal(4))))
+  }
+
+  test("SMALL returns the k-th smallest") {
+    assertEquals(nums.evaluateFormula("=SMALL(A1:A5,1)"), Right(CellValue.Number(BigDecimal(1))))
+    assertEquals(nums.evaluateFormula("=SMALL(A1:A5,3)"), Right(CellValue.Number(BigDecimal(3))))
+  }
+
+  test("RANK descending (default) and ascending") {
+    assertEquals(nums.evaluateFormula("=RANK(4,A1:A5)"), Right(CellValue.Number(BigDecimal(2))))
+    assertEquals(nums.evaluateFormula("=RANK(4,A1:A5,1)"), Right(CellValue.Number(BigDecimal(4))))
+  }
