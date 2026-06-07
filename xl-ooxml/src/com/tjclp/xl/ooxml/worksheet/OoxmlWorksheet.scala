@@ -80,7 +80,10 @@ case class OoxmlWorksheet(
   extLst: Option[Elem] = None,
   otherElements: Seq[Elem] = Seq.empty,
   rootAttributes: MetaData = Null,
-  rootScope: NamespaceBinding = defaultWorksheetScope
+  rootScope: NamespaceBinding = defaultWorksheetScope,
+  // GH-232: inline CT_Worksheet children (dataValidations, sheetProtection, autoFilter, hyperlinks,
+  // etc.) that have no dedicated field above. Keyed by element label; re-emitted in schema order.
+  preservedKnown: Map[String, Elem] = Map.empty
 ) extends XmlWritable,
       SaxSerializable:
 
@@ -107,6 +110,10 @@ case class OoxmlWorksheet(
       rows.sortBy(_.rowIndex).foreach(_.writeSax(writer))
       writer.endElement() // sheetData
 
+      // GH-232: preserved inline elements between sheetData and mergeCells (schema order):
+      // sheetCalcPr, sheetProtection, protectedRanges, scenarios, autoFilter, sortState, ...
+      preservedAfterSheetData.foreach(l => preservedKnown.get(l).foreach(writer.writeElem))
+
       // mergeCells
       if mergedRanges.nonEmpty then
         writer.startElement("mergeCells")
@@ -120,7 +127,13 @@ case class OoxmlWorksheet(
           }
         writer.endElement() // mergeCells
 
+      // GH-232: phoneticPr (after mergeCells, before conditionalFormatting)
+      preservedAfterMergeCells.foreach(l => preservedKnown.get(l).foreach(writer.writeElem))
+
       conditionalFormatting.foreach(writer.writeElem)
+
+      // GH-232: dataValidations, hyperlinks (after conditionalFormatting)
+      preservedAfterCondFmt.foreach(l => preservedKnown.get(l).foreach(writer.writeElem))
 
       printOptions.foreach(writer.writeElem)
       pageMargins.foreach(writer.writeElem)
@@ -131,11 +144,18 @@ case class OoxmlWorksheet(
       colBreaks.foreach(writer.writeElem)
       customPropertiesWs.foreach(writer.writeElem)
 
+      // GH-232: cellWatches, ignoredErrors, smartTags (after customProperties)
+      preservedAfterCustomProps.foreach(l => preservedKnown.get(l).foreach(writer.writeElem))
+
       drawing.foreach(writer.writeElem)
       legacyDrawing.foreach(writer.writeElem)
+      // GH-232: legacyDrawingHF (drawingHF, after legacyDrawing)
+      preservedAfterLegacyDrawing.foreach(l => preservedKnown.get(l).foreach(writer.writeElem))
       picture.foreach(writer.writeElem)
       oleObjects.foreach(writer.writeElem)
       controls.foreach(writer.writeElem)
+      // GH-232: webPublishItems (after controls, before tableParts)
+      preservedAfterControls.foreach(l => preservedKnown.get(l).foreach(writer.writeElem))
 
       tableParts.foreach(writer.writeElem)
 
@@ -164,6 +184,11 @@ case class OoxmlWorksheet(
     )
     children += sheetDataElem
 
+    // GH-232: preserved inline elements between sheetData and mergeCells (schema order)
+    preservedAfterSheetData.foreach(l =>
+      preservedKnown.get(l).foreach(e => children += cleanNamespaces(e))
+    )
+
     // mergeCells (regenerated if present)
     if mergedRanges.nonEmpty then
       val mergeCellElems = mergedRanges.toSeq
@@ -171,8 +196,18 @@ case class OoxmlWorksheet(
         .map(range => elem("mergeCell", "ref" -> range.toA1)())
       children += elem("mergeCells", "count" -> mergedRanges.size.toString)(mergeCellElems*)
 
+    // GH-232: phoneticPr (after mergeCells, before conditionalFormatting)
+    preservedAfterMergeCells.foreach(l =>
+      preservedKnown.get(l).foreach(e => children += cleanNamespaces(e))
+    )
+
     // Conditional formatting (multiple allowed)
     conditionalFormatting.foreach(e => children += cleanNamespaces(e))
+
+    // GH-232: dataValidations, hyperlinks (after conditionalFormatting)
+    preservedAfterCondFmt.foreach(l =>
+      preservedKnown.get(l).foreach(e => children += cleanNamespaces(e))
+    )
 
     // Page layout (after sheetData/mergeCells)
     printOptions.foreach(e => children += cleanNamespaces(e))
@@ -184,12 +219,25 @@ case class OoxmlWorksheet(
     colBreaks.foreach(e => children += cleanNamespaces(e))
     customPropertiesWs.foreach(e => children += cleanNamespaces(e))
 
+    // GH-232: cellWatches, ignoredErrors, smartTags (after customProperties)
+    preservedAfterCustomProps.foreach(l =>
+      preservedKnown.get(l).foreach(e => children += cleanNamespaces(e))
+    )
+
     // Drawings and objects
     drawing.foreach(e => children += cleanNamespaces(e))
     legacyDrawing.foreach(e => children += cleanNamespaces(e))
+    // GH-232: legacyDrawingHF (after legacyDrawing)
+    preservedAfterLegacyDrawing.foreach(l =>
+      preservedKnown.get(l).foreach(e => children += cleanNamespaces(e))
+    )
     picture.foreach(e => children += cleanNamespaces(e))
     oleObjects.foreach(e => children += cleanNamespaces(e))
     controls.foreach(e => children += cleanNamespaces(e))
+    // GH-232: webPublishItems (after controls, before tableParts)
+    preservedAfterControls.foreach(l =>
+      preservedKnown.get(l).foreach(e => children += cleanNamespaces(e))
+    )
 
     // Tables
     tableParts.foreach(e => children += cleanNamespaces(e))
@@ -442,7 +490,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           preserved.extLst,
           preserved.otherElements,
           preserved.rootAttributes,
-          adjustedScope
+          adjustedScope,
+          preserved.preservedKnown // GH-232: carry preserved inline elements through surgical write
         )
       case None =>
         // No preserved metadata - create minimal worksheet with cols from domain

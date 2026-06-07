@@ -28,6 +28,35 @@ private[ooxml] def cleanNamespaces(elem: Elem): Elem =
   }
   elem.copy(scope = TopScope, child = cleanedChildren)
 
+// ===== Preserved inline worksheet elements (GH-232) =====
+// Inline CT_Worksheet children that are listed in WorksheetReader.knownElements (so they are
+// excluded from the `otherElements` catch-all) but have NO dedicated field on OoxmlWorksheet.
+// Without capturing these, any modification of a sheet silently DROPS data validations, sheet
+// protection, autofilters, hyperlinks, etc. They are captured into OoxmlWorksheet.preservedKnown
+// and re-emitted at their correct OOXML schema positions (ECMA-376 18.3.1.99) by the groups below.
+private[worksheet] val preservedAfterSheetData: Seq[String] =
+  Seq(
+    "sheetCalcPr",
+    "sheetProtection",
+    "protectedRanges",
+    "scenarios",
+    "autoFilter",
+    "sortState",
+    "dataConsolidate",
+    "customSheetViews"
+  )
+private[worksheet] val preservedAfterMergeCells: Seq[String] = Seq("phoneticPr")
+private[worksheet] val preservedAfterCondFmt: Seq[String] = Seq("dataValidations", "hyperlinks")
+private[worksheet] val preservedAfterCustomProps: Seq[String] =
+  Seq("cellWatches", "ignoredErrors", "smartTags")
+private[worksheet] val preservedAfterLegacyDrawing: Seq[String] = Seq("legacyDrawingHF")
+private[worksheet] val preservedAfterControls: Seq[String] = Seq("webPublishItems")
+
+/** Union of all inline labels preserved via OoxmlWorksheet.preservedKnown (used by the reader). */
+private[worksheet] val preservedKnownLabels: Set[String] =
+  (preservedAfterSheetData ++ preservedAfterMergeCells ++ preservedAfterCondFmt ++
+    preservedAfterCustomProps ++ preservedAfterLegacyDrawing ++ preservedAfterControls).toSet
+
 /**
  * Group consecutive columns with identical properties into spans.
  *

@@ -548,11 +548,109 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(outputPath)
   }
 
+  test(
+    "GH-232: surgical modify preserves inline elements (dataValidations, sheetProtection, autoFilter, hyperlinks)"
+  ) {
+    val source = createWorkbookWithInlineElements()
+
+    // Read, edit one cell (forces surgical regeneration of the sheet), write back
+    val modified = for
+      wb <- XlsxReader.read(source)
+      sheet <- wb("Sheet1")
+      updated = sheet.put(ref"A1" -> "Modified")
+    yield wb.put(updated)
+    val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)
+
+    val output = Files.createTempFile("inline-preserve", ".xlsx")
+    XlsxWriter.write(wb, output).fold(err => fail(s"Failed to write: $err"), identity)
+
+    val outputZip = new ZipFile(output.toFile)
+    val sheetXml =
+      new String(readEntryBytes(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml")), "UTF-8")
+    outputZip.close()
+
+    assert(sheetXml.contains("Modified"), s"cell edit not applied:\n$sheetXml")
+    // Before GH-232 these were silently dropped on any modification:
+    assert(sheetXml.contains("sheetProtection"), s"sheetProtection DROPPED:\n$sheetXml")
+    assert(sheetXml.contains("autoFilter"), s"autoFilter DROPPED:\n$sheetXml")
+    assert(sheetXml.contains("dataValidation"), s"dataValidations DROPPED:\n$sheetXml")
+    assert(sheetXml.contains("hyperlink"), s"hyperlinks DROPPED:\n$sheetXml")
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
   // Helper: Read entry bytes from ZIP
   private def readEntryBytes(zip: ZipFile, entry: ZipEntry): Array[Byte] =
     val is = zip.getInputStream(entry)
     try is.readAllBytes()
     finally is.close()
+
+  // Helper: Create workbook whose sheet1 has inline elements with NO dedicated OoxmlWorksheet field
+  // (sheetProtection, autoFilter, dataValidations, hyperlinks) — GH-232 regression scaffold.
+  private def createWorkbookWithInlineElements(): Path =
+    val path = Files.createTempFile("test-inline", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1)
+    try
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"""
+      )
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+      )
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+      )
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+      )
+      // Worksheet with inline elements in OOXML schema order (after sheetData)
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>Orig</t></is></c></row>
+  </sheetData>
+  <sheetProtection sheet="1" objects="1" scenarios="1"/>
+  <autoFilter ref="A1:A1"/>
+  <dataValidations count="1">
+    <dataValidation type="list" sqref="A1"><formula1>"Yes,No"</formula1></dataValidation>
+  </dataValidations>
+  <hyperlinks>
+    <hyperlink ref="A1" location="Sheet1!A1"/>
+  </hyperlinks>
+</worksheet>"""
+      )
+    finally out.close()
+    path
 
   // Helper: Create minimal workbook with chart (unknown part)
   private def createMinimalWorkbookWithChart(): Path =

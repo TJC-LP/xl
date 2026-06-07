@@ -116,6 +116,11 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
       otherElements = elem.child.collect {
         case e: Elem if !knownElements.contains(e.label) => e
       }
+      // GH-232: capture inline known elements that have NO dedicated field (dataValidations,
+      // sheetProtection, autoFilter, hyperlinks, ...) so they survive a sheet modification.
+      preservedKnownMap = elem.child.collect {
+        case e: Elem if preservedKnownLabels.contains(e.label) => e.label -> cleanNamespaces(e)
+      }.toMap
     yield OoxmlWorksheet(
       rows,
       mergedRanges,
@@ -141,7 +146,8 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
       extLst,
       otherElements.toSeq,
       rootAttributes = elem.attributes,
-      rootScope = Option(elem.scope).getOrElse(defaultWorksheetScope)
+      rootScope = Option(elem.scope).getOrElse(defaultWorksheetScope),
+      preservedKnown = preservedKnownMap
     )
 
   private def parseMergeCells(worksheetElem: Elem): Either[String, Set[CellRange]] =
