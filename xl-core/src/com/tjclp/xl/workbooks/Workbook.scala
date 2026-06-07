@@ -338,6 +338,27 @@ final case class Workbook(
     val updatedContext = sourceContext.map(_.markMetadataModified)
     copy(metadata = newMetadata, sourceContext = updatedContext)
 
+  /**
+   * Add or replace a workbook-scoped defined name / named range (GH-236).
+   *
+   * `refersTo` is the reference or formula the name points to, e.g. `"Sheet1!$A$1:$A$10"` or
+   * `"0.08"`. A name with the same identifier (workbook-scoped) is replaced. Marks metadata
+   * modified so a surgical write reflects the change.
+   */
+  def withDefinedName(name: String, refersTo: String): Workbook =
+    val dn = DefinedName(name = name, formula = refersTo)
+    val others = metadata.definedNames.filterNot(d => d.name == name && d.localSheetId.isEmpty)
+    val newMetadata = metadata.copy(definedNames = others :+ dn)
+    copy(metadata = newMetadata, sourceContext = sourceContext.map(_.markMetadataModified))
+
+  /** Remove a workbook-scoped defined name by identifier (GH-236). Marks metadata modified. */
+  def removeDefinedName(name: String): Workbook =
+    val newMetadata =
+      metadata.copy(definedNames =
+        metadata.definedNames.filterNot(d => d.name == name && d.localSheetId.isEmpty)
+      )
+    copy(metadata = newMetadata, sourceContext = sourceContext.map(_.markMetadataModified))
+
 object Workbook:
   /**
    * Create workbook from a single sheet.

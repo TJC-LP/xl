@@ -1340,11 +1340,13 @@ object XlsxWriter:
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
-        // Update sheets in preserved structure (names/order/visibility may have changed)
+        // Update sheets in preserved structure (names/order/visibility may have changed).
+        // Named ranges (definedNames) ride through verbatim here (byte-identical). Authoring a
+        // name marks metadata modified, which routes to the fromDomain branch below (GH-236).
         preserved.updateSheets(workbook.sheets, workbook.metadata.sheetStates)
       case None =>
-        // Fallback to minimal for programmatically created workbooks
-        // (or when metadata modified - we need fresh workbook structure)
+        // Fallback for programmatically created workbooks OR when metadata was modified — fresh
+        // workbook structure; fromDomain now serializes wb.metadata.definedNames (GH-236).
         OoxmlWorkbook.fromDomain(workbook)
 
     // Content types: preserve from source when available, otherwise generate minimal.

@@ -331,8 +331,8 @@ object XlsxReader:
       // Parse sheets and collect comment path mapping
       (sheets, commentPathMapping) <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
 
-      // Parse defined names from workbook.xml
-      definedNames = parseDefinedNames(ooxmlWb.definedNames)
+      // Parse defined names from workbook.xml (shared with the surgical writer)
+      definedNames = OoxmlWorkbook.parseDefinedNames(ooxmlWb.definedNames)
 
       // Extract sheet visibility states from OOXML
       sheetStates = ooxmlWb.sheets
@@ -892,35 +892,7 @@ object XlsxReader:
   private def parseXml(xmlString: String, location: String): XLResult[Elem] =
     XmlSecurity.parseSafe(xmlString, location)
 
-  /**
-   * Parse defined names from the raw XML element.
-   *
-   * OOXML structure:
-   * {{{
-   * <definedNames>
-   *   <definedName name="SalesTotal" localSheetId="0">Sheet1!$A$1:$A$10</definedName>
-   *   <definedName name="TaxRate" hidden="1">0.08</definedName>
-   * </definedNames>
-   * }}}
-   */
-  private def parseDefinedNames(rawElem: Option[Elem]): Vector[DefinedName] =
-    rawElem match
-      case None => Vector.empty
-      case Some(elem) =>
-        (elem \ "definedName").collect { case e: Elem =>
-          val name = (e \@ "name")
-          val formula = e.text.trim
-          val localSheetId = Option(e \@ "localSheetId").filter(_.nonEmpty).flatMap(_.toIntOption)
-          val hidden = (e \@ "hidden") == "1"
-          val comment = Option(e \@ "comment").filter(_.nonEmpty)
-          DefinedName(
-            name = name,
-            formula = formula,
-            localSheetId = localSheetId,
-            hidden = hidden,
-            comment = comment
-          )
-        }.toVector
+  // parseDefinedNames now lives in OoxmlWorkbook (single source of truth shared with the writer).
 
   /** Extension for traverse on Vector */
   extension [A](vec: Vector[A])

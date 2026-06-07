@@ -11,6 +11,7 @@ private val defaultWorkbookScope =
   NamespaceBinding(null, nsSpreadsheetML, NamespaceBinding("r", nsRelationships, TopScope))
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.api.Workbook
+import com.tjclp.xl.workbooks.DefinedName
 
 /**
  * Sheet reference in workbook.xml
@@ -207,7 +208,45 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
       val state = wb.metadata.sheetStates.get(sheet.name).flatten
       SheetRef(sheet.name, idx + 1, s"rId${idx + 1}", state)
     }
-    OoxmlWorkbook(sheetRefs)
+    // GH-236: serialize named ranges from the typed model (previously dropped on write)
+    OoxmlWorkbook(sheetRefs, definedNames = buildDefinedNames(wb.metadata.definedNames))
+
+  /**
+   * Build a `<definedNames>` element from the typed model (GH-236), or None when empty. Order
+   * follows the model (preserving the source order on round-trips); attributes are emitted in a
+   * fixed order for deterministic output.
+   */
+  def buildDefinedNames(names: Vector[DefinedName]): Option[Elem] =
+    if names.isEmpty then None
+    else
+      val children = names.map { dn =>
+        val attrs = Seq.newBuilder[(String, String)]
+        attrs += ("name" -> dn.name)
+        dn.comment.foreach(c => attrs += ("comment" -> c))
+        dn.localSheetId.foreach(id => attrs += ("localSheetId" -> id.toString))
+        if dn.hidden then attrs += ("hidden" -> "1")
+        elemOrdered("definedName", attrs.result()*)(Text(dn.formula))
+      }
+      Some(elem("definedNames")(children*))
+
+  /**
+   * Parse `<definedNames>` into the typed model. Single source of truth shared by the reader and
+   * the surgical writer (so the writer can detect whether the model is unchanged and keep raw
+   * bytes).
+   */
+  def parseDefinedNames(rawElem: Option[Elem]): Vector[DefinedName] =
+    rawElem match
+      case None => Vector.empty
+      case Some(dnsElem) =>
+        (dnsElem \ "definedName").collect { case e: Elem =>
+          DefinedName(
+            name = e \@ "name",
+            formula = e.text.trim,
+            localSheetId = Option(e \@ "localSheetId").filter(_.nonEmpty).flatMap(_.toIntOption),
+            hidden = (e \@ "hidden") == "1",
+            comment = Option(e \@ "comment").filter(_.nonEmpty)
+          )
+        }.toVector
 
   def fromXml(elem: Elem): Either[String, OoxmlWorkbook] =
     for
