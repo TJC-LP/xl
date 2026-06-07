@@ -32,7 +32,7 @@ xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), ma
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
 xl-benchmarks/   → JMH performance benchmarks
-xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 88 functions, dependency graphs)
+xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 104 functions, dependency graphs)
 xl-testkit/      → Test laws, generators, helpers [future]
 xl-agent/        → AI agent benchmark runner (Anthropic API, skill comparison)
 ```
@@ -209,7 +209,7 @@ xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                   # Array arithmetic
 --border-color <color>    # Border color (applies to all specified borders)
 
 # Rasterization (PNG/JPEG export)
---use-imagemagick     # Use ImageMagick instead of Batik (needed for native image rasterization)
+--rasterizer <name>   # Force a specific backend: batik, cairosvg, rsvg-convert, resvg, imagemagick
 
 # Large file handling (100k+ rows)
 --stream              # Use O(1) memory streaming (search, stats, bounds, view)
@@ -355,7 +355,7 @@ sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
 sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
 ```
 
-**88 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, MIN, MAX, IF, IFERROR, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, VLOOKUP, XLOOKUP, INDEX, MATCH, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE
+**104 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, MIN, MAX, IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
 
 ### Rich Text
 ```scala

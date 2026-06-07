@@ -44,7 +44,7 @@
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
-- ✅ **Function Library**: **103 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math, statistical, dynamic arrays), extensible type class parser, evaluation API. 0.10.0 added IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, and the spill functions SEQUENCE/SORT/UNIQUE/FILTER (#76, #120, #122).
+- ✅ **Function Library**: **104 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math, statistical, dynamic arrays), extensible type class parser, evaluation API. 0.10.0 added IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, and the spill functions SEQUENCE/SORT/UNIQUE/FILTER (#76, #120, #122).
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 - ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
 
@@ -133,7 +133,7 @@
 **Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
 - ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **103 built-in functions**, extensible type class parser, evaluation API, 236 tests
+- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **104 built-in functions**, extensible type class parser, evaluation API, 236 tests
   - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
   - **Conditional** (7): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
   - **Logical** (9): IF, IFERROR, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
@@ -160,7 +160,7 @@
 ### Style System
 
 **Minor Limitations**:
-- ❌ Theme colors not fully resolved (Color.Theme.toArgb uses approximations)
+- ✅ Theme colors resolved via `Color.toResolvedArgb(theme)` / `toResolvedHex(theme)` (slot lookup + tint application through `ThemePalette.resolve`)
 - ⚠️  StyleRegistry requires explicit initialization per sheet (design choice for purity)
 
 ### OOXML Coverage
@@ -172,8 +172,8 @@
 - ❌ Worksheet relationships (_rels/sheet1.xml.rels)
 - ❌ Print settings, page setup
 - ❌ Conditional formatting
-- ❌ Data validation
-- ❌ Named ranges
+- ❌ Data validation (preserved through edits, but no authoring API yet)
+- ✅ Named ranges (authoring shipped in 0.10.0: `DefinedName` serialization + CLI `name add/rm`)
 
 ### Streaming I/O Limitations
 
@@ -212,7 +212,9 @@
 
 **Remaining**:
 - ❌ XLSM macro preservation policy and tests (macros are never executed)
-- ❌ Configurable file size limits
+
+**Implemented (continued)**:
+- ✅ Configurable file size limits via CLI `--max-size <MB>` (default 100MB; `--max-size 0` = unlimited)
 
 ### Advanced Features
 
@@ -221,7 +223,7 @@
 - ✅ P7: String interpolation Phase 1 (runtime validation for all macros)
 - ✅ P8: String interpolation Phase 2 (compile-time optimization)
 - ✅ P31: Optics, RichText, HTML export, enhanced ergonomics
-- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 103 functions, dependency graph, cycle detection
+- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 104 functions, dependency graph, cycle detection
 - ✅ **Excel Tables** (WI-10): Structured data with headers, AutoFilter, styling
 - ✅ **Benchmarks** (WI-15): JMH performance suite (XL vs POI)
 - ✅ **SAX Write** (WI-17): Fast SAX/StAX streaming write path
@@ -315,7 +317,7 @@ xl-cats-effect/src/com/tjclp/xl/io/
 ```
 
 ### Completed Modules (Additional)
-- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 103 functions, dependency graph)
+- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 104 functions, dependency graph)
 - `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)
 
 ### Not Started (Future Phases)
