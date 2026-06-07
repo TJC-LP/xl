@@ -200,11 +200,12 @@ object FormulaParser:
         case Some('=') =>
           val s3 = skipWhitespace(s2.advance())
           parseComparison(s3).map { case (right, s4) =>
-            // Runtime parsing loses type info - use asInstanceOf
+            // GH-233: resolve PolyRef operands polymorphically (like the inequality
+            // branches use asNumericExpr) so =A1=B1 / =IF(A1=B1,…) evaluate instead of
+            // erroring with "Unresolved PolyRef". asResolvedValueExpr preserves
+            // text/number/bool/date equality (unlike numeric-only asNumericExpr).
             (
-              TExpr
-                .Eq(left.asInstanceOf[TExpr[Any]], right.asInstanceOf[TExpr[Any]])
-                .asInstanceOf[TExpr[Boolean]],
+              TExpr.Eq(TExpr.asResolvedValueExpr(left), TExpr.asResolvedValueExpr(right)),
               s4
             )
           }
@@ -213,11 +214,9 @@ object FormulaParser:
             case Some('>') => // <>
               val s3 = skipWhitespace(s2.advance(2))
               parseComparison(s3).map { case (right, s4) =>
-                // Runtime parsing loses type info - use asInstanceOf
+                // GH-233: resolve PolyRef operands so =A1<>B1 evaluates (see Eq above).
                 (
-                  TExpr
-                    .Neq(left.asInstanceOf[TExpr[Any]], right.asInstanceOf[TExpr[Any]])
-                    .asInstanceOf[TExpr[Boolean]],
+                  TExpr.Neq(TExpr.asResolvedValueExpr(left), TExpr.asResolvedValueExpr(right)),
                   s4
                 )
               }

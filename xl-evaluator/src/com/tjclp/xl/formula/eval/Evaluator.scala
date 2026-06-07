@@ -610,9 +610,15 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
               if allowArrayResults then Right(compared)
               else Left(EvalError.TypeMismatch("comparison", "boolean", "array"))
           }
-        // Both scalars -> plain boolean (fast path)
+        // Both scalars -> plain boolean (fast path).
+        // GH-234: use the same case-insensitive/coercing semantics as the array path
+        // (ArrayArithmetic.cellValueEquals) so scalar and array equality agree with Excel
+        // (e.g. ="A"="a" -> TRUE). Previously used raw `x == y` (case-sensitive).
         case (x, y) =>
-          val eq = x == y
+          val eq = ArrayArithmetic.cellValueEquals(
+            ArrayArithmetic.anyToCellValue(x),
+            ArrayArithmetic.anyToCellValue(y)
+          )
           Right(if negate then !eq else eq)
     yield result
 
