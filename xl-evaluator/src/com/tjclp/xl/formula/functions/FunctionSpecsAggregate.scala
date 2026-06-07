@@ -267,6 +267,137 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   val variancep: FunctionSpec[BigDecimal] { type Args = List[NumericArg] } =
     variadicAggregateSpec("VARP")
 
+  // ===== GH-120: statistical functions over a single range =====
+
+  /** Collect numeric values from one range (standard numeric mode), for LARGE/SMALL/RANK/etc. */
+  private def collectRangeNumerics(
+    location: TExpr.RangeLocation,
+    ctx: EvalContext
+  ): Either[EvalError, Vector[BigDecimal]] =
+    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap { targetSheet =>
+      val bounds = computeBounds(List((location.range, targetSheet)))
+      val constrainedRange = constrainRange(location.range, bounds)
+      constrainedRange.cells.foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
+        case (Left(err), _) => Left(err)
+        case (Right(values), cellRef) =>
+          extractOrEvalNumeric(targetSheet(cellRef).value, targetSheet, ctx).map {
+            case Some(n) => values :+ n
+            case None => values
+          }
+      }
+    }
+
+  /** LARGE(range, k) — k-th largest value (1-based). */
+  val large: FunctionSpec[BigDecimal] { type Args = RangeIntArgs } =
+    FunctionSpec.simple[BigDecimal, RangeIntArgs](
+      "LARGE",
+      Arity.Exact(2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (loc, kExpr) = args
+      for
+        nums <- collectRangeNumerics(loc, ctx)
+        k <- ctx.evalExpr(kExpr)
+        result <-
+          val desc = nums.sorted.reverse
+          if k >= 1 && k <= desc.length then Right(desc(k - 1))
+          else Left(EvalError.EvalFailed(s"LARGE: k=$k out of range (#NUM!)", None))
+      yield result
+    }
+
+  /** SMALL(range, k) — k-th smallest value (1-based). */
+  val small: FunctionSpec[BigDecimal] { type Args = RangeIntArgs } =
+    FunctionSpec.simple[BigDecimal, RangeIntArgs](
+      "SMALL",
+      Arity.Exact(2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (loc, kExpr) = args
+      for
+        nums <- collectRangeNumerics(loc, ctx)
+        k <- ctx.evalExpr(kExpr)
+        result <-
+          val asc = nums.sorted
+          if k >= 1 && k <= asc.length then Right(asc(k - 1))
+          else Left(EvalError.EvalFailed(s"SMALL: k=$k out of range (#NUM!)", None))
+      yield result
+    }
+
+  /** RANK(number, ref, [order]) — rank of number in ref; order 0/omitted = descending. */
+  val rank: FunctionSpec[BigDecimal] { type Args = RankArgs } =
+    FunctionSpec.simple[BigDecimal, RankArgs](
+      "RANK",
+      Arity.Range(2, 3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (numExpr, loc, orderOpt) = args
+      for
+        num <- ctx.evalExpr(numExpr)
+        nums <- collectRangeNumerics(loc, ctx)
+        order <- orderOpt match
+          case Some(e) => ctx.evalExpr(e)
+          case None => Right(0)
+        result <-
+          if !nums.contains(num) then
+            Left(EvalError.EvalFailed(s"RANK: $num not found in range (#N/A)", None))
+          else if order == 0 then Right(BigDecimal(nums.count(_ > num) + 1))
+          else Right(BigDecimal(nums.count(_ < num) + 1))
+      yield result
+    }
+
+  /** Excel PERCENTILE.INC linear interpolation over a sorted-ascending vector; None if invalid. */
+  private def percentileInc(sortedAsc: Vector[BigDecimal], p: BigDecimal): Option[BigDecimal] =
+    if sortedAsc.isEmpty || p < 0 || p > 1 then None
+    else
+      val n = sortedAsc.length
+      if n == 1 then Some(sortedAsc(0))
+      else
+        val rank = p * BigDecimal(n - 1)
+        val lo = rank.toInt
+        if lo >= n - 1 then Some(sortedAsc(n - 1))
+        else
+          val frac = rank - BigDecimal(lo)
+          Some(sortedAsc(lo) + frac * (sortedAsc(lo + 1) - sortedAsc(lo)))
+
+  /** PERCENTILE(range, p) — p in [0,1], inclusive linear interpolation. */
+  val percentile: FunctionSpec[BigDecimal] { type Args = RangeNumArgs } =
+    FunctionSpec.simple[BigDecimal, RangeNumArgs](
+      "PERCENTILE",
+      Arity.Exact(2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (loc, pExpr) = args
+      for
+        nums <- collectRangeNumerics(loc, ctx)
+        p <- ctx.evalExpr(pExpr)
+        result <- percentileInc(nums.sorted, p) match
+          case Some(v) => Right(v)
+          case None =>
+            Left(EvalError.EvalFailed(s"PERCENTILE: invalid p=$p or empty range (#NUM!)", None))
+      yield result
+    }
+
+  /** QUARTILE(range, quart) — quart 0..4 maps to PERCENTILE p = quart/4. */
+  val quartile: FunctionSpec[BigDecimal] { type Args = RangeIntArgs } =
+    FunctionSpec.simple[BigDecimal, RangeIntArgs](
+      "QUARTILE",
+      Arity.Exact(2),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (loc, qExpr) = args
+      for
+        nums <- collectRangeNumerics(loc, ctx)
+        q <- ctx.evalExpr(qExpr)
+        result <-
+          if q < 0 || q > 4 then
+            Left(EvalError.EvalFailed(s"QUARTILE: quart=$q must be 0-4 (#NUM!)", None))
+          else
+            percentileInc(nums.sorted, BigDecimal(q) / 4) match
+              case Some(v) => Right(v)
+              case None => Left(EvalError.EvalFailed("QUARTILE: empty range (#NUM!)", None))
+      yield result
+    }
+
   val sumif: FunctionSpec[BigDecimal] { type Args = SumIfArgs } =
     FunctionSpec.simple[BigDecimal, SumIfArgs](
       "SUMIF",
@@ -454,6 +585,116 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   }
               }
         }
+    }
+
+  /**
+   * GH-76: Collect the numeric values from `valueRangeLocation` at positions where ALL criteria
+   * match. Mirrors the SUMIFS resolve/constrain/iterate pipeline but accumulates the matched values
+   * (rather than summing) so MAXIFS/MINIFS can reduce them. Empty result = no matches.
+   */
+  private def collectIfsValues(
+    valueRangeLocation: TExpr.RangeLocation,
+    conditions: RangeCriteriaList,
+    fnName: String,
+    ctx: EvalContext
+  ): Either[EvalError, Vector[BigDecimal]] =
+    evalCriteriaValues(ctx, conditions).flatMap { criteriaValues =>
+      val parsedConditions = parseConditions(conditions, criteriaValues)
+      val dimensionError = parsedConditions.collectFirst {
+        case (loc, _)
+            if loc.range.width != valueRangeLocation.range.width ||
+              loc.range.height != valueRangeLocation.range.height =>
+          EvalError.EvalFailed(
+            s"$fnName: all ranges must have same dimensions (value_range is ${valueRangeLocation.range.height}×${valueRangeLocation.range.width}, criteria_range is ${loc.range.height}×${loc.range.width})",
+            Some(s"$fnName(${valueRangeLocation.toA1}, ...)")
+          )
+      }
+      dimensionError match
+        case Some(err) => Left(err)
+        case None =>
+          Evaluator.resolveRangeLocation(valueRangeLocation, ctx.sheet, ctx.workbook).flatMap {
+            valueSheet =>
+              val resolvedConditions: Either[
+                EvalError,
+                List[(com.tjclp.xl.sheets.Sheet, TExpr.RangeLocation, CriteriaMatcher.Criterion)]
+              ] =
+                parsedConditions.foldLeft[Either[
+                  EvalError,
+                  List[(com.tjclp.xl.sheets.Sheet, TExpr.RangeLocation, CriteriaMatcher.Criterion)]
+                ]](Right(List.empty)) {
+                  case (Left(err), _) => Left(err)
+                  case (Right(acc), (loc, criterion)) =>
+                    Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map { sheet =>
+                      acc :+ (sheet, loc, criterion)
+                    }
+                }
+              resolvedConditions.flatMap { resolved =>
+                val bounds = computeBounds(
+                  (valueRangeLocation.range, valueSheet) ::
+                    resolved.map { case (sheet, loc, _) => (loc.range, sheet) }
+                )
+                val constrainedValueRange = constrainRange(valueRangeLocation.range, bounds)
+                val constrainedConditions = resolved.map { case (sheet, loc, criterion) =>
+                  (sheet, constrainRange(loc.range, bounds), criterion)
+                }
+                val valueCells = constrainedValueRange.cells.toVector
+                val criteriaCells = constrainedConditions.map { case (sheet, range, criterion) =>
+                  (sheet, range.cells.toVector, criterion)
+                }
+                valueCells.indices.foldLeft[Either[EvalError, Vector[BigDecimal]]](
+                  Right(Vector.empty)
+                ) {
+                  case (Left(err), _) => Left(err)
+                  case (Right(acc), idx) =>
+                    val matchResult =
+                      criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
+                        case (Left(err), _) => Left(err)
+                        case (Right(false), _) => Right(false)
+                        case (Right(true), (criteriaSheet, cells, criterion)) =>
+                          evalCellValueForMatch(
+                            criteriaSheet(cells(idx)).value,
+                            criteriaSheet,
+                            ctx
+                          ).map(tv => CriteriaMatcher.matches(tv, criterion))
+                      }
+                    matchResult.flatMap { allMatch =>
+                      if allMatch then
+                        extractOrEvalNumeric(valueSheet(valueCells(idx)).value, valueSheet, ctx)
+                          .map {
+                            case Some(n) => acc :+ n
+                            case None => acc
+                          }
+                      else Right(acc)
+                    }
+                }
+              }
+          }
+    }
+
+  /** MAXIFS(max_range, criteria_range1, criteria1, ...) — max over matching cells, 0 if none. */
+  val maxifs: FunctionSpec[BigDecimal] { type Args = SumIfsArgs } =
+    FunctionSpec.simple[BigDecimal, SumIfsArgs](
+      "MAXIFS",
+      Arity.AtLeast(3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (valueRange, conditions) = args
+      collectIfsValues(valueRange, conditions, "MAXIFS", ctx).map { vs =>
+        if vs.isEmpty then BigDecimal(0) else vs.max
+      }
+    }
+
+  /** MINIFS(min_range, criteria_range1, criteria1, ...) — min over matching cells, 0 if none. */
+  val minifs: FunctionSpec[BigDecimal] { type Args = SumIfsArgs } =
+    FunctionSpec.simple[BigDecimal, SumIfsArgs](
+      "MINIFS",
+      Arity.AtLeast(3),
+      flags = FunctionFlags(returnsNumeric = true)
+    ) { (args, ctx) =>
+      val (valueRange, conditions) = args
+      collectIfsValues(valueRange, conditions, "MINIFS", ctx).map { vs =>
+        if vs.isEmpty then BigDecimal(0) else vs.min
+      }
     }
 
   val countifs: FunctionSpec[BigDecimal] { type Args = CountIfsArgs } =
