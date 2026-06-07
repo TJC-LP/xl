@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 0.10.0 "Trust & Author" (in progress)
+
+A correctness-and-authoring release: fix defects that silently corrupted data or
+falsified flagship guarantees, close the read↔write asymmetry, and broaden the
+formula library. See `docs/plan/v0.10.0-triage.md` for rationale.
+
+#### Added
+
+- **Structural editing** (#128, #129) — `insert-rows` / `delete-rows` /
+  `insert-cols` / `delete-cols` CLI verbs and a `StructuralEditor` workbook API.
+  Shifts cells, merges, row/column properties and freeze panes, then rewrites
+  every affected formula (including cross-sheet) with correct `#REF!` generation
+  and range shrinking. Pure `Workbook => Workbook`, byte-identical on re-run.
+- **15 formula functions** (#76, #120, #122) — IFS, SWITCH, CHOOSE, LARGE, SMALL,
+  RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, and the dynamic-array
+  functions SEQUENCE, SORT, UNIQUE, FILTER. **Registry 88 → 103.**
+- **XLOOKUP binary-search modes** (#55) — `search_mode` 2 (ascending) and -2
+  (descending) now accepted with correct iteration direction.
+- **Named ranges** — `DefinedName` serialization (previously read-only) plus a
+  CLI `name add` / `name rm` verb.
+- **Hyperlinks** — `Cell.hyperlink` is now serialized to `<hyperlinks>` and
+  populated on read; added a `hyperlink` batch op.
+
+#### Fixed
+
+- **Silent data loss on modify** (C1) — inline worksheet elements
+  (`dataValidations`, `hyperlinks`, `sheetProtection`, `autoFilter`, …) were
+  excluded from the unknown-part catch-all but never captured, so any sheet edit
+  dropped them. Now preserved through the modify path.
+- **`=A1=B1` / `=IF(A1=B1,…)` "Unresolved PolyRef"** (C2) — bare cell-ref
+  operands in equality are now resolved during parsing.
+- **Case-insensitive scalar text equality** (C3) — `="A"="a"` now matches Excel
+  and the array/XLOOKUP/criteria paths.
+- **1900 leap-year** (C4) — pre-1900-03-01 dates and serial 60 now convert with
+  Excel parity; Scaladoc corrected.
+- **Deterministic serialization** (C5) — XML-illegal control characters are
+  sanitized identically across backends, and numerics emit plain decimals (no
+  `1.0E+10`) in `<v>`.
+
 ### Changed
 
 - **Scala 3.7.4 -> 3.8.3** — Language upgrade with betterFors stabilization and VarHandle-based lazy vals

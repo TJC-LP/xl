@@ -1,7 +1,9 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2026-04-26
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**88 functions** + cross-sheet support); tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
+**Last Updated**: 2026-06-07
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**103 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
+
+> **Note (0.10.0):** Sections below predate the 0.10.0 "Trust & Author" release and may understate current capabilities. Hyperlinks (#9) and named ranges (#15) are now **supported**; inline worksheet elements like data validation (#11) are now **preserved through edits** (authoring still pending). See [plan/v0.10.0-execution.md](plan/v0.10.0-execution.md).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -246,14 +248,9 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ### 🟢 Low Impact (Nice to Have)
 
-#### 9. Hyperlinks Not Supported
-**Status**: Not implemented
-**Impact**: Cannot create clickable links in cells
-**Plan**: [P8 - Hyperlinks](plan/11-ooxml-mapping.md#hyperlinks)
-**Phase**: P8 (Future)
-
-**Effort**: 2-3 days
-**LOC**: ~120 (Hyperlink model, relationships, worksheet XML)
+#### 9. Hyperlinks ✅ NOW SUPPORTED (0.10.0)
+**Status**: Implemented
+**Impact**: `Cell.hyperlink` is serialized to `<hyperlinks>` + relationships and populated on read; a `hyperlink` batch op is available. Previously the model existed but write was a silent no-op.
 
 ---
 
@@ -314,14 +311,9 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 15. Named Ranges Not Supported
-**Status**: Not implemented
-**Impact**: Cannot define or use named ranges
-**Plan**: [P7 - Named Ranges](plan/11-ooxml-mapping.md#named-ranges)
-**Phase**: P7 (Future)
-
-**Effort**: 1-2 days
-**LOC**: ~100
+#### 15. Named Ranges ✅ NOW SUPPORTED (0.10.0)
+**Status**: Implemented
+**Impact**: `WorkbookMetadata.definedNames` is serialized to `<definedNames>` (previously read-only), with a CLI `name add` / `name rm` verb. Structured references inside formulas remain future work.
 
 ---
 

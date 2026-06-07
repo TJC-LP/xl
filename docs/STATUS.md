@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-04-26
+**Last Updated**: 2026-06-07
 
 ## Current State
 
@@ -17,7 +17,9 @@
 - ✅ StylePatch Monoid for style composition
 - ✅ StyleRegistry for per-sheet style management
 - ✅ **End-to-end XLSX read/write** (creates real Excel files)
-- ✅ **Surgical modification** (read → modify → write preserves unknown parts: charts, images, drawings, comments)
+- ✅ **Surgical modification** (read → modify → write preserves unknown parts: charts, images, drawings, comments, and inline worksheet elements — dataValidations, sheetProtection, autoFilter — preserved through edits as of 0.10.0 / C1)
+- ✅ **Structural editing** (0.10.0): insert/delete rows & columns shift cells, merges, row/col properties, freeze panes, and rewrite all affected formulas (cross-sheet) with `#REF!` generation
+- ✅ **Named ranges & hyperlinks authoring** (0.10.0): `DefinedName` and `Cell.hyperlink` are now serialized (previously read-only)
 - ✅ Hybrid write optimization (11x speedup for unmodified workbooks, 2-5x for partial modifications)
 - ✅ Shared Strings Table (SST) deduplication
 - ✅ Styles.xml with component deduplication
@@ -42,7 +44,7 @@
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
-- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **88 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math), extensible type class parser, evaluation API. Text functions include TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT (added in TJC-1055 / GH-116).
+- ✅ **Function Library**: **103 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math, statistical, dynamic arrays), extensible type class parser, evaluation API. 0.10.0 added IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, and the spill functions SEQUENCE/SORT/UNIQUE/FILTER (#76, #120, #122).
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 - ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
 
@@ -131,7 +133,7 @@
 **Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
 - ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **88 built-in functions**, extensible type class parser, evaluation API, 236 tests
+- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **103 built-in functions**, extensible type class parser, evaluation API, 236 tests
   - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
   - **Conditional** (7): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
   - **Logical** (9): IF, IFERROR, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
@@ -219,7 +221,7 @@
 - ✅ P7: String interpolation Phase 1 (runtime validation for all macros)
 - ✅ P8: String interpolation Phase 2 (compile-time optimization)
 - ✅ P31: Optics, RichText, HTML export, enhanced ergonomics
-- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 88 functions, dependency graph, cycle detection
+- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 103 functions, dependency graph, cycle detection
 - ✅ **Excel Tables** (WI-10): Structured data with headers, AutoFilter, styling
 - ✅ **Benchmarks** (WI-15): JMH performance suite (XL vs POI)
 - ✅ **SAX Write** (WI-17): Fast SAX/StAX streaming write path
@@ -313,7 +315,7 @@ xl-cats-effect/src/com/tjclp/xl/io/
 ```
 
 ### Completed Modules (Additional)
-- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 88 functions, dependency graph)
+- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 103 functions, dependency graph)
 - `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)
 
 ### Not Started (Future Phases)
