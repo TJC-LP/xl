@@ -149,6 +149,19 @@ enum ParseError derives CanEqual:
   case FormulaTooLong(length: Int, maxLength: Int)
 
   /**
+   * Formula nesting too deep — a stack-overflow guard against pathologically nested input (e.g.
+   * thousands of nested parens or unary operators).
+   *
+   * @param depth
+   *   The nesting depth reached
+   * @param maxDepth
+   *   The maximum allowed nesting depth
+   *
+   * Example: "=((((...))))" 300 levels deep → NestingTooDeep(256, 256)
+   */
+  case NestingTooDeep(depth: Int, maxDepth: Int)
+
+  /**
    * Generic parse error with custom message.
    *
    * Used for errors that don't fit other categories.
@@ -189,6 +202,8 @@ object ParseError:
         "Formula is empty"
       case FormulaTooLong(len, max) =>
         s"Formula too long: $len characters (max $max)"
+      case NestingTooDeep(depth, max) =>
+        s"Formula nesting too deep: $depth levels (max $max)"
       case GenericError(msg, posOpt) =>
         posOpt.fold(msg)(pos => s"$msg at position $pos")
 
@@ -216,6 +231,7 @@ object ParseError:
       case InvalidOperator(_, pos, _) => Some(pos)
       case EmptyFormula => None
       case FormulaTooLong(_, _) => None
+      case NestingTooDeep(_, _) => None
       case GenericError(_, pos) => pos
 
     val message = toXLError(error, formula).message

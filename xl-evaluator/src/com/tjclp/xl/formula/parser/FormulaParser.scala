@@ -117,7 +117,7 @@ object FormulaParser:
    * @param pos
    *   Current position (0-based offset)
    */
-  private case class ParserState(input: String, pos: Int):
+  private case class ParserState(input: String, pos: Int, depth: Int = 0):
     def advance(n: Int = 1): ParserState = copy(pos = pos + n)
     def currentChar: Option[Char] =
       if pos < input.length then Some(input(pos)) else None
@@ -129,6 +129,21 @@ object FormulaParser:
    * Parse result - either error or (expression, remaining state).
    */
   private type ParseResult[A] = Either[ParseError, (A, ParserState)]
+
+  /**
+   * Maximum formula nesting depth — a stack-overflow guard (GH-56). Well above Excel's 64-level
+   * nesting limit and any realistic formula, but far below the depth (~2000) that overflows the
+   * evaluator/parser stack. Capping the parser keeps the AST shallow enough that evaluation is also
+   * safe, so a single guard covers both the parser and the evaluator.
+   */
+  private val MaxNestingDepth = 256
+
+  /**
+   * Guarded descent into a nested sub-expression: deepen the state, or fail if already too deep.
+   */
+  private def descend(s: ParserState): Either[ParseError, ParserState] =
+    if s.depth >= MaxNestingDepth then Left(ParseError.NestingTooDeep(s.depth, MaxNestingDepth))
+    else Right(s.copy(depth = s.depth + 1))
 
   /**
    * Skip whitespace characters.
@@ -145,7 +160,13 @@ object FormulaParser:
    * Parse top-level expression (handles all operator precedence).
    */
   private def parseExpr(state: ParserState): ParseResult[TExpr[?]] =
-    parseLogicalOr(skipWhitespace(state))
+    // parseExpr is the re-entry point for every nesting boundary (parens + function args), so a
+    // single depth guard here bounds both. Restore the caller's depth on the way out so siblings
+    // (e.g. `(1)+(2)+...`) don't accumulate.
+    val s0 = skipWhitespace(state)
+    descend(s0).flatMap { sd =>
+      parseLogicalOr(sd).map { case (expr, s1) => (expr, s1.copy(depth = s0.depth)) }
+    }
 
   /**
    * Parse logical OR (lowest precedence).
@@ -382,17 +403,19 @@ object FormulaParser:
       val s2 = skipWhitespace(s1)
       s2.currentChar match
         case Some('^') =>
-          val s3 = skipWhitespace(s2.advance())
-          // Allow unary minus in the exponent (2^-1 = 0.5)
-          parsePowExponent(s3).map {
-            case (right, s4) => // Recursive call for right-associativity
-              (
-                TExpr.Pow(
-                  TExpr.asNumericExpr(left),
-                  TExpr.asNumericExpr(right)
-                ),
-                s4
-              )
+          descend(s2).flatMap { sd =>
+            val s3 = skipWhitespace(sd.advance())
+            // Allow unary minus in the exponent (2^-1 = 0.5)
+            parsePowExponent(s3).map {
+              case (right, s4) => // Recursive call for right-associativity
+                (
+                  TExpr.Pow(
+                    TExpr.asNumericExpr(left),
+                    TExpr.asNumericExpr(right)
+                  ),
+                  s4.copy(depth = s2.depth)
+                )
+            }
           }
         case _ => Right((left, s2))
     }
@@ -405,9 +428,14 @@ object FormulaParser:
     val s = skipWhitespace(state)
     s.currentChar match
       case Some('-') =>
-        val s2 = skipWhitespace(s.advance())
-        parsePowExponent(s2).map { case (expr, s3) =>
-          (TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), s3)
+        descend(s).flatMap { sd =>
+          val s2 = skipWhitespace(sd.advance())
+          parsePowExponent(s2).map { case (expr, s3) =>
+            (
+              TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)),
+              s3.copy(depth = s.depth)
+            )
+          }
         }
       case _ => parsePow(s)
 
@@ -421,18 +449,22 @@ object FormulaParser:
     val s = skipWhitespace(state)
     s.currentChar match
       case Some('-') =>
-        val s2 = skipWhitespace(s.advance())
-        parseUnary(s2).map { case (expr, s3) =>
-          // Unary minus: 0 - expr
-          (
-            TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), // Convert PolyRef
-            s3
-          )
+        descend(s).flatMap { sd =>
+          val s2 = skipWhitespace(sd.advance())
+          parseUnary(s2).map { case (expr, s3) =>
+            // Unary minus: 0 - expr
+            (
+              TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), // Convert PolyRef
+              s3.copy(depth = s.depth)
+            )
+          }
         }
       case Some('N') | Some('n') if s.remaining.toUpperCase.startsWith("NOT") =>
-        val s2 = skipWhitespace(s.advance(3))
-        parseUnary(s2).map { case (expr, s3) =>
-          (TExpr.Call(FunctionSpecs.not, TExpr.asBooleanExpr(expr)), s3) // Convert PolyRef
+        descend(s).flatMap { sd =>
+          val s2 = skipWhitespace(sd.advance(3))
+          parseUnary(s2).map { case (expr, s3) =>
+            (TExpr.Call(FunctionSpecs.not, TExpr.asBooleanExpr(expr)), s3.copy(depth = s.depth))
+          }
         }
       case _ => parsePow(s)
 
