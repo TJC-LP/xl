@@ -12,7 +12,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **88 formula functions**, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 1080+ tests passing.
+**Current Status**: Production-ready with **103 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER), **structural editing** (insert/delete rows & columns with formula rewriting), named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 1100+ tests passing. **0.10.0 "Trust & Author"** is the active release — see [v0.10.0-execution.md](v0.10.0-execution.md).
 
 **Current Version**: 0.9.7 → **0.10.0 "Trust & Author"** in progress
 
