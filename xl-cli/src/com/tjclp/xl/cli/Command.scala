@@ -18,6 +18,15 @@ object SheetsAction:
   /** Show a hidden sheet (make it visible) */
   case class Show(name: String) extends SheetsAction
 
+/** Named-range (defined name) operations: add/replace and remove. */
+sealed trait NameAction derives CanEqual
+object NameAction:
+  /** Add or replace a workbook-scoped named range. */
+  case class Add(name: String, refersTo: String) extends NameAction
+
+  /** Remove a workbook-scoped named range. */
+  case class Remove(name: String) extends NameAction
+
 /**
  * Command ADT representing all CLI operations.
  *
@@ -27,6 +36,8 @@ enum CliCommand:
   // Read-only (workbook-level)
   case Sheets(action: SheetsAction)
   case Names
+  // Mutation (workbook-level)
+  case Name(action: NameAction)
   // Read-only (sheet-level)
   case Bounds(scan: Boolean) // scan=false: instant (dimension element), scan=true: full scan
   case View(

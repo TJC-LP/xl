@@ -96,7 +96,7 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream uses SAX/StAX workbook writes for modifying commands.
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd
 
     val sheetWriteOpts =
       (
@@ -519,6 +519,19 @@ EXAMPLES:
 
   val namesCmd: Opts[CliCommand] = Opts.subcommand("names", "List defined names (named ranges)") {
     Opts(CliCommand.Names)
+  }
+
+  val nameCmd: Opts[CliCommand] = Opts.subcommand("name", "Manage named ranges: add, rm") {
+    val nameArg = Opts.argument[String]("name")
+    val refArg = Opts.argument[String]("refers-to")
+    val addSub =
+      Opts.subcommand("add", "Add or replace a named range (e.g. name add Tax 'Sheet1!$A$1')") {
+        (nameArg, refArg).mapN(NameAction.Add.apply)
+      }
+    val rmSub = Opts.subcommand("rm", "Remove a named range") {
+      nameArg.map(NameAction.Remove.apply)
+    }
+    (addSub orElse rmSub).map(CliCommand.Name.apply)
   }
 
   val boundsCmd: Opts[CliCommand] = Opts.subcommand(
@@ -1544,6 +1557,15 @@ Use --dry-run to validate JSON without writing."""
       requireOutput(outputOpt, backendOpt, stream)(
         SheetCommands.renameSheet(wb, oldName, newName, _, _, _)
       )
+
+    case CliCommand.Name(action) =>
+      action match
+        case NameAction.Add(nm, refersTo) =>
+          requireOutput(outputOpt, backendOpt, stream)(
+            SheetCommands.nameAdd(wb, nm, refersTo, _, _, _)
+          )
+        case NameAction.Remove(nm) =>
+          requireOutput(outputOpt, backendOpt, stream)(SheetCommands.nameRemove(wb, nm, _, _, _))
 
     case CliCommand.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>
       requireOutput(outputOpt, backendOpt, stream)(
