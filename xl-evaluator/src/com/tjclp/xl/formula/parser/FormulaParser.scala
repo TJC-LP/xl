@@ -343,29 +343,38 @@ object FormulaParser:
         val s2 = skipWhitespace(s)
         s2.currentChar match
           case Some('+') =>
-            val s3 = skipWhitespace(s2.advance())
-            parseMulDiv(s3) match
-              case Right((right, s4)) =>
-                loop(
-                  TExpr.Add(
-                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                    TExpr.asNumericOrRangeExpr(right)
-                  ),
-                  s4
-                )
+            // GH-56: each chained term deepens the left-nested AST, so count it against the depth
+            // budget — otherwise a flat `1+1+1+…` overflows the evaluator (the parser loops, but
+            // eval recurses the spine).
+            descend(s2) match
               case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parseMulDiv(s3) match
+                  case Right((right, s4)) =>
+                    loop(
+                      TExpr.Add(
+                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                        TExpr.asNumericOrRangeExpr(right)
+                      ),
+                      s4
+                    )
+                  case Left(err) => Left(err)
           case Some('-') if !s2.remaining.startsWith("->") =>
-            val s3 = skipWhitespace(s2.advance())
-            parseMulDiv(s3) match
-              case Right((right, s4)) =>
-                loop(
-                  TExpr.Sub(
-                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                    TExpr.asNumericOrRangeExpr(right)
-                  ),
-                  s4
-                )
+            descend(s2) match
               case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parseMulDiv(s3) match
+                  case Right((right, s4)) =>
+                    loop(
+                      TExpr.Sub(
+                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                        TExpr.asNumericOrRangeExpr(right)
+                      ),
+                      s4
+                    )
+                  case Left(err) => Left(err)
           case _ => Right((acc, s2))
 
       loop(left, s1)
@@ -382,29 +391,36 @@ object FormulaParser:
         val s2 = skipWhitespace(s)
         s2.currentChar match
           case Some('*') =>
-            val s3 = skipWhitespace(s2.advance())
-            parseUnary(s3) match
-              case Right((right, s4)) =>
-                loop(
-                  TExpr.Mul(
-                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                    TExpr.asNumericOrRangeExpr(right)
-                  ),
-                  s4
-                )
+            // GH-56: count each chained factor against the depth budget (see parseAddSub).
+            descend(s2) match
               case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parseUnary(s3) match
+                  case Right((right, s4)) =>
+                    loop(
+                      TExpr.Mul(
+                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                        TExpr.asNumericOrRangeExpr(right)
+                      ),
+                      s4
+                    )
+                  case Left(err) => Left(err)
           case Some('/') =>
-            val s3 = skipWhitespace(s2.advance())
-            parseUnary(s3) match
-              case Right((right, s4)) =>
-                loop(
-                  TExpr.Div(
-                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                    TExpr.asNumericOrRangeExpr(right)
-                  ),
-                  s4
-                )
+            descend(s2) match
               case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parseUnary(s3) match
+                  case Right((right, s4)) =>
+                    loop(
+                      TExpr.Div(
+                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                        TExpr.asNumericOrRangeExpr(right)
+                      ),
+                      s4
+                    )
+                  case Left(err) => Left(err)
           case _ => Right((acc, s2))
 
       loop(left, s1)

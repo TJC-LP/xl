@@ -69,3 +69,14 @@ class RecursionGuardSpec extends FunSuite:
     assert(FormulaParser.parse("=1&2&3").isRight)
     assert(FormulaParser.parse("=TRUE AND FALSE OR TRUE").isRight)
   }
+
+  test("flat additive/multiplicative chains are bounded (no eval StackOverflow)") {
+    // Left-associative chains are built by @tailrec loops (the parser doesn't recurse), but they
+    // produce a deep left-nested AST that the evaluator walks recursively. Counting each chain term
+    // against the depth budget rejects pathological chains at parse (total Left) instead of letting
+    // eval overflow. (GH-56, second review round.)
+    assertTooDeep("=1" + ("+1" * 4000))
+    assertTooDeep("=1" + ("*1" * 4000))
+    // short chains still evaluate fine
+    assertEquals(s.evaluateFormula("=1" + ("+1" * 100)), Right(CellValue.Number(BigDecimal(101))))
+  }
