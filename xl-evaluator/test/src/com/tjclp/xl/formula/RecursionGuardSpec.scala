@@ -48,3 +48,24 @@ class RecursionGuardSpec extends FunSuite:
     val ok = "=" + ("(" * 50) + "7" + (")" * 50)
     assertEquals(s.evaluateFormula(ok), Right(CellValue.Number(BigDecimal(7))))
   }
+
+  // The binary operators are right-recursive, so chained operators are a distinct overflow
+  // vector from parens/unary (caught by the claude-review of PR #250).
+  private def assertTooDeep(formula: String): Unit =
+    FormulaParser.parse(formula) match
+      case Left(_: ParseError.NestingTooDeep) => ()
+      case other => fail(s"expected NestingTooDeep, got $other")
+
+  test("deeply chained binary operators → NestingTooDeep, not StackOverflowError") {
+    assertTooDeep("=1" + ("=1" * 300)) // comparison chain
+    assertTooDeep("=1" + ("&1" * 300)) // concatenation chain
+    assertTooDeep("=1" + (" AND 1" * 300)) // logical AND chain
+    assertTooDeep("=1" + (" OR 1" * 300)) // logical OR chain
+    assertTooDeep("=1" + ("<1" * 300)) // inequality chain
+  }
+
+  test("normal short operator chains still parse") {
+    assert(FormulaParser.parse("=1=1").isRight)
+    assert(FormulaParser.parse("=1&2&3").isRight)
+    assert(FormulaParser.parse("=TRUE AND FALSE OR TRUE").isRight)
+  }
