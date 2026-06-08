@@ -183,6 +183,7 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - ⏳ Array formulas - Future work
 - ⏳ Structured references (Table[@Column]) - Requires WI-10 integration
 - ⏳ Quoted sheet names in formulas (`='Q1 Report'!A1`) - Parser support pending
+- 🛡️ **Formula depth cap (GH-56 totality guard):** nesting + operator-chain depth is capped at 256 levels so pathological input returns `ParseError.NestingTooDeep` instead of `StackOverflowError`. Excel allows 64 nesting levels and no operator-chain limit (within 8192 chars); xl additionally counts each operator in a *flat, paren-less* chain, so a chain of 256+ consecutive operators (e.g. `=A1+A2+…` ×256) is rejected — use `SUM`/ranges, or parenthesize to reset the budget. No real-world formula approaches this.
 
 **No workarounds needed** - formula system is complete and production-ready!
 
