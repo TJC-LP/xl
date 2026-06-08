@@ -1141,9 +1141,9 @@ object WriteCommands:
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-cols")
-      _ <- requirePositive(count, "count")
       spec <- colSpec(col, count)
       (at0, n) = spec
+      _ <- requirePositive(n, "count")
       updatedWb = StructuralEditor.insertColumns(wb, sheet.name, at0, n)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
     yield s"Inserted $n column(s) at column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
@@ -1159,9 +1159,9 @@ object WriteCommands:
   ): IO[String] =
     for
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-cols")
-      _ <- requirePositive(count, "count")
       spec <- colSpec(col, count)
       (at0, n) = spec
+      _ <- requirePositive(n, "count")
       updatedWb = StructuralEditor.deleteColumns(wb, sheet.name, at0, n)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
     yield s"Deleted $n column(s) from column ${col.trim.toUpperCase} on '${sheet.name.value}'\n${saveSuffix(outputPath, stream)}"
