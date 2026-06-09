@@ -1081,3 +1081,15 @@ class SvgRendererSpec extends FunSuite:
     assert(svg.contains("2/3/25"), s"SVG should contain formatted date '2/3/25', got: $svg")
     assert(!svg.contains("2025-02-03T"), s"SVG should NOT contain ISO format")
   }
+
+  test("GH-255 cascade: .cell-text CSS rule declares no font, so per-cell attrs win"):
+    // CSS class rules outrank presentation attributes; a font-family/font-size declaration on
+    // .cell-text silently overrode every per-cell font in CSS-aware rasterizers.
+    val sheet = Sheet(SheetName.unsafe("S")).put(
+      ARef.from0(0, 0),
+      CellValue.Text("serif")
+    )
+    val svg = SvgRenderer.toSvg(sheet, CellRange(ARef.from0(0, 0), ARef.from0(0, 0)))
+    val styleBlock = svg.substring(svg.indexOf("<style>"), svg.indexOf("</style>"))
+    assert(!styleBlock.contains(".cell-text"), "cell-text must not have a CSS rule")
+    assert(styleBlock.contains(".header-text"), "header styling stays CSS-driven")

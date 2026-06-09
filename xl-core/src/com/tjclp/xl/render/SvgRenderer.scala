@@ -81,11 +81,14 @@ object SvgRenderer:
     sb.append(s"""width="$totalWidth" height="$totalHeight">\n""")
 
     // Embedded styles - note: 11pt = ~15px (11 * 4/3)
-    // Gridlines are now applied via inline stroke attributes for reliable cross-renderer support
+    // Gridlines are now applied via inline stroke attributes for reliable cross-renderer support.
+    // IMPORTANT: .cell-text must NOT declare font-family/font-size — CSS class rules outrank
+    // presentation attributes in the cascade, which silently overrode per-cell fonts in every
+    // CSS-aware rasterizer (GH-255). Cell text carries explicit font attributes on every path
+    // instead; the class remains for semantic grouping only.
     sb.append(s"""  <style>
     .header { fill: #E0E0E0; stroke: #999999; stroke-width: 1; }
     .header-text { font-family: 'Segoe UI', Arial, sans-serif; font-size: 15px; fill: #333333; }
-    .cell-text { font-family: 'Calibri', 'Segoe UI', Arial, sans-serif; font-size: 15px; }
   </style>
 """)
 
@@ -264,8 +267,9 @@ object SvgRenderer:
                       case "end" => textX - totalWidth
                       case _ => textX // "start"
 
+                    // Explicit base font attrs (was CSS .cell-text): tspan runs override per-run
                     textBuffer.append(
-                      s"""    <text y="$textY" class="cell-text"$clipAttr>"""
+                      s"""    <text y="$textY" class="cell-text" font-size="15px" font-family="Calibri"$clipAttr>"""
                     )
                     rt.runs.zipWithIndex.foldLeft(adjustedTextX) { case (currentX, (run, idx)) =>
                       val runStyle = runToSvgStyle(run, baseFont, theme)
@@ -279,8 +283,11 @@ object SvgRenderer:
                   case other =>
                     val text = cellValueToText(other, numFmt)
                     if text.nonEmpty then
+                      // includeStyles=false still needs explicit font attrs now that the
+                      // .cell-text CSS rule no longer declares them (GH-255 cascade fix)
                       val textStyle =
-                        if includeStyles then cellTextStyle(cell, sheet, theme) else ""
+                        if includeStyles then cellTextStyle(cell, sheet, theme)
+                        else """ fill="#000000" font-size="15px" font-family="Calibri""""
                       val style = cell.styleId.flatMap(sheet.styleRegistry.get)
                       val shouldWrap = style.exists(_.align.wrapText)
 
