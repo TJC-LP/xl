@@ -34,7 +34,9 @@ object SvgRenderer:
    * @param showLabels
    *   Whether to show column letters (A, B, C...) and row numbers (1, 2, 3...) (default: false)
    * @param showGridlines
-   *   Whether to show cell gridlines (default: false, matches HTML behavior)
+   *   Whether to show cell gridlines (default: false, matches HTML behavior). A sheet-level
+   *   `SheetView(showGridLines = false)` suppresses gridlines even when this flag is set, matching
+   *   how Excel renders such sheets (GH-258).
    * @return
    *   SVG string
    */
@@ -46,6 +48,9 @@ object SvgRenderer:
     showLabels: Boolean = false,
     showGridlines: Boolean = false
   ): String =
+    // GH-258: the sheet's own view settings win when they disable gridlines (templates that are
+    // gridline-free in Excel must stay gridline-free in exports).
+    val gridlinesEnabled = showGridlines && sheet.viewSettings.forall(_.showGridLines)
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
@@ -207,7 +212,7 @@ object SvgRenderer:
 
             // Gridlines: add explicit stroke attributes (CSS-only approach unreliable across renderers)
             val strokeAttr =
-              if showGridlines then """ stroke="#D0D0D0" stroke-width="0.5""""
+              if gridlinesEnabled then """ stroke="#D0D0D0" stroke-width="0.5""""
               else ""
 
             sb.append(

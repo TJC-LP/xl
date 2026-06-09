@@ -1355,10 +1355,18 @@ object XlsxWriter:
         // Update sheets in preserved structure (names/order/visibility may have changed).
         // Named ranges (definedNames) ride through verbatim here (byte-identical). Authoring a
         // name marks metadata modified, which routes to the fromDomain branch below (GH-236).
-        preserved.updateSheets(workbook.sheets, workbook.metadata.sheetStates)
+        val updated = preserved.updateSheets(workbook.sheets, workbook.metadata.sheetStates)
+        // GH-259: print names (_xlnm.Print_Area/_xlnm.Print_Titles) are modeled on Sheet.pageSetup,
+        // so a sheet edit can change them WITHOUT marking metadata modified. Reconcile: keep the
+        // preserved definedNames bytes when the model agrees, otherwise regenerate the element.
+        val expected = PrintNames.effective(workbook)
+        if OoxmlWorkbook.parseDefinedNames(updated.definedNames).toSet == expected.toSet then
+          updated
+        else updated.copy(definedNames = OoxmlWorkbook.buildDefinedNames(expected))
       case None =>
         // Fallback for programmatically created workbooks OR when metadata was modified — fresh
-        // workbook structure; fromDomain now serializes wb.metadata.definedNames (GH-236).
+        // workbook structure; fromDomain serializes wb.metadata.definedNames (GH-236) plus the
+        // PageSetup-derived print names (GH-259).
         OoxmlWorkbook.fromDomain(workbook)
 
     // Content types: preserve from source when available, otherwise generate minimal.

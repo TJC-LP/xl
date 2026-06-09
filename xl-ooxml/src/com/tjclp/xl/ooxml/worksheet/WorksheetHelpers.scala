@@ -5,7 +5,7 @@ import scala.xml.*
 import com.tjclp.xl.addressing.{ARef, Column}
 import com.tjclp.xl.ooxml.XmlUtil
 import com.tjclp.xl.ooxml.XmlUtil.nsSpreadsheetML
-import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
+import com.tjclp.xl.sheets.{ColumnProperties, PageSetup, RowProperties, Sheet}
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
 // avoid redundant declarations and preserve mc/x14/xr bindings from the source sheet.
@@ -213,6 +213,88 @@ private[ooxml] def buildColsElement(sheet: Sheet): Option[Elem] =
       XmlUtil.elemOrdered("col", attrs.result()*)( /* no children */ )
     }
     Some(XmlUtil.elem("cols")(colElems*))
+
+// ===== Print setup authoring (GH-259) =====
+// PageSetup is the typed model for <pageMargins>, <pageSetup>, and <headerFooter>. The merge
+// helpers below overlay the modeled fields onto any preserved source XML so unmodeled attributes
+// (paperSize, printer r:id, even/first-page headers, differentOddEven, ...) survive a rewrite.
+
+/** Replace or remove an unprefixed attribute on an element (deterministic for a given input). */
+private def setOrRemoveAttr(e: Elem, key: String, value: Option[String]): Elem =
+  value match
+    case Some(v) => e % new UnprefixedAttribute(key, v, Null)
+    case None => e.copy(attributes = e.attributes.remove(key))
+
+/**
+ * Build a `<pageMargins>` element from the domain margins, or None when not set.
+ *
+ * All six attributes are required by the schema (CT_PageMargins), so the element is fully modeled
+ * and regenerated rather than merged.
+ */
+private[ooxml] def buildPageMarginsElem(pageSetup: Option[PageSetup]): Option[Elem] =
+  pageSetup.flatMap(_.margins).map { m =>
+    XmlUtil.elem(
+      "pageMargins",
+      "left" -> m.left.toString,
+      "right" -> m.right.toString,
+      "top" -> m.top.toString,
+      "bottom" -> m.bottom.toString,
+      "header" -> m.header.toString,
+      "footer" -> m.footer.toString
+    )()
+  }
+
+/**
+ * Merge the modeled `<pageSetup>` attributes (scale, orientation, fitToWidth, fitToHeight) into the
+ * preserved element, keeping unmodeled attributes (paperSize, r:id, dpi, ...) intact.
+ *
+ * Default-valued fields remove their attribute (the OOXML defaults match), so parse-then-merge of
+ * an untouched sheet is an identity. When nothing is preserved and every modeled field is at its
+ * default, no element is emitted.
+ */
+private[ooxml] def mergePageSetupElem(
+  existing: Option[Elem],
+  pageSetup: Option[PageSetup]
+): Option[Elem] =
+  pageSetup match
+    case None => existing
+    case Some(ps) =>
+      val base = existing.getOrElse(XmlUtil.elem("pageSetup")())
+      val overrides: Seq[(String, Option[String])] = Seq(
+        "scale" -> Some(ps.scale.toString).filter(_ => ps.scale != 100),
+        "orientation" -> ps.orientation,
+        "fitToWidth" -> ps.fitToWidth.map(_.toString),
+        "fitToHeight" -> ps.fitToHeight.map(_.toString)
+      )
+      val updated = overrides.foldLeft(base) { case (e, (key, value)) =>
+        setOrRemoveAttr(e, key, value)
+      }
+      if existing.isEmpty && updated.attributes == Null then None else Some(updated)
+
+/**
+ * Merge the modeled odd header/footer into the preserved `<headerFooter>` element, keeping
+ * unmodeled children (evenHeader/evenFooter/firstHeader/firstFooter) and attributes
+ * (differentOddEven, ...) intact. `headerFooter = None` preserves the source element verbatim;
+ * `Some(HeaderFooter(None, None))` actively clears the odd header/footer.
+ */
+private[ooxml] def mergeHeaderFooterElem(
+  existing: Option[Elem],
+  pageSetup: Option[PageSetup]
+): Option[Elem] =
+  pageSetup.flatMap(_.headerFooter) match
+    case None => existing
+    case Some(hf) =>
+      val base = existing.getOrElse(XmlUtil.elem("headerFooter")())
+      val withoutOdd = base.child.filterNot {
+        case e: Elem => e.label == "oddHeader" || e.label == "oddFooter"
+        case _ => false
+      }
+      // CT_HeaderFooter sequence starts with oddHeader, oddFooter — prepend in schema order
+      val oddElems: Seq[Node] =
+        hf.oddHeader.map(t => XmlUtil.elem("oddHeader")(Text(t))).toList ++
+          hf.oddFooter.map(t => XmlUtil.elem("oddFooter")(Text(t))).toList
+      val updated = base.copy(child = oddElems ++ withoutOdd)
+      if updated.child.isEmpty && updated.attributes == Null then None else Some(updated)
 
 /**
  * Apply domain RowProperties to an OoxmlRow.
