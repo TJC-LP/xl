@@ -148,7 +148,8 @@ object WorkbookEvaluator:
         XLError.FormulaError(formulaText(sheet, ref), "Circular reference")
       )
     }
-    val blockedErrors = (blocked -- cyclicCore).toVector.map { ref =>
+    // transitiveDependents excludes its seed set, so `blocked` is already disjoint from the core
+    val blockedErrors = blocked.toVector.map { ref =>
       CellEvalError(
         sheet.name,
         ref,

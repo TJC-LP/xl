@@ -516,14 +516,63 @@ object DependencyGraph:
       transitiveDependentsImpl(graph, originalRefs, directDeps, visited ++ toVisit)
 
   /**
+   * Iterative Tarjan SCC engine shared by `detectCycles` and `cyclicNodes`.
+   *
+   * Uses an explicit work stack instead of recursion: `recalculate` promises totality, and a deep
+   * linear dependency chain (e.g. 100k sequential formulas) must not throw StackOverflowError.
+   * Invokes `onScc` for every completed component in Tarjan pop order (deepest member first,
+   * component root last).
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def foreachScc(graph: DependencyGraph)(onScc: List[ARef] => Unit): Unit =
+    var index = 0
+    var indices = Map.empty[ARef, Int]
+    var lowLinks = Map.empty[ARef, Int]
+    var stack = List.empty[ARef]
+    var onStack = Set.empty[ARef]
+    // DFS frames: (node, successors not yet examined)
+    var frames = List.empty[(ARef, List[ARef])]
+
+    def push(v: ARef): Unit =
+      indices = indices.updated(v, index)
+      lowLinks = lowLinks.updated(v, index)
+      index += 1
+      stack = v :: stack
+      onStack = onStack + v
+      frames = (v, graph.dependencies.getOrElse(v, Set.empty).toList) :: frames
+
+    graph.dependencies.keySet.foreach { root =>
+      if !indices.contains(root) then
+        push(root)
+        while frames.nonEmpty do
+          frames match
+            case (v, w :: rest) :: tail =>
+              frames = (v, rest) :: tail
+              if !indices.contains(w) then push(w)
+              else if onStack.contains(w) then
+                lowLinks = lowLinks.updated(v, math.min(lowLinks(v), indices(w)))
+            case (v, Nil) :: tail =>
+              frames = tail
+              if lowLinks(v) == indices(v) then
+                val (sccTail, remaining) = stack.span(_ != v)
+                stack = remaining.drop(1)
+                val scc = sccTail :+ v
+                onStack = onStack -- scc
+                onScc(scc)
+              frames match
+                case (p, _) :: _ =>
+                  lowLinks = lowLinks.updated(p, math.min(lowLinks(p), lowLinks(v)))
+                case Nil => ()
+            case Nil => () // unreachable: guarded by frames.nonEmpty
+    }
+
+  /**
    * Detect circular references using Tarjan's strongly connected components algorithm.
    *
    * A circular reference occurs when a cell's formula depends (directly or transitively) on its own
    * value. For example: A1="=B1", B1="=C1", C1="=A1" forms a cycle.
    *
-   * This uses Tarjan's SCC algorithm which runs in O(V + E) time with a single DFS traversal. The
-   * algorithm maintains a stack and low-link values to detect strongly connected components
-   * (cycles).
+   * Runs in O(V + E) with an explicit work stack (stack-safe on deep dependency chains).
    *
    * @param graph
    *   The dependency graph to analyze
@@ -539,88 +588,21 @@ object DependencyGraph:
    * detectCycles(graph) // Left(EvalError.CircularRef(List(A1, B1, A1)))
    * }}}
    */
-  @SuppressWarnings(
-    Array(
-      "org.wartremover.warts.Var",
-      "org.wartremover.warts.IterableOps",
-      "org.wartremover.warts.Return",
-      "org.wartremover.warts.IsInstanceOf",
-      "org.wartremover.warts.AsInstanceOf"
-    )
-  )
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def detectCycles(graph: DependencyGraph): Either[EvalError.CircularRef, Unit] =
-    // Tarjan's SCC algorithm: Intentional imperative implementation
-    // Rationale: Classic algorithm uses mutable state for O(V+E) performance.
-    // Functional version sacrifices clarity without benefit. Compile-time only.
-    var index = 0
-    var stack = List.empty[ARef]
-    var indices = Map.empty[ARef, Int]
-    var lowLinks = Map.empty[ARef, Int]
-    var onStack = Set.empty[ARef]
-
-    def strongConnect(v: ARef): Option[List[ARef]] =
-      // Set the depth index for v
-      indices = indices.updated(v, index)
-      lowLinks = lowLinks.updated(v, index)
-      index += 1
-      stack = v :: stack
-      onStack = onStack + v
-
-      // Consider successors of v (cells that v depends on)
-      val successors = graph.dependencies.getOrElse(v, Set.empty)
-      val cycleFound = successors.foldLeft(Option.empty[List[ARef]]) { (acc, w) =>
-        acc match
-          case Some(cycle) => Some(cycle) // Already found cycle, propagate
-          case None =>
-            if !indices.contains(w) then
-              // Successor w has not yet been visited; recurse on it
-              strongConnect(w) match
-                case Some(cycle) => Some(cycle)
-                case None =>
-                  lowLinks = lowLinks.updated(v, math.min(lowLinks(v), lowLinks(w)))
-                  None
-            else if onStack.contains(w) then
-              // Successor w is on stack and hence in the current SCC
-              lowLinks = lowLinks.updated(v, math.min(lowLinks(v), indices(w)))
-              // Found a cycle! Reconstruct it from stack (w to top of stack forms the cycle)
-              val cycleNodes = (stack.takeWhile(_ != w) :+ w).reverse
-              Some(cycleNodes :+ cycleNodes.head) // Add first node again to show cycle closes
-            else None // w is not on stack, already processed
-      }
-
-      cycleFound match
-        case Some(cycle) => Some(cycle)
-        case None =>
-          // If v is a root node, pop the stack and check for SCC
-          if lowLinks(v) == indices(v) then
-            // Pop nodes from stack until v
-            val (scc, remaining) = stack.span(_ != v)
-            stack = remaining.tail // Remove v from stack
-            onStack = onStack -- (scc :+ v)
-
-            // Check if SCC has more than one node (cycle)
-            if scc.nonEmpty then
-              // Multiple nodes in SCC means cycle
-              val cycleNodes = (scc :+ v).reverse
-              Some(cycleNodes :+ cycleNodes.head) // Add first node again to show cycle closes
-            else
-              // Single node - only a cycle if it has self-loop
-              if graph.dependencies.get(v).exists(_.contains(v)) then
-                Some(List(v, v)) // Self-loop: v -> v
-              else None
-          else None
-
-    // Run Tarjan's algorithm on all unvisited nodes
-    val allNodes = graph.dependencies.keySet
-    val cycleFound = allNodes.foldLeft(Option.empty[List[ARef]]) { (acc, node) =>
-      acc match
-        case Some(cycle) => Some(cycle) // Already found cycle
-        case None =>
-          if !indices.contains(node) then strongConnect(node)
-          else None
+    var found = Option.empty[List[ARef]]
+    foreachScc(graph) { scc =>
+      if found.isEmpty then
+        scc match
+          case single :: Nil =>
+            if graph.dependencies.get(single).exists(_.contains(single)) then
+              found = Some(List(single, single)) // Self-loop: v -> v
+          case multi =>
+            val cycleNodes = multi.reverse
+            found =
+              Some(cycleNodes :+ cycleNodes.headOption.getOrElse(multi.last)) // close the cycle
     }
-
-    cycleFound match
+    found match
       case Some(cycle) => scala.util.Left(EvalError.CircularRef(cycle))
       case None => scala.util.Right(())
 
@@ -631,44 +613,19 @@ object DependencyGraph:
    * of cells inside strongly connected components of size > 1, plus self-loops. Used by
    * `Workbook.recalculate` to isolate cyclic cells while still evaluating the acyclic remainder.
    *
+   * Stack-safe: shares the iterative Tarjan engine with `detectCycles`.
+   *
    * @return
    *   The set of cycle participants (empty when the graph is acyclic)
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def cyclicNodes(graph: DependencyGraph): Set[ARef] =
-    // Tarjan's SCC, same imperative style as detectCycles, but collecting all SCCs.
-    var index = 0
-    var stack = List.empty[ARef]
-    var indices = Map.empty[ARef, Int]
-    var lowLinks = Map.empty[ARef, Int]
-    var onStack = Set.empty[ARef]
     var cyclic = Set.empty[ARef]
-
-    def strongConnect(v: ARef): Unit =
-      indices = indices.updated(v, index)
-      lowLinks = lowLinks.updated(v, index)
-      index += 1
-      stack = v :: stack
-      onStack = onStack + v
-
-      graph.dependencies.getOrElse(v, Set.empty).foreach { w =>
-        if !indices.contains(w) then
-          strongConnect(w)
-          lowLinks = lowLinks.updated(v, math.min(lowLinks(v), lowLinks(w)))
-        else if onStack.contains(w) then
-          lowLinks = lowLinks.updated(v, math.min(lowLinks(v), indices(w)))
-      }
-
-      if lowLinks(v) == indices(v) then
-        val (sccTail, remaining) = stack.span(_ != v)
-        val scc = sccTail :+ v
-        stack = remaining.drop(1)
-        onStack = onStack -- scc
-        if sccTail.nonEmpty then cyclic = cyclic ++ scc
-        else if graph.dependencies.get(v).exists(_.contains(v)) then cyclic = cyclic + v
-
-    graph.dependencies.keySet.foreach { node =>
-      if !indices.contains(node) then strongConnect(node)
+    foreachScc(graph) { scc =>
+      scc match
+        case single :: Nil =>
+          if graph.dependencies.get(single).exists(_.contains(single)) then cyclic = cyclic + single
+        case multi => cyclic = cyclic ++ multi
     }
     cyclic
 

@@ -430,6 +430,8 @@ extension (sheet: Sheet)
 
 **Import order**: Java/javax → Scala stdlib → Cats → Project → Tests
 
+**AWT headless default (render)**: the first `toHtml`/`toSvg` call sets `java.awt.headless=true` unless the embedder set it explicitly — non-headless AWT keeps script JVMs alive after main completes (non-daemon AWT-Shutdown thread). GUI embedders: set `-Djava.awt.headless=false` or initialize your toolkit before rendering. A deliberate, guarded global side effect (see `RenderUtils`).
+
 ## CI/CD
 
 GitHub Actions: `./mill __.checkFormat` → `./mill __.compile` → `./mill __.test`

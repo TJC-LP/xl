@@ -53,18 +53,16 @@ object ARef:
 
     /** Convert to A1 notation */
     def toA1: String =
-      // Deliberately NOT inline: the body calls the non-inline extension Column.toLetter, and
-      // inline expansion re-elaborates that call at external call sites where Column is opaque,
-      // failing with "expression does not take parameters". A regular def elaborates here, where
-      // the representation is visible; the call cost is noise next to the string allocation.
+      // NOTE: every member here (and in Column/Row/SheetName/style units) that touches the
+      // opaque representation must stay NON-inline: inline bodies fail to re-elaborate at call
+      // sites outside this package, where the representation is hidden (issue #252). Do not
+      // "optimize" these back to `inline` — the JIT/AOT inlines trivial static methods anyway.
       import Column.toLetter
       import Row.index1
       s"${toLetter(ref.col)}${index1(ref.row)}"
 
     /** Shift reference by column and row offsets */
     def shift(colOffset: Int, rowOffset: Int): ARef =
-      // Non-inline for the same reason as toA1: the nested inline expansion of ARef.apply fails
-      // to re-elaborate at call sites outside this package.
       ARef(ref.col + colOffset, ref.row + rowOffset)
 
 end ARef

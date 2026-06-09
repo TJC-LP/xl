@@ -130,3 +130,38 @@ class RecalcSpec extends FunSuite:
     assert(errorRefs.contains(("S2", a1)), s"S2!A1 should error, got: ${result.errors.map(_.render)}")
     assertEquals(cached(result.workbook, "S1", a1), None)
     assertEquals(cached(result.workbook, "S2", a1), None)
+
+  test("stack safety: 100k-deep dependency chain neither overflows nor reports cycles"):
+    // Graph built directly (no parsing) — pins the iterative Tarjan engine. The recursive
+    // strongConnect this replaces overflowed around ~10k frames, violating recalculate's
+    // totality promise on deep-but-legal generated models.
+    val n = 100000
+    val deps = (0 until n).map { i =>
+      val node = ARef.from0(0, i)
+      val next = if i + 1 < n then Set(ARef.from0(0, i + 1)) else Set.empty[ARef]
+      node -> next
+    }.toMap
+    val graph = com.tjclp.xl.formula.graph.DependencyGraph(deps, Map.empty)
+    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.cyclicNodes(graph), Set.empty[ARef])
+    assert(com.tjclp.xl.formula.graph.DependencyGraph.detectCycles(graph).isRight)
+
+  test("stack safety: 100k-node cycle is fully collected without overflow"):
+    val n = 100000
+    val deps = (0 until n).map { i =>
+      ARef.from0(0, i) -> Set(ARef.from0(0, (i + 1) % n)) // last points back to first
+    }.toMap
+    val graph = com.tjclp.xl.formula.graph.DependencyGraph(deps, Map.empty)
+    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.cyclicNodes(graph).size, n)
+    assert(com.tjclp.xl.formula.graph.DependencyGraph.detectCycles(graph).isLeft)
+
+  test("recalculate end-to-end on a 3k-deep formula chain stays total and clean"):
+    val n = 3000
+    val sheet = (1 until n).foldLeft(Sheet(SheetName.unsafe("Deep")).put(a1, num(1))) {
+      (s, i) => s.put(ARef.from0(0, i), formula(s"=A$i+1"))
+    }
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, s"expected clean, got ${result.errors.take(3).map(_.render)}")
+    assertEquals(
+      result.evaluated.values.headOption.flatMap(_.get(ARef.from0(0, n - 1))),
+      Some(num(n))
+    )
