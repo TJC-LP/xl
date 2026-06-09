@@ -55,6 +55,10 @@ object SheetEvaluator:
      *   Excel formula string (with or without leading =)
      * @param clock
      *   Clock for date/time functions (defaults to system clock)
+     * @param workbook
+     *   Pass `Some(wb)` iff the formula references other sheets (`='Other'!A1`); intra-sheet
+     *   formulas don't need it. Or use `wb.evaluateFormula(formula, onSheet)` which wires the
+     *   context automatically.
      * @return
      *   Either XLError or evaluated CellValue
      *

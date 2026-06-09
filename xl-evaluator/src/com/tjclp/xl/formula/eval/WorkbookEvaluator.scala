@@ -7,7 +7,9 @@ import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.Clock
 
+import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.workbooks.Workbook
 
 // Import SheetEvaluator extension methods
@@ -27,6 +29,46 @@ import SheetEvaluator.*
 object WorkbookEvaluator:
 
   extension (wb: Workbook)
+
+    /**
+     * Evaluate a formula in the context of the named sheet, with cross-sheet references resolved
+     * against this workbook.
+     *
+     * Prefer this over `Sheet.evaluateFormula` in scripts: the workbook context is wired
+     * automatically, so formulas like `='Other Sheet'!A1 * 2` just work.
+     *
+     * Note: explicit overloads instead of a default clock parameter — extension methods with
+     * default arguments crash the compiler when merged through the formulaExports wildcard export
+     * (see the DependentRecalculation note in exports.scala).
+     */
+    def evaluateFormula(
+      formula: String,
+      onSheet: SheetName,
+      clock: Clock
+    ): XLResult[CellValue] =
+      wb(onSheet).flatMap(s => SheetEvaluator.evaluateFormula(s)(formula, clock, Some(wb)))
+
+    /** Evaluate a formula on the named sheet with the system clock. */
+    @annotation.targetName("evaluateFormulaOnSheetDefaultClock")
+    def evaluateFormula(formula: String, onSheet: SheetName): XLResult[CellValue] =
+      evaluateFormula(formula, onSheet, Clock.system)
+
+    /**
+     * Evaluate a formula on the named sheet (string variant). The sheet name is resolved at
+     * runtime.
+     */
+    @annotation.targetName("evaluateFormulaOnSheetString")
+    def evaluateFormula(
+      formula: String,
+      onSheet: String,
+      clock: Clock
+    ): XLResult[CellValue] =
+      wb(onSheet).flatMap(s => SheetEvaluator.evaluateFormula(s)(formula, clock, Some(wb)))
+
+    /** Evaluate a formula on the named sheet (string variant, system clock). */
+    @annotation.targetName("evaluateFormulaOnSheetStringDefaultClock")
+    def evaluateFormula(formula: String, onSheet: String): XLResult[CellValue] =
+      evaluateFormula(formula, onSheet, Clock.system)
 
     /**
      * Evaluate all formulas and cache their computed values.

@@ -33,4 +33,21 @@ object syntax:
         case None => Right(None) // Cell doesn't exist
         case Some(c) => CellCodec[A].read(c)
 
+    /**
+     * Read a typed value, falling back to a default on missing cell, empty cell, or type mismatch.
+     * Total — the scripting counterpart of `readTyped`.
+     *
+     * Naming convention: verb + totality-strategy suffix (`readTyped` / `readTypedOr` /
+     * `readTypedOpt`).
+     */
+    def readTypedOr[A: CellCodec](ref: ARef, default: => A): A =
+      readTyped[A](ref).toOption.flatten.getOrElse(default)
+
+    /**
+     * Read a typed value as a flat Option: None on missing cell, empty cell, or type mismatch.
+     * Total. Use `readTyped` when decode errors must be distinguished from absence.
+     */
+    def readTypedOpt[A: CellCodec](ref: ARef): Option[A] =
+      readTyped[A](ref).toOption.flatten
+
 export syntax.*

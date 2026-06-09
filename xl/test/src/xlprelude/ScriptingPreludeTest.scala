@@ -114,6 +114,17 @@ class ScriptingPreludeTest extends FunSuite:
     given Sheet = sheet
     assertEquals(excel"${ref"A1"}", "100")
 
+  test("upsert, wb.evaluateFormula, and readTypedOr resolve through the prelude"):
+    val wb = Workbook(Sheet("Sales").put(ref"A1", 10).put(ref"A2", 20))
+      .upsert("Summary", _.put(ref"A1", 5))
+    assertEquals(
+      wb.evaluateFormula("=SUM(Sales!A1:A2) + A1", "Summary"),
+      Right(CellValue.Number(BigDecimal(35))): XLResult[CellValue]
+    )
+    val sheet = wb.sheets.headOption.getOrElse(fail("missing sheet"))
+    assertEquals(sheet.readTypedOr[Int](ref"A1", 0), 10)
+    assertEquals(sheet.readTypedOpt[Int](ref"Z9"), None)
+
   test("workbook construction, withCachedFormulas, and sync Excel round-trip"):
     val sheet = Sheet("Data")
       .put(ref"A1", 10)

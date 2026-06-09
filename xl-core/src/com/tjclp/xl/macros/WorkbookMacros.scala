@@ -156,6 +156,37 @@ object WorkbookMacros:
         }
 
   /**
+   * Macro impl for workbook.upsert(name: String, f: Sheet => Sheet).
+   *
+   * Returns Workbook for literal names (format validated at compile time; upsert itself is total).
+   * Returns XLResult[Workbook] for runtime names (format is runtime-dependent).
+   */
+  def upsertImpl(
+    workbook: Expr[Workbook],
+    name: Expr[String],
+    f: Expr[Sheet => Sheet]
+  )(using Quotes): Expr[Workbook | XLResult[Workbook]] =
+    import quotes.reflect.*
+
+    name.value match
+      case Some(literal) =>
+        // Compile-time literal - validate name format now
+        validateSheetName(literal) match
+          case Some(err) =>
+            report.errorAndAbort(s"Invalid sheet name '$literal': $err")
+          case None =>
+            // Valid name format - emit direct upsert call (total, returns Workbook)
+            '{ $workbook.upsert(SheetName.unsafe(${ Expr(literal) }), $f) }
+
+      case None =>
+        // Runtime expression - defer validation (returns XLResult[Workbook])
+        '{
+          SheetName($name) match
+            case Right(sn) => Right($workbook.upsert(sn, $f))
+            case Left(err) => Left(XLError.InvalidSheetName($name, err))
+        }
+
+  /**
    * Macro impl for workbook.delete(name: String).
    *
    * Validates name format at compile time for literals. Always returns XLResult[Workbook] because
