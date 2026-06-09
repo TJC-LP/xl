@@ -1,0 +1,49 @@
+name: Skill Verify
+
+# Compile-verify every complete-script snippet in the xl-scripting skill against the local
+# build. This is the anti-rot guarantee: documented patterns that stop compiling fail CI.
+
+on:
+  pull_request:
+    paths:
+      - "plugin/skills/xl-scripting/**"
+      - "scripts/verify-skill-snippets.sh"
+      - "xl*/src/**"
+  workflow_dispatch:
+
+jobs:
+  snippets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK + scala-cli
+        uses: coursier/setup-action@v1
+        with:
+          jvm: temurin:25
+          apps: scala-cli
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/.scalafmt.conf', '**/.scalafix.conf') }}
+          restore-keys: |
+            ${{ runner.os }}-coursier-
+
+      - name: Cache Mill
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
+
+      # --local publishes the current build to ivy2Local and substitutes the version pin, so
+      # snippets are verified against the code in this PR (the contract the next release ships).
+      - name: Verify skill snippets
+        run: ./scripts/verify-skill-snippets.sh --local

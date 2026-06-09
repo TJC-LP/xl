@@ -40,8 +40,12 @@ xl-agent/        → AI agent benchmark runner (Anthropic API, skill comparison)
 ## Import Patterns
 
 ```scala
-import com.tjclp.xl.{*, given}     // Everything: core + formula + display + type class instances
+import com.tjclp.xl.{*, given}     // Everything: core + formula + display + type class instances (pure)
 import com.tjclp.xl.unsafe.*       // .unsafe boundary (explicit opt-in)
+
+// Scripts: ONE import for everything above + sync Excel + ExcelIO + unsafe + String.toFormatted.
+// Never combine with com.tjclp.xl.{*, given} in the same file (ambiguous forwarders).
+import com.tjclp.xl.scripting.{*, given}
 
 // Core API
 val sheet = Sheet("Demo").put("A1" -> 100)
@@ -288,7 +292,7 @@ See `docs/reference/cli.md` for full command reference.
 - `.claude/` - Dev-only commands (release-prep, docs-cleanup-xl)
 - `plugin/` - User-facing skill distributed via plugin marketplace
 
-The CLI skill (`plugin/skills/xl-cli/SKILL.md`) auto-detects the latest release from GitHub API—no version placeholders to maintain.
+The CLI skill (`plugin/skills/xl-cli/SKILL.md`) auto-detects the latest release from GitHub API—no version placeholders to maintain. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
 
 ## Code Style
 
@@ -425,6 +429,8 @@ extension (sheet: Sheet)
 ```
 
 **Import order**: Java/javax → Scala stdlib → Cats → Project → Tests
+
+**AWT headless default (render)**: the first `toHtml`/`toSvg` call sets `java.awt.headless=true` unless the embedder set it explicitly — non-headless AWT keeps script JVMs alive after main completes (non-daemon AWT-Shutdown thread). GUI embedders: set `-Djava.awt.headless=false` or initialize your toolkit before rendering. A deliberate, guarded global side effect (see `RenderUtils`).
 
 ## CI/CD
 

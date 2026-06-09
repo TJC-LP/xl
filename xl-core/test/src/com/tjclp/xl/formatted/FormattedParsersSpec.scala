@@ -257,3 +257,60 @@ class FormattedParsersSpec extends FunSuite:
         assertEquals(f.value, CellValue.Number(-1000000.00))
       case Left(err) => fail(s"Should parse: $err")
   }
+
+  // ========== detect: total smart detection (0.11.0) ==========
+
+  test("detect: currency") {
+    assertEquals(
+      FormattedParsers.detect("$1,234.56"),
+      Formatted(CellValue.Number(BigDecimal("1234.56")), NumFmt.Currency)
+    )
+  }
+
+  test("detect: accounting negative") {
+    assertEquals(
+      FormattedParsers.detect("($1,000.00)"),
+      Formatted(CellValue.Number(BigDecimal("-1000.00")), NumFmt.Currency)
+    )
+  }
+
+  test("detect: percent stores fraction") {
+    assertEquals(
+      FormattedParsers.detect("45.5%"),
+      Formatted(CellValue.Number(BigDecimal("0.455")), NumFmt.Percent)
+    )
+  }
+
+  test("detect: ISO date") {
+    FormattedParsers.detect("2025-01-15") match
+      case Formatted(CellValue.DateTime(_), fmt) => assert(fmt != NumFmt.General)
+      case other => fail(s"expected date, got $other")
+  }
+
+  test("detect: plain number, boolean, and text fall through to General") {
+    assertEquals(
+      FormattedParsers.detect("123.45"),
+      Formatted(CellValue.Number(BigDecimal("123.45")), NumFmt.General)
+    )
+    assertEquals(FormattedParsers.detect("TRUE"), Formatted(CellValue.Bool(true), NumFmt.General))
+    assertEquals(
+      FormattedParsers.detect("hello"),
+      Formatted(CellValue.Text("hello"), NumFmt.General)
+    )
+  }
+
+  test("detect: is total — malformed lookalikes degrade to Text, never fail") {
+    assertEquals(
+      FormattedParsers.detect("$ABC"),
+      Formatted(CellValue.Text("$ABC"), NumFmt.General)
+    )
+    assertEquals(
+      FormattedParsers.detect("ABC%"),
+      Formatted(CellValue.Text("ABC%"), NumFmt.General)
+    )
+    assertEquals(
+      FormattedParsers.detect("9999-99-99"),
+      Formatted(CellValue.Text("9999-99-99"), NumFmt.General)
+    )
+    assertEquals(FormattedParsers.detect(""), Formatted(CellValue.Text(""), NumFmt.General))
+  }

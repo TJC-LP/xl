@@ -39,6 +39,13 @@ Update all version references from current SNAPSHOT/version to the new release v
 7. **`examples/README.md`** (~line 144)
    - Update the `com.tjclp::xl:...` reference in prose
 
+8. **`plugin/skills/xl-scripting/SKILL.md` + `plugin/skills/xl-scripting/reference/RECIPES.md`**
+   - Update every `//> using dep com.tjclp::xl:...` line (the recipe headers are intentionally
+     byte-identical, so a single find-replace covers all of them). The release workflow has a
+     gate that **fails the release** if these pins don't match the tag.
+   - After bumping, run `./scripts/verify-skill-snippets.sh --local` — this also catches "new
+     version breaks documented patterns" before tagging.
+
 ### Files to SKIP
 
 - **`plugin/skills/xl-cli/SKILL.md`** - Auto-detects latest release from GitHub API (no version to update)
@@ -51,7 +58,9 @@ After updating all files:
 
 1. Run `./mill __.compile` to verify compilation
 2. Run `./mill __.test` to verify tests pass
-3. Run this to verify no SNAPSHOT refs remain:
+3. Run `./scripts/test-examples.sh` (version drift guard + examples against the local build)
+4. Run `./scripts/verify-skill-snippets.sh --local` (xl-scripting skill snippets compile)
+5. Run this to verify no SNAPSHOT refs remain:
    ```bash
    grep -r "SNAPSHOT" --include="*.scala" --include="*.mill" --include="*.md" . | grep -v RELEASING.md | grep -v ".scala-build" | grep -v "out/"
    ```

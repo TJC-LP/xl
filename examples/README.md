@@ -142,3 +142,13 @@ chmod +x examples/my_example.sc
 ```
 
 The `project.scala` file centralizes dependencies (`com.tjclp::xl:0.10.0`) for all examples.
+
+## Scripting Prelude & Skill
+
+`scripting_tour.sc` is the canonical tour of the one-import scripting prelude
+(`import com.tjclp.xl.scripting.{*, given}`). Self-contained, Maven-pinned recipe scripts
+(bulk transforms, typed extraction, streaming filters, diffs, CSV ingest) live in the
+xl-scripting Claude Code skill: [`plugin/skills/xl-scripting/reference/RECIPES.md`](../plugin/skills/xl-scripting/reference/RECIPES.md).
+
+All examples here are compile-verified against the local build by `scripts/test-examples.sh`
+(CI: the `examples` job).

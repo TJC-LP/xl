@@ -179,19 +179,24 @@ See [docs/reference/cli.md](docs/reference/cli.md) for full command reference.
 
 ## Claude Code Plugin
 
-Install the xl-cli skill in [Claude Code](https://claude.ai/code) for AI-assisted Excel operations:
+Install the xl plugin in [Claude Code](https://claude.ai/code) for AI-assisted Excel operations:
 
 ```
 /plugin marketplace add TJC-LP/xl
 /plugin install xl-marketplace@xl
 ```
 
-The skill provides Claude with comprehensive knowledge of xl CLI commands, enabling natural language Excel manipulation:
+The plugin ships **two skills**:
+
+- **xl-cli** — CLI operations: quick reads, single edits, search, visual exports (PNG/PDF/HTML)
+- **xl-scripting** — type-safe Scala scripts against the library (via scala-cli): bulk transformations, multi-file pipelines, typed extraction, formula models with recalculation, streaming 100k+ row files
+
+Rule of thumb: one-shot operations → CLI; anything with loops, intermediate computation, or many dependent edits → scripting.
 
 - "Read the data from sales.xlsx and show me the first 10 rows"
 - "Add a SUM formula to cell B10 that totals B2:B9"
-- "Style the header row with bold text and a blue background"
-- "Search for all cells containing 'Revenue'"
+- "Apply a 5% price increase to column C in every workbook in this folder"
+- "Build a 3-year projection model, recalculate it, and flag any formula errors"
 
 ## Documentation
 

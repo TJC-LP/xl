@@ -69,6 +69,13 @@ object RenderUtils:
   /** Graphics context for text measurement (lazy, with headless fallback). */
   private lazy val graphics: Option[Graphics2D] =
     try
+      // Default AWT to headless unless the embedder explicitly chose otherwise. Font metrics
+      // don't need a display, and non-headless AWT (notably on macOS) starts a non-daemon
+      // AWT-Shutdown thread that keeps script JVMs alive after main completes — any script
+      // calling toHtml/toSvg would hang at exit. GUI embedders that need a display can set
+      // -Djava.awt.headless=false (or initialize their toolkit before calling xl rendering).
+      if System.getProperty("java.awt.headless") == null then
+        System.setProperty("java.awt.headless", "true")
       val img = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
       Some(img.createGraphics())
     catch case _: Throwable => None // Headless environment (catches UnsatisfiedLinkError too)

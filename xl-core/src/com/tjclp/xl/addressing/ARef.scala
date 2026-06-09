@@ -15,15 +15,15 @@ object ARef:
   import Row.index0 as rowIndex
 
   /** Create cell reference from column and row */
-  inline def apply(col: Column, row: Row): ARef =
+  def apply(col: Column, row: Row): ARef =
     (rowIndex(row).toLong << 32) | (colIndex(col).toLong & 0xffffffffL)
 
   /** Create cell reference from 0-based indices */
-  inline def from0(colIndex: Int, rowIndex: Int): ARef =
+  def from0(colIndex: Int, rowIndex: Int): ARef =
     apply(Column.from0(colIndex), Row.from0(rowIndex))
 
   /** Create cell reference from 1-based indices */
-  inline def from1(colIndex: Int, rowIndex: Int): ARef =
+  def from1(colIndex: Int, rowIndex: Int): ARef =
     apply(Column.from1(colIndex), Row.from1(rowIndex))
 
   /** Parse cell reference from A1 notation */
@@ -46,19 +46,23 @@ object ARef:
 
   extension (ref: ARef)
     /** Extract column */
-    inline def col: Column = Column.from0((ref & 0xffffffffL).toInt)
+    def col: Column = Column.from0((ref & 0xffffffffL).toInt)
 
     /** Extract row */
-    inline def row: Row = Row.from0((ref >> 32).toInt)
+    def row: Row = Row.from0((ref >> 32).toInt)
 
     /** Convert to A1 notation */
-    inline def toA1: String =
+    def toA1: String =
+      // NOTE: every member here (and in Column/Row/SheetName/style units) that touches the
+      // opaque representation must stay NON-inline: inline bodies fail to re-elaborate at call
+      // sites outside this package, where the representation is hidden (issue #252). Do not
+      // "optimize" these back to `inline` — the JIT/AOT inlines trivial static methods anyway.
       import Column.toLetter
       import Row.index1
       s"${toLetter(ref.col)}${index1(ref.row)}"
 
     /** Shift reference by column and row offsets */
-    inline def shift(colOffset: Int, rowOffset: Int): ARef =
+    def shift(colOffset: Int, rowOffset: Int): ARef =
       ARef(ref.col + colOffset, ref.row + rowOffset)
 
 end ARef

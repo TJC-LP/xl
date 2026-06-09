@@ -9,7 +9,7 @@ SHAREDIR ?= $(PREFIX)/share/xl
 JAR_PATH = out/xl-cli/assembly.dest/out.jar
 NATIVE_PATH = out/xl-cli/nativeImage.dest/native-executable
 
-.PHONY: build build-native install install-jar uninstall clean help package-skill package-dist
+.PHONY: build build-native install install-jar uninstall clean help package-skill package-dist publish-local examples
 
 help:
 	@echo "XL CLI Makefile"
@@ -134,3 +134,11 @@ package-dist: build
 	@echo ""
 	@echo "Install:"
 	@echo "  tar xzf xl-cli.tar.gz && cd xl-dist && ./install.sh"
+
+# Publish all library modules to ~/.ivy2/local for scala-cli script development
+publish-local:
+	./mill __.publishLocal
+
+# Compile-verify all examples/*.sc against the local build and run the curated subset
+examples:
+	./scripts/test-examples.sh

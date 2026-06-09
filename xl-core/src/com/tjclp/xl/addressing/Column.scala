@@ -12,10 +12,10 @@ object Column:
   val MaxIndex0: Int = 16383
 
   /** Create a Column from 0-based index (0 = A, 1 = B, ...) */
-  inline def from0(index: Int): Column = index
+  def from0(index: Int): Column = index
 
   /** Create a Column from 1-based index (1 = A, 2 = B, ...) */
-  inline def from1(index: Int): Column = index - 1
+  def from1(index: Int): Column = index - 1
 
   /** Create a Column from Excel letter notation (A, B, AA, etc.) */
   def fromLetter(input: String): Either[String, Column] =
@@ -30,10 +30,10 @@ object Column:
 
   extension (col: Column)
     /** Get 0-based index (0 = A, 1 = B, ...) */
-    inline def index0: Int = col
+    def index0: Int = col
 
     /** Get 1-based index (1 = A, 2 = B, ...) */
-    inline def index1: Int = col + 1
+    def index1: Int = col + 1
 
     /** Convert to Excel letter notation (A, B, AA, etc.) */
     def toLetter: String =
@@ -43,9 +43,9 @@ object Column:
       loop(col, "")
 
     /** Shift column by offset */
-    inline def +(offset: Int): Column = col + offset
+    def +(offset: Int): Column = col + offset
 
     /** Shift column by negative offset */
-    inline def -(offset: Int): Column = col - offset
+    def -(offset: Int): Column = col - offset
 
 end Column

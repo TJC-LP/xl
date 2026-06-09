@@ -195,6 +195,38 @@ final case class Workbook(
   transparent inline def update(inline name: String, f: Sheet => Sheet): XLResult[Workbook] =
     ${ com.tjclp.xl.macros.WorkbookMacros.updateImpl('{ this }, 'name, 'f) }
 
+  /**
+   * Update the named sheet, or create it by applying f to a fresh empty sheet when absent.
+   *
+   * The total counterpart of `update`, parallel to `put`'s add-or-replace semantics: totality comes
+   * from create-on-missing, never from silently doing nothing.
+   *
+   * Example:
+   * {{{
+   * wb.upsert(SheetName.unsafe("Summary"), _.put(ref"A1" -> "Total"))  // creates Summary if absent
+   * }}}
+   */
+  def upsert(name: SheetName, f: Sheet => Sheet): Workbook =
+    sheets.indexWhere(_.name == name) match
+      case -1 => put(f(Sheet(name)))
+      case idx =>
+        val updatedContext = sourceContext.map(_.markSheetModified(idx))
+        copy(sheets = sheets.updated(idx, f(sheets(idx))), sourceContext = updatedContext)
+
+  /**
+   * Upsert by name (string variant).
+   *
+   * When called with a string literal, the name format is validated at compile time and returns
+   * Workbook directly (the operation itself is total). Runtime strings return XLResult[Workbook]
+   * because the name format is runtime-dependent.
+   */
+  @annotation.targetName("upsertByString")
+  transparent inline def upsert(
+    inline name: String,
+    f: Sheet => Sheet
+  ): Workbook | XLResult[Workbook] =
+    ${ com.tjclp.xl.macros.WorkbookMacros.upsertImpl('{ this }, 'name, 'f) }
+
   /** Update sheet by index while tracking modification state. */
   def updateAt(idx: Int, f: Sheet => Sheet): XLResult[Workbook] =
     if idx < 0 || idx >= sheets.size then

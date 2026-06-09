@@ -18,8 +18,7 @@
  * Run with: scala-cli examples/data_validation.sc
  */
 
-import com.tjclp.xl.{*, given}
-import com.tjclp.xl.unsafe.*
+import com.tjclp.xl.scripting.{*, given} // One-import scripting prelude (core + IO + evaluator + unsafe)
 // SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 
 // ============================================================================

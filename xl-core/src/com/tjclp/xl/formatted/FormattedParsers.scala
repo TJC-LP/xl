@@ -149,3 +149,36 @@ object FormattedParsers:
       }.toEither.left.map { err =>
         XLError.AccountingFormatError(s, err.getMessage)
       }
+
+  /**
+   * Total smart detection: infer the value type and number format from a raw string.
+   *
+   * Detection order — currency ($1,234.56 / accounting ($1,234.56)) → percent (45.5%) → ISO date
+   * (2025-01-15) → number → boolean → text. Never fails: anything unrecognized is Text with
+   * NumFmt.General. Mirrors the CLI's batch `put` smart detection (the CLI delegates here).
+   *
+   * {{{
+   * FormattedParsers.detect("$1,234.56")  // Formatted(Number(1234.56), Currency)
+   * FormattedParsers.detect("45.5%")      // Formatted(Number(0.455), Percent)
+   * FormattedParsers.detect("2025-01-15") // Formatted(DateTime(...), Date)
+   * FormattedParsers.detect("hello")      // Formatted(Text("hello"), General)
+   * }}}
+   */
+  def detect(s: String): Formatted =
+    val trimmed = s.trim
+    if trimmed.startsWith("$") || (trimmed.startsWith("(") && trimmed.contains("$")) then
+      parseMoney(trimmed)
+        .orElse(parseAccounting(trimmed))
+        .getOrElse(Formatted(CellValue.Text(s), NumFmt.General))
+    else if trimmed.endsWith("%") then
+      parsePercent(trimmed).getOrElse(Formatted(CellValue.Text(s), NumFmt.General))
+    else if trimmed.matches("""\d{4}-\d{2}-\d{2}""") then
+      parseDate(trimmed).getOrElse(Formatted(CellValue.Text(s), NumFmt.General))
+    else
+      Try(BigDecimal(trimmed)).toOption match
+        case Some(n) => Formatted(CellValue.Number(n), NumFmt.General)
+        case None =>
+          trimmed.toLowerCase match
+            case "true" => Formatted(CellValue.Bool(true), NumFmt.General)
+            case "false" => Formatted(CellValue.Bool(false), NumFmt.General)
+            case _ => Formatted(CellValue.Text(s), NumFmt.General)

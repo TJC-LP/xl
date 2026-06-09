@@ -8,7 +8,7 @@
     {
       "name": "xl",
       "source": "./plugin",
-      "description": "LLM-friendly Excel CLI for reading, writing, styling, and analyzing spreadsheets"
+      "description": "LLM-friendly Excel tooling: CLI operations (xl-cli) and type-safe Scala scripting (xl-scripting)"
     }
   ]
 }
