@@ -300,6 +300,17 @@ object RenderUtils:
       .replace("\r", "\\D ")
       .replace("\u0000", "")
 
+  /**
+   * Format a font family name for an SVG presentation attribute (`font-family="..."`).
+   *
+   * SVG presentation attributes accept multi-word family names unquoted; CSS-style single quotes
+   * would become part of the family name, so fontconfig-based rasterizers (rsvg-convert, resvg)
+   * fail to match the family and silently substitute sans-serif (GH-255). Only XML escaping is
+   * applied. Quotes are still required in CSS contexts (HTML `style=""` attributes and `<style>`
+   * blocks) — use `escapeCss` with explicit quotes there.
+   */
+  def svgFontFamily(name: String): String = escapeXml(name)
+
   // ========== Color Resolution ==========
 
   /** Convert Color to CSS/SVG-compatible RGB hex using theme for resolution. Returns #RRGGBB. */

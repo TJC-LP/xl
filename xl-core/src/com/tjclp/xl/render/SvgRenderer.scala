@@ -489,18 +489,21 @@ object SvgRenderer:
         // Font style
         if style.font.italic then attrs += """font-style="italic""""
 
+        // Underline (SVG uses text-decoration, GH-256)
+        if style.font.underline then attrs += """text-decoration="underline""""
+
         // ALWAYS include font size (don't rely on CSS defaults) - convert pt to px (pt * 4/3)
         val fontSizePx = (style.font.sizePt * 4.0 / 3.0).toInt
         attrs += s"""font-size="${fontSizePx}px""""
 
-        // ALWAYS include font family (even if default) - quote font names for SVG
-        attrs += s"""font-family="'${escapeCss(style.font.name)}'""""
+        // ALWAYS include font family (even if default) - unquoted in SVG attributes (GH-255)
+        attrs += s"""font-family="${svgFontFamily(style.font.name)}""""
 
         " " + attrs.mkString(" ")
       }
       .getOrElse {
         // No style - use explicit defaults for exact fidelity
-        """ fill="#000000" font-size="15px" font-family="'Calibri'""""
+        """ fill="#000000" font-size="15px" font-family="Calibri""""
       }
 
   /**
@@ -535,8 +538,8 @@ object SvgRenderer:
         val fontSizePx = (f.sizePt * 4.0 / 3.0).toInt
         attrs += s"""font-size="${fontSizePx}px""""
 
-        // Font family - always include for exact fidelity - quote font names for SVG
-        attrs += s"""font-family="'${escapeCss(f.name)}'""""
+        // Font family - always include for exact fidelity - unquoted in SVG attributes (GH-255)
+        attrs += s"""font-family="${svgFontFamily(f.name)}""""
 
         if attrs.nonEmpty then " " + attrs.mkString(" ") else ""
 
