@@ -117,7 +117,7 @@ object FormulaParser:
    * @param pos
    *   Current position (0-based offset)
    */
-  private case class ParserState(input: String, pos: Int):
+  private case class ParserState(input: String, pos: Int, depth: Int = 0):
     def advance(n: Int = 1): ParserState = copy(pos = pos + n)
     def currentChar: Option[Char] =
       if pos < input.length then Some(input(pos)) else None
@@ -129,6 +129,21 @@ object FormulaParser:
    * Parse result - either error or (expression, remaining state).
    */
   private type ParseResult[A] = Either[ParseError, (A, ParserState)]
+
+  /**
+   * Maximum formula nesting depth — a stack-overflow guard (GH-56). Well above Excel's 64-level
+   * nesting limit and any realistic formula, but far below the depth (~2000) that overflows the
+   * evaluator/parser stack. Capping the parser keeps the AST shallow enough that evaluation is also
+   * safe, so a single guard covers both the parser and the evaluator.
+   */
+  private val MaxNestingDepth = 256
+
+  /**
+   * Guarded descent into a nested sub-expression: deepen the state, or fail if already too deep.
+   */
+  private def descend(s: ParserState): Either[ParseError, ParserState] =
+    if s.depth >= MaxNestingDepth then Left(ParseError.NestingTooDeep(s.depth, MaxNestingDepth))
+    else Right(s.copy(depth = s.depth + 1))
 
   /**
    * Skip whitespace characters.
@@ -145,7 +160,13 @@ object FormulaParser:
    * Parse top-level expression (handles all operator precedence).
    */
   private def parseExpr(state: ParserState): ParseResult[TExpr[?]] =
-    parseLogicalOr(skipWhitespace(state))
+    // parseExpr is the re-entry point for every nesting boundary (parens + function args), so a
+    // single depth guard here bounds both. Restore the caller's depth on the way out so siblings
+    // (e.g. `(1)+(2)+...`) don't accumulate.
+    val s0 = skipWhitespace(state)
+    descend(s0).flatMap { sd =>
+      parseLogicalOr(sd).map { case (expr, s1) => (expr, s1.copy(depth = s0.depth)) }
+    }
 
   /**
    * Parse logical OR (lowest precedence).
@@ -156,14 +177,16 @@ object FormulaParser:
       val s2 = skipWhitespace(s1)
       if s2.remaining.toUpperCase.startsWith("OR") then
         val s3 = skipWhitespace(s2.advance(2))
-        parseLogicalOr(s3).map { case (right, s4) =>
-          (
-            TExpr.Call(
-              FunctionSpecs.or,
-              List(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]])
-            ),
-            s4
-          )
+        descend(s3).flatMap { sd =>
+          parseLogicalOr(sd).map { case (right, s4) =>
+            (
+              TExpr.Call(
+                FunctionSpecs.or,
+                List(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]])
+              ),
+              s4.copy(depth = s3.depth)
+            )
+          }
         }
       else Right((left, s2))
     }
@@ -177,14 +200,16 @@ object FormulaParser:
       val s2 = skipWhitespace(s1)
       if s2.remaining.toUpperCase.startsWith("AND") then
         val s3 = skipWhitespace(s2.advance(3))
-        parseLogicalAnd(s3).map { case (right, s4) =>
-          (
-            TExpr.Call(
-              FunctionSpecs.and,
-              List(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]])
-            ),
-            s4
-          )
+        descend(s3).flatMap { sd =>
+          parseLogicalAnd(sd).map { case (right, s4) =>
+            (
+              TExpr.Call(
+                FunctionSpecs.and,
+                List(left.asInstanceOf[TExpr[Boolean]], right.asInstanceOf[TExpr[Boolean]])
+              ),
+              s4.copy(depth = s3.depth)
+            )
+          }
         }
       else Right((left, s2))
     }
@@ -199,72 +224,84 @@ object FormulaParser:
       s2.currentChar match
         case Some('=') =>
           val s3 = skipWhitespace(s2.advance())
-          parseComparison(s3).map { case (right, s4) =>
-            // GH-233: resolve PolyRef operands polymorphically (like the inequality
-            // branches use asNumericExpr) so =A1=B1 / =IF(A1=B1,…) evaluate instead of
-            // erroring with "Unresolved PolyRef". asResolvedValueExpr preserves
-            // text/number/bool/date equality (unlike numeric-only asNumericExpr).
-            (
-              TExpr.Eq(TExpr.asResolvedValueExpr(left), TExpr.asResolvedValueExpr(right)),
-              s4
-            )
+          descend(s3).flatMap { sd =>
+            parseComparison(sd).map { case (right, s4) =>
+              // GH-233: resolve PolyRef operands polymorphically (like the inequality
+              // branches use asNumericExpr) so =A1=B1 / =IF(A1=B1,…) evaluate instead of
+              // erroring with "Unresolved PolyRef". asResolvedValueExpr preserves
+              // text/number/bool/date equality (unlike numeric-only asNumericExpr).
+              (
+                TExpr.Eq(TExpr.asResolvedValueExpr(left), TExpr.asResolvedValueExpr(right)),
+                s4.copy(depth = s3.depth)
+              )
+            }
           }
         case Some('<') =>
           s2.advance().currentChar match
             case Some('>') => // <>
               val s3 = skipWhitespace(s2.advance(2))
-              parseComparison(s3).map { case (right, s4) =>
-                // GH-233: resolve PolyRef operands so =A1<>B1 evaluates (see Eq above).
-                (
-                  TExpr.Neq(TExpr.asResolvedValueExpr(left), TExpr.asResolvedValueExpr(right)),
-                  s4
-                )
+              descend(s3).flatMap { sd =>
+                parseComparison(sd).map { case (right, s4) =>
+                  // GH-233: resolve PolyRef operands so =A1<>B1 evaluates (see Eq above).
+                  (
+                    TExpr.Neq(TExpr.asResolvedValueExpr(left), TExpr.asResolvedValueExpr(right)),
+                    s4.copy(depth = s3.depth)
+                  )
+                }
               }
             case Some('=') => // <=
               val s3 = skipWhitespace(s2.advance(2))
-              parseComparison(s3).map { case (right, s4) =>
-                (
-                  TExpr.Lte(
-                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
-                    TExpr.asNumericExpr(right)
-                  ),
-                  s4
-                )
+              descend(s3).flatMap { sd =>
+                parseComparison(sd).map { case (right, s4) =>
+                  (
+                    TExpr.Lte(
+                      TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                      TExpr.asNumericExpr(right)
+                    ),
+                    s4.copy(depth = s3.depth)
+                  )
+                }
               }
             case _ => // <
               val s3 = skipWhitespace(s2.advance())
-              parseComparison(s3).map { case (right, s4) =>
-                (
-                  TExpr.Lt(
-                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
-                    TExpr.asNumericExpr(right)
-                  ),
-                  s4
-                )
+              descend(s3).flatMap { sd =>
+                parseComparison(sd).map { case (right, s4) =>
+                  (
+                    TExpr.Lt(
+                      TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                      TExpr.asNumericExpr(right)
+                    ),
+                    s4.copy(depth = s3.depth)
+                  )
+                }
               }
         case Some('>') =>
           s2.advance().currentChar match
             case Some('=') => // >=
               val s3 = skipWhitespace(s2.advance(2))
-              parseComparison(s3).map { case (right, s4) =>
-                (
-                  TExpr.Gte(
-                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
-                    TExpr.asNumericExpr(right)
-                  ),
-                  s4
-                )
+              descend(s3).flatMap { sd =>
+                parseComparison(sd).map { case (right, s4) =>
+                  (
+                    TExpr.Gte(
+                      TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                      TExpr.asNumericExpr(right)
+                    ),
+                    s4.copy(depth = s3.depth)
+                  )
+                }
               }
             case _ => // >
               val s3 = skipWhitespace(s2.advance())
-              parseComparison(s3).map { case (right, s4) =>
-                (
-                  TExpr.Gt(
-                    TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
-                    TExpr.asNumericExpr(right)
-                  ),
-                  s4
-                )
+              descend(s3).flatMap { sd =>
+                parseComparison(sd).map { case (right, s4) =>
+                  (
+                    TExpr.Gt(
+                      TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
+                      TExpr.asNumericExpr(right)
+                    ),
+                    s4.copy(depth = s3.depth)
+                  )
+                }
               }
         case _ => Right((left, s2))
     }
@@ -281,14 +318,16 @@ object FormulaParser:
       s2.currentChar match
         case Some('&') =>
           val s3 = skipWhitespace(s2.advance())
-          parseConcatenation(s3).map { case (right, s4) =>
-            (
-              TExpr.Concat(
-                TExpr.asStringExpr(left),
-                TExpr.asStringExpr(right)
-              ),
-              s4
-            )
+          descend(s3).flatMap { sd =>
+            parseConcatenation(sd).map { case (right, s4) =>
+              (
+                TExpr.Concat(
+                  TExpr.asStringExpr(left),
+                  TExpr.asStringExpr(right)
+                ),
+                s4.copy(depth = s3.depth)
+              )
+            }
           }
         case _ => Right((left, s2))
     }
@@ -304,29 +343,38 @@ object FormulaParser:
         val s2 = skipWhitespace(s)
         s2.currentChar match
           case Some('+') =>
-            val s3 = skipWhitespace(s2.advance())
-            parseMulDiv(s3) match
-              case Right((right, s4)) =>
-                loop(
-                  TExpr.Add(
-                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                    TExpr.asNumericOrRangeExpr(right)
-                  ),
-                  s4
-                )
+            // GH-56: each chained term deepens the left-nested AST, so count it against the depth
+            // budget — otherwise a flat `1+1+1+…` overflows the evaluator (the parser loops, but
+            // eval recurses the spine).
+            descend(s2) match
               case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parseMulDiv(s3) match
+                  case Right((right, s4)) =>
+                    loop(
+                      TExpr.Add(
+                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                        TExpr.asNumericOrRangeExpr(right)
+                      ),
+                      s4
+                    )
+                  case Left(err) => Left(err)
           case Some('-') if !s2.remaining.startsWith("->") =>
-            val s3 = skipWhitespace(s2.advance())
-            parseMulDiv(s3) match
-              case Right((right, s4)) =>
-                loop(
-                  TExpr.Sub(
-                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                    TExpr.asNumericOrRangeExpr(right)
-                  ),
-                  s4
-                )
+            descend(s2) match
               case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parseMulDiv(s3) match
+                  case Right((right, s4)) =>
+                    loop(
+                      TExpr.Sub(
+                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                        TExpr.asNumericOrRangeExpr(right)
+                      ),
+                      s4
+                    )
+                  case Left(err) => Left(err)
           case _ => Right((acc, s2))
 
       loop(left, s1)
@@ -343,29 +391,36 @@ object FormulaParser:
         val s2 = skipWhitespace(s)
         s2.currentChar match
           case Some('*') =>
-            val s3 = skipWhitespace(s2.advance())
-            parseUnary(s3) match
-              case Right((right, s4)) =>
-                loop(
-                  TExpr.Mul(
-                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                    TExpr.asNumericOrRangeExpr(right)
-                  ),
-                  s4
-                )
+            // GH-56: count each chained factor against the depth budget (see parseAddSub).
+            descend(s2) match
               case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parseUnary(s3) match
+                  case Right((right, s4)) =>
+                    loop(
+                      TExpr.Mul(
+                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                        TExpr.asNumericOrRangeExpr(right)
+                      ),
+                      s4
+                    )
+                  case Left(err) => Left(err)
           case Some('/') =>
-            val s3 = skipWhitespace(s2.advance())
-            parseUnary(s3) match
-              case Right((right, s4)) =>
-                loop(
-                  TExpr.Div(
-                    TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
-                    TExpr.asNumericOrRangeExpr(right)
-                  ),
-                  s4
-                )
+            descend(s2) match
               case Left(err) => Left(err)
+              case Right(sd) =>
+                val s3 = skipWhitespace(sd.advance())
+                parseUnary(s3) match
+                  case Right((right, s4)) =>
+                    loop(
+                      TExpr.Div(
+                        TExpr.asNumericOrRangeExpr(acc), // Preserve RangeRef for array arithmetic
+                        TExpr.asNumericOrRangeExpr(right)
+                      ),
+                      s4
+                    )
+                  case Left(err) => Left(err)
           case _ => Right((acc, s2))
 
       loop(left, s1)
@@ -382,17 +437,19 @@ object FormulaParser:
       val s2 = skipWhitespace(s1)
       s2.currentChar match
         case Some('^') =>
-          val s3 = skipWhitespace(s2.advance())
-          // Allow unary minus in the exponent (2^-1 = 0.5)
-          parsePowExponent(s3).map {
-            case (right, s4) => // Recursive call for right-associativity
-              (
-                TExpr.Pow(
-                  TExpr.asNumericExpr(left),
-                  TExpr.asNumericExpr(right)
-                ),
-                s4
-              )
+          descend(s2).flatMap { sd =>
+            val s3 = skipWhitespace(sd.advance())
+            // Allow unary minus in the exponent (2^-1 = 0.5)
+            parsePowExponent(s3).map {
+              case (right, s4) => // Recursive call for right-associativity
+                (
+                  TExpr.Pow(
+                    TExpr.asNumericExpr(left),
+                    TExpr.asNumericExpr(right)
+                  ),
+                  s4.copy(depth = s2.depth)
+                )
+            }
           }
         case _ => Right((left, s2))
     }
@@ -405,9 +462,14 @@ object FormulaParser:
     val s = skipWhitespace(state)
     s.currentChar match
       case Some('-') =>
-        val s2 = skipWhitespace(s.advance())
-        parsePowExponent(s2).map { case (expr, s3) =>
-          (TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), s3)
+        descend(s).flatMap { sd =>
+          val s2 = skipWhitespace(sd.advance())
+          parsePowExponent(s2).map { case (expr, s3) =>
+            (
+              TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)),
+              s3.copy(depth = s.depth)
+            )
+          }
         }
       case _ => parsePow(s)
 
@@ -421,18 +483,22 @@ object FormulaParser:
     val s = skipWhitespace(state)
     s.currentChar match
       case Some('-') =>
-        val s2 = skipWhitespace(s.advance())
-        parseUnary(s2).map { case (expr, s3) =>
-          // Unary minus: 0 - expr
-          (
-            TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), // Convert PolyRef
-            s3
-          )
+        descend(s).flatMap { sd =>
+          val s2 = skipWhitespace(sd.advance())
+          parseUnary(s2).map { case (expr, s3) =>
+            // Unary minus: 0 - expr
+            (
+              TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), // Convert PolyRef
+              s3.copy(depth = s.depth)
+            )
+          }
         }
       case Some('N') | Some('n') if s.remaining.toUpperCase.startsWith("NOT") =>
-        val s2 = skipWhitespace(s.advance(3))
-        parseUnary(s2).map { case (expr, s3) =>
-          (TExpr.Call(FunctionSpecs.not, TExpr.asBooleanExpr(expr)), s3) // Convert PolyRef
+        descend(s).flatMap { sd =>
+          val s2 = skipWhitespace(sd.advance(3))
+          parseUnary(s2).map { case (expr, s3) =>
+            (TExpr.Call(FunctionSpecs.not, TExpr.asBooleanExpr(expr)), s3.copy(depth = s.depth))
+          }
         }
       case _ => parsePow(s)
 

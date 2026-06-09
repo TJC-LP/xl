@@ -87,3 +87,70 @@ class StructuralCommandSpec extends CatsEffectSuite:
       result <- excel.read(out)
     yield assertEquals(result.sheets.head(ref"A2").value, CellValue.Formula("=D1", None)) // C1 -> D1
   }
+
+  test("delete-cols: range form C:E removes the whole span (GH-129)") {
+    val wb = Workbook(
+      Vector(
+        Sheet("S")
+          .put(ref"A1", CellValue.Number(1))
+          .put(ref"B1", CellValue.Number(2))
+          .put(ref"C1", CellValue.Number(3))
+          .put(ref"D1", CellValue.Number(4))
+          .put(ref"E1", CellValue.Number(5))
+          .put(ref"F1", CellValue.Number(6))
+      )
+    )
+    val in = tmp("in4")
+    val out = tmp("out4")
+    for
+      _ <- excel.write(wb, in)
+      read <- excel.read(in)
+      // count arg is ignored when a range is given; C:E deletes 3 columns
+      _ <- WriteCommands.deleteColumns(read, read.sheets.headOption, "C:E", 1, out, config)
+      result <- excel.read(out)
+    yield
+      val s = result.sheets.head
+      assertEquals(s(ref"A1").value, CellValue.Number(1)) // unchanged
+      assertEquals(s(ref"B1").value, CellValue.Number(2)) // unchanged
+      assertEquals(s(ref"C1").value, CellValue.Number(6)) // F shifted left into C
+      assert(!s.contains(ref"D1")) // only 3 columns remain
+  }
+
+  test("delete-cols: reversed range E:C normalizes to the same span") {
+    val wb = Workbook(
+      Vector(
+        Sheet("S")
+          .put(ref"A1", CellValue.Number(1))
+          .put(ref"B1", CellValue.Number(2))
+          .put(ref"C1", CellValue.Number(3))
+          .put(ref"D1", CellValue.Number(4))
+          .put(ref"E1", CellValue.Number(5))
+          .put(ref"F1", CellValue.Number(6))
+      )
+    )
+    val in = tmp("in5")
+    val out = tmp("out5")
+    for
+      _ <- excel.write(wb, in)
+      read <- excel.read(in)
+      _ <- WriteCommands.deleteColumns(read, read.sheets.headOption, "E:C", 1, out, config)
+      result <- excel.read(out)
+    yield
+      val s = result.sheets.head
+      assertEquals(s(ref"C1").value, CellValue.Number(6)) // identical to C:E
+      assert(!s.contains(ref"D1"))
+  }
+
+  test("delete-cols: malformed ranges are rejected (total Left, never crash)") {
+    val wb = Workbook(Vector(Sheet("S").put(ref"A1", CellValue.Number(1))))
+    val in = tmp("in6")
+    val out = tmp("out6")
+    for
+      _ <- excel.write(wb, in)
+      read <- excel.read(in)
+      r1 <- WriteCommands.deleteColumns(read, read.sheets.headOption, "C:E:F", 1, out, config).attempt
+      r2 <- WriteCommands.deleteColumns(read, read.sheets.headOption, "C:", 1, out, config).attempt
+    yield
+      assert(r1.isLeft) // three-part range
+      assert(r2.isLeft) // trailing colon (empty endpoint)
+  }

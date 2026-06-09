@@ -4,15 +4,13 @@
 
 **Last Updated**: 2026-06-07
 
-> ⚠️ **This file is mid-rewrite (tracked as the 0.10.0 doc-truth pass).** For current release work see
-> **[v0.10.0-execution.md](v0.10.0-execution.md)** (live tracker) and **[v0.10.0-triage.md](v0.10.0-triage.md)** (rationale + per-issue verdicts).
-> Sections below are stale pending that pass.
+> **Live trackers**: [v0.10.0-execution.md](v0.10.0-execution.md) (release tracker) and [v0.10.0-triage.md](v0.10.0-triage.md) (rationale + per-issue verdicts).
 
 ---
 
 ## TL;DR
 
-**Current Status**: Production-ready with **103 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER), **structural editing** (insert/delete rows & columns with formula rewriting), named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 1100+ tests passing. **0.10.0 "Trust & Author"** is the active release — see [v0.10.0-execution.md](v0.10.0-execution.md).
+**Current Status**: Production-ready with **104 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 1100+ tests passing. **0.10.0 "Trust & Author"** is the active release — see [v0.10.0-execution.md](v0.10.0-execution.md).
 
 **Current Version**: 0.9.7 → **0.10.0 "Trust & Author"** in progress
 
@@ -20,54 +18,44 @@
 
 ## Release Roadmap
 
-### v0.6.1 (Current)
+### v0.10.0 "Trust & Author" (Current)
 
-Bug fixes and agent tooling improvements:
-
-| Feature | Status |
-|---------|--------|
-| `rasterizers` - List available backends | ✅ Done |
-| ImageMagick delegate detection | ✅ Done |
-| CSV `--no-header` type inference fix | ✅ Done |
-
-### v0.6.0
-
-CLI expansion with 7 new commands and evaluator fixes:
+Build version 0.9.7 → **0.10.0 in progress**. Focus: trust (surgical-edit fidelity) and authoring (write the parts XL previously only read).
 
 | Feature | Status |
 |---------|--------|
-| `csv` - CSV import | ✅ Done |
-| `comment` - Cell comments | ✅ Done |
-| `clear` - Clear ranges | ✅ Done |
-| `fill` - Excel Ctrl+D/R | ✅ Done |
-| `sort` - Row sorting | ✅ Done |
-| Batch `put` smart mode | ✅ Done |
-| `--auto-fit` flag | ✅ Done |
-| Cross-sheet formula fix | ✅ Done |
-| Eager recalculation fix | ✅ Done |
+| Named-range authoring (`DefinedName` serialization + CLI `name add/rm`) | ✅ Done |
+| Hyperlink authoring (`Cell.hyperlink` serialization) | ✅ Done |
+| Structural editing — insert/delete rows & columns with formula rewriting (cross-sheet, `#REF!` generation) | ✅ Done |
+| Formula breadth — registry 88 → **104 functions** (IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER) | ✅ Done |
+| Trust fixes C1–C5 — preserve inline worksheet elements (dataValidations, sheetProtection, autoFilter) through edits | ✅ Done |
+| Theme color resolution (`ThemePalette.resolve`, `toResolvedArgb`/`toResolvedHex`) | ✅ Done |
+| Configurable file size limits (CLI `--max-size`, `0` = unlimited) | ✅ Done |
 
-### v0.7.0 (Security Polish)
+### Shipped in prior releases
 
-| Feature | Status |
-|---------|--------|
-| File Size Limits (enforcement) | Planned |
-| XLSM Macro Handling | Planned |
-
-### v0.8.0+ (Features)
+CLI expansion and evaluator/tooling fixes (v0.6.x):
 
 | Feature | Status |
 |---------|--------|
+| `csv` import, `comment`, `clear`, `fill`, `sort` commands | ✅ Done |
+| Batch `put` smart mode, `--auto-fit` flag | ✅ Done |
+| `rasterizers` command + multi-backend rasterization (`--rasterizer <name>`) | ✅ Done |
+| Cross-sheet formula fix, eager-recalculation fix | ✅ Done |
+
+### Planned / Future
+
+Authoring and rendering features not yet shipped:
+
+| Feature | Status |
+|---------|--------|
+| XLSM macro preservation policy + tests (macros never executed) | Planned |
+| Data-validation / conditional-formatting **authoring** (currently preserved through edits, no write API) | Planned |
 | Drawing Layer (Images, Shapes) | Planned |
 | Chart Model | Planned |
-| Two-phase streaming (SST + styles) | Planned |
-
-### Future
-
-| Feature | Status |
-|---------|--------|
-| Merged Cells in Streaming Write | Backlog |
+| Two-phase streaming (SST + styles in row-stream write path) | Planned |
+| Merged Cells in row-stream Write | Backlog |
 | Query API | Backlog |
-| Named Ranges | Backlog |
 | Pivot Tables | Backlog |
 
 ---
@@ -77,11 +65,12 @@ CLI expansion with 7 new commands and evaluator fixes:
 All completed phases are documented in git history. Key milestones:
 
 - **P0-P8**: Foundation, OOXML, streaming, codecs, macros
-- **WI-07/08/09**: Formula parser, evaluator, 88 functions
-- **TJC-1055** (closes GH-116): Text functions — TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT (88 functions total)
+- **WI-07/08/09**: Formula parser, evaluator (now **104 functions** after the 0.10.0 breadth pass)
+- **TJC-1055** (closes GH-116): Text functions — TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT
 - **WI-10**: Excel table support
 - **WI-17**: SAX streaming write (36% faster than POI)
 - **WI-19**: Row/column property serialization
+- **0.10.0 "Trust & Author"**: named-range & hyperlink authoring, structural editing, theme resolution, function breadth (88 → 104), surgical-edit trust fixes C1–C5
 
 For historical details: `git log --oneline docs/plan/`
 

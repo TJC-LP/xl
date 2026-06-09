@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
 **Last Updated**: 2026-06-07
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**103 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**104 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
 
 > **Note (0.10.0):** Sections below predate the 0.10.0 "Trust & Author" release and may understate current capabilities. Hyperlinks (#9) and named ranges (#15) are now **supported**; inline worksheet elements like data validation (#11) are now **preserved through edits** (authoring still pending). See [plan/v0.10.0-execution.md](plan/v0.10.0-execution.md).
 
@@ -117,7 +117,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 #### 6. Formula System ✅ **PRODUCTION READY**
 **Status**: Complete (WI-07, WI-08, WI-09a-h + TJC-351 cross-sheet formulas)
-**Features**: Parser, evaluator, **88 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, INDEX, MATCH, XIRR, XNPV), dependency graph, cycle detection, cross-sheet references
+**Features**: Parser, evaluator, **104 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, XIRR, XNPV, and dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER), dependency graph, cycle detection, cross-sheet references
 **Plan**: [Formula System](plan/formula-system.md)
 **Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions + Cross-Sheet Formulas
 
@@ -153,7 +153,7 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 **Capabilities**:
 - ✅ **Parsing** (WI-07): Typed GADT AST (TExpr), FormulaParser, FormulaPrinter, round-trip laws (57 tests)
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics (58 tests)
-- ✅ **81 Built-in Functions** (WI-09a-h - 174 tests):
+- ✅ **104 Built-in Functions** (the category breakdown below is representative and predates the 0.10.0 additions — IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, and dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER):
   - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
   - **Conditional** (7): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
   - **Logical** (9): IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
@@ -183,35 +183,25 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - ⏳ Array formulas - Future work
 - ⏳ Structured references (Table[@Column]) - Requires WI-10 integration
 - ⏳ Quoted sheet names in formulas (`='Q1 Report'!A1`) - Parser support pending
+- 🛡️ **Formula depth cap (GH-56 totality guard):** nesting + operator-chain depth is capped at 256 levels so pathological input returns `ParseError.NestingTooDeep` instead of `StackOverflowError`. Excel allows 64 nesting levels and no operator-chain limit (within 8192 chars); xl additionally counts each operator in a *flat, paren-less* chain, so a chain of 256+ consecutive operators (e.g. `=A1+A2+…` ×256) is rejected — use `SUM`/ranges, or parenthesize to reset the budget. No real-world formula approaches this.
 
 **No workarounds needed** - formula system is complete and production-ready!
 
 ---
 
-#### 7. Theme Colors Not Resolved
-**Status**: Color.Theme exists but always returns 0
-**Impact**: Theme-based colors don't work
+#### 7. Theme Colors ✅ **RESOLVED**
+**Status**: Implemented — theme color resolution works via `ThemePalette`
 **Plan**: [P5 - Styles](plan/05-styles-and-themes.md#theme-resolution)
-**Phase**: P5 (Deferred)
+**Phase**: P5 (Complete)
 
 **Current State**:
 ```scala
-Color.Theme(ThemeSlot.Accent1, tint = 0.5)
-// toArgb returns: 0x00000000 (black, wrong!)
-// Should resolve: Theme palette → apply tint → ARGB
+val theme = ThemePalette.default // or a parsed palette
+Color.Theme(ThemeSlot.Accent1, tint = 0.5).toResolvedArgb(theme) // resolves slot → base RGB → tint → ARGB
+Color.Theme(ThemeSlot.Accent1, tint = 0.5).toResolvedHex(theme)  // "#RRGGBB"
 ```
 
-**What's Missing**:
-- Parse `xl/theme/theme1.xml`
-- Extract theme color palette
-- Resolve `ThemeSlot` → base RGB
-- Apply tint transformation
-- Cache resolved colors
-
-**Effort**: 1-2 days
-**LOC**: ~100 in Theme parsing + resolution
-
-**Workaround**: Use `Color.Rgb()` directly with explicit ARGB values
+`ThemePalette.resolve(palette, slot, tint)` performs the slot lookup and applies the tint transformation per RGB component. Note: bare `Color.toArgb` / `toHex` (no palette) still throw on a `Theme` color by design — callers must resolve theme colors through `toResolvedArgb(theme)` / `toResolvedHex(theme)`.
 
 ---
 
@@ -694,7 +684,7 @@ See: [plan/23-security.md](plan/23-security.md)
 | **Streaming Read** | ✅ | ✅ | XL: 55k rows/s, POI: ~40k rows/s |
 | **Multi-sheet** | ✅ | ✅ | XL: Arbitrary, POI: Sequential |
 | **Styles** | ✅ | ✅ | XL: Full in-memory; streaming uses minimal default styles |
-| **Formulas (eval)** | ✅ | ✅ | XL: 88 functions, dependency graph, cycle detection |
+| **Formulas (eval)** | ✅ | ✅ | XL: 104 functions, dependency graph, cycle detection |
 | **Tables** | ✅ | ✅ | XL: Full table support with AutoFilter, structured refs |
 | **Charts** | ❌ | ✅ | POI: Full support |
 | **Drawings** | ❌ | ✅ | POI: Images/shapes |
@@ -751,7 +741,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 - Multi-sheet workbooks
 - Core cell types and rich text
 - Styling in in-memory workflows (full styles supported)
-- Formula evaluation (88 functions, dependency graph, cycle detection)
+- Formula evaluation (104 functions, dependency graph, cycle detection)
 - Excel Tables (structured data with AutoFilter, headers, styling)
 - Performance-critical workloads (benchmarked vs POI)
 
@@ -800,7 +790,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 **Status**: ✅ Production Ready (as of WI-07/08/09)
 
 **What's implemented**:
-- 81 built-in functions (SUM, SUMIF, COUNTIF, XLOOKUP, INDEX, MATCH, XIRR, XNPV, etc.)
+- 104 built-in functions (SUM, SUMIF, COUNTIF, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, XIRR, XNPV, dynamic arrays, etc.)
 - Full dependency graph with cycle detection
 - Safe evaluation with `evaluateWithDependencyCheck()`
 - Type coercion and error handling

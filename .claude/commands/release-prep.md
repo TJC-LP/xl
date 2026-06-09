@@ -8,31 +8,42 @@ Update all version references from current SNAPSHOT/version to the new release v
 
 ### Files to Update
 
-1. **`build.mill`** (~line 55)
-   - Find: `sys.env.getOrElse("PUBLISH_VERSION", "...")`
+> **Line numbers drift between releases.** Always re-confirm with grep before editing — the
+> authoritative list of every version location is:
+> ```bash
+> grep -rln "<OLD_VERSION>" --include="*.scala" --include="*.mill" --include="*.json" --include="*.md" . \
+>   | grep -v "out/" | grep -v ".scala-build" | grep -v CHANGELOG.md
+> ```
+
+1. **`build.mill`** (line 17)
+   - Find: `val version: String = sys.env.getOrElse("PUBLISH_VERSION", "...")`
    - Update the fallback version string
 
-2. **`examples/project.scala`** (lines 5-8)
-   - Update all 4 module dependencies: xl-core, xl-ooxml, xl-cats-effect, xl-evaluator
+2. **`xl-core/src/com/tjclp/xl/workbooks/WorkbookMetadata.scala`** (line 19)
+   - Update `appVersion` default value: `appVersion: Option[String] = Some("...")`
 
-3. **`xl-core/src/com/tjclp/xl/workbooks/WorkbookMetadata.scala`** (~line 12)
-   - Update `appVersion` default value
+3. **`plugin/.claude-plugin/plugin.json`** (the `"version"` field)
+   - Update the plugin marketplace version. **Do not skip this** — it has drifted in past
+     releases (was stale at 0.7.0) because it was missing from this list.
 
-4. **`README.md`**
-   - Update `//> using dep` lines (~lines 11-12)
-   - Update `ivy"..."` dependencies (~lines 51-53)
+4. **`examples/project.scala`** (line 5)
+   - Update the umbrella `//> using dep com.tjclp::xl:...` line (single dependency, not 4)
 
-5. **`docs/QUICK-START.md`**
-   - Update Mill ivyDeps (~lines 21-23)
-   - Update sbt libraryDependencies (~lines 33-35)
+5. **`README.md`**
+   - Update `//> using dep` line (~line 11)
+   - Update `ivyDeps` line (~line 58) and the commented per-module `ivy"..."` examples (~lines 61-64)
 
-6. **`examples/README.md`** (~line 126)
-   - Update example `//> using dep` line
+6. **`docs/QUICK-START.md`**
+   - Update Mill `ivyDeps` (~line 15), sbt `libraryDependencies` (~line 22), and `//> using dep` (~line 27)
+
+7. **`examples/README.md`** (~line 144)
+   - Update the `com.tjclp::xl:...` reference in prose
 
 ### Files to SKIP
 
 - **`plugin/skills/xl-cli/SKILL.md`** - Auto-detects latest release from GitHub API (no version to update)
 - **`docs/RELEASING.md`** - Contains example version strings for documentation
+- **`CHANGELOG.md`** - Historical version headings; managed separately during release notes
 
 ### Verification Steps
 
