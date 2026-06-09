@@ -37,6 +37,7 @@ object scripting:
   // Sync read/write/modify facade + streaming IO escape hatch
   export com.tjclp.xl.io.Excel
   export com.tjclp.xl.io.ExcelIO
+  export com.tjclp.xl.io.RowData // streaming row type (readStream/writeStream)
 
   // The one sanctioned unwrap: .unsafe / .getOrElse on XLResult
   export com.tjclp.xl.unsafe.*
