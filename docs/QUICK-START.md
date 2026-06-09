@@ -12,19 +12,19 @@ import mill._, scalalib._
 
 object myproject extends ScalaModule {
   def scalaVersion = "3.8.3"
-  def ivyDeps = Agg(ivy"com.tjclp::xl:0.9.7")
+  def ivyDeps = Agg(ivy"com.tjclp::xl:0.10.0")
 }
 ```
 
 ### With sbt (build.sbt)
 ```scala
 scalaVersion := "3.8.3"
-libraryDependencies += "com.tjclp" %% "xl" % "0.9.7"
+libraryDependencies += "com.tjclp" %% "xl" % "0.10.0"
 ```
 
 ### With Scala CLI
 ```scala
-//> using dep com.tjclp::xl:0.9.7
+//> using dep com.tjclp::xl:0.10.0
 ```
 
 ### Individual Modules (Optional)

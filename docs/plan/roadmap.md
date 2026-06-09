@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **104 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 1100+ tests passing. **0.10.0 "Trust & Author"** is the active release — see [v0.10.0-execution.md](v0.10.0-execution.md).
 
-**Current Version**: 0.9.7 → **0.10.0 "Trust & Author"** in progress
+**Current Version**: **0.10.0 "Trust & Author"** (released 2026-06-09)
 
 ---
 
@@ -20,7 +20,7 @@
 
 ### v0.10.0 "Trust & Author" (Current)
 
-Build version 0.9.7 → **0.10.0 in progress**. Focus: trust (surgical-edit fidelity) and authoring (write the parts XL previously only read).
+Build version **0.10.0**. Focus: trust (surgical-edit fidelity) and authoring (write the parts XL previously only read).
 
 | Feature | Status |
 |---------|--------|

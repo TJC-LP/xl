@@ -14,7 +14,7 @@ val organization = "com.tjclp"
 /** Shared build configuration constants */
 object BuildConfig {
   /** Project version: CI sets PUBLISH_VERSION; local builds use this fallback */
-  val version: String = sys.env.getOrElse("PUBLISH_VERSION", "0.9.7")
+  val version: String = sys.env.getOrElse("PUBLISH_VERSION", "0.10.0")
 
   /** JVM options to silence Scala 3 LazyVals sun.misc.Unsafe deprecation warnings (JDK 21+) */
   val lazyValsJvmArgs: Seq[String] = Seq(

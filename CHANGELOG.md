@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### 0.10.0 "Trust & Author" (in progress)
+## [0.10.0] "Trust & Author" - 2026-06-09
 
 A correctness-and-authoring release: fix defects that silently corrupted data or
 falsified flagship guarantees, close the read↔write asymmetry, and broaden the
