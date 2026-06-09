@@ -97,3 +97,9 @@ class RangeFillSpec extends ScalaCheckSuite:
     assertEquals(ref"B2".left(), ref"A2")
     assertEquals(ref"A1".down(3).right(2), ref"C4")
   }
+
+  test("large range fill: one cell per address, by design (cost is range.size)"):
+    // Pins the documented contract for big fills: ref"A1:D2500" materializes 10,000 cells.
+    // Full-column fills (A:A = 1,048,576 cells) follow the same rule — prefer bounded ranges.
+    val sheet = emptySheet.put(ref"A1:D2500" := 0)
+    assertEquals(sheet.cells.size, 10000)

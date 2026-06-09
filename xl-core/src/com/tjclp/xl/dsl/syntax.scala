@@ -71,7 +71,11 @@ object syntax:
 
     /**
      * Navigate down by n rows (default 1). Total; like `shift`, staying in bounds is the caller's
-     * responsibility (Excel rows end at 1048576).
+     * responsibility (Excel rows end at 1048576, columns at XFD).
+     *
+     * Out-of-bounds navigation produces an invalid reference that is NOT flagged here — e.g.
+     * `ref"A1".up()` renders as the non-existent "A0" and would corrupt output if written. Guard
+     * loop bounds against your data extent (bounds-checked variants are on the roadmap).
      */
     def down(n: Int = 1): ARef = ref.shift(0, n)
 
@@ -98,6 +102,10 @@ object syntax:
      *
      * Desugars to a Batch of Puts — no new Patch case, so monoid laws and exhaustive matches are
      * unaffected. A 1x1 range is equivalent to a single-cell `:=`.
+     *
+     * Cost is proportional to `range.size`: one Put (and ultimately one cell) per address, by
+     * design — that is what a fill means. Filling a full column (`A:A` = 1,048,576 cells)
+     * materializes a million-cell sheet; prefer a bounded range sized to your data.
      */
     @annotation.targetName("rangeAssignCellValue")
     def :=(cv: CellValue): Patch =

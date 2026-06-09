@@ -114,3 +114,19 @@ class RecalcSpec extends FunSuite:
     val sheet = Sheet(SheetName.unsafe("S")).put(a1, formula("=A1"))
     val result = Workbook(sheet).recalculate()
     assert(result.errors.headOption.exists(_.render.startsWith("S!A1:")))
+
+  test("cross-sheet cycle stays total: caught by depth guard, reported per cell (not Tarjan)"):
+    // Cycle spanning sheets is invisible to the per-sheet Tarjan pass — pin the graceful path:
+    // both cells error (recursion guard), nothing throws, the acyclic remainder still evaluates.
+    val s1 = Sheet(SheetName.unsafe("S1"))
+      .put(a1, formula("=S2!A1+1"))
+      .put(a2, num(5))
+      .put(a3, formula("=A2*2")) // acyclic, must survive
+    val s2 = Sheet(SheetName.unsafe("S2")).put(a1, formula("=S1!A1+1"))
+    val result = Workbook(s1, s2).recalculate()
+    assertEquals(cached(result.workbook, "S1", a3), Some(num(10)))
+    val errorRefs = result.errors.map(e => (e.sheet.value, e.ref)).toSet
+    assert(errorRefs.contains(("S1", a1)), s"S1!A1 should error, got: ${result.errors.map(_.render)}")
+    assert(errorRefs.contains(("S2", a1)), s"S2!A1 should error, got: ${result.errors.map(_.render)}")
+    assertEquals(cached(result.workbook, "S1", a1), None)
+    assertEquals(cached(result.workbook, "S2", a1), None)

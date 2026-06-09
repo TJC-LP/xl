@@ -310,6 +310,8 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 - **Compose patches with `++`**, not Cats `|+|` (the latter needs type ascription on enum cases).
 - **`fx` with runtime interpolation returns `Either`** — there is deliberately no `:=` overload that swallows a `Left`; unwrap with `.unsafe` or sequence it.
 - **`wb.update` fails on a missing sheet; `wb.upsert` creates it.** Pick by intent.
+- **Range fill cost = range size**: `ref"A:A" := 0` really creates 1,048,576 cells (that's what a fill means) — size fill ranges to your data.
+- **Navigation is unchecked at the edges**: `ref"A1".up()` produces an invalid "A0" ref that corrupts output if written; keep loop bounds inside your data extent.
 - **First run is slow** (dependency download); afterwards scala-cli caches everything.
 - **`.sc` files**: top-level statements, no `@main`. A `.scala` file needs `@main def run(): Unit`.
 

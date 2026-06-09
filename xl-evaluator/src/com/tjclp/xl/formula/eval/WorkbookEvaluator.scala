@@ -107,6 +107,13 @@ object WorkbookEvaluator:
      * Excel.write(result.workbook, "out.xlsx")  // partial results; failed cells stay uncached
      * result.toEither                           // Left(errors) when not clean
      * }}}
+     *
+     * Scope notes: cycle isolation is per-sheet (Tarjan over each sheet's graph) — a cycle that
+     * spans sheets is caught instead by the evaluator's recursion depth guard and surfaces as a
+     * generic per-cell eval error (still total, still collected; see RecalcSpec). Cross-sheet
+     * references to upstream formulas evaluate on demand against the original workbook snapshot and
+     * are not memoized across sheets — fine for typical workbooks; a workbook-level topological
+     * order is future work for deep cross-sheet fan-out.
      */
     def recalculate(clock: Clock = Clock.system): RecalcResult =
       val perSheet = wb.sheets.map(sheet => recalcSheet(sheet, wb, clock))
