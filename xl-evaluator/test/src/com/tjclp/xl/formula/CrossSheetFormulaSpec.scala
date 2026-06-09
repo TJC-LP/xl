@@ -136,6 +136,24 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     }
   }
 
+
+  // ===== GH-268: keyword-prefixed sheet names must parse as references =====
+
+  test("GH-268: sheet names starting with NOT/AND/OR round-trip as references") {
+    for name <- List("Notes1", "NoTuq0", "Andrea", "Orders", "NOT", "AND", "OR") do
+      val formula = s"=SUM($name!A47:A48)"
+      val reprinted = FormulaParser.parse(formula).map(FormulaPrinter.print(_))
+      assertEquals(reprinted, Right(formula), s"sheet name: $name")
+  }
+
+  test("GH-268: logical keywords still parse with proper boundaries") {
+    assert(FormulaParser.parse("=NOT(A1)").isRight)
+    assert(FormulaParser.parse("=NOT A1").isRight)
+    assert(FormulaParser.parse("=A1>0 AND B1<5").isRight)
+    assert(FormulaParser.parse("=A1>0 OR B1<5").isRight)
+    assert(FormulaParser.parse("=not(TRUE)").isRight)
+  }
+
   // ===== Evaluator Tests =====
 
   test("SheetPolyRef: evaluates number from target sheet") {
