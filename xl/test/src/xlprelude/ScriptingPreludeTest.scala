@@ -114,6 +114,13 @@ class ScriptingPreludeTest extends FunSuite:
     given Sheet = sheet
     assertEquals(excel"${ref"A1"}", "100")
 
+  test("display interpolator evaluates formulas (evaluating strategy wins in the prelude)"):
+    val sheet = Sheet("DispF")
+      .put(ref"A1", 100)
+      .put(ref"B1", fx"=A1*2")
+    given Sheet = sheet
+    assertEquals(excel"${ref"B1"}", "200")
+
   test("upsert, wb.evaluateFormula, and readTypedOr resolve through the prelude"):
     val wb = Workbook(Sheet("Sales").put(ref"A1", 10).put(ref"A2", 20))
       .upsert("Summary", _.put(ref"A1", 5))

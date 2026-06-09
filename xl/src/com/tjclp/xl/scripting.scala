@@ -27,12 +27,21 @@ object scripting:
   export com.tjclp.xl.api.*
 
   // DSL operators, codec/optics/patch/sheet syntax, style DSL, Easy Mode string extensions,
-  // rich text, display interpolator, compile-time literals (ref/col/fx/money/percent/date)
+  // rich text, display interpolator, compile-time literals (ref/col/fx/money/percent/date).
+  // The low-priority `default` FormulaDisplayStrategy (raw formula text) is excluded in favor
+  // of the evaluator-backed `evaluating` strategy below: the LowPriority inheritance trick does
+  // not survive export forwarding (both would sit at the same depth here and be ambiguous), so
+  // the prelude makes the choice explicitly — scripts display computed, NumFmt-formatted values.
   export com.tjclp.xl.syntax.*
-  export com.tjclp.xl.syntax.given
+  export com.tjclp.xl.syntax.{default as _, given}
 
-  // Formula system: FormulaParser, Sheet/Workbook evaluator extensions, DependencyGraph, Clock
+  // Formula system: FormulaParser, Sheet/Workbook evaluator extensions, DependencyGraph, Clock,
+  // plus the `evaluating` display given (wildcard exports skip givens, so it needs the explicit
+  // given selector — without it, excel"" interpolation prints raw formula text).
+  // (formulaExports.given also carries an inherited `default` forwarder — EvaluatingFormulaDisplay
+  // extends the LowPriority trait — so the exclusion is needed on this hop too.)
   export com.tjclp.xl.formulaExports.*
+  export com.tjclp.xl.formulaExports.{default as _, given}
 
   // Sync read/write/modify facade + streaming IO escape hatch
   export com.tjclp.xl.io.Excel
