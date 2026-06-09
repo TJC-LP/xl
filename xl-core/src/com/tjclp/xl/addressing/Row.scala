@@ -17,15 +17,15 @@ object Row:
 
   extension (row: Row)
     /** Get 0-based index */
-    inline def index0: Int = row
+    def index0: Int = row
 
     /** Get 1-based index */
-    inline def index1: Int = row + 1
+    def index1: Int = row + 1
 
     /** Shift row by offset */
-    inline def +(offset: Int): Row = row + offset
+    def +(offset: Int): Row = row + offset
 
     /** Shift row by negative offset */
-    inline def -(offset: Int): Row = row - offset
+    def -(offset: Int): Row = row - offset
 
 end Row

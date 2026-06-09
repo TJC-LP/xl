@@ -7,10 +7,10 @@ object Emu:
   inline def apply(value: Long): Emu = value
 
   extension (emu: Emu)
-    inline def value: Long = emu
+    def value: Long = emu
 
     /** Convert to points */
-    inline def toPt: Pt = Pt((emu * 72.0) / 914400.0)
+    def toPt: Pt = Pt((emu * 72.0) / 914400.0)
 
     /** Convert to pixels */
-    inline def toPx: Px = Px((emu * 96.0) / 914400.0)
+    def toPx: Px = Px((emu * 96.0) / 914400.0)

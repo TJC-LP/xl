@@ -27,9 +27,11 @@ object api:
   // Addressing types
   export addressing.{Column, Row, SheetName, ARef, CellRange, RefType, Anchor}
 
-  // ARef extension methods (toA1, row, shift)
-  // Note: col/row extension methods work via extension syntax (aref.col), not direct import
-  export addressing.ARef.{toA1, shift}
+  // ARef extension methods (toA1, col, row, shift) resolve through ARef's companion implicit
+  // scope — no export needed. Export forwarders for inline extensions on opaque types generate
+  // path-dependent proxy types ($proxy.ARef) that fail to unify at use sites outside this
+  // package, and the broken forwarder shadows the companion-scope lookup that would otherwise
+  // succeed. (Removed in 0.11.0; was: export addressing.ARef.{toA1, shift})
 
   // Rich text types
   export richtext.{TextRun, RichText}
@@ -82,8 +84,7 @@ object api:
   // Style types - units
   export styles.units.{Pt, Px, Emu, StyleId}
 
-  // Surface Column helpers at the root package for single-import ergonomics
-  export addressing.Column.toLetter
+  // Column.toLetter resolves through Column's companion implicit scope (see ARef note above)
 
   // Export renderers and render syntax
   export render.{HtmlRenderer, SvgRenderer}

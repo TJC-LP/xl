@@ -22,6 +22,6 @@ object SheetName:
   /** Create an unsafe sheet name (use only when validation is guaranteed) */
   inline def unsafe(name: String): SheetName = name
 
-  extension (name: SheetName) inline def value: String = name
+  extension (name: SheetName) def value: String = name
 
 end SheetName

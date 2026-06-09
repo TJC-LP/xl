@@ -30,10 +30,10 @@ object Column:
 
   extension (col: Column)
     /** Get 0-based index (0 = A, 1 = B, ...) */
-    inline def index0: Int = col
+    def index0: Int = col
 
     /** Get 1-based index (1 = A, 2 = B, ...) */
-    inline def index1: Int = col + 1
+    def index1: Int = col + 1
 
     /** Convert to Excel letter notation (A, B, AA, etc.) */
     def toLetter: String =
@@ -43,9 +43,9 @@ object Column:
       loop(col, "")
 
     /** Shift column by offset */
-    inline def +(offset: Int): Column = col + offset
+    def +(offset: Int): Column = col + offset
 
     /** Shift column by negative offset */
-    inline def -(offset: Int): Column = col - offset
+    def -(offset: Int): Column = col - offset
 
 end Column

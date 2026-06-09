@@ -46,19 +46,25 @@ object ARef:
 
   extension (ref: ARef)
     /** Extract column */
-    inline def col: Column = Column.from0((ref & 0xffffffffL).toInt)
+    def col: Column = Column.from0((ref & 0xffffffffL).toInt)
 
     /** Extract row */
-    inline def row: Row = Row.from0((ref >> 32).toInt)
+    def row: Row = Row.from0((ref >> 32).toInt)
 
     /** Convert to A1 notation */
-    inline def toA1: String =
+    def toA1: String =
+      // Deliberately NOT inline: the body calls the non-inline extension Column.toLetter, and
+      // inline expansion re-elaborates that call at external call sites where Column is opaque,
+      // failing with "expression does not take parameters". A regular def elaborates here, where
+      // the representation is visible; the call cost is noise next to the string allocation.
       import Column.toLetter
       import Row.index1
       s"${toLetter(ref.col)}${index1(ref.row)}"
 
     /** Shift reference by column and row offsets */
-    inline def shift(colOffset: Int, rowOffset: Int): ARef =
+    def shift(colOffset: Int, rowOffset: Int): ARef =
+      // Non-inline for the same reason as toA1: the nested inline expansion of ARef.apply fails
+      // to re-elaborate at call sites outside this package.
       ARef(ref.col + colOffset, ref.row + rowOffset)
 
 end ARef
