@@ -60,8 +60,8 @@ object api:
   // Optics types
   export optics.{Lens, Optional, Optics}
 
-  // Formatted type
-  export formatted.Formatted
+  // Formatted type + runtime parsers (incl. total smart detection: FormattedParsers.detect)
+  export formatted.{Formatted, FormattedParsers}
 
   // Codec types
   export codec.{CellCodec, CellReader, CellWriter, CodecError}

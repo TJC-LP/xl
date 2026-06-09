@@ -153,6 +153,13 @@ class ScriptingPreludeTest extends FunSuite:
       Some(3)
     )
 
+  test("smart detection: FormattedParsers.detect and String.toFormatted via the prelude"):
+    val detected = "$1,234.56".toFormatted
+    assertEquals(detected.numFmt, NumFmt.Currency)
+    assertEquals(FormattedParsers.detect("45.5%").numFmt, NumFmt.Percent)
+    val sheet = Sheet("Smart").put(ref"A1", detected)
+    assertEquals(sheet.cells.size, 1)
+
   test("ExcelIO escape hatch is reachable"):
     val io = ExcelIO
     assert(io != null || true)

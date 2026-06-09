@@ -44,10 +44,11 @@ println(s"  ✓ Built ${filled.cells.size} cells from ${products.size} records")
 // ========== 3. Range fill: Excel Ctrl+Enter semantics, := is total ==========
 val zeroed = filled.put(ref"E2:E4" := 0) // every cell in E2:E4 gets 0
 
-// ========== 4. Typed values: codecs infer formats (dates, decimals) ==========
+// ========== 4. Typed values: codecs infer formats; smart detection for raw strings ==========
 val stamped = zeroed
   .put(ref"F1", "As of")
   .put(ref"G1", LocalDate.of(2026, 6, 9))
+  .put(ref"F2", "$1,234.56".toFormatted) // detected: Currency (also: percents, ISO dates)
 
 // ========== 5. Recalculate: total, per-cell errors, cross-sheet aware ==========
 val recalc = Workbook(stamped).recalculate()

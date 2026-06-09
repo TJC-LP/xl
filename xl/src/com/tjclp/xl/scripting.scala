@@ -41,6 +41,13 @@ object scripting:
   // The one sanctioned unwrap: .unsafe / .getOrElse on XLResult
   export com.tjclp.xl.unsafe.*
 
+  // Script-only sugar: total smart detection of currency/percent/date/number/boolean from raw
+  // strings ("$1,234.56".toFormatted → Currency). Kept out of the pure core import — heuristics
+  // are script/CLI territory; the underlying FormattedParsers.detect is available everywhere.
+  extension (s: String)
+    def toFormatted: com.tjclp.xl.formatted.Formatted =
+      com.tjclp.xl.formatted.FormattedParsers.detect(s)
+
   // Note: java.time types (LocalDate, LocalDateTime) cannot be re-exported — Scala's export
   // forwards only the type for Java classes, not the statics (LocalDate.of would not resolve).
   // Scripts import java.time directly when needed.

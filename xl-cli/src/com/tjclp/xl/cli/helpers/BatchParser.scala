@@ -624,46 +624,17 @@ object BatchParser:
    *   - Text: everything else
    */
   private def detectAndParse(s: String): ParsedValue =
-    val trimmed = s.trim
-
-    // Currency: starts with $ or parenthesized with $
-    if trimmed.startsWith("$") || (trimmed.startsWith("(") && trimmed.contains("$")) then
-      FormattedParsers
-        .parseMoney(trimmed)
-        .orElse(FormattedParsers.parseAccounting(trimmed))
-        .map(f => ParsedValue(f.value, Some(f.numFmt)))
-        .getOrElse(ParsedValue(CellValue.Text(s), None))
-
-    // Percent: ends with %
-    else if trimmed.endsWith("%") then
-      FormattedParsers
-        .parsePercent(trimmed)
-        .map(f => ParsedValue(f.value, Some(f.numFmt)))
-        .getOrElse(ParsedValue(CellValue.Text(s), None))
-
-    // ISO Date: YYYY-MM-DD pattern
-    else if trimmed.matches("""\d{4}-\d{2}-\d{2}""") then
-      FormattedParsers
-        .parseDate(trimmed)
-        .map(f => ParsedValue(f.value, Some(f.numFmt)))
-        .getOrElse(ParsedValue(CellValue.Text(s), None))
-
-    // Try number
-    else
-      scala.util.Try(BigDecimal(trimmed)).toOption match
-        case Some(n) => ParsedValue(CellValue.Number(n), None)
-        case None =>
-          // Boolean detection
-          trimmed.toLowerCase match
-            case "true" => ParsedValue(CellValue.Bool(true), None)
-            case "false" => ParsedValue(CellValue.Bool(false), None)
-            case _ =>
-              // Strip quotes if present
-              val text =
-                if trimmed.startsWith("\"") && trimmed.endsWith("\"") then
-                  trimmed.drop(1).dropRight(1)
-                else s
-              ParsedValue(CellValue.Text(text), None)
+    // Delegates to the core's total detection (one source of truth); the CLI adds JSON-specific
+    // quote-stripping for text results and maps NumFmt.General to "no explicit format".
+    FormattedParsers.detect(s) match
+      case Formatted(CellValue.Text(_), _) =>
+        val trimmed = s.trim
+        val text =
+          if trimmed.startsWith("\"") && trimmed.endsWith("\"") then trimmed.drop(1).dropRight(1)
+          else s
+        ParsedValue(CellValue.Text(text), None)
+      case Formatted(value, NumFmt.General) => ParsedValue(value, None)
+      case Formatted(value, numFmt) => ParsedValue(value, Some(numFmt))
 
   /**
    * Parse a single JSON value element (from a "values" array).
