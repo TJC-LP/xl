@@ -208,8 +208,10 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
       val state = wb.metadata.sheetStates.get(sheet.name).flatten
       SheetRef(sheet.name, idx + 1, s"rId${idx + 1}", state)
     }
-    // GH-236: serialize named ranges from the typed model (previously dropped on write)
-    OoxmlWorkbook(sheetRefs, definedNames = buildDefinedNames(wb.metadata.definedNames))
+    // GH-236: serialize named ranges from the typed model (previously dropped on write).
+    // GH-259: print area / repeat rows live on Sheet.pageSetup and are appended here as
+    // sheet-scoped _xlnm.Print_Area / _xlnm.Print_Titles names.
+    OoxmlWorkbook(sheetRefs, definedNames = buildDefinedNames(PrintNames.effective(wb)))
 
   /**
    * Build a `<definedNames>` element from the typed model (GH-236), or None when empty. Order

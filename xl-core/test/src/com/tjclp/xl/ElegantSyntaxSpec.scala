@@ -281,3 +281,26 @@ class ElegantSyntaxSpec extends FunSuite:
     assert(sheet.getCellStyle(ref"B2").exists(_.numFmt == NumFmt.Currency))
     assert(sheet.getCellStyle(ref"C2").exists(_.numFmt == NumFmt.Percent))
   }
+
+  test("Top-level import: per-side borders, indent, and outlined resolve (GH-257/GH-260)") {
+    // Smoke test that the new style DSL and outline patch survive the wildcard-export merge
+    // (com.tjclp.xl.* re-exports styles.dsl and dsl.syntax through the syntax facade).
+    import com.tjclp.xl.macros.ref
+    import com.tjclp.xl.styles.border.{BorderSide, BorderStyle}
+    import com.tjclp.xl.styles.color.Color
+
+    val ruled = CellStyle.default.bold
+      .borderBottom(BorderStyle.Thin)
+      .borderTop(BorderStyle.Double, Color.fromRgb(0, 0, 0))
+      .indent(1)
+    assertEquals(ruled.border.bottom, BorderSide(BorderStyle.Thin))
+    assertEquals(ruled.border.top, BorderSide(BorderStyle.Double, Color.fromRgb(0, 0, 0)))
+    assertEquals(ruled.align.indent, 1)
+    assert(ruled.font.bold)
+
+    val sheet = Patch.applyPatch(emptySheet, ref"A1:B2".outlined(BorderStyle.Medium))
+    val corner = sheet.getCellStyle(ref"A1").map(_.border)
+    assertEquals(corner.map(_.top), Some(BorderSide(BorderStyle.Medium)))
+    assertEquals(corner.map(_.left), Some(BorderSide(BorderStyle.Medium)))
+    assertEquals(corner.map(_.right), Some(BorderSide.none))
+  }

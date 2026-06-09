@@ -169,13 +169,29 @@ object FormulaParser:
     }
 
   /**
+   * Match a logical keyword (NOT/AND/OR) at the current position with a word boundary: the keyword
+   * must be followed by whitespace, '(', or end of input. Without the boundary, sheet and defined
+   * names starting with a keyword were consumed as the operator — `Notes1!A1` parsed as
+   * `NOT(es1!A1)` (found by the cross-sheet round-trip property, GH-268).
+   */
+  private def isKeywordAt(s: ParserState, keyword: String): Boolean =
+    val rem = s.remaining
+    rem.length >= keyword.length &&
+    rem.substring(0, keyword.length).equalsIgnoreCase(keyword) && {
+      rem.length == keyword.length || {
+        val next = rem.charAt(keyword.length)
+        next.isWhitespace || next == '('
+      }
+    }
+
+  /**
    * Parse logical OR (lowest precedence).
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseLogicalOr(state: ParserState): ParseResult[TExpr[?]] =
     parseLogicalAnd(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
-      if s2.remaining.toUpperCase.startsWith("OR") then
+      if isKeywordAt(s2, "OR") then
         val s3 = skipWhitespace(s2.advance(2))
         descend(s3).flatMap { sd =>
           parseLogicalOr(sd).map { case (right, s4) =>
@@ -198,7 +214,7 @@ object FormulaParser:
   private def parseLogicalAnd(state: ParserState): ParseResult[TExpr[?]] =
     parseComparison(state).flatMap { case (left, s1) =>
       val s2 = skipWhitespace(s1)
-      if s2.remaining.toUpperCase.startsWith("AND") then
+      if isKeywordAt(s2, "AND") then
         val s3 = skipWhitespace(s2.advance(3))
         descend(s3).flatMap { sd =>
           parseLogicalAnd(sd).map { case (right, s4) =>
@@ -493,7 +509,7 @@ object FormulaParser:
             )
           }
         }
-      case Some('N') | Some('n') if s.remaining.toUpperCase.startsWith("NOT") =>
+      case Some('N') | Some('n') if isKeywordAt(s, "NOT") =>
         descend(s).flatMap { sd =>
           val s2 = skipWhitespace(sd.advance(3))
           parseUnary(s2).map { case (expr, s3) =>

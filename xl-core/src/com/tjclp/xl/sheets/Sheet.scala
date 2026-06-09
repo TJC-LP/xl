@@ -25,6 +25,11 @@ import scala.util.boundary, boundary.break
  * The distinction between `None` and `Some(Remove)` matters: `None` is the passive default
  * (round-trip preserves the original); `Some(Remove)` is the active intent to remove freeze panes
  * even when the source XML had them.
+ *
+ * @param viewSettings
+ *   Sheet view settings (gridline visibility, zoom). `None` preserves any existing `<sheetView>`
+ *   attributes on write; `Some(view)` sets them. Freeze panes and view settings share a single
+ *   `<sheetView>` element in the serialized XML.
  */
 final case class Sheet(
   name: SheetName,
@@ -38,7 +43,8 @@ final case class Sheet(
   comments: Map[ARef, Comment] = Map.empty,
   tables: Map[String, TableSpec] = Map.empty,
   pageSetup: Option[PageSetup] = None,
-  freezePane: Option[FreezePane] = None
+  freezePane: Option[FreezePane] = None,
+  viewSettings: Option[SheetView] = None
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -577,6 +583,29 @@ final case class Sheet(
 
   /** Remove freeze panes. */
   def unfreeze: Sheet = copy(freezePane = Some(FreezePane.Remove))
+
+  /**
+   * Set sheet view settings (gridline visibility, zoom).
+   *
+   * Example:
+   * {{{
+   * sheet.withViewSettings(SheetView(showGridLines = false, zoomScale = Some(85)))
+   * }}}
+   */
+  def withViewSettings(view: SheetView): Sheet = copy(viewSettings = Some(view))
+
+  /**
+   * Set page setup (print scale/orientation, margins, header/footer, print area, repeat rows).
+   *
+   * Example:
+   * {{{
+   * sheet.withPageSetup(PageSetup(
+   *   orientation = Some("landscape"),
+   *   headerFooter = Some(HeaderFooter(oddFooter = Some("Page &P of &N")))
+   * ))
+   * }}}
+   */
+  def withPageSetup(setup: PageSetup): Sheet = copy(pageSetup = Some(setup))
 
   /** Count of non-empty cells */
   def cellCount: Int = cells.size

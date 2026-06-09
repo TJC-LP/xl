@@ -3,7 +3,14 @@ package com.tjclp.xl.ooxml
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.api.{Sheet, Workbook}
-import com.tjclp.xl.sheets.{ColumnProperties, PageSetup, RowProperties}
+import com.tjclp.xl.sheets.{
+  ColumnProperties,
+  HeaderFooter,
+  PageMargins,
+  PageSetup,
+  RowProperties,
+  SheetView
+}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext, SourceFingerprint}
 import com.tjclp.xl.tables.TableSpec
@@ -774,8 +781,12 @@ object XlsxReader:
     // Extract row properties from OoxmlRow data
     val rowProperties = extractRowProperties(ooxmlSheet.rows)
 
-    // Parse page setup (print scale, orientation, etc.)
-    val pageSetup = parsePageSetup(ooxmlSheet.pageSetup)
+    // Parse print setup (scale/orientation/fit, margins, header/footer) — GH-259
+    val pageSetup =
+      parsePageSetup(ooxmlSheet.pageSetup, ooxmlSheet.pageMargins, ooxmlSheet.headerFooter)
+
+    // Parse view settings (gridlines, zoom) from <sheetViews> — GH-258
+    val viewSettings = parseSheetView(ooxmlSheet.sheetViews)
 
     Right(
       Sheet(
@@ -787,7 +798,8 @@ object XlsxReader:
         tables = tables,
         columnProperties = columnProperties,
         rowProperties = rowProperties,
-        pageSetup = pageSetup
+        pageSetup = pageSetup,
+        viewSettings = viewSettings
       )
     )
 
@@ -851,20 +863,80 @@ object XlsxReader:
     builder.result()
 
   /**
-   * Parse page setup from <pageSetup> XML element.
+   * Parse print setup from the <pageSetup>, <pageMargins>, and <headerFooter> XML elements
+   * (GH-259). Any one of the three is enough to produce a PageSetup; printArea/repeatRows are
+   * lifted from workbook defined names later (PrintNames.extract).
    *
-   * Extracts print settings like scale, orientation, fitToWidth, fitToHeight.
+   * The parse is total: out-of-range or unmodeled attribute values (scale outside 10-400,
+   * orientation="default", negative margins) fall back to defaults instead of violating the model
+   * invariants — a malformed file must never throw.
    */
-  private def parsePageSetup(pageSetupElem: Option[Elem]): Option[PageSetup] =
-    pageSetupElem.map { elem =>
+  private def parsePageSetup(
+    pageSetupElem: Option[Elem],
+    pageMarginsElem: Option[Elem],
+    headerFooterElem: Option[Elem]
+  ): Option[PageSetup] =
+    val margins = pageMarginsElem.flatMap(parsePageMargins)
+    val headerFooter = headerFooterElem.flatMap(parseHeaderFooter)
+    val base = pageSetupElem.map { elem =>
       val attrs = elem.attributes.asAttrMap
       PageSetup(
-        scale = attrs.get("scale").flatMap(_.toIntOption).getOrElse(100),
-        orientation = attrs.get("orientation"),
-        fitToWidth = attrs.get("fitToWidth").flatMap(_.toIntOption),
-        fitToHeight = attrs.get("fitToHeight").flatMap(_.toIntOption)
+        scale = attrs
+          .get("scale")
+          .flatMap(_.toIntOption)
+          .filter(s => s >= 10 && s <= 400)
+          .getOrElse(100),
+        orientation = attrs.get("orientation").filter(o => o == "portrait" || o == "landscape"),
+        fitToWidth = attrs.get("fitToWidth").flatMap(_.toIntOption).filter(_ >= 0),
+        fitToHeight = attrs.get("fitToHeight").flatMap(_.toIntOption).filter(_ >= 0)
       )
     }
+    if base.isEmpty && margins.isEmpty && headerFooter.isEmpty then None
+    else Some(base.getOrElse(PageSetup()).copy(margins = margins, headerFooter = headerFooter))
+
+  /**
+   * Parse <pageMargins>; all six attributes are required by the schema (total: None if invalid).
+   */
+  private def parsePageMargins(elem: Elem): Option[PageMargins] =
+    val attrs = elem.attributes.asAttrMap
+    def attr(name: String): Option[Double] =
+      attrs.get(name).flatMap(_.toDoubleOption).filter(_ >= 0)
+    for
+      left <- attr("left")
+      right <- attr("right")
+      top <- attr("top")
+      bottom <- attr("bottom")
+      header <- attr("header")
+      footer <- attr("footer")
+    yield PageMargins(left, right, top, bottom, header, footer)
+
+  /**
+   * Parse the modeled odd header/footer from <headerFooter>. Returns Some only when an odd part is
+   * present; even/first-page variants are preserved as raw XML, not modeled.
+   */
+  private def parseHeaderFooter(elem: Elem): Option[HeaderFooter] =
+    val oddHeader = (elem \ "oddHeader").headOption.map(_.text).filter(_.nonEmpty)
+    val oddFooter = (elem \ "oddFooter").headOption.map(_.text).filter(_.nonEmpty)
+    if oddHeader.isEmpty && oddFooter.isEmpty then None
+    else Some(HeaderFooter(oddHeader, oddFooter))
+
+  /**
+   * Parse sheet view settings (GH-258) from the first <sheetView>.
+   *
+   * Returns Some only when a modeled attribute (showGridLines, zoomScale) is present, so typical
+   * files keep viewSettings = None and the raw sheetViews XML rides through unchanged on rewrite
+   * (passive preserve, mirroring freezePane semantics). Out-of-range zoom values are dropped rather
+   * than violating the SheetView invariant.
+   */
+  private def parseSheetView(sheetViewsElem: Option[Elem]): Option[SheetView] =
+    for
+      views <- sheetViewsElem
+      view <- (views \ "sheetView").collectFirst { case e: Elem => e }
+      attrs = view.attributes.asAttrMap
+      showGridLines = attrs.get("showGridLines").map(v => v != "0" && v != "false")
+      zoomScale = attrs.get("zoomScale").flatMap(_.toIntOption).filter(z => z >= 10 && z <= 400)
+      if showGridLines.isDefined || zoomScale.isDefined
+    yield SheetView(showGridLines = showGridLines.getOrElse(true), zoomScale = zoomScale)
 
   /**
    * Assemble final workbook with optional SourceContext for surgical modification.
@@ -911,10 +983,14 @@ object XlsxReader:
           case (None, Some(_)) =>
             Left(XLError.IOError("Unexpected source fingerprint without source handle"))
 
+      // GH-259: lift modelable sheet-scoped print names (_xlnm.Print_Area/_xlnm.Print_Titles)
+      // into Sheet.pageSetup; unmodelable forms stay in metadata.definedNames verbatim.
+      val (sheetsWithPrint, remainingNames) = PrintNames.extract(sheets, definedNames)
+
       val metadata =
-        WorkbookMetadata(theme = theme, definedNames = definedNames, sheetStates = sheetStates)
+        WorkbookMetadata(theme = theme, definedNames = remainingNames, sheetStates = sheetStates)
       sourceContextEither.map(ctx =>
-        Workbook(sheets = sheets, metadata = metadata, sourceContext = ctx)
+        Workbook(sheets = sheetsWithPrint, metadata = metadata, sourceContext = ctx)
       )
 
   /**

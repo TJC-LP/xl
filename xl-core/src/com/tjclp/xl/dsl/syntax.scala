@@ -4,6 +4,8 @@ import com.tjclp.xl.addressing.{ARef, CellRange, RefType}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.units.StyleId
 
 /**
@@ -150,6 +152,64 @@ object syntax:
 
     /** Create a SetRangeStyle patch to apply style to all cells in range */
     def styled(style: CellStyle): Patch = Patch.SetRangeStyle(range, style)
+
+    /**
+     * Outline the outer edges of the range (the boxed-figure pattern in banker templates).
+     *
+     * Edge-correct: cells on the top row get a top border, the bottom row a bottom border, the left
+     * column a left border, and the right column a right border — corners get both, interior cells
+     * are untouched. Degenerate shapes follow naturally: a 1x1 range gets all four sides, a single
+     * row gets top+bottom on every cell, a single column gets left+right.
+     *
+     * Desugars to a Batch of per-cell [[Patch.MergeBorder]] patches, so each cell's existing font,
+     * fill, number format, alignment, and untouched border sides are preserved at apply time (the
+     * CLI's additive border semantics).
+     *
+     * Cost is proportional to the perimeter, not the area — interior cells produce no patches.
+     * Outlining a full column (`A:A`) still touches 1,048,576 edge cells; prefer a bounded range.
+     */
+    def outlined(borderStyle: BorderStyle): Patch =
+      outlinePatch(range, BorderSide(borderStyle))
+
+    /** Outline the outer edges of the range with a colored border. See [[outlined]]. */
+    @annotation.targetName("outlinedColored")
+    def outlined(borderStyle: BorderStyle, color: Color): Patch =
+      outlinePatch(range, BorderSide(borderStyle, color))
+
+  /**
+   * Build the per-cell outline patch for a range: one [[Patch.MergeBorder]] per perimeter cell,
+   * carrying exactly the sides that cell contributes to the outline.
+   */
+  private def outlinePatch(range: CellRange, side: BorderSide): Patch =
+    val top = range.rowStart.index0
+    val bottom = range.rowEnd.index0
+    val left = range.colStart.index0
+    val right = range.colEnd.index0
+
+    def borderAt(col: Int, row: Int): Border =
+      Border(
+        left = if col == left then side else BorderSide.none,
+        right = if col == right then side else BorderSide.none,
+        top = if row == top then side else BorderSide.none,
+        bottom = if row == bottom then side else BorderSide.none
+      )
+
+    // Top and bottom rows span every column; left/right columns only the strictly interior rows
+    // (corners are covered once, by the row pass). A 1-row or 1-column range degenerates cleanly.
+    val edgeRows = if top == bottom then Vector(top) else Vector(top, bottom)
+    val edgeCols = if left == right then Vector(left) else Vector(left, right)
+    val rowPass =
+      for
+        row <- edgeRows
+        col <- left to right
+      yield Patch.MergeBorder(ARef.from0(col, row), borderAt(col, row)): Patch
+    val columnPass =
+      for
+        row <- (top + 1) until bottom
+        col <- edgeCols
+      yield Patch.MergeBorder(ARef.from0(col, row), borderAt(col, row)): Patch
+
+    Patch.Batch(rowPass.toVector ++ columnPass.toVector)
 
   // ========== RefType Extensions (Runtime Interpolation Support) ==========
 

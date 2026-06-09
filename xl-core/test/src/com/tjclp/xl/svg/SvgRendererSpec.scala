@@ -566,7 +566,7 @@ class SvgRendererSpec extends FunSuite:
     assert(svg.contains("""font-size="12px""""), s"9pt should be 12px, got: $svg")
   }
 
-  test("toSvg: font-family with spaces is quoted") {
+  test("toSvg: multi-word font-family is unquoted in SVG attributes, quoted in HTML CSS (GH-255)") {
     import com.tjclp.xl.styles.font.Font
     val timesFont = CellStyle.default.withFont(Font(name = "Times New Roman"))
     val sheet = Sheet("Test")
@@ -576,14 +576,26 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // Font name should be quoted to handle spaces
+    // Quotes are CSS syntax; in an SVG presentation attribute they become part of the family
+    // name, so fontconfig rasterizers (rsvg-convert, resvg) silently substitute sans-serif
     assert(
-      svg.contains("""font-family="'Times New Roman'""""),
-      s"Font with spaces should be quoted, got: $svg"
+      svg.contains("""font-family="Times New Roman""""),
+      s"Multi-word font should be unquoted in SVG attribute, got: $svg"
+    )
+    assert(
+      !svg.contains("'Times New Roman'"),
+      s"SVG attribute must not contain CSS-style quotes, got: $svg"
+    )
+
+    // HTML inline styles are CSS context, where multi-word families keep their quotes
+    val html = sheet.toHtml(ref"A1:A1")
+    assert(
+      html.contains("font-family: 'Times New Roman'"),
+      s"HTML CSS should keep quoted family, got: $html"
     )
   }
 
-  test("toSvg: simple font-family is also quoted") {
+  test("toSvg: simple font-family is also unquoted") {
     import com.tjclp.xl.styles.font.Font
     val arialFont = CellStyle.default.withFont(Font(name = "Arial"))
     val sheet = Sheet("Test")
@@ -593,8 +605,9 @@ class SvgRendererSpec extends FunSuite:
 
     val svg = sheet.toSvg(ref"A1:A1")
 
-    // Even simple font names should be quoted for consistency
-    assert(svg.contains("""font-family="'Arial'""""), s"Font should be quoted, got: $svg")
+    // Simple font names are unquoted for consistency with multi-word names
+    assert(svg.contains("""font-family="Arial""""), s"Font should be unquoted, got: $svg")
+    assert(!svg.contains("""font-family="'Arial'""""), s"Font must not be quoted, got: $svg")
   }
 
   test("toSvg: rich text font size converts pt to px") {
@@ -610,7 +623,7 @@ class SvgRendererSpec extends FunSuite:
     assert(svg.contains("""font-size="21px""""), s"Rich text 16pt should be 21px, got: $svg")
   }
 
-  test("toSvg: rich text font-family is quoted") {
+  test("toSvg: rich text font-family is unquoted in SVG attributes") {
     import com.tjclp.xl.richtext.{RichText, TextRun}
     import com.tjclp.xl.styles.font.Font
     val richText = RichText(TextRun("Styled", Some(Font(name = "Comic Sans MS"))))
@@ -619,8 +632,60 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:A1")
 
     assert(
-      svg.contains("""font-family="'Comic Sans MS'""""),
-      s"Rich text font should be quoted, got: $svg"
+      svg.contains("""font-family="Comic Sans MS""""),
+      s"Rich text font should be unquoted in SVG attribute, got: $svg"
+    )
+    assert(
+      !svg.contains("'Comic Sans MS'"),
+      s"SVG attribute must not contain CSS-style quotes, got: $svg"
+    )
+  }
+
+  // ========== Underline Tests (GH-256) ==========
+
+  test("toSvg: underlined cell emits text-decoration on text element (GH-256)") {
+    import com.tjclp.xl.styles.font.Font
+    val underlined = CellStyle.default.withFont(Font(bold = true, underline = true))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "I. Valuation Analysis")
+      .unsafe
+      .withCellStyle(ref"A1", underlined)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(
+      svg.contains("""text-decoration="underline""""),
+      s"Underlined cell should emit text-decoration on <text>, got: $svg"
+    )
+  }
+
+  test("toSvg: cell without underline has no text-decoration") {
+    import com.tjclp.xl.styles.font.Font
+    val plain = CellStyle.default.withFont(Font(bold = true))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Plain")
+      .unsafe
+      .withCellStyle(ref"A1", plain)
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(
+      !svg.contains("text-decoration"),
+      s"Cell without underline should not emit text-decoration, got: $svg"
+    )
+  }
+
+  test("toSvg: underlined rich text run emits text-decoration") {
+    import com.tjclp.xl.richtext.{RichText, TextRun}
+    import com.tjclp.xl.styles.font.Font
+    val richText = RichText(TextRun("Key", Some(Font(underline = true))))
+    val sheet = Sheet("Test").put(ref"A1", CellValue.RichText(richText))
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(
+      svg.contains("""text-decoration="underline""""),
+      s"Underlined rich text run should emit text-decoration, got: $svg"
     )
   }
 
@@ -1016,3 +1081,15 @@ class SvgRendererSpec extends FunSuite:
     assert(svg.contains("2/3/25"), s"SVG should contain formatted date '2/3/25', got: $svg")
     assert(!svg.contains("2025-02-03T"), s"SVG should NOT contain ISO format")
   }
+
+  test("GH-255 cascade: .cell-text CSS rule declares no font, so per-cell attrs win"):
+    // CSS class rules outrank presentation attributes; a font-family/font-size declaration on
+    // .cell-text silently overrode every per-cell font in CSS-aware rasterizers.
+    val sheet = Sheet(SheetName.unsafe("S")).put(
+      ARef.from0(0, 0),
+      CellValue.Text("serif")
+    )
+    val svg = SvgRenderer.toSvg(sheet, CellRange(ARef.from0(0, 0), ARef.from0(0, 0)))
+    val styleBlock = svg.substring(svg.indexOf("<style>"), svg.indexOf("</style>"))
+    assert(!styleBlock.contains(".cell-text"), "cell-text must not have a CSS rule")
+    assert(styleBlock.contains(".header-text"), "header styling stays CSS-driven")

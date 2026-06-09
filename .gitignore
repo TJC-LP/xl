@@ -71,3 +71,4 @@ results/
 ### Downloaded Binaries ###
 xl-*-linux-amd64
 xl-skill-*.zip
+.claude/worktrees/

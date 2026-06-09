@@ -34,7 +34,9 @@ object SvgRenderer:
    * @param showLabels
    *   Whether to show column letters (A, B, C...) and row numbers (1, 2, 3...) (default: false)
    * @param showGridlines
-   *   Whether to show cell gridlines (default: false, matches HTML behavior)
+   *   Whether to show cell gridlines (default: false, matches HTML behavior). A sheet-level
+   *   `SheetView(showGridLines = false)` suppresses gridlines even when this flag is set, matching
+   *   how Excel renders such sheets (GH-258).
    * @return
    *   SVG string
    */
@@ -46,6 +48,9 @@ object SvgRenderer:
     showLabels: Boolean = false,
     showGridlines: Boolean = false
   ): String =
+    // GH-258: the sheet's own view settings win when they disable gridlines (templates that are
+    // gridline-free in Excel must stay gridline-free in exports).
+    val gridlinesEnabled = showGridlines && sheet.viewSettings.forall(_.showGridLines)
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
@@ -76,11 +81,14 @@ object SvgRenderer:
     sb.append(s"""width="$totalWidth" height="$totalHeight">\n""")
 
     // Embedded styles - note: 11pt = ~15px (11 * 4/3)
-    // Gridlines are now applied via inline stroke attributes for reliable cross-renderer support
+    // Gridlines are now applied via inline stroke attributes for reliable cross-renderer support.
+    // IMPORTANT: .cell-text must NOT declare font-family/font-size — CSS class rules outrank
+    // presentation attributes in the cascade, which silently overrode per-cell fonts in every
+    // CSS-aware rasterizer (GH-255). Cell text carries explicit font attributes on every path
+    // instead; the class remains for semantic grouping only.
     sb.append(s"""  <style>
     .header { fill: #E0E0E0; stroke: #999999; stroke-width: 1; }
     .header-text { font-family: 'Segoe UI', Arial, sans-serif; font-size: 15px; fill: #333333; }
-    .cell-text { font-family: 'Calibri', 'Segoe UI', Arial, sans-serif; font-size: 15px; }
   </style>
 """)
 
@@ -207,7 +215,7 @@ object SvgRenderer:
 
             // Gridlines: add explicit stroke attributes (CSS-only approach unreliable across renderers)
             val strokeAttr =
-              if showGridlines then """ stroke="#D0D0D0" stroke-width="0.5""""
+              if gridlinesEnabled then """ stroke="#D0D0D0" stroke-width="0.5""""
               else ""
 
             sb.append(
@@ -259,8 +267,9 @@ object SvgRenderer:
                       case "end" => textX - totalWidth
                       case _ => textX // "start"
 
+                    // Explicit base font attrs (was CSS .cell-text): tspan runs override per-run
                     textBuffer.append(
-                      s"""    <text y="$textY" class="cell-text"$clipAttr>"""
+                      s"""    <text y="$textY" class="cell-text" font-size="15px" font-family="Calibri"$clipAttr>"""
                     )
                     rt.runs.zipWithIndex.foldLeft(adjustedTextX) { case (currentX, (run, idx)) =>
                       val runStyle = runToSvgStyle(run, baseFont, theme)
@@ -274,8 +283,11 @@ object SvgRenderer:
                   case other =>
                     val text = cellValueToText(other, numFmt)
                     if text.nonEmpty then
+                      // includeStyles=false still needs explicit font attrs now that the
+                      // .cell-text CSS rule no longer declares them (GH-255 cascade fix)
                       val textStyle =
-                        if includeStyles then cellTextStyle(cell, sheet, theme) else ""
+                        if includeStyles then cellTextStyle(cell, sheet, theme)
+                        else """ fill="#000000" font-size="15px" font-family="Calibri""""
                       val style = cell.styleId.flatMap(sheet.styleRegistry.get)
                       val shouldWrap = style.exists(_.align.wrapText)
 
@@ -489,18 +501,21 @@ object SvgRenderer:
         // Font style
         if style.font.italic then attrs += """font-style="italic""""
 
+        // Underline (SVG uses text-decoration, GH-256)
+        if style.font.underline then attrs += """text-decoration="underline""""
+
         // ALWAYS include font size (don't rely on CSS defaults) - convert pt to px (pt * 4/3)
         val fontSizePx = (style.font.sizePt * 4.0 / 3.0).toInt
         attrs += s"""font-size="${fontSizePx}px""""
 
-        // ALWAYS include font family (even if default) - quote font names for SVG
-        attrs += s"""font-family="'${escapeCss(style.font.name)}'""""
+        // ALWAYS include font family (even if default) - unquoted in SVG attributes (GH-255)
+        attrs += s"""font-family="${svgFontFamily(style.font.name)}""""
 
         " " + attrs.mkString(" ")
       }
       .getOrElse {
         // No style - use explicit defaults for exact fidelity
-        """ fill="#000000" font-size="15px" font-family="'Calibri'""""
+        """ fill="#000000" font-size="15px" font-family="Calibri""""
       }
 
   /**
@@ -535,8 +550,8 @@ object SvgRenderer:
         val fontSizePx = (f.sizePt * 4.0 / 3.0).toInt
         attrs += s"""font-size="${fontSizePx}px""""
 
-        // Font family - always include for exact fidelity - quote font names for SVG
-        attrs += s"""font-family="'${escapeCss(f.name)}'""""
+        // Font family - always include for exact fidelity - unquoted in SVG attributes (GH-255)
+        attrs += s"""font-family="${svgFontFamily(f.name)}""""
 
         if attrs.nonEmpty then " " + attrs.mkString(" ") else ""
 
