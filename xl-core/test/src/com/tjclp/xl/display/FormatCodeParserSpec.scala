@@ -276,6 +276,70 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(zero, "—")
   }
 
+  // ========== Section Selection (Excel semantics, GH-254) ==========
+  // Excel routes values to sections as follows:
+  //   1 section:  all numbers use it
+  //   2 sections: positive + zero use 1st, negative uses 2nd
+  //   3 sections: positive → 1st, negative → 2nd, zero → 3rd
+  //   4 sections: positive / negative / zero / text
+
+  test("section selection: 1 section formats positive, negative, and zero") {
+    val code = FormatCodeParser.parse("0.0").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1.5"), code)._1, "1.5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("-1.5"), code)._1, "-1.5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("0"), code)._1, "0.0")
+  }
+
+  test("section selection: 2 sections route zero to positive section") {
+    val code = FormatCodeParser.parse("0.0;(0.0)").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1.5"), code)._1, "1.5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("-1.5"), code)._1, "(1.5)")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("0"), code)._1, "0.0")
+  }
+
+  test("section selection: 3 sections route zero to explicit zero section") {
+    val code = FormatCodeParser.parse("0.0;(0.0);\"-\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1.5"), code)._1, "1.5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("-1.5"), code)._1, "(1.5)")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("0"), code)._1, "-")
+  }
+
+  test("section selection: 4 sections route pos/neg/zero/text independently") {
+    val code = FormatCodeParser.parse("0.0;(0.0);\"zero\";@").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1.5"), code)._1, "1.5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("-1.5"), code)._1, "(1.5)")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("0"), code)._1, "zero")
+    assertEquals(FormatCodeParser.applyTextFormat("abc", code), "abc")
+  }
+
+  test("TJC house code: \"$\"#,##0.0_);(\"$\"#,##0.0) routes zero to positive (GH-254)") {
+    val code = FormatCodeParser.parse("\"$\"#,##0.0_);(\"$\"#,##0.0)").toOption.get
+
+    val (zero, _) = FormatCodeParser.applyFormat(BigDecimal("0"), code)
+    assert(!zero.contains("("), s"Zero must not use the negative section: $zero")
+    assertEquals(zero.trim, "$0.0") // trailing space from _) spacer
+
+    val (pos, _) = FormatCodeParser.applyFormat(BigDecimal("1234.56"), code)
+    assertEquals(pos.trim, "$1,234.6")
+
+    val (neg, _) = FormatCodeParser.applyFormat(BigDecimal("-1234.56"), code)
+    assertEquals(neg, "($1,234.6)")
+  }
+
+  test("TJC house code: 0.0%_);(0.0%) routes zero to positive (GH-254)") {
+    val code = FormatCodeParser.parse("0.0%_);(0.0%)").toOption.get
+
+    val (zero, _) = FormatCodeParser.applyFormat(BigDecimal("0"), code)
+    assert(!zero.contains("("), s"Zero must not use the negative section: $zero")
+    assertEquals(zero.trim, "0.0%") // trailing space from _) spacer
+
+    val (pos, _) = FormatCodeParser.applyFormat(BigDecimal("0.125"), code)
+    assertEquals(pos.trim, "12.5%")
+
+    val (neg, _) = FormatCodeParser.applyFormat(BigDecimal("-0.125"), code)
+    assertEquals(neg, "(12.5%)")
+  }
+
   // ========== Date/Time Formatting Tests ==========
 
   test("applyDateFormat: simple date m/d/yy") {

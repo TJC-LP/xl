@@ -407,6 +407,11 @@ object FormatCodeParser:
   /**
    * Apply a parsed format code to a numeric value.
    *
+   * Section selection follows Excel's rules:
+   *   - 1 section: all numbers use it (negatives keep their default minus sign)
+   *   - 2 sections: positive and zero use the 1st, negative uses the 2nd
+   *   - 3+ sections: positive uses the 1st, negative the 2nd, zero the 3rd
+   *
    * @param value
    *   The number to format
    * @param format
@@ -425,7 +430,7 @@ object FormatCodeParser:
       else
         format.zero match
           case Some(z) => (z, value)
-          case None => format.negative.getOrElse(format.positive) -> value
+          case None => (format.positive, value) // Excel: zero uses positive section (GH-254)
 
     val color = section.condition.collect { case Condition.Color(c) => c }
     val formatted = applyPattern(effectiveValue, section.pattern)

@@ -301,6 +301,22 @@ class DisplaySpec extends FunSuite:
     assertEquals(result, "Product: 5 units @ $1,000.00 each")
   }
 
+  test("excel interpolator routes zero through positive section of 2-section custom code (GH-254)") {
+    import ExcelInterpolator.*
+    import DisplayConversions.given
+
+    given Sheet = Sheet(name = SheetName.unsafe("Test"))
+      .put(ref"A1", BigDecimal("0"))
+      .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Custom("0.0%_);(0.0%)")))
+      .unsafe
+
+    given FormulaDisplayStrategy = FormulaDisplayStrategy.default
+
+    val result = excel"Rate: ${ref"A1"}"
+    assertEquals(result.trim, "Rate: 0.0%") // trailing space from _) spacer
+    assert(!result.contains("("), s"Zero must not use the negative section: $result")
+  }
+
   // ========== Syntax Extension Tests ==========
 
   test("sheet.display() returns formatted value") {
@@ -316,6 +332,23 @@ class DisplaySpec extends FunSuite:
 
     val result = mySheet.displayCell(ref"A1")
     assertEquals(result.formatted, "85%")
+  }
+
+  test("displayCell routes zero through positive section of 2-section custom code (GH-254)") {
+    import com.tjclp.xl.display.syntax.*
+    import DisplayConversions.given
+
+    val houseCode = "\"$\"#,##0.0_);(\"$\"#,##0.0)"
+    val mySheet = Sheet(name = SheetName.unsafe("Test"))
+      .put(ref"A1", BigDecimal("0"))
+      .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Custom(houseCode)))
+      .unsafe
+
+    given FormulaDisplayStrategy = FormulaDisplayStrategy.default
+
+    val result = mySheet.displayCell(ref"A1")
+    assertEquals(result.formatted.trim, "$0.0") // trailing space from _) spacer
+    assert(!result.formatted.contains("("), s"Zero must not use the negative section: $result")
   }
 
   test("sheet.displayFormula() shows raw formula") {
