@@ -125,6 +125,19 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(sheet.readTypedOr[Int](ref"A1", 0), 10)
     assertEquals(sheet.readTypedOpt[Int](ref"Z9"), None)
 
+  test("recalculate with per-cell errors resolves through the prelude"):
+    val sheet = Sheet("Calc2")
+      .put(ref"A1", 10)
+      .put(ref"A2", fx"=A1*2")
+      .put(ref"A3", fx"=NOSUCHFN(A1)")
+    val result: RecalcResult = Workbook(sheet).recalculate()
+    assert(!result.isClean)
+    assertEquals(result.errors.map(_.ref.toA1), Vector("A3"))
+    assertEquals(
+      result.evaluated.values.headOption.flatMap(_.get(ref"A2")),
+      Some(CellValue.Number(BigDecimal(20)))
+    )
+
   test("workbook construction, withCachedFormulas, and sync Excel round-trip"):
     val sheet = Sheet("Data")
       .put(ref"A1", 10)

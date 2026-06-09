@@ -7,9 +7,10 @@ import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.Clock
 
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.error.XLResult
+import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
 // Import SheetEvaluator extension methods
@@ -81,28 +82,105 @@ object WorkbookEvaluator:
      * Formulas that fail to evaluate (unsupported functions, circular refs) are left without cached
      * values - Excel will recalculate on open.
      *
+     * Implemented as `recalculate(clock).workbook`; use `recalculate` directly when you need to
+     * know which cells failed.
+     *
      * @param clock
      *   Clock for volatile functions (TODAY, NOW). Defaults to system clock.
      * @return
      *   Workbook with formula cells containing cached values
      */
     def withCachedFormulas(clock: Clock = Clock.system): Workbook =
-      val updatedSheets = wb.sheets.map { sheet =>
-        sheet.evaluateWithDependencyCheck(clock) match
-          case Right(results) =>
-            // Update formula cells with cached values
-            results.foldLeft(sheet) { case (s, (ref, computedValue)) =>
-              s.cells.get(ref) match
-                case Some(cell) =>
-                  cell.value match
-                    case CellValue.Formula(expr, _) =>
-                      s.put(ref, CellValue.Formula(expr, Some(computedValue)))
-                    case _ => s
-                case None => s
-            }
-          case Left(_) =>
-            // Circular reference or evaluation error - leave formulas uncached
-            // Excel will recalculate on open
-            sheet
-      }
-      wb.copy(sheets = updatedSheets)
+      recalculate(clock).workbook
+
+    /**
+     * Total whole-workbook recalculation with per-cell error reporting.
+     *
+     * Evaluates every formula in every sheet in dependency order, with cross-sheet references
+     * resolved against this workbook. Failures never propagate: a failing cell becomes a
+     * [[CellEvalError]] and stays uncached; cycle participants are isolated (reported as circular,
+     * their downstream dependents as blocked) while the acyclic remainder still evaluates.
+     *
+     * {{{
+     * val result = wb.recalculate()
+     * result.errors.foreach(e => println(e.render))
+     * Excel.write(result.workbook, "out.xlsx")  // partial results; failed cells stay uncached
+     * result.toEither                           // Left(errors) when not clean
+     * }}}
+     */
+    def recalculate(clock: Clock = Clock.system): RecalcResult =
+      val perSheet = wb.sheets.map(sheet => recalcSheet(sheet, wb, clock))
+      RecalcResult(
+        workbook = wb.copy(sheets = perSheet.map(_.sheet)),
+        evaluated = perSheet.map(r => r.sheet.name -> r.evaluated).toMap,
+        errors = perSheet.flatMap(_.errors).toVector
+      )
+
+  // ========== recalculate internals ==========
+
+  private final case class SheetRecalc(
+    sheet: Sheet,
+    evaluated: Map[ARef, CellValue],
+    errors: Vector[CellEvalError]
+  )
+
+  private def formulaText(sheet: Sheet, ref: ARef): String =
+    sheet.cells.get(ref).map(_.value) match
+      case Some(CellValue.Formula(expr, _)) => expr
+      case _ => ref.toA1
+
+  private def recalcSheet(sheet: Sheet, wb: Workbook, clock: Clock): SheetRecalc =
+    val graph = DependencyGraph.fromSheet(sheet)
+    val cyclicCore = DependencyGraph.cyclicNodes(graph)
+    val blocked = DependencyGraph.transitiveDependents(graph, cyclicCore)
+
+    val cycleErrors = cyclicCore.toVector.map { ref =>
+      CellEvalError(
+        sheet.name,
+        ref,
+        XLError.FormulaError(formulaText(sheet, ref), "Circular reference")
+      )
+    }
+    val blockedErrors = (blocked -- cyclicCore).toVector.map { ref =>
+      CellEvalError(
+        sheet.name,
+        ref,
+        XLError.FormulaError(formulaText(sheet, ref), "Blocked by an upstream circular reference")
+      )
+    }
+
+    val removed = cyclicCore ++ blocked
+    val pruned = DependencyGraph(
+      dependencies = (graph.dependencies -- removed).view.mapValues(_ -- removed).toMap,
+      dependents = (graph.dependents -- removed).view.mapValues(_ -- removed).toMap
+    )
+
+    DependencyGraph.topologicalSort(pruned) match
+      case Left(circular) =>
+        // Unreachable: cyclicNodes removed every cycle participant. Stay total regardless.
+        val residual = pruned.dependencies.keySet.toVector.map { ref =>
+          CellEvalError(
+            sheet.name,
+            ref,
+            XLError.FormulaError(formulaText(sheet, ref), s"Unresolvable order: $circular")
+          )
+        }
+        SheetRecalc(sheet, Map.empty, cycleErrors ++ blockedErrors ++ residual)
+
+      case Right(evalOrder) =>
+        val (tempSheet, results, evalErrors) = evalOrder.foldLeft(
+          (sheet, Map.empty[ARef, CellValue], Vector.empty[CellEvalError])
+        ) { case ((temp, acc, errs), ref) =>
+          temp.evaluateCell(ref, clock, Some(wb)) match
+            case Right(value) => (temp.put(ref, value), acc + (ref -> value), errs)
+            case Left(error) => (temp, acc, errs :+ CellEvalError(sheet.name, ref, error))
+        }
+
+        // Cache computed values into formula cells; failed cells stay uncached
+        val cachedSheet = results.foldLeft(sheet) { case (s, (ref, computed)) =>
+          s.cells.get(ref).map(_.value) match
+            case Some(CellValue.Formula(expr, _)) =>
+              s.put(ref, CellValue.Formula(expr, Some(computed)))
+            case _ => s
+        }
+        SheetRecalc(cachedSheet, results, cycleErrors ++ blockedErrors ++ evalErrors)

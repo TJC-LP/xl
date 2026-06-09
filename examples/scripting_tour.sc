@@ -49,8 +49,10 @@ val stamped = zeroed
   .put(ref"F1", "As of")
   .put(ref"G1", LocalDate.of(2026, 6, 9))
 
-// ========== 4. Evaluate formulas: whole-workbook recalc with cached results ==========
-val wb = Workbook(stamped).withCachedFormulas()
+// ========== 5. Recalculate: total, per-cell errors, cross-sheet aware ==========
+val recalc = Workbook(stamped).recalculate()
+if !recalc.isClean then recalc.errors.foreach(e => println(s"  ⚠ ${e.render}"))
+val wb = recalc.workbook
 val sheet = wb.sheets.headOption.getOrElse(sys.exit(1))
 
 // Single-formula evaluation returns XLResult — compose with for-comprehensions

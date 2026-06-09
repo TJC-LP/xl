@@ -625,6 +625,54 @@ object DependencyGraph:
       case None => scala.util.Right(())
 
   /**
+   * Collect every node that participates in a reference cycle.
+   *
+   * Unlike `detectCycles` (which fails fast on the first cycle), this identifies the complete set
+   * of cells inside strongly connected components of size > 1, plus self-loops. Used by
+   * `Workbook.recalculate` to isolate cyclic cells while still evaluating the acyclic remainder.
+   *
+   * @return
+   *   The set of cycle participants (empty when the graph is acyclic)
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def cyclicNodes(graph: DependencyGraph): Set[ARef] =
+    // Tarjan's SCC, same imperative style as detectCycles, but collecting all SCCs.
+    var index = 0
+    var stack = List.empty[ARef]
+    var indices = Map.empty[ARef, Int]
+    var lowLinks = Map.empty[ARef, Int]
+    var onStack = Set.empty[ARef]
+    var cyclic = Set.empty[ARef]
+
+    def strongConnect(v: ARef): Unit =
+      indices = indices.updated(v, index)
+      lowLinks = lowLinks.updated(v, index)
+      index += 1
+      stack = v :: stack
+      onStack = onStack + v
+
+      graph.dependencies.getOrElse(v, Set.empty).foreach { w =>
+        if !indices.contains(w) then
+          strongConnect(w)
+          lowLinks = lowLinks.updated(v, math.min(lowLinks(v), lowLinks(w)))
+        else if onStack.contains(w) then
+          lowLinks = lowLinks.updated(v, math.min(lowLinks(v), indices(w)))
+      }
+
+      if lowLinks(v) == indices(v) then
+        val (sccTail, remaining) = stack.span(_ != v)
+        val scc = sccTail :+ v
+        stack = remaining.drop(1)
+        onStack = onStack -- scc
+        if sccTail.nonEmpty then cyclic = cyclic ++ scc
+        else if graph.dependencies.get(v).exists(_.contains(v)) then cyclic = cyclic + v
+
+    graph.dependencies.keySet.foreach { node =>
+      if !indices.contains(node) then strongConnect(node)
+    }
+    cyclic
+
+  /**
    * Topological sort using Kahn's algorithm.
    *
    * Returns a linear ordering of cells such that for every dependency A → B, cell B appears before

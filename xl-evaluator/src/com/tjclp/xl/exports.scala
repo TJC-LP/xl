@@ -39,9 +39,12 @@ object formulaExports:
   export formula.eval.SheetEvaluator
   export formula.eval.SheetEvaluator.*
 
-  // WorkbookEvaluator extension methods (withCachedFormulas)
+  // WorkbookEvaluator extension methods (withCachedFormulas, recalculate, evaluateFormula)
   export formula.eval.WorkbookEvaluator
   export formula.eval.WorkbookEvaluator.*
+
+  // Recalc result types (workbook-level total recalculation with per-cell errors)
+  export formula.eval.{CellEvalError, RecalcResult}
 
   // DependentRecalculation extension methods (GH-163)
   // Note: Extension methods with default parameters must be imported directly,
