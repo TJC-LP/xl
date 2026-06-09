@@ -254,6 +254,33 @@ jobs:
           # Create zip (flat skill structure for Claude.ai)
           cd skill-dist && zip -r ../xl-skill-$VERSION.zip . && cd ..
 
+      - name: Package xl-scripting skill for Claude.ai
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Version gate: the skill's pinned dependency must match the release tag.
+          # The pin is bumped by release-prep; a mismatch means the docs teach a stale API.
+          if ! grep -rq "com.tjclp::xl:$VERSION" plugin/skills/xl-scripting/SKILL.md plugin/skills/xl-scripting/reference/; then
+            echo "::error::xl-scripting skill does not pin com.tjclp::xl:$VERSION — run release-prep version bump"
+            exit 1
+          fi
+          STALE=$(grep -rEoh "com\.tjclp::xl:[0-9A-Za-z.+-]+" plugin/skills/xl-scripting/ | sort -u | grep -v ":$VERSION$" || true)
+          if [ -n "$STALE" ]; then
+            echo "::error::xl-scripting skill contains stale version pins: $STALE"
+            exit 1
+          fi
+
+          mkdir -p scripting-skill-dist/reference
+          cp plugin/skills/xl-scripting/SKILL.md scripting-skill-dist/
+          cp plugin/skills/xl-scripting/reference/*.md scripting-skill-dist/reference/
+
+          cat > scripting-skill-dist/VERSION << EOF
+          version=$VERSION
+          released=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          EOF
+
+          cd scripting-skill-dist && zip -r ../xl-scripting-skill-$VERSION.zip . && cd ..
+
       - name: Download native binaries
         uses: actions/download-artifact@v4
         with:
@@ -265,8 +292,9 @@ jobs:
           mkdir -p release-assets
           # Copy JAR tarball
           cp xl-cli-$VERSION.tar.gz release-assets/
-          # Copy skill zip (for Claude.ai upload)
+          # Copy skill zips (for Claude.ai upload)
           cp xl-skill-$VERSION.zip release-assets/
+          cp xl-scripting-skill-$VERSION.zip release-assets/
           # Copy native binaries (versioned names)
           cp native-binaries/xl-$VERSION-linux-amd64/xl-$VERSION-linux-amd64 release-assets/
           cp native-binaries/xl-$VERSION-darwin-amd64/xl-$VERSION-darwin-amd64 release-assets/
@@ -286,6 +314,7 @@ jobs:
           files: |
             release-assets/xl-cli-${{ steps.version.outputs.version }}.tar.gz
             release-assets/xl-skill-${{ steps.version.outputs.version }}.zip
+            release-assets/xl-scripting-skill-${{ steps.version.outputs.version }}.zip
             release-assets/xl-${{ steps.version.outputs.version }}-linux-amd64
             release-assets/xl-${{ steps.version.outputs.version }}-darwin-amd64
             release-assets/xl-${{ steps.version.outputs.version }}-darwin-arm64

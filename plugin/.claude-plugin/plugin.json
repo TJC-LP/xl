@@ -1,6 +1,6 @@
 {
   "name": "xl",
-  "description": "LLM-friendly Excel CLI for reading, writing, styling, and analyzing spreadsheets. Run `xl <command> --help` for comprehensive usage.",
+  "description": "LLM-friendly Excel tooling: the xl CLI for reading, writing, styling, and analyzing spreadsheets (xl-cli skill), plus type-safe Scala scripting against the xl library via scala-cli for bulk transformations, pipelines, and formula models (xl-scripting skill).",
   "version": "0.10.0",
   "author": {
     "name": "TJC L.P.",
@@ -9,5 +9,5 @@
   "repository": "https://github.com/TJC-LP/xl",
   "homepage": "https://github.com/TJC-LP/xl",
   "license": "Apache-2.0",
-  "keywords": ["excel", "xlsx", "spreadsheet", "cli", "ooxml", "formula", "styling"]
+  "keywords": ["excel", "xlsx", "spreadsheet", "cli", "ooxml", "formula", "styling", "scala", "scala-cli", "scripting", "library"]
 }
