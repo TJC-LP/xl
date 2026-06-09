@@ -14,6 +14,23 @@ final case class Border(
   def withTop(side: BorderSide): Border = copy(top = side)
   def withBottom(side: BorderSide): Border = copy(bottom = side)
 
+  /**
+   * Merge another border into this one, side by side (additive overlay).
+   *
+   * Sides that are set (non-none) in `overlay` replace the corresponding side of this border; sides
+   * that are `BorderSide.none` in `overlay` leave the existing side untouched. This mirrors the
+   * CLI's additive border semantics (`--border-top` only touches the top side).
+   *
+   * Laws: associative, idempotent, with `Border.none` as identity.
+   */
+  def merge(overlay: Border): Border =
+    Border(
+      left = if overlay.left == BorderSide.none then left else overlay.left,
+      right = if overlay.right == BorderSide.none then right else overlay.right,
+      top = if overlay.top == BorderSide.none then top else overlay.top,
+      bottom = if overlay.bottom == BorderSide.none then bottom else overlay.bottom
+    )
+
 object Border:
   val none: Border = Border()
 

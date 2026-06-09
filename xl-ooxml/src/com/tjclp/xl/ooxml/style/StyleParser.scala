@@ -231,9 +231,12 @@ object WorkbookStyles:
           .attribute("wrapText")
           .flatMap(attr => parseBool(attr.text))
           .getOrElse(Align.default.wrapText)
+        // OOXML indent is an unsigned int; ignore negative values from malformed files so the
+        // parser stays total (Align requires indent >= 0)
         val indent = alignElem
           .attribute("indent")
           .flatMap(attr => attr.text.toIntOption)
+          .filter(_ >= 0)
           .getOrElse(Align.default.indent)
         Some(
           Align(

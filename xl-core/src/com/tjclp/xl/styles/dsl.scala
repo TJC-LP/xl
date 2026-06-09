@@ -1,7 +1,7 @@
 package com.tjclp.xl.styles
 
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
-import com.tjclp.xl.styles.border.{Border, BorderStyle}
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
@@ -189,6 +189,16 @@ object dsl:
     inline def wrap: CellStyle =
       style.withAlign(style.align.withWrap(true))
 
+    /**
+     * Set the alignment indent level (Excel's `indent` attribute, ~3 characters per level).
+     *
+     * Indentation travels with the style, not the value — unlike leading spaces, it survives
+     * round-trips, keeps the stored value clean for downstream parsing, and matches how house
+     * templates indent line items. Negative values are clamped to 0 (no indent).
+     */
+    inline def indent(n: Int): CellStyle =
+      style.withAlign(style.align.withIndent(math.max(0, n)))
+
     // ========== Borders ==========
 
     /** Set all borders to thin */
@@ -206,6 +216,49 @@ object dsl:
     /** Remove all borders */
     inline def borderNone: CellStyle =
       style.withBorder(Border.none)
+
+    // ========== Per-Side Borders ==========
+    // Each builder merges into the existing border: only the named side is replaced, the other
+    // three sides are preserved, so per-side builders compose (e.g. `.borderTop(Thin).borderBottom
+    // (Medium)`). Color-taking variants are explicit overloads, NOT default parameters: extension
+    // methods with default parameters break when merged through wildcard exports (see
+    // xl-evaluator exports.scala note on the Scala 3 compiler bug).
+
+    /** Set the top border side, preserving the other sides (typical column-header bottom rule). */
+    inline def borderTop(borderStyle: BorderStyle): CellStyle =
+      style.withBorder(style.border.withTop(BorderSide(borderStyle)))
+
+    /** Set the top border side with a color, preserving the other sides. */
+    @annotation.targetName("borderTopColored")
+    inline def borderTop(borderStyle: BorderStyle, color: Color): CellStyle =
+      style.withBorder(style.border.withTop(BorderSide(borderStyle, color)))
+
+    /** Set the bottom border side, preserving the other sides. */
+    inline def borderBottom(borderStyle: BorderStyle): CellStyle =
+      style.withBorder(style.border.withBottom(BorderSide(borderStyle)))
+
+    /** Set the bottom border side with a color, preserving the other sides. */
+    @annotation.targetName("borderBottomColored")
+    inline def borderBottom(borderStyle: BorderStyle, color: Color): CellStyle =
+      style.withBorder(style.border.withBottom(BorderSide(borderStyle, color)))
+
+    /** Set the left border side, preserving the other sides. */
+    inline def borderLeft(borderStyle: BorderStyle): CellStyle =
+      style.withBorder(style.border.withLeft(BorderSide(borderStyle)))
+
+    /** Set the left border side with a color, preserving the other sides. */
+    @annotation.targetName("borderLeftColored")
+    inline def borderLeft(borderStyle: BorderStyle, color: Color): CellStyle =
+      style.withBorder(style.border.withLeft(BorderSide(borderStyle, color)))
+
+    /** Set the right border side, preserving the other sides. */
+    inline def borderRight(borderStyle: BorderStyle): CellStyle =
+      style.withBorder(style.border.withRight(BorderSide(borderStyle)))
+
+    /** Set the right border side with a color, preserving the other sides. */
+    @annotation.targetName("borderRightColored")
+    inline def borderRight(borderStyle: BorderStyle, color: Color): CellStyle =
+      style.withBorder(style.border.withRight(BorderSide(borderStyle, color)))
 
     // ========== Number Formats ==========
 

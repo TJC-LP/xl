@@ -379,6 +379,18 @@ class StyleSpec extends ScalaCheckSuite:
     assertNotEquals(key1, key2)
   }
 
+  test("CellStyle.canonicalKey distinguishes styles differing only by indent (GH-260)") {
+    // Style dedup must account for indent: two styles that differ only by indent level
+    // would otherwise collapse to one xf in styles.xml, losing the indentation.
+    val indent0 = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
+    val indent1 = CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 1))
+    val indent2 = CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 2))
+
+    assertNotEquals(indent0.canonicalKey, indent1.canonicalKey)
+    assertNotEquals(indent1.canonicalKey, indent2.canonicalKey)
+    assertNotEquals(indent0.canonicalKey, indent2.canonicalKey)
+  }
+
   property("CellStyle.canonicalKey: equal styles have equal keys") {
     forAll { (style: CellStyle) =>
       val copy = style.copy()

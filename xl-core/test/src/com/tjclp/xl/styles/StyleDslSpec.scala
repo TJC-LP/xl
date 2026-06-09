@@ -1,7 +1,7 @@
 package com.tjclp.xl.styles
 
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
-import com.tjclp.xl.styles.border.{Border, BorderStyle}
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.font.Font
@@ -189,6 +189,31 @@ class StyleDslSpec extends ScalaCheckSuite:
     assert(style.align.wrapText)
   }
 
+  // ========== Indent Tests ==========
+
+  test("indent sets alignment indent level") {
+    val style = CellStyle.default.indent(2)
+    assertEquals(style.align.indent, 2)
+  }
+
+  test("indent preserves other alignment properties") {
+    val style = CellStyle.default.left.wrap.indent(3)
+    assertEquals(style.align.horizontal, HAlign.Left)
+    assert(style.align.wrapText)
+    assertEquals(style.align.indent, 3)
+  }
+
+  test("indent clamps negative values to 0 (total, never throws)") {
+    val style = CellStyle.default.indent(5).indent(-1)
+    assertEquals(style.align.indent, 0)
+  }
+
+  test("indent(0) clears an existing indent") {
+    val style = CellStyle.default.indent(4).indent(0)
+    assertEquals(style.align.indent, 0)
+    assertEquals(style.align, Align.default)
+  }
+
   // ========== Border Tests ==========
 
   test("bordered sets all borders to thin") {
@@ -204,6 +229,86 @@ class StyleDslSpec extends ScalaCheckSuite:
   test("borderedThick sets all borders to thick") {
     val style = CellStyle.default.borderedThick
     assertEquals(style.border, Border.all(BorderStyle.Thick))
+  }
+
+  // ========== Per-Side Border Tests ==========
+
+  test("borderTop sets only the top side") {
+    val style = CellStyle.default.borderTop(BorderStyle.Thin)
+    assertEquals(style.border.top, BorderSide(BorderStyle.Thin))
+    assertEquals(style.border.bottom, BorderSide.none)
+    assertEquals(style.border.left, BorderSide.none)
+    assertEquals(style.border.right, BorderSide.none)
+  }
+
+  test("borderBottom sets only the bottom side") {
+    val style = CellStyle.default.borderBottom(BorderStyle.Medium)
+    assertEquals(style.border.bottom, BorderSide(BorderStyle.Medium))
+    assertEquals(style.border.top, BorderSide.none)
+  }
+
+  test("borderLeft sets only the left side") {
+    val style = CellStyle.default.borderLeft(BorderStyle.Dashed)
+    assertEquals(style.border.left, BorderSide(BorderStyle.Dashed))
+    assertEquals(style.border.right, BorderSide.none)
+  }
+
+  test("borderRight sets only the right side") {
+    val style = CellStyle.default.borderRight(BorderStyle.Double)
+    assertEquals(style.border.right, BorderSide(BorderStyle.Double))
+    assertEquals(style.border.left, BorderSide.none)
+  }
+
+  test("per-side border builders compose (each side independent)") {
+    val style = CellStyle.default
+      .borderTop(BorderStyle.Thin)
+      .borderBottom(BorderStyle.Double)
+      .borderLeft(BorderStyle.Medium)
+      .borderRight(BorderStyle.Thick)
+    assertEquals(
+      style.border,
+      Border(
+        left = BorderSide(BorderStyle.Medium),
+        right = BorderSide(BorderStyle.Thick),
+        top = BorderSide(BorderStyle.Thin),
+        bottom = BorderSide(BorderStyle.Double)
+      )
+    )
+  }
+
+  test("per-side builders merge into an existing all-side border") {
+    val style = CellStyle.default.bordered.borderBottom(BorderStyle.Medium)
+    assertEquals(style.border.bottom, BorderSide(BorderStyle.Medium))
+    assertEquals(style.border.top, BorderSide(BorderStyle.Thin))
+    assertEquals(style.border.left, BorderSide(BorderStyle.Thin))
+    assertEquals(style.border.right, BorderSide(BorderStyle.Thin))
+  }
+
+  test("per-side builders preserve non-border style content") {
+    val style = CellStyle.default.bold.bgYellow.currency.borderTop(BorderStyle.Thin)
+    assert(style.font.bold)
+    assertEquals(style.fill, Fill.Solid(Color.fromRgb(255, 255, 0)))
+    assertEquals(style.numFmt, NumFmt.Currency)
+    assertEquals(style.border.top, BorderSide(BorderStyle.Thin))
+  }
+
+  test("color-taking overloads set side color") {
+    val red = Color.fromRgb(255, 0, 0)
+    val blue = Color.fromRgb(0, 0, 255)
+    val style = CellStyle.default
+      .borderTop(BorderStyle.Thin, red)
+      .borderBottom(BorderStyle.Thin, blue)
+      .borderLeft(BorderStyle.Medium, red)
+      .borderRight(BorderStyle.Medium, blue)
+    assertEquals(style.border.top, BorderSide(BorderStyle.Thin, red))
+    assertEquals(style.border.bottom, BorderSide(BorderStyle.Thin, blue))
+    assertEquals(style.border.left, BorderSide(BorderStyle.Medium, red))
+    assertEquals(style.border.right, BorderSide(BorderStyle.Medium, blue))
+  }
+
+  test("setting the same side twice keeps the last write") {
+    val style = CellStyle.default.borderTop(BorderStyle.Thin).borderTop(BorderStyle.Thick)
+    assertEquals(style.border.top, BorderSide(BorderStyle.Thick))
   }
 
   // ========== Number Format Tests ==========

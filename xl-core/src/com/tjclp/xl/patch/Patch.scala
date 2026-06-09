@@ -8,6 +8,7 @@ import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
 import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.border.Border
 import com.tjclp.xl.styles.units.StyleId
 
 /**
@@ -33,6 +34,16 @@ enum Patch:
 
   /** Set style for a range of cells (auto-registers in styleRegistry) */
   case SetRangeStyle(range: CellRange, style: CellStyle)
+
+  /**
+   * Merge border sides into a cell's existing style (auto-registers in styleRegistry).
+   *
+   * Unlike [[SetCellStyle]], which replaces the whole style, this preserves the cell's existing
+   * font, fill, number format, and alignment, and only overlays the border sides that are set
+   * (non-none) in `border` — the CLI's additive border semantics (`--border-top` etc.). Sides left
+   * as `BorderSide.none` keep the cell's existing sides.
+   */
+  case MergeBorder(ref: ARef, border: Border)
 
   /** Clear style for a cell */
   case ClearStyle(ref: ARef)
@@ -112,6 +123,11 @@ object Patch:
     case SetRangeStyle(range, style) =>
       // Register style and apply to all cells in range
       sheet.withRangeStyle(range, style)
+
+    case MergeBorder(ref, border) =>
+      // Overlay border sides onto the cell's existing style (font/fill/numFmt/align preserved)
+      val existing = sheet.getCellStyle(ref).getOrElse(CellStyle.default)
+      sheet.withCellStyle(ref, existing.withBorder(existing.border.merge(border)))
 
     case ClearStyle(ref) =>
       val cell = sheet(ref).clearStyle
