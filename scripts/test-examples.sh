@@ -58,9 +58,15 @@ for sc in examples/*.sc; do
 done
 
 # ---------- 4. Run the curated fast subset ----------
+# Per-example timeout: a hung example must fail loudly, never block CI. (`timeout` is coreutils;
+# present on ubuntu runners and via brew coreutils locally — fall back to no timeout if absent.)
+RUN_TIMEOUT=()
+if command -v timeout > /dev/null 2>&1; then
+  RUN_TIMEOUT=(timeout 300)
+fi
 if ! $COMPILE_ONLY; then
   for name in "${RUN_SET[@]}"; do
-    if scala-cli run "examples/$name" > /dev/null 2>&1; then
+    if "${RUN_TIMEOUT[@]}" scala-cli run "examples/$name" > /dev/null 2>&1; then
       echo "✓ run     $name"
     else
       echo "✗ run     $name" >&2

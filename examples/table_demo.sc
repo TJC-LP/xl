@@ -6,8 +6,7 @@
 //   1. Publish locally: ./mill xl-core.publishLocal xl-ooxml.publishLocal
 //   2. Run script: scala-cli run examples/table_demo.sc
 
-import com.tjclp.xl.{*, given}
-import com.tjclp.xl.unsafe.*
+import com.tjclp.xl.scripting.{*, given} // One-import scripting prelude (core + IO + evaluator + unsafe)
 import com.tjclp.xl.tables.{TableSpec, TableAutoFilter, TableStyle}
 import com.tjclp.xl.ooxml.{XlsxWriter, XlsxReader}
 import java.nio.file.{Files, Path}

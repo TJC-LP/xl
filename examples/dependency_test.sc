@@ -11,9 +11,7 @@
  * - D1 should show dependencies: C1, C2, C3
  */
 
-import com.tjclp.xl.{*, given}
-import com.tjclp.xl.macros.ref
-import com.tjclp.xl.unsafe.*
+import com.tjclp.xl.scripting.{*, given} // One-import scripting prelude (core + IO + evaluator + unsafe)
 
 val sheet = Sheet("Dependencies")
   // Data cells (these will show as dependents of formulas)

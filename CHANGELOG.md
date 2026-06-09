@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (scripting hardening, #252)
+
+- **Scripting prelude** `com.tjclp.xl.scripting.{*, given}`: one import for scripts — core API,
+  DSL, compile-time literals, formula evaluation, sync `Excel`, streaming `ExcelIO` + `RowData`,
+  smart detection sugar (`String.toFormatted`), and the `.unsafe` boundary. The plain
+  `com.tjclp.xl.{*, given}` import stays 100% pure.
+- **Range fill**: `range := value` puts the value in every cell (Excel Ctrl+Enter semantics) —
+  new `:=` overloads on `CellRange`, total `:=` on `RefType`.
+- **Total ARef navigation**: `down`/`up`/`right`/`left` (default 1) for Either-free loops.
+- **`Workbook.upsert(name, f)`**: total update-or-create counterpart of `update` (string
+  literals compile-time validated; runtime strings return `XLResult`).
+- **Typed read helpers**: `Sheet.readTypedOr(ref, default)` and `Sheet.readTypedOpt(ref)`.
+- **Workbook-level evaluation**: `wb.evaluateFormula(formula, onSheet)` wires cross-sheet
+  context automatically.
+- **`Workbook.recalculate(clock)`**: total whole-workbook recalculation returning
+  `RecalcResult` (cached workbook + per-sheet values + per-cell `CellEvalError`s); reference
+  cycles are isolated (participants circular, downstream dependents blocked) while the acyclic
+  remainder evaluates.
+- **`FormattedParsers.detect`**: total smart value detection (currency/accounting/percent/ISO
+  date/number/boolean/text) promoted from CLI-internal code; the CLI delegates.
+- **xl-scripting skill** (`plugin/skills/xl-scripting/`): SKILL.md + API reference + 7 runnable
+  recipes; packaged as `xl-scripting-skill-<version>.zip` on release with a version-pin gate.
+- **Anti-rot CI**: `scripts/test-examples.sh` (compiles every `examples/*.sc` against the local
+  build, runs a curated subset) and `scripts/verify-skill-snippets.sh` (compiles every complete
+  snippet in the skill), wired into GitHub Actions (`examples` job, `skill-verify` workflow).
+
+### Fixed (scripting hardening, #252)
+
+- **Opaque-type extensions unusable outside the package**: export forwarders for extension
+  methods and companion factories on opaque types (`ARef.toA1/shift/col/row`, `Column`/`Row`
+  arithmetic, `SheetName.value`, style units) produced path-dependent proxy types or failed
+  extension lookup for any consumer outside `com.tjclp.xl` (e.g. `Column.from0(0).toLetter` in
+  `examples/demo.sc` did not compile against 0.10.0). Fixed via explicit alias + singleton-val
+  pairs in `api`, de-inlined opaque extensions/factories (still static methods on primitives),
+  and companion-scope resolution. Guarded by new external-consumer probes
+  (`xl/test/src/xlprelude/`).
+- **`withCachedFormulas` uncached entire sheets**: one failing formula dropped caching for the
+  whole sheet, and cross-sheet formulas always failed (no workbook context), silently uncaching
+  their sheet. Now per-cell and cross-sheet aware (implemented on `recalculate`).
+- **Silent no-op `range := value`**: previously returned `Patch.empty` (documented wart); now
+  fills the range. Code relying on the no-op behavior must filter ranges explicitly.
+- **Scripts hung at exit after `toHtml`/`toSvg`**: render text measurement initialized
+  non-headless AWT, whose non-daemon AWT-Shutdown thread kept the JVM alive after main
+  completed. AWT now defaults to headless unless the embedder set `java.awt.headless`
+  explicitly (font metrics don't need a display).
+
 ## [0.10.0] "Trust & Author" - 2026-06-09
 
 A correctness-and-authoring release: fix defects that silently corrupted data or

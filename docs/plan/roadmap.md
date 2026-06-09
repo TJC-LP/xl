@@ -18,6 +18,23 @@
 
 ## Release Roadmap
 
+### v0.11.0 "Scripting" (Next)
+
+Make library scripting (scala-cli + `com.tjclp.xl.scripting` prelude) the turbo-charged agent path — goal: the best functional Excel scripting DSL. Tracked in [#252](https://github.com/TJC-LP/xl/issues/252).
+
+| Feature | Status |
+|---------|--------|
+| `com.tjclp.xl.scripting` prelude (one import; pure base import unchanged) | ✅ Done |
+| Opaque-type extension fix for external consumers (toA1/shift/col/row...) + `xlprelude` probes | ✅ Done |
+| Total DSL: `range := v` fill (Ctrl+Enter), ARef `down/up/right/left` | ✅ Done |
+| `Workbook.upsert`, `readTypedOr`/`readTypedOpt`, `wb.evaluateFormula(formula, onSheet)` | ✅ Done |
+| `Workbook.recalculate` — total, per-cell `CellEvalError`s, cycle isolation, cross-sheet fix | ✅ Done |
+| `FormattedParsers.detect` promotion (CLI delegates) + prelude `String.toFormatted` | ✅ Done |
+| xl-scripting skill (SKILL.md + API.md + 7 recipes) + release packaging & version gate | ✅ Done |
+| Anti-rot CI: examples job + skill-verify workflow | ✅ Done |
+| Future: typed row/record extraction (RowCodec derivation) | 🔵 Proposed |
+| Future: bounds-checked `shift`/navigation variants | 🔵 Proposed |
+
 ### v0.10.0 "Trust & Author" (Current)
 
 Build version **0.10.0**. Focus: trust (surgical-edit fidelity) and authoring (write the parts XL previously only read).
