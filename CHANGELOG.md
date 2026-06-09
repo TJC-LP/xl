@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (render & style fidelity, #254-#260)
+
+- **Per-side border DSL + range outlines** (#257): `CellStyle.borderTop/borderBottom/borderLeft/
+  borderRight` builders (with color overloads) merging into the existing border, and
+  `range.outlined(style[, color])` — an edge-correct outline patch built on the new
+  `Patch.MergeBorder` case (apply-time border overlay preserving font/fill/numFmt; note for
+  exhaustive matchers: `Patch` gains a case).
+- **Alignment indent DSL** (#260): `CellStyle.indent(n)` shortcut (model + OOXML round-trip
+  already existed); style dedup and round-trip now covered by tests; styles parser hardened
+  against negative `indent` attributes in malformed files.
+- **Sheet view settings** (#258): `SheetView(showGridLines, zoomScale)` on
+  `Sheet.viewSettings`, serialized into the same `sheetView` element as freeze panes; SVG
+  renderer suppresses gridlines when a sheet disables them.
+- **Print setup** (#259): `PageSetup` gains `headerFooter` (odd header/footer with `&P`/`&N`
+  codes), `margins`, `printArea`, and `repeatRows` — emitted in schema order and round-tripped;
+  print area/titles ride the defined-names pipeline as sheet-scoped `_xlnm` names. Follow-ups
+  (even/first headers, `fitToPage` flag) tracked separately.
+
+### Fixed (render & style fidelity, #254-#260)
+
+- **Custom number formats: zero routed to the negative section** (#254): two-section codes
+  (`pos;neg`) now format zero through the positive section per Excel's rule — `$0.0`, not
+  `($0.0)`. One unified section-selection site covers display, HTML/SVG, CLI, and `TEXT()`.
+- **SVG cell fonts silently overridden** (#255): the embedded `.cell-text` CSS rule's
+  font-family/font-size outranked per-cell presentation attributes in every CSS-aware
+  rasterizer (and the attribute value carried CSS-style quotes fontconfig can't match). Class
+  rules no longer declare fonts; every text path emits explicit, unquoted font attributes.
+- **SVG underline dropped** (#256): `Font.underline` now emits `text-decoration="underline"`
+  on SVG text (HTML already had it), so underlined headers survive PNG/PDF export.
+
+### Changed
+
+- Reading a workbook now populates `Sheet.pageSetup` for any sheet with `<pageMargins>`
+  (virtually all real files) — previously only sheets with `<pageSetup>`; modelable
+  `_xlnm.Print_Area`/`_xlnm.Print_Titles` defined names are lifted into `pageSetup` instead of
+  surfacing in `metadata.definedNames`.
+
+
 ### Added (scripting hardening, #252)
 
 - **Scripting prelude** `com.tjclp.xl.scripting.{*, given}`: one import for scripts — core API,
