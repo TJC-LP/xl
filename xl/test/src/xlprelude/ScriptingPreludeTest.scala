@@ -68,6 +68,11 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(sheet.cells.size, 2)
     assertEquals(sheet.mergedRanges.size, 1)
 
+  test("range fill := and ARef navigation resolve through the prelude"):
+    val sheet = Sheet("Fill").put(ref"A1:B2" := 0)
+    assertEquals(sheet.cells.size, 4)
+    assertEquals(ref"A1".down(2).right(1), ref"B3")
+
   test("runtime ref interpolation returns Either and := works on RefType"):
     val row = "5"
     val patch = (for refType <- ref"A$row"

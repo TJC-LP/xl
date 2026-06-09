@@ -41,8 +41,11 @@ val rows = products.zipWithIndex.foldLeft(Patch.empty) { case (acc, ((name, unit
 val filled = sales.put(rows)
 println(s"  ✓ Built ${filled.cells.size} cells from ${products.size} records")
 
-// ========== 3. Typed values: codecs infer formats (dates, decimals) ==========
-val stamped = filled
+// ========== 3. Range fill: Excel Ctrl+Enter semantics, := is total ==========
+val zeroed = filled.put(ref"E2:E4" := 0) // every cell in E2:E4 gets 0
+
+// ========== 4. Typed values: codecs infer formats (dates, decimals) ==========
+val stamped = zeroed
   .put(ref"F1", "As of")
   .put(ref"G1", LocalDate.of(2026, 6, 9))
 

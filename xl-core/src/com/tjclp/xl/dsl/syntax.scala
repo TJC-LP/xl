@@ -69,6 +69,21 @@ object syntax:
     /** Create a ClearStyle patch to remove styling from a cell */
     def clearStyle: Patch = Patch.ClearStyle(ref)
 
+    /**
+     * Navigate down by n rows (default 1). Total; like `shift`, staying in bounds is the caller's
+     * responsibility (Excel rows end at 1048576).
+     */
+    def down(n: Int = 1): ARef = ref.shift(0, n)
+
+    /** Navigate up by n rows (default 1). Total; see `down` for the bounds contract. */
+    def up(n: Int = 1): ARef = ref.shift(0, -n)
+
+    /** Navigate right by n columns (default 1). Total; see `down` for the bounds contract. */
+    def right(n: Int = 1): ARef = ref.shift(n, 0)
+
+    /** Navigate left by n columns (default 1). Total; see `down` for the bounds contract. */
+    def left(n: Int = 1): ARef = ref.shift(-n, 0)
+
   // ========== CellRange Extensions ==========
 
   /**
@@ -78,6 +93,44 @@ object syntax:
    * before application.
    */
   extension (range: CellRange)
+    /**
+     * Fill every cell in the range with the same value (Excel Ctrl+Enter semantics).
+     *
+     * Desugars to a Batch of Puts — no new Patch case, so monoid laws and exhaustive matches are
+     * unaffected. A 1x1 range is equivalent to a single-cell `:=`.
+     */
+    @annotation.targetName("rangeAssignCellValue")
+    def :=(cv: CellValue): Patch =
+      Patch.Batch(range.cells.map(r => Patch.Put(r, cv): Patch).toVector)
+
+    /** Fill every cell in the range with a String (Excel Ctrl+Enter semantics). */
+    @annotation.targetName("rangeAssignString")
+    def :=(value: String): Patch = range := CellValue.Text(value)
+
+    /** Fill every cell in the range with an Int (Excel Ctrl+Enter semantics). */
+    @annotation.targetName("rangeAssignInt")
+    def :=(value: Int): Patch = range := CellValue.Number(BigDecimal(value))
+
+    /** Fill every cell in the range with a Long (Excel Ctrl+Enter semantics). */
+    @annotation.targetName("rangeAssignLong")
+    def :=(value: Long): Patch = range := CellValue.Number(BigDecimal(value))
+
+    /** Fill every cell in the range with a Double (Excel Ctrl+Enter semantics). */
+    @annotation.targetName("rangeAssignDouble")
+    def :=(value: Double): Patch = range := CellValue.Number(BigDecimal(value))
+
+    /** Fill every cell in the range with a BigDecimal (Excel Ctrl+Enter semantics). */
+    @annotation.targetName("rangeAssignBigDecimal")
+    def :=(value: BigDecimal): Patch = range := CellValue.Number(value)
+
+    /** Fill every cell in the range with a Boolean (Excel Ctrl+Enter semantics). */
+    @annotation.targetName("rangeAssignBoolean")
+    def :=(value: Boolean): Patch = range := CellValue.Bool(value)
+
+    /** Fill every cell in the range with a LocalDateTime (Excel Ctrl+Enter semantics). */
+    @annotation.targetName("rangeAssignLocalDateTime")
+    def :=(value: java.time.LocalDateTime): Patch = range := CellValue.DateTime(value)
+
     /** Create a Merge patch */
     def merge: Patch = Patch.Merge(range)
 
@@ -98,36 +151,21 @@ object syntax:
    * These extensions allow `ref"$var"` (which returns `Either[XLError, RefType]`) to work directly
    * with patch DSL operators without manual extraction of ARef/CellRange.
    *
-   * '''Important Limitation: Assignment operators (`:=`) only work on single cells'''
+   * `:=` is total across all RefType cases: cells produce a single Put; ranges fill every cell with
+   * the value (Excel Ctrl+Enter semantics, a Batch of Puts). Before 0.11.0, ranges silently
+   * returned `Patch.empty` — that was a bug, fixed by fill semantics.
    *
-   * When applied to ranges, assignment operators return `Patch.empty` (silent no-op) rather than
-   * throwing errors. This is intentional for composability in fold operations, but users should be
-   * aware of this behavior.
-   *
-   * '''Working examples (single cells):'''
    * {{{
    *   val row = "5"
-   *   for {
-   *     cellRef <- ref"A$row"      // RefType.Cell
-   *   } yield (cellRef := "Value")  // ✓ Works - creates Put patch
+   *   for cellRef <- ref"A$row"        // RefType.Cell
+   *   yield (cellRef := "Value")       // single Put
+   *
+   *   for rangeRef <- ref"A1:B$row"    // RefType.Range
+   *   yield (rangeRef := 0)            // fills A1:B5 with 0
    * }}}
    *
-   * '''Silent no-op examples (ranges):'''
-   * {{{
-   *   val rangeRef = ref"A1:B10"    // RefType.Range
-   *   rangeRef := "Value"            // ✗ Silent no-op - returns Patch.empty
-   *
-   *   // To style ranges, use .styled() or apply to individual cells:
-   *   rangeRef.styled(style)         // ✓ Works for ranges
-   * }}}
-   *
-   * '''Other operations work on both cells and ranges:'''
-   * {{{
-   *   cellRef.styled(style)          // ✓ Works
-   *   rangeRef.styled(style)         // ✓ Works (cells only, not ranges in current impl)
-   *   rangeRef.merge                 // ✓ Works
-   *   rangeRef.remove                // ✓ Works
-   * }}}
+   * `styled`, `merge`, and `remove` also work on both cells and ranges (merge of a single cell is
+   * meaningless and returns the empty patch).
    */
   extension (refType: RefType)
     /** Create Put patch from RefType (delegates to underlying ARef) */
@@ -135,56 +173,64 @@ object syntax:
     inline def :=(cv: CellValue): Patch = refType match
       case RefType.Cell(aref) => aref := cv
       case RefType.QualifiedCell(_, aref) => aref := cv
-      case _ => Patch.empty // Ranges can't be assigned single values
+      case RefType.Range(range) => range := cv
+      case RefType.QualifiedRange(_, range) => range := cv
 
     /** Create Put patch with automatic conversion from String */
     @annotation.targetName("refTypeAssignString")
     inline def :=(value: String): Patch = refType match
       case RefType.Cell(aref) => aref := value
       case RefType.QualifiedCell(_, aref) => aref := value
-      case _ => Patch.empty
+      case RefType.Range(range) => range := value
+      case RefType.QualifiedRange(_, range) => range := value
 
     /** Create Put patch with automatic conversion from Int */
     @annotation.targetName("refTypeAssignInt")
     inline def :=(value: Int): Patch = refType match
       case RefType.Cell(aref) => aref := value
       case RefType.QualifiedCell(_, aref) => aref := value
-      case _ => Patch.empty
+      case RefType.Range(range) => range := value
+      case RefType.QualifiedRange(_, range) => range := value
 
     /** Create Put patch with automatic conversion from Long */
     @annotation.targetName("refTypeAssignLong")
     inline def :=(value: Long): Patch = refType match
       case RefType.Cell(aref) => aref := value
       case RefType.QualifiedCell(_, aref) => aref := value
-      case _ => Patch.empty
+      case RefType.Range(range) => range := value
+      case RefType.QualifiedRange(_, range) => range := value
 
     /** Create Put patch with automatic conversion from Double */
     @annotation.targetName("refTypeAssignDouble")
     inline def :=(value: Double): Patch = refType match
       case RefType.Cell(aref) => aref := value
       case RefType.QualifiedCell(_, aref) => aref := value
-      case _ => Patch.empty
+      case RefType.Range(range) => range := value
+      case RefType.QualifiedRange(_, range) => range := value
 
     /** Create Put patch with automatic conversion from BigDecimal */
     @annotation.targetName("refTypeAssignBigDecimal")
     inline def :=(value: BigDecimal): Patch = refType match
       case RefType.Cell(aref) => aref := value
       case RefType.QualifiedCell(_, aref) => aref := value
-      case _ => Patch.empty
+      case RefType.Range(range) => range := value
+      case RefType.QualifiedRange(_, range) => range := value
 
     /** Create Put patch with automatic conversion from Boolean */
     @annotation.targetName("refTypeAssignBoolean")
     inline def :=(value: Boolean): Patch = refType match
       case RefType.Cell(aref) => aref := value
       case RefType.QualifiedCell(_, aref) => aref := value
-      case _ => Patch.empty
+      case RefType.Range(range) => range := value
+      case RefType.QualifiedRange(_, range) => range := value
 
     /** Create Put patch with automatic conversion from LocalDateTime */
     @annotation.targetName("refTypeAssignLocalDateTime")
     inline def :=(value: java.time.LocalDateTime): Patch = refType match
       case RefType.Cell(aref) => aref := value
       case RefType.QualifiedCell(_, aref) => aref := value
-      case _ => Patch.empty
+      case RefType.Range(range) => range := value
+      case RefType.QualifiedRange(_, range) => range := value
 
     /** Apply style to RefType (works for both cells and ranges) */
     @annotation.targetName("refTypeStyled")
