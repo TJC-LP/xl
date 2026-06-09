@@ -20,7 +20,7 @@ object SheetName:
     else Right(name)
 
   /** Create an unsafe sheet name (use only when validation is guaranteed) */
-  inline def unsafe(name: String): SheetName = name
+  def unsafe(name: String): SheetName = name
 
   extension (name: SheetName) def value: String = name
 

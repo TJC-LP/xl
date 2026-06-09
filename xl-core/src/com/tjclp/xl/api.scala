@@ -24,14 +24,23 @@ object api:
   // Cell types
   export cells.{Cell, CellValue, CellError, Comment}
 
-  // Addressing types
-  export addressing.{Column, Row, SheetName, ARef, CellRange, RefType, Anchor}
+  // Addressing types — non-opaque types use export forwarders as usual
+  export addressing.{CellRange, RefType, Anchor}
 
-  // ARef extension methods (toA1, col, row, shift) resolve through ARef's companion implicit
-  // scope — no export needed. Export forwarders for inline extensions on opaque types generate
-  // path-dependent proxy types ($proxy.ARef) that fail to unify at use sites outside this
-  // package, and the broken forwarder shadows the companion-scope lookup that would otherwise
-  // succeed. (Removed in 0.11.0; was: export addressing.ARef.{toA1, shift})
+  // Opaque addressing types use explicit alias + singleton-typed companion val pairs instead of
+  // exports (0.11.0). Export-generated term forwarders give factory results path-dependent types
+  // that defeat extension lookup at external call sites (`Column.from0(0).toLetter` fails), and
+  // export forwarders for the extension methods themselves produce proxy types ($proxy.ARef)
+  // that never unify. With explicit singleton vals, factory results are properly anchored and
+  // the extensions resolve through each opaque type's companion implicit scope.
+  type ARef = addressing.ARef
+  val ARef: addressing.ARef.type = addressing.ARef
+  type Column = addressing.Column
+  val Column: addressing.Column.type = addressing.Column
+  type Row = addressing.Row
+  val Row: addressing.Row.type = addressing.Row
+  type SheetName = addressing.SheetName
+  val SheetName: addressing.SheetName.type = addressing.SheetName
 
   // Rich text types
   export richtext.{TextRun, RichText}
@@ -81,8 +90,15 @@ object api:
   // Style types - patch
   export styles.patch.StylePatch
 
-  // Style types - units
-  export styles.units.{Pt, Px, Emu, StyleId}
+  // Style types - units: opaque, same explicit alias + singleton val treatment as addressing
+  type Pt = styles.units.Pt
+  val Pt: styles.units.Pt.type = styles.units.Pt
+  type Px = styles.units.Px
+  val Px: styles.units.Px.type = styles.units.Px
+  type Emu = styles.units.Emu
+  val Emu: styles.units.Emu.type = styles.units.Emu
+  type StyleId = styles.units.StyleId
+  val StyleId: styles.units.StyleId.type = styles.units.StyleId
 
   // Column.toLetter resolves through Column's companion implicit scope (see ARef note above)
 

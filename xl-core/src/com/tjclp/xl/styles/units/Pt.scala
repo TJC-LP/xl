@@ -4,7 +4,7 @@ package com.tjclp.xl.styles.units
 opaque type Pt = Double
 
 object Pt:
-  inline def apply(value: Double): Pt = value
+  def apply(value: Double): Pt = value
 
   extension (pt: Pt)
     def value: Double = pt

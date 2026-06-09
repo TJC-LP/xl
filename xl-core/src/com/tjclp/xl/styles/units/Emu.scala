@@ -4,7 +4,7 @@ package com.tjclp.xl.styles.units
 opaque type Emu = Long
 
 object Emu:
-  inline def apply(value: Long): Emu = value
+  def apply(value: Long): Emu = value
 
   extension (emu: Emu)
     def value: Long = emu

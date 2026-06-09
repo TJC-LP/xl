@@ -15,15 +15,15 @@ object ARef:
   import Row.index0 as rowIndex
 
   /** Create cell reference from column and row */
-  inline def apply(col: Column, row: Row): ARef =
+  def apply(col: Column, row: Row): ARef =
     (rowIndex(row).toLong << 32) | (colIndex(col).toLong & 0xffffffffL)
 
   /** Create cell reference from 0-based indices */
-  inline def from0(colIndex: Int, rowIndex: Int): ARef =
+  def from0(colIndex: Int, rowIndex: Int): ARef =
     apply(Column.from0(colIndex), Row.from0(rowIndex))
 
   /** Create cell reference from 1-based indices */
-  inline def from1(colIndex: Int, rowIndex: Int): ARef =
+  def from1(colIndex: Int, rowIndex: Int): ARef =
     apply(Column.from1(colIndex), Row.from1(rowIndex))
 
   /** Parse cell reference from A1 notation */

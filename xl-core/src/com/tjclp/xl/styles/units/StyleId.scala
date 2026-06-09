@@ -4,6 +4,6 @@ package com.tjclp.xl.styles.units
 opaque type StyleId = Int
 
 object StyleId:
-  inline def apply(i: Int): StyleId = i
+  def apply(i: Int): StyleId = i
 
   extension (s: StyleId) def value: Int = s
