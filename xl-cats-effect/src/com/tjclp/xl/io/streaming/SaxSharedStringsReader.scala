@@ -66,11 +66,12 @@ object SaxSharedStringsReader:
       if inSi then fail("Unexpected end of xl/sharedStrings.xml while parsing <si>")
 
       val entryVec = entries.toVector
+      // EXACT keys, matching SharedStrings.fromXml (GH-289): no Unicode normalization
       val indexMap = entryVec.iterator.zipWithIndex.map { case (entry, idx) =>
         val key = entry match
           case Left(text) => text
           case Right(richText) => richText.toPlainText
-        SharedStrings.normalize(key) -> idx
+        key -> idx
       }.toMap
 
       SharedStrings(entryVec, indexMap, totalCount.getOrElse(entryVec.size))

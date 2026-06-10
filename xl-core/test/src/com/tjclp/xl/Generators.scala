@@ -229,7 +229,8 @@ object Generators:
   //   - text avoids XML-illegal control chars (the writer strips them by
   //     design, GH-237); \r IS generated — the writer escapes it as _x000D_
   //     per ECMA-376 ST_Xstring (GH-288)
-  //   - text stays NFC-normalized (SST deduplicates by NFC key)
+  //   - non-NFC text (decomposed accents) IS generated — the SST deduplicates
+  //     exact strings, so NFC/NFD spellings round-trip byte-faithfully (GH-289)
   //   - Custom numFmt codes avoid the exact code strings NumFmt.parse maps
   //     back to built-in enum cases (those are the SAME format semantically,
   //     but would compare unequal as enum values)
@@ -251,11 +252,13 @@ object Generators:
       1 -> Gen.oneOf('\t', '\n', '\r')
     )
     val plain = Gen.chooseNum(0, 24).flatMap(n => Gen.listOfN(n, safeChar).map(_.mkString))
-    // Adversarial suffixes: literal _xHHHH_ patterns must survive via _x005F_ protection (GH-288)
+    // Adversarial suffixes: literal _xHHHH_ patterns must survive via _x005F_ protection (GH-288);
+    // decomposed accents (NFD "é" = e + U+0301) must keep their exact codepoints (GH-289)
     Gen.frequency(
-      15 -> plain,
+      14 -> plain,
       1 -> plain.map(_ + "_x000D_"),
-      1 -> plain.map(_ + "\r\n")
+      1 -> plain.map(_ + "\r\n"),
+      1 -> plain.map(_ + "e\u0301")
     )
 
   /** Non-empty variant of [[genXmlSafeText]] */

@@ -18,13 +18,15 @@ type SSTEntry = Either[String, RichText]
  * Deduplicates string values across the workbook. Cells reference strings by index rather than
  * embedding them inline.
  *
- * Supports both plain text and rich text (formatted runs). All plain text is normalized to NFC form
- * for consistent deduplication. RichText entries are deduplicated by plain text content.
+ * Supports both plain text and rich text (formatted runs). Deduplication is by EXACT string —
+ * never by Unicode normalization: NFC "Café" and NFD "Café" are canonically equivalent but
+ * different strings, and collapsing them changes cell bytes on round-trip (GH-289). Excel also
+ * deduplicates exact strings. RichText entries are deduplicated by exact plain text content.
  *
  * @param strings
  *   Ordered list of unique entries (plain text or rich text)
  * @param indexMap
- *   Plain text → index lookup (used for deduplication)
+ *   Exact plain text → index lookup (used for deduplication)
  * @param totalCount
  *   Total number of string cell instances in workbook (including duplicates)
  */
@@ -35,13 +37,13 @@ final case class SharedStrings(
 ) extends XmlWritable,
       SaxSerializable:
 
-  /** Get index for plain text string (returns None if not found) */
+  /** Get index for plain text string by exact match (returns None if not found) */
   def indexOf(s: String): Option[Int] =
-    indexMap.get(SharedStrings.normalize(s))
+    indexMap.get(s)
 
-  /** Get index for RichText by plain text content (returns None if not found) */
+  /** Get index for RichText by exact plain text content (returns None if not found) */
   def indexOf(richText: RichText): Option[Int] =
-    indexMap.get(SharedStrings.normalize(richText.toPlainText))
+    indexMap.get(richText.toPlainText)
 
   /** Get entry at index (returns None if out of bounds) */
   def apply(index: Int): Option[SSTEntry] =
@@ -259,26 +261,27 @@ object SharedStrings extends XmlReadable[SharedStrings]:
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def fromStrings(strings: Iterable[String], totalCount: Option[Int] = None): SharedStrings =
     // Stream through strings with LinkedHashSet for O(1) deduplication (50-70% memory reduction)
-    // Normalize ONLY for deduplication keys, store original strings
+    // Deduplicate by EXACT string (GH-289): Unicode-equivalent spellings stay distinct entries
     import scala.collection.mutable
     val seenKeys = mutable.LinkedHashSet.empty[String]
     val uniqueStrings = mutable.ArrayBuffer.empty[String]
     var count = 0
     strings.foreach { s =>
       count += 1
-      val normalizedKey = normalize(s)
-      if seenKeys.add(normalizedKey) then
-        uniqueStrings += s // Store original string, not normalized
+      if seenKeys.add(s) then uniqueStrings += s
     }
     val entries = uniqueStrings.toVector.map(s => Left(s): SSTEntry)
     val indexMap = entries.zipWithIndex.map {
-      case (Left(s), idx) => normalize(s) -> idx
-      case (Right(rt), idx) => normalize(rt.toPlainText) -> idx
+      case (Left(s), idx) => s -> idx
+      case (Right(rt), idx) => rt.toPlainText -> idx
     }.toMap
     val finalCount = totalCount.getOrElse(count)
     SharedStrings(entries, indexMap, finalCount)
 
-  /** Normalize string to NFC form for consistent comparison */
+  /**
+   * Normalize string to NFC form. NOT used for SST deduplication (which is exact, GH-289) — kept
+   * for callers that need canonical-equivalence comparison.
+   */
   def normalize(s: String): String =
     Normalizer.normalize(s, Normalizer.Form.NFC)
 
@@ -319,7 +322,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
   /**
    * Create SharedStrings from SST entries with deduplication.
    *
-   * Deduplicates by plain text content (RichText entries are keyed by toPlainText).
+   * Deduplicates by EXACT plain text content (GH-289); RichText entries are keyed by toPlainText.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def fromEntries(entries: Iterable[SSTEntry], totalCount: Option[Int] = None): SharedStrings =
@@ -331,24 +334,24 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     entries.foreach { entry =>
       count += 1
       val key = entry match
-        case Left(text) => normalize(text)
-        case Right(richText) => normalize(richText.toPlainText)
+        case Left(text) => text
+        case Right(richText) => richText.toPlainText
 
       if seen.add(key) then entryVec += entry
     }
 
-    val normalized = entryVec.result()
+    val deduped = entryVec.result()
     // Optimization: Use iterator.zipWithIndex.foreach with builder to avoid intermediate collections
     val indexMapBuilder = Map.newBuilder[String, Int]
-    normalized.iterator.zipWithIndex.foreach { case (entry, idx) =>
+    deduped.iterator.zipWithIndex.foreach { case (entry, idx) =>
       val key = entry match
         case Left(text) => text
         case Right(richText) => richText.toPlainText
-      indexMapBuilder += (normalize(key) -> idx)
+      indexMapBuilder += (key -> idx)
     }
     val indexMap = indexMapBuilder.result()
 
-    SharedStrings(normalized, indexMap, totalCount.getOrElse(count))
+    SharedStrings(deduped, indexMap, totalCount.getOrElse(count))
 
   /**
    * Determine if using SST saves space vs inline strings
@@ -399,12 +402,12 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     else
       val entryVec = entries.collect { case Right(entry) => entry }.toVector
 
-      // Build index map using plain text representation
+      // Build index map using EXACT plain text representation (GH-289)
       val indexMap = entryVec.zipWithIndex.map { case (entry, idx) =>
         val key = entry match
           case Left(text) => text
           case Right(richText) => richText.toPlainText
-        normalize(key) -> idx
+        key -> idx
       }.toMap
 
       // Try to read totalCount from count attribute, fall back to uniqueCount
