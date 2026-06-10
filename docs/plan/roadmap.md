@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **104 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 3005+ tests passing.
 
-**Current Version**: **0.11.1 "Totality"** (released 2026-06-10)
+**Current Version**: **0.11.2 "Laws & Functions"** (released 2026-06-10)
 
 ---
 
@@ -39,12 +39,12 @@ All open bugs, one patch release (PR #276). Reviewer-discovered gaps filed as #2
 | [#48](https://github.com/TJC-LP/xl/issues/48) | `SheetEvaluator` var-free refactor |
 | [#17](https://github.com/TJC-LP/xl/issues/17) | SST surgical whitespace: not reproducible; regression spec added |
 
-### v0.11.2 "Laws & Functions" — waves 2 + 3
+### v0.11.2 "Laws & Functions" — waves 2 + 3 (Released 2026-06-10)
 
 | Wave | Issues |
 |------|--------|
-| 2 — test infrastructure | [#240](https://github.com/TJC-LP/xl/issues/240) real-fixture corpus + generative round-trip law + streaming/in-memory parity; [#40](https://github.com/TJC-LP/xl/issues/40) `Sheet.put` benchmark; [#47](https://github.com/TJC-LP/xl/issues/47) renderer edge tests |
-| 3 — evaluator breadth | [#193](https://github.com/TJC-LP/xl/issues/193) LET; [#274](https://github.com/TJC-LP/xl/issues/274) INDIRECT (design-first); [#93](https://github.com/TJC-LP/xl/issues/93) YEARFRAC parity; [#115](https://github.com/TJC-LP/xl/issues/115) RAND/RANDBETWEEN (seeded-RNG capability); [#184](https://github.com/TJC-LP/xl/issues/184) formula numFmt inheritance |
+| 2 — test infrastructure (PR #299) | [#240](https://github.com/TJC-LP/xl/issues/240) real-fixture corpus + generative round-trip law + streaming/in-memory parity; [#40](https://github.com/TJC-LP/xl/issues/40) `Sheet.put` benchmark; [#47](https://github.com/TJC-LP/xl/issues/47) renderer edge tests |
+| 3 — evaluator breadth + law-found fixes #277/#287-#290 (PR #300) | [#193](https://github.com/TJC-LP/xl/issues/193) LET; [#274](https://github.com/TJC-LP/xl/issues/274) INDIRECT (design-first); [#93](https://github.com/TJC-LP/xl/issues/93) YEARFRAC parity; [#115](https://github.com/TJC-LP/xl/issues/115) RAND/RANDBETWEEN (seeded-RNG capability); [#184](https://github.com/TJC-LP/xl/issues/184) formula numFmt inheritance |
 
 ### v0.11.3 "Robustness" — waves 4 + 5
 

@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -135,7 +135,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -161,6 +161,13 @@ Workbook(model).recalculate().toEither match
     errors.foreach(e => println(s"✗ ${e.render}"))
     sys.exit(1)
 ```
+
+Since 0.11.2, formulas may use `LET` (lexical bindings), `INDIRECT` (dynamic references —
+evaluated in a deferred last partition), and `RAND`/`RANDBETWEEN`. Randomness is an explicit
+capability: pass `Rng.seeded(42L)` to the rng-taking overloads (`wb.recalculate(clock, rng)`,
+`sheet.evaluateFormula(f, clock, rng)`) for reproducible runs; the default is `Rng.system`.
+For Excel-style format inheritance on formula entry, use the opt-in
+`sheet.putFormulaInheriting(ref, formula)`.
 
 `recalculate(clock: Clock = Clock.system)` returns a `RecalcResult`:
 
@@ -229,7 +236,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -283,7 +290,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

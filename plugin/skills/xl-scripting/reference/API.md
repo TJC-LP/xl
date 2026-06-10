@@ -185,9 +185,10 @@ Header/footer strings support Excel codes — `&P` page, `&N` total pages, `&D` 
 | Method | Returns | Notes |
 |--------|---------|-------|
 | `wb.evaluateFormula(formula, onSheet[, clock])` | `XLResult[CellValue]` | cross-sheet context automatic; onSheet: String or SheetName |
-| `wb.recalculate([clock])` | `RecalcResult` | total whole-workbook recalc, per-cell errors, cycle isolation |
+| `wb.recalculate([clock][, rng])` | `RecalcResult` | total whole-workbook recalc, per-cell errors, cycle isolation; `rng` (0.11.2+) seeds RAND — `Rng.seeded(42L)` for reproducible scripts |
 | `wb.withCachedFormulas([clock])` | `Workbook` | = `recalculate(clock).workbook` |
-| `sheet.evaluateFormula(formula[, clock][, workbook])` | `XLResult[CellValue]` | pass `Some(wb)` iff formula references other sheets |
+| `sheet.evaluateFormula(formula[, clock][, rng][, workbook])` | `XLResult[CellValue]` | pass `Some(wb)` iff formula references other sheets |
+| `sheet.putFormulaInheriting(ref, formula[, workbook])` | `XLResult[Sheet]` | 0.11.2+: puts the formula AND inherits the referenced cells' number format into a General target (Excel's entry behavior) |
 | `sheet.evaluateWithDependencyCheck([clock])` | `XLResult[Map[ARef, CellValue]]` | fail-fast on first error/cycle |
 | `FormulaParser.parse("=A1+B1")` | `Either[ParseError, TExpr[?]]` | AST access |
 | `DependencyGraph.fromSheet(sheet)` | `DependencyGraph` | `.precedents(ref)` / `.dependents(ref)` |
