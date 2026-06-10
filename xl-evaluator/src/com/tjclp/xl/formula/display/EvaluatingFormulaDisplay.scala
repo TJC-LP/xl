@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula.display
 
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.display.{FormulaDisplayStrategy, LowPriorityFormulaDisplay, NumFmtFormatter}
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.eval.SheetEvaluator
@@ -68,6 +69,24 @@ object EvaluatingFormulaDisplay extends LowPriorityFormulaDisplay:
         case Left(error) =>
           // Evaluation failed - show raw formula as fallback
           formulaWithEquals
+
+    override def formatCached(
+      formula: String,
+      cached: Option[CellValue],
+      numFmt: NumFmt,
+      sheet: Sheet
+    ): String =
+      // Prefer the cached value (populated by Workbook.recalculate() or read from
+      // disk): sheet-local re-evaluation has no workbook context, so cross-sheet
+      // formulas would degrade to raw text despite a correct cached value (GH-275).
+      // Only uncached formulas fall back to local evaluation.
+      cached match
+        case Some(value) =>
+          val effectiveFmt = numFmt match
+            case NumFmt.General => inferFormatFromValue(value)
+            case explicit => explicit
+          NumFmtFormatter.formatValue(value, effectiveFmt)
+        case None => format(formula, sheet)
 
   /**
    * Infer appropriate NumFmt from a computed value.
