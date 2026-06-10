@@ -474,6 +474,76 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(FormatCodeParser.applyTextFormat("abc", code), "val: abc")
   }
 
+  // ========== Date display gaps (GH-283) ==========
+  // 1. General on a date-typed value shows the Excel SERIAL NUMBER (dates ARE
+  //    numbers; Excel's General does not pretty-print them) — not ISO text.
+  // 2. Custom codes applied to dates route through section selection like any
+  //    number (the serial is the routed value): ';;;' hides dates, numeric
+  //    sections render the serial, conditional date codes pick sections by serial.
+  // 3. Date-token sections fed an out-of-range serial (negative or >= 10000-01-01)
+  //    render '######' like Excel's unrepresentable-date fill.
+
+  test("formatDateTime: General shows the date serial, not ISO text (GH-283)") {
+    val dt = java.time.LocalDateTime.of(2025, 11, 21, 0, 0, 0)
+    assertEquals(NumFmtFormatter.formatDateTime(dt, NumFmt.General), "45982")
+  }
+
+  test("formatDateTime: General with a time component shows the fractional serial (GH-283)") {
+    val noon = java.time.LocalDateTime.of(2025, 11, 21, 12, 0, 0)
+    assertEquals(NumFmtFormatter.formatDateTime(noon, NumFmt.General), "45982.5")
+  }
+
+  test("formatValue: DateTime cell under General renders the serial (GH-283)") {
+    import com.tjclp.xl.cells.CellValue
+    val value = CellValue.DateTime(java.time.LocalDateTime.of(2025, 11, 21, 0, 0, 0))
+    assertEquals(NumFmtFormatter.formatValue(value, NumFmt.General), "45982")
+  }
+
+  test("formatDateTime: numeric built-in formats apply to the serial (GH-283)") {
+    val dt = java.time.LocalDateTime.of(2025, 11, 21, 0, 0, 0)
+    assertEquals(NumFmtFormatter.formatDateTime(dt, NumFmt.Integer), "45982")
+    assertEquals(NumFmtFormatter.formatDateTime(dt, NumFmt.ThousandsSeparator), "45,982")
+  }
+
+  test("formatDateTime: ';;;' hides a date value (GH-283)") {
+    val dt = java.time.LocalDateTime.of(2025, 11, 21, 0, 0, 0)
+    assertEquals(NumFmtFormatter.formatDateTime(dt, NumFmt.Custom(";;;")), "")
+  }
+
+  test("formatDateTime: custom NUMERIC code renders the serial, not ISO text (GH-283)") {
+    val dt = java.time.LocalDateTime.of(2025, 11, 21, 0, 0, 0)
+    assertEquals(NumFmtFormatter.formatDateTime(dt, NumFmt.Custom("0.00")), "45982.00")
+  }
+
+  test("formatDateTime: conditional date code routes sections by serial (GH-283/285)") {
+    val fmt = NumFmt.Custom("[<45000]m/d/yy;yyyy")
+    val recent = java.time.LocalDateTime.of(2025, 11, 21, 0, 0, 0) // serial 45982
+    val old = java.time.LocalDateTime.of(2020, 1, 1, 0, 0, 0) // serial 43831
+    assertEquals(NumFmtFormatter.formatDateTime(recent, fmt), "2025")
+    assertEquals(NumFmtFormatter.formatDateTime(old, fmt), "1/1/20")
+  }
+
+  test("formatDateTime: 'm/d/yy;@' still renders via the date section (GH-283 regression)") {
+    val dt = java.time.LocalDateTime.of(2025, 11, 21, 0, 0, 0)
+    assertEquals(NumFmtFormatter.formatDateTime(dt, NumFmt.Custom("m/d/yy;@")), "11/21/25")
+  }
+
+  test("formatNumber: serial with a date code still renders the date (GH-283 regression)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal(45982), NumFmt.Custom("m/d/yy")), "11/21/25")
+    assertEquals(
+      NumFmtFormatter.formatNumber(BigDecimal("0.5"), NumFmt.Custom("h:mm AM/PM")),
+      "12:00 PM"
+    )
+  }
+
+  test("formatNumber: out-of-range serial with a date code renders ###### (GH-283)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal(-5), NumFmt.Custom("m/d/yy")), "######")
+    assertEquals(
+      NumFmtFormatter.formatNumber(BigDecimal(3000000), NumFmt.Custom("m/d/yy")),
+      "######"
+    )
+  }
+
   // ========== Date/Time Formatting Tests ==========
 
   test("applyDateFormat: simple date m/d/yy") {

@@ -455,8 +455,8 @@ object FormatCodeParser:
    *   - 2 sections: positive and zero use the 1st, negative uses the 2nd
    *   - 3+ sections: positive uses the 1st, negative the 2nd, zero the 3rd
    *   - compare conditions on the first two sections override positional routing (GH-285)
-   *   - a trailing `@` section among fewer than 4 sections is the text section and never
-   *     receives numbers
+   *   - a trailing `@` section among fewer than 4 sections is the text section and never receives
+   *     numbers
    *
    * Multi-section formats render the absolute value (any minus sign must be written in the
    * pattern); only single-section formats receive the default leading minus.
@@ -483,16 +483,16 @@ object FormatCodeParser:
    * Route a numeric value to its format section per Excel semantics (GH-254/262/283/285).
    *
    * Mirrors SheetJS/SSF `choose_fmt` (reverse-engineered from Excel):
-   *   - a trailing `@` section among fewer than 4 sections is the text section and drops out
-   *     of numeric routing
+   *   - a trailing `@` section among fewer than 4 sections is the text section and drops out of
+   *     numeric routing
    *   - without compare conditions, routing is positional with padding: 1 section serves all
    *     values, 2 sections serve [pos+zero, neg], 3+ serve [pos, neg, zero]
    *   - with compare conditions (honored on the first two sections only): the first matching
-   *     condition wins; an unmatched value falls back to the third padded section when both
-   *     leading sections carry conditions, otherwise to the second
+   *     condition wins; an unmatched value falls back to the third padded section when both leading
+   *     sections carry conditions, otherwise to the second
    *
-   * Returns None when the code has no numeric section (a lone `@` text format) — Excel renders
-   * such numbers in General format.
+   * Returns None when the code has no numeric section (a lone `@` text format) — Excel renders such
+   * numbers in General format.
    */
   def selectSection(value: BigDecimal, format: FormatCode): Option[FormatSection] =
     val sections = numericSections(format)
@@ -740,9 +740,9 @@ object FormatCodeParser:
    *
    * A verbatim port of the SheetJS/SSF `frac` algorithm (reverse-engineered from Excel and
    * validated against an Excel-generated corpus): convergents are generated in IEEE-754 double
-   * arithmetic until the denominator budget is exceeded, then the previous convergent wins.
-   * Double state is deliberate — Excel stores values as doubles and the binary noise is
-   * observable in the chosen convergent (12.3 → 12 1/3 but 0.3 → 2/7).
+   * arithmetic until the denominator budget is exceeded, then the previous convergent wins. Double
+   * state is deliberate — Excel stores values as doubles and the binary noise is observable in the
+   * chosen convergent (12.3 → 12 1/3 but 0.3 → 2/7).
    */
   private def nearestFraction(x: Double, maxDen: Double): (Double, Double) =
     var b = x
@@ -781,9 +781,9 @@ object FormatCodeParser:
     placeholders.count(c => c == '?' || (c >= '0' && c <= '9'))
 
   /**
-   * Align digits within a placeholder run: unfilled `?` positions become spaces, `0` becomes
-   * zeros, `#` adds nothing. Numerators/wholes right-align (pad left), denominators left-align
-   * (pad right).
+   * Align digits within a placeholder run: unfilled `?` positions become spaces, `0` becomes zeros,
+   * `#` adds nothing. Numerators/wholes right-align (pad left), denominators left-align (pad
+   * right).
    */
   private def padPlaceholders(digits: String, placeholders: String, alignRight: Boolean): String =
     val diff = placeholders.length - digits.length
@@ -800,8 +800,8 @@ object FormatCodeParser:
   /**
    * Apply a format code to text.
    *
-   * The text section is the 4th section when present; otherwise a trailing `@` section among
-   * fewer than 4 sections (GH-285). Without either, text echoes unchanged.
+   * The text section is the 4th section when present; otherwise a trailing `@` section among fewer
+   * than 4 sections (GH-285). Without either, text echoes unchanged.
    */
   def applyTextFormat(text: String, format: FormatCode): String =
     val all = Vector(format.positive) ++ format.negative ++ format.zero ++ format.text
@@ -822,16 +822,23 @@ object FormatCodeParser:
   // ========== Date/Time Formatter ==========
 
   /**
-   * Check if a format code contains date/time tokens.
+   * Check if a format code's first section contains date/time tokens.
    */
   def hasDateTokens(format: FormatCode): Boolean =
-    format.positive.pattern.tokens.exists {
+    hasDateTokens(format.positive)
+
+  /**
+   * Check if a single format section contains date/time tokens (GH-283: sections of one code may
+   * mix calendar and numeric patterns, so callers route per section).
+   */
+  def hasDateTokens(section: FormatSection): Boolean =
+    section.pattern.tokens.exists {
       case FormatToken.DatePart(_) | FormatToken.AmPm(_) | FormatToken.Elapsed(_) => true
       case _ => false
     }
 
   /**
-   * Apply a parsed format code to a LocalDateTime value.
+   * Apply a parsed format code's first section to a LocalDateTime value.
    *
    * @param dt
    *   The datetime to format
@@ -841,7 +848,14 @@ object FormatCodeParser:
    *   Formatted date/time string
    */
   def applyDateFormat(dt: LocalDateTime, format: FormatCode): String =
-    val tokens = format.positive.pattern.tokens
+    applyDateFormat(dt, format.positive)
+
+  /**
+   * Apply a single format section to a LocalDateTime value (GH-283: the section is chosen by
+   * [[selectSection]] on the date's serial number).
+   */
+  def applyDateFormat(dt: LocalDateTime, section: FormatSection): String =
+    val tokens = section.pattern.tokens
     val minutePositions = findMinutePositions(tokens)
     tokens.zipWithIndex.map { case (token, idx) =>
       renderDateToken(dt, token, minutePositions.contains(idx))
