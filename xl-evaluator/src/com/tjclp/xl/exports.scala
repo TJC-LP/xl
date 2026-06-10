@@ -39,6 +39,9 @@ object formulaExports:
   export formula.eval.SheetEvaluator
   export formula.eval.SheetEvaluator.*
 
+  // Number-format inheritance for formula cells (GH-184, opt-in via putFormulaInheriting)
+  export formula.eval.FormulaFormatting
+
   // WorkbookEvaluator extension methods (withCachedFormulas, recalculate, evaluateFormula)
   export formula.eval.WorkbookEvaluator
   export formula.eval.WorkbookEvaluator.*

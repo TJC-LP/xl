@@ -13,6 +13,8 @@ import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.workbooks.Workbook
 import java.time.{LocalDate, LocalDateTime}
 
@@ -377,7 +379,67 @@ object SheetEvaluator:
             scala.util.Right((sheet.put(originRef, cv), CellRange(originRef, originRef)))
       yield updated
 
+    /**
+     * Put a formula at ref, inheriting the number format of its referenced cells (GH-184).
+     *
+     * Excel applies the referenced cells' format automatically when a formula is entered into a
+     * General cell (`=B2-B3` over currency cells displays as `$400,000.00`); plain `put` keeps
+     * formula cells at General. This opt-in variant parses the formula, infers a format via
+     * [[FormulaFormatting.inferFormatFromReferences]], and — matching Excel — applies it only when
+     * the target cell's current format is General (an explicit target format is preserved, as are
+     * its other style properties).
+     *
+     * Note: explicit overloads instead of a default workbook parameter — extension methods with
+     * default arguments crash the compiler when merged through the formulaExports wildcard export
+     * (see the DependentRecalculation note in exports.scala).
+     *
+     * @param ref
+     *   Target cell for the formula
+     * @param formula
+     *   Excel formula string (with or without leading =)
+     * @return
+     *   Left on parse failure; Right(updated sheet) otherwise (inference itself never fails —
+     *   unresolvable or unformatted references simply contribute nothing)
+     */
+    def putFormulaInheriting(ref: ARef, formula: String): XLResult[Sheet] =
+      putFormulaInheritingImpl(sheet, ref, formula, None)
+
+    /**
+     * Workbook-aware [[putFormulaInheriting]]: cross-sheet references (`=Data!B2`) resolve their
+     * formats against the given workbook.
+     */
+    @annotation.targetName("putFormulaInheritingWorkbook")
+    def putFormulaInheriting(ref: ARef, formula: String, workbook: Workbook): XLResult[Sheet] =
+      putFormulaInheritingImpl(sheet, ref, formula, Some(workbook))
+
   // ========== Helper Functions ==========
+
+  private def putFormulaInheritingImpl(
+    sheet: Sheet,
+    ref: ARef,
+    formula: String,
+    workbook: Option[Workbook]
+  ): XLResult[Sheet] =
+    FormulaParser
+      .parse(formula)
+      .left
+      .map(parseError => XLError.FormulaError(formula, s"Parse error: $parseError"))
+      .map { expr =>
+        val normalized = if formula.startsWith("=") then formula else s"=$formula"
+        val withFormula = sheet.put(ref, CellValue.Formula(normalized))
+        val currentStyle =
+          withFormula.cells.get(ref).flatMap(_.styleId).flatMap(withFormula.styleRegistry.get)
+        // Excel parity: inherit only into a General-formatted target (formats are inferred
+        // against the pre-put sheet so a self-reference can't observe the formula being written)
+        FormulaFormatting.inferFormatFromReferences(expr, sheet, workbook) match
+          case Some(fmt) if currentStyle.forall(_.numFmt == NumFmt.General) =>
+            import com.tjclp.xl.sheets.styleSyntax.withCellStyle
+            withFormula.withCellStyle(
+              ref,
+              currentStyle.getOrElse(CellStyle.default).withNumFmt(fmt)
+            )
+          case _ => withFormula
+      }
 
   /**
    * Convert typed TExpr evaluation result to CellValue.
