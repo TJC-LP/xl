@@ -17,6 +17,13 @@ object `package` extends build.XLModule {
   )
 
   object test extends ScalaTests with build.XLTestModule {
+    // Share the real-file fixture corpus (xl-ooxml/test/resources/fixtures) so
+    // streaming/in-memory parity specs read the exact same committed files.
+    override def resources: T[Seq[PathRef]] = Task.Sources(
+      moduleDir / "resources",
+      build.`xl-ooxml`.moduleDir / "test" / "resources"
+    )
+
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.0.3",
       mvn"org.scalameta::munit-scalacheck:1.2.0",
