@@ -34,43 +34,59 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
       mergedRanges <- parseMergeCells(elem)
 
       // Extract ALL preserved metadata elements (all optional)
-      sheetPr = (elem \ "sheetPr").headOption.collect { case e: Elem => cleanNamespaces(e) }
-      dimension = (elem \ "dimension").headOption.collect { case e: Elem => cleanNamespaces(e) }
-      sheetViews = (elem \ "sheetViews").headOption.collect { case e: Elem => cleanNamespaces(e) }
-      sheetFormatPr = (elem \ "sheetFormatPr").headOption.collect { case e: Elem =>
-        cleanNamespaces(e)
+      sheetPr = (elem \ "sheetPr").headOption.collect { case e: Elem => rebindUsedNamespaces(e) }
+      dimension = (elem \ "dimension").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
       }
-      cols = (elem \ "cols").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      sheetViews = (elem \ "sheetViews").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
+      }
+      sheetFormatPr = (elem \ "sheetFormatPr").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
+      }
+      cols = (elem \ "cols").headOption.collect { case e: Elem => rebindUsedNamespaces(e) }
 
       conditionalFormatting = elem.child.collect {
-        case e: Elem if e.label == "conditionalFormatting" => cleanNamespaces(e)
+        case e: Elem if e.label == "conditionalFormatting" => rebindUsedNamespaces(e)
       }
       printOptions = (elem \ "printOptions").headOption.collect { case e: Elem =>
-        cleanNamespaces(e)
+        rebindUsedNamespaces(e)
       }
-      rowBreaks = (elem \ "rowBreaks").headOption.collect { case e: Elem => cleanNamespaces(e) }
-      colBreaks = (elem \ "colBreaks").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      rowBreaks = (elem \ "rowBreaks").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
+      }
+      colBreaks = (elem \ "colBreaks").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
+      }
       customPropertiesWs = (elem \ "customProperties").headOption.collect { case e: Elem =>
-        cleanNamespaces(e)
+        rebindUsedNamespaces(e)
       }
 
-      pageMargins = (elem \ "pageMargins").headOption.collect { case e: Elem => cleanNamespaces(e) }
-      pageSetup = (elem \ "pageSetup").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      pageMargins = (elem \ "pageMargins").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
+      }
+      pageSetup = (elem \ "pageSetup").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
+      }
       headerFooter = (elem \ "headerFooter").headOption.collect { case e: Elem =>
-        cleanNamespaces(e)
+        rebindUsedNamespaces(e)
       }
 
-      drawing = (elem \ "drawing").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      drawing = (elem \ "drawing").headOption.collect { case e: Elem => rebindUsedNamespaces(e) }
       legacyDrawing = (elem \ "legacyDrawing").headOption.collect { case e: Elem =>
-        cleanNamespaces(e)
+        rebindUsedNamespaces(e)
       }
-      picture = (elem \ "picture").headOption.collect { case e: Elem => cleanNamespaces(e) }
-      oleObjects = (elem \ "oleObjects").headOption.collect { case e: Elem => cleanNamespaces(e) }
-      controls = (elem \ "controls").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      picture = (elem \ "picture").headOption.collect { case e: Elem => rebindUsedNamespaces(e) }
+      oleObjects = (elem \ "oleObjects").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
+      }
+      controls = (elem \ "controls").headOption.collect { case e: Elem => rebindUsedNamespaces(e) }
 
-      tableParts = (elem \ "tableParts").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      tableParts = (elem \ "tableParts").headOption.collect { case e: Elem =>
+        rebindUsedNamespaces(e)
+      }
 
-      extLst = (elem \ "extLst").headOption.collect { case e: Elem => cleanNamespaces(e) }
+      extLst = (elem \ "extLst").headOption.collect { case e: Elem => rebindUsedNamespaces(e) }
 
       // Inline labels we recognize (single source of truth in WorksheetHelpers so the
       // preservation invariant can be guarded by a test — see worksheetKnownElements).
@@ -80,7 +96,7 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
       // GH-232: capture inline known elements that have NO dedicated field (dataValidations,
       // sheetProtection, autoFilter, hyperlinks, ...) so they survive a sheet modification.
       preservedKnownMap = elem.child.collect {
-        case e: Elem if preservedKnownLabels.contains(e.label) => e.label -> cleanNamespaces(e)
+        case e: Elem if preservedKnownLabels.contains(e.label) => e.label -> rebindUsedNamespaces(e)
       }.toMap
     yield OoxmlWorksheet(
       rows,

@@ -87,10 +87,51 @@ case class OoxmlWorksheet(
 ) extends XmlWritable,
       SaxSerializable:
 
+  /**
+   * Preserved/generated child elements re-emitted into the regenerated worksheet. Used only to
+   * collect namespace bindings (GH-291), so emission order is irrelevant; preservedKnown is
+   * label-sorted for determinism.
+   */
+  private def preservedChildElems: Seq[Elem] =
+    Seq(
+      sheetPr,
+      dimension,
+      sheetViews,
+      sheetFormatPr,
+      cols,
+      printOptions,
+      rowBreaks,
+      colBreaks,
+      customPropertiesWs,
+      pageMargins,
+      pageSetup,
+      headerFooter,
+      drawing,
+      legacyDrawing,
+      picture,
+      oleObjects,
+      controls,
+      tableParts,
+      extLst
+    ).flatten ++ conditionalFormatting ++
+      preservedKnown.toSeq.sortBy(_._1).map(_._2) ++ otherElements
+
+  /**
+   * Root scope extended with any namespace binding used by a re-emitted child but missing from the
+   * root (GH-291): openpyxl binds xmlns:r locally on `<drawing>`; child scopes are stripped on
+   * re-emission, so required bindings are hoisted onto the regenerated root — the standard Excel
+   * layout. Shared by both writer backends (toXml and writeSax).
+   */
+  private def emissionScope: NamespaceBinding =
+    val base = Option(rootScope).getOrElse(defaultWorksheetScope)
+    val hoisted = hoistUsedBindings(base, preservedChildElems)
+    if rows.exists(_.dyDescent.isDefined) then ensureWellKnownPrefix(hoisted, "x14ac")
+    else hoisted
+
   def writeSax(writer: SaxWriter): Unit =
     writer.startDocument()
 
-    val scope = Option(rootScope).getOrElse(defaultWorksheetScope)
+    val scope = emissionScope
     val rootAttrs = Option(rootAttributes).getOrElse(Null)
 
     writer.startElement("worksheet")
@@ -248,7 +289,7 @@ case class OoxmlWorksheet(
     // Any other elements
     otherElements.foreach(e => children += cleanNamespaces(e))
 
-    val scope = Option(rootScope).getOrElse(defaultWorksheetScope)
+    val scope = emissionScope
     val attrs = Option(rootAttributes).getOrElse(Null)
 
     Elem(null, "worksheet", attrs, scope, minimizeEmpty = false, children.result()*)
@@ -460,15 +501,10 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
         .getOrElse(Map.empty)
 
     // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
+    // (a generated legacyDrawing/hyperlinks element carries its own r: binding, which emission
+    // hoists onto the root when the preserved scope lacks it — GH-291)
     preservedMetadata match
       case Some(preserved) =>
-        // Ensure rootScope includes 'r:' namespace if we're adding a new legacyDrawing element
-        // (source worksheet might not have had comments, so its scope might lack the r: prefix)
-        val needsRNamespace = sheet.comments.nonEmpty && preserved.legacyDrawing.isEmpty
-        val adjustedScope =
-          if needsRNamespace && !scopeHasPrefix(preserved.rootScope, "r") then
-            NamespaceBinding("r", nsRelationships, preserved.rootScope)
-          else preserved.rootScope
         OoxmlWorksheet(
           allRows, // Use merged rows (with cells + empty rows)
           sheet.mergedRanges,
@@ -499,7 +535,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           preserved.extLst,
           preserved.otherElements,
           preserved.rootAttributes,
-          adjustedScope,
+          preserved.rootScope,
           // GH-232 preserve inline elements + GH-235 model-driven hyperlinks (overrides any raw)
           preserved.preservedKnown ++ hyperlinksMap
         )
