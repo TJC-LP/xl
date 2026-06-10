@@ -27,6 +27,8 @@ object formulaExports:
   // Evaluation
   export formula.eval.Evaluator
   export formula.Clock
+  // GH-115: randomness capability for RAND/RANDBETWEEN (Rng.system / Rng.seeded)
+  export formula.Rng
 
   // Error types
   export formula.eval.EvalError

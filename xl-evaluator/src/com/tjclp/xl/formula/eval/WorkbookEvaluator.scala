@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
-import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
@@ -72,6 +72,29 @@ object WorkbookEvaluator:
       evaluateFormula(formula, onSheet, Clock.system)
 
     /**
+     * Evaluate a formula on the named sheet with an explicit randomness source (GH-115) —
+     * deterministic RAND/RANDBETWEEN via `Rng.seeded(seed)`.
+     */
+    @annotation.targetName("evaluateFormulaOnSheetWithRng")
+    def evaluateFormula(
+      formula: String,
+      onSheet: SheetName,
+      clock: Clock,
+      rng: Rng
+    ): XLResult[CellValue] =
+      wb(onSheet).flatMap(s => SheetEvaluator.evaluateFormula(s)(formula, clock, rng, Some(wb)))
+
+    /** Evaluate a formula on the named sheet with an explicit rng (string variant, GH-115). */
+    @annotation.targetName("evaluateFormulaOnSheetStringWithRng")
+    def evaluateFormula(
+      formula: String,
+      onSheet: String,
+      clock: Clock,
+      rng: Rng
+    ): XLResult[CellValue] =
+      wb(onSheet).flatMap(s => SheetEvaluator.evaluateFormula(s)(formula, clock, rng, Some(wb)))
+
+    /**
      * Evaluate all formulas and cache their computed values.
      *
      * Useful for:
@@ -92,6 +115,11 @@ object WorkbookEvaluator:
      */
     def withCachedFormulas(clock: Clock = Clock.system): Workbook =
       recalculate(clock).workbook
+
+    /** Cache formula values with an explicit randomness source (GH-115). */
+    @annotation.targetName("withCachedFormulasWithRng")
+    def withCachedFormulas(clock: Clock, rng: Rng): Workbook =
+      recalculate(clock, rng).workbook
 
     /**
      * Total whole-workbook recalculation with per-cell error reporting.
@@ -116,14 +144,27 @@ object WorkbookEvaluator:
      * order is future work for deep cross-sheet fan-out.
      */
     def recalculate(clock: Clock = Clock.system): RecalcResult =
-      val perSheet = wb.sheets.map(sheet => recalcSheet(sheet, wb, clock))
-      RecalcResult(
-        workbook = wb.copy(sheets = perSheet.map(_.sheet)),
-        evaluated = perSheet.map(r => r.sheet.name -> r.evaluated).toMap,
-        errors = perSheet.flatMap(_.errors).toVector
-      )
+      recalculateImpl(wb, clock, None)
+
+    /**
+     * Total whole-workbook recalculation with an explicit randomness source (GH-115).
+     *
+     * Volatile semantics: RAND/RANDBETWEEN draw fresh values on every recalculate; with
+     * `Rng.seeded(seed)` the whole recalculation is reproducible.
+     */
+    @annotation.targetName("recalculateWithRng")
+    def recalculate(clock: Clock, rng: Rng): RecalcResult =
+      recalculateImpl(wb, clock, Some(rng))
 
   // ========== recalculate internals ==========
+
+  private def recalculateImpl(wb: Workbook, clock: Clock, rngOpt: Option[Rng]): RecalcResult =
+    val perSheet = wb.sheets.map(sheet => recalcSheet(sheet, wb, clock, rngOpt))
+    RecalcResult(
+      workbook = wb.copy(sheets = perSheet.map(_.sheet)),
+      evaluated = perSheet.map(r => r.sheet.name -> r.evaluated).toMap,
+      errors = perSheet.flatMap(_.errors).toVector
+    )
 
   private final case class SheetRecalc(
     sheet: Sheet,
@@ -136,7 +177,12 @@ object WorkbookEvaluator:
       case Some(CellValue.Formula(expr, _)) => expr
       case _ => ref.toA1
 
-  private def recalcSheet(sheet: Sheet, wb: Workbook, clock: Clock): SheetRecalc =
+  private def recalcSheet(
+    sheet: Sheet,
+    wb: Workbook,
+    clock: Clock,
+    rngOpt: Option[Rng]
+  ): SheetRecalc =
     val graph = DependencyGraph.fromSheet(sheet)
     val cyclicCore = DependencyGraph.cyclicNodes(graph)
     val blocked = DependencyGraph.transitiveDependents(graph, cyclicCore)
@@ -179,7 +225,10 @@ object WorkbookEvaluator:
         val (tempSheet, results, evalErrors) = evalOrder.foldLeft(
           (sheet, Map.empty[ARef, CellValue], Vector.empty[CellEvalError])
         ) { case ((temp, acc, errs), ref) =>
-          temp.evaluateCell(ref, clock, Some(wb)) match
+          val evaluated = rngOpt match
+            case Some(rng) => temp.evaluateCell(ref, clock, rng, Some(wb))
+            case None => temp.evaluateCell(ref, clock, Some(wb))
+          evaluated match
             case Right(value) => (temp.put(ref, value), acc + (ref -> value), errs)
             case Left(error) => (temp, acc, errs :+ CellEvalError(sheet.name, ref, error))
         }

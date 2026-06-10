@@ -17,3 +17,4 @@ object FunctionSpecs
     with FunctionSpecsReference
     with FunctionSpecsText
     with FunctionSpecsArray
+    with FunctionSpecsRandom

@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.functions
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
-import com.tjclp.xl.formula.{Clock, Arity}
+import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.addressing.ARef
@@ -47,7 +47,9 @@ final case class EvalContext(
   /** Recursion depth for cross-sheet formula evaluation. */
   depth: Int = 0,
   /** GH-193: in-scope LET bindings (declared name → evaluated value). */
-  bindings: Map[String, Any] = Map.empty
+  bindings: Map[String, Any] = Map.empty,
+  /** GH-115: randomness capability for RAND/RANDBETWEEN (Clock pattern). */
+  rng: Rng = Rng.system
 )
 
 sealed trait ArgValue

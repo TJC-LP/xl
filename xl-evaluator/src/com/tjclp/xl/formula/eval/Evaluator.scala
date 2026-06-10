@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, EvalContext}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
-import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.ARef
@@ -72,11 +72,21 @@ object Evaluator:
   def instance: Evaluator = new EvaluatorImpl()
 
   /**
+   * Evaluator instance with an explicit randomness source (GH-115).
+   *
+   * Use `Evaluator.instance(Rng.seeded(seed))` for deterministic RAND/RANDBETWEEN.
+   */
+  def instance(rng: Rng): Evaluator = new EvaluatorImpl(rng = rng)
+
+  /**
    * Evaluator instance that allows array results to propagate.
    *
    * Used for array formula evaluation where arithmetic over ranges should spill arrays.
    */
   def arrayInstance: Evaluator = new EvaluatorImpl(allowArrayResults = true)
+
+  /** Array-result evaluator with an explicit randomness source (GH-115). */
+  def arrayInstance(rng: Rng): Evaluator = new EvaluatorImpl(allowArrayResults = true, rng = rng)
 
   /**
    * Convenience method for direct evaluation (forwards to instance.eval).
@@ -158,7 +168,8 @@ object Evaluator:
     targetSheet: Sheet,
     clock: Clock,
     workbook: Option[Workbook],
-    depth: Int = 0
+    depth: Int = 0,
+    rng: Rng = Rng.system
   ): Either[EvalError, CellValue] =
     boundary:
       // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
@@ -181,19 +192,23 @@ object Evaluator:
             )
           )
         case Right(expr) =>
-          // Recursively evaluate with depth-aware evaluator (GH-161 cycle protection)
-          new EvaluatorWithDepth(depth + 1).eval(expr, targetSheet, clock, workbook).map { result =>
-            // Convert typed result to CellValue
-            result match
-              case cv: CellValue => cv
-              case bd: BigDecimal => CellValue.Number(bd)
-              case s: String => CellValue.Text(s)
-              case b: Boolean => CellValue.Bool(b)
-              case i: Int => CellValue.Number(BigDecimal(i))
-              case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
-              case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
-              case other => CellValue.Text(other.toString)
-          }
+          // Recursively evaluate with depth-aware evaluator (GH-161 cycle protection).
+          // The referenced formula is a separate lexical unit: the rng threads through, but LET
+          // bindings never leak across formula boundaries (fresh empty environment).
+          new EvaluatorWithDepth(depth + 1, rng = rng)
+            .eval(expr, targetSheet, clock, workbook)
+            .map { result =>
+              // Convert typed result to CellValue
+              result match
+                case cv: CellValue => cv
+                case bd: BigDecimal => CellValue.Number(bd)
+                case s: String => CellValue.Text(s)
+                case b: Boolean => CellValue.Bool(b)
+                case i: Int => CellValue.Number(BigDecimal(i))
+                case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
+                case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
+                case other => CellValue.Text(other.toString)
+            }
 
 /**
  * Private implementation of Evaluator.
@@ -204,10 +219,14 @@ object Evaluator:
  *   GH-193: the LET environment — values of in-scope bindings, keyed by declared name. Threaded
  *   through instance state so every recursive eval (including function-argument evaluation via
  *   EvalContext) sees the same environment.
+ * @param rng
+ *   GH-115: randomness capability for RAND/RANDBETWEEN, threaded like bindings so derived
+ *   evaluators (array args, cross-sheet recursion, LET bodies) draw from the same source.
  */
 private class EvaluatorImpl(
   allowArrayResults: Boolean = false,
-  bindings: Map[String, Any] = Map.empty
+  bindings: Map[String, Any] = Map.empty,
+  rng: Rng = Rng.system
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
@@ -270,7 +289,14 @@ private class EvaluatorImpl(
                     // GH-161 review: Apply decoder to Cell with evaluated result (type-safe)
                     // GH-161 review: Pass currentDepth for cycle protection
                     Evaluator
-                      .evalCrossSheetFormula(formulaStr, targetSheet, clock, workbook, currentDepth)
+                      .evalCrossSheetFormula(
+                        formulaStr,
+                        targetSheet,
+                        clock,
+                        workbook,
+                        currentDepth,
+                        rng
+                      )
                       .flatMap { evaluatedValue =>
                         val resultCell = Cell(at, evaluatedValue)
                         decode(resultCell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
@@ -311,7 +337,7 @@ private class EvaluatorImpl(
         cell.value match
           case CellValue.Formula(formulaStr, None) =>
             Evaluator
-              .evalCrossSheetFormula(formulaStr, sheet, clock, workbook, currentDepth)
+              .evalCrossSheetFormula(formulaStr, sheet, clock, workbook, currentDepth, rng)
               .flatMap { evaluatedValue =>
                 val resultCell = Cell(at, evaluatedValue)
                 decode(resultCell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
@@ -449,7 +475,7 @@ private class EvaluatorImpl(
         // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
         // (e.g. SUM over a range-valued binding) still resolve in-scope names.
         def evalArrayArg(expr: TExpr[Any]): Either[EvalError, Any] =
-          new EvaluatorWithDepth(currentDepth, allowArrayResults = true, bindings)
+          new EvaluatorWithDepth(currentDepth, allowArrayResults = true, bindings, rng)
             .eval(expr, sheet, clock, workbook, currentCell)
 
         val ctx = EvalContext(
@@ -460,7 +486,8 @@ private class EvaluatorImpl(
           evalArrayArg,
           currentCell,
           currentDepth,
-          bindings
+          bindings,
+          rng
         )
         call.spec.eval(call.args, ctx)
 
@@ -507,7 +534,7 @@ private class EvaluatorImpl(
             // Bare cell refs resolve to the cell's effective value (cached formula extracted,
             // Empty → 0) — same treatment as top-level refs and equality operands (GH-233).
             val resolved = TExpr.asResolvedValueExpr(valueExpr)
-            new EvaluatorWithDepth(currentDepth, allowArrayResults = true, env)
+            new EvaluatorWithDepth(currentDepth, allowArrayResults = true, env, rng)
               .eval(resolved.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
               .map(value => env + (name -> unwrapBindingValue(value)))
               .left
@@ -531,7 +558,7 @@ private class EvaluatorImpl(
             .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
         case other =>
           val resolvedBody = TExpr.asResolvedValueExpr(other)
-          new EvaluatorWithDepth(currentDepth, allowArrayResults, env)
+          new EvaluatorWithDepth(currentDepth, allowArrayResults, env, rng)
             .eval(resolvedBody.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
     }
 
@@ -739,6 +766,7 @@ private class EvaluatorImpl(
 private class EvaluatorWithDepth(
   depth: Int,
   allowArrayResults: Boolean = false,
-  bindings: Map[String, Any] = Map.empty
-) extends EvaluatorImpl(allowArrayResults, bindings):
+  bindings: Map[String, Any] = Map.empty,
+  rng: Rng = Rng.system
+) extends EvaluatorImpl(allowArrayResults, bindings, rng):
   override protected def currentDepth: Int = depth
