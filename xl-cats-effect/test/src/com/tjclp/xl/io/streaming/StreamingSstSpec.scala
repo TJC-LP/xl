@@ -233,3 +233,34 @@ class StreamingSstSpec extends CatsEffectSuite:
       assertEquals(count, 100_000, "count attribute counts every reference")
     }
   }
+
+  // Purity law: the accumulator must be created per RUN, not per stream construction —
+  // otherwise re-running the same compiled effect (e.g. a retry) inherits the previous
+  // run's strings as stale SST entries.
+
+  test("re-running the same compiled writeStream IO produces an identical SST (fresh per run)") {
+    val path = tempXlsx("rerun-single")
+    val io = dupRows.through(excel.writeStream(path, "Data")).compile.drain
+    for
+      _ <- io
+      first = parseSst(path)
+      _ <- io
+      second = parseSst(path)
+    yield
+      assertEquals(second, first, "second run of the same IO must not reuse the accumulator")
+      assertEquals(first, (5, 3, Vector("alpha", "beta", "gamma")))
+  }
+
+  test("re-running the same writeStreamsSeq F produces an identical SST (fresh per run)") {
+    val path = tempXlsx("rerun-multi")
+    val rows = fs2.Stream.emits(List(RowData(1, Map(0 -> CellValue.Text("x"))))).covary[IO]
+    val io = excel.writeStreamsSeq(path, Seq("S1" -> rows))
+    for
+      _ <- io
+      first = parseSst(path)
+      _ <- io
+      second = parseSst(path)
+    yield
+      assertEquals(second, first, "second run of the same F must not reuse the accumulator")
+      assertEquals(first, (1, 1, Vector("x")))
+  }

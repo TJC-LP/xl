@@ -661,42 +661,47 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         new IllegalArgumentException(s"Sheet index must be >= 1, got: $sheetIndex")
       )
     else
-      val sst = sstAccumulatorFor(config)
+      // Accumulator is created inside the stream (not at construction) so each RUN of the
+      // compiled effect gets a fresh one — re-running must not inherit a previous run's strings.
       Stream
-        .bracket(
-          Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
-        )(zip => Sync[F].delay(zip.close()))
-        .flatMap { zip =>
-          // 1. Write static parts first (SST is declared up front; an empty table is valid)
-          Stream.eval(
-            Sync[F].delay(
-              writeStaticPartsSync(zip, sheetName, sheetIndex, config, sst.isDefined, styles)
-            )
-          ) ++
-            // 2. Open worksheet entry
-            Stream.eval(
-              Sync[F].delay {
-                val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
-                entry.setMethod(ZipEntry.DEFLATED)
-                zip.putNextEntry(entry)
-                // Write header with optional dimension
-                writeWorksheetHeader(zip, dimension)
-              }
-            ) ++
-            // 3. Stream XML events → bytes → ZIP (pass 1: SST indices assigned on first occurrence)
-            body(sst)
-              .through(xml.render.raw())
-              .through(fs2.text.utf8.encode)
-              .chunks
-              .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
-            // 4. Write footer, close entry, then emit the accumulated SST (pass 2)
-            Stream.eval(
-              Sync[F].delay {
-                writeWorksheetFooter(zip)
-                zip.closeEntry()
-                sst.foreach(writeSharedStringsSync(zip, _, config))
-              }
-            )
+        .eval(Sync[F].delay(sstAccumulatorFor(config)))
+        .flatMap { sst =>
+          Stream
+            .bracket(
+              Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
+            )(zip => Sync[F].delay(zip.close()))
+            .flatMap { zip =>
+              // 1. Write static parts first (SST is declared up front; an empty table is valid)
+              Stream.eval(
+                Sync[F].delay(
+                  writeStaticPartsSync(zip, sheetName, sheetIndex, config, sst.isDefined, styles)
+                )
+              ) ++
+                // 2. Open worksheet entry
+                Stream.eval(
+                  Sync[F].delay {
+                    val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
+                    entry.setMethod(ZipEntry.DEFLATED)
+                    zip.putNextEntry(entry)
+                    // Write header with optional dimension
+                    writeWorksheetHeader(zip, dimension)
+                  }
+                ) ++
+                // 3. Stream XML events → bytes → ZIP (pass 1: SST indices assigned on first use)
+                body(sst)
+                  .through(xml.render.raw())
+                  .through(fs2.text.utf8.encode)
+                  .chunks
+                  .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
+                // 4. Write footer, close entry, then emit the accumulated SST (pass 2)
+                Stream.eval(
+                  Sync[F].delay {
+                    writeWorksheetFooter(zip)
+                    zip.closeEntry()
+                    sst.foreach(writeSharedStringsSync(zip, _, config))
+                  }
+                )
+            }
         }
         .drain
 
@@ -961,55 +966,58 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         (name, idx + 1, rows, dim)
       }
 
-      // GH-223: ONE workbook-global SST shared by all sheets (dedup across sheets)
-      val sst = sstAccumulatorFor(config)
-
+      // GH-223: ONE workbook-global SST shared by all sheets (dedup across sheets), created
+      // inside the stream so each run of the returned F gets a fresh accumulator.
       Stream
-        .bracket(
-          Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
-        )(zip => Sync[F].delay(zip.close()))
-        .flatMap { zip =>
-          // 1. Write static parts with all sheet metadata
-          Stream.eval(
-            Sync[F].delay {
-              writeStaticPartsMultiSync(
-                zip,
-                sheetsWithIndices.map { case (name, idx, _, _) => (name, idx) },
-                config,
-                hasSharedStrings = sst.isDefined
-              )
-            }
-          ) ++
-            // 2. Stream each sheet sequentially
-            Stream
-              .emits(sheetsWithIndices)
-              .flatMap { case (_, sheetIndex, rows, dimension) =>
-                // Open worksheet entry
-                Stream.eval(
-                  Sync[F].delay {
-                    val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
-                    entry.setMethod(ZipEntry.DEFLATED)
-                    zip.putNextEntry(entry)
-                    writeWorksheetHeader(zip, dimension)
-                  }
-                ) ++
-                  // Stream XML events → bytes → ZIP
-                  StreamingXmlWriter
-                    .worksheetBody(rows, config.formulaInjectionPolicy, sst)
-                    .through(xml.render.raw())
-                    .through(fs2.text.utf8.encode)
-                    .chunks
-                    .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
-                  // Close entry
-                  Stream.eval(
-                    Sync[F].delay {
-                      writeWorksheetFooter(zip)
-                      zip.closeEntry()
-                    }
+        .eval(Sync[F].delay(sstAccumulatorFor(config)))
+        .flatMap { sst =>
+          Stream
+            .bracket(
+              Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
+            )(zip => Sync[F].delay(zip.close()))
+            .flatMap { zip =>
+              // 1. Write static parts with all sheet metadata
+              Stream.eval(
+                Sync[F].delay {
+                  writeStaticPartsMultiSync(
+                    zip,
+                    sheetsWithIndices.map { case (name, idx, _, _) => (name, idx) },
+                    config,
+                    hasSharedStrings = sst.isDefined
                   )
-              } ++
-            // 3. Emit the accumulated workbook-global SST (GH-223)
-            Stream.eval(Sync[F].delay(sst.foreach(writeSharedStringsSync(zip, _, config))))
+                }
+              ) ++
+                // 2. Stream each sheet sequentially
+                Stream
+                  .emits(sheetsWithIndices)
+                  .flatMap { case (_, sheetIndex, rows, dimension) =>
+                    // Open worksheet entry
+                    Stream.eval(
+                      Sync[F].delay {
+                        val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
+                        entry.setMethod(ZipEntry.DEFLATED)
+                        zip.putNextEntry(entry)
+                        writeWorksheetHeader(zip, dimension)
+                      }
+                    ) ++
+                      // Stream XML events → bytes → ZIP
+                      StreamingXmlWriter
+                        .worksheetBody(rows, config.formulaInjectionPolicy, sst)
+                        .through(xml.render.raw())
+                        .through(fs2.text.utf8.encode)
+                        .chunks
+                        .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
+                      // Close entry
+                      Stream.eval(
+                        Sync[F].delay {
+                          writeWorksheetFooter(zip)
+                          zip.closeEntry()
+                        }
+                      )
+                  } ++
+                // 3. Emit the accumulated workbook-global SST (GH-223)
+                Stream.eval(Sync[F].delay(sst.foreach(writeSharedStringsSync(zip, _, config))))
+            }
         }
         .compile
         .drain
