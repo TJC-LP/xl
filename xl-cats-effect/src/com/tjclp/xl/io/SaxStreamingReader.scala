@@ -173,6 +173,8 @@ object SaxStreamingReader:
     var inFormula = false
     var inInlineStr = false
     var inPhoneticRun = false
+    var inInlineRun = false
+    var sawInlineRun = false
     var inTextElement = false
     var cachedValue: Option[String] = None
     var formulaText: Option[String] = None
@@ -180,6 +182,9 @@ object SaxStreamingReader:
     val valueText = new StringBuilder
     // Decoded inline-string runs for the current cell (each run decoded at </t>, GH-305)
     val inlineRuns = new StringBuilder
+    // Bare <t> text directly under <is> (CT_Rst is (t?, r*, rPh*, phoneticPr?)); the DOM
+    // reader ignores it whenever <r> runs exist, so it is accumulated separately.
+    val bareInlineText = new StringBuilder
 
     // Check cancelled less frequently - every 10k elements
     private var elementCount = 0
@@ -229,6 +234,11 @@ object SaxStreamingReader:
         case "is" =>
           inInlineStr = true
           inlineRuns.clear()
+          bareInlineText.clear()
+          sawInlineRun = false
+
+        case "r" if inInlineStr && !inPhoneticRun =>
+          inInlineRun = true
 
         case "rPh" if inInlineStr =>
           // Phonetic (furigana) runs are presentation metadata, not cell text;
@@ -264,20 +274,34 @@ object SaxStreamingReader:
         case "t" if inTextElement =>
           // GH-305: decode each run BEFORE concatenation, mirroring the DOM reader's
           // per-run decode - an _xHHHH_ escape is only honored within a single <t>,
-          // never across run boundaries.
-          inlineRuns.append(XmlUtil.decodeXstring(valueText.toString))
+          // never across run boundaries. Bare <t> text (outside any <r>) is stashed
+          // separately: the DOM reader ignores it whenever <r> runs exist.
+          val decoded = XmlUtil.decodeXstring(valueText.toString)
+          if inInlineRun then
+            sawInlineRun = true
+            inlineRuns.append(decoded)
+          else bareInlineText.append(decoded)
           inTextElement = false
           valueText.clear()
+
+        case "r" if inInlineRun =>
+          inInlineRun = false
 
         case "rPh" if inPhoneticRun =>
           inPhoneticRun = false
 
         case "is" if inInlineStr =>
           // GH-293: defer the commit to </c> so the s= style index is recorded there,
-          // exactly like SST and number cells.
-          if !skipRow && !skipCell then inlineValue = Some(inlineRuns.toString)
+          // exactly like SST and number cells. Runs win over a coexisting bare <t>
+          // (DOM reader's rElems.nonEmpty dispatch); the bare <t> contributes only
+          // when the <is> contains no runs.
+          if !skipRow && !skipCell then
+            inlineValue = Some(
+              if sawInlineRun then inlineRuns.toString else bareInlineText.toString
+            )
           inInlineStr = false
           inlineRuns.clear()
+          bareInlineText.clear()
 
         case "c" =>
           if !skipRow && !skipCell then
@@ -316,9 +340,12 @@ object SaxStreamingReader:
           inFormula = false
           inInlineStr = false
           inPhoneticRun = false
+          inInlineRun = false
+          sawInlineRun = false
           inTextElement = false
           valueText.clear()
           inlineRuns.clear()
+          bareInlineText.clear()
 
         case "row" if inRow =>
           if !skipRow then

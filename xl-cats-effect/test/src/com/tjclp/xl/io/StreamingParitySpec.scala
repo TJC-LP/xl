@@ -393,3 +393,45 @@ class StreamingParitySpec extends CatsEffectSuite:
       }
     }
   }
+
+  test("GH-305: bare <t> coexisting with <r> runs is ignored, matching the in-memory reader") {
+    // ECMA-376 CT_Rst is (t?, r*, rPh*, phoneticPr?): a bare <t> may legally coexist
+    // with rich runs. The in-memory reader ignores the bare <t> whenever <r> runs are
+    // present (parseCellValueWithoutFormula: rElems.nonEmpty wins) - streaming must
+    // not concatenate it into the value. B1 pins the no-runs case: with no <r>, the
+    // bare <t> IS the value.
+    val sheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="A1" t="inlineStr"><is><t>X</t><r><t>Y</t></r></is></c>
+        |      <c r="B1" t="inlineStr"><is><t>X</t></is></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>
+        |""".stripMargin
+    rawXlsx("mixed-bare-t-and-runs", sheetXml).flatMap { path =>
+      loadInMemory("mixed-bare-t-and-runs", path).flatMap { wb =>
+        val expected = inMemoryValues(wb.sheets(0))
+        assertEquals(
+          expected.get((1, 0)).flatMap(plainTextOf),
+          Some("Y"),
+          "in-memory reader ignores the bare <t> when <r> runs are present"
+        )
+        assertEquals(expected.get((1, 1)).flatMap(plainTextOf), Some("X"))
+        streamedValues(path, "Sheet1").map { streamed =>
+          assertEquals(
+            streamed.get((1, 0)).flatMap(plainTextOf),
+            Some("Y"),
+            "streaming must ignore the bare <t> when <r> runs are present (GH-305)"
+          )
+          assertEquals(
+            streamed.get((1, 1)).flatMap(plainTextOf),
+            Some("X"),
+            "streaming must keep the bare <t> as the value when there are no runs (GH-305)"
+          )
+        }
+      }
+    }
+  }
