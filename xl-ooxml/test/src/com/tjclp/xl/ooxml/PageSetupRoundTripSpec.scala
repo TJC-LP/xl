@@ -131,6 +131,23 @@ class PageSetupRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-263: sheet named like a cell ref (Q1) produces quoted print formulas") {
+    val setup = PageSetup(printArea = Some(ref"A1:B2"), repeatRows = Some((1, 1)))
+    val sheet = Sheet(SheetName.unsafe("Q1")).put(ref"A1", 1).withPageSetup(setup)
+    val wb = Workbook(sheet)
+    val out = Files.createTempFile("pagesetup-cellref-name", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val workbookXml = zipEntryString(out, "xl/workbook.xml")
+    assert(workbookXml.contains("'Q1'!$A$1:$B$2"), s"quoted area formula missing: $workbookXml")
+    assert(workbookXml.contains("'Q1'!$1:$1"), s"quoted titles formula missing: $workbookXml")
+
+    val reread = XlsxReader.read(out).fold(e => fail(s"read failed: $e"), identity)
+    val rereadSheet = reread(SheetName.unsafe("Q1")).fold(e => fail(s"$e"), identity)
+    assertEquals(rereadSheet.pageSetup, Some(setup))
+    Files.deleteIfExists(out)
+  }
+
   test("GH-259: every print field round-trips together (full PageSetup equality)") {
     val setup = PageSetup(
       scale = 90,

@@ -59,30 +59,17 @@ enum RefType derives CanEqual:
   /**
    * Convert to A1 notation.
    *
-   * For qualified refs, includes sheet name (with quotes if needed). Escapes single quotes as ''
-   * (Excel convention).
+   * For qualified refs, includes sheet name, quoted when required (special characters, leading
+   * digits, or cell-ref-shaped names like `Q1` — see SheetName.needsQuoting). Escapes single quotes
+   * as '' (Excel convention).
    */
   def toA1: String = this match
     case Cell(ref) => ref.toA1
     case Range(range) => range.toA1
     case QualifiedCell(sheet, ref) =>
-      val sheetStr = formatSheetName(sheet.value)
-      s"$sheetStr!${ref.toA1}"
+      s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}"
     case QualifiedRange(sheet, range) =>
-      val sheetStr = formatSheetName(sheet.value)
-      s"$sheetStr!${range.toA1}"
-
-  /** Format sheet name with proper quoting and escaping */
-  private def formatSheetName(name: String): String =
-    if needsQuoting(name) then
-      // Escape ' → '' and wrap in quotes
-      val escaped = name.replace("'", "''")
-      s"'$escaped'"
-    else name
-
-  /** Check if sheet name needs quoting (has spaces or special chars) */
-  private def needsQuoting(name: String): Boolean =
-    name.exists(c => c == ' ' || c == '\'' || !c.isLetterOrDigit && c != '_')
+      s"${SheetName.quoteForFormula(sheet.value)}!${range.toA1}"
 
 end RefType
 

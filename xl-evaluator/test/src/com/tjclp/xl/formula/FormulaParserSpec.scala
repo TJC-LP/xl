@@ -272,6 +272,51 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertEquals(result, Right(BigDecimal(3)))
   }
 
+  // ==================== GH-263: cell-ref-shaped sheet names ====================
+  // A sheet named Q1/A1/R1C1 must be single-quoted by the printer or the generated
+  // formula is spec-invalid (Excel would read Q1!A1 as something else entirely).
+
+  test("GH-263: parse quoted sheet name that looks like a cell ref ('A1'!B2)") {
+    FormulaParser.parse("='A1'!B2") match
+      case Right(TExpr.SheetRef(sheet, at, _, _)) =>
+        assertEquals(sheet.value, "A1")
+        assertEquals(at.toA1, "B2")
+      case Right(TExpr.SheetPolyRef(sheet, at, _)) =>
+        assertEquals(sheet.value, "A1")
+        assertEquals(at.toA1, "B2")
+      case other => fail(s"Expected sheet-qualified ref to 'A1'!B2, got $other")
+  }
+
+  test("GH-263: printer quotes cell-ref-shaped sheet name back ('A1'!B2)") {
+    FormulaParser.parse("='A1'!B2") match
+      case Right(expr) => assertEquals(FormulaPrinter.print(expr), "='A1'!B2")
+      case Left(err) => fail(s"='A1'!B2 should parse: $err")
+  }
+
+  test("GH-263: printer quotes Q1-style sheet name inside function ranges") {
+    FormulaParser.parse("=SUM('Q1'!A1:B2)") match
+      case Right(expr) => assertEquals(FormulaPrinter.print(expr), "=SUM('Q1'!A1:B2)")
+      case Left(err) => fail(s"=SUM('Q1'!A1:B2) should parse: $err")
+  }
+
+  test("GH-263: leniently parsed unquoted form prints canonically quoted (=Q1!A1)") {
+    FormulaParser.parse("=Q1!A1") match
+      case Right(expr) => assertEquals(FormulaPrinter.print(expr), "='Q1'!A1")
+      case Left(err) => fail(s"=Q1!A1 should parse: $err")
+  }
+
+  test("GH-263: R1C1-shaped sheet name prints quoted") {
+    FormulaParser.parse("='R1C1'!A1") match
+      case Right(expr) => assertEquals(FormulaPrinter.print(expr), "='R1C1'!A1")
+      case Left(err) => fail(s"='R1C1'!A1 should parse: $err")
+  }
+
+  test("GH-263: safe sheet names still print bare (Sheet1!A1)") {
+    FormulaParser.parse("=Sheet1!A1") match
+      case Right(expr) => assertEquals(FormulaPrinter.print(expr), "=Sheet1!A1")
+      case Left(err) => fail(s"=Sheet1!A1 should parse: $err")
+  }
+
   test("parse decimal number") {
     val result = FormulaParser.parse("=3.14")
     assert(result.isRight)

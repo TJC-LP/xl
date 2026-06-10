@@ -265,23 +265,12 @@ object FormulaPrinter:
   /**
    * Format sheet name for Excel formula.
    *
-   * Sheet names with spaces or special characters need to be quoted with single quotes. Any single
-   * quotes within the name are doubled (Excel escape convention).
+   * Delegates to the shared SheetName predicate (GH-263): quoting covers spaces, special
+   * characters, leading digits, and names that would parse as cell references (Q1, A1, R1C1).
+   * Single quotes within the name are doubled (Excel escape convention).
    */
   private def formatSheetName(sheet: SheetName): String =
-    val name = sheet.value
-    // Sheet names need quoting if they contain spaces, special chars, or look like cell refs
-    val needsQuoting = name.contains(' ') ||
-      name.contains('\'') ||
-      name.contains('-') ||
-      name.exists(c => !c.isLetterOrDigit && c != '_') ||
-      name.headOption.exists(_.isDigit) // Names starting with digit need quoting
-
-    if needsQuoting then
-      // Escape single quotes by doubling them
-      val escaped = name.replace("'", "''")
-      s"'$escaped'"
-    else name
+    SheetName.quoteForFormula(sheet.value)
 
   /**
    * Print with minimal whitespace (compact format).

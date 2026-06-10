@@ -31,14 +31,12 @@ private[ooxml] object PrintNames:
   private val RowSpanRe = """^\$([0-9]+):\$([0-9]+)$""".r
 
   /**
-   * Quote a sheet name for use in a defined-name formula, matching Excel's convention: simple names
-   * (letters/digits/underscore, not starting with a digit) stay bare, everything else is wrapped in
-   * single quotes with embedded quotes doubled.
+   * Quote a sheet name for use in a defined-name formula, matching Excel's convention. Delegates to
+   * the shared predicate (GH-263): simple names stay bare; names with special characters, leading
+   * digits, or that would parse as cell references (Q1, A1, R1C1) are wrapped in single quotes with
+   * embedded quotes doubled.
    */
-  def quoteSheetName(name: String): String =
-    val simple = name.nonEmpty && !name.charAt(0).isDigit &&
-      name.forall(c => c.isLetterOrDigit || c == '_')
-    if simple then name else s"'${name.replace("'", "''")}'"
+  def quoteSheetName(name: String): String = SheetName.quoteForFormula(name)
 
   /** Format a Print_Area formula, e.g. `Sheet1!$A$1:$D$20` or `'Q1 Report'!$A$1:$D$20`. */
   def printAreaFormula(sheet: SheetName, area: CellRange): String =
