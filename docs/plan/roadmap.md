@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **104 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 3005+ tests passing.
 
-**Current Version**: **0.11.0 "Scripting"** (released 2026-06-10)
+**Current Version**: **0.11.1 "Totality"** (released 2026-06-10)
 
 ---
 
@@ -23,9 +23,9 @@ executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (ba
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
 
-### v0.11.1 "Totality" — wave 1 (in flight)
+### v0.11.1 "Totality" — wave 1 (Released 2026-06-10)
 
-All open bugs, one patch release.
+All open bugs, one patch release (PR #276). Reviewer-discovered gaps filed as #277–#285.
 
 | Issue | Fix |
 |-------|-----|

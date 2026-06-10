@@ -62,7 +62,7 @@ After updating all files:
 4. Run `./scripts/verify-skill-snippets.sh --local` (xl-scripting skill snippets compile)
 5. Run this to verify no SNAPSHOT refs remain:
    ```bash
-   grep -r "SNAPSHOT" --include="*.scala" --include="*.mill" --include="*.md" . | grep -v RELEASING.md | grep -v ".scala-build" | grep -v "out/"
+   grep -r "SNAPSHOT" --include="*.scala" --include="*.mill" --include="*.md" . | grep -v RELEASING.md | grep -v ".scala-build" | grep -v "out/" | grep -v ".claude/commands"
    ```
 6. Confirm new release features are documented in `plugin/skills/xl-scripting/reference/API.md`
    and `docs/reference/scripting.md` — cross-check the release's CHANGELOG entries against both

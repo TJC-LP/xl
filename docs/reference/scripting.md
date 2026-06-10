@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.0
+//> using dep com.tjclp::xl:0.11.1
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.0
+//> using dep com.tjclp::xl:0.11.1
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -135,7 +135,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.0
+//> using dep com.tjclp::xl:0.11.1
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -229,7 +229,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.0
+//> using dep com.tjclp::xl:0.11.1
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -240,6 +240,8 @@ val report = Sheet("Report")
     PageSetup(
       orientation = Some("landscape"),
       fitToWidth = Some(1),
+      // 0.11.1+: HeaderFooter also takes evenHeader/evenFooter/firstHeader/firstFooter
+      // with differentOddEven/differentFirst; fitToWidth/Height emit the fitToPage flag
       headerFooter = Some(HeaderFooter(oddFooter = Some("&LACME Corp&RPage &P of &N"))),
       margins = Some(PageMargins(left = 0.5, right = 0.5)),
       printArea = Some(ref"A1:H40"),     // _xlnm.Print_Area defined name
@@ -281,7 +283,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.0
+//> using dep com.tjclp::xl:0.11.1
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
