@@ -172,10 +172,14 @@ object SaxStreamingReader:
     var inValue = false
     var inFormula = false
     var inInlineStr = false
+    var inPhoneticRun = false
     var inTextElement = false
     var cachedValue: Option[String] = None
     var formulaText: Option[String] = None
+    var inlineValue: Option[String] = None
     val valueText = new StringBuilder
+    // Decoded inline-string runs for the current cell (each run decoded at </t>, GH-305)
+    val inlineRuns = new StringBuilder
 
     // Check cancelled less frequently - every 10k elements
     private var elementCount = 0
@@ -224,8 +228,14 @@ object SaxStreamingReader:
 
         case "is" =>
           inInlineStr = true
+          inlineRuns.clear()
 
-        case "t" if inInlineStr =>
+        case "rPh" if inInlineStr =>
+          // Phonetic (furigana) runs are presentation metadata, not cell text;
+          // the DOM reader and the SAX SST reader both exclude them.
+          inPhoneticRun = true
+
+        case "t" if inInlineStr && !inPhoneticRun =>
           inTextElement = true
           valueText.clear()
 
@@ -243,34 +253,52 @@ object SaxStreamingReader:
           valueText.clear()
 
         case "f" if inFormula =>
-          if !skipRow && !skipCell then formulaText = Some(valueText.toString)
+          if !skipRow && !skipCell then
+            // GH-293: the in-memory reader trims <f> text and treats a whitespace-only
+            // formula as absent (WorksheetReader `.text.trim` + nonEmpty guard); match it.
+            val trimmed = valueText.toString.trim
+            formulaText = Option.when(trimmed.nonEmpty)(trimmed)
           inFormula = false
           valueText.clear()
 
         case "t" if inTextElement =>
+          // GH-305: decode each run BEFORE concatenation, mirroring the DOM reader's
+          // per-run decode - an _xHHHH_ escape is only honored within a single <t>,
+          // never across run boundaries.
+          inlineRuns.append(XmlUtil.decodeXstring(valueText.toString))
           inTextElement = false
+          valueText.clear()
+
+        case "rPh" if inPhoneticRun =>
+          inPhoneticRun = false
 
         case "is" if inInlineStr =>
-          if !skipRow && !skipCell then
-            val text = XmlUtil.decodeXstring(valueText.toString)
-            for colIdx <- currentCellColIdx do currentRowCells(colIdx) = CellValue.Text(text)
+          // GH-293: defer the commit to </c> so the s= style index is recorded there,
+          // exactly like SST and number cells.
+          if !skipRow && !skipCell then inlineValue = Some(inlineRuns.toString)
           inInlineStr = false
-          valueText.clear()
+          inlineRuns.clear()
 
         case "c" =>
           if !skipRow && !skipCell then
             for colIdx <- currentCellColIdx do
-              val cellValue = (formulaText, cachedValue) match
-                case (Some(formula), Some(cached)) =>
+              // Mirror of the DOM reader's dispatch (WorksheetReader.parseCellValue):
+              // a nonEmpty formula wins; otherwise <is> wins for inline-string cell
+              // types; otherwise interpret <v>.
+              val inlineText = inlineValue.filter(_ => isInlineStringType)
+              val cellValue = (formulaText, inlineText, cachedValue) match
+                case (Some(formula), _, Some(cached)) =>
                   val parsedCached = interpretCellValue(cached, currentCellType, sst)
                   val cachedOpt =
                     if parsedCached == CellValue.Empty then None else Some(parsedCached)
                   CellValue.Formula(formula, cachedOpt)
-                case (Some(formula), None) =>
+                case (Some(formula), _, None) =>
                   CellValue.Formula(formula, None)
-                case (None, Some(value)) =>
+                case (None, Some(text), _) =>
+                  CellValue.Text(text)
+                case (None, None, Some(value)) =>
                   interpretCellValue(value, currentCellType, sst)
-                case (None, None) =>
+                case (None, None, None) =>
                   CellValue.Empty
               if cellValue != CellValue.Empty then
                 currentRowCells(colIdx) = cellValue
@@ -283,11 +311,14 @@ object SaxStreamingReader:
           skipCell = false
           cachedValue = None
           formulaText = None
+          inlineValue = None
           inValue = false
           inFormula = false
           inInlineStr = false
+          inPhoneticRun = false
           inTextElement = false
           valueText.clear()
+          inlineRuns.clear()
 
         case "row" if inRow =>
           if !skipRow then
@@ -296,6 +327,10 @@ object SaxStreamingReader:
           skipRow = false
 
         case _ => ()
+
+    /** Cell types whose value may come from an <is> inline string (DOM reader contract). */
+    private def isInlineStringType: Boolean =
+      currentCellType.exists(t => t == "inlineStr" || t == "str")
 
     private def parseCellColumn(cellRef: String): Option[Int] =
       val col = cellRef.takeWhile(_.isLetter)
