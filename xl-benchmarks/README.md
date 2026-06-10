@@ -93,7 +93,18 @@ XL vs Apache POI comparison on equivalent operations.
 
 **Parameters**: `rows` = 1000, 10000, 100000
 
-### 5. SaxWriterBenchmark
+### 5. SheetPutBenchmark
+Compares `Sheet.put` overloads at 1000 cells with mixed value types (GH-40): is the runtime
+`CellWriter[CellWritable]` pattern match a real cost?
+
+**Benchmarks**:
+- `chainedSinglePuts` - `sheet.put(ref, value)` folded per cell (runtime dispatch + style inference)
+- `batchVarargsPut` - `sheet.put(updates*)` batch varargs (tuple seq built in setup)
+- `preConstructedCellPuts` - `sheet.put(cell)` with pre-built Cells (no dispatch)
+- `patchBatchPut` - `Patch.Batch` of `Patch.Put` via `applyPatch` (the DSL path)
+- `writerDispatchOnly` - isolates the pattern match + codec write, no sheet machinery
+
+### 6. SaxWriterBenchmark
 Compares XL write backends: SaxStax vs ScalaXml.
 
 **Benchmarks**:
