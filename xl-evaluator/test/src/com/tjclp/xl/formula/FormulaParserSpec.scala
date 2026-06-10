@@ -216,6 +216,62 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
+  // ==================== GH-271: Leading unary plus ====================
+  // Excel accepts a leading unary plus (=+E43, =+SUM(...)) — a pervasive banker idiom.
+  // Unary plus is identity: it parses to the SAME AST as the formula without it, so the
+  // printer normalizes it away and the parse∘print=id round-trip law stays intact.
+
+  test("GH-271: unary plus parses to the same AST as without it (=+A1)") {
+    val plus = FormulaParser.parse("=+A1")
+    assert(plus.isRight, s"=+A1 should parse, got $plus")
+    assertEquals(plus, FormulaParser.parse("=A1"))
+  }
+
+  test("GH-271: unary plus before function call (=+SUM(A1:B2))") {
+    val plus = FormulaParser.parse("=+SUM(A1:B2)")
+    assert(plus.isRight, s"=+SUM(A1:B2) should parse, got $plus")
+    assertEquals(plus, FormulaParser.parse("=SUM(A1:B2)"))
+  }
+
+  test("GH-271: chained unary plus (=++A1)") {
+    val plus = FormulaParser.parse("=++A1")
+    assert(plus.isRight, s"=++A1 should parse, got $plus")
+    assertEquals(plus, FormulaParser.parse("=A1"))
+  }
+
+  test("GH-271: unary plus followed by binary plus (=+1+2)") {
+    val plus = FormulaParser.parse("=+1+2")
+    assert(plus.isRight, s"=+1+2 should parse, got $plus")
+    assertEquals(plus, FormulaParser.parse("=1+2"))
+  }
+
+  test("GH-271: unary plus mixes with unary minus (=+-2)") {
+    val plus = FormulaParser.parse("=+-2")
+    assert(plus.isRight, s"=+-2 should parse, got $plus")
+    assertEquals(plus, FormulaParser.parse("=-2"))
+  }
+
+  test("GH-271: unary plus in power exponent (=2^+2)") {
+    val plus = FormulaParser.parse("=2^+2")
+    assert(plus.isRight, s"=2^+2 should parse, got $plus")
+    assertEquals(plus, FormulaParser.parse("=2^2"))
+  }
+
+  test("GH-271: printer normalizes unary plus away (=+A1 prints as =A1)") {
+    FormulaParser.parse("=+A1") match
+      case Right(expr) => assertEquals(FormulaPrinter.print(expr), "=A1")
+      case Left(err) => fail(s"=+A1 should parse: $err")
+  }
+
+  test("GH-271: unary plus formula evaluates (=+1+2 = 3)") {
+    val sheet = Sheet("Test")
+    val result = for
+      expr <- FormulaParser.parse("=+1+2")
+      value <- Evaluator.eval(expr, sheet)
+    yield value
+    assertEquals(result, Right(BigDecimal(3)))
+  }
+
   test("parse decimal number") {
     val result = FormulaParser.parse("=3.14")
     assert(result.isRight)

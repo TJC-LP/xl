@@ -471,8 +471,8 @@ object FormulaParser:
     }
 
   /**
-   * Parse the exponent of a power expression, allowing unary minus. This handles cases like 2^-1 =
-   * 0.5 while keeping -2^2 = -(2^2) = -4
+   * Parse the exponent of a power expression, allowing unary minus and plus. This handles cases
+   * like 2^-1 = 0.5 while keeping -2^2 = -(2^2) = -4. Unary plus is identity (GH-271).
    */
   private def parsePowExponent(state: ParserState): ParseResult[TExpr[?]] =
     val s = skipWhitespace(state)
@@ -487,12 +487,22 @@ object FormulaParser:
             )
           }
         }
+      case Some('+') =>
+        descend(s).flatMap { sd =>
+          val s2 = skipWhitespace(sd.advance())
+          parsePowExponent(s2).map { case (expr, s3) =>
+            (expr, s3.copy(depth = s.depth))
+          }
+        }
       case _ => parsePow(s)
 
   /**
-   * Parse unary operators: -, NOT
+   * Parse unary operators: -, +, NOT
    *
    * Excel precedence: unary minus has lower precedence than ^, so -2^2 = -(2^2) = -4
+   *
+   * Unary plus (GH-271: =+A1, the pervasive banker idiom) is identity: it parses to the same AST as
+   * the operand alone, so the printer normalizes it away while parse∘print=id holds on the AST.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def parseUnary(state: ParserState): ParseResult[TExpr[?]] =
@@ -507,6 +517,14 @@ object FormulaParser:
               TExpr.Sub(TExpr.Lit(BigDecimal(0)), TExpr.asNumericExpr(expr)), // Convert PolyRef
               s3.copy(depth = s.depth)
             )
+          }
+        }
+      case Some('+') =>
+        // descend: each chained '+' counts against the depth budget (GH-56 recursion guard)
+        descend(s).flatMap { sd =>
+          val s2 = skipWhitespace(sd.advance())
+          parseUnary(s2).map { case (expr, s3) =>
+            (expr, s3.copy(depth = s.depth))
           }
         }
       case Some('N') | Some('n') if isKeywordAt(s, "NOT") =>
