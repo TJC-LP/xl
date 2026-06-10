@@ -369,11 +369,15 @@ private class EvaluatorImpl(
 
       // ===== String Operators =====
       case TExpr.Concat(x, y) =>
-        // Concatenate: join two strings
+        // Concatenate: join two strings. Operands are statically String, but erased upstream
+        // casts (e.g. a numeric LET binding or a numeric-returning call coerced via
+        // asStringExpr) can deliver non-String runtime values — evaluate as Any (a String-typed
+        // binder would checkcast and throw) and coerce totally with the decodeAsString
+        // conventions instead of crashing (GH-193).
         for
-          xv <- eval(x, sheet, clock, workbook, currentCell)
-          yv <- eval(y, sheet, clock, workbook, currentCell)
-        yield xv + yv
+          xv <- eval(x.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+          yv <- eval(y.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+        yield concatText(xv) + concatText(yv)
 
       // ===== Comparison Operators =====
       // GH-197: Use evalComparison for array-aware comparisons
@@ -561,6 +565,24 @@ private class EvaluatorImpl(
           new EvaluatorWithDepth(currentDepth, allowArrayResults, env, rng)
             .eval(resolvedBody.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
     }
+
+  /**
+   * Total text coercion for '&' operands, mirroring the decodeAsString conventions (Number →
+   * toString, Bool → TRUE/FALSE, DateTime → ISO, Empty → "").
+   */
+  private def concatText(value: Any): String = value match
+    case s: String => s
+    case b: Boolean => if b then "TRUE" else "FALSE"
+    case bd: BigDecimal => bd.toString
+    case i: Int => i.toString
+    case ld: java.time.LocalDate => ld.toString
+    case ldt: java.time.LocalDateTime => ldt.toString
+    case CellValue.Text(s) => s
+    case CellValue.Number(n) => n.toString
+    case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
+    case CellValue.DateTime(dt) => dt.toString
+    case CellValue.Empty => ""
+    case other => other.toString
 
   /**
    * Unwrap a CellValue binding result to its primitive so bound values compose with arithmetic,

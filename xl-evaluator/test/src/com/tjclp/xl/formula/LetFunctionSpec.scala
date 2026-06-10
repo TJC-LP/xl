@@ -75,6 +75,24 @@ class LetFunctionSpec extends ScalaCheckSuite:
     assertEquals(evalNum("=LET(x, 3, x*x+x)"), BigDecimal(12))
   }
 
+  test("numeric binding coerces to text in concat: LET(x, 1, \"v: \"&x) = 'v: 1'") {
+    assertEquals(
+      sheet.evaluateFormula("""=LET(x, 1, "v: "&x)"""),
+      Right(CellValue.Text("v: 1"))
+    )
+  }
+
+  test("LET result coerces to text in outer concat: LET(x, 1, x)&\"a\" = '1a'") {
+    assertEquals(
+      sheet.evaluateFormula("""=LET(x, 1, x)&"a""""),
+      Right(CellValue.Text("1a"))
+    )
+  }
+
+  test("date binding supports serial arithmetic: LET(d, TODAY(), d+1-(d)) = 1") {
+    assertEquals(evalNum("=LET(d, TODAY(), d+1-d)"), BigDecimal(1))
+  }
+
   test("LET composes as a scalar function argument: ABS(LET(x, 5, -x)) = 5") {
     assertEquals(evalNum("=ABS(LET(x, 5, 0-x))"), BigDecimal(5))
   }
