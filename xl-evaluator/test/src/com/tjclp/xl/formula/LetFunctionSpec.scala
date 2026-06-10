@@ -356,3 +356,127 @@ class LetFunctionSpec extends ScalaCheckSuite:
       Some(CellValue.Number(BigDecimal(50)))
     )
   }
+
+  // ===== Typed argument positions (total coercion at the as*Expr boundary) =====
+  // BindingRef is Any-typed like PolyRef; a binding used where a function expects
+  // String/Int/Boolean/BigDecimal/LocalDate must coerce TOTALLY (clean Left when
+  // uncoercible), never ClassCastException through the XLResult-returning APIs.
+
+  test("Int position: LET(k, 2, LEFT(\"hey\", k)) = 'he'") {
+    assertEquals(
+      sheet.evaluateFormula("""=LET(k, 2, LEFT("hey", k))"""),
+      Right(CellValue.Text("he"))
+    )
+  }
+
+  test("Int position via COUNT binding: LET(n, COUNT(A1:A2), MID(\"hello\", n, 1)) = 'e'") {
+    assertEquals(
+      sheet.evaluateFormula("""=LET(n, COUNT(A1:A2), MID("hello", n, 1))"""),
+      Right(CellValue.Text("e"))
+    )
+  }
+
+  test("Int position coerces boolean binding like decodeAsInt: LET(b, TRUE, LEFT(\"hey\", b)) = 'h'") {
+    assertEquals(
+      sheet.evaluateFormula("""=LET(b, TRUE, LEFT("hey", b))"""),
+      Right(CellValue.Text("h"))
+    )
+  }
+
+  test("Int position rejects non-integral binding with a clean Left: LET(x, 1.7, LEFT(\"hey\", x))") {
+    val result = sheet.evaluateFormula("""=LET(x, 1.7, LEFT("hey", x))""")
+    assert(result.isLeft, s"expected clean Left for non-integral count, got $result")
+  }
+
+  test("String position: LET(x, A1, UPPER(x)) = '10' (parity with UPPER(A1))") {
+    assertEquals(sheet.evaluateFormula("=UPPER(A1)"), Right(CellValue.Text("10")))
+    assertEquals(sheet.evaluateFormula("=LET(x, A1, UPPER(x))"), Right(CellValue.Text("10")))
+  }
+
+  test("String position: LET(x, 1, LEN(x)) = 1") {
+    assertEquals(evalNum("=LET(x, 1, LEN(x))"), BigDecimal(1))
+  }
+
+  test("Boolean position: LET(x, A1, IF(x, 1, 2)) matches IF(A1, 1, 2) and never throws") {
+    val direct = sheet.evaluateFormula("=IF(A1, 1, 2)")
+    val bound = sheet.evaluateFormula("=LET(x, A1, IF(x, 1, 2))")
+    // Load-bearing assertion: totality + parity with the direct form (today both are a
+    // clean TypeMismatch Left; if numeric truthiness ever lands, both must follow).
+    assertEquals(bound.isLeft, direct.isLeft)
+  }
+
+  test("Numeric position gives clean Left for a text binding: LET(s, \"ab\", ABS(s))") {
+    val result = sheet.evaluateFormula("""=LET(s, "ab", ABS(s))""")
+    assert(result.isLeft, s"expected clean Left for text in numeric position, got $result")
+  }
+
+  test("Date position: LET(d, A1, YEAR(d)) works when A1 holds a date") {
+    val s = sheetWith("A1" -> CellValue.DateTime(java.time.LocalDateTime.of(2024, 3, 15, 0, 0)))
+    assertEquals(evalNum("=LET(d, A1, YEAR(d))", s), BigDecimal(2024))
+  }
+
+  test("Date position: LET(d, DATE(2024, 1, 5), MONTH(d)) = 1 (LocalDate binding)") {
+    assertEquals(evalNum("=LET(d, DATE(2024, 1, 5), MONTH(d))"), BigDecimal(1))
+  }
+
+  test("array binding in a scalar text position gives clean Left: LET(t, TRANSPOSE(A1:A2), UPPER(t))") {
+    val result = sheet.evaluateFormula("=LET(t, TRANSPOSE(A1:A2), UPPER(t))")
+    assert(result.isLeft, s"expected clean Left for array in scalar position, got $result")
+  }
+
+  test("parse.print = id through typed argument positions") {
+    val formulas = List(
+      """=LET(k, 2, LEFT("hey", k))""",
+      """=LET(n, COUNT(A1:A2), MID("hello", n, 1))""",
+      "=LET(x, A1, UPPER(x))",
+      "=LET(x, A1, IF(x, 1, 2))",
+      "=LET(d, A1, YEAR(d))"
+    )
+    formulas.foreach { f =>
+      val parsed = FormulaParser.parse(f)
+      assert(parsed.isRight, s"parse failed for $f: $parsed")
+      parsed.foreach(expr => assertEquals(FormulaPrinter.print(expr), f))
+    }
+  }
+
+  test("FormulaShifter shifts through typed argument positions") {
+    val parsed = FormulaParser.parse("""=LET(k, A1, LEFT("hey", k))""")
+    assert(parsed.isRight, s"$parsed")
+    parsed.foreach { expr =>
+      val shifted = FormulaShifter.shift(expr, 1, 1)
+      assertEquals(FormulaPrinter.print(shifted), """=LET(k, B2, LEFT("hey", k))""")
+    }
+  }
+
+  test("structural shift survives typed argument positions (row insert above)") {
+    val parsed = FormulaParser.parse("""=LET(k, A5, LEFT("hey", k))""")
+    assert(parsed.isRight, s"$parsed")
+    parsed.foreach { expr =>
+      val shifted =
+        FormulaShifter.shiftStructural(expr, shiftLocal = true, "S", isRow = true, 0, 2)
+      assertEquals(
+        shifted.map(e => FormulaPrinter.print(e)),
+        Some("""=LET(k, A7, LEFT("hey", k))""")
+      )
+    }
+  }
+
+  test("recalculate is total over typed-position LET formulas (per-cell errors, never throws)") {
+    val s = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", CellValue.Number(BigDecimal(10)))
+      .put(ref"A2", CellValue.Number(BigDecimal(20)))
+      .put(ref"B1", CellValue.Formula("""=LET(k, 2, LEFT("hey", k))""", None))
+      .put(ref"B2", CellValue.Formula("=LET(x, A1, UPPER(x))", None))
+      .put(ref"B3", CellValue.Formula("""=LET(s, "ab", ABS(s))""", None))
+      .put(ref"B4", CellValue.Formula("=LET(x, A1, IF(x, 1, 2))", None))
+    // Documented contract: total whole-workbook recalculation with per-cell error
+    // reporting. This call must return a RecalcResult, never throw.
+    val result = Workbook(Vector(s)).recalculate()
+    val evaluated = result.evaluated(SheetName.unsafe("S"))
+    assertEquals(evaluated.get(ref"B1"), Some(CellValue.Text("he")))
+    assertEquals(evaluated.get(ref"B2"), Some(CellValue.Text("10")))
+    assert(
+      result.errors.exists(e => e.ref == ref"B3"),
+      s"expected a per-cell error for B3, got: ${result.errors}"
+    )
+  }

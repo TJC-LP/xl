@@ -157,6 +157,7 @@ object FormulaShifter:
           shiftInternal(body, colDelta, rowDelta)
         ).asInstanceOf[TExpr[A]]
       case bref: BindingRef => bref.asInstanceOf[TExpr[A]]
+      case cbref: CoercedBindingRef[?] => cbref.asInstanceOf[TExpr[A]]
 
   /**
    * Shift a cell reference based on its anchor mode.
@@ -414,3 +415,4 @@ object FormulaShifter:
           sb <- go(body)
         yield Let(bs.reverse, sb).asInstanceOf[TExpr[A]]
       case _: BindingRef => Some(expr)
+      case _: CoercedBindingRef[?] => Some(expr)

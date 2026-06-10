@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.eval
 
-import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.ast.{BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, EvalContext}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.FormulaPrinter
@@ -413,17 +413,16 @@ private class EvaluatorImpl(
 
       // ===== Type Conversions =====
       case TExpr.ToInt(expr) =>
-        // ToInt: Convert BigDecimal to Int (validates integer range)
-        eval(expr, sheet, clock, workbook, currentCell).flatMap { bd =>
-          if bd.isValidInt then Right(bd.toInt)
-          else
-            Left(
-              EvalError.TypeMismatch(
-                "ToInt",
-                "valid integer",
-                s"$bd (out of Int range)"
-              )
-            )
+        // ToInt: total conversion to Int. The operand is statically BigDecimal, but erased
+        // upstream casts can deliver other runtime values — evaluate as Any and pattern-match
+        // (the old BigDecimal-typed binder would checkcast and throw) per GH-193 totality.
+        eval(expr.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell).flatMap {
+          case bd: BigDecimal if bd.isValidInt => Right(bd.toInt)
+          case bd: BigDecimal =>
+            Left(EvalError.TypeMismatch("ToInt", "valid integer", s"$bd (out of Int range)"))
+          case i: Int => Right(i)
+          case other =>
+            Left(EvalError.TypeMismatch("ToInt", "number", s"$other"))
         }
 
       // ===== Date/Time Conversions =====
@@ -504,6 +503,17 @@ private class EvaluatorImpl(
           case Some(value) => Right(value)
           case None =>
             // Parser-prevented: BindingRef is only emitted for lexically resolved names
+            Left(EvalError.EvalFailed(s"LET name '$name' is not in scope", None))
+        ).asInstanceOf[Either[EvalError, A]]
+
+      // A binding used in a typed argument position (rewritten from BindingRef by the as*Expr
+      // coercion boundary): coerce the bound value totally — Left(TypeMismatch) when
+      // uncoercible — so consuming functions never checkcast a mistyped value and throw.
+      case TExpr.CoercedBindingRef(name, target) =>
+        (bindings.get(name) match
+          case Some(value) => coerceBinding(name, value, target)
+          case None =>
+            // Parser-prevented: emitted only for lexically resolved names
             Left(EvalError.EvalFailed(s"LET name '$name' is not in scope", None))
         ).asInstanceOf[Either[EvalError, A]]
 
@@ -597,6 +607,69 @@ private class EvaluatorImpl(
     case CellValue.Empty => BigDecimal(0)
     case CellValue.Formula(_, Some(cached)) => unwrapBindingValue(cached)
     case other => other
+
+  /** Largest Excel date serial (9999-12-31); guards excelSerialToDateTime against overflow. */
+  private val MaxExcelDateSerial = BigDecimal(2958465)
+
+  /**
+   * Total coercion of a bound value into a typed argument position (TExpr.CoercedBindingRef).
+   *
+   * Each target mirrors the conventions of the corresponding cell decoder (decodeAsString,
+   * decodeAsInt, decodeBool, decodeNumeric, decodeAsDate) plus the binding value model: dates read
+   * from cells are stored as Excel serial numbers (see unwrapBindingValue), so Date converts
+   * serials back and Numeric accepts LocalDate/LocalDateTime as serials (like toOperand).
+   * ArrayResult passes through untouched for every target — the scalar/array policy belongs to
+   * evalArg/evalArrayArg above, which reject or accept arrays per call site. Uncoercible values
+   * produce Left(TypeMismatch) naming the binding; never a ClassCastException downstream.
+   */
+  private def coerceBinding(
+    name: String,
+    value: Any,
+    target: BindingCoercion
+  ): Either[EvalError, Any] =
+    def mismatch(expected: String): Either[EvalError, Any] =
+      Left(EvalError.TypeMismatch(s"LET binding '$name'", expected, s"$value"))
+    value match
+      case arr: ArrayResult => Right(arr)
+      case _ =>
+        target match
+          case BindingCoercion.Text =>
+            value match
+              case s: String => Right(s)
+              case bd: BigDecimal => Right(bd.toString)
+              case i: Int => Right(i.toString)
+              case b: Boolean => Right(if b then "TRUE" else "FALSE")
+              case ld: java.time.LocalDate => Right(ld.toString)
+              case ldt: java.time.LocalDateTime => Right(ldt.toString)
+              case _ => mismatch("text")
+          case BindingCoercion.Integer =>
+            value match
+              case bd: BigDecimal if bd.isValidInt => Right(bd.toInt)
+              case bd: BigDecimal => mismatch("valid integer")
+              case i: Int => Right(i)
+              case b: Boolean => Right(if b then 1 else 0)
+              case _ => mismatch("integer")
+          case BindingCoercion.Bool =>
+            value match
+              case b: Boolean => Right(b)
+              case _ => mismatch("boolean")
+          case BindingCoercion.Numeric =>
+            value match
+              case bd: BigDecimal => Right(bd)
+              case i: Int => Right(BigDecimal(i))
+              case b: Boolean => Right(if b then BigDecimal(1) else BigDecimal(0))
+              case ld: java.time.LocalDate =>
+                Right(BigDecimal(CellValue.dateTimeToExcelSerial(ld.atStartOfDay())))
+              case ldt: java.time.LocalDateTime =>
+                Right(BigDecimal(CellValue.dateTimeToExcelSerial(ldt)))
+              case _ => mismatch("number")
+          case BindingCoercion.Date =>
+            value match
+              case ld: java.time.LocalDate => Right(ld)
+              case ldt: java.time.LocalDateTime => Right(ldt.toLocalDate)
+              case bd: BigDecimal if bd >= 0 && bd <= MaxExcelDateSerial =>
+                Right(CellValue.excelSerialToDateTime(bd.toDouble).toLocalDate)
+              case _ => mismatch("date")
 
   // ===== Array Arithmetic Helpers =====
 

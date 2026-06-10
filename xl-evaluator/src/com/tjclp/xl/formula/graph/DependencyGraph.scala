@@ -176,6 +176,7 @@ object DependencyGraph:
         bindings.exists((_, value) => containsCellReferences(value)) ||
         containsCellReferences(body)
       case TExpr.BindingRef(_) => false
+      case TExpr.CoercedBindingRef(_, _) => false
 
       // Literals and constants
       case TExpr.Lit(_) => false
@@ -256,6 +257,7 @@ object DependencyGraph:
         bindings.exists((_, value) => containsUnqualifiedCellReferences(value)) ||
         containsUnqualifiedCellReferences(body)
       case TExpr.BindingRef(_) => false
+      case TExpr.CoercedBindingRef(_, _) => false
 
       // Literals and constants
       case TExpr.Lit(_) => false
@@ -331,6 +333,7 @@ object DependencyGraph:
           acc ++ extractDependencies(value)
         }
       case TExpr.BindingRef(_) => Set.empty
+      case TExpr.CoercedBindingRef(_, _) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -414,6 +417,7 @@ object DependencyGraph:
           acc ++ extractDependenciesBounded(value, bounds)
         }
       case TExpr.BindingRef(_) => Set.empty
+      case TExpr.CoercedBindingRef(_, _) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -923,6 +927,7 @@ object DependencyGraph:
           case (acc, (_, value)) => acc ++ extractQualifiedDependencies(value, currentSheet)
         }
       case TExpr.BindingRef(_) => Set.empty
+      case TExpr.CoercedBindingRef(_, _) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty

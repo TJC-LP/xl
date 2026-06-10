@@ -188,6 +188,9 @@ object FormulaPrinter:
 
       case TExpr.BindingRef(name) => name
 
+      // A binding in a typed argument position prints as the bare name, exactly like BindingRef
+      case TExpr.CoercedBindingRef(name, _) => name
+
   /**
    * Format ARef to A1 notation with default Relative anchor.
    *
@@ -384,3 +387,5 @@ object FormulaPrinter:
         s"Let($bindingsStr, ${printWithTypes(body)})"
       case TExpr.BindingRef(name) =>
         s"BindingRef($name)"
+      case TExpr.CoercedBindingRef(name, target) =>
+        s"CoercedBindingRef($name, $target)"

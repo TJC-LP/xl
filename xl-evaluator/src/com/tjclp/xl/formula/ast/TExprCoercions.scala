@@ -19,6 +19,8 @@ trait TExprCoercions:
   def asStringExpr(expr: TExpr[?]): TExpr[String] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsString)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsString)
+    // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
+    case BindingRef(name) => CoercedBindingRef[String](name, BindingCoercion.Text)
     case TExpr.Lit(value: String) => TExpr.Lit(value)
     case TExpr.Lit(value: BigDecimal) => TExpr.Lit(value.toString)
     case TExpr.Lit(value: Boolean) => TExpr.Lit(if value then "TRUE" else "FALSE")
@@ -35,6 +37,9 @@ trait TExprCoercions:
   def asDateExpr(expr: TExpr[?]): TExpr[java.time.LocalDate] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsDate)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsDate)
+    // GH-193: LET bindings are Any-typed — coerce totally at evaluation time (bound dates from
+    // cells are stored as Excel serial numbers, which the Date target converts back)
+    case BindingRef(name) => CoercedBindingRef[java.time.LocalDate](name, BindingCoercion.Date)
     case other =>
       other.asInstanceOf[TExpr[java.time.LocalDate]] // Safe: non-PolyRef already has correct type
 
@@ -48,6 +53,8 @@ trait TExprCoercions:
   def asIntExpr(expr: TExpr[?]): TExpr[Int] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeAsInt)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsInt)
+    // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
+    case BindingRef(name) => CoercedBindingRef[Int](name, BindingCoercion.Integer)
     case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
     // Any function call returning BigDecimal (flagged via returnsNumeric) — wrap in ToInt.
     // Covers SUM, COUNT, AVERAGE, ROUND, ABS, MOD, ROW, COLUMN, MATCH, PMT, FIND, LEN,
@@ -70,6 +77,8 @@ trait TExprCoercions:
   def asNumericExpr(expr: TExpr[?]): TExpr[BigDecimal] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeNumeric)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeNumeric)
+    // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
+    case BindingRef(name) => CoercedBindingRef[BigDecimal](name, BindingCoercion.Numeric)
     // Date functions return LocalDate/LocalDateTime - convert to Excel serial number
     case call: TExpr.Call[?] if call.spec.flags.returnsDate =>
       DateToSerial(call.asInstanceOf[TExpr[java.time.LocalDate]])
@@ -101,6 +110,8 @@ trait TExprCoercions:
   def asBooleanExpr(expr: TExpr[?]): TExpr[Boolean] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeBool)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeBool)
+    // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
+    case BindingRef(name) => CoercedBindingRef[Boolean](name, BindingCoercion.Bool)
     case other => other.asInstanceOf[TExpr[Boolean]] // Safe: non-PolyRef already has correct type
 
   /**
