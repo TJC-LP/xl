@@ -2,9 +2,18 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{Cell, CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, Comment}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.context.ModificationTracker
+import com.tjclp.xl.sheets.{FreezePane, HeaderFooter, PageMargins, PageSetup, SheetView}
+import com.tjclp.xl.sheets.styleSyntax.*
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
+import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+import com.tjclp.xl.styles.color.{Color, ThemeSlot}
+import com.tjclp.xl.styles.fill.{Fill, PatternType}
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
 import org.scalacheck.{Arbitrary, Gen}
 
 import java.time.LocalDateTime
@@ -125,12 +134,11 @@ object Generators:
       cells <- Gen.listOfN(numCells, genCell)
       numMerged <- Gen.choose(0, 3)
       merged <- Gen.listOfN(numMerged, genCellRange)
-    yield
-      Sheet(
-        name = name,
-        cells = cells.map(c => c.ref -> c).toMap,
-        mergedRanges = merged.toSet
-      )
+    yield Sheet(
+      name = name,
+      cells = cells.map(c => c.ref -> c).toMap,
+      mergedRanges = merged.toSet
+    )
 
   /** Generate workbook metadata */
   val genWorkbookMetadata: Gen[WorkbookMetadata] =
@@ -211,6 +219,385 @@ object Generators:
   val genInvalidMoney: Gen[String] = Gen.oneOf("$ABC", "1.2.3", "$$$$", "")
   val genInvalidPercent: Gen[String] = Gen.oneOf("ABC%", "1%%", "%", "")
   val genInvalidDate: Gen[String] = Gen.oneOf("2025-13-01", "not-a-date", "2025/11/10", "")
+
+  // =====================================================================
+  // Rich generators for the OOXML generative round-trip law (GH-240a).
+  //
+  // These produce workbooks that exercise styles, comments, hyperlinks,
+  // formulas, merges, sheet views, and page setup, while staying inside the
+  // domain the OOXML layer can faithfully round-trip:
+  //   - text avoids XML-illegal control chars (the writer strips them by
+  //     design, GH-237) and bare \r (XML line-ending normalization folds it
+  //     to \n on parse; Excel escapes CR as _x000D_ which XL does not emit)
+  //   - text stays NFC-normalized (SST deduplicates by NFC key)
+  //   - Custom numFmt codes avoid the exact code strings NumFmt.parse maps
+  //     back to built-in enum cases (those are the SAME format semantically,
+  //     but would compare unequal as enum values)
+  //   - degenerate style states the writer cannot represent are avoided:
+  //     BorderSide(None, Some(color)) drops its color, Fill.Pattern with
+  //     pattern None/Solid collapses to Fill.None/Fill.Solid
+  //   - generated PageSetup/HeaderFooter always carry at least one visible
+  //     (non-default) field; an all-default PageSetup serializes to nothing
+  //     and reads back as None by design
+  // =====================================================================
+
+  /** Cell text that round-trips through OOXML XML (see constraints above) */
+  val genXmlSafeText: Gen[String] =
+    val safeChar: Gen[Char] = Gen.frequency(
+      10 -> Gen.alphaNumChar,
+      3 -> Gen.const(' '),
+      2 -> Gen.oneOf('.', ',', '-', '_', '&', '<', '>', '"', '\'', '%', '$', '#', '(', ')', '/'),
+      1 -> Gen.oneOf('é', 'ü', 'ß', '日', '本', '€', '£'),
+      1 -> Gen.oneOf('\t', '\n')
+    )
+    Gen.chooseNum(0, 24).flatMap(n => Gen.listOfN(n, safeChar).map(_.mkString))
+
+  /** Non-empty variant of [[genXmlSafeText]] */
+  val genXmlSafeTextNonEmpty: Gen[String] =
+    for
+      head <- Gen.alphaNumChar
+      tail <- genXmlSafeText
+    yield s"$head$tail"
+
+  /** Colors stable through the OOXML hex/theme round-trip */
+  val genColor: Gen[Color] =
+    Gen.frequency(
+      6 -> Gen
+        .oneOf(0xff000000, 0xffffffff, 0xffff0000, 0xff00b0f0, 0xff4472c4, 0xffffc000, 0xff70ad47)
+        .map(Color.Rgb.apply),
+      2 -> (for
+        slot <- Gen.oneOf(ThemeSlot.values.toIndexedSeq)
+        tint <- Gen.oneOf(-0.5, -0.25, 0.0, 0.25, 0.5)
+      yield Color.Theme(slot, tint)),
+      1 -> Gen.chooseNum(Int.MinValue, Int.MaxValue).map(Color.Rgb.apply)
+    )
+
+  /** Generate font (realistic names/sizes; all flag combinations) */
+  val genFont: Gen[Font] =
+    for
+      name <- Gen.oneOf("Calibri", "Arial", "Times New Roman", "Courier New", "Aptos Narrow")
+      size <- Gen.oneOf(8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 22.0)
+      bold <- Gen.oneOf(true, false)
+      italic <- Gen.oneOf(true, false)
+      underline <- Gen.oneOf(true, false)
+      color <- Gen.option(genColor)
+    yield Font(name, size, bold, italic, underline, color)
+
+  /**
+   * Generate fill. Fill.Pattern is only generated with pattern types other than None/Solid: the
+   * dedicated enum cases Fill.None/Fill.Solid own those encodings.
+   */
+  val genFill: Gen[Fill] =
+    val texturePatterns = PatternType.values.toIndexedSeq.filter {
+      case PatternType.None | PatternType.Solid => false
+      case _ => true
+    }
+    Gen.frequency(
+      4 -> Gen.const(Fill.None),
+      4 -> genColor.map(Fill.Solid.apply),
+      2 -> (for
+        fg <- genColor
+        bg <- genColor
+        pattern <- Gen.oneOf(texturePatterns)
+      yield Fill.Pattern(fg, bg, pattern))
+    )
+
+  /**
+   * Generate border side. A color is only attached when the style is not None — the writer cannot
+   * represent a colored "no border" side (it serializes as a bare side element).
+   */
+  val genBorderSide: Gen[BorderSide] =
+    for
+      style <- Gen.oneOf(BorderStyle.values.toIndexedSeq)
+      color <- if style == BorderStyle.None then Gen.const(None) else Gen.option(genColor)
+    yield BorderSide(style, color)
+
+  /** Generate border (independent sides) */
+  val genBorder: Gen[Border] =
+    for
+      left <- genBorderSide
+      right <- genBorderSide
+      top <- genBorderSide
+      bottom <- genBorderSide
+    yield Border(left, right, top, bottom)
+
+  /**
+   * Representative number formats: every built-in enum case plus Custom codes (codes chosen to not
+   * collide with the built-in code strings NumFmt.parse recognizes).
+   */
+  val genNumFmt: Gen[NumFmt] =
+    Gen.frequency(
+      6 -> Gen.oneOf(
+        NumFmt.General,
+        NumFmt.Integer,
+        NumFmt.Decimal,
+        NumFmt.ThousandsSeparator,
+        NumFmt.ThousandsDecimal,
+        NumFmt.Currency,
+        NumFmt.Percent,
+        NumFmt.PercentDecimal,
+        NumFmt.Scientific,
+        NumFmt.Fraction,
+        NumFmt.Date,
+        NumFmt.DateTime,
+        NumFmt.Time,
+        NumFmt.Text
+      ),
+      2 -> Gen
+        .oneOf(
+          "0.000",
+          "#,##0.0",
+          "yyyy-mm-dd",
+          "mmm yyyy",
+          "0.0%",
+          "$#,##0.00;[Red]($#,##0.00)",
+          "_(* #,##0.00_);_(* (#,##0.00);_(* \"-\"??_);_(@_)",
+          "[$€-407] #,##0.00",
+          "0.00 \"units\""
+        )
+        .map(NumFmt.Custom.apply)
+    )
+
+  /** Generate alignment incl. indent (GH-style: indent levels 0-15) */
+  val genAlign: Gen[Align] =
+    for
+      h <- Gen.oneOf(HAlign.values.toIndexedSeq)
+      v <- Gen.oneOf(VAlign.values.toIndexedSeq)
+      wrap <- Gen.oneOf(true, false)
+      indent <- Gen.frequency(3 -> Gen.const(0), 1 -> Gen.choose(1, 15))
+    yield Align(h, v, wrap, indent)
+
+  /** Generate complete cell style (numFmtId left writer-assigned) */
+  val genCellStyle: Gen[CellStyle] =
+    for
+      font <- genFont
+      fill <- genFill
+      border <- genBorder
+      numFmt <- genNumFmt
+      align <- genAlign
+    yield CellStyle(font, fill, border, numFmt, None, align)
+
+  /** Generate comment: plain text body plus optional author (trimmed, non-empty) */
+  val genComment: Gen[Comment] =
+    for
+      text <- genXmlSafeTextNonEmpty
+      author <- Gen.option(Gen.identifier.map(_.take(12)))
+    yield Comment.plainText(text, author)
+
+  /** Generate hyperlink target: external URL/mailto or internal location */
+  val genHyperlink: Gen[String] =
+    Gen.frequency(
+      5 -> Gen.identifier.map(s => s"https://example.com/${s.take(10)}"),
+      2 -> Gen.identifier.map(s => s"mailto:${s.take(8)}@example.com"),
+      3 -> Gen.oneOf("A1", "Sheet1!B2", "'Q1 Report'!C3")
+    )
+
+  /**
+   * Formula text that round-trips verbatim (no surrounding whitespace — the reader trims the
+   * formula element text). Formulas round-trip as TEXT; no evaluation happens.
+   */
+  val genFormulaExpr: Gen[String] =
+    Gen.oneOf(
+      "A1+1",
+      "=A1*2",
+      "SUM(A1:B2)",
+      "IF(A1<5,1,0)",
+      "AVERAGE(B1:B5)",
+      "CONCATENATE(A1,\"x\")",
+      "'Q1 Report'!A1+B2"
+    )
+
+  /** Numbers that survive plain-decimal serialization (incl. GH-238 magnitude extremes) */
+  val genRoundTripNumber: Gen[BigDecimal] =
+    Gen.frequency(
+      5 -> Gen.chooseNum(-1000000.0, 1000000.0).map(BigDecimal.apply),
+      2 -> Gen.chooseNum(-1000000L, 1000000L).map(BigDecimal.apply),
+      1 -> Gen.oneOf(
+        BigDecimal("1E20"),
+        BigDecimal("1E-7"),
+        BigDecimal("-1E18"),
+        BigDecimal(0),
+        BigDecimal("0.0001"),
+        BigDecimal("123456789.123456789")
+      )
+    )
+
+  /** DateTime within Excel's representable era, whole seconds */
+  val genExcelDateTime: Gen[LocalDateTime] =
+    for
+      year <- Gen.choose(1950, 2099)
+      month <- Gen.choose(1, 12)
+      day <- Gen.choose(1, 28)
+      hour <- Gen.choose(0, 23)
+      minute <- Gen.choose(0, 59)
+      second <- Gen.choose(0, 59)
+    yield LocalDateTime.of(year, month, day, hour, minute, second)
+
+  /** Formula cell value with optional cached value (cached values are write-only metadata) */
+  val genFormulaCellValue: Gen[CellValue] =
+    for
+      expr <- genFormulaExpr
+      cached <- Gen.option(
+        Gen.oneOf(
+          genRoundTripNumber.map(CellValue.Number.apply),
+          Gen.oneOf(true, false).map(CellValue.Bool.apply),
+          Gen.alphaNumStr.map(CellValue.Text.apply),
+          genCellError.map(CellValue.Error.apply)
+        )
+      )
+    yield CellValue.Formula(expr, cached)
+
+  /** Cell values for round-trip testing (all OOXML-representable variants) */
+  val genRichCellValue: Gen[CellValue] =
+    Gen.frequency(
+      4 -> genXmlSafeText.map(CellValue.Text.apply),
+      3 -> genRoundTripNumber.map(CellValue.Number.apply),
+      1 -> Gen.oneOf(true, false).map(CellValue.Bool.apply),
+      1 -> genCellError.map(CellValue.Error.apply),
+      1 -> genExcelDateTime.map(CellValue.DateTime.apply),
+      2 -> genFormulaCellValue,
+      1 -> Gen.const(CellValue.Empty)
+    )
+
+  /** Sheet view settings (zoom always within Excel's 10-400 bounds) */
+  val genSheetView: Gen[SheetView] =
+    for
+      gridLines <- Gen.oneOf(true, false)
+      zoom <- Gen.option(Gen.oneOf(25, 75, 85, 100, 150, 200, 400))
+    yield SheetView(gridLines, zoom)
+
+  /** Header/footer with at least one visible part or flag (all-default reads back as None) */
+  val genHeaderFooter: Gen[HeaderFooter] =
+    val part = Gen.oneOf(
+      "&LTHE JORDAN COMPANY&RConfidential",
+      "&CPage &P of &N",
+      "&L&D &T",
+      "Draft — &A",
+      "&F"
+    )
+    for
+      oddH <- Gen.option(part)
+      oddF <- Gen.option(part)
+      evenH <- Gen.option(part)
+      evenF <- Gen.option(part)
+      firstH <- Gen.option(part)
+      firstF <- Gen.option(part)
+      diffOddEven <- Gen.oneOf(true, false)
+      diffFirst <- Gen.oneOf(true, false)
+    yield
+      val hf =
+        HeaderFooter(oddH, oddF, evenH, evenF, firstH, firstF, diffOddEven, diffFirst)
+      if hf == HeaderFooter() then HeaderFooter(oddHeader = Some("&CPage &P")) else hf
+
+  /** Page margins (positive inches that round-trip through Double.toString) */
+  val genPageMargins: Gen[PageMargins] =
+    for
+      left <- Gen.oneOf(0.25, 0.5, 0.7, 1.0)
+      right <- Gen.oneOf(0.25, 0.5, 0.7, 1.0)
+      top <- Gen.oneOf(0.5, 0.75, 1.0)
+      bottom <- Gen.oneOf(0.5, 0.75, 1.0)
+      header <- Gen.oneOf(0.25, 0.3, 0.5)
+      footer <- Gen.oneOf(0.25, 0.3, 0.5)
+    yield PageMargins(left, right, top, bottom, header, footer)
+
+  /**
+   * Page setup with at least one visible (non-default) field — an all-default PageSetup serializes
+   * to no XML and intentionally reads back as None. printArea/repeatRows are exercised by the
+   * dedicated PrintNames specs, not generated here.
+   */
+  val genPageSetup: Gen[PageSetup] =
+    for
+      scale <- Gen.frequency(3 -> Gen.const(100), 1 -> Gen.oneOf(50, 85, 120, 200))
+      orientation <- Gen.option(Gen.oneOf("portrait", "landscape"))
+      fitToWidth <- Gen.option(Gen.choose(0, 3))
+      fitToHeight <- Gen.option(Gen.choose(0, 3))
+      headerFooter <- Gen.option(genHeaderFooter)
+      margins <- Gen.option(genPageMargins)
+    yield
+      val ps = PageSetup(scale, orientation, fitToWidth, fitToHeight, headerFooter, margins)
+      if ps == PageSetup() then ps.copy(orientation = Some("landscape")) else ps
+
+  /**
+   * Freeze pane at a non-A1 cell (freezing at A1 is a no-op the writer elides). NOTE: freezePane
+   * has write-only three-valued semantics (None = preserve) — the reader never populates it, so
+   * generating it exercises the writer without participating in round-trip equality.
+   */
+  val genFreezePane: Gen[FreezePane] =
+    for
+      col <- Gen.choose(0, 3)
+      row <- Gen.choose(0, 5)
+    yield
+      val ref = if col == 0 && row == 0 then ARef.from0(1, 1) else ARef.from0(col, row)
+      FreezePane.At(ref)
+
+  /** Cell reference within a compact grid (A1:H12) so merges/comments cluster realistically */
+  val genGridRef: Gen[ARef] =
+    for
+      col <- Gen.choose(0, 7)
+      row <- Gen.choose(0, 11)
+    yield ARef.from0(col, row)
+
+  /** Cell range within the compact grid */
+  val genGridRange: Gen[CellRange] =
+    for
+      ref1 <- genGridRef
+      ref2 <- genGridRef
+    yield CellRange(ref1, ref2)
+
+  /**
+   * Rich sheet for the round-trip law: ≤30 cells with values/styles/comments/hyperlinks, merges,
+   * optional view settings, page setup, and freeze panes. Styles are registered through the sheet's
+   * StyleRegistry (withCellStyle) so styleIds always resolve.
+   */
+  val genRichSheet: Gen[Sheet] =
+    val genEntry =
+      for
+        ref <- genGridRef
+        value <- genRichCellValue
+        style <- Gen.frequency(2 -> Gen.const(None), 2 -> genCellStyle.map(Some.apply))
+        comment <- Gen.frequency(3 -> Gen.const(None), 1 -> genComment.map(Some.apply))
+        hyperlink <- Gen.frequency(4 -> Gen.const(None), 1 -> genHyperlink.map(Some.apply))
+      yield (ref, value, style, comment, hyperlink)
+    for
+      name <- genSheetName
+      numCells <- Gen.choose(0, 30)
+      entries <- Gen.listOfN(numCells, genEntry)
+      numMerges <- Gen.choose(0, 3)
+      merges <- Gen.listOfN(numMerges, genGridRange)
+      view <- Gen.option(genSheetView)
+      pageSetup <- Gen.option(genPageSetup)
+      freeze <- Gen.frequency(3 -> Gen.const(None), 1 -> genFreezePane.map(Some.apply))
+    yield
+      val withCells = entries.foldLeft(Sheet(name)) {
+        case (sheet, (ref, value, style, comment, hyperlink)) =>
+          val withCell = sheet.put(Cell(ref, value, None, None, hyperlink))
+          val styled = style.fold(withCell)(s => withCell.withCellStyle(ref, s))
+          comment.fold(styled)(c => styled.comment(ref, c))
+      }
+      val withMerges = merges.foldLeft(withCells)(_.merge(_))
+      withMerges.copy(viewSettings = view, pageSetup = pageSetup, freezePane = freeze)
+
+  /**
+   * Rich workbook for the round-trip law: 1-3 rich sheets with unique, realistic names (spaces,
+   * accents, apostrophes, ampersands all legal in sheet names).
+   */
+  val genRichWorkbook: Gen[Workbook] =
+    val namePool = Vector("Data", "Q1 Report", "Summary", "Détails", "O'Brien", "P&L")
+    for
+      numSheets <- Gen.choose(1, 3)
+      sheets <- Gen.listOfN(numSheets, genRichSheet)
+      offset <- Gen.choose(0, namePool.size - 1)
+      metadata <- genWorkbookMetadata
+      activeIndex <- Gen.choose(0, numSheets - 1)
+    yield
+      val unique = sheets.zipWithIndex.map { case (sheet, i) =>
+        sheet.copy(name = SheetName.unsafe(s"${namePool((offset + i) % namePool.size)} ${i + 1}"))
+      }
+      Workbook(
+        sheets = unique.toVector,
+        metadata = metadata,
+        activeSheetIndex = activeIndex
+      )
 
   /** Generate ModificationTracker for property-based testing */
   val genModificationTracker: Gen[ModificationTracker] =
