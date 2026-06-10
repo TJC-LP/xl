@@ -2,6 +2,7 @@ package com.tjclp.xl.display
 
 import munit.FunSuite
 import FormatCodeParser.*
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Tests for Excel custom number format code parser.
@@ -338,6 +339,58 @@ class FormatCodeParserSpec extends FunSuite:
 
     val (neg, _) = FormatCodeParser.applyFormat(BigDecimal("-0.125"), code)
     assertEquals(neg, "(12.5%)")
+  }
+
+  // ========== Empty Sections (hide-value idiom, GH-262) ==========
+  // An EMPTY section means "display nothing" for that value class:
+  //   "0.0;;" → positive shown, negative hidden, zero hidden
+  //   "0.0;"  → negative hidden, zero routes to positive (2-section rule)
+
+  test("parse: trailing empty sections preserved — 0.0;; yields 3 sections (GH-262)") {
+    val code = FormatCodeParser.parse("0.0;;").toOption.get
+    assert(code.negative.isDefined, "negative (2nd) section must exist")
+    assert(code.zero.isDefined, "zero (3rd) section must exist")
+    assertEquals(code.negative.get.pattern.tokens, Vector.empty[FormatToken])
+    assertEquals(code.zero.get.pattern.tokens, Vector.empty[FormatToken])
+    assertEquals(code.text, None)
+  }
+
+  test("hide-zero idiom: zero with 0.0;; renders empty string (GH-262)") {
+    val code = FormatCodeParser.parse("0.0;;").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("0"), code)._1, "")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1.5"), code)._1, "1.5")
+  }
+
+  test("hide-negative idiom: negative with 0.0;; renders empty string (GH-262)") {
+    val code = FormatCodeParser.parse("0.0;;").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("-1.5"), code)._1, "")
+  }
+
+  test("trailing empty 2nd section: 0.0; hides negatives, zero routes to positive (GH-262)") {
+    val code = FormatCodeParser.parse("0.0;").toOption.get
+    assert(code.negative.isDefined, "negative (2nd) section must exist")
+    assertEquals(code.negative.get.pattern.tokens, Vector.empty[FormatToken])
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("1.5"), code)._1, "1.5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("-1.5"), code)._1, "")
+    // GH-254 zero routing must be intact: 2 sections → zero uses positive section
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("0"), code)._1, "0.0")
+  }
+
+  test("interior empty zero section: 0;-0;;@ hides zero only (GH-262)") {
+    val code = FormatCodeParser.parse("0;-0;;@").toOption.get
+    assert(code.zero.isDefined, "zero (3rd) section must exist")
+    assert(code.text.isDefined, "text (4th) section must exist")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("5"), code)._1, "5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("-5"), code)._1, "-5")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal("0"), code)._1, "")
+    assertEquals(FormatCodeParser.applyTextFormat("abc", code), "abc")
+  }
+
+  test("NumFmtFormatter: Custom 0.0;; hides zero and negative, no General fallback (GH-262)") {
+    val fmt = NumFmt.Custom("0.0;;")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("0"), fmt), "")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("-2.5"), fmt), "")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("2.5"), fmt), "2.5")
   }
 
   // ========== Date/Time Formatting Tests ==========
