@@ -1240,3 +1240,193 @@ class EvaluatorSpec extends ScalaCheckSuite:
         assertEquals(n, BigDecimal("0.5"))
       case other => fail(s"Expected Number(0.5), got $other")
   }
+
+  // ==================== YEARFRAC Excel-parity truth table (GH-93) ====================
+  //
+  // Expected values are Excel's results, derived from Excel's reverse-engineered
+  // algorithms: basis 0 per the US (NASD) 30/360 rules of ODF OpenFormula v1.2
+  // §4.11.7, bases 1-4 per David A. Wheeler, "YEARFRAC() in Excel"
+  // (https://dwheeler.com/yearfrac/) — the same algorithm LibreOffice ships for
+  // Excel interop (ScGetYearFrac/GetYearDiff, sc/source/core/tool/interpr2.cxx).
+  // Each case documents the day-count arithmetic Excel performs.
+
+  /** Place two dates in A1/B1, evaluate =YEARFRAC, and compare to Excel within 1e-9. */
+  private def assertYearfrac(
+    start: (Int, Int, Int),
+    end: (Int, Int, Int),
+    basis: Option[Int],
+    expected: BigDecimal
+  )(implicit loc: munit.Location): Unit =
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(start._1, start._2, start._3, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(end._1, end._2, end._3, 0, 0))
+    )
+    val formula = basis match
+      case Some(b) => s"=YEARFRAC(A1, B1, $b)"
+      case None => "=YEARFRAC(A1, B1)"
+    sheet.evaluateFormula(formula) match
+      case Right(CellValue.Number(n)) =>
+        assert(
+          (n - expected).abs < BigDecimal("0.000000001"),
+          s"$formula for $start..$end: expected $expected, got $n"
+        )
+      case other => fail(s"$formula for $start..$end: expected Number($expected), got $other")
+
+  test("YEARFRAC basis 0: start on Feb 29 (leap EOM) adjusts d1 to 30") {
+    // d1 last day of Feb -> d1=30; then d2=31 with d1>=30 -> d2=30.
+    // days = (8-2)*30 + (30-30) = 180; 180/360 = 0.5
+    assertYearfrac((2024, 2, 29), (2024, 8, 31), Some(0), BigDecimal("0.5"))
+  }
+
+  test("YEARFRAC basis 0: start on Feb 28 non-leap (EOM) adjusts d1 to 30") {
+    // d1 last day of Feb -> d1=30; d2=31 with d1>=30 -> d2=30.
+    // days = (3-2)*30 + (30-30) = 30; 30/360 = 0.08333...
+    assertYearfrac((2023, 2, 28), (2023, 3, 31), Some(0), BigDecimal("0.0833333333333333"))
+  }
+
+  test("YEARFRAC basis 0: Feb 28 in a leap year is NOT end-of-month") {
+    // 2024 is leap, so Feb 28 is not the last day of Feb: no Feb rule.
+    // d1=28 < 30, so d2=31 stays. days = 30 + (31-28) = 33; 33/360 = 0.091666...
+    assertYearfrac((2024, 2, 28), (2024, 3, 31), Some(0), BigDecimal("0.0916666666666667"))
+  }
+
+  test("YEARFRAC basis 0: both dates last day of Feb gives exact years") {
+    // Both EOM Feb -> d2=30, d1=30. days = 360 + 0 + 0 = 360; 360/360 = 1.0
+    assertYearfrac((2023, 2, 28), (2024, 2, 29), Some(0), BigDecimal("1"))
+    assertYearfrac((2024, 2, 29), (2025, 2, 28), Some(0), BigDecimal("1"))
+  }
+
+  test("YEARFRAC basis 0: end on Feb EOM alone is NOT adjusted") {
+    // d2 is only set to 30 when d1 is ALSO last day of Feb. Here d1=15, so d2=29
+    // stays. days = (2-1)*30 + (29-15) = 44; 44/360 = 0.12222...
+    assertYearfrac((2024, 1, 15), (2024, 2, 29), Some(0), BigDecimal("0.122222222222222"))
+  }
+
+  test("YEARFRAC basis 0: d2=31 truncates when d1=30") {
+    // d1=30 (no adjustment needed); d2=31 with d1>=30 -> d2=30.
+    // days = 2*30 + (30-30) = 60; 60/360 = 0.16666...
+    assertYearfrac((2024, 1, 30), (2024, 3, 31), Some(0), BigDecimal("0.166666666666667"))
+  }
+
+  test("YEARFRAC basis 0: d2=31 stays when d1 < 30") {
+    // d1=15 < 30 so d2=31 is NOT truncated. days = 2*30 + (31-15) = 76; 76/360
+    assertYearfrac((2024, 1, 15), (2024, 3, 31), Some(0), BigDecimal("0.211111111111111"))
+  }
+
+  test("YEARFRAC basis 0: both dates on the 31st") {
+    // d2=31 with d1=31>=30 -> d2=30; d1=31 -> d1=30. days = 60; 60/360
+    assertYearfrac((2024, 1, 31), (2024, 3, 31), Some(0), BigDecimal("0.166666666666667"))
+  }
+
+  test("YEARFRAC basis 0: Feb EOM rule applies before the 31 rule") {
+    // d1 = Feb 29 -> 30 (Feb rule first), THEN d2=31 with d1>=30 -> d2=30.
+    // days = 30 + (30-30) = 30; 30/360 = 0.08333... (31-rule-first would give 31/360)
+    assertYearfrac((2024, 2, 29), (2024, 3, 31), Some(0), BigDecimal("0.0833333333333333"))
+  }
+
+  test("YEARFRAC basis 0: same date is zero") {
+    assertYearfrac((2024, 5, 17), (2024, 5, 17), Some(0), BigDecimal(0))
+  }
+
+  test("YEARFRAC default basis applies full NASD rules") {
+    assertYearfrac((2024, 2, 29), (2024, 8, 31), None, BigDecimal("0.5"))
+  }
+
+  test("YEARFRAC swaps arguments when start > end (result is non-negative)") {
+    // Excel normalizes the order: YEARFRAC(b, a) = YEARFRAC(a, b) >= 0
+    assertYearfrac((2024, 8, 31), (2024, 2, 29), Some(0), BigDecimal("0.5"))
+    // basis 1: days(2024-01-01..2024-07-01) = 182, same leap year -> 182/366
+    assertYearfrac((2024, 7, 1), (2024, 1, 1), Some(1), BigDecimal("0.497267759562842"))
+  }
+
+  test("YEARFRAC basis 1: same leap year uses 366") {
+    // days = 182, same calendar year and 2024 is leap -> 182/366
+    assertYearfrac((2024, 1, 1), (2024, 7, 1), Some(1), BigDecimal("0.497267759562842"))
+  }
+
+  test("YEARFRAC basis 1: same leap year uses 366 even when span excludes Feb 29") {
+    // Excel quirk: the leap denominator applies to the whole calendar year.
+    // days = 31; 31/366
+    assertYearfrac((2024, 5, 1), (2024, 6, 1), Some(1), BigDecimal("0.0846994535519126"))
+  }
+
+  test("YEARFRAC basis 1: same non-leap year uses 365") {
+    // days = 181; 181/365
+    assertYearfrac((2023, 1, 1), (2023, 7, 1), Some(1), BigDecimal("0.495890410958904"))
+  }
+
+  test("YEARFRAC basis 1: cross-year span not crossing Feb 29 uses 365") {
+    // GH-93's example. Excel does NOT prorate ISDA-style: span <= 1 year,
+    // no Feb 29 between 2024-12-01 and 2025-01-31 -> 61/365 (not 61/366).
+    assertYearfrac((2024, 12, 1), (2025, 1, 31), Some(1), BigDecimal("0.167123287671233"))
+  }
+
+  test("YEARFRAC basis 1: cross-year span crossing Feb 29 uses 366") {
+    // End year 2024 is leap and end >= Mar 1 -> 366. days = 91; 91/366
+    assertYearfrac((2023, 12, 1), (2024, 3, 1), Some(1), BigDecimal("0.248633879781421"))
+  }
+
+  test("YEARFRAC basis 1: start in Jan/Feb of leap year uses 366") {
+    // Start year 2024 leap with month <= 2 -> 366. days = 365; 365/366
+    assertYearfrac((2024, 2, 1), (2025, 1, 31), Some(1), BigDecimal("0.997267759562842"))
+  }
+
+  test("YEARFRAC basis 1: end date exactly Feb 29 uses 366") {
+    // Wheeler: end is Feb 29 -> 366 even though end < Mar 1. days = 365; 365/366
+    assertYearfrac((2023, 3, 1), (2024, 2, 29), Some(1), BigDecimal("0.997267759562842"))
+  }
+
+  test("YEARFRAC basis 1: exact one-year spans are exactly 1.0") {
+    // 2023-03-15..2024-03-15: days = 366 (crosses Feb 29), denominator 366
+    assertYearfrac((2023, 3, 15), (2024, 3, 15), Some(1), BigDecimal(1))
+    // 2024-03-15..2025-03-15: days = 365, denominator 365
+    assertYearfrac((2024, 3, 15), (2025, 3, 15), Some(1), BigDecimal(1))
+    // 2024-01-15..2025-01-15: days = 366 (crosses Feb 29), denominator 366
+    assertYearfrac((2024, 1, 15), (2025, 1, 15), Some(1), BigDecimal(1))
+    // Leap EOM to non-leap EOM is one day short of the year: 365/366
+    assertYearfrac((2024, 2, 29), (2025, 2, 28), Some(1), BigDecimal("0.997267759562842"))
+  }
+
+  test("YEARFRAC basis 1: one day over a year switches to average-year-length") {
+    // days = 367; years 2023+2024 -> (365+366)/2 = 365.5; 367/365.5
+    assertYearfrac((2023, 3, 15), (2024, 3, 16), Some(1), BigDecimal("1.00410396716826"))
+  }
+
+  test("YEARFRAC basis 1: multi-year spans divide by average year length") {
+    // 2023-01-01..2024-07-01: days = 547; avg(365, 366) = 365.5; 547/365.5
+    assertYearfrac((2023, 1, 1), (2024, 7, 1), Some(1), BigDecimal("1.49658002735978"))
+    // 2022-06-15..2024-06-15: days = 731; avg(365, 365, 366) = 1096/3; 2193/1096
+    assertYearfrac((2022, 6, 15), (2024, 6, 15), Some(1), BigDecimal("2.00091240875912"))
+  }
+
+  test("YEARFRAC basis 2: actual/360") {
+    // days = 182; 182/360
+    assertYearfrac((2024, 1, 1), (2024, 7, 1), Some(2), BigDecimal("0.505555555555556"))
+  }
+
+  test("YEARFRAC basis 3: actual/365") {
+    // days = 182; 182/365 (leap year irrelevant for basis 3)
+    assertYearfrac((2024, 1, 1), (2024, 7, 1), Some(3), BigDecimal("0.498630136986301"))
+  }
+
+  test("YEARFRAC basis 4: European 30E/360 truncates 31 on both sides") {
+    // d1=31 -> 30, d2=31 -> 30. days = 60; 60/360
+    assertYearfrac((2024, 1, 31), (2024, 3, 31), Some(4), BigDecimal("0.166666666666667"))
+  }
+
+  test("YEARFRAC basis 4: European 30E/360 has NO February rule") {
+    // d1 = 28 stays (unlike basis 0); d2=31 -> 30. days = 30 + 2 = 32; 32/360
+    assertYearfrac((2023, 2, 28), (2023, 3, 31), Some(4), BigDecimal("0.0888888888888889"))
+  }
+
+  test("YEARFRAC: invalid basis is an error") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 1, 1, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 7, 1, 0, 0))
+    )
+    sheet.evaluateFormula("=YEARFRAC(A1, B1, 5)") match
+      case Left(_) => ()
+      case Right(v) => fail(s"Expected error for basis 5, got $v")
+  }
