@@ -10,7 +10,7 @@ Apply a 5% price increase to column C of every workbook in a directory, in place
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -42,7 +42,7 @@ Read rows into case classes; collect per-cell validation failures into a new Iss
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 
 final case class Order(id: Int, customer: String, amount: BigDecimal)
@@ -76,7 +76,7 @@ Three-year projection with growth formulas; fail the script if any formula error
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 
 val header = CellStyle.default.bold.size(12.0).center
@@ -111,7 +111,7 @@ Stack the data rows of every input file under one header.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -147,7 +147,7 @@ println(s"combined ${files.size} files, ${combined.cells.size} cells")
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -176,7 +176,7 @@ println("✓ filtered (constant memory)")
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 
 val before = Excel.read("before.xlsx")
@@ -204,7 +204,7 @@ else
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*

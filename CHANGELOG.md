@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] "Laws & Functions" - 2026-06-10
+
+Waves 2+3 of the backlog burn-down: the test-infrastructure release that ships its laws
+together with everything those laws caught, plus the evaluator-breadth batch (LET, RAND,
+INDIRECT, YEARFRAC parity, format inheritance — registry 104 → 107).
+
 ### Added (evaluator breadth, wave 3)
 
 - **LET** (#193): `LET(name1, value1, ..., calculation)` lexical bindings with let* semantics —

@@ -38,7 +38,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -100,7 +100,7 @@ wb.update("Sales", f).unsafe                       // throws structured XLExcept
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -235,7 +235,7 @@ Or lean on totality so there is nothing to unwrap: literal refs, `upsert`, range
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -257,7 +257,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))
@@ -285,7 +285,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.1
+//> using dep com.tjclp::xl:0.11.2
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
