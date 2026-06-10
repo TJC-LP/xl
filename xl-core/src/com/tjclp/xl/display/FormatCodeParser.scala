@@ -668,6 +668,13 @@ object FormatCodeParser:
    *     right-align within their placeholders, denominators left-align
    *
    * The sign is handled by [[applyFormat]] (section literals or the default leading minus).
+   *
+   * Known divergences from Excel/SSF (corpus-checked, asymmetric-exotica only): codes with unequal
+   * numerator/denominator placeholder widths (`# ??/?????????`) align per-placeholder here, while
+   * Excel pads the numerator to the shared budget width `min(max(numLen, denLen), 7)` and
+   * blank-fills `2*width + 1`; codes with spaces around the slash (`# ?? / ??`) are not tokenized
+   * as fractions. Symmetric codes — everything Excel's Format Cells dialog offers — match the
+   * Excel-generated corpus exactly.
    */
   private def applyFractionPattern(
     value: BigDecimal,
@@ -691,11 +698,18 @@ object FormatCodeParser:
         val maxDen = math.pow(10, digits.toDouble) - 1
         // Excel stores values as IEEE-754 doubles and runs the search on the FULL value:
         // the whole part's binary noise is observable (12.3 → 12 1/3, but 0.3 → 2/7).
-        val (p, q) = nearestFraction(abs.toDouble, maxDen)
-        val wholeD = math.floor(p / q)
-        // p/q are exact-integer doubles for all values below 2^53 (Excel's own precision);
-        // the max(0, _) keeps the numerator total for astronomically large inputs.
-        (BigDecimal(wholeD).toBigInt, BigInt(math.max(0.0, p - wholeD * q).toLong), q.toLong)
+        val d = abs.toDouble
+        if d.isInfinite then
+          // |value| overflows Double (BigDecimal admits > ~1.8E308): the convergent search
+          // cannot run, and no fractional part is representable at that magnitude anyway —
+          // render the whole-number form (num == 0 blanks the fraction area), staying total.
+          (abs.setScale(0, BigDecimal.RoundingMode.HALF_UP).toBigInt, BigInt(0), 1L)
+        else
+          val (p, q) = nearestFraction(d, maxDen)
+          val wholeD = math.floor(p / q)
+          // p/q are exact-integer doubles for all values below 2^53 (Excel's own precision);
+          // the max(0, _) keeps the numerator total for astronomically large inputs.
+          (BigDecimal(wholeD).toBigInt, BigInt(math.max(0.0, p - wholeD * q).toLong), q.toLong)
 
     val improperNumerator = whole * den + num
 

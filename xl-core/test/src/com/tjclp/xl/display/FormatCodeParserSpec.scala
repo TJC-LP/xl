@@ -845,3 +845,31 @@ class FormatCodeParserSpec extends FunSuite:
     val fmt = NumFmt.Custom("# ?/?;(# ?/?)")
     assertEquals(NumFmtFormatter.formatNumber(BigDecimal("-1.5"), fmt), "(1 1/2)")
   }
+
+  // Totality: BigDecimal holds values beyond Double range (the evaluator can produce
+  // >1E308). The convergent search runs on doubles, so out-of-range magnitudes must
+  // bypass it and render the whole-number form (blank fraction area) — the same shape
+  // huge-but-finite values already produce — instead of throwing.
+
+  test("fraction totality: 1E400 (beyond Double range) renders the whole form, no throw (GH-243)") {
+    val expected = "1" + "0" * 400 + "    "
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("1E400"), NumFmt.Fraction), expected)
+    // Consistency pin: huge-but-finite values take the convergent path to the same shape.
+    assertEquals(
+      NumFmtFormatter.formatNumber(BigDecimal("1E20"), NumFmt.Fraction),
+      "100000000000000000000    "
+    )
+  }
+
+  test("fraction totality: custom # ?/? with 1E400 renders the whole form, no throw (GH-243)") {
+    val expected = "1" + "0" * 400 + "    "
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("1E400"), NumFmt.Custom("# ?/?")), expected)
+  }
+
+  test("fraction totality: # ??/?? with -1E400 keeps the default minus, no throw (GH-243)") {
+    val expected = "-1" + "0" * 400 + "      "
+    assertEquals(
+      NumFmtFormatter.formatNumber(BigDecimal("-1E400"), NumFmt.Custom("# ??/??")),
+      expected
+    )
+  }
