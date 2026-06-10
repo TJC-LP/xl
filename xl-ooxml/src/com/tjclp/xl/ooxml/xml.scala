@@ -349,15 +349,19 @@ object XmlUtil:
         }
       }
 
+    // Font requires sizePt > 0 and a nonEmpty name; filter malformed values so
+    // rich-text parsing stays total instead of throwing through require (GH-278)
     val sizePt = (rPrElem \ "sz").headOption
       .collect { case elem: Elem => elem }
       .flatMap(e => getAttrOpt(e, "val"))
       .flatMap(_.toDoubleOption)
+      .filter(_ > 0)
       .getOrElse(11.0)
 
     val name = (rPrElem \ "name").headOption
       .collect { case elem: Elem => elem }
       .flatMap(e => getAttrOpt(e, "val"))
+      .filter(_.nonEmpty)
       .getOrElse("Calibri")
 
     Font(
