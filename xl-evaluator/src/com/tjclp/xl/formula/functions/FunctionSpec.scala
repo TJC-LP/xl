@@ -45,7 +45,9 @@ final case class EvalContext(
   /** Current cell being evaluated. Used by ROW() and COLUMN() with no arguments. */
   currentCell: Option[ARef] = None,
   /** Recursion depth for cross-sheet formula evaluation. */
-  depth: Int = 0
+  depth: Int = 0,
+  /** GH-193: in-scope LET bindings (declared name → evaluated value). */
+  bindings: Map[String, Any] = Map.empty
 )
 
 sealed trait ArgValue

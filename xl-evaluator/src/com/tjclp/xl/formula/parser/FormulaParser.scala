@@ -110,14 +110,33 @@ object FormulaParser:
     case other => other
 
   /**
+   * GH-193: an in-scope LET binding visible to the parser.
+   *
+   * @param name
+   *   The declared binding name (original case; lookup is case-insensitive)
+   * @param substitution
+   *   For range-shaped binding values (RangeRef/SheetRange), the range expression to substitute at
+   *   each use site so range-typed argument positions keep working; None for ordinary bindings
+   *   which parse to [[TExpr.BindingRef]]
+   */
+  private final case class LetScopeEntry(name: String, substitution: Option[TExpr[?]])
+
+  /**
    * Parser state - tracks position in input string.
    *
    * @param input
    *   The formula string being parsed
    * @param pos
    *   Current position (0-based offset)
+   * @param scope
+   *   GH-193: lexically visible LET bindings, innermost first
    */
-  private case class ParserState(input: String, pos: Int, depth: Int = 0):
+  private case class ParserState(
+    input: String,
+    pos: Int,
+    depth: Int = 0,
+    scope: List[LetScopeEntry] = Nil
+  ):
     def advance(n: Int = 1): ParserState = copy(pos = pos + n)
     def currentChar: Option[Char] =
       if pos < input.length then Some(input(pos)) else None
@@ -564,8 +583,9 @@ object FormulaParser:
         else
           // Starts with '.' - definitely a number like .5
           parseNumberLiteral(s)
-      case Some(c) if c.isLetter =>
-        // Function call, cell reference, or boolean literal
+      case Some(c) if c.isLetter || c == '_' =>
+        // Function call, cell reference, boolean literal, or LET binding reference
+        // ('_' admits underscore-led LET names, GH-193)
         parseFunctionOrRef(s)
       case Some('$') =>
         // Anchored cell reference (e.g., $A$1, $A1)
@@ -721,13 +741,32 @@ object FormulaParser:
                 // Range (e.g., A1:B10)
                 parseRange(state.input.substring(startPos, s2.pos), s2, startPos)
               case _ =>
-                // Cell reference
-                parseCellReference(state.input.substring(startPos, s2.pos), s2, startPos)
+                // GH-193: a bare identifier matching an in-scope LET binding resolves to the
+                // binding (case-insensitive, innermost first) — even when the name shadows a
+                // function name. Function-call syntax above still wins for `name(...)`.
+                val rawIdent = state.input.substring(startPos, s2.pos)
+                state.scope.find(_.name.equalsIgnoreCase(rawIdent)) match
+                  case Some(entry) =>
+                    entry.substitution match
+                      case Some(rangeExpr) => Right((rangeExpr, s2))
+                      case None => Right((TExpr.BindingRef(entry.name), s2))
+                  case None =>
+                    // Cell reference
+                    parseCellReference(rawIdent, s2, startPos)
 
   /**
    * Parse function call: FUNC(arg1, arg2, ...)
    */
   private def parseFunction(
+    name: String,
+    state: ParserState,
+    startPos: Int
+  ): ParseResult[TExpr[?]] =
+    // GH-193: LET is a special form (it introduces lexical bindings), not a FunctionSpec.
+    if name == "LET" then parseLet(state, startPos)
+    else parseRegularFunction(name, state, startPos)
+
+  private def parseRegularFunction(
     name: String,
     state: ParserState,
     startPos: Int
@@ -775,6 +814,131 @@ object FormulaParser:
           val suggestions = suggestFunctions(name)
           Left(ParseError.UnknownFunction(name, startPos, suggestions))
     }
+
+  // ===== GH-193: LET special form =====
+
+  /** Names that collide with literals or operator keywords can never be LET binding names. */
+  private val ReservedLetNames = Set("TRUE", "FALSE", "AND", "OR", "NOT")
+
+  /**
+   * Valid Excel LET binding name: starts with a letter or underscore, continues with
+   * letters/digits/underscores, is not cell-ref shaped (A1, XFD100, ...), and is not a reserved
+   * literal/operator keyword.
+   */
+  private def isValidLetName(name: String): Boolean =
+    name.nonEmpty
+      && (name.charAt(0).isLetter || name.charAt(0) == '_')
+      && name.forall(c => c.isLetterOrDigit || c == '_')
+      && ARef.parse(name).isLeft
+      && !ReservedLetNames.contains(name.toUpperCase)
+
+  private def invalidLetNameError(name: String, pos: Int): ParseError =
+    ParseError.InvalidArguments(
+      "LET",
+      pos,
+      "binding name (starts with a letter or '_', not a cell reference)",
+      if name.isEmpty then "empty name" else s"'$name'"
+    )
+
+  /** Read an identifier-shaped token (letters/digits/underscores) at the current position. */
+  @tailrec
+  private def readLetName(s: ParserState): ParserState =
+    s.currentChar match
+      case Some(c) if c.isLetterOrDigit || c == '_' => readLetName(s.advance())
+      case _ => s
+
+  /**
+   * Parse LET(name1, value1, [name2, value2, ...], calculation).
+   *
+   * Lexical scope: binding N is visible to bindings N+1.. and the body (let* semantics, matching
+   * Excel). Pair-vs-body disambiguation is a one-token lookahead: at a pair position, an identifier
+   * directly followed by ',' is a binding name; anything else is the final calculation. The final
+   * argument must therefore be the body — a trailing name/value pair without a body is rejected, as
+   * is LET without at least one pair.
+   *
+   * Range-shaped binding values (A1:B10, Sheet2!A1:A10) are substituted at use sites (see
+   * [[LetScopeEntry]]); all other bindings parse to [[TExpr.BindingRef]] and are evaluated against
+   * the runtime environment.
+   *
+   * @param state
+   *   Parser state positioned at the opening '('
+   */
+  private def parseLet(state: ParserState, startPos: Int): ParseResult[TExpr[?]] =
+    val entryScope = state.scope
+
+    def expectComma(s: ParserState, context: String): Either[ParseError, ParserState] =
+      val sw = skipWhitespace(s)
+      sw.currentChar match
+        case Some(',') => Right(skipWhitespace(sw.advance()))
+        case Some(c) => Left(ParseError.UnexpectedChar(c, sw.pos, context))
+        case None => Left(ParseError.UnexpectedEOF(sw.pos, context))
+
+    def scopeEntryFor(name: String, value: TExpr[?]): LetScopeEntry =
+      value match
+        case r: TExpr.RangeRef => LetScopeEntry(name, Some(r))
+        case sr: TExpr.SheetRange => LetScopeEntry(name, Some(sr))
+        case _ => LetScopeEntry(name, None)
+
+    /**
+     * Lookahead for a pair position: Some((name, namePos, stateAfterName)) iff an identifier-shaped
+     * token directly followed (modulo whitespace) by ',' starts here.
+     */
+    def identCommaLookahead(s: ParserState): Option[(String, Int, ParserState)] =
+      val sw = skipWhitespace(s)
+      sw.currentChar match
+        case Some(c) if c.isLetter || c == '_' =>
+          val sEnd = readLetName(sw)
+          val name = sw.input.substring(sw.pos, sEnd.pos)
+          if skipWhitespace(sEnd).currentChar.contains(',') then Some((name, sw.pos, sEnd))
+          else None
+        case _ => None
+
+    def parsePairsAndBody(
+      s: ParserState,
+      scope: List[LetScopeEntry],
+      acc: List[(String, TExpr[?])]
+    ): ParseResult[TExpr[?]] =
+      identCommaLookahead(s) match
+        case Some((rawName, namePos, afterName)) =>
+          if !isValidLetName(rawName) then Left(invalidLetNameError(rawName, namePos))
+          else
+            for
+              afterComma <- expectComma(afterName, "expected ',' after LET binding name")
+              // The value expression sees only PRIOR bindings (lexical, let* semantics)
+              (value, afterValue) <- parseExpr(afterComma.copy(scope = scope))
+              next <- expectComma(
+                afterValue,
+                "expected ',' and a final calculation after LET binding value"
+              )
+              result <- parsePairsAndBody(
+                next,
+                scopeEntryFor(rawName, value) :: scope,
+                (rawName, value) :: acc
+              )
+            yield result
+        case None =>
+          if acc.isEmpty then
+            Left(
+              ParseError.InvalidArguments(
+                "LET",
+                startPos,
+                "at least one name/value pair and a calculation",
+                "no name/value pair"
+              )
+            )
+          else
+            parseExpr(s.copy(scope = scope)).flatMap { case (body, afterBody) =>
+              val sw = skipWhitespace(afterBody)
+              sw.currentChar match
+                case Some(')') =>
+                  Right((TExpr.Let(acc.reverse, body), sw.advance().copy(scope = entryScope)))
+                case Some(c) =>
+                  Left(ParseError.UnexpectedChar(c, sw.pos, "expected ')' to close LET"))
+                case None => Left(ParseError.UnexpectedEOF(sw.pos, "expected ')' to close LET"))
+            }
+
+    // Skip opening '('
+    parsePairsAndBody(skipWhitespace(state.advance()), entryScope, Nil)
 
   /**
    * Parse cell reference with anchor support: A1, $A$1, $A1, A$1, Sheet1!A1

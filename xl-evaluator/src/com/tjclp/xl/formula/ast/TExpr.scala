@@ -274,6 +274,29 @@ enum TExpr[A] derives CanEqual:
    */
   case Call[A](spec: FunctionSpec[A], args: spec.Args) extends TExpr[A]
 
+  /**
+   * GH-193: LET(name1, value1, [name2, value2, ...], calculation) — Excel 365 lexical bindings.
+   *
+   * Each binding's value expression is evaluated against the environment of all PRIOR bindings
+   * (let* semantics); the body sees every binding. The Let expression's type is the body's type.
+   *
+   * Range-shaped binding values (RangeRef/SheetRange) are recorded here for canonical printing, but
+   * the parser substitutes them directly into the body so range-typed argument positions (e.g.
+   * SUMIF's criteria range) keep working — the evaluator never materializes them.
+   *
+   * Example: Let(List(("x", Lit(1))), Add(BindingRef("x"), Lit(1))) ≡ LET(x, 1, x+1)
+   */
+  case Let[A](bindings: List[(String, TExpr[?])], body: TExpr[A]) extends TExpr[A]
+
+  /**
+   * GH-193: Reference to an in-scope LET binding by its declared name.
+   *
+   * Existential/Any-typed like PolyRef: the runtime value comes from the evaluation environment,
+   * and surrounding context coerces it. The parser only emits BindingRef for names it resolved
+   * lexically, so an unknown name at evaluation time is a programming error.
+   */
+  case BindingRef(name: String) extends TExpr[Nothing]
+
 object TExpr
     extends TExprRangeLocation
     with TExprConstructors

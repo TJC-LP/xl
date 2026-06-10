@@ -199,8 +199,16 @@ object Evaluator:
  * Private implementation of Evaluator.
  *
  * Implements all TExpr cases with proper error handling and short-circuit semantics.
+ *
+ * @param bindings
+ *   GH-193: the LET environment — values of in-scope bindings, keyed by declared name. Threaded
+ *   through instance state so every recursive eval (including function-argument evaluation via
+ *   EvalContext) sees the same environment.
  */
-private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluator:
+private class EvaluatorImpl(
+  allowArrayResults: Boolean = false,
+  bindings: Map[String, Any] = Map.empty
+) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
@@ -437,9 +445,12 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
               Left(EvalError.TypeMismatch("function argument", "scalar", "array"))
             case value => Right(value.asInstanceOf[A])
           }
-        // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions
+        // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
+        // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
+        // (e.g. SUM over a range-valued binding) still resolve in-scope names.
         def evalArrayArg(expr: TExpr[Any]): Either[EvalError, Any] =
-          Evaluator.arrayInstance.eval(expr, sheet, clock, workbook, currentCell)
+          new EvaluatorWithDepth(currentDepth, allowArrayResults = true, bindings)
+            .eval(expr, sheet, clock, workbook, currentCell)
 
         val ctx = EvalContext(
           sheet,
@@ -448,9 +459,95 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
           [A] => (expr: TExpr[A]) => evalArg(expr),
           evalArrayArg,
           currentCell,
-          currentDepth
+          currentDepth,
+          bindings
         )
         call.spec.eval(call.args, ctx)
+
+      // ===== GH-193: LET lexical bindings =====
+      // Cast the Either container, not the value: BindingRef extends TExpr[Nothing], so the GADT
+      // match refines A to Nothing and a value-level cast would compile to a throwing
+      // cast-to-Nothing (same reason the arithmetic cases cast their Either results).
+      case TExpr.BindingRef(name) =>
+        (bindings.get(name) match
+          case Some(value) => Right(value)
+          case None =>
+            // Parser-prevented: BindingRef is only emitted for lexically resolved names
+            Left(EvalError.EvalFailed(s"LET name '$name' is not in scope", None))
+        ).asInstanceOf[Either[EvalError, A]]
+
+      case TExpr.Let(letBindings, body) =>
+        evalLet(letBindings, body, sheet, clock, workbook, currentCell)
+          .asInstanceOf[Either[EvalError, A]]
+
+  // ===== GH-193: LET evaluation =====
+
+  /**
+   * Evaluate LET bindings left-to-right (each against the environment so far), then the body with
+   * the full environment. A failing binding short-circuits with the binding name in the message.
+   *
+   * Range-shaped binding values were substituted into the body by the parser, so they are skipped
+   * here (never materialized — a whole-column binding would allocate millions of cells). All other
+   * values evaluate array-aware so array-producing calls (e.g. TRANSPOSE) can be bound.
+   */
+  private def evalLet(
+    letBindings: List[(String, TExpr[?])],
+    body: TExpr[?],
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): Either[EvalError, Any] =
+    val envResult = letBindings.foldLeft[Either[EvalError, Map[String, Any]]](Right(bindings)) {
+      case (Left(err), _) => Left(err)
+      case (Right(env), (name, valueExpr)) =>
+        valueExpr match
+          case _: TExpr.RangeRef | _: TExpr.SheetRange => Right(env)
+          case _ =>
+            // Bare cell refs resolve to the cell's effective value (cached formula extracted,
+            // Empty → 0) — same treatment as top-level refs and equality operands (GH-233).
+            val resolved = TExpr.asResolvedValueExpr(valueExpr)
+            new EvaluatorWithDepth(currentDepth, allowArrayResults = true, env)
+              .eval(resolved.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+              .map(value => env + (name -> unwrapBindingValue(value)))
+              .left
+              .map { err =>
+                EvalError.EvalFailed(
+                  s"LET binding '$name': ${EvalError.toXLError(err).message}",
+                  None
+                )
+              }
+    }
+    envResult.flatMap { env =>
+      body match
+        // A range-valued body (e.g. LET(r, A1:A10, r) under SUM) yields an array in array
+        // contexts; scalar contexts keep the standard "range must be used within a function"
+        // error from eval below.
+        case TExpr.RangeRef(range) if allowArrayResults =>
+          Right(ArrayArithmetic.rangeToArray(range, sheet))
+        case TExpr.SheetRange(sheetName, range) if allowArrayResults =>
+          Evaluator
+            .resolveRangeLocation(TExpr.RangeLocation.CrossSheet(sheetName, range), sheet, workbook)
+            .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+        case other =>
+          val resolvedBody = TExpr.asResolvedValueExpr(other)
+          new EvaluatorWithDepth(currentDepth, allowArrayResults, env)
+            .eval(resolvedBody.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+    }
+
+  /**
+   * Unwrap a CellValue binding result to its primitive so bound values compose with arithmetic,
+   * comparison, and text machinery exactly like literals do. DateTime unwraps to its Excel serial
+   * number (dates ARE numbers in Excel's value model).
+   */
+  private def unwrapBindingValue(value: Any): Any = value match
+    case CellValue.Number(n) => n
+    case CellValue.Text(s) => s
+    case CellValue.Bool(b) => b
+    case CellValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt))
+    case CellValue.Empty => BigDecimal(0)
+    case CellValue.Formula(_, Some(cached)) => unwrapBindingValue(cached)
+    case other => other
 
   // ===== Array Arithmetic Helpers =====
 
@@ -496,6 +593,16 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
       case i: Int => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(i)))
       case l: Long => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(l)))
       case d: Double => Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(d)))
+      // GH-193: date values coerce to their Excel serial in arithmetic (dates ARE numbers),
+      // e.g. a LET binding holding TODAY() used as `d+1`.
+      case ld: java.time.LocalDate =>
+        Right(
+          ArrayArithmetic.ArrayOperand.Scalar(
+            BigDecimal(CellValue.dateTimeToExcelSerial(ld.atStartOfDay()))
+          )
+        )
+      case ldt: java.time.LocalDateTime =>
+        Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(CellValue.dateTimeToExcelSerial(ldt))))
       case _ => Left(EvalError.TypeMismatch("arithmetic", "number or array", value.toString))
 
   /**
@@ -626,8 +733,12 @@ private class EvaluatorImpl(allowArrayResults: Boolean = false) extends Evaluato
  * Depth-aware evaluator for cross-sheet formula cycle protection (GH-161).
  *
  * Extends EvaluatorImpl but tracks recursion depth. When a SheetRef with uncached formula triggers
- * recursive evaluation, the depth is passed through to detect infinite loops.
+ * recursive evaluation, the depth is passed through to detect infinite loops. Also carries the LET
+ * environment (GH-193) so derived evaluators preserve in-scope bindings.
  */
-private class EvaluatorWithDepth(depth: Int, allowArrayResults: Boolean = false)
-    extends EvaluatorImpl(allowArrayResults):
+private class EvaluatorWithDepth(
+  depth: Int,
+  allowArrayResults: Boolean = false,
+  bindings: Map[String, Any] = Map.empty
+) extends EvaluatorImpl(allowArrayResults, bindings):
   override protected def currentDepth: Int = depth

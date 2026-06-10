@@ -171,6 +171,12 @@ object DependencyGraph:
       case TExpr.DateToSerial(e) => containsCellReferences(e)
       case TExpr.DateTimeToSerial(e) => containsCellReferences(e)
 
+      // GH-193: LET — check binding values and the body; BindingRef is a name, not a cell
+      case TExpr.Let(bindings, body) =>
+        bindings.exists((_, value) => containsCellReferences(value)) ||
+        containsCellReferences(body)
+      case TExpr.BindingRef(_) => false
+
       // Literals and constants
       case TExpr.Lit(_) => false
 
@@ -245,6 +251,12 @@ object DependencyGraph:
       case TExpr.DateToSerial(e) => containsUnqualifiedCellReferences(e)
       case TExpr.DateTimeToSerial(e) => containsUnqualifiedCellReferences(e)
 
+      // GH-193: LET — check binding values and the body; BindingRef is a name, not a cell
+      case TExpr.Let(bindings, body) =>
+        bindings.exists((_, value) => containsUnqualifiedCellReferences(value)) ||
+        containsUnqualifiedCellReferences(body)
+      case TExpr.BindingRef(_) => false
+
       // Literals and constants
       case TExpr.Lit(_) => false
 
@@ -312,6 +324,13 @@ object DependencyGraph:
       case TExpr.ToInt(expr) =>
         extractDependencies(expr) // Type conversion - extract from wrapped expr
       case TExpr.Aggregate(_, location) => location.localCells
+
+      // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
+      case TExpr.Let(bindings, body) =>
+        bindings.foldLeft(extractDependencies(body)) { case (acc, (_, value)) =>
+          acc ++ extractDependencies(value)
+        }
+      case TExpr.BindingRef(_) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -388,6 +407,13 @@ object DependencyGraph:
           loc => loc.localCellsBounded(bounds),
           range => boundedCells(range, bounds)
         )
+
+      // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
+      case TExpr.Let(bindings, body) =>
+        bindings.foldLeft(extractDependenciesBounded(body, bounds)) { case (acc, (_, value)) =>
+          acc ++ extractDependenciesBounded(value, bounds)
+        }
+      case TExpr.BindingRef(_) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -890,6 +916,13 @@ object DependencyGraph:
             case ArgValue.Cells(range) =>
               acc ++ range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
         }
+
+      // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
+      case TExpr.Let(bindings, body) =>
+        bindings.foldLeft(extractQualifiedDependencies(body, currentSheet)) {
+          case (acc, (_, value)) => acc ++ extractQualifiedDependencies(value, currentSheet)
+        }
+      case TExpr.BindingRef(_) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
