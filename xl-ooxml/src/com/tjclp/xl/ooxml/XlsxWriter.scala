@@ -205,6 +205,16 @@ object XlsxWriter:
         throw new IllegalStateException("Source file changed since read; refusing to copy verbatim")
 
   /**
+   * Canonical comment author: trimmed, whitespace-only → unauthored (GH-290).
+   *
+   * The trim happens ONCE at write time; the `<authors>` entry and the bold author-prefix run are
+   * both built from this value, so `XlsxReader.stripAuthorPrefix` (which matches the stored author
+   * against the first run) always strips the prefix and it never leaks into the comment text.
+   */
+  private def canonicalCommentAuthor(author: Option[String]): Option[String] =
+    author.map(_.trim).filter(_.nonEmpty)
+
+  /**
    * Build per-sheet comment data for serialization.
    *
    * Returns:
@@ -215,15 +225,14 @@ object XlsxWriter:
     val commentsBySheet = workbook.sheets.zipWithIndex.flatMap { case (sheet, idx) =>
       if sheet.comments.isEmpty then None
       else
-        // Build author list (deduplicated and sorted for deterministic output)
+        // Build author list (canonicalized, deduplicated and sorted for deterministic output)
         // Reserve index 0 for unauthored comments (empty string)
         val (authorSet, hasUnauthored) =
           sheet.comments.values.foldLeft((Set.empty[String], false)) {
             case ((existing, hasNone), comment) =>
-              val nextSet = comment.author match
-                case Some(author) => existing + author
-                case None => existing
-              (nextSet, hasNone || comment.author.isEmpty)
+              canonicalCommentAuthor(comment.author) match
+                case Some(author) => (existing + author, hasNone)
+                case None => (existing, true)
           }
         // Sort for deterministic output (Excel preserves insertion order; we choose determinism here)
         // to keep serialized files stable across runs.
@@ -234,13 +243,14 @@ object XlsxWriter:
 
         // Convert domain Comments to OOXML (sorted by ref for deterministic output)
         val ooxmlComments = sheet.comments.toVector.sortBy(_._1.toA1).map { case (ref, comment) =>
+          val canonicalAuthor = canonicalCommentAuthor(comment.author)
           val authorId =
-            comment.author.flatMap(authorMap.get).getOrElse(0) // Index 0 = "" for unauthored
+            canonicalAuthor.flatMap(authorMap.get).getOrElse(0) // Index 0 = "" for unauthored
           // Note: xr:uid GUIDs omitted for new comments (deterministic output)
           // GUIDs are optional per OOXML spec and only needed for revision tracking
 
           // Excel displays author as part of comment text (bold first run)
-          val textWithAuthor = comment.author match
+          val textWithAuthor = canonicalAuthor match
             case Some(author) =>
               // Prepend author name as bold run
               val authorRun = com.tjclp.xl.richtext.TextRun(

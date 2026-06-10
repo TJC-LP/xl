@@ -386,11 +386,25 @@ object Generators:
       align <- genAlign
     yield CellStyle(font, fill, border, numFmt, None, align)
 
-  /** Generate comment: plain text body plus optional author (trimmed, non-empty) */
+  /**
+   * Generate comment: plain text body plus optional author. Authors may carry edge whitespace or
+   * be whitespace-only — the writer canonicalizes (trim; blank → unauthored, GH-290), and
+   * round-trip equivalence compares canonical authors.
+   */
   val genComment: Gen[Comment] =
+    val genAuthor: Gen[String] =
+      for
+        base <- Gen.identifier.map(_.take(12))
+        decorated <- Gen.frequency(
+          6 -> Gen.const(base),
+          1 -> Gen.const(s" $base "),
+          1 -> Gen.const(s"$base  "),
+          1 -> Gen.const("   ") // whitespace-only → canonicalizes to unauthored
+        )
+      yield decorated
     for
       text <- genXmlSafeTextNonEmpty
-      author <- Gen.option(Gen.identifier.map(_.take(12)))
+      author <- Gen.option(genAuthor)
     yield Comment.plainText(text, author)
 
   /** Generate hyperlink target: external URL/mailto or internal location */

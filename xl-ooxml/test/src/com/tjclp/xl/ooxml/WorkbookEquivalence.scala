@@ -29,7 +29,9 @@ import com.tjclp.xl.styles.fill.Fill
  *       them) and compared with numFmtId normalized to None — numFmtId is the raw OOXML format-id
  *       slot the reader fills in, not an authored property
  *     - hyperlink targets equal
- *   - comments equal by (plain text, author) per ref
+ *   - comments equal by (plain text, CANONICAL author) per ref — the writer trims authors and
+ *     treats whitespace-only as unauthored (GH-290), so authors compare after the same
+ *     canonicalization
  *   - merged ranges set-equal
  *   - (c) sheet-level: viewSettings equal; pageSetup equal (an authored PageSetup always
  *     round-trips when it has at least one visible field; all-default PageSetup serializes to no
@@ -218,6 +220,10 @@ object WorkbookEquivalence:
       s"$sheet!${ref.toA1}: hyperlink mismatch: expected ${expected.hyperlink}, actual ${actual.hyperlink}"
     )
 
+  /** Canonical comment author (the writer's rule, GH-290): trim, whitespace-only → unauthored. */
+  private def canonicalAuthor(author: Option[String]): Option[String] =
+    author.map(_.trim).filter(_.nonEmpty)
+
   private def commentsDiff(sheet: String, expected: Sheet, actual: Sheet): List[String] =
     val refDiffs =
       keySetDiff(sheet, "comment refs", expected.comments.keySet, actual.comments.keySet)
@@ -233,9 +239,10 @@ object WorkbookEquivalence:
             s"$sheet!${ref.toA1}: comment text mismatch: expected '${exp.text.toPlainText}', " +
               s"actual '${act.text.toPlainText}'"
           )
-          val authorMismatch = Option.when(exp.author != act.author)(
-            s"$sheet!${ref.toA1}: comment author mismatch: expected ${exp.author}, actual ${act.author}"
-          )
+          val authorMismatch =
+            Option.when(canonicalAuthor(exp.author) != canonicalAuthor(act.author))(
+              s"$sheet!${ref.toA1}: comment author mismatch: expected ${exp.author}, actual ${act.author}"
+            )
           textMismatch.toList ++ authorMismatch.toList
         }
     refDiffs ++ bodyDiffs
