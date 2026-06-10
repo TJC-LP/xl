@@ -524,3 +524,173 @@ class FormatCodeParserSpec extends FunSuite:
     val result = FormatCodeParser.applyDateFormat(dt, code)
     assertEquals(result, "January 15, 2025")
   }
+
+  // ========== Fractions (GH-243) ==========
+  // Excel picks the last continued-fraction convergent whose denominator fits the
+  // placeholder budget (1 digit for ?/?, 2 for ??/??), computed in IEEE-754 double
+  // arithmetic over the FULL value. The algorithm is a verbatim port of SheetJS/SSF
+  // `frac` (reverse-engineered from Excel); the "Excel corpus" tests below pin
+  // expected strings taken directly from SSF's Excel-generated test/fraction.json.
+  // Double noise is part of the spec: 12.3 → "12 1/3" but bare 0.3 → " 2/7".
+  // Alignment: `?` placeholders pad with spaces (numerator right-aligns, denominator
+  // left-aligns); a whole number blanks the fraction area to preserve width.
+
+  test("fraction parse: # ?/? produces a Fraction token (GH-243)") {
+    val code = FormatCodeParser.parse("# ?/?").toOption.get
+    val fracTokens = code.positive.pattern.tokens.collect { case f: FormatToken.Fraction => f }
+    assertEquals(fracTokens, Vector(FormatToken.Fraction("?", "?", None)))
+  }
+
+  test("fraction parse: fixed denominator # ?/8 captures the literal denominator (GH-243)") {
+    val code = FormatCodeParser.parse("# ?/8").toOption.get
+    val fracTokens = code.positive.pattern.tokens.collect { case f: FormatToken.Fraction => f }
+    assertEquals(fracTokens, Vector(FormatToken.Fraction("?", "8", Some(8L))))
+  }
+
+  test("fraction parse: date separators are untouched — m/d/yy has no Fraction token (GH-243)") {
+    val code = FormatCodeParser.parse("m/d/yy").toOption.get
+    val fracTokens = code.positive.pattern.tokens.collect { case f: FormatToken.Fraction => f }
+    assertEquals(fracTokens, Vector.empty)
+  }
+
+  test("NumFmt.Fraction: simple halves 0.5 → ' 1/2' (GH-243)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("0.5"), NumFmt.Fraction), " 1/2")
+  }
+
+  test("NumFmt.Fraction: mixed number 1.5 → '1 1/2' (GH-243)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("1.5"), NumFmt.Fraction), "1 1/2")
+  }
+
+  test("NumFmt.Fraction: 5.25 → '5 1/4' (MS docs example, GH-243)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("5.25"), NumFmt.Fraction), "5 1/4")
+  }
+
+  test("NumFmt.Fraction: 3.14159 → '3 1/7' (GH-243)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("3.14159"), NumFmt.Fraction), "3 1/7")
+  }
+
+  test("NumFmt.Fraction: 0.3 → ' 2/7' — double of 0.3 sits below 3/10 so the CF path differs from 12.3 (GH-243)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("0.3"), NumFmt.Fraction), " 2/7")
+  }
+
+  test("Excel corpus: # ?/? values from SSF fraction.json (GH-243)") {
+    val cases = Vector(
+      BigDecimal("1") -> "1    ",
+      BigDecimal("-1.2") -> "-1 1/5",
+      BigDecimal("12.3") -> "12 1/3",
+      BigDecimal("-12.34") -> "-12 1/3",
+      BigDecimal("123.45") -> "123 4/9",
+      BigDecimal("-123.456") -> "-123 1/2",
+      BigDecimal("1234.567") -> "1234 4/7",
+      BigDecimal("-1234.5678") -> "-1234 4/7",
+      BigDecimal("12345.6789") -> "12345 2/3",
+      BigDecimal("-12345.67891") -> "-12345 2/3"
+    )
+    cases.foreach { case (value, expected) =>
+      assertEquals(
+        NumFmtFormatter.formatNumber(value, NumFmt.Custom("# ?/?")),
+        expected,
+        s"value $value"
+      )
+    }
+  }
+
+  test("Excel corpus: # ??/?? values from SSF fraction.json (GH-243)") {
+    val cases = Vector(
+      BigDecimal("1") -> "1      ",
+      BigDecimal("-1.2") -> "-1  1/5 ",
+      BigDecimal("12.3") -> "12  3/10",
+      BigDecimal("-12.34") -> "-12 17/50",
+      BigDecimal("123.45") -> "123  9/20",
+      BigDecimal("-123.456") -> "-123 26/57",
+      BigDecimal("1234.567") -> "1234 55/97",
+      BigDecimal("-1234.5678") -> "-1234 46/81",
+      BigDecimal("12345.6789") -> "12345 55/81",
+      BigDecimal("-12345.67891") -> "-12345 55/81"
+    )
+    cases.foreach { case (value, expected) =>
+      assertEquals(
+        NumFmtFormatter.formatNumber(value, NumFmt.Custom("# ??/??")),
+        expected,
+        s"value $value"
+      )
+    }
+  }
+
+  test("Excel corpus: fixed denominators # ?/2 and # ?/4 from SSF fraction.json (GH-243)") {
+    val halfCases = Vector(
+      BigDecimal("1") -> "1    ",
+      BigDecimal("-1.2") -> "-1    ",
+      BigDecimal("12.3") -> "12 1/2",
+      BigDecimal("-12.34") -> "-12 1/2"
+    )
+    halfCases.foreach { case (value, expected) =>
+      assertEquals(
+        NumFmtFormatter.formatNumber(value, NumFmt.Custom("# ?/2")),
+        expected,
+        s"value $value"
+      )
+    }
+    val quarterCases = Vector(
+      BigDecimal("-1.2") -> "-1 1/4",
+      BigDecimal("123.45") -> "123 2/4"
+    )
+    quarterCases.foreach { case (value, expected) =>
+      assertEquals(
+        NumFmtFormatter.formatNumber(value, NumFmt.Custom("# ?/4")),
+        expected,
+        s"value $value"
+      )
+    }
+  }
+
+  test("NumFmt.Fraction: whole number blanks the fraction area: 2 → '2    ' (GH-243)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("2"), NumFmt.Fraction), "2    ")
+  }
+
+  test("NumFmt.Fraction: zero → '0    ' (GH-243)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("0"), NumFmt.Fraction), "0    ")
+  }
+
+  test("NumFmt.Fraction: negative mixed -1.5 → '-1 1/2' (GH-243)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("-1.5"), NumFmt.Fraction), "-1 1/2")
+  }
+
+  test("NumFmt.Fraction: negative pure fraction -0.5 → '- 1/2' (GH-243)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("-0.5"), NumFmt.Fraction), "- 1/2")
+  }
+
+  test("custom fraction: # ??/?? gives 5.3 → '5  3/10' (MS docs example, GH-243)") {
+    val fmt = NumFmt.Custom("# ??/??")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("5.3"), fmt), "5  3/10")
+  }
+
+  test("custom fraction: # ??/?? pads numerator left, denominator right: 0.5 → '  1/2 ' (GH-243)") {
+    val fmt = NumFmt.Custom("# ??/??")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("0.5"), fmt), "  1/2 ")
+  }
+
+  test("custom fraction: fixed denominator # ?/8 does not reduce: 0.5 → ' 4/8' (GH-243)") {
+    val fmt = NumFmt.Custom("# ?/8")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("0.5"), fmt), " 4/8")
+  }
+
+  test("custom fraction: fixed denominator rounds into the whole part: 0.96 → '1    ' (GH-243)") {
+    val fmt = NumFmt.Custom("# ?/8")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("0.96"), fmt), "1    ")
+  }
+
+  test("custom fraction: fixed denominator # ?/8: 0.3 → ' 2/8' (GH-243)") {
+    val fmt = NumFmt.Custom("# ?/8")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("0.3"), fmt), " 2/8")
+  }
+
+  test("custom fraction: improper ?/? without whole part: 1.5 → '3/2' (GH-243)") {
+    val fmt = NumFmt.Custom("?/?")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("1.5"), fmt), "3/2")
+  }
+
+  test("custom fraction: negative section applies: # ?/?;(# ?/?) → -1.5 → '(1 1/2)' (GH-243)") {
+    val fmt = NumFmt.Custom("# ?/?;(# ?/?)")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("-1.5"), fmt), "(1 1/2)")
+  }

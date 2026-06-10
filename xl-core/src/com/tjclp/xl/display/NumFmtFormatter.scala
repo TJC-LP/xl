@@ -17,6 +17,10 @@ import java.time.format.DateTimeFormatter
  */
 object NumFmtFormatter:
 
+  /** Parsed pattern for the built-in NumFmt.Fraction (format id 12, "# ?/?"). */
+  private val builtInFractionFormat: Either[String, FormatCodeParser.FormatCode] =
+    FormatCodeParser.parse("# ?/?")
+
   /**
    * Format a cell value according to its number format.
    *
@@ -98,8 +102,10 @@ object NumFmtFormatter:
         f"$hours%d:$minutes%02d:$seconds%02d"
 
       case NumFmt.Fraction =>
-        // TODO: Implement fraction formatting (e.g., 0.5 → "1/2")
-        formatGeneral(n)
+        // Built-in fraction format id 12: "# ?/?" (up to one denominator digit, GH-243)
+        builtInFractionFormat match
+          case Right(fmt) => FormatCodeParser.applyFormat(n, fmt)._1
+          case Left(_) => formatGeneral(n)
 
       case NumFmt.Text =>
         // Text format displays numbers as text

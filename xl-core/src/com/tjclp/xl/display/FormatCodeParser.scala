@@ -127,8 +127,12 @@ object FormatCodeParser:
     /** AM/PM marker */
     case AmPm(format: String)
 
-    /** Fraction: # ?/? or # ??/?? */
-    case Fraction(wholePart: Boolean, numDigits: Int, denomDigits: Int)
+    /**
+     * Fraction: digit-placeholder runs around `/` (e.g. `?/?`, `??/??`) or a fixed literal
+     * denominator (e.g. `?/8`). `numerator`/`denominator` hold the raw placeholder runs;
+     * `fixedDenominator` is defined when the denominator is a literal integer.
+     */
+    case Fraction(numerator: String, denominator: String, fixedDenominator: Option[Long])
 
     /** Elapsed time: [h], [m], [s] */
     case Elapsed(unit: Char)
@@ -386,9 +390,36 @@ object FormatCodeParser:
           i += 3
 
         case '/' =>
-          // Could be part of date format or fraction - treat as literal
-          tokens += FormatToken.Literal("/")
-          i += 1
+          // Fraction when digit placeholders directly flank the slash (GH-243): pop the
+          // numerator run and consume the denominator (placeholder run or fixed integer).
+          // Date separators (m/d/yy) reach here between DatePart tokens and stay literal.
+          val denominator =
+            val sb = new StringBuilder
+            var j = i + 1
+            while j < pattern.length && isFractionChar(pattern(j)) do
+              sb += pattern(j)
+              j += 1
+            sb.toString
+          var numeratorLen = 0
+          while numeratorLen < tokens.length && (tokens(tokens.length - 1 - numeratorLen) match
+              case FormatToken.Digit(_) => true
+              case _ => false)
+          do numeratorLen += 1
+          if denominator.nonEmpty && numeratorLen > 0 then
+            val numerator = tokens
+              .takeRight(numeratorLen)
+              .collect { case FormatToken.Digit(ch) => ch }
+              .mkString
+            tokens.dropRightInPlace(numeratorLen)
+            val fixed =
+              if denominator.forall(_.isDigit) && denominator.exists(_ != '0') then
+                denominator.toLongOption
+              else None
+            tokens += FormatToken.Fraction(numerator, denominator, fixed)
+            i += 1 + denominator.length
+          else
+            tokens += FormatToken.Literal("/")
+            i += 1
 
         case ':' =>
           // Time separator
@@ -406,6 +437,10 @@ object FormatCodeParser:
           i += 1
 
     FormatPattern(tokens.toVector, hasThousands, hasPercent)
+
+  /** Characters that may appear in a fraction numerator/denominator run. */
+  private def isFractionChar(c: Char): Boolean =
+    c == '#' || c == '?' || (c >= '0' && c <= '9')
 
   // ========== Formatter ==========
 
@@ -451,6 +486,15 @@ object FormatCodeParser:
    * literals.
    */
   private def applyPattern(value: BigDecimal, pattern: FormatPattern): String =
+    val fracIdx = pattern.tokens.indexWhere {
+      case _: FormatToken.Fraction => true
+      case _ => false
+    }
+    pattern.tokens.lift(fracIdx) match
+      case Some(f: FormatToken.Fraction) => applyFractionPattern(value, pattern.tokens, fracIdx, f)
+      case _ => applyNumericPattern(value, pattern)
+
+  private def applyNumericPattern(value: BigDecimal, pattern: FormatPattern): String =
     // Handle percent: multiply by 100
     val adjustedValue = if pattern.hasPercent then value * 100 else value
 
@@ -551,6 +595,147 @@ object FormatCodeParser:
       if posFromEnd > 0 && posFromEnd % 3 == 0 then s"$c,"
       else c.toString
     }.mkString
+
+  /**
+   * Render a fraction pattern (GH-243).
+   *
+   * Excel semantics (verified against the Excel-corpus-tested SheetJS/SSF algorithm):
+   *   - variable denominators (`?/?`, `??/??`) use the last continued-fraction convergent whose
+   *     denominator fits the placeholder budget (`10^digits - 1`, digits capped at 7)
+   *   - fixed denominators (`?/8`) round to that denominator and never reduce (4/8 stays 4/8)
+   *   - a whole value blanks the fraction area with spaces to preserve column alignment
+   *   - unfilled `?` placeholders render as spaces, `0` as zeros, `#` as nothing; numerators
+   *     right-align within their placeholders, denominators left-align
+   *
+   * The sign is handled by [[applyFormat]] (section literals or the default leading minus).
+   */
+  private def applyFractionPattern(
+    value: BigDecimal,
+    tokens: Vector[FormatToken],
+    fracIdx: Int,
+    frac: FormatToken.Fraction
+  ): String =
+    val abs = value.abs
+    val wholePlaceholders = tokens
+      .take(fracIdx)
+      .collect { case FormatToken.Digit(ch) => ch }
+      .mkString
+    val mixed = wholePlaceholders.nonEmpty
+
+    val (whole, num, den) = frac.fixedDenominator match
+      case Some(d) =>
+        val rr = (abs * d).setScale(0, BigDecimal.RoundingMode.HALF_UP).toBigInt
+        (rr / d, rr % d, d)
+      case None =>
+        val digits = math.min(math.max(frac.numerator.length, frac.denominator.length), 7)
+        val maxDen = math.pow(10, digits.toDouble) - 1
+        // Excel stores values as IEEE-754 doubles and runs the search on the FULL value:
+        // the whole part's binary noise is observable (12.3 → 12 1/3, but 0.3 → 2/7).
+        val (p, q) = nearestFraction(abs.toDouble, maxDen)
+        val wholeD = math.floor(p / q)
+        // p/q are exact-integer doubles for all values below 2^53 (Excel's own precision);
+        // the max(0, _) keeps the numerator total for astronomically large inputs.
+        (BigDecimal(wholeD).toBigInt, BigInt(math.max(0.0, p - wholeD * q).toLong), q.toLong)
+
+    val improperNumerator = whole * den + num
+
+    val denWidth = frac.fixedDenominator
+      .fold(visibleWidth(frac.denominator))(_.toString.length)
+    val fractionPart =
+      if num == 0 && mixed then " " * (visibleWidth(frac.numerator) + 1 + denWidth)
+      else
+        val numerator = if mixed then num else improperNumerator
+        val denStr = frac.fixedDenominator match
+          case Some(d) => d.toString
+          case None => padPlaceholders(den.toString, frac.denominator, alignRight = false)
+        padPlaceholders(numerator.toString, frac.numerator, alignRight = true) + "/" + denStr
+
+    val wholeStr =
+      if !mixed then ""
+      else if whole != 0 then padPlaceholders(whole.toString, wholePlaceholders, alignRight = true)
+      else if num == 0 then "0"
+      else padPlaceholders("", wholePlaceholders, alignRight = true)
+
+    val result = new StringBuilder
+    var wholeEmitted = false
+    tokens.zipWithIndex.foreach { case (token, idx) =>
+      token match
+        case FormatToken.Digit(_) if idx < fracIdx =>
+          if !wholeEmitted then
+            result ++= wholeStr
+            wholeEmitted = true
+        case _: FormatToken.Fraction =>
+          result ++= fractionPart
+        case FormatToken.Literal(text) =>
+          result ++= text
+        case FormatToken.Spacer(_) =>
+          result += ' '
+        case _ =>
+          () // fills, percent, date tokens: not meaningful inside fraction patterns
+    }
+    result.toString
+
+  /**
+   * Last continued-fraction convergent P/Q of `x` (non-negative) with Q <= maxDen.
+   *
+   * A verbatim port of the SheetJS/SSF `frac` algorithm (reverse-engineered from Excel and
+   * validated against an Excel-generated corpus): convergents are generated in IEEE-754 double
+   * arithmetic until the denominator budget is exceeded, then the previous convergent wins.
+   * Double state is deliberate — Excel stores values as doubles and the binary noise is
+   * observable in the chosen convergent (12.3 → 12 1/3 but 0.3 → 2/7).
+   */
+  private def nearestFraction(x: Double, maxDen: Double): (Double, Double) =
+    var b = x
+    var p2 = 0.0
+    var p1 = 1.0
+    var q2 = 1.0
+    var q1 = 0.0
+    var p = 0.0
+    var q = 0.0
+    var continue = true
+    while continue && q1 < maxDen do
+      val a = math.floor(b)
+      p = a * p1 + p2
+      q = a * q1 + q2
+      if b - a < 0.00000005 then continue = false
+      else
+        b = 1.0 / (b - a)
+        p2 = p1
+        p1 = p
+        q2 = q1
+        q1 = q
+    if q > maxDen then
+      if q1 > maxDen then
+        q = q2
+        p = p2
+      else
+        q = q1
+        p = p1
+    (p, q)
+
+  /**
+   * Width a placeholder run occupies when blanked out: `?`, `0` and literal digits reserve one
+   * space each; `#` reserves nothing.
+   */
+  private def visibleWidth(placeholders: String): Int =
+    placeholders.count(c => c == '?' || (c >= '0' && c <= '9'))
+
+  /**
+   * Align digits within a placeholder run: unfilled `?` positions become spaces, `0` becomes
+   * zeros, `#` adds nothing. Numerators/wholes right-align (pad left), denominators left-align
+   * (pad right).
+   */
+  private def padPlaceholders(digits: String, placeholders: String, alignRight: Boolean): String =
+    val diff = placeholders.length - digits.length
+    if diff <= 0 then digits
+    else
+      val unfilled = if alignRight then placeholders.take(diff) else placeholders.takeRight(diff)
+      val fill = unfilled.flatMap {
+        case '?' => " "
+        case '0' => "0"
+        case _ => ""
+      }
+      if alignRight then fill + digits else digits + fill
 
   /**
    * Apply a format code to text.
