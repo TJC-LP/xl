@@ -1093,3 +1093,128 @@ class SvgRendererSpec extends FunSuite:
     val styleBlock = svg.substring(svg.indexOf("<style>"), svg.indexOf("</style>"))
     assert(!styleBlock.contains(".cell-text"), "cell-text must not have a CSS rule")
     assert(styleBlock.contains(".header-text"), "header styling stays CSS-driven")
+
+  // ========== Renderer Edge Cases (GH-47) ==========
+
+  test("toSvg: empty range with column properties renders gridlines and no text (GH-47)") {
+    // Sheet has column metadata but zero cells: the grid must still render.
+    val sheet = Sheet("Test")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(20.0))) // 165px
+
+    val svg = sheet.toSvg(ref"A1:B5", showGridlines = true)
+
+    // Valid SVG sized from properties: A = 20 chars -> 20*8+5 = 165px, B default 72px; 5 rows x 20px
+    assert(svg.contains("<svg"), s"Should contain svg tag, got: $svg")
+    assert(svg.contains("viewBox=\"0 0 237 100\""), s"viewBox should be 237x100, got: $svg")
+    assert(svg.contains("""width="165""""), s"Column A width 165px should apply, got: $svg")
+
+    // All 10 cells render as background rects with gridline strokes
+    val cellRectCount = """<rect[^>]*class="cell"""".r.findAllIn(svg).length
+    assertEquals(cellRectCount, 10, s"Should render 2x5 cell rects, got: $svg")
+    assert(svg.contains("""stroke="#D0D0D0""""), s"Gridlines should be drawn, got: $svg")
+
+    // Zero cells -> zero text elements
+    assert(!svg.contains("<text"), s"Empty range should have no text elements, got: $svg")
+    assert(svg.endsWith("</svg>"), "SVG should be closed")
+  }
+
+  test("toSvg/toHtml: dimension parity for explicit column width and row height (GH-47)") {
+    // Both renderers derive px from the same RenderUtils formulas:
+    //   column chars -> px: chars * 8 + 5  (15.0 -> 125)
+    //   row pt -> px:       pt * 4/3       (30.0 -> 40)
+    val style = CellStyle.default.withFill(Fill.Solid(Color.fromRgb(200, 200, 200)))
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Styled")
+      .unsafe
+      .withCellStyle(ref"A1", style)
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(15.0)))
+      .setRowProperties(Row.from0(0), RowProperties(height = Some(30.0)))
+
+    val svg = sheet.toSvg(ref"A1:A1")
+    val html = sheet.toHtml(ref"A1:A1")
+
+    val rectRe = """<rect x="0" y="0" width="(\d+)" height="(\d+)"[^>]*class="cell"""".r
+    val (svgW, svgH) = rectRe.findFirstMatchIn(svg) match
+      case Some(m) => (m.group(1).toInt, m.group(2).toInt)
+      case None => fail(s"Could not find cell rect in: $svg")
+
+    val htmlW = """<col style="width: (\d+)px"""".r
+      .findFirstMatchIn(html)
+      .map(_.group(1).toInt)
+      .getOrElse(fail(s"Could not find col width in: $html"))
+    val htmlH = """<tr style="height: (\d+)px"""".r
+      .findFirstMatchIn(html)
+      .map(_.group(1).toInt)
+      .getOrElse(fail(s"Could not find row height in: $html"))
+
+    // Pin the exact values per the documented formulas, then assert cross-renderer parity
+    assertEquals(svgW, 125, s"SVG col width should be 15*8+5=125, got $svgW")
+    assertEquals(svgH, 40, s"SVG row height should be 30*4/3=40, got $svgH")
+    assert(math.abs(svgW - htmlW) <= 1, s"Width parity: svg=$svgW html=$htmlW")
+    assert(math.abs(svgH - htmlH) <= 1, s"Height parity: svg=$svgH html=$htmlH")
+  }
+
+  test("toSvg: shared-edge borders are both drawn overlapping — documents current behavior (GH-47)") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    // A1 right=Thick vs B1 left=Thin meet at the same grid edge (x=72).
+    // CURRENT behavior (pinned here): each cell draws its own border, so BOTH <line> elements
+    // land at identical coordinates in deterministic cell order — A1's thick line first, B1's
+    // thin line second. SVG painter's order means the later thin line paints on top.
+    // Excel instead resolves shared edges to the heavier border (thick should win) — known
+    // fidelity gap; fixing it needs a shared-edge resolution pass, not done here.
+    val thickRight = CellStyle.default.withBorder(
+      Border.none.withRight(BorderSide(BorderStyle.Thick, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val thinLeft = CellStyle.default.withBorder(
+      Border.none.withLeft(BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "L", ref"B1" -> "R")
+      .unsafe
+      .withCellStyle(ref"A1", thickRight)
+      .withCellStyle(ref"B1", thinLeft)
+
+    val svg = sheet.toSvg(ref"A1:B1")
+
+    // Lines on the shared edge x=72 (A1 spans 0..72 at default width)
+    val edgeLines = """<line x1="72\.0" y1="0\.0" x2="72\.0" y2="20\.0"[^>]*/>""".r
+      .findAllIn(svg)
+      .toList
+    val widths = edgeLines.flatMap(l =>
+      """stroke-width="(\d+)"""".r.findFirstMatchIn(l).map(_.group(1).toInt)
+    )
+    assertEquals(
+      widths,
+      List(3, 1),
+      s"Both cells draw the shared edge, thick (A1) before thin (B1), got: $svg"
+    )
+  }
+
+  test("toSvg: single-cell range on an empty sheet renders sane output (GH-47)") {
+    val sheet = Sheet("Test")
+
+    val svg = sheet.toSvg(ref"A1:A1")
+
+    assert(svg.contains("viewBox=\"0 0 72 20\""), s"Default single cell is 72x20, got: $svg")
+    val cellRectCount = """<rect[^>]*class="cell"""".r.findAllIn(svg).length
+    assertEquals(cellRectCount, 1, s"Should render exactly one cell rect, got: $svg")
+    assert(!svg.contains("<text"), s"No content -> no text elements, got: $svg")
+    assert(svg.endsWith("</svg>"), "SVG should be closed")
+  }
+
+  test("toSvg: range with all rows and columns hidden renders without crashing (GH-47)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Invisible")
+      .setColumnProperties(Column.from0(0), ColumnProperties(hidden = true))
+      .setColumnProperties(Column.from0(1), ColumnProperties(hidden = true))
+      .setRowProperties(Row.from0(0), RowProperties(hidden = true))
+      .setRowProperties(Row.from0(1), RowProperties(hidden = true))
+
+    val svg = sheet.toSvg(ref"A1:B2")
+
+    // Zero-area canvas: all widths/heights collapse to 0
+    assert(svg.contains("viewBox=\"0 0 0 0\""), s"All-hidden range should be 0x0, got: $svg")
+    // Text in hidden cells must not leak into the output
+    assert(!svg.contains("Invisible"), s"Hidden cell text must not render, got: $svg")
+    assert(svg.endsWith("</svg>"), "SVG should be closed")
+  }

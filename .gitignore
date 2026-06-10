@@ -61,6 +61,8 @@ repomix*
 ~$*.xlsx
 test-*.xlsx
 data
+# Committed real-file fixture corpus (GH-240) - overrides *.xlsx above
+!xl-ooxml/test/resources/fixtures/*.xlsx
 
 ### Benchmark Logs ###
 *.log

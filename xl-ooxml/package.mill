@@ -13,6 +13,10 @@ object `package` extends build.XLModule {
   )
 
   object test extends ScalaTests with build.XLTestModule {
+    // xl-core.test provides the shared ScalaCheck generators (com.tjclp.xl.Generators)
+    // used by the generative round-trip law (GH-240).
+    override def moduleDeps = super.moduleDeps ++ Seq(build.`xl-core`.test)
+
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.0.3",
       mvn"org.scalameta::munit-scalacheck:1.2.0",

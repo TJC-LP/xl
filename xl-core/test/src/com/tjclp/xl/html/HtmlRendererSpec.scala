@@ -672,3 +672,76 @@ class HtmlRendererSpec extends FunSuite:
     val tdCount = "<td".r.findAllIn(html).length
     assertEquals(tdCount, 3, s"Should have 3 <td> elements (1 spanning + 2 normal), got: $html")
   }
+
+  // ========== Renderer Edge Cases (GH-47) ==========
+
+  test("toHtml: empty range with column properties renders well-formed table (GH-47)") {
+    // Sheet has column metadata but zero cells: the table must still render fully.
+    val sheet = Sheet("Test")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(20.0))) // 165px
+
+    val html = sheet.toHtml(ref"A1:B5")
+
+    assert(html.contains("<table"), "Should contain table tag")
+    assert(html.contains("width: 165px"), s"Column A width should be 165px (20 chars), got: $html")
+    assert(html.contains("width: 72px"), s"Column B should use default 72px, got: $html")
+
+    val rowCount = "<tr style=\"height:".r.findAllIn(html).length
+    assertEquals(rowCount, 5, s"Should have 5 rows, got: $html")
+    assertEquals("<td".r.findAllIn(html).length, 10, s"Should have 10 cells, got: $html")
+    assertEquals("</td>".r.findAllIn(html).length, 10, "All cells should be closed")
+    assertEquals("</tr>".r.findAllIn(html).length, 5, "All rows should be closed")
+    assert(html.contains("background-color: #FFFFFF"), "Empty cells get white background")
+    assert(html.endsWith("</table>"), "Table should be closed")
+  }
+
+  test("toHtml: shared-edge borders — both declarations emitted, CSS resolves (GH-47)") {
+    import com.tjclp.xl.styles.border.BorderSide
+    // A1 right=Thick vs B1 left=Thin. The renderer emits BOTH declarations; with
+    // border-collapse: collapse the CSS conflict rule picks the wider border (3px thick),
+    // which matches Excel's heavier-border-wins behavior at shared edges. The SVG renderer,
+    // by contrast, does NOT resolve this conflict — it draws both lines overlapping and
+    // painter's order leaves the thin line on top, contradicting Excel (see the
+    // SvgRendererSpec shared-edge documenting test; reported as a fidelity gap).
+    val thickRight = CellStyle.default.withBorder(
+      Border.none.withRight(BorderSide(BorderStyle.Thick, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val thinLeft = CellStyle.default.withBorder(
+      Border.none.withLeft(BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "L", ref"B1" -> "R")
+      .unsafe
+      .withCellStyle(ref"A1", thickRight)
+      .withCellStyle(ref"B1", thinLeft)
+
+    val html = sheet.toHtml(ref"A1:B1")
+
+    assert(html.contains("border-collapse: collapse"), "Table must use border-collapse")
+    assert(
+      html.contains("border-right: 3px solid #000000"),
+      s"A1 thick right border should be declared, got: $html"
+    )
+    assert(
+      html.contains("border-left: 1px solid #000000"),
+      s"B1 thin left border should be declared, got: $html"
+    )
+  }
+
+  test("toHtml: range with all rows and columns hidden renders empty table body (GH-47)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Invisible")
+      .setColumnProperties(Column.from0(0), ColumnProperties(hidden = true))
+      .setColumnProperties(Column.from0(1), ColumnProperties(hidden = true))
+      .setRowProperties(Row.from0(0), RowProperties(hidden = true))
+      .setRowProperties(Row.from0(1), RowProperties(hidden = true))
+
+    val html = sheet.toHtml(ref"A1:B2")
+
+    assert(html.contains("<table"), "Should still emit a table")
+    assert(!html.contains("Invisible"), s"Hidden content must not render, got: $html")
+    // Hidden rows are excluded entirely; hidden columns are declared at zero width
+    assertEquals("<tr".r.findAllIn(html).length, 0, s"Hidden rows should be excluded, got: $html")
+    assertEquals("width: 0px".r.findAllIn(html).length, 2, s"Both cols should be 0px, got: $html")
+    assert(html.endsWith("</table>"), "Table should be closed")
+  }
