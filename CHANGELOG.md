@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] "Scripting" - 2026-06-10
+
+The scripting release: one-import prelude, total-by-semantics APIs, whole-workbook
+recalculation with per-cell error reporting, the xl-scripting Claude Code skill with
+compile-verified snippets, and the render/style fidelity needed to reproduce professional
+(banker-grade) templates exactly. The new gate machinery (external-consumer probes, examples
+CI, adversarial reviews, property seeds) surfaced and fixed eight pre-existing bugs.
+
 ### Added (render & style fidelity, #254-#260)
 
 - **Per-side border DSL + range outlines** (#257): `CellStyle.borderTop/borderBottom/borderLeft/
@@ -36,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rules no longer declare fonts; every text path emits explicit, unquoted font attributes.
 - **SVG underline dropped** (#256): `Font.underline` now emits `text-decoration="underline"`
   on SVG text (HTML already had it), so underlined headers survive PNG/PDF export.
+- **Parser ate keyword-prefixed names** (#268): `=SUM(Notes1!A1:A2)` parsed as
+  `=SUM(NOT(es1!A1:A2))` — logical keywords (NOT/AND/OR) now require a word boundary; sheets
+  literally named `NOT`/`AND`/`OR` parse as references.
+- **Verbatim copy always failed** (#261): the read digest stopped at the ZIP central directory
+  while the copy check hashed the whole file, so writing an untouched workbook to a new path
+  errored loudly. Untouched copies are byte-identical again; tampering is still refused.
+- **excel"" printed raw formulas through the prelude**: the evaluator's `evaluating` display
+  strategy never survived wildcard export; the prelude now selects it explicitly, so scripts
+  display computed, NumFmt-formatted values.
 
 ### Changed
 
