@@ -1,45 +1,48 @@
 
 # Examples — End‑to‑End Snippets
 
+> **Start here**: [`examples/scripting_tour.sc`](../../examples/scripting_tour.sc) is the canonical, runnable tour of the scripting prelude — one import, compile-time refs, patch folds, recalculation, typed reads, and the `.unsafe` boundary in ~80 lines. The full catalog of runnable scripts lives in [`examples/README.md`](../../examples/README.md), and the prose companion is the [Scripting Guide](scripting.md).
+
+Most snippets below use the **scripting prelude** (`import com.tjclp.xl.scripting.{*, given}`), the one-import path for scripts. Where an example deliberately demonstrates the **pure library import** (`com.tjclp.xl.{*, given}` — no `.unsafe`, no sync IO), it is labeled as such. Never combine the two imports in one file.
+
 ## 1) Export a simple table
+
 ```scala
-import com.tjclp.xl.{*, given}
-import com.tjclp.xl.unsafe.*
-import com.tjclp.xl.io.ExcelIO
-import cats.effect.IO
-import cats.effect.unsafe.implicits.global
-import java.nio.file.Path
+import com.tjclp.xl.scripting.{*, given}
 
 final case class Person(name: String, age: Int, email: String) derives CanEqual
 val people = Vector(Person("Ada", 34, "ada@ex.com"), Person("Linus", 55, "linus@ex.com"))
 
-// Build sheet with headers
-val sheet = Sheet("People").unsafe
-  .put(
-    ref"A1" -> "Name",
-    ref"B1" -> "Age",
-    ref"C1" -> "Email"
-  )
-  .unsafe
-
-// Add data rows
-val sheetWithData = people.zipWithIndex.foldLeft(sheet) { case (sh, (p, i)) =>
-  val row = i + 2  // Row 2, 3, ...
-  sh.put(
-    ref"A$row" -> p.name,
-    ref"B$row" -> p.age,
-    ref"C$row" -> p.email
-  ).unsafe
+// Headers + data rows: fold everything into one Patch, apply once
+val header = (ref"A1" := "Name") ++ (ref"B1" := "Age") ++ (ref"C1" := "Email")
+val rows = people.zipWithIndex.foldLeft(Patch.empty) { case (acc, (p, i)) =>
+  val r = ref"A2".down(i) // total navigation — no Either in the loop
+  acc ++ (r := p.name) ++ (r.right(1) := p.age) ++ (r.right(2) := p.email)
 }
 
-val workbook = Workbook(Vector(sheetWithData))
-ExcelIO.instance[IO].write(workbook, Path.of("people.xlsx")).unsafeRunSync()
+val sheet = Sheet("People").put(header ++ rows)
+Excel.write(Workbook(sheet), "people.xlsx")
+```
+
+For production code with Cats Effect (no sync facade), use the pure import + `ExcelIO`:
+
+```scala
+// Pure library import (deliberately NOT the scripting prelude)
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.io.ExcelIO
+import cats.effect.IO
+import java.nio.file.Path
+
+def write(wb: Workbook, path: Path): IO[Unit] =
+  ExcelIO.instance[IO].write(wb, path)
 ```
 
 ## 2) Formula Parsing & Typed AST
 
+This example uses the **pure library import** — the formula AST works identically under the prelude.
+
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.{*, given}
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, TExpr, ParseError}
 
 // ==================== Parsing Formula Strings ====================
@@ -116,37 +119,43 @@ parsedFormula.foreach { expr =>
 }
 ```
 
-**Note**: Formula evaluation is now **fully operational** (WI-07, WI-08, WI-09 complete). See runnable example scripts in `/examples/` directory.
+**Note**: Evaluation is fully operational — 104 functions, whole-workbook `recalculate()`, dependency graphs with cycle detection. See the runnable scripts below.
 
-## 3) Formula System Example Scripts
+## 3) Example Scripts Catalog
 
-The `/examples/` directory contains ready-to-run scripts demonstrating the complete formula system (parsing, evaluation, dependency analysis, and cycle detection).
+The `/examples/` directory contains ready-to-run scripts. Highlights (full catalog: [`examples/README.md`](../../examples/README.md)):
+
+### Scripting Tour (start here)
+
+**File**: `examples/scripting_tour.sc`
+
+Canonical tour of the scripting prelude — ONE import gives a script everything:
+- Compile-time literals (`ref"A1"`, `fx"..."`) and total navigation
+- Bulk generation by folding data into a `Patch`
+- Range fill (`ref"E2:E4" := 0`), smart detection (`"$1,234.56".toFormatted`)
+- `recalculate()` with per-cell errors, typed reads, the `excel""` display interpolator
+- Sync `Excel` IO and the one `.unsafe` boundary
 
 ### Quick Start (5 minutes)
 
-**File**: `examples/quick-start.sc`
+**File**: `examples/quick_start.sc`
 
-Get up and running with formula evaluation in 5 minutes. Demonstrates:
+Formula system in 5 minutes (pure import):
 - Parse Excel formulas to typed AST
 - Evaluate formulas against sheets
 - Handle errors gracefully (Either types, no exceptions)
 - Detect circular references automatically
 - Evaluate all formulas safely with dependency checking
 
-```bash
-scala-cli examples/quick-start.sc
-```
-
 **Key APIs shown**:
 - `FormulaParser.parse("=SUM(A1:A10)")`
-- `sheet.evaluateFormula(formula)`
 - `sheet.evaluateCell(ref)`
 - `sheet.evaluateWithDependencyCheck()`
 - `DependencyGraph.detectCycles(graph)`
 
-### Financial Modeling (~200 LOC)
+### Financial Modeling
 
-**File**: `examples/financial-model.sc`
+**File**: `examples/financial_model.sc`
 
 Complete 3-year income statement with:
 - Revenue projections with growth rates
@@ -154,110 +163,57 @@ Complete 3-year income statement with:
 - Financial ratios (gross margin, operating margin, net margin)
 - Dependency chain analysis (evaluation order)
 
-**Perfect for**: FP&A teams, finance applications, reporting automation
+### Dependency Analysis
 
-**Demonstrates**:
-- Complex formula chains (Revenue → COGS → Gross Profit → OpEx → Net Income)
-- Division operations (margin percentages)
-- Dependency analysis (impact of revenue changes)
-- Production-ready evaluation with cycle detection
-
-### Dependency Analysis (~100 LOC)
-
-**File**: `examples/dependency-analysis.sc`
+**File**: `examples/dependency_analysis.sc`
 
 Advanced dependency graph features:
 - Build dependency graphs from formula cells
 - Detect circular references with precise cycle paths (Tarjan's SCC)
 - Compute topological evaluation order (Kahn's algorithm)
-- Query precedents and dependents (O(1) lookups)
+- Query precedents and dependents
 - Perform impact analysis (transitive dependencies)
 
-**Perfect for**: Meta-programming, formula auditing, testing frameworks
+### Data Validation
 
-**Demonstrates**:
-- `DependencyGraph.fromSheet(sheet)`
-- `DependencyGraph.detectCycles(graph)` (with 4 cycle scenarios)
-- `DependencyGraph.topologicalSort(graph)`
-- `DependencyGraph.precedents/dependents(graph, ref)`
-- Transitive dependency calculation
-- What-if analysis (change propagation)
-
-### Data Validation (~120 LOC)
-
-**File**: `examples/data-validation.sc`
+**File**: `examples/data_validation.sc`
 
 Quality control and error detection:
 - Validate data ranges (MIN/MAX bounds checking)
 - Detect missing data (COUNT vs expected)
-- Normalize text (UPPER/LOWER for consistency)
-- Validate text length (LEN for field constraints)
+- Normalize text (UPPER/LOWER), validate lengths (LEN)
 - Handle division by zero gracefully
 
-**Perfect for**: ETL pipelines, data quality teams, validation frameworks
+### Sales Pipeline Analytics
 
-**Demonstrates**:
-- Validation formulas: `IF(AND(value>=0, value<=100), "Valid", "INVALID")`
-- Completeness checks: `COUNT(range) = expected`
-- Text operations: `UPPER`, `LEFT`, `RIGHT`, `LEN`
-- Error handling patterns
-
-### Sales Pipeline Analytics (~150 LOC)
-
-**File**: `examples/sales-pipeline.sc`
+**File**: `examples/sales_pipeline.sc`
 
 CRM and sales operations:
 - Pipeline funnel with stage-by-stage conversion rates
 - Tiered commission calculations (nested IF)
 - Quota attainment tracking
-- Average deal size metrics
 
-**Perfect for**: Sales teams, RevOps, CRM applications
+### Text Functions
 
-**Demonstrates**:
-- Conversion funnels: `current_stage / previous_stage`
-- Tiered logic: `IF(x<=t1, rate1, IF(x<=t2, rate2, rate3))`
-- Safe division (automatic zero handling)
-- Range aggregation across pipeline stages
-
-### Comprehensive Evaluator Demo
-
-**File**: `examples/evaluator-demo.sc`
-
-Complete formula system tour:
-- Low-level API (Evaluator.eval for programmatic use)
-- High-level API (Sheet extensions)
-- All 21 built-in functions
-- Error handling patterns
-- Dependency analysis
-- Integration with fx macro
-
-**Perfect for**: Learning all formula system capabilities systematically
+**File**: `examples/text_functions_demo.sc` — TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT.
 
 ### Running the Examples
 
-All example scripts use `scala-cli` with explicit dependencies:
+Examples resolve the library via the shared `examples/project.scala`, so publish locally first:
 
 ```bash
-# Option 1: Run directly (downloads dependencies)
-scala-cli examples/quick-start.sc
-
-# Option 2: Publish locally first (faster, uses local build)
-./mill xl-core.publishLocal && ./mill xl-evaluator.publishLocal
-scala-cli examples/quick-start.sc
-
-# Run specific examples
-scala-cli examples/financial-model.sc
-scala-cli examples/dependency-analysis.sc
-scala-cli examples/data-validation.sc
-scala-cli examples/sales-pipeline.sc
-scala-cli examples/evaluator-demo.sc
-scala-cli examples/text_functions_demo.sc   # TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT
+./mill __.publishLocal
+scala-cli run examples/scripting_tour.sc
+scala-cli run examples/quick_start.sc
+scala-cli run examples/financial_model.sc
 ```
 
-## 4) Chart spec (Future - WI-11)
+CI compiles every script via `scripts/test-examples.sh` (and runs a curated subset), so the catalog cannot silently rot.
+
+## 4) Chart spec (Future — #222)
 ```scala
-// Note: Chart support is planned for WI-11. This is a design preview.
+// Note: Chart support is a 0.12.0 candidate (GH #222, on the DrawingML layer #221).
+// This is a design preview only.
 import com.tjclp.xl.{*, given}
 // import com.tjclp.xl.chart.*  // Future module
 

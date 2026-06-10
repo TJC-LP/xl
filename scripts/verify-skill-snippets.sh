@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Extract every fenced ```scala block that begins with `//> using` from the xl-scripting skill
-# and compile it with scala-cli. Blocks without the directive header are fragments and skipped.
+# and docs/reference/scripting.md, and compile it with scala-cli. Blocks without the directive
+# header are fragments and skipped.
 #
 # Usage:
 #   scripts/verify-skill-snippets.sh           # compile against the pinned Maven version
@@ -15,7 +16,8 @@ SKILL_DIR="plugin/skills/xl-scripting"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-for md in "$SKILL_DIR/SKILL.md" "$SKILL_DIR/reference/RECIPES.md" "$SKILL_DIR/reference/API.md"; do
+for md in "$SKILL_DIR/SKILL.md" "$SKILL_DIR/reference/RECIPES.md" "$SKILL_DIR/reference/API.md" \
+  "docs/reference/scripting.md"; do
   [[ -f "$md" ]] || continue
   awk -v outdir="$TMP" -v src="$(basename "$md" .md)" '
     BEGIN { inblock = 0; n = 0 }
@@ -66,7 +68,7 @@ done
 
 if (( ${#FAILED[@]} > 0 )); then
   echo "" >&2
-  echo "✗ ${#FAILED[@]} skill snippet(s) failed to compile" >&2
+  echo "✗ ${#FAILED[@]} snippet(s) failed to compile" >&2
   exit 1
 fi
-echo "✓ All skill snippets compile"
+echo "✓ All skill/doc snippets compile"

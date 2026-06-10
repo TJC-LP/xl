@@ -142,22 +142,24 @@ excel.readStream(path)
 **Bad** (N intermediate sheets):
 ```scala
 (1 to 10000).foldLeft(sheet) { (s, i) =>
-  s.put(ref"A$i", CellValue.Number(i))
+  s.put(ref"A1".down(i - 1), i)
 }
 // Creates 10,000 intermediate Sheet instances
 ```
 
-**Good** (single putAll):
+**Good** (fold into a Patch, apply once):
 ```scala
-val cells = (1 to 10000).map(i => Cell(ref"A$i", CellValue.Number(i)))
-sheet.put(cells)
+val patch = (1 to 10000).foldLeft(Patch.empty) { (p, i) =>
+  p ++ (ref"A1".down(i - 1) := i)
+}
+sheet.put(patch)
 // Creates 1 Sheet instance
 ```
 
-**Best** (batch put with codecs):
+**Best** (batch varargs put with codecs):
 ```scala
 sheet.put(
-  (1 to 10000).map(i => ref"A$i" -> i)*
+  (1 to 10000).map(i => ARef.from0(0, i - 1) -> i)*
 )
 // Type-safe, auto-format inference, single allocation
 ```
@@ -170,16 +172,16 @@ sheet.put(
 ```scala
 var s = sheet
 for i <- 1 to 1000 do
-  s = s.put(ref"A$i", s"Row $i")  // 1000 Sheet instances
-  s = s.merge(ref"A$i:B$i")       // 1000 more Sheet instances
+  val r = ref"A1".down(i - 1)
+  s = s.put(r, s"Row $i")                  // 1000 Sheet instances
+  s = s.merge(CellRange(r, r.right(1)))    // 1000 more Sheet instances
 ```
 
 **Good** (deferred with Patch):
 ```scala
-import com.tjclp.xl.dsl.*
-
-val patch = (1 to 1000).foldLeft(Patch.empty: Patch) { (p, i) =>
-  p ++ (ref"A$i" := s"Row $i") ++ ref"A$i:B$i".merge
+val patch = (1 to 1000).foldLeft(Patch.empty) { (p, i) =>
+  val r = ref"A1".down(i - 1)
+  p ++ (r := s"Row $i") ++ CellRange(r, r.right(1)).merge
 }
 sheet.put(patch)  // Execute once at end
 ```
@@ -192,14 +194,15 @@ sheet.put(patch)  // Execute once at end
 
 **Manual** (verbose, error‑prone):
 ```scala
-import com.tjclp.xl.*
+import com.tjclp.xl.{*, given}
+import java.time.{LocalDate, LocalDateTime}
 
-val dateStyle = CellStyle.default.numFmt(NumFmt.Date)
-val decimalStyle = CellStyle.default.numFmt(NumFmt.Number)
+val dateStyle = CellStyle.default.withNumFmt(NumFmt.Date)
+val decimalStyle = CellStyle.default.withNumFmt(NumFmt.Decimal)
 
 sheet
   .put(ref"A1", CellValue.Text("Revenue"))
-  .put(ref"B1", CellValue.DateTime(LocalDate.of(2025, 11, 10)))
+  .put(ref"B1", CellValue.DateTime(LocalDate.of(2025, 11, 10).atStartOfDay))
   .withCellStyle(ref"B1", dateStyle)    // Must manually set format
   .put(ref"C1", CellValue.Number(BigDecimal("1000000.50")))
   .withCellStyle(ref"C1", decimalStyle) // Must manually set format
@@ -207,13 +210,13 @@ sheet
 
 **Batch `put` with codecs** (clean, automatic):
 ```scala
-import com.tjclp.xl.*
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.{*, given}
+import java.time.LocalDate
 
 sheet.put(
   ref"A1" -> "Revenue",                         // String
   ref"B1" -> LocalDate.of(2025, 11, 10),        // Auto: date format
-  ref"C1" -> BigDecimal("1000000.50")           // Auto: number format
+  ref"C1" -> BigDecimal("1000000.50")           // Auto: decimal format
 )
 ```
 
@@ -252,7 +255,7 @@ database.stream()  // fs2.Stream[IO, Row]
 **Current** (after lazy optimizations):
 ```scala
 // Already optimized! range.cells returns Iterator
-sheet.fillBy(range"A1:Z100") { (col, row) =>
+sheet.fillBy(ref"A1:Z100") { (col, row) =>
   CellValue.Text(s"${col.toLetter}${row.index1}")
 }
 // No intermediate Vector allocation
@@ -292,16 +295,15 @@ sheet.put(newCells)
 
 ## Common Performance Pitfalls
 
-### Pitfall 1: Fold with Put Instead of PutAll
+### Pitfall 1: Fold with Put Instead of Batch Put
 ```scala
 // ❌ Bad: O(n) sheet copies
 val result = data.foldLeft(sheet) { (s, item) =>
-  s.put(ref"A${item.id}", item.name)
+  s.put(ARef.from0(0, item.id), item.name)
 }
 
 // ✅ Good: Single sheet copy
-val cells = data.map(item => Cell(ref"A${item.id}", CellValue.Text(item.name)))
-sheet.put(cells)
+sheet.put(data.map(item => ARef.from0(0, item.id) -> item.name)*)
 ```
 
 **Impact**: 10-20x faster for large datasets
@@ -341,7 +343,7 @@ excel.read(largeFile)
 - **Prototyping**: Optimize later
 
 ### Consider Optimizing
-- **10k-100k rows**: Use batching (putAll, putMixed)
+- **10k-100k rows**: Use batching (varargs `Sheet.put` / Patch folds)
 - **Complex styling**: Use Patch composition
 - **Repeated operations**: Cache usedRange, style registries
 
@@ -373,7 +375,7 @@ excel.read(largeFile)
 
 ## Performance Roadmap
 
-### Current (As of 2025-11-20)
+### Current (as of 0.11.0, 2026-06-10)
 - ✅ Streaming write: O(1) memory, ~88k rows/sec
 - ✅ Streaming read: O(1) memory via `fs2.io.readInputStream` (+ SST materialized once)
 - ✅ Lazy optimizations: 30-75% speedup (memoized canonicalKey, single-pass usedRange)
@@ -407,20 +409,18 @@ val sheet = Sheet("Data")
   .put(ref"A1", "Title")
   .put(ref"B1", 100)
 
-ExcelIO.instance.write[IO](Workbook(Vector(sheet)), path).unsafeRunSync()
+ExcelIO.instance[IO].write(Workbook(Vector(sheet)), path).unsafeRunSync()
 ```
 
 ### Medium Workbooks (10k-100k rows)
 ```scala
 // Use batching
-import com.tjclp.xl.codec.syntax.*
-
 val cells = (1 to 100_000).map(i =>
-  ref"A$i" -> s"Row $i"
+  ARef.from0(0, i - 1) -> s"Row $i"
 )
 val sheet = Sheet("Data").put(cells*)
 
-ExcelIO.instance.write[IO](Workbook(Vector(sheet)), path).unsafeRunSync()
+ExcelIO.instance[IO].write(Workbook(Vector(sheet)), path).unsafeRunSync()
 ```
 
 ### Large Workbooks (100k+ rows, minimal styling)

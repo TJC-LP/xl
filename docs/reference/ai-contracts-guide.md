@@ -1,5 +1,7 @@
 # AI Contracts Guide
 
+> **Adoption status (2026-06-10)**: the contract format below is in active use, primarily in `xl-ooxml` (parsers/serializers: `SharedStrings`, `XlsxReader`, `StyleSerializer`, ...) and `xl-cats-effect` (`StreamingXmlWriter`) — about 20 functions today. Treat "always use for public APIs" as the aspiration, not the current state. Note that Scalafmt re-flows Scaladoc, so section keywords may not start a line in the source (e.g. `DETERMINISTIC: Yes (...) ERROR CASES: None` on one line); the keywords, not the line breaks, are the format.
+
 ## Purpose
 
 AI contracts are structured Scaladoc comments that make code behavior explicit and machine-readable. They help:

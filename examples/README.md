@@ -29,6 +29,12 @@ scala-cli run examples/<example-name>.sc
 
 ## Example Catalog
 
+### Start Here: Scripting Prelude
+
+| Example | Description |
+|---------|-------------|
+| `scripting_tour.sc` | **Canonical tour of the one-import scripting prelude** (`com.tjclp.xl.scripting.{*, given}`) — source of truth for the xl-scripting skill snippets |
+
 ### Core API
 
 | Example | Description |
@@ -42,6 +48,7 @@ scala-cli run examples/<example-name>.sc
 |---------|-------------|
 | `quick_start.sc` | Formula system in 5 minutes: parsing, evaluation, round-trip |
 | `dependency_analysis.sc` | Formula dependency graph analysis and visualization |
+| `text_functions_demo.sc` | Text functions (TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT) with expected-vs-actual output |
 
 ### Real-World Applications
 
@@ -52,6 +59,17 @@ scala-cli run examples/<example-name>.sc
 | `data_validation.sc` | Data quality validation patterns |
 | `table_demo.sc` | Excel tables with AutoFilter and styling |
 | `resize_demo.sc` | Row/column sizing and HTML/SVG export |
+
+### Streaming & Performance
+
+| Example | Description |
+|---------|-------------|
+| `big_demo.sc` | Streams 1,000,000 rows with a 256MB heap — O(1) memory write + read |
+| `verify_big.sc` | Verifies the million-row output via streaming reads (sample rows + total count) |
+| `streaming_benchmark.sc` | Streaming write benchmark: single-pass vs two-pass |
+| `streaming_pressure_test.sc` | O(1) memory pressure test for streaming reads over large datasets |
+| `calamine_comparison.sc` | Read-only streaming benchmark vs Rust's calamine (needs a local 1M-row NYC 311 sample) |
+| `nyc311_roundtrip.sc` | Round-trip benchmark: stream-read 1M rows, stream-write, verify (same NYC 311 sample) |
 
 ### Test Utilities
 
@@ -64,6 +82,17 @@ scala-cli run examples/<example-name>.sc
 ---
 
 ## Featured Examples
+
+### scripting_tour.sc
+
+```bash
+scala-cli run examples/scripting_tour.sc
+```
+
+The **canonical prelude tour** — one import (`com.tjclp.xl.scripting.{*, given}`) gives a script
+the core API, DSL operators, compile-time literals, formula evaluation, sync `Excel` IO, streaming
+`ExcelIO`, smart value detection, and the `.unsafe` boundary. Compile-verified by
+`scripts/test-examples.sh` and the source of truth for snippets in the xl-scripting skill.
 
 ### demo.sc
 

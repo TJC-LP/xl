@@ -1,3 +1,5 @@
+> 📜 **HISTORICAL** — dated review artifact (written when XL was at Scala 3.7 / 77 tests, pre-OOXML-MVP), kept for the record. Do not treat its status claims or API sketches as current; see [STATUS.md](../STATUS.md) and [plan/roadmap.md](../plan/roadmap.md).
+
 # GPT-5-Pro Review Prompt: XL Query API Design
 
 ## Context: About XL

@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: CI runs the full Mill test graph across the library, evaluator, CLI, and support modules. Use `./mill __.test` as the authoritative count.
+**Current Status**: CI runs the full Mill test graph across the library, evaluator, CLI, and support modules — **3005+ tests** as of 0.11.0. Use `./mill __.test` as the authoritative count.
 
 ## Test Infrastructure
 
@@ -16,14 +16,15 @@ xl-ooxml/test/src/com/tjclp/xl/ooxml/
 xl-cats-effect/test/src/com/tjclp/xl/io/
 xl-evaluator/test/src/com/tjclp/xl/formula/
 xl-cli/test/src/com/tjclp/xl/cli/
-xl-testkit/test/src/com/tjclp/xl/testkit/
+xl-agent/test/src/
+xl/test/src/xlprelude/          (external-consumer probes for the scripting prelude)
 ```
 
 ## Test Coverage by Module
 
 ### xl-core: domain, style, codec, optics, and law suites ✅
 
-#### Addressing Laws (17 tests)
+#### Addressing Laws
 - **Column/Row round-trips**: `from0` → `index0` identity
 - **ARef packing**: 64-bit (row, col) ↔ Long bijection
 - **A1 notation**: `parse` → `toA1` round-trip for all valid refs
@@ -31,7 +32,7 @@ xl-testkit/test/src/com/tjclp/xl/testkit/
 - **Range contains**: Point-in-rectangle tests
 - **Property-based**: Generated Column (0-16383), Row (0-1048575)
 
-#### Patch Laws (21 tests)
+#### Patch Laws
 - **Monoid associativity**: `(p1 |+| p2) |+| p3 == p1 |+| (p2 |+| p3)`
 - **Monoid identity**: `p |+| Patch.Empty == p`
 - **Idempotence**: `Put(ref, v1) |+| Put(ref, v2)` keeps v2
@@ -39,7 +40,7 @@ xl-testkit/test/src/com/tjclp/xl/testkit/
 - **Error handling**: Invalid patches return `Left[XLError]`
 - **Batch composition**: `Patch.Batch` flattens correctly
 
-#### Style System (60 tests)
+#### Style System
 - **Unit conversions**: `Pt ↔ Px ↔ Emu` bidirectional laws
 - **Color parsing**: Hex, RGB, ARGB, theme color parsing
 - **Style canonicalization**: `canonicalKey` idempotence
@@ -48,13 +49,13 @@ xl-testkit/test/src/com/tjclp/xl/testkit/
 - **Font/Fill/Border**: Builder patterns and deduplication
 - **NumFmt**: Pre-defined format IDs and custom formats
 
-#### DateTime (8 tests)
+#### DateTime
 - **Excel serial numbers**: LocalDate ↔ Double conversion
 - **1900 leap year bug**: Compatibility with Excel's quirk
 - **DateTime round-trips**: LocalDateTime ↔ serial + fraction
 - **Epoch correctness**: 1899-12-30 baseline
 
-#### CellCodec (42 tests)
+#### CellCodec
 - **Identity laws**: `read(write(v)) == Right(Some(v))` for all 9 types
 - **Type safety**: `readTyped[Wrong]` returns `Left[CodecError]`
 - **Auto-formatting**: LocalDate → NumFmt.Date, BigDecimal → NumFmt.Decimal
@@ -62,7 +63,7 @@ xl-testkit/test/src/com/tjclp/xl/testkit/
 - **Error cases**: Parse failures, type mismatches
 - **Round-trip precision**: BigDecimal maintains precision
 
-#### Batch Operations (16 tests)
+#### Batch Operations
 - **Batch `Sheet.put`**: Heterogeneous updates with type-safe codecs (replaces old `putMixed`)
 - **Style deduplication**: Multiple cells with same format share style
 - **Given conversions**: Implicit codec resolution
@@ -73,14 +74,14 @@ xl-testkit/test/src/com/tjclp/xl/testkit/
 - **Formatted literals**: `money"$1,234.56"`, `percent"45.5%"`, `date"2025-11-10"`, `accounting"-$500.00"`
 - **Macro expansion**: Compile-time parsing verified
 
-#### Optics (34 tests)
+#### Optics
 - **Lens laws**: `get ∘ set == id`, `set(get(s), s) == s`, `set(set(s, a), b) == set(s, b)`
 - **Optional laws**: Similar to Lens for partial updates
 - **Focus DSL**: `sheet.focus(ref).modify(f)` correctness
 - **Real-world scenarios**: Invoice updates, financial model edits
 - **Compose**: Lens/Optional composition verified
 
-#### RichText (5 tests)
+#### RichText
 - **Composition**: `run1 + run2` combines correctly
 - **DSL extensions**: `.bold`, `.italic`, `.red`, `.size()` work
 - **Whitespace**: Preserved correctly with `xml:space="preserve"`
@@ -199,7 +200,7 @@ property("get-set") {
 ```bash
 ./mill xl-core.test.testOnly com.tjclp.xl.AddressingSpec
 ./mill xl-core.test.testOnly com.tjclp.xl.PatchSpec
-./mill xl-ooxml.test.testOnly com.tjclp.xl.ooxml.RoundTripSpec
+./mill xl-ooxml.test.testOnly com.tjclp.xl.ooxml.OoxmlRoundTripSpec
 ```
 
 ### CI Integration
@@ -208,15 +209,20 @@ GitHub Actions runs:
 2. `./mill __.compile` (Compilation check)
 3. `./mill __.test` (All test modules)
 
-## Coverage Goals
+## Test Counts by Module
 
-| Module | Lines | Coverage | Status |
-|--------|-------|----------|--------|
-| xl-core | ~3500 | ~90% | ✅ Excellent |
-| xl-macros | ~400 | ~95% | ✅ Excellent |
-| xl-ooxml | ~1800 | ~85% | ✅ Good |
-| xl-cats-effect | ~500 | ~80% | ✅ Good |
-| **Total** | **~6200** | **~88%** | **✅ Excellent** |
+As of 0.11.0 (`./mill show __.test`; macros are part of xl-core — there is no separate xl-macros module):
+
+| Module | Tests |
+|--------|-------|
+| xl-evaluator | 1198 |
+| xl-core | 971 |
+| xl-ooxml | 381 |
+| xl-cli | 308 |
+| xl-cats-effect | 76 |
+| xl-agent | 54 |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 17 |
+| **Total** | **3005** (3004 passing + 1 ignored) |
 
 ## Test Quality Metrics
 

@@ -1,5 +1,7 @@
 # OOXML Research & Quick Reference
 
+> **Status (2026-06-10)**: pre-implementation research record, kept for OOXML spec reference. Its design *recommendations* are historical — several were deliberately superseded (e.g. "don't ship a full evaluator in v1.0": xl now ships a 104-function evaluator with whole-workbook recalculation). Trust [STATUS.md](../STATUS.md) and the code for what xl does today; trust this file for OOXML part/relationship details.
+
 Comprehensive research on OOXML (Office Open XML) SpreadsheetML specification with concrete API sketches and implementation guidance.
 
 ---

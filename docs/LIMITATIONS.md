@@ -1,9 +1,11 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2026-06-07
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**104 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes).
+**Last Updated**: 2026-06-10
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**104 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes); scripting prelude + whole-workbook recalculation + print setup authoring (0.11.0).
 
-> **Note (0.10.0):** Sections below predate the 0.10.0 "Trust & Author" release and may understate current capabilities. Hyperlinks (#9) and named ranges (#15) are now **supported**; inline worksheet elements like data validation (#11) are now **preserved through edits** (authoring still pending). See [plan/v0.10.0-execution.md](plan/v0.10.0-execution.md).
+> **Note (0.11.0):** Sections below largely predate the 0.10.0 "Trust & Author" and 0.11.0 "Scripting" releases and may understate current capabilities. Hyperlinks (#9) and named ranges (#15) are **supported**; inline worksheet elements like data validation (#11) are **preserved through edits** (authoring still pending); print setup is **partially supported** as of 0.11.0 (#16). 0.11.0 also added the scripting prelude (`com.tjclp.xl.scripting`), whole-workbook `recalculate` with per-cell errors, per-side borders/outlines, and sheet view settings — see the [CHANGELOG](../CHANGELOG.md). For the 0.10.0 rationale, see [archive/plan/v0.10.0-execution.md](archive/plan/v0.10.0-execution.md).
+>
+> **Known open issues** (GitHub): leading `=+` formula prefix rejected (#271), trailing empty number-format sections (#262), quoting of cell-ref-shaped sheet names (#263), streaming StylePatcher indent (#264), SaxStax DirectSaxEmitter metadata gaps (#265), even/first page headers + fitToPage (#266), charts (#222), drawings (#221).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -36,13 +38,13 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 - ✅ **Mill build system**: Fast, reliable builds
 - ✅ **Scalafmt integration**: Consistent code formatting
 - ✅ **GitHub Actions CI**: Automated testing
-- ✅ **Comprehensive docs**: README, CLAUDE.md, 29 plan files
+- ✅ **Comprehensive docs**: README, CLAUDE.md, reference + design guides under `docs/`
 - ✅ **Property-based testing**: ScalaCheck generators for all core types
 - ✅ **Law verification**: Monoid laws, round-trip laws, invariants
 
 ---
 
-## Recently Completed ✅ (This Session)
+## Recently Completed ✅
 
 ### Style Application End-to-End
 **Completed**: 2025-11-10 (P4 Days 1-3)
@@ -118,10 +120,9 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 #### 6. Formula System ✅ **PRODUCTION READY**
 **Status**: Complete (WI-07, WI-08, WI-09a-h + TJC-351 cross-sheet formulas)
 **Features**: Parser, evaluator, **104 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, XIRR, XNPV, and dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER), dependency graph, cycle detection, cross-sheet references
-**Plan**: [Formula System](plan/formula-system.md)
 **Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions + Cross-Sheet Formulas
 
-**What Works** (Production Ready - 280+ tests):
+**What Works** (Production Ready — 1198 xl-evaluator tests):
 ```scala
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, Evaluator}
 import com.tjclp.xl.formula.SheetEvaluator.*
@@ -153,15 +154,17 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 **Capabilities**:
 - ✅ **Parsing** (WI-07): Typed GADT AST (TExpr), FormulaParser, FormulaPrinter, round-trip laws (57 tests)
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics (58 tests)
-- ✅ **104 Built-in Functions** (the category breakdown below is representative and predates the 0.10.0 additions — IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, and dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER):
+- ✅ **104 Built-in Functions** (complete current registry, verified against `xl functions`):
   - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
-  - **Conditional** (7): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
-  - **Logical** (9): IF, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
-  - **Text** (11): CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, SUBSTITUTE, TEXT, VALUE
-  - **Date** (13): TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
+  - **Statistical** (5): LARGE, SMALL, RANK, PERCENTILE, QUARTILE
+  - **Conditional** (9): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, SUMPRODUCT
+  - **Logical / Selection** (13): IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
+  - **Text** (12): CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE
+  - **Date** (12): TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
   - **Math** (16): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
   - **Financial** (9): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
-  - **Lookup** (4): VLOOKUP, XLOOKUP, INDEX, MATCH
+  - **Lookup / Reference** (11): VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+  - **Dynamic Arrays** (5): TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
 - ✅ **Dependency Graph** (WI-09d - 52 tests):
   - Tarjan's SCC algorithm: O(V+E) cycle detection
   - Kahn's algorithm: O(V+E) topological sort
@@ -182,7 +185,8 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - ⏳ Extended function library (300+ Excel functions) - WI-09e+
 - ⏳ Array formulas - Future work
 - ⏳ Structured references (Table[@Column]) - Requires WI-10 integration
-- ⏳ Quoted sheet names in formulas (`='Q1 Report'!A1`) - Parser support pending
+- ✅ Quoted sheet names in formulas (`='Q1 Report'!A1`) are parsed and printed; quoting of sheet names *shaped like cell refs* is tracked in #263
+- ⏳ Leading `=+` formula prefix (legacy Lotus style) is rejected by the parser - #271
 - 🛡️ **Formula depth cap (GH-56 totality guard):** nesting + operator-chain depth is capped at 256 levels so pathological input returns `ParseError.NestingTooDeep` instead of `StackOverflowError`. Excel allows 64 nesting levels and no operator-chain limit (within 8192 chars); xl additionally counts each operator in a *flat, paren-less* chain, so a chain of 256+ consecutive operators (e.g. `=A1+A2+…` ×256) is rejected — use `SUM`/ranges, or parenthesize to reset the budget. No real-world formula approaches this.
 
 **No workarounds needed** - formula system is complete and production-ready!
@@ -191,7 +195,6 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 
 #### 7. Theme Colors ✅ **RESOLVED**
 **Status**: Implemented — theme color resolution works via `ThemePalette`
-**Plan**: [P5 - Styles](plan/05-styles-and-themes.md#theme-resolution)
 **Phase**: P5 (Complete)
 
 **Current State**:
@@ -208,8 +211,7 @@ Color.Theme(ThemeSlot.Accent1, tint = 0.5).toResolvedHex(theme)  // "#RRGGBB"
 #### 8. No Shared Strings Table (SST) in Streaming Write
 **Status**: Streaming write always uses inline strings
 **Impact**: Larger file sizes for repeated strings
-**Plan**: [P6 - SST Streaming Integration](plan/13-streaming-and-performance.md#sst-streaming)
-**Phase**: P6 (Future)
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Current State**:
 - `writeStream` uses `type="inlineStr"` for all text cells
@@ -245,21 +247,19 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 ---
 
 #### 10. Conditional Formatting Not Supported
-**Status**: Not implemented
-**Impact**: Cannot add color scales, data bars, icon sets
-**Plan**: [P10 - Conditional Formatting](plan/08-tables-and-pivots.md#conditional-formatting)
-**Phase**: P10 (Future)
+**Status**: Not implemented (preserved through edits since 0.10.0, like other unknown/inline parts)
+**Impact**: Cannot author color scales, data bars, icon sets
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Effort**: 5-7 days
 **LOC**: ~300 (Rules model, XML serialization, testing)
 
 ---
 
-#### 11. Data Validation Not Supported
-**Status**: Not implemented
-**Impact**: Cannot add dropdown lists, input validation
-**Plan**: [P10 - Data Validation](plan/08-tables-and-pivots.md#data-validation)
-**Phase**: P10 (Future)
+#### 11. Data Validation Authoring Not Supported
+**Status**: Existing `dataValidations` are **preserved through edits** since 0.10.0 (C1); no authoring API yet
+**Impact**: Cannot add new dropdown lists or input validation
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Effort**: 3-4 days
 **LOC**: ~200
@@ -267,10 +267,9 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 ---
 
 #### 12. Charts Not Supported
-**Status**: Not implemented
+**Status**: Not implemented (existing charts are preserved through edits) — tracked in #222
 **Impact**: Cannot generate charts
-**Plan**: [P9 - Charts](plan/07-charts.md)
-**Phase**: P9 (Future - Very Complex)
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Effort**: 20-30 days (massive scope)
 **LOC**: ~1500+
@@ -278,10 +277,9 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 ---
 
 #### 13. Drawings (Images, Shapes) Not Supported
-**Status**: Not implemented
+**Status**: Not implemented (existing drawings are preserved through edits) — tracked in #221
 **Impact**: Cannot embed images or shapes
-**Plan**: [P8 - Drawings](plan/06-drawings.md)
-**Phase**: P8 (Future)
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Effort**: 10-15 days
 **LOC**: ~800
@@ -291,8 +289,7 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 #### 14. Pivot Tables Not Supported
 **Status**: Not implemented
 **Impact**: Cannot create Pivot Tables
-**Plan**: [P10 - Advanced Features](plan/advanced-features.md)
-**Phase**: P10 (Future)
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Note**: Excel Tables (structured data ranges with headers, AutoFilter, styling) are ✅ **fully supported** as of WI-10.
 
@@ -307,22 +304,16 @@ RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
 
 ---
 
-#### 16. Print Settings and Page Setup Not Supported
-**Status**: Not implemented
-**Impact**: Default print settings used
-**Plan**: [P10 - Page Setup](plan/11-ooxml-mapping.md#page-setup)
-**Phase**: P10 (Future)
-
-**Effort**: 2-3 days
-**LOC**: ~150
+#### 16. Print Settings and Page Setup ⚠️ PARTIALLY SUPPORTED (0.11.0)
+**Status**: `PageSetup` authoring shipped in 0.11.0 (#259): odd header/footer (with `&P`/`&N` codes), page margins, print area, and repeat rows — emitted in schema order and round-tripped; print area/titles ride the defined-names pipeline as sheet-scoped `_xlnm` names. Reading now populates `Sheet.pageSetup` for any sheet with `<pageMargins>`.
+**Remaining**: even/first-page headers and the `fitToPage` flag — tracked in #266.
 
 ---
 
 #### 17. Document Properties Not Written
 **Status**: Not implemented
 **Impact**: Missing metadata (author, title, creation date)
-**Plan**: [P10 - Document Properties](plan/11-ooxml-mapping.md#document-properties)
-**Phase**: P10 (Future)
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Current**:
 - No `docProps/core.xml` (core properties)
@@ -446,8 +437,7 @@ XlsxReader.read(path, strictConfig)
 #### 22. No Type-Class Derivation for Codecs
 **Status**: Not implemented
 **Impact**: Manual row/cell conversion required
-**Plan**: [P6 - Codecs](plan/09-codecs-and-named-tuples.md)
-**Phase**: P6 (High Priority)
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **What's Missing**:
 ```scala
@@ -470,10 +460,9 @@ people.through(Codec[Person].encode)
 ---
 
 #### 23. No Path Macro for Named Cell References
-**Status**: Not implemented
-**Impact**: Cannot use symbolic names for cells
-**Plan**: [P7 - Advanced Macros](plan/17-macros-and-syntax.md#path-macro)
-**Phase**: P7 (Future)
+**Status**: Not implemented (named ranges themselves are supported since 0.10.0 — see #15)
+**Impact**: Cannot use compile-time symbolic names for cells
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Want**:
 ```scala
@@ -490,10 +479,9 @@ sheet.put(Paths.totalRevenue, formula"=SUM(${Paths.salesTable})")
 ---
 
 #### 24. No Style Literal for Inline Styling
-**Status**: Not implemented
-**Impact**: Verbose style definitions
-**Plan**: [P7 - Advanced Macros](plan/17-macros-and-syntax.md#style-literal)
-**Phase**: P7 (Future)
+**Status**: Not implemented (the builder DSL — `.bold`, plus 0.11.0's `.borderTop(...)`, `.indent(n)`, `range.outlined(...)` — covers most cases)
+**Impact**: No single-string style literal
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Want**:
 ```scala
@@ -508,8 +496,7 @@ val headerStyle = style"font-weight: bold; background: #CCCCCC; border: all thin
 #### 25. XLSM Macros Not Preserved
 **Status**: Not implemented
 **Impact**: Opening XLSM files strips macros
-**Plan**: [P11 - Security](plan/23-security.md#macro-preservation)
-**Phase**: P11 (Future)
+**Plan**: see [plan/roadmap.md](plan/roadmap.md)
 
 **Current**: Reading `.xlsm` treats it as `.xlsx` (ignores `vbaProject.bin`)
 
@@ -586,14 +573,13 @@ excel.readStreamByIndex(path, 2)  // Sheet 2 (separate call)
 
 ## Roadmap to 100% Feature Parity
 
-### Phase 4 Continuation (Priority 1 - Next Sprint)
-**Effort**: 1-2 weeks
+### Phase 4 Continuation ✅ (Complete)
 **Focus**: Complete OOXML coverage for common use cases
 
-- [ ] Style application end-to-end (2-3 days) - **HIGH IMPACT**
-- [ ] DateTime serialization (1 day) - **HIGH IMPACT**
-- [ ] Merged cells XML (3 hours) - MEDIUM IMPACT
-- [ ] Column/row properties XML (4 hours) - MEDIUM IMPACT
+- [x] Style application end-to-end ✅
+- [x] DateTime serialization ✅
+- [x] Merged cells XML ✅
+- [x] Column/row properties XML ✅
 
 **Result**: Fully functional spreadsheet library with formatting
 
@@ -603,7 +589,7 @@ excel.readStreamByIndex(path, 2)  // Sheet 2 (separate call)
 **Effort**: 2-3 weeks
 **Focus**: Ergonomic data binding
 
-See: [plan/09-codecs-and-named-tuples.md](plan/09-codecs-and-named-tuples.md)
+See: [plan/roadmap.md](plan/roadmap.md)
 
 - [ ] Type-class derivation (7-10 days)
 - [ ] Header row binding (3-4 days)
@@ -617,7 +603,7 @@ See: [plan/09-codecs-and-named-tuples.md](plan/09-codecs-and-named-tuples.md)
 **Effort**: 1-2 weeks
 **Focus**: Enhanced compile-time DSL
 
-See: [plan/17-macros-and-syntax.md](plan/17-macros-and-syntax.md)
+See: [plan/roadmap.md](plan/roadmap.md)
 
 - [ ] Path macro for named references (3-4 days)
 - [ ] Style literal (2-3 days)
@@ -631,7 +617,7 @@ See: [plan/17-macros-and-syntax.md](plan/17-macros-and-syntax.md)
 **Effort**: 2-3 weeks
 **Focus**: Images and shapes
 
-See: [plan/06-drawings.md](plan/06-drawings.md)
+See: [plan/roadmap.md](plan/roadmap.md) (drawings tracked in #221)
 
 - [ ] Image embedding (5-7 days)
 - [ ] Shapes (3-4 days)
@@ -643,7 +629,7 @@ See: [plan/06-drawings.md](plan/06-drawings.md)
 **Effort**: 4-6 weeks
 **Focus**: Chart generation
 
-See: [plan/07-charts.md](plan/07-charts.md)
+See: [plan/roadmap.md](plan/roadmap.md) (charts tracked in #222)
 
 **Very complex**: 15+ chart types, each with custom XML structure
 
@@ -653,7 +639,7 @@ See: [plan/07-charts.md](plan/07-charts.md)
 **Effort**: 3-4 weeks
 **Focus**: Tables, pivots, conditional formatting
 
-See: [plan/08-tables-and-pivots.md](plan/08-tables-and-pivots.md)
+See: [plan/roadmap.md](plan/roadmap.md)
 
 ---
 
@@ -661,7 +647,7 @@ See: [plan/08-tables-and-pivots.md](plan/08-tables-and-pivots.md)
 **Status**: Production ready (2025-12-07)
 **Focus**: Security hardening
 
-See: [plan/23-security.md](plan/23-security.md)
+See: [plan/roadmap.md](plan/roadmap.md)
 
 **Completed** (WI-30):
 - ✅ ZIP bomb detection (`ReaderConfig` with compression ratio, size, entry count limits)
@@ -808,19 +794,18 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 
 ### If you hit a limitation today:
 
-1. **Styles not working**: Wait for P4 completion (2-3 days) OR use external formatting tools
-2. **Need charts**: Use POI for now, plan to migrate when P9 complete
-3. **Formula evaluation**: Let Excel handle it (store formulas as strings)
-4. **Selective updates**: Use `read()` + `write()` for small files, wait for P6 for large files
+1. **Need charts or drawings**: Use POI for chart/drawing *authoring* (#222, #221); XL preserves existing charts/drawings through edits
+2. **Unsupported formula function**: Store the formula as a string and let Excel recalculate on open (XL evaluates the 104 built-ins)
+3. **Streaming update of one sheet in a huge workbook**: Use the in-memory read → modify → write path (surgical modification preserves untouched parts)
 
 ---
 
 ## Contributing
 
 Want to help implement these features? See:
-- [docs/plan/18-roadmap.md](plan/18-roadmap.md) - Full implementation plan
+- [docs/plan/roadmap.md](plan/roadmap.md) - Full implementation plan
 - [CLAUDE.md](../CLAUDE.md) - Contribution guidelines
-- Each feature links to detailed design doc in `docs/plan/`
+- [GitHub Issues](https://github.com/TJC-LP/xl/issues) - Per-feature tracking
 
 ---
 
@@ -834,4 +819,4 @@ Want to help implement these features? See:
 
 ---
 
-*Last updated by Claude Code session on 2025-12-18 (Week 1 Bug Fixes: TJC-352 VLOOKUP cross-sheet, TJC-339 streaming formula injection, TJC-354 SVG styling)*
+*Last updated 2026-06-10 (0.11.0 doc-truth pass, GH-272: refreshed fixed/open status against the 0.10.0 and 0.11.0 releases, corrected the function registry breakdown, repointed retired plan links).*

@@ -38,6 +38,30 @@ For minimal dependencies, use individual modules:
 | `xl-cats-effect` | IO streaming with Cats Effect |
 | `xl-evaluator` | Formula parser and evaluator |
 
+## Scripting (one import)
+
+For scripts, skip the build setup entirely: a two-line `scala-cli` header and ONE import give you the whole library — core API, DSL, compile-time literals, formula evaluation, sync `Excel` I/O, and streaming.
+
+```scala
+//> using scala 3.8.3
+//> using dep com.tjclp::xl:0.11.0
+
+import com.tjclp.xl.scripting.{*, given}
+
+val sheet = Sheet("Model")
+  .put(ref"A1", 100)
+  .put(ref"A2", 200)
+  .put(ref"A3", fx"=SUM(A1:A2)")
+
+val recalc = Workbook(sheet).recalculate() // total: per-cell errors, never throws
+if !recalc.isClean then recalc.errors.foreach(e => println(e.render))
+Excel.write(recalc.workbook, "model.xlsx")
+```
+
+Save as `model.sc`, run with `scala-cli run model.sc`. Never combine this import with `com.tjclp.xl.{*, given}` in the same file (ambiguous forwarders).
+
+**More**: [reference/scripting.md](reference/scripting.md) (full guide) · [../examples/scripting_tour.sc](../examples/scripting_tour.sc) (runnable tour) · the **xl-scripting** Claude Code skill ([../plugin/skills/xl-scripting/](../plugin/skills/xl-scripting/))
+
 ## Your First Spreadsheet (30 seconds)
 
 ```scala
@@ -289,7 +313,7 @@ cyclicSheet.evaluateWithDependencyCheck() match
 - **Conditional**: SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, SUMPRODUCT
 - **Logical / Selection**: IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
 - **Text**: CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE
-- **Date**: TODAY, NOW, DATE, YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
+- **Date**: TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
 - **Math**: ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
 - **Financial**: NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
 - **Lookup / Reference**: VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
@@ -389,11 +413,11 @@ ref"XFE1"    // ❌ Invalid (column out of range)
 import com.tjclp.xl.addressing.SheetName
 
 SheetName("My Sheet!") match
-  case Right(name) => Workbook(name)
+  case Right(name) => Workbook(Sheet(name))
   case Left(err) => println(s"Invalid: $err")
 
 // Or use unsafe (throws on invalid):
-Workbook(SheetName.unsafe("ValidName"))
+Workbook(Sheet(SheetName.unsafe("ValidName")))
 ```
 
 ---

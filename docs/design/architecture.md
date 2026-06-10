@@ -6,39 +6,48 @@ This document describes the high‑level architecture of XL and how the main mod
 
 ```mermaid
 graph TD
-  subgraph Core
+  subgraph Published["Published libraries"]
     Core[xl-core<br/>Domain model]
-  end
-
-  subgraph OOXML
     Ooxml[xl-ooxml<br/>OOXML mapping]
-  end
-
-  subgraph IO
     Ce[xl-cats-effect<br/>Excel / ExcelIO]
-  end
-
-  subgraph Evaluator
     Eval[xl-evaluator<br/>Formula parser + evaluator]
+    Agg[xl<br/>aggregate bundle + scripting prelude]
   end
 
-  subgraph Test
-    Tk[xl-testkit<br/>(law & property tests)]
+  subgraph Internal["Internal (not published)"]
+    Cli[xl-cli<br/>CLI]
+    Agent[xl-agent<br/>AI agent benchmarks]
+    Bench[xl-benchmarks<br/>JMH]
+    Tk[xl-testkit<br/>placeholder]
   end
 
   Core --> Ooxml
   Core --> Ce
   Core --> Eval
-  Core --> Tk
   Ooxml --> Ce
-  Ooxml --> Tk
+  Ce --> Agg
+  Eval --> Agg
+  Ce --> Cli
+  Eval --> Cli
+  Ce --> Agent
+  Eval --> Agent
+  Ce --> Bench
 ```
+
+Published (Maven Central):
 
 - `xl-core`: Pure domain model (`Cell`, `Sheet`, `Workbook`, styles, codecs, optics, macros).
 - `xl-ooxml`: Pure OOXML mapping layer (`XlsxReader` / `XlsxWriter`, `OoxmlWorkbook`, `OoxmlWorksheet`, `SharedStrings`, `Styles`).
 - `xl-cats-effect`: Effectful interpreters (`Excel[F]` / `ExcelIO`) and true streaming I/O built on Cats Effect, fs2, and fs2-data-xml.
-- `xl-evaluator`: Formula parser, printer, evaluator, function registry, dependency graph, and cross-sheet formula support.
-- `xl-testkit`: Reusable generators and law test helpers for the other modules.
+- `xl-evaluator`: Formula parser, printer, evaluator, function registry, dependency graph, cross-sheet formula support, and whole-workbook recalculation.
+- `xl`: Aggregate bundle (`com.tjclp::xl`) depending on the four modules above, plus the `com.tjclp.xl.scripting` one-import prelude for scripts.
+
+Internal (not published):
+
+- `xl-cli`: Stateless command-line tool (`xl`); installed locally via `make install`.
+- `xl-agent`: AI agent benchmark runner (Anthropic API, skill comparison).
+- `xl-benchmarks`: JMH performance benchmarks (XL vs Apache POI).
+- `xl-testkit`: Placeholder — declared in the build but has no sources yet; reusable generators currently live in `xl-core/test` (`Generators.scala`).
 
 ## I/O Flow
 
@@ -52,7 +61,7 @@ flowchart LR
   end
 
   subgraph Streaming["Streaming I/O (xl-cats-effect)"]
-    SR[StreamingXmlReader<br/>ZIP entry → XML events → RowData]
+    SR[SaxStreamingReader<br/>ZIP entry → SAX events → RowData]
     SW[StreamingXmlWriter<br/>RowData → XML events → ZIP entry]
   end
 
@@ -70,7 +79,7 @@ flowchart LR
   - When a `Workbook` was created by `XlsxReader`, a `SourceContext` tracks the original file and a `ModificationTracker`, enabling *surgical modification* (copy unchanged parts verbatim, regenerate only what changed).
 
 - **Streaming path**:
-  - `ExcelIO.readStream` / `readSheetStream` open the ZIP and stream a worksheet’s XML through fs2‑data‑xml, yielding a `Stream[F, RowData]` with constant memory use (SST is still materialized once if present).
+  - `ExcelIO.readStream` / `readSheetStream` open the ZIP and stream a worksheet’s XML through a SAX parser (`SaxStreamingReader`, 3–4x faster than the original fs2‑data‑xml path), yielding a `Stream[F, RowData]` with constant memory use (SST is still materialized once if present).
   - `ExcelIO.writeStream` / `writeStreamsSeq` write static parts once, then stream worksheet XML events directly to a `ZipOutputStream` from a `Stream[F, RowData]` without ever materializing all rows.
   - `ExcelIO.writeWorkbookStream` is different: it accepts an already-materialized `Workbook`, then uses the SAX/StAX OOXML backend to reduce writer allocation while preserving the full metadata handled by `XlsxWriter`.
 
@@ -186,5 +195,6 @@ The evaluator implements: `Evaluator.eval: TExpr[A] => Sheet => Either[EvalError
 - Short-circuit evaluation for And/Or
 - Division by zero handling (returns `CellError.Div0`)
 - 104 Excel functions: SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, OFFSET, SUMIF, COUNTIF, NPV, IRR, dynamic arrays (SEQUENCE/SORT/UNIQUE/FILTER), and more
+- Whole-workbook recalculation: `Workbook.recalculate(clock)` is total and returns `RecalcResult` (recached workbook + per-sheet values + per-cell `CellEvalError`s); cycle participants are isolated while the acyclic remainder still evaluates
 
 See `docs/STATUS.md` for the complete function list.

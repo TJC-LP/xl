@@ -14,8 +14,10 @@ Everything below is in scope after `import com.tjclp.xl.scripting.{*, given}`.
 | `CellValue` | enum: `Text`, `Number(BigDecimal)`, `Bool`, `DateTime`, `Formula(expr, cached)`, `RichText`, `Error`, `Empty` |
 | `Sheet` | Immutable sheet: `cells: Map[ARef, Cell]`, name, merges, comments, col/row properties |
 | `Workbook` | `sheets: Vector[Sheet]` + metadata |
-| `Patch` | Composable change set (monoid): `Put`, `SetCellStyle`, `SetRangeStyle`, `Merge`, `Remove`, `Batch`, ... |
+| `Patch` | Composable change set (monoid): `Put`, `SetCellStyle`, `SetRangeStyle`, `Merge`, `MergeBorder`, `Remove`, `Batch`, ... |
 | `CellStyle` | font, fill, border, numFmt, alignment |
+| `SheetView` | display settings: `(showGridLines, zoomScale)` — see Sheet View & Print Setup |
+| `PageSetup` | print settings: scale, orientation, fit, header/footer, margins, print area, repeat rows |
 | `NumFmt` | `General`, `Currency`, `Percent`, `Date`, `DateTime`, `Decimal`, custom |
 | `Formatted` | `(value: CellValue, numFmt: NumFmt)` — value + display format pair |
 | `XLResult[A]` | `Either[XLError, A]` — every fallible operation |
@@ -74,6 +76,8 @@ ARef.from0(colIdx, rowIdx)   // 0-based construction
 | `sheet.comment(ref, Comment.plainText("note", Some("author")))` | `Sheet` | |
 | `sheet.toHtml(ref"A1:B10")` | `String` | inline-CSS HTML table |
 | `sheet.usedRange` | `Option[CellRange]` | |
+| `sheet.withViewSettings(view)` | `Sheet` | gridlines/zoom — see Sheet View & Print Setup |
+| `sheet.withPageSetup(setup)` | `Sheet` | print settings — see Sheet View & Print Setup |
 
 Codec types for `put`/`readTyped*`: String, Int, Long, Double, BigDecimal, Boolean, LocalDate (→ Date format), LocalDateTime (→ DateTime format), RichText.
 
@@ -104,8 +108,15 @@ ref"A1:C1".styled(style)        // style a range
 ref"A1:C1".merge                // merge cells (also .unmerge)
 ref"A1:C10".remove              // clear cells
 ref"A1".clearStyle
+ref"B2:D6".outlined(BorderStyle.Medium)                       // box the range's outer edges
+ref"B2:D6".outlined(BorderStyle.Thin, Color.fromRgb(128, 128, 128))  // colored outline
 Patch.empty                     // identity — fold seed
 ```
+
+`outlined` is edge-correct (top row gets top, corners get both, interior untouched; 1×1 gets all
+four sides) and desugars to per-cell `Patch.MergeBorder(ref, border)` — an apply-time border
+overlay that preserves each cell's font, fill, numFmt, and untouched border sides. Cost is
+proportional to the perimeter; prefer bounded ranges over whole columns.
 
 Runtime `RefType` (from `ref"$s"`) supports the same `:=` / `.styled` / `.merge` / `.remove`; `:=` on a parsed range fills it.
 
@@ -120,14 +131,51 @@ CellStyle.default
   .center / .left / .right          // horizontal align
   .top / .middle / .bottom          // vertical align
   .wrap
+  .indent(2)                        // alignment indent level (~3 chars each); negatives clamp to 0
   .bordered / .borderedMedium / .borderedThick / .borderNone
+  .borderTop(BorderStyle.Thin)      // per-side: also borderBottom/borderLeft/borderRight
+  .borderBottom(BorderStyle.Medium, Color.fromRgb(0, 0, 128))  // color overloads on each side
   .currency / .percent / .decimal / .dateFormat / .dateTime   // numFmt shortcuts
   .withNumFmt(NumFmt.Percent)
 ```
 
+Per-side border builders merge into the existing border — only the named side is replaced, so
+they compose: `.borderTop(BorderStyle.Thin).borderBottom(BorderStyle.Medium)`. Indentation lives
+in the style (survives round-trips, keeps the stored value clean) — prefer it over leading spaces.
+
 Rich text: `"Bold ".bold + "red".red + " plain"` → `RichText`, put directly into a cell.
 
 Smart detection: `FormattedParsers.detect(s)` / `s.toFormatted` (prelude) — total: `"$1,234.56"` → Currency, `"45.5%"` → Percent (stored 0.455), `"2025-01-15"` → Date, `"123.4"`/`"true"` → Number/Bool (General), anything else → Text (General).
+
+## Sheet View & Print Setup
+
+The four settings types live one import deeper than the prelude:
+
+```scala
+import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
+```
+
+```scala
+// Display: gridlines off (professional templates), zoom 10-400
+sheet.withViewSettings(SheetView(showGridLines = false, zoomScale = Some(90)))
+
+// Print/PDF setup — all fields optional with Excel defaults
+sheet.withPageSetup(
+  PageSetup(
+    scale = 100,                                              // 10-400
+    orientation = Some("landscape"),                          // or "portrait"
+    fitToWidth = Some(1),                                     // pages wide (also fitToHeight)
+    headerFooter = Some(HeaderFooter(oddFooter = Some("&CPage &P of &N"))),
+    margins = Some(PageMargins(left = 0.5, right = 0.5)),     // inches; defaults match Excel Normal
+    printArea = Some(ref"A1:F40"),                            // _xlnm.Print_Area defined name
+    repeatRows = Some((1, 2))                                 // 1-based rows repeated on every page
+  )
+)
+```
+
+Header/footer strings support Excel codes — `&P` page, `&N` total pages, `&D` date, `&T` time,
+`&F` file, `&A` sheet, with `&L`/`&C`/`&R` section markers. View settings share one
+`<sheetView>` element with freeze panes; print area/repeat rows ride the defined-names pipeline.
 
 ## Formula Evaluation
 

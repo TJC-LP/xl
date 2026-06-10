@@ -18,8 +18,8 @@ This guide helps Java developers migrate from Apache POI to XL. The two librarie
 
 | POI API | XL Equivalent | Notes |
 |---------|---------------|-------|
-| `new XSSFWorkbook()` | `Workbook.empty` | Returns `XLResult[Workbook]` |
-| `workbook.createSheet("Data")` | `Workbook("Data")` | Immutable, returns `Either` |
+| `new XSSFWorkbook()` | `Workbook.empty` | Returns `Workbook` (total) |
+| `workbook.createSheet("Data")` | `Workbook(Sheet("Data"))` | Immutable; literal sheet names are compile-time validated |
 | `sheet.createRow(0)` | N/A – XL is cell-oriented |
 | `row.createCell(0)` | `sheet.put(ref"A1", value)` | Pure and immutable |
 | `cell.setCellValue("Hello")` | `ref"A1" := "Hello"` | DSL syntax |
@@ -27,8 +27,8 @@ This guide helps Java developers migrate from Apache POI to XL. The two librarie
 | `cell.setCellValue(true)` | `ref"A1" := true` | Type-safe |
 | `cell.getCellValue()` | `sheet(ref"A1")` | Returns `Cell` (empty cells yield `CellValue.Empty`) |
 | `cell.getNumericCellValue()` | `sheet.readTyped[Int](ref"A1")` | Returns `Either[CodecError, Option[Int]]` |
-| `cell.setCellStyle(style)` | `sheet.withCellStyle(ref"A1", styleId)` | Register style first |
-| `workbook.write(out)` | `ExcelIO.instance[IO].write(wb, path)` | Effect-wrapped |
+| `cell.setCellStyle(style)` | `sheet.withCellStyle(ref"A1", style)` | Style auto-registered & deduplicated |
+| `workbook.write(out)` | `Excel.write(wb, "out.xlsx")` / `ExcelIO.instance[IO].write(wb, path)` | Sync facade or effect-wrapped |
 
 ## Common Patterns
 
@@ -54,28 +54,22 @@ out.close();
 
 **XL (Scala)**:
 ```scala
-import com.tjclp.xl.*
-import cats.effect.IO
-import cats.effect.unsafe.implicits.global
+import com.tjclp.xl.scripting.{*, given}
 
-val sheet =
-  Sheet("Sales").map(_.put(
-    ref"A1" -> "Product",
-    ref"B1" -> "Revenue",
-    ref"A2" -> "Widget",
-    ref"B2" -> 1000
-  )).unsafe
+val sheet = Sheet("Sales").put(
+  ref"A1" -> "Product",
+  ref"B1" -> "Revenue",
+  ref"A2" -> "Widget",
+  ref"B2" -> 1000
+)
 
-val workbook =
-  Workbook.empty.flatMap(_.put(sheet)).unsafe
-
-ExcelIO.instance[IO].write(workbook, Path.of("sales.xlsx")).unsafeRunSync()
+Excel.write(Workbook(sheet), "sales.xlsx")
 ```
 
 - **Key Differences**:
   - XL is **cell-oriented** (no explicit rows)
   - XL uses **immutable updates** (no setters)
-  - XL requires **effect handling** (`IO`)
+  - XL isolates **IO at the edge** (sync `Excel` facade for scripts, `ExcelIO.instance[IO]` for Cats Effect services)
   - XL uses **compile-time validated** references (`ref"A1"`)
 
 ---
@@ -98,19 +92,16 @@ cell.setCellStyle(style);
 
 **XL (Scala)**:
 ```scala
-import com.tjclp.xl.style.*
+import com.tjclp.xl.scripting.{*, given}
 
-val style = CellStyle.default
-  .withFont(Font("Arial", 12.0, bold = true, color = Color.fromHex("#FF0000")))
-  .withFill(Fill.Solid(Color.fromRgb(200, 200, 200)))
+// Style DSL: compile-time validated hex colors, fluent builders
+val style = CellStyle.default.bold.size(12.0).fontFamily("Arial")
+  .hex("#FF0000")          // font color
+  .bgRgb(200, 200, 200)    // fill
 
-val (registry, styleId) = sheet.styleRegistry.register(style)
-val updated = sheet
-  .copy(styleRegistry = registry)
-  .withCellStyle(ref"A1", styleId)
+val updated = sheet.withCellStyle(ref"A1", style) // auto-registered & deduplicated
 
-// Or use Patch DSL:
-import com.tjclp.xl.dsl.*
+// Or use the Patch DSL:
 val patch = ref"A1".styled(style)
 sheet.put(patch)
 ```
@@ -118,7 +109,7 @@ sheet.put(patch)
 **Key Differences**:
 - XL styles are **immutable** (builder pattern)
 - XL uses **RGB colors** (not indexed colors)
-- XL requires **style registration** (deduplication)
+- XL **auto-registers and deduplicates** styles (no manual registry bookkeeping)
 - XL supports **StylePatch Monoid** for composition
 
 ---
@@ -144,8 +135,7 @@ switch (cell.getCellType()) {
 
 **XL (Scala)**:
 ```scala
-import com.tjclp.xl.*
-import com.tjclp.xl.codec.syntax.*
+import com.tjclp.xl.scripting.{*, given}
 
 // Type-safe reading with Either
 sheet.readTyped[String](ref"A1") match
@@ -154,7 +144,7 @@ sheet.readTyped[String](ref"A1") match
   case Left(error) => println(s"Type error: $error")
 
 // Or pattern match on CellValue
-sheet.get(ref"A1") match
+sheet.cells.get(ref"A1") match
   case Some(cell) =>
     cell.value match
       case CellValue.Text(s) => println(s"String: $s")
@@ -193,7 +183,9 @@ workbook.dispose(); // Delete temp files
 
 **XL (Scala)**:
 ```scala
+import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.{Excel, RowData}
+import cats.effect.unsafe.implicits.global
 import fs2.Stream
 
 Stream.range(1, 1_000_001)
@@ -267,15 +259,15 @@ try {
 }
 ```
 
-**XL Philosophy**: Returns Either for errors (no exceptions)
+**XL Philosophy**: Returns Either for errors (no exceptions in the pure core)
 ```scala
-ExcelIO.instance.read[IO](path).map {
+ExcelIO.instance[IO].readR(path).map {
   case Right(wb) => // Success
   case Left(error: XLError) => // Explicit error handling
 }.unsafeRunSync()
 ```
 
-**Migration Tip**: XL errors are values, not exceptions. Use pattern matching or flatMap.
+**Migration Tip**: XL errors are values, not exceptions. Use pattern matching or flatMap. (`read` raises the error in `F` for monadic pipelines; `readR` surfaces it as `XLResult`. The sync `Excel.read` facade throws — only at the script IO edge.)
 
 ---
 
@@ -293,7 +285,7 @@ ExcelIO.instance.read[IO](path).map {
 ### Medium Files (10k-100k rows)
 
 **POI**: Use `XSSFWorkbook` or `SXSSFWorkbook` with window
-**XL**: Use in-memory API with batching (putAll, putMixed)
+**XL**: Use in-memory API with batching (varargs `Sheet.put` / Patch folds)
 
 **XL Advantage**: Simpler API, no temp files, faster
 
@@ -323,7 +315,7 @@ workbook.write(out);  // void
 
 **XL**:
 ```scala
-ExcelIO.instance.write[IO](wb, path)  // IO[Unit]
+ExcelIO.instance[IO].write(wb, path)  // IO[Unit]
   .unsafeRunSync()  // Must call to execute!
 ```
 
@@ -340,10 +332,10 @@ workbook.createSheet("My Sheet!");  // Works (POI allows most chars)
 
 **XL**:
 ```scala
-Workbook("My Sheet!")  // Error! Exclamation mark invalid
+Sheet("Sheet[1]")  // Compile error! Brackets are invalid in sheet names
 
-// Use SheetName.apply for validation:
-SheetName("My Sheet!") match
+// Runtime strings validate via SheetName.apply:
+SheetName(userInput) match
   case Right(name) => // Valid
   case Left(err) => // Invalid char
 ```
@@ -364,7 +356,7 @@ if (row == null) {
 
 **XL**:
 ```scala
-sheet.get(ref"A1") match
+sheet.cells.get(ref"A1") match
   case Some(cell) => // Exists
   case None => sheet.put(ref"A1", CellValue.Empty)  // Explicit creation
 ```
@@ -409,41 +401,31 @@ out.close();
 
 ### XL Version (Scala)
 ```scala
-import com.tjclp.xl.api.*
-import com.tjclp.xl.macros.*
-import com.tjclp.xl.codec.syntax.*
-import com.tjclp.xl.style.*
+import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
-import cats.effect.IO
-import cats.effect.unsafe.implicits.global
 
 // Header style
-val headerStyle = CellStyle.default
-  .withFont(Font("Arial", 12.0, bold = true))
+val headerStyle = CellStyle.default.bold.size(12.0).fontFamily("Arial")
 
-// Create sheet
-val sheet =
-  Sheet("Q1 Sales").map(_.put(
+// Header + style
+val header = Sheet("Q1 Sales")
+  .put(
     ref"A1" -> "Product",
     ref"B1" -> "Revenue",
     ref"C1" -> "Date"
-  )).get
-
-val styledHeader = sheet.withRangeStyle(ref"A1:C1", headerStyle)
-
-// Data rows (batched for performance)
-val dataRows = (1 to 1000).flatMap { i =>
-  Seq(
-    ref"A${i+1}" -> s"Product $i",
-    ref"B${i+1}" -> i * 100,
-    ref"C${i+1}" -> LocalDate.now()
   )
+  .withRangeStyle(ref"A1:C1", headerStyle)
+
+// Data rows: fold into a Patch, apply once (codecs auto-infer the date format)
+val dataRows = (1 to 1000).foldLeft(Patch.empty) { (p, i) =>
+  val r = ref"A2".down(i - 1)
+  p ++ (r := s"Product $i") ++ (r.right(1) := i * 100) ++
+    (r.right(2) := LocalDate.now().atStartOfDay)
 }
-val withData = sheet.put(dataRows*)
+val withData = header.put(dataRows)
 
 // Write
-val workbook = Workbook(Vector(withData))
-ExcelIO.instance.write[IO](workbook, Path.of("sales.xlsx")).unsafeRunSync()
+Excel.write(Workbook(withData), "sales.xlsx")
 ```
 
 **Differences**:
@@ -518,17 +500,18 @@ Memory: ~100MB (10x less)
 **A**: Not easily. They use different in-memory representations. You'd need to write to file and read back.
 
 ### Q: Does XL support all POI features?
-**A**: No. XL is ~55% feature complete. Missing: charts, drawings, pivot tables, formula evaluation. See roadmap.
+**A**: No. Still missing: charts, drawings, pivot tables, VBA. Formula **evaluation** is a point in XL's favor: 104 functions with whole-workbook recalculation (POI's evaluator exists but is partial and mutable). See [roadmap](../plan/roadmap.md) and [LIMITATIONS](../LIMITATIONS.md).
 
 ### Q: Is XL production-ready?
-**A**: Yes for core features (read/write, styling, streaming write). No for advanced features (charts, etc.).
+**A**: Yes for core features (read/write, styling, formulas, structural editing, streaming). No for visual features (charts, drawings).
 
 ### Q: How do I handle errors in XL?
 **A**: XL uses Either[XLError, A]. Pattern match or use flatMap/map:
 ```scala
+val excel = ExcelIO.instance[IO]
 for
-  workbook <- ExcelIO.instance.read[IO](path)
-  sheet <- IO.fromEither(workbook.flatMap(_.sheet("Data")))
+  workbook <- excel.read(path)              // errors raised in IO
+  sheet <- IO.fromEither(workbook("Data"))  // XLResult[Sheet] → IO
 yield sheet
 ```
 

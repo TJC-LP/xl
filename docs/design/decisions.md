@@ -50,11 +50,12 @@
 
 ## ADR-007: fs2-data-xml for streaming
 **Date**: 2025-01 (P5)
-**Status**: ✅ Implemented
+**Status**: ✅ Implemented (write path); read path superseded by SAX backend (P6.6)
 
 - **Decision**: Use fs2-data-xml for event-based XML parsing/writing instead of scala-xml
 - **Rationale**: Constant-memory streaming (O(1)), 4.5x faster than Apache POI
 - **Consequence**: More complex implementation, but enables 1M+ row files without OOM
+- **Update**: Streaming *reads* later moved to a plain SAX parser (`SaxStreamingReader`, 3–4x faster, still O(1) — see `performance-investigation.md`); fs2-data-xml remains the row-stream *write* backend (`StreamingXmlWriter`)
 
 ## ADR-008: CellCodec primitives over derivation
 **Date**: 2025-01 (P6)
