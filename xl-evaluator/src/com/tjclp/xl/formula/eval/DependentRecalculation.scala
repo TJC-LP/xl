@@ -33,6 +33,13 @@ object DependentRecalculation:
      *
      * Evaluates in topological order and updates cached values in Formula cells.
      *
+     * GH-274: dynamic-reference cells (INDIRECT) are always dirty — the static graph cannot see
+     * which cells their evaluated text names, so any edit may affect them. They and their static
+     * dependents recalculate last (`DependencyGraph.deferDynamic`); earlier-refreshed caches are
+     * exactly what dynamic reads should observe. This is the purity-charter encoding of Excel's
+     * "volatile" marking. Caveat: INDIRECT→INDIRECT chains may need the full
+     * `Workbook.recalculate()` for guaranteed freshness (caches are refreshed, not stripped, here).
+     *
      * @param modifiedRefs
      *   Set of cell references that have been modified
      * @param workbook
@@ -50,13 +57,18 @@ object DependentRecalculation:
       if modifiedRefs.isEmpty then sheet
       else
         val graph = DependencyGraph.fromSheet(sheet)
-        val toRecalc = DependencyGraph.transitiveDependents(graph, modifiedRefs)
+        val dynamic = DependencyGraph.dynamicCells(sheet)
+        val toRecalc =
+          DependencyGraph.transitiveDependents(graph, modifiedRefs ++ dynamic) ++ dynamic
         if toRecalc.isEmpty then sheet
         else
           // Get topological order and filter to only affected cells
           DependencyGraph.topologicalSort(graph) match
             case Right(evalOrder) =>
-              val orderedToRecalc = evalOrder.filter(toRecalc.contains)
+              val orderedToRecalc = DependencyGraph.deferDynamic(
+                evalOrder.filter(toRecalc.contains),
+                DependencyGraph.dynamicClosure(graph, dynamic)
+              )
               recalculateInOrder(sheet, orderedToRecalc, workbook, clock)
             case Left(_) =>
               // Cycle detected - skip recalculation (formulas will show error on eval)
@@ -95,9 +107,20 @@ object DependentRecalculation:
       if modifiedRefs.isEmpty then wb
       else
         val qualifiedRefs = modifiedRefs.map(ref => QualifiedRef(sheetName, ref))
+        // GH-274: dynamic-reference cells (INDIRECT) on ANY sheet are always dirty — their
+        // resolved targets are invisible to the static graph, so every sheet's dynamic cells
+        // join the seeds (and the recalc set) unconditionally.
+        val dynamicBySheet: Map[SheetName, Set[ARef]] =
+          wb.sheets.map(s => s.name -> DependencyGraph.dynamicCells(s)).toMap
+        val dynamicQualified: Set[QualifiedRef] =
+          dynamicBySheet.toSet.flatMap { case (name, refs) =>
+            refs.map(ref => QualifiedRef(name, ref))
+          }
         val graph = DependencyGraph.fromWorkbook(wb)
         val dependentsMap = buildDependentsMap(graph)
-        val toRecalc = transitiveDependentsQualified(dependentsMap, qualifiedRefs)
+        val toRecalc =
+          transitiveDependentsQualified(dependentsMap, qualifiedRefs ++ dynamicQualified) ++
+            dynamicQualified
 
         if toRecalc.isEmpty then wb
         else
@@ -109,7 +132,14 @@ object DependentRecalculation:
                 DependencyGraph.topologicalSort(sheetGraph) match
                   case Right(evalOrder) =>
                     val localRefs = refs.map(_.ref)
-                    val orderedToRecalc = evalOrder.filter(localRefs.contains)
+                    // GH-274: same evaluate-last partition as the sheet variant
+                    val orderedToRecalc = DependencyGraph.deferDynamic(
+                      evalOrder.filter(localRefs.contains),
+                      DependencyGraph.dynamicClosure(
+                        sheetGraph,
+                        dynamicBySheet.getOrElse(sheet.name, Set.empty)
+                      )
+                    )
                     val updatedSheet =
                       recalculateInOrder(sheet, orderedToRecalc, Some(currentWb), clock)
                     currentWb.put(updatedSheet)

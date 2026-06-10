@@ -1215,7 +1215,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("Known functions include all 104 functions") {
+  test("Known functions include all 107 functions") {
     val functions = FunctionRegistry.allNames
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -1327,7 +1327,45 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("MAXIFS"))
     assert(functions.contains("MINIFS"))
     assert(functions.contains("OFFSET"))
-    assertEquals(functions.length, 104)
+    // GH-115 random
+    assert(functions.contains("RAND"))
+    assert(functions.contains("RANDBETWEEN"))
+    // GH-274 dynamic references
+    assert(functions.contains("INDIRECT"))
+    assertEquals(functions.length, 107)
+  }
+
+  // ==================== INDIRECT Parsing Tests (GH-274) ====================
+
+  test("INDIRECT round-trips through print (1-arg and 2-arg)") {
+    List(
+      "=INDIRECT(\"B2\")",
+      "=INDIRECT(A1)",
+      "=INDIRECT(\"A1:B10\", TRUE)",
+      "=INDIRECT(\"B\"&C1)",
+      "=SUM(INDIRECT(\"A1:A10\"))"
+    ).foreach { f =>
+      val parsed = FormulaParser.parse(f)
+      assert(parsed.isRight, s"parse failed for $f: $parsed")
+      parsed.foreach { expr =>
+        val printed = FormulaPrinter.print(expr, includeEquals = true)
+        assertEquals(FormulaParser.parse(printed), parsed, s"round-trip for $f via $printed")
+      }
+    }
+  }
+
+  test("parse INDIRECT with optional a1 argument") {
+    val result = FormulaParser.parse("=INDIRECT(\"A1\", FALSE)")
+    assert(result.isRight)
+    result match
+      case Right(call: TExpr.Call[?]) if call.spec.name == "INDIRECT" =>
+        assertEquals(call.spec.argSpec.toValues(call.args).length, 2)
+      case other => fail(s"Expected TExpr.Call(INDIRECT), got $other")
+  }
+
+  test("INDIRECT arity is enforced (0 args and 3 args fail)") {
+    assert(FormulaParser.parse("=INDIRECT()").isLeft)
+    assert(FormulaParser.parse("=INDIRECT(\"A1\", TRUE, 1)").isLeft)
   }
 
   test("FunctionRegistry.lookup finds spec-based functions") {

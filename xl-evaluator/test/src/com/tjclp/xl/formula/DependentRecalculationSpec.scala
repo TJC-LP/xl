@@ -244,3 +244,65 @@ class DependentRecalculationSpec extends FunSuite:
     val result = wb.recalculateDependents(sheet.name, Set.empty)
     assertEquals(result.sheets.map(_.name), wb.sheets.map(_.name))
   }
+
+  // ===== GH-274: INDIRECT cells are always-dirty in targeted recalculation =====
+
+  test("GH-274: editing the dynamic target refreshes INDIRECT (no static edge exists)") {
+    val sheet = sheetWith(
+      ref"C1" -> CellValue.Number(BigDecimal(5)),
+      ref"B1" -> CellValue.Formula("=INDIRECT(\"C1\")", Some(CellValue.Number(BigDecimal(5))))
+    )
+    val updated = sheet
+      .put(ref"C1", CellValue.Number(BigDecimal(50)))
+      .recalculateDependents(Set(ref"C1"))
+    assertEquals(
+      updated(ref"B1").value,
+      CellValue.Formula("=INDIRECT(\"C1\")", Some(CellValue.Number(BigDecimal(50))))
+    )
+  }
+
+  test("GH-274: editing the text-source cell refreshes INDIRECT via the static edge") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Text("C1"),
+      ref"C1" -> CellValue.Number(BigDecimal(5)),
+      ref"C2" -> CellValue.Number(BigDecimal(7)),
+      ref"B1" -> CellValue.Formula("=INDIRECT(A1)", Some(CellValue.Number(BigDecimal(5))))
+    )
+    val updated = sheet
+      .put(ref"A1", CellValue.Text("C2"))
+      .recalculateDependents(Set(ref"A1"))
+    assertEquals(
+      updated(ref"B1").value,
+      CellValue.Formula("=INDIRECT(A1)", Some(CellValue.Number(BigDecimal(7))))
+    )
+  }
+
+  test("GH-274: dependents of an INDIRECT cell refresh when the dynamic target changes") {
+    val sheet = sheetWith(
+      ref"C1" -> CellValue.Number(BigDecimal(5)),
+      ref"B1" -> CellValue.Formula("=INDIRECT(\"C1\")", Some(CellValue.Number(BigDecimal(5)))),
+      ref"D1" -> CellValue.Formula("=B1+1", Some(CellValue.Number(BigDecimal(6))))
+    )
+    val updated = sheet
+      .put(ref"C1", CellValue.Number(BigDecimal(50)))
+      .recalculateDependents(Set(ref"C1"))
+    assertEquals(
+      updated(ref"D1").value,
+      CellValue.Formula("=B1+1", Some(CellValue.Number(BigDecimal(51))))
+    )
+  }
+
+  test("GH-274: workbook recalculateDependents treats INDIRECT cells as always dirty") {
+    val s1 = (new Sheet(name = SheetName.unsafe("S1"))).put(ref"A1", CellValue.Number(BigDecimal(5)))
+    val s2 = (new Sheet(name = SheetName.unsafe("S2")))
+      .put(ref"B1", CellValue.Formula("=INDIRECT(\"S1!A1\")", Some(CellValue.Number(BigDecimal(5)))))
+    val wb0 = Workbook(s1, s2)
+    val wb1 = wb0
+      .put(s1.put(ref"A1", CellValue.Number(BigDecimal(9))))
+      .recalculateDependents(SheetName.unsafe("S1"), Set(ref"A1"))
+    val out = wb1.sheets.find(_.name.value == "S2").map(_(ref"B1").value)
+    assertEquals(
+      out,
+      Some(CellValue.Formula("=INDIRECT(\"S1!A1\")", Some(CellValue.Number(BigDecimal(9)))))
+    )
+  }

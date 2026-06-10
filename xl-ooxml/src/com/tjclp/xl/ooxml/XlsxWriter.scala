@@ -205,6 +205,16 @@ object XlsxWriter:
         throw new IllegalStateException("Source file changed since read; refusing to copy verbatim")
 
   /**
+   * Canonical comment author: trimmed, whitespace-only → unauthored (GH-290).
+   *
+   * The trim happens ONCE at write time; the `<authors>` entry and the bold author-prefix run are
+   * both built from this value, so `XlsxReader.stripAuthorPrefix` (which matches the stored author
+   * against the first run) always strips the prefix and it never leaks into the comment text.
+   */
+  private def canonicalCommentAuthor(author: Option[String]): Option[String] =
+    author.map(_.trim).filter(_.nonEmpty)
+
+  /**
    * Build per-sheet comment data for serialization.
    *
    * Returns:
@@ -215,15 +225,14 @@ object XlsxWriter:
     val commentsBySheet = workbook.sheets.zipWithIndex.flatMap { case (sheet, idx) =>
       if sheet.comments.isEmpty then None
       else
-        // Build author list (deduplicated and sorted for deterministic output)
+        // Build author list (canonicalized, deduplicated and sorted for deterministic output)
         // Reserve index 0 for unauthored comments (empty string)
         val (authorSet, hasUnauthored) =
           sheet.comments.values.foldLeft((Set.empty[String], false)) {
             case ((existing, hasNone), comment) =>
-              val nextSet = comment.author match
-                case Some(author) => existing + author
-                case None => existing
-              (nextSet, hasNone || comment.author.isEmpty)
+              canonicalCommentAuthor(comment.author) match
+                case Some(author) => (existing + author, hasNone)
+                case None => (existing, true)
           }
         // Sort for deterministic output (Excel preserves insertion order; we choose determinism here)
         // to keep serialized files stable across runs.
@@ -234,13 +243,14 @@ object XlsxWriter:
 
         // Convert domain Comments to OOXML (sorted by ref for deterministic output)
         val ooxmlComments = sheet.comments.toVector.sortBy(_._1.toA1).map { case (ref, comment) =>
+          val canonicalAuthor = canonicalCommentAuthor(comment.author)
           val authorId =
-            comment.author.flatMap(authorMap.get).getOrElse(0) // Index 0 = "" for unauthored
+            canonicalAuthor.flatMap(authorMap.get).getOrElse(0) // Index 0 = "" for unauthored
           // Note: xr:uid GUIDs omitted for new comments (deterministic output)
           // GUIDs are optional per OOXML spec and only needed for revision tracking
 
           // Excel displays author as part of comment text (bold first run)
-          val textWithAuthor = comment.author match
+          val textWithAuthor = canonicalAuthor match
             case Some(author) =>
               // Prepend author name as bold run
               val authorRun = com.tjclp.xl.richtext.TextRun(
@@ -1252,53 +1262,48 @@ object XlsxWriter:
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
         val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.sourcePath)).getOrElse(None)
 
-        // Check if modified sheets contain NEW strings not in preserved SST
-        // Extract entries from modified sheets (normalize for comparison consistency)
-        val modifiedSheetEntries: Set[Either[String, RichText]] =
-          tracker.modifiedSheets.flatMap { idx =>
+        // Check if modified sheets contain NEW strings not in the preserved SST.
+        // Entries are collected PER REFERENCE (one per text cell, GH-277: the SST count attribute
+        // counts references) in deterministic ref order, and compared EXACTLY — no Unicode
+        // normalization, byte-different spellings are different strings (GH-277/GH-289).
+        val modifiedSheetRefEntries: Vector[Either[String, RichText]] =
+          tracker.modifiedSheets.toVector.sorted.flatMap { idx =>
             workbook.sheets.lift(idx).toList.flatMap { sheet =>
-              sheet.cells.values.flatMap { cell =>
+              sheet.cells.toVector.sortBy(_._1.toA1).flatMap { case (_, cell) =>
                 cell.value match
-                  case CellValue.Text(str) => Some(Left(SharedStrings.normalize(str)))
+                  case CellValue.Text(str) => Some(Left(str))
                   case CellValue.RichText(rt) => Some(Right(rt))
                   case _ => None
               }
             }
-          }.toSet
+          }
 
-        // Get preserved SST entries (normalize for comparison)
         val preservedEntries: Set[Either[String, RichText]] =
-          parsedSST
-            .map(
-              _.strings
-                .map {
-                  case Left(s) => Left(SharedStrings.normalize(s))
-                  case Right(rt) => Right(rt)
-                }
-                .toSet
-            )
-            .getOrElse(Set.empty)
+          parsedSST.map(_.strings.toSet).getOrElse(Set.empty)
 
-        // Determine if modified sheets introduced new strings (normalized comparison)
-        val newEntries = modifiedSheetEntries.diff(preservedEntries)
+        // New entries in deterministic first-reference order, storing ORIGINAL strings —
+        // normalization is for comparison only, never storage (GH-277)
+        val newEntries =
+          modifiedSheetRefEntries.distinct.filterNot(preservedEntries.contains)
 
         if newEntries.nonEmpty then
           // New strings detected → build SST from preserved + new entries only
           // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
           val combinedEntries =
-            parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries.toVector
+            parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries
 
-          // Calculate total reference count: preserved count + new string references
+          // Total reference count: preserved count + one per REFERENCE of each new string (GH-277)
           val originalTotalCount = parsedSST.map(_.totalCount).getOrElse(0)
-          val newStringRefCount = newEntries.size // Each new entry used at least once
+          val newEntrySet = newEntries.toSet
+          val newStringRefCount = modifiedSheetRefEntries.count(newEntrySet.contains)
           val combinedTotalCount = originalTotalCount + newStringRefCount
 
-          // Create new SST with combined entries
+          // Create new SST with combined entries (exact-string index keys, GH-289)
           val combinedSST = SharedStrings(
             strings = combinedEntries,
             indexMap = combinedEntries.zipWithIndex.map {
-              case (Left(s), idx) => SharedStrings.normalize(s) -> idx
-              case (Right(rt), idx) => SharedStrings.normalize(rt.toPlainText) -> idx
+              case (Left(s), idx) => s -> idx
+              case (Right(rt), idx) => rt.toPlainText -> idx
             }.toMap,
             totalCount = combinedTotalCount
           )
@@ -1318,7 +1323,11 @@ object XlsxWriter:
         (generated, generated.isDefined)
 
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
-    val sstForSheets = if regenerateSharedStrings then sst else None
+    // Regenerated sheets ALWAYS encode against whatever SST ships in the output — preserved,
+    // combined, or freshly generated. The old `if regenerateSharedStrings then sst else None`
+    // orphaned a verbatim-copied SST: modified sheets re-inlined every string while
+    // sharedStrings.xml still shipped (GH-277).
+    val sstForSheets = sst
 
     // Build style index (automatic optimization based on sourceContext). Any sheet regenerated
     // from a source-backed workbook needs a local-to-workbook style remapping.

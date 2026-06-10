@@ -9,7 +9,7 @@ import org.xml.sax.{InputSource, Attributes}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
 import com.tjclp.xl.cells.{CellValue, CellError}
-import com.tjclp.xl.ooxml.SharedStrings
+import com.tjclp.xl.ooxml.{SharedStrings, XmlUtil}
 import java.util.concurrent.{ArrayBlockingQueue, BlockingQueue}
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -252,7 +252,7 @@ object SaxStreamingReader:
 
         case "is" if inInlineStr =>
           if !skipRow && !skipCell then
-            val text = valueText.toString
+            val text = XmlUtil.decodeXstring(valueText.toString)
             for colIdx <- currentCellColIdx do currentRowCells(colIdx) = CellValue.Text(text)
           inInlineStr = false
           valueText.clear()
@@ -322,7 +322,7 @@ object SaxStreamingReader:
             .getOrElse(CellValue.Empty)
 
         case Some("inlineStr") =>
-          CellValue.Text(value)
+          CellValue.Text(XmlUtil.decodeXstring(value))
 
         case Some("n") =>
           try CellValue.Number(BigDecimal(value))
@@ -344,7 +344,7 @@ object SaxStreamingReader:
           errorOpt.map(CellValue.Error(_)).getOrElse(CellValue.Empty)
 
         case Some("str") =>
-          CellValue.Text(value)
+          CellValue.Text(XmlUtil.decodeXstring(value))
 
         case _ =>
           try CellValue.Number(BigDecimal(value))

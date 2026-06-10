@@ -4,7 +4,9 @@ import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.Sheet
-import munit.FunSuite
+import munit.ScalaCheckSuite
+import org.scalacheck.Gen
+import org.scalacheck.Prop.*
 
 /**
  * Tests for DependencyGraph (WI-09d).
@@ -12,7 +14,7 @@ import munit.FunSuite
  * Tests dependency extraction, graph construction, cycle detection (Tarjan's SCC), and topological
  * sorting (Kahn's algorithm).
  */
-class DependencyGraphSpec extends FunSuite:
+class DependencyGraphSpec extends ScalaCheckSuite:
   val emptySheet = new Sheet(name = SheetName.unsafe("Test"))
 
   def sheetWith(cells: (ARef, CellValue)*): Sheet =
@@ -657,4 +659,107 @@ class DependencyGraphSpec extends FunSuite:
     assertEquals(deps, Set(ref"A1", ref"A2", ref"A3"))
     // Verify it didn't include cells outside used range
     assert(!deps.contains(ref"A100"))
+  }
+
+  // ===== GH-274: dynamic references (INDIRECT) =====
+
+  test("containsDynamicReference: true for INDIRECT nested in IF/SUM arguments") {
+    val nested = FormulaParser
+      .parse("=IF(A1>0, SUM(INDIRECT(\"B1:B2\")), 0)")
+      .fold(err => fail(err.toString), identity)
+    assert(DependencyGraph.containsDynamicReference(nested))
+
+    val arithmetic = FormulaParser
+      .parse("=INDIRECT(\"C1\")+1")
+      .fold(err => fail(err.toString), identity)
+    assert(DependencyGraph.containsDynamicReference(arithmetic))
+  }
+
+  test("containsDynamicReference: false without dynamic calls") {
+    val static = FormulaParser
+      .parse("=SUM(A1:A3)+OFFSET(A1,1,0)")
+      .fold(err => fail(err.toString), identity)
+    assert(!DependencyGraph.containsDynamicReference(static))
+  }
+
+  test("extractDependencies: =INDIRECT(A1) sees the argument A1") {
+    val expr = FormulaParser.parse("=INDIRECT(A1)").fold(err => fail(err.toString), identity)
+    assertEquals(DependencyGraph.extractDependencies(expr), Set(parseRef("A1")))
+  }
+
+  test("extractDependencies: =INDIRECT(\"B2\") sees nothing (resolved target is invisible)") {
+    // Pins the design: the static graph never gains an edge to INDIRECT's target — zero
+    // Tarjan false positives; freshness is the deferred bucket's job, not the graph's.
+    val expr = FormulaParser.parse("=INDIRECT(\"B2\")").fold(err => fail(err.toString), identity)
+    assertEquals(DependencyGraph.extractDependencies(expr), Set.empty[ARef])
+  }
+
+  test("dynamicCells: finds INDIRECT formulas, skips static and unparseable ones") {
+    val sheet = sheetWith(
+      parseRef("A1") -> CellValue.Formula("=INDIRECT(\"C1\")", None),
+      parseRef("A2") -> CellValue.Formula("=indirect(b1)", None), // case-insensitive
+      parseRef("A3") -> CellValue.Formula("=SUM(B1:B2)", None),
+      parseRef("A4") -> CellValue.Formula("=INDIRECT(", None), // unparseable: not dynamic
+      parseRef("A5") -> CellValue.Text("INDIRECT(\"C1\")") // not a formula
+    )
+    assertEquals(DependencyGraph.dynamicCells(sheet), Set(parseRef("A1"), parseRef("A2")))
+  }
+
+  test("dynamicClosure includes the dynamic cells AND their transitive static dependents") {
+    val sheet = sheetWith(
+      parseRef("A1") -> CellValue.Formula("=INDIRECT(\"X1\")", None),
+      parseRef("B1") -> CellValue.Formula("=A1+1", None),
+      parseRef("C1") -> CellValue.Formula("=B1+1", None),
+      parseRef("D1") -> CellValue.Formula("=X1*2", None) // not downstream of A1
+    )
+    val graph = DependencyGraph.fromSheet(sheet)
+    val closure = DependencyGraph.dynamicClosure(graph, Set(parseRef("A1")))
+    assertEquals(closure, Set(parseRef("A1"), parseRef("B1"), parseRef("C1")))
+  }
+
+  test("deferDynamic: empty closure is the identity") {
+    val order = List(parseRef("A1"), parseRef("B1"), parseRef("C1"))
+    assertEquals(DependencyGraph.deferDynamic(order, Set.empty), order)
+  }
+
+  property("deferDynamic lemma: stable partition of a topo order is a topo order, closure last") {
+    // Random DAG: node i may only depend on node j < i (acyclic by construction).
+    val genCase: Gen[(DependencyGraph, Set[ARef])] =
+      for
+        n <- Gen.choose(2, 12)
+        edges <- Gen.listOf(
+          for
+            i <- Gen.choose(1, n - 1)
+            j <- Gen.choose(0, n - 1).map(_ % math.max(1, i)) // j < i
+          yield (ARef.from0(0, i), ARef.from0(0, j))
+        )
+        seedIdx <- Gen.choose(0, n - 1)
+      yield
+        val nodes = (0 until n).map(k => ARef.from0(0, k))
+        val deps0 = nodes.map(_ -> Set.empty[ARef]).toMap
+        val deps = edges.foldLeft(deps0) { case (m, (u, v)) => m.updated(u, m(u) + v) }
+        val dependents = deps.foldLeft(Map.empty[ARef, Set[ARef]]) { case (acc, (u, vs)) =>
+          vs.foldLeft(acc)((a, v) => a.updated(v, a.getOrElse(v, Set.empty) + u))
+        }
+        (DependencyGraph(deps, dependents), Set(ARef.from0(0, seedIdx)))
+
+    forAll(genCase) { case (graph, seeds) =>
+      DependencyGraph.topologicalSort(graph) match
+        case Left(err) => falsified :| s"generated DAG reported cyclic: $err"
+        case Right(order) =>
+          val closure = DependencyGraph.dynamicClosure(graph, seeds)
+          val deferred = DependencyGraph.deferDynamic(order, closure)
+          val pos = deferred.zipWithIndex.toMap
+          val key = (r: ARef) => (r.row.index0, r.col.index0)
+          val isPermutation =
+            deferred.sortBy(key) == order.sortBy(key) && deferred.size == order.size
+          val isTopoOrder = graph.dependencies.forall { case (u, deps) =>
+            deps.filter(pos.contains).forall(v => pos(v) < pos(u))
+          }
+          val closureIsTail =
+            deferred.dropWhile(r => !closure.contains(r)).forall(closure.contains)
+          (isPermutation :| "permutation") &&
+          (isTopoOrder :| "valid topological order") &&
+          (closureIsTail :| "closure occupies the tail")
+    }
   }

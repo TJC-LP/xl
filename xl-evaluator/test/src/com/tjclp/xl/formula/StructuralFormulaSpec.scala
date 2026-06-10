@@ -96,3 +96,15 @@ class StructuralFormulaSpec extends FunSuite:
     val r = StructuralEditor.insertRows(Workbook(Vector(data, report)), SheetName.unsafe("Report"), 2, 1)
     assertEquals(sheetNamed(r, "Report")(ref"B1").value, formulaCell("=Data!A5"))
   }
+
+  // ===== GH-274: INDIRECT and structural edits =====
+
+  test("GH-274: insert row freezes INDIRECT text but shifts INDIRECT ref arguments") {
+    val s = new Sheet(name = S)
+      .put(ref"B1", formulaCell("=INDIRECT(\"A5\")")) // text is data — frozen (Excel parity)
+      .put(ref"C1", formulaCell("=INDIRECT(A5)")) // the A5 ARGUMENT is a real ref — shifts
+    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val s2 = sheetNamed(r, "S")
+    assertEquals(s2(ref"B1").value, formulaCell("=INDIRECT(\"A5\")"))
+    assertEquals(s2(ref"C1").value, formulaCell("=INDIRECT(A6)"))
+  }

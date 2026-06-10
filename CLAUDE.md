@@ -32,7 +32,7 @@ xl/              → Aggregate module + scripting prelude (com.tjclp.xl.scriptin
 xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), macros, DSL
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
-xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 104 functions, dependency graphs)
+xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 107 functions, dependency graphs)
 xl-cli/          → Stateless `xl` CLI (internal, native-image capable)
 xl-agent/        → AI agent benchmark runner (Anthropic API, skill comparison)
 xl-benchmarks/   → JMH performance benchmarks
@@ -363,7 +363,7 @@ sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
 sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
 ```
 
-**104 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, MIN, MAX, IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
+**107 Functions**: SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AVERAGE, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, MEDIAN, STDEV, STDEVP, VAR, VARP, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, MIN, MAX, IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR, CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE, TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC, ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PMT, FV, PV, RATE, NPER, NPV, IRR, XNPV, XIRR, VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, PI, ROW, COLUMN, ROWS, COLUMNS, ADDRESS, TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER, RAND, RANDBETWEEN — plus LET (lexical bindings; a parser-level special form, not in the registry listing)
 
 ### Rich Text
 ```scala

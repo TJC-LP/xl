@@ -126,6 +126,57 @@ class StreamingParitySpec extends CatsEffectSuite:
     }
   }
 
+  // ========== GH-288: _xHHHH_ escape decoding parity ==========
+
+  private val crText = "line1\rline2\r\nline3"
+  private val literalEscape = "_x000D_ literal"
+
+  private def crWorkbook: Workbook =
+    import com.tjclp.xl.cells.Cell
+    import com.tjclp.xl.macros.ref
+    Workbook(
+      Vector(
+        Sheet(SheetName.unsafe("Data"))
+          .put(Cell(ref"A1", CellValue.Text(crText)))
+          .put(Cell(ref"B2", CellValue.Text(literalEscape)))
+      )
+    )
+
+  List(
+    "inline" -> com.tjclp.xl.ooxml.writer.SstPolicy.Never,
+    "sst" -> com.tjclp.xl.ooxml.writer.SstPolicy.Always
+  ).foreach { case (dialect, sstPolicy) =>
+    test(s"GH-288 parity: CR (_x000D_) decodes identically in streaming and in-memory ($dialect)") {
+      val path = Files.createTempFile(s"xl-parity-cr-$dialect-", ".xlsx")
+      path.toFile.deleteOnExit()
+      IO.fromEither(
+        com.tjclp.xl.ooxml.XlsxWriter
+          .writeWith(
+            crWorkbook,
+            path,
+            com.tjclp.xl.ooxml.writer.WriterConfig(sstPolicy = sstPolicy)
+          )
+          .left
+          .map(err => new Exception(s"write failed: ${err.message}"))
+      ) >> loadInMemory(s"cr-$dialect", path).flatMap { wb =>
+        val expected = inMemoryValues(wb.sheets(0))
+        assertEquals(
+          expected.get((1, 0)),
+          Some(CellValue.Text(crText)),
+          s"$dialect: in-memory reader lost the CR"
+        )
+        assertEquals(
+          expected.get((2, 1)),
+          Some(CellValue.Text(literalEscape)),
+          s"$dialect: in-memory reader corrupted the literal _xHHHH_ text"
+        )
+        streamedValues(path, "Data").map { streamed =>
+          assertEquals(streamed, expected, s"$dialect: streaming vs in-memory CR drift")
+        }
+      }
+    }
+  }
+
   test("KNOWN GAP: streaming drops s= style indices for inlineStr cells (styled.xlsx)") {
     // Every cell in styled.xlsx carries an s= attribute in the XML (s=1..8) and
     // the in-memory reader assigns a styleId to all 8 cells. The streaming

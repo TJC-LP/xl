@@ -27,6 +27,8 @@ object formulaExports:
   // Evaluation
   export formula.eval.Evaluator
   export formula.Clock
+  // GH-115: randomness capability for RAND/RANDBETWEEN (Rng.system / Rng.seeded)
+  export formula.Rng
 
   // Error types
   export formula.eval.EvalError
@@ -38,6 +40,9 @@ object formulaExports:
   // SheetEvaluator object and extension methods
   export formula.eval.SheetEvaluator
   export formula.eval.SheetEvaluator.*
+
+  // Number-format inheritance for formula cells (GH-184, opt-in via putFormulaInheriting)
+  export formula.eval.FormulaFormatting
 
   // WorkbookEvaluator extension methods (withCachedFormulas, recalculate, evaluateFormula)
   export formula.eval.WorkbookEvaluator

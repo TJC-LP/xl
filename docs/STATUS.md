@@ -58,7 +58,7 @@
 - ✅ HTML export: `sheet.toHtml(range"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
-- ✅ **Function Library**: **104 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math, statistical, dynamic arrays), extensible type class parser, evaluation API. 0.10.0 added IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, and the spill functions SEQUENCE/SORT/UNIQUE/FILTER (#76, #120, #122).
+- ✅ **Function Library**: **107 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math, statistical, dynamic arrays), extensible type class parser, evaluation API. 0.10.0 added IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, and the spill functions SEQUENCE/SORT/UNIQUE/FILTER (#76, #120, #122); 0.11.2 added INDIRECT (GH-274), RAND/RANDBETWEEN via the seeded Rng capability (GH-115), and LET lexical bindings (GH-193) (dynamic text-to-reference resolution with deferred-bucket recalculation).
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 - ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
 
@@ -99,7 +99,7 @@
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 1198 | parser, evaluator, 104-function library, dependency graph, cross-sheet formulas, recalculation, structural editing |
+| xl-evaluator | 1279 | parser, evaluator, 105-function library, dependency graph, cross-sheet formulas, recalculation, structural editing |
 | xl-core | 971 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL |
 | xl-ooxml | 381 | round-trips (cells, styles, tables, comments, hyperlinks), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 308 | command parsing, batch ops, view/eval/export, streaming mode |
@@ -119,7 +119,7 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 **Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
 - ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **104 built-in functions**, extensible type class parser, evaluation API
+- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **107 built-in functions**, extensible type class parser, evaluation API
   - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
   - **Statistical** (5): LARGE, SMALL, RANK, PERCENTILE, QUARTILE
   - **Conditional** (9): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, SUMPRODUCT
@@ -128,7 +128,7 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
   - **Date** (12): TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
   - **Math** (16): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
   - **Financial** (9): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
-  - **Lookup / Reference** (11): VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+  - **Lookup / Reference** (12): VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
   - **Dynamic Arrays** (5): TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
   - FunctionSpec registry: macro-collected specs with extensible registry
   - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
@@ -209,7 +209,7 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 - ✅ P7: String interpolation Phase 1 (runtime validation for all macros)
 - ✅ P8: String interpolation Phase 2 (compile-time optimization)
 - ✅ P31: Optics, RichText, HTML export, enhanced ergonomics
-- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 104 functions, dependency graph, cycle detection
+- ✅ **Formula System** (WI-07/08/09): Parser, evaluator, 107 functions, dependency graph, cycle detection
 - ✅ **Excel Tables** (WI-10): Structured data with headers, AutoFilter, styling
 - ✅ **Benchmarks** (WI-15): JMH performance suite (XL vs POI)
 - ✅ **SAX Write** (WI-17): Fast SAX/StAX streaming write path
@@ -296,7 +296,7 @@ xl-cats-effect/src/com/tjclp/xl/io/
 ```
 
 ### Completed Modules (Additional)
-- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 104 functions, dependency graph, structural editing, recalculation)
+- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 107 functions, dependency graph, structural editing, recalculation)
 - `xl-cli/` ✅ **Complete** (stateless `xl` CLI: 40 subcommands, 21 batch ops, rendering, streaming mode)
 - `xl-agent/` ✅ **Complete** (AI agent benchmark runner)
 - `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)

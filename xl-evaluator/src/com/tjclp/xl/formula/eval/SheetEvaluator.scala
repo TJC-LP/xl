@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
-import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
@@ -13,6 +13,8 @@ import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.patch.Patch
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.workbooks.Workbook
 import java.time.{LocalDate, LocalDateTime}
 
@@ -75,27 +77,29 @@ object SheetEvaluator:
       workbook: Option[Workbook] = None,
       currentCell: Option[ARef] = None
     ): XLResult[CellValue] =
-      for
-        // Parse formula string to TExpr AST
-        expr <- FormulaParser
-          .parse(formula)
-          .left
-          .map(parseError =>
-            XLError.FormulaError(
-              formula,
-              s"Parse error: $parseError"
-            )
-          )
+      evaluateFormulaWith(sheet, formula, Evaluator.instance, clock, workbook, currentCell)
 
-        // Evaluate TExpr against sheet
-        result <- Evaluator.instance
-          .eval(expr, sheet, clock, workbook, currentCell)
-          .left
-          .map(evalError => evalErrorToXLError(evalError, Some(formula)))
+    /**
+     * Evaluate a formula with an explicit randomness source (GH-115) — deterministic
+     * RAND/RANDBETWEEN via `Rng.seeded(seed)`.
+     *
+     * Note: explicit overloads instead of a default rng parameter — extension methods with default
+     * arguments crash the compiler when merged through the formulaExports wildcard export (see the
+     * DependentRecalculation note in exports.scala).
+     */
+    @annotation.targetName("evaluateFormulaWithRng")
+    def evaluateFormula(formula: String, clock: Clock, rng: Rng): XLResult[CellValue] =
+      evaluateFormulaWith(sheet, formula, Evaluator.instance(rng), clock, None, None)
 
-        // Convert typed result to CellValue
-        cellValue = toCellValue(result)
-      yield cellValue
+    /** Evaluate a formula with an explicit randomness source and workbook context (GH-115). */
+    @annotation.targetName("evaluateFormulaWithRngWorkbook")
+    def evaluateFormula(
+      formula: String,
+      clock: Clock,
+      rng: Rng,
+      workbook: Option[Workbook]
+    ): XLResult[CellValue] =
+      evaluateFormulaWith(sheet, formula, Evaluator.instance(rng), clock, workbook, None)
 
     /**
      * Evaluate cell at ref (if it contains formula).
@@ -135,6 +139,25 @@ object SheetEvaluator:
         case other =>
           scala.util.Right(other)
 
+    /** Evaluate a formula cell with an explicit randomness source (GH-115). */
+    @annotation.targetName("evaluateCellWithRng")
+    def evaluateCell(ref: ARef, clock: Clock, rng: Rng): XLResult[CellValue] =
+      evaluateCell(ref, clock, rng, None)
+
+    /** Evaluate a formula cell with explicit randomness and workbook context (GH-115). */
+    @annotation.targetName("evaluateCellWithRngWorkbook")
+    def evaluateCell(
+      ref: ARef,
+      clock: Clock,
+      rng: Rng,
+      workbook: Option[Workbook]
+    ): XLResult[CellValue] =
+      sheet(ref).value match
+        case CellValue.Formula(expr, _) =>
+          evaluateFormulaWith(sheet, expr, Evaluator.instance(rng), clock, workbook, Some(ref))
+        case other =>
+          scala.util.Right(other)
+
     /**
      * Evaluate all formula cells in sheet with dependency checking.
      *
@@ -165,36 +188,12 @@ object SheetEvaluator:
       clock: Clock = Clock.system,
       workbook: Option[Workbook] = None
     ): XLResult[Map[ARef, CellValue]] =
-      // Build dependency graph
-      val graph = DependencyGraph.fromSheet(sheet)
+      evaluateWithDependencyCheckImpl(sheet, clock, workbook, None)
 
-      // Detect cycles first (fail fast)
-      DependencyGraph.detectCycles(graph) match
-        case scala.util.Left(circularRef) =>
-          // Convert EvalError.CircularRef to XLError
-          scala.util.Left(evalErrorToXLError(circularRef, None))
-        case scala.util.Right(_) =>
-          // No cycles, get evaluation order
-          DependencyGraph.topologicalSort(graph) match
-            case scala.util.Left(circularRef) =>
-              // Topological sort found cycle (shouldn't happen after detectCycles passed)
-              scala.util.Left(evalErrorToXLError(circularRef, None))
-            case scala.util.Right(evalOrder) =>
-              // Evaluate in dependency order, threading the partially evaluated sheet so
-              // dependent formulas see previously computed values. Fail-fast on first error.
-              val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
-                scala.util.Right((sheet, Map.empty))
-              ) {
-                case (scala.util.Right((tempSheet, results)), ref) =>
-                  tempSheet.evaluateCell(ref, clock, workbook) match
-                    case scala.util.Right(value) =>
-                      scala.util.Right((tempSheet.put(ref, value), results + (ref -> value)))
-                    case scala.util.Left(error) =>
-                      scala.util.Left(error)
-                case (left, _) => left
-              }
-
-              evalResult.map(_._2)
+    /** Dependency-ordered evaluation with an explicit randomness source (GH-115). */
+    @annotation.targetName("evaluateWithDependencyCheckRng")
+    def evaluateWithDependencyCheck(clock: Clock, rng: Rng): XLResult[Map[ARef, CellValue]] =
+      evaluateWithDependencyCheckImpl(sheet, clock, None, Some(rng))
 
     /**
      * Evaluate all formula cells in sheet (unsafe, no cycle detection).
@@ -277,9 +276,16 @@ object SheetEvaluator:
         // 3. Find all transitive dependencies (cells that range formulas depend on)
         val transitiveDeps = DependencyGraph.transitiveDependencies(graph, rangeFormulaCells)
 
-        // 4. Target cells = range formulas + (transitive deps that are also formulas)
+        // 4. Target cells = range formulas + (transitive deps that are also formulas).
+        // GH-274: when the sheet has dynamic references (INDIRECT), widen to EVERY formula
+        // cell — dynamic targets are invisible to the static walk, so correctness requires
+        // the whole sheet computed in order (correctness over narrowness; results still
+        // report only the requested range).
+        val dynamic = DependencyGraph.dynamicCells(sheet)
         val allFormulaCells = graph.dependencies.keySet
-        val targetCells = rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
+        val targetCells =
+          if dynamic.isEmpty then rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
+          else allFormulaCells
 
         // 5. Check for cycles in the subgraph (could still have cycles if dependencies have cycles)
         // We use the full graph for cycle detection since dependencies may form cycles outside the range
@@ -293,12 +299,18 @@ object SheetEvaluator:
                 scala.util.Left(evalErrorToXLError(circularRef, None))
               case scala.util.Right(fullEvalOrder) =>
                 // Filter to only include cells we need to evaluate
-                val evalOrder = fullEvalOrder.filter(targetCells.contains)
+                // GH-274: dynamic cells + their static dependents evaluate last (caches stripped)
+                val (evalOrder, initial) = deferDynamicWithStrip(
+                  sheet,
+                  graph,
+                  fullEvalOrder.filter(targetCells.contains),
+                  dynamic
+                )
 
                 // 7. Evaluate in dependency order, threading the partially evaluated sheet.
                 // Fail-fast on first error; only cells in the original range are reported.
                 val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
-                  scala.util.Right((sheet, Map.empty))
+                  scala.util.Right((initial, Map.empty))
                 ) {
                   case (scala.util.Right((tempSheet, results)), ref) =>
                     tempSheet.evaluateCell(ref, clock, workbook) match
@@ -348,36 +360,221 @@ object SheetEvaluator:
       clock: Clock = Clock.system,
       workbook: Option[Workbook] = None
     ): XLResult[(Sheet, CellRange)] =
-      for
-        // Parse formula string to TExpr AST
-        expr <- FormulaParser
-          .parse(formula)
-          .left
-          .map(parseError =>
-            XLError.FormulaError(
-              formula,
-              s"Parse error: $parseError"
-            )
+      evaluateArrayFormulaImpl(sheet, formula, originRef, Evaluator.arrayInstance, clock, workbook)
+
+    /** Array formula evaluation with an explicit randomness source (GH-115). */
+    @annotation.targetName("evaluateArrayFormulaWithRng")
+    def evaluateArrayFormula(
+      formula: String,
+      originRef: ARef,
+      clock: Clock,
+      rng: Rng
+    ): XLResult[(Sheet, CellRange)] =
+      evaluateArrayFormulaImpl(sheet, formula, originRef, Evaluator.arrayInstance(rng), clock, None)
+
+    /**
+     * Put a formula at ref, inheriting the number format of its referenced cells (GH-184).
+     *
+     * Excel applies the referenced cells' format automatically when a formula is entered into a
+     * General cell (`=B2-B3` over currency cells displays as `$400,000.00`); plain `put` keeps
+     * formula cells at General. This opt-in variant parses the formula, infers a format via
+     * [[FormulaFormatting.inferFormatFromReferences]], and — matching Excel — applies it only when
+     * the target cell's current format is General (an explicit target format is preserved, as are
+     * its other style properties).
+     *
+     * Note: explicit overloads instead of a default workbook parameter — extension methods with
+     * default arguments crash the compiler when merged through the formulaExports wildcard export
+     * (see the DependentRecalculation note in exports.scala).
+     *
+     * @param ref
+     *   Target cell for the formula
+     * @param formula
+     *   Excel formula string (with or without leading =)
+     * @return
+     *   Left on parse failure; Right(updated sheet) otherwise (inference itself never fails —
+     *   unresolvable or unformatted references simply contribute nothing)
+     */
+    def putFormulaInheriting(ref: ARef, formula: String): XLResult[Sheet] =
+      putFormulaInheritingImpl(sheet, ref, formula, None)
+
+    /**
+     * Workbook-aware [[putFormulaInheriting]]: cross-sheet references (`=Data!B2`) resolve their
+     * formats against the given workbook.
+     */
+    @annotation.targetName("putFormulaInheritingWorkbook")
+    def putFormulaInheriting(ref: ARef, formula: String, workbook: Workbook): XLResult[Sheet] =
+      putFormulaInheritingImpl(sheet, ref, formula, Some(workbook))
+
+  // ========== Implementation shared by the public overloads ==========
+
+  private def evaluateArrayFormulaImpl(
+    sheet: Sheet,
+    formula: String,
+    originRef: ARef,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[(Sheet, CellRange)] =
+    for
+      // Parse formula string to TExpr AST
+      expr <- FormulaParser
+        .parse(formula)
+        .left
+        .map(parseError =>
+          XLError.FormulaError(
+            formula,
+            s"Parse error: $parseError"
           )
+        )
 
-        // Evaluate TExpr against sheet
-        result <- Evaluator.arrayInstance
-          .eval(expr, sheet, clock, workbook, Some(originRef))
-          .left
-          .map(evalError => evalErrorToXLError(evalError, Some(formula)))
+      // Evaluate TExpr against sheet
+      result <- evaluator
+        .eval(expr, sheet, clock, workbook, Some(originRef))
+        .left
+        .map(evalError => evalErrorToXLError(evalError, Some(formula)))
 
-        // Handle array vs scalar result
-        updated <- result match
-          case ar: ArrayResult =>
-            val patch = Patch.PutArray(originRef, ar.values)
-            val endRef = originRef.shift(ar.cols - 1, ar.rows - 1)
-            scala.util.Right((Patch.applyPatch(sheet, patch), CellRange(originRef, endRef)))
-          case other =>
-            val cv = toCellValue(other)
-            scala.util.Right((sheet.put(originRef, cv), CellRange(originRef, originRef)))
-      yield updated
+      // Handle array vs scalar result
+      updated <- result match
+        case ar: ArrayResult =>
+          val patch = Patch.PutArray(originRef, ar.values)
+          val endRef = originRef.shift(ar.cols - 1, ar.rows - 1)
+          scala.util.Right((Patch.applyPatch(sheet, patch), CellRange(originRef, endRef)))
+        case other =>
+          val cv = toCellValue(other)
+          scala.util.Right((sheet.put(originRef, cv), CellRange(originRef, originRef)))
+    yield updated
 
   // ========== Helper Functions ==========
+
+  private def putFormulaInheritingImpl(
+    sheet: Sheet,
+    ref: ARef,
+    formula: String,
+    workbook: Option[Workbook]
+  ): XLResult[Sheet] =
+    FormulaParser
+      .parse(formula)
+      .left
+      .map(parseError => XLError.FormulaError(formula, s"Parse error: $parseError"))
+      .map { expr =>
+        val normalized = if formula.startsWith("=") then formula else s"=$formula"
+        val withFormula = sheet.put(ref, CellValue.Formula(normalized))
+        val currentStyle =
+          withFormula.cells.get(ref).flatMap(_.styleId).flatMap(withFormula.styleRegistry.get)
+        // Excel parity: inherit only into a General-formatted target (formats are inferred
+        // against the pre-put sheet so a self-reference can't observe the formula being written)
+        FormulaFormatting.inferFormatFromReferences(expr, sheet, workbook) match
+          case Some(fmt) if currentStyle.forall(_.numFmt == NumFmt.General) =>
+            import com.tjclp.xl.sheets.styleSyntax.withCellStyle
+            withFormula.withCellStyle(
+              ref,
+              currentStyle.getOrElse(CellStyle.default).withNumFmt(fmt)
+            )
+          case _ => withFormula
+      }
+
+  /** Shared parse → evaluate → CellValue pipeline, parameterized by evaluator (GH-115: rng). */
+  private def evaluateFormulaWith(
+    sheet: Sheet,
+    formula: String,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): XLResult[CellValue] =
+    for
+      expr <- FormulaParser
+        .parse(formula)
+        .left
+        .map(parseError =>
+          XLError.FormulaError(
+            formula,
+            s"Parse error: $parseError"
+          )
+        )
+      result <- evaluator
+        .eval(expr, sheet, clock, workbook, currentCell)
+        .left
+        .map(evalError => evalErrorToXLError(evalError, Some(formula)))
+    yield toCellValue(result)
+
+  /** Shared dependency-ordered evaluation, optionally with an explicit rng (GH-115). */
+  private def evaluateWithDependencyCheckImpl(
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    rngOpt: Option[Rng]
+  ): XLResult[Map[ARef, CellValue]] =
+    // Build dependency graph
+    val graph = DependencyGraph.fromSheet(sheet)
+
+    // Detect cycles first (fail fast)
+    DependencyGraph.detectCycles(graph) match
+      case scala.util.Left(circularRef) =>
+        // Convert EvalError.CircularRef to XLError
+        scala.util.Left(evalErrorToXLError(circularRef, None))
+      case scala.util.Right(_) =>
+        // No cycles, get evaluation order
+        DependencyGraph.topologicalSort(graph) match
+          case scala.util.Left(circularRef) =>
+            // Topological sort found cycle (shouldn't happen after detectCycles passed)
+            scala.util.Left(evalErrorToXLError(circularRef, None))
+          case scala.util.Right(evalOrder) =>
+            // GH-274: dynamic (INDIRECT-bearing) cells and their static dependents evaluate
+            // last, against a temp whose bucket caches are stripped, so dynamic reads see
+            // computed values. A dynamic depth-cap error fails the call, consistent with
+            // this method's fail-fast cycle behavior.
+            val (ordered, initial) =
+              deferDynamicWithStrip(sheet, graph, evalOrder, DependencyGraph.dynamicCells(sheet))
+            // Evaluate in dependency order, threading the partially evaluated sheet so
+            // dependent formulas see previously computed values. Fail-fast on first error.
+            val evalResult = ordered.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
+              scala.util.Right((initial, Map.empty))
+            ) {
+              case (scala.util.Right((tempSheet, results)), ref) =>
+                val evaluated = rngOpt match
+                  case Some(rng) => tempSheet.evaluateCell(ref, clock, rng, workbook)
+                  case None => tempSheet.evaluateCell(ref, clock, workbook)
+                evaluated match
+                  case scala.util.Right(value) =>
+                    scala.util.Right((tempSheet.put(ref, value), results + (ref -> value)))
+                  case scala.util.Left(error) =>
+                    scala.util.Left(error)
+              case (left, _) => left
+            }
+
+            evalResult.map(_._2)
+
+  /**
+   * GH-274: strip stale formula caches from the given cells.
+   *
+   * Used on the deferred dynamic bucket before threading an evaluation fold: a dynamic read
+   * (INDIRECT) of a not-yet-evaluated bucket cell then recursively evaluates the formula fresh
+   * (depth-guarded) instead of trusting a previous generation's cache. Only the threaded temp sheet
+   * is affected — final cache write-back overlays computed results on the original sheet.
+   */
+  private[eval] def stripFormulaCaches(sheet: Sheet, refs: Set[ARef]): Sheet =
+    refs.foldLeft(sheet) { (s, r) =>
+      s.cells.get(r).map(_.value) match
+        case Some(CellValue.Formula(expr, Some(_))) => s.put(r, CellValue.Formula(expr, None))
+        case _ => s
+    }
+
+  /**
+   * GH-274: defer dynamic (INDIRECT-bearing) cells and their static dependents to the end of a
+   * topological evaluation order, and strip their stale caches from the sheet the fold threads.
+   * Identity when the sheet has no dynamic references.
+   */
+  private[eval] def deferDynamicWithStrip(
+    sheet: Sheet,
+    graph: DependencyGraph,
+    evalOrder: List[ARef],
+    dynamic: Set[ARef]
+  ): (List[ARef], Sheet) =
+    if dynamic.isEmpty then (evalOrder, sheet)
+    else
+      val bucket = DependencyGraph.dynamicClosure(graph, dynamic)
+      (DependencyGraph.deferDynamic(evalOrder, bucket), stripFormulaCaches(sheet, bucket))
 
   /**
    * Convert typed TExpr evaluation result to CellValue.

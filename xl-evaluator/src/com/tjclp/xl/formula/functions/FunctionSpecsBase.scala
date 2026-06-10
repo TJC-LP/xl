@@ -89,6 +89,8 @@ trait FunctionSpecsBase:
   type FilterArgs = (TExpr.RangeLocation, TExpr.RangeLocation, Option[TExpr[Any]])
   // GH-122 OFFSET: anchor ref + row/col offsets + optional height/width
   type OffsetArgs = (AnyExpr, TExpr[Int], TExpr[Int], Option[TExpr[Int]], Option[TExpr[Int]])
+  // GH-274 INDIRECT: ref_text + optional a1 flag (FALSE = R1C1, documented-unsupported)
+  type IndirectArgs = (TExpr[String], Option[TExpr[Boolean]])
   type IfErrorArgs = (TExpr[CellValue], TExpr[CellValue])
   type NoArgs = EmptyTuple
   type DateTripleInt = (TExpr[Int], TExpr[Int], TExpr[Int])

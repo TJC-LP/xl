@@ -150,6 +150,15 @@ object FormulaShifter:
       case DateTimeToSerial(dtExpr) =>
         DateTimeToSerial(shiftInternal(dtExpr, colDelta, rowDelta)).asInstanceOf[TExpr[A]]
 
+      // GH-193: LET — shift refs in binding values and body; binding names are not cell refs
+      case Let(bindings, body) =>
+        Let(
+          bindings.map((name, value) => (name, shiftWildcard(value, colDelta, rowDelta))),
+          shiftInternal(body, colDelta, rowDelta)
+        ).asInstanceOf[TExpr[A]]
+      case bref: BindingRef => bref.asInstanceOf[TExpr[A]]
+      case cbref: CoercedBindingRef[?] => cbref.asInstanceOf[TExpr[A]]
+
   /**
    * Shift a cell reference based on its anchor mode.
    *
@@ -393,3 +402,17 @@ object FormulaShifter:
         if deleted then None else Some(Call(call.spec, shifted).asInstanceOf[TExpr[A]])
       case DateToSerial(e) => go(e).map(se => DateToSerial(se).asInstanceOf[TExpr[A]])
       case DateTimeToSerial(e) => go(e).map(se => DateTimeToSerial(se).asInstanceOf[TExpr[A]])
+      // GH-193: LET — a fully-deleted ref in any binding value or the body voids the formula
+      case Let(bindings, body) =>
+        val shiftedBindings =
+          bindings.foldLeft[Option[List[(String, TExpr[?])]]](Some(Nil)) {
+            case (None, _) => None
+            case (Some(acc), (name, value)) =>
+              go(value.asInstanceOf[TExpr[Any]]).map(sv => (name, sv) :: acc)
+          }
+        for
+          bs <- shiftedBindings
+          sb <- go(body)
+        yield Let(bs.reverse, sb).asInstanceOf[TExpr[A]]
+      case _: BindingRef => Some(expr)
+      case _: CoercedBindingRef[?] => Some(expr)

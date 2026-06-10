@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.functions
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
-import com.tjclp.xl.formula.{Clock, Arity}
+import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.addressing.ARef
@@ -22,7 +22,15 @@ final case class FunctionFlags(
    * numeric-returning Call in `ToInt` without listing each function by name. Mutually exclusive
    * with `returnsDate` / `returnsTime` — a function returns one type.
    */
-  returnsNumeric: Boolean = false
+  returnsNumeric: Boolean = false,
+  /**
+   * GH-274: True for functions whose data dependencies are not statically knowable (e.g. INDIRECT,
+   * which reads whatever cell its evaluated text names). The static dependency graph sees only the
+   * function's *arguments*; cells bearing such calls are deferred to the end of recalculation order
+   * (`DependencyGraph.deferDynamic`) and treated as always-dirty by targeted recalculation
+   * (`DependentRecalculation`).
+   */
+  dynamicDeps: Boolean = false
 )
 
 final case class ArgPrinter(
@@ -45,7 +53,11 @@ final case class EvalContext(
   /** Current cell being evaluated. Used by ROW() and COLUMN() with no arguments. */
   currentCell: Option[ARef] = None,
   /** Recursion depth for cross-sheet formula evaluation. */
-  depth: Int = 0
+  depth: Int = 0,
+  /** GH-193: in-scope LET bindings (declared name → evaluated value). */
+  bindings: Map[String, Any] = Map.empty,
+  /** GH-115: randomness capability for RAND/RANDBETWEEN (Clock pattern). */
+  rng: Rng = Rng.system
 )
 
 sealed trait ArgValue

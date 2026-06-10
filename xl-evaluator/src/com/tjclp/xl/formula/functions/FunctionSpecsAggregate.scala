@@ -96,7 +96,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case CellValue.Formula(formulaStr, None) =>
         // Recursively evaluate uncached formula
         Evaluator
-          .evalCrossSheetFormula(formulaStr, targetSheet, ctx.clock, ctx.workbook, ctx.depth + 1)
+          .evalCrossSheetFormula(
+            formulaStr,
+            targetSheet,
+            ctx.clock,
+            ctx.workbook,
+            ctx.depth + 1,
+            ctx.rng
+          )
           .map {
             case CellValue.Number(n) => Some(n)
             case _ => None // Non-numeric result, skip
@@ -116,7 +123,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case CellValue.Formula(formulaStr, None) =>
         // Recursively evaluate uncached formula
         Evaluator
-          .evalCrossSheetFormula(formulaStr, targetSheet, ctx.clock, ctx.workbook, ctx.depth + 1)
+          .evalCrossSheetFormula(
+            formulaStr,
+            targetSheet,
+            ctx.clock,
+            ctx.workbook,
+            ctx.depth + 1,
+            ctx.rng
+          )
           .map(coerceToNumeric)
       case _ =>
         Right(coerceToNumeric(cellValue))
@@ -132,7 +146,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case CellValue.Formula(formulaStr, None) =>
         // Recursively evaluate uncached formula
         Evaluator
-          .evalCrossSheetFormula(formulaStr, targetSheet, ctx.clock, ctx.workbook, ctx.depth + 1)
+          .evalCrossSheetFormula(
+            formulaStr,
+            targetSheet,
+            ctx.clock,
+            ctx.workbook,
+            ctx.depth + 1,
+            ctx.rng
+          )
       case CellValue.Formula(_, Some(cached)) =>
         // Use cached value
         Right(cached)

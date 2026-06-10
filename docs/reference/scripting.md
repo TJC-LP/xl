@@ -177,7 +177,7 @@ Reference cycles are **isolated**: the participants and their downstream depende
 the acyclic remainder still evaluates and caches.
 
 For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` returns
-`XLResult[CellValue]` with cross-sheet context wired automatically (104 functions supported —
+`XLResult[CellValue]` with cross-sheet context wired automatically (107 functions supported —
 see the [skill API reference](../../plugin/skills/xl-scripting/reference/API.md) for the full
 list).
 

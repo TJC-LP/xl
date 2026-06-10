@@ -2,9 +2,10 @@ package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator}
+import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.Arity
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellValue, CellError}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
@@ -69,6 +70,114 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
                 Right(ArrayResult(extractRangeAsMatrix(range, ctx.sheet)))
           yield result
     }
+
+  /**
+   * INDIRECT(ref_text, [a1])
+   *
+   * GH-274: resolves A1-style text ("B5", "A1:B10", "$A$1", "A:A", "Sheet2!A1", "'My Sheet'!A1") to
+   * a reference at evaluation time. Returned as an ArrayResult (the OFFSET mechanism), so it
+   * collapses to a scalar when 1×1, composes with aggregates (SUM(INDIRECT(...))), broadcasts in
+   * array arithmetic, and spills standalone. Unresolvable, non-reference, or out-of-grid text is
+   * the #REF! VALUE (total — never a thrown exception). Full column/row text is bounded to the
+   * target sheet's used range; resolved ranges are capped at 1,048,576 cells. R1C1 mode (a1=FALSE)
+   * is a documented-unsupported evaluation error: the cell stays uncached so Excel computes the
+   * true value on open (deliberately NOT #REF! — a valid R1C1 string is not an invalid reference).
+   *
+   * Dependency semantics: the static graph sees only INDIRECT's arguments (e.g. A1 in
+   * `=INDIRECT(A1)`), never its resolved target — see `DependencyGraph.dynamicCells` and the
+   * deferred-bucket ordering in `WorkbookEvaluator.recalcSheet`.
+   */
+  val indirect: FunctionSpec[ArrayResult] { type Args = IndirectArgs } =
+    FunctionSpec.simple[ArrayResult, IndirectArgs](
+      "INDIRECT",
+      Arity.Range(1, 2),
+      flags = FunctionFlags(dynamicDeps = true)
+    ) { (args, ctx) =>
+      val (refTextExpr, a1Opt) = args
+      for
+        refText <- ctx.evalExpr(refTextExpr)
+        a1 <- a1Opt.map(e => ctx.evalExpr(e)).getOrElse(Right(true))
+        result <-
+          if !a1 then
+            Left(
+              EvalError.EvalFailed(
+                "INDIRECT: R1C1 reference style (a1=FALSE) is not supported",
+                Some(s"INDIRECT(\"$refText\", FALSE)")
+              )
+            )
+          else resolveIndirect(refText.trim, ctx)
+      yield result
+    }
+
+  /** Maximum number of cells INDIRECT will materialize (SEQUENCE-guard parity). */
+  private val MaxIndirectCells = 1048576L
+
+  /** The #REF! VALUE result (Excel parity for unresolvable ref_text — not an eval failure). */
+  private def indirectRefError: Either[EvalError, ArrayResult] =
+    Right(ArrayResult.single(CellValue.Error(CellError.Ref)))
+
+  /**
+   * Resolve INDIRECT ref_text to a materialized ArrayResult.
+   *
+   * Reuses FormulaParser (anchors, full columns/rows, quoted sheet names, grid bounds, GH-56
+   * nesting cap all inherited) and whitelists the parsed AST down to reference shapes. Any other
+   * shape — literals, expressions, calls, defined names, external-workbook or structured references
+   * — is #REF!. A sheet name that fails workbook lookup is also #REF! (the name is data; deliberate
+   * divergence from SheetRef's config-style error). Qualified text WITHOUT a workbook context is a
+   * config error (Left), matching cross-sheet reference behavior.
+   */
+  private def resolveIndirect(
+    text: String,
+    ctx: EvalContext
+  ): Either[EvalError, ArrayResult] =
+    if text.isEmpty then indirectRefError
+    else
+      FormulaParser.parse("=" + text) match
+        case Left(_) => indirectRefError
+        case Right(expr) =>
+          whitelistedReference(expr) match
+            case None => indirectRefError
+            case Some((None, range)) => materializeIndirect(range, ctx.sheet, ctx)
+            case Some((Some(sheetName), range)) =>
+              ctx.workbook match
+                case None => Left(Evaluator.missingWorkbookError(text, isRange = true))
+                case Some(wb) =>
+                  wb(sheetName) match
+                    case Left(_) => indirectRefError
+                    case Right(target) => materializeIndirect(range, target, ctx)
+
+  /** Whitelist a parsed AST down to (optional sheet, range); None for any non-reference shape. */
+  private def whitelistedReference(expr: TExpr[?]): Option[(Option[SheetName], CellRange)] =
+    expr match
+      case TExpr.Ref(at, _, _) => Some((None, CellRange(at, at)))
+      case TExpr.PolyRef(at, _) => Some((None, CellRange(at, at)))
+      case TExpr.RangeRef(range) => Some((None, range))
+      case TExpr.SheetRef(sheet, at, _, _) => Some((Some(sheet), CellRange(at, at)))
+      case TExpr.SheetPolyRef(sheet, at, _) => Some((Some(sheet), CellRange(at, at)))
+      case TExpr.SheetRange(sheet, range) => Some((Some(sheet), range))
+      case _ => None
+
+  /**
+   * Bound (full column/row → used range), cap, and materialize the resolved range.
+   *
+   * A full column/row over an empty sheet collapses to the empty array (SUM → 0, the GH-192
+   * `CellRange.empty` convention). The cell cap rejects huge non-full ranges BEFORE materializing —
+   * anti-OOM, totality preserved as a Left.
+   */
+  private def materializeIndirect(
+    range: CellRange,
+    target: Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, ArrayResult] =
+    val bounded: Option[CellRange] =
+      if range.isFullColumn || range.isFullRow then target.usedRange.flatMap(range.intersect)
+      else Some(range)
+    bounded match
+      case None => Right(ArrayResult.empty)
+      case Some(r) =>
+        if r.width.toLong * r.height.toLong > MaxIndirectCells then
+          Left(EvalError.EvalFailed("INDIRECT: resolved range exceeds 1,048,576 cells", None))
+        else extractRangeAsMatrixEval(r, target, ctx).map(ArrayResult(_))
 
   /**
    * SEQUENCE(rows, [cols], [start], [step])
@@ -230,3 +339,42 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
           case other => other
       }.toVector
     }.toVector
+
+  /**
+   * GH-274: eval-aware variant of [[extractRangeAsMatrix]] used by INDIRECT.
+   *
+   * Identical except UNCACHED formula cells are recursively evaluated (the GH-208 `Ref`-deref /
+   * GH-187 aggregate semantics: trust `Some(cached)`, evaluate `None`, depth-100 guard). This is
+   * what makes the quote laws `INDIRECT("X") ≡ X` and `SUM(INDIRECT(R)) ≡ SUM(R)` hold when targets
+   * are formulas that have not been evaluated yet. OFFSET deliberately keeps the cache-trusting
+   * extractor in this change (behavior delta on a shipped function — named follow-up).
+   */
+  private def extractRangeAsMatrixEval(
+    range: CellRange,
+    targetSheet: Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, Vector[Vector[CellValue]]] =
+    (range.rowStart.index0 to range.rowEnd.index0)
+      .foldLeft[Either[EvalError, Vector[Vector[CellValue]]]](Right(Vector.empty)) {
+        case (Left(err), _) => Left(err)
+        case (Right(rows), rowIdx) =>
+          (range.colStart.index0 to range.colEnd.index0)
+            .foldLeft[Either[EvalError, Vector[CellValue]]](Right(Vector.empty)) {
+              case (Left(err), _) => Left(err)
+              case (Right(cols), colIdx) =>
+                targetSheet(ARef.from0(colIdx, rowIdx)).value match
+                  case CellValue.Formula(_, Some(cachedValue)) => Right(cols :+ cachedValue)
+                  case CellValue.Formula(formulaStr, None) =>
+                    Evaluator
+                      .evalCrossSheetFormula(
+                        formulaStr,
+                        targetSheet,
+                        ctx.clock,
+                        ctx.workbook,
+                        ctx.depth + 1
+                      )
+                      .map(cols :+ _)
+                  case other => Right(cols :+ other)
+            }
+            .map(rows :+ _)
+      }

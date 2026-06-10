@@ -179,6 +179,18 @@ object FormulaPrinter:
         )
         call.spec.render(call.args, printer)
 
+      // GH-193: LET special form — canonical LET(name, value, ..., calculation)
+      case TExpr.Let(bindings, body) =>
+        val parts =
+          bindings.flatMap((name, value) => List(name, printExpr(value, precedence = 0))) :+
+            printExpr(body, precedence = 0)
+        s"LET(${parts.mkString(", ")})"
+
+      case TExpr.BindingRef(name) => name
+
+      // A binding in a typed argument position prints as the bare name, exactly like BindingRef
+      case TExpr.CoercedBindingRef(name, _) => name
+
   /**
    * Format ARef to A1 notation with default Relative anchor.
    *
@@ -369,3 +381,11 @@ object FormulaPrinter:
           cellRange = formatRange
         )
         s"Call(${call.spec.name}, ${call.spec.argSpec.render(call.args, printer).mkString(", ")})"
+      case TExpr.Let(bindings, body) =>
+        val bindingsStr =
+          bindings.map((name, value) => s"$name = ${printWithTypes(value)}").mkString(", ")
+        s"Let($bindingsStr, ${printWithTypes(body)})"
+      case TExpr.BindingRef(name) =>
+        s"BindingRef($name)"
+      case TExpr.CoercedBindingRef(name, target) =>
+        s"CoercedBindingRef($name, $target)"

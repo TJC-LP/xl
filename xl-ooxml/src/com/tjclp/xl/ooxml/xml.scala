@@ -182,6 +182,67 @@ object XmlUtil:
   def sanitizeXmlText(s: String): String =
     if s.forall(isLegalXmlChar) then s else s.filter(isLegalXmlChar)
 
+  /** True when `s` contains a literal `_xHHHH_` pattern (lowercase `x`, 4 hex digits) at `i`. */
+  private def isXstringEscapeAt(s: String, i: Int): Boolean =
+    def hex(c: Char): Boolean =
+      (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+    i + 6 < s.length && s.charAt(i) == '_' && s.charAt(i + 1) == 'x' &&
+    hex(s.charAt(i + 2)) && hex(s.charAt(i + 3)) && hex(s.charAt(i + 4)) &&
+    hex(s.charAt(i + 5)) && s.charAt(i + 6) == '_'
+
+  /**
+   * ECMA-376 ST_Xstring escape (Part 1, §22.9.2.19) for `<t>`/`<v>` text content (GH-288).
+   *
+   * XML 1.0 parsers normalize raw CR and CRLF in element content to LF, so a raw `\r` cannot
+   * round-trip; Excel stores it as the `_x000D_` escape. Text that LITERALLY contains an `_xHHHH_`
+   * pattern must protect its leading underscore as `_x005F_` so decoding is unambiguous.
+   *
+   * Only CR needs escaping for fidelity: TAB and LF survive element content unchanged, and
+   * XML-illegal control characters are deliberately STRIPPED by [[sanitizeXmlText]] (GH-237), not
+   * escaped. Fast path returns the input unchanged.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def escapeXstring(s: String): String =
+    var needs = false
+    var i = 0
+    while !needs && i < s.length do
+      val c = s.charAt(i)
+      if c == '\r' || (c == '_' && isXstringEscapeAt(s, i)) then needs = true
+      i += 1
+    if !needs then s
+    else
+      val sb = new java.lang.StringBuilder(s.length + 16)
+      var j = 0
+      while j < s.length do
+        val c = s.charAt(j)
+        if c == '\r' then sb.append("_x000D_")
+        else if c == '_' && isXstringEscapeAt(s, j) then sb.append("_x005F_")
+        else sb.append(c)
+        j += 1
+      sb.toString
+
+  /**
+   * Decode ECMA-376 `_xHHHH_` escapes (Part 1, §22.9.2.19) in `<t>`/`<v>` text content (GH-288).
+   *
+   * Single left-to-right pass: `_x000D_` → CR, `_x005F_` → `_` (so `_x005F_x000D_` decodes to the
+   * literal text `_x000D_`). Hex digits are accepted in either case; the `x` must be lowercase per
+   * the spec. Fast path returns the input unchanged.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def decodeXstring(s: String): String =
+    if s.indexOf("_x") < 0 then s
+    else
+      val sb = new java.lang.StringBuilder(s.length)
+      var i = 0
+      while i < s.length do
+        if isXstringEscapeAt(s, i) then
+          sb.append(Integer.parseInt(s.substring(i + 2, i + 6), 16).toChar)
+          i += 7
+        else
+          sb.append(s.charAt(i))
+          i += 1
+      sb.toString
+
   /**
    * Format a BigDecimal for an OOXML `<v>` element as a plain decimal, never scientific notation
    * (GH-238). Excel never writes `1.0E+10` in `<v>` and stricter consumers reject it.
@@ -336,10 +397,10 @@ object XmlUtil:
       val font = rPrElemOpt.map(parseRunProperties)
       val rawRPrXml = rPrElemOpt.map(elem => compact(elem)) // Preserve as XML string
 
-      // Extract required <t> text (preserving whitespace)
+      // Extract required <t> text (preserving whitespace, decoding _xHHHH_ escapes — GH-288)
       (rElem \ "t").headOption
         .collect { case elem: Elem => elem }
-        .map(getTextPreservingWhitespace) match
+        .map(e => decodeXstring(getTextPreservingWhitespace(e))) match
         case Some(text) => Right(TextRun(text, font, rawRPrXml))
         case None => Left("Text run <r> missing <t> element")
     }

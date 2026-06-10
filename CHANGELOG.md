@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (evaluator breadth, wave 3)
+
+- **LET** (#193): `LET(name1, value1, ..., calculation)` lexical bindings with let* semantics —
+  new `TExpr.Let`/`BindingRef` AST nodes, parser-level lexical scope, total coercion of bindings
+  in typed argument positions, range-valued bindings via parse-time substitution. Divergences
+  from Excel documented in LIMITATIONS.md.
+- **RAND / RANDBETWEEN** (#115): randomness as an explicit `Rng` capability mirroring `Clock` —
+  `Rng.system` by default, `Rng.seeded(seed)` for deterministic scripts/tests, threaded through
+  explicit `@targetName` overloads (`evaluateFormula(f, clock, rng)`, `recalculate(clock, rng)`).
+- **INDIRECT** (#274): dynamic text-to-reference resolution riding the OFFSET `ArrayResult`
+  mechanism — composes with aggregates (`=SUM(INDIRECT("A1:A"&B1))`), sheet-qualified and quoted
+  names, full-column clamping; `recalculate()` defers INDIRECT-bearing cells and their dependents
+  to an evaluate-last partition with cache stripping. R1C1 mode documented-unsupported.
+  Registry: 104 → **107 functions**.
+- **Format inheritance for formulas, opt-in** (#184): `sheet.putFormulaInheriting(ref, formula)`
+  applies the referenced cells' number format to General-formatted targets (Excel's behavior on
+  formula entry), via `FormulaFormatting.inferFormatFromReferences`.
+
+### Fixed (wave 3)
+
+- **YEARFRAC Excel parity** (#93): full US/NASD 30/360 rules for basis 0 (Feb end-of-month before
+  day-31 rules, in Excel's order) and Excel's actual basis-1 algorithm (366 only when the span
+  includes Feb 29; average-year-length for multi-year spans); start > end normalizes positive for
+  all bases.
+- **Round-trip defects found by the wave-2 generative law** — fixed and the corresponding
+  generator exclusions removed, so the law now locks them: schema-invalid lowercase border/fill
+  enum tokens → canonical ECMA-376 camelCase (#287); CR in cell text lost → `_x000D_` ST_Xstring
+  escaping on every writer/reader path including streaming (#288); SST collapsed NFC-equivalent
+  strings → exact-string dedup, original codepoints preserved (#289); comment author whitespace
+  corrupted text on read → author canonicalized (trimmed) at write time (#290); surgical SST
+  combine orphaned the SST on no-new-strings writes, stored NFC-normalized text, and undercounted
+  references (#277).
+- **Cross-sheet array stringification** (latent, found during #274): a reference that recursively
+  evaluates to an array no longer collapses to `Text("ArrayResult(...)")` — it takes the top-left
+  value per scalar-context convention.
+
 ### Added (test infrastructure, #240/#40/#47)
 
 - **Generative round-trip law** (#240): `forAll(genWorkbook) { wb => read(write(wb)) ≈ wb }`

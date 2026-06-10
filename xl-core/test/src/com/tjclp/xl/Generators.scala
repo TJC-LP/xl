@@ -227,9 +227,10 @@ object Generators:
   // formulas, merges, sheet views, and page setup, while staying inside the
   // domain the OOXML layer can faithfully round-trip:
   //   - text avoids XML-illegal control chars (the writer strips them by
-  //     design, GH-237) and bare \r (XML line-ending normalization folds it
-  //     to \n on parse; Excel escapes CR as _x000D_ which XL does not emit)
-  //   - text stays NFC-normalized (SST deduplicates by NFC key)
+  //     design, GH-237); \r IS generated — the writer escapes it as _x000D_
+  //     per ECMA-376 ST_Xstring (GH-288)
+  //   - non-NFC text (decomposed accents) IS generated — the SST deduplicates
+  //     exact strings, so NFC/NFD spellings round-trip byte-faithfully (GH-289)
   //   - Custom numFmt codes avoid the exact code strings NumFmt.parse maps
   //     back to built-in enum cases (those are the SAME format semantically,
   //     but would compare unequal as enum values)
@@ -248,9 +249,17 @@ object Generators:
       3 -> Gen.const(' '),
       2 -> Gen.oneOf('.', ',', '-', '_', '&', '<', '>', '"', '\'', '%', '$', '#', '(', ')', '/'),
       1 -> Gen.oneOf('é', 'ü', 'ß', '日', '本', '€', '£'),
-      1 -> Gen.oneOf('\t', '\n')
+      1 -> Gen.oneOf('\t', '\n', '\r')
     )
-    Gen.chooseNum(0, 24).flatMap(n => Gen.listOfN(n, safeChar).map(_.mkString))
+    val plain = Gen.chooseNum(0, 24).flatMap(n => Gen.listOfN(n, safeChar).map(_.mkString))
+    // Adversarial suffixes: literal _xHHHH_ patterns must survive via _x005F_ protection (GH-288);
+    // decomposed accents (NFD "é" = e + U+0301) must keep their exact codepoints (GH-289)
+    Gen.frequency(
+      14 -> plain,
+      1 -> plain.map(_ + "_x000D_"),
+      1 -> plain.map(_ + "\r\n"),
+      1 -> plain.map(_ + "e\u0301")
+    )
 
   /** Non-empty variant of [[genXmlSafeText]] */
   val genXmlSafeTextNonEmpty: Gen[String] =
@@ -377,11 +386,25 @@ object Generators:
       align <- genAlign
     yield CellStyle(font, fill, border, numFmt, None, align)
 
-  /** Generate comment: plain text body plus optional author (trimmed, non-empty) */
+  /**
+   * Generate comment: plain text body plus optional author. Authors may carry edge whitespace or
+   * be whitespace-only — the writer canonicalizes (trim; blank → unauthored, GH-290), and
+   * round-trip equivalence compares canonical authors.
+   */
   val genComment: Gen[Comment] =
+    val genAuthor: Gen[String] =
+      for
+        base <- Gen.identifier.map(_.take(12))
+        decorated <- Gen.frequency(
+          6 -> Gen.const(base),
+          1 -> Gen.const(s" $base "),
+          1 -> Gen.const(s"$base  "),
+          1 -> Gen.const("   ") // whitespace-only → canonicalizes to unauthored
+        )
+      yield decorated
     for
       text <- genXmlSafeTextNonEmpty
-      author <- Gen.option(Gen.identifier.map(_.take(12)))
+      author <- Gen.option(genAuthor)
     yield Comment.plainText(text, author)
 
   /** Generate hyperlink target: external URL/mailto or internal location */

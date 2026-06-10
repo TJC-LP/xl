@@ -141,11 +141,13 @@ object StreamingTransform:
       case CellValue.Empty => ()
 
       case CellValue.Text(s) =>
-        // <is><t>text</t></is>
+        // <is><t>text</t></is> (_xHHHH_-escaped per GH-288)
+        val escaped = XmlUtil.escapeXstring(s)
         writer.startElement("is")
         writer.startElement("t")
-        if XmlUtil.needsXmlSpacePreserve(s) then writer.writeAttribute("xml:space", "preserve")
-        writer.writeCharacters(s)
+        if XmlUtil.needsXmlSpacePreserve(escaped) then
+          writer.writeAttribute("xml:space", "preserve")
+        writer.writeCharacters(escaped)
         writer.endElement() // t
         writer.endElement() // is
 
@@ -214,10 +216,11 @@ object StreamingTransform:
             writer.endElement()
             writer.endElement() // rPr
           }
+          val runText = XmlUtil.escapeXstring(run.text)
           writer.startElement("t")
-          if XmlUtil.needsXmlSpacePreserve(run.text) then
+          if XmlUtil.needsXmlSpacePreserve(runText) then
             writer.writeAttribute("xml:space", "preserve")
-          writer.writeCharacters(run.text)
+          writer.writeCharacters(runText)
           writer.endElement() // t
           writer.endElement() // r
         }
@@ -232,7 +235,7 @@ object StreamingTransform:
         writer.endElement()
       case CellValue.Text(s) =>
         writer.startElement("v")
-        writer.writeCharacters(s)
+        writer.writeCharacters(XmlUtil.escapeXstring(s))
         writer.endElement()
       case CellValue.Bool(b) =>
         writer.startElement("v")

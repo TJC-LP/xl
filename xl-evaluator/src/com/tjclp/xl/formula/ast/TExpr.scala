@@ -274,6 +274,53 @@ enum TExpr[A] derives CanEqual:
    */
   case Call[A](spec: FunctionSpec[A], args: spec.Args) extends TExpr[A]
 
+  /**
+   * GH-193: LET(name1, value1, [name2, value2, ...], calculation) — Excel 365 lexical bindings.
+   *
+   * Each binding's value expression is evaluated against the environment of all PRIOR bindings
+   * (let* semantics); the body sees every binding. The Let expression's type is the body's type.
+   *
+   * Range-shaped binding values (RangeRef/SheetRange) are recorded here for canonical printing, but
+   * the parser substitutes them directly into the body so range-typed argument positions (e.g.
+   * SUMIF's criteria range) keep working — the evaluator never materializes them.
+   *
+   * Example: Let(List(("x", Lit(1))), Add(BindingRef("x"), Lit(1))) ≡ LET(x, 1, x+1)
+   */
+  case Let[A](bindings: List[(String, TExpr[?])], body: TExpr[A]) extends TExpr[A]
+
+  /**
+   * GH-193: Reference to an in-scope LET binding by its declared name.
+   *
+   * Existential/Any-typed like PolyRef: the runtime value comes from the evaluation environment,
+   * and surrounding context coerces it. The parser only emits BindingRef for names it resolved
+   * lexically, so an unknown name at evaluation time is a programming error.
+   */
+  case BindingRef(name: String) extends TExpr[Nothing]
+
+  /**
+   * GH-193: An in-scope LET binding used in a statically-typed argument position.
+   *
+   * BindingRef is Any-typed like PolyRef, so the typed coercion boundary (asStringExpr, asIntExpr,
+   * asBooleanExpr, asNumericExpr, asDateExpr) rewrites it to this node — the same maneuver that
+   * turns PolyRef into Ref(at, anchor, decoder). The evaluator looks up the bound value and coerces
+   * it TOTALLY per the target's decode conventions, returning Left(TypeMismatch) when uncoercible
+   * instead of letting the consuming function checkcast and throw. The target is data (not a
+   * decoder function) so structural equality is preserved.
+   *
+   * The type parameter must agree with the target (Text ↔ String, Integer ↔ Int, ...); the five
+   * coercion helpers in [[TExprCoercions]] are the only construction sites and each pins both.
+   * Prints as the bare binding name, exactly like BindingRef.
+   */
+  case CoercedBindingRef[A](name: String, target: BindingCoercion) extends TExpr[A]
+
+/**
+ * Target type for [[TExpr.CoercedBindingRef]] — carried as data (not a decoder function) so TExpr
+ * keeps structural equality. Each case mirrors the decode conventions of the corresponding cell
+ * decoder (decodeAsString, decodeAsInt, decodeBool, decodeNumeric, decodeAsDate).
+ */
+enum BindingCoercion derives CanEqual:
+  case Text, Integer, Bool, Numeric, Date
+
 object TExpr
     extends TExprRangeLocation
     with TExprConstructors

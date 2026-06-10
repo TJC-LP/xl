@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.formula.ast.TExpr
-import com.tjclp.xl.formula.functions.{FunctionSpecs, ArgValue}
+import com.tjclp.xl.formula.functions.{FunctionSpecs, FunctionRegistry, ArgValue}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.eval.EvalError
 
@@ -171,8 +171,95 @@ object DependencyGraph:
       case TExpr.DateToSerial(e) => containsCellReferences(e)
       case TExpr.DateTimeToSerial(e) => containsCellReferences(e)
 
+      // GH-193: LET — check binding values and the body; BindingRef is a name, not a cell
+      case TExpr.Let(bindings, body) =>
+        bindings.exists((_, value) => containsCellReferences(value)) ||
+        containsCellReferences(body)
+      case TExpr.BindingRef(_) => false
+      case TExpr.CoercedBindingRef(_, _) => false
+
       // Literals and constants
       case TExpr.Lit(_) => false
+
+  /**
+   * GH-274: Check whether an expression contains a dynamic-reference function call.
+   *
+   * A dynamic reference is a `TExpr.Call` whose spec is flagged `FunctionFlags.dynamicDeps` (e.g.
+   * INDIRECT): its data dependencies are decided by evaluated text, so the static graph cannot see
+   * them. The walk recurses into Call arguments; `ArgValue.Range`/`Cells` arguments cannot contain
+   * calls, and reference/literal leaves are never dynamic.
+   */
+  def containsDynamicReference[A](expr: TExpr[A]): Boolean =
+    expr match
+      case call: TExpr.Call[?] =>
+        call.spec.flags.dynamicDeps || call.spec.argSpec
+          .toValues(call.args)
+          .exists {
+            case ArgValue.Expr(e) => containsDynamicReference(e)
+            case ArgValue.Range(_) => false
+            case ArgValue.Cells(_) => false
+          }
+      case TExpr.Add(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Sub(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Mul(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Div(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Pow(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Concat(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Eq(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Neq(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Lt(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Lte(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Gt(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.Gte(l, r) => containsDynamicReference(l) || containsDynamicReference(r)
+      case TExpr.ToInt(e) => containsDynamicReference(e)
+      case TExpr.DateToSerial(e) => containsDynamicReference(e)
+      case TExpr.DateTimeToSerial(e) => containsDynamicReference(e)
+      case _ => false
+
+  /**
+   * GH-274: Find all formula cells in the sheet bearing dynamic references (INDIRECT et al).
+   *
+   * A case-insensitive substring pre-filter over the registry's dynamicDeps-flagged names runs
+   * before any parsing, so sheets without dynamic functions pay no parse cost. Formulas that fail
+   * to parse are not dynamic (matching `fromSheet`, where they contribute no edges).
+   */
+  def dynamicCells(sheet: Sheet): Set[ARef] =
+    val names = FunctionRegistry.dynamicFunctionNames
+    if names.isEmpty then Set.empty
+    else
+      sheet.cells.iterator.flatMap { case (ref, cell) =>
+        cell.value match
+          case CellValue.Formula(expression, _)
+              if names.exists(n => expression.toUpperCase.contains(n)) =>
+            FormulaParser.parse(expression) match
+              case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
+              case _ => None
+          case _ => None
+      }.toSet
+
+  /**
+   * GH-274: A dynamic cell set closed under "depends on me": the cells themselves plus every
+   * transitive static dependent. `transitiveDependents` excludes its seeds, so the union is
+   * required. This is the bucket `deferDynamic` moves to the end of evaluation order.
+   */
+  def dynamicClosure(graph: DependencyGraph, dynamic: Set[ARef]): Set[ARef] =
+    dynamic ++ transitiveDependents(graph, dynamic)
+
+  /**
+   * GH-274: Stable partition of a topological order — non-closure cells first, closure cells last,
+   * relative order preserved within each part.
+   *
+   * Lemma (order preservation): if `order` is a valid topological order of the graph and `closure`
+   * is dependent-closed (contains every static dependent of each of its members), the result is
+   * also a valid topological order. For any edge u-depends-on-v: if u and v are in the same part,
+   * their relative order is preserved (stable partition); if u is deferred and v is not, v sits in
+   * the front part, before u; v deferred with u not deferred is impossible — u depends on v, so u
+   * is a dependent of v and dependent-closure would have pulled u into the closure. Property-tested
+   * in DependencyGraphSpec.
+   */
+  def deferDynamic(order: List[ARef], closure: Set[ARef]): List[ARef] =
+    if closure.isEmpty then order
+    else order.filterNot(closure.contains) ++ order.filter(closure.contains)
 
   /**
    * Check if an expression contains any **unqualified** cell references.
@@ -245,6 +332,13 @@ object DependencyGraph:
       case TExpr.DateToSerial(e) => containsUnqualifiedCellReferences(e)
       case TExpr.DateTimeToSerial(e) => containsUnqualifiedCellReferences(e)
 
+      // GH-193: LET — check binding values and the body; BindingRef is a name, not a cell
+      case TExpr.Let(bindings, body) =>
+        bindings.exists((_, value) => containsUnqualifiedCellReferences(value)) ||
+        containsUnqualifiedCellReferences(body)
+      case TExpr.BindingRef(_) => false
+      case TExpr.CoercedBindingRef(_, _) => false
+
       // Literals and constants
       case TExpr.Lit(_) => false
 
@@ -312,6 +406,14 @@ object DependencyGraph:
       case TExpr.ToInt(expr) =>
         extractDependencies(expr) // Type conversion - extract from wrapped expr
       case TExpr.Aggregate(_, location) => location.localCells
+
+      // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
+      case TExpr.Let(bindings, body) =>
+        bindings.foldLeft(extractDependencies(body)) { case (acc, (_, value)) =>
+          acc ++ extractDependencies(value)
+        }
+      case TExpr.BindingRef(_) => Set.empty
+      case TExpr.CoercedBindingRef(_, _) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -388,6 +490,14 @@ object DependencyGraph:
           loc => loc.localCellsBounded(bounds),
           range => boundedCells(range, bounds)
         )
+
+      // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
+      case TExpr.Let(bindings, body) =>
+        bindings.foldLeft(extractDependenciesBounded(body, bounds)) { case (acc, (_, value)) =>
+          acc ++ extractDependenciesBounded(value, bounds)
+        }
+      case TExpr.BindingRef(_) => Set.empty
+      case TExpr.CoercedBindingRef(_, _) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -890,6 +1000,14 @@ object DependencyGraph:
             case ArgValue.Cells(range) =>
               acc ++ range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
         }
+
+      // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
+      case TExpr.Let(bindings, body) =>
+        bindings.foldLeft(extractQualifiedDependencies(body, currentSheet)) {
+          case (acc, (_, value)) => acc ++ extractQualifiedDependencies(value, currentSheet)
+        }
+      case TExpr.BindingRef(_) => Set.empty
+      case TExpr.CoercedBindingRef(_, _) => Set.empty
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
