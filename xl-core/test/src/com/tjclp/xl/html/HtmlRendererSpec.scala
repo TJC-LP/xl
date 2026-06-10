@@ -699,8 +699,10 @@ class HtmlRendererSpec extends FunSuite:
     import com.tjclp.xl.styles.border.BorderSide
     // A1 right=Thick vs B1 left=Thin. The renderer emits BOTH declarations; with
     // border-collapse: collapse the CSS conflict rule picks the wider border (3px thick),
-    // which matches Excel's heavier-border-wins behavior at shared edges. The SVG renderer
-    // resolves the same conflict explicitly (see SvgRendererSpec shared-edge test).
+    // which matches Excel's heavier-border-wins behavior at shared edges. The SVG renderer,
+    // by contrast, does NOT resolve this conflict — it draws both lines overlapping and
+    // painter's order leaves the thin line on top, contradicting Excel (see the
+    // SvgRendererSpec shared-edge documenting test; reported as a fidelity gap).
     val thickRight = CellStyle.default.withBorder(
       Border.none.withRight(BorderSide(BorderStyle.Thick, Some(Color.fromRgb(0, 0, 0))))
     )
