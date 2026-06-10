@@ -15,7 +15,9 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.Comment
 import com.tjclp.xl.ooxml.{
   OoxmlComments,
+  OoxmlStyles,
   Relationships,
+  SstPolicy,
   XlsxReader,
   XlsxWriter,
   SharedStrings,
@@ -559,6 +561,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * instant metadata queries. Otherwise, dimension is omitted (use `writeStreamWithAutoDetect` for
    * automatic dimension detection at the cost of 2x I/O).
    *
+   * Shared strings (GH-223): unless `config.sstPolicy` is `SstPolicy.Never`, plain-text cells are
+   * deduplicated through a shared strings table — indices are assigned in first-occurrence order
+   * while rows stream, and xl/sharedStrings.xml is emitted after the worksheet. Memory cost is
+   * O(distinct strings). `SstPolicy.Never` keeps the previous inline-string dialect.
+   *
    * @param path
    *   Output file path
    * @param sheetName
@@ -579,45 +586,119 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     dimension: Option[CellRange] = None
   ): Pipe[F, RowData, Unit] =
     rows =>
-      // Validate sheet index
-      if sheetIndex < 1 then
-        Stream.raiseError[F](
-          new IllegalArgumentException(s"Sheet index must be >= 1, got: $sheetIndex")
-        )
-      else
-        Stream
-          .bracket(
-            Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
-          )(zip => Sync[F].delay(zip.close()))
-          .flatMap { zip =>
-            // 1. Write static parts first
-            Stream.eval(Sync[F].delay(writeStaticPartsSync(zip, sheetName, sheetIndex, config))) ++
-              // 2. Open worksheet entry
-              Stream.eval(
-                Sync[F].delay {
-                  val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
-                  entry.setMethod(ZipEntry.DEFLATED)
-                  zip.putNextEntry(entry)
-                  // Write header with optional dimension
-                  writeWorksheetHeader(zip, dimension)
-                }
-              ) ++
-              // 3. Stream XML events → bytes → ZIP
-              StreamingXmlWriter
-                .worksheetBody(rows, config.formulaInjectionPolicy)
-                .through(xml.render.raw())
-                .through(fs2.text.utf8.encode)
-                .chunks
-                .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
-              // 4. Write footer and close entry
-              Stream.eval(
-                Sync[F].delay {
-                  writeWorksheetFooter(zip)
-                  zip.closeEntry()
-                }
-              )
-          }
-          .drain
+      writeStreamImpl(
+        path,
+        sheetName,
+        sheetIndex,
+        config,
+        dimension,
+        OoxmlStyles.minimal,
+        sst => StreamingXmlWriter.worksheetBody(rows, config.formulaInjectionPolicy, sst)
+      )
+
+  /**
+   * Streaming write with cell styles AND shared strings (GH-223).
+   *
+   * `styles(i)` is the CellStyle that a `StyledRowData.cellStyles` value `i` refers to. The style
+   * table is deduplicated (by canonical key) into xl/styles.xml up front — cellXf 0 is always the
+   * default style — and each row's style indices are remapped to the emitted indices before the
+   * `s="N"` attribute is written. Indices outside the table fall back to the default style.
+   *
+   * Strings follow the same SST policy as [[writeStream]] (Auto/Always dedup, Never inline).
+   */
+  def writeStreamStyled(
+    path: Path,
+    sheetName: String,
+    styles: Vector[com.tjclp.xl.styles.CellStyle],
+    sheetIndex: Int = 1,
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default,
+    dimension: Option[CellRange] = None
+  ): Pipe[F, StyledRowData, Unit] =
+    rows =>
+      val (ooxmlStyles, remap) = StreamingXmlWriter.buildStyleTable(styles)
+      val remapped = rows.map { row =>
+        row.copy(cellStyles = row.cellStyles.flatMap { case (col, sid) =>
+          remap.get(sid).map(col -> _)
+        })
+      }
+      writeStreamImpl(
+        path,
+        sheetName,
+        sheetIndex,
+        config,
+        dimension,
+        ooxmlStyles,
+        sst => StreamingXmlWriter.worksheetBodyStyled(remapped, config.formulaInjectionPolicy, sst)
+      )
+
+  /** GH-223: SST accumulation policy for streaming writes — Auto/Always dedup, Never inline. */
+  private def sstAccumulatorFor(config: com.tjclp.xl.ooxml.WriterConfig): Option[SstAccumulator] =
+    config.sstPolicy match
+      case SstPolicy.Never => None
+      case _ => Some(new SstAccumulator)
+
+  /** Emit xl/sharedStrings.xml from the accumulated table (pass 2 of GH-223). */
+  private def writeSharedStringsSync(
+    zip: ZipOutputStream,
+    sst: SstAccumulator,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): Unit =
+    writePartSync(zip, "xl/sharedStrings.xml", sst.toSharedStrings.toXml, config)
+
+  /** Shared single-sheet streaming write: static parts, worksheet body, then SST (GH-223). */
+  private def writeStreamImpl(
+    path: Path,
+    sheetName: String,
+    sheetIndex: Int,
+    config: com.tjclp.xl.ooxml.WriterConfig,
+    dimension: Option[CellRange],
+    styles: OoxmlStyles,
+    body: Option[SstAccumulator] => Stream[F, fs2.data.xml.XmlEvent]
+  ): Stream[F, Unit] =
+    // Validate sheet index
+    if sheetIndex < 1 then
+      Stream.raiseError[F](
+        new IllegalArgumentException(s"Sheet index must be >= 1, got: $sheetIndex")
+      )
+    else
+      val sst = sstAccumulatorFor(config)
+      Stream
+        .bracket(
+          Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
+        )(zip => Sync[F].delay(zip.close()))
+        .flatMap { zip =>
+          // 1. Write static parts first (SST is declared up front; an empty table is valid)
+          Stream.eval(
+            Sync[F].delay(
+              writeStaticPartsSync(zip, sheetName, sheetIndex, config, sst.isDefined, styles)
+            )
+          ) ++
+            // 2. Open worksheet entry
+            Stream.eval(
+              Sync[F].delay {
+                val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
+                entry.setMethod(ZipEntry.DEFLATED)
+                zip.putNextEntry(entry)
+                // Write header with optional dimension
+                writeWorksheetHeader(zip, dimension)
+              }
+            ) ++
+            // 3. Stream XML events → bytes → ZIP (pass 1: SST indices assigned on first occurrence)
+            body(sst)
+              .through(xml.render.raw())
+              .through(fs2.text.utf8.encode)
+              .chunks
+              .evalMap(chunk => Sync[F].delay(zip.write(chunk.toArray))) ++
+            // 4. Write footer, close entry, then emit the accumulated SST (pass 2)
+            Stream.eval(
+              Sync[F].delay {
+                writeWorksheetFooter(zip)
+                zip.closeEntry()
+                sst.foreach(writeSharedStringsSync(zip, _, config))
+              }
+            )
+        }
+        .drain
 
   /**
    * Streaming write with automatic dimension detection.
@@ -650,14 +731,18 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
             Sync[F].delay(JFiles.deleteIfExists(tempFile)).void
           }
           .flatMap { case (tempFile, bounds) =>
+            // GH-223: SST indices are assigned during phase 1 (first occurrence), so the temp-file
+            // body already carries final t="s" references; phase 2 just emits the table.
+            val sst = sstAccumulatorFor(config)
+
             // Phase 1: Stream rows to temp file, track bounds
             val writeTemp = rows
               .evalTap(row => Sync[F].delay(bounds.update(row)))
-              .through(rowsToTempXml(tempFile, config))
+              .through(rowsToTempXml(tempFile, config, sst))
 
             // Phase 2: Assemble final ZIP with dimension
             val assembleZip = Stream.eval(
-              assembleWorksheetZip(path, tempFile, bounds, sheetName, sheetIndex, config)
+              assembleWorksheetZip(path, tempFile, bounds, sheetName, sheetIndex, config, sst)
             )
 
             writeTemp ++ assembleZip
@@ -667,7 +752,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   // Helper: Stream rows to temp XML file (body only, no header/footer)
   private def rowsToTempXml(
     tempFile: Path,
-    config: com.tjclp.xl.ooxml.WriterConfig
+    config: com.tjclp.xl.ooxml.WriterConfig,
+    sst: Option[SstAccumulator]
   ): Pipe[F, RowData, Unit] =
     rows =>
       Stream
@@ -676,7 +762,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         )(os => Sync[F].delay(os.close()))
         .flatMap { os =>
           StreamingXmlWriter
-            .worksheetBody(rows, config.formulaInjectionPolicy)
+            .worksheetBody(rows, config.formulaInjectionPolicy, sst)
             .through(xml.render.raw())
             .through(fs2.text.utf8.encode)
             .chunks
@@ -690,13 +776,14 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     bounds: BoundsAccumulator,
     sheetName: String,
     sheetIndex: Int,
-    config: com.tjclp.xl.ooxml.WriterConfig
+    config: com.tjclp.xl.ooxml.WriterConfig,
+    sst: Option[SstAccumulator]
   ): F[Unit] =
     Sync[F].delay {
       val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
       try
         // 1. Write static parts
-        writeStaticPartsSync(zip, sheetName, sheetIndex, config)
+        writeStaticPartsSync(zip, sheetName, sheetIndex, config, sst.isDefined, OoxmlStyles.minimal)
 
         // 2. Write worksheet with dimension
         val wsEntry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
@@ -713,6 +800,9 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         writeWorksheetFooter(zip)
 
         zip.closeEntry()
+
+        // 3. Emit the SST accumulated during phase 1 (GH-223)
+        sst.foreach(writeSharedStringsSync(zip, _, config))
       finally zip.close()
     }
 
@@ -735,27 +825,37 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   private def writeWorksheetFooter(out: java.io.OutputStream): Unit =
     out.write("</sheetData></worksheet>".getBytes(StandardCharsets.UTF_8))
 
-  // Helper: Sync version of writeStaticParts for use in assembleWorksheetZip
+  // Helper: Sync version of writeStaticParts for use in streaming writes.
+  // hasSharedStrings declares the SST up front (the part itself is emitted after the worksheets);
+  // styles carries the GH-223 style table (OoxmlStyles.minimal when unstyled).
   private def writeStaticPartsSync(
     zip: ZipOutputStream,
     sheetName: String,
     sheetIndex: Int,
-    config: com.tjclp.xl.ooxml.WriterConfig
+    config: com.tjclp.xl.ooxml.WriterConfig,
+    hasSharedStrings: Boolean,
+    styles: OoxmlStyles
   ): Unit =
     import com.tjclp.xl.ooxml.*
     import com.tjclp.xl.addressing.SheetName
 
     val contentTypes =
-      ContentTypes.forSheetIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
+      ContentTypes.forSheetIndices(
+        Seq(sheetIndex),
+        hasStyles = true,
+        hasSharedStrings = hasSharedStrings
+      )
     val rootRels = Relationships.root()
     val workbookRels =
-      Relationships.workbookWithIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
+      Relationships.workbookWithIndices(
+        Seq(sheetIndex),
+        hasStyles = true,
+        hasSharedStrings = hasSharedStrings
+      )
 
     val ooxmlWb = OoxmlWorkbook(
       sheets = Vector(SheetRef(SheetName.unsafe(sheetName), sheetIndex, "rId1"))
     )
-
-    val styles = OoxmlStyles.minimal
 
     writePartSync(zip, "[Content_Types].xml", contentTypes.toXml, config)
     writePartSync(zip, "_rels/.rels", rootRels.toXml, config)
@@ -861,6 +961,9 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         (name, idx + 1, rows, dim)
       }
 
+      // GH-223: ONE workbook-global SST shared by all sheets (dedup across sheets)
+      val sst = sstAccumulatorFor(config)
+
       Stream
         .bracket(
           Sync[F].delay(new ZipOutputStream(new FileOutputStream(path.toFile)))
@@ -872,7 +975,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
               writeStaticPartsMultiSync(
                 zip,
                 sheetsWithIndices.map { case (name, idx, _, _) => (name, idx) },
-                config
+                config,
+                hasSharedStrings = sst.isDefined
               )
             }
           ) ++
@@ -891,7 +995,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                 ) ++
                   // Stream XML events → bytes → ZIP
                   StreamingXmlWriter
-                    .worksheetBody(rows, config.formulaInjectionPolicy)
+                    .worksheetBody(rows, config.formulaInjectionPolicy, sst)
                     .through(xml.render.raw())
                     .through(fs2.text.utf8.encode)
                     .chunks
@@ -903,7 +1007,9 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                       zip.closeEntry()
                     }
                   )
-              }
+              } ++
+            // 3. Emit the accumulated workbook-global SST (GH-223)
+            Stream.eval(Sync[F].delay(sst.foreach(writeSharedStringsSync(zip, _, config))))
         }
         .compile
         .drain
@@ -951,18 +1057,21 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           }.void
         }
         .flatMap { resources =>
+          // GH-223: ONE workbook-global SST; indices assigned during phase 1 are final
+          val sst = sstAccumulatorFor(config)
+
           // Phase 1: Stream each sheet's rows to its temp file
           val writePhase = Stream
             .emits(sheetsWithIndices.zip(resources))
             .flatMap { case ((_, _, rows), (_, _, tempFile, bounds)) =>
               rows
                 .evalTap(row => Sync[F].delay(bounds.update(row)))
-                .through(rowsToTempXml(tempFile, config))
+                .through(rowsToTempXml(tempFile, config, sst))
             }
 
           // Phase 2: Assemble final ZIP with all worksheets
           val assemblePhase = Stream.eval(
-            assembleMultiSheetZip(path, resources, config)
+            assembleMultiSheetZip(path, resources, config, sst)
           )
 
           writePhase ++ assemblePhase
@@ -996,7 +1105,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   private def assembleMultiSheetZip(
     path: Path,
     resources: Seq[(String, Int, Path, BoundsAccumulator)],
-    config: com.tjclp.xl.ooxml.WriterConfig
+    config: com.tjclp.xl.ooxml.WriterConfig,
+    sst: Option[SstAccumulator]
   ): F[Unit] =
     Sync[F].delay {
       val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
@@ -1005,7 +1115,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         writeStaticPartsMultiSync(
           zip,
           resources.map { case (name, idx, _, _) => (name, idx) },
-          config
+          config,
+          hasSharedStrings = sst.isDefined
         )
 
         // 2. Write each worksheet with its dimension
@@ -1025,6 +1136,9 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
 
           zip.closeEntry()
         }
+
+        // 3. Emit the SST accumulated during phase 1 (GH-223)
+        sst.foreach(writeSharedStringsSync(zip, _, config))
       finally zip.close()
     }
 
@@ -1032,7 +1146,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   private def writeStaticPartsMultiSync(
     zip: ZipOutputStream,
     sheets: Seq[(String, Int)],
-    config: com.tjclp.xl.ooxml.WriterConfig
+    config: com.tjclp.xl.ooxml.WriterConfig,
+    hasSharedStrings: Boolean
   ): Unit =
     import com.tjclp.xl.ooxml.*
     import com.tjclp.xl.addressing.SheetName
@@ -1040,13 +1155,13 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     val contentTypes = ContentTypes.forSheetIndices(
       sheetIndices = sheets.map(_._2),
       hasStyles = true,
-      hasSharedStrings = false
+      hasSharedStrings = hasSharedStrings
     )
     val rootRels = Relationships.root()
     val workbookRels = Relationships.workbook(
       sheetCount = sheets.size,
       hasStyles = true,
-      hasSharedStrings = false
+      hasSharedStrings = hasSharedStrings
     )
 
     val sheetRefs = sheets.map { case (name, idx) =>

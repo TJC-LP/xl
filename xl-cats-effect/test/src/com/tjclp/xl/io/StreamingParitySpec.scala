@@ -229,6 +229,37 @@ class StreamingParitySpec extends CatsEffectSuite:
     }
   }
 
+  // ========== GH-223: streaming-WRITTEN files (SST dialect) ==========
+
+  test("GH-223 parity: streaming-written SST file - streaming and in-memory readers agree") {
+    val path = Files.createTempFile("xl-parity-stream-sst-", ".xlsx")
+    path.toFile.deleteOnExit()
+    val rows = fs2.Stream
+      .emits(
+        (1 to 50).toList.map { i =>
+          RowData(
+            i,
+            Map(
+              0 -> CellValue.Text(s"name-${i % 7}"), // duplicates -> SST dedup
+              1 -> CellValue.Number(BigDecimal(i)),
+              2 -> CellValue.Bool(i % 2 == 0)
+            )
+          )
+        }
+      )
+      .covary[IO]
+    rows.through(excel.writeStream(path, "Data")).compile.drain >>
+      loadInMemory("stream-sst", path).flatMap { wb =>
+        val expected = inMemoryValues(wb.sheets(0))
+        assertEquals(expected.size, 150, "expected 50 rows x 3 cells")
+        assertEquals(expected.get((1, 0)), Some(CellValue.Text("name-1")))
+        streamedValues(path, "Data").map { streamed =>
+          assertEquals(streamed, expected, "streaming vs in-memory drift on streaming-written SST file")
+        }
+      }
+  }
+
+
   // ========== GH-293 / GH-305: raw-XML dialect probes ==========
   // XL's own writer never emits whitespace-padded formulas or escape sequences
   // split across rich runs, so these parity probes are built from raw part XML.
