@@ -1,7 +1,7 @@
 {
   "name": "xl",
   "description": "LLM-friendly Excel tooling: the xl CLI for reading, writing, styling, and analyzing spreadsheets (xl-cli skill), plus type-safe Scala scripting against the xl library via scala-cli for bulk transformations, pipelines, and formula models (xl-scripting skill).",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "author": {
     "name": "TJC L.P.",
     "url": "https://github.com/TJC-LP"

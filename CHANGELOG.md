@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] "Totality" - 2026-06-10
+
+Wave 1 of the post-0.11.0 backlog burn-down: every open bug, fixed TDD-first under
+adversarial review (each new test proven to fail without its fix).
+
 ### Added
 
 - **Leading unary plus in formulas** (#271): `=+A1`, `=+SUM(A1:B2)`, chained `=++A1`, and

@@ -164,8 +164,11 @@ sheet.withPageSetup(
   PageSetup(
     scale = 100,                                              // 10-400
     orientation = Some("landscape"),                          // or "portrait"
-    fitToWidth = Some(1),                                     // pages wide (also fitToHeight)
-    headerFooter = Some(HeaderFooter(oddFooter = Some("&CPage &P of &N"))),
+    fitToWidth = Some(1),                                     // pages wide (also fitToHeight; emits pageSetUpPr fitToPage)
+    headerFooter = Some(HeaderFooter(
+      oddFooter = Some("&CPage &P of &N"),
+      firstHeader = Some("&CCONFIDENTIAL"), differentFirst = true // 0.11.1+: even/first variants
+    )),                                                       // also evenHeader/evenFooter + differentOddEven
     margins = Some(PageMargins(left = 0.5, right = 0.5)),     // inches; defaults match Excel Normal
     printArea = Some(ref"A1:F40"),                            // _xlnm.Print_Area defined name
     repeatRows = Some((1, 2))                                 // 1-based rows repeated on every page
