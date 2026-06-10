@@ -119,3 +119,22 @@ class WorkbookMetadataReaderSpec extends FunSuite:
     val result = WorkbookMetadataReader.read(path)
     assert(result.isLeft, "Expected error for non-existent file")
   }
+
+  test("read: extracts date1904 flag from workbookPr (GH-243)") {
+    val sheets = Vector(Sheet(SheetName.unsafe("Dates")))
+    val path = Files.createTempFile("metadata-test-1904-", ".xlsx")
+    val wb = Workbook(sheets)
+    XlsxWriter.write(wb.copy(metadata = wb.metadata.copy(date1904 = true)), path)
+    try
+      val meta = WorkbookMetadataReader.read(path).toOption.get
+      assert(meta.date1904, "expected date1904 = true from written workbookPr")
+    finally Files.deleteIfExists(path)
+  }
+
+  test("read: date1904 defaults to false for 1900-system workbooks (GH-243)") {
+    val path = createTempWorkbook(Vector(Sheet(SheetName.unsafe("Plain"))))
+    try
+      val meta = WorkbookMetadataReader.read(path).toOption.get
+      assert(!meta.date1904)
+    finally Files.deleteIfExists(path)
+  }

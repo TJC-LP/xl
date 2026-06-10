@@ -32,6 +32,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 - ✅ **Performance optimizations**: Inline hot paths, zero-overhead abstractions
 - ✅ **Style Application**: Full end-to-end formatting with fonts, colors, fills, borders
 - ✅ **DateTime Serialization**: Proper Excel serial number conversion
+- ✅ **1904 date system** (GH-243): `<workbookPr date1904="1"/>` (legacy Mac Excel) is read into `WorkbookMetadata.date1904`, preserved on write, and `DateTime` cells are serialized with the 1904 epoch; epoch-aware conversions via `CellValue.excelSerialToDateTime(serial, date1904 = true)`. Display formatting, typed codec reads, and formula evaluation still assume the 1900 system — interpret raw serials with the metadata flag for 1904 files.
 - ✅ **Security Hardening**: ZIP bomb detection, XXE prevention, formula injection guards (WI-30)
 
 ### Developer Experience

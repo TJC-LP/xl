@@ -364,7 +364,8 @@ object XlsxReader:
         theme,
         definedNames,
         sheetStates,
-        commentPathMapping
+        commentPathMapping,
+        date1904 = ooxmlWb.date1904
       )
     yield ReadResult(workbook, styleWarnings)
 
@@ -980,6 +981,8 @@ object XlsxReader:
    *   Sheet visibility states from workbook.xml
    * @param commentPathMapping
    *   Mapping from 0-based sheet index to comment file path (e.g., "xl/comments1.xml")
+   * @param date1904
+   *   True when workbookPr declares the 1904 date system (GH-243)
    * @return
    *   Workbook with optional SourceContext
    */
@@ -991,7 +994,8 @@ object XlsxReader:
     theme: ThemePalette,
     definedNames: Vector[DefinedName],
     sheetStates: Map[SheetName, Option[String]],
-    commentPathMapping: Map[Int, String]
+    commentPathMapping: Map[Int, String],
+    date1904: Boolean
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -1010,7 +1014,12 @@ object XlsxReader:
       val (sheetsWithPrint, remainingNames) = PrintNames.extract(sheets, definedNames)
 
       val metadata =
-        WorkbookMetadata(theme = theme, definedNames = remainingNames, sheetStates = sheetStates)
+        WorkbookMetadata(
+          theme = theme,
+          definedNames = remainingNames,
+          sheetStates = sheetStates,
+          date1904 = date1904
+        )
       sourceContextEither.map(ctx =>
         Workbook(sheets = sheetsWithPrint, metadata = metadata, sourceContext = ctx)
       )

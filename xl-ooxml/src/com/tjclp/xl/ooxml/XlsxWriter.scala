@@ -95,8 +95,10 @@ object XlsxWriter:
   ): XLResult[Unit] =
     try
       val escapeFormulas = formulaEscapingRequested(config)
+      // GH-243: serialize DateTime cells with the workbook's date system before any write path.
+      val normalized = withDates1904Normalized(workbook)
 
-      workbook.sourceContext match
+      normalized.sourceContext match
         case Some(ctx) if ctx.isClean && !escapeFormulas =>
           // Clean workbook + file target → verbatim copy (ultra-fast)
           target match
@@ -104,23 +106,53 @@ object XlsxWriter:
               copyVerbatim(ctx, path)
             case OutputStreamTarget(_) =>
               // Can't copy to stream, use unified write (will copy all parts)
-              unifiedWrite(workbook, workbook.sourceContext, target, config)
+              unifiedWrite(normalized, normalized.sourceContext, target, config)
 
         case Some(ctx) =>
           // Surgical mode with source: use atomic temp file to prevent corruption
           target match
             case OutputPath(destPath) =>
-              writeAtomically(workbook, Some(ctx), destPath, config)
+              writeAtomically(normalized, Some(ctx), destPath, config)
             case _ =>
-              unifiedWrite(workbook, workbook.sourceContext, target, config)
+              unifiedWrite(normalized, normalized.sourceContext, target, config)
 
         case None =>
           // No source context: safe to write directly (no surgical preservation)
-          unifiedWrite(workbook, None, target, config)
+          unifiedWrite(normalized, None, target, config)
 
       Right(())
 
     catch case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
+
+  /**
+   * Re-express DateTime cells as raw serial Numbers using the workbook's date system (GH-243).
+   *
+   * The cell emitters (OoxmlCell/OoxmlWorksheet/DirectSaxEmitter) convert any remaining DateTime
+   * values with the default 1900 epoch, so for 1904-system workbooks the conversion must happen
+   * here, once, before dispatching to any write path. No-op for 1900-system workbooks (the
+   * emitters' inline conversion is identical) and for workbooks without DateTime cells — in
+   * particular, freshly read workbooks store date serials as Numbers, so surgical-write
+   * modification tracking is unaffected.
+   */
+  private def withDates1904Normalized(workbook: Workbook): Workbook =
+    if !workbook.metadata.date1904 then workbook
+    else
+      val normalizedSheets = workbook.sheets.map { sheet =>
+        val hasDateTime = sheet.cells.values.exists(_.value match
+          case CellValue.DateTime(_) => true
+          case _ => false)
+        if !hasDateTime then sheet
+        else
+          val cells = sheet.cells.map { case (ref, cell) =>
+            cell.value match
+              case CellValue.DateTime(dt) =>
+                val serial = CellValue.dateTimeToExcelSerial(dt, date1904 = true)
+                ref -> cell.copy(value = CellValue.Number(BigDecimal(serial)))
+              case _ => ref -> cell
+          }
+          sheet.copy(cells = cells)
+      }
+      workbook.copy(sheets = normalizedSheets)
 
   /**
    * Write to file atomically via temp file + rename.

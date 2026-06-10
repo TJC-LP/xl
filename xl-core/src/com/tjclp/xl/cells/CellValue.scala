@@ -71,8 +71,14 @@ object CellValue:
     )
     Formula(expression, cachedValue)
 
+  // Excel epoch for the 1900 date system: December 30, 1899 (not Jan 1, 1900, to account for
+  // Excel's 1900 leap-year bug). Epoch for the 1904 date system (legacy Mac Excel): January 1,
+  // 1904 = serial 0; that system has NO phantom leap day.
+  private val epoch1900 = LocalDateTime.of(1899, 12, 30, 0, 0, 0)
+  private val epoch1904 = LocalDateTime.of(1904, 1, 1, 0, 0, 0)
+
   /**
-   * Convert LocalDateTime to Excel serial number.
+   * Convert LocalDateTime to Excel serial number in the default 1900 date system.
    *
    * Excel represents dates as the number of days since December 30, 1899, with fractional days
    * representing time. Excel has a bug where it treats 1900 as a leap year (it wasn't); this
@@ -85,17 +91,34 @@ object CellValue:
    *   Excel serial number (days since 1899-12-30 + fractional time)
    */
   def dateTimeToExcelSerial(dt: LocalDateTime): Double =
+    dateTimeToExcelSerial(dt, date1904 = false)
+
+  /**
+   * Convert LocalDateTime to Excel serial number in the given date system (GH-243).
+   *
+   * In the 1904 date system (`<workbookPr date1904="1"/>`, legacy Mac Excel) serials count days
+   * since 1904-01-01 (= serial 0). The 1900 system's phantom 1900-02-29 does not exist in the 1904
+   * system, so no leap-day adjustment is applied. For the same date on/after 1900-03-01 the two
+   * systems differ by exactly 1462 days.
+   *
+   * @param dt
+   *   The LocalDateTime to convert
+   * @param date1904
+   *   true for the 1904 date system, false for the default 1900 system
+   * @return
+   *   Excel serial number (days since the system epoch + fractional time)
+   */
+  def dateTimeToExcelSerial(dt: LocalDateTime, date1904: Boolean): Double =
     import java.time.temporal.ChronoUnit
 
-    // Excel epoch: December 30, 1899 (not Jan 1, 1900, to account for 1900 leap year bug)
-    val epoch1900 = LocalDateTime.of(1899, 12, 30, 0, 0, 0)
-
-    // Calculate days since epoch
-    val rawDays = ChronoUnit.DAYS.between(epoch1900, dt)
-    // Excel 1900 leap-year bug: it counts a phantom 1900-02-29 (serial 60), so real dates before
-    // 1900-03-01 (rawDays < 61 from the 1899-12-30 epoch) are one higher than Excel. Subtract it
-    // back so 1900-01-01 -> 1 and 1900-02-28 -> 59. Dates on/after 1900-03-01 are already correct.
-    val days = if rawDays < 61 then rawDays - 1 else rawDays
+    val days =
+      if date1904 then ChronoUnit.DAYS.between(epoch1904, dt)
+      else
+        val rawDays = ChronoUnit.DAYS.between(epoch1900, dt)
+        // Excel 1900 leap-year bug: it counts a phantom 1900-02-29 (serial 60), so real dates before
+        // 1900-03-01 (rawDays < 61 from the 1899-12-30 epoch) are one higher than Excel. Subtract it
+        // back so 1900-01-01 -> 1 and 1900-02-28 -> 59. Dates on/after 1900-03-01 are already correct.
+        if rawDays < 61 then rawDays - 1 else rawDays
 
     // Calculate fractional day for time component
     val dayStart = dt.toLocalDate.atStartOfDay
@@ -105,7 +128,7 @@ object CellValue:
     days.toDouble + fractionOfDay
 
   /**
-   * Convert Excel serial number to LocalDateTime.
+   * Convert Excel serial number to LocalDateTime in the default 1900 date system.
    *
    * Excel represents dates as the number of days since December 30, 1899, with fractional days
    * representing time. This is the inverse of dateTimeToExcelSerial.
@@ -116,20 +139,33 @@ object CellValue:
    *   LocalDateTime corresponding to the serial number
    */
   def excelSerialToDateTime(serial: Double): LocalDateTime =
-    import java.time.temporal.ChronoUnit
+    excelSerialToDateTime(serial, date1904 = false)
 
-    // Excel epoch: December 30, 1899
-    val epoch1900 = LocalDateTime.of(1899, 12, 30, 0, 0, 0)
-
+  /**
+   * Convert Excel serial number to LocalDateTime in the given date system (GH-243).
+   *
+   * In the 1904 date system serial 0 = 1904-01-01 and no phantom-leap-day inverse adjustment is
+   * applied. This is the inverse of `dateTimeToExcelSerial(dt, date1904)`.
+   *
+   * @param serial
+   *   Excel serial number (days since the system epoch + fractional time)
+   * @param date1904
+   *   true for the 1904 date system, false for the default 1900 system
+   * @return
+   *   LocalDateTime corresponding to the serial number
+   */
+  def excelSerialToDateTime(serial: Double, date1904: Boolean): LocalDateTime =
     // Extract whole days and fractional day
     val wholeDays = serial.toLong
     val fractionOfDay = serial - wholeDays
     val seconds = (fractionOfDay * 86400.0).toLong
 
-    // Inverse of the 1900 leap-year adjustment: serials below 60 are shifted one day forward;
-    // serial 60 is Excel's phantom 1900-02-29, mapped here to 1900-02-28. Serials >= 61 are exact.
-    val dayShift = if wholeDays < 60 then 1L else 0L
-    epoch1900.plusDays(wholeDays + dayShift).plusSeconds(seconds)
+    if date1904 then epoch1904.plusDays(wholeDays).plusSeconds(seconds)
+    else
+      // Inverse of the 1900 leap-year adjustment: serials below 60 are shifted one day forward;
+      // serial 60 is Excel's phantom 1900-02-29, mapped here to 1900-02-28. Serials >= 61 are exact.
+      val dayShift = if wholeDays < 60 then 1L else 0L
+      epoch1900.plusDays(wholeDays + dayShift).plusSeconds(seconds)
 
   /**
    * Characters that trigger formula injection when at the start of a cell value.
