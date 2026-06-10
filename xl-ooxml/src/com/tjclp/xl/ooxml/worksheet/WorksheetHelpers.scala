@@ -214,10 +214,11 @@ private[ooxml] def buildColsElement(sheet: Sheet): Option[Elem] =
     }
     Some(XmlUtil.elem("cols")(colElems*))
 
-// ===== Print setup authoring (GH-259) =====
-// PageSetup is the typed model for <pageMargins>, <pageSetup>, and <headerFooter>. The merge
-// helpers below overlay the modeled fields onto any preserved source XML so unmodeled attributes
-// (paperSize, printer r:id, even/first-page headers, differentOddEven, ...) survive a rewrite.
+// ===== Print setup authoring (GH-259, GH-266) =====
+// PageSetup is the typed model for <pageMargins>, <pageSetup>, <headerFooter>, and the
+// sheetPr/pageSetUpPr fitToPage flag. The merge helpers below overlay the modeled fields onto any
+// preserved source XML so unmodeled attributes (paperSize, printer r:id, scaleWithDoc, ...)
+// survive a rewrite.
 
 /** Replace or remove an unprefixed attribute on an element (deterministic for a given input). */
 private def setOrRemoveAttr(e: Elem, key: String, value: Option[String]): Elem =
@@ -271,11 +272,16 @@ private[ooxml] def mergePageSetupElem(
       }
       if existing.isEmpty && updated.attributes == Null then None else Some(updated)
 
+/** CT_HeaderFooter child labels in schema sequence order (ECMA-376 18.3.1.46). */
+private val headerFooterPartLabels: Seq[String] =
+  Seq("oddHeader", "oddFooter", "evenHeader", "evenFooter", "firstHeader", "firstFooter")
+
 /**
- * Merge the modeled odd header/footer into the preserved `<headerFooter>` element, keeping
- * unmodeled children (evenHeader/evenFooter/firstHeader/firstFooter) and attributes
- * (differentOddEven, ...) intact. `headerFooter = None` preserves the source element verbatim;
- * `Some(HeaderFooter(None, None))` actively clears the odd header/footer.
+ * Merge the modeled header/footer into the preserved `<headerFooter>` element. All six page parts
+ * (odd/even/first × header/footer) plus the differentOddEven/differentFirst flags are modeled
+ * (GH-266); remaining unmodeled bits (scaleWithDoc/alignWithMargins attributes, foreign children)
+ * stay intact. `headerFooter = None` preserves the source element verbatim; `Some(HeaderFooter())`
+ * actively clears all modeled parts.
  */
 private[ooxml] def mergeHeaderFooterElem(
   existing: Option[Elem],
@@ -285,16 +291,59 @@ private[ooxml] def mergeHeaderFooterElem(
     case None => existing
     case Some(hf) =>
       val base = existing.getOrElse(XmlUtil.elem("headerFooter")())
-      val withoutOdd = base.child.filterNot {
-        case e: Elem => e.label == "oddHeader" || e.label == "oddFooter"
+      val unmodeled = base.child.filterNot {
+        case e: Elem => headerFooterPartLabels.contains(e.label)
         case _ => false
       }
-      // CT_HeaderFooter sequence starts with oddHeader, oddFooter — prepend in schema order
-      val oddElems: Seq[Node] =
-        hf.oddHeader.map(t => XmlUtil.elem("oddHeader")(Text(t))).toList ++
-          hf.oddFooter.map(t => XmlUtil.elem("oddFooter")(Text(t))).toList
-      val updated = base.copy(child = oddElems ++ withoutOdd)
-      if updated.child.isEmpty && updated.attributes == Null then None else Some(updated)
+      val parts: Seq[Option[String]] = Seq(
+        hf.oddHeader,
+        hf.oddFooter,
+        hf.evenHeader,
+        hf.evenFooter,
+        hf.firstHeader,
+        hf.firstFooter
+      )
+      // CT_HeaderFooter children precede any foreign content — prepend in schema order
+      val partElems: Seq[Node] = headerFooterPartLabels.zip(parts).flatMap { (label, text) =>
+        text.map(t => XmlUtil.elem(label)(Text(t)))
+      }
+      val flagged = Seq(
+        "differentOddEven" -> Option.when(hf.differentOddEven)("1"),
+        "differentFirst" -> Option.when(hf.differentFirst)("1")
+      ).foldLeft(base.copy(child = partElems ++ unmodeled)) { case (e, (key, value)) =>
+        setOrRemoveAttr(e, key, value)
+      }
+      if flagged.child.isEmpty && flagged.attributes == Null then None else Some(flagged)
+
+/**
+ * Ensure `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` when the model requests page-fit
+ * scaling (GH-266): Excel ignores pageSetup's fitToWidth/fitToHeight without this flag. When no
+ * fitTo* is modeled, the preserved element rides through verbatim — absence of the model fields is
+ * not evidence the source flag should be cleared (fitToWidth/fitToHeight default to 1 in OOXML, so
+ * a bare flag without pageSetup attributes is still meaningful).
+ */
+private[ooxml] def mergeSheetPrElem(
+  existing: Option[Elem],
+  pageSetup: Option[PageSetup]
+): Option[Elem] =
+  val wantsFit = pageSetup.exists(ps => ps.fitToWidth.isDefined || ps.fitToHeight.isDefined)
+  if !wantsFit then existing
+  else
+    val base = existing.getOrElse(XmlUtil.elem("sheetPr")())
+    val hasPageSetUpPr = base.child.exists {
+      case e: Elem => e.label == "pageSetUpPr"
+      case _ => false
+    }
+    val children =
+      if hasPageSetUpPr then
+        base.child.map {
+          case e: Elem if e.label == "pageSetUpPr" =>
+            e % new UnprefixedAttribute("fitToPage", "1", Null)
+          case other => other
+        }
+      // CT_SheetPr's child sequence ends with pageSetUpPr — appending keeps schema order
+      else base.child :+ XmlUtil.elem("pageSetUpPr", "fitToPage" -> "1")()
+    Some(base.copy(child = children))
 
 /**
  * Apply domain RowProperties to an OoxmlRow.

@@ -472,8 +472,9 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
         OoxmlWorksheet(
           allRows, // Use merged rows (with cells + empty rows)
           sheet.mergedRanges,
-          // Preserve all metadata from original, but use recalculated dimension
-          preserved.sheetPr,
+          // Preserve all metadata from original, but use recalculated dimension.
+          // GH-266: fitToWidth/fitToHeight require sheetPr/pageSetUpPr fitToPage="1"
+          mergeSheetPrElem(preserved.sheetPr, sheet.pageSetup),
           calculatedDimension.orElse(
             preserved.dimension
           ), // Use calculated dimension, fallback to preserved
@@ -507,6 +508,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
         OoxmlWorksheet(
           rowsWithCells,
           sheet.mergedRanges,
+          sheetPr = mergeSheetPrElem(None, sheet.pageSetup), // GH-266: fitToPage flag
           dimension = calculatedDimension,
           sheetViews = applySheetViewOverrides(None, sheet.freezePane, sheet.viewSettings),
           cols = generatedCols,

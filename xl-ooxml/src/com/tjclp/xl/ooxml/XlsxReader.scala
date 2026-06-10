@@ -919,14 +919,28 @@ object XlsxReader:
     yield PageMargins(left, right, top, bottom, header, footer)
 
   /**
-   * Parse the modeled odd header/footer from <headerFooter>. Returns Some only when an odd part is
-   * present; even/first-page variants are preserved as raw XML, not modeled.
+   * Parse the modeled header/footer from <headerFooter> (GH-266): all six page parts
+   * (odd/even/first × header/footer) plus the differentOddEven/differentFirst flags. Returns Some
+   * only when a modeled part or flag is present, so a headerFooter element carrying only unmodeled
+   * attributes (scaleWithDoc, ...) rides through as preserved XML.
    */
   private def parseHeaderFooter(elem: Elem): Option[HeaderFooter] =
-    val oddHeader = (elem \ "oddHeader").headOption.map(_.text).filter(_.nonEmpty)
-    val oddFooter = (elem \ "oddFooter").headOption.map(_.text).filter(_.nonEmpty)
-    if oddHeader.isEmpty && oddFooter.isEmpty then None
-    else Some(HeaderFooter(oddHeader, oddFooter))
+    def part(label: String): Option[String] =
+      (elem \ label).headOption.map(_.text).filter(_.nonEmpty)
+    def flag(name: String): Boolean =
+      val value = elem \@ name
+      value == "1" || value == "true"
+    val parsed = HeaderFooter(
+      oddHeader = part("oddHeader"),
+      oddFooter = part("oddFooter"),
+      evenHeader = part("evenHeader"),
+      evenFooter = part("evenFooter"),
+      firstHeader = part("firstHeader"),
+      firstFooter = part("firstFooter"),
+      differentOddEven = flag("differentOddEven"),
+      differentFirst = flag("differentFirst")
+    )
+    if parsed == HeaderFooter() then None else Some(parsed)
 
   /**
    * Parse sheet view settings (GH-258) from the first <sheetView>.
