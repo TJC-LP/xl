@@ -393,6 +393,87 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(NumFmtFormatter.formatNumber(BigDecimal("2.5"), fmt), "2.5")
   }
 
+  // ========== Conditional sections (GH-285) ==========
+  // Excel semantics per SheetJS/SSF choose_fmt (validated against Excel corpora):
+  //   - compare conditions are honored on the first two sections only
+  //   - the first matching condition wins; an unmatched value falls back to the
+  //     third section when BOTH leading sections carry conditions, otherwise to the
+  //     second (sections pad positionally: 1 section -> [s1,s1,s1], 2 -> [s1,s2,s1])
+  //   - when conditions are present, sign/zero positional routing is suspended
+  //   - multi-section formats render |value|; the minus sign must be written
+  //     explicitly in the pattern; single-section formats keep the default minus
+  //   - there is no ###### fallback: Excel's no-match-no-fallback behavior is
+  //     undocumented (MS docs and major guides define no such case) and SSF's
+  //     Excel-validated routing always resolves to a section
+
+  test("conditional routing: [>100]#,##0;[<=0]0.00;0.0 — first match wins, else fallback (GH-285)") {
+    val code = FormatCodeParser.parse("[>100]#,##0;[<=0]0.00;0.0").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(250), code)._1, "250")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-5), code)._1, "5.00")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(0), code)._1, "0.00")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(50), code)._1, "50.0")
+  }
+
+  test("conditional routing: [>100]0;0.0 — unconditioned second section is the else branch (GH-285)") {
+    val code = FormatCodeParser.parse("[>100]0;0.0").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(250), code)._1, "250")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(50), code)._1, "50.0")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(0), code)._1, "0.0")
+    // Multi-section: |value| is rendered; the sign must be explicit in the pattern
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-50), code)._1, "50.0")
+  }
+
+  test("conditional routing: stacked color and condition [Red][<=100]0;[Blue][>100]0 (GH-285)") {
+    val code = FormatCodeParser.parse("[Red][<=100]0;[Blue][>100]0").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(50), code), ("50", Some("Red")))
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(500), code), ("500", Some("Blue")))
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-3), code), ("3", Some("Red")))
+  }
+
+  test("conditional routing: both conditions unmatched, no third section → first pattern (GH-285)") {
+    // SSF pads 2 sections to [s1, s2, s1], so the no-match fallback is the FIRST
+    // section's pattern (its condition ignored). No ###### — see block comment.
+    val code = FormatCodeParser.parse("[>100]0;[<0]0.00").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(50), code)._1, "50")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(250), code)._1, "250")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-5), code)._1, "5.00")
+  }
+
+  test("conditional routing: single conditional section formats all values, sign kept (GH-285)") {
+    val code = FormatCodeParser.parse("[>100]0").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(250), code)._1, "250")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(50), code)._1, "50")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-50), code)._1, "-50")
+  }
+
+  test("conditional ops: =, <>, >= comparisons (GH-285)") {
+    val eq = FormatCodeParser.parse("[=5]\"five\";0").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(5), eq)._1, "five")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(4), eq)._1, "4")
+
+    val ne = FormatCodeParser.parse("[<>0]0.0;\"zero\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(5), ne)._1, "5.0")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(0), ne)._1, "zero")
+
+    val ge = FormatCodeParser.parse("[>=10]\"big\";\"small\"").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(10), ge)._1, "big")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(9), ge)._1, "small")
+  }
+
+  test("trailing @ among <4 sections is the text section, not the negative (GH-285)") {
+    // SSF choose_fmt: "0.0;@" has ONE numeric section — negatives keep the default
+    // minus instead of routing into the text section (which previously hid them).
+    val code = FormatCodeParser.parse("0.0;@").toOption.get
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(-5), code)._1, "-5.0")
+    assertEquals(FormatCodeParser.applyFormat(BigDecimal(0), code)._1, "0.0")
+    assertEquals(FormatCodeParser.applyTextFormat("abc", code), "abc")
+  }
+
+  test("trailing @ section with literals formats text values (GH-285)") {
+    val code = FormatCodeParser.parse("0;0;\"val: \"@").toOption.get
+    assertEquals(FormatCodeParser.applyTextFormat("abc", code), "val: abc")
+  }
+
   // ========== Date/Time Formatting Tests ==========
 
   test("applyDateFormat: simple date m/d/yy") {

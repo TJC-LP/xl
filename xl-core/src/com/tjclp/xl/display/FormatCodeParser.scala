@@ -55,17 +55,20 @@ object FormatCodeParser:
   )
 
   /**
-   * A single format section with optional condition and pattern.
+   * A single format section with stacked conditions and a pattern.
    *
-   * @param condition
-   *   Optional color or value condition (e.g., [Red], [>100])
+   * @param conditions
+   *   Leading bracket modifiers in order (e.g. `[Red][<=100]` stacks a color and a compare
+   *   condition on the same section)
    * @param pattern
    *   The formatting pattern
    */
   case class FormatSection(
-    condition: Option[Condition] = None,
+    conditions: Vector[Condition] = Vector.empty,
     pattern: FormatPattern
-  )
+  ):
+    /** The last parsed condition, if any (legacy accessor; conditions stack since GH-285). */
+    def condition: Option[Condition] = conditions.lastOption
 
   /**
    * A condition modifier for a format section.
@@ -216,9 +219,9 @@ object FormatCodeParser:
   private def parseSection(section: String): Either[String, FormatSection] =
     boundary:
       var remaining = section
-      var condition: Option[Condition] = None
+      var conditions = Vector.empty[Condition]
 
-      // Extract leading conditions like [Red], [>100], [$-409]
+      // Extract leading conditions like [Red], [>100], [$-409] — they stack (GH-285)
       while remaining.startsWith("[") do
         val endBracket = remaining.indexOf(']')
         if endBracket < 0 then break(Left(s"Unclosed bracket in: $section"))
@@ -226,17 +229,17 @@ object FormatCodeParser:
         val bracketContent = remaining.substring(1, endBracket)
         parseCondition(bracketContent) match
           case Some(cond) =>
-            condition = Some(cond)
+            conditions = conditions :+ cond
           case None =>
             // Unknown bracket content - might be elapsed time [h], [m], [s]
             // Pass through as part of pattern
             val pattern = parsePattern(remaining)
-            break(Right(FormatSection(condition, pattern)))
+            break(Right(FormatSection(conditions, pattern)))
 
         remaining = remaining.substring(endBracket + 1)
 
       val pattern = parsePattern(remaining)
-      Right(FormatSection(condition, pattern))
+      Right(FormatSection(conditions, pattern))
 
   /**
    * Parse a condition from bracket content.
@@ -447,10 +450,16 @@ object FormatCodeParser:
   /**
    * Apply a parsed format code to a numeric value.
    *
-   * Section selection follows Excel's rules:
+   * Section selection follows Excel's rules (see [[selectSection]]):
    *   - 1 section: all numbers use it (negatives keep their default minus sign)
    *   - 2 sections: positive and zero use the 1st, negative uses the 2nd
    *   - 3+ sections: positive uses the 1st, negative the 2nd, zero the 3rd
+   *   - compare conditions on the first two sections override positional routing (GH-285)
+   *   - a trailing `@` section among fewer than 4 sections is the text section and never
+   *     receives numbers
+   *
+   * Multi-section formats render the absolute value (any minus sign must be written in the
+   * pattern); only single-section formats receive the default leading minus.
    *
    * @param value
    *   The number to format
@@ -460,24 +469,75 @@ object FormatCodeParser:
    *   Tuple of (formatted string, optional color)
    */
   def applyFormat(value: BigDecimal, format: FormatCode): (String, Option[String]) =
-    // Select appropriate section based on value sign
-    val (section, effectiveValue) =
-      if value > 0 then (format.positive, value)
-      else if value < 0 then
-        format.negative match
-          case Some(neg) => (neg, value.abs) // Negative section uses absolute value
-          case None => (format.positive, value) // Fall back to positive
-      else
-        format.zero match
-          case Some(z) => (z, value)
-          case None => (format.positive, value) // Excel: zero uses positive section (GH-254)
-
-    val color = section.condition.collect { case Condition.Color(c) => c }
-    val formatted = applyPattern(effectiveValue, section.pattern)
+    val section = selectSection(value, format).getOrElse(format.positive)
+    val color = section.conditions.collectFirst { case Condition.Color(c) => c }
+    val formatted = applyPattern(value, section.pattern)
     val withDefaultSign =
-      if value < 0 && format.negative.isEmpty && !formatted.startsWith("-") then s"-$formatted"
+      if value < 0 && numericSections(format).sizeIs <= 1 && formatted.nonEmpty &&
+        !formatted.startsWith("-")
+      then s"-$formatted"
       else formatted
     (withDefaultSign, color)
+
+  /**
+   * Route a numeric value to its format section per Excel semantics (GH-254/262/283/285).
+   *
+   * Mirrors SheetJS/SSF `choose_fmt` (reverse-engineered from Excel):
+   *   - a trailing `@` section among fewer than 4 sections is the text section and drops out
+   *     of numeric routing
+   *   - without compare conditions, routing is positional with padding: 1 section serves all
+   *     values, 2 sections serve [pos+zero, neg], 3+ serve [pos, neg, zero]
+   *   - with compare conditions (honored on the first two sections only): the first matching
+   *     condition wins; an unmatched value falls back to the third padded section when both
+   *     leading sections carry conditions, otherwise to the second
+   *
+   * Returns None when the code has no numeric section (a lone `@` text format) — Excel renders
+   * such numbers in General format.
+   */
+  def selectSection(value: BigDecimal, format: FormatCode): Option[FormatSection] =
+    val sections = numericSections(format)
+    if sections.isEmpty then None
+    else
+      val padded = sections.size match
+        case 1 => Vector(sections(0), sections(0), sections(0))
+        case 2 => Vector(sections(0), sections(1), sections(0))
+        case _ => Vector(sections(0), sections(1), sections(2))
+      val cmp1 = compareCondition(padded(0))
+      val cmp2 = compareCondition(padded(1))
+      val chosen =
+        if cmp1.isEmpty && cmp2.isEmpty then
+          if value > 0 then padded(0)
+          else if value < 0 then padded(1)
+          else padded(2) // Excel: zero uses the positive section when unpadded (GH-254)
+        else if cmp1.exists(conditionMatches(value, _)) then padded(0)
+        else if cmp2.exists(conditionMatches(value, _)) then padded(1)
+        else if cmp1.isDefined && cmp2.isDefined then padded(2)
+        else padded(1)
+      Some(chosen)
+
+  /**
+   * The sections that participate in numeric routing: all sections except a trailing `@` text
+   * section among fewer than 4 sections (SSF `choose_fmt` `lat` adjustment).
+   */
+  private def numericSections(format: FormatCode): Vector[FormatSection] =
+    val all = Vector(format.positive) ++ format.negative ++ format.zero ++ format.text
+    val trailingAt = all.sizeIs < 4 &&
+      all.lastOption.exists(_.pattern.tokens.contains(FormatToken.TextPlaceholder))
+    if trailingAt then all.dropRight(1) else all
+
+  private def compareCondition(section: FormatSection): Option[Condition.Compare] =
+    section.conditions.collectFirst { case c: Condition.Compare => c }
+
+  private def conditionMatches(value: BigDecimal, condition: Condition.Compare): Boolean =
+    val cmp = value.compare(condition.value)
+    condition.op match
+      case "=" => cmp == 0
+      case ">" => cmp > 0
+      case "<" => cmp < 0
+      case ">=" => cmp >= 0
+      case "<=" => cmp <= 0
+      case "<>" => cmp != 0
+      case _ => false
 
   /**
    * Apply a format pattern to a number.
@@ -739,9 +799,18 @@ object FormatCodeParser:
 
   /**
    * Apply a format code to text.
+   *
+   * The text section is the 4th section when present; otherwise a trailing `@` section among
+   * fewer than 4 sections (GH-285). Without either, text echoes unchanged.
    */
   def applyTextFormat(text: String, format: FormatCode): String =
-    format.text match
+    val all = Vector(format.positive) ++ format.negative ++ format.zero ++ format.text
+    val textSection = format.text.orElse(
+      if all.sizeIs < 4 then
+        all.lastOption.filter(_.pattern.tokens.contains(FormatToken.TextPlaceholder))
+      else None
+    )
+    textSection match
       case Some(section) =>
         section.pattern.tokens.map {
           case FormatToken.TextPlaceholder => text
