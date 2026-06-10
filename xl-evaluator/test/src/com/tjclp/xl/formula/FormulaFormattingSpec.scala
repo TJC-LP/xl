@@ -285,3 +285,13 @@ class FormulaFormattingSpec extends FunSuite:
         assertEquals(outSheet.displayCell(ref"B4").formatted, "$400,000.00")
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
   }
+
+  test("LET formulas traverse without MatchError and inherit from binding-value refs (GH-193 integration)") {
+    // Cross-cluster integration pin: TExpr.Let/BindingRef landed in the same wave as
+    // FormulaFormatting — an unhandled GADT case here fails at RUNTIME, not compile time.
+    val sheet = base.put(ref"B2", 500000, currency).put(ref"B3", 100000, currency)
+    sheet.putFormulaInheriting(ref"B5", "=LET(x, B2, y, B3, x-y)") match
+      case Right(updated) =>
+        assertEquals(numFmtOf(updated, ref"B5"), Some(NumFmt.Currency))
+      case Left(err) => fail(s"putFormulaInheriting on LET failed: $err")
+  }

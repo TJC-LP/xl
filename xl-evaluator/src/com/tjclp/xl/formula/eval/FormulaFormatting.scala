@@ -157,6 +157,17 @@ object FormulaFormatting:
         case TExpr.DateToSerial(inner) => loop(inner)
         case TExpr.DateTimeToSerial(inner) => loop(inner)
 
+        // LET (GH-193): binding values in declaration order, then the body — mirrors
+        // DependencyGraph's over-approximation (unused bindings still contribute refs)
+        case TExpr.Let(bindings, body) =>
+          bindings.foldLeft(Vector.empty[(Sheet, ARef)]) { case (acc, (_, value)) =>
+            acc ++ loop(value)
+          } ++ loop(body)
+        // Binding references carry no cell refs of their own (their value's refs are
+        // contributed at the binding site above)
+        case TExpr.BindingRef(_) => Vector.empty
+        case TExpr.CoercedBindingRef(_, _) => Vector.empty
+
         // Literals: no references
         case TExpr.Lit(_) => Vector.empty
 

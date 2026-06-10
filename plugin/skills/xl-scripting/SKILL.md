@@ -208,7 +208,7 @@ Excel.write(result.workbook, "model.xlsx")       // computed values cached for E
 
 `recalculate` evaluates every formula across all sheets in dependency order, resolves cross-sheet references automatically, isolates reference cycles (the rest of the workbook still computes), and reports failures per cell in `result.errors`. `result.toEither` gives `Left(errors)` for fail-hard pipelines. For one-off questions: `wb.evaluateFormula("=SUM(Data!A:A)", "Summary")`.
 
-105 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/NPV/IRR/...) — full list in `reference/API.md`.
+107 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/RAND/NPV/IRR/... plus LET) — full list in `reference/API.md`.
 
 ### Error handling: Either everywhere, unsafe once
 
