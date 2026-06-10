@@ -283,6 +283,14 @@ object XlsxReader:
           // Build final manifest
           val manifest = builder.build()
 
+          // Drain the remaining container bytes through the digest before fingerprinting:
+          // ZipInputStream stops consuming at the central directory, but copyVerbatim hashes
+          // the whole file — without this drain the fingerprints could never match and every
+          // clean file→file write failed loudly (GH-261).
+          if source.isDefined then
+            val drainBuf = new Array[Byte](8192)
+            while is.read(drainBuf) != -1 do ()
+
           // Compute fingerprint if reading from a file
           val fingerprint = source.map(_.finalizeFingerprint())
 
