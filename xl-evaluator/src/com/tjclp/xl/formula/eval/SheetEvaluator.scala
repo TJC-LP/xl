@@ -161,13 +161,10 @@ object SheetEvaluator:
      * sheet.evaluateWithDependencyCheck() // Left(XLError.FormulaError(..., CircularRef))
      * }}}
      */
-    @SuppressWarnings(Array("org.wartremover.warts.Var"))
     def evaluateWithDependencyCheck(
       clock: Clock = Clock.system,
       workbook: Option[Workbook] = None
     ): XLResult[Map[ARef, CellValue]] =
-      // Suppression rationale: Mutable accumulator for building results map during iteration.
-      // Functional fold alternative less clear for this use case.
       // Build dependency graph
       val graph = DependencyGraph.fromSheet(sheet)
 
@@ -183,27 +180,21 @@ object SheetEvaluator:
               // Topological sort found cycle (shouldn't happen after detectCycles passed)
               scala.util.Left(evalErrorToXLError(circularRef, None))
             case scala.util.Right(evalOrder) =>
-              // Evaluate in dependency order
-              // Create a mutable temp sheet to accumulate evaluated values
-              var tempSheet = sheet
-              var results = Map.empty[ARef, CellValue]
-
-              val evalResult = evalOrder.foldLeft[XLResult[Unit]](scala.util.Right(())) {
-                case (scala.util.Right(_), ref) =>
-                  // Evaluate this cell against the temp sheet (which has previously evaluated values)
+              // Evaluate in dependency order, threading the partially evaluated sheet so
+              // dependent formulas see previously computed values. Fail-fast on first error.
+              val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
+                scala.util.Right((sheet, Map.empty))
+              ) {
+                case (scala.util.Right((tempSheet, results)), ref) =>
                   tempSheet.evaluateCell(ref, clock, workbook) match
                     case scala.util.Right(value) =>
-                      // Update temp sheet with evaluated value (for dependent formulas to use)
-                      // put(ref, CellValue) returns Sheet directly - it cannot fail
-                      tempSheet = tempSheet.put(ref, value)
-                      results = results + (ref -> value)
-                      scala.util.Right(())
+                      scala.util.Right((tempSheet.put(ref, value), results + (ref -> value)))
                     case scala.util.Left(error) =>
                       scala.util.Left(error)
                 case (left, _) => left
               }
 
-              evalResult.map(_ => results)
+              evalResult.map(_._2)
 
     /**
      * Evaluate all formula cells in sheet (unsafe, no cycle detection).
@@ -261,15 +252,11 @@ object SheetEvaluator:
      * // Only evaluates formulas in A1:C10 + their dependencies
      * }}}
      */
-    @SuppressWarnings(Array("org.wartremover.warts.Var"))
     def evaluateForRange(
       range: CellRange,
       clock: Clock = Clock.system,
       workbook: Option[Workbook] = None
     ): XLResult[Map[ARef, CellValue]] =
-      // Suppression rationale: Mutable accumulator for building results map during iteration.
-      // Same pattern as evaluateWithDependencyCheck.
-
       // 1. Find formula cells within the range (using pattern match, not isInstanceOf)
       val rangeFormulaCells = sheet.cells
         .collect {
@@ -308,24 +295,24 @@ object SheetEvaluator:
                 // Filter to only include cells we need to evaluate
                 val evalOrder = fullEvalOrder.filter(targetCells.contains)
 
-                // 7. Evaluate in dependency order
-                var tempSheet = sheet
-                var results = Map.empty[ARef, CellValue]
-
-                val evalResult = evalOrder.foldLeft[XLResult[Unit]](scala.util.Right(())) {
-                  case (scala.util.Right(_), ref) =>
+                // 7. Evaluate in dependency order, threading the partially evaluated sheet.
+                // Fail-fast on first error; only cells in the original range are reported.
+                val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
+                  scala.util.Right((sheet, Map.empty))
+                ) {
+                  case (scala.util.Right((tempSheet, results)), ref) =>
                     tempSheet.evaluateCell(ref, clock, workbook) match
                       case scala.util.Right(value) =>
-                        tempSheet = tempSheet.put(ref, value)
-                        // Only include results for cells in the original range
-                        if rangeFormulaCells.contains(ref) then results = results + (ref -> value)
-                        scala.util.Right(())
+                        val nextResults =
+                          if rangeFormulaCells.contains(ref) then results + (ref -> value)
+                          else results
+                        scala.util.Right((tempSheet.put(ref, value), nextResults))
                       case scala.util.Left(error) =>
                         scala.util.Left(error)
                   case (left, _) => left
                 }
 
-                evalResult.map(_ => results)
+                evalResult.map(_._2)
 
     /**
      * Evaluate an array formula and spill results into adjacent cells.
