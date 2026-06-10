@@ -36,12 +36,14 @@ import com.tjclp.xl.styles.fill.Fill
  *   - (c) sheet-level: viewSettings equal; pageSetup equal (an authored PageSetup always
  *     round-trips when it has at least one visible field; all-default PageSetup serializes to no
  *     XML and reads back None by design — generators only produce visible ones)
+ *   - (d) workbook-level: docProps metadata fields equal (GH-242 — creator, lastModifiedBy,
+ *     application, appVersion exact; created/modified at W3CDTF second precision)
  *
  * EXPLICITLY IGNORED (serialization noise or known write-only fields):
  *   - styleId numbering (dedup may renumber; only resolved styles matter)
  *   - SST ordering / inline-vs-shared string encoding
- *   - workbook metadata (docProps not written on save — GH-242) and activeSheetIndex (not
- *     serialized to bookViews)
+ *   - activeSheetIndex (not serialized to bookViews) and metadata theme/definedNames/sheetStates
+ *     (separate parts with their own round-trip specs)
  *   - the worksheet dimension element and derived defaults (defaultColWidth etc.)
  *   - freezePane (three-valued write-only override: None means "preserve", so the reader never
  *     populates it)
@@ -68,7 +70,29 @@ object WorkbookEquivalence:
         .zip(actual.sheets)
         .flatMap { case (exp, act) => sheetDiff(exp, act) }
         .toList
-    nameDiffs ++ sheetDiffs
+    nameDiffs ++ metadataDiff(expected, actual) ++ sheetDiffs
+
+  /**
+   * docProps metadata fields round-trip since GH-242: creator/lastModifiedBy/application/appVersion
+   * exact, created/modified at the W3CDTF second precision the part stores.
+   */
+  private def metadataDiff(expected: Workbook, actual: Workbook): List[String] =
+    def field[A](name: String, exp: A, act: A): Option[String] =
+      Option.when(exp != act)(s"metadata.$name mismatch: expected $exp, actual $act")
+    def seconds(
+      dt: Option[java.time.LocalDateTime]
+    ): Option[java.time.LocalDateTime] =
+      dt.map(_.truncatedTo(java.time.temporal.ChronoUnit.SECONDS))
+    val em = expected.metadata
+    val am = actual.metadata
+    List(
+      field("creator", em.creator, am.creator),
+      field("created", seconds(em.created), seconds(am.created)),
+      field("modified", seconds(em.modified), seconds(am.modified)),
+      field("lastModifiedBy", em.lastModifiedBy, am.lastModifiedBy),
+      field("application", em.application, am.application),
+      field("appVersion", em.appVersion, am.appVersion)
+    ).flatten
 
   /** True when `diff` reports no violations. */
   def equivalent(expected: Workbook, actual: Workbook): Boolean =

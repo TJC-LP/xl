@@ -1410,6 +1410,12 @@ object XlsxWriter:
         // PageSetup-derived print names (GH-259).
         OoxmlWorkbook.fromDomain(workbook)
 
+    // GH-242: document properties are model-driven. The reader parses docProps/core.xml and
+    // app.xml into WorkbookMetadata (and marks them parsed, so they are never copied verbatim);
+    // here the model decides what ships — emitted iff at least one field is present.
+    val corePropsXml = DocProps.buildCoreXml(workbook.metadata)
+    val appPropsXml = DocProps.buildAppXml(workbook.metadata)
+
     // Content types: preserve from source when available, otherwise generate minimal.
     // IMPORTANT: Don't call withCommentOverrides when preserving - the source already has
     // correct comment entries with Excel's sequential numbering (comments1.xml, comments2.xml...)
@@ -1424,7 +1430,9 @@ object XlsxWriter:
             )
           else preserved
         // Only add table overrides (comments already in preserved Content_Types)
-        withSst.withTableOverrides(totalTableCount)
+        withSst
+          .withTableOverrides(totalTableCount)
+          .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
       case None =>
         ContentTypes
           .minimal(
@@ -1435,8 +1443,11 @@ object XlsxWriter:
           )
           .withCommentOverrides(sheetsWithComments)
           .withTableOverrides(totalTableCount)
+          .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
 
-    val rootRels = preservedRootRels.getOrElse(Relationships.root())
+    val rootRels = preservedRootRels
+      .getOrElse(Relationships.root())
+      .withDocProps(corePropsXml.isDefined, appPropsXml.isDefined)
 
     val workbookRels = preservedWorkbookRels match
       case Some(preserved) =>
@@ -1467,6 +1478,12 @@ object XlsxWriter:
       // Write structural parts (always regenerated)
       writePart(zip, "[Content_Types].xml", contentTypes, config)
       writePart(zip, "_rels/.rels", rootRels, config)
+
+      // GH-242: document properties — deterministic, model-driven (no GUIDs/wall-clock values).
+      // The reader marks docProps as parsed, so these never collide with preserved parts.
+      corePropsXml.foreach(x => writePart(zip, DocProps.corePath, x, config))
+      appPropsXml.foreach(x => writePart(zip, DocProps.appPath, x, config))
+
       writePart(zip, "xl/workbook.xml", ooxmlWb, config)
       writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels, config)
       writeStyles(zip, "xl/styles.xml", styles, config)

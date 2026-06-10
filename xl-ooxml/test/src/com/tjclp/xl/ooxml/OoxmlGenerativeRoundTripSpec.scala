@@ -31,9 +31,9 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  * specs). In short: same sheet names in order; same cell refs; CellValue equal (formulas by text,
  * numbers by BigDecimal compare, DateTime ≈ stored serial); RESOLVED cell styles equal (registry
  * indices may be renumbered by dedup, numFmtId is reader-filled metadata); comments equal by (plain
- * text, author); hyperlinks equal; merges set-equal; viewSettings/pageSetup equal. Explicitly
- * ignored serialization noise: styleId numbering, SST ordering, workbook metadata +
- * activeSheetIndex (not serialized — GH-242), dimension/defaultColWidth-style derived props,
+ * text, author); hyperlinks equal; merges set-equal; viewSettings/pageSetup equal; docProps
+ * metadata fields equal (GH-242). Explicitly ignored serialization noise: styleId numbering, SST
+ * ordering, activeSheetIndex (not serialized), dimension/defaultColWidth-style derived props,
  * write-only freezePane, cached formula values, and Rgb alpha-00 ≡ alpha-FF (the parser
  * deliberately canonicalizes 00 alpha to opaque, matching Excel/openpyxl's 00RRGGBB convention).
  *

@@ -46,6 +46,11 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table"
   val relTypeHyperlink =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+  // docProps relationships (GH-242): core props is a PACKAGE relationship type, app is officeDocument
+  val relTypeCoreProperties =
+    "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
+  val relTypeExtendedProperties =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties"
 
   /** Content type URIs */
   val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -57,6 +62,9 @@ object XmlUtil:
   val ctVmlDrawing = "application/vnd.openxmlformats-officedocument.vmlDrawing"
   val ctTable = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
+  val ctCoreProperties = "application/vnd.openxmlformats-package.core-properties+xml"
+  val ctExtendedProperties =
+    "application/vnd.openxmlformats-officedocument.extended-properties+xml"
 
   /** Sort attributes by name for deterministic output */
   def sortAttributes(attrs: MetaData): MetaData =

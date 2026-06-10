@@ -67,6 +67,32 @@ final case class Relationships(
   def findAllByType(`type`: String): Seq[Relationship] =
     relationships.filter(_.`type` == `type`)
 
+  /**
+   * Reconcile package-level docProps relationships with what the writer emits (GH-242).
+   *
+   * Existing relationships of the right type are kept verbatim (stable rIds for preserved
+   * `_rels/.rels`); missing ones are appended with the next free numeric rId; stale ones (part no
+   * longer emitted) are removed. Deterministic for a given input.
+   */
+  def withDocProps(hasCore: Boolean, hasApp: Boolean): Relationships =
+    def nextId(rels: Seq[Relationship]): String =
+      val maxNum = rels.flatMap(r => r.id.stripPrefix("rId").toIntOption).maxOption.getOrElse(0)
+      s"rId${maxNum + 1}"
+    def ensure(
+      rels: Seq[Relationship],
+      present: Boolean,
+      relType: String,
+      target: String
+    ): Seq[Relationship] =
+      if present then
+        if rels.exists(_.`type` == relType) then rels
+        else rels :+ Relationship(nextId(rels), relType, target)
+      else rels.filterNot(_.`type` == relType)
+
+    val withCore = ensure(relationships, hasCore, relTypeCoreProperties, "docProps/core.xml")
+    val withApp = ensure(withCore, hasApp, relTypeExtendedProperties, "docProps/app.xml")
+    Relationships(withApp)
+
 object Relationships extends XmlReadable[Relationships]:
   val empty: Relationships = Relationships(Seq.empty)
 
