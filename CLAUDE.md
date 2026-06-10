@@ -28,14 +28,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Module Architecture
 
 ```
+xl/              → Aggregate module + scripting prelude (com.tjclp.xl.scripting) + prelude probes
 xl-core/         → Pure domain model (Cell, Sheet, Workbook, Patch, Style), macros, DSL
 xl-ooxml/        → Pure OOXML mapping (XlsxReader, XlsxWriter, SharedStrings, Styles)
 xl-cats-effect/  → IO interpreters and streaming (Excel[F], ExcelIO, SAX-based streaming)
-xl-benchmarks/   → JMH performance benchmarks
 xl-evaluator/    → Formula parser/evaluator (TExpr GADT, 104 functions, dependency graphs)
-xl-testkit/      → Test laws, generators, helpers [future]
+xl-cli/          → Stateless `xl` CLI (internal, native-image capable)
 xl-agent/        → AI agent benchmark runner (Anthropic API, skill comparison)
+xl-benchmarks/   → JMH performance benchmarks
+xl-testkit/      → Test laws, generators, helpers [placeholder — no sources yet]
 ```
+
+Published to Maven Central: `xl` (aggregate), `xl-core`, `xl-ooxml`, `xl-cats-effect`, `xl-evaluator`. Internal: `xl-cli`, `xl-agent`, `xl-benchmarks`, `xl-testkit`.
 
 ## Import Patterns
 
@@ -96,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all
-./mill __.test             # Run all tests (1080+)
+./mill __.test             # Run all tests (3005+)
 ./mill xl-core.test        # Test specific module
 ./mill __.reformat         # Format (Scalafmt 3.10.1)
 ./mill __.checkFormat      # CI check
@@ -274,7 +278,7 @@ echo '[{"op":"add-sheet","name":"Summary","after":"Sheet1"}]' | xl ...
 echo '[{"op":"rename-sheet","from":"Old","to":"New"}]' | xl ...
 ```
 
-**All 20 batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`
+**All 21 batch operations**: `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`
 
 **Common mistake**: Using unqualified range without `--sheet`:
 ```bash
@@ -301,8 +305,8 @@ All code must pass `./mill __.checkFormat`. See `docs/design/style-guide.md`.
 **Rules**: opaque types for domain quantities | enums with `derives CanEqual` | `final case class` for data | total functions returning Either/Option | extension methods over implicit classes
 
 **WartRemover** (compile-time enforcement):
-- ❌ Error: `null`, `.head/.tail`, `.get` on Try/Either
-- ⚠️ Warning: `.get` on Option, `var`/`while`/`return` (acceptable in tests/macros)
+- ❌ Error: `null`, `.get` on Try/Either
+- ⚠️ Warning: `.head/.tail` on collections, `.get` on Option, `var`/`while`/`return` (acceptable in tests/macros)
 
 **Error Handling**: Always use `XLResult[A] = Either[XLError, A]`
 
@@ -391,12 +395,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**1080+ tests**: addressing (17), patch (21), style (60), datetime (8), codec (42), batch (46), syntax (18), optics (34), OOXML (24), streaming (18), RichText (5), formula (51+), v0.3.0 regressions (36), CLI (100+)
+**3005+ tests** by module: xl-evaluator (1198), xl-core (971), xl-ooxml (381), xl-cli (308), xl-cats-effect (76), xl-agent (54), xl prelude probes (17). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 1080+ tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 3005+ tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 

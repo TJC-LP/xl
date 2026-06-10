@@ -32,21 +32,22 @@ XL has **two distinct I/O implementations** with fundamentally different archite
 ### Mode 2: Streaming (xl-cats-effect)
 
 **Implementation**: Event-based streaming with fs2
-- Stream ZIP bytes via fs2-data-xml
-- Emit XML events directly
+- Reads: SAX parser over ZIP entry streams (`SaxStreamingReader`)
+- Writes: fs2-data-xml events emitted directly (`StreamingXmlWriter`)
 - No intermediate trees
 - Constant memory
 
 **Modules**:
 - `xl-cats-effect`: Effect interpreters
 - `StreamingXmlWriter`: Domain model → XML events → ZIP
-- `StreamingXmlReader`: ZIP → XML events → Domain model
+- `SaxStreamingReader`: ZIP → SAX events → RowData
 
 **Key Files**:
 - `xl-cats-effect/src/com/tjclp/xl/io/Excel.scala`
 - `xl-cats-effect/src/com/tjclp/xl/io/ExcelIO.scala`
 - `xl-cats-effect/src/com/tjclp/xl/io/StreamingXmlWriter.scala`
-- `xl-cats-effect/src/com/tjclp/xl/io/StreamingXmlReader.scala`
+- `xl-cats-effect/src/com/tjclp/xl/io/SaxStreamingReader.scala`
+- `xl-cats-effect/src/com/tjclp/xl/io/streaming/` (SAX→StAX transforms: `ZipTransformer`, `StreamingTransform`, `StylePatcher`)
 
 ---
 
@@ -79,8 +80,8 @@ Write (`writeStream` / `writeStreamsSeq`):
 - Output is compact XML with `Compression.Deflated` by default; by design it uses inline strings (no SST) and a minimal style set.
 
 Read (`readStream` / `readSheetStream` / `readStreamByIndex`):
-- The ZIP is opened as a `ZipFile`, and the target worksheet entry is streamed through fs2‑data‑xml as a stream of XML events.
-- Those events are converted into `RowData` records on the fly.
+- The ZIP is opened as a `ZipFile`, and the target worksheet entry is streamed through a SAX parser (`SaxStreamingReader`; 3–4x faster than the original fs2‑data‑xml path).
+- SAX events are converted into `RowData` records (values plus raw style indices).
 - The `SharedStrings` table (if present) is parsed once up front and held in memory; worksheet data itself is streamed.
 
 Characteristics:
@@ -140,7 +141,9 @@ Features: Limited (reads values only, minimal style info)
 
 ---
 
-### ADR-012: Why Not Streaming-First?
+### Why Not Streaming-First?
+
+(Companion rationale to ADR-011; not a numbered ADR — see `decisions.md` for the canonical ADR list, where ADR-012 is compression defaults.)
 
 **Decision**: In-memory is the **default** API, streaming is opt-in
 
@@ -162,7 +165,7 @@ Features: Limited (reads values only, minimal style info)
 
 ### ADR-013: Streaming Read Bug - Why Not Fixed Yet?
 
-**Status**: Historical only – the original streaming reader used `readAllBytes()` and was O(n) in memory. As of P6.6 it has been rewritten on top of `fs2.io.readInputStream` and fs2‑data‑xml and now achieves the same constant‑memory characteristics as the streaming writer.
+**Status**: Historical only – the original streaming reader used `readAllBytes()` and was O(n) in memory. As of P6.6 it has been rewritten on top of `fs2.io.readInputStream` (and since moved to the SAX parser backend — see the status update under "Streaming: Why fs2-data-xml?" below) and now achieves the same constant‑memory characteristics as the streaming writer.
 
 Today:
 - `ExcelIO.readStream` / `readSheetStream` / `readStreamByIndex` are safe to use for large files.
@@ -175,11 +178,11 @@ Today:
 | Feature | In-Memory | Streaming Write | Streaming Read (Fixed) |
 |---------|-----------|-----------------|------------------------|
 | **SST** | ✅ Full | ❌ None (inline only) | ✅ Full |
-| **Styles** | ✅ Full | ⚠️ Default only | ⚠️ Minimal |
+| **Styles** | ✅ Full | ⚠️ Default only | ⚠️ Raw style indices on `RowData` |
 | **Formulas** | ✅ Store | ✅ Store | ✅ Read |
-| **Merged Cells** | ⚠️ Track (not serialized) | ❌ No | ❌ No |
+| **Merged Cells** | ✅ Full (serialized) | ❌ No | ❌ No |
 | **Rich Text** | ✅ Full | ✅ Full | ✅ Full |
-| **Column/Row Props** | ⚠️ Track (not serialized) | ❌ No | ❌ No |
+| **Column/Row Props** | ✅ Full (serialized) | ❌ No | ❌ No |
 | **Memory** | O(n) | O(1) | O(1) after P6.6 |
 | **Speed** | ~88k rows/sec | ~88k rows/sec | ~55k rows/sec |
 
@@ -216,6 +219,12 @@ Today:
 
 **Decision**: Use fs2-data-xml for event streaming
 
+**Status update**: this decision now applies to the row-stream *write* path only
+(`StreamingXmlWriter`). The streaming *read* path was later rebuilt on a plain SAX parser
+(`SaxStreamingReader`) for 3–4x throughput — see
+[performance-investigation.md](performance-investigation.md). The SAX→StAX transform writers
+(`ZipTransformer`/`StreamingTransform`) likewise use `javax.xml` wrapped in `Sync[F]`.
+
 **Pros**:
 - True streaming (no tree building)
 - Constant memory
@@ -228,7 +237,7 @@ Today:
 - Harder to debug (can't inspect tree)
 
 **Alternative Considered**: Use javax.xml.stream.XMLStreamWriter
-**Rejected Because**: Imperative, side-effecting, not fs2-compatible
+**Rejected Because**: Imperative, side-effecting, not fs2-compatible (later adopted, behind `Sync[F]`, where raw throughput won)
 
 ---
 
@@ -316,10 +325,11 @@ test("streaming read uses constant memory"):
 
 ## Migration Path
 
-### Current State (As of 2026-01)
+### Current State (As of 2026-06, v0.11.0)
 - In-memory: Production-ready for <100k rows
 - Streaming write: Production-ready for >100k rows (minimal styling)
 - Streaming read: Production-ready for >100k rows (O(1) memory)
+- Streaming transforms: targeted cell/style edits on existing files without full load (`ZipTransformer` + `StreamingTransform`; CLI `--stream` put/putf/style/batch)
 
 ### ✅ P6.6: Fix Streaming Read (Complete)
 - Replaced `readAllBytes()` with `fs2.io.readInputStream`
@@ -356,7 +366,7 @@ test("streaming read uses constant memory"):
 ## Related Documents
 
 - [performance-guide.md](../reference/performance-guide.md) - User guidance
-- [streaming-improvements.md](../plan/streaming-improvements.md) - Roadmap
+- [smart-streaming.md](smart-streaming.md) - Streaming roadmap (shipped vs future)
 - [purity-charter.md](purity-charter.md) - Why pure core matters
 - [STATUS.md](../STATUS.md) - Current limitations
 
@@ -364,4 +374,4 @@ test("streaming read uses constant memory"):
 
 ## Author
 
-Documented 2025-11-11
+Documented 2025-11-11. Last updated 2026-06-10 (SAX read backend, streaming transforms, feature-matrix corrections).

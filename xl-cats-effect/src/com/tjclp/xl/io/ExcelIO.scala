@@ -101,7 +101,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   /**
    * Stream rows from sheet by name with constant memory.
    *
-   * Uses fs2-data-xml pull parsing for the target sheet.
+   * Uses SAX parser (javax.xml.parsers.SAXParser) for 3-4x speedup vs fs2-data-xml.
    */
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData] =
     Stream

@@ -64,6 +64,9 @@ After updating all files:
    ```bash
    grep -r "SNAPSHOT" --include="*.scala" --include="*.mill" --include="*.md" . | grep -v RELEASING.md | grep -v ".scala-build" | grep -v "out/"
    ```
+6. Confirm new release features are documented in `plugin/skills/xl-scripting/reference/API.md`
+   and `docs/reference/scripting.md` — cross-check the release's CHANGELOG entries against both
+   files before tagging (doc drift here ships to every skill user).
 
 ### Commit
 
@@ -73,6 +76,11 @@ chore(release): Bump version to $ARGUMENTS
 ```
 
 ### Tagging
+
+**Step 0 — CHANGELOG heading**: Before tagging, add the new version heading to CHANGELOG.md —
+move the `## [Unreleased]` content under a new `## [$ARGUMENTS] - <YYYY-MM-DD>` entry (leaving an
+empty `## [Unreleased]` section) and include it in the release commit. The extraction below reads
+release notes from that heading, so a missing heading produces an empty tag message.
 
 After committing, create an **annotated tag** with release notes from CHANGELOG.md:
 

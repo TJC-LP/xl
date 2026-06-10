@@ -16,6 +16,8 @@
 - [ ] All tests pass: `./mill __.test`
 - [ ] Code formatted: `./mill __.reformat`
 - [ ] Zero WartRemover warnings
+- [ ] Skill snippets compile: `./scripts/verify-skill-snippets.sh --local` (if `plugin/skills` or `docs/reference/scripting.md` changed)
+- [ ] Examples pass: `./scripts/test-examples.sh` (if `examples/` or the prelude changed)
 
 ## Documentation Updates
 

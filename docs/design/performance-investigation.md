@@ -4,6 +4,8 @@
 **Status**: Investigation Complete
 **Author**: Claude Code + Human Review
 
+> Investigation snapshot, 2025-12 — conclusions adopted (Option A); numbers reflect that benchmark run. For current user guidance see [performance-guide.md](../reference/performance-guide.md).
+
 ## Executive Summary
 
 XL outperforms Apache POI on typical workloads (<10k rows) for both reads and writes. At scale (100k+ rows), XL's functional abstractions introduce overhead for reads, while writes remain faster.

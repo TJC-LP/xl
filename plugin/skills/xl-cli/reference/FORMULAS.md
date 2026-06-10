@@ -1,6 +1,6 @@
 # Supported Formula Functions
 
-The `eval` command supports 88 Excel functions.
+The `eval` command supports 104 Excel functions (run `xl functions` for the live list).
 
 ## Math Functions
 
@@ -39,6 +39,11 @@ The `eval` command supports 88 Excel functions.
 | STDEVP | `=STDEVP(range)` | `=STDEVP(A1:A10)` → population std dev (n) |
 | VAR | `=VAR(range)` | `=VAR(A1:A10)` → sample variance (n-1) |
 | VARP | `=VARP(range)` | `=VARP(A1:A10)` → population variance (n) |
+| LARGE | `=LARGE(range, k)` | `=LARGE(A1:A10, 2)` → 2nd largest (1-based k) |
+| SMALL | `=SMALL(range, k)` | `=SMALL(A1:A10, 2)` → 2nd smallest |
+| RANK | `=RANK(number, ref, [order])` | `=RANK(A1, A1:A10)` → rank; order 0/omitted = descending |
+| PERCENTILE | `=PERCENTILE(range, p)` | `=PERCENTILE(A1:A10, 0.9)` → p in [0,1], inclusive interpolation |
+| QUARTILE | `=QUARTILE(range, quart)` | `=QUARTILE(A1:A10, 3)` → quart 0-4 (0=min, 2=median, 4=max) |
 
 **Note**: STDEV/VAR use Welford's algorithm for numerical stability. Sample variants require at least 2 values; population variants require at least 1.
 
@@ -47,6 +52,9 @@ The `eval` command supports 88 Excel functions.
 | Function | Syntax | Example |
 |----------|--------|---------|
 | IF | `=IF(condition, true_val, false_val)` | `=IF(A1>100,"High","Low")` |
+| IFS | `=IFS(cond1, val1, cond2, val2, ...)` | `=IFS(A1>90,"A",A1>80,"B")` → first TRUE condition's value, else #N/A |
+| SWITCH | `=SWITCH(expr, case1, val1, ..., [default])` | `=SWITCH(A1,1,"One",2,"Two","Other")` → trailing default optional |
+| CHOOSE | `=CHOOSE(index, val1, val2, ...)` | `=CHOOSE(2,"a","b","c")` → "b" (1-based; out of range → #VALUE!) |
 | AND | `=AND(cond1, cond2, ...)` | `=AND(A1>0, B1>0)` |
 | OR | `=OR(cond1, cond2, ...)` | `=OR(A1="Yes", B1="Yes")` |
 | NOT | `=NOT(condition)` | `=NOT(A1=0)` |
@@ -121,9 +129,11 @@ The `eval` command supports 88 Excel functions.
 | Function | Syntax | Example |
 |----------|--------|---------|
 | VLOOKUP | `=VLOOKUP(value, range, col, [match])` | `=VLOOKUP(A1, B:D, 2, FALSE)` |
+| HLOOKUP | `=HLOOKUP(value, range, row, [match])` | `=HLOOKUP(A1, B1:F3, 2, FALSE)` → searches first row |
 | XLOOKUP | `=XLOOKUP(lookup, lookup_arr, return_arr)` | `=XLOOKUP(A1, B:B, C:C)` |
 | INDEX | `=INDEX(array, row, [col])` | `=INDEX(A1:C10, 2, 3)` |
 | MATCH | `=MATCH(value, range, [match_type])` | `=MATCH(A1, B:B, 0)` |
+| OFFSET | `=OFFSET(ref, rows, cols, [height], [width])` | `=SUM(OFFSET(A1, 1, 0, 5, 1))` → returns a range; composes with aggregates |
 
 ## Conditional Functions
 
@@ -135,6 +145,8 @@ The `eval` command supports 88 Excel functions.
 | SUMIFS | `=SUMIFS(sum_range, crit_range1, crit1, ...)` | `=SUMIFS(C:C, A:A, "Q1", B:B, ">0")` |
 | COUNTIFS | `=COUNTIFS(range1, crit1, range2, crit2, ...)` | `=COUNTIFS(A:A, "Active", B:B, ">100")` |
 | AVERAGEIFS | `=AVERAGEIFS(avg_range, crit_range1, crit1, ...)` | `=AVERAGEIFS(C:C, A:A, "Q1", B:B, ">0")` |
+| MAXIFS | `=MAXIFS(max_range, crit_range1, crit1, ...)` | `=MAXIFS(C:C, A:A, "Q1")` → 0 if nothing matches |
+| MINIFS | `=MINIFS(min_range, crit_range1, crit1, ...)` | `=MINIFS(C:C, A:A, "Q1")` → 0 if nothing matches |
 | SUMPRODUCT | `=SUMPRODUCT(array1, [array2], ...)` | `=SUMPRODUCT(A1:A10, B1:B10)` |
 
 ## Error Handling Functions
@@ -166,3 +178,16 @@ The `eval` command supports 88 Excel functions.
 | ADDRESS | `=ADDRESS(row, col, [abs], [a1], [sheet])` | `=ADDRESS(1, 1, 1, TRUE)` → "$A$1" |
 
 **ADDRESS abs_num**: 1=$A$1, 2=A$1, 3=$A1, 4=A1
+
+## Array Functions (Dynamic Arrays)
+
+These return a grid of values. Use `xl evala` to display the result grid or spill it into the
+sheet with `--at <ref>`; a 1×1 result collapses to a scalar.
+
+| Function | Syntax | Example |
+|----------|--------|---------|
+| TRANSPOSE | `=TRANSPOSE(array)` | `=TRANSPOSE(A1:C2)` → swaps rows and columns (2×3 → 3×2) |
+| SEQUENCE | `=SEQUENCE(rows, [cols], [start], [step])` | `=SEQUENCE(5)` → 1..5 column; defaults cols=1, start=1, step=1 |
+| SORT | `=SORT(array, [sort_index], [sort_order])` | `=SORT(A1:B10, 2, -1)` → rows by 1-based column; 1=asc (default), -1=desc |
+| UNIQUE | `=UNIQUE(array, [by_col], [exactly_once])` | `=UNIQUE(A1:A100)` → distinct rows, first-seen order |
+| FILTER | `=FILTER(array, include, [if_empty])` | `=FILTER(A1:B10, C1:C10)` → rows where include is truthy; if_empty/#N/A otherwise |

@@ -112,7 +112,7 @@ CI, adversarial reviews, property seeds) surfaced and fixed eight pre-existing b
 
 A correctness-and-authoring release: fix defects that silently corrupted data or
 falsified flagship guarantees, close the read↔write asymmetry, and broaden the
-formula library. See `docs/plan/v0.10.0-triage.md` for rationale.
+formula library. See `docs/archive/plan/v0.10.0-triage.md` for rationale.
 
 #### Added
 

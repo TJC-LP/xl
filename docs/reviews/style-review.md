@@ -1,3 +1,5 @@
+> 📜 **HISTORICAL** — dated review artifact (2025-11-10), kept for the record. The issues it raised have long since been fixed or tracked; see [STATUS.md](../STATUS.md) for current behavior.
+
 # Style Review - Status: Documented ✓
 
 **Review Date**: Pre-implementation

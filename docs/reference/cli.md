@@ -18,15 +18,17 @@ cd xl
 make install
 ```
 
-This builds a fat JAR and installs `xl` to `~/.local/bin/`. Ensure it's in your PATH:
+This builds a native binary (no JDK required, instant startup) and installs `xl` to `~/.local/bin/`. Ensure it's in your PATH:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+**JAR install** (requires JDK 17+): `make install-jar`
+
 **Uninstall**: `make uninstall`
 
-**Update**: After `git pull`, run `make build` — the wrapper auto-picks up the new JAR.
+**Update**: After `git pull`, run `make install` (or `make install-jar`) again.
 
 ---
 
@@ -34,24 +36,36 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ```bash
 # Global flags (used with all commands)
--f, --file <path>     # Input file (required)
--s, --sheet <name>    # Sheet to operate on (optional, defaults to first)
--o, --output <path>   # Output file for mutations (required for put/putf)
+-f, --file <path>     # Input file (required for most commands)
+-s, --sheet <name>    # Sheet to operate on (required for unqualified ranges)
+-o, --output <path>   # Output file for mutations
+-i, --in-place        # Edit file in place (same as -o matching -f)
+--stream              # O(1) memory streaming for large files (search/stats/bounds/view + writes)
+--max-size <MB>       # Max uncompressed size for in-memory load (default 100, 0 = unlimited)
+--backend <name>      # XML backend: scalaxml (default) or saxstax (faster)
 
 # Read-only operations
 xl -f model.xlsx sheets                    # List all sheets
-xl -f model.xlsx bounds                    # Show used range
+xl -f model.xlsx names                     # List defined names (named ranges)
+xl -f model.xlsx -s "P&L" bounds           # Show used range
 xl -f model.xlsx -s "P&L" view A1:D20      # View range as markdown
-xl -f model.xlsx cell B5                   # Get single cell details
-xl -f model.xlsx search "Revenue"          # Find cells by content
-xl -f model.xlsx eval "=SUM(B1:B10)"       # Evaluate formula (what-if)
+xl -f model.xlsx cell B5                   # Get single cell details (sheet auto-detected if unambiguous)
+xl -f model.xlsx search "Revenue"          # Find cells by content (all sheets)
+xl -f model.xlsx -s "P&L" stats B1:B100    # Numeric statistics for a range
+xl -f model.xlsx -s "P&L" eval "=SUM(B1:B10)"   # Evaluate formula (what-if)
+xl -f model.xlsx -s "P&L" evala "=TRANSPOSE(A1:C2)"  # Evaluate array formula (spill grid)
 
-# Mutations (require -o)
-xl -f model.xlsx -o output.xlsx put B5 1000000       # Write value
-xl -f model.xlsx -o output.xlsx putf C5 "=B5*1.1"    # Write formula
+# Mutations (require -o or -i)
+xl -f model.xlsx -s S1 -o output.xlsx put B5 1000000       # Write value
+xl -f model.xlsx -s S1 -o output.xlsx putf C5 "=B5*1.1"    # Write formula
 
 # What-if analysis with overrides
-xl -f model.xlsx eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary values
+xl -f model.xlsx -s S1 eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary values
+
+# No file needed
+xl new report.xlsx --sheet Data --sheet Summary   # Create a blank workbook
+xl functions                                       # List all 104 supported functions
+xl rasterizers                                     # List available PNG/PDF backends
 ```
 
 ---
@@ -62,39 +76,75 @@ xl -f model.xlsx eval "=B1*1.1" --with "B1=100"      # Evaluate with temporary v
 
 | Category | Commands | Purpose |
 |----------|----------|---------|
-| **Navigate** | `sheets`, `bounds` | Find your way around |
-| **Explore** | `view`, `cell`, `search` | Read data incrementally |
-| **Analyze** | `eval` | What-if formula evaluation |
-| **Mutate** | `put`, `putf`, `style`, `row`, `col`, `fill`, `clear` | Make changes (requires `-o`) |
+| **Info** (no `-f`) | `functions`, `rasterizers`, `new` | Capability listing, blank workbook |
+| **Navigate** | `sheets`, `bounds`, `names` | Find your way around |
+| **Explore** | `view`, `cell`, `search`, `stats` | Read data incrementally |
+| **Analyze** | `eval`, `evala` | What-if formula evaluation (scalar + array) |
+| **Mutate cells** | `put`, `putf`, `style`, `fill`, `clear`, `copy`, `sort`, `merge`, `unmerge`, `comment`, `remove-comment`, `batch`, `import` | Make changes (require `-o` or `-i`) |
+| **Rows/columns** | `row`, `col`, `autofit`, `insert-rows`, `delete-rows`, `insert-cols`, `delete-cols` | Sizing, visibility, structural editing |
+| **Sheets & view** | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide/show`, `freeze`, `unfreeze`, `name` | Workbook structure |
 
 ### Command Summary
 
 | Command | Arguments | Description |
 |---------|-----------|-------------|
-| `sheets` | | List all sheets with stats |
-| `bounds` | | Show used range of current sheet |
-| `view` | `<range>` | Render range as markdown |
-| `cell` | `<ref>` | Get single cell details |
-| `search` | `<pattern>` | Find cells matching pattern |
+| `functions` | | List all 104 supported Excel functions (no `-f` needed) |
+| `rasterizers` | | List available SVG-to-raster backends (no `-f` needed) |
+| `new` | `<output> [--sheet <name>]...` | Create a blank xlsx file (no `-f` needed) |
+| `sheets` | `[list\|hide <name> [--very]\|show <name>]` | List sheets (default) or hide/show one |
+| `names` | | List defined names (named ranges) |
+| `name` | `add <name> <refers-to>` \| `rm <name>` | Manage named ranges (requires `-o`) |
+| `bounds` | `[--scan]` | Show used range of current sheet |
+| `view` | `<range> [flags]` | Render range (markdown/json/csv/html/svg/png/jpeg/webp/pdf) |
+| `cell` | `<ref> [--no-style]` | Get single cell details |
+| `search` | `<pattern> [--limit n] [--sheets a,b]` | Find cells matching pattern (regex, all sheets by default) |
+| `stats` | `<range>` | Statistics for numeric values in range |
 | `eval` | `<formula> [--with overrides]` | Evaluate formula without modifying |
-| `put` | `<ref> <value>` | Write value to cell (requires `-o`) |
-| `putf` | `<ref> <formula>` | Write formula to cell (requires `-o`) |
+| `evala` | `<formula> [--at <ref>] [--with overrides]` | Evaluate array formula; display or spill result grid |
+| `put` | `<ref\|range> <value...> [--csv]` | Write value(s) to cell or range (requires `-o`) |
+| `putf` | `<ref\|range> <formula...>` | Write formula(s); single formula + range drags with `$` anchors (requires `-o`) |
 | `style` | `<range> [options]` | Apply styling (requires `-o`) |
-| `row` | `<n> [options]` | Set row height, hide/show (requires `-o`) |
-| `col` | `<letter> [options]` | Set column width, hide/show, auto-fit (requires `-o`) |
+| `row` | `<n> [--height pt] [--hide\|--show]` | Set row properties (requires `-o`) |
+| `col` | `<letter\|A:F> [--width n] [--auto-fit] [--hide\|--show]` | Set column properties (requires `-o`) |
+| `autofit` | `[--columns A:F]` | Auto-fit column widths from content (requires `-o`) |
 | `fill` | `<source> <target> [--right]` | Fill cells with source value/formula (requires `-o`) |
 | `clear` | `<range> [--all\|--styles\|--comments]` | Clear cell contents/styles/comments (requires `-o`) |
-| `batch` | `<file\|->` | Apply multiple operations from JSON (requires `-o`) |
+| `copy` | `<source> <target> [--values-only]` | Copy range with formula adjustment (requires `-o`) |
+| `sort` | `<range> --by <col> [options]` | Sort rows by one or more columns (requires `-o`) |
+| `merge` | `<range>` | Merge cells (requires `-o`) |
+| `unmerge` | `<range>` | Unmerge cells (requires `-o`) |
+| `comment` | `<ref> <text> [--author name]` | Add cell comment (requires `-o`) |
+| `remove-comment` | `<ref>` | Remove cell comment (requires `-o`) |
+| `freeze` | `<ref>` | Freeze panes at cell (requires `-o`) |
+| `unfreeze` | | Remove freeze panes (requires `-o`) |
+| `import` | `<csv-file> [start-ref] [options]` | Import CSV with type detection (requires `-o`) |
+| `add-sheet` | `<name> [--after s] [--before s]` | Add new empty sheet (requires `-o`) |
+| `remove-sheet` | `<name>` | Remove sheet (requires `-o`) |
+| `rename-sheet` | `<name> <new-name>` | Rename sheet (requires `-o`) |
+| `move-sheet` | `<name> [--to idx] [--after s] [--before s]` | Move sheet to new position (requires `-o`) |
+| `copy-sheet` | `<name> <new-name>` | Copy sheet to new name (requires `-o`) |
+| `insert-rows` | `<at-row> [count]` | Insert rows; shifts cells, rewrites formulas (requires `-o`) |
+| `delete-rows` | `<at-row> [count]` | Delete rows; `#REF!` on lost references (requires `-o`) |
+| `insert-cols` | `<at-col> [count]` | Insert columns; shifts cells, rewrites formulas (requires `-o`) |
+| `delete-cols` | `<at-col> [count]` | Delete columns; `#REF!` on lost references (requires `-o`) |
+| `batch` | `<file\|-> [--dry-run]` | Apply multiple operations from JSON (requires `-o`; `--dry-run` validates without a file) |
 
 ---
 
 ## Command Details
 
-### `xl sheets`
+### `xl sheets [list|hide|show]`
 
-List all sheets as a markdown table.
+Sheet operations. With no subcommand, defaults to `list`.
 
-**Output**:
+**Subcommands**:
+| Subcommand | Arguments | Description |
+|------------|-----------|-------------|
+| `list` | `[--stats]` | List all sheets (`--stats` adds cell/formula counts; slower) |
+| `hide` | `<sheet-name> [--very]` | Hide a sheet (`--very` = very hidden, VBA-only; requires `-o`) |
+| `show` | `<sheet-name>` | Show a hidden sheet (requires `-o`) |
+
+**Output** (`list --stats`):
 ```markdown
 | # | Name        | Range    | Cells | Formulas |
 |---|-------------|----------|-------|----------|
@@ -105,14 +155,21 @@ List all sheets as a markdown table.
 
 ---
 
-### `xl bounds [sheet]`
+### `xl names` / `xl name add|rm`
 
-Show the used range (bounding box of non-empty cells).
+List and manage defined names (named ranges).
 
-**Arguments**:
-| Arg | Type | Required | Default | Description |
-|-----|------|----------|---------|-------------|
-| `sheet` | string | No | active | Sheet name |
+```bash
+xl -f model.xlsx names                                       # List all defined names
+xl -f model.xlsx -o out.xlsx name add Tax 'Sheet1!$A$1'      # Add or replace
+xl -f model.xlsx -o out.xlsx name rm Tax                     # Remove
+```
+
+---
+
+### `xl bounds [--scan]`
+
+Show the used range (bounding box of non-empty cells) for the sheet selected with `-s`. Instant by default (reads the worksheet's dimension element); `--scan` forces a full streaming scan for accurate bounds.
 
 **Output**:
 ```
@@ -127,15 +184,26 @@ Non-empty: 892 cells
 
 ### `xl view <range>`
 
-View a rectangular range as a markdown table with row/column headers.
+View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG/JPEG/WebP/PDF.
 
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `range` | string | Yes | — | Cell range (e.g., "A1:D20") |
+| `--format` | string | No | markdown | Output format: markdown, json, csv, html, svg, png, jpeg, webp, pdf |
 | `--formulas` | flag | No | false | Show formulas instead of values |
 | `--eval` | flag | No | false | Evaluate formulas (compute live values) |
+| `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
 | `--limit` | int | No | 50 | Max rows to display |
+| `--skip-empty` | flag | No | false | Skip empty cells (JSON) or empty rows/columns (tabular) |
+| `--show-labels` | flag | No | false | Include column letters and row numbers |
+| `--header-row` | int | No | — | Use values from this row as keys in JSON output (1-based) |
+| `--raster-output` | path | For raster | — | Output file (required for png/jpeg/webp/pdf) |
+| `--dpi` | int | No | 144 | Resolution for raster output |
+| `--quality` | int | No | 90 | JPEG quality 1-100 |
+| `--rasterizer` | string | No | auto | Force backend: batik, cairosvg, rsvg-convert, resvg, imagemagick |
+| `--gridlines` | flag | No | false | Show cell gridlines in SVG output |
+| `--print-scale` | flag | No | false | Apply print scaling (for PDF-like output) |
 
 **Output**:
 ```markdown
@@ -177,14 +245,14 @@ Value: Revenue
 
 ### `xl search <pattern>`
 
-Find cells containing text matching pattern.
+Find cells containing text matching pattern. Searches all sheets by default (no `-s` needed).
 
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `pattern` | string | Yes | — | Search pattern (supports regex) |
-| `--in` | string | No | entire sheet | Limit search to range |
-| `--limit` | int | No | 20 | Max results |
+| `--sheets` | string | No | all | Comma-separated list of sheets to search |
+| `--limit` | int | No | 50 | Max results |
 
 **Output**:
 ```markdown
@@ -200,31 +268,64 @@ Found 5 matches for "Revenue":
 
 ### `xl eval <formula> [--with overrides]`
 
-Evaluate a formula without modifying the file (what-if analysis).
+Evaluate a formula without modifying the file (what-if analysis). `-f` is optional for constant formulas (`xl eval "=PI()*2"`).
 
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
 | `formula` | string | Yes | Formula to evaluate |
-| `--with` | string | No | Temporary cell overrides (e.g., "B1=100") |
+| `--with`, `-w` | string | No | Temporary cell overrides (e.g., "B1=100,B2=200"; repeatable) |
 
 **Examples**:
 ```bash
-xl -f model.xlsx eval "=SUM(B1:B10)"
-xl -f model.xlsx eval "=B1*1.1" --with "B1=100"
+xl -f model.xlsx -s Sheet1 eval "=SUM(B1:B10)"
+xl -f model.xlsx -s Sheet1 eval "=B1*1.1" --with "B1=100"
 ```
 
 ---
 
-### `xl put <ref> <value>`
+### `xl evala <formula> [--at <ref>]`
 
-Write a value to a cell.
+Evaluate an **array formula** and display the result grid, or spill it into the sheet. Requires `-f` (array formulas need sheet context).
 
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
-| `ref` | string | Yes | Cell reference |
-| `value` | string | Yes | Value to write |
+| `formula` | string | Yes | Array formula to evaluate |
+| `--at` | string | No | Target cell for array spill (default: display only) |
+| `--with`, `-w` | string | No | Temporary cell overrides (repeatable) |
+
+**Examples**:
+```bash
+xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)"          # Display result grid
+xl -f data.xlsx -s Sheet1 evala "=SEQUENCE(5)" --at E1       # Spill starting at E1
+xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                  # Array arithmetic with broadcasting
+```
+
+---
+
+### `xl stats <range>`
+
+Calculate statistics (count, sum, min, max, average, ...) for numeric values in a range. Supports `--stream` for large files.
+
+```bash
+xl -f data.xlsx -s Sheet1 stats B2:B10000
+xl -f huge.xlsx --stream stats A1:E100000
+```
+
+---
+
+### `xl put <ref|range> <value...>`
+
+Write value(s) to a cell or range.
+
+**Modes**:
+| Mode | Example | Behavior |
+|------|---------|----------|
+| Single | `put A1 100` | Write 100 to A1 |
+| Fill | `put A1:A10 "TBD"` | Fill range with the same value |
+| Batch | `put A1:C1 "X" "Y" "Z"` | One value per cell (row-major) |
+| CSV split | `put A1:C1 "X,Y,Z" --csv` | Split one comma-separated value across the range |
 
 **Type Inference**:
 - Numbers: `1000`, `1,234.56`, `$100`, `50%`
@@ -232,29 +333,38 @@ Write a value to a cell.
 - Booleans: `true`, `false`
 - Text: Everything else
 
+**Negative numbers**: use the `--value` flag (a leading `-` is parsed as a flag):
+```bash
+xl -f input.xlsx -s S1 -o output.xlsx put A1 --value "-500"
+```
+
 **Example**:
 ```bash
-xl -f input.xlsx -o output.xlsx put B5 1000000
+xl -f input.xlsx -s S1 -o output.xlsx put B5 1000000
 ```
 
 ---
 
-### `xl putf <ref> <formula>`
+### `xl putf <ref|range> <formula...>`
 
-Write a formula to a cell.
+Write formula(s) to a cell or range with Excel-style dragging.
 
-**Arguments**:
-| Arg | Type | Required | Description |
-|-----|------|----------|-------------|
-| `ref` | string | Yes | Cell reference or range |
-| `formula` | string | Yes | Formula (with or without `=`) |
-| `--from` | string | No | Source cell for relative reference adjustment |
+**Modes**:
+| Mode | Example | Behavior |
+|------|---------|----------|
+| Single | `putf C1 "=A1+B1"` | One formula, one cell |
+| Drag | `putf B2:B10 "=A2*1.1"` | Single formula + range: references shift per cell (`$` anchors pin) |
+| Batch | `putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"` | One formula per cell, applied as-is (no dragging) |
+
+**Anchor modes** (`$` controls shifting when dragging): `$A$1` absolute, `$A1` column-absolute, `A$1` row-absolute, `A1` fully relative.
 
 **Examples**:
 ```bash
-xl -f input.xlsx -o output.xlsx putf C5 "=B5*1.1"
-xl -f input.xlsx -o output.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
+xl -f input.xlsx -s S1 -o output.xlsx putf C5 "=B5*1.1"
+xl -f input.xlsx -s S1 -o output.xlsx putf C2:C10 "=SUM(\$B\$2:B2)"   # Running total
 ```
+
+(The batch JSON `putf` op additionally accepts a `"from"` field to drag from an explicit source cell.)
 
 ---
 
@@ -262,22 +372,31 @@ xl -f input.xlsx -o output.xlsx putf B2:B10 "=SUM(\$A\$1:A2)" --from B2
 
 Apply styling to cells.
 
+Styles **merge** with existing formatting by default; `--replace` overwrites.
+
 **Arguments**:
 | Arg | Type | Description |
 |-----|------|-------------|
 | `range` | string | Cell/range reference |
 | `--bold` | flag | Bold text |
 | `--italic` | flag | Italic text |
-| `--bg` | string | Background color (name or hex) |
+| `--underline` | flag | Underlined text |
+| `--font-size` | double | Font size in points |
+| `--font-name` | string | Font family (e.g., "Arial") |
+| `--bg` | string | Background color (name, #hex, or rgb(r,g,b)) |
 | `--fg` | string | Text color |
-| `--align` | string | Alignment: left, center, right |
-| `--format` | string | Number format: currency, percent, date |
-| `--border` | string | Border style: none, thin, medium, thick |
+| `--align` | string | Horizontal alignment: left, center, right |
+| `--valign` | string | Vertical alignment: top, middle, bottom |
+| `--wrap` | flag | Enable text wrapping |
+| `--format` | string | Number format: general, number, currency, percent, date, text |
+| `--border` | string | Border style for all sides: none, thin, medium, thick |
+| `--border-top` / `--border-right` / `--border-bottom` / `--border-left` | string | Per-side border style |
+| `--border-color` | string | Border color (applies to all specified borders) |
 | `--replace` | flag | Replace entire style instead of merging |
 
 **Example**:
 ```bash
-xl -f input.xlsx -o output.xlsx style A1:D1 --bold --bg yellow --align center
+xl -f input.xlsx -s S1 -o output.xlsx style A1:D1 --bold --bg yellow --align center
 ```
 
 ---
@@ -310,7 +429,7 @@ Set column properties (width, hide/show, auto-fit).
 **Arguments**:
 | Arg | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `letter` | string | Yes | — | Column letter (e.g., "A", "B", "AA") |
+| `letter` | string | Yes | — | Column letter or range (e.g., "A", "AA", "A:F") |
 | `--width` | double | No | — | Column width in character units (~8.43 default) |
 | `--auto-fit` | flag | No | false | Auto-fit width based on cell content |
 | `--hide` | flag | No | false | Hide the column |
@@ -419,6 +538,137 @@ xl -f input.xlsx -o output.xlsx fill B1 B1:B10
 
 ---
 
+### `xl autofit [--columns A:F]`
+
+Auto-fit column widths based on content (defaults to all used columns).
+
+```bash
+xl -f input.xlsx -s S1 -o output.xlsx autofit
+xl -f input.xlsx -s S1 -o output.xlsx autofit --columns A:F
+```
+
+---
+
+### `xl copy <source> <target> [--values-only]`
+
+Copy a range to another location with Excel-style formula adjustment (`$` anchors preserved). `--values-only` copies values without adjusting formulas.
+
+```bash
+xl -f input.xlsx -s S1 -o output.xlsx copy A1:C10 E1
+xl -f input.xlsx -s S1 -o output.xlsx copy A1:C10 E1 --values-only
+```
+
+---
+
+### `xl sort <range> --by <col> [options]`
+
+Sort rows in a range by one or more columns.
+
+**Arguments**:
+| Arg | Type | Required | Description |
+|-----|------|----------|-------------|
+| `range` | string | Yes | Range to sort |
+| `--by`, `-b` | string | Yes | Primary sort column |
+| `--then-by` | string | No | Secondary sort column(s) (repeatable) |
+| `--desc` | flag | No | Sort descending (default: ascending) |
+| `--numeric` | flag | No | Force numeric comparison ("10" > "9") |
+| `--header` | flag | No | First row is header (exclude from sort) |
+
+**Behavior**: empty cells sort last; formulas sort by cached value; rows move together.
+
+```bash
+xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B --desc --numeric
+xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B --then-by C --header
+```
+
+---
+
+### `xl merge <range>` / `xl unmerge <range>`
+
+Merge or unmerge cells in a range.
+
+```bash
+xl -f input.xlsx -s S1 -o output.xlsx merge A1:D1
+xl -f input.xlsx -s S1 -o output.xlsx unmerge A1:D1
+```
+
+---
+
+### `xl comment <ref> <text> [--author name]` / `xl remove-comment <ref>`
+
+Add or remove a cell comment.
+
+```bash
+xl -f input.xlsx -s S1 -o output.xlsx comment A1 "Verify this figure" --author "Analyst"
+xl -f input.xlsx -s S1 -o output.xlsx remove-comment A1
+```
+
+---
+
+### `xl freeze <ref>` / `xl unfreeze`
+
+Freeze panes at a cell reference (rows above and columns to the left are locked), or remove them.
+
+```bash
+xl -f input.xlsx -s S1 -o output.xlsx freeze B2    # Freeze row 1 + column A
+xl -f input.xlsx -s S1 -o output.xlsx unfreeze
+```
+
+---
+
+### `xl import <csv-file> [start-ref] [options]`
+
+Import CSV data with automatic type detection (numbers, booleans, ISO dates).
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `csv-file` | string | Yes | — | CSV file path |
+| `start-ref` | string | No | A1 | Cell where import starts |
+| `--delimiter` | char | No | `,` | Field separator |
+| `--encoding` | string | No | UTF-8 | Input encoding |
+| `--skip-header` | flag | No | false | Skip first row (do not import) |
+| `--new-sheet` | string | No | — | Create new sheet for imported data |
+| `--no-type-inference` | flag | No | false | Treat all values as text |
+
+```bash
+xl -f f.xlsx -s S1 -o o.xlsx import data.csv A1 --delimiter ";" --skip-header
+xl -f f.xlsx -o o.xlsx import data.csv --new-sheet "Imported"
+```
+
+**Limitations**: entire CSV is loaded into memory (recommended <50k rows); dates must be ISO 8601 (`YYYY-MM-DD`).
+
+---
+
+### Sheet management: `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`
+
+```bash
+xl -f f.xlsx -o o.xlsx add-sheet Summary --after Sheet1      # or --before <name>
+xl -f f.xlsx -o o.xlsx remove-sheet Scratch
+xl -f f.xlsx -o o.xlsx rename-sheet "Old Name" "New Name"
+xl -f f.xlsx -o o.xlsx move-sheet Summary --to 0             # or --after/--before <name>
+xl -f f.xlsx -o o.xlsx copy-sheet Template "Q2 Report"
+```
+
+---
+
+### Structural editing: `insert-rows`, `delete-rows`, `insert-cols`, `delete-cols`
+
+Insert or delete rows/columns with full formula-reference rewriting: references at or past the cut shift, straddling ranges shrink, and references to deleted cells become `#REF!`. Cross-sheet references to the edited sheet are rewritten too.
+
+**Arguments**: position (`<at-row>` 1-based, or `<at-col>` letter) and optional `<count>` (default 1). Column commands also accept an inclusive range (`C:E`), which overrides the count.
+
+```bash
+xl -f f.xlsx -s S1 -o o.xlsx insert-rows 5 2     # Insert 2 rows at row 5
+xl -f f.xlsx -s S1 -o o.xlsx delete-rows 5       # Delete row 5
+xl -f f.xlsx -s S1 -o o.xlsx insert-cols B 3     # Insert 3 columns at B
+xl -f f.xlsx -s S1 -o o.xlsx delete-cols C:E     # Delete columns C through E
+```
+
+Example formula rewriting: deleting row 2 turns `=A1+A3` into `=A1+A2`; `=SUM(A1:A4)` shrinks to `=SUM(A1:A3)`; a direct reference to a deleted cell becomes `#REF!`.
+
+---
+
 ### `xl batch <file|->`
 
 Apply multiple operations atomically from JSON input.
@@ -426,7 +676,8 @@ Apply multiple operations atomically from JSON input.
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
-| `file` | string | Yes | JSON file path or `-` for stdin |
+| `file` | string | No (default `-`) | JSON file path or `-` for stdin |
+| `--dry-run` | flag | No | Validate JSON and show a summary without writing (works without `-f`/`-o`) |
 
 **JSON Schema**:
 
@@ -457,6 +708,7 @@ Apply multiple operations atomically from JSON input.
 | `rowheight` | `row`, `height` | | Set row height |
 | `comment` | `ref`, `text` | `author` | Add cell comment |
 | `remove-comment` | `ref` | | Remove cell comment |
+| `hyperlink` | `ref` | `target` | Set cell hyperlink (omit `target` to clear) |
 | `clear` | `range` | `all`, `styles`, `comments` | Clear cell contents/styles/comments |
 | `col-hide` | `col` | | Hide column |
 | `col-show` | `col` | | Show column |
@@ -465,6 +717,9 @@ Apply multiple operations atomically from JSON input.
 | `autofit` | | `columns` | Auto-fit column widths |
 | `add-sheet` | `name` | `after` | Add new sheet |
 | `rename-sheet` | `from`, `to` | | Rename sheet |
+| `freeze` | `ref` | | Freeze panes at cell |
+| `unfreeze` | | | Remove freeze panes |
+| `copy` | `source`, `target` | `valuesOnly` | Copy range with formula adjustment |
 
 **Native JSON Types** (recommended):
 
@@ -643,5 +898,6 @@ Suggestion: Use a different cell reference to break the cycle
 ## See Also
 
 - [Quick Start Guide](../QUICK-START.md) — Library usage
+- [Scripting Guide](scripting.md) — When a task outgrows the CLI (loops, typed extraction, multi-file pipelines)
 - [Performance Guide](performance-guide.md) — Streaming for large files
 - [GitHub Issues](https://github.com/TJC-LP/xl/issues) — Feature requests and bug reports

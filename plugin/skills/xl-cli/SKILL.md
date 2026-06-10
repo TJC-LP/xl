@@ -60,7 +60,7 @@ Ensure `~/.local/bin` is in your PATH: `export PATH="$HOME/.local/bin:$PATH"`
 
 ### Info Commands (no file required)
 ```bash
-xl functions                           # List all 88 supported functions
+xl functions                           # List all 104 supported functions
 xl rasterizers                         # Check SVG-to-raster backends
 ```
 
@@ -107,6 +107,21 @@ xl -f <file> -s <sheet> -o <out> row <n> --height 30
 xl -f <file> -s <sheet> -o <out> col <letter> --width 20
 xl -f <file> -s <sheet> -o <out> col A:F --auto-fit
 xl -f <file> -s <sheet> -o <out> autofit              # All columns
+```
+
+### Structural Editing (require `-o`)
+
+Insert/delete rows and columns Excel-style: cells, merges, row/column properties, and freeze
+panes shift, and every affected formula (including cross-sheet references) is rewritten.
+References to deleted cells become `#REF!`.
+
+```bash
+xl -f <file> -s <sheet> -o <out> insert-rows 5        # Insert 1 row before row 5
+xl -f <file> -s <sheet> -o <out> insert-rows 5 3      # Insert 3 rows before row 5
+xl -f <file> -s <sheet> -o <out> delete-rows 5 2      # Delete rows 5-6
+xl -f <file> -s <sheet> -o <out> insert-cols C 2      # Insert 2 columns at C
+xl -f <file> -s <sheet> -o <out> delete-cols C        # Delete column C
+xl -f <file> -s <sheet> -o <out> delete-cols C:E      # Delete columns C through E
 ```
 
 ### Sheet Management (require `-o`)
@@ -273,7 +288,7 @@ Apply multiple operations atomically:
 ]
 ```
 
-**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight
+**Operations**: put, putf, style, merge, unmerge, colwidth, rowheight, and more — all 21 listed under "All batch operations" below
 
 **Native JSON types** (recommended for numeric data):
 ```json
@@ -392,7 +407,7 @@ xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500"  # What-if
 xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A5)" --with "A1=0,A5=0"  # Multiple overrides (comma-separated)
 ```
 
-See [reference/FORMULAS.md](reference/FORMULAS.md) for 88 supported functions.
+See [reference/FORMULAS.md](reference/FORMULAS.md) for 104 supported functions.
 
 ### Create Formatted Report
 
@@ -431,15 +446,19 @@ echo '[{"op":"putf","ref":"A1","formula":"=SUM(B1:B10)"},{"op":"style","range":"
 echo '[{"op":"put","ref":"A1","value":"test"}]' | xl -f in.xlsx -o out.xlsx batch --dry-run -
 ```
 
-**All batch operations** (20): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`
+**All batch operations** (21): `put`, `putf`, `style`, `merge`, `unmerge`, `colwidth`, `rowheight`, `comment`, `remove-comment`, `hyperlink`, `clear`, `col-hide`, `col-show`, `row-hide`, `row-show`, `autofit`, `add-sheet`, `rename-sheet`, `freeze`, `unfreeze`, `copy`
 
-**Freeze/unfreeze/copy in batch:**
+**Freeze/unfreeze/copy/hyperlink in batch:**
 ```json
 {"op": "freeze", "ref": "B2"}
 {"op": "unfreeze"}
 {"op": "copy", "source": "A1:D10", "target": "F1"}
 {"op": "copy", "source": "A1:D10", "target": "F1", "valuesOnly": true}
+{"op": "hyperlink", "ref": "A1", "target": "https://example.com"}
+{"op": "hyperlink", "ref": "A1"}
 ```
+
+`hyperlink` sets a cell's hyperlink target; omit `target` to clear an existing hyperlink.
 
 ### CSV to Styled Table
 
@@ -534,7 +553,7 @@ xl -f huge.xlsx --max-size 500 cell A1    # Custom 500MB limit
 
 | Command | Description |
 |---------|-------------|
-| `functions` | List all 88 supported Excel functions |
+| `functions` | List all 104 supported Excel functions |
 | `rasterizers` | List SVG-to-raster backends with status |
 
 ### Workbook Commands
@@ -572,7 +591,7 @@ Run `xl view --help` for complete options.
 | `copy <source> <target>` | `--values-only` (no formula adjustment) |
 | `freeze <ref>` | Freeze panes (rows above + columns left of ref) |
 | `unfreeze` | Remove freeze panes |
-| `batch <json-file>` | 20 operations (see below) |
+| `batch <json-file>` | 21 operations (see below) |
 | `import <csv> [ref]` | `--new-sheet`, `--delimiter`, `--no-type-inference` |
 
 Run `xl <command> --help` for complete options.
@@ -614,11 +633,25 @@ Run `xl sort --help` for sorting details.
 | `col <letter(s)>` | `--width`, `--auto-fit`, `--hide`, `--show` |
 | `autofit` | `--columns` (range like A:Z) |
 
+### Structural Editing Commands
+
+| Command | Arguments |
+|---------|-----------|
+| `insert-rows <at-row> [count]` | Insert `count` rows (default 1) before 1-based row `at-row` |
+| `delete-rows <at-row> [count]` | Delete `count` rows (default 1) starting at row `at-row` |
+| `insert-cols <at-col> [count]` | Insert `count` columns (default 1) at column letter `at-col` |
+| `delete-cols <at-col> [count]` | Delete `count` columns (default 1) starting at `at-col` |
+
+Column commands also accept an inclusive range (`delete-cols C:E`), which derives the count and
+overrides the positional `count` argument. All four shift cells, merges, row/column properties,
+and freeze panes, then rewrite affected formulas across all sheets; formulas referencing deleted
+cells get `#REF!` and ranges shrink correctly.
+
 ---
 
 ## Links
 
 - `xl <command> --help` for detailed usage and examples
-- [reference/FORMULAS.md](reference/FORMULAS.md) for 88 supported functions
+- [reference/FORMULAS.md](reference/FORMULAS.md) for 104 supported functions
 - [reference/COLORS.md](reference/COLORS.md) for color names
 - [reference/OUTPUT-FORMATS.md](reference/OUTPUT-FORMATS.md) for format specs

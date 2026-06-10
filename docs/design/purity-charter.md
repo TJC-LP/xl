@@ -5,6 +5,7 @@
 - `xl-core` and `xl-ooxml` expose **pure functions only**; no side‑effects, no clocks, no randomness.
 - `xl-cats-effect` contains **the only interpreters** for: ZIP I/O, file system, streams.
 - All IO return types are **`F[_]`** with typeclass constraints (`Sync`, `Async`) and **no hidden global state**.
+- One documented exception: the first render call (`toHtml`/`toSvg`) defaults `java.awt.headless=true` if the embedder left it unset — a deliberate, guarded, idempotent global property write (see `RenderUtils` in xl-core), not a hidden effect.
 
 ## 2) Totality & defensive programming
 - Abolish `null`; use `Option`.

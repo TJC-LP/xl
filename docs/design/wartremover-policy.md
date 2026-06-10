@@ -4,9 +4,9 @@ XL uses [WartRemover](https://www.wartremover.org/) to enforce functional progra
 
 ## Overview
 
-**Version**: WartRemover 3.4.1
-**Integration**: Compiler plugin via Mill build system
-**Scope**: All modules (xl-core, xl-ooxml, xl-cats-effect, xl-evaluator, xl-testkit)
+**Version**: WartRemover 3.5.6
+**Integration**: Compiler plugin via Mill build system (`XLModuleBase` in `build.mill`)
+**Scope**: All modules (xl, xl-core, xl-ooxml, xl-cats-effect, xl-evaluator, xl-cli, xl-agent, xl-benchmarks, xl-testkit)
 
 ## Philosophy Alignment
 
@@ -27,11 +27,10 @@ These warts violate XL's fundamental principles and will **fail compilation**:
 | `Null` | Prevents use of `null` | Null violates totality; use Option instead |
 | `TryPartial` | Prevents `.get` on Try | Partial function; use `.fold` or `.getOrElse` |
 | `EitherProjectionPartial` | Prevents `.get` on Either projections | Deprecated API; use `.fold` or pattern matching |
-| `IterableOps` | Prevents `.head`/`.tail`/`.last` on collections | Partial functions; use `.headOption`/`.lastOption` |
 | `TripleQuestionMark` | Prevents `???` placeholders | Unimplemented code should not compile |
 | `ArrayEquals` | Prevents `==` on arrays | Reference equality; use `.sameElements` |
 | `JavaConversions` | Prevents automatic Java conversions | Implicit; use explicit conversions |
-| `Option2Iterable` | Prevents implicit Option to Iterable | Obscures intent; use `.toSeq` explicitly |
+| `Option2Iterable` | Prevents implicit Option to Iterable | Obscures intent; use `.toList` explicitly |
 
 #### Examples
 
@@ -41,12 +40,6 @@ val x: String = null  // Fails compilation
 
 // ✅ Correct: Use Option
 val x: Option[String] = None
-
-// ❌ Error: IterableOps
-val first = list.head  // Fails compilation
-
-// ✅ Correct: Use headOption
-val first = list.headOption.getOrElse(default)
 
 // ❌ Error: TryPartial
 val result = Try(operation).get  // Fails compilation
@@ -61,6 +54,7 @@ These warts highlight code quality issues but **only produce warnings**:
 
 | Wart | Description | Why Warning? |
 |------|-------------|-------------|
+| `IterableOps` | Warns on `.head`/`.tail`/`.last` on collections | Acceptable in tests; prefer `.headOption`/`.lastOption` in production |
 | `OptionPartial` | Warns on `.get` on Option | Acceptable in tests; prefer `.fold` in production |
 | `Var` | Warns on mutable variables | Intentional in performance-critical code (macros) |
 | `Return` | Warns on early returns | Intentional in parser optimizations |
@@ -70,7 +64,7 @@ These warts highlight code quality issues but **only produce warnings**:
 
 #### Why Warnings?
 
-- **OptionPartial**: Test code commonly uses `.get` for clearer assertions
+- **IterableOps/OptionPartial**: Test code commonly uses `.head`/`.get` for clearer assertions
 - **Var/While/Return**: Performance-critical code (macros, parsers) intentionally uses imperative patterns
 - **AsInstanceOf**: Opaque types require internal casts for zero-cost abstractions
 - **IsInstanceOf**: Runtime type inspection needed in certain scenarios (e.g., codec dispatch)
@@ -190,9 +184,9 @@ If a wart causes excessive false positives:
 WartRemover is configured in `build.mill`:
 
 ```scala
-trait XLModule extends ScalaModule {
+trait XLModuleBase extends ScalaModule with ScalafmtModule {
   def scalacPluginMvnDeps = Seq(
-    mvn"org.wartremover:::wartremover:3.4.1"
+    mvn"org.wartremover:::wartremover:3.5.6"
   )
 
   override def scalacOptions = Seq(
@@ -200,11 +194,11 @@ trait XLModule extends ScalaModule {
 
     // Tier 1 warts (errors)
     "-P:wartremover:traverser:org.wartremover.warts.Null",
-    // ... 8 more ...
+    // ... 6 more ...
 
     // Tier 2 warts (warnings)
-    "-P:wartremover:only-warn-traverser:org.wartremover.warts.OptionPartial",
-    // ... 5 more ...
+    "-P:wartremover:only-warn-traverser:org.wartremover.warts.IterableOps",
+    // ... 6 more ...
   )
 }
 ```
@@ -259,8 +253,10 @@ Violations will fail CI builds for Tier 1 warts.
 
 ## Version History
 
+- **2026-06-09** (0.10.0): WartRemover 3.4.1 → 3.5.6 (required for the Scala 3.8.3 compiler plugin)
+  - 3.5.6 newly caught `Option2Iterable` violations (`.toSeq` on `Option` replaced with `.toList`)
 - **2025-11-14**: Initial WartRemover integration (v3.4.1)
-  - 8 Tier 1 warts (errors)
-  - 6 Tier 2 warts (warnings)
+  - 7 Tier 1 warts (errors)
+  - 7 Tier 2 warts (warnings)
   - Mill 1.0.6 + Scala 3.7.3
   - All 467 tests passing

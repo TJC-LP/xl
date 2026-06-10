@@ -199,6 +199,8 @@ object BatchParser:
    *   - `rowheight`: {"op": "rowheight", "row": 1, "height": 30}
    *   - `comment`: {"op": "comment", "ref": "A1", "text": "Note", "author": "User"}
    *   - `remove-comment`: {"op": "remove-comment", "ref": "A1"}
+   *   - `hyperlink`: {"op": "hyperlink", "ref": "A1", "target": "https://example.com"} (omit target
+   *     to clear)
    *   - `clear`: {"op": "clear", "range": "A1:B10", "all": true}
    *   - `col-hide`: {"op": "col-hide", "col": "C"}
    *   - `col-show`: {"op": "col-show", "col": "C"}
@@ -207,6 +209,9 @@ object BatchParser:
    *   - `autofit`: {"op": "autofit", "columns": "A:F"}
    *   - `add-sheet`: {"op": "add-sheet", "name": "New Sheet", "after": "Sheet1"}
    *   - `rename-sheet`: {"op": "rename-sheet", "from": "Old", "to": "New"}
+   *   - `freeze`: {"op": "freeze", "ref": "B2"}
+   *   - `unfreeze`: {"op": "unfreeze"}
+   *   - `copy`: {"op": "copy", "source": "A1:B2", "target": "D1", "valuesOnly": false}
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def parseBatchJson(json: String): Either[Exception, ParseResult] =
@@ -378,8 +383,8 @@ object BatchParser:
             throw new Exception(
               s"Object ${idx + 1}: Unknown operation '$other'. " +
                 "Valid: put, putf, style, merge, unmerge, colwidth, rowheight, " +
-                "comment, remove-comment, clear, col-hide, col-show, row-hide, row-show, " +
-                "autofit, add-sheet, rename-sheet, freeze, unfreeze, copy"
+                "comment, remove-comment, hyperlink, clear, col-hide, col-show, " +
+                "row-hide, row-show, autofit, add-sheet, rename-sheet, freeze, unfreeze, copy"
             )
       }
 

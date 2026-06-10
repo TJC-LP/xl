@@ -183,7 +183,7 @@ Install the xl plugin in [Claude Code](https://claude.ai/code) for AI-assisted E
 
 ```
 /plugin marketplace add TJC-LP/xl
-/plugin install xl-marketplace@xl
+/plugin install xl@xl-marketplace
 ```
 
 The plugin ships **two skills**:
@@ -191,7 +191,7 @@ The plugin ships **two skills**:
 - **xl-cli** — CLI operations: quick reads, single edits, search, visual exports (PNG/PDF/HTML)
 - **xl-scripting** — type-safe Scala scripts against the library (via scala-cli): bulk transformations, multi-file pipelines, typed extraction, formula models with recalculation, streaming 100k+ row files
 
-Rule of thumb: one-shot operations → CLI; anything with loops, intermediate computation, or many dependent edits → scripting.
+Rule of thumb: one-shot operations → CLI; anything with loops, intermediate computation, or many dependent edits → scripting (see the [scripting guide](docs/reference/scripting.md)).
 
 - "Read the data from sales.xlsx and show me the first 10 rows"
 - "Add a SUM formula to cell B10 that totals B2:B9"
@@ -204,6 +204,7 @@ Rule of thumb: one-shot operations → CLI; anything with loops, intermediate co
 |-----|---------|
 | **[docs/INDEX.md](docs/INDEX.md)** | Documentation navigation hub |
 | [docs/QUICK-START.md](docs/QUICK-START.md) | Get started in 5 minutes |
+| [docs/reference/scripting.md](docs/reference/scripting.md) | Scripting guide — scala-cli + one-import prelude |
 | [docs/STATUS.md](docs/STATUS.md) | Current capabilities |
 | [examples/](examples/) | Runnable scala-cli examples |
 | [CLAUDE.md](CLAUDE.md) | Complete API reference |

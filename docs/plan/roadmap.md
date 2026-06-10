@@ -2,15 +2,15 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-06-07
+**Last Updated**: 2026-06-10
 
-> **Live trackers**: [v0.10.0-execution.md](v0.10.0-execution.md) (release tracker) and [v0.10.0-triage.md](v0.10.0-triage.md) (rationale + per-issue verdicts).
+> **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
 ---
 
 ## TL;DR
 
-**Current Status**: Production-ready with **104 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 1100+ tests passing. **0.10.0 "Trust & Author"** is the active release — see [v0.10.0-execution.md](v0.10.0-execution.md).
+**Current Status**: Production-ready with **104 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 3005+ tests passing.
 
 **Current Version**: **0.11.0 "Scripting"** (released 2026-06-10)
 
@@ -18,7 +18,22 @@
 
 ## Release Roadmap
 
-### v0.11.0 "Scripting" (Current)
+### v0.12.0 candidates (not yet scheduled)
+
+This roadmap is the single source of truth for scheduling; entries below are **candidates, not commitments** — nothing is started until it is pulled into a release plan.
+
+| Candidate | Notes |
+|-----------|-------|
+| **"Visual" theme**: Chart model ([#222](https://github.com/TJC-LP/xl/issues/222)) on a DrawingML/image layer ([#221](https://github.com/TJC-LP/xl/issues/221)) | Deferred from 0.10.0/0.11.0; charts structurally depend on the drawing layer |
+| 0.11.x follow-up: leading `=+` unary plus rejected by parser ([#271](https://github.com/TJC-LP/xl/issues/271)) | Banker idiom (`=+A1`); flagged as the top 0.11.1 candidate |
+| 0.11.x follow-up: trailing empty format sections ([#262](https://github.com/TJC-LP/xl/issues/262)) | Number-format section selection edge case |
+| 0.11.x follow-up: quoting for cell-ref-shaped sheet names ([#263](https://github.com/TJC-LP/xl/issues/263)) | e.g. a sheet literally named `A1` |
+| 0.11.x follow-up: streaming StylePatcher indent + border-merge unification ([#264](https://github.com/TJC-LP/xl/issues/264)) | Parity between streaming and in-memory style edits |
+| 0.11.x follow-up: SaxStax DirectSaxEmitter metadata gaps ([#265](https://github.com/TJC-LP/xl/issues/265)) | Streaming writer metadata parity |
+| 0.11.x follow-up: even/first-page headers + `fitToPage` flag ([#266](https://github.com/TJC-LP/xl/issues/266)) | Completes the 0.11.0 `PageSetup` print extensions |
+| Display strategy: `excel""` interpolator re-evaluates formulas sheet-locally instead of using the `recalculate` cache | Cross-sheet formulas can display stale/erroring values in scripts; unify display on the recalc cache |
+
+### v0.11.0 "Scripting" (Released 2026-06-10)
 
 Make library scripting (scala-cli + `com.tjclp.xl.scripting` prelude) the turbo-charged agent path — goal: the best functional Excel scripting DSL. Tracked in [#252](https://github.com/TJC-LP/xl/issues/252).
 

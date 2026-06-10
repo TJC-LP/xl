@@ -1,6 +1,6 @@
 # Domain Model (Scala 3.8, Deep Dive)
 
-This document mirrors the **current** xl-core data model. All types derive `CanEqual` and lean on opaque types for zero-overhead safety. Package references use `com.tjclp.xl` (macros and syntax live in the same module).
+This document mirrors the **current** xl-core data model. Core types lean on opaque types for zero-overhead safety; closed sums are enums with exhaustive matching. Package references use `com.tjclp.xl` (macros and syntax live in the same module).
 
 ## Addressing Primitives
 ```scala
@@ -8,41 +8,50 @@ package com.tjclp.xl.addressing
 
 opaque type Column = Int
 object Column:
-  val MaxIndex0 = 16383             // A..XFD
-  inline def from0(index: Int): Column = index
-  inline def from1(index: Int): Column = index - 1
+  val MaxIndex0: Int = 16383        // A..XFD
+  def from0(index: Int): Column = index
+  def from1(index: Int): Column = index - 1
   def fromLetter(input: String): Either[String, Column] = ...
   extension (c: Column)
-    inline def index0: Int = c
-    inline def index1: Int = c + 1
+    def index0: Int = c
+    def index1: Int = c + 1
     def toLetter: String = ...
 
 opaque type Row = Int
 object Row:
-  inline def from0(index: Int): Row = index
-  inline def from1(index: Int): Row = index - 1
+  val MaxIndex0: Int = 1048575      // 1..1048576
+  def from0(index: Int): Row = index
+  def from1(index: Int): Row = index - 1
   extension (r: Row)
-    inline def index0: Int = r
-    inline def index1: Int = r + 1
+    def index0: Int = r
+    def index1: Int = r + 1
 
 /** Absolute cell reference packed into a Long: high 32 bits = row, low 32 = col. */
 opaque type ARef = Long
 object ARef:
-  inline def apply(col: Column, row: Row): ARef = ((row.toLong) << 32) | (col.toLong & 0xffffffffL)
+  def apply(col: Column, row: Row): ARef = ((row.toLong) << 32) | (col.toLong & 0xffffffffL)
   def parse(a1: String): Either[String, ARef] = ...
   extension (ref: ARef)
-    inline def col: Column = (ref & 0xffffffffL).toInt
-    inline def row: Row    = (ref >>> 32).toInt
+    def col: Column = (ref & 0xffffffffL).toInt
+    def row: Row    = (ref >> 32).toInt
     def toA1: String = ...
 
-final case class CellRange(start: ARef, end: ARef) derives CanEqual
+/** Inclusive range; start/end carry anchoring for $-style absolute refs. */
+final case class CellRange(
+  start: ARef,
+  end: ARef,
+  startAnchor: Anchor = Anchor.Relative,
+  endAnchor: Anchor = Anchor.Relative
+)
 
 /** Validated sheet name */
 opaque type SheetName = String
 object SheetName:
   def apply(name: String): Either[String, SheetName] = ...
-  extension (n: SheetName) inline def value: String = n
+  extension (name: SheetName) def value: String = name
 ```
+
+> **Why no `inline`?** Members that touch an opaque type's underlying representation are deliberately non-`inline`: inline bodies fail to re-elaborate at call sites outside the defining package, breaking external consumers of the published jars (issue #252). See the NOTE in `xl-core/src/com/tjclp/xl/addressing/ARef.scala` and [style-guide.md](style-guide.md).
 
 ### Invariants
 - `CellRange` is normalized (start <= end by row, then col).
@@ -53,21 +62,21 @@ object SheetName:
 ```scala
 import java.time.LocalDateTime
 
-enum CellError derives CanEqual:
+enum CellError:
   case Div0, NA, Name, Null, Num, Ref, Value
 
-enum CellValue derives CanEqual:
+enum CellValue:
   case Text(value: String)
   case RichText(value: com.tjclp.xl.richtext.RichText)
   case Number(value: BigDecimal)
   case Bool(value: Boolean)
   case DateTime(value: LocalDateTime)
-  case Formula(expression: String)        // String stored; see TExpr in xl-evaluator for typed AST
+  case Formula(expression: String, cachedValue: Option[CellValue] = None)
   case Empty
   case Error(error: CellError)
 ```
 
-- Formula strings stored in `CellValue.Formula`; use `TExpr` in `xl-evaluator` for typed AST manipulation.
+- Formula strings stored in `CellValue.Formula` alongside an optional cached result (what Excel's `<v>` holds; populated by readers and by `Workbook.recalculate` in xl-evaluator); use `TExpr` in `xl-evaluator` for typed AST manipulation.
 - `CellValue.from` provides a best-effort conversion from common JVM types.
 
 ### Formula AST (xl-evaluator)
@@ -136,7 +145,7 @@ object TExpr:
 **Parser/Printer**:
 - `FormulaParser.parse(s: String): Either[ParseError, TExpr[?]]` — Parse formula strings
 - `FormulaPrinter.print(expr: TExpr[?]): String` — Print back to Excel syntax
-- Round-trip law: `parse(print(expr)) == Right(expr)` (verified by 51 property tests)
+- Round-trip law: `parse(print(expr)) == Right(expr)` (verified by property tests)
 
 **Evaluator**: `Evaluator.eval(expr: TExpr[A], sheet: Sheet): Either[EvalError, A]` (WI-08)
 
@@ -146,6 +155,8 @@ import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.StyleRegistry
 import com.tjclp.xl.cells.Comment
 import com.tjclp.xl.context.SourceContext
+import com.tjclp.xl.sheets.{FreezePane, PageSetup, SheetView}
+import com.tjclp.xl.tables.TableSpec
 
 final case class Cell(
   ref: ARef,
@@ -164,7 +175,11 @@ final case class Sheet(
   defaultColumnWidth: Option[Double] = None,
   defaultRowHeight: Option[Double] = None,
   styleRegistry: StyleRegistry = StyleRegistry.default,
-  comments: Map[ARef, Comment] = Map.empty
+  comments: Map[ARef, Comment] = Map.empty,
+  tables: Map[String, TableSpec] = Map.empty,
+  pageSetup: Option[PageSetup] = None,
+  freezePane: Option[FreezePane] = None,
+  viewSettings: Option[SheetView] = None
 ):
   def apply(ref: ARef): Cell = cells.getOrElse(ref, Cell.empty(ref))
   def contains(ref: ARef): Boolean = cells.contains(ref)
@@ -184,6 +199,8 @@ final case class Workbook(
 - `styleId` indexes into the sheet-local `StyleRegistry` (style deduplication).
 - `SourceContext` attaches when reading from disk to enable surgical modification (copy unchanged ZIP parts verbatim).
 - Workbook has no global style/shared-strings fields; those are constructed ad hoc inside `xl-ooxml`.
+- Print/display settings live on the sheet: `pageSetup` (margins, header/footer, print area/titles — extended in 0.11.0), `freezePane`, and `viewSettings` (`SheetView(showGridLines, zoomScale)`, new in 0.11.0; serialized into the same `<sheetView>` element as freeze panes).
+- `tables` holds structured table definitions (`TableSpec`) keyed by table name.
 
 ## Style Model (summary)
 - Defined under `com.tjclp.xl.styles` with `CellStyle`, `Font`, `Fill`, `Border`, `Align`, `NumFmt`, and units (`Pt`, `Px`, `Emu`, `StyleId`).
@@ -195,29 +212,39 @@ package com.tjclp.xl.richtext
 
 final case class TextRun(
   text: String,
-  font: Option[com.tjclp.xl.styles.font.Font] = None,
-  color: Option[com.tjclp.xl.styles.color.Color] = None,
-  bold: Boolean = false,
-  italic: Boolean = false,
-  underline: Boolean = false
-) derives CanEqual
+  font: Option[Font] = None,          // All formatting (bold/italic/color/size) lives in Font
+  rawRPrXml: Option[String] = None    // Raw <rPr> XML preserved for lossless round-trip
+):
+  def bold: TextRun = ...             // Builder methods return updated TextRun
+  def italic: TextRun = ...
+  def underline: TextRun = ...
+  def withColor(c: Color): TextRun = ...
+  def size(pt: Double): TextRun = ...
+  def +(other: TextRun): RichText = ...   // also +(s: String), +(other: RichText)
 
-final case class RichText(runs: Vector[TextRun]) derives CanEqual:
-  def +(other: TextRun): RichText = copy(runs = runs :+ other)
-  def +(other: RichText): RichText = copy(runs = runs ++ other.runs)
+final case class RichText(runs: Vector[TextRun]):
+  def +(other: RichText): RichText = RichText(runs ++ other.runs)
+  def +(run: TextRun): RichText = RichText(runs :+ run)
+  def +(s: String): RichText = RichText(runs :+ TextRun(s))
   def toPlainText: String = runs.map(_.text).mkString
+  def isPlainText: Boolean = runs.forall(_.font.isEmpty)
 
-extension (s: String)
-  def bold: RichText = RichText(Vector(TextRun(s, bold = true)))
-  def italic: RichText = RichText(Vector(TextRun(s, italic = true)))
-  def underline: RichText = RichText(Vector(TextRun(s, underline = true)))
-  def red: RichText = RichText(Vector(TextRun(s, color = Some(com.tjclp.xl.styles.color.Color.rgb(255, 0, 0)))))
-  def green: RichText = RichText(Vector(TextRun(s, color = Some(com.tjclp.xl.styles.color.Color.rgb(0, 255, 0)))))
-  def blue: RichText = RichText(Vector(TextRun(s, color = Some(com.tjclp.xl.styles.color.Color.rgb(0, 0, 255)))))
-  def size(pt: Double): RichText = RichText(Vector(TextRun(s, font = Some(com.tjclp.xl.styles.font.Font("Calibri", pt, bold = false, italic = false)))))
+object RichText:
+  def plain(text: String): RichText = ...
+  given Conversion[String, TextRun] = TextRun(_)
+  given Conversion[TextRun, RichText] = r => RichText(Vector(r))
+
+  extension (s: String)   // DSL: "Bold".bold.red + " and " + "Italic".italic.blue
+    def bold: TextRun = TextRun(s).bold
+    def italic: TextRun = TextRun(s).italic
+    def underline: TextRun = TextRun(s).underline
+    def size(pt: Double): TextRun = TextRun(s).size(pt)
+    def fontFamily(name: String): TextRun = TextRun(s).fontFamily(name)
+    def withColor(c: Color): TextRun = TextRun(s).withColor(c)
+    def red: TextRun = TextRun(s).red   // also green, blue, black, white
 ```
 
-RichText is stored losslessly (including whitespace) via SharedStrings in `xl-ooxml` and supported in streaming write paths as inline strings.
+Run formatting is carried entirely by `Option[Font]` (the old per-run `bold`/`italic`/`color` flags were folded into `Font`); `rawRPrXml` preserves run properties the `Font` model doesn't represent (vertAlign, underline styles, …) so round-trips are lossless. RichText is stored losslessly (including whitespace) via SharedStrings in `xl-ooxml` and supported in streaming write paths as inline strings.
 
 ## Comments & Hyperlinks
 - Cells carry lightweight `comment: Option[String]` and `hyperlink: Option[String]`.

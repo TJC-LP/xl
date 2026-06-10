@@ -1,5 +1,7 @@
 # Implementation Scaffolds: Idiomatic Scala 3 Code Examples
 
+> **Status (2026-06-10)**: historical scaffold record — several targets have since shipped (hyperlinks & named ranges in 0.10.0, page setup in 0.11.0) and the test scaffolds use ScalaTest while the project standardized on MUnit. Useful as design sketches, not as current API documentation.
+
 **Purpose**: Complete, runnable code scaffolds for AI agents and developers
 **Last Updated**: 2026-01-23
 **Companion To**: [docs/plan/roadmap.md](../plan/roadmap.md)

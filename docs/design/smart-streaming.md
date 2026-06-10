@@ -8,7 +8,7 @@ Make the XL CLI handle files of any size with optimal performance by automatical
 
 ---
 
-## Current State (v0.8.0)
+## Shipped (as of 0.11.0)
 
 ### Manual Mode Selection
 - `--stream` flag opts into O(1) streaming for compatible commands
@@ -21,20 +21,41 @@ Make the XL CLI handle files of any size with optimal performance by automatical
 |---------|-----------|-----------|-------|
 | `search` | ✅ O(1) | ✅ | Streaming stops early on limit |
 | `stats` | ✅ O(1) | ✅ | Streaming aggregation |
-| `bounds` | ✅ O(1) | ✅ | Track min/max during scan |
-| `view` (md/csv/json) | ✅ O(1) | ✅ | No styles needed |
+| `bounds` | ✅ O(1) | ✅ | `<dimension>` fast path; `--scan` forces full scan |
+| `view` (md/csv/json) | ✅ O(1) | ✅ | No styles needed; `--eval` not supported when streaming |
 | `view` (html/svg/pdf) | ❌ | ✅ | Requires style registry |
-| `cell` | ❌ | ✅ | Needs dependency graph |
+| `cell` | ✅ O(1) | ✅ | SAX single-cell reader (`SaxSingleCellReader`); dependents (reverse deps) need in-memory |
 | `eval` | ❌ | ✅ | Needs formula analysis |
 | `sheets` | ❌ | ✅ | Needs workbook metadata |
 | `names` | ❌ | ✅ | Needs workbook metadata |
-| All writes | ❌ | ✅ | Read-modify-write cycle |
+| `put` / `putf` / `style` / `batch` | ✅ O(1) | ✅ | SAX→StAX transform (`ZipTransformer`); copies untouched ZIP entries verbatim |
+| Other writes | ❌¹ | ✅ | Read-modify-write cycle |
+
+¹ For all other modifying commands, `--stream` still helps: the full workbook is loaded in
+memory, but the write goes through the lower-allocation SAX/StAX backend
+(`ExcelIO.writeWorkbookStream`).
 
 ---
 
-## Future Architecture
+## Architecture Phases: Status
+
+Each phase below was designed when streaming was read-only (v0.8.0 era). Status as of 0.11.0:
+
+| Phase | Status |
+|-------|--------|
+| 1. Lazy metadata loading | ⬜ Future — `sheets`/`names` still require full load; no `LazyWorkbook` |
+| 2. Style-aware streaming | ⚠️ Partial — `RowData`/`StyledRowData` carry style indices; styled HTML/SVG streaming not shipped |
+| 3a. Append-only writes | ⚠️ Partial — `import --stream` streams CSV→new sheet (O(1)); no append-to-existing-sheet API |
+| 3b. Range-based modifications | ✅ Shipped in 0.8.0 (#183) — `StreamingTransform` + `ZipTransformer`; CLI `--stream` `put`/`putf`/`style`/`batch` |
+| 4. Intelligent mode selection | ⬜ Future — mode selection is still manual via `--stream` |
+| 5. Parallel streaming | ⬜ Future |
+
+The original phase designs are kept below as rationale and as the target shape for the
+unshipped parts.
 
 ### Phase 1: Lazy Metadata Loading
+
+**Status**: ⬜ Future. `LazyWorkbook` does not exist; workbook-level commands still load fully.
 
 **Goal**: Load workbook structure without loading cell data.
 
@@ -61,6 +82,11 @@ trait LazyWorkbook:
 
 ### Phase 2: Style-Aware Streaming
 
+**Status**: ⚠️ Partial. Since #183, `RowData` carries `cellStyles: Map[Int, Int]` (raw style
+indices) and `StyledRowData` feeds style-preserving streaming writes (`StylePatcher` patches
+`styles.xml` during transforms). The rendering half — streaming HTML/SVG with resolved
+`CellStyle`s — has not shipped; `view --stream` remains md/csv/json only.
+
 **Goal**: Stream cells with style information for rich output formats.
 
 ```scala
@@ -83,6 +109,14 @@ def streamSheetStyled(name: SheetName): Stream[IO, StyledRowData]
 - PDF generation can stream pages
 
 ### Phase 3: Streaming Write Operations
+
+**Status**: ✅ Mostly shipped (0.8.0, #183; worksheet-metadata patches extended in 0.9.6, #219).
+The implementation matches the 3b design: `ZipTransformer` copies unchanged ZIP entries
+verbatim, `StreamingTransform` SAX→StAX-rewrites only the target worksheet (cell values,
+styles, plus `<cols>`, merges, and row attributes), and `StylePatcher` appends new styles to
+`styles.xml`. Exposed as CLI `--stream` on `put`/`putf`/`style`/`batch`. From 3a, only
+streaming CSV import shipped (`import --stream` to a new sheet via `writeStreamWithAutoDetect`);
+generic append-to-existing-sheet APIs remain future work.
 
 **Goal**: Enable streaming modifications without full workbook load.
 
@@ -116,6 +150,8 @@ def modifyRange(
 - `import` can stream CSV directly to new sheet
 
 ### Phase 4: Intelligent Mode Selection
+
+**Status**: ⬜ Future. No `FileProfile`/`SmartExecutor`; users choose with `--stream`.
 
 **Goal**: Automatically choose optimal mode based on operation and file.
 
@@ -156,6 +192,8 @@ def chooseMode(profile: FileProfile, command: CliCommand): ExecutionMode =
 - Graceful degradation for complex cases
 
 ### Phase 5: Parallel Streaming
+
+**Status**: ⬜ Future. No parallel multi-sheet streaming in xl-cats-effect or the CLI.
 
 **Goal**: Utilize multiple cores for large file operations.
 
@@ -216,24 +254,24 @@ ZIP File → Probe Metadata → Choose Mode → Execute Optimal Path → Output
 
 ## Migration Path
 
-### v0.8.0 (Current)
+(The original plan pinned phases to v0.9.0/v1.0.0/v1.1.0; delivery diverged — range
+modifications shipped first, lazy metadata has not shipped. Restated against reality:)
+
+### Shipped (0.8.0 – 0.11.0)
 - [x] `--stream` flag for opt-in streaming
 - [x] `--max-size` flag for large file override
-- [x] Streaming: search, stats, bounds, view (md/csv/json)
+- [x] Streaming reads: search, stats, bounds, view (md/csv/json), cell
+- [x] Streaming range modifications: `put`/`putf`/`style`/`batch` via SAX→StAX transform (0.8.0, #183)
+- [x] Streaming worksheet-metadata patches: col/row props, merges, visibility (0.9.6, #219)
+- [x] Streaming CSV import to new sheet (`import --stream`)
+- [x] SAX/StAX workbook writer for all other `--stream` writes (`writeWorkbookStream`)
 
-### v0.9.0
-- [ ] Lazy workbook metadata loading
-- [ ] `sheets` and `names` without full load
+### Future (unscheduled)
+- [ ] Lazy workbook metadata loading (`sheets` and `names` without full load)
 - [ ] Auto-streaming for search/stats (no flag needed)
-
-### v1.0.0
-- [ ] Style-aware streaming
-- [ ] HTML/SVG streaming for large ranges
+- [ ] Style-aware streaming HTML/SVG for large ranges
 - [ ] Intelligent mode selection
-
-### v1.1.0
-- [ ] Streaming range modifications
-- [ ] Append-only write operations
+- [ ] Append-to-existing-sheet write operations
 - [ ] Parallel multi-sheet operations
 
 ---
@@ -285,13 +323,16 @@ enum ExecutionMode:
 
 ## Performance Targets
 
-| Operation | File Size | Current | Target | Mode |
-|-----------|-----------|---------|--------|------|
-| `sheets` | 1M rows | 80s | <1s | Lazy metadata |
-| `search --limit 10` | 1M rows | 80s | <1s | Streaming + early stop |
-| `view A1:D100 --format html` | 1M rows | 80s | <2s | Lazy styled |
-| `put A1 "test"` | 1M rows | 80s | <5s | Streaming modify |
-| `search` (4 sheets) | 4x250k rows | 80s | 20s | Parallel streaming |
+("Baseline" is the v0.8.0-era in-memory load time the targets were set against. For current
+measured numbers on the shipped paths, see `docs/reference/performance-guide.md`.)
+
+| Operation | File Size | Baseline | Target | Mode | Status |
+|-----------|-----------|----------|--------|------|--------|
+| `sheets` | 1M rows | 80s | <1s | Lazy metadata | ⬜ Future |
+| `search --limit 10` | 1M rows | 80s | <1s | Streaming + early stop | ✅ Shipped |
+| `view A1:D100 --format html` | 1M rows | 80s | <2s | Lazy styled | ⬜ Future |
+| `put A1 "test"` | 1M rows | 80s | <5s | Streaming modify | ✅ Shipped |
+| `search` (4 sheets) | 4x250k rows | 80s | 20s | Parallel streaming | ⬜ Future |
 
 ---
 

@@ -1,12 +1,26 @@
 # XL Project Status
 
-**Last Updated**: 2026-06-07
+**Last Updated**: 2026-06-10
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.11.0 "Scripting"** (2026-06-10):
+- ✅ **Scripting prelude** `com.tjclp.xl.scripting.{*, given}` — ONE import for scripts: core API + DSL + compile-time literals + formula evaluation + sync `Excel` + streaming `ExcelIO` + smart detection (`String.toFormatted`) + `.unsafe` boundary
+- ✅ **Range fill**: `range := value` puts the value in every cell (Excel Ctrl+Enter semantics; previously a silent no-op)
+- ✅ **Total ARef navigation**: `down`/`up`/`right`/`left` (default 1) for Either-free loops
+- ✅ **`Workbook.upsert(name, f)`** — total update-or-create counterpart of `update`
+- ✅ **`Workbook.recalculate(clock)`** — total whole-workbook recalculation returning `RecalcResult` (cached workbook + per-sheet values + per-cell `CellEvalError`s; cycles isolated, acyclic remainder still evaluates)
+- ✅ **`FormattedParsers.detect`** — total smart value detection (currency/accounting/percent/ISO date/number/boolean/text), promoted from CLI-internal code
+- ✅ **Per-side borders + outlines**: `CellStyle.borderTop/borderBottom/borderLeft/borderRight` and `range.outlined(style[, color])` via the new `Patch.MergeBorder`
+- ✅ **Alignment indent**: `CellStyle.indent(n)`
+- ✅ **Sheet view settings**: `SheetView(showGridLines, zoomScale)` on `Sheet.viewSettings` (SVG renderer respects gridline suppression)
+- ✅ **Print setup extensions**: `PageSetup` gains `headerFooter`, `margins`, `printArea`, `repeatRows` (sheet-scoped `_xlnm` defined names; even/first headers + fitToPage tracked in #266)
+- ✅ **xl-scripting skill** (`plugin/skills/xl-scripting/`) — SKILL.md + API reference + runnable recipes, compile-verified on CI
+- ✅ **Anti-rot CI**: examples job (`scripts/test-examples.sh`) + skill-verify workflow (`scripts/verify-skill-snippets.sh`)
 
 **Core Features**:
 - ✅ Type-safe addressing (Column, Row, ARef with 64-bit packing)
@@ -81,48 +95,20 @@
 
 ### Test Coverage
 
-**1080+ tests across 6 modules** (includes P7+P8 string interpolation + WI-07/08/09/09d formula system + TJC-351 cross-sheet formulas + WI-10 table support + WI-15 benchmarks + WI-17 SAX streaming write + v0.3.0 regressions + TJC-1055 text functions):
-- **xl-core**: ~500+ tests
-  - 17 addressing (Column, Row, ARef, CellRange laws)
-  - 21 patch (Monoid laws, application semantics)
-  - 60 style (units, colors, builders, canonicalization, StylePatch, StyleRegistry)
-  - 8 datetime (Excel serial number conversions)
-  - 42 codec (CellCodec identity laws, type safety, auto-inference)
-  - 16 batch update (putMixed, readTyped, style deduplication)
-  - 18 elegant syntax (given conversions, batch put, formatted literals)
-  - 34 optics (Lens/Optional laws, focus DSL, real-world use cases)
-  - 5 RichText (composition, formatting, DSL)
-  - **+111 string interpolation Phase 1** (RefInterpolationSpec, FormattedInterpolationSpec, MacroUtilSpec)
-  - **+40 string interpolation Phase 2** (RefCompileTimeOptimizationSpec, FormattedCompileTimeOptimizationSpec)
-  - +200+ additional tests (range combinators, comprehensive property tests)
-- **xl-ooxml**: ~145+ tests
-  - Round-trip tests (text, numbers, booleans, mixed, multi-sheet, SST, styles, RichText)
-  - Compression tests (DEFLATED vs STORED, prettyPrint, defaults, debug mode)
-  - Security tests (XXE, DOCTYPE rejection)
-  - Error path tests (malformed XML, missing files)
-  - Whitespace preservation, alignment serialization
-  - **+45 table tests** (TableSpec: XML parsing, serialization, round-trips, domain conversions, edge cases)
-- **xl-cats-effect**: ~30+ tests
-  - True streaming I/O with fs2-data-xml (constant memory, 100k+ rows)
-  - Memory tests (O(1) verification, concurrent streams)
-- **xl-evaluator**: ~338 tests (parser, evaluator, function library, evaluation API, dependency graph, cross-sheet formulas, integration)
-  - **Parser (WI-07)**: 57 tests
-    - 7 property-based round-trip tests (parse ∘ print = id)
-    - 26 parser unit tests (literals, operators, functions, edge cases)
-    - 10 scientific notation tests (E notation, positive/negative exponents)
-    - 5 error handling tests (invalid syntax, unknown functions)
-    - 9 integration tests (complex expressions, nested formulas, operator precedence)
-  - **Evaluator (WI-08)**: 58 tests
-  - **Function library (WI-09a/b/c)**: 48 tests across aggregate/logical/text/date functions
-  - **Dependency graph (WI-09d)**: 44 graph tests + 8 integration/dependency tests
-    - 10 property-based law tests (literal identity, arithmetic correctness, short-circuit semantics)
-    - 28 unit tests (division by zero, boolean operations, comparisons, cell references, range references)
-    - 12 integration tests (IF, AND, OR, nested conditionals, SUM/COUNT, complex boolean logic)
-    - 8 error path tests (nested errors, codec failures, missing cells, propagation vs short-circuit)
-  - **Cross-sheet formulas (TJC-351)**: 26 tests + 8 ignored (future features)
-    - Parser tests: simple refs, ranges, round-trip property tests
-    - Evaluator tests: SheetPolyRef, cross-sheet range aggregates (SUM), error cases
-    - Cycle detection: `DependencyGraph.fromWorkbook`, `detectCrossSheetCycles`
+**3005+ tests** (verified via `./mill __.test`, 2026-06-10):
+
+| Module | Tests | Covers |
+|--------|-------|--------|
+| xl-evaluator | 1198 | parser, evaluator, 104-function library, dependency graph, cross-sheet formulas, recalculation, structural editing |
+| xl-core | 971 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL |
+| xl-ooxml | 381 | round-trips (cells, styles, tables, comments, hyperlinks), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 308 | command parsing, batch ops, view/eval/export, streaming mode |
+| xl-cats-effect | 76 | streaming I/O, O(1) memory verification, SAX/StAX write |
+| xl-agent | 54 | benchmark engine, skill abstraction |
+| xl (prelude) | 17 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl-testkit | 0 | placeholder (no sources yet) |
+
+See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
 
 ---
 
@@ -133,17 +119,17 @@
 **Formula System** (WI-07, WI-08, WI-09a/b/c/d - Production Ready):
 - ✅ **Parsing** (WI-07): Typed AST (TExpr GADT), FormulaParser, FormulaPrinter, round-trip verification, 57 tests
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics, 58 tests
-- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **104 built-in functions**, extensible type class parser, evaluation API, 236 tests
+- ✅ **Function Library** (WI-09a-h + TJC-1055 complete): **104 built-in functions**, extensible type class parser, evaluation API
   - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
-  - **Conditional** (7): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, SUMPRODUCT
-  - **Logical** (9): IF, IFERROR, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
+  - **Statistical** (5): LARGE, SMALL, RANK, PERCENTILE, QUARTILE
+  - **Conditional** (9): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, SUMPRODUCT
+  - **Logical / Selection** (13): IF, IFS, IFERROR, SWITCH, CHOOSE, AND, OR, NOT, ISNUMBER, ISTEXT, ISBLANK, ISERR, ISERROR
   - **Text** (12): CONCATENATE, LEFT, RIGHT, MID, LEN, UPPER, LOWER, TRIM, FIND, SUBSTITUTE, TEXT, VALUE
   - **Date** (12): TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
   - **Math** (16): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
   - **Financial** (9): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
-  - **Lookup** (4): VLOOKUP, XLOOKUP, INDEX, MATCH
-  - **Info** (5): ROW, COLUMN, ROWS, COLUMNS, ADDRESS
-  - **Array** (1): TRANSPOSE
+  - **Lookup / Reference** (11): VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+  - **Dynamic Arrays** (5): TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
   - FunctionSpec registry: macro-collected specs with extensible registry
   - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
   - Clock trait for pure date/time functions (deterministic testing)
@@ -154,7 +140,7 @@
   - Safe evaluation: sheet.evaluateWithDependencyCheck() (production-ready)
   - Performance: Handles 10k formula cells in <10ms
 - ⚠️ Merged cells are supported by the in-memory OOXML path and `writeWorkbookStream`. Pure row-stream generation (`writeStream` / `writeStreamsSeq`) has no merge API.
-- ❌ Hyperlinks not serialized.
+- ✅ Hyperlinks serialized as of 0.10.0 (`Cell.hyperlink` → `<hyperlinks>` + worksheet relationships; populated on read).
 - ✅ Column/row properties (width, height, hidden, outlineLevel, collapsed) are fully serialized via DirectSaxEmitter.
 
 ### Style System
@@ -167,10 +153,10 @@
 
 **Missing Parts** (not critical for MVP):
 - ❌ docProps/core.xml, docProps/app.xml (metadata)
-- ❌ xl/theme/theme1.xml (theme palette)
+- ⚠️ xl/theme/theme1.xml (theme palette) — preserved from source on round-trip, not generated for new workbooks
 - ❌ xl/calcChain.xml (formula calculation order)
-- ❌ Worksheet relationships (_rels/sheet1.xml.rels)
-- ❌ Print settings, page setup
+- ✅ Worksheet relationships (`_rels/sheetN.xml.rels`) — written when a sheet has comments, tables, or hyperlinks
+- ⚠️ Print settings, page setup — partial as of 0.11.0: header/footer (odd), margins, print area, repeat rows (#259); even/first headers + fitToPage tracked in #266
 - ❌ Conditional formatting
 - ❌ Data validation (preserved through edits, but no authoring API yet)
 - ✅ Named ranges (authoring shipped in 0.10.0: `DefinedName` serialization + CLI `name add/rm`)
@@ -275,49 +261,44 @@
 
 ### Completed Modules
 ```
-xl-core/src/com/tjclp/xl/
-├── addressing.scala       ✅ Opaque types, ARef packing
-├── cell.scala             ✅ CellValue, CellError
-├── sheet.scala            ✅ Sheet, Workbook
-├── error.scala            ✅ XLError ADT
-├── patch.scala            ✅ Patch Monoid
-├── style.scala            ✅ CellStyle, Font, Fill, Border, Color, NumFmt, StylePatch, StyleRegistry
-├── datetime.scala         ✅ Excel serial number conversions
-├── codec/
-│   ├── CellCodec.scala    ✅ Bidirectional type-safe encoding (9 primitive types)
-│   └── BatchOps.scala     ✅ putMixed, readTyped APIs
-├── optics.scala           ✅ Lens, Optional, focus DSL
-├── richtext.scala         ✅ TextRun, RichText, DSL extensions
-├── html/
-│   └── HtmlExport.scala   ✅ sheet.toHtml with inline CSS
-├── conversions.scala      ✅ Given conversions
-├── formatted.scala        ✅ Formatted literals support
-└── dsl.scala              ✅ Ergonomic patch operators
+xl/src/com/tjclp/xl/
+└── scripting.scala        ✅ One-import scripting prelude (com.tjclp.xl.scripting)
 
-xl-macros/src/com/tjclp/xl/
-├── macros.scala           ✅ cell"", range"", batch put, money"", percent"", date"", accounting""
-└── MacroUtil.scala        ✅ Shared utilities for runtime interpolation (Phase 1)
+xl-core/src/com/tjclp/xl/
+├── addressing/            ✅ Opaque types (Column, Row, ARef packing), CellRange, SheetName
+├── cells/                 ✅ Cell, CellValue, CellError, Comment
+├── sheets/                ✅ Sheet, SheetView, PageSetup
+├── workbooks/             ✅ Workbook, WorkbookMetadata, DefinedName
+├── patch/                 ✅ Patch Monoid (incl. MergeBorder)
+├── styles/                ✅ CellStyle, Font, Fill, Border, Color, NumFmt, StylePatch, style DSL
+├── codec/                 ✅ CellCodec (9 primitive types), readTyped/readTypedOr/readTypedOpt
+├── macros/                ✅ ref"", fx"", money"" … compile-time literals (lives in xl-core; no separate xl-macros module)
+├── optics/                ✅ Lens, Optional, focus DSL
+├── richtext/              ✅ TextRun, RichText, DSL extensions
+├── formatted/             ✅ Formatted literals + FormattedParsers.detect
+├── render/                ✅ HTML/SVG renderers (sheet.toHtml / toSvg)
+└── dsl/                   ✅ Ergonomic patch operators (:=, ++, outlined)
 
 xl-ooxml/src/com/tjclp/xl/ooxml/
-├── xml.scala              ✅ XmlWritable/XmlReadable traits
 ├── ContentTypes.scala     ✅ [Content_Types].xml
 ├── Relationships.scala    ✅ .rels files
 ├── Workbook.scala         ✅ xl/workbook.xml
-├── Worksheet.scala        ✅ xl/worksheets/sheet#.xml (with RichText support)
+├── worksheet/             ✅ xl/worksheets/sheet#.xml (RichText, merges, hyperlinks, page setup)
 ├── SharedStrings.scala    ✅ xl/sharedStrings.xml (SST with RichText)
 ├── Styles.scala           ✅ xl/styles.xml
-├── XlsxWriter.scala       ✅ ZIP assembly
-└── XlsxReader.scala       ✅ ZIP parsing
+├── XlsxWriter.scala       ✅ ZIP assembly + surgical modification
+└── XlsxReader.scala       ✅ ZIP parsing + security limits
 
 xl-cats-effect/src/com/tjclp/xl/io/
 ├── Excel.scala            ✅ Algebra trait
 ├── ExcelIO.scala          ✅ Interpreter with true streaming
-├── StreamingXmlWriter.scala  ✅ Event-based write (fs2-data-xml)
-└── StreamingXmlReader.scala  ✅ Event-based read (fs2-data-xml)
+└── Sax/StAX + fs2 writers ✅ Event-based streaming read/write
 ```
 
 ### Completed Modules (Additional)
-- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 104 functions, dependency graph)
+- `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 104 functions, dependency graph, structural editing, recalculation)
+- `xl-cli/` ✅ **Complete** (stateless `xl` CLI: 40 subcommands, 21 batch ops, rendering, streaming mode)
+- `xl-agent/` ✅ **Complete** (AI agent benchmark runner)
 - `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)
 
 ### Not Started (Future Phases)
@@ -334,12 +315,12 @@ xl-cats-effect/src/com/tjclp/xl/io/
 2. ~~DateTime serialization~~ - ✅ Excel serial number conversion implemented
 3. ~~Cell → CellStyle linkage~~ - ✅ StyleRegistry provides sheet-level style management
 4. ~~Comments~~ - ✅ Full OOXML round-trip (xl/commentsN.xml + VML drawings), rich text support, 12+ tests
+5. ~~Merged cells~~ - ✅ `mergedRanges` serialized via `<mergeCells>` (in-memory + `writeWorkbookStream` paths)
+6. ~~Column/row properties~~ - ✅ width/height/hidden/outline serialized via DirectSaxEmitter
+7. ~~Hyperlinks~~ - ✅ serialized with worksheet relationships (0.10.0)
 
 ### Remaining
-1. **Merged cells** - Serialize mergedRanges to worksheet XML
-2. **Column/row properties** - Serialize width/height/hidden
-3. **Hyperlinks** - Add to worksheet relationships
-4. **Theme resolution** - Improve Theme color ARGB approximations (currently functional but not perfect)
+1. **Theme resolution** - Improve Theme color ARGB approximations (currently functional but not perfect)
 
 ---
 
