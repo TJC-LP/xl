@@ -18,20 +18,44 @@
 
 ## Release Roadmap
 
-### v0.12.0 candidates (not yet scheduled)
+The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four releases**, each wave
+executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
+worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
+source of truth for scheduling.
 
-This roadmap is the single source of truth for scheduling; entries below are **candidates, not commitments** — nothing is started until it is pulled into a release plan.
+### v0.11.1 "Totality" — wave 1 (in flight)
 
-| Candidate | Notes |
-|-----------|-------|
-| **"Visual" theme**: Chart model ([#222](https://github.com/TJC-LP/xl/issues/222)) on a DrawingML/image layer ([#221](https://github.com/TJC-LP/xl/issues/221)) | Deferred from 0.10.0/0.11.0; charts structurally depend on the drawing layer |
-| 0.11.x follow-up: leading `=+` unary plus rejected by parser ([#271](https://github.com/TJC-LP/xl/issues/271)) | Banker idiom (`=+A1`); flagged as the top 0.11.1 candidate |
-| 0.11.x follow-up: trailing empty format sections ([#262](https://github.com/TJC-LP/xl/issues/262)) | Number-format section selection edge case |
-| 0.11.x follow-up: quoting for cell-ref-shaped sheet names ([#263](https://github.com/TJC-LP/xl/issues/263)) | e.g. a sheet literally named `A1` |
-| 0.11.x follow-up: streaming StylePatcher indent + border-merge unification ([#264](https://github.com/TJC-LP/xl/issues/264)) | Parity between streaming and in-memory style edits |
-| 0.11.x follow-up: SaxStax DirectSaxEmitter metadata gaps ([#265](https://github.com/TJC-LP/xl/issues/265)) | Streaming writer metadata parity |
-| 0.11.x follow-up: even/first-page headers + `fitToPage` flag ([#266](https://github.com/TJC-LP/xl/issues/266)) | Completes the 0.11.0 `PageSetup` print extensions |
-| Display strategy: `excel""` interpolator re-evaluates formulas sheet-locally instead of using the `recalculate` cache | Cross-sheet formulas can display stale/erroring values in scripts; unify display on the recalc cache |
+All open bugs, one patch release.
+
+| Issue | Fix |
+|-------|-----|
+| [#271](https://github.com/TJC-LP/xl/issues/271) | Leading unary plus (`=+A1`) parses as identity; printer normalizes |
+| [#263](https://github.com/TJC-LP/xl/issues/263) | Cell-ref-shaped sheet names quoted via shared `SheetName.needsQuoting` |
+| [#262](https://github.com/TJC-LP/xl/issues/262) | Trailing empty format sections preserved (`"0.0;;"` hide-zero idiom) |
+| [#264](https://github.com/TJC-LP/xl/issues/264) | Streaming `StylePatcher` totality (malformed attribute hardening) |
+| [#266](https://github.com/TJC-LP/xl/issues/266) | Even/first-page headers+footers, `fitToPage` flag |
+| [#265](https://github.com/TJC-LP/xl/issues/265) | `DirectSaxEmitter` emits sheet metadata (+ hyperlinks) for fresh sheets |
+| [#275](https://github.com/TJC-LP/xl/issues/275) | Evaluating display prefers `recalculate`'s cached values |
+| [#48](https://github.com/TJC-LP/xl/issues/48) | `SheetEvaluator` var-free refactor |
+| [#17](https://github.com/TJC-LP/xl/issues/17) | SST surgical whitespace: not reproducible; regression spec added |
+
+### v0.11.2 "Laws & Functions" — waves 2 + 3
+
+| Wave | Issues |
+|------|--------|
+| 2 — test infrastructure | [#240](https://github.com/TJC-LP/xl/issues/240) real-fixture corpus + generative round-trip law + streaming/in-memory parity; [#40](https://github.com/TJC-LP/xl/issues/40) `Sheet.put` benchmark; [#47](https://github.com/TJC-LP/xl/issues/47) renderer edge tests |
+| 3 — evaluator breadth | [#193](https://github.com/TJC-LP/xl/issues/193) LET; [#274](https://github.com/TJC-LP/xl/issues/274) INDIRECT (design-first); [#93](https://github.com/TJC-LP/xl/issues/93) YEARFRAC parity; [#115](https://github.com/TJC-LP/xl/issues/115) RAND/RANDBETWEEN (seeded-RNG capability); [#184](https://github.com/TJC-LP/xl/issues/184) formula numFmt inheritance |
+
+### v0.11.3 "Robustness" — waves 4 + 5
+
+| Wave | Issues |
+|------|--------|
+| 4 — streaming/OOXML | [#223](https://github.com/TJC-LP/xl/issues/223) two-pass streaming SST + style registry; [#242](https://github.com/TJC-LP/xl/issues/242) docProps emission; [#243](https://github.com/TJC-LP/xl/issues/243) 1904 dates + `NumFmt.Fraction` + autofilter authoring |
+| 5 — CLI/UX | [#134](https://github.com/TJC-LP/xl/issues/134) `filter --where` (row predicates); [#137](https://github.com/TJC-LP/xl/issues/137) `diff`; [#159](https://github.com/TJC-LP/xl/issues/159) markdown import; [#156](https://github.com/TJC-LP/xl/issues/156) AWT-metric autofit; [#86](https://github.com/TJC-LP/xl/issues/86) Batik-first rasterization |
+
+### v0.12.0 "Visual" — wave 6 (design-first)
+
+Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture corpus; (b) `Drawing`/`Image`/anchor domain model + image authoring ([#221](https://github.com/TJC-LP/xl/issues/221)); (c) typed chart AST (bar/line/pie) + authoring + `xl chart` CLI ([#222](https://github.com/TJC-LP/xl/issues/222)). Re-scoped by its own design panel when reached.
 
 ### v0.11.0 "Scripting" (Released 2026-06-10)
 
