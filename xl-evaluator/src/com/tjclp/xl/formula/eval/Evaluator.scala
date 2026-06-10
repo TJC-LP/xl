@@ -207,6 +207,10 @@ object Evaluator:
                 case i: Int => CellValue.Number(BigDecimal(i))
                 case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
                 case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
+                // GH-274: an array-returning call (INDIRECT/OFFSET standalone) read through a
+                // reference collapses to its top-left value (the SheetEvaluator.toCellValue
+                // scalar-context convention) instead of stringifying.
+                case ar: ArrayResult => if ar.isEmpty then CellValue.Empty else ar(0, 0)
                 case other => CellValue.Text(other.toString)
             }
 

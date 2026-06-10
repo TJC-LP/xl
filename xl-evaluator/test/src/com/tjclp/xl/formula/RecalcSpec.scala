@@ -165,3 +165,103 @@ class RecalcSpec extends FunSuite:
       result.evaluated.values.headOption.flatMap(_.get(ARef.from0(0, n - 1))),
       Some(num(n))
     )
+
+  // ===== GH-274: INDIRECT — deferred-bucket recalculation =====
+
+  test("GH-274 deferred bucket: INDIRECT cell reads the freshly computed target, not a stale cache"):
+    // C1=INDIRECT("A1") has ZERO static deps, so Kahn may schedule it before A1; the
+    // evaluate-last bucket + cache strip guarantee it sees the computed A1, not the stale 999.
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(1))
+      .put(ref"X2", num(2))
+      .put(ref"X3", num(3))
+      .put(ref"A1", CellValue.Formula("=SUM(X1:X3)", Some(num(999)))) // stale cache
+      .put(ref"C1", formula("=INDIRECT(\"A1\")"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"A1"), Some(num(6)))
+    assertEquals(cached(result.workbook, "S", ref"C1"), Some(num(6)))
+
+  test("GH-274 bucket closure: static dependents of INDIRECT cells defer with them"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(1))
+      .put(ref"X2", num(2))
+      .put(ref"X3", num(3))
+      .put(ref"A1", CellValue.Formula("=SUM(X1:X3)", Some(num(999)))) // stale cache
+      .put(ref"C1", formula("=INDIRECT(\"A1\")"))
+      .put(ref"D1", formula("=C1+1")) // static dependent of the dynamic cell
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(7)))
+
+  test("GH-274 stale-cache regression: edit target, recalculate again, INDIRECT chain reflects it"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(1))
+      .put(ref"A1", formula("=X1*2"))
+      .put(ref"C1", formula("=INDIRECT(\"A1\")"))
+      .put(ref"D1", formula("=C1+1"))
+    val wb1 = Workbook(sheet).recalculate().workbook // generation 1: caches populated
+    val s1 = wb1.sheets.find(_.name.value == "S").fold(fail("missing sheet"))(identity)
+    val wb2 = wb1.put(s1.put(ref"X1", num(100)))
+    val result = wb2.recalculate() // generation 2 must not trust generation 1's caches
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"A1"), Some(num(200)))
+    assertEquals(cached(result.workbook, "S", ref"C1"), Some(num(200)))
+    assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(201)))
+
+  test("GH-274 chain freshness: INDIRECT→INDIRECT with stale caches resolves fresh via strip"):
+    // A1 and B1 have no static edges between them, so their relative bucket order is
+    // arbitrary — only the cache strip (recursive fresh eval) makes this order-independent.
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", CellValue.Formula("=INDIRECT(\"B1\")", Some(num(111)))) // stale
+      .put(ref"B1", CellValue.Formula("=INDIRECT(\"C1\")", Some(num(222)))) // stale
+      .put(ref"C1", num(42))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"A1"), Some(num(42)))
+    assertEquals(cached(result.workbook, "S", ref"B1"), Some(num(42)))
+
+  test("GH-274 dynamic cycle: per-cell depth-guard errors, siblings survive (not Tarjan)"):
+    // A1=INDIRECT("B1") -> B1=A1+1 is a cycle only through the dynamic edge, invisible to
+    // the static graph. Pin the graceful path: both cells error, both stay uncached, the
+    // unrelated sibling still evaluates (mirrors the cross-sheet-cycle contract above).
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", formula("=INDIRECT(\"B1\")"))
+      .put(ref"B1", formula("=A1+1"))
+      .put(ref"X1", num(5))
+      .put(ref"Y1", formula("=X1*2")) // unrelated sibling, must survive
+    val result = Workbook(sheet).recalculate()
+    assertEquals(cached(result.workbook, "S", ref"Y1"), Some(num(10)))
+    assertEquals(cached(result.workbook, "S", ref"A1"), None)
+    assertEquals(cached(result.workbook, "S", ref"B1"), None)
+    assertEquals(result.errors.map(_.ref).toSet, Set(ref"A1", ref"B1"))
+
+  test("GH-274 dynamic self-reference is total and deterministic"):
+    val sheet = Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"A1\")"))
+    val r1 = Workbook(sheet).recalculate()
+    val r2 = Workbook(sheet).recalculate()
+    assertEquals(cached(r1.workbook, "S", ref"A1"), None)
+    assertEquals(r1.errors.map(_.ref), Vector(ref"A1"))
+    assertEquals(r1, r2)
+
+  test("GH-274 determinism: recalculate() twice yields identical RecalcResult"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(3))
+      .put(ref"A1", formula("=X1*2"))
+      .put(ref"B1", formula("=INDIRECT(\"A1\")"))
+      .put(ref"C1", formula("=B1+1"))
+    val wb = Workbook(sheet)
+    assertEquals(wb.recalculate(), wb.recalculate())
+
+  test("GH-274: static cycle reporting is unchanged by an unrelated INDIRECT"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", formula("=A2+1"))
+      .put(ref"A2", formula("=A1+1")) // static cycle, must still be reported as circular
+      .put(ref"X1", num(7))
+      .put(ref"Y1", formula("=INDIRECT(\"X1\")")) // unrelated dynamic cell, must evaluate
+    val result = Workbook(sheet).recalculate()
+    assertEquals(cached(result.workbook, "S", ref"Y1"), Some(num(7)))
+    val byRef = result.errors.map(e => e.ref -> e.error.message).toMap
+    assert(byRef(ref"A1").contains("Circular"), byRef.toString)
+    assert(byRef(ref"A2").contains("Circular"), byRef.toString)
+    assertEquals(result.errors.map(_.ref).toSet, Set(ref"A1", ref"A2"))

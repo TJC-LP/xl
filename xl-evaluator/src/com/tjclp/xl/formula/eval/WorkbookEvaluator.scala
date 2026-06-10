@@ -142,6 +142,16 @@ object WorkbookEvaluator:
      * references to upstream formulas evaluate on demand against the original workbook snapshot and
      * are not memoized across sheets — fine for typical workbooks; a workbook-level topological
      * order is future work for deep cross-sheet fan-out.
+     *
+     * Dynamic references (GH-274): the static graph sees INDIRECT's *arguments*, not its resolved
+     * *targets*. INDIRECT-bearing cells and their static dependents evaluate after all other
+     * formulas (stable evaluate-last partition, `DependencyGraph.deferDynamic`) with stale caches
+     * stripped, resolving not-yet-evaluated targets on demand under the depth-100 recursion guard —
+     * so INDIRECT chains compute fresh values every recalculation. Dynamic cycles (INDIRECT
+     * resolving into its own dependents) are not pre-detected by Tarjan; they surface as per-cell
+     * recursion-guard errors while the rest of the workbook still evaluates. Because `recalculate`
+     * is always full-workbook, Excel's "volatile" marking is moot here; the targeted
+     * `recalculateDependents` treats dynamic cells as always dirty instead.
      */
     def recalculate(clock: Clock = Clock.system): RecalcResult =
       recalculateImpl(wb, clock, None)
@@ -222,8 +232,16 @@ object WorkbookEvaluator:
         SheetRecalc(sheet, Map.empty, cycleErrors ++ blockedErrors ++ residual)
 
       case Right(evalOrder) =>
-        val (tempSheet, results, evalErrors) = evalOrder.foldLeft(
-          (sheet, Map.empty[ARef, CellValue], Vector.empty[CellEvalError])
+        // GH-274: INDIRECT-bearing cells and their transitive static dependents evaluate last
+        // (stable evaluate-last partition), against a temp sheet whose bucket members have had
+        // stale caches stripped — a dynamic read of a not-yet-evaluated bucket cell then
+        // recursively evaluates fresh (depth-guarded) instead of trusting a previous
+        // generation's cache. INDIRECT-free sheets take the identity path, bit-identical.
+        val dynamic = DependencyGraph.dynamicCells(sheet) -- removed
+        val (ordered, initial) =
+          SheetEvaluator.deferDynamicWithStrip(sheet, pruned, evalOrder, dynamic)
+        val (tempSheet, results, evalErrors) = ordered.foldLeft(
+          (initial, Map.empty[ARef, CellValue], Vector.empty[CellEvalError])
         ) { case ((temp, acc, errs), ref) =>
           val evaluated = rngOpt match
             case Some(rng) => temp.evaluateCell(ref, clock, rng, Some(wb))

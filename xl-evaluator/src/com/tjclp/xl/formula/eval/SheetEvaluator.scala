@@ -276,9 +276,16 @@ object SheetEvaluator:
         // 3. Find all transitive dependencies (cells that range formulas depend on)
         val transitiveDeps = DependencyGraph.transitiveDependencies(graph, rangeFormulaCells)
 
-        // 4. Target cells = range formulas + (transitive deps that are also formulas)
+        // 4. Target cells = range formulas + (transitive deps that are also formulas).
+        // GH-274: when the sheet has dynamic references (INDIRECT), widen to EVERY formula
+        // cell — dynamic targets are invisible to the static walk, so correctness requires
+        // the whole sheet computed in order (correctness over narrowness; results still
+        // report only the requested range).
+        val dynamic = DependencyGraph.dynamicCells(sheet)
         val allFormulaCells = graph.dependencies.keySet
-        val targetCells = rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
+        val targetCells =
+          if dynamic.isEmpty then rangeFormulaCells ++ (transitiveDeps & allFormulaCells)
+          else allFormulaCells
 
         // 5. Check for cycles in the subgraph (could still have cycles if dependencies have cycles)
         // We use the full graph for cycle detection since dependencies may form cycles outside the range
@@ -292,12 +299,18 @@ object SheetEvaluator:
                 scala.util.Left(evalErrorToXLError(circularRef, None))
               case scala.util.Right(fullEvalOrder) =>
                 // Filter to only include cells we need to evaluate
-                val evalOrder = fullEvalOrder.filter(targetCells.contains)
+                // GH-274: dynamic cells + their static dependents evaluate last (caches stripped)
+                val (evalOrder, initial) = deferDynamicWithStrip(
+                  sheet,
+                  graph,
+                  fullEvalOrder.filter(targetCells.contains),
+                  dynamic
+                )
 
                 // 7. Evaluate in dependency order, threading the partially evaluated sheet.
                 // Fail-fast on first error; only cells in the original range are reported.
                 val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
-                  scala.util.Right((sheet, Map.empty))
+                  scala.util.Right((initial, Map.empty))
                 ) {
                   case (scala.util.Right((tempSheet, results)), ref) =>
                     tempSheet.evaluateCell(ref, clock, workbook) match
@@ -507,10 +520,16 @@ object SheetEvaluator:
             // Topological sort found cycle (shouldn't happen after detectCycles passed)
             scala.util.Left(evalErrorToXLError(circularRef, None))
           case scala.util.Right(evalOrder) =>
+            // GH-274: dynamic (INDIRECT-bearing) cells and their static dependents evaluate
+            // last, against a temp whose bucket caches are stripped, so dynamic reads see
+            // computed values. A dynamic depth-cap error fails the call, consistent with
+            // this method's fail-fast cycle behavior.
+            val (ordered, initial) =
+              deferDynamicWithStrip(sheet, graph, evalOrder, DependencyGraph.dynamicCells(sheet))
             // Evaluate in dependency order, threading the partially evaluated sheet so
             // dependent formulas see previously computed values. Fail-fast on first error.
-            val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
-              scala.util.Right((sheet, Map.empty))
+            val evalResult = ordered.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
+              scala.util.Right((initial, Map.empty))
             ) {
               case (scala.util.Right((tempSheet, results)), ref) =>
                 val evaluated = rngOpt match
@@ -525,6 +544,37 @@ object SheetEvaluator:
             }
 
             evalResult.map(_._2)
+
+  /**
+   * GH-274: strip stale formula caches from the given cells.
+   *
+   * Used on the deferred dynamic bucket before threading an evaluation fold: a dynamic read
+   * (INDIRECT) of a not-yet-evaluated bucket cell then recursively evaluates the formula fresh
+   * (depth-guarded) instead of trusting a previous generation's cache. Only the threaded temp sheet
+   * is affected — final cache write-back overlays computed results on the original sheet.
+   */
+  private[eval] def stripFormulaCaches(sheet: Sheet, refs: Set[ARef]): Sheet =
+    refs.foldLeft(sheet) { (s, r) =>
+      s.cells.get(r).map(_.value) match
+        case Some(CellValue.Formula(expr, Some(_))) => s.put(r, CellValue.Formula(expr, None))
+        case _ => s
+    }
+
+  /**
+   * GH-274: defer dynamic (INDIRECT-bearing) cells and their static dependents to the end of a
+   * topological evaluation order, and strip their stale caches from the sheet the fold threads.
+   * Identity when the sheet has no dynamic references.
+   */
+  private[eval] def deferDynamicWithStrip(
+    sheet: Sheet,
+    graph: DependencyGraph,
+    evalOrder: List[ARef],
+    dynamic: Set[ARef]
+  ): (List[ARef], Sheet) =
+    if dynamic.isEmpty then (evalOrder, sheet)
+    else
+      val bucket = DependencyGraph.dynamicClosure(graph, dynamic)
+      (DependencyGraph.deferDynamic(evalOrder, bucket), stripFormulaCaches(sheet, bucket))
 
   /**
    * Convert typed TExpr evaluation result to CellValue.

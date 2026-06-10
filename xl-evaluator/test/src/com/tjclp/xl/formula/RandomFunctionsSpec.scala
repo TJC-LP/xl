@@ -53,11 +53,12 @@ class RandomFunctionsSpec extends ScalaCheckSuite:
 
   // ===== Registry =====
 
-  test("RAND and RANDBETWEEN are registered (104 -> 106 functions)") {
+  test("RAND and RANDBETWEEN are registered") {
     val functions = FunctionRegistry.allNames
     assert(functions.contains("RAND"))
     assert(functions.contains("RANDBETWEEN"))
-    assertEquals(functions.length, 106)
+    // total count asserted authoritatively in FormulaParserSpec ("all 107 functions")
+    assert(functions.length >= 107)
   }
 
   // ===== RAND =====

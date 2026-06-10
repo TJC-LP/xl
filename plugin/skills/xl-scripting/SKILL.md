@@ -208,7 +208,7 @@ Excel.write(result.workbook, "model.xlsx")       // computed values cached for E
 
 `recalculate` evaluates every formula across all sheets in dependency order, resolves cross-sheet references automatically, isolates reference cycles (the rest of the workbook still computes), and reports failures per cell in `result.errors`. `result.toEither` gives `Left(errors)` for fail-hard pipelines. For one-off questions: `wb.evaluateFormula("=SUM(Data!A:A)", "Summary")`.
 
-104 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/NPV/IRR/...) — full list in `reference/API.md`.
+105 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/NPV/IRR/...) — full list in `reference/API.md`.
 
 ### Error handling: Either everywhere, unsafe once
 
@@ -317,7 +317,7 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 
 ## Reference
 
-- `reference/API.md` — types, extension methods, style builders, all 104 formula functions, streaming API
+- `reference/API.md` — types, extension methods, style builders, all 105 formula functions, streaming API
 - `reference/RECIPES.md` — 7 complete, runnable scripts (bulk transform, typed extraction, model build, merge, streaming, diff, CSV ingest)
 - Repo examples: `examples/*.sc` in https://github.com/TJC-LP/xl (start with `scripting_tour.sc`)
 - The `xl-cli` skill for CLI operations (visual exports, quick inspection)

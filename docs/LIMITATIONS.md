@@ -1,7 +1,7 @@
 # XL Current Limitations and Future Roadmap
 
 **Last Updated**: 2026-06-10
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**104 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes); scripting prelude + whole-workbook recalculation + print setup authoring (0.11.0).
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**105 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes); scripting prelude + whole-workbook recalculation + print setup authoring (0.11.0).
 
 > **Note (0.11.0):** Sections below largely predate the 0.10.0 "Trust & Author" and 0.11.0 "Scripting" releases and may understate current capabilities. Hyperlinks (#9) and named ranges (#15) are **supported**; inline worksheet elements like data validation (#11) are **preserved through edits** (authoring still pending); print setup is **partially supported** as of 0.11.0 (#16). 0.11.0 also added the scripting prelude (`com.tjclp.xl.scripting`), whole-workbook `recalculate` with per-cell errors, per-side borders/outlines, and sheet view settings — see the [CHANGELOG](../CHANGELOG.md). For the 0.10.0 rationale, see [archive/plan/v0.10.0-execution.md](archive/plan/v0.10.0-execution.md).
 >
@@ -119,7 +119,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 
 #### 6. Formula System ✅ **PRODUCTION READY**
 **Status**: Complete (WI-07, WI-08, WI-09a-h + TJC-351 cross-sheet formulas)
-**Features**: Parser, evaluator, **104 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, XIRR, XNPV, and dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER), dependency graph, cycle detection, cross-sheet references
+**Features**: Parser, evaluator, **105 functions** (including SUMIF, COUNTIF, SUMIFS, COUNTIFS, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, XIRR, XNPV, and dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER), dependency graph, cycle detection, cross-sheet references
 **Phase**: WI-07, WI-08, WI-09a/b/c/d Complete + Financial Functions + Cross-Sheet Formulas
 
 **What Works** (Production Ready — 1198 xl-evaluator tests):
@@ -154,7 +154,7 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 **Capabilities**:
 - ✅ **Parsing** (WI-07): Typed GADT AST (TExpr), FormulaParser, FormulaPrinter, round-trip laws (57 tests)
 - ✅ **Evaluation** (WI-08): Pure functional evaluator, total error handling, short-circuit semantics (58 tests)
-- ✅ **104 Built-in Functions** (complete current registry, verified against `xl functions`):
+- ✅ **105 Built-in Functions** (complete current registry, verified against `xl functions`):
   - **Aggregate** (12): SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
   - **Statistical** (5): LARGE, SMALL, RANK, PERCENTILE, QUARTILE
   - **Conditional** (9): SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, SUMPRODUCT
@@ -163,7 +163,7 @@ DependencyGraph.detectCrossSheetCycles(graph) match
   - **Date** (12): TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
   - **Math** (16): ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
   - **Financial** (9): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
-  - **Lookup / Reference** (11): VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+  - **Lookup / Reference** (12): VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
   - **Dynamic Arrays** (5): TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
 - ✅ **Dependency Graph** (WI-09d - 52 tests):
   - Tarjan's SCC algorithm: O(V+E) cycle detection
@@ -188,6 +188,12 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - ✅ Quoted sheet names in formulas (`='Q1 Report'!A1`) are parsed and printed; quoting of sheet names *shaped like cell refs* is tracked in #263
 - ⏳ Leading `=+` formula prefix (legacy Lotus style) is rejected by the parser - #271
 - 🛡️ **Formula depth cap (GH-56 totality guard):** nesting + operator-chain depth is capped at 256 levels so pathological input returns `ParseError.NestingTooDeep` instead of `StackOverflowError`. Excel allows 64 nesting levels and no operator-chain limit (within 8192 chars); xl additionally counts each operator in a *flat, paren-less* chain, so a chain of 256+ consecutive operators (e.g. `=A1+A2+…` ×256) is rejected — use `SUM`/ranges, or parenthesize to reset the budget. No real-world formula approaches this.
+
+**INDIRECT — dynamic references (GH-274)**: `INDIRECT(ref_text, [a1])` resolves A1-style text — `"B5"`, `"A1:B10"`, `"$A$1:B10"`, `"A:A"`, `"Sheet2!A1"`, `"'My Sheet'!A1:C3"` — at evaluation time and composes with aggregates (`=SUM(INDIRECT("A1:A"&B1))`), array arithmetic, and spill (`evala`) via the same ArrayResult mechanism as OFFSET. Unresolvable, out-of-grid, defined-name, external-workbook, or structured-reference text evaluates to `#REF!` (a value — total, never throws). Full column/row text is clamped to the sheet's used range before materializing; resolved ranges are capped at 1,048,576 cells.
+
+**Dependency semantics (differs from Excel):** the static graph sees INDIRECT's *arguments* (e.g. A1 in `=INDIRECT(A1)`), not its resolved *targets*. `recalculate()` evaluates INDIRECT-bearing formulas and their dependents after all other formulas (stable evaluate-last partition), and resolves not-yet-evaluated targets on demand with the same depth-100 recursion guard as cross-sheet references — so INDIRECT chains compute fresh values. Dynamic circular references (INDIRECT resolving into its own dependents) are not pre-detected by Tarjan; they surface as per-cell recursion-guard errors (cells left uncached) while the rest of the workbook still evaluates. Static cycle detection is unchanged (zero new false positives). xl's `recalculate()` is always full-workbook, so Excel's "volatile" marking is moot there; the targeted `recalculateDependents` treats INDIRECT-bearing cells as always dirty.
+
+**Not supported (v1):** R1C1 mode (`a1=FALSE`) returns an evaluation error and leaves the cell uncached (Excel computes it on open) — deliberately not `#REF!`; consequently `INDIRECT(ADDRESS(..., FALSE), FALSE)` does not compose. INDIRECT is not accepted where a literal range is required at parse time (SUMIF/VLOOKUP/XLOOKUP/INDEX/MATCH/NPV/IRR array slots) — the same envelope as OFFSET. In scalar argument positions (e.g. `IFERROR(INDIRECT(...), x)`, `LEFT(INDIRECT(...), n)`) the array result is rejected by the scalar evaluator, so IFERROR returns its fallback even for valid references — shared with OFFSET, tracked as a family follow-up. Structural row/column edits do not rewrite text inside INDIRECT strings (Excel parity — that is INDIRECT's purpose).
 
 **No workarounds needed** - formula system is complete and production-ready!
 
@@ -776,7 +782,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 **Status**: ✅ Production Ready (as of WI-07/08/09)
 
 **What's implemented**:
-- 104 built-in functions (SUM, SUMIF, COUNTIF, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, XIRR, XNPV, dynamic arrays, etc.)
+- 105 built-in functions (SUM, SUMIF, COUNTIF, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, XIRR, XNPV, dynamic arrays, etc.)
 - Full dependency graph with cycle detection
 - Safe evaluation with `evaluateWithDependencyCheck()`
 - Type coercion and error handling
