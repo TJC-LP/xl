@@ -231,6 +231,28 @@ class Date1904Spec extends FunSuite:
       case other => fail(s"Expected Number cell after round-trip, got $other")
   }
 
+  test("GH-243: 1904 DateTime serials render byte-identically to the shared plainNumber rule") {
+    // The 1904 normalization stores Number(BigDecimal(serial)) whose rendering must equal
+    // XmlUtil.plainNumber(serial: Double) — the rule every 1900-path DateTime emitter
+    // (OoxmlCell/OoxmlWorksheet/DirectSaxEmitter) uses. Pins that the two date systems
+    // cannot drift cosmetically if either formatting routine changes independently.
+    val dt = LocalDateTime.of(1998, 7, 5, 0, 0, 0)
+    val sheet = Sheet(SheetName.unsafe("Dates")).put(ref"A1", CellValue.DateTime(dt))
+    val wb = Workbook(Vector(sheet))
+    val wb1904 = wb.copy(metadata = wb.metadata.copy(date1904 = true))
+
+    val written = XlsxWriter.writeToBytes(wb1904).getOrElse(fail("Failed to write workbook"))
+    val sheetXml = zipEntryText(written, "xl/worksheets/sheet1.xml").getOrElse(
+      fail("Written xlsx missing xl/worksheets/sheet1.xml")
+    )
+
+    val expected = s"<v>${XmlUtil.plainNumber(july5_1998Serial1904)}</v>"
+    assert(
+      sheetXml.contains(expected),
+      s"1904 serial must use the shared plainNumber rendering $expected. Got: $sheetXml"
+    )
+  }
+
   test("GH-243: surgical write keeps the 1904 system when editing a 1904 file") {
     val srcPath = java.nio.file.Files.createTempFile("xl-1904-", ".xlsx")
     val outPath = java.nio.file.Files.createTempFile("xl-1904-out-", ".xlsx")
