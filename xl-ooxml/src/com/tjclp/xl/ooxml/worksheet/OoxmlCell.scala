@@ -31,10 +31,11 @@ case class OoxmlCell(
         case CellValue.Empty => ()
 
         case CellValue.Text(text) if cellType == "inlineStr" =>
+          val escaped = XmlUtil.escapeXstring(text)
           writer.startElement("is")
           writer.startElement("t")
-          if needsXmlSpacePreserve(text) then writer.writeAttribute("xml:space", "preserve")
-          writer.writeCharacters(text)
+          if needsXmlSpacePreserve(escaped) then writer.writeAttribute("xml:space", "preserve")
+          writer.writeCharacters(escaped)
           writer.endElement() // t
           writer.endElement() // is
 
@@ -68,7 +69,7 @@ case class OoxmlCell(
               writer.endElement()
             case CellValue.Text(s) =>
               writer.startElement("v")
-              writer.writeCharacters(s)
+              writer.writeCharacters(XmlUtil.escapeXstring(s))
               writer.endElement()
             case CellValue.Bool(b) =>
               writer.startElement("v")
@@ -117,9 +118,10 @@ case class OoxmlCell(
         case None =>
           run.font.foreach(writeFontRPrSax(writer, _))
 
+      val runText = XmlUtil.escapeXstring(run.text)
       writer.startElement("t")
-      if needsXmlSpacePreserve(run.text) then writer.writeAttribute("xml:space", "preserve")
-      writer.writeCharacters(run.text)
+      if needsXmlSpacePreserve(runText) then writer.writeAttribute("xml:space", "preserve")
+      writer.writeCharacters(runText)
       writer.endElement() // t
 
       writer.endElement() // r
@@ -174,7 +176,8 @@ case class OoxmlCell(
       case CellValue.Empty => Seq.empty
       case CellValue.Text(text) if cellType == "inlineStr" =>
         // Add xml:space="preserve" for text with leading/trailing/multiple spaces
-        val needsPreserve = needsXmlSpacePreserve(text)
+        val escaped = XmlUtil.sanitizeXmlText(XmlUtil.escapeXstring(text))
+        val needsPreserve = needsXmlSpacePreserve(escaped)
         val tElem =
           if needsPreserve then
             Elem(
@@ -183,9 +186,9 @@ case class OoxmlCell(
               PrefixedAttribute("xml", "space", "preserve", Null),
               TopScope,
               true,
-              Text(XmlUtil.sanitizeXmlText(text))
+              Text(escaped)
             )
-          else elem("t")(Text(XmlUtil.sanitizeXmlText(text)))
+          else elem("t")(Text(escaped))
         Seq(elem("is")(tElem))
       case CellValue.Text(text) => // SST index
         Seq(
@@ -234,17 +237,18 @@ case class OoxmlCell(
 
           // Text run: <r> with optional <rPr> and <t>
           // Add xml:space="preserve" to preserve leading/trailing/multiple spaces
+          val runText = XmlUtil.sanitizeXmlText(XmlUtil.escapeXstring(run.text))
           val textElem =
-            if needsXmlSpacePreserve(run.text) then
+            if needsXmlSpacePreserve(runText) then
               Elem(
                 null,
                 "t",
                 PrefixedAttribute("xml", "space", "preserve", Null),
                 TopScope,
                 true,
-                Text(XmlUtil.sanitizeXmlText(run.text))
+                Text(runText)
               )
-            else elem("t")(Text(XmlUtil.sanitizeXmlText(run.text)))
+            else elem("t")(Text(runText))
 
           elem("r")(
             rPrElems ++ Seq(textElem)*
@@ -262,7 +266,7 @@ case class OoxmlCell(
         // Write cached value if present
         val cachedElem = cachedValue.flatMap {
           case CellValue.Number(num) => Some(elem("v")(Text(XmlUtil.plainNumber(num))))
-          case CellValue.Text(s) => Some(elem("v")(Text(s)))
+          case CellValue.Text(s) => Some(elem("v")(Text(XmlUtil.escapeXstring(s))))
           case CellValue.Bool(b) => Some(elem("v")(Text(if b then "1" else "0")))
           case CellValue.Error(err) =>
             import com.tjclp.xl.cells.CellError.toExcel

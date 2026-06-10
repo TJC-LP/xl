@@ -227,8 +227,8 @@ object Generators:
   // formulas, merges, sheet views, and page setup, while staying inside the
   // domain the OOXML layer can faithfully round-trip:
   //   - text avoids XML-illegal control chars (the writer strips them by
-  //     design, GH-237) and bare \r (XML line-ending normalization folds it
-  //     to \n on parse; Excel escapes CR as _x000D_ which XL does not emit)
+  //     design, GH-237); \r IS generated — the writer escapes it as _x000D_
+  //     per ECMA-376 ST_Xstring (GH-288)
   //   - text stays NFC-normalized (SST deduplicates by NFC key)
   //   - Custom numFmt codes avoid the exact code strings NumFmt.parse maps
   //     back to built-in enum cases (those are the SAME format semantically,
@@ -248,9 +248,15 @@ object Generators:
       3 -> Gen.const(' '),
       2 -> Gen.oneOf('.', ',', '-', '_', '&', '<', '>', '"', '\'', '%', '$', '#', '(', ')', '/'),
       1 -> Gen.oneOf('é', 'ü', 'ß', '日', '本', '€', '£'),
-      1 -> Gen.oneOf('\t', '\n')
+      1 -> Gen.oneOf('\t', '\n', '\r')
     )
-    Gen.chooseNum(0, 24).flatMap(n => Gen.listOfN(n, safeChar).map(_.mkString))
+    val plain = Gen.chooseNum(0, 24).flatMap(n => Gen.listOfN(n, safeChar).map(_.mkString))
+    // Adversarial suffixes: literal _xHHHH_ patterns must survive via _x005F_ protection (GH-288)
+    Gen.frequency(
+      15 -> plain,
+      1 -> plain.map(_ + "_x000D_"),
+      1 -> plain.map(_ + "\r\n")
+    )
 
   /** Non-empty variant of [[genXmlSafeText]] */
   val genXmlSafeTextNonEmpty: Gen[String] =

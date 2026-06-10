@@ -6,7 +6,7 @@ import fs2.{Stream, Pipe}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
 import com.tjclp.xl.cells.{CellValue, CellError}
-import com.tjclp.xl.ooxml.SharedStrings
+import com.tjclp.xl.ooxml.{SharedStrings, XmlUtil}
 
 /**
  * True streaming XML reader using fs2-data-xml for constant-memory reads.
@@ -213,7 +213,7 @@ object StreamingXmlReader:
             .getOrElse(CellValue.Empty)
 
         case Some("inlineStr") =>
-          CellValue.Text(value)
+          CellValue.Text(XmlUtil.decodeXstring(value))
 
         case Some("n") =>
           // Number
@@ -239,7 +239,7 @@ object StreamingXmlReader:
 
         case Some("str") =>
           // Formula result (string)
-          CellValue.Text(value)
+          CellValue.Text(XmlUtil.decodeXstring(value))
 
         case _ =>
           // Default: treat as number if possible, else text

@@ -78,8 +78,9 @@ final case class SharedStrings(
   def toXml: Elem =
     val siElems = strings.map {
       case Left(s) =>
-        // Plain text: <si><t>text</t></si>
-        val needsPreserve = needsXmlSpacePreserve(s)
+        // Plain text: <si><t>text</t></si> (_xHHHH_-escaped per GH-288)
+        val escaped = escapeXstring(s)
+        val needsPreserve = needsXmlSpacePreserve(escaped)
         val tElem =
           if needsPreserve then
             Elem(
@@ -88,9 +89,9 @@ final case class SharedStrings(
               PrefixedAttribute("xml", "space", "preserve", Null),
               TopScope,
               false,
-              Text(s)
+              Text(escaped)
             )
-          else elem("t")(Text(s))
+          else elem("t")(Text(escaped))
 
         elem("si")(tElem)
 
@@ -133,8 +134,9 @@ final case class SharedStrings(
                 elem("rPr")(fontProps.result()*)
               }.toList
 
-          // Build <t> with optional xml:space="preserve"
-          val needsPreserve = needsXmlSpacePreserve(run.text)
+          // Build <t> with optional xml:space="preserve" (_xHHHH_-escaped per GH-288)
+          val runText = escapeXstring(run.text)
+          val needsPreserve = needsXmlSpacePreserve(runText)
           val textElem =
             if needsPreserve then
               Elem(
@@ -143,9 +145,9 @@ final case class SharedStrings(
                 PrefixedAttribute("xml", "space", "preserve", Null),
                 TopScope,
                 true,
-                Text(run.text)
+                Text(runText)
               )
-            else elem("t")(Text(run.text))
+            else elem("t")(Text(runText))
 
           elem("r")(rPrElems ++ Seq(textElem)*)
         }
@@ -171,10 +173,11 @@ final case class SharedStrings(
     ) {
       strings.foreach {
         case Left(text) =>
+          val escaped = escapeXstring(text)
           writer.startElement("si")
           writer.startElement("t")
-          if needsXmlSpacePreserve(text) then writer.writeAttribute("xml:space", "preserve")
-          writer.writeCharacters(text)
+          if needsXmlSpacePreserve(escaped) then writer.writeAttribute("xml:space", "preserve")
+          writer.writeCharacters(escaped)
           writer.endElement() // t
           writer.endElement() // si
 
@@ -194,9 +197,10 @@ final case class SharedStrings(
               case Some(elem) => writer.writeElem(elem)
               case None => run.font.foreach(writeFontSax(writer, _))
 
+            val runText = escapeXstring(run.text)
             writer.startElement("t")
-            if needsXmlSpacePreserve(run.text) then writer.writeAttribute("xml:space", "preserve")
-            writer.writeCharacters(run.text)
+            if needsXmlSpacePreserve(runText) then writer.writeAttribute("xml:space", "preserve")
+            writer.writeCharacters(runText)
             writer.endElement() // t
 
             writer.endElement() // r
@@ -380,10 +384,11 @@ object SharedStrings extends XmlReadable[SharedStrings]:
         // RichText: parse runs with formatting
         parseTextRuns(rElems).map(rt => Right(rt): SSTEntry)
       else
-        // Simple text: extract from <t> (preserving whitespace, NO normalization for storage)
+        // Simple text: extract from <t> (preserving whitespace, NO normalization for storage,
+        // decoding _xHHHH_ escapes — GH-288)
         (si \ "t").headOption
           .collect { case elem: Elem => elem }
-          .map(getTextPreservingWhitespace) match
+          .map(e => decodeXstring(getTextPreservingWhitespace(e))) match
           case Some(text) => Right(Left(text): SSTEntry)
           case None => Left("SharedString <si> missing <t> element and has no <r> runs")
     }

@@ -142,10 +142,11 @@ object StreamingXmlWriter:
 
       case CellValue.Text(s) =>
         // <c r="A1" t="inlineStr"><is><t>text</t></is></c>
-        // Apply formula injection escaping if policy requires it
-        val escaped = injectionPolicy match
+        // Apply formula injection escaping if policy requires it, then _xHHHH_ escapes (GH-288)
+        val injectionEscaped = injectionPolicy match
           case FormulaInjectionPolicy.Escape => CellValue.escape(s)
           case FormulaInjectionPolicy.None => s
+        val escaped = XmlUtil.escapeXstring(injectionEscaped)
         // Add xml:space="preserve" for text with leading/trailing/multiple spaces
         // Note: we check the escaped text because whitespace in the original (e.g., "  =formula")
         // must still be preserved after escaping adds a leading quote (e.g., "'  =formula")
@@ -205,7 +206,7 @@ object StreamingXmlWriter:
           case CellValue.Text(s) =>
             List(
               XmlEvent.StartTag(QName("v"), Nil, false),
-              XmlEvent.XmlString(s, false),
+              XmlEvent.XmlString(XmlUtil.escapeXstring(s), false),
               XmlEvent.EndTag(QName("v"))
             )
           case CellValue.Bool(b) =>
@@ -295,15 +296,16 @@ object StreamingXmlWriter:
             )
           }
 
-          // Text element with optional xml:space="preserve"
+          // Text element with optional xml:space="preserve" (_xHHHH_-escaped per GH-288)
+          val runText = XmlUtil.escapeXstring(run.text)
           val tAttrs =
-            if XmlUtil.needsXmlSpacePreserve(run.text) then
+            if XmlUtil.needsXmlSpacePreserve(runText) then
               List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
             else Nil
 
           val textEvents = List(
             XmlEvent.StartTag(QName("t"), tAttrs, false),
-            XmlEvent.XmlString(run.text, false),
+            XmlEvent.XmlString(runText, false),
             XmlEvent.EndTag(QName("t"))
           )
 

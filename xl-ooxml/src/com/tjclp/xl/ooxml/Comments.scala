@@ -189,7 +189,7 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
 
     if runElems.isEmpty then
       // Plain text comment (no rich formatting) - create single run
-      val text = textElem.text.trim
+      val text = decodeXstring(textElem.text.trim)
       if text.isEmpty then Left("Comment <text> element is empty")
       else Right(RichText.plain(text))
     else
@@ -316,18 +316,19 @@ object OoxmlComments extends XmlReadable[OoxmlComments]:
         elem("rPr")(props.result()*)
       }
 
-      // Build <t> with xml:space="preserve" if needed
+      // Build <t> with xml:space="preserve" if needed (_xHHHH_-escaped per GH-288)
+      val runText = escapeXstring(run.text)
       val textElem =
-        if needsXmlSpacePreserve(run.text) then
+        if needsXmlSpacePreserve(runText) then
           Elem(
             null,
             "t",
             PrefixedAttribute("xml", "space", "preserve", Null),
             TopScope,
             minimizeEmpty = true,
-            Text(run.text)
+            Text(runText)
           )
-        else elem("t")(Text(run.text))
+        else elem("t")(Text(runText))
 
       elem("r")(rPrElem.toList :+ textElem*)
     }

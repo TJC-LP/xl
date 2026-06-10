@@ -6,7 +6,7 @@ import org.xml.sax.{Attributes, InputSource}
 import org.xml.sax.helpers.DefaultHandler
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.ooxml.SharedStrings
+import com.tjclp.xl.ooxml.{SharedStrings, XmlUtil}
 
 /**
  * SAX-based single cell reader with early-abort optimization.
@@ -206,7 +206,7 @@ object SaxSingleCellReader:
             .getOrElse(CellValue.Empty)
 
         case Some("inlineStr") =>
-          CellValue.Text(value)
+          CellValue.Text(XmlUtil.decodeXstring(value))
 
         case Some("n") =>
           try CellValue.Number(BigDecimal(value))
@@ -228,7 +228,7 @@ object SaxSingleCellReader:
           errorOpt.map(CellValue.Error(_)).getOrElse(CellValue.Empty)
 
         case Some("str") =>
-          CellValue.Text(value)
+          CellValue.Text(XmlUtil.decodeXstring(value))
 
         case _ =>
           try CellValue.Number(BigDecimal(value))

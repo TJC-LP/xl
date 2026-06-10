@@ -5,6 +5,7 @@ import scala.xml.Elem
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.ooxml.XmlUtil.{
+  decodeXstring,
   getAttr,
   getAttrOpt,
   getChild,
@@ -218,7 +219,7 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
               import com.tjclp.xl.cells.CellError
               CellError.parse(vText).toOption.map(CellValue.Error.apply)
             case "str" | "inlineStr" =>
-              Some(CellValue.Text(vText))
+              Some(CellValue.Text(decodeXstring(vText)))
             case _ => None
         }
         Right(CellValue.Formula(formulaExpr, cachedValue))
@@ -242,7 +243,7 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
             // Fallback: "str" type may have text in <v> element (preserving whitespace)
             (elem \ "v").headOption
               .collect { case e: Elem => e }
-              .map(getTextPreservingWhitespace) match
+              .map(e => decodeXstring(getTextPreservingWhitespace(e))) match
               case Some(text) => Right(CellValue.Text(text))
               case None => Left(s"$cellType cell missing <is> element and <v> element")
           case Some(isElem: Elem) =>
@@ -252,10 +253,10 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
               // Rich text: parse runs with formatting
               parseTextRuns(rElems).map(CellValue.RichText.apply)
             else
-              // Simple text: extract from <t> (preserving whitespace)
+              // Simple text: extract from <t> (preserving whitespace, decoding _xHHHH_ — GH-288)
               (isElem \ "t").headOption
                 .collect { case e: Elem => e }
-                .map(getTextPreservingWhitespace) match
+                .map(e => decodeXstring(getTextPreservingWhitespace(e))) match
                 case Some(text) => Right(CellValue.Text(text))
                 case None => Left(s"$cellType <is> missing <t> element and has no <r> runs")
           case _ => Left(s"$cellType <is> is not an Elem")

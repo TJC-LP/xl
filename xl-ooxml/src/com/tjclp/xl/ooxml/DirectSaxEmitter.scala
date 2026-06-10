@@ -364,10 +364,11 @@ object DirectSaxEmitter:
       case CellValue.Empty => ()
 
       case CellValue.Text(text) if cellType == "inlineStr" =>
+        val escaped = XmlUtil.escapeXstring(text)
         writer.startElement("is")
         writer.startElement("t")
-        if needsXmlSpacePreserve(text) then writer.writeAttribute("xml:space", "preserve")
-        writer.writeCharacters(text)
+        if needsXmlSpacePreserve(escaped) then writer.writeAttribute("xml:space", "preserve")
+        writer.writeCharacters(escaped)
         writer.endElement() // t
         writer.endElement() // is
 
@@ -419,7 +420,7 @@ object DirectSaxEmitter:
         writer.endElement()
       case CellValue.Text(s) =>
         writer.startElement("v")
-        writer.writeCharacters(s)
+        writer.writeCharacters(XmlUtil.escapeXstring(s))
         writer.endElement()
       case CellValue.Bool(b) =>
         writer.startElement("v")
@@ -456,9 +457,10 @@ object DirectSaxEmitter:
         case None =>
           run.font.foreach(emitFontRPr(writer, _))
 
+      val runText = XmlUtil.escapeXstring(run.text)
       writer.startElement("t")
-      if needsXmlSpacePreserve(run.text) then writer.writeAttribute("xml:space", "preserve")
-      writer.writeCharacters(run.text)
+      if needsXmlSpacePreserve(runText) then writer.writeAttribute("xml:space", "preserve")
+      writer.writeCharacters(runText)
       writer.endElement() // t
 
       writer.endElement() // r

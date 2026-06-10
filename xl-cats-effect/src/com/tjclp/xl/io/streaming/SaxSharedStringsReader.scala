@@ -136,13 +136,13 @@ object SaxSharedStringsReader:
       else
         name match
           case "t" if inRunText =>
-            currentRunText.append(textBuffer.toString)
+            currentRunText.append(XmlUtil.decodeXstring(textBuffer.toString))
             currentRunTextSeen = true
             inRunText = false
             textBuffer.clear()
 
           case "t" if inPlainText =>
-            plainTextBuffer.append(textBuffer.toString)
+            plainTextBuffer.append(XmlUtil.decodeXstring(textBuffer.toString))
             plainTextSeen = true
             inPlainText = false
             textBuffer.clear()
