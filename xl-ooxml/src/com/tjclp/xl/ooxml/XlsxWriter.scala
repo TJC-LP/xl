@@ -1262,53 +1262,48 @@ object XlsxWriter:
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
         val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.sourcePath)).getOrElse(None)
 
-        // Check if modified sheets contain NEW strings not in preserved SST
-        // Extract entries from modified sheets (normalize for comparison consistency)
-        val modifiedSheetEntries: Set[Either[String, RichText]] =
-          tracker.modifiedSheets.flatMap { idx =>
+        // Check if modified sheets contain NEW strings not in the preserved SST.
+        // Entries are collected PER REFERENCE (one per text cell, GH-277: the SST count attribute
+        // counts references) in deterministic ref order, and compared EXACTLY — no Unicode
+        // normalization, byte-different spellings are different strings (GH-277/GH-289).
+        val modifiedSheetRefEntries: Vector[Either[String, RichText]] =
+          tracker.modifiedSheets.toVector.sorted.flatMap { idx =>
             workbook.sheets.lift(idx).toList.flatMap { sheet =>
-              sheet.cells.values.flatMap { cell =>
+              sheet.cells.toVector.sortBy(_._1.toA1).flatMap { case (_, cell) =>
                 cell.value match
-                  case CellValue.Text(str) => Some(Left(SharedStrings.normalize(str)))
+                  case CellValue.Text(str) => Some(Left(str))
                   case CellValue.RichText(rt) => Some(Right(rt))
                   case _ => None
               }
             }
-          }.toSet
+          }
 
-        // Get preserved SST entries (normalize for comparison)
         val preservedEntries: Set[Either[String, RichText]] =
-          parsedSST
-            .map(
-              _.strings
-                .map {
-                  case Left(s) => Left(SharedStrings.normalize(s))
-                  case Right(rt) => Right(rt)
-                }
-                .toSet
-            )
-            .getOrElse(Set.empty)
+          parsedSST.map(_.strings.toSet).getOrElse(Set.empty)
 
-        // Determine if modified sheets introduced new strings (normalized comparison)
-        val newEntries = modifiedSheetEntries.diff(preservedEntries)
+        // New entries in deterministic first-reference order, storing ORIGINAL strings —
+        // normalization is for comparison only, never storage (GH-277)
+        val newEntries =
+          modifiedSheetRefEntries.distinct.filterNot(preservedEntries.contains)
 
         if newEntries.nonEmpty then
           // New strings detected → build SST from preserved + new entries only
           // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
           val combinedEntries =
-            parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries.toVector
+            parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries
 
-          // Calculate total reference count: preserved count + new string references
+          // Total reference count: preserved count + one per REFERENCE of each new string (GH-277)
           val originalTotalCount = parsedSST.map(_.totalCount).getOrElse(0)
-          val newStringRefCount = newEntries.size // Each new entry used at least once
+          val newEntrySet = newEntries.toSet
+          val newStringRefCount = modifiedSheetRefEntries.count(newEntrySet.contains)
           val combinedTotalCount = originalTotalCount + newStringRefCount
 
-          // Create new SST with combined entries
+          // Create new SST with combined entries (exact-string index keys, GH-289)
           val combinedSST = SharedStrings(
             strings = combinedEntries,
             indexMap = combinedEntries.zipWithIndex.map {
-              case (Left(s), idx) => SharedStrings.normalize(s) -> idx
-              case (Right(rt), idx) => SharedStrings.normalize(rt.toPlainText) -> idx
+              case (Left(s), idx) => s -> idx
+              case (Right(rt), idx) => rt.toPlainText -> idx
             }.toMap,
             totalCount = combinedTotalCount
           )
@@ -1328,7 +1323,11 @@ object XlsxWriter:
         (generated, generated.isDefined)
 
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
-    val sstForSheets = if regenerateSharedStrings then sst else None
+    // Regenerated sheets ALWAYS encode against whatever SST ships in the output — preserved,
+    // combined, or freshly generated. The old `if regenerateSharedStrings then sst else None`
+    // orphaned a verbatim-copied SST: modified sheets re-inlined every string while
+    // sharedStrings.xml still shipped (GH-277).
+    val sstForSheets = sst
 
     // Build style index (automatic optimization based on sourceContext). Any sheet regenerated
     // from a source-backed workbook needs a local-to-workbook style remapping.

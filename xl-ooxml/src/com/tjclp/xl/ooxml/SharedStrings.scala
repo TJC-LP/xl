@@ -18,10 +18,10 @@ type SSTEntry = Either[String, RichText]
  * Deduplicates string values across the workbook. Cells reference strings by index rather than
  * embedding them inline.
  *
- * Supports both plain text and rich text (formatted runs). Deduplication is by EXACT string —
- * never by Unicode normalization: NFC "Café" and NFD "Café" are canonically equivalent but
- * different strings, and collapsing them changes cell bytes on round-trip (GH-289). Excel also
- * deduplicates exact strings. RichText entries are deduplicated by exact plain text content.
+ * Supports both plain text and rich text (formatted runs). Deduplication is by EXACT string — never
+ * by Unicode normalization: NFC "Café" and NFD "Café" are canonically equivalent but different
+ * strings, and collapsing them changes cell bytes on round-trip (GH-289). Excel also deduplicates
+ * exact strings. RichText entries are deduplicated by exact plain text content.
  *
  * @param strings
  *   Ordered list of unique entries (plain text or rich text)
