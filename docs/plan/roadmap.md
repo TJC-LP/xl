@@ -12,13 +12,13 @@
 
 **Current Status**: Production-ready with **104 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 1100+ tests passing. **0.10.0 "Trust & Author"** is the active release — see [v0.10.0-execution.md](v0.10.0-execution.md).
 
-**Current Version**: **0.10.0 "Trust & Author"** (released 2026-06-09)
+**Current Version**: **0.11.0 "Scripting"** (released 2026-06-10)
 
 ---
 
 ## Release Roadmap
 
-### v0.11.0 "Scripting" (Next)
+### v0.11.0 "Scripting" (Current)
 
 Make library scripting (scala-cli + `com.tjclp.xl.scripting` prelude) the turbo-charged agent path — goal: the best functional Excel scripting DSL. Tracked in [#252](https://github.com/TJC-LP/xl/issues/252).
 
@@ -35,7 +35,7 @@ Make library scripting (scala-cli + `com.tjclp.xl.scripting` prelude) the turbo-
 | Future: typed row/record extraction (RowCodec derivation) | 🔵 Proposed |
 | Future: bounds-checked `shift`/navigation variants | 🔵 Proposed |
 
-### v0.10.0 "Trust & Author" (Current)
+### v0.10.0 "Trust & Author" (Released)
 
 Build version **0.10.0**. Focus: trust (surgical-edit fidelity) and authoring (write the parts XL previously only read).
 
