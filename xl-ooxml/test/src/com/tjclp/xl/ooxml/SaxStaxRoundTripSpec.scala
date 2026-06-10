@@ -27,7 +27,9 @@ class SaxStaxRoundTripSpec extends FunSuite:
     val saxPath = tempDir.resolve("sax.xlsx")
     val scalaPath = tempDir.resolve("scala.xml.xlsx")
 
-    val saxConfig = WriterConfig.default.copy(sstPolicy = SstPolicy.Always)
+    // saxStax, not default: default is ScalaXml, which would make this spec compare
+    // ScalaXml against itself instead of exercising the SaxStax backend (GH-265)
+    val saxConfig = WriterConfig.saxStax.copy(sstPolicy = SstPolicy.Always)
     val scalaConfig = WriterConfig.scalaXml.copy(sstPolicy = SstPolicy.Always)
 
     XlsxWriter.writeWith(workbook, saxPath, saxConfig).getOrElse(fail("SaxStax write failed"))

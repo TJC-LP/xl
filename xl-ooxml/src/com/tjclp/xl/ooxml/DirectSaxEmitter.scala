@@ -7,6 +7,15 @@ import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.RowProperties
 import com.tjclp.xl.styles.Color
 import com.tjclp.xl.ooxml.SaxSupport.writeElem
+import com.tjclp.xl.ooxml.worksheet.{
+  buildHyperlinksElem,
+  buildPageMarginsElem,
+  buildSheetViewsElem,
+  collectHyperlinks,
+  mergeHeaderFooterElem,
+  mergePageSetupElem,
+  mergeSheetPrElem
+}
 import java.util.Arrays
 
 /**
@@ -62,9 +71,19 @@ object DirectSaxEmitter:
     writer.startDocument()
     writer.startElement("worksheet")
 
+    // GH-265: sheet metadata (sheetPr, sheetViews, hyperlinks, page setup) must come out of the
+    // streaming path too, in ECMA-376 18.3.1.99 schema order — mirroring the fresh-sheet branch of
+    // OoxmlWorksheet.fromDomainWithMetadata. The tiny metadata Elems reuse the SAME builders as the
+    // DOM writer (parity by construction); only the bulk sheetData stays hand-emitted for speed.
     SaxWriter.withAttributes(writer, "xmlns" -> nsSpreadsheetML, "xmlns:r" -> nsRelationships) {
+      // sheetPr carries the pageSetUpPr fitToPage flag (GH-266)
+      mergeSheetPrElem(None, sheet.pageSetup).foreach(writer.writeElem)
+
       // Calculate dimension from cells
       emitDimension(writer, sheet)
+
+      // Freeze panes + view settings (GH-258) — BEFORE cols/sheetData
+      buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings).foreach(writer.writeElem)
 
       // Emit column definitions if any
       emitCols(writer, sheet)
@@ -74,6 +93,14 @@ object DirectSaxEmitter:
 
       // Emit mergeCells if any
       emitMergeCells(writer, sheet)
+
+      // Hyperlinks (GH-235) — the sheet .rels for them are written on both backends
+      buildHyperlinksElem(collectHyperlinks(sheet)).foreach(writer.writeElem)
+
+      // Print setup (GH-259/GH-266) — AFTER sheetData/mergeCells, before drawings
+      buildPageMarginsElem(sheet.pageSetup).foreach(writer.writeElem)
+      mergePageSetupElem(None, sheet.pageSetup).foreach(writer.writeElem)
+      mergeHeaderFooterElem(None, sheet.pageSetup).foreach(writer.writeElem)
 
       // Emit legacyDrawing if comments are present
       emitLegacyDrawing(writer, sheet)
