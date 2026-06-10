@@ -314,7 +314,7 @@ final case class OoxmlStyles(
 
       case Fill.Pattern(fg, bg, patternType) =>
         elem("fill")(
-          elem("patternFill", "patternType" -> patternType.toString.toLowerCase)(
+          elem("patternFill", "patternType" -> OoxmlStyles.patternTypeToken(patternType))(
             colorToXml(fg).copy(label = "fgColor"), // Use colorToXml to preserve theme colors
             colorToXml(bg).copy(label = "bgColor") // Use colorToXml to preserve theme colors
           )
@@ -334,7 +334,7 @@ final case class OoxmlStyles(
       val children = borderSide.color.map { color =>
         colorToXml(color) // Use colorToXml to preserve theme colors in borders
       }.toList
-      elem(side, "style" -> borderSide.style.toString.toLowerCase)(children*)
+      elem(side, "style" -> OoxmlStyles.borderStyleToken(borderSide.style))(children*)
 
   private def colorToXml(color: Color): Elem =
     color match
@@ -471,7 +471,7 @@ final case class OoxmlStyles(
         writer.endElement()
       case Fill.Pattern(fg, bg, patternType) =>
         writer.startElement("patternFill")
-        writer.writeAttribute("patternType", patternType.toString.toLowerCase)
+        writer.writeAttribute("patternType", OoxmlStyles.patternTypeToken(patternType))
         writer.startElement("fgColor")
         writeColorAttributes(writer, fg)
         writer.endElement()
@@ -495,7 +495,7 @@ final case class OoxmlStyles(
       writer.endElement()
     else
       writer.startElement(side)
-      writer.writeAttribute("style", borderSide.style.toString.toLowerCase)
+      writer.writeAttribute("style", OoxmlStyles.borderStyleToken(borderSide.style))
       borderSide.color.foreach { color =>
         writer.startElement("color")
         writeColorAttributes(writer, color)
@@ -512,6 +512,54 @@ final case class OoxmlStyles(
         writer.writeAttribute("tint", tint.toString)
 
 object OoxmlStyles:
+
+  /**
+   * Canonical ST_BorderStyle token (ECMA-376 Part 1, §18.18.3) for each border style. Explicit
+   * total mapping — the schema tokens are camelCase (`mediumDashDotDot`), which no `toString`
+   * transformation of the enum case names produces reliably (GH-287). The reader stays lenient and
+   * accepts any casing.
+   */
+  private[ooxml] def borderStyleToken(style: BorderStyle): String = style match
+    case BorderStyle.None => "none"
+    case BorderStyle.Thin => "thin"
+    case BorderStyle.Medium => "medium"
+    case BorderStyle.Thick => "thick"
+    case BorderStyle.Dashed => "dashed"
+    case BorderStyle.Dotted => "dotted"
+    case BorderStyle.Double => "double"
+    case BorderStyle.Hair => "hair"
+    case BorderStyle.DashDot => "dashDot"
+    case BorderStyle.DashDotDot => "dashDotDot"
+    case BorderStyle.SlantDashDot => "slantDashDot"
+    case BorderStyle.MediumDashed => "mediumDashed"
+    case BorderStyle.MediumDashDot => "mediumDashDot"
+    case BorderStyle.MediumDashDotDot => "mediumDashDotDot"
+
+  /**
+   * Canonical ST_PatternType token (ECMA-376 Part 1, §18.18.55) for each pattern type. Explicit
+   * total mapping for the same reason as [[borderStyleToken]] (GH-287).
+   */
+  private[ooxml] def patternTypeToken(pattern: PatternType): String = pattern match
+    case PatternType.None => "none"
+    case PatternType.Solid => "solid"
+    case PatternType.Gray125 => "gray125"
+    case PatternType.Gray0625 => "gray0625"
+    case PatternType.DarkGray => "darkGray"
+    case PatternType.MediumGray => "mediumGray"
+    case PatternType.LightGray => "lightGray"
+    case PatternType.DarkHorizontal => "darkHorizontal"
+    case PatternType.DarkVertical => "darkVertical"
+    case PatternType.DarkDown => "darkDown"
+    case PatternType.DarkUp => "darkUp"
+    case PatternType.DarkGrid => "darkGrid"
+    case PatternType.DarkTrellis => "darkTrellis"
+    case PatternType.LightHorizontal => "lightHorizontal"
+    case PatternType.LightVertical => "lightVertical"
+    case PatternType.LightDown => "lightDown"
+    case PatternType.LightUp => "lightUp"
+    case PatternType.LightGrid => "lightGrid"
+    case PatternType.LightTrellis => "lightTrellis"
+
   /** Create minimal styles (default only) */
   def minimal: OoxmlStyles =
     val defaultIndex = StyleIndex(
