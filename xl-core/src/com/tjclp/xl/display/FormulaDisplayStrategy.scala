@@ -1,6 +1,8 @@
 package com.tjclp.xl.display
 
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Type class for displaying formula cells.
@@ -25,6 +27,32 @@ trait FormulaDisplayStrategy:
    *   Formatted display string
    */
   def format(formula: String, sheet: Sheet): String
+
+  /**
+   * Format a formula cell for display, with access to its cached value and number format.
+   *
+   * Called by the display layer with the full formula-cell context: the cached value (populated by
+   * `Workbook.recalculate()` / read from disk) and the cell's number format. The default
+   * implementation ignores both and delegates to [[format]]; strategies may override to prefer the
+   * cached value (see EvaluatingFormulaDisplay in xl-evaluator, GH-275).
+   *
+   * @param formula
+   *   The formula expression
+   * @param cached
+   *   The cached computed value carried by the formula cell, if any
+   * @param numFmt
+   *   The cell's number format (from its style; General when unstyled)
+   * @param sheet
+   *   The sheet context for evaluation (if evaluating)
+   * @return
+   *   Formatted display string
+   */
+  def formatCached(
+    formula: String,
+    cached: Option[CellValue],
+    numFmt: NumFmt,
+    sheet: Sheet
+  ): String = format(formula, sheet)
 
 /**
  * Low-priority given instances for FormulaDisplayStrategy.

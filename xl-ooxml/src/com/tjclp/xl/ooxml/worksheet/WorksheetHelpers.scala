@@ -5,7 +5,14 @@ import scala.xml.*
 import com.tjclp.xl.addressing.{ARef, Column}
 import com.tjclp.xl.ooxml.XmlUtil
 import com.tjclp.xl.ooxml.XmlUtil.nsSpreadsheetML
-import com.tjclp.xl.sheets.{ColumnProperties, PageSetup, RowProperties, Sheet}
+import com.tjclp.xl.sheets.{
+  ColumnProperties,
+  FreezePane,
+  PageSetup,
+  RowProperties,
+  Sheet,
+  SheetView
+}
 
 // Default namespaces for generated worksheets. Real files capture the original scope/attributes to
 // avoid redundant declarations and preserve mc/x14/xr bindings from the source sheet.
@@ -214,10 +221,143 @@ private[ooxml] def buildColsElement(sheet: Sheet): Option[Elem] =
     }
     Some(XmlUtil.elem("cols")(colElems*))
 
-// ===== Print setup authoring (GH-259) =====
-// PageSetup is the typed model for <pageMargins>, <pageSetup>, and <headerFooter>. The merge
-// helpers below overlay the modeled fields onto any preserved source XML so unmodeled attributes
-// (paperSize, printer r:id, even/first-page headers, differentOddEven, ...) survive a rewrite.
+// ===== Sheet view authoring (GH-258) =====
+// Shared by the DOM writer (OoxmlWorksheet) and the streaming writer (DirectSaxEmitter, GH-265)
+// so freeze panes and view settings serialize identically on both paths.
+
+/**
+ * Build sheetViews XML from the modeled freeze pane and view settings (GH-258), overlaying any
+ * preserved `<sheetViews>` element.
+ *
+ * The freeze pane override runs first (creating a minimal `<sheetViews><sheetView/></sheetViews>`
+ * when needed), then view settings are merged onto the same `<sheetView>` element, so freeze panes
+ * and view settings always share ONE sheetView.
+ */
+private[ooxml] def buildSheetViewsElem(
+  existing: Option[Elem],
+  freezeOverride: Option[FreezePane],
+  viewSettings: Option[SheetView]
+): Option[Elem] =
+  applyViewSettingsOverride(applyFreezePaneOverride(existing, freezeOverride), viewSettings)
+
+/**
+ * Apply sheet view settings to sheetViews XML.
+ *
+ * When `None`, preserves existing sheetViews unchanged (passive default, mirroring freezePane).
+ * When `Some(view)`, sets `showGridLines` ("1"/"0", always written so the setting round-trips) and
+ * `zoomScale` (written when defined, removed when None) on every `<sheetView>` element, creating a
+ * minimal `<sheetViews><sheetView workbookViewId="0"/></sheetViews>` when absent. Unmodeled
+ * attributes (tabSelected, topLeftCell, view, ...) are preserved.
+ */
+private def applyViewSettingsOverride(
+  existing: Option[Elem],
+  viewSettings: Option[SheetView]
+): Option[Elem] =
+  viewSettings match
+    case None => existing
+    case Some(view) =>
+      val base = existing.getOrElse(
+        XmlUtil.elem("sheetViews")(XmlUtil.elem("sheetView", "workbookViewId" -> "0")())
+      )
+      // Degenerate guard: a <sheetViews> without any <sheetView> child gets one appended
+      val hasSheetView = base.child.exists {
+        case e: Elem => e.label == "sheetView"
+        case _ => false
+      }
+      val withView =
+        if hasSheetView then base
+        else base.copy(child = base.child :+ XmlUtil.elem("sheetView", "workbookViewId" -> "0")())
+      val newChildren = withView.child.map {
+        case e: Elem if e.label == "sheetView" => applyViewAttrs(e, view)
+        case other => other
+      }
+      Some(withView.copy(child = newChildren))
+
+/** Set the modeled view attributes on a single `<sheetView>` element. */
+private def applyViewAttrs(sheetView: Elem, view: SheetView): Elem =
+  val withGrid = sheetView % new UnprefixedAttribute(
+    "showGridLines",
+    if view.showGridLines then "1" else "0",
+    Null
+  )
+  view.zoomScale match
+    case Some(zoom) => withGrid % new UnprefixedAttribute("zoomScale", zoom.toString, Null)
+    case None => withGrid.copy(attributes = withGrid.attributes.remove("zoomScale"))
+
+/**
+ * Apply freeze pane override to sheetViews XML.
+ *
+ * When `freezeOverride` is `Some(FreezePane.At(ref))`, injects a `<pane>` element. When
+ * `Some(FreezePane.Remove)`, strips `<pane>` from existing sheetViews. When `None`, preserves
+ * existing sheetViews unchanged.
+ */
+private def applyFreezePaneOverride(
+  existing: Option[Elem],
+  freezeOverride: Option[FreezePane]
+): Option[Elem] =
+  freezeOverride match
+    case None => existing
+    case Some(FreezePane.Remove) =>
+      existing.map { sv =>
+        val newChildren = sv.child.map {
+          case e: Elem if e.label == "sheetView" =>
+            e.copy(child = e.child.filterNot {
+              case c: Elem => c.label == "pane"
+              case _ => false
+            })
+          case other => other
+        }
+        sv.copy(child = newChildren)
+      }
+    case Some(FreezePane.At(ref)) =>
+      val colSplit = ref.col.index0
+      val rowSplit = ref.row.index0
+      if colSplit == 0 && rowSplit == 0 then existing
+      else
+        val activePane = (colSplit > 0, rowSplit > 0) match
+          case (true, true) => "bottomRight"
+          case (false, true) => "bottomLeft"
+          case (true, false) => "topRight"
+          case _ => "bottomLeft"
+
+        val paneAttrs: Vector[(String, String)] =
+          (if colSplit > 0 then Vector("xSplit" -> colSplit.toString) else Vector.empty) ++
+            (if rowSplit > 0 then Vector("ySplit" -> rowSplit.toString) else Vector.empty) ++
+            Vector(
+              "topLeftCell" -> ref.toA1,
+              "activePane" -> activePane,
+              "state" -> "frozen"
+            )
+
+        val paneElem = XmlUtil.elem("pane", paneAttrs*)()
+
+        // Inject pane into existing sheetViews or create new
+        existing match
+          case Some(sv) =>
+            val newChildren = sv.child.map {
+              case e: Elem if e.label == "sheetView" =>
+                // Remove old pane, add new one at the beginning (before selection elements)
+                val withoutPane = e.child.filterNot {
+                  case c: Elem => c.label == "pane"
+                  case _ => false
+                }
+                e.copy(child = paneElem +: withoutPane)
+              case other => other
+            }
+            Some(sv.copy(child = newChildren))
+          case None =>
+            // Create minimal sheetViews from scratch
+            val sheetView = XmlUtil.elem(
+              "sheetView",
+              "workbookViewId" -> "0"
+            )(paneElem)
+            Some(XmlUtil.elem("sheetViews")(sheetView))
+
+// ===== Print setup authoring (GH-259, GH-266) =====
+// PageSetup is the typed model for <pageMargins>, <pageSetup>, <headerFooter>, and the
+// sheetPr/pageSetUpPr fitToPage flag. The merge helpers below overlay the modeled fields onto any
+// preserved source XML so unmodeled attributes (paperSize, printer r:id, scaleWithDoc, ...)
+// survive a rewrite.
 
 /** Replace or remove an unprefixed attribute on an element (deterministic for a given input). */
 private def setOrRemoveAttr(e: Elem, key: String, value: Option[String]): Elem =
@@ -271,11 +411,16 @@ private[ooxml] def mergePageSetupElem(
       }
       if existing.isEmpty && updated.attributes == Null then None else Some(updated)
 
+/** CT_HeaderFooter child labels in schema sequence order (ECMA-376 18.3.1.46). */
+private val headerFooterPartLabels: Seq[String] =
+  Seq("oddHeader", "oddFooter", "evenHeader", "evenFooter", "firstHeader", "firstFooter")
+
 /**
- * Merge the modeled odd header/footer into the preserved `<headerFooter>` element, keeping
- * unmodeled children (evenHeader/evenFooter/firstHeader/firstFooter) and attributes
- * (differentOddEven, ...) intact. `headerFooter = None` preserves the source element verbatim;
- * `Some(HeaderFooter(None, None))` actively clears the odd header/footer.
+ * Merge the modeled header/footer into the preserved `<headerFooter>` element. All six page parts
+ * (odd/even/first × header/footer) plus the differentOddEven/differentFirst flags are modeled
+ * (GH-266); remaining unmodeled bits (scaleWithDoc/alignWithMargins attributes, foreign children)
+ * stay intact. `headerFooter = None` preserves the source element verbatim; `Some(HeaderFooter())`
+ * actively clears all modeled parts.
  */
 private[ooxml] def mergeHeaderFooterElem(
   existing: Option[Elem],
@@ -285,16 +430,59 @@ private[ooxml] def mergeHeaderFooterElem(
     case None => existing
     case Some(hf) =>
       val base = existing.getOrElse(XmlUtil.elem("headerFooter")())
-      val withoutOdd = base.child.filterNot {
-        case e: Elem => e.label == "oddHeader" || e.label == "oddFooter"
+      val unmodeled = base.child.filterNot {
+        case e: Elem => headerFooterPartLabels.contains(e.label)
         case _ => false
       }
-      // CT_HeaderFooter sequence starts with oddHeader, oddFooter — prepend in schema order
-      val oddElems: Seq[Node] =
-        hf.oddHeader.map(t => XmlUtil.elem("oddHeader")(Text(t))).toList ++
-          hf.oddFooter.map(t => XmlUtil.elem("oddFooter")(Text(t))).toList
-      val updated = base.copy(child = oddElems ++ withoutOdd)
-      if updated.child.isEmpty && updated.attributes == Null then None else Some(updated)
+      val parts: Seq[Option[String]] = Seq(
+        hf.oddHeader,
+        hf.oddFooter,
+        hf.evenHeader,
+        hf.evenFooter,
+        hf.firstHeader,
+        hf.firstFooter
+      )
+      // CT_HeaderFooter children precede any foreign content — prepend in schema order
+      val partElems: Seq[Node] = headerFooterPartLabels.zip(parts).flatMap { (label, text) =>
+        text.map(t => XmlUtil.elem(label)(Text(t)))
+      }
+      val flagged = Seq(
+        "differentOddEven" -> Option.when(hf.differentOddEven)("1"),
+        "differentFirst" -> Option.when(hf.differentFirst)("1")
+      ).foldLeft(base.copy(child = partElems ++ unmodeled)) { case (e, (key, value)) =>
+        setOrRemoveAttr(e, key, value)
+      }
+      if flagged.child.isEmpty && flagged.attributes == Null then None else Some(flagged)
+
+/**
+ * Ensure `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` when the model requests page-fit scaling
+ * (GH-266): Excel ignores pageSetup's fitToWidth/fitToHeight without this flag. When no fitTo* is
+ * modeled, the preserved element rides through verbatim — absence of the model fields is not
+ * evidence the source flag should be cleared (fitToWidth/fitToHeight default to 1 in OOXML, so a
+ * bare flag without pageSetup attributes is still meaningful).
+ */
+private[ooxml] def mergeSheetPrElem(
+  existing: Option[Elem],
+  pageSetup: Option[PageSetup]
+): Option[Elem] =
+  val wantsFit = pageSetup.exists(ps => ps.fitToWidth.isDefined || ps.fitToHeight.isDefined)
+  if !wantsFit then existing
+  else
+    val base = existing.getOrElse(XmlUtil.elem("sheetPr")())
+    val hasPageSetUpPr = base.child.exists {
+      case e: Elem => e.label == "pageSetUpPr"
+      case _ => false
+    }
+    val children =
+      if hasPageSetUpPr then
+        base.child.map {
+          case e: Elem if e.label == "pageSetUpPr" =>
+            e % new UnprefixedAttribute("fitToPage", "1", Null)
+          case other => other
+        }
+      // CT_SheetPr's child sequence ends with pageSetUpPr — appending keeps schema order
+      else base.child :+ XmlUtil.elem("pageSetUpPr", "fitToPage" -> "1")()
+    Some(base.copy(child = children))
 
 /**
  * Apply domain RowProperties to an OoxmlRow.

@@ -171,6 +171,9 @@ object FormatCodeParser:
 
   /**
    * Split format code into sections by semicolon. Respects quoted strings and brackets.
+   *
+   * Empty sections are preserved — including trailing ones — because an empty section means
+   * "display nothing" for that value class (e.g. `0.0;;` hides negative and zero, GH-262).
    */
   private def splitSections(code: String): Vector[String] =
     val sections = ArrayBuffer[String]()
@@ -198,7 +201,9 @@ object FormatCodeParser:
           current += c
       i += 1
 
-    if current.nonEmpty then sections += current.toString
+    // Keep the final segment whenever a separator created it (sections.nonEmpty),
+    // so trailing empty sections survive: "0.0;;" splits into three sections.
+    if sections.nonEmpty || current.nonEmpty then sections += current.toString
     sections.toVector
 
   /**

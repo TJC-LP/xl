@@ -15,6 +15,13 @@ class FormulaInterpolationSpec extends FunSuite:
       case other => fail(s"Expected Formula, got $other")
   }
 
+  test("GH-271: compile-time literal accepts leading unary plus (=+SUM(A1:B2))") {
+    // The macro accepted '=+' before the full parser did; this pins the two staying in agreement
+    fx"=+SUM(A1:B2)" match
+      case CellValue.Formula(expr, _) => assertEquals(expr, "=+SUM(A1:B2)")
+      case other => fail(s"Expected Formula, got $other")
+  }
+
   // ===== Runtime Interpolation (New Functionality) =====
 
   test("Runtime interpolation: simple SUM formula") {

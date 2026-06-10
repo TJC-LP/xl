@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Leading unary plus in formulas** (#271): `=+A1`, `=+SUM(A1:B2)`, chained `=++A1`, and
+  exponent positions (`=2^+2`) now parse — the ubiquitous banker idiom from real bank-built
+  models. Unary plus is identity: it parses to the same AST as the bare expression, so the
+  printer normalizes (`=+A1` prints `=A1`) and the parse∘print round-trip law is untouched.
+  Deeply chained `+` counts against the recursion budget (`NestingTooDeep`, never overflow).
+- **Even/first-page headers & footers + fitToPage** (#266): `HeaderFooter` gains
+  `evenHeader/evenFooter/firstHeader/firstFooter` and `differentOddEven/differentFirst`;
+  setting `fitToWidth`/`fitToHeight` now also emits `<sheetPr><pageSetUpPr fitToPage="1"/>`
+  (without which Excel ignores fit-to-page). Full write→read round-trip.
+
+### Fixed
+
+- **Sheet names that look like cell refs are now quoted** (#263): a sheet named `Q1`, `A1`,
+  or `R1C1` previously produced unquoted, ambiguous formulas (`Q1!$A$1:$B$2`) in printed
+  formulas, `toA1`, and `_xlnm` print names. One shared predicate (`SheetName.needsQuoting` /
+  `SheetName.quoteForFormula`) now drives `RefType`, `FormulaPrinter`, and `PrintNames` —
+  including `TRUE`/`FALSE` as sheet names, which the parser would otherwise re-read as booleans.
+- **Trailing empty format sections preserved** (#262): `"0.0;;"` (the hide-zero idiom) now
+  splits into three sections and empty sections render as empty string instead of falling
+  back to General. `";;;"` (hide-everything) works.
+- **Evaluating display strategy prefers cached formula values** (#275): after
+  `wb.recalculate()`, cross-sheet formulas display their cached values in `excel""` /
+  `displayCell` output instead of raw formula text.
+- **Streaming `StylePatcher` totality** (#264): malformed `indent="-2"` (and other invalid
+  numeric attributes) in styles.xml no longer throw through `Align`'s domain guard during
+  streaming style patches — hardened to match the DOM-side parser exactly.
+- **Streaming writer emits sheet metadata for fresh sheets** (#265): `DirectSaxEmitter` now
+  writes `sheetPr`, `sheetViews` (freeze panes, gridline settings), `pageMargins`,
+  `pageSetup`, `headerFooter`, and `hyperlinks` in schema order — previously all silently
+  dropped on the SaxStax path; also fixes orphaned hyperlink relationships.
+
+### Changed
+
+- **`SheetEvaluator` is now var-free** (#48): the two mutable accumulation blocks were
+  refactored to `foldLeft`, removing the last `@SuppressWarnings(Var)` exemptions in the
+  evaluator's hot path. Behavior is identical (locked by the existing suite + new
+  equivalence pins).
+- **SST whitespace preservation through surgical writes pinned by regression spec** (#17):
+  investigated with a falsifiability protocol (three hypothesized bug classes injected, each
+  caught) — the 2025-11 report is not reproducible on the current write path; a permanent
+  regression spec now guards it.
+
 ## [0.11.0] "Scripting" - 2026-06-10
 
 The scripting release: one-import prelude, total-by-semantics APIs, whole-workbook

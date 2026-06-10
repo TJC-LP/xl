@@ -309,6 +309,102 @@ class RefTypeSpec extends ScalaCheckSuite:
     assert(ref.toA1.contains("'"), "Should quote sheet name with apostrophe")
   }
 
+  // ========== GH-263: cell-ref-shaped sheet names must be quoted ==========
+
+  test("GH-263: toA1 quotes sheet names that parse as cell references") {
+    val b2 = ARef.from1(2, 2)
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("A1"), b2).toA1, "'A1'!B2")
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("Q1"), b2).toA1, "'Q1'!B2")
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("XFD1048576"), b2).toA1, "'XFD1048576'!B2")
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("q4"), b2).toA1, "'q4'!B2")
+  }
+
+  test("GH-263: toA1 quotes R1C1-shaped and leading-digit sheet names") {
+    val b2 = ARef.from1(2, 2)
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("R1C1"), b2).toA1, "'R1C1'!B2")
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("RC"), b2).toA1, "'RC'!B2")
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("r2c3"), b2).toA1, "'r2c3'!B2")
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("2024Q1"), b2).toA1, "'2024Q1'!B2")
+  }
+
+  test("GH-263: 'A1' as a sheet name round-trips through toA1/parse") {
+    val original = RefType.QualifiedCell(SheetName.unsafe("A1"), ARef.from1(2, 2))
+    assertEquals(RefType.parse(original.toA1), Right(original))
+    val qrange = RefType.QualifiedRange(
+      SheetName.unsafe("Q1"),
+      CellRange(ARef.from1(1, 1), ARef.from1(2, 2))
+    )
+    assertEquals(RefType.parse(qrange.toA1), Right(qrange))
+  }
+
+  test("GH-263: names beyond cell-ref bounds or plain identifiers stay bare") {
+    val b2 = ARef.from1(2, 2)
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("XFE1"), b2).toA1, "XFE1!B2")
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("A1048577"), b2).toA1, "A1048577!B2")
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("Sales"), b2).toA1, "Sales!B2")
+    assertEquals(RefType.QualifiedCell(SheetName.unsafe("Sheet1"), b2).toA1, "Sheet1!B2")
+  }
+
+  test("GH-263: SheetName.needsQuoting truth table") {
+    // cell-ref shaped (A1 through XFD1048576, case-insensitive)
+    assert(SheetName.needsQuoting("A1"), "A1")
+    assert(SheetName.needsQuoting("Q1"), "Q1")
+    assert(SheetName.needsQuoting("ab12"), "ab12")
+    assert(SheetName.needsQuoting("xfd1048576"), "xfd1048576")
+    // R1C1 shaped (case-insensitive, digits optional)
+    assert(SheetName.needsQuoting("R1C1"), "R1C1")
+    assert(SheetName.needsQuoting("rc"), "rc")
+    assert(SheetName.needsQuoting("R1C"), "R1C")
+    assert(SheetName.needsQuoting("RC2"), "RC2")
+    // leading digit / empty / special chars / quotes / spaces (existing rules)
+    assert(SheetName.needsQuoting("2024Q1"), "2024Q1")
+    assert(SheetName.needsQuoting(""), "empty")
+    assert(SheetName.needsQuoting("Q1 Report"), "Q1 Report")
+    assert(SheetName.needsQuoting("P&L"), "P&L")
+    assert(SheetName.needsQuoting("It's"), "It's")
+    // bare TRUE/FALSE parse as boolean literals in formulas, not sheet names
+    assert(SheetName.needsQuoting("TRUE"), "TRUE")
+    assert(SheetName.needsQuoting("false"), "false")
+    // safe names stay bare
+    assert(!SheetName.needsQuoting("Sales"), "Sales")
+    assert(!SheetName.needsQuoting("Sheet1"), "Sheet1")
+    assert(!SheetName.needsQuoting("XFE1"), "XFE1 is beyond max column")
+    assert(!SheetName.needsQuoting("A1048577"), "A1048577 is beyond max row")
+    assert(!SheetName.needsQuoting("Revenue_2024"), "Revenue_2024")
+    assert(!SheetName.needsQuoting("R"), "bare R is a valid name")
+    assert(!SheetName.needsQuoting("C"), "bare C is a valid name")
+  }
+
+  property("GH-263: hostile sheet names round-trip through toA1/parse") {
+    val genHostileName = Gen.oneOf(
+      "A1",
+      "a1",
+      "Q1",
+      "q4",
+      "AB12",
+      "XFD1048576",
+      "R1C1",
+      "RC",
+      "r1c1",
+      "2024Q1",
+      "TRUE",
+      "FALSE",
+      "Sales",
+      "Sheet1",
+      "My Sheet",
+      "It's Q1",
+      "P&L",
+      "XFE1"
+    )
+    forAll(genHostileName, genARef) { (name: String, ref: ARef) =>
+      val original = RefType.QualifiedCell(SheetName.unsafe(name), ref)
+      RefType.parse(original.toA1) match
+        case Right(parsed) => assertEquals(parsed, original)
+        case Left(err) => fail(s"Failed to parse ${original.toA1}: $err")
+      true
+    }
+  }
+
   // ========== Pattern Matching ==========
 
   test("Pattern match on RefType variants") {

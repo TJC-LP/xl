@@ -3,12 +3,23 @@ package com.tjclp.xl.ooxml
 import munit.FunSuite
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path}
 import java.time.LocalDateTime
+import java.util.zip.ZipFile
 import scala.xml.{Elem, MetaData, Node, Null, PrefixedAttribute, Text, TopScope, UnprefixedAttribute, XML}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellValue, Comment}
+import com.tjclp.xl.api.Workbook
+import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.richtext.RichText.*
-import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
+import com.tjclp.xl.sheets.{
+  ColumnProperties,
+  HeaderFooter,
+  PageMargins,
+  PageSetup,
+  RowProperties,
+  Sheet,
+  SheetView
+}
 // DirectSaxEmitter is in the same package
 
 // Test code uses .get/.head for brevity in assertions
@@ -48,6 +59,93 @@ class DirectSaxEmitterParitySpec extends FunSuite:
     assert(formulaElem.isDefined, "Cell should have <f> element")
     assertEquals(formulaElem.get.text, "SUM(B1:B10)")
   }
+
+  test("GH-265: direct SAX emission matches DOM writer for fresh-sheet metadata") {
+    // Freeze panes, view settings, page setup (incl. even header + fitToPage), hyperlinks:
+    // everything the DOM writer emits for a fresh sheet must come out of the streaming path too.
+    val sheet = buildMetadataSheet()
+
+    val expected = OoxmlWorksheet.fromDomainWithSST(sheet, None, Map.empty, None)
+    val actual = emitDirect(sheet, None)
+
+    assertEquals(normalize(expected.toXml), normalize(actual))
+  }
+
+  test("GH-265: SaxStax streaming write round-trips metadata equal to the DOM writer") {
+    val wb = Workbook(Vector(buildMetadataSheet()))
+    val saxPath = Files.createTempFile("gh265-sax", ".xlsx")
+    val domPath = Files.createTempFile("gh265-dom", ".xlsx")
+    XlsxWriter
+      .writeWith(wb, saxPath, WriterConfig.saxStax)
+      .fold(e => fail(s"SaxStax write failed: $e"), identity)
+    XlsxWriter
+      .writeWith(wb, domPath, WriterConfig.scalaXml)
+      .fold(e => fail(s"ScalaXml write failed: $e"), identity)
+
+    val saxWb = XlsxReader.read(saxPath).fold(e => fail(s"SaxStax read failed: $e"), identity)
+    val domWb = XlsxReader.read(domPath).fold(e => fail(s"ScalaXml read failed: $e"), identity)
+    assertEquals(saxWb.copy(sourceContext = None), domWb.copy(sourceContext = None))
+
+    val xml = zipEntryString(saxPath, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("<pane "), s"freeze pane missing from streaming output: $xml")
+    assert(xml.contains("showGridLines=\"0\""), s"view settings missing: $xml")
+    assert(xml.contains("orientation=\"landscape\""), s"pageSetup missing: $xml")
+    assert(xml.contains("<pageMargins "), s"pageMargins missing: $xml")
+    assert(xml.contains("<evenHeader>"), s"even header (GH-266) missing: $xml")
+    assert(xml.contains("fitToPage=\"1\""), s"sheetPr fitToPage flag missing: $xml")
+    // Schema order (ECMA-376 18.3.1.99): sheetPr < sheetViews < cols < sheetData < page*
+    val order = Seq(
+      "<sheetPr>",
+      "<dimension ",
+      "<sheetViews>",
+      "<cols>",
+      "<sheetData>",
+      "<mergeCells ",
+      "<hyperlinks>",
+      "<pageMargins ",
+      "<pageSetup ",
+      "<headerFooter ",
+      "<legacyDrawing "
+    ).map(tag => tag -> xml.indexOf(tag))
+    order.foreach((tag, idx) => assert(idx >= 0, s"$tag missing from streaming output: $xml"))
+    assert(
+      order.map(_._2) == order.map(_._2).sorted,
+      s"streaming output violates schema order: $order"
+    )
+    Files.deleteIfExists(saxPath)
+    Files.deleteIfExists(domPath)
+  }
+
+  private def zipEntryString(path: Path, entry: String): String =
+    val zf = new ZipFile(path.toFile)
+    try
+      val is = zf.getInputStream(zf.getEntry(entry))
+      try new String(is.readAllBytes(), StandardCharsets.UTF_8)
+      finally is.close()
+    finally zf.close()
+
+  /** Fresh sheet exercising every metadata block DirectSaxEmitter must emit (GH-265). */
+  private def buildMetadataSheet(): Sheet =
+    val b2 = ARef.from1(2, 2)
+    buildSheet()
+      .put(Cell(ARef.from1(4, 2), CellValue.Text("link")).withHyperlink("https://example.com"))
+      .freezeAt(b2)
+      .withViewSettings(SheetView(showGridLines = false, zoomScale = Some(85)))
+      .withPageSetup(
+        PageSetup(
+          orientation = Some("landscape"),
+          fitToWidth = Some(1),
+          headerFooter = Some(
+            HeaderFooter(
+              oddHeader = Some("&LXL"),
+              oddFooter = Some("&CPage &P of &N"),
+              evenHeader = Some("&REven"),
+              differentOddEven = true
+            )
+          ),
+          margins = Some(PageMargins.default)
+        )
+      )
 
   private def emitDirect(sheet: Sheet, tableParts: Option[Elem]): Elem =
     val output = new ByteArrayOutputStream()

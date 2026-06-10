@@ -5,7 +5,7 @@ import scala.xml.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Row}
 import com.tjclp.xl.ooxml.XmlUtil.{elem, nsRelationships}
 import com.tjclp.xl.ooxml.{SaxSerializable, SaxWriter, SharedStrings, XmlWritable}
-import com.tjclp.xl.sheets.{FreezePane, Sheet, SheetView}
+import com.tjclp.xl.sheets.Sheet
 
 /**
  * Worksheet for xl/worksheets/sheet#.xml
@@ -472,12 +472,13 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
         OoxmlWorksheet(
           allRows, // Use merged rows (with cells + empty rows)
           sheet.mergedRanges,
-          // Preserve all metadata from original, but use recalculated dimension
-          preserved.sheetPr,
+          // Preserve all metadata from original, but use recalculated dimension.
+          // GH-266: fitToWidth/fitToHeight require sheetPr/pageSetUpPr fitToPage="1"
+          mergeSheetPrElem(preserved.sheetPr, sheet.pageSetup),
           calculatedDimension.orElse(
             preserved.dimension
           ), // Use calculated dimension, fallback to preserved
-          applySheetViewOverrides(preserved.sheetViews, sheet.freezePane, sheet.viewSettings),
+          buildSheetViewsElem(preserved.sheetViews, sheet.freezePane, sheet.viewSettings),
           preserved.sheetFormatPr,
           generatedCols.orElse(preserved.cols), // Prefer domain props over preserved XML
           preserved.conditionalFormatting,
@@ -507,8 +508,9 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
         OoxmlWorksheet(
           rowsWithCells,
           sheet.mergedRanges,
+          sheetPr = mergeSheetPrElem(None, sheet.pageSetup), // GH-266: fitToPage flag
           dimension = calculatedDimension,
-          sheetViews = applySheetViewOverrides(None, sheet.freezePane, sheet.viewSettings),
+          sheetViews = buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings),
           cols = generatedCols,
           pageMargins = buildPageMarginsElem(sheet.pageSetup),
           pageSetup = mergePageSetupElem(None, sheet.pageSetup),
@@ -517,130 +519,3 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           tableParts = tableParts,
           preservedKnown = hyperlinksMap
         )
-
-  /**
-   * Apply freeze pane and view-settings overrides to sheetViews XML (GH-258).
-   *
-   * The freeze pane override runs first (creating a minimal `<sheetViews><sheetView/></sheetViews>`
-   * when needed), then view settings are merged onto the same `<sheetView>` element, so freeze
-   * panes and view settings always share ONE sheetView.
-   */
-  private def applySheetViewOverrides(
-    existing: Option[Elem],
-    freezeOverride: Option[FreezePane],
-    viewSettings: Option[SheetView]
-  ): Option[Elem] =
-    applyViewSettingsOverride(applyFreezePaneOverride(existing, freezeOverride), viewSettings)
-
-  /**
-   * Apply sheet view settings to sheetViews XML.
-   *
-   * When `None`, preserves existing sheetViews unchanged (passive default, mirroring freezePane).
-   * When `Some(view)`, sets `showGridLines` ("1"/"0", always written so the setting round-trips)
-   * and `zoomScale` (written when defined, removed when None) on every `<sheetView>` element,
-   * creating a minimal `<sheetViews><sheetView workbookViewId="0"/></sheetViews>` when absent.
-   * Unmodeled attributes (tabSelected, topLeftCell, view, ...) are preserved.
-   */
-  private def applyViewSettingsOverride(
-    existing: Option[Elem],
-    viewSettings: Option[SheetView]
-  ): Option[Elem] =
-    viewSettings match
-      case None => existing
-      case Some(view) =>
-        val base = existing.getOrElse(
-          elem("sheetViews")(elem("sheetView", "workbookViewId" -> "0")())
-        )
-        // Degenerate guard: a <sheetViews> without any <sheetView> child gets one appended
-        val hasSheetView = base.child.exists {
-          case e: Elem => e.label == "sheetView"
-          case _ => false
-        }
-        val withView =
-          if hasSheetView then base
-          else base.copy(child = base.child :+ elem("sheetView", "workbookViewId" -> "0")())
-        val newChildren = withView.child.map {
-          case e: Elem if e.label == "sheetView" => applyViewAttrs(e, view)
-          case other => other
-        }
-        Some(withView.copy(child = newChildren))
-
-  /** Set the modeled view attributes on a single `<sheetView>` element. */
-  private def applyViewAttrs(sheetView: Elem, view: SheetView): Elem =
-    val withGrid = sheetView % new UnprefixedAttribute(
-      "showGridLines",
-      if view.showGridLines then "1" else "0",
-      Null
-    )
-    view.zoomScale match
-      case Some(zoom) => withGrid % new UnprefixedAttribute("zoomScale", zoom.toString, Null)
-      case None => withGrid.copy(attributes = withGrid.attributes.remove("zoomScale"))
-
-  /**
-   * Apply freeze pane override to sheetViews XML.
-   *
-   * When `freezeOverride` is `Some(FreezePane.At(ref))`, injects a `<pane>` element. When
-   * `Some(FreezePane.Remove)`, strips `<pane>` from existing sheetViews. When `None`, preserves
-   * existing sheetViews unchanged.
-   */
-  private def applyFreezePaneOverride(
-    existing: Option[Elem],
-    freezeOverride: Option[FreezePane]
-  ): Option[Elem] =
-    freezeOverride match
-      case None => existing
-      case Some(FreezePane.Remove) =>
-        existing.map { sv =>
-          val newChildren = sv.child.map {
-            case e: Elem if e.label == "sheetView" =>
-              e.copy(child = e.child.filterNot {
-                case c: Elem => c.label == "pane"
-                case _ => false
-              })
-            case other => other
-          }
-          sv.copy(child = newChildren)
-        }
-      case Some(FreezePane.At(ref)) =>
-        val colSplit = ref.col.index0
-        val rowSplit = ref.row.index0
-        if colSplit == 0 && rowSplit == 0 then existing
-        else
-          val activePane = (colSplit > 0, rowSplit > 0) match
-            case (true, true) => "bottomRight"
-            case (false, true) => "bottomLeft"
-            case (true, false) => "topRight"
-            case _ => "bottomLeft"
-
-          val paneAttrs: Vector[(String, String)] =
-            (if colSplit > 0 then Vector("xSplit" -> colSplit.toString) else Vector.empty) ++
-              (if rowSplit > 0 then Vector("ySplit" -> rowSplit.toString) else Vector.empty) ++
-              Vector(
-                "topLeftCell" -> ref.toA1,
-                "activePane" -> activePane,
-                "state" -> "frozen"
-              )
-
-          val paneElem = elem("pane", paneAttrs*)()
-
-          // Inject pane into existing sheetViews or create new
-          existing match
-            case Some(sv) =>
-              val newChildren = sv.child.map {
-                case e: Elem if e.label == "sheetView" =>
-                  // Remove old pane, add new one at the beginning (before selection elements)
-                  val withoutPane = e.child.filterNot {
-                    case c: Elem => c.label == "pane"
-                    case _ => false
-                  }
-                  e.copy(child = paneElem +: withoutPane)
-                case other => other
-              }
-              Some(sv.copy(child = newChildren))
-            case None =>
-              // Create minimal sheetViews from scratch
-              val sheetView = elem(
-                "sheetView",
-                "workbookViewId" -> "0"
-              )(paneElem)
-              Some(elem("sheetViews")(sheetView))

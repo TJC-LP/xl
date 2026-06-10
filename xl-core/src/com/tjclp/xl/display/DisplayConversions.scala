@@ -88,9 +88,10 @@ object DisplayConversions:
 
     // Format based on value type
     val formatted = cell.value match
-      case CellValue.Formula(expr, _) =>
-        // Use formula display strategy (raw text or evaluation)
-        fds.format(expr, sheet)
+      case CellValue.Formula(expr, cached) =>
+        // Use formula display strategy (raw text or evaluation), passing the cached
+        // value and cell numFmt so strategies can prefer the cache (GH-275)
+        fds.formatCached(expr, cached, numFmt, sheet)
 
       case other =>
         // Use NumFmt formatter for non-formula values

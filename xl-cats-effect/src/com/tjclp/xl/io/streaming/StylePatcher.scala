@@ -501,7 +501,9 @@ object StylePatcher:
         val bold = (f \ "b").nonEmpty
         val italic = (f \ "i").nonEmpty
         val underline = (f \ "u").nonEmpty
-        val size = (f \ "sz" \ "@val").text.toDoubleOption.getOrElse(11.0)
+        // Font requires sizePt > 0; treat non-positive (or NaN) sizes from malformed files
+        // as absent so the streaming path stays total
+        val size = (f \ "sz" \ "@val").text.toDoubleOption.filter(_ > 0).getOrElse(11.0)
         val name = (f \ "name" \ "@val").text match
           case "" => "Calibri"
           case n => n
@@ -600,7 +602,9 @@ object StylePatcher:
         case "distributed" => VAlign.Distributed
         case _ => VAlign.Bottom
       val wrap = (alignment \ "@wrapText").text == "1"
-      val indent = (alignment \ "@indent").text.toIntOption.getOrElse(0)
+      // OOXML indent is an unsigned int; ignore negative values from malformed files so the
+      // streaming path stays total (Align requires indent >= 0), matching the DOM StyleParser
+      val indent = (alignment \ "@indent").text.toIntOption.filter(_ >= 0).getOrElse(0)
       Align(h, v, wrap, indent)
 
   private def extractColor(nodes: NodeSeq): Option[Color] =

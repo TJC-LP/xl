@@ -1,7 +1,10 @@
 package com.tjclp.xl.io.streaming
 
 import munit.FunSuite
+import com.tjclp.xl.ooxml.XmlSecurity
+import com.tjclp.xl.ooxml.style.WorkbookStyles
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.alignment.HAlign
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.color.Color
@@ -12,6 +15,7 @@ import com.tjclp.xl.error.XLError
  *
  * Covers:
  *   - Malformed XML handling in StylePatcher
+ *   - Malformed attribute values in StylePatcher (totality, DOM-parser parity)
  *   - Error recovery in streaming transforms
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
@@ -112,6 +116,68 @@ class StreamingErrorSpec extends FunSuite:
     assertEquals(merged.font.italic, true)
   }
 
+  // ========== StylePatcher Attribute Totality (#264) ==========
+
+  test("StylePatcher.getStyle: negative indent attribute is ignored, not thrown") {
+    val xml = stylesXmlWith(
+      defaultFontsXml,
+      """<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" wrapText="1" indent="-2"/></xf>"""
+    )
+
+    val result = StylePatcher.getStyle(xml, 1)
+    result match
+      case Right(Some(style)) =>
+        assertEquals(style.align.indent, 0) // negative treated as absent, like DOM parser
+        assertEquals(style.align.horizontal, HAlign.Left)
+        assertEquals(style.align.wrapText, true)
+      case other => fail(s"Expected Right(Some(style)), got: $other")
+  }
+
+  test("StylePatcher.getStyle: negative indent behaves identically to DOM StyleParser") {
+    val xml = stylesXmlWith(
+      defaultFontsXml,
+      """<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" wrapText="1" indent="-2"/></xf>"""
+    )
+
+    val streamingAlign = StylePatcher.getStyle(xml, 1).toOption.flatten.map(_.align)
+    val domAlign = XmlSecurity
+      .parseSafe(xml, "styles.xml")
+      .toOption
+      .flatMap(elem => WorkbookStyles.fromXml(elem).toOption)
+      .flatMap(_.styleAt(1))
+      .map(_.align)
+
+    assert(streamingAlign.isDefined, "streaming path should produce an alignment")
+    assert(domAlign.isDefined, "DOM path should produce an alignment")
+    assertEquals(streamingAlign, domAlign)
+  }
+
+  test("StylePatcher.getStyle: valid positive indent is preserved") {
+    val xml = stylesXmlWith(
+      defaultFontsXml,
+      """<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" indent="3"/></xf>"""
+    )
+
+    val result = StylePatcher.getStyle(xml, 1)
+    result match
+      case Right(Some(style)) => assertEquals(style.align.indent, 3)
+      case other => fail(s"Expected Right(Some(style)), got: $other")
+  }
+
+  test("StylePatcher.getStyle: non-positive font size falls back to default, not thrown") {
+    for badSize <- List("-5", "0", "NaN") do
+      val xml = stylesXmlWith(
+        s"""<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><sz val="$badSize"/><name val="Calibri"/></font></fonts>""",
+        """<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>"""
+      )
+
+      val result = StylePatcher.getStyle(xml, 1)
+      result match
+        case Right(Some(style)) =>
+          assertEquals(style.font.sizePt, Font.default.sizePt, s"for sz val=$badSize")
+        case other => fail(s"Expected Right(Some(style)) for sz val=$badSize, got: $other")
+  }
+
   // ========== StreamingTransform Edge Cases ==========
 
   test("StreamingTransform.analyzePatches: empty patches returns None") {
@@ -150,6 +216,20 @@ class StreamingErrorSpec extends FunSuite:
   }
 
   // ========== Helpers ==========
+
+  private val defaultFontsXml: String =
+    """<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>"""
+
+  /** styles.xml with the given fonts block and a second cellXf (style id 1). */
+  private def stylesXmlWith(fontsXml: String, secondXf: String): String =
+    s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+       |<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+       |$fontsXml
+       |<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+       |<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+       |<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+       |<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>$secondXf</cellXfs>
+       |</styleSheet>""".stripMargin.replaceAll("\n", "")
 
   private val minimalStylesXml: String =
     """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

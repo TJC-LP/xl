@@ -131,6 +131,23 @@ class PageSetupRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-263: sheet named like a cell ref (Q1) produces quoted print formulas") {
+    val setup = PageSetup(printArea = Some(ref"A1:B2"), repeatRows = Some((1, 1)))
+    val sheet = Sheet(SheetName.unsafe("Q1")).put(ref"A1", 1).withPageSetup(setup)
+    val wb = Workbook(sheet)
+    val out = Files.createTempFile("pagesetup-cellref-name", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val workbookXml = zipEntryString(out, "xl/workbook.xml")
+    assert(workbookXml.contains("'Q1'!$A$1:$B$2"), s"quoted area formula missing: $workbookXml")
+    assert(workbookXml.contains("'Q1'!$1:$1"), s"quoted titles formula missing: $workbookXml")
+
+    val reread = XlsxReader.read(out).fold(e => fail(s"read failed: $e"), identity)
+    val rereadSheet = reread(SheetName.unsafe("Q1")).fold(e => fail(s"$e"), identity)
+    assertEquals(rereadSheet.pageSetup, Some(setup))
+    Files.deleteIfExists(out)
+  }
+
   test("GH-259: every print field round-trips together (full PageSetup equality)") {
     val setup = PageSetup(
       scale = 90,
@@ -232,6 +249,134 @@ class PageSetupRoundTripSpec extends FunSuite:
     val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
     assertEquals(sheet.pageSetup.flatMap(_.repeatRows), None)
     assertEquals(reread.metadata.definedNames, Vector(colTitles))
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-266: even/first headers+footers round-trip with differentOddEven/differentFirst") {
+    val hf = HeaderFooter(
+      oddHeader = Some("&LOdd Head"),
+      oddFooter = Some("&CPage &P of &N"),
+      evenHeader = Some("&REven Head"),
+      evenFooter = Some("&CEven Foot"),
+      firstHeader = Some("&CFirst Head"),
+      firstFooter = Some("&CFirst Foot"),
+      differentOddEven = true,
+      differentFirst = true
+    )
+    val setup = PageSetup(headerFooter = Some(hf))
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(setup))
+    val (reread, out) = writeRead(wb)
+    assertEquals(sheetSetup(reread), setup)
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("differentOddEven=\"1\""), s"differentOddEven attr missing: $xml")
+    assert(xml.contains("differentFirst=\"1\""), s"differentFirst attr missing: $xml")
+    assert(xml.contains("<evenHeader>"), s"evenHeader missing: $xml")
+    assert(xml.contains("<evenFooter>"), s"evenFooter missing: $xml")
+    assert(xml.contains("<firstHeader>"), s"firstHeader missing: $xml")
+    assert(xml.contains("<firstFooter>"), s"firstFooter missing: $xml")
+    // CT_HeaderFooter child sequence: odd, even, first
+    val odd = xml.indexOf("<oddHeader>")
+    val even = xml.indexOf("<evenHeader>")
+    val first = xml.indexOf("<firstHeader>")
+    assert(odd < even && even < first, "headerFooter children must follow schema order")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-266: even header round-trips without first-page parts (flags independent)") {
+    val hf = HeaderFooter(
+      oddHeader = Some("&COdd"),
+      evenHeader = Some("&CEven"),
+      differentOddEven = true
+    )
+    val setup = PageSetup(headerFooter = Some(hf))
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(setup))
+    val (reread, out) = writeRead(wb)
+    assertEquals(sheetSetup(reread), setup)
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(!xml.contains("differentFirst"), s"spurious differentFirst attr: $xml")
+    assert(!xml.contains("<firstHeader>"), s"spurious firstHeader: $xml")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-266: surgical write (cell edit) preserves even/first header+footer parts") {
+    val hf = HeaderFooter(
+      oddFooter = Some("&CPage &P"),
+      evenFooter = Some("&CEven &P"),
+      firstHeader = Some("&CCover"),
+      differentOddEven = true,
+      differentFirst = true
+    )
+    val wb0 = Workbook(
+      Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(PageSetup(headerFooter = Some(hf)))
+    )
+    val src = Files.createTempFile("evenfirst-src", ".xlsx")
+    XlsxWriter.write(wb0, src).fold(e => fail(s"seed write failed: $e"), identity)
+
+    val edited = for
+      wb <- XlsxReader.read(src)
+      sheet <- wb("Sheet1")
+    yield wb.put(sheet.put(ref"B1" -> 2))
+    val wb1 = edited.fold(e => fail(s"edit failed: $e"), identity)
+
+    val out = Files.createTempFile("evenfirst-out", ".xlsx")
+    XlsxWriter.write(wb1, out).fold(e => fail(s"write failed: $e"), identity)
+    val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
+    assertEquals(sheetSetup(reread).headerFooter, Some(hf))
+    Files.deleteIfExists(src)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-266: fitToWidth/fitToHeight emit sheetPr/pageSetUpPr fitToPage flag") {
+    val setup = PageSetup(fitToWidth = Some(1), fitToHeight = Some(0))
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(setup))
+    val (reread, out) = writeRead(wb)
+    assertEquals(sheetSetup(reread), setup)
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("<pageSetUpPr"), s"pageSetUpPr missing: $xml")
+    assert(xml.contains("fitToPage=\"1\""), s"fitToPage flag missing: $xml")
+    // sheetPr must come FIRST in the worksheet element order (ECMA-376 18.3.1.99)
+    val sheetPr = xml.indexOf("<sheetPr")
+    assert(sheetPr >= 0, s"sheetPr missing: $xml")
+    assert(sheetPr < xml.indexOf("<dimension"), "sheetPr must precede dimension")
+    assert(sheetPr < xml.indexOf("<sheetData"), "sheetPr must precede sheetData")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-266: no fitTo* means no fitToPage flag (sheetPr not invented)") {
+    val setup = PageSetup(scale = 80, orientation = Some("landscape"))
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(setup))
+    val (reread, out) = writeRead(wb)
+    assertEquals(sheetSetup(reread), setup)
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(!xml.contains("fitToPage"), s"spurious fitToPage flag: $xml")
+    assert(!xml.contains("<sheetPr"), s"spurious sheetPr element: $xml")
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-266: surgical edit keeps fitToPage flag from the source file") {
+    val setup = PageSetup(fitToWidth = Some(2), fitToHeight = Some(1))
+    val wb0 = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(setup))
+    val src = Files.createTempFile("fittopage-src", ".xlsx")
+    XlsxWriter.write(wb0, src).fold(e => fail(s"seed write failed: $e"), identity)
+
+    val edited = for
+      wb <- XlsxReader.read(src)
+      sheet <- wb("Sheet1")
+    yield wb.put(sheet.put(ref"B1" -> 2))
+    val wb1 = edited.fold(e => fail(s"edit failed: $e"), identity)
+
+    val out = Files.createTempFile("fittopage-out", ".xlsx")
+    XlsxWriter.write(wb1, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("fitToPage=\"1\""), s"fitToPage lost on surgical edit: $xml")
+    val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
+    assertEquals(sheetSetup(reread), setup)
+    Files.deleteIfExists(src)
     Files.deleteIfExists(out)
   }
 

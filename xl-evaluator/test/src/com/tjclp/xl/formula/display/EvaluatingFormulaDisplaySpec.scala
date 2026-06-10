@@ -175,6 +175,87 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     assertEquals(result, "Total: 300")
   }
 
+  // ========== Cached value display (GH-275) ==========
+  // After wb.recalculate() caches values into CellValue.Formula cells, display must
+  // prefer the cached value; local re-evaluation (which has no workbook context and
+  // fails on cross-sheet refs) is only the fallback for uncached formulas.
+
+  test("GH-275: displayCell shows cached cross-sheet value after recalculate, not formula text") {
+    import com.tjclp.xl.display.syntax.*
+    import com.tjclp.xl.workbooks.Workbook
+
+    val sheet1 = Sheet(name = SheetName.unsafe("Sheet1"))
+      .put(ref"A1", CellValue.Number(BigDecimal(10)))
+    val sheet2 = Sheet(name = SheetName.unsafe("Sheet2"))
+      .put(ref"A1", CellValue.Formula("='Sheet1'!A1*2"))
+
+    val result = Workbook(Vector(sheet1, sheet2)).recalculate()
+    assert(result.isClean, s"recalculate must be clean: ${result.errors.map(_.render)}")
+
+    val recalced = result.workbook.sheets.filter(_.name.value == "Sheet2") match
+      case Vector(s) => s
+      case other => fail(s"expected exactly one Sheet2, got $other")
+
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+    assertEquals(recalced.displayCell(ref"A1").formatted, "20")
+  }
+
+  test("GH-275: excel interpolator shows cached cross-sheet value after recalculate") {
+    import ExcelInterpolator.*
+    import DisplayConversions.given
+    import com.tjclp.xl.workbooks.Workbook
+
+    val sheet1 = Sheet(name = SheetName.unsafe("Sheet1"))
+      .put(ref"A1", CellValue.Number(BigDecimal(10)))
+    val sheet2 = Sheet(name = SheetName.unsafe("Sheet2"))
+      .put(ref"A1", CellValue.Formula("='Sheet1'!A1*2"))
+
+    val result = Workbook(Vector(sheet1, sheet2)).recalculate()
+    val recalced = result.workbook.sheets.filter(_.name.value == "Sheet2") match
+      case Vector(s) => s
+      case other => fail(s"expected exactly one Sheet2, got $other")
+
+    given Sheet = recalced
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+    assertEquals(excel"Value: ${ref"A1"}", "Value: 20")
+  }
+
+  test("GH-275: cached value formats via the cell's explicit numFmt") {
+    import com.tjclp.xl.display.syntax.*
+
+    // Cross-sheet expr so local evaluation cannot accidentally succeed: only the
+    // cached value can produce a number here.
+    val sheet = Sheet(name = SheetName.unsafe("Test"))
+      .put(ref"B1", CellValue.Formula("='Other'!A1/'Other'!A2", Some(CellValue.Number(BigDecimal("0.5")))))
+      .style(ref"B1", CellStyle.default.withNumFmt(NumFmt.Percent))
+      .unsafe
+
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+    assertEquals(sheet.displayCell(ref"B1").formatted, "50%")
+  }
+
+  test("GH-275: cached DateTime under General numFmt displays as a date") {
+    import com.tjclp.xl.display.syntax.*
+
+    val dt = LocalDate.of(2025, 11, 21).atStartOfDay()
+    val sheet = Sheet(name = SheetName.unsafe("Test"))
+      .put(ref"A1", CellValue.Formula("='Other'!A1", Some(CellValue.DateTime(dt))))
+
+    given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
+    val displayed = sheet.displayCell(ref"A1").formatted
+    assert(displayed.contains("11/21/25"), s"expected date-formatted display, got: $displayed")
+  }
+
+  test("GH-275: default (non-evaluating) strategy ignores cached values, shows raw text") {
+    import com.tjclp.xl.display.syntax.*
+
+    val sheet = Sheet(name = SheetName.unsafe("Test"))
+      .put(ref"A1", CellValue.Formula("='Sheet1'!A1*2", Some(CellValue.Number(BigDecimal(20)))))
+
+    given FormulaDisplayStrategy = FormulaDisplayStrategy.default
+    assertEquals(sheet.displayCell(ref"A1").formatted, "='Sheet1'!A1*2")
+  }
+
   // ========== Edge Cases ==========
 
   test("Evaluating strategy handles circular reference gracefully") {

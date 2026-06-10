@@ -9,17 +9,36 @@ import com.tjclp.xl.addressing.{CellRange, Row}
  * `&T` (time), `&F` (file name), `&A` (sheet name), plus the `&L`/`&C`/`&R` section markers for
  * left/center/right placement (e.g. `"&LTHE JORDAN COMPANY&RPage &P of &N"`).
  *
- * Only odd-page headers/footers are modeled for now; even/first-page variants present in a source
- * file are preserved verbatim on rewrite.
+ * Even-page text only takes effect when `differentOddEven` is set, and first-page text only when
+ * `differentFirst` is set — mirroring Excel, which keeps the text but ignores it while the
+ * corresponding flag is off.
  *
  * @param oddHeader
- *   Header text for odd pages (all pages unless differentOddEven is set in the source file)
+ *   Header text for odd pages (all pages unless differentOddEven is set)
  * @param oddFooter
  *   Footer text for odd pages
+ * @param evenHeader
+ *   Header text for even pages (used when differentOddEven is set)
+ * @param evenFooter
+ *   Footer text for even pages (used when differentOddEven is set)
+ * @param firstHeader
+ *   Header text for the first page (used when differentFirst is set)
+ * @param firstFooter
+ *   Footer text for the first page (used when differentFirst is set)
+ * @param differentOddEven
+ *   Whether even pages use evenHeader/evenFooter instead of the odd text
+ * @param differentFirst
+ *   Whether the first page uses firstHeader/firstFooter instead of the odd text
  */
 final case class HeaderFooter(
   oddHeader: Option[String] = None,
-  oddFooter: Option[String] = None
+  oddFooter: Option[String] = None,
+  evenHeader: Option[String] = None,
+  evenFooter: Option[String] = None,
+  firstHeader: Option[String] = None,
+  firstFooter: Option[String] = None,
+  differentOddEven: Boolean = false,
+  differentFirst: Boolean = false
 )
 
 /**

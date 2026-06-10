@@ -99,11 +99,13 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
 
   // ===== Round-Trip Property Tests =====
 
-  // Generator for valid unquoted sheet names
-  val genSimpleSheetName: Gen[String] = for
+  // Generator for valid unquoted sheet names — must exclude names the printer quotes
+  // (cell-ref/R1C1 shapes like "ab1234", per GH-263); quoted-name round-trips are
+  // covered by genQuotedSheetName below and the hostile-name property in RefTypeSpec
+  val genSimpleSheetName: Gen[String] = (for
     first <- Gen.alphaChar
     rest <- Gen.listOfN(5, Gen.alphaNumChar)
-  yield (first :: rest).mkString
+  yield (first :: rest).mkString).suchThat(n => !SheetName.needsQuoting(n))
 
   // Generator for sheet names requiring quotes (spaces, special chars)
   val genQuotedSheetName: Gen[String] = for

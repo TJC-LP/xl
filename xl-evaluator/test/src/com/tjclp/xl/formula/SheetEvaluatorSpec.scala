@@ -522,6 +522,29 @@ class SheetEvaluatorSpec extends FunSuite:
     assert(result.isLeft)
   }
 
+  test("evaluateForRange: stops on first error in a dependency outside the range") {
+    // GH-48 behavioral pin: evaluation is fail-fast — an eval error in a transitive
+    // dependency (even outside the requested range) fails the whole call.
+    val sheet = sheetWith(
+      ref"B1" -> CellValue.Formula("=10/0"), // Outside range, fails
+      ref"C1" -> CellValue.Formula("=B1+1") // In range, depends on B1
+    )
+    val range = CellRange(ref"C1", ref"C1")
+    val result = sheet.evaluateForRange(range)
+    assert(result.isLeft)
+  }
+
+  test("evaluateForRange: error in one component does not yield partial results") {
+    // GH-48 behavioral pin: fail-fast discards results from independent components too.
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Formula("=10/0"), // In range, fails
+      ref"B1" -> CellValue.Formula("=1+1") // In range, independent, would succeed
+    )
+    val range = CellRange(ref"A1", ref"B1")
+    val result = sheet.evaluateForRange(range)
+    assert(result.isLeft)
+  }
+
   test("evaluateForRange: complex dependency chain") {
     // D1 = (A1 + B1) * C1 where each is a formula
     val sheet = sheetWith(
