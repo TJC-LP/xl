@@ -251,14 +251,12 @@ object XlsxWriter:
     author.map(_.trim).filter(_.nonEmpty)
 
   /**
-   * Build per-sheet comment data for serialization.
-   *
-   * Returns:
-   *   - Map[Int, OoxmlComments]: sheet index (0-based) -> comments to write
-   *   - Set[Int]: indices (1-based) of sheets with comments for content types
+   * Build per-sheet comment data for serialization: sheet index (0-based) -> comments to write.
+   * Part paths are assigned separately — identity-mapped or freshly allocated above every
+   * source-claimed number (GH-315) — never derived from the sheet index.
    */
-  private def buildCommentsData(workbook: Workbook): (Map[Int, OoxmlComments], Set[Int]) =
-    val commentsBySheet = workbook.sheets.zipWithIndex.flatMap { case (sheet, idx) =>
+  private def buildCommentsData(workbook: Workbook): Map[Int, OoxmlComments] =
+    workbook.sheets.zipWithIndex.flatMap { case (sheet, idx) =>
       if sheet.comments.isEmpty then None
       else
         // Build author list (canonicalized, deduplicated and sorted for deterministic output)
@@ -326,11 +324,6 @@ object XlsxWriter:
 
         Some(idx -> OoxmlComments(authors, ooxmlComments))
     }.toMap
-
-    // Convert to 1-based indices for file naming and content types
-    val sheetsWithComments = commentsBySheet.keySet.map(_ + 1)
-
-    (commentsBySheet, sheetsWithComments)
 
   /**
    * Build per-sheet table data for serialization.
@@ -1134,6 +1127,7 @@ object XlsxWriter:
 
   /** Excel's comment-part scheme: xl/commentsN.xml pairs with xl/drawings/vmlDrawingN.vml. */
   private val legacyCommentPathPattern = "^xl/comments(\\d+)\\.xml$".r
+  private val legacyVmlPathPattern = "^xl/drawings/vmlDrawing(\\d+)\\.vml$".r
 
   /**
    * VML drawing part path for a sheet's regenerated comments (GH-292). Excel's numbering scheme is
@@ -1617,9 +1611,49 @@ object XlsxWriter:
       OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, cfPlan.mergedDxfs)
 
     // Build comments data and VML drawings
-    val (commentsBySheet, sheetsWithComments) = buildCommentsData(workbook)
+    val commentsBySheet = buildCommentsData(workbook)
     val vmlDrawings = commentsBySheet.map { case (idx, comments) =>
       idx -> VmlDrawing.generateForComments(comments, idx)
+    }
+
+    // GH-315: ONE deterministic comment-part assignment for every regenerated sheet that emits
+    // comments — the rels/emission sites, the preserved-VML skip set (the GH-292 mirroring
+    // requirement) and the content-type registration below all consume THIS map. Identity-mapped
+    // sheets keep their source part; unmapped sheets (fresh comments) allocate numbers ABOVE
+    // everything any manifest comment/VML part or mapping value claims — the drawing layer's
+    // maxDrawingNum+1 precedent — so a fresh comments{n}.xml (and its paired vmlDrawing{n}.vml)
+    // can never collide with a surviving sheet's identity-mapped part. In the no-source case the
+    // counter starts at 1, yielding Excel's own sequential numbering across commented sheets.
+    val commentPathBySheet: Map[Int, String] =
+      val mapping = sourceContext.map(_.commentPathMapping).getOrElse(Map.empty)
+      val claimedPaths =
+        sourceContext.map(_.partManifest.entries.keySet).getOrElse(Set.empty) ++ mapping.values
+      val maxClaimedNum = claimedPaths
+        .flatMap {
+          case legacyCommentPathPattern(n) => Some(n.toInt)
+          case legacyVmlPathPattern(n) => Some(n.toInt)
+          case _ => None
+        }
+        .maxOption
+        .getOrElse(0)
+      sheetsToRegenerate.toVector.sorted
+        .filter(commentsBySheet.contains)
+        .foldLeft((Map.empty[Int, String], maxClaimedNum + 1)) { case ((acc, next), idx) =>
+          workbook.sheets.lift(idx).flatMap(s => mapping.get(s.name)) match
+            case Some(mapped) => (acc.updated(idx, mapped), next)
+            case None => (acc.updated(idx, s"xl/comments$next.xml"), next + 1)
+        }
+        ._1
+
+    // The exact VML parts those assignments emit (legacy-numbered comment parts pair with
+    // vmlDrawing{n}.vml; foreign dialects resolve through the preserved rels, GH-292).
+    val vmlPathBySheet: Map[Int, String] = commentPathBySheet.map { case (idx, commentPath) =>
+      idx -> vmlPathForSheet(
+        sourceContext,
+        sourceContext.flatMap(sourceSheetRelsPath(_, idx)),
+        idx,
+        commentPath
+      )
     }
 
     // Build table data
@@ -1682,9 +1716,9 @@ object XlsxWriter:
     val appPropsXml = DocProps.buildAppXml(workbook.metadata)
 
     // Content types: preserve from source when available, otherwise generate minimal.
-    // IMPORTANT: Don't call withCommentOverrides when preserving - the source already has
-    // correct comment entries with Excel's sequential numbering (comments1.xml, comments2.xml...)
-    // which differs from sheet-index-based numbering.
+    // GH-315: comment/VML registrations follow the EMITTED part paths (identity-mapped or freshly
+    // allocated) — withEmittedCommentParts is conservative, so source-declared parts ride through
+    // byte-identical and only genuinely fresh parts add overrides.
     val contentTypes = preservedContentTypes match
       case Some(preserved) =>
         // Add sharedStrings override if we're generating it but source didn't have it
@@ -1694,7 +1728,6 @@ object XlsxWriter:
               preserved.overrides + ("/xl/sharedStrings.xml" -> XmlUtil.ctSharedStrings)
             )
           else preserved
-        // Only add table overrides (comments already in preserved Content_Types).
         // GH-221: source drawing overrides/media defaults are already in the preserved types;
         // register only fresh parts and the media extensions this write touches (idempotent).
         withSst
@@ -1703,6 +1736,7 @@ object XlsxWriter:
           .withDrawingOverrides(drawingPlan.freshPartPaths)
           .withChartOverrides(drawingPlan.freshChartPaths)
           .withImageDefaults(drawingPlan.imageDefaults)
+          .withEmittedCommentParts(commentPathBySheet.values.toSet, vmlPathBySheet.values.toSet)
       case None =>
         // GH-221: this branch regenerates [Content_Types].xml from scratch while preserved
         // drawing/media parts still ride the copy loop, so register EVERY drawing part shipping
@@ -1712,10 +1746,9 @@ object XlsxWriter:
           .minimal(
             hasStyles = true,
             hasSharedStrings = sharedStringsInOutput,
-            sheetCount = workbook.sheets.size,
-            sheetsWithComments = sheetsWithComments
+            sheetCount = workbook.sheets.size
           )
-          .withCommentOverrides(sheetsWithComments)
+          .withEmittedCommentParts(commentPathBySheet.values.toSet, vmlPathBySheet.values.toSet)
           .withTableOverrides(totalTableCount)
           .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
           .withDrawingOverrides(drawingPlan.allPartPaths)
@@ -1873,12 +1906,12 @@ object XlsxWriter:
           // 2. Regenerate comments/VML from domain model (handles comment add/remove/modify)
           // GH-315: the OUTPUT rels entry is named by current index; the PRESERVED rels are
           // looked up by the sheet's identity-resolved source path (they differ after deletion
-          // or reorder).
+          // or reorder). The comment part comes from the per-write assignment (identity-mapped
+          // or collision-free fresh allocation); the index fallback is only reachable for sheets
+          // that emit no comments, where the value is never written.
           val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
           val sourceRelsPathOpt = sourceContext.flatMap(sourceSheetRelsPath(_, idx))
-          val commentPath = sourceContext
-            .flatMap(_.commentPathMapping.get(sheet.name))
-            .getOrElse(s"xl/comments${idx + 1}.xml")
+          val commentPath = commentPathBySheet.getOrElse(idx, s"xl/comments${idx + 1}.xml")
           // GH-292: foreign comment dialects resolve the VML target through the preserved rels
           val vmlPath = vmlPathForSheet(sourceContext, sourceRelsPathOpt, idx, commentPath)
 
@@ -1890,10 +1923,17 @@ object XlsxWriter:
           // Otherwise regenerate minimal relationships. Authored hyperlinks (hlRels) are merged
           // in, as is a first-drawing rel (rIdDr1, GH-221) when this sheet gained a fresh part.
           val drawingRelAdd = drawingPlan.sheetRelAdditions.get(idx)
+          // GH-315: a sheet with preserved rels gaining its FIRST comments needs comment+VML
+          // rels appended — the source rels predate them. (A mapped comment part implies the
+          // source rels already reference it: the reader resolved the part THROUGH those rels,
+          // GH-292 — so only an unmapped emission appends.)
+          val needsCommentRels = hasComments &&
+            sourceContext.flatMap(_.commentPathMapping.get(sheet.name)).isEmpty
           (sourceContext, sourceRelsPathOpt) match
             case (Some(ctx), Some(sourceRelsPath)) if ctx.partManifest.contains(sourceRelsPath) =>
-              if hlRels.isEmpty && drawingRelAdd.isEmpty && sourceRelsPath == relsPath then
-                copyPreservedPart(ctx.sourcePath, relsPath, zip)
+              if hlRels.isEmpty && drawingRelAdd.isEmpty && !needsCommentRels &&
+                sourceRelsPath == relsPath
+              then copyPreservedPart(ctx.sourcePath, relsPath, zip)
               else
                 // Merge authored hyperlink rels into the preserved sheet rels (parse + append);
                 // also the path for source rels riding to a DIFFERENT output slot (GH-315).
@@ -1903,10 +1943,25 @@ object XlsxWriter:
                 // Drop the source's hyperlink rels (we regenerate them from the model) to avoid
                 // orphans, but keep everything else (printerSettings, drawings, ...).
                 val kept = preserved.relationships.filterNot(_.`type` == XmlUtil.relTypeHyperlink)
+                val commentRelAdds =
+                  if needsCommentRels && !kept.exists(_.`type` == XmlUtil.relTypeComments) then
+                    Seq(
+                      Relationship(
+                        "rIdCmt1",
+                        XmlUtil.relTypeComments,
+                        s"../${commentPath.stripPrefix("xl/")}"
+                      ),
+                      Relationship(
+                        "rIdVml1",
+                        XmlUtil.relTypeVmlDrawing,
+                        s"../${vmlPath.stripPrefix("xl/")}"
+                      )
+                    )
+                  else Seq.empty
                 writePart(
                   zip,
                   relsPath,
-                  Relationships(kept ++ hlRels ++ drawingRelAdd.toList),
+                  Relationships(kept ++ hlRels ++ drawingRelAdd.toList ++ commentRelAdds),
                   config
                 )
             case _
@@ -1979,10 +2034,8 @@ object XlsxWriter:
               val mapped = ctx.commentPathMapping.get(sheet.name)
               // GH-292/GH-315: mirror the regeneration paths EXACTLY, or the preserved copy
               // ships too — the sheet's source-numbered VML (comment removal must drop it) AND
-              // the emission target (fresh comments can land on a deleted sheet's old VML path).
-              val emitted = Option.when(commentsBySheet.contains(idx))(
-                mapped.getOrElse(s"xl/comments${idx + 1}.xml")
-              )
+              // the emission target from the SAME per-write assignment the emission consumed.
+              val emitted = commentPathBySheet.get(idx)
               (mapped.toList ++ emitted.toList)
                 .toSet[String]
                 .map(cp => vmlPathForSheet(Some(ctx), sourceRels, idx, cp))

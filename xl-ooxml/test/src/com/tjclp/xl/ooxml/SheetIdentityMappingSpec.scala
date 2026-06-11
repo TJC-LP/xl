@@ -88,6 +88,29 @@ class SheetIdentityMappingSpec extends FunSuite:
         }
     }
 
+  /**
+   * OPC validity: every shipped comments part needs a [Content_Types].xml Override (the "xml"
+   * Default is application/xml, which does not register a comments part); every shipped VML part
+   * must be covered by an Override or the "vml" extension Default.
+   */
+  private def assertCommentPartsRegistered(path: Path): Unit =
+    val names = entryNames(path)
+    val ct = scala.xml.XML.loadString(entryText(path, "[Content_Types].xml"))
+    val overridden = (ct \ "Override").map(o => (o \ "@PartName").text).toSet
+    val defaults = (ct \ "Default").map(d => (d \ "@Extension").text.toLowerCase).toSet
+    names.filter(n => n.startsWith("xl/comments") && n.endsWith(".xml")).foreach { n =>
+      assert(
+        overridden.contains(s"/$n"),
+        s"shipped comment part $n must have a [Content_Types].xml Override, got $overridden"
+      )
+    }
+    names.filter(_.endsWith(".vml")).foreach { n =>
+      assert(
+        overridden.contains(s"/$n") || defaults.contains("vml"),
+        s"shipped VML part $n must be covered by an Override or the vml Default, got $overridden"
+      )
+    }
+
   private def textAt(wb: Workbook, sheet: String, r: com.tjclp.xl.addressing.ARef): Option[String] =
     wb(name(sheet)).toOption.flatMap(_.cells.get(r)).map(_.value).collect {
       case CellValue.Text(s) => s
@@ -249,4 +272,141 @@ class SheetIdentityMappingSpec extends FunSuite:
       s"Beta must not inherit the deleted sheet's comment, got $betaComments"
     )
     assertWorksheetRelsResolve(out)
+  }
+
+  // ===== fresh-comment allocation must not collide with a surviving sheet's mapped part =====
+
+  test("GH-315: reorder + fresh comment on the other sheet — comment paths do not collide") {
+    val alpha = Sheet(name("Alpha"))
+      .put(ref"A1" -> "AlphaContent")
+      .comment(ref"A1", Comment.plainText("alpha note", Some("Ann")))
+    val beta = Sheet(name("Beta")).put(ref"A1" -> "BetaContent")
+    val (_, wb) = writeRead(Workbook(Vector(alpha, beta)), "reorder-fresh-comment")
+
+    // Beta lands at index 0: the fresh-comment fallback used to allocate comments1.xml — the
+    // very part Alpha's identity mapping still claims — and the duplicate zip entry killed the
+    // ENTIRE write with an IOError.
+    val edited = wb
+      .reorder(Vector(name("Beta"), name("Alpha")))
+      .flatMap(
+        _.update(name("Beta"), _.comment(ref"B2", Comment.plainText("beta note", Some("Bob"))))
+      )
+      .fold(e => fail(e.message), identity)
+    val out = write(edited, "reorder-fresh-comment")
+
+    val result = reread(out)
+    assertEquals(result.sheetNames.map(_.value), Vector("Beta", "Alpha"))
+    val alphaComments = result(name("Alpha")).fold(e => fail(e.message), identity).comments
+    assertEquals(
+      alphaComments.get(ref"A1").map(_.text.toPlainText),
+      Some("alpha note"),
+      "Alpha's comment must stay with Alpha"
+    )
+    assertEquals(alphaComments.size, 1)
+    val betaComments = result(name("Beta")).fold(e => fail(e.message), identity).comments
+    assertEquals(
+      betaComments.get(ref"B2").map(_.text.toPlainText),
+      Some("beta note"),
+      "Beta's fresh comment must land on Beta"
+    )
+    assertEquals(betaComments.size, 1)
+
+    // Alpha keeps its source part; Beta's fresh part allocates ABOVE every claimed number
+    // (the drawing layer's maxDrawingNum+1 precedent)
+    val entries = entryNames(out)
+    assert(entries.contains("xl/comments1.xml"), s"Alpha's mapped part must survive: $entries")
+    assert(entries.contains("xl/comments2.xml"), s"Beta's fresh part allocates above: $entries")
+    assertWorksheetRelsResolve(out)
+    assertCommentPartsRegistered(out)
+  }
+
+  test("GH-315: delete a commented sheet + fresh comment on another — fresh part allocates above") {
+    val aye = Sheet(name("Aye"))
+      .put(ref"A1" -> "AyeContent")
+      .comment(ref"A1", Comment.plainText("aye note", Some("Ann")))
+    val bee = Sheet(name("Bee"))
+      .put(ref"A1" -> "BeeContent")
+      .comment(ref"A1", Comment.plainText("bee note", Some("Bob")))
+    val cee = Sheet(name("Cee")).put(ref"A1" -> "CeeContent")
+    val (_, wb) = writeRead(Workbook(Vector(aye, bee, cee)), "delete-fresh-comment")
+
+    // Cee lands at index 1: the fresh-comment fallback used to allocate comments2.xml — the part
+    // surviving Bee still claims by identity — and the duplicate zip entry killed the write.
+    val edited = wb
+      .remove(name("Aye"))
+      .flatMap(
+        _.update(name("Cee"), _.comment(ref"C3", Comment.plainText("cee note", Some("Cal"))))
+      )
+      .fold(e => fail(e.message), identity)
+    val out = write(edited, "delete-fresh-comment")
+
+    val result = reread(out)
+    assertEquals(result.sheetNames.map(_.value), Vector("Bee", "Cee"))
+    val beeComments = result(name("Bee")).fold(e => fail(e.message), identity).comments
+    assertEquals(
+      beeComments.get(ref"A1").map(_.text.toPlainText),
+      Some("bee note"),
+      "Bee must keep its own comment"
+    )
+    assertEquals(beeComments.size, 1)
+    val ceeComments = result(name("Cee")).fold(e => fail(e.message), identity).comments
+    assertEquals(
+      ceeComments.get(ref"C3").map(_.text.toPlainText),
+      Some("cee note"),
+      "Cee's fresh comment must land on Cee"
+    )
+    assertEquals(ceeComments.size, 1)
+
+    val entries = entryNames(out)
+    assert(entries.contains("xl/comments2.xml"), s"Bee keeps its source part: $entries")
+    assert(entries.contains("xl/comments3.xml"), s"Cee's fresh part allocates above: $entries")
+    assertWorksheetRelsResolve(out)
+    assertCommentPartsRegistered(out)
+  }
+
+  // ===== combined stress: every tracked structural+content operation in ONE write =====
+
+  test("GH-315: delete middle + reorder + image edit + comment edit + fresh comment in ONE write") {
+    val aye = Sheet(name("Aye"))
+      .put(ref"A1" -> "AyeContent")
+      .comment(ref"A1", Comment.plainText("aye note", Some("Ann")))
+    val mid = Sheet(name("Mid")).put(ref"A1" -> "MidContent")
+    val cee = Sheet(name("Cee")).put(ref"A1" -> "CeeContent").addImage(png, ref"B2", extent)
+    val (_, wb) = writeRead(Workbook(Vector(aye, mid, cee)), "stress")
+
+    val edited = wb
+      .remove(name("Mid"))
+      .flatMap(_.reorder(Vector(name("Cee"), name("Aye"))))
+      .flatMap(_.update(name("Cee"), _.addImage(gif, ref"D8", extent)))
+      .flatMap(
+        _.update(
+          name("Aye"),
+          _.comment(ref"A1", Comment.plainText("aye note edited", Some("Ann")))
+        )
+      )
+      .flatMap(
+        _.update(name("Cee"), _.comment(ref"E5", Comment.plainText("cee note", Some("Cal"))))
+      )
+      .fold(e => fail(e.message), identity)
+    val out = write(edited, "stress")
+
+    val result = reread(out)
+    assertEquals(result.sheetNames.map(_.value), Vector("Cee", "Aye"))
+    assertEquals(textAt(result, "Cee", ref"A1"), Some("CeeContent"))
+    assertEquals(textAt(result, "Aye", ref"A1"), Some("AyeContent"))
+
+    val ayeComments = result(name("Aye")).fold(e => fail(e.message), identity).comments
+    assertEquals(ayeComments.get(ref"A1").map(_.text.toPlainText), Some("aye note edited"))
+    assertEquals(ayeComments.size, 1)
+    val ceeComments = result(name("Cee")).fold(e => fail(e.message), identity).comments
+    assertEquals(ceeComments.get(ref"E5").map(_.text.toPlainText), Some("cee note"))
+    assertEquals(ceeComments.size, 1)
+
+    val drawings = result(name("Cee")).fold(e => fail(e.message), identity).drawings
+    assertEquals(drawings.size, 2, s"Cee must carry both images, got $drawings")
+    val formats = drawings.collect { case p: Drawing.Picture => p.image.format }.toSet
+    assertEquals(formats, Set[ImageFormat](ImageFormat.Png, ImageFormat.Gif))
+
+    assertWorksheetRelsResolve(out)
+    assertCommentPartsRegistered(out)
   }
