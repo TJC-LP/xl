@@ -1247,6 +1247,25 @@ object XlsxWriter:
    * modified sheets can reference the same indices as unmodified sheets.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  /**
+   * Count shared-string references (sheetData cells with t="s") in a SOURCE worksheet (GH-304).
+   *
+   * Used to subtract a modified sheet's pre-edit contribution from the preserved SST count
+   * attribute, so the sheet's actual post-edit references can be added back. Returns 0 when the
+   * part is missing or unparseable (a new sheet, or a degenerate source).
+   */
+  private def countSourceSstReferences(sourcePath: Path, sheetPath: String): Int =
+    Try(withZipFile(sourcePath)(zip => readZipEntry(zip, sheetPath))) match
+      case Success(Some(xmlString)) =>
+        XmlSecurity
+          .parseSafe(xmlString, sheetPath)
+          .toOption
+          .map { elem =>
+            (elem \ "sheetData" \ "row" \ "c").count(c => (c \ "@t").text == "s")
+          }
+          .getOrElse(0)
+      case _ => 0
+
   private def parsePreservedSST(sourcePath: Path): Option[SharedStrings] =
     Try(withZipFile(sourcePath)(zip => readZipEntry(zip, "xl/sharedStrings.xml"))) match
       case Failure(_) => None
@@ -1358,17 +1377,28 @@ object XlsxWriter:
         val newEntries =
           modifiedSheetRefEntries.distinct.filterNot(preservedEntries.contains)
 
+        // GH-304: the count attribute counts REFERENCES, and edits can REMOVE or DUPLICATE
+        // references to existing strings, not just add new ones. Recount the modified sheets'
+        // contribution exactly: preserved sheets keep their counted contribution (original count
+        // minus the modified sheets' pre-edit t="s" cells), while modified sheets contribute one
+        // reference per post-edit text cell (regenerated sheets encode ALL text via the SST).
+        val preEditModifiedRefs = sourceContext
+          .map { ctx =>
+            tracker.modifiedSheets.toVector.sorted
+              .map(idx => countSourceSstReferences(ctx.sourcePath, graph.pathForSheet(idx)))
+              .sum
+          }
+          .getOrElse(0)
+        val exactTotalCount = parsedSST match
+          case Some(preserved) =>
+            math.max(0, preserved.totalCount - preEditModifiedRefs + modifiedSheetRefEntries.size)
+          case None => modifiedSheetRefEntries.size
+
         if newEntries.nonEmpty then
           // New strings detected → build SST from preserved + new entries only
           // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
           val combinedEntries =
             parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries
-
-          // Total reference count: preserved count + one per REFERENCE of each new string (GH-277)
-          val originalTotalCount = parsedSST.map(_.totalCount).getOrElse(0)
-          val newEntrySet = newEntries.toSet
-          val newStringRefCount = modifiedSheetRefEntries.count(newEntrySet.contains)
-          val combinedTotalCount = originalTotalCount + newStringRefCount
 
           // Create new SST with combined entries (exact-string index keys, GH-289)
           val combinedSST = SharedStrings(
@@ -1377,12 +1407,19 @@ object XlsxWriter:
               case (Left(s), idx) => s -> idx
               case (Right(rt), idx) => rt.toPlainText -> idx
             }.toMap,
-            totalCount = combinedTotalCount
+            totalCount = exactTotalCount
           )
           (Some(combinedSST), true)
         else
-          // No new strings → copy preserved SST verbatim for byte-perfect preservation
-          (parsedSST, false)
+          parsedSST match
+            case Some(preserved) if preserved.totalCount != exactTotalCount =>
+              // GH-304: same strings, changed reference count → re-emit the SST with the exact
+              // count. Entries are never pruned or reordered: preserved sheets' t="s" indices
+              // must stay valid.
+              (Some(preserved.copy(totalCount = exactTotalCount)), true)
+            case _ =>
+              // No count drift → copy preserved SST verbatim for byte-perfect preservation
+              (parsedSST, false)
       else
         // No source SST - generate if policy allows
         val generated = config.sstPolicy match
