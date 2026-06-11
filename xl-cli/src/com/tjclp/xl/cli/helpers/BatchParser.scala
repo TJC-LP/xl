@@ -1352,44 +1352,12 @@ object BatchParser:
       }
     yield result
 
-  /** Calculate auto-fit width for a column (character units). */
+  /**
+   * Calculate auto-fit width for a column (character units). Shares the font-metric-aware
+   * implementation with `col --auto-fit` and `autofit` so batch autofit cannot drift (GH-156).
+   */
   private def autoFitWidth(sheet: Sheet, col: Column): Double =
-    import com.tjclp.xl.cells.CellValue.*
-    import com.tjclp.xl.display.NumFmtFormatter
-
-    val cellsInColumn = sheet.cells.filter { case (ref, _) => ref.col == col }
-
-    if cellsInColumn.isEmpty then 8.43
-    else
-      val maxCharWidth = cellsInColumn.values
-        .map { cell =>
-          val styleOpt = cell.styleId.flatMap(sheet.styleRegistry.get)
-          val numFmt = styleOpt.map(_.numFmt).getOrElse(NumFmt.General)
-          val boldFactor = if styleOpt.exists(_.font.bold) then 1.1 else 1.0
-
-          val baseWidth: Double = cell.value match
-            case Text(s) => s.length.toDouble
-            case n @ Number(_) => NumFmtFormatter.formatValue(n, numFmt).length.toDouble
-            case Bool(b) => if b then 4.0 else 5.0
-            case Error(e) => e.toString.length.toDouble
-            case Empty => 0.0
-            case dt @ DateTime(_) => NumFmtFormatter.formatValue(dt, numFmt).length.toDouble
-            case Formula(_, Some(cached)) =>
-              val tempCell = cell.copy(value = cached)
-              val tempStyleOpt = tempCell.styleId.flatMap(sheet.styleRegistry.get)
-              val tempNumFmt = tempStyleOpt.map(_.numFmt).getOrElse(NumFmt.General)
-              NumFmtFormatter.formatValue(cached, tempNumFmt).length.toDouble
-            case Formula(expr, None) => expr.length.toDouble
-            case RichText(rt) => rt.toPlainText.length.toDouble
-
-          baseWidth * boldFactor
-        }
-        .maxOption
-        .getOrElse(0.0)
-
-      val width =
-        BigDecimal(maxCharWidth * 0.90 + 1.5).setScale(2, BigDecimal.RoundingMode.HALF_UP).toDouble
-      math.max(width, 5.0)
+    ColumnAutoFit.calculateWidth(sheet, col)
 
   /** Parse autofit columns spec: single column (A) or range (A:F). */
   private def parseAutoFitColumnsSpec(spec: String): Either[String, List[Column]] =

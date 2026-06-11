@@ -9,8 +9,12 @@ import com.tjclp.xl.{Workbook, Sheet}
 import com.tjclp.xl.addressing.{ARef, Column}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
+import com.tjclp.xl.extensions.style
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
  * Integration tests for auto-fit column width functionality.
@@ -30,6 +34,114 @@ class AutoFitCommandSpec extends FunSuite:
   // Helper to create ARef from A1 notation indices (col first!)
   private def ref(col: Int, row: Int): ARef = ARef.from0(col, row)
 
+  // Extract the first reported width (e.g. "A: 10.86 (auto)") from command output
+  private def extractReportedWidth(result: String): Double =
+    """(\d+\.\d+)""".r
+      .findFirstIn(result)
+      .map(_.toDouble)
+      .getOrElse(fail(s"No width found in output: $result"))
+
+  // Auto-fit column A of the given sheet and return the persisted width
+  private def autoFitWidthOfColumnA(sheet: Sheet, outputPath: Path): Double =
+    val wb = Workbook(sheet)
+    WriteCommands
+      .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
+      .unsafeRunSync()
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.headOption.getOrElse(fail("No sheets found"))
+    val col = Column.fromLetter("A").toOption.getOrElse(fail("Invalid column"))
+    s.getColumnProperties(col).width.getOrElse(fail("No width set"))
+
+  // ========== Font-Metric-Aware Auto-Fit Tests (GH-156) ==========
+  //
+  // These assert RELATIVE behavior so they pass in both measurement modes:
+  //   - AWT mode: RenderUtils.measureTextWidth measures real glyph advances (works under
+  //     java.awt.headless=true — BufferedImage needs no display, so CI takes this path too)
+  //   - estimation mode: when graphics creation fails entirely (no fontconfig), RenderUtils
+  //     falls back to a char-count estimate that still scales with font size and bold
+  // Exact widths are environment-dependent (installed fonts differ), so no exact pins here.
+
+  test("col --auto-fit: larger font autofits wider than default size (GH-156)") {
+    val text = "Quarterly Revenue Report"
+    val plainWidth = withTempFile { outputPath =>
+      autoFitWidthOfColumnA(Sheet("Test").put(ref(0, 0), CellValue.Text(text)), outputPath)
+    }
+    val bigFontWidth = withTempFile { outputPath =>
+      val sheet = Sheet("Test")
+        .put(ref(0, 0), CellValue.Text(text))
+        .style(ref(0, 0), CellStyle.default.withFont(Font.default.withSize(22.0)))
+      autoFitWidthOfColumnA(sheet, outputPath)
+    }
+    assert(
+      bigFontWidth > plainWidth,
+      s"22pt text ($bigFontWidth) should autofit wider than 11pt text ($plainWidth)"
+    )
+  }
+
+  test("col --auto-fit: bold text autofits wider than plain text (GH-156)") {
+    val text = "Quarterly Revenue Report"
+    val plainWidth = withTempFile { outputPath =>
+      autoFitWidthOfColumnA(Sheet("Test").put(ref(0, 0), CellValue.Text(text)), outputPath)
+    }
+    val boldWidth = withTempFile { outputPath =>
+      val sheet = Sheet("Test")
+        .put(ref(0, 0), CellValue.Text(text))
+        .style(ref(0, 0), CellStyle.default.withFont(Font.default.withBold(true)))
+      autoFitWidthOfColumnA(sheet, outputPath)
+    }
+    assert(
+      boldWidth > plainWidth,
+      s"Bold text ($boldWidth) should autofit wider than plain text ($plainWidth)"
+    )
+  }
+
+  test("col --auto-fit: large styled cells autofit wider than the char-count heuristic (GH-156)") {
+    // The pre-GH-156 heuristic predicted chars * boldFactor(1.1) * 0.90 + 1.5 regardless of
+    // font size. Font-metric measurement must give a 22pt bold cell strictly more room.
+    val text = "Quarterly Revenue Report"
+    val heuristicPrediction = text.length * 1.1 * 0.90 + 1.5
+    val width = withTempFile { outputPath =>
+      val sheet = Sheet("Test")
+        .put(ref(0, 0), CellValue.Text(text))
+        .style(
+          ref(0, 0),
+          CellStyle.default.withFont(Font.default.withBold(true).withSize(22.0))
+        )
+      autoFitWidthOfColumnA(sheet, outputPath)
+    }
+    assert(
+      width > heuristicPrediction,
+      s"22pt bold width ($width) should exceed the char-count heuristic ($heuristicPrediction)"
+    )
+  }
+
+  test("col --auto-fit: width stays within sane bounds for default font (GH-156)") {
+    // Catches unit errors in the px -> Excel-width conversion (e.g. forgetting MDW division):
+    // 24 chars of Calibri/DejaVu/fallback land in roughly [0.5, 1.5] units per char.
+    val text = "Quarterly Revenue Report" // 24 chars
+    val width = withTempFile { outputPath =>
+      autoFitWidthOfColumnA(Sheet("Test").put(ref(0, 0), CellValue.Text(text)), outputPath)
+    }
+    assert(width >= 12.0 && width <= 36.0, s"Width $width out of sane range for 24 chars")
+  }
+
+  test("col --auto-fit: currency format autofits wider than the bare number (GH-156)") {
+    val value = CellValue.Number(BigDecimal(45500))
+    val bareWidth = withTempFile { outputPath =>
+      autoFitWidthOfColumnA(Sheet("Test").put(ref(0, 0), value), outputPath)
+    }
+    val currencyWidth = withTempFile { outputPath =>
+      val sheet = Sheet("Test")
+        .put(ref(0, 0), value)
+        .style(ref(0, 0), CellStyle.default.withNumFmt(NumFmt.Currency))
+      autoFitWidthOfColumnA(sheet, outputPath)
+    }
+    assert(
+      currencyWidth > bareWidth,
+      s"Currency-formatted ($currencyWidth) should autofit wider than bare number ($bareWidth)"
+    )
+  }
+
   // ========== Auto-Fit Width Tests ==========
 
   test("col --auto-fit: calculates width from text content") {
@@ -46,15 +158,16 @@ class AutoFitCommandSpec extends FunSuite:
         .unsafeRunSync()
 
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
-      // Width = 26 chars * 0.90 + 1.5 = 24.9
-      assert(result.contains("24.90"), s"Expected '24.90' in output: $result")
 
-      // Verify the file was saved with the column width
+      // Verify the file was saved with the column width; exact value is font-metric
+      // dependent (GH-156), so assert a sane range for the longest cell (26 chars)
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       val s = imported.sheets.headOption.getOrElse(fail("No sheets found"))
       val col = Column.fromLetter("A").toOption.getOrElse(fail("Invalid column"))
-      val colProps = s.getColumnProperties(col)
-      assertEquals(colProps.width, Some(24.9))
+      val width = s.getColumnProperties(col).width.getOrElse(fail("No width set"))
+      assert(width >= 13.0 && width <= 39.0, s"Width $width out of range for 26-char content")
+      // Reported width matches the persisted width
+      assert(result.contains(f"$width%.2f"), s"Expected width $width in output: $result")
     }
   }
 
@@ -72,8 +185,9 @@ class AutoFitCommandSpec extends FunSuite:
         .unsafeRunSync()
 
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
-      // Width = 10 digits * 0.90 + 1.5 = 10.5
-      assert(result.contains("10.50"), s"Expected '10.50' in output: $result")
+      // Driven by the 10-digit value; exact width is font-metric dependent (GH-156)
+      val width = extractReportedWidth(result)
+      assert(width >= 9.0 && width <= 15.0, s"Width $width out of range for 10 digits: $result")
     }
   }
 
@@ -104,8 +218,9 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      // Width = 5 chars (FALSE) * 0.90 + 1.5 = 6.0
-      assert(result.contains("6.00"), s"Expected '6.00' in output: $result")
+      // Driven by "FALSE" (5 chars); exact width is font-metric dependent (GH-156)
+      val width = extractReportedWidth(result)
+      assert(width >= 5.0 && width <= 9.0, s"Width $width out of range for 'FALSE': $result")
     }
   }
 
@@ -121,7 +236,7 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "B", None, hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      // Width = 3 chars (200) * 0.85 + 1.5 = 4.05, min 5.0
+      // "200" (3 chars) measures well below the 5.0 minimum width floor
       assert(result.contains("5.00"), s"Expected '5.00' in output: $result")
     }
   }
@@ -137,8 +252,9 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      // Width = 10 chars * 0.90 + 1.5 = 10.5
-      assert(result.contains("10.50"), s"Expected '10.50' in output: $result")
+      // Driven by "123.456789" (10 chars); exact width is font-metric dependent (GH-156)
+      val width = extractReportedWidth(result)
+      assert(width >= 8.0 && width <= 15.0, s"Width $width out of range for 10 chars: $result")
     }
   }
 
@@ -154,8 +270,9 @@ class AutoFitCommandSpec extends FunSuite:
         .col(wb, Some(sheet), "A", Some(100.0), hide = false, show = false, autoFit = true, outputPath, config)
         .unsafeRunSync()
 
-      // Auto-fit should win: 5 chars * 0.90 + 1.5 = 6.0
-      assert(result.contains("6.00"), s"Expected '6.00' in output: $result")
+      // Auto-fit should win over width=100: "Short" needs far less than 100 units
+      val width = extractReportedWidth(result)
+      assert(width < 10.0, s"Auto-fit width $width should be derived from 'Short', not 100")
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
     }
   }
@@ -196,19 +313,23 @@ class AutoFitCommandSpec extends FunSuite:
       assert(result.contains("C:"), s"Expected 'C:' in output: $result")
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
 
-      // Verify widths in saved file
+      // Verify widths in saved file: exact values are font-metric dependent (GH-156) and
+      // proportional fonts mean char count alone doesn't order widths (B's wide glyphs can
+      // out-measure C's narrow ones), but "Short" is unambiguously narrower than both
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       val s = imported.sheets.headOption.getOrElse(fail("No sheets found"))
       val colA = Column.fromLetter("A").toOption.getOrElse(fail("Invalid column A"))
       val colB = Column.fromLetter("B").toOption.getOrElse(fail("Invalid column B"))
       val colC = Column.fromLetter("C").toOption.getOrElse(fail("Invalid column C"))
 
-      // A: 5 chars * 0.90 + 1.5 = 6.0
-      assertEquals(s.getColumnProperties(colA).width, Some(6.0))
-      // B: 18 chars * 0.90 + 1.5 = 17.7
-      assertEquals(s.getColumnProperties(colB).width, Some(17.7))
-      // C: 19 chars * 0.90 + 1.5 = 18.6
-      assertEquals(s.getColumnProperties(colC).width, Some(18.6))
+      val widthA = s.getColumnProperties(colA).width.getOrElse(fail("No width for A"))
+      val widthB = s.getColumnProperties(colB).width.getOrElse(fail("No width for B"))
+      val widthC = s.getColumnProperties(colC).width.getOrElse(fail("No width for C"))
+      assert(widthA < widthB, s"'Short' ($widthA) should be narrower than 18 chars ($widthB)")
+      assert(widthA < widthC, s"'Short' ($widthA) should be narrower than 19 chars ($widthC)")
+      assert(widthA >= 5.0 && widthA <= 9.0, s"Width $widthA out of range for 'Short'")
+      assert(widthB >= 10.0 && widthB <= 29.0, s"Width $widthB out of range for 18 chars")
+      assert(widthC >= 10.0 && widthC <= 29.0, s"Width $widthC out of range for 19 chars")
     }
   }
 
@@ -232,16 +353,18 @@ class AutoFitCommandSpec extends FunSuite:
       assert(result.contains("A:"), s"Expected 'A:' in output: $result")
       assert(result.contains("D:"), s"Expected 'D:' in output: $result")
 
-      // Verify widths
+      // Verify widths: exact values are font-metric dependent (GH-156); 13 chars of
+      // text need more room than an 8-digit number
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       val s = imported.sheets.headOption.getOrElse(fail("No sheets found"))
       val colA = Column.fromLetter("A").toOption.getOrElse(fail("Invalid column A"))
       val colD = Column.fromLetter("D").toOption.getOrElse(fail("Invalid column D"))
 
-      // A: 13 chars * 0.90 + 1.5 = 13.2
-      assertEquals(s.getColumnProperties(colA).width, Some(13.2))
-      // D: 8 chars * 0.90 + 1.5 = 8.7
-      assertEquals(s.getColumnProperties(colD).width, Some(8.7))
+      val widthA = s.getColumnProperties(colA).width.getOrElse(fail("No width for A"))
+      val widthD = s.getColumnProperties(colD).width.getOrElse(fail("No width for D"))
+      assert(widthA > widthD, s"13-char text ($widthA) should be wider than 8 digits ($widthD)")
+      assert(widthA >= 7.0 && widthA <= 21.0, s"Width $widthA out of range for 13 chars")
+      assert(widthD >= 6.0 && widthD <= 13.0, s"Width $widthD out of range for 8 digits")
     }
   }
 
