@@ -108,6 +108,25 @@ class ConditionalFormatSpec extends FunSuite:
     assertEquals(ConditionalFormat.scanPriorities("""priority="99999999999999""""), Vector.empty)
   }
 
+  test("auto-priority allocation saturates at Int.MaxValue (never wraps negative)") {
+    val s = Sheet("CF")
+      .conditionalFormat(
+        Vector(ref"A1:A5": CellRange),
+        Vector(CfRule.CellIs(CfOperator.LessThan, "0", None, Some(dxf), priority = Int.MaxValue))
+      )
+      .conditionalFormat(
+        ref"B1:B5",
+        CfRule.cellIs(CfOperator.GreaterThan, "1", dxf),
+        CfRule.dataBar(green)
+      )
+    // a wrapped Int.MinValue is schema-invalid; saturation collides at Int.MaxValue instead
+    // (colliding priorities are Excel-tolerated, negative ones are not)
+    assertEquals(
+      s.typedConditionalFormats.flatMap(_.rules).flatMap(CfRule.priorityOf),
+      Vector(Int.MaxValue, Int.MaxValue, Int.MaxValue)
+    )
+  }
+
   test("removeConditionalFormat mirrors removeDrawing (identity out of range)") {
     val s = Sheet("CF")
       .conditionalFormat(ref"A1:A5", CfRule.cellIs(CfOperator.GreaterThan, "1", dxf))

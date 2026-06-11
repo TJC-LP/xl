@@ -690,8 +690,10 @@ final case class Sheet(
    * Authoring always appends a new block, never merges into existing blocks (Excel accepts and
    * itself writes multiple blocks). Rules with `priority <= 0` ([[CfRule.AutoPriority]]) are
    * assigned `maxExistingPriority + 1, +2, ...` in argument order — above every priority already on
-   * the sheet, including those of Preserved rules/blocks. Explicit positive priorities pass through
-   * unvalidated; colliding priorities are Excel-tolerated but discouraged.
+   * the sheet, including those of Preserved rules/blocks. Allocation saturates at `Int.MaxValue` (a
+   * wrapped negative priority would be schema-invalid; a collision at the ceiling is
+   * Excel-tolerated). Explicit positive priorities pass through unvalidated; colliding priorities
+   * are Excel-tolerated but discouraged.
    */
   def conditionalFormat(range: CellRange, rule: CfRule, more: CfRule*): Sheet =
     conditionalFormat(Vector(range), (rule +: more).toVector)
@@ -705,7 +707,7 @@ final case class Sheet(
         case ((acc, cur), rule) =>
           CfRule.priorityOf(rule) match
             case Some(p) if p <= 0 =>
-              val next = cur + 1
+              val next = Sheet.nextCfPriority(cur)
               (acc :+ CfRule.withPriority(rule, next), next)
             case _ => (acc :+ rule, cur)
       }
@@ -871,6 +873,14 @@ object Sheet:
       case (acc, ConditionalFormat.Preserved(xml)) =>
         ConditionalFormat.scanPriorities(xml).foldLeft(acc)(math.max)
     }
+
+  /**
+   * Saturating successor for auto-priority allocation (shared with the OOXML emitter's safety net):
+   * `current + 1`, capped at `Int.MaxValue` so an existing ceiling priority can never wrap to a
+   * schema-invalid negative.
+   */
+  private[xl] def nextCfPriority(current: Int): Int =
+    if current == Int.MaxValue then current else current + 1
 
   /**
    * Shift a chart's data references that point at sheet `edited` (matched case-insensitively, the

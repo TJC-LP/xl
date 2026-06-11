@@ -55,6 +55,9 @@ class CfPreservationSpec extends FunSuite:
         case None => fail(s"zip entry $name not found in $path")
     finally zip.close()
 
+  private def occurrences(haystack: String, needle: String): Int =
+    java.util.regex.Pattern.quote(needle).r.findAllMatchIn(haystack).size
+
   private def allPriorities(sheet: Sheet): Vector[Int] =
     sheet.conditionalFormats.flatMap {
       case ConditionalFormat.Rules(_, rules, _) => rules.flatMap(CfRule.priorityOf)
@@ -129,6 +132,35 @@ class CfPreservationSpec extends FunSuite:
     assertEquals(reread(out).sheets(0).conditionalFormats, sheet.conditionalFormats)
   }
 
+  test("LAW: every Preserved cf payload XlsxReader produces re-parses (self-contained XML)") {
+    // The dirty-write emission contract silently drops payloads that fail to re-parse
+    // (CfCodec.parsePreserved), so reader-produced Preserved xml MUST be namespace-self-contained
+    // — including prefixed descendants (the x14/xm extLst pairing Excel writes inside dataBar
+    // cfRules) whose inline bindings the reader's block-level rebind severs from the chain.
+    TestFixtures.all.foreach { name =>
+      val (_, wb) = readFixture(name)
+      for
+        sheet <- wb.sheets
+        cf <- sheet.conditionalFormats
+      do
+        cf match
+          case ConditionalFormat.Preserved(xml) =>
+            assert(
+              XmlSecurity.parseSafe(xml, s"$name block Preserved").isRight,
+              s"$name: block-level Preserved payload is not self-contained XML:\n$xml"
+            )
+          case ConditionalFormat.Rules(_, rules, _) =>
+            rules.foreach {
+              case CfRule.Preserved(xml, _) =>
+                assert(
+                  XmlSecurity.parseSafe(xml, s"$name rule Preserved").isRight,
+                  s"$name: rule-level Preserved payload is not self-contained XML:\n$xml"
+                )
+              case _ => ()
+            }
+    }
+  }
+
   // ===== (a) authored + preserved coexistence =====
 
   test("(a) author on top of preserved: no duplication, no loss, priority = max+1") {
@@ -183,6 +215,61 @@ class CfPreservationSpec extends FunSuite:
     val origTyped = wb.sheets(0).typedConditionalFormats.flatMap(_.rules)
     val backTyped = back.sheets(0).typedConditionalFormats.flatMap(_.rules)
     assertEquals(backTyped.take(origTyped.size), origTyped)
+  }
+
+  test("(a) author on LO preserved rules: the x14 extLst dataBar block survives a dirty write") {
+    val (_, wb) = readFixture("condformat-lo.xlsx")
+    val sheetName = wb.sheets(0).name
+    val before = wb.sheets(0).conditionalFormats
+    val updated = wb
+      .update(
+        sheetName,
+        _.conditionalFormat(ref"K2:K9", CfRule.cellIs(CfOperator.GreaterThan, "100", green))
+      )
+      .fold(err => fail(s"update failed: $err"), identity)
+    val out = writeTo(updated, "lo-author")
+    // dirty write must emit ALL 8 blocks — the D2:D9 dataBar rule is Preserved with a prefixed
+    // x14 extLst child; a namespace-broken capture fails parsePreserved at emission and silently
+    // drops the whole single-rule block
+    val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+    def count(sub: String): Int = occurrences(sheetXml, sub)
+    assertEquals(count("<conditionalFormatting"), 8, "no block may be dropped")
+    assertEquals(count("sqref=\"D2:D9\""), 1, "the dataBar block must survive exactly once")
+    // the rule-level extLst x14 GUID pairing rides through exactly once...
+    assertEquals(count("{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"), 1)
+    // ...and stays paired with the worksheet-level x14:conditionalFormattings (same rule id,
+    // once in the cfRule's <x14:id>, once in the worksheet extLst pairing)
+    assertEquals(count("{26C9BFD7-9A20-468E-9236-D82474454A88}"), 2)
+    // Re-read the cf model through the reader's own per-part pipeline (OoxmlWorksheet routes
+    // through WorksheetReader's rebind; CfCodec.parseAll with the output's dxfs — exactly what
+    // XlsxReader.convertToDomainSheet does). Full-workbook reread of a MODIFIED LibreOffice file
+    // is blocked by a pre-existing cf-UNRELATED writer bug: workbook.xml is regenerated with
+    // renumbered sheet rIds (rId1) while the preserved workbook.xml.rels keeps LO's layout
+    // (rId1 = theme), so sheet resolution lands on theme1.xml. Reproduces at the parent commit
+    // on small-values-lo.xlsx with a plain cell edit; tracked separately.
+    def cfModelOf(p: Path): Vector[ConditionalFormat] =
+      val ws = worksheet.OoxmlWorksheet
+        .fromXml(
+          XmlSecurity
+            .parseSafe(entryText(p, "xl/worksheets/sheet1.xml"), "ws")
+            .fold(e => fail(e.message), identity)
+        )
+        .fold(e => fail(e), identity)
+      val styles = style.WorkbookStyles
+        .fromXml(
+          XmlSecurity
+            .parseSafe(entryText(p, "xl/styles.xml"), "styles")
+            .fold(e => fail(e.message), identity)
+        )
+        .fold(e => fail(e), identity)
+      worksheet.CfCodec.parseAll(ws.conditionalFormatting, styles.dxfs)
+    val after = cfModelOf(out)
+    assertEquals(after.size, before.size + 1)
+    assertEquals(after.take(before.size), before, "preserved blocks must ride through unchanged")
+    after.lastOption match
+      case Some(ConditionalFormat.Rules(ranges, Vector(_), _)) =>
+        assertEquals(ranges.map(_.toA1), Vector("K2:K9"))
+      case other => fail(s"expected the authored block last, got $other")
   }
 
   // ===== (b) the dirty-gate proof =====
@@ -251,6 +338,21 @@ class CfPreservationSpec extends FunSuite:
     assertEquals(back.sheets(0).conditionalFormats, wb.sheets(0).conditionalFormats.drop(1))
     val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
     assertEquals(raw"<iconSet\b".r.findAllIn(sheetXml).size, 1, "preserved iconSet kept")
+  }
+
+  test("(c) removing one LO block keeps the x14 extLst dataBar block (second dirty-write path)") {
+    val (_, wb) = readFixture("condformat-lo.xlsx")
+    val without = wb
+      .update(wb.sheets(0).name, _.removeConditionalFormat(0))
+      .fold(err => fail(s"update failed: $err"), identity)
+    val out = writeTo(without, "lo-remove-one")
+    val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+    assertEquals(
+      occurrences(sheetXml, "<conditionalFormatting"),
+      6,
+      "ONLY the removed block may disappear"
+    )
+    assertEquals(occurrences(sheetXml, "sqref=\"D2:D9\""), 1, "the dataBar block must survive")
   }
 
   // ===== (d) dxfs fixpoint =====

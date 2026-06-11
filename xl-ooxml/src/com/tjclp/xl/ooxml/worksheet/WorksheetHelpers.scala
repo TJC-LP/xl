@@ -52,7 +52,9 @@ private val wellKnownNamespaces: Map[String, String] = Map(
   "r" -> XmlUtil.nsRelationships,
   "mc" -> "http://schemas.openxmlformats.org/markup-compatibility/2006",
   "xr" -> "http://schemas.microsoft.com/office/spreadsheetml/2014/revision",
-  "x14ac" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+  "x14ac" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac",
+  "x14" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main",
+  "xm" -> "http://schemas.microsoft.com/office/excel/2006/main"
 )
 
 /**
@@ -65,6 +67,20 @@ private val wellKnownNamespaces: Map[String, String] = Map(
  * TopScope) the nearest ancestor scope is consulted instead.
  */
 private[ooxml] def usedPrefixBindings(root: Elem): Seq[(String, String)] =
+  usedPrefixBindings(root, TopScope)
+
+/**
+ * [[usedPrefixBindings]] resolving against `inheritedScope` when `root` itself carries no scope —
+ * for capturing a CHILD of an already-rebound element in isolation. The reader's per-element rebind
+ * hoists used bindings onto the captured ROOT and severs every descendant chain (cleanNamespaces),
+ * so a fragment cut from below such a root (a `cfRule` inside a rebound `conditionalFormatting`
+ * block) must consult the parent's scope to resolve prefixes like x14/xm (GH-136: the dataBar
+ * extLst pairing) or the binding is silently omitted.
+ */
+private[ooxml] def usedPrefixBindings(
+  root: Elem,
+  inheritedScope: NamespaceBinding
+): Seq[(String, String)] =
   @annotation.tailrec
   def attrPrefixes(md: MetaData, acc: List[String]): List[String] = md match
     case Null => acc.reverse
@@ -85,7 +101,7 @@ private[ooxml] def usedPrefixBindings(root: Elem): Seq[(String, String)] =
     }
     here.toVector ++
       e.child.collect { case c: Elem => c }.toVector.flatMap(collect(_, effectiveScope))
-  collect(root, TopScope).distinctBy(_._1)
+  collect(root, inheritedScope).distinctBy(_._1)
 
 /**
  * cleanNamespaces, then re-bind the prefixes the subtree actually uses on the subtree root, so a
@@ -102,6 +118,13 @@ private[ooxml] def rebindUsedNamespaces(elem: Elem): Elem =
  * to be scope-self-contained). None when every element is prefixed or the binding is absent.
  */
 private[ooxml] def usedDefaultNamespace(root: Elem): Option[String] =
+  usedDefaultNamespace(root, TopScope)
+
+/** [[usedDefaultNamespace]] resolving against `inheritedScope` (see [[usedPrefixBindings]]). */
+private[ooxml] def usedDefaultNamespace(
+  root: Elem,
+  inheritedScope: NamespaceBinding
+): Option[String] =
   def find(e: Elem, inherited: NamespaceBinding): Option[String] =
     val effective = Option(e.scope).filterNot(_ == TopScope).getOrElse(inherited)
     val here =
@@ -112,7 +135,7 @@ private[ooxml] def usedDefaultNamespace(root: Elem): Option[String] =
         acc.orElse(find(c, effective))
       }
     }
-  find(root, TopScope)
+  find(root, inheritedScope)
 
 /**
  * rebindUsedNamespaces extended to also re-bind the DEFAULT namespace used by unprefixed elements
@@ -121,8 +144,19 @@ private[ooxml] def usedDefaultNamespace(root: Elem): Option[String] =
  * namespace is structural and never travels with fragments).
  */
 private[ooxml] def rebindUsedNamespaces(elem: Elem, includeDefault: Boolean): Elem =
-  val used = usedPrefixBindings(elem)
-  val default = if includeDefault then usedDefaultNamespace(elem) else None
+  rebindUsedNamespaces(elem, includeDefault, TopScope)
+
+/**
+ * [[rebindUsedNamespaces]] resolving against `inheritedScope` for bindings no longer reachable from
+ * `elem`'s own chain (see [[usedPrefixBindings]] — GH-136 rule-level cf capture).
+ */
+private[ooxml] def rebindUsedNamespaces(
+  elem: Elem,
+  includeDefault: Boolean,
+  inheritedScope: NamespaceBinding
+): Elem =
+  val used = usedPrefixBindings(elem, inheritedScope)
+  val default = if includeDefault then usedDefaultNamespace(elem, inheritedScope) else None
   val cleaned = cleanNamespaces(elem)
   if used.isEmpty && default.isEmpty then cleaned
   else

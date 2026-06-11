@@ -15,7 +15,9 @@ class StaxSaxWriter(underlying: XMLStreamWriter) extends SaxWriter:
     "r" -> XmlUtil.nsRelationships,
     "mc" -> "http://schemas.openxmlformats.org/markup-compatibility/2006",
     "xr" -> "http://schemas.microsoft.com/office/spreadsheetml/2014/revision",
-    "x14ac" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+    "x14ac" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac",
+    "x14" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main",
+    "xm" -> "http://schemas.microsoft.com/office/excel/2006/main"
   )
 
   private val namespaceStack =

@@ -70,9 +70,16 @@ object CfCodec:
   def parseAll(blocks: Seq[Elem], dxfs: Vector[Elem]): Vector[ConditionalFormat] =
     blocks.toVector.map(parseBlock(_, dxfs))
 
-  /** Scope-self-contained canonical capture (the DrawingReader.Preserved pattern). */
-  private def preservedXml(e: Elem): String =
-    XmlUtil.compact(rebindUsedNamespaces(e, includeDefault = true))
+  /**
+   * Scope-self-contained canonical capture (the DrawingReader.Preserved pattern). `inheritedScope`
+   * supplies bindings the reader's BLOCK-level rebind severed from the element's own chain:
+   * WorksheetReader hoists used prefixes onto the block root and cleans descendant scopes, so a
+   * RULE captured in isolation must resolve x14/xm (the dataBar extLst pairing) against its parent
+   * block's scope or the stored payload is unbound XML that parsePreserved silently drops at dirty
+   * emission.
+   */
+  private def preservedXml(e: Elem, inheritedScope: NamespaceBinding): String =
+    XmlUtil.compact(rebindUsedNamespaces(e, includeDefault = true, inheritedScope))
 
   private def attrKeys(e: Elem): Set[String] = e.attributes.asAttrMap.keySet
 
@@ -101,10 +108,10 @@ object CfCodec:
           case Some(v) => parseBool(v)
         children <- childElems(block).toOption
         rules <- Option.when(children.nonEmpty && children.forall(_.label == "cfRule"))(
-          children.map(parseRule(_, ranges, dxfs))
+          children.map(parseRule(_, block.scope, ranges, dxfs))
         )
       yield ConditionalFormat.Rules(ranges, rules, pivot)
-    typed.getOrElse(ConditionalFormat.Preserved(preservedXml(block)))
+    typed.getOrElse(ConditionalFormat.Preserved(preservedXml(block, TopScope)))
 
   /** Space-split sqref; a single-cell token becomes a 1×1 range. None on any corrupt token. */
   private def parseSqref(sqref: String): Option[Vector[CellRange]] =
@@ -120,7 +127,12 @@ object CfCodec:
       if parsed.forall(_.isDefined) then Some(parsed.flatten) else None
 
   /** Per-rule typed parse with the family whitelists; falls back to [[CfRule.Preserved]]. */
-  private def parseRule(rule: Elem, ranges: Vector[CellRange], dxfs: Vector[Elem]): CfRule =
+  private def parseRule(
+    rule: Elem,
+    blockScope: NamespaceBinding,
+    ranges: Vector[CellRange],
+    dxfs: Vector[Elem]
+  ): CfRule =
     val parsedPriority = rule.attribute("priority").map(_.text).flatMap(_.toIntOption)
     val typed = childElems(rule).toOption.flatMap { children =>
       if children.exists(_.label == "extLst") then None // protects x14 GUID pairings
@@ -133,7 +145,7 @@ object CfCodec:
           parsed <- parseFamily(rule, typeToken, attrs, children, priority, ranges, dxfs)
         yield parsed
     }
-    typed.getOrElse(CfRule.Preserved(preservedXml(rule), parsedPriority))
+    typed.getOrElse(CfRule.Preserved(preservedXml(rule, blockScope), parsedPriority))
 
   private def parseStopIfTrue(attrs: Map[String, String]): Option[Boolean] =
     attrs.get("stopIfTrue") match
@@ -329,7 +341,8 @@ object CfCodec:
    * Canonical emission: blocks in vector order, rules in vector order, attributes in Excel's order.
    * Empty-envelope blocks are dropped (unexpressible in OOXML). Safety net: any residual
    * `priority <= 0` (direct construction bypassing `Sheet.conditionalFormat`) is assigned
-   * `max+1, +2, ...` in document order; explicit and Preserved priorities are NEVER renumbered.
+   * `max+1, +2, ...` in document order, saturating at `Int.MaxValue` (never a schema-invalid
+   * negative); explicit and Preserved priorities are NEVER renumbered.
    */
   def toElems(cfs: Vector[ConditionalFormat], dxfIds: Map[Dxf, Int]): Seq[Elem] =
     val maxExisting = Sheet.maxCfPriority(cfs)
@@ -338,7 +351,7 @@ object CfCodec:
         val (rs, next) = rules.foldLeft((Vector.empty[CfRule], cur)) { case ((a, c), r) =>
           CfRule.priorityOf(r) match
             case Some(p) if p <= 0 =>
-              val n = c + 1
+              val n = Sheet.nextCfPriority(c)
               (a :+ CfRule.withPriority(r, n), n)
             case _ => (a :+ r, c)
         }

@@ -327,3 +327,51 @@ class CfCodecSpec extends ScalaCheckSuite:
     val second = CfCodec.parseAll(emitted, Vector.empty)
     assertEquals(second, first)
   }
+
+  test("emitter safety net saturates at Int.MaxValue (never emits a negative priority)") {
+    val cfs = block(
+      CfRule.CellIs(CfOperator.GreaterThan, "1", None, None, priority = Int.MaxValue),
+      CfRule.Expression("A1>0", None, CfRule.AutoPriority) // residual sentinel
+    )
+    val priorities = CfCodec
+      .toElems(cfs, Map.empty)
+      .flatMap(e => (e \ "cfRule").flatMap(_.attribute("priority")).map(_.text))
+    assertEquals(priorities, Seq(Int.MaxValue.toString, Int.MaxValue.toString))
+  }
+
+  // ===== namespace-self-contained Preserved capture =====
+  // WorksheetReader rebinds used prefixes onto the BLOCK root and severs every descendant scope
+  // (cleanNamespaces), so a rule captured in isolation must re-resolve x14/xm against the block's
+  // scope — or the stored payload is unbound XML that parsePreserved silently drops at emission.
+
+  /** The dataBar extLst x14 pairing exactly as Excel/LibreOffice write it (inline binding). */
+  private val x14ExtLstRule =
+    """<cfRule type="dataBar" priority="5"><dataBar minLength="10" maxLength="90"><cfvo type="min" val="0"/><cfvo type="max" val="0"/><color rgb="FF638EC6"/></dataBar><extLst><ext xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"><x14:id>{26C9BFD7-9A20-468E-9236-D82474454A88}</x14:id></ext></extLst></cfRule>"""
+
+  test("rule-level Preserved capture rebinds prefixes severed onto the block root (x14 extLst)") {
+    val raw = s"""<conditionalFormatting sqref="D2:D9">$x14ExtLstRule</conditionalFormatting>"""
+    // what WorksheetReader does before CfCodec ever sees the block
+    val block = rebindUsedNamespaces(xml(raw))
+    CfCodec.parseAll(Seq(block), Vector.empty) match
+      case Vector(ConditionalFormat.Rules(_, Vector(CfRule.Preserved(payload, Some(5))), _)) =>
+        assert(
+          payload.contains("xmlns:x14="),
+          s"x14 binding must travel with the fragment:\n$payload"
+        )
+        assert(
+          XmlSecurity.parseSafe(payload, "rule payload").isRight,
+          s"captured payload must be self-contained XML:\n$payload"
+        )
+      case other => fail(s"expected one typed envelope with one Preserved rule, got $other")
+  }
+
+  test("block-level Preserved capture keeps prefixed descendants bound (pin)") {
+    val raw =
+      s"""<conditionalFormatting sqref="D2:D9" weird="1">$x14ExtLstRule</conditionalFormatting>"""
+    val block = rebindUsedNamespaces(xml(raw))
+    CfCodec.parseAll(Seq(block), Vector.empty) match
+      case Vector(ConditionalFormat.Preserved(payload)) =>
+        assert(payload.contains("xmlns:x14="), payload)
+        assert(XmlSecurity.parseSafe(payload, "block payload").isRight, payload)
+      case other => fail(s"expected block-level Preserved, got $other")
+  }
