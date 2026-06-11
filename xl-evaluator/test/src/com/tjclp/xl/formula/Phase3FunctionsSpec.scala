@@ -211,6 +211,21 @@ class Phase3FunctionsSpec extends FunSuite:
     )
   }
 
+  test("GH-302: OFFSET in arithmetic collapses in scalar mode") {
+    // Operator positions collapse like scalar argument positions (family parity
+    // with INDIRECT) — =ABS(OFFSET(...)) already worked; =OFFSET(...)+1 must too.
+    // crit A1:A5 = 10,20,30,40,50; OFFSET(A1,1,0) = A2 = 20.
+    assertEquals(
+      crit.evaluateFormula("=OFFSET(A1,1,0)+1"),
+      Right(CellValue.Number(BigDecimal(21)))
+    )
+    // multi-cell OFFSET window collapses to its top-left in arithmetic
+    assertEquals(
+      crit.evaluateFormula("=OFFSET(A1,0,0,3,1)*10"),
+      Right(CellValue.Number(BigDecimal(100)))
+    )
+  }
+
   // GH-301: OFFSET parity with INDIRECT — eval-aware extraction (uncached formula targets
   // evaluate fresh instead of leaking raw Formula values / being skipped by aggregates).
   test("GH-301: OFFSET over an UNCACHED formula target evaluates it") {

@@ -242,6 +242,48 @@ class IndirectFunctionSpec extends ScalaCheckSuite:
     assertEquals(base.evaluateFormula("=ISNUMBER(INDIRECT(\"B2\"))"), Right(CellValue.Bool(true)))
   }
 
+  // ===== 6b. Scalar-mode OPERATOR positions collapse like argument positions (GH-302) =====
+
+  test("GH-302: INDIRECT in arithmetic collapses in scalar mode") {
+    // Operator positions collapse 1×1 ArrayResults exactly like scalar argument
+    // positions (=ABS(INDIRECT("B2")) already worked; =INDIRECT("B2")+1 must too).
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")+1"), Right(num(43)))
+    assertEquals(base.evaluateFormula("=INDIRECT(\"A1\")+INDIRECT(\"B2\")"), Right(num(52)))
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")*10"), Right(num(420)))
+  }
+
+  test("GH-302: multi-cell INDIRECT in arithmetic collapses to top-left") {
+    // col A1:A3 = 10,20,30 — same top-left convention as the standalone collapse.
+    assertEquals(col.evaluateFormula("=INDIRECT(\"A1:A3\")*10"), Right(num(100)))
+  }
+
+  test("GH-302: INDIRECT in comparison collapses in scalar mode") {
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")>15"), Right(CellValue.Bool(true)))
+    assertEquals(base.evaluateFormula("=INDIRECT(\"A1\")>15"), Right(CellValue.Bool(false)))
+  }
+
+  test("GH-302: IF over an INDIRECT comparison works in scalar mode") {
+    assertEquals(
+      base.evaluateFormula("=IF(INDIRECT(\"B2\")>15,\"big\",\"small\")"),
+      Right(CellValue.Text("big"))
+    )
+    assertEquals(
+      base.evaluateFormula("=IF(INDIRECT(\"A1\")>15,\"big\",\"small\")"),
+      Right(CellValue.Text("small"))
+    )
+  }
+
+  test("GH-302: INDIRECT equality collapses in scalar mode (all three operand shapes)") {
+    // array=scalar, scalar=array, array=array — the three equality branches
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")=42"), Right(CellValue.Bool(true)))
+    assertEquals(base.evaluateFormula("=42=INDIRECT(\"B2\")"), Right(CellValue.Bool(true)))
+    assertEquals(
+      base.evaluateFormula("=INDIRECT(\"A1\")=INDIRECT(\"B2\")"),
+      Right(CellValue.Bool(false))
+    )
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")<>42"), Right(CellValue.Bool(false)))
+  }
+
   // ===== 7. Spill / collapse / broadcast =====
 
   test("INDIRECT(\"A1:B2\") spills 2x2 via evaluateArrayFormula") {

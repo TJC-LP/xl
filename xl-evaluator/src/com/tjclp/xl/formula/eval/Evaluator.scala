@@ -750,6 +750,19 @@ private class EvaluatorImpl(
       case _ => Left(EvalError.TypeMismatch("arithmetic", "number or array", value.toString))
 
   /**
+   * GH-302: operator positions in scalar mode collapse array results to their top-left value
+   * (implicit intersection), consistent with scalar ARGUMENT positions — =INDIRECT("A1")+1 works
+   * exactly like =ABS(INDIRECT("A1")). Plain ranges collapse the same way (=A1:A3*10 → A1*10,
+   * pinned in ArrayArithmeticSpec). Array mode passes the array through for spill/broadcast.
+   */
+  private def collapseUnlessArrayMode(
+    label: String,
+    target: BindingCoercion
+  )(arr: ArrayResult): Either[EvalError, Any] =
+    if allowArrayResults then Right(arr)
+    else ScalarCoercion.coerce(label, ScalarCoercion.collapseArray(arr), target)
+
+  /**
    * Evaluate binary arithmetic with array support.
    *
    * Handles:
@@ -778,8 +791,7 @@ private class EvaluatorImpl(
       output <- result match
         case ArrayArithmetic.ArrayOperand.Scalar(v) => Right(v)
         case ArrayArithmetic.ArrayOperand.Array(arr) =>
-          if allowArrayResults then Right(arr)
-          else Left(EvalError.TypeMismatch("arithmetic", "number", "array"))
+          collapseUnlessArrayMode("arithmetic", BindingCoercion.Numeric)(arr)
     yield output
 
   /**
@@ -815,9 +827,7 @@ private class EvaluatorImpl(
             xOp <- toOperand(xVal, sheet)
             yOp <- toOperand(yVal, sheet)
             compared <- ArrayArithmetic.broadcastCompare(xOp, yOp, op)
-            output <-
-              if allowArrayResults then Right(compared)
-              else Left(EvalError.TypeMismatch("comparison", "boolean", "array"))
+            output <- collapseUnlessArrayMode("comparison", BindingCoercion.Bool)(compared)
           yield output
     yield result
 
@@ -843,24 +853,20 @@ private class EvaluatorImpl(
       result <- (xVal, yVal) match
         // Array vs Array -> element-wise comparison
         case (lArr: ArrayResult, rArr: ArrayResult) =>
-          ArrayArithmetic.broadcastEqualityCompare(lArr, Left(rArr), negate).flatMap { compared =>
-            if allowArrayResults then Right(compared)
-            else Left(EvalError.TypeMismatch("comparison", "boolean", "array"))
-          }
+          ArrayArithmetic
+            .broadcastEqualityCompare(lArr, Left(rArr), negate)
+            .flatMap(collapseUnlessArrayMode("comparison", BindingCoercion.Bool))
         // Left is array, right is scalar -> element-wise comparison
         case (arr: ArrayResult, scalar) =>
-          ArrayArithmetic.broadcastEqualityCompare(arr, Right(scalar), negate).flatMap { compared =>
-            if allowArrayResults then Right(compared)
-            else Left(EvalError.TypeMismatch("comparison", "boolean", "array"))
-          }
+          ArrayArithmetic
+            .broadcastEqualityCompare(arr, Right(scalar), negate)
+            .flatMap(collapseUnlessArrayMode("comparison", BindingCoercion.Bool))
         // Left is scalar, right is array -> create 1x1 array and broadcast
         case (scalar, arr: ArrayResult) =>
           val scalarArr = ArrayResult.single(ArrayArithmetic.anyToCellValue(scalar))
-          ArrayArithmetic.broadcastEqualityCompare(scalarArr, Left(arr), negate).flatMap {
-            compared =>
-              if allowArrayResults then Right(compared)
-              else Left(EvalError.TypeMismatch("comparison", "boolean", "array"))
-          }
+          ArrayArithmetic
+            .broadcastEqualityCompare(scalarArr, Left(arr), negate)
+            .flatMap(collapseUnlessArrayMode("comparison", BindingCoercion.Bool))
         // Both scalars -> plain boolean (fast path).
         // GH-234: use the same case-insensitive/coercing semantics as the array path
         // (ArrayArithmetic.cellValueEquals) so scalar and array equality agree with Excel
