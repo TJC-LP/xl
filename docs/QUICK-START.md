@@ -12,19 +12,19 @@ import mill._, scalalib._
 
 object myproject extends ScalaModule {
   def scalaVersion = "3.8.3"
-  def ivyDeps = Agg(ivy"com.tjclp::xl:0.12.1")
+  def ivyDeps = Agg(ivy"com.tjclp::xl:0.12.2")
 }
 ```
 
 ### With sbt (build.sbt)
 ```scala
 scalaVersion := "3.8.3"
-libraryDependencies += "com.tjclp" %% "xl" % "0.12.1"
+libraryDependencies += "com.tjclp" %% "xl" % "0.12.2"
 ```
 
 ### With Scala CLI
 ```scala
-//> using dep com.tjclp::xl:0.12.1
+//> using dep com.tjclp::xl:0.12.2
 ```
 
 ### Individual Modules (Optional)
@@ -44,7 +44,7 @@ For scripts, skip the build setup entirely: a two-line `scala-cli` header and ON
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.1
+//> using dep com.tjclp::xl:0.12.2
 
 import com.tjclp.xl.scripting.{*, given}
 
