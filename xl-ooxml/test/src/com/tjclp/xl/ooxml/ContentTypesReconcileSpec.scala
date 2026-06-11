@@ -3,6 +3,8 @@ package com.tjclp.xl.ooxml
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
+import scala.jdk.CollectionConverters.*
+
 import com.tjclp.xl.api.*
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
@@ -111,6 +113,57 @@ class ContentTypesReconcileSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
+  // ========== GH-321: comment overrides follow EMITTED paths on metadata-modified writes ==========
+
+  test("GH-321: metadata-only write of a foreign-dialect comments file has no dangling overrides") {
+    val source = TestFixtures.copyToTemp("comments-hyperlinks.xlsx")
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    // Metadata-only edit: no sheet content touched → the regenerate-from-minimal CT branch
+    val modified = wb.withDefinedName("Answer", "Notes!$A$1")
+
+    val output = Files.createTempFile("gh321-metadata", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val entries = zipEntryNames(output)
+    // The openpyxl-dialect comment + VML parts ship at their SOURCE paths (identity-mapped,
+    // GH-315/GH-292), never at the legacy index paths
+    assert(
+      entries.contains("xl/comments/comment1.xml"),
+      s"foreign-dialect comment part missing from output: $entries"
+    )
+    assert(
+      entries.contains("xl/drawings/commentsDrawing1.vml"),
+      s"foreign-dialect VML part missing from output: $entries"
+    )
+    assert(!entries.contains("xl/comments1.xml"), "comment part emitted at the legacy index path")
+
+    val ct = parseContentTypes(output)
+    // The shipped comment part is registered at its ACTUAL path...
+    assertEquals(
+      ct.overrides.get("/xl/comments/comment1.xml"),
+      Some(XmlUtil.ctComments),
+      s"shipped comment part unregistered. Overrides: ${ct.overrides}"
+    )
+    // ...the shipped VML part is covered by the vml extension Default...
+    assert(
+      ct.defaults.keysIterator.exists(_.equalsIgnoreCase("vml")),
+      s"vml Default missing. Defaults: ${ct.defaults}"
+    )
+    // ...and NO override points at a part that does not ship (index-derived registration would
+    // leave /xl/comments1.xml + /xl/drawings/vmlDrawing1.vml dangling here)
+    val dangling = ct.overrides.keys.filterNot(p => entries.contains(p.stripPrefix("/")))
+    assert(dangling.isEmpty, s"overrides point at parts that do not ship: ${dangling.mkString(", ")}")
+
+    // The comment itself round-trips
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    val sheet = reloaded("Notes").fold(err => fail(s"Sheet missing: $err"), identity)
+    assert(sheet.comments.contains(ref"A1"), "comment lost on metadata-only write")
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
   // ========== pure reconcile law: preserved ∪ model, model wins except workbook dialect ==========
 
   test("ContentTypes.reconcile: union with model-wins, preserved workbook dialect kept") {
@@ -146,6 +199,15 @@ class ContentTypesReconcileSpec extends FunSuite:
     val zip = new ZipFile(path.toFile)
     try zip.getEntry(entryName) != null
     finally zip.close()
+
+  private def zipEntryNames(path: Path): Set[String] =
+    val zip = new ZipFile(path.toFile)
+    try zip.entries().asScala.map(_.getName).toSet
+    finally zip.close()
+
+  private def parseContentTypes(path: Path): ContentTypes =
+    val xml = scala.xml.XML.loadString(new String(readEntry(path, "[Content_Types].xml"), "UTF-8"))
+    ContentTypes.fromXml(xml).fold(err => fail(s"Content types parse failed: $err"), identity)
 
   private def readEntry(path: Path, entryName: String): Array[Byte] =
     val zip = new ZipFile(path.toFile)
