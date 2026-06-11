@@ -129,6 +129,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `insert-cols` | `<at-col> [count]` | Insert columns; shifts cells, rewrites formulas (requires `-o`) |
 | `delete-cols` | `<at-col> [count]` | Delete columns; `#REF!` on lost references (requires `-o`) |
 | `batch` | `<file\|-> [--dry-run]` | Apply multiple operations from JSON (requires `-o`; `--dry-run` validates without a file) |
+| `diff` | `-g <file2> [--format markdown\|json]` | Compare two workbooks; exit 0 identical, 1 differs, 2 error |
 
 ---
 
@@ -889,6 +890,56 @@ EOF
 | Percent as decimal | `"59.4%"` stored as `0.594` | Excel displays correctly with percent format |
 | Invalid custom formats | Accepted but may render incorrectly in Excel | Test format codes in Excel first |
 | `--stream` mode | Supports formula dragging but not formula evaluation | Use non-streaming for `--eval` |
+
+---
+
+### `xl diff -g <file2> [--format markdown|json]`
+
+Compare two workbooks and report differences. The first file comes from the global `-f`, the second from `-g/--file2`. Optional global `-s/--sheet` restricts the comparison to one sheet.
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `-g, --file2` | path | Yes | — | Second file to compare against |
+| `--format` | string | No | markdown | `markdown` (human) or `json` (stable schema) |
+
+**Exit codes** (diff-tool convention): `0` identical, `1` differences found, `2` error.
+
+**What is compared** (per sheet, refs in A1, row-major order):
+- **Changed cells** — value, formula text, and resolved style (`styleChanged` boolean). Formula cells compare by formula text; cached values are derived and ignored. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference.
+- **Added / removed cells** — a cell with Empty value, default style, and no hyperlink counts as absent.
+- **Sheets added / removed** (by name).
+- **Merged ranges, comments, hyperlinks** — separate added/removed/changed deltas per sheet.
+
+```bash
+xl -f old.xlsx diff -g new.xlsx                      # Markdown report
+xl -f old.xlsx -s Sheet1 diff -g new.xlsx            # One sheet only
+xl -f old.xlsx diff -g new.xlsx --format json        # Machine-readable
+xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
+```
+
+**JSON schema** (stable; `sheets` lists only sheets with differences):
+
+```json
+{
+  "identical": false,
+  "sheetsAdded": [], "sheetsRemoved": [],
+  "sheets": [{
+    "name": "Sheet1",
+    "added":   [{"ref": "D5", "value": "New", "formula": null}],
+    "removed": [{"ref": "E5", "value": "Old", "formula": null}],
+    "changed": [{"ref": "A5",
+                 "before": {"value": "Revenue", "formula": null},
+                 "after":  {"value": "Total Revenue", "formula": null},
+                 "styleChanged": false}],
+    "mergesAdded": [], "mergesRemoved": [],
+    "commentsAdded": [], "commentsRemoved": [], "commentsChanged": [],
+    "hyperlinksAdded": [], "hyperlinksRemoved": [], "hyperlinksChanged": []
+  }]
+}
+```
+
+**Limitations**: both workbooks load in memory (`--max-size` applies to each); no range-level filter yet.
 
 ---
 

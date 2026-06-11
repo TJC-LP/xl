@@ -131,11 +131,18 @@ enum CliCommand:
   case DeleteRows(at: Int, count: Int) // Delete `count` rows starting at 1-based row `at`
   case InsertColumns(col: String, count: Int) // Insert `count` columns before column `col`
   case DeleteColumns(col: String, count: Int) // Delete `count` columns starting at column `col`
+  // Compare two workbooks (-f vs -g); exit code 0 = identical, 1 = differs, 2 = error
+  case Diff(file2: Path, format: DiffFormat)
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:
   case Down // Fill downward (default)
   case Right // Fill rightward
+
+/** Output format for the diff command */
+enum DiffFormat derives CanEqual:
+  case Markdown // Human-readable, grouped by sheet (default)
+  case Json // Stable machine-readable schema
 
 /** Sort direction for the sort command */
 enum SortDirection derives CanEqual:

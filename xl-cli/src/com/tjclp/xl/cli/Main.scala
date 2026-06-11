@@ -16,6 +16,7 @@ import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.cli.commands.{
   CellCommands,
   CommentCommands,
+  DiffCommands,
   ImportCommands,
   ReadCommands,
   SheetCommands,
@@ -119,6 +120,14 @@ object Main
       runStandalone(outPath, sheetName, sheets, backend)
     }
 
+    // Diff: compares -f against -g (two inputs, no output); custom exit codes
+    val diffOpts = (fileOpt, sheetOpt, maxSizeOpt, diffCmd).mapN { (file, sheet, maxSize, cmd) =>
+      cmd match
+        case CliCommand.Diff(file2, format) => runDiff(file, file2, sheet, maxSize, format)
+        case other =>
+          IO.println(Format.errorSimple(s"Unexpected diff command: $other")).as(ExitCode.Error)
+    }
+
     // Info commands: no file required
     val infoOpts = functionsCmd.map(_ => runInfo())
     val rasterOpts = rasterizersCmd.map(_ => runRasterizers())
@@ -133,7 +142,7 @@ object Main
         }
         .map(src => batchDryRun(src).flatMap(IO.println).as(ExitCode.Success))
 
-    rasterOpts orElse infoOpts orElse standaloneOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
+    rasterOpts orElse infoOpts orElse standaloneOpts orElse diffOpts orElse headlessOpts orElse sheetsOpts orElse workbookOpts orElse sheetReadOnlyOpts orElse batchDryRunOpts orElse sheetWriteOpts
 
   // ==========================================================================
   // Global options
@@ -472,6 +481,58 @@ EXAMPLES:
   xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B
   xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B --desc --numeric
   xl -f f.xlsx -s S1 -o o.xlsx sort A1:D100 --by B --then-by C --header"""
+
+  private val diffHelp = """Compare two workbooks and report cell, style, and structure differences.
+
+USAGE:
+  xl -f old.xlsx diff -g new.xlsx
+  xl -f old.xlsx -s Sheet1 diff -g new.xlsx          # Single sheet only
+  xl -f old.xlsx diff -g new.xlsx --format json      # Stable JSON schema
+
+COMPARES (per sheet, refs in A1):
+  - Changed cells: value, formula text, resolved style (styleChanged flag)
+  - Added / removed cells
+  - Sheets added / removed
+  - Merged-range, comment, and hyperlink deltas
+
+NOTES:
+  - Formula cells compare by formula text (cached values are derived, ignored)
+  - Styles compare RESOLVED formatting, not raw style ids
+  - Both files load in memory (--max-size applies to each)
+
+EXIT CODES (diff-tool convention):
+  0 = files are identical
+  1 = differences found
+  2 = error (unreadable file, bad sheet filter, ...)
+
+Docs: docs/reference/cli.md (diff section)
+
+EXAMPLES:
+  xl -f v1.xlsx diff -g v2.xlsx
+  xl -f v1.xlsx diff -g v2.xlsx --format json | jq '.sheets[0].changed'
+  xl -f v1.xlsx diff -g v2.xlsx && echo "no changes\""""
+
+  // --- Diff command (GH-137) ---
+
+  private val file2Opt =
+    Opts.option[Path]("file2", "Second file to compare against (required)", "g")
+
+  private val diffFormatOpt: Opts[DiffFormat] =
+    Opts
+      .option[String]("format", "Output format: markdown (default), json")
+      .withDefault("markdown")
+      .mapValidated { s =>
+        s.toLowerCase match
+          case "markdown" | "md" => cats.data.Validated.valid(DiffFormat.Markdown)
+          case "json" => cats.data.Validated.valid(DiffFormat.Json)
+          case other =>
+            cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown or json")
+      }
+
+  val diffCmd: Opts[CliCommand] =
+    Opts.subcommand("diff", diffHelp) {
+      (file2Opt, diffFormatOpt).mapN(CliCommand.Diff.apply)
+    }
 
   // --- Info commands (no --file required) ---
 
@@ -1170,6 +1231,36 @@ Use --dry-run to validate JSON without writing."""
         IO.println(Format.errorSimple(err.getMessage)).as(ExitCode.Error)
     }
 
+  /**
+   * Run the diff command with diff-tool exit codes: 0 = identical, 1 = differences found, 2 = error
+   * (unreadable file, sheet filter matching neither workbook, ...).
+   */
+  private[cli] def runDiff(
+    fileA: Path,
+    fileB: Path,
+    sheetFilter: Option[String],
+    maxSizeOpt: Option[Long],
+    format: DiffFormat
+  ): IO[ExitCode] =
+    val excel = ExcelIO.instance[IO]
+    val readerConfig = buildReaderConfig(maxSizeOpt)
+    (for
+      wbA <- excel.readWith(fileA, readerConfig)
+      wbB <- excel.readWith(fileB, readerConfig)
+      diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter) match
+        case Right(d) => IO.pure(d)
+        case Left(err) => IO.raiseError(new Exception(err))
+      output = format match
+        case DiffFormat.Markdown =>
+          DiffCommands.renderMarkdown(diff, fileA.toString, fileB.toString)
+        case DiffFormat.Json => DiffCommands.renderJson(diff)
+    yield (output, diff.identical)).attempt.flatMap {
+      case Right((output, identical)) =>
+        IO.println(output).as(if identical then ExitCode.Success else ExitCode(1))
+      case Left(err) =>
+        IO.println(Format.errorSimple(err.getMessage)).as(ExitCode(2))
+    }
+
   private def runStandalone(
     outPath: Path,
     sheetName: String,
@@ -1753,6 +1844,10 @@ Use --dry-run to validate JSON without writing."""
       requireOutput(outputOpt, backendOpt, stream)(
         WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _)
       )
+
+    // Diff has its own runner (two input files, custom exit codes) — never reaches here
+    case CliCommand.Diff(_, _) =>
+      IO.raiseError(new Exception("Internal: diff is dispatched via runDiff"))
 
   // ==========================================================================
   // Helpers
