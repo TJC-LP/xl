@@ -99,6 +99,15 @@ xl -f <file> -s <sheet> -o <out> copy <source> <target>  # Range copy with formu
 xl -f <file> -s <sheet> -o <out> freeze <ref>         # Freeze panes
 xl -f <file> -s <sheet> -o <out> unfreeze             # Remove freeze panes
 xl -f <file> -o <out> import <csv-file> --new-sheet "Data"
+xl -f <file> -o <out> import-md <table.md> --start A1   # GFM markdown table import (0.11.3+; '-' = stdin)
+```
+
+### Compare & Query (read-only, 0.11.3+)
+```bash
+xl -f a.xlsx diff -g b.xlsx --format markdown          # Workbook diff (exit 0 identical, 1 differs)
+xl -f a.xlsx diff -g b.xlsx --format json              # Stable JSON schema for tooling
+xl -f <file> -s <sheet> filter --where "B > 100 AND D = TRUE" --header --format csv
+xl -f <file> -s <sheet> filter --where "Name LIKE 'Acme%'" --columns A,C:E --limit 20
 ```
 
 ### Row/Column Operations (require `-o`)

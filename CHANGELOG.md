@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3] "Robustness" - 2026-06-11
+
+Waves 4+5 of the backlog burn-down: streaming/OOXML robustness (docProps, streaming SST,
+1904 dates, fraction/conditional formats, reader parity, the drawing-corruption fix that
+unblocks 0.12.0 Visual) and the CLI/evaluator batch (import-md, diff, filter; implicit
+intersection and the totality sweep).
+
 ### Added (CLI & evaluator totality, wave 5)
 
 - **`import-md`** (#159): GFM pipe-table import (file or stdin) with smart per-cell type
