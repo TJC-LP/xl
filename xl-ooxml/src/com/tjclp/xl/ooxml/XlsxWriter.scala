@@ -1472,12 +1472,25 @@ object XlsxWriter:
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
         val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.sourcePath)).getOrElse(None)
 
+        // GH-323: a NEW sheet (no source counterpart by identity, GH-315) never enters
+        // tracker.modifiedSheets — Workbook.put of an unseen name marks only metadata — yet its
+        // regenerated part encodes text through whatever SST ships. It joins the modified-sheet
+        // set for SST accounting: its strings enter the combined SST and the per-reference count
+        // (its pre-edit contribution is naturally 0 — there is no source part to subtract).
+        val sstAccountedSheets: Vector[Int] = sourceContext match
+          case Some(ctx) =>
+            (tracker.modifiedSheets ++
+              workbook.sheets.indices.filter(idx =>
+                sourceSheetPath(ctx, idx).isEmpty
+              )).toVector.sorted
+          case None => tracker.modifiedSheets.toVector.sorted
+
         // Check if modified sheets contain NEW strings not in the preserved SST.
         // Entries are collected PER REFERENCE (one per text cell, GH-277: the SST count attribute
         // counts references) in deterministic ref order, and compared EXACTLY — no Unicode
         // normalization, byte-different spellings are different strings (GH-277/GH-289).
         val modifiedSheetRefEntries: Vector[Either[String, RichText]] =
-          tracker.modifiedSheets.toVector.sorted.flatMap { idx =>
+          sstAccountedSheets.flatMap { idx =>
             workbook.sheets.lift(idx).toList.flatMap { sheet =>
               sheet.cells.toVector.sortBy(_._1.toA1).flatMap { case (_, cell) =>
                 cell.value match
@@ -1505,7 +1518,7 @@ object XlsxWriter:
         // current index no longer names the right source part.
         val preEditModifiedRefs = sourceContext
           .map { ctx =>
-            tracker.modifiedSheets.toVector.sorted
+            sstAccountedSheets
               .map(idx =>
                 sourceSheetPath(ctx, idx).fold(0)(countSourceSstReferences(ctx.sourcePath, _))
               )
