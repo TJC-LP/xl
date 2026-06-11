@@ -475,7 +475,8 @@ object XlsxReader:
         docProps,
         drawingPathMapping = parsedSheets.drawingPathMapping,
         drawingSnapshots = parsedSheets.drawingSnapshots,
-        chartSnapshots = parsedSheets.chartSnapshots
+        chartSnapshots = parsedSheets.chartSnapshots,
+        sheetPathMapping = parsedSheets.sheetPathMapping
       )
     yield ReadResult(workbook, styleWarnings ++ parsedSheets.warnings)
 
@@ -795,15 +796,21 @@ object XlsxReader:
   /** Result of [[parseSheets]]: sheets plus the per-sheet part mappings and read warnings. */
   private case class ParsedSheets(
     sheets: Vector[Sheet],
-    commentPathMapping: Map[Int, String],
-    drawingPathMapping: Map[Int, String],
-    drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]],
-    chartSnapshots: Map[Int, Vector[com.tjclp.xl.context.ChartSnapshot]],
+    commentPathMapping: Map[SheetName, String],
+    drawingPathMapping: Map[SheetName, String],
+    drawingSnapshots: Map[SheetName, Vector[com.tjclp.xl.drawings.Drawing]],
+    chartSnapshots: Map[SheetName, Vector[com.tjclp.xl.context.ChartSnapshot]],
+    sheetPathMapping: Map[SheetName, String],
     warnings: Vector[Warning]
   )
 
   /**
-   * Parse all worksheets and collect comment/drawing path mappings.
+   * Parse all worksheets and collect comment/drawing/worksheet path mappings.
+   *
+   * All mappings are keyed by the sheet NAME as read — the stable identity that survives
+   * delete/reorder/rename edits (GH-315). Names are unique in well-formed workbooks (Excel enforces
+   * it); a malformed duplicate name keeps the last entry, which only degrades the surgical-write
+   * optimization, never correctness of the parsed model.
    *
    * Excel numbers comment files sequentially (comments1.xml, comments2.xml...) across only sheets
    * that have comments, NOT by sheet index. The mappings preserve the original paths.
@@ -824,10 +831,12 @@ object XlsxReader:
     relationships: Relationships
   ): XLResult[ParsedSheets] =
     val relMap = relationships.relationships.map(rel => rel.id -> rel).toMap
-    val commentPathBuilder = Map.newBuilder[Int, String]
-    val drawingPathBuilder = Map.newBuilder[Int, String]
-    val drawingSnapshotBuilder = Map.newBuilder[Int, Vector[com.tjclp.xl.drawings.Drawing]]
-    val chartSnapshotBuilder = Map.newBuilder[Int, Vector[com.tjclp.xl.context.ChartSnapshot]]
+    val commentPathBuilder = Map.newBuilder[SheetName, String]
+    val drawingPathBuilder = Map.newBuilder[SheetName, String]
+    val drawingSnapshotBuilder = Map.newBuilder[SheetName, Vector[com.tjclp.xl.drawings.Drawing]]
+    val chartSnapshotBuilder =
+      Map.newBuilder[SheetName, Vector[com.tjclp.xl.context.ChartSnapshot]]
+    val sheetPathBuilder = Map.newBuilder[SheetName, String]
     val warningBuilder = Vector.newBuilder[Warning]
 
     sheetRefs.toVector.zipWithIndex
@@ -836,6 +845,7 @@ object XlsxReader:
           .get(ref.relationshipId)
           .map(rel => resolveSheetPath(rel.target))
           .getOrElse(defaultSheetPath(ref.sheetId))
+        sheetPathBuilder += (ref.name -> sheetPath)
 
         for
           xml <- parts
@@ -853,8 +863,8 @@ object XlsxReader:
           // Parse comments if relationship exists
           comments <- commentTarget match
             case Some(target) =>
-              // Track the mapping from sheet index to comment file path
-              commentPathBuilder += (idx -> target)
+              // Track the mapping from sheet name (stable identity) to comment file path
+              commentPathBuilder += (ref.name -> target)
               parseCommentsForSheet(parts, target)
             case None => Right(Map.empty)
 
@@ -864,7 +874,7 @@ object XlsxReader:
           // GH-221: parse the drawing part (total — never fails the read)
           drawings = drawingTarget.filter(retainedDrawings.xml.contains) match
             case Some(drawingPath) =>
-              drawingPathBuilder += (idx -> drawingPath)
+              drawingPathBuilder += (ref.name -> drawingPath)
               val parsed = parseDrawingsForSheet(retainedDrawings, drawingPath) match
                 case Right(part) =>
                   // GH-222: associate typed ChartFrames with their rel/part provenance
@@ -882,12 +892,12 @@ object XlsxReader:
                           )
                       }
                   }
-                  if snapshots.nonEmpty then chartSnapshotBuilder += (idx -> snapshots)
+                  if snapshots.nonEmpty then chartSnapshotBuilder += (ref.name -> snapshots)
                   part.drawings
                 case Left(warning) =>
                   warningBuilder += warning
                   Vector.empty
-              drawingSnapshotBuilder += (idx -> parsed)
+              drawingSnapshotBuilder += (ref.name -> parsed)
               parsed
             case None => Vector.empty[com.tjclp.xl.drawings.Drawing]
 
@@ -910,6 +920,7 @@ object XlsxReader:
           drawingPathBuilder.result(),
           drawingSnapshotBuilder.result(),
           chartSnapshotBuilder.result(),
+          sheetPathBuilder.result(),
           warningBuilder.result()
         )
       )
@@ -1226,7 +1237,8 @@ object XlsxReader:
    * @param sheetStates
    *   Sheet visibility states from workbook.xml
    * @param commentPathMapping
-   *   Mapping from 0-based sheet index to comment file path (e.g., "xl/comments1.xml")
+   *   Mapping from sheet name (as read, the stable identity — GH-315) to comment file path (e.g.,
+   *   "xl/comments1.xml")
    * @param date1904
    *   True when workbookPr declares the 1904 date system (GH-243)
    * @param activeSheetIndex
@@ -1244,13 +1256,14 @@ object XlsxReader:
     theme: ThemePalette,
     definedNames: Vector[DefinedName],
     sheetStates: Map[SheetName, Option[String]],
-    commentPathMapping: Map[Int, String],
+    commentPathMapping: Map[SheetName, String],
     date1904: Boolean,
     activeSheetIndex: Int,
     docProps: DocProps.Data,
-    drawingPathMapping: Map[Int, String],
-    drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]],
-    chartSnapshots: Map[Int, Vector[com.tjclp.xl.context.ChartSnapshot]]
+    drawingPathMapping: Map[SheetName, String],
+    drawingSnapshots: Map[SheetName, Vector[com.tjclp.xl.drawings.Drawing]],
+    chartSnapshots: Map[SheetName, Vector[com.tjclp.xl.context.ChartSnapshot]],
+    sheetPathMapping: Map[SheetName, String]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -1266,7 +1279,8 @@ object XlsxReader:
                   commentPathMapping,
                   drawingPathMapping,
                   drawingSnapshots,
-                  chartSnapshots
+                  chartSnapshots,
+                  sheetPathMapping
                 )
               )
             )

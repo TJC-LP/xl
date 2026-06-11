@@ -766,7 +766,10 @@ object XlsxWriter:
     allChartPartPaths: Set[String]
   )
 
-  private def drawingRelsPathOf(partPath: String): String =
+  /**
+   * Sibling rels path of any part: xl/worksheets/sheet2.xml -> xl/worksheets/_rels/sheet2.xml.rels
+   */
+  private def partRelsPathOf(partPath: String): String =
     val slash = partPath.lastIndexOf('/')
     val (dir, name) = partPath.splitAt(slash + 1)
     s"${dir}_rels/$name.rels"
@@ -811,9 +814,10 @@ object XlsxWriter:
    * Preserved fragments carrying relationship references are dropped on this path (their targets do
    * not exist without the source part's rels — documented in LIMITATIONS).
    *
-   * When sheets were deleted or reordered the index-keyed mappings are unreliable (the
-   * commentPathMapping precedent has the same shape); drawing regeneration is skipped for that
-   * write and parts ride preservation unchanged.
+   * The source mappings are keyed by sheet NAME (stable identity, GH-315), so structural edits in
+   * the same write are safe: deleted names drop out of the mappings, reorders move nothing, and
+   * renames re-key (`Workbook.rename`). The wave-6a skip-on-delete/reorder guard that existed only
+   * because of index instability is gone.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private def planDrawingWrites(
@@ -838,15 +842,11 @@ object XlsxWriter:
         }
         .toMap
 
-    val mappingsUnreliable = sourceContext.exists { ctx =>
-      ctx.modificationTracker.deletedSheets.nonEmpty || ctx.modificationTracker.reorderedSheets
-    }
-
     val dirtyIndices: Vector[Int] = sourceContext match
-      case Some(_) if mappingsUnreliable => Vector.empty
       case Some(ctx) =>
         workbook.sheets.indices.toVector.filter { idx =>
-          workbook.sheets(idx).drawings != ctx.drawingSnapshots.getOrElse(idx, Vector.empty)
+          val sheet = workbook.sheets(idx)
+          sheet.drawings != ctx.drawingSnapshots.getOrElse(sheet.name, Vector.empty)
         }
       case None =>
         workbook.sheets.indices.toVector.filter(idx => workbook.sheets(idx).drawings.nonEmpty)
@@ -986,7 +986,7 @@ object XlsxWriter:
         )
         partsOut += partPath -> OoxmlDrawing.build(keep, embeds.result(), chartRelIds, None)
         val rels = partRels.result()
-        if rels.nonEmpty then relsOut += drawingRelsPathOf(partPath) -> Relationships(rels)
+        if rels.nonEmpty then relsOut += partRelsPathOf(partPath) -> Relationships(rels)
         fresh += partPath
         refs += idx -> drawingRefElem
         relAdds += idx -> Relationship(
@@ -997,7 +997,7 @@ object XlsxWriter:
 
     def emitSamePathPart(ctx: SourceContext, idx: Int, partPath: String): Unit =
       val sheet = workbook.sheets(idx)
-      val relsPath = drawingRelsPathOf(partPath)
+      val relsPath = partRelsPathOf(partPath)
       val sourceRelsOpt: Option[Relationships] =
         Try(
           withZipFile(ctx.sourcePath)(z => parseOptionalEntry(z, relsPath)(Relationships.fromXml))
@@ -1050,7 +1050,7 @@ object XlsxWriter:
       // rels through the same counter machinery
       val chartRelIds = planChartParts(
         sheet.drawings,
-        ctx.chartSnapshots.getOrElse(idx, Vector.empty),
+        ctx.chartSnapshots.getOrElse(sheet.name, Vector.empty),
         target => {
           relCounter += 1
           val id = s"rId$relCounter"
@@ -1075,7 +1075,7 @@ object XlsxWriter:
     dirtyIndices.foreach { idx =>
       sourceContext match
         case Some(ctx) =>
-          ctx.drawingPathMapping.get(idx) match
+          ctx.drawingPathMapping.get(workbook.sheets(idx).name) match
             case Some(partPath) => emitSamePathPart(ctx, idx, partPath)
             case None =>
               // First drawings on this sheet. Only wire when the worksheet is regenerated (it
@@ -1140,26 +1140,29 @@ object XlsxWriter:
    * derived from the comment path; foreign comment dialects (openpyxl's xl/comments/comment1.xml)
    * carry no number, so the sheet's preserved vmlDrawing RELATIONSHIP target is reused — the
    * regenerated VML then replaces the original part in place instead of orphaning a second copy.
-   * Falls back to the sheet-index scheme when nothing usable is preserved.
+   * The preserved rels are resolved by the sheet's SOURCE rels path (identity-keyed, GH-315); falls
+   * back to the sheet-index scheme when nothing usable is preserved.
    */
   private def vmlPathForSheet(
     ctx: Option[SourceContext],
+    sourceRelsPath: Option[String],
     sheetIdx: Int,
     commentPath: String
   ): String =
     commentPath match
       case legacyCommentPathPattern(num) => s"xl/drawings/vmlDrawing$num.vml"
       case _ =>
-        ctx
-          .flatMap(preservedVmlTarget(_, sheetIdx))
-          .getOrElse(s"xl/drawings/vmlDrawing${sheetIdx + 1}.vml")
+        (for
+          c <- ctx
+          rels <- sourceRelsPath
+          target <- preservedVmlTarget(c, rels)
+        yield target).getOrElse(s"xl/drawings/vmlDrawing${sheetIdx + 1}.vml")
 
   /** Resolve the sheet's preserved vmlDrawing relationship target to a normalized xl/ path. */
-  private def preservedVmlTarget(ctx: SourceContext, sheetIdx: Int): Option[String] =
-    val relsPath = s"xl/worksheets/_rels/sheet${sheetIdx + 1}.xml.rels"
-    if !ctx.partManifest.contains(relsPath) then None
+  private def preservedVmlTarget(ctx: SourceContext, sourceRelsPath: String): Option[String] =
+    if !ctx.partManifest.contains(sourceRelsPath) then None
     else
-      withZipFile(ctx.sourcePath)(z => parseOptionalEntry(z, relsPath)(Relationships.fromXml))
+      withZipFile(ctx.sourcePath)(z => parseOptionalEntry(z, sourceRelsPath)(Relationships.fromXml))
         .flatMap(_.relationships.find(_.`type` == XmlUtil.relTypeVmlDrawing))
         .flatMap(rel => normalizeSheetRelTarget(rel.target))
 
@@ -1438,6 +1441,22 @@ object XlsxWriter:
       case None =>
         (RelationshipGraph.empty, Set.empty[String], Set.empty[String])
 
+    // GH-315: resolve a sheet's SOURCE worksheet part by stable identity (the name as read; the
+    // context re-keys on rename and drops on delete). An empty mapping is a context built without
+    // identity info — fall back to index naming (legacy behavior). A MISS in a populated mapping
+    // means the sheet has no source part (added in-session, or untracked direct surgery): no
+    // preserved metadata and no pre-edit SST contribution — never another sheet's part.
+    def sourceSheetPath(ctx: SourceContext, idx: Int): Option[String] =
+      workbook.sheets.lift(idx).flatMap { sheet =>
+        ctx.sheetPathMapping.get(sheet.name) match
+          case some @ Some(_) => some
+          case None if ctx.sheetPathMapping.isEmpty => Some(graph.pathForSheet(idx))
+          case None => None
+      }
+
+    def sourceSheetRelsPath(ctx: SourceContext, idx: Int): Option[String] =
+      sourceSheetPath(ctx, idx).map(partRelsPathOf)
+
     // Escaping must be applied to every text-bearing worksheet part; preserved sheets can contain
     // dangerous inline strings or shared-string references that would bypass WriterConfig.secure.
     val sheetsToRegenerate =
@@ -1488,16 +1507,40 @@ object XlsxWriter:
         // contribution exactly: preserved sheets keep their counted contribution (original count
         // minus the modified sheets' pre-edit t="s" cells), while modified sheets contribute one
         // reference per post-edit text cell (regenerated sheets encode ALL text via the SST).
+        // GH-315: each modified sheet's pre-edit part resolves by IDENTITY — after a deletion the
+        // current index no longer names the right source part.
         val preEditModifiedRefs = sourceContext
           .map { ctx =>
             tracker.modifiedSheets.toVector.sorted
-              .map(idx => countSourceSstReferences(ctx.sourcePath, graph.pathForSheet(idx)))
+              .map(idx =>
+                sourceSheetPath(ctx, idx).fold(0)(countSourceSstReferences(ctx.sourcePath, _))
+              )
+              .sum
+          }
+          .getOrElse(0)
+        // GH-315: a DELETED sheet's references leave the workbook with it. Deleted source parts
+        // are the manifest's worksheet parts not claimed by any live sheet (identity-keyed and
+        // rename-stable, so only genuinely deleted parts remain).
+        val deletedSheetRefs = sourceContext
+          .filter(_.modificationTracker.deletedSheets.nonEmpty)
+          .map { ctx =>
+            val claimed = workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet
+            ctx.partManifest.entries.keysIterator
+              .filter(p => p.startsWith("xl/worksheets/") && !p.startsWith("xl/worksheets/_rels/"))
+              .filterNot(claimed)
+              .toVector
+              .sorted
+              .map(countSourceSstReferences(ctx.sourcePath, _))
               .sum
           }
           .getOrElse(0)
         val exactTotalCount = parsedSST match
           case Some(preserved) =>
-            math.max(0, preserved.totalCount - preEditModifiedRefs + modifiedSheetRefEntries.size)
+            math.max(
+              0,
+              preserved.totalCount - preEditModifiedRefs - deletedSheetRefs +
+                modifiedSheetRefEntries.size
+            )
           case None => modifiedSheetRefEntries.size
 
         if newEntries.nonEmpty then
@@ -1551,12 +1594,18 @@ object XlsxWriter:
 
     // GH-136: parse each regenerated sheet's preserved worksheet ONCE — the cf pre-pass and the
     // sheet loop below both consume this cache (no double parse of large worksheets).
+    // GH-315: the source part resolves by identity, so after a delete/reorder every sheet merges
+    // ITS OWN preserved metadata (cols, views, drawing refs), not a positional neighbor's.
     val preservedWorksheets: Map[Int, XLResult[Option[OoxmlWorksheet]]] =
       sourceContext match
         case Some(ctx) =>
           sheetsToRegenerate.toVector.sorted
             .filter(workbook.sheets.indices.contains)
-            .map(idx => idx -> parsePreservedWorksheet(ctx.sourcePath, graph.pathForSheet(idx)))
+            .map(idx =>
+              idx -> (sourceSheetPath(ctx, idx) match
+                case Some(path) => parsePreservedWorksheet(ctx.sourcePath, path)
+                case None => Right(None))
+            )
             .toMap
         case None => Map.empty
 
@@ -1745,13 +1794,16 @@ object XlsxWriter:
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
         if sheetsToRegenerate.contains(idx) then
           // Regenerate modified sheet with preserved metadata (if available, via the GH-136
-          // pre-pass cache — parsed once, consumed by both the cf plan and this loop)
-          val sheetPath = graph.pathForSheet(idx)
+          // pre-pass cache — parsed once, consumed by both the cf plan and this loop).
+          // GH-315: the sheet's SOURCE parts (worksheet metadata, rels) resolve by identity; the
+          // OUTPUT entry names follow the current index.
+          val sourcePathOpt = sourceContext.flatMap(sourceSheetPath(_, idx))
           val preservedMetadata = preservedWorksheets.getOrElse(idx, Right(None)) match
             case Right(value) => value
             case Left(err) =>
               throw new IllegalStateException(
-                s"Failed to parse preserved worksheet $sheetPath: ${err.message}"
+                s"Failed to parse preserved worksheet " +
+                  s"${sourcePathOpt.getOrElse(graph.pathForSheet(idx))}: ${err.message}"
               )
           val remapping = sheetRemappings.getOrElse(idx, Map.empty)
 
@@ -1819,12 +1871,16 @@ object XlsxWriter:
           // For modified sheets:
           // 1. Copy relationships from source (preserves printerSettings, drawings, customProperty)
           // 2. Regenerate comments/VML from domain model (handles comment add/remove/modify)
+          // GH-315: the OUTPUT rels entry is named by current index; the PRESERVED rels are
+          // looked up by the sheet's identity-resolved source path (they differ after deletion
+          // or reorder).
           val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+          val sourceRelsPathOpt = sourceContext.flatMap(sourceSheetRelsPath(_, idx))
           val commentPath = sourceContext
-            .flatMap(_.commentPathMapping.get(idx))
+            .flatMap(_.commentPathMapping.get(sheet.name))
             .getOrElse(s"xl/comments${idx + 1}.xml")
           // GH-292: foreign comment dialects resolve the VML target through the preserved rels
-          val vmlPath = vmlPathForSheet(sourceContext, idx, commentPath)
+          val vmlPath = vmlPathForSheet(sourceContext, sourceRelsPathOpt, idx, commentPath)
 
           val hasComments = commentsBySheet.contains(idx)
           val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
@@ -1834,14 +1890,15 @@ object XlsxWriter:
           // Otherwise regenerate minimal relationships. Authored hyperlinks (hlRels) are merged
           // in, as is a first-drawing rel (rIdDr1, GH-221) when this sheet gained a fresh part.
           val drawingRelAdd = drawingPlan.sheetRelAdditions.get(idx)
-          sourceContext match
-            case Some(ctx) if ctx.partManifest.contains(relsPath) =>
-              if hlRels.isEmpty && drawingRelAdd.isEmpty then
+          (sourceContext, sourceRelsPathOpt) match
+            case (Some(ctx), Some(sourceRelsPath)) if ctx.partManifest.contains(sourceRelsPath) =>
+              if hlRels.isEmpty && drawingRelAdd.isEmpty && sourceRelsPath == relsPath then
                 copyPreservedPart(ctx.sourcePath, relsPath, zip)
               else
-                // Merge authored hyperlink rels into the preserved sheet rels (parse + append)
+                // Merge authored hyperlink rels into the preserved sheet rels (parse + append);
+                // also the path for source rels riding to a DIFFERENT output slot (GH-315).
                 val preserved = withZipFile(ctx.sourcePath) { z =>
-                  parseOptionalEntry(z, relsPath)(Relationships.fromXml)
+                  parseOptionalEntry(z, sourceRelsPath)(Relationships.fromXml)
                 }.getOrElse(Relationships(Seq.empty))
                 // Drop the source's hyperlink rels (we regenerate them from the model) to avoid
                 // orphans, but keep everything else (printerSettings, drawings, ...).
@@ -1874,18 +1931,21 @@ object XlsxWriter:
             }
           }
         else
-          // Copy unmodified sheet from source (only if source available)
+          // Copy unmodified sheet from source (only if source available). Only reachable with
+          // stable indices — deletion/reorder/metadata changes force full regeneration — but the
+          // source paths resolve by identity anyway (GH-315); the legacy index fallback covers
+          // untracked direct surgery exactly as before.
           sourceContext.foreach { ctx =>
-            val sheetPath = graph.pathForSheet(idx)
+            val sheetPath = sourceSheetPath(ctx, idx).getOrElse(graph.pathForSheet(idx))
             copyPreservedPart(ctx.sourcePath, sheetPath, zip)
 
             // Copy comments and relationships using source's actual paths (from mapping)
-            ctx.commentPathMapping.get(idx).foreach { commentPath =>
+            ctx.commentPathMapping.get(sheet.name).foreach { commentPath =>
               if ctx.partManifest.contains(commentPath) then
                 copyPreservedPart(ctx.sourcePath, commentPath, zip)
             }
 
-            val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+            val relsPath = partRelsPathOf(sheetPath)
             if ctx.partManifest.contains(relsPath) then
               copyPreservedPart(ctx.sourcePath, relsPath, zip)
           }
@@ -1911,11 +1971,21 @@ object XlsxWriter:
       // (or omit it if comments were removed); skip drawing parts superseded by same-path
       // regeneration (GH-221)
       sourceContext.foreach { ctx =>
-        val vmlPathsToSkip = sheetsToRegenerate.flatMap { idx =>
-          ctx.commentPathMapping.get(idx).map { commentPath =>
-            // GH-292: must mirror the regeneration path exactly, or the preserved copy ships too
-            vmlPathForSheet(Some(ctx), idx, commentPath)
-          }
+        val vmlPathsToSkip: Set[String] = sheetsToRegenerate.flatMap { idx =>
+          workbook.sheets.lift(idx) match
+            case None => Set.empty[String]
+            case Some(sheet) =>
+              val sourceRels = sourceSheetRelsPath(ctx, idx)
+              val mapped = ctx.commentPathMapping.get(sheet.name)
+              // GH-292/GH-315: mirror the regeneration paths EXACTLY, or the preserved copy
+              // ships too — the sheet's source-numbered VML (comment removal must drop it) AND
+              // the emission target (fresh comments can land on a deleted sheet's old VML path).
+              val emitted = Option.when(commentsBySheet.contains(idx))(
+                mapped.getOrElse(s"xl/comments${idx + 1}.xml")
+              )
+              (mapped.toList ++ emitted.toList)
+                .toSet[String]
+                .map(cp => vmlPathForSheet(Some(ctx), sourceRels, idx, cp))
         }
 
         preservableParts.foreach { path =>

@@ -203,7 +203,56 @@ class SurgicalSstCombineSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
+  // ========== GH-315: deletion + edit in one write keeps the count exact ==========
+
+  test("GH-315(c): deleting a sheet referencing SST strings + editing another → exact counts") {
+    // Source: Sheet1 references Alpha/Beta/Gamma (3 refs), Sheet2 references Alpha (1 ref)
+    // → count=4, uniqueCount=3
+    val source = createRawTwoSheetSstFixture()
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    val modified = wb
+      .remove(com.tjclp.xl.addressing.SheetName.unsafe("Sheet1"))
+      .flatMap(
+        _.update(com.tjclp.xl.addressing.SheetName.unsafe("Sheet2"), _.put(ref"B1" -> "Delta"))
+      )
+      .fold(err => fail(s"Modify failed: $err"), identity)
+
+    val output = Files.createTempFile("gh315-delete-count", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val sstXml = new String(readEntry(output, "xl/sharedStrings.xml"), "UTF-8")
+    // 4 source refs − 3 (deleted Sheet1) − 1 (Sheet2 pre-edit) + 2 (Sheet2 post-edit: Alpha+Delta)
+    // = 2. Entries are never pruned, Delta appends → uniqueCount=4.
+    assert(
+      sstXml.contains("count=\"2\""),
+      s"count must subtract the DELETED sheet's references and recount the edited sheet by " +
+        s"IDENTITY (not by drifted index). SST:\n$sstXml"
+    )
+    assert(
+      sstXml.contains("uniqueCount=\"4\""),
+      s"uniqueCount should be 3 preserved + 1 new (Delta). SST:\n$sstXml"
+    )
+    existingStrings.foreach { s =>
+      assert(sstXml.contains(s"<t>$s</t>"), s"entry '$s' must never be pruned. SST:\n$sstXml")
+    }
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(reloaded.sheetNames.map(_.value), Vector("Sheet2"))
+    assertEquals(textAtIn(reloaded, "Sheet2", ref"A1"), Some("Alpha"))
+    assertEquals(textAtIn(reloaded, "Sheet2", ref"B1"), Some("Delta"))
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
   // ========== helpers ==========
+
+  private def textAtIn(wb: Workbook, sheet: String, r: ARef): Option[String] =
+    wb(com.tjclp.xl.addressing.SheetName.unsafe(sheet)).toOption
+      .flatMap(_.cells.get(r))
+      .map(_.value)
+      .collect { case CellValue.Text(s) => s }
 
   private def textAt(wb: Workbook, r: ARef): Option[String] =
     wb("Sheet1").toOption.flatMap(_.cells.get(r)).map(_.value).collect { case CellValue.Text(s) =>
@@ -299,6 +348,90 @@ class SurgicalSstCombineSpec extends FunSuite:
     <row r="3"><c r="A3" t="s"><v>0</v></c></row>
     <row r="4"><c r="A4" t="s"><v>0</v></c></row>
     <row r="5"><c r="A5" t="s"><v>0</v></c></row>
+  </sheetData>
+</worksheet>"""
+      )
+    finally out.close()
+    path
+
+  /**
+   * GH-315 variant: TWO sheets. Sheet1 references Alpha/Beta/Gamma (A1..A3), Sheet2 references
+   * Alpha (A1) — SST count=4, uniqueCount=3.
+   */
+  private def createRawTwoSheetSstFixture(): Path =
+    val path = Files.createTempFile("gh315-fixture", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1)
+    try
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"""
+      )
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+      )
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
+  </sheets>
+</workbook>"""
+      )
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>"""
+      )
+      writeEntry(
+        out,
+        "xl/sharedStrings.xml",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+          "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"4\" uniqueCount=\"3\">" +
+          existingStrings.map(s => s"<si><t>$s</t></si>").mkString +
+          "</sst>"
+      )
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
+    <row r="2"><c r="A2" t="s"><v>1</v></c></row>
+    <row r="3"><c r="A3" t="s"><v>2</v></c></row>
+  </sheetData>
+</worksheet>"""
+      )
+      writeEntry(
+        out,
+        "xl/worksheets/sheet2.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
   </sheetData>
 </worksheet>"""
       )

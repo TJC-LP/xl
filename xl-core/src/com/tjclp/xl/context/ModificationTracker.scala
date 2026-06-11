@@ -43,6 +43,13 @@ final case class ModificationTracker(
    * Example: If sheets [0,1,2,3,4] exist and you delete(1) then delete(3), the deletedSheets will
    * contain {1, 2} (not {1, 3}) because after deleting sheet 1, what was sheet 3 becomes sheet 2.
    *
+   * Deletion ALSO marks workbook metadata modified (GH-315): removing a sheet restructures
+   * workbook.xml, its rels, and the content types, and shifts every later sheet's output position —
+   * index-aligned part copying after a deletion silently attached source parts to the wrong sheets.
+   * Forcing the metadata-modified write path regenerates the workbook skeleton and every surviving
+   * sheet against its own (identity-resolved) source part, the same treatment GH-207 gave
+   * reordering.
+   *
    * @param index
    *   Zero-based sheet index to mark as deleted
    * @return
@@ -61,7 +68,8 @@ final case class ModificationTracker(
           if i > index then i - 1 // Shift down
           else i // Keep unchanged
         }
-        .filterNot(_ == index) // Remove the deleted index after shifting
+        .filterNot(_ == index), // Remove the deleted index after shifting
+      modifiedMetadata = true
     )
 
   /** Indicate that sheet order changed. */
