@@ -44,9 +44,18 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    * default to 1). Returned as an ArrayResult, so it spills standalone, collapses to a scalar when
    * 1×1, and composes with aggregates (e.g. SUM(OFFSET(...))). Out-of-bounds or non-positive size
    * yields #REF!. Note: a cross-sheet anchor's sheet is not tracked (same-sheet result).
+   *
+   * GH-301 (INDIRECT parity, #274 design §6): the static graph sees only OFFSET's ARGUMENTS (the
+   * anchor and offsets), never the shifted window it actually reads — `dynamicDeps = true` defers
+   * OFFSET-bearing cells to the evaluate-last partition and marks them always-dirty in targeted
+   * recalculation, and the eval-aware extractor resolves uncached/stripped formula targets fresh.
    */
   val offset: FunctionSpec[ArrayResult] { type Args = OffsetArgs } =
-    FunctionSpec.simple[ArrayResult, OffsetArgs]("OFFSET", Arity.Range(3, 5)) { (args, ctx) =>
+    FunctionSpec.simple[ArrayResult, OffsetArgs](
+      "OFFSET",
+      Arity.Range(3, 5),
+      flags = FunctionFlags(dynamicDeps = true)
+    ) { (args, ctx) =>
       val (refExpr, rowsExpr, colsExpr, hOpt, wOpt) = args
       extractARef(refExpr) match
         case None =>
@@ -67,7 +76,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
               else
                 val range =
                   CellRange(ARef.from0(c0, r0), ARef.from0(c0 + width - 1, r0 + height - 1))
-                Right(ArrayResult(extractRangeAsMatrix(range, ctx.sheet)))
+                extractRangeAsMatrixEval(range, ctx.sheet, ctx).map(ArrayResult(_))
           yield result
     }
 
@@ -341,13 +350,13 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     }.toVector
 
   /**
-   * GH-274: eval-aware variant of [[extractRangeAsMatrix]] used by INDIRECT.
+   * GH-274: eval-aware variant of [[extractRangeAsMatrix]] used by INDIRECT and (GH-301) OFFSET.
    *
    * Identical except UNCACHED formula cells are recursively evaluated (the GH-208 `Ref`-deref /
    * GH-187 aggregate semantics: trust `Some(cached)`, evaluate `None`, depth-100 guard). This is
    * what makes the quote laws `INDIRECT("X") ≡ X` and `SUM(INDIRECT(R)) ≡ SUM(R)` hold when targets
-   * are formulas that have not been evaluated yet. OFFSET deliberately keeps the cache-trusting
-   * extractor in this change (behavior delta on a shipped function — named follow-up).
+   * are formulas that have not been evaluated yet — and what lets deferred-bucket evaluation strip
+   * dynamic-cell caches without OFFSET reading raw Formula values.
    */
   private def extractRangeAsMatrixEval(
     range: CellRange,

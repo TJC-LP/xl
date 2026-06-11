@@ -265,3 +265,45 @@ class RecalcSpec extends FunSuite:
     assert(byRef(ref"A1").contains("Circular"), byRef.toString)
     assert(byRef(ref"A2").contains("Circular"), byRef.toString)
     assertEquals(result.errors.map(_.ref).toSet, Set(ref"A1", ref"A2"))
+
+  // ===== GH-301: OFFSET — deferred-bucket recalculation (INDIRECT parity) =====
+
+  test("GH-301 deferred bucket: OFFSET reads the freshly computed target, not a stale cache"):
+    // B9 anchors at B5 and reads A1 (shift -4,-1): no static edge to A1 exists, so only the
+    // deferred bucket + cache strip + eval-aware extraction guarantee the fresh value.
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(1))
+      .put(ref"X2", num(2))
+      .put(ref"X3", num(3))
+      .put(ref"A1", CellValue.Formula("=SUM(X1:X3)", Some(num(999)))) // stale cache
+      .put(ref"B9", formula("=OFFSET(B5,-4,-1)"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"A1"), Some(num(6)))
+    assertEquals(cached(result.workbook, "S", ref"B9"), Some(num(6)))
+
+  test("GH-301 stale-cache regression: edit upstream, recalculate again, OFFSET chain reflects it"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(1))
+      .put(ref"A1", formula("=X1*2"))
+      .put(ref"C1", formula("=OFFSET(C5,-4,-2)")) // reads A1, no static edge
+      .put(ref"D1", formula("=C1+1"))
+    val wb1 = Workbook(sheet).recalculate().workbook // generation 1: caches populated
+    val s1 = wb1.sheets.find(_.name.value == "S").fold(fail("missing sheet"))(identity)
+    val wb2 = wb1.put(s1.put(ref"X1", num(100)))
+    val result = wb2.recalculate() // generation 2 must not trust generation 1's caches
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"A1"), Some(num(200)))
+    assertEquals(cached(result.workbook, "S", ref"C1"), Some(num(200)))
+    assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(201)))
+
+  test("GH-301 mixed dynamics: INDIRECT and OFFSET defer together and stay correct"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(7))
+      .put(ref"A1", CellValue.Formula("=X1*2", Some(num(999)))) // stale cache
+      .put(ref"B1", formula("=INDIRECT(\"A1\")"))
+      .put(ref"C1", formula("=OFFSET(C5,-4,-2)")) // reads A1
+      .put(ref"D1", formula("=B1+C1"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(28)))

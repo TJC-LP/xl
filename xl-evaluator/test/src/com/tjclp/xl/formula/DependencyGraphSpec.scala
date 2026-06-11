@@ -676,10 +676,18 @@ class DependencyGraphSpec extends ScalaCheckSuite:
   }
 
   test("containsDynamicReference: false without dynamic calls") {
+    // GH-301: OFFSET is now dynamicDeps-flagged (it reads a shifted window the static graph
+    // cannot see), so the static example here no longer includes it — and the OFFSET form is
+    // asserted dynamic below.
     val static = FormulaParser
-      .parse("=SUM(A1:A3)+OFFSET(A1,1,0)")
+      .parse("=SUM(A1:A3)+VLOOKUP(\"k\",B1:C3,2)")
       .fold(err => fail(err.toString), identity)
     assert(!DependencyGraph.containsDynamicReference(static))
+
+    val offsetArithmetic = FormulaParser
+      .parse("=SUM(A1:A3)+OFFSET(A1,1,0)")
+      .fold(err => fail(err.toString), identity)
+    assert(DependencyGraph.containsDynamicReference(offsetArithmetic))
   }
 
   test("extractDependencies: =INDIRECT(A1) sees the argument A1") {
@@ -703,6 +711,19 @@ class DependencyGraphSpec extends ScalaCheckSuite:
       parseRef("A5") -> CellValue.Text("INDIRECT(\"C1\")") // not a formula
     )
     assertEquals(DependencyGraph.dynamicCells(sheet), Set(parseRef("A1"), parseRef("A2")))
+  }
+
+  test("GH-301 dynamicCells: OFFSET formulas are dynamic (parity with INDIRECT)") {
+    val sheet = sheetWith(
+      parseRef("A1") -> CellValue.Formula("=OFFSET(B1,1,0)", None),
+      parseRef("A2") -> CellValue.Formula("=SUM(OFFSET(B1,0,0,3,1))", None), // composed
+      parseRef("A3") -> CellValue.Formula("=offset(B1,1,0)*2", None), // case + operand position
+      parseRef("A4") -> CellValue.Formula("=SUM(B1:B2)", None) // static
+    )
+    assertEquals(
+      DependencyGraph.dynamicCells(sheet),
+      Set(parseRef("A1"), parseRef("A2"), parseRef("A3"))
+    )
   }
 
   test("dynamicClosure includes the dynamic cells AND their transitive static dependents") {

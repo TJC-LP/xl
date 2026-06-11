@@ -306,3 +306,55 @@ class DependentRecalculationSpec extends FunSuite:
       Some(CellValue.Formula("=INDIRECT(\"S1!A1\")", Some(CellValue.Number(BigDecimal(9)))))
     )
   }
+
+  // ===== GH-301: OFFSET cells are always-dirty in targeted recalculation (INDIRECT parity) =====
+
+  test("GH-301: editing the dynamic target refreshes OFFSET (no static edge exists)") {
+    // B1=OFFSET(C1,1,0) reads C2; the static graph only has the C1 anchor edge, so an
+    // edit to C2 is invisible without the always-dirty marking.
+    val sheet = sheetWith(
+      ref"C1" -> CellValue.Number(BigDecimal(1)),
+      ref"C2" -> CellValue.Number(BigDecimal(5)),
+      ref"B1" -> CellValue.Formula("=OFFSET(C1,1,0)", Some(CellValue.Number(BigDecimal(5))))
+    )
+    val updated = sheet
+      .put(ref"C2", CellValue.Number(BigDecimal(50)))
+      .recalculateDependents(Set(ref"C2"))
+    assertEquals(
+      updated(ref"B1").value,
+      CellValue.Formula("=OFFSET(C1,1,0)", Some(CellValue.Number(BigDecimal(50))))
+    )
+  }
+
+  test("GH-301: dependents of an OFFSET cell refresh when the dynamic target changes") {
+    val sheet = sheetWith(
+      ref"C1" -> CellValue.Number(BigDecimal(1)),
+      ref"C2" -> CellValue.Number(BigDecimal(5)),
+      ref"B1" -> CellValue.Formula("=OFFSET(C1,1,0)", Some(CellValue.Number(BigDecimal(5)))),
+      ref"D1" -> CellValue.Formula("=B1+1", Some(CellValue.Number(BigDecimal(6))))
+    )
+    val updated = sheet
+      .put(ref"C2", CellValue.Number(BigDecimal(50)))
+      .recalculateDependents(Set(ref"C2"))
+    assertEquals(
+      updated(ref"D1").value,
+      CellValue.Formula("=B1+1", Some(CellValue.Number(BigDecimal(51))))
+    )
+  }
+
+  test("GH-301: SUM(OFFSET(...)) window refreshes when a window cell changes") {
+    // SUM over OFFSET(C1,0,0,3,1) = C1:C3; editing C3 must refresh despite no static edge.
+    val sheet = sheetWith(
+      ref"C1" -> CellValue.Number(BigDecimal(1)),
+      ref"C2" -> CellValue.Number(BigDecimal(2)),
+      ref"C3" -> CellValue.Number(BigDecimal(3)),
+      ref"B1" -> CellValue.Formula("=SUM(OFFSET(C1,0,0,3,1))", Some(CellValue.Number(BigDecimal(6))))
+    )
+    val updated = sheet
+      .put(ref"C3", CellValue.Number(BigDecimal(30)))
+      .recalculateDependents(Set(ref"C3"))
+    assertEquals(
+      updated(ref"B1").value,
+      CellValue.Formula("=SUM(OFFSET(C1,0,0,3,1))", Some(CellValue.Number(BigDecimal(33))))
+    )
+  }

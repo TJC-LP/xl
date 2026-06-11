@@ -210,3 +210,31 @@ class Phase3FunctionsSpec extends FunSuite:
       Right(CellValue.Number(BigDecimal(0)))
     )
   }
+
+  // GH-301: OFFSET parity with INDIRECT — eval-aware extraction (uncached formula targets
+  // evaluate fresh instead of leaking raw Formula values / being skipped by aggregates).
+  test("GH-301: OFFSET over an UNCACHED formula target evaluates it") {
+    val sheet = s
+      .put("A1" -> 3)
+      .put(ref"C1", CellValue.Formula("=A1*2", None))
+    assertEquals(
+      sheet.evaluateFormula("=OFFSET(C1,0,0)"),
+      Right(CellValue.Number(BigDecimal(6)))
+    )
+  }
+
+  test("GH-301: SUM(OFFSET(...)) evaluates uncached formulas inside the window") {
+    val sheet = s
+      .put("A1" -> 1)
+      .put(ref"A2", CellValue.Formula("=A1+1", None)) // uncached
+      .put(ref"A3", CellValue.Formula("=A1+2", Some(CellValue.Number(BigDecimal(3))))) // cached
+    assertEquals(
+      sheet.evaluateFormula("=SUM(OFFSET(A1,0,0,3,1))"),
+      Right(CellValue.Number(BigDecimal(6)))
+    )
+  }
+
+  test("GH-301: OFFSET over a cached formula target trusts the cache") {
+    val sheet = s.put(ref"C1", CellValue.Formula("=1+1", Some(CellValue.Number(BigDecimal(2)))))
+    assertEquals(sheet.evaluateFormula("=OFFSET(C1,0,0)"), Right(CellValue.Number(BigDecimal(2))))
+  }
