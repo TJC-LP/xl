@@ -2,6 +2,7 @@ package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, Comment}
+import com.tjclp.xl.cf.{CfRule, ConditionalFormat}
 import com.tjclp.xl.charts.{Chart, DataRef, Series, SeriesName}
 import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
 import com.tjclp.xl.drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData}
@@ -37,6 +38,10 @@ import scala.util.boundary, boundary.break
  * @param drawings
  *   Drawing objects (pictures and preserved fragments, GH-221). Document order is z-order is
  *   emission order: appended drawings paint on top.
+ *
+ * @param conditionalFormats
+ *   Conditional-formatting blocks (GH-136). Document order is emission order; use
+ *   [[conditionalFormat]] to append (it assigns priorities) rather than constructing directly.
  */
 final case class Sheet(
   name: SheetName,
@@ -52,7 +57,8 @@ final case class Sheet(
   pageSetup: Option[PageSetup] = None,
   freezePane: Option[FreezePane] = None,
   viewSettings: Option[SheetView] = None,
-  drawings: Vector[Drawing] = Vector.empty
+  drawings: Vector[Drawing] = Vector.empty,
+  conditionalFormats: Vector[ConditionalFormat] = Vector.empty
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -221,6 +227,30 @@ final case class Sheet(
       case preserved: Drawing.Preserved => preserved
     }
 
+    // Conditional formats (GH-136): the EXACT mergedRanges clamp/split/drop algebra on each typed
+    // block's envelope. A range collapsing entirely is dropped; a block whose ranges all drop is
+    // removed (Excel deletes rules whose entire range is deleted). Rules themselves — including
+    // CfRule.Preserved payloads — are untouched here; typed formula rewriting is layered in
+    // xl-evaluator's StructuralEditor. ConditionalFormat.Preserved blocks are untouched.
+    val newCondFmts = conditionalFormats.flatMap {
+      case ConditionalFormat.Rules(ranges, rules, pivot) =>
+        val shiftedRanges = ranges.flatMap { range =>
+          val s = axisOf(range.start)
+          val e = axisOf(range.end)
+          val (ns, ne) =
+            if !deleting then (if s >= at then s + count else s, if e >= at then e + count else e)
+            else
+              val ns0 = if s < at then s else if s >= at + count then s - count else at
+              val ne0 = if e < at then e else if e >= at + count then e - count else at - 1
+              (ns0, ne0)
+          if ns > ne then None
+          else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
+        }
+        if shiftedRanges.isEmpty then None
+        else Some(ConditionalFormat.Rules(shiftedRanges, rules, pivot))
+      case preserved: ConditionalFormat.Preserved => Some(preserved)
+    }
+
     copy(
       cells = newCells,
       comments = newComments,
@@ -228,7 +258,8 @@ final case class Sheet(
       columnProperties = newColProps,
       mergedRanges = newMerges,
       freezePane = newFreeze,
-      drawings = newDrawings
+      drawings = newDrawings,
+      conditionalFormats = newCondFmts
     )
 
   /** Put CellValue at reference (always succeeds - CellValue is pre-validated) */
@@ -651,6 +682,45 @@ final case class Sheet(
     if drawings.isDefinedAt(index) then copy(drawings = drawings.patch(index, Nil, 1))
     else this
 
+  // ===== Conditional formatting (GH-136) =====
+
+  /**
+   * Append ONE conditional-formatting block applying `rule` (and `more`) to `range`.
+   *
+   * Authoring always appends a new block, never merges into existing blocks (Excel accepts and
+   * itself writes multiple blocks). Rules with `priority <= 0` ([[CfRule.AutoPriority]]) are
+   * assigned `maxExistingPriority + 1, +2, ...` in argument order — above every priority already on
+   * the sheet, including those of Preserved rules/blocks. Explicit positive priorities pass through
+   * unvalidated; colliding priorities are Excel-tolerated but discouraged.
+   */
+  def conditionalFormat(range: CellRange, rule: CfRule, more: CfRule*): Sheet =
+    conditionalFormat(Vector(range), (rule +: more).toVector)
+
+  /** Multi-range variant of [[conditionalFormat]]: one block, several sqref ranges. */
+  def conditionalFormat(ranges: Vector[CellRange], rules: Vector[CfRule]): Sheet =
+    if ranges.isEmpty || rules.isEmpty then this
+    else
+      val maxExisting = Sheet.maxCfPriority(conditionalFormats)
+      val (stamped, _) = rules.foldLeft((Vector.empty[CfRule], maxExisting)) {
+        case ((acc, cur), rule) =>
+          CfRule.priorityOf(rule) match
+            case Some(p) if p <= 0 =>
+              val next = cur + 1
+              (acc :+ CfRule.withPriority(rule, next), next)
+            case _ => (acc :+ rule, cur)
+      }
+      copy(conditionalFormats = conditionalFormats :+ ConditionalFormat.Rules(ranges, stamped))
+
+  /** Remove the conditional-format block at `index`; identity when out of range. */
+  def removeConditionalFormat(index: Int): Sheet =
+    if conditionalFormats.isDefinedAt(index) then
+      copy(conditionalFormats = conditionalFormats.patch(index, Nil, 1))
+    else this
+
+  /** All typed conditional-format blocks in document order (Preserved fragments excluded). */
+  def typedConditionalFormats: Vector[ConditionalFormat.Rules] =
+    conditionalFormats.collect { case r: ConditionalFormat.Rules => r }
+
   /** Add or update table in sheet */
   def withTable(table: TableSpec): Sheet =
     copy(tables = tables.updated(table.name, table))
@@ -788,6 +858,19 @@ final case class Sheet(
     copy(comments = comments.filterNot((ref, _) => range.contains(ref)))
 
 object Sheet:
+
+  /**
+   * Highest priority present across the sheet's conditional formats (0 when none): typed rules'
+   * priorities ∪ parsed `CfRule.Preserved` priorities ∪ priorities text-scanned from
+   * `ConditionalFormat.Preserved` payloads (GH-136). Auto-priority allocation appends above this.
+   */
+  private[xl] def maxCfPriority(cfs: Vector[ConditionalFormat]): Int =
+    cfs.foldLeft(0) {
+      case (acc, ConditionalFormat.Rules(_, rules, _)) =>
+        rules.foldLeft(acc)((a, r) => math.max(a, CfRule.priorityOf(r).getOrElse(0)))
+      case (acc, ConditionalFormat.Preserved(xml)) =>
+        ConditionalFormat.scanPriorities(xml).foldLeft(acc)(math.max)
+    }
 
   /**
    * Shift a chart's data references that point at sheet `edited` (matched case-insensitively, the

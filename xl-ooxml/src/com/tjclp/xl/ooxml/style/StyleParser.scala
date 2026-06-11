@@ -16,13 +16,18 @@ import com.tjclp.xl.styles.numfmt.NumFmt
  *
  * Stores both domain model (cellStyles) and raw OOXML vectors (fonts, fills, borders) for
  * byte-perfect preservation during surgical writes.
+ *
+ * @param dxfs
+ *   raw `<dxfs>` children (differential formats) in table order — conditional-formatting dxfId
+ *   attributes index into this vector (GH-136)
  */
 final case class WorkbookStyles(
   cellStyles: Vector[CellStyle],
   fonts: Vector[Font],
   fills: Vector[Fill],
   borders: Vector[Border],
-  customNumFmts: Vector[(Int, NumFmt)]
+  customNumFmts: Vector[(Int, NumFmt)],
+  dxfs: Vector[Elem] = Vector.empty
 ):
   def styleAt(index: Int): Option[CellStyle] = cellStyles.lift(index)
 
@@ -41,13 +46,17 @@ object WorkbookStyles:
     val fills = parseFills(elem)
     val borders = parseBorders(elem)
     val cellStyles = parseCellXfs(elem, fonts, fills, borders, numFmts)
+    val dxfs = (elem \ "dxfs").headOption
+      .collect { case e: Elem => getChildren(e, "dxf").toVector }
+      .getOrElse(Vector.empty)
     Right(
       WorkbookStyles(
         cellStyles = cellStyles,
         fonts = fonts,
         fills = fills,
         borders = borders,
-        customNumFmts = numFmts.toVector.sortBy(_._1)
+        customNumFmts = numFmts.toVector.sortBy(_._1),
+        dxfs = dxfs
       )
     )
 

@@ -134,7 +134,20 @@ object WorkbookEquivalence:
         )
       else Nil
     refDiffs ++ cellDiffs ++ commentDiffs ++ mergeDiffs ++ viewDiffs ++ pageSetupDiffs ++
-      drawingsDiff(name, expected, actual)
+      drawingsDiff(name, expected, actual) ++ cfDiff(name, expected, actual)
+
+  /**
+   * Conditional-format equality (GH-136): PLAIN structural equality — typed blocks/rules compare by
+   * value (incl. Dxf), Preserved fragments by exact canonical XML string. The model always holds
+   * final priorities (assigned at append), so there is deliberately NO priority canonicalization
+   * clause.
+   */
+  private def cfDiff(sheet: String, expected: Sheet, actual: Sheet): List[String] =
+    if expected.conditionalFormats == actual.conditionalFormats then Nil
+    else
+      List(
+        s"$sheet: conditionalFormats mismatch:\n  expected ${expected.conditionalFormats}\n  actual   ${actual.conditionalFormats}"
+      )
 
   /**
    * Drawing equality (GH-221/GH-222): same length and per-index kind; Pictures compare by anchor,

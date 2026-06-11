@@ -3,12 +3,13 @@ package com.tjclp.xl
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, Comment}
+import com.tjclp.xl.cf.{CfOperator, CfPoint, CfRule, CfTextOp, Cfvo, ConditionalFormat}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.context.ModificationTracker
 import com.tjclp.xl.drawings.TestImages
 import com.tjclp.xl.sheets.{FreezePane, HeaderFooter, PageMargins, PageSetup, SheetView}
 import com.tjclp.xl.sheets.styleSyntax.*
-import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.{CellStyle, Dxf, DxfFont}
 import com.tjclp.xl.styles.alignment.{Align, HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemeSlot}
@@ -707,6 +708,183 @@ object Generators:
       name <- Gen.frequency(1 -> Gen.alphaNumStr.map(_.take(12)), 2 -> Gen.const(""))
     yield Drawing.ChartFrame(anchor, chart, name)
 
+  // ===== Conditional-format generators (GH-136) =====
+  // Constraints for the round-trip law (mirroring the style-generator notes above):
+  //   - colors come from the stable pool/theme subset (an alpha-00 Rgb canonicalizes to FF on
+  //     parse, which plain cf equality would flag)
+  //   - dxf numFmts avoid NumFmt.Currency (no format-code string parses back to that case) and
+  //     Custom codes that collide with built-in code strings
+  //   - priorities are stamped concrete (1..n in document order) — the model always holds final
+  //     priorities, so equivalence is plain equality with no canonicalization clause
+
+  /** Colors stable under the OOXML color parse (alpha FF or theme+tint). */
+  private val genCfColor: Gen[Color] =
+    Gen.frequency(
+      6 -> Gen
+        .oneOf(0xff000000, 0xffffffff, 0xff9c0006, 0xffffc7ce, 0xff638ec6, 0xff00b050, 0xffffc000)
+        .map(Color.Rgb.apply),
+      2 -> (for
+        slot <- Gen.oneOf(ThemeSlot.values.toIndexedSeq)
+        tint <- Gen.oneOf(-0.25, 0.0, 0.25)
+      yield Color.Theme(slot, tint))
+    )
+
+  /** Differential font: at least the generated deltas, Some(false) force-offs included. */
+  val genDxfFont: Gen[DxfFont] =
+    val flag = Gen.oneOf(None, Some(true), Some(false))
+    for
+      bold <- flag
+      italic <- flag
+      strike <- flag
+      underline <- flag
+      color <- Gen.option(genCfColor)
+    yield DxfFont(bold, italic, strike, underline, color)
+
+  /** Dxf numFmts stable through code-string round-trip (see constraints above). */
+  private val genDxfNumFmt: Gen[NumFmt] =
+    Gen.oneOf(
+      NumFmt.General,
+      NumFmt.Integer,
+      NumFmt.Decimal,
+      NumFmt.Percent,
+      NumFmt.PercentDecimal,
+      NumFmt.Date,
+      NumFmt.Custom("0.000"),
+      NumFmt.Custom("#,##0.0"),
+      NumFmt.Custom("yyyy-mm-dd")
+    )
+
+  /** Differential format within the modeled subset (font/fill/border/numFmt deltas). */
+  val genDxf: Gen[Dxf] =
+    val side =
+      for
+        style <- Gen.oneOf(
+          BorderStyle.None,
+          BorderStyle.Thin,
+          BorderStyle.Medium,
+          BorderStyle.Double
+        )
+        color <- if style == BorderStyle.None then Gen.const(None) else Gen.option(genCfColor)
+      yield BorderSide(style, color)
+    val border = for l <- side; r <- side; t <- side; b <- side
+    yield Border(l, r, t, b)
+    for
+      font <- Gen.option(genDxfFont)
+      fill <- Gen.option(genCfColor.map(c => Fill.Solid(c): Fill))
+      bdr <- Gen.frequency(3 -> Gen.const(None), 1 -> border.map(Some.apply))
+      numFmt <- Gen.frequency(3 -> Gen.const(None), 1 -> genDxfNumFmt.map(Some.apply))
+    yield Dxf(font, fill, bdr, numFmt)
+
+  /** Cfvo points; formula text round-trips verbatim (never re-parsed on read). */
+  val genCfvo: Gen[Cfvo] =
+    Gen.frequency(
+      3 -> Gen.oneOf(Cfvo.Min, Cfvo.Max),
+      2 -> Gen.oneOf(BigDecimal(0), BigDecimal(10), BigDecimal("1.5")).map(Cfvo.Num.apply),
+      2 -> Gen.oneOf(BigDecimal(10), BigDecimal(50), BigDecimal(90)).map(Cfvo.Percent.apply),
+      1 -> Gen.oneOf(BigDecimal(25), BigDecimal(75)).map(Cfvo.Percentile.apply),
+      1 -> Gen.oneOf("MAX($A$1:$A$9)", "AVERAGE($B$1:$B$9)+1").map(Cfvo.Formula.apply)
+    )
+
+  /** Color-scale point. */
+  val genCfPoint: Gen[CfPoint] =
+    for
+      cfvo <- genCfvo
+      color <- genCfColor
+    yield CfPoint(cfvo, color)
+
+  private val genCfFormula: Gen[String] =
+    Gen.oneOf("100", "0", "$B$1", "AVERAGE($A$1:$A$9)", "LEN(A1)>3", "\"x\"")
+
+  private val genCfText: Gen[String] =
+    Gen.oneOf("todo", "Q1 total", "x", "say \"hi\"", "100%")
+
+  /**
+   * Typed rule families with the auto-priority sentinel (callers stamp concrete priorities).
+   * Preserved rules are reader-constructed and deliberately not generated.
+   */
+  val genCfRule: Gen[CfRule] =
+    val dxfOpt = Gen.frequency(1 -> Gen.const(None), 3 -> genDxf.map(Some.apply))
+    val stop = Gen.frequency(3 -> Gen.const(false), 1 -> Gen.const(true))
+    Gen.oneOf(
+      for
+        op <- Gen.oneOf(
+          CfOperator.LessThan,
+          CfOperator.LessThanOrEqual,
+          CfOperator.Equal,
+          CfOperator.NotEqual,
+          CfOperator.GreaterThanOrEqual,
+          CfOperator.GreaterThan
+        )
+        f <- genCfFormula
+        dxf <- dxfOpt
+        s <- stop
+      yield CfRule.CellIs(op, f, None, dxf, CfRule.AutoPriority, s),
+      for
+        op <- Gen.oneOf(CfOperator.Between, CfOperator.NotBetween)
+        lo <- Gen.oneOf("1", "0", "$A$1")
+        hi <- Gen.oneOf("9", "100")
+        dxf <- dxfOpt
+        s <- stop
+      yield CfRule.CellIs(op, lo, Some(hi), dxf, CfRule.AutoPriority, s),
+      for
+        f <- Gen.oneOf("$B1>$C1", "MOD(ROW(),2)=0", "A1>AVERAGE($A$1:$A$9)")
+        dxf <- dxfOpt
+        s <- stop
+      yield CfRule.Expression(f, dxf, CfRule.AutoPriority, s),
+      for
+        min <- genCfPoint
+        mid <- Gen.option(genCfPoint)
+        max <- genCfPoint
+      yield CfRule.ColorScale(min, mid, max, CfRule.AutoPriority),
+      for
+        min <- genCfvo
+        max <- genCfvo
+        color <- genCfColor
+        show <- Gen.oneOf(true, false)
+      yield CfRule.DataBar(min, max, color, show, CfRule.AutoPriority),
+      for
+        rank <- Gen.choose(1, 50)
+        percent <- Gen.oneOf(true, false)
+        bottom <- Gen.oneOf(true, false)
+        dxf <- dxfOpt
+        s <- stop
+      yield CfRule.Top10(rank, percent, bottom, dxf, CfRule.AutoPriority, s),
+      for
+        op <- Gen
+          .oneOf(CfTextOp.Contains, CfTextOp.NotContains, CfTextOp.BeginsWith, CfTextOp.EndsWith)
+        text <- genCfText
+        dxf <- dxfOpt
+        s <- stop
+      yield CfRule.Text(op, text, dxf, CfRule.AutoPriority, s)
+    )
+
+  /** One typed block: 1-2 in-grid ranges, 1-3 rules (priorities stamped by the caller). */
+  private val genCfBlock: Gen[ConditionalFormat.Rules] =
+    for
+      numRanges <- Gen.choose(1, 2)
+      ranges <- Gen.listOfN(numRanges, genGridRange)
+      numRules <- Gen.choose(1, 3)
+      rules <- Gen.listOfN(numRules, genCfRule)
+    yield ConditionalFormat.Rules(ranges.toVector.distinct, rules.toVector)
+
+  /**
+   * ≤3 typed blocks with CONCRETE priorities 1..n stamped in document order — the shape
+   * `Sheet.conditionalFormat` produces, so round-trip equivalence is plain equality.
+   */
+  val genConditionalFormats: Gen[Vector[ConditionalFormat]] =
+    for
+      numBlocks <- Gen.choose(1, 3)
+      blocks <- Gen.listOfN(numBlocks, genCfBlock)
+    yield
+      val (stamped, _) = blocks.foldLeft((Vector.empty[ConditionalFormat], 0)) {
+        case ((acc, n), block) =>
+          val (rules, next) = block.rules.foldLeft((Vector.empty[CfRule], n)) {
+            case ((rs, k), rule) => (rs :+ CfRule.withPriority(rule, k + 1), k + 1)
+          }
+          (acc :+ block.copy(rules = rules), next)
+      }
+      stamped
+
   /**
    * Remap a sheet's typed-chart references from `oldName` to `newName` — the genRichWorkbook rename
    * fixup (TRAP-3): generated charts self-reference their sheet, so the post-generation rename must
@@ -763,6 +941,11 @@ object Generators:
         1 -> Gen.choose(1, 2).flatMap(n => Gen.listOfN(n, genPicture).map(_.toVector)),
         1 -> genChartFrame(name).map(Vector(_))
       )
+      // GH-136: typed conditional formats at picture-like frequency
+      condFmts <- Gen.frequency(
+        3 -> Gen.const(Vector.empty[ConditionalFormat]),
+        1 -> genConditionalFormats
+      )
     yield
       val withCells = entries.foldLeft(Sheet(name)) {
         case (sheet, (ref, value, style, comment, hyperlink)) =>
@@ -775,7 +958,8 @@ object Generators:
         viewSettings = view,
         pageSetup = pageSetup,
         freezePane = freeze,
-        drawings = drawings
+        drawings = drawings,
+        conditionalFormats = condFmts
       )
 
   /**

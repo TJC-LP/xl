@@ -1340,6 +1340,68 @@ object XlsxWriter:
           case None => (None, TopScope, None)
 
   /**
+   * Conditional-formatting write plan (GH-136).
+   *
+   * @param condFmtBySheet
+   *   the `<conditionalFormatting>` slot for every regenerated sheet (exactly one producer)
+   * @param mergedDxfs
+   *   the `<dxfs>` element for styles.xml: untouched source object when no sheet is cf-dirty,
+   *   source-prefix + appended entries otherwise (append-only — existing indices never move)
+   */
+  private final case class CfWritePlan(
+    condFmtBySheet: Map[Int, Seq[Elem]],
+    mergedDxfs: Option[Elem]
+  )
+
+  /**
+   * Pre-pass: decide per regenerated sheet whether its cf slot is CLEAN (reparse of the preserved
+   * worksheet equals the model — emit today's source elements verbatim, zero trust regression) or
+   * DIRTY (emit from the model via CfCodec), and plan the merged dxf table for the dirty sheets.
+   *
+   * The reparse dirty-gate is self-healing: the comparison is keyed by the SAME preserved part that
+   * would be passed through, so a wrong sheet-path mapping compares unequal → dirty → emit from
+   * model → correct output. A deterministic parser makes reparse-at-write equal parse-at-read for
+   * untouched models. Deletion is honored: a cleared model compares dirty and emits nothing (no
+   * resurrection).
+   */
+  private def planCfWrites(
+    workbook: Workbook,
+    sheetsToRegenerate: Set[Int],
+    preservedWorksheets: Map[Int, XLResult[Option[OoxmlWorksheet]]],
+    preservedDxfs: Option[Elem]
+  ): CfWritePlan =
+    import com.tjclp.xl.ooxml.style.DxfTable
+    import com.tjclp.xl.ooxml.worksheet.CfCodec
+    val sourceDxfChildren: Vector[Elem] =
+      preservedDxfs.map(e => XmlUtil.getChildren(e, "dxf").toVector).getOrElse(Vector.empty)
+    // Per regenerated sheet: Left(verbatim source elems) when clean, Right(sheet) when dirty.
+    val decisions: Vector[(Int, Either[Seq[Elem], Sheet])] =
+      sheetsToRegenerate.toVector.sorted
+        .flatMap(idx => workbook.sheets.lift(idx).map(idx -> _))
+        .map { case (idx, sheet) =>
+          val sourceCf: Option[Seq[Elem]] =
+            preservedWorksheets.get(idx).flatMap(_.toOption).flatten.map(_.conditionalFormatting)
+          sourceCf match
+            case Some(srcElems)
+                if CfCodec.parseAll(srcElems, sourceDxfChildren) == sheet.conditionalFormats =>
+              idx -> Left(srcElems)
+            case _ if sheet.conditionalFormats.isEmpty => idx -> Left(Seq.empty)
+            case _ => idx -> Right(sheet)
+        }
+    // Dxf planning only when some sheet is cf-dirty: collect needed dxfs in
+    // (sheetIdx, blockIdx, ruleIdx) order, reuse typed-equal source indices, dedup-append.
+    val neededDxfs: Vector[com.tjclp.xl.styles.Dxf] =
+      decisions.collect { case (_, Right(sheet)) =>
+        CfCodec.collectDxfs(sheet.conditionalFormats)
+      }.flatten
+    val dxfPlan = DxfTable.plan(preservedDxfs, neededDxfs)
+    val condFmt: Map[Int, Seq[Elem]] = decisions.map {
+      case (idx, Left(verbatim)) => idx -> verbatim
+      case (idx, Right(sheet)) => idx -> CfCodec.toElems(sheet.conditionalFormats, dxfPlan.dxfIds)
+    }.toMap
+    CfWritePlan(condFmt, dxfPlan.merged)
+
+  /**
    * Unified write: intelligently regenerates only what changed, preserves the rest.
    *
    * Strategy:
@@ -1487,7 +1549,23 @@ object XlsxWriter:
       case Some(ctx) => parsePreservedStylesMetadata(ctx.sourcePath)
       case None => (None, TopScope, None)
 
-    val styles = OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, preservedDxfs)
+    // GH-136: parse each regenerated sheet's preserved worksheet ONCE — the cf pre-pass and the
+    // sheet loop below both consume this cache (no double parse of large worksheets).
+    val preservedWorksheets: Map[Int, XLResult[Option[OoxmlWorksheet]]] =
+      sourceContext match
+        case Some(ctx) =>
+          sheetsToRegenerate.toVector.sorted
+            .filter(workbook.sheets.indices.contains)
+            .map(idx => idx -> parsePreservedWorksheet(ctx.sourcePath, graph.pathForSheet(idx)))
+            .toMap
+        case None => Map.empty
+
+    // GH-136: plan conditional-formatting emission + dxf-table merge BEFORE writeStyles —
+    // styles.xml is written before the sheet loop, so dxf indices must be assigned up front.
+    val cfPlan = planCfWrites(workbook, sheetsToRegenerate, preservedWorksheets, preservedDxfs)
+
+    val styles =
+      OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, cfPlan.mergedDxfs)
 
     // Build comments data and VML drawings
     val (commentsBySheet, sheetsWithComments) = buildCommentsData(workbook)
@@ -1666,11 +1744,10 @@ object XlsxWriter:
       // Write sheets: regenerate modified, copy unmodified (if source available)
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
         if sheetsToRegenerate.contains(idx) then
-          // Regenerate modified sheet with preserved metadata (if available)
+          // Regenerate modified sheet with preserved metadata (if available, via the GH-136
+          // pre-pass cache — parsed once, consumed by both the cf plan and this loop)
           val sheetPath = graph.pathForSheet(idx)
-          val preservedMetadata = sourceContext
-            .map(ctx => parsePreservedWorksheet(ctx.sourcePath, sheetPath))
-            .getOrElse(Right(None)) match
+          val preservedMetadata = preservedWorksheets.getOrElse(idx, Right(None)) match
             case Right(value) => value
             case Left(err) =>
               throw new IllegalStateException(
@@ -1711,9 +1788,10 @@ object XlsxWriter:
           // For SaxStax backend with no preserved metadata, use direct SAX emission
           // (bypasses intermediate OOXML types for 5-7x performance improvement).
           // GH-221: sheets with drawings force the OoxmlWorksheet path — DirectSaxEmitter has no
-          // <drawing> support yet (deferred).
+          // <drawing> support yet (deferred). GH-136: same for conditional formats.
           (config.backend, preservedMetadata) match
-            case (XmlBackend.SaxStax, None) if sheet.drawings.isEmpty =>
+            case (XmlBackend.SaxStax, None)
+                if sheet.drawings.isEmpty && sheet.conditionalFormats.isEmpty =>
               writeWorksheetDirect(
                 zip,
                 s"xl/worksheets/sheet${idx + 1}.xml",
@@ -1733,7 +1811,8 @@ object XlsxWriter:
                   preservedMetadata,
                   tablePartsXml,
                   escapeFormulas,
-                  drawingPlan.drawingRefs.get(idx)
+                  drawingPlan.drawingRefs.get(idx),
+                  condFmt = Some(cfPlan.condFmtBySheet.getOrElse(idx, Seq.empty))
                 )
               writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
 

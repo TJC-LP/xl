@@ -21,14 +21,16 @@ object TestFixtures:
     "chart-stacked.xlsx",
     "chart-scatter.xlsx",
     "image.xlsx",
-    "comments-hyperlinks.xlsx"
+    "comments-hyperlinks.xlsx",
+    "condformat.xlsx"
   )
 
   /** Fixtures converted through LibreOffice headless (SST dialect, cached formulas). */
   val libreOffice: List[String] = List(
     "small-values-lo.xlsx",
     "styled-lo.xlsx",
-    "formulas-lo.xlsx"
+    "formulas-lo.xlsx",
+    "condformat-lo.xlsx"
   )
 
   /**

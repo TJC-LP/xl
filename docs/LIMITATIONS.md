@@ -257,13 +257,20 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
 
 ---
 
-#### 10. Conditional Formatting Not Supported
-**Status**: Not implemented (preserved through edits since 0.10.0, like other unknown/inline parts)
-**Impact**: Cannot author color scales, data bars, icon sets
-**Plan**: see [plan/roadmap.md](plan/roadmap.md)
+#### 10. Conditional Formatting ✅ TYPED RULES SUPPORTED (#136) — with scoped limitations
+**Status**: Six rule families are fully modeled: `cellIs` (all eight operators incl. between/notBetween), `expression`, 2/3-point `colorScale`, `dataBar`, `top10`, and the four text rules (contains/notContains/beginsWith/endsWith). Read into `Sheet.conditionalFormats` (typed `ConditionalFormat.Rules` envelopes with `CfRule` rules), authored via `Sheet.conditionalFormat(range, CfRule.cellIs(...), ...)` with differential formats (`Dxf`: font deltas, solid fills, borders, numFmts), and round-tripped on both writer backends. Priorities are assigned at append (`max(existing)+1, +2, ...` — above Preserved rules' priorities too); explicit priorities pass through unvalidated. The read path is typed-parse-or-Preserved at TWO granularities: an unmodeled **rule** (iconSet, timePeriod, aboveAverage, duplicate/uniqueValues, containsBlanks/Errors, any rule with a child `extLst` or out-of-whitelist attr/dxf) rides `CfRule.Preserved` verbatim while its **envelope stays typed** (sqref still shifts under structural edits); an unparseable **envelope** rides `ConditionalFormat.Preserved` whole. The write path is a reparse dirty-gate: an untouched cf model re-emits the source elements verbatim (untouched sheets stay byte-identical); a changed model regenerates with canonical emission and **append-only** dxf-table merging (existing dxf indices never move, so dxfIds baked into Preserved rules and tables stay valid). Structural edits shift typed envelopes with the merged-ranges clamp/split/drop algebra and rewrite typed rule formulas (`#REF!` on full deletion, rule kept); text-rule formulas are derived at emission so they auto-correct.
 
-**Effort**: 5-7 days
-**LOC**: ~300 (Rules model, XML serialization, testing)
+**Scope fence (v1 OUT — all ride `Preserved` byte-faithfully)**:
+- No typed iconSet, timePeriod, aboveAverage, duplicate/uniqueValues, containsBlanks/Errors, autoMin/autoMax data bars, or any x14 extension content (gradient/negative/axis data bars, custom icon sets); worksheet-level `extLst` untouched.
+- No dxf alignment/protection/gradient fills/font name/size; double-underline degrades to Preserved. `NumFmt.Currency` in a dxf emits but reads back as `Custom` (no distinct format-code retraction).
+- **No evaluation or rendering anywhere**: rules do not participate in `SheetEvaluator`/`DependencyGraph`; HTML/SVG/PNG export and `view --eval` ignore conditional formatting.
+
+**Behavioral limitations (by design)**:
+- **Preserved staleness under structural edits**: `CfRule.Preserved` payload formulas and `ConditionalFormat.Preserved` sqref do NOT shift (the `Drawing.Preserved` precedent); typed envelopes around Preserved rules DO shift.
+- No priority renumbering or overlap validation of explicit priorities; authoring never merges into existing blocks (a new block is appended per call, as Excel itself does).
+- No streaming-path cf (`readStream` surfaces none; `writeStream` emits none); fresh-sheet SaxStax writes with cf route through the DOM-equivalent worksheet builder (DirectSaxEmitter cf deferred).
+- No CLI/batch op in this wave (follow-up issue covers `xl cond-format` + batch op + skill doc).
+- **Source-compat**: `Sheet` gained a 15th field (`conditionalFormats`) — source-compatible, not binary-compatible with 0.12.x.
 
 ---
 

@@ -1036,6 +1036,11 @@ object XlsxReader:
     // Parse view settings (gridlines, zoom) from <sheetViews> — GH-258
     val viewSettings = parseSheetView(ooxmlSheet.sheetViews)
 
+    // Parse conditional formatting into the typed model (GH-136); dxfId attrs resolve through
+    // the styles.xml <dxfs> table. Total: unmodeled content rides through Preserved.
+    val conditionalFormats =
+      com.tjclp.xl.ooxml.worksheet.CfCodec.parseAll(ooxmlSheet.conditionalFormatting, styles.dxfs)
+
     Right(
       Sheet(
         name = name,
@@ -1048,7 +1053,8 @@ object XlsxReader:
         rowProperties = rowProperties,
         pageSetup = pageSetup,
         viewSettings = viewSettings,
-        drawings = drawings
+        drawings = drawings,
+        conditionalFormats = conditionalFormats
       )
     )
 
