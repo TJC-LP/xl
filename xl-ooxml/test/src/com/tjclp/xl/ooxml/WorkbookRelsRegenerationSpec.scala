@@ -81,6 +81,13 @@ class WorkbookRelsRegenerationSpec extends FunSuite:
       (e \@ "name") -> rId
     }.toVector
 
+  /** name -> sheetId for every `<sheet>` in workbook.xml, in declaration order. */
+  private def sheetIdsByName(path: Path): Vector[(String, String)] =
+    val wb = parseEntry(path, "xl/workbook.xml")
+    (wb \ "sheets" \ "sheet").collect { case e: scala.xml.Elem =>
+      (e \@ "name") -> (e \@ "sheetId")
+    }.toVector
+
   /** Id -> (Type, Target, TargetMode) for every relationship in workbook.xml.rels. */
   private def workbookRels(path: Path): Map[String, (String, String, Option[String])] =
     val ids = relIdList(path)
@@ -277,6 +284,59 @@ class WorkbookRelsRegenerationSpec extends FunSuite:
     assertEquals(back.sheetNames.map(_.value), Vector("Values", "Extra"))
     assertEquals(back.sheets(1)(ref"A1").value, CellValue.Number(BigDecimal(42)))
     assertEquals(back.sheets(0)(ref"A2").value, CellValue.Text("héllo wörld"))
+  }
+
+  test("GH-320: adding two sheets in one session allocates distinct sheetIds") {
+    // ECMA-376 requires unique sheetId; allocation must thread through the pass, not recompute
+    // max(preserved)+1 per sheet (which hands every new sheet in the session the same id).
+    Seq("small-values.xlsx", "small-values-lo.xlsx").foreach { fixture =>
+      val (_, wb) = readFixture(fixture)
+      val extra1 = Sheet(SheetName.unsafe("Extra1")).put(ref"A1", CellValue.Number(BigDecimal(1)))
+      val extra2 = Sheet(SheetName.unsafe("Extra2")).put(ref"A1", CellValue.Number(BigDecimal(2)))
+      val added = wb
+        .insertAt(1, extra1)
+        .flatMap(_.insertAt(2, extra2))
+        .fold(err => fail(s"$fixture: insertAt failed: $err"), identity)
+      val out = writeTo(added, "multi-add")
+      val ids = sheetIdsByName(out)
+      assertEquals(ids.map(_._1), Vector("Values", "Extra1", "Extra2"), fixture)
+      val sheetIds = ids.map(_._2)
+      assertEquals(
+        sheetIds.distinct.size,
+        sheetIds.size,
+        s"$fixture: duplicate sheetId in workbook.xml: $ids"
+      )
+      // deterministic: preserved sheet keeps its id, fresh sheets allocate max+1 in sheet order
+      assertEquals(sheetIds, Vector("1", "2", "3"), fixture)
+      val back = reread(out)
+      assertEquals(back.sheetNames.map(_.value), Vector("Values", "Extra1", "Extra2"), fixture)
+      assertEquals(back.sheets(1)(ref"A1").value, CellValue.Number(BigDecimal(1)), fixture)
+      assertEquals(back.sheets(2)(ref"A1").value, CellValue.Number(BigDecimal(2)), fixture)
+    }
+  }
+
+  test("GH-320: renaming both sheets of formulas-lo.xlsx keeps sheetIds distinct") {
+    val (_, wb) = readFixture("formulas-lo.xlsx")
+    val renamed = wb
+      .rename(SheetName.unsafe("Data"), SheetName.unsafe("D2"))
+      .flatMap(_.rename(SheetName.unsafe("Calc"), SheetName.unsafe("C2")))
+      .fold(err => fail(s"rename failed: $err"), identity)
+    val out = writeTo(renamed, "multi-rename")
+    val ids = sheetIdsByName(out)
+    assertEquals(ids.map(_._1), Vector("D2", "C2"))
+    val sheetIds = ids.map(_._2)
+    assertEquals(
+      sheetIds.distinct.size,
+      sheetIds.size,
+      s"duplicate sheetId in workbook.xml: $ids"
+    )
+    // renamed sheets miss the name match, so each allocates a fresh id above the preserved max
+    assertEquals(sheetIds, Vector("3", "4"))
+    // their rIds still ride through (identity-resolved part match is rename-stable, GH-315)
+    assertEquals(sheetRelIds(out), Vector("D2" -> "rId3", "C2" -> "rId4"))
+    val back = reread(out)
+    assertEquals(back.sheetNames.map(_.value), Vector("D2", "C2"))
+    assertEquals(back.sheets(0)(ref"A5").value, CellValue.Number(BigDecimal(50)))
   }
 
   test("GH-320: deleting a sheet from formulas-lo.xlsx drops its rel and keeps the rest") {

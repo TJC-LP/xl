@@ -117,23 +117,29 @@ case class OoxmlWorkbook(
     stateOverrides: Map[SheetName, Option[String]],
     relationshipIds: Seq[String]
   ): OoxmlWorkbook =
-    val updatedRefs = newSheets.zipWithIndex.map { case (sheet, idx) =>
-      val relId = relationshipIds.lift(idx).getOrElse(s"rId${idx + 1}")
-      // Check for explicit state override from domain metadata
-      val overriddenState = stateOverrides.get(sheet.name)
+    // Fresh sheetId allocation threads through the pass (seeded with the preserved max, which
+    // already covers every matched sheet's id) so multiple unmatched sheets in one session —
+    // multi-add, multi-rename — get DISTINCT ids; ECMA-376 requires sheetId uniqueness. Mirrors
+    // the rId counter in Relationships.reconcileWorkbook.
+    val seedMaxId = sheets.map(_.sheetId).maxOption.getOrElse(0)
+    val (updatedRefs, _) = newSheets.zipWithIndex
+      .foldLeft((Vector.empty[SheetRef], seedMaxId)) { case ((acc, maxId), (sheet, idx)) =>
+        val relId = relationshipIds.lift(idx).getOrElse(s"rId${idx + 1}")
+        // Check for explicit state override from domain metadata
+        val overriddenState = stateOverrides.get(sheet.name)
 
-      // Try to find original SheetRef to preserve sheetId
-      sheets.find(_.name == sheet.name) match
-        case Some(original) =>
-          // Use override if present, otherwise preserve original state
-          val finalState = overriddenState.getOrElse(original.state)
-          original.copy(relationshipId = relId, state = finalState)
-        case None =>
-          // New sheet - generate new ID, use override or default to visible
-          val newId = sheets.map(_.sheetId).maxOption.getOrElse(0) + 1
-          val finalState = overriddenState.getOrElse(None)
-          SheetRef(sheet.name, newId, relId, finalState)
-    }
+        // Try to find original SheetRef to preserve sheetId
+        sheets.find(_.name == sheet.name) match
+          case Some(original) =>
+            // Use override if present, otherwise preserve original state
+            val finalState = overriddenState.getOrElse(original.state)
+            (acc :+ original.copy(relationshipId = relId, state = finalState), maxId)
+          case None =>
+            // New sheet - allocate above every id seen so far, use override or default to visible
+            val newId = maxId + 1
+            val finalState = overriddenState.getOrElse(None)
+            (acc :+ SheetRef(sheet.name, newId, relId, finalState), newId)
+      }
     copy(sheets = updatedRefs)
 
   def toXml: Elem =
