@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Visual wave 6b)
+
+- **Typed chart model** (#222): `com.tjclp.xl.charts.Chart` — bar, line, pie with series
+  (name/categories/values as sheet-qualified ranges), title, legend; charts anchor through the
+  6a drawing layer (`Drawing.ChartFrame`). Typed read of the supported subset with `Preserved`
+  fallback for everything else (stacked/scatter/3D round-trip byte-faithfully — pinned by new
+  `chart-stacked.xlsx`/`chart-scatter.xlsx` fixtures). Deterministic `xl/charts/chartN.xml`
+  emission with series formulas quoted via `SheetName.quoteForFormula` and value caches filled
+  from live cells. **Structural row/column edits rewrite chart series ranges** like formulas.
+  Charts join the generative round-trip law (`genChart`, dedicated `ChartRoundTripSpec` laws).
+- **CLI**: `xl chart add --type bar --data B2:D10 --categories A2:A10 --title "Revenue" --at
+  F2:K15` and `xl add-image logo.png --at B2` (#222, #221 surface).
+
 ### Added (Visual wave 6a)
 
 - **Embedded pictures** (#221): new pure `com.tjclp.xl.drawings` package — `Drawing` enum
