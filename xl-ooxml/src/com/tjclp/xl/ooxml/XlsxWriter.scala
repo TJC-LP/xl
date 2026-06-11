@@ -4,7 +4,7 @@ import scala.xml.*
 import java.io.{ByteArrayOutputStream, FileOutputStream, OutputStream}
 import java.security.MessageDigest
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
-import java.nio.file.{Files, Path, StandardCopyOption}
+import java.nio.file.{Files, Path, Paths, StandardCopyOption}
 import java.nio.charset.StandardCharsets
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
@@ -1132,6 +1132,50 @@ object XlsxWriter:
       f(zip)
     })
 
+  /** Excel's comment-part scheme: xl/commentsN.xml pairs with xl/drawings/vmlDrawingN.vml. */
+  private val legacyCommentPathPattern = "^xl/comments(\\d+)\\.xml$".r
+
+  /**
+   * VML drawing part path for a sheet's regenerated comments (GH-292). Excel's numbering scheme is
+   * derived from the comment path; foreign comment dialects (openpyxl's xl/comments/comment1.xml)
+   * carry no number, so the sheet's preserved vmlDrawing RELATIONSHIP target is reused — the
+   * regenerated VML then replaces the original part in place instead of orphaning a second copy.
+   * Falls back to the sheet-index scheme when nothing usable is preserved.
+   */
+  private def vmlPathForSheet(
+    ctx: Option[SourceContext],
+    sheetIdx: Int,
+    commentPath: String
+  ): String =
+    commentPath match
+      case legacyCommentPathPattern(num) => s"xl/drawings/vmlDrawing$num.vml"
+      case _ =>
+        ctx
+          .flatMap(preservedVmlTarget(_, sheetIdx))
+          .getOrElse(s"xl/drawings/vmlDrawing${sheetIdx + 1}.vml")
+
+  /** Resolve the sheet's preserved vmlDrawing relationship target to a normalized xl/ path. */
+  private def preservedVmlTarget(ctx: SourceContext, sheetIdx: Int): Option[String] =
+    val relsPath = s"xl/worksheets/_rels/sheet${sheetIdx + 1}.xml.rels"
+    if !ctx.partManifest.contains(relsPath) then None
+    else
+      withZipFile(ctx.sourcePath)(z => parseOptionalEntry(z, relsPath)(Relationships.fromXml))
+        .flatMap(_.relationships.find(_.`type` == XmlUtil.relTypeVmlDrawing))
+        .flatMap(rel => normalizeSheetRelTarget(rel.target))
+
+  /**
+   * Normalize a worksheet relationship target (relative "../x", absolute "/xl/x") to an xl/ zip
+   * path — the same rules as the reader's comment/drawing target resolution. None when the target
+   * escapes xl/.
+   */
+  private def normalizeSheetRelTarget(target: String): Option[String] =
+    val cleaned = if target.startsWith("/") then target.drop(1) else target
+    val resolved =
+      if cleaned.startsWith("xl/") || cleaned.startsWith("xl\\") then Paths.get(cleaned)
+      else Paths.get("xl/worksheets").resolve(cleaned)
+    val normalized = resolved.normalize().toString.replace('\\', '/')
+    Option.when(normalized.startsWith("xl/"))(normalized)
+
   /**
    * GH-235: external-hyperlink relationships for a sheet (rIdHL{n} <-> URL), matching the
    * worksheet.
@@ -1705,8 +1749,8 @@ object XlsxWriter:
           val commentPath = sourceContext
             .flatMap(_.commentPathMapping.get(idx))
             .getOrElse(s"xl/comments${idx + 1}.xml")
-          val commentFileNum = commentPath.stripPrefix("xl/comments").stripSuffix(".xml")
-          val vmlPath = s"xl/drawings/vmlDrawing$commentFileNum.vml"
+          // GH-292: foreign comment dialects resolve the VML target through the preserved rels
+          val vmlPath = vmlPathForSheet(sourceContext, idx, commentPath)
 
           val hasComments = commentsBySheet.contains(idx)
           val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
@@ -1795,16 +1839,16 @@ object XlsxWriter:
       sourceContext.foreach { ctx =>
         val vmlPathsToSkip = sheetsToRegenerate.flatMap { idx =>
           ctx.commentPathMapping.get(idx).map { commentPath =>
-            val fileNum = commentPath.stripPrefix("xl/comments").stripSuffix(".xml")
-            s"xl/drawings/vmlDrawing$fileNum.vml"
+            // GH-292: must mirror the regeneration path exactly, or the preserved copy ships too
+            vmlPathForSheet(Some(ctx), idx, commentPath)
           }
         }
 
         preservableParts.foreach { path =>
-          val isVmlDrawing = path.startsWith("xl/drawings/vmlDrawing") && path.endsWith(".vml")
+          // vmlPathsToSkip holds the exact regeneration targets — including foreign-named VML
+          // parts like openpyxl's commentsDrawing1.vml (GH-292), so no filename-prefix guard
           val shouldSkip =
-            (isVmlDrawing && vmlPathsToSkip.contains(path)) ||
-              drawingPlan.skipPaths.contains(path)
+            vmlPathsToSkip.contains(path) || drawingPlan.skipPaths.contains(path)
 
           if !shouldSkip then copyPreservedPart(ctx.sourcePath, path, zip)
         }

@@ -137,14 +137,31 @@ object XlsxReader:
    *   - Worksheets (pattern: xl/worksheets/sheet*.xml)
    *   - Relationships
    *
-   * All other parts (charts, drawings, images, etc.) are preserved byte-for-byte.
+   * All other parts (charts, drawings, images, etc.) are preserved byte-for-byte. Comment parts
+   * are NOT matched here: which part is a sheet's comment part is decided by the worksheet
+   * RELATIONSHIP type (GH-292), so the scan only retains candidates (see
+   * [[isCommentCandidatePart]]) and the manifest is reconciled after rels resolution.
    */
   private def isKnownPart(path: String): Boolean =
     knownParts.contains(path) ||
       path.matches("xl/worksheets/sheet\\d+\\.xml") ||
-      path.matches("xl/comments\\d+\\.xml") ||
       path.matches("xl/tables/table\\d+\\.xml") ||
       path.matches("xl/worksheets/_rels/sheet\\d+\\.xml\\.rels")
+
+  /**
+   * Comment-part candidates retained at scan time (GH-292). Producers disagree on comment part
+   * paths — Excel writes xl/comments1.xml, openpyxl xl/comments/comment1.xml — so retention is a
+   * generous path heuristic while the authoritative sheet→part resolution is the worksheet
+   * relationship of type [[XmlUtil.relTypeComments]] (the GH-221 drawing-rel precedent). Retained
+   * parts stay UNPARSED in the manifest until a relationship claims them
+   * ([[PartManifest.markParsed]]); unclaimed candidates (including threadedComments, which use a
+   * different relationship type) keep riding byte-preservation.
+   */
+  private def isCommentCandidatePart(path: String): Boolean =
+    path.startsWith("xl/") && path.endsWith(".xml") && {
+      val basename = path.substring(path.lastIndexOf('/') + 1)
+      basename.toLowerCase.contains("comment")
+    }
 
   /**
    * Drawing parts and media retained as raw content during the zip scan (GH-221). These entries
@@ -319,6 +336,10 @@ object XlsxReader:
                   drawingXml(entryName) = new String(content, "UTF-8")
                 else if isChartXmlPart(entryName) then
                   chartXml(entryName) = new String(content, "UTF-8")
+                else if isCommentCandidatePart(entryName) then
+                  // GH-292: retained for rel-driven comment resolution; parsed status is decided
+                  // after the worksheet rels are read (parseWorkbook reconciles the manifest)
+                  parts(entryName) = new String(content, "UTF-8")
                 else if entryName.startsWith("xl/media/") then
                   mediaBytes(entryName) = ArraySeq.unsafeWrapArray(content)
                 // Unknown part - index but don't store content
@@ -432,11 +453,18 @@ object XlsxReader:
         sheets.size
       )
 
+      // GH-292: comment parts are identified by the worksheet RELATIONSHIP type, which is only
+      // known after the rels are parsed. Mark the resolved parts as parsed so the surgical writer
+      // treats them as model-owned (regenerate/copy via commentPathMapping) instead of ALSO
+      // shipping the preserved bytes — that dual representation produced duplicate zip entries.
+      reconciledManifest = parsedSheets.commentPathMapping.values
+        .foldLeft(manifest)(_.markParsed(_))
+
       // Assemble workbook with optional SourceContext
       workbook <- assembleWorkbook(
         sheets,
         source,
-        manifest,
+        reconciledManifest,
         fingerprint,
         theme,
         definedNames,

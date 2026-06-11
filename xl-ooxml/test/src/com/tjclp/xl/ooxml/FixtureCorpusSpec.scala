@@ -3,6 +3,7 @@ package com.tjclp.xl.ooxml
 import munit.FunSuite
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -142,23 +143,69 @@ class FixtureCorpusSpec extends FunSuite:
     assertEquals(sheet(ref"B1").value, CellValue.Text("example link"))
   }
 
-  test(
-    "comments-hyperlinks.xlsx: KNOWN GAP - openpyxl comment dialect is invisible to the domain"
-  ) {
-    // openpyxl stores the comment part at xl/comments/comment1.xml (subdirectory,
-    // singular) and points to it from the sheet rels with an absolute target
-    // (/xl/comments/comment1.xml). XlsxReader only treats xl/comments\d+.xml as a
-    // known comment part, so this comment is NOT parsed into Sheet.comments - it
-    // rides along as an opaque preserved part instead. Excel itself reads openpyxl
-    // comments fine. This test pins the current (lossy) behavior; if it starts
-    // failing because the comment appears, the reader learned rels-based comment
-    // resolution and this test should be flipped to assert the comment text.
+  test("comments-hyperlinks.xlsx: openpyxl-dialect comment (GH-292) populates Sheet.comments") {
+    // openpyxl stores the comment part at xl/comments/comment1.xml (subdirectory, singular) and
+    // points to it from the sheet rels with an absolute target (/xl/comments/comment1.xml).
+    // Comment parts are resolved through the worksheet RELATIONSHIP (type-based), so the
+    // subdirectory dialect surfaces in the domain model like Excel's xl/commentsN.xml form.
     val sheet = sheetOf(load("comments-hyperlinks.xlsx"), "Notes", "comments-hyperlinks.xlsx")
+    val comment = sheet.comments.getOrElse(ref"A1", fail("openpyxl-dialect comment not resolved"))
+    assertEquals(comment.text.toPlainText, "Synthetic note: invented for tests.")
+    assertEquals(comment.author, Some("Fixture Bot"))
+  }
+
+  test("comments-hyperlinks.xlsx: GH-292 cell edit keeps the comment, no dual representation") {
+    val wb = load("comments-hyperlinks.xlsx")
+    val edited = wb("Notes")
+      .map(sheet => wb.put(sheet.put(ref"C1" -> "edited")))
+      .fold(e => fail(s"edit failed: $e"), identity)
+    val bytes = XlsxWriter
+      .writeToBytes(edited)
+      .fold(err => fail(s"write failed: ${err.message}"), identity)
+
+    // Exactly ONE comment part, at the source's own path (modeled part must not ALSO ride
+    // verbatim preservation — the docProps GH-242 model-wins rule)
+    val entries = zipEntryNames(bytes)
     assertEquals(
-      sheet.comments.get(ref"A1"),
-      None,
-      "reader unexpectedly resolved the openpyxl-dialect comment - flip this test to assert it"
+      entries.count(_ == "xl/comments/comment1.xml"),
+      1,
+      s"expected exactly one comment part, entries: $entries"
     )
+    assert(
+      !entries.exists(e => e.startsWith("xl/comments") && e != "xl/comments/comment1.xml"),
+      s"comment part duplicated under a second path: $entries"
+    )
+
+    val reread = XlsxReader
+      .readFromBytes(bytes)
+      .fold(err => fail(s"re-read failed: ${err.message}"), identity)
+    val sheet = sheetOf(reread, "Notes", "comments-hyperlinks.xlsx")
+    val comment = sheet.comments.getOrElse(ref"A1", fail("comment lost across cell edit"))
+    assertEquals(comment.text.toPlainText, "Synthetic note: invented for tests.")
+    assertEquals(sheet(ref"C1").value, CellValue.Text("edited"))
+  }
+
+  test("comments-hyperlinks.xlsx: GH-292 comment edit round-trips through the model") {
+    import com.tjclp.xl.cells.Comment
+    val wb = load("comments-hyperlinks.xlsx")
+    val edited = wb("Notes")
+      .map(sheet =>
+        wb.put(sheet.comment(ref"A1", Comment.plainText("Rewritten note", Some("Fixture Bot"))))
+      )
+      .fold(e => fail(s"comment edit failed: $e"), identity)
+    val bytes = XlsxWriter
+      .writeToBytes(edited)
+      .fold(err => fail(s"write failed: ${err.message}"), identity)
+
+    val reread = XlsxReader
+      .readFromBytes(bytes)
+      .fold(err => fail(s"re-read failed: ${err.message}"), identity)
+    val sheet = sheetOf(reread, "Notes", "comments-hyperlinks.xlsx")
+    val comment = sheet.comments.getOrElse(ref"A1", fail("edited comment missing"))
+    assertEquals(comment.text.toPlainText, "Rewritten note")
+    assertEquals(comment.author, Some("Fixture Bot"))
+    // The regenerated part replaces the original at its own path
+    assertEquals(zipEntryNames(bytes).count(_ == "xl/comments/comment1.xml"), 1)
   }
 
   test("autofilter.xlsx: data table reads; autoFilter rides through as preserved XML") {
@@ -213,6 +260,17 @@ class FixtureCorpusSpec extends FunSuite:
       }
     }
   }
+
+  private def zipEntryNames(bytes: Array[Byte]): List[String] =
+    val zis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
+    try
+      Iterator
+        .continually(Option(zis.getNextEntry))
+        .takeWhile(_.isDefined)
+        .flatten
+        .map(_.getName)
+        .toList
+    finally zis.close()
 
   private def zipEntry(bytes: Array[Byte], name: String): String =
     val zis = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))
