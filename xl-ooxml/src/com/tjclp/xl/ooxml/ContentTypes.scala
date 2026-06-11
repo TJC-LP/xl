@@ -39,6 +39,14 @@ case class ContentTypes(
     else copy(overrides = overrides ++ partPaths.map(p => s"/$p" -> ctDrawing))
 
   /**
+   * Register chart-part overrides (GH-222). `partPaths` are zip paths without the leading slash
+   * ("xl/charts/chart1.xml"). Idempotent.
+   */
+  def withChartOverrides(partPaths: Set[String]): ContentTypes =
+    if partPaths.isEmpty then this
+    else copy(overrides = overrides ++ partPaths.map(p => s"/$p" -> ctChart))
+
+  /**
    * Register media extension Defaults (GH-221), e.g. "png" -> "image/png", derived from the media
    * filenames actually written or reused by the drawing layer. Idempotent.
    */

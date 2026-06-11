@@ -137,23 +137,35 @@ object WorkbookEquivalence:
       drawingsDiff(name, expected, actual)
 
   /**
-   * Drawing equality (GH-221): same length and per-index kind; Pictures compare by anchor, image
-   * (sha256 + format), description, and WRITER-CANONICAL name — an empty authored name reads back
-   * as the emitter's "Image {ordinal}" default (ordinal = 1-based position among the part's
-   * pictures), so equality is taken after the same canonicalization. Preserved fragments compare by
-   * exact canonical XML string.
+   * Drawing equality (GH-221/GH-222): same length and per-index kind; Pictures compare by anchor,
+   * image (sha256 + format), description, and WRITER-CANONICAL name — an empty authored name reads
+   * back as the emitter's "Image {ordinal}" default (ordinal = 1-based position among the part's
+   * pictures), so equality is taken after the same canonicalization. ChartFrames compare by anchor
+   * + typed chart with DataRef ranges ANCHOR-NORMALIZED (CellRange equality includes anchors; parse
+   * always produces Relative) + the writer-canonical "Chart {ordinal}" name, chart ordinals counted
+   * separately from image ordinals. Preserved fragments compare by exact canonical XML string.
    */
   private def drawingsDiff(sheet: String, expected: Sheet, actual: Sheet): List[String] =
+    import com.tjclp.xl.charts.{Chart, DataRef}
     import com.tjclp.xl.drawings.Drawing
     def canonicalNames(drawings: Vector[Drawing]): Vector[String] =
       drawings
-        .foldLeft((Vector.empty[String], 1)) {
-          case ((acc, ordinal), p: Drawing.Picture) =>
-            val name = if p.name.nonEmpty then p.name else s"Image $ordinal"
-            (acc :+ name, ordinal + 1)
-          case ((acc, ordinal), _) => (acc :+ "", ordinal)
+        .foldLeft((Vector.empty[String], 1, 1)) {
+          case ((acc, picOrdinal, chartOrdinal), p: Drawing.Picture) =>
+            val name = if p.name.nonEmpty then p.name else s"Image $picOrdinal"
+            (acc :+ name, picOrdinal + 1, chartOrdinal)
+          case ((acc, picOrdinal, chartOrdinal), c: Drawing.ChartFrame) =>
+            val name = if c.name.nonEmpty then c.name else s"Chart $chartOrdinal"
+            (acc :+ name, picOrdinal, chartOrdinal + 1)
+          case ((acc, picOrdinal, chartOrdinal), _) => (acc :+ "", picOrdinal, chartOrdinal)
         }
         ._1
+    def normalizeRef(ref: DataRef): DataRef =
+      ref.copy(range = com.tjclp.xl.addressing.CellRange(ref.range.start, ref.range.end))
+    def normalizeChart(chart: Chart): Chart =
+      chart.copy(series = chart.series.map { s =>
+        s.copy(values = normalizeRef(s.values), categories = s.categories.map(normalizeRef))
+      })
     if expected.drawings.sizeIs != actual.drawings.size then
       List(
         s"$sheet: drawings count mismatch: expected ${expected.drawings.size}, actual ${actual.drawings.size}"
@@ -179,6 +191,17 @@ object WorkbookEquivalence:
             s"$sheet: drawing[$i] description mismatch: expected '${exp.description}', actual '${act.description}'"
           )
           anchorDiff.toList ++ imageDiff.toList ++ nameDiff.toList ++ descrDiff.toList
+        case (exp: Drawing.ChartFrame, act: Drawing.ChartFrame, i) =>
+          val anchorDiff = Option.when(exp.anchor != act.anchor)(
+            s"$sheet: drawing[$i] anchor mismatch: expected ${exp.anchor}, actual ${act.anchor}"
+          )
+          val chartDiff = Option.when(normalizeChart(exp.chart) != normalizeChart(act.chart))(
+            s"$sheet: drawing[$i] chart mismatch:\n  expected ${normalizeChart(exp.chart)}\n  actual   ${normalizeChart(act.chart)}"
+          )
+          val nameDiff = Option.when(expNames(i) != actNames(i))(
+            s"$sheet: drawing[$i] name mismatch: expected '${expNames(i)}', actual '${actNames(i)}'"
+          )
+          anchorDiff.toList ++ chartDiff.toList ++ nameDiff.toList
         case (Drawing.Preserved(exp), Drawing.Preserved(act), i) =>
           Option
             .when(exp != act)(s"$sheet: drawing[$i] preserved xml mismatch")

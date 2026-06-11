@@ -37,7 +37,7 @@ import zipfile
 from pathlib import Path
 
 import openpyxl
-from openpyxl.chart import BarChart, Reference
+from openpyxl.chart import BarChart, Reference, ScatterChart, Series as ChartSeries
 from openpyxl.comments import Comment
 from openpyxl.drawing.image import Image
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -213,6 +213,48 @@ def gen_chart_bar() -> Path:
     return save(wb, "chart-bar.xlsx")
 
 
+def gen_chart_stacked() -> Path:
+    """Stacked BarChart WITH overlap=100 (GH-222: pins the stacked read+write dialect).
+
+    openpyxl does not set overlap automatically; without it Excel renders stacked
+    bars side-by-side, so xl's reader requires overlap=100 for stacked groupings.
+    """
+    wb = new_workbook()
+    ws = wb.active
+    ws.title = "StackData"
+    rows = [("Quarter", "North", "South"), ("Q1", 3, 7), ("Q2", 5, 2), ("Q3", 8, 4)]
+    for r, row in enumerate(rows, start=1):
+        ws[f"A{r}"], ws[f"B{r}"], ws[f"C{r}"] = row
+    chart = BarChart()
+    chart.type = "col"
+    chart.grouping = "stacked"
+    chart.overlap = 100
+    chart.title = "Synthetic Stacked Units"
+    chart.add_data(
+        Reference(ws, min_col=2, max_col=3, min_row=1, max_row=4), titles_from_data=True
+    )
+    chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=4))
+    ws.add_chart(chart, "E2")
+    return save(wb, "chart-stacked.xlsx")
+
+
+def gen_chart_scatter() -> Path:
+    """ScatterChart (GH-222: outside the typed fence — whole anchor stays Preserved)."""
+    wb = new_workbook()
+    ws = wb.active
+    ws.title = "ScatterData"
+    rows = [("X", "Y"), (1, 2), (2, 5), (3, 4), (4, 9)]
+    for r, row in enumerate(rows, start=1):
+        ws[f"A{r}"], ws[f"B{r}"] = row
+    chart = ScatterChart()
+    chart.title = "Synthetic Scatter"
+    xs = Reference(ws, min_col=1, min_row=2, max_row=5)
+    ys = Reference(ws, min_col=2, min_row=1, max_row=5)
+    chart.series.append(ChartSeries(ys, xs, title_from_data=True))
+    ws.add_chart(chart, "D2")
+    return save(wb, "chart-scatter.xlsx")
+
+
 def gen_image() -> Path:
     """Embedded PNG (xl/media/* + xl/drawings/*) without requiring Pillow.
 
@@ -294,6 +336,8 @@ def main() -> int:
     formulas = gen_formulas()
     gen_autofilter()
     gen_chart_bar()
+    gen_chart_stacked()
+    gen_chart_scatter()
     gen_image()
     gen_comments_hyperlinks()
     if args.skip_lo:

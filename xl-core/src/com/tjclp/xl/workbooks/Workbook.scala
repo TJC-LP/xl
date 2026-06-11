@@ -157,7 +157,13 @@ final case class Workbook(
       )
     else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
-  /** Rename sheet (marks both sheet and metadata as modified). */
+  /**
+   * Rename sheet (marks both sheet and metadata as modified).
+   *
+   * Typed-chart data references (`DataRef.sheet` / `SeriesName.FromCell.sheet`) matching the old
+   * name are remapped across ALL sheets (GH-222) — Excel tracks renames in chart sources. Preserved
+   * chart fragments and formula strings are NOT remapped (existing limitation, documented).
+   */
   def rename(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
     sheets.indexWhere(_.name == oldName) match
       case -1 => Left(XLError.SheetNotFound(oldName.value))
@@ -166,9 +172,12 @@ final case class Workbook(
           Left(XLError.DuplicateSheet(newName.value))
         else
           val updated = sheets(index).copy(name = newName)
+          val renamedSheets = sheets
+            .updated(index, updated)
+            .map(Workbook.remapChartSheetName(_, oldName, newName))
           // Mark both: metadata (workbook.xml has sheet names) AND sheet (to regenerate styles)
           val updatedContext = sourceContext.map(_.markSheetModified(index).markMetadataModified)
-          Right(copy(sheets = sheets.updated(index, updated), sourceContext = updatedContext))
+          Right(copy(sheets = renamedSheets, sourceContext = updatedContext))
 
   /**
    * Update sheet by applying a function to it.
@@ -392,6 +401,34 @@ final case class Workbook(
     copy(metadata = newMetadata, sourceContext = sourceContext.map(_.markMetadataModified))
 
 object Workbook:
+
+  /**
+   * Remap typed-chart references on `sheet` from `oldName` to `newName` (GH-222). Matching is
+   * case-insensitive (Excel sheet-reference semantics, the FormulaShifter convention).
+   */
+  private def remapChartSheetName(sheet: Sheet, oldName: SheetName, newName: SheetName): Sheet =
+    import com.tjclp.xl.charts.{DataRef, SeriesName}
+    import com.tjclp.xl.drawings.Drawing
+    def matches(s: SheetName): Boolean = s.value.equalsIgnoreCase(oldName.value)
+    def remapRef(ref: DataRef): DataRef =
+      if matches(ref.sheet) then ref.copy(sheet = newName) else ref
+    val newDrawings = sheet.drawings.map {
+      case Drawing.ChartFrame(anchor, chart, n) =>
+        val remappedSeries = chart.series.map { series =>
+          series.copy(
+            values = remapRef(series.values),
+            categories = series.categories.map(remapRef),
+            name = series.name.map {
+              case SeriesName.FromCell(s, ref) if matches(s) => SeriesName.FromCell(newName, ref)
+              case other => other
+            }
+          )
+        }
+        Drawing.ChartFrame(anchor, chart.copy(series = remappedSeries), n)
+      case other => other
+    }
+    if newDrawings == sheet.drawings then sheet else sheet.copy(drawings = newDrawings)
+
   /**
    * Create workbook from a single sheet.
    *

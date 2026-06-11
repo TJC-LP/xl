@@ -33,6 +33,8 @@ object XmlUtil:
   val nsSpreadsheetDrawing =
     "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
   val nsDrawingMain = "http://schemas.openxmlformats.org/drawingml/2006/main"
+  // Chart namespace (GH-222)
+  val nsChart = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 
   /** Relationship type URIs */
   val relTypeOfficeDocument =
@@ -54,6 +56,8 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing"
   val relTypeImage =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+  val relTypeChart =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
   // docProps relationships (GH-242): core props is a PACKAGE relationship type, app is officeDocument
   val relTypeCoreProperties =
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
@@ -70,6 +74,7 @@ object XmlUtil:
   val ctVmlDrawing = "application/vnd.openxmlformats-officedocument.vmlDrawing"
   val ctTable = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
   val ctDrawing = "application/vnd.openxmlformats-officedocument.drawing+xml"
+  val ctChart = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
   val ctCoreProperties = "application/vnd.openxmlformats-package.core-properties+xml"
   val ctExtendedProperties =

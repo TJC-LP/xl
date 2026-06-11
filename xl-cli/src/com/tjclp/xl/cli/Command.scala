@@ -132,6 +132,22 @@ enum CliCommand:
   // Freeze pane operations (require -o)
   case Freeze(ref: String) // Freeze panes at ref (rows above + columns left)
   case Unfreeze // Remove freeze panes
+  // Drawing layer (GH-221/GH-222, require -o)
+  case ChartAdd(
+    chartType: String, // column | bar | line | pie
+    grouping: Option[String], // clustered | stacked | percent-stacked (column/bar only)
+    data: String, // values range, e.g. B2:D10 (qualified accepted)
+    categories: Option[String], // categories vector, e.g. A2:A10
+    seriesNames: Option[String], // comma-separated literal names, positional
+    title: Option[String],
+    legend: Option[String], // right | left | top | bottom | top-right | none
+    at: String // placement: range -> two-cell anchor, single cell -> default extent
+  )
+  case AddImage(
+    imagePath: Path,
+    at: String, // single cell (natural size or --size) or range (stretch over)
+    size: Option[String] // WxH in pixels, e.g. 320x240
+  )
   // Range operations (require -o)
   case Copy(source: String, target: String, valuesOnly: Boolean)
   // Structural editing: insert/delete rows & columns with formula rewriting (require -o)

@@ -55,8 +55,9 @@ object RefParser:
       validateSheetName(part)
       part
 
+  /** Index of the first `!` outside single quotes, or -1 (shared with chart DataRef parsing). */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def findUnquotedBang(s: String): Int =
+  private[xl] def findUnquotedBang(s: String): Int =
     boundary:
       var i = 0
       var inQuote = false

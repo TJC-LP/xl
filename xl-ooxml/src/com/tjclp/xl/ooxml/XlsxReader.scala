@@ -54,6 +54,13 @@ object XlsxReader:
     /** A drawing part was structurally unparseable; it rides byte-preservation only (GH-221). */
     case MalformedDrawingPart(path: String)
 
+    /**
+     * A chart part behind an otherwise-typeable graphicFrame was structurally unparseable; the
+     * anchor stays Preserved and the part rides byte-preservation (GH-222). Charts merely outside
+     * the typed subset are silently Preserved (the pic-fence precedent) — no warning.
+     */
+    case MalformedChartPart(path: String)
+
   /** Successful read result with accumulated warnings. */
   case class ReadResult(workbook: Workbook, warnings: Vector[Warning])
 
@@ -148,12 +155,20 @@ object XlsxReader:
    */
   private case class RetainedDrawingParts(
     xml: Map[String, String], // drawingN.xml and drawingN.xml.rels, as UTF-8
+    charts: Map[String, String], // chartN.xml and chartN.xml.rels (GH-222), as UTF-8
     media: Map[String, ArraySeq[Byte]] // xl/media/*
   )
 
   private def isDrawingXmlPart(path: String): Boolean =
     path.matches("xl/drawings/drawing\\d+\\.xml") ||
       path.matches("xl/drawings/_rels/drawing\\d+\\.xml\\.rels")
+
+  /**
+   * Chart parts retained for the typed chart layer (GH-222); stay `recordUnparsed` like drawings.
+   */
+  private def isChartXmlPart(path: String): Boolean =
+    path.matches("xl/charts/chart\\d+\\.xml") ||
+      path.matches("xl/charts/_rels/chart\\d+\\.xml\\.rels")
 
   /**
    * Read workbook from XLSX file (in-memory).
@@ -236,6 +251,7 @@ object XlsxReader:
     val zip = new ZipInputStream(is)
     val parts = mutable.Map[String, String]()
     val drawingXml = mutable.Map[String, String]()
+    val chartXml = mutable.Map[String, String]()
     val mediaBytes = mutable.Map[String, ArraySeq[Byte]]()
     val manifestBuilder = PartManifestBuilder.empty
 
@@ -295,12 +311,14 @@ object XlsxReader:
                 parts(entryName) = new String(content, "UTF-8")
                 builder = builder.recordParsed(entryName)
               else
-                // GH-221: retain drawing XML and media bytes for the drawing layer. The entries
-                // stay UNPARSED in the manifest (byte-preservation contract); zero extra IO —
-                // content was already read for security accounting. Memory stays bounded by
-                // ReaderConfig.maxUncompressedSize.
+                // GH-221/GH-222: retain drawing/chart XML and media bytes for the drawing layer.
+                // The entries stay UNPARSED in the manifest (byte-preservation contract); zero
+                // extra IO — content was already read for security accounting. Memory stays
+                // bounded by ReaderConfig.maxUncompressedSize.
                 if isDrawingXmlPart(entryName) then
                   drawingXml(entryName) = new String(content, "UTF-8")
+                else if isChartXmlPart(entryName) then
+                  chartXml(entryName) = new String(content, "UTF-8")
                 else if entryName.startsWith("xl/media/") then
                   mediaBytes(entryName) = ArraySeq.unsafeWrapArray(content)
                 // Unknown part - index but don't store content
@@ -330,7 +348,7 @@ object XlsxReader:
           // Parse workbook structure from known parts
           parseWorkbook(
             parts.toMap,
-            RetainedDrawingParts(drawingXml.toMap, mediaBytes.toMap),
+            RetainedDrawingParts(drawingXml.toMap, chartXml.toMap, mediaBytes.toMap),
             source,
             manifest,
             fingerprint,
@@ -420,7 +438,8 @@ object XlsxReader:
         date1904 = ooxmlWb.date1904,
         docProps,
         drawingPathMapping = parsedSheets.drawingPathMapping,
-        drawingSnapshots = parsedSheets.drawingSnapshots
+        drawingSnapshots = parsedSheets.drawingSnapshots,
+        chartSnapshots = parsedSheets.chartSnapshots
       )
     yield ReadResult(workbook, styleWarnings ++ parsedSheets.warnings)
 
@@ -743,6 +762,7 @@ object XlsxReader:
     commentPathMapping: Map[Int, String],
     drawingPathMapping: Map[Int, String],
     drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]],
+    chartSnapshots: Map[Int, Vector[com.tjclp.xl.context.ChartSnapshot]],
     warnings: Vector[Warning]
   )
 
@@ -755,6 +775,9 @@ object XlsxReader:
    * GH-221: drawing parts are parsed into `Sheet.drawings`; the as-parsed vectors are ALSO recorded
    * (same references) as snapshots for the writer's dirty test. A structurally unparseable drawing
    * part contributes a warning and an empty vector — the part itself still rides byte-preservation.
+   *
+   * GH-222: typed ChartFrames additionally record (anchorIdx, relId, partPath, chart) snapshots
+   * feeding the writer's equality-match part/rel-id reuse.
    */
   private def parseSheets(
     parts: Map[String, String],
@@ -768,6 +791,7 @@ object XlsxReader:
     val commentPathBuilder = Map.newBuilder[Int, String]
     val drawingPathBuilder = Map.newBuilder[Int, String]
     val drawingSnapshotBuilder = Map.newBuilder[Int, Vector[com.tjclp.xl.drawings.Drawing]]
+    val chartSnapshotBuilder = Map.newBuilder[Int, Vector[com.tjclp.xl.context.ChartSnapshot]]
     val warningBuilder = Vector.newBuilder[Warning]
 
     sheetRefs.toVector.zipWithIndex
@@ -806,7 +830,24 @@ object XlsxReader:
             case Some(drawingPath) =>
               drawingPathBuilder += (idx -> drawingPath)
               val parsed = parseDrawingsForSheet(retainedDrawings, drawingPath) match
-                case Right(vector) => vector
+                case Right(part) =>
+                  // GH-222: associate typed ChartFrames with their rel/part provenance
+                  part.malformedChartParts
+                    .foreach(p => warningBuilder += Warning.MalformedChartPart(p))
+                  val snapshots = part.chartRefs.toVector.sortBy(_._1).flatMap {
+                    case (anchorIdx, (relId, partPath)) =>
+                      part.drawings.lift(anchorIdx).collect {
+                        case frame: com.tjclp.xl.drawings.Drawing.ChartFrame =>
+                          com.tjclp.xl.context.ChartSnapshot(
+                            anchorIdx,
+                            relId,
+                            partPath,
+                            frame.chart
+                          )
+                      }
+                  }
+                  if snapshots.nonEmpty then chartSnapshotBuilder += (idx -> snapshots)
+                  part.drawings
                 case Left(warning) =>
                   warningBuilder += warning
                   Vector.empty
@@ -832,6 +873,7 @@ object XlsxReader:
           commentPathBuilder.result(),
           drawingPathBuilder.result(),
           drawingSnapshotBuilder.result(),
+          chartSnapshotBuilder.result(),
           warningBuilder.result()
         )
       )
@@ -843,21 +885,27 @@ object XlsxReader:
   private def parseDrawingsForSheet(
     retainedDrawings: RetainedDrawingParts,
     drawingPath: String
-  ): Either[Warning, Vector[com.tjclp.xl.drawings.Drawing]] =
-    import com.tjclp.xl.ooxml.drawing.DrawingReader
+  ): Either[Warning, com.tjclp.xl.ooxml.drawing.ParsedDrawingPart] =
+    import com.tjclp.xl.ooxml.drawing.{ChartPartAccess, DrawingReader, ParsedDrawingPart}
     val relsPath = drawingRelsPath(drawingPath)
     val rels = retainedDrawings.xml
       .get(relsPath)
       .flatMap(xml => XmlSecurity.parseSafe(xml, relsPath).toOption)
       .flatMap(elem => Relationships.fromXml(elem).toOption)
       .getOrElse(Relationships.empty)
+    // GH-222: chart-part access mirrors the media accessor; hasRels gates Excel charts whose
+    // colors1/style1/userShapes rels would orphan on regeneration
+    val chartAccess = ChartPartAccess(
+      xml = retainedDrawings.charts.get,
+      hasRels = path => retainedDrawings.charts.contains(chartRelsPath(path))
+    )
     retainedDrawings.xml.get(drawingPath) match
-      case None => Right(Vector.empty)
+      case None => Right(ParsedDrawingPart(Vector.empty, Map.empty, Vector.empty))
       case Some(xml) =>
         XmlSecurity.parseSafe(xml, drawingPath) match
           case Left(_) => Left(Warning.MalformedDrawingPart(drawingPath))
           case Right(elem) =>
-            Right(DrawingReader.fromElem(elem, rels, retainedDrawings.media.get))
+            Right(DrawingReader.fromElem(elem, rels, retainedDrawings.media.get, chartAccess))
 
   /**
    * Rels path for a drawing part: xl/drawings/drawing1.xml -> xl/drawings/_rels/drawing1.xml.rels
@@ -865,6 +913,12 @@ object XlsxReader:
   private def drawingRelsPath(drawingPath: String): String =
     val slash = drawingPath.lastIndexOf('/')
     val (dir, name) = drawingPath.splitAt(slash + 1)
+    s"${dir}_rels/$name.rels"
+
+  /** Rels path for a chart part: xl/charts/chart1.xml -> xl/charts/_rels/chart1.xml.rels */
+  private def chartRelsPath(chartPath: String): String =
+    val slash = chartPath.lastIndexOf('/')
+    val (dir, name) = chartPath.splitAt(slash + 1)
     s"${dir}_rels/$name.rels"
 
   private def defaultSheetPath(sheetId: Int): String = s"xl/worksheets/sheet$sheetId.xml"
@@ -1150,7 +1204,8 @@ object XlsxReader:
     date1904: Boolean,
     docProps: DocProps.Data,
     drawingPathMapping: Map[Int, String],
-    drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]]
+    drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]],
+    chartSnapshots: Map[Int, Vector[com.tjclp.xl.context.ChartSnapshot]]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -1165,7 +1220,8 @@ object XlsxReader:
                   fp,
                   commentPathMapping,
                   drawingPathMapping,
-                  drawingSnapshots
+                  drawingSnapshots,
+                  chartSnapshots
                 )
               )
             )

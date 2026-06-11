@@ -47,7 +47,8 @@ object StructuralEditor:
   ): Workbook =
     val editedName = target.value
     val updatedSheets = wb.sheets.map { s =>
-      // 1. Pure cell/merge/property shift — only on the edited sheet.
+      // 1. Pure cell/merge/property shift — only on the edited sheet. Its own typed charts
+      //    (anchors + same-sheet data refs) are handled INSIDE the shift (GH-222).
       val shifted =
         if s.name == target then
           (isRow, delta >= 0) match
@@ -55,7 +56,10 @@ object StructuralEditor:
             case (true, false) => s.deleteRows(at, -delta)
             case (false, true) => s.insertColumns(at, delta)
             case (false, false) => s.deleteColumns(at, -delta)
-        else s
+        else
+          // GH-222: typed charts on OTHER sheets track the edited sheet's geometry (no
+          // double-shift: the edited sheet's charts were already shifted above).
+          s.shiftChartRefs(editedName, isRow, at, delta)
       // 2. Rewrite formula references on every sheet (local refs only on the edited sheet;
       //    sheet-qualified refs to the edited sheet on all sheets).
       rewriteFormulas(shifted, shiftLocal = s.name == target, editedName, isRow, at, delta)

@@ -15,6 +15,7 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.tables.TableSpec
+import com.tjclp.xl.ooxml.chart.{ChartCaches, OoxmlChart}
 import com.tjclp.xl.ooxml.drawing.{DrawingReader, OoxmlDrawing}
 import com.tjclp.xl.ooxml.worksheet.collectHyperlinks
 
@@ -1105,7 +1106,10 @@ object XlsxWriter:
     freshPartPaths: Set[String],
     allPartPaths: Set[String],
     imageDefaults: Map[String, String],
-    manifestImageDefaults: Map[String, String]
+    manifestImageDefaults: Map[String, String],
+    chartParts: Vector[(String, OoxmlChart)],
+    freshChartPaths: Set[String],
+    allChartPartPaths: Set[String]
   )
 
   private def drawingRelsPathOf(partPath: String): String =
@@ -1169,6 +1173,8 @@ object XlsxWriter:
       sourceContext.map(_.partManifest.entries.keySet).getOrElse(Set.empty)
     val manifestDrawingParts: Set[String] =
       manifestPaths.filter(_.matches("xl/drawings/drawing\\d+\\.xml"))
+    val manifestChartParts: Set[String] =
+      manifestPaths.filter(_.matches("xl/charts/chart\\d+\\.xml"))
     val manifestImageDefaults: Map[String, String] =
       manifestPaths
         .filter(_.startsWith("xl/media/"))
@@ -1201,9 +1207,15 @@ object XlsxWriter:
       .map(_.group(1).toInt)
       .maxOption
       .getOrElse(0)
+    val maxChartNum = manifestChartParts
+      .flatMap("""chart(\d+)\.xml""".r.findFirstMatchIn(_))
+      .map(_.group(1).toInt)
+      .maxOption
+      .getOrElse(0)
 
     var nextDrawing = maxDrawingNum + 1
     var nextImage = maxImageNum + 1
+    var nextChart = maxChartNum + 1
     val newMediaByKey = mutable.Map.empty[(String, String), String] // (sha, ext) -> media path
     val mediaOut = Vector.newBuilder[(String, ArraySeq[Byte])]
     val partsOut = Vector.newBuilder[(String, OoxmlDrawing)]
@@ -1213,6 +1225,58 @@ object XlsxWriter:
     val relAdds = Map.newBuilder[Int, Relationship]
     val fresh = Set.newBuilder[String]
     val usedExts = mutable.Map.empty[String, String]
+    val chartPartsOut = Vector.newBuilder[(String, OoxmlChart)]
+    val freshCharts = Set.newBuilder[String]
+
+    /**
+     * Chart planning for one drawing part (GH-222). Per ChartFrame, in anchor order:
+     *   1. EQUALITY MATCH (consume-once) against the sheet's chart snapshots, preferring the same
+     *      anchorIdx: reuse the snapshot relId; the chart part is untouched and rides
+     *      byte-preservation (the source rels kept verbatim make the rId resolve by construction).
+     *      Robust under drawings-vector reorder/insert — the sha256-media analogue.
+     *   2. No equality match but an unconsumed snapshot at the SAME anchorIdx → edited chart:
+     *      regenerate at the snapshot's partPath with the same relId (no part churn).
+     *   3. Otherwise → fresh `xl/charts/chartN.xml` + an appended rel via `allocRel`.
+     * Leftover snapshots' parts stay on disk (the never-delete media policy; orphaned rels are
+     * legal OOXML).
+     */
+    def planChartParts(
+      drawings: Vector[DomainDrawing],
+      snapshots: Vector[com.tjclp.xl.context.ChartSnapshot],
+      allocRel: String => String
+    ): Map[Int, String] =
+      val consumed = mutable.Set.empty[Int]
+      def firstUnconsumed(
+        p: com.tjclp.xl.context.ChartSnapshot => Boolean
+      ): Option[Int] =
+        snapshots.indices.find(i => !consumed.contains(i) && p(snapshots(i)))
+      val ids = Map.newBuilder[Int, String]
+      drawings.zipWithIndex.foreach {
+        case (frame: DomainDrawing.ChartFrame, anchorIdx) =>
+          firstUnconsumed(s => s.anchorIdx == anchorIdx && s.chart == frame.chart)
+            .orElse(firstUnconsumed(_.chart == frame.chart)) match
+            case Some(i) =>
+              consumed += i
+              ids += anchorIdx -> snapshots(i).relId
+            case None =>
+              firstUnconsumed(_.anchorIdx == anchorIdx) match
+                case Some(i) =>
+                  consumed += i
+                  val snap = snapshots(i)
+                  skip += snap.partPath
+                  chartPartsOut += snap.partPath ->
+                    OoxmlChart(frame.chart, ChartCaches.resolve(workbook, frame.chart))
+                  ids += anchorIdx -> snap.relId
+                case None =>
+                  val partPath = s"xl/charts/chart$nextChart.xml"
+                  nextChart += 1
+                  chartPartsOut += partPath ->
+                    OoxmlChart(frame.chart, ChartCaches.resolve(workbook, frame.chart))
+                  freshCharts += partPath
+                  ids += anchorIdx -> allocRel(s"../charts/${fileNameOf(partPath)}")
+        case _ => ()
+      }
+      ids.result()
 
     def allocMedia(image: com.tjclp.xl.drawings.ImageData): String =
       val key = (image.sha256, image.format.extension)
@@ -1227,9 +1291,12 @@ object XlsxWriter:
       )
 
     def emitFreshPart(idx: Int, drawings: Vector[DomainDrawing]): Unit =
-      // Rel-referencing Preserved fragments are dropped: no source rels exist to resolve them
+      // Rel-referencing Preserved fragments are dropped: no source rels exist to resolve them.
+      // Typed ChartFrames are FIRST-CLASS here (GH-222): self-contained, each allocates a fresh
+      // chart part + rels entry.
       val keep = drawings.filter {
         case _: DomainDrawing.Picture => true
+        case _: DomainDrawing.ChartFrame => true
         case DomainDrawing.Preserved(xml) => !OoxmlDrawing.hasRelationshipRefs(xml)
       }
       if keep.nonEmpty then
@@ -1253,7 +1320,17 @@ object XlsxWriter:
             embeds += i -> relId
           case _ => ()
         }
-        partsOut += partPath -> OoxmlDrawing.build(keep, embeds.result(), None)
+        val chartRelIds = planChartParts(
+          keep,
+          Vector.empty, // fresh part: no snapshots, every chart is fresh
+          target => {
+            relCounter += 1
+            val id = s"rId$relCounter"
+            partRels += Relationship(id, XmlUtil.relTypeChart, target)
+            id
+          }
+        )
+        partsOut += partPath -> OoxmlDrawing.build(keep, embeds.result(), chartRelIds, None)
         val rels = partRels.result()
         if rels.nonEmpty then relsOut += drawingRelsPathOf(partPath) -> Relationships(rels)
         fresh += partPath
@@ -1315,11 +1392,28 @@ object XlsxWriter:
               embeds += anchorIdx -> relId
         case _ => ()
       }
+      // GH-222: chart planning (equality-match reuse / same-anchor regen / fresh) appends chart
+      // rels through the same counter machinery
+      val chartRelIds = planChartParts(
+        sheet.drawings,
+        ctx.chartSnapshots.getOrElse(idx, Vector.empty),
+        target => {
+          relCounter += 1
+          val id = s"rId$relCounter"
+          appended += Relationship(id, XmlUtil.relTypeChart, target)
+          id
+        }
+      )
       // ALL source relationships are kept verbatim: preserved fragments' embedded rIds resolve by
-      // construction, and orphaned image rels are legal (their media is still byte-copied — media
-      // is never deleted in 6a).
+      // construction, and orphaned image/chart rels are legal (their parts are still byte-copied —
+      // parts are never deleted, the 6a media policy).
       val finalRels = Relationships(sourceRels.relationships ++ appended.result())
-      partsOut += partPath -> OoxmlDrawing.build(sheet.drawings, embeds.result(), sourceScope)
+      partsOut += partPath -> OoxmlDrawing.build(
+        sheet.drawings,
+        embeds.result(),
+        chartRelIds,
+        sourceScope
+      )
       skip += partPath
       if sourceRelsOpt.isDefined then skip += relsPath
       if finalRels.relationships.nonEmpty then relsOut += relsPath -> finalRels
@@ -1340,6 +1434,7 @@ object XlsxWriter:
     }
 
     val freshPaths = fresh.result()
+    val freshChartPathSet = freshCharts.result()
     DrawingWritePlan(
       parts = partsOut.result(),
       rels = relsOut.result(),
@@ -1350,7 +1445,10 @@ object XlsxWriter:
       freshPartPaths = freshPaths,
       allPartPaths = manifestDrawingParts ++ freshPaths,
       imageDefaults = usedExts.toMap,
-      manifestImageDefaults = manifestImageDefaults
+      manifestImageDefaults = manifestImageDefaults,
+      chartParts = chartPartsOut.result(),
+      freshChartPaths = freshChartPathSet,
+      allChartPartPaths = manifestChartParts ++ freshChartPathSet
     )
 
   /** Write a raw binary part (media bytes) to the output zip. */
@@ -1727,11 +1825,13 @@ object XlsxWriter:
           .withTableOverrides(totalTableCount)
           .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
           .withDrawingOverrides(drawingPlan.freshPartPaths)
+          .withChartOverrides(drawingPlan.freshChartPaths)
           .withImageDefaults(drawingPlan.imageDefaults)
       case None =>
         // GH-221: this branch regenerates [Content_Types].xml from scratch while preserved
         // drawing/media parts still ride the copy loop, so register EVERY drawing part shipping
-        // (manifest + fresh) and every known media extension (manifest + written).
+        // (manifest + fresh) and every known media extension (manifest + written). GH-222: chart
+        // parts follow the same allPartPaths pattern.
         ContentTypes
           .minimal(
             hasStyles = true,
@@ -1743,6 +1843,7 @@ object XlsxWriter:
           .withTableOverrides(totalTableCount)
           .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
           .withDrawingOverrides(drawingPlan.allPartPaths)
+          .withChartOverrides(drawingPlan.allChartPartPaths)
           .withImageDefaults(drawingPlan.manifestImageDefaults ++ drawingPlan.imageDefaults)
 
     val rootRels = preservedRootRels
@@ -1964,6 +2065,8 @@ object XlsxWriter:
       drawingPlan.media.foreach { case (path, bytes) =>
         writeBinaryPart(zip, path, bytes.toArray, config)
       }
+      // GH-222: regenerated/fresh chart parts (same-path regens are in skipPaths)
+      drawingPlan.chartParts.foreach { case (path, part) => writePart(zip, path, part, config) }
 
       // Copy preserved parts (charts, drawings, images, etc.) if source available
       // Skip VML drawings for regenerated sheets - we regenerate VML from domain model

@@ -2,6 +2,7 @@ package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, Comment}
+import com.tjclp.xl.charts.{Chart, DataRef, Series, SeriesName}
 import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
 import com.tjclp.xl.drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData}
 import com.tjclp.xl.error.{XLError, XLResult}
@@ -180,18 +181,26 @@ final case class Sheet(
     // comments, Excel keeps pictures when their anchor row/column is deleted (a fully-deleted
     // TwoCell range degenerates to zero extent). Absolute and Preserved anchors are untouched;
     // editAs-aware size recomputation is deliberately not attempted (GH-221, deferred).
+    // ChartFrames additionally shift their SAME-SHEET data references (GH-222) — cross-sheet
+    // chart shifts are layered in xl-evaluator's StructuralEditor (which sees all sheets).
     def remapPoint(p: AnchorPoint): AnchorPoint =
       val ni = idx(axisOf(p.cell)).getOrElse(at)
       p.copy(cell = rebuild(p.cell, ni))
+    def remapAnchor(anchor: DrawingAnchor): DrawingAnchor = anchor match
+      case DrawingAnchor.OneCell(from, extent) =>
+        DrawingAnchor.OneCell(remapPoint(from), extent)
+      case DrawingAnchor.TwoCell(from, to, editAs) =>
+        DrawingAnchor.TwoCell(remapPoint(from), remapPoint(to), editAs)
+      case abs: DrawingAnchor.Absolute => abs
     val newDrawings = drawings.map {
       case Drawing.Picture(anchor, image, n, d) =>
-        val remapped = anchor match
-          case DrawingAnchor.OneCell(from, extent) =>
-            DrawingAnchor.OneCell(remapPoint(from), extent)
-          case DrawingAnchor.TwoCell(from, to, editAs) =>
-            DrawingAnchor.TwoCell(remapPoint(from), remapPoint(to), editAs)
-          case abs: DrawingAnchor.Absolute => abs
-        Drawing.Picture(remapped, image, n, d)
+        Drawing.Picture(remapAnchor(anchor), image, n, d)
+      case Drawing.ChartFrame(anchor, chart, n) =>
+        Drawing.ChartFrame(
+          remapAnchor(anchor),
+          Sheet.shiftChartReferences(chart, name.value, rowAxis, at, count, deleting),
+          n
+        )
       case preserved: Drawing.Preserved => preserved
     }
 
@@ -574,6 +583,43 @@ final case class Sheet(
   def pictures: Vector[Drawing.Picture] =
     drawings.collect { case p: Drawing.Picture => p }
 
+  // ===== Drawings: typed charts (GH-222) =====
+
+  /** Add a chart with full anchor control (total). */
+  def addChart(chart: Chart, anchor: DrawingAnchor): Sheet =
+    copy(drawings = drawings :+ Drawing.ChartFrame(anchor, chart))
+
+  /** Add a chart two-cell-anchored over `range` (total). */
+  def addChart(chart: Chart, over: CellRange, editAs: EditAs = EditAs.TwoCell): Sheet =
+    addChart(chart, DrawingAnchor.over(over, editAs))
+
+  /** All typed charts in z-order (Preserved fragments excluded). */
+  def charts: Vector[Drawing.ChartFrame] =
+    drawings.collect { case c: Drawing.ChartFrame => c }
+
+  /**
+   * Shift this sheet's typed-chart data references that point at sheet `edited` through a
+   * structural edit on that sheet (GH-222): `delta > 0` inserts `delta` rows/columns at 0-based
+   * `at`, `delta < 0` deletes `-delta`. Anchors are NOT touched — they live on this sheet, whose
+   * own geometry did not change. Used by xl-evaluator's StructuralEditor for cross-sheet chart
+   * tracking; the edited sheet's own charts are handled inside the structural shift itself.
+   */
+  def shiftChartRefs(edited: String, isRow: Boolean, at: Int, delta: Int): Sheet =
+    if delta == 0 then this
+    else
+      val deleting = delta < 0
+      val count = math.abs(delta)
+      val newDrawings = drawings.map {
+        case Drawing.ChartFrame(anchor, chart, n) =>
+          Drawing.ChartFrame(
+            anchor,
+            Sheet.shiftChartReferences(chart, edited, isRow, at, count, deleting),
+            n
+          )
+        case other => other
+      }
+      copy(drawings = newDrawings)
+
   /** Remove the drawing at `index` (z-order position); identity when out of range. */
   def removeDrawing(index: Int): Sheet =
     if drawings.isDefinedAt(index) then copy(drawings = drawings.patch(index, Nil, 1))
@@ -716,6 +762,71 @@ final case class Sheet(
     copy(comments = comments.filterNot((ref, _) => range.contains(ref)))
 
 object Sheet:
+
+  /**
+   * Shift a chart's data references that point at sheet `edited` (matched case-insensitively, the
+   * FormulaShifter convention) through one structural axis edit (GH-222). Same clamp algebra as
+   * merged ranges. Deletion semantics (total — no `#REF!` state in the typed model):
+   *   - partial overlap → clamp to the surviving span
+   *   - values fully deleted → DROP the series
+   *   - categories fully deleted → `categories = None` (Excel falls back to 1..N)
+   *   - name cell deleted → `name = None`
+   */
+  private[xl] def shiftChartReferences(
+    chart: Chart,
+    edited: String,
+    rowAxis: Boolean,
+    at: Int,
+    count: Int,
+    deleting: Boolean
+  ): Chart =
+    def axisStart(r: CellRange): Int =
+      if rowAxis then r.start.row.index0 else r.start.col.index0
+    def axisEnd(r: CellRange): Int =
+      if rowAxis then r.end.row.index0 else r.end.col.index0
+    def rebuild(ref: ARef, newIdx: Int): ARef =
+      if rowAxis then ARef.from0(ref.col.index0, newIdx) else ARef.from0(newIdx, ref.row.index0)
+    // The merged-range clamp algebra: shift both endpoints; collapse-to-empty = None.
+    def shiftRange(range: CellRange): Option[CellRange] =
+      val s = axisStart(range)
+      val e = axisEnd(range)
+      val (ns, ne) =
+        if !deleting then (if s >= at then s + count else s, if e >= at then e + count else e)
+        else
+          val ns0 = if s < at then s else if s >= at + count then s - count else at
+          val ne0 = if e < at then e else if e >= at + count then e - count else at - 1
+          (ns0, ne0)
+      if ns > ne then None
+      else Some(CellRange(rebuild(range.start, ns), rebuild(range.end, ne)))
+    def shiftCell(ref: ARef): Option[ARef] =
+      val i = if rowAxis then ref.row.index0 else ref.col.index0
+      val ni =
+        if !deleting then Some(if i >= at then i + count else i)
+        else if i < at then Some(i)
+        else if i >= at + count then Some(i - count)
+        else None
+      ni.map(rebuild(ref, _))
+    def matches(sheet: SheetName): Boolean = sheet.value.equalsIgnoreCase(edited)
+    val shiftedSeries = chart.series.flatMap { series =>
+      val newValues =
+        if matches(series.values.sheet) then
+          shiftRange(series.values.range).map(r => series.values.copy(range = r))
+        else Some(series.values)
+      newValues.map { values =>
+        val newCats = series.categories.flatMap { cats =>
+          if matches(cats.sheet) then shiftRange(cats.range).map(r => cats.copy(range = r))
+          else Some(cats)
+        }
+        val newName = series.name.flatMap {
+          case SeriesName.FromCell(sheet, ref) if matches(sheet) =>
+            shiftCell(ref).map(SeriesName.FromCell(sheet, _))
+          case other => Some(other)
+        }
+        Series(values, newCats, newName)
+      }
+    }
+    chart.copy(series = shiftedSeries)
+
   /**
    * Create empty sheet with name.
    *
