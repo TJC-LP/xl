@@ -70,9 +70,10 @@ trait TExprCoercions:
     // Date-returning calls (TODAY, DATE, EDATE, ...) already produce LocalDate
     case call: TExpr.Call[?] if call.spec.flags.returnsDate =>
       call.asInstanceOf[TExpr[java.time.LocalDate]]
-    // GH-307: cross-typed literals coerce at evaluation time (Excel serial → date)
-    case TExpr.Lit(_: BigDecimal) | TExpr.Lit(_: String) =>
-      coerced[java.time.LocalDate](expr, BindingCoercion.Date)
+    // GH-307: cross-typed literals coerce at evaluation time (Excel serial → date; booleans
+    // are their serial like everywhere else in the table, so =YEAR(TRUE) is 1900 like Excel —
+    // previously Lit(Boolean) fell through to the erased cast and threw ClassCastException)
+    case lit: TExpr.Lit[?] => coerced[java.time.LocalDate](lit, BindingCoercion.Date)
     // GH-306: time-returning calls (NOW), serial arithmetic (TODAY()+1), numeric calls — coerce
     // at evaluation time (LocalDateTime → date, Excel serial → date)
     case other if isRuntimePolymorphic(other) =>

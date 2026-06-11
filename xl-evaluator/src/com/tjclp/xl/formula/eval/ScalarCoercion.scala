@@ -128,6 +128,9 @@ private[formula] object ScalarCoercion:
       Right(CellValue.excelSerialToDateTime(bd.toDouble).toLocalDate)
     case i: Int if i >= 0 && BigDecimal(i) <= MaxExcelDateSerial =>
       Right(CellValue.excelSerialToDateTime(i.toDouble).toLocalDate)
+    // GH-307: booleans are their Excel serial in date positions too (TRUE=1 → 1900-01-01,
+    // so =YEAR(TRUE) is 1900 like Excel) — delegate so they match the numeric branch exactly
+    case b: Boolean => coerceDate(label, if b then BigDecimal(1) else BigDecimal(0))
     case other => mismatch(label, "date", other)
 
   /** Excel truncates fractional values toward zero in integer positions; guard the Int range. */

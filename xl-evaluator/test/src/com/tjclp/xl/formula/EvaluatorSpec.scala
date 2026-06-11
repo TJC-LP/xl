@@ -1524,4 +1524,23 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assertEquals(sheet.evaluateFormula("=SQRT(\"16\")"), Right(CellValue.Number(BigDecimal(4))))
     val bad = sheet.evaluateFormula("=SQRT(\"abc\")")
     assert(bad.isLeft, s"expected clean error, got $bad")
+    // date position: boolean literals coerce via their Excel serial like any number
+    // (TRUE=1 -> 1900-01-01 so =YEAR(TRUE) is 1900 like Excel; FALSE=0 -> 1899-12-31,
+    // the same mapping as =MONTH(0) — Excel's "Jan 0 1900" is not a real date).
+    // Previously every one of these threw ClassCastException through evaluateFormula.
+    assertEquals(sheet.evaluateFormula("=YEAR(TRUE)"), Right(CellValue.Number(BigDecimal(1900))))
+    assertEquals(sheet.evaluateFormula("=MONTH(FALSE)"), Right(CellValue.Number(BigDecimal(12))))
+    List(
+      "=EDATE(%s, 1)",
+      "=EOMONTH(%s, 1)",
+      "=WORKDAY(%s, 1)",
+      "=DATEDIF(%s, DATE(2024,1,1), \"d\")",
+      "=YEARFRAC(%s, DATE(2024,1,1))",
+      "=NETWORKDAYS(%s, DATE(2024,1,1))"
+    ).foreach { template =>
+      val viaBool = sheet.evaluateFormula(template.format("TRUE"))
+      val viaDate = sheet.evaluateFormula(template.format("DATE(1900,1,1)"))
+      assert(viaDate.isRight, s"baseline failed for $template: $viaDate")
+      assertEquals(viaBool, viaDate, s"TRUE must coerce like DATE(1900,1,1) in $template")
+    }
   }
