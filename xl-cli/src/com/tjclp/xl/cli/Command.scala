@@ -60,6 +60,14 @@ enum CliCommand:
   case Cell(ref: String, noStyle: Boolean)
   case Search(pattern: String, limit: Int, sheetsFilter: Option[String])
   case Stats(ref: String)
+  // Row filtering with a --where predicate (GH-134, phase 1 — read-only, in-memory)
+  case Filter(
+    where: String,
+    columns: Option[String],
+    limit: Int,
+    format: FilterFormat,
+    header: Boolean
+  )
   // Analyze
   case Eval(formula: String, overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
@@ -143,6 +151,12 @@ enum FillDirection derives CanEqual:
 enum DiffFormat derives CanEqual:
   case Markdown // Human-readable, grouped by sheet (default)
   case Json // Stable machine-readable schema
+
+/** Output format for the filter command */
+enum FilterFormat derives CanEqual:
+  case Markdown // Table with Row column (default)
+  case Csv // RFC 4180 with a label header line
+  case Json // Array of {row, cells} objects with typed values
 
 /** Sort direction for the sort command */
 enum SortDirection derives CanEqual:

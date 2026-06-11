@@ -17,6 +17,7 @@ import com.tjclp.xl.cli.commands.{
   CellCommands,
   CommentCommands,
   DiffCommands,
+  FilterCommands,
   ImportCommands,
   ReadCommands,
   SheetCommands,
@@ -87,7 +88,7 @@ object Main
 
     // Sheet-level read-only: --file and --sheet (no --output)
     val sheetReadOnlySubcmds =
-      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd
+      boundsCmd orElse viewCmd orElse cellCmd orElse searchCmd orElse statsCmd orElse filterCmd
 
     val sheetReadOnlyOpts = (fileOpt, sheetOpt, maxSizeOpt, streamOpt, sheetReadOnlySubcmds).mapN {
       (file, sheet, maxSize, stream, cmd) =>
@@ -675,6 +676,78 @@ EXAMPLES:
   val statsCmd: Opts[CliCommand] =
     Opts.subcommand("stats", "Calculate statistics for numeric values in range") {
       rangeArg.map(CliCommand.Stats.apply)
+    }
+
+  // --- Filter command (GH-134, phase 1) ---
+
+  private val filterHelp = """Filter rows of the used range with a --where predicate (read-only).
+
+USAGE:
+  xl -f data.xlsx -s Sheet1 filter --where "B > 100"
+  xl -f data.xlsx -s Sheet1 filter --where "Price > 100" --header
+  xl -f data.xlsx -s Sheet1 filter --where "A LIKE 'Widget%'" --columns A,C:E --format csv
+
+PREDICATE GRAMMAR (keywords case-insensitive):
+  Comparisons:  B > 100, A = 'Widget', C != TRUE   (= != <> > >= < <=)
+  Wildcards:    A LIKE 'Widget%'                   (% matches any run)
+  Ranges:       B BETWEEN 10 AND 100               (inclusive)
+  Sets:         A IN ('x', 'y', 'z')
+  Blanks:       A IS EMPTY / A IS NOT EMPTY
+  Logic:        AND, OR, NOT, parentheses          (NOT > AND > OR)
+
+SEMANTICS:
+  - Columns are letters (A, B) or header names with --header (first used row;
+    header names win over letters on collision, matched case-insensitively)
+  - Numbers compare numerically, strings case-insensitively, booleans to TRUE/FALSE
+  - Type mismatch (e.g. text cell vs number literal) = row doesn't match, never an error
+  - Formula cells compare by cached value
+
+OPTIONS:
+  --where <pred>      Filter predicate (required)
+  --columns <spec>    Output columns, e.g. A,C:E (default: all used columns)
+  --limit <n>         Max rows to display (default: 50)
+  --format <fmt>      markdown (default), csv, json
+  --header            First used row holds column names (excluded from matching)
+
+NOTES:
+  - Read-only: does not modify the file (no -o needed)
+  - Loads the workbook in memory; --stream is not supported (use --max-size for large files)
+  - Output rows keep their original row numbers
+
+Docs: docs/reference/cli.md (filter section)
+
+EXAMPLES:
+  xl -f sales.xlsx -s Q1 filter --where "Revenue > 10000 AND Region = 'EMEA'" --header
+  xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
+  xl -f data.xlsx -s Sheet1 filter --where "A IS NOT EMPTY" --columns A:C --limit 200"""
+
+  private val whereOpt =
+    Opts.option[String]("where", "Filter predicate (e.g. \"B > 100 AND C = 'x'\")")
+  private val filterColumnsOpt =
+    Opts.option[String]("columns", "Columns to output, e.g. A,C:E (default: all used)").orNone
+  private val filterLimitOpt =
+    Opts.option[Int]("limit", "Maximum matching rows to display").withDefault(50)
+  private val filterFormatOpt: Opts[FilterFormat] =
+    Opts
+      .option[String]("format", "Output format: markdown (default), csv, json")
+      .withDefault("markdown")
+      .mapValidated { s =>
+        s.toLowerCase match
+          case "markdown" | "md" => cats.data.Validated.valid(FilterFormat.Markdown)
+          case "csv" => cats.data.Validated.valid(FilterFormat.Csv)
+          case "json" => cats.data.Validated.valid(FilterFormat.Json)
+          case other =>
+            cats.data.Validated.invalidNel(s"Unknown format: $other. Use markdown, csv, or json")
+      }
+  private val filterHeaderOpt =
+    Opts
+      .flag("header", "Treat the first used row as column names (excluded from matching)")
+      .orFalse
+
+  val filterCmd: Opts[CliCommand] =
+    Opts.subcommand("filter", filterHelp) {
+      (whereOpt, filterColumnsOpt, filterLimitOpt, filterFormatOpt, filterHeaderOpt)
+        .mapN(CliCommand.Filter.apply)
     }
 
   // --- Analyze ---
@@ -1616,6 +1689,9 @@ Use --dry-run to validate JSON without writing."""
 
     case CliCommand.Stats(refStr) =>
       ReadCommands.stats(wb, sheetOpt, refStr)
+
+    case CliCommand.Filter(where, columns, limit, format, header) =>
+      FilterCommands.filter(wb, sheetOpt, where, columns, limit, format, header)
 
     case CliCommand.Eval(formulaStr, overrides) =>
       ReadCommands.eval(wb, sheetOpt, formulaStr, overrides)

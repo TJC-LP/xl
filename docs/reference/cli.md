@@ -99,6 +99,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `cell` | `<ref> [--no-style]` | Get single cell details |
 | `search` | `<pattern> [--limit n] [--sheets a,b]` | Find cells matching pattern (regex, all sheets by default) |
 | `stats` | `<range>` | Statistics for numeric values in range |
+| `filter` | `--where <pred> [--columns A,C:E] [--limit n] [--format md\|csv\|json] [--header]` | Show rows matching a predicate (read-only) |
 | `eval` | `<formula> [--with overrides]` | Evaluate formula without modifying |
 | `evala` | `<formula> [--at <ref>] [--with overrides]` | Evaluate array formula; display or spill result grid |
 | `put` | `<ref\|range> <value...> [--csv]` | Write value(s) to cell or range (requires `-o`) |
@@ -314,6 +315,47 @@ Calculate statistics (count, sum, min, max, average, ...) for numeric values in 
 xl -f data.xlsx -s Sheet1 stats B2:B10000
 xl -f huge.xlsx --stream stats A1:E100000
 ```
+
+---
+
+### `xl filter --where <predicate> [options]`
+
+Show rows of the used range matching a predicate. Read-only (no `-o`); phase 1 of GH-134 — predicate filtering only, no SQL-style SELECT/GROUP BY.
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `--where` | string | Yes | — | Filter predicate (grammar below) |
+| `--columns` | string | No | all used | Output columns, e.g. `A,C:E` |
+| `--limit` | int | No | 50 | Max matching rows to display |
+| `--format` | string | No | markdown | `markdown`, `csv`, or `json` |
+| `--header` | flag | No | false | First used row holds column names (excluded from matching) |
+
+**Predicate grammar** (keywords case-insensitive; `NOT` > `AND` > `OR`, parens allowed):
+
+| Form | Example |
+|------|---------|
+| Comparison (`=` `!=` `<>` `>` `>=` `<` `<=`) | `B > 100`, `A = 'Widget'`, `C = TRUE` |
+| Wildcard match (`%` only) | `A LIKE 'Widget%'` |
+| Inclusive range | `B BETWEEN 10 AND 100` |
+| Set membership | `A IN ('x', 'y', 'z')` |
+| Blank test | `A IS EMPTY`, `A IS NOT EMPTY` |
+
+**Semantics**:
+- Column refs are letters (`A`, `B`) or, with `--header`, header names from the first used row (case-insensitive; header names win over letters on collision)
+- Numbers compare numerically, strings case-insensitively, booleans against `TRUE`/`FALSE`
+- Type mismatch (e.g. text cell vs number literal) means the row doesn't match — never an error
+- Formula cells compare by their cached value; `IS EMPTY` is true for missing cells, empty cells, and blank text
+
+```bash
+xl -f sales.xlsx -s Q1 filter --where "Revenue > 10000 AND Region = 'EMEA'" --header
+xl -f data.xlsx -s Sheet1 filter --where "A LIKE 'Widget%'" --columns A,C:E --format csv
+xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
+```
+
+**Output**: matching rows keep their original row numbers. Markdown adds a `Row` column and a match-count footer; CSV starts with a `row,<labels>` header line; JSON is an array of `{"row": n, "cells": {<label>: <typed value>}}` objects (labels are header names with `--header`, letters otherwise).
+
+**Limitations**: loads the workbook in memory (`--max-size` envelope applies); `--stream` is not supported. No date literals in predicates yet.
 
 ---
 
