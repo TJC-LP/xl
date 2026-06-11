@@ -58,12 +58,23 @@ private[ooxml] object OoxmlDrawing:
     Seq(Some("c") -> XmlUtil.nsChart)
 
   /**
-   * Pure string scan for relationship references inside a preserved fragment — fragments whose rIds
-   * have no rels to resolve against (fresh parts without the source zip) must be dropped.
+   * Detect relationship references inside a preserved fragment — fragments whose rIds have no rels
+   * to resolve against (fresh parts without the source zip) must be dropped.
+   *
+   * GH-316: prefixes are resolved by NAMESPACE URI over the fragment's own scope (the GH-291
+   * `usedPrefixBindings` traversal), so a fragment binding the relationships namespace to an exotic
+   * prefix (`xmlns:q=… q:embed`) is still detected, while an unrelated prefix that merely looks
+   * like `r:` is not. An unbound `r:` heals to the relationships namespace via the
+   * well-known-prefix fallback, matching capture-side behavior. Unparseable fragments fall back to
+   * the legacy string scan (they are dropped at build time regardless).
    */
   def hasRelationshipRefs(preservedXml: String): Boolean =
-    preservedXml.contains("r:embed") || preservedXml.contains("r:id") ||
-      preservedXml.contains("r:link")
+    XmlSecurity.parseSafe(preservedXml, "preserved drawing fragment").toOption match
+      case Some(elem) =>
+        usedPrefixBindings(elem).exists { case (_, uri) => uri == XmlUtil.nsRelationships }
+      case None =>
+        preservedXml.contains("r:embed") || preservedXml.contains("r:id") ||
+        preservedXml.contains("r:link")
 
   /**
    * Build the part from a sheet's drawings.

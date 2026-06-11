@@ -411,6 +411,85 @@ class DrawingRoundTripSpec extends FunSuite:
     assertEquals(readBack.sheets(0).drawings, Vector.empty[Drawing])
   }
 
+  // ===== GH-316: rel detection resolves attribute prefixes by NAMESPACE URI =====
+
+  private val nsXdr = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+  private val nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+  private def anchorBody: String =
+    """<from><col>0</col><colOff>0</colOff><row>0</row><rowOff>0</rowOff></from>
+      |<ext cx="95250" cy="190500"/>""".stripMargin
+
+  /** Rel-bearing fragment binding the relationships namespace to an exotic prefix. */
+  private def exoticRelFragment: String =
+    s"""<oneCellAnchor xmlns="$nsXdr" xmlns:q="$nsRel" xmlns:a="$nsA">
+       |$anchorBody
+       |<pic><nvPicPr><cNvPr id="7" name="Exotic"/><cNvPicPr/></nvPicPr>
+       |<blipFill><a:blip q:embed="rId9"/></blipFill>
+       |<spPr><a:prstGeom prst="rect"/></spPr></pic>
+       |<clientData/>
+       |</oneCellAnchor>""".stripMargin
+
+  /** Rel-free fragment with an unrelated q: prefix (must NOT count as rel-bearing). */
+  private def relFreeFragment: String =
+    s"""<oneCellAnchor xmlns="$nsXdr" xmlns:q="urn:example:custom">
+       |$anchorBody
+       |<sp q:tag="decorative"><nvSpPr><cNvPr id="8" name="Shape"/><cNvSpPr/></nvSpPr><spPr/></sp>
+       |<clientData/>
+       |</oneCellAnchor>""".stripMargin
+
+  test("GH-316: exotic prefix bound to the relationships namespace is rel-bearing") {
+    assert(
+      OoxmlDrawing.hasRelationshipRefs(exoticRelFragment),
+      "q:embed resolving to the relationships namespace must be detected"
+    )
+  }
+
+  test("GH-316: unrelated q: prefix is not a relationship reference") {
+    assert(
+      !OoxmlDrawing.hasRelationshipRefs(relFreeFragment),
+      "an attribute whose prefix binds a non-relationships namespace is rel-free"
+    )
+  }
+
+  test("GH-316: unbound r:embed still detected (well-known prefix fallback)") {
+    // The binding was lost before capture; the GH-291 machinery heals 'r' to the rel namespace.
+    val fragment =
+      s"""<oneCellAnchor xmlns="$nsXdr">$anchorBody<pic><blipFill><blip r:embed="rId3"/></blipFill></pic><clientData/></oneCellAnchor>"""
+    assert(OoxmlDrawing.hasRelationshipRefs(fragment), "unbound r: must heal to rel namespace")
+  }
+
+  test("GH-316: r: prefix bound to a NON-relationships namespace is rel-free") {
+    val fragment =
+      s"""<oneCellAnchor xmlns="$nsXdr" xmlns:r="urn:example:not-rel">$anchorBody<sp r:id="x"/><clientData/></oneCellAnchor>"""
+    assert(
+      !OoxmlDrawing.hasRelationshipRefs(fragment),
+      "detection is by namespace URI, not prefix spelling"
+    )
+  }
+
+  test("GH-316: fresh emission drops the exotic rel-bearing fragment, keeps the rel-free one") {
+    val sheet = freshSheet("Art").copy(drawings =
+      Vector(
+        Drawing.Picture(DrawingAnchor.at(ref"B2", extent), png, "Pic 1", "alt"),
+        Drawing.Preserved(exoticRelFragment),
+        Drawing.Preserved(relFreeFragment)
+      )
+    )
+    val out = write(Workbook(Vector(sheet)), "gh316-fresh")
+    val partXml = entryText(out, "xl/drawings/drawing1.xml")
+    assert(
+      !partXml.contains("q:embed") && !partXml.contains("rId9"),
+      s"rel-bearing exotic fragment leaked into the fresh part with a dangling rel:\n$partXml"
+    )
+    assert(
+      partXml.contains("q:tag"),
+      s"rel-free fragment with an unrelated q: prefix must still emit:\n$partXml"
+    )
+    // The typed picture's own rel resolves
+    assert(entryText(out, "xl/drawings/_rels/drawing1.xml.rels").contains("image1.png"))
+  }
+
   test("adding the same image bytes to a source-backed sheet reuses the source media part") {
     val (_, wb) = readFixture("image.xlsx")
     val sheetName = wb.sheets(0).name
