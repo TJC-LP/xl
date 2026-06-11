@@ -970,12 +970,10 @@ object XlsxReader:
 
   private def defaultSheetPath(sheetId: Int): String = s"xl/worksheets/sheet$sheetId.xml"
 
+  // GH-320: single source of truth with the writer's rels reconciliation — reader and writer
+  // must never disagree on what a workbook-rels target names.
   private def resolveSheetPath(target: String): String =
-    val cleaned = if target.startsWith("/") then target.drop(1) else target
-    val resolvedPath =
-      if cleaned.startsWith("xl/") || cleaned.startsWith("xl\\") then Paths.get(cleaned)
-      else Paths.get("xl").resolve(cleaned)
-    resolvedPath.normalize().toString.replace('\\', '/')
+    Relationships.resolveWorkbookTarget(target)
 
   /**
    * Convert OoxmlWorksheet to domain Sheet.
