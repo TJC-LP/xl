@@ -3,6 +3,8 @@ package com.tjclp.xl.ooxml
 import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
+import scala.jdk.CollectionConverters.*
+
 import com.tjclp.xl.api.*
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
@@ -111,6 +113,123 @@ class ContentTypesReconcileSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
+  // ========== GH-321: comment overrides follow EMITTED paths on metadata-modified writes ==========
+
+  test("GH-321: metadata-only write of a foreign-dialect comments file has no dangling overrides") {
+    val source = TestFixtures.copyToTemp("comments-hyperlinks.xlsx")
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    // Metadata-only edit: no sheet content touched → the regenerate-from-minimal CT branch
+    val modified = wb.withDefinedName("Answer", "Notes!$A$1")
+
+    val output = Files.createTempFile("gh321-metadata", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val entries = zipEntryNames(output)
+    // The openpyxl-dialect comment + VML parts ship at their SOURCE paths (identity-mapped,
+    // GH-315/GH-292), never at the legacy index paths
+    assert(
+      entries.contains("xl/comments/comment1.xml"),
+      s"foreign-dialect comment part missing from output: $entries"
+    )
+    assert(
+      entries.contains("xl/drawings/commentsDrawing1.vml"),
+      s"foreign-dialect VML part missing from output: $entries"
+    )
+    assert(!entries.contains("xl/comments1.xml"), "comment part emitted at the legacy index path")
+
+    val ct = parseContentTypes(output)
+    // The shipped comment part is registered at its ACTUAL path...
+    assertEquals(
+      ct.overrides.get("/xl/comments/comment1.xml"),
+      Some(XmlUtil.ctComments),
+      s"shipped comment part unregistered. Overrides: ${ct.overrides}"
+    )
+    // ...the shipped VML part is covered by the vml extension Default...
+    assert(
+      ct.defaults.keysIterator.exists(_.equalsIgnoreCase("vml")),
+      s"vml Default missing. Defaults: ${ct.defaults}"
+    )
+    // ...and NO override points at a part that does not ship (index-derived registration would
+    // leave /xl/comments1.xml + /xl/drawings/vmlDrawing1.vml dangling here)
+    val dangling = ct.overrides.keys.filterNot(p => entries.contains(p.stripPrefix("/")))
+    assert(
+      dangling.isEmpty,
+      s"overrides point at parts that do not ship: ${dangling.mkString(", ")}"
+    )
+
+    // The comment itself round-trips
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    val sheet = reloaded("Notes").fold(err => fail(s"Sheet missing: $err"), identity)
+    assert(sheet.comments.contains(ref"A1"), "comment lost on metadata-only write")
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  // ========== GH-322: writer-owned overrides for parts that no longer ship are pruned ==========
+
+  test("GH-322: deleting a sheet leaves no dangling worksheet override; exotic override survives") {
+    val source = createExoticFixture(sheetCount = 2)
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    val modified = wb.remove("Sheet2").fold(err => fail(s"Remove failed: $err"), identity)
+
+    val output = Files.createTempFile("gh322-delete", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val entries = zipEntryNames(output)
+    assert(!entries.contains("xl/worksheets/sheet2.xml"), "deleted sheet part must not ship")
+
+    val ct = parseContentTypes(output)
+    // The deleted sheet's preserved override must not survive the merge as a dangling entry
+    assertEquals(
+      ct.overrides.get("/xl/worksheets/sheet2.xml"),
+      None,
+      s"deleted sheet's worksheet override survived as a dangling entry. Overrides: ${ct.overrides}"
+    )
+    // The surviving sheet stays registered; non-writer-owned preserved overrides ride through
+    assertEquals(ct.overrides.get("/xl/worksheets/sheet1.xml"), Some(XmlUtil.ctWorksheet))
+    assertEquals(ct.overrides.get(customXmlOverride), Some("application/xml"))
+    assert(entryExists(output, "customXml/item1.xml"), "preserved customXml part should ship")
+    // ...and no override anywhere points at a part that does not ship
+    val dangling = ct.overrides.keys.filterNot(p => entries.contains(p.stripPrefix("/")))
+    assert(
+      dangling.isEmpty,
+      s"overrides point at parts that do not ship: ${dangling.mkString(", ")}"
+    )
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(reloaded.sheetNames.map(_.value), Vector("Sheet1"))
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("ContentTypes.reconcile: prunes writer-owned overrides absent from model and verbatim set") {
+    val preserved = ContentTypes(
+      defaults = Map("rels" -> XmlUtil.ctRelationships, "xml" -> "application/xml"),
+      overrides = Map(
+        "/xl/workbook.xml" -> XmlUtil.ctWorkbook,
+        "/xl/worksheets/sheet1.xml" -> XmlUtil.ctWorksheet,
+        "/xl/worksheets/sheet3.xml" -> XmlUtil.ctWorksheet, // deleted sheet → dangling
+        "/xl/comments9.xml" -> XmlUtil.ctComments, // removed comments → dangling
+        "/xl/drawings/drawing7.xml" -> XmlUtil.ctDrawing, // ships verbatim → kept
+        customXmlOverride -> "application/xml" // not writer-owned → kept
+      )
+    )
+    val model = ContentTypes.minimal(hasStyles = true, hasSharedStrings = false, sheetCount = 1)
+
+    val merged =
+      ContentTypes.reconcile(preserved, model, verbatimParts = Set("xl/drawings/drawing7.xml"))
+
+    assertEquals(merged.overrides.get("/xl/worksheets/sheet3.xml"), None, "dangling sheet kept")
+    assertEquals(merged.overrides.get("/xl/comments9.xml"), None, "dangling comments kept")
+    assertEquals(merged.overrides.get("/xl/drawings/drawing7.xml"), Some(XmlUtil.ctDrawing))
+    assertEquals(merged.overrides.get(customXmlOverride), Some("application/xml"))
+    assertEquals(merged.overrides.get("/xl/worksheets/sheet1.xml"), Some(XmlUtil.ctWorksheet))
+  }
+
   // ========== pure reconcile law: preserved ∪ model, model wins except workbook dialect ==========
 
   test("ContentTypes.reconcile: union with model-wins, preserved workbook dialect kept") {
@@ -147,6 +266,15 @@ class ContentTypesReconcileSpec extends FunSuite:
     try zip.getEntry(entryName) != null
     finally zip.close()
 
+  private def zipEntryNames(path: Path): Set[String] =
+    val zip = new ZipFile(path.toFile)
+    try zip.entries().asScala.map(_.getName).toSet
+    finally zip.close()
+
+  private def parseContentTypes(path: Path): ContentTypes =
+    val xml = scala.xml.XML.loadString(new String(readEntry(path, "[Content_Types].xml"), "UTF-8"))
+    ContentTypes.fromXml(xml).fold(err => fail(s"Content types parse failed: $err"), identity)
+
   private def readEntry(path: Path, entryName: String): Array[Byte] =
     val zip = new ZipFile(path.toFile)
     try
@@ -166,9 +294,10 @@ class ContentTypesReconcileSpec extends FunSuite:
    * Excel-shaped raw fixture carrying an exotic part: customXml/item1.xml registered via an
    * Override the writer's domain model knows nothing about. With `macroEnabled` the workbook main
    * part uses the macro dialect content type and a vbaProject.bin payload rides along (bin
-   * Default), mirroring a real .xlsm.
+   * Default), mirroring a real .xlsm. `sheetCount` controls the number of worksheets (GH-322
+   * deletion coverage needs at least two).
    */
-  private def createExoticFixture(macroEnabled: Boolean = false): Path =
+  private def createExoticFixture(macroEnabled: Boolean = false, sheetCount: Int = 1): Path =
     val path = Files.createTempFile("gh314-fixture", if macroEnabled then ".xlsm" else ".xlsx")
     val workbookCt =
       if macroEnabled then macroWorkbookCt
@@ -176,6 +305,19 @@ class ContentTypesReconcileSpec extends FunSuite:
     val macroDefault =
       if macroEnabled then s"""  <Default Extension="bin" ContentType="$vbaProjectCt"/>\n"""
       else ""
+    val sheetOverrides = (1 to sheetCount)
+      .map { i =>
+        s"""  <Override PartName="/xl/worksheets/sheet$i.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"""
+      }
+      .mkString("\n")
+    val sheetElems = (1 to sheetCount)
+      .map(i => s"""    <sheet name="Sheet$i" sheetId="$i" r:id="rId$i"/>""")
+      .mkString("\n")
+    val sheetRels = (1 to sheetCount)
+      .map { i =>
+        s"""  <Relationship Id="rId$i" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet$i.xml"/>"""
+      }
+      .mkString("\n")
     val out = new ZipOutputStream(Files.newOutputStream(path))
     out.setLevel(1)
     try
@@ -187,7 +329,7 @@ class ContentTypesReconcileSpec extends FunSuite:
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
 $macroDefault  <Override PartName="/xl/workbook.xml" ContentType="$workbookCt"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+$sheetOverrides
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
   <Override PartName="$customXmlOverride" ContentType="application/xml"/>
 </Types>"""
@@ -203,20 +345,20 @@ $macroDefault  <Override PartName="/xl/workbook.xml" ContentType="$workbookCt"/>
       writeEntry(
         out,
         "xl/workbook.xml",
-        """<?xml version="1.0"?>
+        s"""<?xml version="1.0"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+$sheetElems
   </sheets>
 </workbook>"""
       )
       writeEntry(
         out,
         "xl/_rels/workbook.xml.rels",
-        """<?xml version="1.0"?>
+        s"""<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+$sheetRels
+  <Relationship Id="rId${sheetCount + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>"""
       )
       writeEntry(
@@ -230,16 +372,18 @@ $macroDefault  <Override PartName="/xl/workbook.xml" ContentType="$workbookCt"/>
   <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
 </styleSheet>"""
       )
-      writeEntry(
-        out,
-        "xl/worksheets/sheet1.xml",
-        """<?xml version="1.0"?>
+      (1 to sheetCount).foreach { i =>
+        writeEntry(
+          out,
+          s"xl/worksheets/sheet$i.xml",
+          s"""<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
-    <row r="1"><c r="A1"><v>1</v></c></row>
+    <row r="1"><c r="A1"><v>$i</v></c></row>
   </sheetData>
 </worksheet>"""
-      )
+        )
+      }
       writeEntry(
         out,
         "customXml/item1.xml",

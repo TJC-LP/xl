@@ -246,6 +246,60 @@ class SurgicalSstCombineSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
+  // ========== GH-323: a NEW sheet's text joins the surgical SST accounting ==========
+
+  test("GH-323: Workbook.put of a NEW sheet encodes text via the combined SST, counts exact") {
+    // Source: Sheet1 references Alpha/Beta/Gamma (A1..A3) → count=3, uniqueCount=3
+    val source = createRawSstFixture()
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    // NEW sheet (no source counterpart): one existing string + one new string referenced twice.
+    // Workbook.put of an unseen name marks metadata modified but NOT sheet-modified.
+    val added = Sheet("Added").put(ref"A1" -> "Alpha", ref"A2" -> "Delta", ref"A3" -> "Delta")
+    val modified = wb.put(added)
+
+    val output = Files.createTempFile("gh323-newsheet", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    // The new sheet's text cells must reference the combined SST, not re-inline
+    val sheetXml = new String(readEntry(output, "xl/worksheets/sheet2.xml"), "UTF-8")
+    assert(
+      !sheetXml.contains("inlineStr"),
+      s"new sheet re-inlined its strings while the preserved SST ships:\n$sheetXml"
+    )
+    assert(
+      sheetXml.contains("t=\"s\""),
+      s"new sheet should reference SST entries via t=\"s\":\n$sheetXml"
+    )
+
+    val sstXml = new String(readEntry(output, "xl/sharedStrings.xml"), "UTF-8")
+    // 3 source refs + 3 new-sheet refs (Alpha, Delta, Delta) = 6; Delta appends → uniqueCount=4
+    assert(
+      sstXml.contains("count=\"6\""),
+      s"SST count must include the NEW sheet's references. SST:\n$sstXml"
+    )
+    assert(
+      sstXml.contains("uniqueCount=\"4\""),
+      s"SST uniqueCount should be 3 preserved + 1 new (Delta). SST:\n$sstXml"
+    )
+    assert(
+      sstXml.contains("<t>Delta</t>"),
+      s"the new sheet's new string must join the combined SST. SST:\n$sstXml"
+    )
+
+    // And everything reads back from both sheets
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(textAtIn(reloaded, "Added", ref"A1"), Some("Alpha"))
+    assertEquals(textAtIn(reloaded, "Added", ref"A2"), Some("Delta"))
+    assertEquals(textAtIn(reloaded, "Added", ref"A3"), Some("Delta"))
+    List(ref"A1", ref"A2", ref"A3").zip(existingStrings).foreach { case (r, s) =>
+      assertEquals(textAt(reloaded, r), Some(s))
+    }
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
   // ========== helpers ==========
 
   private def textAtIn(wb: Workbook, sheet: String, r: ARef): Option[String] =

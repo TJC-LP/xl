@@ -1472,12 +1472,25 @@ object XlsxWriter:
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
         val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.sourcePath)).getOrElse(None)
 
+        // GH-323: a NEW sheet (no source counterpart by identity, GH-315) never enters
+        // tracker.modifiedSheets — Workbook.put of an unseen name marks only metadata — yet its
+        // regenerated part encodes text through whatever SST ships. It joins the modified-sheet
+        // set for SST accounting: its strings enter the combined SST and the per-reference count
+        // (its pre-edit contribution is naturally 0 — there is no source part to subtract).
+        val sstAccountedSheets: Vector[Int] = sourceContext match
+          case Some(ctx) =>
+            (tracker.modifiedSheets ++
+              workbook.sheets.indices.filter(idx =>
+                sourceSheetPath(ctx, idx).isEmpty
+              )).toVector.sorted
+          case None => tracker.modifiedSheets.toVector.sorted
+
         // Check if modified sheets contain NEW strings not in the preserved SST.
         // Entries are collected PER REFERENCE (one per text cell, GH-277: the SST count attribute
         // counts references) in deterministic ref order, and compared EXACTLY — no Unicode
         // normalization, byte-different spellings are different strings (GH-277/GH-289).
         val modifiedSheetRefEntries: Vector[Either[String, RichText]] =
-          tracker.modifiedSheets.toVector.sorted.flatMap { idx =>
+          sstAccountedSheets.flatMap { idx =>
             workbook.sheets.lift(idx).toList.flatMap { sheet =>
               sheet.cells.toVector.sortBy(_._1.toA1).flatMap { case (_, cell) =>
                 cell.value match
@@ -1505,7 +1518,7 @@ object XlsxWriter:
         // current index no longer names the right source part.
         val preEditModifiedRefs = sourceContext
           .map { ctx =>
-            tracker.modifiedSheets.toVector.sorted
+            sstAccountedSheets
               .map(idx =>
                 sourceSheetPath(ctx, idx).fold(0)(countSourceSstReferences(ctx.sourcePath, _))
               )
@@ -1656,58 +1669,110 @@ object XlsxWriter:
       )
     }
 
+    // VML parts the regeneration supersedes, excluded from the verbatim copy loop (GH-292/GH-315):
+    // each regenerated sheet's source-numbered VML (comment removal must drop it) AND the emission
+    // target from the SAME per-write assignment the emission consumes. Hoisted so the content-type
+    // reconciliation below (GH-322) and the copy loop share one definition.
+    val vmlPathsToSkip: Set[String] = sourceContext match
+      case None => Set.empty
+      case Some(ctx) =>
+        sheetsToRegenerate.flatMap { idx =>
+          workbook.sheets.lift(idx) match
+            case None => Set.empty[String]
+            case Some(sheet) =>
+              val sourceRels = sourceSheetRelsPath(ctx, idx)
+              val mapped = ctx.commentPathMapping.get(sheet.name)
+              val emitted = commentPathBySheet.get(idx)
+              (mapped.toList ++ emitted.toList)
+                .toSet[String]
+                .map(cp => vmlPathForSheet(Some(ctx), sourceRels, idx, cp))
+        }
+
     // Build table data
     val (tablesBySheet, totalTableCount, tableIdMap) = buildTablesData(workbook)
 
     // GH-221: drawing-layer plan — snapshot-equality dirty test, media dedup, first-drawing wiring
     val drawingPlan = planDrawingWrites(workbook, sourceContext, sheetsToRegenerate)
 
-    // Preserve structural parts from source (or fallback to minimal)
-    // IMPORTANT: When metadata is modified (add/remove/rename/reorder sheets),
-    // we MUST regenerate the structural parts since sheet count/order changed.
-    val (preservedContentTypes, preservedRootRels, preservedWorkbookRels, preservedWorkbook) =
+    // Preserve structural parts from source (or fallback to minimal). Parsed UNGATED (GH-320):
+    // the metadata-modified path needs the preserved workbook element (carry-through) and the
+    // preserved rels (sheet-rId reconciliation) too, not just the byte-stable path.
+    val (preservedStructCt, preservedStructRootRels, preservedStructWbRels, preservedStructWb) =
       sourceContext match
-        case Some(ctx) if !tracker.modifiedMetadata => parsePreservedStructure(ctx.sourcePath)
-        case _ => (None, None, None, None)
+        case Some(ctx) => parsePreservedStructure(ctx.sourcePath)
+        case None => (None, None, None, None)
+
+    // IMPORTANT: When metadata is modified (add/remove/rename/reorder sheets), the workbook
+    // skeleton MUST be regenerated from the domain — these gated views feed the byte-stable
+    // preservation branches only.
+    val metadataStable = !tracker.modifiedMetadata
+    val preservedContentTypes = preservedStructCt.filter(_ => metadataStable)
+    val preservedWorkbook = preservedStructWb.filter(_ => metadataStable)
 
     // GH-314: the preserved [Content_Types].xml matters even when metadata changed — exotic
     // preserved parts (pivots, custom XML, macro payloads) still ride the verbatim copy loop and
-    // must stay registered. Parsed here so the regenerate-from-minimal branch below can reconcile
-    // instead of dropping their overrides.
-    val preservedContentTypesForReconcile: Option[ContentTypes] =
-      preservedContentTypes.orElse {
-        sourceContext.flatMap { ctx =>
-          withZipFile(ctx.sourcePath) { zip =>
-            parseOptionalEntry(zip, "[Content_Types].xml")(ContentTypes.fromXml)
-          }
-        }
+    // must stay registered, so the regenerate-from-minimal branch below reconciles instead of
+    // dropping their overrides.
+    val preservedContentTypesForReconcile: Option[ContentTypes] = preservedStructCt
+
+    // GH-320: workbook.xml.rels is regenerated IN THE SAME PASS as workbook.xml. Sheet rIds are
+    // reused from the source rels (matched by identity-resolved source part) and never renumbered;
+    // non-sheet rels ride through with stable ids; fresh sheets allocate above the max id. The
+    // resulting ids feed the <sheet r:id> emission below, so every reference resolves by
+    // construction. (LibreOffice numbers rels theme-first — renumbering sheets rId1..N against the
+    // verbatim rels made the first sheet resolve to xl/theme/theme1.xml: a data-corruption class.)
+    val sheetSourcePaths: Vector[Option[String]] =
+      workbook.sheets.indices.toVector.map(idx => sourceContext.flatMap(sourceSheetPath(_, idx)))
+    val sheetOutputPaths: Vector[String] =
+      workbook.sheets.indices.toVector.map { idx =>
+        if sheetsToRegenerate.contains(idx) then s"xl/worksheets/sheet${idx + 1}.xml"
+        else sheetSourcePaths(idx).getOrElse(s"xl/worksheets/sheet${idx + 1}.xml")
       }
+    val (sheetRelIds, workbookRels) = preservedStructWbRels match
+      case Some(preservedRels) =>
+        Relationships.reconcileWorkbook(
+          preservedRels,
+          sheetSourcePaths,
+          sheetOutputPaths,
+          ensureSharedStrings = sharedStringsInOutput
+        )
+      case None =>
+        (
+          OoxmlWorkbook.sequentialRelIds(workbook.sheets.size),
+          Relationships.workbook(
+            sheetCount = workbook.sheets.size,
+            hasStyles = true,
+            hasSharedStrings = sharedStringsInOutput
+          )
+        )
 
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
-        // Update sheets in preserved structure (names/order/visibility may have changed).
-        // Named ranges (definedNames) ride through verbatim here (byte-identical). Authoring a
-        // name marks metadata modified, which routes to the fromDomain branch below (GH-236).
+        // Update sheets in preserved structure (names/order/visibility may have changed) with
+        // the reconciled rIds. Named ranges (definedNames) ride through verbatim here
+        // (byte-identical). Authoring a name marks metadata modified, which routes to the
+        // fromDomain branch below (GH-236).
         // GH-294: the model's activeSheetIndex is overlaid on the preserved bookViews (model
         // wins; unmodeled view attributes ride through), clamped like the fromDomain path.
         val updated = preserved
-          .updateSheets(workbook.sheets, workbook.metadata.sheetStates)
+          .updateSheets(workbook.sheets, workbook.metadata.sheetStates, sheetRelIds)
           .withActiveTab(
             OoxmlWorkbook.clampActiveTab(workbook.activeSheetIndex, workbook.sheets.size)
           )
         // GH-259: print names (_xlnm.Print_Area/_xlnm.Print_Titles) are modeled on Sheet.pageSetup,
         // so a sheet edit can change them WITHOUT marking metadata modified. Reconcile: keep the
         // preserved definedNames bytes when the model agrees, otherwise regenerate the element.
-        val expected = PrintNames.effective(workbook)
-        if OoxmlWorkbook.parseDefinedNames(updated.definedNames).toSet == expected.toSet then
-          updated
-        else updated.copy(definedNames = OoxmlWorkbook.buildDefinedNames(expected))
+        updated.copy(definedNames =
+          OoxmlWorkbook
+            .reconcileDefinedNames(updated.definedNames, PrintNames.effective(workbook))
+        )
       case None =>
         // Fallback for programmatically created workbooks OR when metadata was modified — fresh
-        // workbook structure; fromDomain serializes wb.metadata.definedNames (GH-236) plus the
-        // PageSetup-derived print names (GH-259).
-        OoxmlWorkbook.fromDomain(workbook)
+        // sheets/definedNames from the domain (GH-236/GH-259) with preserved workbook-level
+        // elements (fileVersion, calcPr, workbookProtection, bookViews siblings, extLst, ...)
+        // carried through when a source exists (GH-320).
+        OoxmlWorkbook.fromDomain(workbook, preservedStructWb, sheetRelIds)
 
     // GH-242: document properties are model-driven. The reader parses docProps/core.xml and
     // app.xml into WorkbookMetadata (and marks them parsed, so they are never copied verbatim);
@@ -1758,33 +1823,26 @@ object XlsxWriter:
         // content types so exotic parts riding the copy loop keep their registrations. docProps
         // reconciliation is re-applied AFTER the merge: it removes stale preserved overrides for
         // docProps the model no longer emits (GH-242), which a plain union would resurrect.
+        // GH-322: the verbatim set names the writer-owned parts that ship WITHOUT a model
+        // registration — the copy loop's survivors plus the re-emitted VML (Default-covered) —
+        // so preserved overrides of writer-owned classes that ship neither way (a deleted
+        // sheet's worksheet part) are pruned instead of surviving as dangling entries.
         preservedContentTypesForReconcile match
           case Some(preserved) =>
             ContentTypes
-              .reconcile(preserved, model)
+              .reconcile(
+                preserved,
+                model,
+                verbatimParts = preservableParts -- vmlPathsToSkip ++ vmlPathBySheet.values
+              )
               .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
           case None => model
 
-    val rootRels = preservedRootRels
+    // GH-320: ungated like the content types (GH-314) — a metadata-modified write must keep the
+    // preserved package-level rels (docProps/custom.xml and friends ride the verbatim copy loop).
+    val rootRels = preservedStructRootRels
       .getOrElse(Relationships.root())
       .withDocProps(corePropsXml.isDefined, appPropsXml.isDefined)
-
-    val workbookRels = preservedWorkbookRels match
-      case Some(preserved) =>
-        // Add sharedStrings relationship if we're generating it but source didn't have it
-        if sharedStringsInOutput && !sourceHasSharedStrings then
-          val nextId = preserved.relationships.size + 1
-          preserved.copy(relationships =
-            preserved.relationships :+
-              Relationship(s"rId$nextId", XmlUtil.relTypeSharedStrings, "sharedStrings.xml")
-          )
-        else preserved
-      case None =>
-        Relationships.workbook(
-          sheetCount = workbook.sheets.size,
-          hasStyles = true,
-          hasSharedStrings = sharedStringsInOutput
-        )
 
     // Open output ZIP
     val zip = target match
@@ -2024,23 +2082,8 @@ object XlsxWriter:
       // Copy preserved parts (charts, drawings, images, etc.) if source available
       // Skip VML drawings for regenerated sheets - we regenerate VML from domain model
       // (or omit it if comments were removed); skip drawing parts superseded by same-path
-      // regeneration (GH-221)
+      // regeneration (GH-221). vmlPathsToSkip is hoisted above (shared with GH-322).
       sourceContext.foreach { ctx =>
-        val vmlPathsToSkip: Set[String] = sheetsToRegenerate.flatMap { idx =>
-          workbook.sheets.lift(idx) match
-            case None => Set.empty[String]
-            case Some(sheet) =>
-              val sourceRels = sourceSheetRelsPath(ctx, idx)
-              val mapped = ctx.commentPathMapping.get(sheet.name)
-              // GH-292/GH-315: mirror the regeneration paths EXACTLY, or the preserved copy
-              // ships too — the sheet's source-numbered VML (comment removal must drop it) AND
-              // the emission target from the SAME per-write assignment the emission consumed.
-              val emitted = commentPathBySheet.get(idx)
-              (mapped.toList ++ emitted.toList)
-                .toSet[String]
-                .map(cp => vmlPathForSheet(Some(ctx), sourceRels, idx, cp))
-        }
-
         preservableParts.foreach { path =>
           // vmlPathsToSkip holds the exact regeneration targets — including foreign-named VML
           // parts like openpyxl's commentsDrawing1.vml (GH-292), so no filename-prefix guard

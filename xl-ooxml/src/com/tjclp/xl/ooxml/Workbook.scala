@@ -104,22 +104,42 @@ case class OoxmlWorkbook(
     newSheets: Vector[com.tjclp.xl.api.Sheet],
     stateOverrides: Map[SheetName, Option[String]] = Map.empty
   ): OoxmlWorkbook =
-    val updatedRefs = newSheets.zipWithIndex.map { case (sheet, idx) =>
-      // Check for explicit state override from domain metadata
-      val overriddenState = stateOverrides.get(sheet.name)
+    updateSheets(newSheets, stateOverrides, OoxmlWorkbook.sequentialRelIds(newSheets.size))
 
-      // Try to find original SheetRef to preserve sheetId
-      sheets.find(_.name == sheet.name) match
-        case Some(original) =>
-          // Use override if present, otherwise preserve original state
-          val finalState = overriddenState.getOrElse(original.state)
-          original.copy(relationshipId = s"rId${idx + 1}", state = finalState)
-        case None =>
-          // New sheet - generate new ID, use override or default to visible
-          val newId = sheets.map(_.sheetId).maxOption.getOrElse(0) + 1
-          val finalState = overriddenState.getOrElse(None)
-          SheetRef(sheet.name, newId, s"rId${idx + 1}", finalState)
-    }
+  /**
+   * Update sheets with EXPLICIT relationship ids (GH-320). The ids must come from the same
+   * reconciliation pass that regenerates workbook.xml.rels — renumbering them independently
+   * (rId1..N) corrupted foreign files whose preserved rels number sheets after the theme part
+   * (LibreOffice maps rId1 to the theme, so the first sheet resolved to xl/theme/theme1.xml).
+   */
+  def updateSheets(
+    newSheets: Vector[com.tjclp.xl.api.Sheet],
+    stateOverrides: Map[SheetName, Option[String]],
+    relationshipIds: Seq[String]
+  ): OoxmlWorkbook =
+    // Fresh sheetId allocation threads through the pass (seeded with the preserved max, which
+    // already covers every matched sheet's id) so multiple unmatched sheets in one session —
+    // multi-add, multi-rename — get DISTINCT ids; ECMA-376 requires sheetId uniqueness. Mirrors
+    // the rId counter in Relationships.reconcileWorkbook.
+    val seedMaxId = sheets.map(_.sheetId).maxOption.getOrElse(0)
+    val (updatedRefs, _) = newSheets.zipWithIndex
+      .foldLeft((Vector.empty[SheetRef], seedMaxId)) { case ((acc, maxId), (sheet, idx)) =>
+        val relId = relationshipIds.lift(idx).getOrElse(s"rId${idx + 1}")
+        // Check for explicit state override from domain metadata
+        val overriddenState = stateOverrides.get(sheet.name)
+
+        // Try to find original SheetRef to preserve sheetId
+        sheets.find(_.name == sheet.name) match
+          case Some(original) =>
+            // Use override if present, otherwise preserve original state
+            val finalState = overriddenState.getOrElse(original.state)
+            (acc :+ original.copy(relationshipId = relId, state = finalState), maxId)
+          case None =>
+            // New sheet - allocate above every id seen so far, use override or default to visible
+            val newId = maxId + 1
+            val finalState = overriddenState.getOrElse(None)
+            (acc :+ SheetRef(sheet.name, newId, relId, finalState), newId)
+      }
     copy(sheets = updatedRefs)
 
   def toXml: Elem =
@@ -215,26 +235,86 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   def minimal(sheetName: String = "Sheet1"): OoxmlWorkbook =
     OoxmlWorkbook(Seq(SheetRef(SheetName.unsafe(sheetName), 1, "rId1")))
 
+  /** Sequential rId1..N — the fresh-workbook id scheme (matches Relationships.workbook). */
+  private[ooxml] def sequentialRelIds(count: Int): Vector[String] =
+    (1 to count).map(idx => s"rId$idx").toVector
+
   /** Create workbook from domain model */
   def fromDomain(wb: Workbook): OoxmlWorkbook =
-    val sheetRefs = wb.sheets.zipWithIndex.map { case (sheet, idx) =>
-      val state = wb.metadata.sheetStates.get(sheet.name).flatten
-      SheetRef(sheet.name, idx + 1, s"rId${idx + 1}", state)
-    }
-    // GH-243: preserve-the-system — declare the 1904 date system when the model says so, so the
-    // raw serials riding through (and DateTime cells serialized with the 1904 epoch) stay correct.
-    val workbookPr =
-      if wb.metadata.date1904 then Some(elem("workbookPr", "date1904" -> "1")()) else None
-    // GH-236: serialize named ranges from the typed model (previously dropped on write).
-    // GH-259: print area / repeat rows live on Sheet.pageSetup and are appended here as
-    // sheet-scoped _xlnm.Print_Area / _xlnm.Print_Titles names.
-    OoxmlWorkbook(
-      sheetRefs,
-      workbookPr = workbookPr,
-      // GH-294: fresh workbooks always ship bookViews/activeTab (Excel always writes bookViews)
-      bookViews = buildBookViews(None, clampActiveTab(wb.activeSheetIndex, wb.sheets.size)),
-      definedNames = buildDefinedNames(PrintNames.effective(wb))
-    )
+    fromDomain(wb, None, sequentialRelIds(wb.sheets.size))
+
+  /**
+   * Create workbook.xml from the domain model, carrying preserved workbook-level elements through
+   * when the source structure is available (GH-320 — the metadata-modified path).
+   *
+   * The model wins for everything it represents — sheets (names/order/visibility), activeTab,
+   * definedNames, date1904 — while unmodeled preserved elements ride through in schema order:
+   * fileVersion, workbookPr attributes, mc:AlternateContent, xr:revisionPtr, bookViews siblings,
+   * calcPr, extLst, and otherElements (workbookProtection, pivotCaches, externalReferences, ...) —
+   * the worksheet-level preserved-metadata machinery applied at workbook level. The relationship
+   * ids come from the rels reconciliation pass (see [[Relationships.reconcileWorkbook]]) so every
+   * emitted `r:id` resolves.
+   */
+  def fromDomain(
+    wb: Workbook,
+    preserved: Option[OoxmlWorkbook],
+    relationshipIds: Seq[String]
+  ): OoxmlWorkbook =
+    preserved match
+      case Some(p) =>
+        p.updateSheets(wb.sheets, wb.metadata.sheetStates, relationshipIds)
+          // GH-294: model activeTab overlaid on the preserved bookViews (siblings ride through)
+          .withActiveTab(clampActiveTab(wb.activeSheetIndex, wb.sheets.size))
+          .copy(
+            workbookPr = reconcileDate1904(p.workbookPr, wb.metadata.date1904),
+            definedNames = reconcileDefinedNames(p.definedNames, PrintNames.effective(wb))
+          )
+      case None =>
+        val sheetRefs = wb.sheets.zipWithIndex.map { case (sheet, idx) =>
+          val state = wb.metadata.sheetStates.get(sheet.name).flatten
+          val relId = relationshipIds.lift(idx).getOrElse(s"rId${idx + 1}")
+          SheetRef(sheet.name, idx + 1, relId, state)
+        }
+        // GH-243: preserve-the-system — declare the 1904 date system when the model says so, so the
+        // raw serials riding through (and DateTime cells serialized with the 1904 epoch) stay
+        // correct.
+        val workbookPr =
+          if wb.metadata.date1904 then Some(elem("workbookPr", "date1904" -> "1")()) else None
+        // GH-236: serialize named ranges from the typed model (previously dropped on write).
+        // GH-259: print area / repeat rows live on Sheet.pageSetup and are appended here as
+        // sheet-scoped _xlnm.Print_Area / _xlnm.Print_Titles names.
+        OoxmlWorkbook(
+          sheetRefs,
+          workbookPr = workbookPr,
+          // GH-294: fresh workbooks always ship bookViews/activeTab (Excel always writes bookViews)
+          bookViews = buildBookViews(None, clampActiveTab(wb.activeSheetIndex, wb.sheets.size)),
+          definedNames = buildDefinedNames(PrintNames.effective(wb))
+        )
+
+  /**
+   * Keep the preserved `<definedNames>` bytes when the model agrees with them; regenerate the
+   * element from the model otherwise (the GH-259 reconcile, shared by both writer branches).
+   */
+  def reconcileDefinedNames(
+    preservedElem: Option[Elem],
+    expected: Vector[DefinedName]
+  ): Option[Elem] =
+    if parseDefinedNames(preservedElem).toSet == expected.toSet then preservedElem
+    else buildDefinedNames(expected)
+
+  /**
+   * Reconcile the date1904 declaration with the model (model wins, GH-243) while every other
+   * preserved workbookPr attribute (codeName, defaultThemeVersion, ...) rides through.
+   * Byte-identical when the model agrees with the preserved spelling.
+   */
+  def reconcileDate1904(preservedPr: Option[Elem], date1904: Boolean): Option[Elem] =
+    if parseDate1904(preservedPr) == date1904 then preservedPr
+    else
+      (preservedPr, date1904) match
+        case (Some(pr), true) => Some(pr % new UnprefixedAttribute("date1904", "1", Null))
+        case (Some(pr), false) => Some(pr.copy(attributes = pr.attributes.remove("date1904")))
+        case (None, true) => Some(elem("workbookPr", "date1904" -> "1")())
+        case (None, false) => None
 
   /** Clamp an active-tab index into [0, sheetCount-1] (write side; the reader clamps too). */
   def clampActiveTab(index: Int, sheetCount: Int): Int =

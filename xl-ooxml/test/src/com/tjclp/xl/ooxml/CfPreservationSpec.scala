@@ -240,30 +240,11 @@ class CfPreservationSpec extends FunSuite:
     // ...and stays paired with the worksheet-level x14:conditionalFormattings (same rule id,
     // once in the cfRule's <x14:id>, once in the worksheet extLst pairing)
     assertEquals(count("{26C9BFD7-9A20-468E-9236-D82474454A88}"), 2)
-    // Re-read the cf model through the reader's own per-part pipeline (OoxmlWorksheet routes
-    // through WorksheetReader's rebind; CfCodec.parseAll with the output's dxfs — exactly what
-    // XlsxReader.convertToDomainSheet does). Full-workbook reread of a MODIFIED LibreOffice file
-    // is blocked by a pre-existing cf-UNRELATED writer bug: workbook.xml is regenerated with
-    // renumbered sheet rIds (rId1) while the preserved workbook.xml.rels keeps LO's layout
-    // (rId1 = theme), so sheet resolution lands on theme1.xml. Reproduces at the parent commit
-    // on small-values-lo.xlsx with a plain cell edit; tracked separately.
-    def cfModelOf(p: Path): Vector[ConditionalFormat] =
-      val ws = worksheet.OoxmlWorksheet
-        .fromXml(
-          XmlSecurity
-            .parseSafe(entryText(p, "xl/worksheets/sheet1.xml"), "ws")
-            .fold(e => fail(e.message), identity)
-        )
-        .fold(e => fail(e), identity)
-      val styles = style.WorkbookStyles
-        .fromXml(
-          XmlSecurity
-            .parseSafe(entryText(p, "xl/styles.xml"), "styles")
-            .fold(e => fail(e.message), identity)
-        )
-        .fold(e => fail(e), identity)
-      worksheet.CfCodec.parseAll(ws.conditionalFormatting, styles.dxfs)
-    val after = cfModelOf(out)
+    // Full-workbook re-read of the MODIFIED LibreOffice file — the assertion this test always
+    // wanted. It was blocked by GH-320 (workbook.xml regenerated with renumbered sheet rIds
+    // against LO's verbatim rels, where rId1 = theme, so sheet resolution landed on theme1.xml)
+    // and went through the reader's per-part pipeline instead; GH-320 fixed, workaround undone.
+    val after = reread(out).sheets(0).conditionalFormats
     assertEquals(after.size, before.size + 1)
     assertEquals(after.take(before.size), before, "preserved blocks must ride through unchanged")
     after.lastOption match

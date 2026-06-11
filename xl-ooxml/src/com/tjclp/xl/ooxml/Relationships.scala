@@ -1,5 +1,7 @@
 package com.tjclp.xl.ooxml
 
+import java.nio.file.Paths
+
 import scala.xml.*
 import XmlUtil.*
 
@@ -131,6 +133,103 @@ object Relationships extends XmlReadable[Relationships]:
       else Seq.empty
 
     Relationships(sheets ++ styles ++ sst)
+
+  /**
+   * Resolve a workbook-rels target to a package path against the xl/ base. A leading slash is
+   * package-absolute (openpyxl writes `/xl/worksheets/sheet1.xml`); anything else resolves relative
+   * to xl/. Single source of truth shared by the reader's sheet resolution and the writer's rels
+   * reconciliation (GH-320) — they must never disagree on what a target names.
+   */
+  def resolveWorkbookTarget(target: String): String =
+    val cleaned = if target.startsWith("/") then target.drop(1) else target
+    val resolvedPath =
+      if cleaned.startsWith("xl/") || cleaned.startsWith("xl\\") then Paths.get(cleaned)
+      else Paths.get("xl").resolve(cleaned)
+    resolvedPath.normalize().toString.replace('\\', '/')
+
+  /** A package path as a workbook-rels target (relative to xl/). */
+  private def workbookTargetOf(packagePath: String): String =
+    packagePath.stripPrefix("xl/")
+
+  /**
+   * Regenerate workbook.xml.rels in the same pass as workbook.xml (GH-320).
+   *
+   * Sheet rIds are REUSED from the preserved rels — each live sheet matched by its
+   * identity-resolved source part path — and never renumbered: LibreOffice numbers its rels
+   * theme-first (rId1 = theme, sheets from rId3), so renumbering sheets rId1..N against a verbatim
+   * rels copy made the first sheet resolve to the theme part. Non-sheet rels (theme, styles,
+   * sharedStrings, calcChain, externalLinks, pivotCache, ...) ride through untouched — their ids
+   * stay stable, so `r:id` references inside preserved workbook elements (pivotCaches,
+   * externalReferences) keep resolving. Worksheet rels not claimed by any live sheet are dropped
+   * (deleted sheets); new sheets allocate ids ABOVE every preserved numeric id, in sheet order
+   * (deterministic). The styles/sharedStrings rels are ensured by type with the same allocation
+   * (presence follows what the writer actually emits — the withDocProps precedent).
+   *
+   * @param preserved
+   *   the source workbook.xml.rels
+   * @param sheetSourcePaths
+   *   per live sheet, its identity-resolved SOURCE part path (None = new sheet)
+   * @param sheetOutputPaths
+   *   per live sheet, the package path the writer emits the worksheet at
+   * @param ensureSharedStrings
+   *   true when the output ships xl/sharedStrings.xml
+   * @return
+   *   (rId per sheet index — these MUST feed the workbook.xml `<sheet r:id>` emission, so every
+   *   reference resolves by construction; the regenerated relationships)
+   */
+  def reconcileWorkbook(
+    preserved: Relationships,
+    sheetSourcePaths: Vector[Option[String]],
+    sheetOutputPaths: Vector[String],
+    ensureSharedStrings: Boolean
+  ): (Vector[String], Relationships) =
+    val worksheetRelByPath: Map[String, Relationship] =
+      preserved.relationships.iterator
+        .filter(_.`type` == relTypeWorksheet)
+        .map(rel => resolveWorkbookTarget(rel.target) -> rel)
+        .toMap
+    val maxNumericId: Int = preserved.relationships
+      .flatMap(_.id.stripPrefix("rId").toIntOption)
+      .maxOption
+      .getOrElse(0)
+
+    // Per sheet: keep the matched rel verbatim when its target already names the output part
+    // (byte-stable for untouched dialects), re-target it when the sheet moved, or allocate fresh.
+    val (sheetRels, afterSheets) = sheetSourcePaths
+      .zip(sheetOutputPaths)
+      .foldLeft((Vector.empty[Relationship], maxNumericId)) {
+        case ((acc, maxId), (sourcePath, outputPath)) =>
+          sourcePath.flatMap(worksheetRelByPath.get) match
+            case Some(rel) if resolveWorkbookTarget(rel.target) == outputPath =>
+              (acc :+ rel, maxId)
+            case Some(rel) =>
+              (acc :+ rel.copy(target = workbookTargetOf(outputPath)), maxId)
+            case None =>
+              val fresh =
+                Relationship(s"rId${maxId + 1}", relTypeWorksheet, workbookTargetOf(outputPath))
+              (acc :+ fresh, maxId + 1)
+      }
+
+    val nonSheet = preserved.relationships.filterNot(_.`type` == relTypeWorksheet)
+
+    def ensure(
+      state: (Seq[Relationship], Int),
+      present: Boolean,
+      relType: String,
+      target: String
+    ): (Seq[Relationship], Int) =
+      val (rels, maxId) = state
+      if present then
+        if rels.exists(_.`type` == relType) then state
+        else (rels :+ Relationship(s"rId${maxId + 1}", relType, target), maxId + 1)
+      else (rels.filterNot(_.`type` == relType), maxId)
+
+    val base = (nonSheet ++ sheetRels, afterSheets)
+    val withStyles = ensure(base, present = true, relTypeStyles, "styles.xml")
+    val (finalRels, _) =
+      ensure(withStyles, ensureSharedStrings, relTypeSharedStrings, "sharedStrings.xml")
+
+    (sheetRels.map(_.id), Relationships(finalRels))
 
   def fromXml(elem: Elem): Either[String, Relationships] =
     val rels = getChildren(elem, "Relationship").map { e =>
