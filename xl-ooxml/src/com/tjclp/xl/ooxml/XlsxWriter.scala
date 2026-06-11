@@ -1656,6 +1656,25 @@ object XlsxWriter:
       )
     }
 
+    // VML parts the regeneration supersedes, excluded from the verbatim copy loop (GH-292/GH-315):
+    // each regenerated sheet's source-numbered VML (comment removal must drop it) AND the emission
+    // target from the SAME per-write assignment the emission consumes. Hoisted so the content-type
+    // reconciliation below (GH-322) and the copy loop share one definition.
+    val vmlPathsToSkip: Set[String] = sourceContext match
+      case None => Set.empty
+      case Some(ctx) =>
+        sheetsToRegenerate.flatMap { idx =>
+          workbook.sheets.lift(idx) match
+            case None => Set.empty[String]
+            case Some(sheet) =>
+              val sourceRels = sourceSheetRelsPath(ctx, idx)
+              val mapped = ctx.commentPathMapping.get(sheet.name)
+              val emitted = commentPathBySheet.get(idx)
+              (mapped.toList ++ emitted.toList)
+                .toSet[String]
+                .map(cp => vmlPathForSheet(Some(ctx), sourceRels, idx, cp))
+        }
+
     // Build table data
     val (tablesBySheet, totalTableCount, tableIdMap) = buildTablesData(workbook)
 
@@ -1758,10 +1777,18 @@ object XlsxWriter:
         // content types so exotic parts riding the copy loop keep their registrations. docProps
         // reconciliation is re-applied AFTER the merge: it removes stale preserved overrides for
         // docProps the model no longer emits (GH-242), which a plain union would resurrect.
+        // GH-322: the verbatim set names the writer-owned parts that ship WITHOUT a model
+        // registration — the copy loop's survivors plus the re-emitted VML (Default-covered) —
+        // so preserved overrides of writer-owned classes that ship neither way (a deleted
+        // sheet's worksheet part) are pruned instead of surviving as dangling entries.
         preservedContentTypesForReconcile match
           case Some(preserved) =>
             ContentTypes
-              .reconcile(preserved, model)
+              .reconcile(
+                preserved,
+                model,
+                verbatimParts = preservableParts -- vmlPathsToSkip ++ vmlPathBySheet.values
+              )
               .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
           case None => model
 
@@ -2024,23 +2051,8 @@ object XlsxWriter:
       // Copy preserved parts (charts, drawings, images, etc.) if source available
       // Skip VML drawings for regenerated sheets - we regenerate VML from domain model
       // (or omit it if comments were removed); skip drawing parts superseded by same-path
-      // regeneration (GH-221)
+      // regeneration (GH-221). vmlPathsToSkip is hoisted above (shared with GH-322).
       sourceContext.foreach { ctx =>
-        val vmlPathsToSkip: Set[String] = sheetsToRegenerate.flatMap { idx =>
-          workbook.sheets.lift(idx) match
-            case None => Set.empty[String]
-            case Some(sheet) =>
-              val sourceRels = sourceSheetRelsPath(ctx, idx)
-              val mapped = ctx.commentPathMapping.get(sheet.name)
-              // GH-292/GH-315: mirror the regeneration paths EXACTLY, or the preserved copy
-              // ships too — the sheet's source-numbered VML (comment removal must drop it) AND
-              // the emission target from the SAME per-write assignment the emission consumed.
-              val emitted = commentPathBySheet.get(idx)
-              (mapped.toList ++ emitted.toList)
-                .toSet[String]
-                .map(cp => vmlPathForSheet(Some(ctx), sourceRels, idx, cp))
-        }
-
         preservableParts.foreach { path =>
           // vmlPathsToSkip holds the exact regeneration targets — including foreign-named VML
           // parts like openpyxl's commentsDrawing1.vml (GH-292), so no filename-prefix guard

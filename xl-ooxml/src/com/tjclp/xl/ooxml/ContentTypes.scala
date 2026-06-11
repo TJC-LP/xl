@@ -183,16 +183,49 @@ object ContentTypes extends XmlReadable[ContentTypes]:
    * which worksheets/styles/sharedStrings/comments/tables ship — EXCEPT `/xl/workbook.xml`, whose
    * content type encodes the package dialect (macro-enabled, template) that the domain model does
    * not track.
+   *
+   * GH-322: a preserved override of a WRITER-OWNED part class whose part no longer ships — e.g. a
+   * deleted sheet's `/xl/worksheets/sheetN.xml` — must not survive the union as a dangling entry.
+   * Such an override is kept only when the model registers the part or it rides the verbatim copy
+   * loop (`verbatimParts`, zip paths without the leading slash). Non-writer-owned registrations
+   * (pivots, customXml, macro payloads, themes) always survive.
    */
-  def reconcile(preserved: ContentTypes, model: ContentTypes): ContentTypes =
+  def reconcile(
+    preserved: ContentTypes,
+    model: ContentTypes,
+    verbatimParts: Set[String] = Set.empty
+  ): ContentTypes =
+    val verbatimPartNames = verbatimParts.map(p => s"/$p")
+    val livePreserved = preserved.overrides.filter { case (partName, ct) =>
+      !writerOwnedContentTypes.contains(ct) ||
+      model.overrides.contains(partName) ||
+      verbatimPartNames.contains(partName)
+    }
     val workbookDialect =
       preserved.overrides.get(workbookPartName).map(workbookPartName -> _)
     ContentTypes(
       defaults = preserved.defaults ++ model.defaults,
-      overrides = preserved.overrides ++ model.overrides ++ workbookDialect
+      overrides = livePreserved ++ model.overrides ++ workbookDialect
     )
 
   private val workbookPartName = "/xl/workbook.xml"
+
+  /**
+   * Content types of the part classes the writer fully owns (GH-322): every shipping part of these
+   * classes is registered by the model (worksheets, comments, tables, styles, sharedStrings,
+   * drawings, charts) or named in the verbatim set handed to [[reconcile]], so a preserved override
+   * of one of these types covering neither is a dangling registration.
+   */
+  private val writerOwnedContentTypes: Set[String] = Set(
+    ctWorksheet,
+    ctComments,
+    ctVmlDrawing,
+    ctDrawing,
+    ctChart,
+    ctTable,
+    ctSharedStrings,
+    ctStyles
+  )
 
   def fromXml(elem: Elem): Either[String, ContentTypes] =
     val defaults = getChildren(elem, "Default").map { e =>
