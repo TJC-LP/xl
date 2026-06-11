@@ -7,6 +7,7 @@ import com.tjclp.xl.cf.{CfOperator, CfPoint, CfRule, CfTextOp, Cfvo, Conditional
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.context.ModificationTracker
 import com.tjclp.xl.drawings.TestImages
+import com.tjclp.xl.richtext
 import com.tjclp.xl.sheets.{FreezePane, HeaderFooter, PageMargins, PageSetup, SheetView}
 import com.tjclp.xl.sheets.styleSyntax.*
 import com.tjclp.xl.styles.{CellStyle, Dxf, DxfFont}
@@ -263,6 +264,23 @@ object Generators:
       1 -> plain.map(_ + "e\u0301")
     )
 
+  /** RichText cell values for the round-trip law (GH-303: run-structure SST keying) */
+  val genRichTextCellValue: Gen[CellValue.RichText] =
+    for
+      n <- Gen.choose(1, 3)
+      runs <- Gen.listOfN(
+        n,
+        for
+          text <- genXmlSafeTextNonEmpty
+          bold <- Gen.oneOf(true, false)
+          italic <- Gen.oneOf(true, false)
+        yield richtext.TextRun(
+          text,
+          if bold || italic then Some(Font("Calibri", 11.0, bold = bold, italic = italic)) else None
+        )
+      )
+    yield CellValue.RichText(richtext.RichText(runs.toVector))
+
   /** Non-empty variant of [[genXmlSafeText]] */
   val genXmlSafeTextNonEmpty: Gen[String] =
     for
@@ -481,6 +499,7 @@ object Generators:
       1 -> genCellError.map(CellValue.Error.apply),
       1 -> genExcelDateTime.map(CellValue.DateTime.apply),
       2 -> genFormulaCellValue,
+      1 -> genRichTextCellValue,
       1 -> Gen.const(CellValue.Empty)
     )
 

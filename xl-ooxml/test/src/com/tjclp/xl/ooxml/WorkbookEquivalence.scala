@@ -42,14 +42,15 @@ import com.tjclp.xl.styles.fill.Fill
  * EXPLICITLY IGNORED (serialization noise or known write-only fields):
  *   - styleId numbering (dedup may renumber; only resolved styles matter)
  *   - SST ordering / inline-vs-shared string encoding
- *   - activeSheetIndex (not serialized to bookViews) and metadata theme/definedNames/sheetStates
- *     (separate parts with their own round-trip specs)
+ *   - metadata theme/definedNames/sheetStates (separate parts with their own round-trip specs);
+ *     activeSheetIndex compares since GH-294 (bookViews/activeTab serializes both directions)
  *   - the worksheet dimension element and derived defaults (defaultColWidth etc.)
  *   - freezePane (three-valued write-only override: None means "preserve", so the reader never
  *     populates it)
  *   - Cell.comment / rich-text comment formatting (Sheet.comments is the comment model; the
  *     author-prefix run the writer adds is presentation, so comments compare by plain text)
  *   - cached formula values (see Formula rule above)
+ *   - TextRun.rawRPrXml (reader-populated byte-fidelity cache; runs compare by text+font)
  */
 object WorkbookEquivalence:
 
@@ -70,7 +71,13 @@ object WorkbookEquivalence:
         .zip(actual.sheets)
         .flatMap { case (exp, act) => sheetDiff(exp, act) }
         .toList
-    nameDiffs ++ metadataDiff(expected, actual) ++ sheetDiffs
+    val activeDiff =
+      if expected.activeSheetIndex != actual.activeSheetIndex then
+        List(
+          s"activeSheetIndex mismatch (GH-294): expected ${expected.activeSheetIndex}, actual ${actual.activeSheetIndex}"
+        )
+      else Nil
+    nameDiffs ++ activeDiff ++ metadataDiff(expected, actual) ++ sheetDiffs
 
   /**
    * docProps metadata fields round-trip since GH-242: creator/lastModifiedBy/application/appVersion
@@ -266,6 +273,14 @@ object WorkbookEquivalence:
       case (CellValue.DateTime(exp), CellValue.DateTime(act)) =>
         Option.when(Duration.between(exp, act).abs().compareTo(dateTolerance) > 0)(
           s"$sheet!${ref.toA1}: datetime mismatch: expected $exp, actual $act"
+        )
+      case (CellValue.RichText(exp), CellValue.RichText(act)) =>
+        // rawRPrXml is a reader-populated byte-fidelity cache (like cached formula values):
+        // compare runs by (text, font) only (GH-303 wired RichText into the law)
+        val expRuns = exp.runs.map(r => (r.text, r.font))
+        val actRuns = act.runs.map(r => (r.text, r.font))
+        Option.when(expRuns != actRuns)(
+          s"$sheet!${ref.toA1}: rich text mismatch: expected $expRuns, actual $actRuns"
         )
       case _ =>
         Option.when(expected != actual)(
