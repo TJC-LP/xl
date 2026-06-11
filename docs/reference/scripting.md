@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.3
+//> using dep com.tjclp::xl:0.12.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.3
+//> using dep com.tjclp::xl:0.12.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -135,7 +135,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.3
+//> using dep com.tjclp::xl:0.12.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -161,6 +161,11 @@ Workbook(model).recalculate().toEither match
     errors.foreach(e => println(s"✗ ${e.render}"))
     sys.exit(1)
 ```
+
+Since 0.12.0 the prelude also exposes the drawing layer: `sheet.addImage(bytes, format, at)`
+embeds pictures (7 formats, natural-size PNG/JPEG sniffing) and `com.tjclp.xl.charts.Chart`
+authors bar/line/pie charts anchored to ranges — both round-trip through OOXML with unmodeled
+content preserved byte-faithfully.
 
 Since 0.11.2, formulas may use `LET` (lexical bindings), `INDIRECT` (dynamic references —
 evaluated in a deferred last partition), and `RAND`/`RANDBETWEEN`. Randomness is an explicit
@@ -236,7 +241,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.3
+//> using dep com.tjclp::xl:0.12.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -290,7 +295,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.11.3
+//> using dep com.tjclp::xl:0.12.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

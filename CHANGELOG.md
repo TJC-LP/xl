@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] "Visual" - 2026-06-11
+
+The Visual release: embedded pictures and typed charts with hybrid preservation —
+the drawing layer xl could previously only carry verbatim is now a first-class,
+law-governed part of the model. Closes the original 0.12.0 theme (#221, #222).
+
 ### Added (Visual wave 6b)
 
 - **Typed chart model** (#222): `com.tjclp.xl.charts.Chart` — bar, line, pie with series

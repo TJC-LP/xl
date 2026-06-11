@@ -110,6 +110,12 @@ xl -f <file> -s <sheet> filter --where "B > 100 AND D = TRUE" --header --format 
 xl -f <file> -s <sheet> filter --where "Name LIKE 'Acme%'" --columns A,C:E --limit 20
 ```
 
+### Images & Charts (require `-o`, 0.12.0+)
+```bash
+xl -f <file> -s <sheet> -o <out> add-image logo.png --at B2          # Embed picture (png/jpeg/gif/bmp...)
+xl -f <file> -s <sheet> -o <out> chart add --type bar --data B2:D10 --categories A2:A10 --title "Revenue" --at F2:K15
+```
+
 ### Row/Column Operations (require `-o`)
 ```bash
 xl -f <file> -s <sheet> -o <out> row <n> --height 30

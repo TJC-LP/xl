@@ -12,7 +12,7 @@
 
 **Current Status**: Production-ready with **104 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 3005+ tests passing.
 
-**Current Version**: **0.11.3 "Robustness"** (released 2026-06-11)
+**Current Version**: **0.12.0 "Visual"** (released 2026-06-11)
 
 ---
 
@@ -53,7 +53,7 @@ All open bugs, one patch release (PR #276). Reviewer-discovered gaps filed as #2
 | 4 — streaming/OOXML + parity/totality follow-ups #278/#283/#285/#291/#293/#305 (PR #310) | [#223](https://github.com/TJC-LP/xl/issues/223) two-pass streaming SST + style registry; [#242](https://github.com/TJC-LP/xl/issues/242) docProps emission; [#243](https://github.com/TJC-LP/xl/issues/243) 1904 dates + `NumFmt.Fraction` + autofilter authoring |
 | 5 — CLI/UX + display/SVG/evaluator follow-ups #279-#282/#296/#298/#301/#302/#306-#308 (PR #311) | [#134](https://github.com/TJC-LP/xl/issues/134) `filter --where` (row predicates); [#137](https://github.com/TJC-LP/xl/issues/137) `diff`; [#159](https://github.com/TJC-LP/xl/issues/159) markdown import; [#156](https://github.com/TJC-LP/xl/issues/156) AWT-metric autofit; [#86](https://github.com/TJC-LP/xl/issues/86) Batik-first rasterization |
 
-### v0.12.0 "Visual" — wave 6 (design-first)
+### v0.12.0 "Visual" — wave 6 (Released 2026-06-11)
 
 Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture corpus; (b) `Drawing`/`Image`/anchor domain model + image authoring ([#221](https://github.com/TJC-LP/xl/issues/221)); (c) typed chart AST (bar/line/pie) + authoring + `xl chart` CLI ([#222](https://github.com/TJC-LP/xl/issues/222)). Re-scoped by its own design panel when reached.
 
