@@ -312,9 +312,19 @@ final case class Workbook(
   def renameSheet(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
     rename(oldName, newName)
 
-  /** Set active sheet index */
+  /**
+   * Set active sheet index.
+   *
+   * Serialized as `bookViews/workbookView@activeTab` (GH-294). A changed index marks workbook
+   * metadata modified so a surgical write regenerates workbook.xml instead of copying the source
+   * verbatim (which would silently drop the change).
+   */
   def setActiveSheet(index: Int): XLResult[Workbook] =
-    if index >= 0 && index < sheets.size then Right(copy(activeSheetIndex = index))
+    if index >= 0 && index < sheets.size then
+      if index == activeSheetIndex then Right(this)
+      else
+        val updatedContext = sourceContext.map(_.markMetadataModified)
+        Right(copy(activeSheetIndex = index, sourceContext = updatedContext))
     else Left(XLError.OutOfBounds(s"active[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
   /** Get active sheet */

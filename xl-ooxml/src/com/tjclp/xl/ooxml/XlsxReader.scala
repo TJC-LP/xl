@@ -425,6 +425,13 @@ object XlsxReader:
       // GH-242: parse document properties (lenient — absent/malformed parts yield empty fields)
       docProps = parseDocProps(parts)
 
+      // GH-294: bookViews/workbookView activeTab → activeSheetIndex, clamped leniently into
+      // [0, sheetCount-1] (malformed or out-of-range values must never fail a read)
+      activeSheetIndex = OoxmlWorkbook.clampActiveTab(
+        OoxmlWorkbook.parseActiveTab(ooxmlWb.bookViews).getOrElse(0),
+        sheets.size
+      )
+
       // Assemble workbook with optional SourceContext
       workbook <- assembleWorkbook(
         sheets,
@@ -436,6 +443,7 @@ object XlsxReader:
         sheetStates,
         commentPathMapping,
         date1904 = ooxmlWb.date1904,
+        activeSheetIndex = activeSheetIndex,
         docProps,
         drawingPathMapping = parsedSheets.drawingPathMapping,
         drawingSnapshots = parsedSheets.drawingSnapshots,
@@ -1187,6 +1195,8 @@ object XlsxReader:
    *   Mapping from 0-based sheet index to comment file path (e.g., "xl/comments1.xml")
    * @param date1904
    *   True when workbookPr declares the 1904 date system (GH-243)
+   * @param activeSheetIndex
+   *   Active tab parsed from bookViews, already clamped to the sheet count (GH-294)
    * @param docProps
    *   Document properties parsed from docProps/core.xml + app.xml (GH-242)
    * @return
@@ -1202,6 +1212,7 @@ object XlsxReader:
     sheetStates: Map[SheetName, Option[String]],
     commentPathMapping: Map[Int, String],
     date1904: Boolean,
+    activeSheetIndex: Int,
     docProps: DocProps.Data,
     drawingPathMapping: Map[Int, String],
     drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]],
@@ -1251,7 +1262,12 @@ object XlsxReader:
           date1904 = date1904
         )
       sourceContextEither.map(ctx =>
-        Workbook(sheets = sheetsWithPrint, metadata = metadata, sourceContext = ctx)
+        Workbook(
+          sheets = sheetsWithPrint,
+          metadata = metadata,
+          activeSheetIndex = activeSheetIndex,
+          sourceContext = ctx
+        )
       )
 
   /**

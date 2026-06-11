@@ -1489,7 +1489,13 @@ object XlsxWriter:
         // Update sheets in preserved structure (names/order/visibility may have changed).
         // Named ranges (definedNames) ride through verbatim here (byte-identical). Authoring a
         // name marks metadata modified, which routes to the fromDomain branch below (GH-236).
-        val updated = preserved.updateSheets(workbook.sheets, workbook.metadata.sheetStates)
+        // GH-294: the model's activeSheetIndex is overlaid on the preserved bookViews (model
+        // wins; unmodeled view attributes ride through), clamped like the fromDomain path.
+        val updated = preserved
+          .updateSheets(workbook.sheets, workbook.metadata.sheetStates)
+          .withActiveTab(
+            OoxmlWorkbook.clampActiveTab(workbook.activeSheetIndex, workbook.sheets.size)
+          )
         // GH-259: print names (_xlnm.Print_Area/_xlnm.Print_Titles) are modeled on Sheet.pageSetup,
         // so a sheet edit can change them WITHOUT marking metadata modified. Reconcile: keep the
         // preserved definedNames bytes when the model agrees, otherwise regenerate the element.
