@@ -189,18 +189,35 @@ object CellCodec:
    * sheet.put(ref"A1" -> "hello", ref"B1" -> 42, ref"C1" -> LocalDate.now)
    * // Inferred type: A = String | Int | LocalDate <: CellWritable ✓
    * }}}
+   *
+   * Performance (GH-297): this is the hot path for every codec-based `Sheet.put`. Branches
+   * construct results directly instead of summoning the per-type codecs — the codecs are `inline
+   * given`, so a summon inside `write` would allocate a fresh codec instance (and a fresh
+   * `CellStyle` hint) on every call. Each branch MUST stay in lockstep with the corresponding
+   * `CellCodec` write implementation above; `CellCodecSpec` ("GH-297: master writer matches codec
+   * writes...") pins the equivalence. Common primitive branches are ordered first.
    */
   given CellWriter[CellWritable] with
+    // Shared style hints: immutable, and CellStyle.canonicalKey is a lazy val — reusing one
+    // instance per hint computes the style-dedup key once per JVM instead of once per write.
+    private val generalNumberHint: Option[CellStyle] =
+      Some(CellStyle.default.withNumFmt(NumFmt.General))
+    private val decimalHint: Option[CellStyle] = Some(CellStyle.default.withNumFmt(NumFmt.Decimal))
+    private val dateHint: Option[CellStyle] = Some(CellStyle.default.withNumFmt(NumFmt.Date))
+    private val dateTimeHint: Option[CellStyle] = Some(
+      CellStyle.default.withNumFmt(NumFmt.DateTime)
+    )
+
     def write(value: CellWritable): (CellValue, Option[CellStyle]) = value match
-      case s: String => summon[CellCodec[String]].write(s)
-      case i: Int => summon[CellCodec[Int]].write(i)
-      case l: Long => summon[CellCodec[Long]].write(l)
-      case d: Double => summon[CellCodec[Double]].write(d)
-      case bd: BigDecimal => summon[CellCodec[BigDecimal]].write(bd)
-      case b: Boolean => summon[CellCodec[Boolean]].write(b)
-      case ld: LocalDate => summon[CellCodec[LocalDate]].write(ld)
-      case ldt: LocalDateTime => summon[CellCodec[LocalDateTime]].write(ldt)
-      case rt: RichText => summon[CellCodec[RichText]].write(rt)
+      case s: String => (CellValue.Text(s), None)
+      case i: Int => (CellValue.Number(BigDecimal(i)), generalNumberHint)
+      case d: Double => (CellValue.Number(BigDecimal(d)), generalNumberHint)
+      case b: Boolean => (CellValue.Bool(b), None)
+      case ld: LocalDate => (CellValue.DateTime(ld.atStartOfDay), dateHint)
+      case l: Long => (CellValue.Number(BigDecimal(l)), generalNumberHint)
+      case bd: BigDecimal => (CellValue.Number(bd), decimalHint)
+      case ldt: LocalDateTime => (CellValue.DateTime(ldt), dateTimeHint)
+      case rt: RichText => (CellValue.RichText(rt), None)
       case tr: com.tjclp.xl.richtext.TextRun =>
         // TextRun from RichText DSL - convert to single-run RichText
         (CellValue.RichText(RichText(Vector(tr))), None)

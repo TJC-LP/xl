@@ -320,3 +320,44 @@ class CellCodecSpec extends ScalaCheckSuite:
         assert(rsn.contains("Int"))
       case other => fail(s"Expected XLError.ParseError, got $other")
   }
+
+  // ========== GH-297: master CellWriter[CellWritable] ≡ per-type codecs ==========
+  // The master writer constructs results directly (with cached style hints) on the hot put
+  // path; these tests pin every branch to the per-type CellCodec write implementation so the
+  // two can never drift.
+
+  test("GH-297: master writer matches codec writes for every codec-backed type") {
+    val w = CellWriter[CellWritable]
+    assertEquals(w.write("hello"), CellCodec[String].write("hello"))
+    assertEquals(w.write(42), CellCodec[Int].write(42))
+    assertEquals(w.write(42L), CellCodec[Long].write(42L))
+    assertEquals(w.write(3.14), CellCodec[Double].write(3.14))
+    assertEquals(
+      w.write(BigDecimal("1234.56")),
+      CellCodec[BigDecimal].write(BigDecimal("1234.56"))
+    )
+    assertEquals(w.write(true), CellCodec[Boolean].write(true))
+    assertEquals(w.write(false), CellCodec[Boolean].write(false))
+    val ld = LocalDate.of(2025, 6, 11)
+    assertEquals(w.write(ld), CellCodec[LocalDate].write(ld))
+    val ldt = LocalDateTime.of(2025, 6, 11, 12, 30, 15)
+    assertEquals(w.write(ldt), CellCodec[LocalDateTime].write(ldt))
+    val rt = com.tjclp.xl.richtext.RichText.plain("rich")
+    assertEquals(w.write(rt), CellCodec[com.tjclp.xl.richtext.RichText].write(rt))
+  }
+
+  test("GH-297: master writer handles TextRun, CellValue, and Formatted directly") {
+    val w = CellWriter[CellWritable]
+    val run = com.tjclp.xl.richtext.TextRun("styled")
+    assertEquals(
+      w.write(run),
+      (CellValue.RichText(com.tjclp.xl.richtext.RichText(Vector(run))), None)
+    )
+    val cv: CellValue = CellValue.Number(BigDecimal(7))
+    assertEquals(w.write(cv), (cv, None))
+    val formatted = com.tjclp.xl.formatted.Formatted(CellValue.Number(BigDecimal("0.25")), NumFmt.Percent)
+    assertEquals(
+      w.write(formatted),
+      (formatted.value, Some(com.tjclp.xl.styles.CellStyle.default.withNumFmt(NumFmt.Percent)))
+    )
+  }

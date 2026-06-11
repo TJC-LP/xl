@@ -7,6 +7,7 @@ import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
 import com.tjclp.xl.drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
+import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.tables.TableSpec
 
 import scala.collection.immutable.{Map, Set}
@@ -329,6 +330,9 @@ final case class Sheet(
   // Internal helper for single-cell put with CellWriter type class
   // Uses the CellWriter[CellWritable] instance which handles all supported types via pattern matching
   // Returns Sheet directly (infallible) since CellWriter.write cannot fail
+  // GH-297: style registration and the cell update are fused into a single copy (register once,
+  // set the styleId directly). The previous register + withCellStyle sequence recomputed the
+  // canonical key and copied the sheet three times per styled put.
   private def putSingle[A: CellWriter](ref: ARef, value: A): Sheet =
     import com.tjclp.xl.codec.given
     val (cellValue, styleOpt) = CellWriter[A].write(value)
@@ -336,17 +340,18 @@ final case class Sheet(
     val updatedCell = existingCell match
       case Some(existing) => existing.withValue(cellValue)
       case None => Cell(ref, cellValue)
-    val sheetWithCell = copy(cells = cells.updated(ref, updatedCell))
     styleOpt match
       case Some(codecStyle) =>
         val mergedStyle = existingCell.flatMap(_.styleId).flatMap(styleRegistry.get) match
           case Some(existingStyle) => mergeStyles(existingStyle, codecStyle)
           case None => codecStyle
-        val (newRegistry, _) = styleRegistry.register(mergedStyle)
-        import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-        sheetWithCell.copy(styleRegistry = newRegistry).withCellStyle(ref, mergedStyle)
+        val (newRegistry, styleId) = styleRegistry.register(mergedStyle)
+        copy(
+          styleRegistry = newRegistry,
+          cells = cells.updated(ref, updatedCell.withStyle(styleId))
+        )
       case None =>
-        sheetWithCell
+        copy(cells = cells.updated(ref, updatedCell))
 
   /**
    * Batch put with mixed value types and automatic style inference.
@@ -393,9 +398,11 @@ final case class Sheet(
     // 3. Output depends only on inputs (deterministic)
     // This is a common FP optimization pattern for bulk operations (similar to Scala stdlib).
 
-    // Single-pass: build cells and collect styles simultaneously
+    // Single-pass: build cells and collect resolved style ids simultaneously (GH-297: the
+    // style is registered once here; the previous per-cell withCellStyle fold re-registered
+    // each style and copied the whole sheet once per styled cell)
     val builtCells = scala.collection.mutable.ArrayBuffer[Cell]()
-    val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
+    val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, StyleId)]()
     var registry = styleRegistry
     val writer = CellWriter[A]
 
@@ -410,9 +417,9 @@ final case class Sheet(
         val mergedStyle = existingCell.flatMap(_.styleId).flatMap(this.styleRegistry.get) match
           case Some(existingStyle) => mergeStyles(existingStyle, codecStyle)
           case None => codecStyle
-        val (newRegistry, _) = registry.register(mergedStyle)
+        val (newRegistry, styleId) = registry.register(mergedStyle)
         registry = newRegistry
-        cellsWithStyles += ((ref, mergedStyle))
+        cellsWithStyles += ((ref, styleId))
       }
     }
 
@@ -427,7 +434,7 @@ final case class Sheet(
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def putTyped[A](updates: (ARef, A)*)(using CellCodec[A]): Sheet =
     val builtCells = scala.collection.mutable.ArrayBuffer[Cell]()
-    val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, CellStyle)]()
+    val cellsWithStyles = scala.collection.mutable.ArrayBuffer[(ARef, StyleId)]()
     var registry = styleRegistry
     val codec = summon[CellCodec[A]]
 
@@ -442,9 +449,9 @@ final case class Sheet(
         val mergedStyle = existingCell.flatMap(_.styleId).flatMap(this.styleRegistry.get) match
           case Some(existingStyle) => mergeStyles(existingStyle, codecStyle)
           case None => codecStyle
-        val (newRegistry, _) = registry.register(mergedStyle)
+        val (newRegistry, styleId) = registry.register(mergedStyle)
         registry = newRegistry
-        cellsWithStyles += ((ref, mergedStyle))
+        cellsWithStyles += ((ref, styleId))
       }
     }
 
@@ -477,17 +484,20 @@ final case class Sheet(
   ): Sheet | XLResult[Sheet] =
     ${ com.tjclp.xl.macros.PutLiteral.putTuplesImpl('{ this }, 'updates, 'cw) }
 
+  // GH-297: styles arrive pre-registered as (ref, styleId) — apply ids to the merged cell map
+  // directly instead of folding withCellStyle (which re-registered every style and copied the
+  // whole sheet once per styled cell). The id fold preserves the pre-existing duplicate-ref
+  // semantics: the last value put wins, and any styled entry for that ref re-applies its id.
   private def applyBulkCells(
     builtCells: Iterable[Cell],
-    styled: Iterable[(ARef, CellStyle)],
+    styled: Iterable[(ARef, StyleId)],
     newRegistry: StyleRegistry
   ): Sheet =
-    val withCells = copy(
-      styleRegistry = newRegistry,
-      cells = this.cells ++ builtCells.iterator.map(cell => cell.ref -> cell)
-    )
-    import com.tjclp.xl.sheets.styleSyntax.withCellStyle
-    styled.foldLeft(withCells) { case (s, (ref, style)) => s.withCellStyle(ref, style) }
+    val baseCells = this.cells ++ builtCells.iterator.map(cell => cell.ref -> cell)
+    val finalCells = styled.foldLeft(baseCells) { case (cs, (ref, styleId)) =>
+      cs.get(ref).fold(cs)(cell => cs.updated(ref, cell.withStyle(styleId)))
+    }
+    copy(styleRegistry = newRegistry, cells = finalCells)
 
   /**
    * Apply a patch to this sheet.
