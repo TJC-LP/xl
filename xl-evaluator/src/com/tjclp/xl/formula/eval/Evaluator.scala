@@ -134,7 +134,8 @@ object Evaluator:
       case TExpr.RangeLocation.CrossSheet(sheetName, range) =>
         workbook match
           case None =>
-            val refStr = s"${sheetName.value}!${range.toA1}"
+            // GH-280: quote cell-ref-shaped sheet names so diagnostics read unambiguously
+            val refStr = s"${SheetName.quoteForFormula(sheetName.value)}!${range.toA1}"
             Left(missingWorkbookError(refStr, isRange = true))
           case Some(wb) =>
             wb(sheetName) match
@@ -269,7 +270,7 @@ private class EvaluatorImpl(
       case TExpr.SheetPolyRef(sheetName, at, _) =>
         Left(
           EvalError.EvalFailed(
-            s"Unresolved SheetPolyRef at ${sheetName.value}!${(at: ARef).toA1} - should have been resolved during parsing",
+            s"Unresolved SheetPolyRef at ${SheetName.quoteForFormula(sheetName.value)}!${(at: ARef).toA1} - should have been resolved during parsing",
             None
           )
         )
@@ -278,7 +279,8 @@ private class EvaluatorImpl(
         // SheetRef: resolve cell from target sheet in workbook
         workbook match
           case None =>
-            val refStr = s"${sheetName.value}!${(at: ARef).toA1}"
+            // GH-280: quote cell-ref-shaped sheet names so diagnostics read unambiguously
+            val refStr = s"${SheetName.quoteForFormula(sheetName.value)}!${(at: ARef).toA1}"
             Left(Evaluator.missingWorkbookError(refStr))
           case Some(wb) =>
             wb(sheetName) match
@@ -311,7 +313,8 @@ private class EvaluatorImpl(
 
       case TExpr.SheetRange(sheetName, range) =>
         // SheetRange should be wrapped in a function (SUM, COUNT, etc.) before evaluation
-        val refStr = s"${sheetName.value}!${range.toA1}"
+        // GH-280: quote cell-ref-shaped sheet names so diagnostics read unambiguously
+        val refStr = s"${SheetName.quoteForFormula(sheetName.value)}!${range.toA1}"
         Left(
           EvalError.EvalFailed(
             s"Cross-sheet range $refStr must be used within a function like SUM or COUNT.",

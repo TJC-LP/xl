@@ -862,7 +862,9 @@ object DependencyGraph:
    * }}}
    */
   final case class QualifiedRef(sheet: SheetName, ref: ARef):
-    override def toString: String = s"${sheet.value}!${ref.toA1}"
+    // GH-280: quote cell-ref-shaped sheet names so a sheet literally named "A1" renders
+    // unambiguously in diagnostics ('A1'!B2, not A1!B2)
+    override def toString: String = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}"
 
   /**
    * Build dependency graph from Workbook (cross-sheet aware).
