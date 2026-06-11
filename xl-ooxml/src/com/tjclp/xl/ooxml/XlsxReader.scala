@@ -112,7 +112,11 @@ object XlsxReader:
     "xl/_rels/workbook.xml.rels",
     "xl/styles.xml",
     "xl/sharedStrings.xml",
-    "xl/theme/theme1.xml"
+    "xl/theme/theme1.xml",
+    // GH-242: docProps are parsed into WorkbookMetadata and re-emitted from the model on write
+    // (NOT preserved verbatim — the model wins). docProps/custom.xml stays unparsed/preserved.
+    DocProps.corePath,
+    DocProps.appPath
   )
 
   /**
@@ -355,6 +359,9 @@ object XlsxReader:
         .map(ref => ref.name -> ref.state)
         .toMap
 
+      // GH-242: parse document properties (lenient — absent/malformed parts yield empty fields)
+      docProps = parseDocProps(parts)
+
       // Assemble workbook with optional SourceContext
       workbook <- assembleWorkbook(
         sheets,
@@ -364,9 +371,29 @@ object XlsxReader:
         theme,
         definedNames,
         sheetStates,
-        commentPathMapping
+        commentPathMapping,
+        date1904 = ooxmlWb.date1904,
+        docProps
       )
     yield ReadResult(workbook, styleWarnings)
+
+  /**
+   * Parse docProps/core.xml + app.xml into the modeled metadata fields (GH-242).
+   *
+   * Lenient by design: docProps in the wild are messy and must never fail a read. Absent or
+   * malformed parts contribute no fields; unmodeled fields (title, keywords, ...) are ignored.
+   */
+  private def parseDocProps(parts: Map[String, String]): DocProps.Data =
+    def parsePart(path: String, parse: Elem => DocProps.Data): DocProps.Data =
+      parts
+        .get(path)
+        .flatMap(xml => XmlSecurity.parseSafe(xml, path).toOption)
+        .map(parse)
+        .getOrElse(DocProps.Data.empty)
+    DocProps.merge(
+      parsePart(DocProps.corePath, DocProps.parseCoreXml),
+      parsePart(DocProps.appPath, DocProps.parseAppXml)
+    )
 
   /** Parse optional shared strings table */
   private def parseOptionalSST(parts: Map[String, String]): XLResult[Option[SharedStrings]] =
@@ -980,6 +1007,10 @@ object XlsxReader:
    *   Sheet visibility states from workbook.xml
    * @param commentPathMapping
    *   Mapping from 0-based sheet index to comment file path (e.g., "xl/comments1.xml")
+   * @param date1904
+   *   True when workbookPr declares the 1904 date system (GH-243)
+   * @param docProps
+   *   Document properties parsed from docProps/core.xml + app.xml (GH-242)
    * @return
    *   Workbook with optional SourceContext
    */
@@ -991,7 +1022,9 @@ object XlsxReader:
     theme: ThemePalette,
     definedNames: Vector[DefinedName],
     sheetStates: Map[SheetName, Option[String]],
-    commentPathMapping: Map[Int, String]
+    commentPathMapping: Map[Int, String],
+    date1904: Boolean,
+    docProps: DocProps.Data
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -1009,8 +1042,21 @@ object XlsxReader:
       // into Sheet.pageSetup; unmodelable forms stay in metadata.definedNames verbatim.
       val (sheetsWithPrint, remainingNames) = PrintNames.extract(sheets, definedNames)
 
+      // GH-242: docProps fields reflect the FILE exactly (None when absent) — never the
+      // WorkbookMetadata defaults, so write(read(f)) round-trips document properties.
       val metadata =
-        WorkbookMetadata(theme = theme, definedNames = remainingNames, sheetStates = sheetStates)
+        WorkbookMetadata(
+          creator = docProps.creator,
+          created = docProps.created,
+          modified = docProps.modified,
+          lastModifiedBy = docProps.lastModifiedBy,
+          application = docProps.application,
+          appVersion = docProps.appVersion,
+          theme = theme,
+          definedNames = remainingNames,
+          sheetStates = sheetStates,
+          date1904 = date1904
+        )
       sourceContextEither.map(ctx =>
         Workbook(sheets = sheetsWithPrint, metadata = metadata, sourceContext = ctx)
       )

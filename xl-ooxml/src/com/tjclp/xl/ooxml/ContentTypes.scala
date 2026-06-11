@@ -30,6 +30,25 @@ case class ContentTypes(
       val overridesToAdd = ContentTypes.tableOverrides(tableCount)
       copy(overrides = overrides ++ overridesToAdd)
 
+  /**
+   * Reconcile docProps overrides with what the writer actually emits (GH-242).
+   *
+   * Idempotent: adds the override when the part is emitted, removes any stale override when it is
+   * not (e.g. a preserved [Content_Types].xml whose source had docProps that the model no longer
+   * carries).
+   */
+  def withDocPropsOverrides(hasCore: Boolean, hasApp: Boolean): ContentTypes =
+    def adjust(ov: Map[String, String], present: Boolean, part: String, ct: String) =
+      if present then ov + (part -> ct) else ov - part
+    copy(overrides =
+      adjust(
+        adjust(overrides, hasCore, "/docProps/core.xml", ctCoreProperties),
+        hasApp,
+        "/docProps/app.xml",
+        ctExtendedProperties
+      )
+    )
+
   def toXml: Elem =
     val defaultElems = defaults.toSeq.sortBy(_._1).map { (ext, ct) =>
       elem("Default", "Extension" -> ext, "ContentType" -> ct)()

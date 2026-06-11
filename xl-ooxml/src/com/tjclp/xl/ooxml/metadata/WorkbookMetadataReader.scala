@@ -18,10 +18,14 @@ import com.tjclp.xl.workbooks.DefinedName
  *   Sheet info including name, ID, visibility, and dimension
  * @param definedNames
  *   Named ranges/formulas defined in the workbook
+ * @param date1904
+ *   True when workbookPr declares the 1904 date system (GH-243); date serials then count days since
+ *   1904-01-01 instead of the default 1900 system
  */
 final case class LightMetadata(
   sheets: Vector[SheetInfo],
-  definedNames: Vector[DefinedName]
+  definedNames: Vector[DefinedName],
+  date1904: Boolean = false
 )
 
 /**
@@ -105,7 +109,12 @@ object WorkbookMetadataReader:
           }
         yield
           val definedNames = parseDefinedNames(wbElem)
-          LightMetadata(sheetsWithDimensions, definedNames)
+          // GH-243: surface the 1904 date system flag so streaming consumers can interpret
+          // date serials with the correct epoch (shared parser with the full reader).
+          val date1904 = com.tjclp.xl.ooxml.OoxmlWorkbook.parseDate1904(
+            (wbElem \ "workbookPr").headOption.collect { case e: Elem => e }
+          )
+          LightMetadata(sheetsWithDimensions, definedNames, date1904)
       finally zipFile.close()
     }
 

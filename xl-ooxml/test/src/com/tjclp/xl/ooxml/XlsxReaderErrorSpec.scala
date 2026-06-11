@@ -134,6 +134,24 @@ class XlsxReaderErrorSpec extends FunSuite:
       case other => fail(s"Expected ParseError for malformed styles, got $other")
   }
 
+  test("XlsxReader survives non-positive font sz in styles.xml (GH-278)") {
+    // Font requires sizePt > 0; a malformed val="-4" must fall back to the
+    // default size at the parse site instead of throwing through the require.
+    val malformedStyles =
+      """<?xml version="1.0" encoding="UTF-8"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="-4"/><name val="Calibri"/></font></fonts>
+  <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+  <borders count="1"><border/></borders>
+  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+</styleSheet>"""
+    val bytes = buildWorkbook(overrides = Map("xl/styles.xml" -> malformedStyles))
+    XlsxReader.readFromBytes(bytes) match
+      case Right(wb) =>
+        assertEquals(wb.sheets(0)(ref"A1").value, CellValue.Text("Hello"))
+      case Left(err) => fail(s"read must not fail on a malformed font size: $err")
+  }
+
   test("XlsxReader errors when worksheet part referenced by workbook is missing") {
     val bytes = buildWorkbook(omit = Set("xl/worksheets/sheet1.xml"))
     assertParseError(

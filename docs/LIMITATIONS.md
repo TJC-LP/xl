@@ -32,6 +32,7 @@ This document provides a comprehensive overview of what XL can and cannot do tod
 - ✅ **Performance optimizations**: Inline hot paths, zero-overhead abstractions
 - ✅ **Style Application**: Full end-to-end formatting with fonts, colors, fills, borders
 - ✅ **DateTime Serialization**: Proper Excel serial number conversion
+- ✅ **1904 date system** (GH-243): `<workbookPr date1904="1"/>` (legacy Mac Excel) is read into `WorkbookMetadata.date1904`, preserved on write, and `DateTime` cells are serialized with the 1904 epoch; epoch-aware conversions via `CellValue.excelSerialToDateTime(serial, date1904 = true)`. Display formatting, typed codec reads, and formula evaluation still assume the 1900 system — interpret raw serials with the metadata flag for 1904 files. **Streaming-edit exception**: streaming writes (CLI `--stream batch` via `StreamingTransform`) still serialize *new* date values with the 1900 epoch while the output keeps `date1904="1"`, so those cells land 1,462 days off — avoid streaming date puts into 1904-system files; in-memory writes (the default, via `XlsxWriter`) are epoch-correct.
 - ✅ **Security Hardening**: ZIP bomb detection, XXE prevention, formula injection guards (WI-30)
 
 ### Developer Experience
@@ -219,33 +220,32 @@ Color.Theme(ThemeSlot.Accent1, tint = 0.5).toResolvedHex(theme)  // "#RRGGBB"
 
 ---
 
-#### 8. No Shared Strings Table (SST) in Streaming Write
-**Status**: Streaming write always uses inline strings
-**Impact**: Larger file sizes for repeated strings
-**Plan**: see [plan/roadmap.md](plan/roadmap.md)
+#### 8. Shared Strings Table (SST) in Streaming Write ✅ NOW SUPPORTED (GH-223)
+**Status**: Implemented — streaming writes deduplicate strings through an SST by default
+**Impact**: Plain-text cells are emitted as `t="s"` index references; `xl/sharedStrings.xml` is
+written after the worksheets with correct `count` (references) / `uniqueCount` (distinct) values.
 
-**Current State**:
-- `writeStream` uses `type="inlineStr"` for all text cells
-- Each cell carries full string (no deduplication)
-- File size: ~2x larger for files with repeated strings
+**How it works** (two-pass design from `design/smart-streaming.md`):
+- Pass 1: while rows stream, an `SstAccumulator` assigns SST indices in first-occurrence order —
+  an index is final the moment it is assigned, so the worksheet body needs no second pass
+- Pass 2: after the worksheet entries, the accumulated table is emitted as `sharedStrings.xml`
 
-**Example**:
-```scala
-// 100k rows with same company name
-RowData(i, Map(0 -> CellValue.Text("ACME Corporation")))
-// TODAY: "ACME Corporation" written 100k times (~1.7MB)
-// WITH SST: Written once in SST, cells reference index (~200KB)
-```
+Applies to `writeStream`, `writeStreamWithAutoDetect`, `writeStreamsSeq` (one workbook-global SST
+shared across sheets), `writeStreamsSeqWithAutoDetect`, and the new `writeStreamStyled`.
 
-**Why It's Hard**:
-- Streaming write consumes rows once (cannot scan twice)
-- Two-pass approach: 1) collect strings, 2) write with indices (breaks streaming)
-- Online SST building: Track duplicates as stream flows (complex state)
+**Styles** (GH-223 phase 2): `ExcelIO.writeStreamStyled(path, sheet, styles)` takes a
+`Vector[CellStyle]` table; `StyledRowData.cellStyles` values index into it. The table is
+deduplicated into `xl/styles.xml` (cellXf 0 = default) and cell `s=` attributes are remapped to
+the emitted indices — formatted 100k+ row files no longer require the in-memory path.
 
-**Effort**: 4-5 days
-**LOC**: ~200 in SST streaming builder
-
-**Workaround**: Acceptable for most use cases (disk space is cheap)
+**Remaining envelope / limitations**:
+- Memory is O(distinct strings) for the accumulator — the accepted envelope per the design doc
+  (100k rows with 100 distinct strings keeps exactly 100 entries; 1M unique strings ≈ tens of MB)
+- `SstPolicy.Never` (`WriterConfig`) keeps the previous inline-string dialect; `Auto`/`Always`
+  both deduplicate (streaming cannot pre-scan, so `Auto` opts into SST — note this changes the
+  default streaming output dialect from inline strings to SST as of GH-223)
+- RichText cells stay `inlineStr` even in SST mode (mixed dialects are valid OOXML)
+- Merged-cell emission from streaming writers (phase 3 of GH-223) is still future work
 
 ---
 

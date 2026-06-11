@@ -5,7 +5,14 @@ import fs2.data.xml.*
 import fs2.data.xml.XmlEvent.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.ooxml.{FormulaInjectionPolicy, XmlUtil}
+import com.tjclp.xl.ooxml.{FormulaInjectionPolicy, SSTEntry, SharedStrings, XmlUtil}
+import com.tjclp.xl.ooxml.style.{OoxmlStyles, StyleIndex}
+import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.border.Border
+import com.tjclp.xl.styles.fill.Fill
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * Tracks worksheet bounds during streaming. O(1) memory (4 integers).
@@ -65,6 +72,38 @@ final class BoundsAccumulator:
     else None
 
 /**
+ * Two-pass shared-strings accumulator for streaming writes (GH-223).
+ *
+ * Pass 1 (while rows stream): every plain-text cell calls [[indexFor]], which assigns SST indices
+ * in FIRST-OCCURRENCE order — so the index a cell emits is final the moment it is assigned, and the
+ * worksheet body never needs a second pass. Pass 2 (after the body): [[toSharedStrings]] yields the
+ * table for xl/sharedStrings.xml.
+ *
+ * Memory: O(distinct strings) — the accepted envelope per docs/design/smart-streaming.md. The
+ * reference count feeds the SST `count` attribute (counts references, not unique entries).
+ *
+ * Thread-safety: NOT thread-safe; single-fiber use only (same contract as [[BoundsAccumulator]]).
+ */
+@SuppressWarnings(Array("org.wartremover.warts.Var"))
+final class SstAccumulator:
+  private val indexByString = scala.collection.mutable.LinkedHashMap.empty[String, Int]
+  private var references: Int = 0
+
+  /** SST index for `s`, assigning the next first-occurrence index when unseen. */
+  def indexFor(s: String): Int =
+    references += 1
+    indexByString.getOrElseUpdate(s, indexByString.size)
+
+  def uniqueCount: Int = indexByString.size
+
+  def referenceCount: Int = references
+
+  /** Build the table for xl/sharedStrings.xml: entries in first-occurrence order. */
+  def toSharedStrings: SharedStrings =
+    val entries = indexByString.keysIterator.map(s => Left(s): SSTEntry).toVector
+    SharedStrings(entries, indexByString.toMap, references)
+
+/**
  * True streaming XML writer using fs2-data-xml for constant-memory writes.
  *
  * Emits XML events incrementally as rows arrive, never materializing the full document tree in
@@ -75,6 +114,10 @@ final class BoundsAccumulator:
  *   - Phase 2: Assemble final ZIP with dimension element (from tracked bounds)
  *
  * This maintains O(1) memory while producing files with instant metadata queries.
+ *
+ * Shared strings (GH-223): pass an [[SstAccumulator]] to the body/row/cell helpers to emit plain
+ * text as `t="s"` SST references (first-occurrence indices); without one, text stays
+ * `t="inlineStr"`. RichText always stays inline (mixed dialects are valid OOXML).
  */
 object StreamingXmlWriter:
 
@@ -124,6 +167,9 @@ object StreamingXmlWriter:
    *   Formula injection escaping policy (default: None)
    * @param styleId
    *   Optional style index for s="N" attribute (from StyleIndex)
+   * @param sst
+   *   Optional SST accumulator (GH-223): when present, plain text is emitted as a t="s" reference
+   *   whose index is assigned on first occurrence; when absent, text stays inline
    * @return
    *   List of XML events representing the cell
    */
@@ -132,7 +178,8 @@ object StreamingXmlWriter:
     rowIndex: Int,
     value: CellValue,
     injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
-    styleId: Option[Int] = None
+    styleId: Option[Int] = None,
+    sst: Option[SstAccumulator] = None
   ): List[XmlEvent] =
     val ref = s"${columnToLetter(colIndex)}$rowIndex"
 
@@ -141,31 +188,46 @@ object StreamingXmlWriter:
         ("", Nil)
 
       case CellValue.Text(s) =>
-        // <c r="A1" t="inlineStr"><is><t>text</t></is></c>
-        // Apply formula injection escaping if policy requires it, then _xHHHH_ escapes (GH-288)
+        // Apply formula injection escaping if policy requires it (BEFORE SST accumulation, so the
+        // table stores the escaped text), then _xHHHH_ escapes for the inline dialect (GH-288)
         val injectionEscaped = injectionPolicy match
           case FormulaInjectionPolicy.Escape => CellValue.escape(s)
           case FormulaInjectionPolicy.None => s
-        val escaped = XmlUtil.escapeXstring(injectionEscaped)
-        // Add xml:space="preserve" for text with leading/trailing/multiple spaces
-        // Note: we check the escaped text because whitespace in the original (e.g., "  =formula")
-        // must still be preserved after escaping adds a leading quote (e.g., "'  =formula")
-        val needsPreserve = XmlUtil.needsXmlSpacePreserve(escaped)
-        val tAttrs =
-          if needsPreserve then
-            List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
-          else Nil
+        sst match
+          case Some(acc) =>
+            // <c r="A1" t="s"><v>idx</v></c> — SST reference (GH-223). The accumulator stores the
+            // raw string; SharedStrings serialization applies _xHHHH_/xml:space at emission.
+            val idx = acc.indexFor(injectionEscaped)
+            (
+              "s",
+              List(
+                XmlEvent.StartTag(QName("v"), Nil, false),
+                XmlEvent.XmlString(idx.toString, false),
+                XmlEvent.EndTag(QName("v"))
+              )
+            )
+          case None =>
+            // <c r="A1" t="inlineStr"><is><t>text</t></is></c>
+            val escaped = XmlUtil.escapeXstring(injectionEscaped)
+            // Add xml:space="preserve" for text with leading/trailing/multiple spaces
+            // Note: we check the escaped text because whitespace in the original (e.g., "  =formula")
+            // must still be preserved after escaping adds a leading quote (e.g., "'  =formula")
+            val needsPreserve = XmlUtil.needsXmlSpacePreserve(escaped)
+            val tAttrs =
+              if needsPreserve then
+                List(Attr(QName(Some("xml"), "space"), List(XmlString("preserve", false))))
+              else Nil
 
-        (
-          "inlineStr",
-          List(
-            XmlEvent.StartTag(QName("is"), Nil, false),
-            XmlEvent.StartTag(QName("t"), tAttrs, false),
-            XmlEvent.XmlString(escaped, false),
-            XmlEvent.EndTag(QName("t")),
-            XmlEvent.EndTag(QName("is"))
-          )
-        )
+            (
+              "inlineStr",
+              List(
+                XmlEvent.StartTag(QName("is"), Nil, false),
+                XmlEvent.StartTag(QName("t"), tAttrs, false),
+                XmlEvent.XmlString(escaped, false),
+                XmlEvent.EndTag(QName("t")),
+                XmlEvent.EndTag(QName("is"))
+              )
+            )
 
       case CellValue.Number(n) =>
         // <c r="A1" t="n"><v>42</v></c>
@@ -261,35 +323,34 @@ object StreamingXmlWriter:
         val isEvents = richText.runs.flatMap { run =>
           val rStart = XmlEvent.StartTag(QName("r"), Nil, false)
 
-          // Optional <rPr> with font properties
+          // Optional <rPr> with font properties.
+          // NOTE: fs2-data-xml renders StartTag(isEmpty = true) as a self-closing element by
+          // pairing it with its MATCHING EndTag event — an isEmpty StartTag without an EndTag
+          // desynchronizes the renderer and swallows the next close tag (</rPr> went missing,
+          // producing malformed worksheets for any styled rich-text run).
           val rPrEvents = run.font.toList.flatMap { f =>
             val propsBuilder = List.newBuilder[XmlEvent]
 
+            def selfClosing(label: String, attrs: List[Attr] = Nil): Unit =
+              propsBuilder += XmlEvent.StartTag(QName(label), attrs, true)
+              propsBuilder += XmlEvent.EndTag(QName(label))
+
             // Font style properties
-            if f.bold then propsBuilder += XmlEvent.StartTag(QName("b"), Nil, true)
-            if f.italic then propsBuilder += XmlEvent.StartTag(QName("i"), Nil, true)
-            if f.underline then propsBuilder += XmlEvent.StartTag(QName("u"), Nil, true)
+            if f.bold then selfClosing("b")
+            if f.italic then selfClosing("i")
+            if f.underline then selfClosing("u")
 
             // Color
             f.color.foreach { c =>
-              propsBuilder += XmlEvent.StartTag(
-                QName("color"),
-                List(Attr(QName("rgb"), List(XmlString(c.toHex.drop(1), false)))),
-                true
+              selfClosing(
+                "color",
+                List(Attr(QName("rgb"), List(XmlString(c.toHex.drop(1), false))))
               )
             }
 
             // Size and name
-            propsBuilder += XmlEvent.StartTag(
-              QName("sz"),
-              List(Attr(QName("val"), List(XmlString(f.sizePt.toString, false)))),
-              true
-            )
-            propsBuilder += XmlEvent.StartTag(
-              QName("name"),
-              List(Attr(QName("val"), List(XmlString(f.name, false)))),
-              true
-            )
+            selfClosing("sz", List(Attr(QName("val"), List(XmlString(f.sizePt.toString, false)))))
+            selfClosing("name", List(Attr(QName("val"), List(XmlString(f.name, false)))))
 
             XmlEvent.StartTag(QName("rPr"), Nil, false) :: propsBuilder.result() ::: List(
               XmlEvent.EndTag(QName("rPr"))
@@ -337,7 +398,8 @@ object StreamingXmlWriter:
   /** Generate XML events for a row */
   def rowToEvents(
     rowData: RowData,
-    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
+    sst: Option[SstAccumulator] = None
   ): List[XmlEvent] =
     val rowAttrs = List(attr("r", rowData.rowIndex.toString))
 
@@ -345,7 +407,7 @@ object StreamingXmlWriter:
     val cellEvents = rowData.cells.toList
       .sortBy(_._1)
       .flatMap { case (colIdx, value) =>
-        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy)
+        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy, None, sst)
       }
 
     if cellEvents.isEmpty then Nil // Skip empty rows
@@ -357,7 +419,8 @@ object StreamingXmlWriter:
   /** Generate XML events for a styled row (with s="N" attributes) */
   def styledRowToEvents(
     rowData: StyledRowData,
-    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
+    sst: Option[SstAccumulator] = None
   ): List[XmlEvent] =
     val rowAttrs = List(attr("r", rowData.rowIndex.toString))
 
@@ -366,7 +429,7 @@ object StreamingXmlWriter:
       .sortBy(_._1)
       .flatMap { case (colIdx, value) =>
         val styleId = rowData.cellStyles.get(colIdx)
-        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy, styleId)
+        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy, styleId, sst)
       }
 
     if cellEvents.isEmpty then Nil // Skip empty rows
@@ -393,7 +456,10 @@ object StreamingXmlWriter:
           QName("dimension"),
           List(attr("ref", range.toA1)),
           true // self-closing: <dimension ref="A1:Z100"/>
-        )
+        ),
+        // fs2-data-xml pairs an isEmpty StartTag with its matching EndTag to render the
+        // self-closing form; an unpaired isEmpty StartTag desynchronizes the renderer
+        XmlEvent.EndTag(QName("dimension"))
       )
     }
 
@@ -419,14 +485,17 @@ object StreamingXmlWriter:
    *   Stream of row data
    * @param injectionPolicy
    *   Formula injection escaping policy
+   * @param sst
+   *   Optional SST accumulator (GH-223) for t="s" string references
    * @return
    *   Stream of XML events for all rows
    */
   def worksheetBody[F[_]](
     rows: Stream[F, RowData],
-    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
+    sst: Option[SstAccumulator] = None
   ): Stream[F, XmlEvent] =
-    rows.flatMap(row => Stream.emits(rowToEvents(row, injectionPolicy)))
+    rows.flatMap(row => Stream.emits(rowToEvents(row, injectionPolicy, sst)))
 
   /**
    * Generate row events for styled worksheet body.
@@ -438,14 +507,17 @@ object StreamingXmlWriter:
    *   Stream of styled row data
    * @param injectionPolicy
    *   Formula injection escaping policy
+   * @param sst
+   *   Optional SST accumulator (GH-223) for t="s" string references
    * @return
    *   Stream of XML events for all rows with styles
    */
   def worksheetBodyStyled[F[_]](
     rows: Stream[F, StyledRowData],
-    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None
+    injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
+    sst: Option[SstAccumulator] = None
   ): Stream[F, XmlEvent] =
-    rows.flatMap(row => Stream.emits(styledRowToEvents(row, injectionPolicy)))
+    rows.flatMap(row => Stream.emits(styledRowToEvents(row, injectionPolicy, sst)))
 
   /**
    * Generate worksheet footer events.
@@ -477,3 +549,50 @@ object StreamingXmlWriter:
     Stream.emits(worksheetHeader(None)) ++
       worksheetBody(rows, injectionPolicy) ++
       Stream.emits(worksheetFooter)
+
+  /**
+   * Build the styles.xml registry for a styled streaming write (GH-223).
+   *
+   * `styles(i)` is the CellStyle a `StyledRowData.cellStyles` value `i` refers to. Returns the
+   * serializable [[OoxmlStyles]] (cellXf 0 is always CellStyle.default; duplicates collapse by
+   * canonicalKey) plus the caller-index → emitted-cellXf-index remap to apply to each row's
+   * `cellStyles` before emission. Deterministic: emitted order is default + first occurrence.
+   */
+  def buildStyleTable(styles: Vector[CellStyle]): (OoxmlStyles, Map[Int, Int]) =
+    import scala.collection.mutable
+    val emitted =
+      mutable.LinkedHashMap[String, (Int, CellStyle)](
+        CellStyle.default.canonicalKey -> (0, CellStyle.default)
+      )
+    val remap = styles.zipWithIndex.map { case (style, callerIdx) =>
+      val (idx, _) = emitted.getOrElseUpdate(style.canonicalKey, (emitted.size, style))
+      callerIdx -> idx
+    }.toMap
+    val unified = emitted.valuesIterator.map(_._2).toVector
+
+    // Component dedup in first-occurrence order (mirrors StyleIndex.fromWorkbookWithoutSource)
+    val fonts = mutable.LinkedHashSet.empty[Font]
+    val fills = mutable.LinkedHashSet.empty[Fill]
+    val borders = mutable.LinkedHashSet.empty[Border]
+    val customCodes = mutable.LinkedHashSet.empty[String]
+    unified.foreach { style =>
+      fonts += style.font
+      fills += style.fill
+      borders += style.border
+      style.numFmt match
+        case NumFmt.Custom(code) => customCodes += code
+        case _ => ()
+    }
+    val customNumFmts = customCodes.toVector.zipWithIndex.map { case (code, idx) =>
+      (164 + idx, NumFmt.Custom(code): NumFmt)
+    }
+
+    val index = StyleIndex(
+      fonts = fonts.toVector,
+      fills = fills.toVector,
+      borders = borders.toVector,
+      numFmts = customNumFmts,
+      cellStyles = unified,
+      styleToIndex = emitted.view.map { case (key, (idx, _)) => key -> StyleId(idx) }.toMap
+    )
+    (OoxmlStyles(index), remap)

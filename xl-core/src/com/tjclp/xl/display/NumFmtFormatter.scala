@@ -17,6 +17,10 @@ import java.time.format.DateTimeFormatter
  */
 object NumFmtFormatter:
 
+  /** Parsed pattern for the built-in NumFmt.Fraction (format id 12, "# ?/?"). */
+  private val builtInFractionFormat: Either[String, FormatCodeParser.FormatCode] =
+    FormatCodeParser.parse("# ?/?")
+
   /**
    * Format a cell value according to its number format.
    *
@@ -98,8 +102,10 @@ object NumFmtFormatter:
         f"$hours%d:$minutes%02d:$seconds%02d"
 
       case NumFmt.Fraction =>
-        // TODO: Implement fraction formatting (e.g., 0.5 → "1/2")
-        formatGeneral(n)
+        // Built-in fraction format id 12: "# ?/?" (up to one denominator digit, GH-243)
+        builtInFractionFormat match
+          case Right(fmt) => FormatCodeParser.applyFormat(n, fmt)._1
+          case Left(_) => formatGeneral(n)
 
       case NumFmt.Text =>
         // Text format displays numbers as text
@@ -107,14 +113,8 @@ object NumFmtFormatter:
 
       case NumFmt.Custom(code) =>
         FormatCodeParser.parse(code) match
-          case Right(fmt) if FormatCodeParser.hasDateTokens(fmt) =>
-            // Custom date format: convert serial number to LocalDateTime
-            val dt = excelSerialToDateTime(n)
-            FormatCodeParser.applyDateFormat(dt, fmt)
-          case Right(fmt) =>
-            FormatCodeParser.applyFormat(n, fmt)._1
-          case Left(_) =>
-            formatGeneral(n) // Fallback for unparseable formats
+          case Right(fmt) => formatCustom(n, serialToDateTime(n), fmt)
+          case Left(_) => formatGeneral(n) // Fallback for unparseable formats
 
   /**
    * Format in General style (Excel's default number format).
@@ -169,13 +169,57 @@ object NumFmtFormatter:
         dt.toLocalTime.format(DateTimeFormatter.ofPattern("H:mm:ss")) // 24-hour format
 
       case NumFmt.Custom(code) =>
+        // Route through section selection on the serial (GH-283): ';;;' hides dates,
+        // numeric sections render the serial, conditional codes pick sections by serial
         FormatCodeParser.parse(code) match
-          case Right(fmt) if FormatCodeParser.hasDateTokens(fmt) =>
-            FormatCodeParser.applyDateFormat(dt, fmt)
-          case _ => dt.toString // Fallback for non-date formats or parse errors
+          case Right(fmt) => formatCustom(dateTimeSerial(dt), Some(dt), fmt)
+          case Left(_) => dt.toString // Fallback for parse errors
 
-      case _ =>
-        dt.toString
+      case other =>
+        // Dates ARE numbers in Excel: any numeric format (General included) displays
+        // the underlying serial number, never ISO text (GH-283)
+        formatNumber(dateTimeSerial(dt), other)
+
+  /**
+   * Render a numeric value through a parsed custom code with full section routing (GH-283/285): the
+   * section chosen for the value decides between calendar rendering (date tokens), General
+   * (text-only codes like a lone `@`) and numeric pattern rendering.
+   *
+   * @param n
+   *   The numeric value (a date serial when the value is date-typed)
+   * @param dt
+   *   The calendar view of `n` for date-token sections; None marks a serial outside Excel's
+   *   displayable date range, rendered as `######` like Excel's unrepresentable-date fill
+   * @param fmt
+   *   The parsed format code
+   */
+  private def formatCustom(
+    n: BigDecimal,
+    dt: => Option[LocalDateTime],
+    fmt: FormatCodeParser.FormatCode
+  ): String =
+    FormatCodeParser.selectSection(n, fmt) match
+      case None => formatGeneral(n)
+      case Some(section) if FormatCodeParser.hasDateTokens(section) =>
+        dt match
+          case Some(d) => FormatCodeParser.applyDateFormat(d, section)
+          case None => "######"
+      case Some(_) => FormatCodeParser.applyFormat(n, fmt)._1
+
+  /** Exclusive upper bound of Excel's displayable date serials (9999-12-31 is 2958465). */
+  private val maxDateSerialExclusive = BigDecimal(2958466)
+
+  /**
+   * Calendar view of a date serial, or None when the serial lies outside Excel's displayable range
+   * (negative or on/after 10000-01-01) — Excel fills such cells with `#` (GH-283).
+   */
+  private def serialToDateTime(serial: BigDecimal): Option[LocalDateTime] =
+    if serial < 0 || serial >= maxDateSerialExclusive then None
+    else Some(excelSerialToDateTime(serial))
+
+  /** Excel serial number (days since 1899-12-30 + day fraction) of a LocalDateTime. */
+  private def dateTimeSerial(dt: LocalDateTime): BigDecimal =
+    BigDecimal(CellValue.dateTimeToExcelSerial(dt))
 
   /**
    * Convert Excel date serial number to LocalDateTime.

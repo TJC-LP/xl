@@ -46,6 +46,11 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table"
   val relTypeHyperlink =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+  // docProps relationships (GH-242): core props is a PACKAGE relationship type, app is officeDocument
+  val relTypeCoreProperties =
+    "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
+  val relTypeExtendedProperties =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties"
 
   /** Content type URIs */
   val ctWorkbook = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -57,6 +62,9 @@ object XmlUtil:
   val ctVmlDrawing = "application/vnd.openxmlformats-officedocument.vmlDrawing"
   val ctTable = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
+  val ctCoreProperties = "application/vnd.openxmlformats-package.core-properties+xml"
+  val ctExtendedProperties =
+    "application/vnd.openxmlformats-officedocument.extended-properties+xml"
 
   /** Sort attributes by name for deterministic output */
   def sortAttributes(attrs: MetaData): MetaData =
@@ -349,15 +357,19 @@ object XmlUtil:
         }
       }
 
+    // Font requires sizePt > 0 and a nonEmpty name; filter malformed values so
+    // rich-text parsing stays total instead of throwing through require (GH-278)
     val sizePt = (rPrElem \ "sz").headOption
       .collect { case elem: Elem => elem }
       .flatMap(e => getAttrOpt(e, "val"))
       .flatMap(_.toDoubleOption)
+      .filter(_ > 0)
       .getOrElse(11.0)
 
     val name = (rPrElem \ "name").headOption
       .collect { case elem: Elem => elem }
       .flatMap(e => getAttrOpt(e, "val"))
+      .filter(_.nonEmpty)
       .getOrElse("Calibri")
 
     Font(

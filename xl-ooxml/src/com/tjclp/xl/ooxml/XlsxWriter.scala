@@ -95,8 +95,10 @@ object XlsxWriter:
   ): XLResult[Unit] =
     try
       val escapeFormulas = formulaEscapingRequested(config)
+      // GH-243: serialize DateTime cells with the workbook's date system before any write path.
+      val normalized = withDates1904Normalized(workbook)
 
-      workbook.sourceContext match
+      normalized.sourceContext match
         case Some(ctx) if ctx.isClean && !escapeFormulas =>
           // Clean workbook + file target → verbatim copy (ultra-fast)
           target match
@@ -104,23 +106,53 @@ object XlsxWriter:
               copyVerbatim(ctx, path)
             case OutputStreamTarget(_) =>
               // Can't copy to stream, use unified write (will copy all parts)
-              unifiedWrite(workbook, workbook.sourceContext, target, config)
+              unifiedWrite(normalized, normalized.sourceContext, target, config)
 
         case Some(ctx) =>
           // Surgical mode with source: use atomic temp file to prevent corruption
           target match
             case OutputPath(destPath) =>
-              writeAtomically(workbook, Some(ctx), destPath, config)
+              writeAtomically(normalized, Some(ctx), destPath, config)
             case _ =>
-              unifiedWrite(workbook, workbook.sourceContext, target, config)
+              unifiedWrite(normalized, normalized.sourceContext, target, config)
 
         case None =>
           // No source context: safe to write directly (no surgical preservation)
-          unifiedWrite(workbook, None, target, config)
+          unifiedWrite(normalized, None, target, config)
 
       Right(())
 
     catch case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
+
+  /**
+   * Re-express DateTime cells as raw serial Numbers using the workbook's date system (GH-243).
+   *
+   * The cell emitters (OoxmlCell/OoxmlWorksheet/DirectSaxEmitter) convert any remaining DateTime
+   * values with the default 1900 epoch, so for 1904-system workbooks the conversion must happen
+   * here, once, before dispatching to any write path. No-op for 1900-system workbooks (the
+   * emitters' inline conversion is identical) and for workbooks without DateTime cells — in
+   * particular, freshly read workbooks store date serials as Numbers, so surgical-write
+   * modification tracking is unaffected.
+   */
+  private def withDates1904Normalized(workbook: Workbook): Workbook =
+    if !workbook.metadata.date1904 then workbook
+    else
+      val normalizedSheets = workbook.sheets.map { sheet =>
+        val hasDateTime = sheet.cells.values.exists(_.value match
+          case CellValue.DateTime(_) => true
+          case _ => false)
+        if !hasDateTime then sheet
+        else
+          val cells = sheet.cells.map { case (ref, cell) =>
+            cell.value match
+              case CellValue.DateTime(dt) =>
+                val serial = CellValue.dateTimeToExcelSerial(dt, date1904 = true)
+                ref -> cell.copy(value = CellValue.Number(BigDecimal(serial)))
+              case _ => ref -> cell
+          }
+          sheet.copy(cells = cells)
+      }
+      workbook.copy(sheets = normalizedSheets)
 
   /**
    * Write to file atomically via temp file + rename.
@@ -1378,6 +1410,12 @@ object XlsxWriter:
         // PageSetup-derived print names (GH-259).
         OoxmlWorkbook.fromDomain(workbook)
 
+    // GH-242: document properties are model-driven. The reader parses docProps/core.xml and
+    // app.xml into WorkbookMetadata (and marks them parsed, so they are never copied verbatim);
+    // here the model decides what ships — emitted iff at least one field is present.
+    val corePropsXml = DocProps.buildCoreXml(workbook.metadata)
+    val appPropsXml = DocProps.buildAppXml(workbook.metadata)
+
     // Content types: preserve from source when available, otherwise generate minimal.
     // IMPORTANT: Don't call withCommentOverrides when preserving - the source already has
     // correct comment entries with Excel's sequential numbering (comments1.xml, comments2.xml...)
@@ -1392,7 +1430,9 @@ object XlsxWriter:
             )
           else preserved
         // Only add table overrides (comments already in preserved Content_Types)
-        withSst.withTableOverrides(totalTableCount)
+        withSst
+          .withTableOverrides(totalTableCount)
+          .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
       case None =>
         ContentTypes
           .minimal(
@@ -1403,8 +1443,11 @@ object XlsxWriter:
           )
           .withCommentOverrides(sheetsWithComments)
           .withTableOverrides(totalTableCount)
+          .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
 
-    val rootRels = preservedRootRels.getOrElse(Relationships.root())
+    val rootRels = preservedRootRels
+      .getOrElse(Relationships.root())
+      .withDocProps(corePropsXml.isDefined, appPropsXml.isDefined)
 
     val workbookRels = preservedWorkbookRels match
       case Some(preserved) =>
@@ -1435,6 +1478,12 @@ object XlsxWriter:
       // Write structural parts (always regenerated)
       writePart(zip, "[Content_Types].xml", contentTypes, config)
       writePart(zip, "_rels/.rels", rootRels, config)
+
+      // GH-242: document properties — deterministic, model-driven (no GUIDs/wall-clock values).
+      // The reader marks docProps as parsed, so these never collide with preserved parts.
+      corePropsXml.foreach(x => writePart(zip, DocProps.corePath, x, config))
+      appPropsXml.foreach(x => writePart(zip, DocProps.appPath, x, config))
+
       writePart(zip, "xl/workbook.xml", ooxmlWb, config)
       writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels, config)
       writeStyles(zip, "xl/styles.xml", styles, config)

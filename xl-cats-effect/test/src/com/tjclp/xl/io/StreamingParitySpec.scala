@@ -177,29 +177,37 @@ class StreamingParitySpec extends CatsEffectSuite:
     }
   }
 
-  test("KNOWN GAP: streaming drops s= style indices for inlineStr cells (styled.xlsx)") {
-    // Every cell in styled.xlsx carries an s= attribute in the XML (s=1..8) and
-    // the in-memory reader assigns a styleId to all 8 cells. The streaming
-    // reader, however, commits inline-string values inside the </is> handler,
-    // which bypasses the </c> branch that records currentCellStyleId - so the
-    // s= index is silently dropped for every t="inlineStr" cell. openpyxl
-    // writes ALL strings as inlineStr, so streaming style preservation sees no
-    // style for any openpyxl text cell. Number cells (t="n") keep theirs.
-    // This pins the current behavior; when SaxStreamingReader is fixed, flip
-    // this test to assert full agreement with the in-memory styleIds.
+  test("GH-293: streaming surfaces s= style indices for inlineStr cells (styled.xlsx)") {
+    // Every cell in styled.xlsx (openpyxl inline-string dialect) carries an s=
+    // attribute in the XML (s=1..8). The streaming reader used to commit
+    // inline-string values inside the </is> handler, bypassing the </c> branch
+    // that records currentCellStyleId - so the s= index was silently dropped for
+    // every t="inlineStr" cell while t="n" cells kept theirs. Both readers must
+    // surface the same raw style index for every styled, non-empty cell.
     val path = fixturePath("styled.xlsx")
+    val expectedRawStyleIdx = Map(
+      (1, 0) -> 1, // A1 inlineStr "bold red on yellow"
+      (1, 1) -> 2, // B1 n
+      (1, 2) -> 3, // C1 inlineStr
+      (1, 3) -> 4, // D1 inlineStr
+      (2, 0) -> 5, // A2 inlineStr
+      (2, 1) -> 6, // B2 n
+      (3, 1) -> 7, // B3 n
+      (4, 0) -> 8 // A4 inlineStr
+    )
     loadInMemory("styled.xlsx", path).flatMap { wb =>
       val sheet = wb.sheets(0)
-      // .iterator: collecting (Int, Int) pairs straight from the Map would build
-      // a Map[Int, Int] and collapse rows
-      val inMemoryStyled = sheet.cells.iterator.collect {
-        case (ref, cell) if cell.styleId.isDefined && cell.value != CellValue.Empty =>
-          (ref.row.index1, ref.col.index0)
-      }.toSet
+      // .iterator: collecting pairs straight from the Map would build a
+      // Map[Int, Int] and collapse rows
+      val inMemoryStyleIdx = sheet.cells.iterator.flatMap { case (ref, cell) =>
+        cell.styleId
+          .filter(_ => cell.value != CellValue.Empty)
+          .map(sid => (ref.row.index1, ref.col.index0) -> sid.value)
+      }.toMap
       assertEquals(
-        inMemoryStyled,
-        Set((1, 0), (1, 1), (1, 2), (1, 3), (2, 0), (2, 1), (3, 1), (4, 0)),
-        "in-memory reader should style all 8 cells"
+        inMemoryStyleIdx,
+        expectedRawStyleIdx,
+        "in-memory reader should keep the raw s= index for all 8 cells"
       )
       excel
         .readSheetStream(path, sheet.name.value)
@@ -213,11 +221,248 @@ class StreamingParitySpec extends CatsEffectSuite:
             .toMap
           assertEquals(
             streamedStyles,
-            Map((1, 1) -> 2, (2, 1) -> 6, (3, 1) -> 7),
-            "streaming currently surfaces s= only for the three t=\"n\" cells; if " +
-              "inlineStr cells now appear, the gap was fixed - flip this test to " +
-              "assert parity with the in-memory styleIds"
+            inMemoryStyleIdx,
+            "streaming must surface the same s= index as the in-memory reader for " +
+              "every styled cell, including t=\"inlineStr\" (GH-293)"
           )
         }
+    }
+  }
+
+  // ========== GH-223: streaming-WRITTEN files (SST dialect) ==========
+
+  test("GH-223 parity: streaming-written SST file - streaming and in-memory readers agree") {
+    val path = Files.createTempFile("xl-parity-stream-sst-", ".xlsx")
+    path.toFile.deleteOnExit()
+    val rows = fs2.Stream
+      .emits(
+        (1 to 50).toList.map { i =>
+          RowData(
+            i,
+            Map(
+              0 -> CellValue.Text(s"name-${i % 7}"), // duplicates -> SST dedup
+              1 -> CellValue.Number(BigDecimal(i)),
+              2 -> CellValue.Bool(i % 2 == 0)
+            )
+          )
+        }
+      )
+      .covary[IO]
+    rows.through(excel.writeStream(path, "Data")).compile.drain >>
+      loadInMemory("stream-sst", path).flatMap { wb =>
+        val expected = inMemoryValues(wb.sheets(0))
+        assertEquals(expected.size, 150, "expected 50 rows x 3 cells")
+        assertEquals(expected.get((1, 0)), Some(CellValue.Text("name-1")))
+        streamedValues(path, "Data").map { streamed =>
+          assertEquals(streamed, expected, "streaming vs in-memory drift on streaming-written SST file")
+        }
+      }
+  }
+
+
+  // ========== GH-293 / GH-305: raw-XML dialect probes ==========
+  // XL's own writer never emits whitespace-padded formulas or escape sequences
+  // split across rich runs, so these parity probes are built from raw part XML.
+
+  private val minimalWorkbookXml =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      |<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+      |          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      |  <sheets>
+      |    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+      |  </sheets>
+      |</workbook>
+      |""".stripMargin
+
+  private val minimalWorkbookRelsXml =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      |  <Relationship Id="rId1"
+      |                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+      |                Target="worksheets/sheet1.xml"/>
+      |</Relationships>
+      |""".stripMargin
+
+  private val minimalContentTypesXml =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      |<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+      |  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+      |  <Default Extension="xml" ContentType="application/xml"/>
+      |  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+      |  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+      |</Types>
+      |""".stripMargin
+
+  private val minimalRootRelsXml =
+    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      |  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+      |</Relationships>
+      |""".stripMargin
+
+  /** Hand-built single-sheet xlsx from raw worksheet XML. */
+  private def rawXlsx(name: String, sheetXml: String): IO[Path] = IO {
+    import java.nio.charset.StandardCharsets
+    import java.util.zip.{ZipEntry, ZipOutputStream}
+    val path = Files.createTempFile(s"xl-parity-raw-$name-", ".xlsx")
+    path.toFile.deleteOnExit()
+    val zipOut = new ZipOutputStream(Files.newOutputStream(path))
+    try
+      List(
+        "[Content_Types].xml" -> minimalContentTypesXml,
+        "_rels/.rels" -> minimalRootRelsXml,
+        "xl/workbook.xml" -> minimalWorkbookXml,
+        "xl/_rels/workbook.xml.rels" -> minimalWorkbookRelsXml,
+        "xl/worksheets/sheet1.xml" -> sheetXml
+      ).foreach { case (entryName, content) =>
+        val entry = new ZipEntry(entryName)
+        entry.setTime(0L)
+        zipOut.putNextEntry(entry)
+        zipOut.write(content.getBytes(StandardCharsets.UTF_8))
+        zipOut.closeEntry()
+      }
+    finally zipOut.close()
+    path
+  }
+
+  /**
+   * Text content regardless of rich formatting. The streaming reader surfaces inline rich text as
+   * plain CellValue.Text (it carries no run formatting), so the cross-reader law for rich inline
+   * strings is over text content, not CellValue equality.
+   */
+  private def plainTextOf(cv: CellValue): Option[String] = cv match
+    case CellValue.Text(t) => Some(t)
+    case CellValue.RichText(rt) => Some(rt.toPlainText)
+    case _ => None
+
+  test("GH-293: streaming trims <f> formula text exactly like the in-memory reader") {
+    // The in-memory WorksheetReader reads formulas via `.text.trim`; pretty-printed
+    // part XML (newline + indent inside <f>) must not leak whitespace into the
+    // formula expression on the streaming path either.
+    val sheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="A1"><f>
+        |        SUM(B1:C1)  </f><v>5</v></c>
+        |      <c r="B1"><v>2</v></c>
+        |      <c r="C1"><v>3</v></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>
+        |""".stripMargin
+    rawXlsx("formula-trim", sheetXml).flatMap { path =>
+      loadInMemory("formula-trim", path).flatMap { wb =>
+        val expected = inMemoryValues(wb.sheets(0))
+        assertEquals(
+          expected.get((1, 0)),
+          Some(CellValue.Formula("SUM(B1:C1)", Some(CellValue.Number(BigDecimal(5))))),
+          "in-memory reader trims <f> text"
+        )
+        streamedValues(path, "Sheet1").map { streamed =>
+          assertEquals(
+            streamed,
+            expected,
+            "whitespace-padded formulas must trim identically on both paths (GH-293)"
+          )
+        }
+      }
+    }
+  }
+
+  test("GH-305: _xHHHH_ escape split across rich inline-string runs decodes per-run") {
+    // A1: run1 ends "_x00", run2 starts "0D_". Neither run contains a complete
+    // escape, so the decoded value is the literal concatenation "seg_x000D_tail"
+    // - NOT a CR. Decoding after concatenation would fabricate a CR; the DOM
+    // reader decodes per-run. B1 pins multi-run concatenation itself. C1 pins
+    // phonetic-run (rPh) exclusion: furigana text is not part of the cell value
+    // on either path.
+    val sheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="A1" t="inlineStr"><is><r><t>seg_x00</t></r><r><t>0D_tail</t></r></is></c>
+        |      <c r="B1" t="inlineStr"><is><r><rPr><b/></rPr><t>Alpha</t></r><r><t>Beta</t></r></is></c>
+        |      <c r="C1" t="inlineStr"><is><r><t>kanji</t></r><rPh sb="0" eb="1"><t>kana</t></rPh></is></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>
+        |""".stripMargin
+    rawXlsx("split-escape", sheetXml).flatMap { path =>
+      loadInMemory("split-escape", path).flatMap { wb =>
+        val expected = inMemoryValues(wb.sheets(0))
+        assertEquals(
+          expected.get((1, 0)).flatMap(plainTextOf),
+          Some("seg_x000D_tail"),
+          "in-memory reader decodes per-run: literal pieces, no CR"
+        )
+        assertEquals(expected.get((1, 1)).flatMap(plainTextOf), Some("AlphaBeta"))
+        assertEquals(expected.get((1, 2)).flatMap(plainTextOf), Some("kanji"))
+        streamedValues(path, "Sheet1").map { streamed =>
+          assertEquals(
+            streamed.get((1, 0)).flatMap(plainTextOf),
+            Some("seg_x000D_tail"),
+            "streaming must decode each run before concatenation (GH-305)"
+          )
+          assert(
+            streamed.get((1, 0)).flatMap(plainTextOf).forall(!_.contains('\r')),
+            "a CR must not materialize from an escape split across runs (GH-305)"
+          )
+          assertEquals(
+            streamed.get((1, 1)).flatMap(plainTextOf),
+            Some("AlphaBeta"),
+            "streaming must concatenate ALL runs, not keep the last one (GH-305)"
+          )
+          assertEquals(
+            streamed.get((1, 2)).flatMap(plainTextOf),
+            Some("kanji"),
+            "streaming must exclude phonetic <rPh> runs like the in-memory reader (GH-305)"
+          )
+        }
+      }
+    }
+  }
+
+  test("GH-305: bare <t> coexisting with <r> runs is ignored, matching the in-memory reader") {
+    // ECMA-376 CT_Rst is (t?, r*, rPh*, phoneticPr?): a bare <t> may legally coexist
+    // with rich runs. The in-memory reader ignores the bare <t> whenever <r> runs are
+    // present (parseCellValueWithoutFormula: rElems.nonEmpty wins) - streaming must
+    // not concatenate it into the value. B1 pins the no-runs case: with no <r>, the
+    // bare <t> IS the value.
+    val sheetXml =
+      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        |  <sheetData>
+        |    <row r="1">
+        |      <c r="A1" t="inlineStr"><is><t>X</t><r><t>Y</t></r></is></c>
+        |      <c r="B1" t="inlineStr"><is><t>X</t></is></c>
+        |    </row>
+        |  </sheetData>
+        |</worksheet>
+        |""".stripMargin
+    rawXlsx("mixed-bare-t-and-runs", sheetXml).flatMap { path =>
+      loadInMemory("mixed-bare-t-and-runs", path).flatMap { wb =>
+        val expected = inMemoryValues(wb.sheets(0))
+        assertEquals(
+          expected.get((1, 0)).flatMap(plainTextOf),
+          Some("Y"),
+          "in-memory reader ignores the bare <t> when <r> runs are present"
+        )
+        assertEquals(expected.get((1, 1)).flatMap(plainTextOf), Some("X"))
+        streamedValues(path, "Sheet1").map { streamed =>
+          assertEquals(
+            streamed.get((1, 0)).flatMap(plainTextOf),
+            Some("Y"),
+            "streaming must ignore the bare <t> when <r> runs are present (GH-305)"
+          )
+          assertEquals(
+            streamed.get((1, 1)).flatMap(plainTextOf),
+            Some("X"),
+            "streaming must keep the bare <t> as the value when there are no runs (GH-305)"
+          )
+        }
+      }
     }
   }

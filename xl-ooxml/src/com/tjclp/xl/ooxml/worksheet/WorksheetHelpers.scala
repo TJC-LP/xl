@@ -35,6 +35,102 @@ private[ooxml] def cleanNamespaces(elem: Elem): Elem =
   }
   elem.copy(scope = TopScope, child = cleanedChildren)
 
+// ===== Namespace preservation on regeneration (GH-291) =====
+// Some producers (openpyxl) bind a prefix locally on a child element — e.g.
+// `<drawing xmlns:r="…" r:id="rId1"/>` — instead of on the worksheet root. Regeneration strips
+// child scopes (cleanNamespaces) to avoid redundant re-declarations, so a binding that exists
+// ONLY on a child must be re-bound or the emitted prefix is unbound and Excel reports the
+// workbook as corrupt. The reader captures each preserved subtree with the bindings it actually
+// uses (rebindUsedNamespaces); emission hoists any binding the root lacks onto the regenerated
+// worksheet root (hoistUsedBindings) — the standard Excel layout.
+
+/**
+ * Well-known OOXML prefixes, used as a last resort when a used prefix's binding was lost before
+ * capture (mirrors StaxSaxWriter.knownNamespaces, which heals the same way on the StAX path).
+ */
+private val wellKnownNamespaces: Map[String, String] = Map(
+  "r" -> XmlUtil.nsRelationships,
+  "mc" -> "http://schemas.openxmlformats.org/markup-compatibility/2006",
+  "xr" -> "http://schemas.microsoft.com/office/spreadsheetml/2014/revision",
+  "x14ac" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+)
+
+/**
+ * Prefix -> URI for every namespace prefix USED by the tree (on element tags and attributes),
+ * resolved against the scope in effect at the point of use, falling back to wellKnownNamespaces.
+ * First binding wins (document order); unresolvable prefixes are omitted (the input was already
+ * namespace-broken). `xml` and `xmlns` are never collected. Attributes built via XmlUtil.elem carry
+ * the prefix inside the key ("x14ac:dyDescent"), so colon-keys are treated as prefixed. Parsed
+ * trees carry full scope chains on every element; for programmatically built trees (child scope
+ * TopScope) the nearest ancestor scope is consulted instead.
+ */
+private[ooxml] def usedPrefixBindings(root: Elem): Seq[(String, String)] =
+  @annotation.tailrec
+  def attrPrefixes(md: MetaData, acc: List[String]): List[String] = md match
+    case Null => acc.reverse
+    case PrefixedAttribute(pre, _, _, next) => attrPrefixes(next, pre :: acc)
+    case UnprefixedAttribute(key, _, next) =>
+      key.split(":", 2) match
+        case Array(pre, _) => attrPrefixes(next, pre :: acc)
+        case _ => attrPrefixes(next, acc)
+  def collect(e: Elem, inherited: NamespaceBinding): Vector[(String, String)] =
+    val own = Option(e.scope).filterNot(_ == TopScope)
+    val effectiveScope = own.getOrElse(inherited)
+    val prefixes = (Option(e.prefix).toList ++ attrPrefixes(e.attributes, Nil))
+      .filter(p => p.nonEmpty && p != "xml" && p != "xmlns")
+    val here = prefixes.flatMap { p =>
+      Option(effectiveScope.getURI(p))
+        .orElse(wellKnownNamespaces.get(p))
+        .map(p -> _)
+    }
+    here.toVector ++
+      e.child.collect { case c: Elem => c }.toVector.flatMap(collect(_, effectiveScope))
+  collect(root, TopScope).distinctBy(_._1)
+
+/**
+ * cleanNamespaces, then re-bind the prefixes the subtree actually uses on the subtree root, so a
+ * preserved element stays namespace-well-formed in isolation (GH-291). Bindings are attached in
+ * sorted-prefix order for deterministic output.
+ */
+private[ooxml] def rebindUsedNamespaces(elem: Elem): Elem =
+  val used = usedPrefixBindings(elem)
+  val cleaned = cleanNamespaces(elem)
+  if used.isEmpty then cleaned
+  else
+    val scope = used.sortBy(_._1).foldRight(TopScope: NamespaceBinding) {
+      case ((prefix, uri), parent) => NamespaceBinding(prefix, uri, parent)
+    }
+    cleaned.copy(scope = scope)
+
+/**
+ * Extend `base` with bindings for prefixes used by `children` but not bound on `base` — hoisting
+ * locally-declared child bindings onto the regenerated worksheet root, the standard Excel layout
+ * (GH-291). Missing prefixes are prepended in sorted order for deterministic output. A prefix
+ * already bound on `base` (even to a different URI) is left untouched.
+ */
+private[ooxml] def hoistUsedBindings(
+  base: NamespaceBinding,
+  children: Seq[Elem]
+): NamespaceBinding =
+  children
+    .flatMap(usedPrefixBindings)
+    .distinctBy(_._1)
+    .filterNot { case (prefix, _) => scopeHasPrefix(base, prefix) }
+    .sortBy(_._1)
+    .foldRight(base) { case ((prefix, uri), parent) => NamespaceBinding(prefix, uri, parent) }
+
+/**
+ * Ensure a single well-known prefix is bound on `scope` (no-op for unknown prefixes). Rows re-emit
+ * `x14ac:dyDescent` as a raw qualified attribute outside the Elem-based collection, so
+ * OoxmlWorksheet binds that prefix explicitly when any row carries the attribute (GH-291).
+ */
+private[worksheet] def ensureWellKnownPrefix(
+  scope: NamespaceBinding,
+  prefix: String
+): NamespaceBinding =
+  if scopeHasPrefix(scope, prefix) then scope
+  else wellKnownNamespaces.get(prefix).fold(scope)(uri => NamespaceBinding(prefix, uri, scope))
+
 // ===== Preserved inline worksheet elements (GH-232) =====
 // Inline CT_Worksheet children that are listed in WorksheetReader.knownElements (so they are
 // excluded from the `otherElements` catch-all) but have NO dedicated field on OoxmlWorksheet.
@@ -160,7 +256,11 @@ private[ooxml] def buildHyperlinksElem(entries: Seq[HyperlinkEntry]): Option[Ele
       val attrs = new UnprefixedAttribute("ref", e.ref.toA1, tail)
       Elem(null, "hyperlink", attrs, TopScope, minimizeEmpty = true)
     }
-    Some(Elem(null, "hyperlinks", Null, TopScope, minimizeEmpty = false, children*))
+    // External entries use r:id — carry the binding so emission can hoist it (GH-291)
+    val scope =
+      if entries.exists(_.external) then NamespaceBinding("r", XmlUtil.nsRelationships, TopScope)
+      else TopScope
+    Some(Elem(null, "hyperlinks", Null, scope, minimizeEmpty = false, children*))
 
 /**
  * Group consecutive columns with identical properties into spans.

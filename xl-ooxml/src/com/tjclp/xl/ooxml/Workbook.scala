@@ -77,6 +77,12 @@ case class OoxmlWorkbook(
       SaxSerializable:
 
   /**
+   * True when this workbook uses the 1904 date system (`<workbookPr date1904="1"/>`, GH-243). Date
+   * serials then count days since 1904-01-01 instead of the default 1900 system.
+   */
+  def date1904: Boolean = OoxmlWorkbook.parseDate1904(workbookPr)
+
+  /**
    * Update sheets while preserving all workbook metadata.
    *
    * Maps domain sheets to SheetRefs, preserving original sheetIds from the source file. For new
@@ -208,10 +214,18 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
       val state = wb.metadata.sheetStates.get(sheet.name).flatten
       SheetRef(sheet.name, idx + 1, s"rId${idx + 1}", state)
     }
+    // GH-243: preserve-the-system — declare the 1904 date system when the model says so, so the
+    // raw serials riding through (and DateTime cells serialized with the 1904 epoch) stay correct.
+    val workbookPr =
+      if wb.metadata.date1904 then Some(elem("workbookPr", "date1904" -> "1")()) else None
     // GH-236: serialize named ranges from the typed model (previously dropped on write).
     // GH-259: print area / repeat rows live on Sheet.pageSetup and are appended here as
     // sheet-scoped _xlnm.Print_Area / _xlnm.Print_Titles names.
-    OoxmlWorkbook(sheetRefs, definedNames = buildDefinedNames(PrintNames.effective(wb)))
+    OoxmlWorkbook(
+      sheetRefs,
+      workbookPr = workbookPr,
+      definedNames = buildDefinedNames(PrintNames.effective(wb))
+    )
 
   /**
    * Build a `<definedNames>` element from the typed model (GH-236), or None when empty. Order
@@ -230,6 +244,17 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
         elemOrdered("definedName", attrs.result()*)(Text(dn.formula))
       }
       Some(elem("definedNames")(children*))
+
+  /**
+   * Parse the `date1904` attribute of a raw `<workbookPr>` element (GH-243). Single source of truth
+   * shared by the full reader and the lightweight metadata reader. OOXML uses xsd:boolean, so both
+   * "1" and "true" mean the 1904 date system; absent attribute/element means 1900.
+   */
+  def parseDate1904(workbookPr: Option[Elem]): Boolean =
+    workbookPr.exists { e =>
+      val value = e \@ "date1904"
+      value == "1" || value == "true"
+    }
 
   /**
    * Parse `<definedNames>` into the typed model. Single source of truth shared by the reader and

@@ -78,9 +78,12 @@ object WorkbookStyles:
       .map(_.text)
       .filter(_.nonEmpty)
       .getOrElse(Font.default.name)
+    // Font requires sizePt > 0; treat non-positive (or NaN) sizes from malformed
+    // files as absent so the parser stays total (GH-278, DOM analog of GH-264)
     val size = (fontElem \ "sz").headOption
       .flatMap(_.attribute("val"))
       .flatMap(v => v.text.toDoubleOption)
+      .filter(_ > 0)
       .getOrElse(Font.default.sizePt)
     val bold = (fontElem \ "b").nonEmpty
     val italic = (fontElem \ "i").nonEmpty
