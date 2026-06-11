@@ -106,6 +106,16 @@ class RasterizerChainSpec extends CatsEffectSuite:
     assert(error.message.contains("Install"), "Should provide install hints")
   }
 
+  test("NoRasterizerAvailable message explains the ImageMagick explicit opt-in (GH-86)") {
+    // ImageMagick is no longer tried automatically, so merely installing it will not fix
+    // this error: the message must point at the --rasterizer flag.
+    val error = RasterError.NoRasterizerAvailable(List("Batik"))
+    assert(
+      error.message.contains("--rasterizer imagemagick"),
+      s"Should explain ImageMagick needs --rasterizer imagemagick: ${error.message}"
+    )
+  }
+
   test("RasterizerNotFound message includes name and hint") {
     val error = RasterError.RasterizerNotFound("cairosvg", "Install: pip install cairosvg")
     assert(error.message.contains("cairosvg"), "Should mention rasterizer name")
@@ -133,20 +143,22 @@ class RasterizerChainSpec extends CatsEffectSuite:
 
   // ========== RasterizerChain Configuration Tests ==========
 
-  test("defaultChain has 5 rasterizers in order") {
+  test("defaultChain is Batik-first and excludes ImageMagick (GH-86)") {
+    // Batik (pure JVM) is the default backend; subprocess tools remain automatic fallbacks
+    // for native-image builds. ImageMagick's SVG delegate handling is too fragile for the
+    // automatic chain (GH-83) and must be requested explicitly via --rasterizer imagemagick.
     val chain = RasterizerChain.defaultChain
-    assertEquals(chain.length, 5)
-    assertEquals(chain.map(_.name), List("Batik", "cairosvg", "rsvg-convert", "resvg", "ImageMagick"))
+    assertEquals(chain.map(_.name), List("Batik", "cairosvg", "rsvg-convert", "resvg"))
   }
 
-  test("byName contains all rasterizers lowercase") {
+  test("byName contains all rasterizers lowercase, including explicit-only ImageMagick (GH-86)") {
     val names = RasterizerChain.byName
     assertEquals(names.size, 5)
     assert(names.contains("batik"))
     assert(names.contains("cairosvg"))
     assert(names.contains("rsvg-convert"))
     assert(names.contains("resvg"))
-    assert(names.contains("imagemagick"))
+    assert(names.contains("imagemagick"), "--rasterizer imagemagick must stay reachable")
   }
 
   test("validNames lists all rasterizer names lowercase") {
@@ -271,6 +283,23 @@ class RasterizerChainSpec extends CatsEffectSuite:
   }
 
   // ========== RasterizerChain.convert Error Tests ==========
+
+  test("convert with no preference uses Batik, the default backend, on the JVM (GH-86)") {
+    val tempFile = Files.createTempFile("test", ".png")
+    val svg =
+      """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="red" width="100" height="100"/></svg>"""
+
+    BatikRasterizer.isAvailable.flatMap { batikAvailable =>
+      assume(batikAvailable, "AWT not available - skipping default-backend test")
+      RasterizerChain
+        .convert(svg, tempFile, RasterFormat.Png, 96, None)
+        .map { used =>
+          assertEquals(used, "Batik", "Default chain should rasterize with Batik on the JVM")
+          assert(Files.size(tempFile) > 0, "PNG should have content")
+        }
+        .guarantee(IO(Files.deleteIfExists(tempFile)).void)
+    }
+  }
 
   test("convert with invalid rasterizer name returns RasterizerNotFound") {
     val tempFile = Files.createTempFile("test", ".png")

@@ -1,0 +1,24 @@
+{
+  "resources": {
+    "includes": [
+      { "pattern": "org/apache/batik/.*\\.properties" },
+      { "pattern": "META-INF/services/org\\.apache\\.batik\\.ext\\.awt\\.image\\.spi\\.RegistryEntry" },
+      { "pattern": "META-INF/services/org\\.apache\\.batik\\.ext\\.awt\\.image\\.spi\\.ImageWriter" }
+    ]
+  },
+  "bundles": [
+    { "name": "org.apache.batik.anim.resources.Messages" },
+    { "name": "org.apache.batik.bridge.resources.Messages" },
+    { "name": "org.apache.batik.css.engine.resources.Messages" },
+    { "name": "org.apache.batik.css.engine.value.resources.Messages" },
+    { "name": "org.apache.batik.css.parser.resources.Messages" },
+    { "name": "org.apache.batik.dom.resources.Messages" },
+    { "name": "org.apache.batik.dom.svg.resources.Messages" },
+    { "name": "org.apache.batik.ext.awt.image.spi.resources.Messages" },
+    { "name": "org.apache.batik.parser.resources.Messages" },
+    { "name": "org.apache.batik.transcoder.image.resources.Messages" },
+    { "name": "org.apache.batik.util.io.resources.Messages" },
+    { "name": "org.apache.batik.util.resources.Messages" },
+    { "name": "org.apache.batik.xml.scanner.resources.Messages" }
+  ]
+}

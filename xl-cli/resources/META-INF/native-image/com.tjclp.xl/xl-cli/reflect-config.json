@@ -1,0 +1,46 @@
+[
+  {
+    "name": "org.apache.batik.css.parser.Parser",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "com.sun.org.apache.xerces.internal.jaxp.SAXParserFactoryImpl",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "com.sun.org.apache.xerces.internal.jaxp.DocumentBuilderFactoryImpl",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "com.sun.org.apache.xerces.internal.parsers.SAXParser",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "org.apache.batik.ext.awt.image.codec.png.PNGRegistryEntry",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "org.apache.batik.ext.awt.image.codec.imageio.ImageIOJPEGRegistryEntry",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "org.apache.batik.ext.awt.image.codec.imageio.ImageIOPNGRegistryEntry",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "org.apache.batik.ext.awt.image.codec.imageio.ImageIOTIFFRegistryEntry",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "org.apache.batik.ext.awt.image.codec.imageio.ImageIOPNGImageWriter",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "org.apache.batik.ext.awt.image.codec.imageio.ImageIOJPEGImageWriter",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  },
+  {
+    "name": "org.apache.batik.ext.awt.image.codec.imageio.ImageIOTIFFImageWriter",
+    "methods": [{ "name": "<init>", "parameterTypes": [] }]
+  }
+]

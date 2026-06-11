@@ -1026,9 +1026,9 @@ Use --dry-run to validate JSON without writing."""
         sb.append(f"${"Backend"}%-14s | ${"Status"}%-11s | ${"Notes"}\n")
         sb.append("-" * 60 + "\n")
 
-        // Batik - "unavailable" when AWT not present (native image)
+        // Batik - the default backend; "unavailable" when AWT not present (native image)
         val batikStatus = if batikAvail then "available" else "unavailable"
-        val batikNote = "Built-in (requires AWT, not native image)"
+        val batikNote = "Built-in default (requires AWT)"
         sb.append(f"${"batik"}%-14s | ${batikStatus}%-11s | $batikNote\n")
 
         // CairoSvg
@@ -1046,7 +1046,7 @@ Use --dry-run to validate JSON without writing."""
         val resvgNote = if resvgAvail then "cargo install resvg" else "Not in PATH"
         sb.append(f"${"resvg"}%-14s | ${resvgStatus}%-11s | $resvgNote\n")
 
-        // ImageMagick (with delegate check)
+        // ImageMagick (with delegate check) - explicit opt-in only, never tried automatically
         // "broken" = found but delegate missing, "missing" = not in PATH
         val imStatus =
           if imageMagickAvail then "available"
@@ -1054,7 +1054,9 @@ Use --dry-run to validate JSON without writing."""
           else "missing"
         val imNote =
           val cleaned = imageMagickDiag.replaceAll("ImageMagick \\d+ \\((magick|convert)\\) ", "")
-          if cleaned.length > 40 then cleaned.take(37) + "..." else cleaned
+          val withOptIn =
+            if imageMagickAvail then s"--rasterizer imagemagick only; $cleaned" else cleaned
+          if withOptIn.length > 40 then withOptIn.take(37) + "..." else withOptIn
         sb.append(f"${"imagemagick"}%-14s | ${imStatus}%-11s | $imNote\n")
 
         sb.append("\n")
@@ -1068,7 +1070,7 @@ Use --dry-run to validate JSON without writing."""
           sb.append("  pip install cairosvg           # Python, most portable\n")
           sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
           sb.append("  cargo install resvg            # Rust, best quality\n")
-          sb.append("  apt install imagemagick        # Last resort\n")
+          sb.append("  apt install imagemagick        # then pass --rasterizer imagemagick\n")
 
         (sb.toString, anyAvailable)
     }

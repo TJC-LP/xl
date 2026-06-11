@@ -8,12 +8,15 @@ import cats.syntax.all.*
 /**
  * Common interface for SVG-to-raster converters.
  *
- * The CLI supports multiple rasterization backends with automatic fallback:
- *   1. Batik (pure JVM, requires AWT - works in JVM mode, not native image)
+ * Batik (pure JVM, bundled) is the default backend. The subprocess backends remain automatic
+ * fallbacks for environments where AWT is unavailable (native image):
+ *   1. Batik (pure JVM, requires AWT - the default)
  *   2. cairosvg (Python, very portable - pip install cairosvg)
  *   3. rsvg-convert (librsvg, fast - apt install librsvg2-bin)
  *   4. resvg (Rust, best quality - cargo install resvg)
- *   5. ImageMagick (last resort - may have SVG issues)
+ *
+ * ImageMagick is not part of the automatic chain (its SVG delegate configuration is fragile,
+ * GH-83/GH-86) but stays reachable explicitly via `--rasterizer imagemagick`.
  */
 trait Rasterizer:
 
@@ -82,7 +85,8 @@ object RasterError:
          |  - cairosvg: pip install cairosvg
          |  - rsvg-convert: apt install librsvg2-bin (Debian/Ubuntu)
          |  - resvg: cargo install resvg
-         |  - ImageMagick: apt install imagemagick
+         |  - ImageMagick (not tried automatically): apt install imagemagick,
+         |    then pass --rasterizer imagemagick
          |
          |Or use --format svg for vector output.""".stripMargin
 
@@ -112,25 +116,31 @@ object RasterizerChain:
    * Default fallback chain in priority order.
    *
    * Order rationale:
-   *   - Batik: Pure JVM, no external deps, but doesn't work in native image
+   *   - Batik: the default backend - pure JVM, bundled, no subprocess (covers PNG/JPEG); only
+   *     unavailable where AWT is missing (native image)
    *   - cairosvg: Very portable (Python), pre-installed in Claude.ai
    *   - rsvg-convert: Fast (C/Rust), common on Linux
    *   - resvg: Best SVG 2.0 support, but requires Rust/Cargo
-   *   - ImageMagick: Widely installed but may have SVG rendering issues
+   *
+   * ImageMagick is deliberately excluded: its SVG support depends on delegate configuration (rsvg)
+   * that breaks in hard-to-diagnose ways (GH-83/GH-86). It remains available as an explicit opt-in
+   * via `--rasterizer imagemagick`.
    */
   def defaultChain: List[Rasterizer] = List(
     BatikRasterizer,
     CairoSvg,
     RsvgConvert,
-    Resvg,
-    ImageMagick
+    Resvg
   )
 
+  /** Every known backend, including explicit-opt-in-only ones (ImageMagick). */
+  def allRasterizers: List[Rasterizer] = defaultChain :+ ImageMagick
+
   /** Map of rasterizer names for --rasterizer flag */
-  def byName: Map[String, Rasterizer] = defaultChain.map(r => r.name.toLowerCase -> r).toMap
+  def byName: Map[String, Rasterizer] = allRasterizers.map(r => r.name.toLowerCase -> r).toMap
 
   /** Valid rasterizer names for CLI help */
-  def validNames: List[String] = defaultChain.map(_.name.toLowerCase)
+  def validNames: List[String] = allRasterizers.map(_.name.toLowerCase)
 
   /**
    * Convert SVG to raster using the fallback chain.
@@ -253,7 +263,7 @@ object RasterizerChain:
         }
 
   private def installHintFor(name: String): String = name match
-    case "batik" => "Batik requires JVM mode (not native image)"
+    case "batik" => "Batik is bundled but requires AWT (unavailable in this native image)"
     case "cairosvg" => "Install: pip install cairosvg"
     case "rsvg-convert" => "Install: apt install librsvg2-bin (Debian/Ubuntu)"
     case "resvg" => "Install: cargo install resvg"
