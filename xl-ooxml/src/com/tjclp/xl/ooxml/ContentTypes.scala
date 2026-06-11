@@ -150,6 +150,28 @@ object ContentTypes extends XmlReadable[ContentTypes]:
       overrides = baseOverrides ++ stylesOverride ++ sstOverride
     )
 
+  /**
+   * Reconcile a PRESERVED [Content_Types].xml with the MODEL-required content types (GH-314).
+   *
+   * Used when a write regenerates the structural parts (metadata-modified surgical writes) but
+   * exotic preserved parts (pivots, custom XML, macro payloads) still ride the verbatim copy loop:
+   * their registrations must survive, or the package is corrupted.
+   *
+   * Union of Defaults and Overrides from both sides; the model wins on conflict — it knows exactly
+   * which worksheets/styles/sharedStrings/comments/tables ship — EXCEPT `/xl/workbook.xml`, whose
+   * content type encodes the package dialect (macro-enabled, template) that the domain model does
+   * not track.
+   */
+  def reconcile(preserved: ContentTypes, model: ContentTypes): ContentTypes =
+    val workbookDialect =
+      preserved.overrides.get(workbookPartName).map(workbookPartName -> _)
+    ContentTypes(
+      defaults = preserved.defaults ++ model.defaults,
+      overrides = preserved.overrides ++ model.overrides ++ workbookDialect
+    )
+
+  private val workbookPartName = "/xl/workbook.xml"
+
   def fromXml(elem: Elem): Either[String, ContentTypes] =
     val defaults = getChildren(elem, "Default").map { e =>
       for

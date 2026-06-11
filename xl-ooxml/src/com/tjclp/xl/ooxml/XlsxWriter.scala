@@ -1433,6 +1433,19 @@ object XlsxWriter:
         case Some(ctx) if !tracker.modifiedMetadata => parsePreservedStructure(ctx.sourcePath)
         case _ => (None, None, None, None)
 
+    // GH-314: the preserved [Content_Types].xml matters even when metadata changed — exotic
+    // preserved parts (pivots, custom XML, macro payloads) still ride the verbatim copy loop and
+    // must stay registered. Parsed here so the regenerate-from-minimal branch below can reconcile
+    // instead of dropping their overrides.
+    val preservedContentTypesForReconcile: Option[ContentTypes] =
+      preservedContentTypes.orElse {
+        sourceContext.flatMap { ctx =>
+          withZipFile(ctx.sourcePath) { zip =>
+            parseOptionalEntry(zip, "[Content_Types].xml")(ContentTypes.fromXml)
+          }
+        }
+      }
+
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
@@ -1486,7 +1499,7 @@ object XlsxWriter:
         // drawing/media parts still ride the copy loop, so register EVERY drawing part shipping
         // (manifest + fresh) and every known media extension (manifest + written). GH-222: chart
         // parts follow the same allPartPaths pattern.
-        ContentTypes
+        val model = ContentTypes
           .minimal(
             hasStyles = true,
             hasSharedStrings = sharedStringsInOutput,
@@ -1499,6 +1512,16 @@ object XlsxWriter:
           .withDrawingOverrides(drawingPlan.allPartPaths)
           .withChartOverrides(drawingPlan.allChartPartPaths)
           .withImageDefaults(drawingPlan.manifestImageDefaults ++ drawingPlan.imageDefaults)
+        // GH-314: a source can still exist here (metadata-modified write) — merge its preserved
+        // content types so exotic parts riding the copy loop keep their registrations. docProps
+        // reconciliation is re-applied AFTER the merge: it removes stale preserved overrides for
+        // docProps the model no longer emits (GH-242), which a plain union would resurrect.
+        preservedContentTypesForReconcile match
+          case Some(preserved) =>
+            ContentTypes
+              .reconcile(preserved, model)
+              .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
+          case None => model
 
     val rootRels = preservedRootRels
       .getOrElse(Relationships.root())
