@@ -165,6 +165,18 @@ val chart = Chart.bar(series, title = Some("Revenue")).unsafe  // XLResult: vali
 sheet.addChart(chart, ref"F2:K16")                             // anchored over the range — total
 sheet.pictures; sheet.charts                                   // typed views (unmodeled drawings preserved)
 
+// Conditional formatting (0.12.1+) — typed rules with dxf differential formats
+sheet.conditionalFormat(ref"A1:A10", CfRule.cellIs(CfOperator.GreaterThan, "100", Dxf(fill = Some(Fill.Solid(Color.Rgb(0xFFFFC7CE))))))
+sheet.conditionalFormat(
+  ref"B1:B10",
+  CfRule.colorScale3(
+    CfPoint(Cfvo.Min, Color.Rgb(0xFFF8696B)),
+    CfPoint(Cfvo.Percentile(50), Color.Rgb(0xFFFFEB84)),
+    CfPoint(Cfvo.Max, Color.Rgb(0xFF63BE7B))
+  )
+)
+// also CfRule.expression / dataBar / top10 / text ops; unmodeled rule families preserved byte-faithfully
+
 sheet.withViewSettings(SheetView(showGridLines = false, zoomScale = Some(90)))
 
 // Print/PDF setup — all fields optional with Excel defaults

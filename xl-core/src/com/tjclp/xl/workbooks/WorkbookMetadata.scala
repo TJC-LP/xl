@@ -21,7 +21,7 @@ final case class WorkbookMetadata(
   modified: Option[java.time.LocalDateTime] = None,
   lastModifiedBy: Option[String] = None,
   application: Option[String] = Some("XL - Pure Scala 3.8 Excel Library"),
-  appVersion: Option[String] = Some("0.12.0"),
+  appVersion: Option[String] = Some("0.12.1"),
   theme: ThemePalette = ThemePalette.office,
   definedNames: Vector[DefinedName] = Vector.empty,
   sheetStates: Map[SheetName, Option[String]] = Map.empty,
