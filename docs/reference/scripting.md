@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.0
+//> using dep com.tjclp::xl:0.12.1
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.0
+//> using dep com.tjclp::xl:0.12.1
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -135,7 +135,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.0
+//> using dep com.tjclp::xl:0.12.1
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -161,6 +161,11 @@ Workbook(model).recalculate().toEither match
     errors.foreach(e => println(s"✗ ${e.render}"))
     sys.exit(1)
 ```
+
+Since 0.12.1, conditional formatting is typed: `sheet.conditionalFormat(range, CfRule.cellIs(...))`
+authors cellIs/expression/colorScale/dataBar/top10 rules with `Dxf` differential formats;
+structural edits shift rule ranges, and rule families xl does not model survive round-trips
+byte-faithfully.
 
 Since 0.12.0 the prelude also exposes the drawing layer: `sheet.addImage(bytes, format, at)`
 embeds pictures (7 formats, natural-size PNG/JPEG sniffing) and `com.tjclp.xl.charts.Chart`
@@ -241,7 +246,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.0
+//> using dep com.tjclp::xl:0.12.1
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -295,7 +300,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.8.3
-//> using dep com.tjclp::xl:0.12.0
+//> using dep com.tjclp::xl:0.12.1
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

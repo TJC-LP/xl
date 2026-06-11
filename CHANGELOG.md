@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] "Clean Sweep" - 2026-06-11
+
+Wave 7: every remaining open issue closed in one wave — conditional formatting lands as
+the headline feature alongside twelve fidelity, writer-internals, and polish fixes.
+
 ### Added (clean-sweep wave 7)
 
 - **Conditional formatting** (#136): typed model for cellIs / expression / colorScale /
