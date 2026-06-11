@@ -273,3 +273,164 @@ class TypeCoercionSpec extends FunSuite:
     val result = sheet.evaluateFormula("=YEAR(A1) + MONTH(A1)")
     assertEquals(result, Right(CellValue.Number(BigDecimal(2036))))
   }
+
+  // ============================================================================
+  // GH-306: cross-type CALL-RESULT coercion in typed argument positions
+  // (the wave-3 let-rand reviewer's probe list + totality sweep)
+  // ============================================================================
+
+  test("GH-306: UPPER(SUM(A1:A2)) renders the numeric call result as text") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"A2" -> CellValue.Number(BigDecimal(20))
+    )
+    assertEquals(sheet.evaluateFormula("=UPPER(SUM(A1:A2))"), Right(CellValue.Text("30")))
+  }
+
+  test("GH-306: LEN(SUM(A1:A2)) measures the rendered number") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"A2" -> CellValue.Number(BigDecimal(20))
+    )
+    assertEquals(sheet.evaluateFormula("=LEN(SUM(A1:A2))"), Right(CellValue.Number(BigDecimal(2))))
+  }
+
+  test("GH-306: IF(SUM(A1:A2), 1, 2) uses Excel truthiness (non-zero = TRUE)") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"A2" -> CellValue.Number(BigDecimal(20))
+    )
+    assertEquals(sheet.evaluateFormula("=IF(SUM(A1:A2), 1, 2)"), Right(CellValue.Number(BigDecimal(1))))
+  }
+
+  test("GH-306: IF(SUM(empty), 1, 2) — zero is FALSE") {
+    val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
+    assertEquals(sheet.evaluateFormula("=IF(SUM(A1:A2), 1, 2)"), Right(CellValue.Number(BigDecimal(2))))
+  }
+
+  test("GH-306: LEFT(text, SUM(...)) — numeric call result in int position (probe seed)") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(1)),
+      ref"A2" -> CellValue.Number(BigDecimal(2))
+    )
+    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", SUM(A1:A2))"), Right(CellValue.Text("hel")))
+  }
+
+  test("GH-306/GH-307: fractional call result in int position TRUNCATES like Excel") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal("1.5")),
+      ref"A2" -> CellValue.Number(BigDecimal("1.2"))
+    )
+    // SUM = 2.7 → LEFT("hello", 2.7) → Excel truncates → "he"
+    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", SUM(A1:A2))"), Right(CellValue.Text("he")))
+  }
+
+  test("GH-306: numeric TEXT call result coerces in numeric position (SQRT(LEFT(\"16ab\",2)))") {
+    assertEquals(
+      emptySheet.evaluateFormula("=SQRT(LEFT(\"16ab\", 2))"),
+      Right(CellValue.Number(BigDecimal(4)))
+    )
+  }
+
+  test("GH-306: boolean call results in boolean positions are unchanged (regression guard)") {
+    assertEquals(
+      emptySheet.evaluateFormula("=IF(AND(TRUE, TRUE), 1, 2)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
+    assertEquals(
+      emptySheet.evaluateFormula("=IF(NOT(FALSE), 1, 2)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
+  }
+
+  test("GH-306: boolean call result coerces to text (UPPER(AND(TRUE,TRUE)) = \"TRUE\")") {
+    assertEquals(
+      emptySheet.evaluateFormula("=UPPER(AND(TRUE, TRUE))"),
+      Right(CellValue.Text("TRUE"))
+    )
+  }
+
+  test("GH-306: IF branch value flows through a text position (LOWER(IF(...)))") {
+    assertEquals(
+      emptySheet.evaluateFormula("=LOWER(IF(TRUE, \"ABC\", 5))"),
+      Right(CellValue.Text("abc"))
+    )
+    // the numeric branch renders as text
+    assertEquals(
+      emptySheet.evaluateFormula("=LOWER(IF(FALSE, \"ABC\", 5))"),
+      Right(CellValue.Text("5"))
+    )
+  }
+
+  test("GH-306: time call result in a date position (YEAR(NOW()))") {
+    val clock = Clock.fixed(LocalDate.of(2026, 6, 10), LocalDateTime.of(2026, 6, 10, 12, 0))
+    assertEquals(
+      emptySheet.evaluateFormula("=YEAR(NOW())", clock),
+      Right(CellValue.Number(BigDecimal(2026)))
+    )
+  }
+
+  test("GH-306: serial arithmetic in a date position (MONTH(TODAY()+40))") {
+    val clock = Clock.fixed(LocalDate.of(2026, 6, 10), LocalDateTime.of(2026, 6, 10, 12, 0))
+    // 2026-06-10 + 40 days = 2026-07-20 → month 7
+    assertEquals(
+      emptySheet.evaluateFormula("=MONTH(TODAY()+40)", clock),
+      Right(CellValue.Number(BigDecimal(7)))
+    )
+  }
+
+  test("GH-306: uncoercible call results are clean per-cell errors, never thrown") {
+    // text where a number is needed
+    val r1 = emptySheet.evaluateFormula("=ABS(UPPER(\"xy\"))")
+    assert(r1.isLeft, s"expected clean Left for text in numeric position, got $r1")
+    // text where a boolean is needed
+    val r2 = emptySheet.evaluateFormula("=IF(\"a\"&\"b\", 1, 2)")
+    assert(r2.isLeft, s"expected clean Left for text in boolean position, got $r2")
+    // text where an int is needed
+    val r3 = emptySheet.evaluateFormula("=LEFT(\"hello\", UPPER(\"xy\"))")
+    assert(r3.isLeft, s"expected clean Left for text in int position, got $r3")
+    // text where a date is needed
+    val r4 = emptySheet.evaluateFormula("=YEAR(UPPER(\"xy\"))")
+    assert(r4.isLeft, s"expected clean Left for text in date position, got $r4")
+  }
+
+  test("GH-306: totality sweep — cross-type compositions never throw") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(10)),
+      ref"A2" -> CellValue.Number(BigDecimal(20)),
+      ref"B1" -> CellValue.Text("text")
+    )
+    val probes = List(
+      "=UPPER(SUM(A1:A2))",
+      "=IF(SUM(A1:A2), 1, 2)",
+      "=LEFT(B1, SUM(A1:A2))",
+      "=SQRT(CONCATENATE(\"1\", \"6\"))",
+      "=IF(CONCATENATE(\"a\", \"b\"), 1, 2)",
+      "=ABS(IF(TRUE, B1, B1))",
+      "=YEAR(SUM(A1:A2))",
+      "=LOWER(MAX(A1:A2))",
+      "=NOT(SUM(A1:A2))",
+      "=LEN(AVERAGE(A1:A2))"
+    )
+    probes.foreach { f =>
+      val result = sheet.evaluateFormula(f) // must not throw — Left is acceptable
+      assert(result.isLeft || result.isRight, s"unreachable, evaluated: $f")
+    }
+  }
+
+  test("GH-306: round-trip — coercion wrappers print transparently") {
+    val formulas = List(
+      "=UPPER(SUM(A1:A2))",
+      "=IF(SUM(A1:A2), 1, 2)",
+      "=LEFT(\"hello\", SUM(A1:A2))",
+      "=YEAR(NOW())",
+      "=SQRT(LEFT(\"16ab\", 2))"
+    )
+    formulas.foreach { f =>
+      FormulaParser.parse(f) match
+        case Right(expr) =>
+          assertEquals(FormulaPrinter.print(expr), f)
+          assertEquals(FormulaParser.parse(FormulaPrinter.print(expr)), Right(expr))
+        case Left(err) => fail(s"parse failed for $f: $err")
+    }
+  }
