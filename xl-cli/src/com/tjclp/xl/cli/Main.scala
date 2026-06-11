@@ -96,7 +96,7 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream uses SAX/StAX workbook writes for modifying commands.
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd
 
     val sheetWriteOpts =
       (
@@ -361,6 +361,42 @@ EXAMPLES:
   xl -f f.xlsx -o o.xlsx import data.csv --new-sheet "Imported"
   xl -f f.xlsx -s S1 -o o.xlsx import data.csv A1 --delimiter ";" --skip-header
   xl -f f.xlsx -s S1 -o o.xlsx import data.csv A1 --no-type-inference"""
+
+  private val importMdHelp = """Import a GFM markdown table with automatic type detection.
+
+USAGE:
+  xl -f file.xlsx -s Sheet1 -o out.xlsx import-md table.md --start A1
+  cat table.md | xl -f file.xlsx -s Sheet1 -o out.xlsx import-md -
+  xl -f file.xlsx -o out.xlsx import-md table.md --new-sheet "Data"
+
+OPTIONS:
+  --start <ref>           Top-left cell for the table (default: A1)
+  --skip-header           Skip the table's header row (do not import it)
+  --no-type-inference     Treat all values as text
+  --new-sheet <name>      Create new sheet for imported data
+
+FORMAT:
+  GFM pipe tables: header row, delimiter row (|---|---|), body rows.
+  Outer pipes optional; \| inside a cell is a literal pipe; cells are trimmed.
+  Alignment markers (:--- left, :---: center, ---: right) become cell alignment.
+
+TYPE DETECTION (same smart detection as batch put):
+  Currency:  $1,234.56 → Number + Currency format
+  Percent:   45.5% → 0.455 + Percent format
+  Dates:     2025-01-15 (ISO 8601) → DateTime + Date format
+  Numbers:   100, 29.99, -5.5 | Booleans: true/false | Text: everything else
+
+NOTES:
+  - The first table found in the input is imported (preamble text is skipped)
+  - Input is read as UTF-8; entire table loads in memory
+  - Use "-" to read from stdin
+
+Docs: docs/reference/cli.md (import-md section)
+
+EXAMPLES:
+  xl -f f.xlsx -s S1 -o o.xlsx import-md table.md
+  xl -f f.xlsx -s S1 -o o.xlsx import-md table.md --start C5 --skip-header
+  echo "| A | B |\n|---|---|\n| 1 | 2 |" | xl -f f.xlsx -s S1 -o o.xlsx import-md -"""
 
   private val putHelp = """Write value(s) to cell or range.
 
@@ -798,6 +834,17 @@ Use --dry-run to validate JSON without writing."""
         .mapN { (path, ref, delim, skipHeader, enc, newSh, noInfer) =>
           CliCommand.Import(path, ref, delim, skipHeader, enc, newSh, noInfer)
         }
+    }
+
+  // --- Import markdown command (GH-159) ---
+  private val mdPathArg = Opts.argument[String]("md-file")
+  private val mdStartOpt =
+    Opts.option[String]("start", "Top-left cell for the imported table (default: A1)").orNone
+
+  val importMdCmd: Opts[CliCommand] =
+    Opts.subcommand("import-md", importMdHelp) {
+      (mdPathArg, mdStartOpt, skipHeaderOpt, newSheetImportOpt, noTypeInferenceOpt)
+        .mapN(CliCommand.ImportMarkdown.apply)
     }
 
   // --- Sheet management commands ---
@@ -1574,6 +1621,22 @@ Use --dry-run to validate JSON without writing."""
           delim,
           skipHeader,
           enc,
+          newSheetOpt,
+          noInfer,
+          outputPath,
+          writerConfig,
+          streamWrite
+        )
+      }
+
+    case CliCommand.ImportMarkdown(mdPath, startRefOpt, skipHeader, newSheetOpt, noInfer) =>
+      requireOutput(outputOpt, backendOpt, stream) { (outputPath, writerConfig, streamWrite) =>
+        ImportCommands.importMarkdown(
+          wb,
+          sheetOpt,
+          mdPath,
+          startRefOpt,
+          skipHeader,
           newSheetOpt,
           noInfer,
           outputPath,

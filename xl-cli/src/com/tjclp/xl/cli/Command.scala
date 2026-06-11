@@ -99,6 +99,13 @@ enum CliCommand:
     newSheet: Option[String],
     noTypeInference: Boolean
   )
+  case ImportMarkdown(
+    mdPath: String, // "-" for stdin or file path
+    startRef: Option[String],
+    skipHeader: Boolean,
+    newSheet: Option[String],
+    noTypeInference: Boolean
+  )
   // Sheet management
   case AddSheet(name: String, after: Option[String], before: Option[String])
   case RemoveSheet(name: String)

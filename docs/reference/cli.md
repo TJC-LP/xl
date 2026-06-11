@@ -118,6 +118,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `freeze` | `<ref>` | Freeze panes at cell (requires `-o`) |
 | `unfreeze` | | Remove freeze panes (requires `-o`) |
 | `import` | `<csv-file> [start-ref] [options]` | Import CSV with type detection (requires `-o`) |
+| `import-md` | `<md-file\|-> [--start ref] [options]` | Import GFM markdown table with type detection (requires `-o`) |
 | `add-sheet` | `<name> [--after s] [--before s]` | Add new empty sheet (requires `-o`) |
 | `remove-sheet` | `<name>` | Remove sheet (requires `-o`) |
 | `rename-sheet` | `<name> <new-name>` | Rename sheet (requires `-o`) |
@@ -637,6 +638,35 @@ xl -f f.xlsx -o o.xlsx import data.csv --new-sheet "Imported"
 ```
 
 **Limitations**: entire CSV is loaded into memory (recommended <50k rows); dates must be ISO 8601 (`YYYY-MM-DD`).
+
+---
+
+### `xl import-md <md-file|-> [--start ref] [options]`
+
+Import a GFM (GitHub Flavored Markdown) pipe table with smart type detection. Use `-` to read from stdin — handy for LLM agents that generate tables inline.
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `md-file` | string | Yes | — | Markdown file path, or `-` for stdin |
+| `--start` | string | No | A1 | Top-left cell for the imported table |
+| `--skip-header` | flag | No | false | Skip the table's header row (do not import) |
+| `--new-sheet` | string | No | — | Create new sheet for imported data |
+| `--no-type-inference` | flag | No | false | Treat all values as text |
+
+```bash
+xl -f f.xlsx -s S1 -o o.xlsx import-md table.md --start B2
+xl -f f.xlsx -o o.xlsx import-md table.md --new-sheet "Data"
+printf '| A | B |\n|---|---|\n| 1 | 2 |\n' | xl -f f.xlsx -s S1 -o o.xlsx import-md -
+```
+
+**Table format** (GFM): header row, delimiter row (`|---|---|`), body rows. The first table found in the input is imported (preamble prose is skipped); the table ends at the first blank line. Outer pipes are optional, `\|` inside a cell is a literal pipe, and cell whitespace is trimmed. Body rows are padded/truncated to the delimiter row's column count.
+
+**Type detection** (per cell, same smart detection as batch `put`): currency `$1,234.56` → Number + Currency format, percent `45.5%` → `0.455` + Percent format, ISO dates `2025-01-15` → date-formatted cell, plain numbers and `true`/`false` → typed values, everything else → text. Opt out with `--no-type-inference`.
+
+**Alignment**: GFM markers map to cell horizontal alignment — `:---` left, `:---:` center, `---:` right (no marker leaves alignment unset).
+
+**Limitations**: input is read as UTF-8 and parsed in memory; one table per import (first wins).
 
 ---
 
