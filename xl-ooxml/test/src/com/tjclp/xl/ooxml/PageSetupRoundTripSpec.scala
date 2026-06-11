@@ -389,6 +389,116 @@ class PageSetupRoundTripSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
+  test("GH-284: fitToPage=Some(false) actively clears a preserved fitToPage flag") {
+    // Seed a file whose sheetPr carries pageSetUpPr fitToPage="1" (derived from fitTo*)
+    val wb0 = Workbook(
+      Sheet("Sheet1")
+        .put(ref"A1" -> 1)
+        .withPageSetup(PageSetup(fitToWidth = Some(1), fitToHeight = Some(0)))
+    )
+    val src = Files.createTempFile("fittopage-clear-src", ".xlsx")
+    XlsxWriter.write(wb0, src).fold(e => fail(s"seed write failed: $e"), identity)
+    assert(
+      zipEntryString(src, "xl/worksheets/sheet1.xml").contains("fitToPage=\"1\""),
+      "seed file must carry the flag"
+    )
+
+    // Clear the fit settings AND actively strip the flag
+    val cleared = for
+      wb <- XlsxReader.read(src)
+      sheet <- wb("Sheet1")
+      setup = sheet.pageSetup.getOrElse(fail("seed pageSetup missing"))
+    yield wb.put(
+      sheet.withPageSetup(
+        setup.copy(fitToWidth = None, fitToHeight = None, fitToPage = Some(false))
+      )
+    )
+    val wb1 = cleared.fold(e => fail(s"edit failed: $e"), identity)
+
+    val out = Files.createTempFile("fittopage-clear-out", ".xlsx")
+    XlsxWriter.write(wb1, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(!xml.contains("fitToPage"), s"preserved fitToPage flag not cleared: $xml")
+    assert(!xml.contains("<sheetPr"), s"empty sheetPr should be dropped, not kept: $xml")
+
+    val reread = XlsxReader.read(out).fold(e => fail(s"reread failed: $e"), identity)
+    val rereadSetup = sheetSetup(reread)
+    assertEquals(rereadSetup.fitToWidth, None)
+    assertEquals(rereadSetup.fitToHeight, None)
+    Files.deleteIfExists(src)
+    Files.deleteIfExists(out)
+  }
+
+  test("GH-284: Some(false) strips only pageSetUpPr — codeName/tabColor sheetPr content stays") {
+    import scala.xml.*
+    val preserved =
+      XmlSecurity
+        .parseSafe(
+          """<sheetPr codeName="Sheet1"><tabColor rgb="FFFF0000"/><pageSetUpPr fitToPage="1"/></sheetPr>""",
+          "test sheetPr"
+        )
+        .fold(e => fail(s"parse failed: $e"), identity)
+    val merged = com.tjclp.xl.ooxml.worksheet.mergeSheetPrElem(
+      Some(preserved),
+      Some(PageSetup(fitToPage = Some(false)))
+    )
+    val elem = merged.getOrElse(fail("sheetPr with codeName/tabColor must survive the strip"))
+    assertEquals(elem \@ "codeName", "Sheet1", "codeName attribute lost")
+    assert((elem \ "tabColor").nonEmpty, "tabColor child lost")
+    assert((elem \ "pageSetUpPr").isEmpty, s"pageSetUpPr should be gone: $elem")
+  }
+
+  test("GH-284: Some(false) with nothing preserved emits no sheetPr at all") {
+    val merged = com.tjclp.xl.ooxml.worksheet.mergeSheetPrElem(
+      None,
+      Some(PageSetup(fitToPage = Some(false)))
+    )
+    assertEquals(merged, None)
+  }
+
+  test("GH-284: fitToPage=Some(true) forces the flag without fitToWidth/fitToHeight") {
+    val wb = Workbook(
+      Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(PageSetup(fitToPage = Some(true)))
+    )
+    val out = Files.createTempFile("fittopage-force", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("fitToPage=\"1\""), s"forced fitToPage flag missing: $xml")
+
+    // Write-only tri-state (freezePane precedent): the reader keeps fitToPage=None and the flag
+    // rides preservation — a subsequent cell edit must keep it.
+    val edited = for
+      rb <- XlsxReader.read(out)
+      sheet <- rb("Sheet1")
+    yield rb.put(sheet.put(ref"B1" -> 2))
+    val wb1 = edited.fold(e => fail(s"edit failed: $e"), identity)
+    val out2 = Files.createTempFile("fittopage-force-2", ".xlsx")
+    XlsxWriter.write(wb1, out2).fold(e => fail(s"second write failed: $e"), identity)
+    assert(
+      zipEntryString(out2, "xl/worksheets/sheet1.xml").contains("fitToPage=\"1\""),
+      "forced flag lost on subsequent surgical edit"
+    )
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(out2)
+  }
+
+  test("GH-284: explicit Some(false) wins over fitToWidth/fitToHeight derivation") {
+    val wb = Workbook(
+      Sheet("Sheet1")
+        .put(ref"A1" -> 1)
+        .withPageSetup(PageSetup(fitToWidth = Some(2), fitToPage = Some(false)))
+    )
+    val out = Files.createTempFile("fittopage-explicit", ".xlsx")
+    XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
+
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("fitToWidth=\"2\""), s"fitToWidth must still serialize: $xml")
+    assert(!xml.contains("fitToPage"), s"explicit Some(false) must suppress the flag: $xml")
+    Files.deleteIfExists(out)
+  }
+
   test("GH-258/GH-259: freeze panes + view settings + print setup round-trip together") {
     val view = SheetView(showGridLines = false, zoomScale = Some(90))
     val setup = PageSetup(

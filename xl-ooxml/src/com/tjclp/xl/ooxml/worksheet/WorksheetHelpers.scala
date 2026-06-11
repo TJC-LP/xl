@@ -585,34 +585,63 @@ private[ooxml] def mergeHeaderFooterElem(
       if flagged.child.isEmpty && flagged.attributes == Null then None else Some(flagged)
 
 /**
- * Ensure `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` when the model requests page-fit scaling
- * (GH-266): Excel ignores pageSetup's fitToWidth/fitToHeight without this flag. When no fitTo* is
- * modeled, the preserved element rides through verbatim — absence of the model fields is not
- * evidence the source flag should be cleared (fitToWidth/fitToHeight default to 1 in OOXML, so a
- * bare flag without pageSetup attributes is still meaningful).
+ * Reconcile `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` with the model (GH-266, GH-284):
+ * Excel ignores pageSetup's fitToWidth/fitToHeight without this flag.
+ *
+ * `PageSetup.fitToPage` is a write-only tri-state (GH-284):
+ *   - Some(true): force the flag (even without fitTo* fields)
+ *   - Some(false): actively strip the flag from preserved sheetPr — pageSetUpPr is dropped when
+ *     nothing else remains on it, and sheetPr itself when that leaves it empty; unrelated sheetPr
+ *     content (codeName, tabColor, outlinePr, ...) always survives
+ *   - None: derive — ensure the flag when fitToWidth/fitToHeight are modeled, otherwise the
+ *     preserved element rides through verbatim. Absence of the model fields is not evidence the
+ *     source flag should be cleared (fitToWidth/fitToHeight default to 1 in OOXML, so a bare flag
+ *     without pageSetup attributes is still meaningful).
  */
 private[ooxml] def mergeSheetPrElem(
   existing: Option[Elem],
   pageSetup: Option[PageSetup]
 ): Option[Elem] =
-  val wantsFit = pageSetup.exists(ps => ps.fitToWidth.isDefined || ps.fitToHeight.isDefined)
-  if !wantsFit then existing
-  else
-    val base = existing.getOrElse(XmlUtil.elem("sheetPr")())
-    val hasPageSetUpPr = base.child.exists {
-      case e: Elem => e.label == "pageSetUpPr"
-      case _ => false
+  val derivedFit = pageSetup.exists(ps => ps.fitToWidth.isDefined || ps.fitToHeight.isDefined)
+  pageSetup.flatMap(_.fitToPage) match
+    case Some(false) => stripFitToPage(existing)
+    case Some(true) => ensureFitToPage(existing)
+    case None => if derivedFit then ensureFitToPage(existing) else existing
+
+/** Set fitToPage="1", creating sheetPr/pageSetUpPr as needed (GH-266 behavior). */
+private def ensureFitToPage(existing: Option[Elem]): Option[Elem] =
+  val base = existing.getOrElse(XmlUtil.elem("sheetPr")())
+  val hasPageSetUpPr = base.child.exists {
+    case e: Elem => e.label == "pageSetUpPr"
+    case _ => false
+  }
+  val children =
+    if hasPageSetUpPr then
+      base.child.map {
+        case e: Elem if e.label == "pageSetUpPr" =>
+          e % new UnprefixedAttribute("fitToPage", "1", Null)
+        case other => other
+      }
+    // CT_SheetPr's child sequence ends with pageSetUpPr — appending keeps schema order
+    else base.child :+ XmlUtil.elem("pageSetUpPr", "fitToPage" -> "1")()
+  Some(base.copy(child = children))
+
+/**
+ * Remove the fitToPage attribute from a preserved sheetPr (GH-284 clear path), dropping elements
+ * that the removal leaves empty. Nothing preserved means nothing to strip.
+ */
+private def stripFitToPage(existing: Option[Elem]): Option[Elem] =
+  existing.flatMap { base =>
+    val children = base.child.flatMap {
+      case e: Elem if e.label == "pageSetUpPr" =>
+        val stripped = e.copy(attributes = e.attributes.remove("fitToPage"))
+        // Drop a pageSetUpPr that carries nothing else (no attributes, no children)
+        if stripped.attributes == Null && stripped.child.isEmpty then None else Some(stripped)
+      case other => Some(other)
     }
-    val children =
-      if hasPageSetUpPr then
-        base.child.map {
-          case e: Elem if e.label == "pageSetUpPr" =>
-            e % new UnprefixedAttribute("fitToPage", "1", Null)
-          case other => other
-        }
-      // CT_SheetPr's child sequence ends with pageSetUpPr — appending keeps schema order
-      else base.child :+ XmlUtil.elem("pageSetUpPr", "fitToPage" -> "1")()
-    Some(base.copy(child = children))
+    val result = base.copy(child = children)
+    if result.child.isEmpty && result.attributes == Null then None else Some(result)
+  }
 
 /**
  * Apply domain RowProperties to an OoxmlRow.

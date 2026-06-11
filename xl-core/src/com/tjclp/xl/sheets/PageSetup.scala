@@ -99,6 +99,13 @@ object PageMargins:
  * @param repeatRows
  *   1-based inclusive row span repeated at the top of every printed page (`_xlnm.Print_Titles`),
  *   e.g. `Some((1, 2))` repeats rows 1-2
+ * @param fitToPage
+ *   Write-only tri-state override for the `sheetPr/pageSetUpPr fitToPage` flag (GH-284, the
+ *   freezePane precedent — the reader never populates it). None (default) derives the flag from
+ *   fitToWidth/fitToHeight and otherwise preserves whatever the source file carries; Some(true)
+ *   forces the flag even without fitTo* fields; Some(false) actively strips it from preserved
+ *   sheetPr XML (the only way to CLEAR a flag that arrived with the file). An explicit value wins
+ *   over the fitToWidth/fitToHeight derivation.
  */
 final case class PageSetup(
   scale: Int = 100,
@@ -108,7 +115,8 @@ final case class PageSetup(
   headerFooter: Option[HeaderFooter] = None,
   margins: Option[PageMargins] = None,
   printArea: Option[CellRange] = None,
-  repeatRows: Option[(Int, Int)] = None
+  repeatRows: Option[(Int, Int)] = None,
+  fitToPage: Option[Boolean] = None
 ):
   require(scale >= 10 && scale <= 400, s"Scale must be 10-400, got: $scale")
   require(
