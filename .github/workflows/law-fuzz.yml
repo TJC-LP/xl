@@ -1,0 +1,51 @@
+name: Law Fuzz
+
+# GH-308: the generative round-trip law runs a FIXED ScalaCheck seed in CI for
+# determinism. This scheduled job re-runs the law and parity suites with a fresh
+# random seed at a high case count, so seed-shaped blind spots surface weekly
+# instead of never. Failures print the seed for local reproduction.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: coursier/setup-action@v1
+        with:
+          jvm: temurin:25
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/.scalafmt.conf', '**/.scalafix.conf') }}
+          restore-keys: |
+            ${{ runner.os }}-coursier-
+
+      - name: Cache Mill
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
+
+      - name: Random-seed law + parity run (2000 cases)
+        env:
+          XL_ROUNDTRIP_MIN_SUCCESS: "2000"
+          XL_ROUNDTRIP_RANDOM_SEED: "true"
+        run: |
+          ./mill xl-ooxml.test
+          ./mill xl-cats-effect.test
