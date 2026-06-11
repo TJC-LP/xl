@@ -27,9 +27,19 @@ import com.tjclp.xl.workbooks.Workbook
  */
 class ChartRoundTripSpec extends ScalaCheckSuite:
 
+  // The OoxmlGenerativeRoundTripSpec convention: crank locally via
+  // XL_ROUNDTRIP_MIN_SUCCESS=1000 (or -Dxl.roundtrip.minSuccess=... where the runner
+  // forwards JVM props).
+  private val minSuccess: Int =
+    sys.props
+      .get("xl.roundtrip.minSuccess")
+      .orElse(sys.env.get("XL_ROUNDTRIP_MIN_SUCCESS"))
+      .flatMap(_.toIntOption)
+      .getOrElse(200)
+
   override def scalaCheckTestParameters: org.scalacheck.Test.Parameters =
     super.scalaCheckTestParameters
-      .withMinSuccessfulTests(200)
+      .withMinSuccessfulTests(minSuccess)
       .withInitialSeed(org.scalacheck.rng.Seed(20260611L))
 
   private def emit(chart: Chart, workbook: Workbook): String =
