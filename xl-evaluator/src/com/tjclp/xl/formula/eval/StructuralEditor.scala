@@ -4,6 +4,7 @@ import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
 
@@ -94,7 +95,57 @@ object StructuralEditor:
             case Left(_) => (ref, cell)
         case _ => (ref, cell)
     }
-    sheet.copy(cells = updatedCells)
+    sheet.copy(
+      cells = updatedCells,
+      conditionalFormats =
+        rewriteCfFormulas(sheet.conditionalFormats, shiftLocal, editedSheet, isRow, at, delta)
+    )
+
+  /**
+   * GH-136: rewrite TYPED conditional-format formula text (CellIs.formula1/formula2,
+   * Expression.formula, Cfvo.Formula inside ColorScale points and DataBar bounds) through the same
+   * shift as cell formulas. A fully-deleted reference degrades the formula TEXT to "#REF!" with the
+   * rule kept — the Excel-observable surface, consistent with the whole-cell `CellValue.Error(Ref)`
+   * behavior above. Unparseable text rides verbatim (same precedent). Text-family rules store no
+   * formula (derived at emission) and Preserved payloads are never touched; their typed envelopes
+   * were already shifted by the pure core shift.
+   */
+  private def rewriteCfFormulas(
+    cfs: Vector[ConditionalFormat],
+    shiftLocal: Boolean,
+    editedSheet: String,
+    isRow: Boolean,
+    at: Int,
+    delta: Int
+  ): Vector[ConditionalFormat] =
+    def shiftText(formula: String): String =
+      FormulaParser.parse(s"=$formula") match
+        case Right(expr) =>
+          FormulaShifter.shiftStructural(expr, shiftLocal, editedSheet, isRow, at, delta) match
+            case Some(shifted) => FormulaPrinter.print(shifted, includeEquals = false)
+            case None => "#REF!"
+        case Left(_) => formula
+    def shiftCfvo(cfvo: Cfvo): Cfvo = cfvo match
+      case Cfvo.Formula(f) => Cfvo.Formula(shiftText(f))
+      case other => other
+    cfs.map {
+      case ConditionalFormat.Rules(ranges, rules, pivot) =>
+        val shifted = rules.map {
+          case r: CfRule.CellIs =>
+            r.copy(formula1 = shiftText(r.formula1), formula2 = r.formula2.map(shiftText))
+          case r: CfRule.Expression => r.copy(formula = shiftText(r.formula))
+          case r: CfRule.ColorScale =>
+            r.copy(
+              min = r.min.copy(cfvo = shiftCfvo(r.min.cfvo)),
+              mid = r.mid.map(p => p.copy(cfvo = shiftCfvo(p.cfvo))),
+              max = r.max.copy(cfvo = shiftCfvo(r.max.cfvo))
+            )
+          case r: CfRule.DataBar => r.copy(min = shiftCfvo(r.min), max = shiftCfvo(r.max))
+          case other @ (_: CfRule.Top10 | _: CfRule.Text | _: CfRule.Preserved) => other
+        }
+        ConditionalFormat.Rules(ranges, shifted, pivot)
+      case preserved: ConditionalFormat.Preserved => preserved
+    }
 
   /** Ergonomic workbook extensions. */
   extension (wb: Workbook)

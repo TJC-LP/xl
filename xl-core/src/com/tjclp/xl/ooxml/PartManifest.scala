@@ -61,6 +61,18 @@ final case class PartManifest(entries: Map[String, PartManifestEntry]) derives C
 
   def contains(path: String): Boolean = entries.contains(path)
 
+  /**
+   * Mark an entry as parsed AFTER the scan (GH-292). Some parts can only be identified as
+   * model-owned once the worksheet relationships are resolved (e.g. openpyxl's
+   * xl/comments/comment1.xml comment dialect) — marking them parsed keeps them out of
+   * `unparsedParts`, so the surgical writer never ships the preserved bytes alongside the
+   * regenerated part. Unknown paths are a no-op.
+   */
+  def markParsed(path: String): PartManifest =
+    entries.get(path) match
+      case Some(entry) => PartManifest(entries.updated(path, entry.copy(parsed = true)))
+      case None => this
+
 object PartManifest:
   val empty: PartManifest = PartManifest(Map.empty)
 

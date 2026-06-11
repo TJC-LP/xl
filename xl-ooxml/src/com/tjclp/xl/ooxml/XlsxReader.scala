@@ -137,14 +137,31 @@ object XlsxReader:
    *   - Worksheets (pattern: xl/worksheets/sheet*.xml)
    *   - Relationships
    *
-   * All other parts (charts, drawings, images, etc.) are preserved byte-for-byte.
+   * All other parts (charts, drawings, images, etc.) are preserved byte-for-byte. Comment parts are
+   * NOT matched here: which part is a sheet's comment part is decided by the worksheet RELATIONSHIP
+   * type (GH-292), so the scan only retains candidates (see [[isCommentCandidatePart]]) and the
+   * manifest is reconciled after rels resolution.
    */
   private def isKnownPart(path: String): Boolean =
     knownParts.contains(path) ||
       path.matches("xl/worksheets/sheet\\d+\\.xml") ||
-      path.matches("xl/comments\\d+\\.xml") ||
       path.matches("xl/tables/table\\d+\\.xml") ||
       path.matches("xl/worksheets/_rels/sheet\\d+\\.xml\\.rels")
+
+  /**
+   * Comment-part candidates retained at scan time (GH-292). Producers disagree on comment part
+   * paths — Excel writes xl/comments1.xml, openpyxl xl/comments/comment1.xml — so retention is a
+   * generous path heuristic while the authoritative sheet→part resolution is the worksheet
+   * relationship of type [[XmlUtil.relTypeComments]] (the GH-221 drawing-rel precedent). Retained
+   * parts stay UNPARSED in the manifest until a relationship claims them
+   * ([[PartManifest.markParsed]]); unclaimed candidates (including threadedComments, which use a
+   * different relationship type) keep riding byte-preservation.
+   */
+  private def isCommentCandidatePart(path: String): Boolean =
+    path.startsWith("xl/") && path.endsWith(".xml") && {
+      val basename = path.substring(path.lastIndexOf('/') + 1)
+      basename.toLowerCase.contains("comment")
+    }
 
   /**
    * Drawing parts and media retained as raw content during the zip scan (GH-221). These entries
@@ -319,6 +336,10 @@ object XlsxReader:
                   drawingXml(entryName) = new String(content, "UTF-8")
                 else if isChartXmlPart(entryName) then
                   chartXml(entryName) = new String(content, "UTF-8")
+                else if isCommentCandidatePart(entryName) then
+                  // GH-292: retained for rel-driven comment resolution; parsed status is decided
+                  // after the worksheet rels are read (parseWorkbook reconciles the manifest)
+                  parts(entryName) = new String(content, "UTF-8")
                 else if entryName.startsWith("xl/media/") then
                   mediaBytes(entryName) = ArraySeq.unsafeWrapArray(content)
                 // Unknown part - index but don't store content
@@ -425,21 +446,37 @@ object XlsxReader:
       // GH-242: parse document properties (lenient — absent/malformed parts yield empty fields)
       docProps = parseDocProps(parts)
 
+      // GH-294: bookViews/workbookView activeTab → activeSheetIndex, clamped leniently into
+      // [0, sheetCount-1] (malformed or out-of-range values must never fail a read)
+      activeSheetIndex = OoxmlWorkbook.clampActiveTab(
+        OoxmlWorkbook.parseActiveTab(ooxmlWb.bookViews).getOrElse(0),
+        sheets.size
+      )
+
+      // GH-292: comment parts are identified by the worksheet RELATIONSHIP type, which is only
+      // known after the rels are parsed. Mark the resolved parts as parsed so the surgical writer
+      // treats them as model-owned (regenerate/copy via commentPathMapping) instead of ALSO
+      // shipping the preserved bytes — that dual representation produced duplicate zip entries.
+      reconciledManifest = parsedSheets.commentPathMapping.values
+        .foldLeft(manifest)(_.markParsed(_))
+
       // Assemble workbook with optional SourceContext
       workbook <- assembleWorkbook(
         sheets,
         source,
-        manifest,
+        reconciledManifest,
         fingerprint,
         theme,
         definedNames,
         sheetStates,
         commentPathMapping,
         date1904 = ooxmlWb.date1904,
+        activeSheetIndex = activeSheetIndex,
         docProps,
         drawingPathMapping = parsedSheets.drawingPathMapping,
         drawingSnapshots = parsedSheets.drawingSnapshots,
-        chartSnapshots = parsedSheets.chartSnapshots
+        chartSnapshots = parsedSheets.chartSnapshots,
+        sheetPathMapping = parsedSheets.sheetPathMapping
       )
     yield ReadResult(workbook, styleWarnings ++ parsedSheets.warnings)
 
@@ -759,15 +796,21 @@ object XlsxReader:
   /** Result of [[parseSheets]]: sheets plus the per-sheet part mappings and read warnings. */
   private case class ParsedSheets(
     sheets: Vector[Sheet],
-    commentPathMapping: Map[Int, String],
-    drawingPathMapping: Map[Int, String],
-    drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]],
-    chartSnapshots: Map[Int, Vector[com.tjclp.xl.context.ChartSnapshot]],
+    commentPathMapping: Map[SheetName, String],
+    drawingPathMapping: Map[SheetName, String],
+    drawingSnapshots: Map[SheetName, Vector[com.tjclp.xl.drawings.Drawing]],
+    chartSnapshots: Map[SheetName, Vector[com.tjclp.xl.context.ChartSnapshot]],
+    sheetPathMapping: Map[SheetName, String],
     warnings: Vector[Warning]
   )
 
   /**
-   * Parse all worksheets and collect comment/drawing path mappings.
+   * Parse all worksheets and collect comment/drawing/worksheet path mappings.
+   *
+   * All mappings are keyed by the sheet NAME as read — the stable identity that survives
+   * delete/reorder/rename edits (GH-315). Names are unique in well-formed workbooks (Excel enforces
+   * it); a malformed duplicate name keeps the last entry, which only degrades the surgical-write
+   * optimization, never correctness of the parsed model.
    *
    * Excel numbers comment files sequentially (comments1.xml, comments2.xml...) across only sheets
    * that have comments, NOT by sheet index. The mappings preserve the original paths.
@@ -788,10 +831,12 @@ object XlsxReader:
     relationships: Relationships
   ): XLResult[ParsedSheets] =
     val relMap = relationships.relationships.map(rel => rel.id -> rel).toMap
-    val commentPathBuilder = Map.newBuilder[Int, String]
-    val drawingPathBuilder = Map.newBuilder[Int, String]
-    val drawingSnapshotBuilder = Map.newBuilder[Int, Vector[com.tjclp.xl.drawings.Drawing]]
-    val chartSnapshotBuilder = Map.newBuilder[Int, Vector[com.tjclp.xl.context.ChartSnapshot]]
+    val commentPathBuilder = Map.newBuilder[SheetName, String]
+    val drawingPathBuilder = Map.newBuilder[SheetName, String]
+    val drawingSnapshotBuilder = Map.newBuilder[SheetName, Vector[com.tjclp.xl.drawings.Drawing]]
+    val chartSnapshotBuilder =
+      Map.newBuilder[SheetName, Vector[com.tjclp.xl.context.ChartSnapshot]]
+    val sheetPathBuilder = Map.newBuilder[SheetName, String]
     val warningBuilder = Vector.newBuilder[Warning]
 
     sheetRefs.toVector.zipWithIndex
@@ -800,6 +845,7 @@ object XlsxReader:
           .get(ref.relationshipId)
           .map(rel => resolveSheetPath(rel.target))
           .getOrElse(defaultSheetPath(ref.sheetId))
+        sheetPathBuilder += (ref.name -> sheetPath)
 
         for
           xml <- parts
@@ -817,8 +863,8 @@ object XlsxReader:
           // Parse comments if relationship exists
           comments <- commentTarget match
             case Some(target) =>
-              // Track the mapping from sheet index to comment file path
-              commentPathBuilder += (idx -> target)
+              // Track the mapping from sheet name (stable identity) to comment file path
+              commentPathBuilder += (ref.name -> target)
               parseCommentsForSheet(parts, target)
             case None => Right(Map.empty)
 
@@ -828,7 +874,7 @@ object XlsxReader:
           // GH-221: parse the drawing part (total — never fails the read)
           drawings = drawingTarget.filter(retainedDrawings.xml.contains) match
             case Some(drawingPath) =>
-              drawingPathBuilder += (idx -> drawingPath)
+              drawingPathBuilder += (ref.name -> drawingPath)
               val parsed = parseDrawingsForSheet(retainedDrawings, drawingPath) match
                 case Right(part) =>
                   // GH-222: associate typed ChartFrames with their rel/part provenance
@@ -846,12 +892,12 @@ object XlsxReader:
                           )
                       }
                   }
-                  if snapshots.nonEmpty then chartSnapshotBuilder += (idx -> snapshots)
+                  if snapshots.nonEmpty then chartSnapshotBuilder += (ref.name -> snapshots)
                   part.drawings
                 case Left(warning) =>
                   warningBuilder += warning
                   Vector.empty
-              drawingSnapshotBuilder += (idx -> parsed)
+              drawingSnapshotBuilder += (ref.name -> parsed)
               parsed
             case None => Vector.empty[com.tjclp.xl.drawings.Drawing]
 
@@ -874,6 +920,7 @@ object XlsxReader:
           drawingPathBuilder.result(),
           drawingSnapshotBuilder.result(),
           chartSnapshotBuilder.result(),
+          sheetPathBuilder.result(),
           warningBuilder.result()
         )
       )
@@ -1000,6 +1047,11 @@ object XlsxReader:
     // Parse view settings (gridlines, zoom) from <sheetViews> — GH-258
     val viewSettings = parseSheetView(ooxmlSheet.sheetViews)
 
+    // Parse conditional formatting into the typed model (GH-136); dxfId attrs resolve through
+    // the styles.xml <dxfs> table. Total: unmodeled content rides through Preserved.
+    val conditionalFormats =
+      com.tjclp.xl.ooxml.worksheet.CfCodec.parseAll(ooxmlSheet.conditionalFormatting, styles.dxfs)
+
     Right(
       Sheet(
         name = name,
@@ -1012,7 +1064,8 @@ object XlsxReader:
         rowProperties = rowProperties,
         pageSetup = pageSetup,
         viewSettings = viewSettings,
-        drawings = drawings
+        drawings = drawings,
+        conditionalFormats = conditionalFormats
       )
     )
 
@@ -1184,9 +1237,12 @@ object XlsxReader:
    * @param sheetStates
    *   Sheet visibility states from workbook.xml
    * @param commentPathMapping
-   *   Mapping from 0-based sheet index to comment file path (e.g., "xl/comments1.xml")
+   *   Mapping from sheet name (as read, the stable identity — GH-315) to comment file path (e.g.,
+   *   "xl/comments1.xml")
    * @param date1904
    *   True when workbookPr declares the 1904 date system (GH-243)
+   * @param activeSheetIndex
+   *   Active tab parsed from bookViews, already clamped to the sheet count (GH-294)
    * @param docProps
    *   Document properties parsed from docProps/core.xml + app.xml (GH-242)
    * @return
@@ -1200,12 +1256,14 @@ object XlsxReader:
     theme: ThemePalette,
     definedNames: Vector[DefinedName],
     sheetStates: Map[SheetName, Option[String]],
-    commentPathMapping: Map[Int, String],
+    commentPathMapping: Map[SheetName, String],
     date1904: Boolean,
+    activeSheetIndex: Int,
     docProps: DocProps.Data,
-    drawingPathMapping: Map[Int, String],
-    drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]],
-    chartSnapshots: Map[Int, Vector[com.tjclp.xl.context.ChartSnapshot]]
+    drawingPathMapping: Map[SheetName, String],
+    drawingSnapshots: Map[SheetName, Vector[com.tjclp.xl.drawings.Drawing]],
+    chartSnapshots: Map[SheetName, Vector[com.tjclp.xl.context.ChartSnapshot]],
+    sheetPathMapping: Map[SheetName, String]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -1221,7 +1279,8 @@ object XlsxReader:
                   commentPathMapping,
                   drawingPathMapping,
                   drawingSnapshots,
-                  chartSnapshots
+                  chartSnapshots,
+                  sheetPathMapping
                 )
               )
             )
@@ -1251,7 +1310,12 @@ object XlsxReader:
           date1904 = date1904
         )
       sourceContextEither.map(ctx =>
-        Workbook(sheets = sheetsWithPrint, metadata = metadata, sourceContext = ctx)
+        Workbook(
+          sheets = sheetsWithPrint,
+          metadata = metadata,
+          activeSheetIndex = activeSheetIndex,
+          sourceContext = ctx
+        )
       )
 
   /**

@@ -83,6 +83,13 @@ case class OoxmlWorkbook(
   def date1904: Boolean = OoxmlWorkbook.parseDate1904(workbookPr)
 
   /**
+   * Overlay the model's active tab onto the bookViews element (GH-294, model wins). See
+   * [[OoxmlWorkbook.buildBookViews]] for the merge rules; the caller clamps.
+   */
+  def withActiveTab(activeTab: Int): OoxmlWorkbook =
+    copy(bookViews = OoxmlWorkbook.buildBookViews(bookViews, activeTab))
+
+  /**
    * Update sheets while preserving all workbook metadata.
    *
    * Maps domain sheets to SheetRefs, preserving original sheetIds from the source file. For new
@@ -224,8 +231,55 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
     OoxmlWorkbook(
       sheetRefs,
       workbookPr = workbookPr,
+      // GH-294: fresh workbooks always ship bookViews/activeTab (Excel always writes bookViews)
+      bookViews = buildBookViews(None, clampActiveTab(wb.activeSheetIndex, wb.sheets.size)),
       definedNames = buildDefinedNames(PrintNames.effective(wb))
     )
+
+  /** Clamp an active-tab index into [0, sheetCount-1] (write side; the reader clamps too). */
+  def clampActiveTab(index: Int, sheetCount: Int): Int =
+    index.max(0).min((sheetCount - 1).max(0))
+
+  /**
+   * Parse `<bookViews>/<workbookView activeTab>` (first view wins, like Excel). Returns None when
+   * the element or attribute is absent — the schema default is 0.
+   */
+  def parseActiveTab(bookViews: Option[Elem]): Option[Int] =
+    for
+      bv <- bookViews
+      view <- (bv \ "workbookView").collectFirst { case e: Elem => e }
+      value <- getAttrOpt(view, "activeTab")
+      tab <- value.toIntOption
+    yield tab
+
+  /**
+   * Overlay the model's activeTab onto a (possibly preserved) `<bookViews>` element — the model
+   * value wins (GH-294, docProps GH-242 precedent) while unmodeled attributes (window geometry,
+   * tabRatio, ...) ride through:
+   *   - no element / no `<workbookView>` child: a fresh `<workbookView activeTab="N"/>` is added
+   *     (always, including N=0 — Excel always writes bookViews)
+   *   - existing first `<workbookView>`: activeTab is set to N; when N=0 and the source omitted the
+   *     attribute it stays omitted (0 is the schema default), so parse→merge is an identity for
+   *     both the Excel (omitted) and openpyxl (explicit ="0") spellings
+   */
+  def buildBookViews(preserved: Option[Elem], activeTab: Int): Option[Elem] =
+    val base = preserved.getOrElse(elem("bookViews")())
+    val firstViewIdx = base.child.indexWhere {
+      case e: Elem => e.label == "workbookView"
+      case _ => false
+    }
+    val children =
+      if firstViewIdx < 0 then
+        base.child :+ elem("workbookView", "activeTab" -> activeTab.toString)()
+      else
+        base.child.zipWithIndex.map {
+          case (e: Elem, idx) if idx == firstViewIdx =>
+            if activeTab > 0 || getAttrOpt(e, "activeTab").isDefined then
+              e % new UnprefixedAttribute("activeTab", activeTab.toString, Null)
+            else e
+          case (other, _) => other
+        }
+    Some(base.copy(child = children))
 
   /**
    * Build a `<definedNames>` element from the typed model (GH-236), or None when empty. Order

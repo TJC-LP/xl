@@ -65,6 +65,9 @@ object api:
     SeriesName
   }
 
+  // Conditional formatting (GH-136) — plain enums/case classes, safe export forwarders.
+  export cf.{ConditionalFormat, CfRule, CfOperator, CfTextOp, Cfvo, CfPoint}
+
   // Patch types
   export patch.Patch
 
@@ -83,8 +86,8 @@ object api:
   // Codec types
   export codec.{CellCodec, CellReader, CellWriter, CodecError}
 
-  // Style types - core
-  export styles.{CellStyle, StyleRegistry}
+  // Style types - core (Dxf/DxfFont: differential formats for conditional formatting, GH-136)
+  export styles.{CellStyle, StyleRegistry, Dxf, DxfFont}
 
   // Style types - alignment
   export styles.alignment.{HAlign, VAlign, Align}

@@ -199,6 +199,10 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 
 **LET — lexical bindings (GH-193)**: `LET(name1, value1, ..., calculation)` is supported with let* semantics: each binding sees prior bindings; names are case-insensitive, must start with a letter or underscore, and must not be cell-ref-shaped; inner LETs shadow outer. Bindings used in typed argument positions (text, integer, boolean, number, date) coerce totally per the cell-decoder conventions — e.g. `LET(k, 2, LEFT("hey", k))` and `LET(d, A1, YEAR(d))` work, and uncoercible values produce a clean per-cell error, never an exception. Known divergences from Excel: (a) range-valued bindings work via parse-time substitution of literal ranges (`LET(r, A1:A10, SUMIF(r, ">5"))` works), but a binding whose value is a range-*returning* call (e.g. OFFSET) cannot be used where a literal range is syntactically required — it still works in array-tolerant positions like SUM; (b) re-printed or structurally-shifted LET formulas show range bindings substituted into the body — `=LET(r, A1:A3, SUM(r)/COUNT(r))` reprints as `=LET(r, A1:A3, SUM(A1:A3)/COUNT(A1:A3))`, so structural row/column edits rewrite stored formula text with the literal ranges in place of the body's `r` usages (AST law and semantics preserved); (c) LET is a parser special form, not a registry function: it does not appear in `FunctionRegistry.allNames`, so CLI `functions` listings omit it; (d) dependency extraction over-approximates: binding values contribute their cell refs even when the binding is unused in the body; (e) duplicate-name rebinding is allowed (Excel rejects), dotted names (Excel-legal) are rejected.
 
+**Lenient sheet-reference parsing (GH-281, intentional)**: the formula parser accepts unquoted cell-ref-shaped sheet references (`=Q1!A1`) that Excel itself rejects (Excel requires `='Q1'!A1`). Printing always canonicalizes to the quoted form, so anything xl writes re-parses everywhere; the leniency only widens what xl can READ. Pinned by a named parser test.
+
+**`Cell.comment` deprecated (GH-295, since 0.12.1)**: the `Option[String]` field on `Cell` was never serialized — `Sheet.comments` is the store the OOXML writer reads. Setting it now write-throughs into `Sheet.comments` on `put` (plain text, no author) instead of vanishing; migrate to `Sheet.comment(ref, Comment.plainText(...))`. The field will be removed in a future major.
+
 **RAND/RANDBETWEEN — volatile functions (GH-115)**: `RAND()`/`RANDBETWEEN(bottom, top)` are supported. Volatility: xl re-evaluates volatile formulas on every `recalculate`/`withCachedFormulas` pass, so cached values change per recalculation (matching Excel). Determinism: randomness is an explicit `Rng` capability (Clock pattern) — pass `Rng.seeded(seed)` to the rng-taking overloads (`sheet.evaluateFormula(f, clock, rng)`, `wb.recalculate(clock, rng)`, ...) for reproducible output; default paths use `Rng.system`. RANDBETWEEN tightens fractional bounds inward (bottom rounds up, top down) and errors when bottom > top.
 
 **No workarounds needed** - formula system is complete and production-ready!
@@ -257,13 +261,20 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
 
 ---
 
-#### 10. Conditional Formatting Not Supported
-**Status**: Not implemented (preserved through edits since 0.10.0, like other unknown/inline parts)
-**Impact**: Cannot author color scales, data bars, icon sets
-**Plan**: see [plan/roadmap.md](plan/roadmap.md)
+#### 10. Conditional Formatting ✅ TYPED RULES SUPPORTED (#136) — with scoped limitations
+**Status**: Six rule families are fully modeled: `cellIs` (all eight operators incl. between/notBetween), `expression`, 2/3-point `colorScale`, `dataBar`, `top10`, and the four text rules (contains/notContains/beginsWith/endsWith). Read into `Sheet.conditionalFormats` (typed `ConditionalFormat.Rules` envelopes with `CfRule` rules), authored via `Sheet.conditionalFormat(range, CfRule.cellIs(...), ...)` with differential formats (`Dxf`: font deltas, solid fills, borders, numFmts), and round-tripped on both writer backends. Priorities are assigned at append (`max(existing)+1, +2, ...` — above Preserved rules' priorities too); explicit priorities pass through unvalidated. The read path is typed-parse-or-Preserved at TWO granularities: an unmodeled **rule** (iconSet, timePeriod, aboveAverage, duplicate/uniqueValues, containsBlanks/Errors, any rule with a child `extLst` or out-of-whitelist attr/dxf) rides `CfRule.Preserved` verbatim while its **envelope stays typed** (sqref still shifts under structural edits); an unparseable **envelope** rides `ConditionalFormat.Preserved` whole. The write path is a reparse dirty-gate: an untouched cf model re-emits the source elements verbatim (untouched sheets stay byte-identical); a changed model regenerates with canonical emission and **append-only** dxf-table merging (existing dxf indices never move, so dxfIds baked into Preserved rules and tables stay valid). Structural edits shift typed envelopes with the merged-ranges clamp/split/drop algebra and rewrite typed rule formulas (`#REF!` on full deletion, rule kept); text-rule formulas are derived at emission so they auto-correct.
 
-**Effort**: 5-7 days
-**LOC**: ~300 (Rules model, XML serialization, testing)
+**Scope fence (v1 OUT — all ride `Preserved` byte-faithfully)**:
+- No typed iconSet, timePeriod, aboveAverage, duplicate/uniqueValues, containsBlanks/Errors, autoMin/autoMax data bars, or any x14 extension content (gradient/negative/axis data bars, custom icon sets); worksheet-level `extLst` untouched.
+- No dxf alignment/protection/gradient fills/font name/size; double-underline degrades to Preserved. `NumFmt.Currency` in a dxf emits but reads back as `Custom` (no distinct format-code retraction).
+- **No evaluation or rendering anywhere**: rules do not participate in `SheetEvaluator`/`DependencyGraph`; HTML/SVG/PNG export and `view --eval` ignore conditional formatting.
+
+**Behavioral limitations (by design)**:
+- **Preserved staleness under structural edits**: `CfRule.Preserved` payload formulas and `ConditionalFormat.Preserved` sqref do NOT shift (the `Drawing.Preserved` precedent); typed envelopes around Preserved rules DO shift.
+- No priority renumbering or overlap validation of explicit priorities; authoring never merges into existing blocks (a new block is appended per call, as Excel itself does).
+- No streaming-path cf (`readStream` surfaces none; `writeStream` emits none); fresh-sheet SaxStax writes with cf route through the DOM-equivalent worksheet builder (DirectSaxEmitter cf deferred).
+- No CLI/batch op in this wave (follow-up issue covers `xl cond-format` + batch op + skill doc).
+- **Source-compat**: `Sheet` gained a 15th field (`conditionalFormats`) — source-compatible, not binary-compatible with 0.12.x.
 
 ---
 
@@ -305,7 +316,7 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
 - **Orphan media is never garbage-collected**: removing pictures rewrites the drawing part but keeps all source media parts (orphans are legal OOXML).
 - **Preserved anchors are not shifted** by `insertRows`/`deleteColumns`/... (typed Picture anchors are; a deleted anchor index clamps instead of dropping — Excel keeps pictures). EditAs-aware size recomputation is not attempted.
 - **Accepted-and-dropped on dirty regeneration**: `a:blip/@cstate`, plain `a:xfrm`, `cNvPicPr` content (e.g. `a:picLocks`). The loss only materializes when a sheet's drawings vector actually changes; untouched parts are byte-identical.
-- **Sheet delete/reorder + drawing edits in one write**: the per-index drawing mappings follow the commentPathMapping precedent and become unreliable when sheets are deleted or reordered; drawing regeneration is skipped for that write (parts ride preservation). Split such edits into two writes.
+- ~~Sheet delete/reorder + drawing edits in one write~~ **lifted (#315)**: source mappings (drawings, comments, worksheet parts, SST accounting) are keyed by sheet NAME as read — stable under delete/reorder, re-keyed by `Workbook.rename` — so structural edits combine freely with drawing/comment edits in a single write. Fresh comment parts allocate numbers above everything the source claims (never colliding with a surviving sheet's identity-mapped part). API note: `SourceContext` changed shape for this — per-sheet mappings are `Map[SheetName, _]`, a new `sheetPathMapping` field, and `markSheetDeleted(Int, SheetName)` — source- and binary-incompatible with 0.12.x for code constructing or pattern-matching `SourceContext` directly.
 - **Source-/binary-compat**: `Sheet` gained a 14th field (`drawings`) — source-compatible, not binary-compatible with 0.11.x.
 - Deferred, tracked: typed Chart/Shape cases (#222), SVG (svgBlip), crop/rotation/effects, picture hyperlinks, pHYs DPI sizing, media GC, `Patch` case, CLI `add-image`, DirectSaxEmitter drawing emission, string-ref `addImage` overload.
 

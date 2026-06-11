@@ -297,7 +297,12 @@ class OpticsSpec extends FunSuite:
     val cell = updated(ref"A1")
     assertEquals(cell.value, CellValue.Text("changed"))
     assertEquals(cell.styleId, Some(StyleId(3)))
-    assertEquals(cell.comment, Some("Note"))
+    // GH-295: put(cell) (the lens setter) converts the legacy comment field into Sheet.comments
+    assertEquals(cell.comment, None)
+    assertEquals(
+      updated.getComment(ref"A1"),
+      Some(com.tjclp.xl.cells.Comment.plainText("Note"))
+    )
     assertEquals(cell.hyperlink, Some("https://example.com"))
   }
 

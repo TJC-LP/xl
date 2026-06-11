@@ -52,7 +52,9 @@ private val wellKnownNamespaces: Map[String, String] = Map(
   "r" -> XmlUtil.nsRelationships,
   "mc" -> "http://schemas.openxmlformats.org/markup-compatibility/2006",
   "xr" -> "http://schemas.microsoft.com/office/spreadsheetml/2014/revision",
-  "x14ac" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+  "x14ac" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac",
+  "x14" -> "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main",
+  "xm" -> "http://schemas.microsoft.com/office/excel/2006/main"
 )
 
 /**
@@ -65,6 +67,20 @@ private val wellKnownNamespaces: Map[String, String] = Map(
  * TopScope) the nearest ancestor scope is consulted instead.
  */
 private[ooxml] def usedPrefixBindings(root: Elem): Seq[(String, String)] =
+  usedPrefixBindings(root, TopScope)
+
+/**
+ * [[usedPrefixBindings]] resolving against `inheritedScope` when `root` itself carries no scope —
+ * for capturing a CHILD of an already-rebound element in isolation. The reader's per-element rebind
+ * hoists used bindings onto the captured ROOT and severs every descendant chain (cleanNamespaces),
+ * so a fragment cut from below such a root (a `cfRule` inside a rebound `conditionalFormatting`
+ * block) must consult the parent's scope to resolve prefixes like x14/xm (GH-136: the dataBar
+ * extLst pairing) or the binding is silently omitted.
+ */
+private[ooxml] def usedPrefixBindings(
+  root: Elem,
+  inheritedScope: NamespaceBinding
+): Seq[(String, String)] =
   @annotation.tailrec
   def attrPrefixes(md: MetaData, acc: List[String]): List[String] = md match
     case Null => acc.reverse
@@ -85,7 +101,7 @@ private[ooxml] def usedPrefixBindings(root: Elem): Seq[(String, String)] =
     }
     here.toVector ++
       e.child.collect { case c: Elem => c }.toVector.flatMap(collect(_, effectiveScope))
-  collect(root, TopScope).distinctBy(_._1)
+  collect(root, inheritedScope).distinctBy(_._1)
 
 /**
  * cleanNamespaces, then re-bind the prefixes the subtree actually uses on the subtree root, so a
@@ -102,6 +118,13 @@ private[ooxml] def rebindUsedNamespaces(elem: Elem): Elem =
  * to be scope-self-contained). None when every element is prefixed or the binding is absent.
  */
 private[ooxml] def usedDefaultNamespace(root: Elem): Option[String] =
+  usedDefaultNamespace(root, TopScope)
+
+/** [[usedDefaultNamespace]] resolving against `inheritedScope` (see [[usedPrefixBindings]]). */
+private[ooxml] def usedDefaultNamespace(
+  root: Elem,
+  inheritedScope: NamespaceBinding
+): Option[String] =
   def find(e: Elem, inherited: NamespaceBinding): Option[String] =
     val effective = Option(e.scope).filterNot(_ == TopScope).getOrElse(inherited)
     val here =
@@ -112,7 +135,7 @@ private[ooxml] def usedDefaultNamespace(root: Elem): Option[String] =
         acc.orElse(find(c, effective))
       }
     }
-  find(root, TopScope)
+  find(root, inheritedScope)
 
 /**
  * rebindUsedNamespaces extended to also re-bind the DEFAULT namespace used by unprefixed elements
@@ -121,8 +144,19 @@ private[ooxml] def usedDefaultNamespace(root: Elem): Option[String] =
  * namespace is structural and never travels with fragments).
  */
 private[ooxml] def rebindUsedNamespaces(elem: Elem, includeDefault: Boolean): Elem =
-  val used = usedPrefixBindings(elem)
-  val default = if includeDefault then usedDefaultNamespace(elem) else None
+  rebindUsedNamespaces(elem, includeDefault, TopScope)
+
+/**
+ * [[rebindUsedNamespaces]] resolving against `inheritedScope` for bindings no longer reachable from
+ * `elem`'s own chain (see [[usedPrefixBindings]] — GH-136 rule-level cf capture).
+ */
+private[ooxml] def rebindUsedNamespaces(
+  elem: Elem,
+  includeDefault: Boolean,
+  inheritedScope: NamespaceBinding
+): Elem =
+  val used = usedPrefixBindings(elem, inheritedScope)
+  val default = if includeDefault then usedDefaultNamespace(elem, inheritedScope) else None
   val cleaned = cleanNamespaces(elem)
   if used.isEmpty && default.isEmpty then cleaned
   else
@@ -585,34 +619,63 @@ private[ooxml] def mergeHeaderFooterElem(
       if flagged.child.isEmpty && flagged.attributes == Null then None else Some(flagged)
 
 /**
- * Ensure `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` when the model requests page-fit scaling
- * (GH-266): Excel ignores pageSetup's fitToWidth/fitToHeight without this flag. When no fitTo* is
- * modeled, the preserved element rides through verbatim — absence of the model fields is not
- * evidence the source flag should be cleared (fitToWidth/fitToHeight default to 1 in OOXML, so a
- * bare flag without pageSetup attributes is still meaningful).
+ * Reconcile `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` with the model (GH-266, GH-284):
+ * Excel ignores pageSetup's fitToWidth/fitToHeight without this flag.
+ *
+ * `PageSetup.fitToPage` is a write-only tri-state (GH-284):
+ *   - Some(true): force the flag (even without fitTo* fields)
+ *   - Some(false): actively strip the flag from preserved sheetPr — pageSetUpPr is dropped when
+ *     nothing else remains on it, and sheetPr itself when that leaves it empty; unrelated sheetPr
+ *     content (codeName, tabColor, outlinePr, ...) always survives
+ *   - None: derive — ensure the flag when fitToWidth/fitToHeight are modeled, otherwise the
+ *     preserved element rides through verbatim. Absence of the model fields is not evidence the
+ *     source flag should be cleared (fitToWidth/fitToHeight default to 1 in OOXML, so a bare flag
+ *     without pageSetup attributes is still meaningful).
  */
 private[ooxml] def mergeSheetPrElem(
   existing: Option[Elem],
   pageSetup: Option[PageSetup]
 ): Option[Elem] =
-  val wantsFit = pageSetup.exists(ps => ps.fitToWidth.isDefined || ps.fitToHeight.isDefined)
-  if !wantsFit then existing
-  else
-    val base = existing.getOrElse(XmlUtil.elem("sheetPr")())
-    val hasPageSetUpPr = base.child.exists {
-      case e: Elem => e.label == "pageSetUpPr"
-      case _ => false
+  val derivedFit = pageSetup.exists(ps => ps.fitToWidth.isDefined || ps.fitToHeight.isDefined)
+  pageSetup.flatMap(_.fitToPage) match
+    case Some(false) => stripFitToPage(existing)
+    case Some(true) => ensureFitToPage(existing)
+    case None => if derivedFit then ensureFitToPage(existing) else existing
+
+/** Set fitToPage="1", creating sheetPr/pageSetUpPr as needed (GH-266 behavior). */
+private def ensureFitToPage(existing: Option[Elem]): Option[Elem] =
+  val base = existing.getOrElse(XmlUtil.elem("sheetPr")())
+  val hasPageSetUpPr = base.child.exists {
+    case e: Elem => e.label == "pageSetUpPr"
+    case _ => false
+  }
+  val children =
+    if hasPageSetUpPr then
+      base.child.map {
+        case e: Elem if e.label == "pageSetUpPr" =>
+          e % new UnprefixedAttribute("fitToPage", "1", Null)
+        case other => other
+      }
+    // CT_SheetPr's child sequence ends with pageSetUpPr — appending keeps schema order
+    else base.child :+ XmlUtil.elem("pageSetUpPr", "fitToPage" -> "1")()
+  Some(base.copy(child = children))
+
+/**
+ * Remove the fitToPage attribute from a preserved sheetPr (GH-284 clear path), dropping elements
+ * that the removal leaves empty. Nothing preserved means nothing to strip.
+ */
+private def stripFitToPage(existing: Option[Elem]): Option[Elem] =
+  existing.flatMap { base =>
+    val children = base.child.flatMap {
+      case e: Elem if e.label == "pageSetUpPr" =>
+        val stripped = e.copy(attributes = e.attributes.remove("fitToPage"))
+        // Drop a pageSetUpPr that carries nothing else (no attributes, no children)
+        if stripped.attributes == Null && stripped.child.isEmpty then None else Some(stripped)
+      case other => Some(other)
     }
-    val children =
-      if hasPageSetUpPr then
-        base.child.map {
-          case e: Elem if e.label == "pageSetUpPr" =>
-            e % new UnprefixedAttribute("fitToPage", "1", Null)
-          case other => other
-        }
-      // CT_SheetPr's child sequence ends with pageSetUpPr — appending keeps schema order
-      else base.child :+ XmlUtil.elem("pageSetUpPr", "fitToPage" -> "1")()
-    Some(base.copy(child = children))
+    val result = base.copy(child = children)
+    if result.child.isEmpty && result.attributes == Null then None else Some(result)
+  }
 
 /**
  * Apply domain RowProperties to an OoxmlRow.

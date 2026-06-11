@@ -187,7 +187,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     assert(wb.sourceContext.isEmpty, "Programmatic workbook should not have SourceContext")
 
-    // Write (should use regenerateAll, not throw error)
+    // Write (no SourceContext: unifiedWrite regenerates all parts, must not error)
     val output = Files.createTempFile("programmatic", ".xlsx")
     XlsxWriter
       .write(wb, output)

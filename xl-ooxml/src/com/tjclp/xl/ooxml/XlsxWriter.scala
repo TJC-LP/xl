@@ -4,7 +4,7 @@ import scala.xml.*
 import java.io.{ByteArrayOutputStream, FileOutputStream, OutputStream}
 import java.security.MessageDigest
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
-import java.nio.file.{Files, Path, StandardCopyOption}
+import java.nio.file.{Files, Path, Paths, StandardCopyOption}
 import java.nio.charset.StandardCharsets
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
@@ -251,14 +251,12 @@ object XlsxWriter:
     author.map(_.trim).filter(_.nonEmpty)
 
   /**
-   * Build per-sheet comment data for serialization.
-   *
-   * Returns:
-   *   - Map[Int, OoxmlComments]: sheet index (0-based) -> comments to write
-   *   - Set[Int]: indices (1-based) of sheets with comments for content types
+   * Build per-sheet comment data for serialization: sheet index (0-based) -> comments to write.
+   * Part paths are assigned separately — identity-mapped or freshly allocated above every
+   * source-claimed number (GH-315) — never derived from the sheet index.
    */
-  private def buildCommentsData(workbook: Workbook): (Map[Int, OoxmlComments], Set[Int]) =
-    val commentsBySheet = workbook.sheets.zipWithIndex.flatMap { case (sheet, idx) =>
+  private def buildCommentsData(workbook: Workbook): Map[Int, OoxmlComments] =
+    workbook.sheets.zipWithIndex.flatMap { case (sheet, idx) =>
       if sheet.comments.isEmpty then None
       else
         // Build author list (canonicalized, deduplicated and sorted for deterministic output)
@@ -327,11 +325,6 @@ object XlsxWriter:
         Some(idx -> OoxmlComments(authors, ooxmlComments))
     }.toMap
 
-    // Convert to 1-based indices for file naming and content types
-    val sheetsWithComments = commentsBySheet.keySet.map(_ + 1)
-
-    (commentsBySheet, sheetsWithComments)
-
   /**
    * Build per-sheet table data for serialization.
    *
@@ -373,58 +366,6 @@ object XlsxWriter:
     }.toMap
 
     (tablesBySheet, totalTableCount, tableIdMap)
-
-  /**
-   * Build worksheet relationships for a sheet with comments.
-   *
-   * Creates relationships for:
-   *   - Comments content (../commentsN.xml)
-   *   - VML drawing for visual indicators (../drawings/vmlDrawingN.xml)
-   *
-   * N is 1-based sheet index.
-   */
-  private def buildWorksheetRelationships(sheetIndex: Int): Relationships =
-    Relationships(
-      Seq(
-        Relationship(
-          id = "rId1",
-          `type` = XmlUtil.relTypeComments,
-          target = s"../comments$sheetIndex.xml"
-        ),
-        Relationship(
-          id = "rId2",
-          `type` = XmlUtil.relTypeVmlDrawing,
-          target = s"../drawings/vmlDrawing$sheetIndex.vml"
-        )
-      )
-    )
-
-  /**
-   * Build worksheet relationships for a sheet with comments and/or tables.
-   *
-   * Creates relationships for:
-   *   - Comments content (../commentsN.xml) - rId1 (if hasComments)
-   *   - VML drawing for visual indicators (../drawings/vmlDrawingN.vml) - rId2 (if hasComments)
-   *   - Tables (../tables/tableM.xml) - rId3+ (if hasComments), rId1+ (if tables only)
-   *
-   * N is 1-based sheet index, M is global table ID.
-   *
-   * @param sheetIndex
-   *   Sheet index (1-based) for file naming
-   * @param hasComments
-   *   Whether this sheet has comments
-   * @param tableIds
-   *   Sequence of global table IDs for this sheet
-   * @return
-   *   Relationships with sequential rId allocation
-   */
-  private def buildWorksheetRelationshipsWithTables(
-    sheetIndex: Int,
-    hasComments: Boolean,
-    tableIds: Seq[Long]
-  ): Relationships =
-    val commentPath = s"xl/comments$sheetIndex.xml"
-    buildWorksheetRelationshipsWithCommentsPath(commentPath, hasComments, tableIds)
 
   /**
    * Build worksheet relationships using the actual comment file path.
@@ -469,300 +410,6 @@ object XlsxWriter:
     }
 
     Relationships(commentRels ++ tableRels)
-
-  /**
-   * Full regeneration of all XLSX parts (current behavior).
-   *
-   * Used when:
-   *   - Workbook has no SourceContext (created programmatically)
-   *   - Output target is a stream (can't use file copy optimization)
-   *
-   * Regenerates all parts from domain model.
-   */
-  private def regenerateAll(
-    workbook: Workbook,
-    target: OutputTarget,
-    config: WriterConfig
-  ): Unit =
-    // Build shared strings table based on policy
-    val sst = config.sstPolicy match
-      case SstPolicy.Always => Some(SharedStrings.fromWorkbook(workbook))
-      case SstPolicy.Never => None
-      case SstPolicy.Auto =>
-        if SharedStrings.shouldUseSST(workbook) then Some(SharedStrings.fromWorkbook(workbook))
-        else None
-
-    // Build comments data and VML drawings
-    val (commentsBySheet, sheetsWithComments) = buildCommentsData(workbook)
-    val vmlDrawings = commentsBySheet.map { case (idx, comments) =>
-      idx -> VmlDrawing.generateForComments(comments, idx)
-    }
-
-    // Build table data
-    val (tablesBySheet, totalTableCount, tableIdMap) = buildTablesData(workbook)
-
-    // Build unified style index with per-sheet remappings
-    val (styleIndex, sheetRemappings) = StyleIndex.fromWorkbook(workbook)
-    val styles = OoxmlStyles(styleIndex)
-
-    // Convert domain workbook to OOXML
-    val ooxmlWb = OoxmlWorkbook.fromDomain(workbook)
-
-    // Convert sheets to OOXML worksheets with style remapping
-    val ooxmlSheets = workbook.sheets.zipWithIndex.map { case (sheet, sheetIdx) =>
-      val remapping = sheetRemappings.getOrElse(sheetIdx, Map.empty)
-
-      // Generate tableParts XML element if sheet has tables
-      val tablePartsXml = tablesBySheet.get(sheetIdx).flatMap { tablesForSheet =>
-        if tablesForSheet.isEmpty then None
-        else
-          val hasComments = commentsBySheet.contains(sheetIdx)
-          val rIdOffset = if hasComments then 3 else 1 // Comments use rId1-2
-
-          val tablePartElems =
-            tablesForSheet.sortBy(_._2).zipWithIndex.map { case ((_, tableId), idx) =>
-              import scala.xml.*
-              Elem(
-                prefix = null,
-                label = "tablePart",
-                attributes = new PrefixedAttribute("r", "id", s"rId${rIdOffset + idx}", Null),
-                scope = NamespaceBinding("r", XmlUtil.nsRelationships, TopScope),
-                minimizeEmpty = true
-              )
-            }
-
-          Some(
-            XmlUtil.elem("tableParts", "count" -> tablesForSheet.size.toString)(tablePartElems*)
-          )
-      }
-
-      val escapeFormulas = config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
-      OoxmlWorksheet.fromDomainWithSST(sheet, sst, remapping, tablePartsXml, escapeFormulas)
-    }
-
-    // Create content types
-    val contentTypes =
-      ContentTypes
-        .minimal(
-          hasStyles = true, // Always include styles
-          hasSharedStrings = sst.isDefined,
-          sheetCount = workbook.sheets.size,
-          sheetsWithComments = sheetsWithComments
-        )
-        .withCommentOverrides(sheetsWithComments)
-        .withTableOverrides(totalTableCount)
-
-    // Create relationships
-    val rootRels = Relationships.root()
-    val workbookRels = Relationships.workbook(
-      sheetCount = workbook.sheets.size,
-      hasStyles = true,
-      hasSharedStrings = sst.isDefined
-    )
-
-    // Dispatch based on target type
-    target match
-      case OutputPath(path) =>
-        writeZip(
-          path,
-          contentTypes,
-          rootRels,
-          workbookRels,
-          ooxmlWb,
-          ooxmlSheets,
-          styles,
-          sst,
-          commentsBySheet,
-          vmlDrawings,
-          tablesBySheet,
-          tableIdMap,
-          config,
-          Some(workbook),
-          sheetRemappings
-        )
-      case OutputStreamTarget(stream) =>
-        writeZipToStream(
-          stream,
-          contentTypes,
-          rootRels,
-          workbookRels,
-          ooxmlWb,
-          ooxmlSheets,
-          styles,
-          sst,
-          commentsBySheet,
-          vmlDrawings,
-          tablesBySheet,
-          tableIdMap,
-          config,
-          Some(workbook),
-          sheetRemappings
-        )
-
-  /** Write all parts to ZIP file */
-  private def writeZip(
-    path: Path,
-    contentTypes: ContentTypes,
-    rootRels: Relationships,
-    workbookRels: Relationships,
-    workbook: OoxmlWorkbook,
-    sheets: Vector[OoxmlWorksheet],
-    styles: OoxmlStyles,
-    sst: Option[SharedStrings],
-    commentsBySheet: Map[Int, OoxmlComments],
-    vmlDrawings: Map[Int, String],
-    tablesBySheet: Map[Int, Seq[(TableSpec, Long)]],
-    tableIdMap: Map[String, Long],
-    config: WriterConfig,
-    domainWorkbook: Option[Workbook] = None,
-    sheetRemappings: Map[Int, Map[Int, Int]] = Map.empty
-  ): Unit =
-    val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
-    zip.setLevel(1) // Match Excel's compression level (super fast)
-    try
-      writeZipContents(
-        zip,
-        contentTypes,
-        rootRels,
-        workbookRels,
-        workbook,
-        sheets,
-        styles,
-        sst,
-        commentsBySheet,
-        vmlDrawings,
-        tablesBySheet,
-        tableIdMap,
-        config,
-        domainWorkbook,
-        sheetRemappings
-      )
-    finally zip.close()
-
-  /** Write all parts to ZIP stream (for OutputStreamTarget) */
-  private def writeZipToStream(
-    stream: OutputStream,
-    contentTypes: ContentTypes,
-    rootRels: Relationships,
-    workbookRels: Relationships,
-    workbook: OoxmlWorkbook,
-    sheets: Vector[OoxmlWorksheet],
-    styles: OoxmlStyles,
-    sst: Option[SharedStrings],
-    commentsBySheet: Map[Int, OoxmlComments],
-    vmlDrawings: Map[Int, String],
-    tablesBySheet: Map[Int, Seq[(TableSpec, Long)]],
-    tableIdMap: Map[String, Long],
-    config: WriterConfig,
-    domainWorkbook: Option[Workbook] = None,
-    sheetRemappings: Map[Int, Map[Int, Int]] = Map.empty
-  ): Unit =
-    val zip = new ZipOutputStream(stream)
-    zip.setLevel(1) // Match Excel's compression level (super fast)
-    try
-      writeZipContents(
-        zip,
-        contentTypes,
-        rootRels,
-        workbookRels,
-        workbook,
-        sheets,
-        styles,
-        sst,
-        commentsBySheet,
-        vmlDrawings,
-        tablesBySheet,
-        tableIdMap,
-        config,
-        domainWorkbook,
-        sheetRemappings
-      )
-    finally zip.close()
-
-  /** Common logic for writing all parts to a ZIP stream */
-  private def writeZipContents(
-    zip: ZipOutputStream,
-    contentTypes: ContentTypes,
-    rootRels: Relationships,
-    workbookRels: Relationships,
-    workbook: OoxmlWorkbook,
-    sheets: Vector[OoxmlWorksheet],
-    styles: OoxmlStyles,
-    sst: Option[SharedStrings],
-    commentsBySheet: Map[Int, OoxmlComments],
-    vmlDrawings: Map[Int, String],
-    tablesBySheet: Map[Int, Seq[(TableSpec, Long)]],
-    tableIdMap: Map[String, Long],
-    config: WriterConfig,
-    domainWorkbook: Option[Workbook],
-    sheetRemappings: Map[Int, Map[Int, Int]]
-  ): Unit =
-    // Write parts in canonical order
-    writePart(zip, "[Content_Types].xml", contentTypes, config)
-    writePart(zip, "_rels/.rels", rootRels, config)
-    writePart(zip, "xl/workbook.xml", workbook, config)
-    writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels, config)
-
-    // Write styles
-    writeStyles(zip, "xl/styles.xml", styles, config)
-
-    // Write shared strings if present
-    sst.foreach { sharedStrings =>
-      writeSharedStrings(zip, "xl/sharedStrings.xml", sharedStrings, config)
-    }
-
-    // Write worksheets
-    sheets.zipWithIndex.foreach { case (sheet, idx) =>
-      // For SaxStax backend with domain workbook available, use direct emission
-      (config.backend, domainWorkbook) match
-        case (XmlBackend.SaxStax, Some(dwb)) =>
-          val domainSheet = dwb.sheets(idx)
-          val remapping = sheetRemappings.getOrElse(idx, Map.empty)
-          val escapeFormulas = config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
-          writeWorksheetDirect(
-            zip,
-            s"xl/worksheets/sheet${idx + 1}.xml",
-            domainSheet,
-            sst,
-            remapping,
-            sheet.tableParts,
-            escapeFormulas,
-            config
-          )
-        case _ =>
-          writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", sheet, config)
-
-      // Write worksheet relationships if this sheet has comments, tables, or hyperlinks (GH-235)
-      val hasComments = commentsBySheet.contains(idx)
-      val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
-      val hlRels =
-        domainWorkbook.map(dwb => hyperlinkRelationships(dwb.sheets(idx))).getOrElse(Seq.empty)
-
-      if hasComments || tableIds.nonEmpty || hlRels.nonEmpty then
-        val base = buildWorksheetRelationshipsWithTables(idx + 1, hasComments, tableIds)
-        writePart(
-          zip,
-          s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels",
-          Relationships(base.relationships ++ hlRels),
-          config
-        )
-    }
-
-    // Write comment files and VML drawings for sheets with comments
-    commentsBySheet.foreach { case (idx, comments) =>
-      writePart(zip, s"xl/comments${idx + 1}.xml", comments, config)
-
-      // Write VML drawing for comment indicators
-      vmlDrawings.get(idx).foreach { vmlXml =>
-        writeVmlPart(zip, s"xl/drawings/vmlDrawing${idx + 1}.vml", vmlXml, config)
-      }
-    }
-
-    // Write table files for all sheets
-    tablesBySheet.values.flatten.foreach { case (tableSpec, tableId) =>
-      val ooxmlTable = TableConversions.toOoxml(tableSpec, tableId)
-      writePart(zip, s"xl/tables/table$tableId.xml", ooxmlTable, config)
-    }
 
   /** Write worksheet directly from domain Sheet using DirectSaxEmitter */
   private def writeWorksheetDirect(
@@ -1112,7 +759,10 @@ object XlsxWriter:
     allChartPartPaths: Set[String]
   )
 
-  private def drawingRelsPathOf(partPath: String): String =
+  /**
+   * Sibling rels path of any part: xl/worksheets/sheet2.xml -> xl/worksheets/_rels/sheet2.xml.rels
+   */
+  private def partRelsPathOf(partPath: String): String =
     val slash = partPath.lastIndexOf('/')
     val (dir, name) = partPath.splitAt(slash + 1)
     s"${dir}_rels/$name.rels"
@@ -1157,9 +807,10 @@ object XlsxWriter:
    * Preserved fragments carrying relationship references are dropped on this path (their targets do
    * not exist without the source part's rels — documented in LIMITATIONS).
    *
-   * When sheets were deleted or reordered the index-keyed mappings are unreliable (the
-   * commentPathMapping precedent has the same shape); drawing regeneration is skipped for that
-   * write and parts ride preservation unchanged.
+   * The source mappings are keyed by sheet NAME (stable identity, GH-315), so structural edits in
+   * the same write are safe: deleted names drop out of the mappings, reorders move nothing, and
+   * renames re-key (`Workbook.rename`). The wave-6a skip-on-delete/reorder guard that existed only
+   * because of index instability is gone.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private def planDrawingWrites(
@@ -1184,15 +835,11 @@ object XlsxWriter:
         }
         .toMap
 
-    val mappingsUnreliable = sourceContext.exists { ctx =>
-      ctx.modificationTracker.deletedSheets.nonEmpty || ctx.modificationTracker.reorderedSheets
-    }
-
     val dirtyIndices: Vector[Int] = sourceContext match
-      case Some(_) if mappingsUnreliable => Vector.empty
       case Some(ctx) =>
         workbook.sheets.indices.toVector.filter { idx =>
-          workbook.sheets(idx).drawings != ctx.drawingSnapshots.getOrElse(idx, Vector.empty)
+          val sheet = workbook.sheets(idx)
+          sheet.drawings != ctx.drawingSnapshots.getOrElse(sheet.name, Vector.empty)
         }
       case None =>
         workbook.sheets.indices.toVector.filter(idx => workbook.sheets(idx).drawings.nonEmpty)
@@ -1332,7 +979,7 @@ object XlsxWriter:
         )
         partsOut += partPath -> OoxmlDrawing.build(keep, embeds.result(), chartRelIds, None)
         val rels = partRels.result()
-        if rels.nonEmpty then relsOut += drawingRelsPathOf(partPath) -> Relationships(rels)
+        if rels.nonEmpty then relsOut += partRelsPathOf(partPath) -> Relationships(rels)
         fresh += partPath
         refs += idx -> drawingRefElem
         relAdds += idx -> Relationship(
@@ -1343,7 +990,7 @@ object XlsxWriter:
 
     def emitSamePathPart(ctx: SourceContext, idx: Int, partPath: String): Unit =
       val sheet = workbook.sheets(idx)
-      val relsPath = drawingRelsPathOf(partPath)
+      val relsPath = partRelsPathOf(partPath)
       val sourceRelsOpt: Option[Relationships] =
         Try(
           withZipFile(ctx.sourcePath)(z => parseOptionalEntry(z, relsPath)(Relationships.fromXml))
@@ -1396,7 +1043,7 @@ object XlsxWriter:
       // rels through the same counter machinery
       val chartRelIds = planChartParts(
         sheet.drawings,
-        ctx.chartSnapshots.getOrElse(idx, Vector.empty),
+        ctx.chartSnapshots.getOrElse(sheet.name, Vector.empty),
         target => {
           relCounter += 1
           val id = s"rId$relCounter"
@@ -1421,7 +1068,7 @@ object XlsxWriter:
     dirtyIndices.foreach { idx =>
       sourceContext match
         case Some(ctx) =>
-          ctx.drawingPathMapping.get(idx) match
+          ctx.drawingPathMapping.get(workbook.sheets(idx).name) match
             case Some(partPath) => emitSamePathPart(ctx, idx, partPath)
             case None =>
               // First drawings on this sheet. Only wire when the worksheet is regenerated (it
@@ -1477,6 +1124,54 @@ object XlsxWriter:
       val zip = use(new ZipFile(path.toFile))
       f(zip)
     })
+
+  /** Excel's comment-part scheme: xl/commentsN.xml pairs with xl/drawings/vmlDrawingN.vml. */
+  private val legacyCommentPathPattern = "^xl/comments(\\d+)\\.xml$".r
+  private val legacyVmlPathPattern = "^xl/drawings/vmlDrawing(\\d+)\\.vml$".r
+
+  /**
+   * VML drawing part path for a sheet's regenerated comments (GH-292). Excel's numbering scheme is
+   * derived from the comment path; foreign comment dialects (openpyxl's xl/comments/comment1.xml)
+   * carry no number, so the sheet's preserved vmlDrawing RELATIONSHIP target is reused — the
+   * regenerated VML then replaces the original part in place instead of orphaning a second copy.
+   * The preserved rels are resolved by the sheet's SOURCE rels path (identity-keyed, GH-315); falls
+   * back to the sheet-index scheme when nothing usable is preserved.
+   */
+  private def vmlPathForSheet(
+    ctx: Option[SourceContext],
+    sourceRelsPath: Option[String],
+    sheetIdx: Int,
+    commentPath: String
+  ): String =
+    commentPath match
+      case legacyCommentPathPattern(num) => s"xl/drawings/vmlDrawing$num.vml"
+      case _ =>
+        (for
+          c <- ctx
+          rels <- sourceRelsPath
+          target <- preservedVmlTarget(c, rels)
+        yield target).getOrElse(s"xl/drawings/vmlDrawing${sheetIdx + 1}.vml")
+
+  /** Resolve the sheet's preserved vmlDrawing relationship target to a normalized xl/ path. */
+  private def preservedVmlTarget(ctx: SourceContext, sourceRelsPath: String): Option[String] =
+    if !ctx.partManifest.contains(sourceRelsPath) then None
+    else
+      withZipFile(ctx.sourcePath)(z => parseOptionalEntry(z, sourceRelsPath)(Relationships.fromXml))
+        .flatMap(_.relationships.find(_.`type` == XmlUtil.relTypeVmlDrawing))
+        .flatMap(rel => normalizeSheetRelTarget(rel.target))
+
+  /**
+   * Normalize a worksheet relationship target (relative "../x", absolute "/xl/x") to an xl/ zip
+   * path — the same rules as the reader's comment/drawing target resolution. None when the target
+   * escapes xl/.
+   */
+  private def normalizeSheetRelTarget(target: String): Option[String] =
+    val cleaned = if target.startsWith("/") then target.drop(1) else target
+    val resolved =
+      if cleaned.startsWith("xl/") || cleaned.startsWith("xl\\") then Paths.get(cleaned)
+      else Paths.get("xl/worksheets").resolve(cleaned)
+    val normalized = resolved.normalize().toString.replace('\\', '/')
+    Option.when(normalized.startsWith("xl/"))(normalized)
 
   /**
    * GH-235: external-hyperlink relationships for a sheet (rIdHL{n} <-> URL), matching the
@@ -1593,6 +1288,25 @@ object XlsxWriter:
    * modified sheets can reference the same indices as unmodified sheets.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  /**
+   * Count shared-string references (sheetData cells with t="s") in a SOURCE worksheet (GH-304).
+   *
+   * Used to subtract a modified sheet's pre-edit contribution from the preserved SST count
+   * attribute, so the sheet's actual post-edit references can be added back. Returns 0 when the
+   * part is missing or unparseable (a new sheet, or a degenerate source).
+   */
+  private def countSourceSstReferences(sourcePath: Path, sheetPath: String): Int =
+    Try(withZipFile(sourcePath)(zip => readZipEntry(zip, sheetPath))) match
+      case Success(Some(xmlString)) =>
+        XmlSecurity
+          .parseSafe(xmlString, sheetPath)
+          .toOption
+          .map { elem =>
+            (elem \ "sheetData" \ "row" \ "c").count(c => (c \ "@t").text == "s")
+          }
+          .getOrElse(0)
+      case _ => 0
+
   private def parsePreservedSST(sourcePath: Path): Option[SharedStrings] =
     Try(withZipFile(sourcePath)(zip => readZipEntry(zip, "xl/sharedStrings.xml"))) match
       case Failure(_) => None
@@ -1621,6 +1335,68 @@ object XlsxWriter:
             val dxfs = (elem \ "dxfs").headOption.collect { case e: Elem => e }
             (Some(elem.attributes), elem.scope, dxfs)
           case None => (None, TopScope, None)
+
+  /**
+   * Conditional-formatting write plan (GH-136).
+   *
+   * @param condFmtBySheet
+   *   the `<conditionalFormatting>` slot for every regenerated sheet (exactly one producer)
+   * @param mergedDxfs
+   *   the `<dxfs>` element for styles.xml: untouched source object when no sheet is cf-dirty,
+   *   source-prefix + appended entries otherwise (append-only — existing indices never move)
+   */
+  private final case class CfWritePlan(
+    condFmtBySheet: Map[Int, Seq[Elem]],
+    mergedDxfs: Option[Elem]
+  )
+
+  /**
+   * Pre-pass: decide per regenerated sheet whether its cf slot is CLEAN (reparse of the preserved
+   * worksheet equals the model — emit today's source elements verbatim, zero trust regression) or
+   * DIRTY (emit from the model via CfCodec), and plan the merged dxf table for the dirty sheets.
+   *
+   * The reparse dirty-gate is self-healing: the comparison is keyed by the SAME preserved part that
+   * would be passed through, so a wrong sheet-path mapping compares unequal → dirty → emit from
+   * model → correct output. A deterministic parser makes reparse-at-write equal parse-at-read for
+   * untouched models. Deletion is honored: a cleared model compares dirty and emits nothing (no
+   * resurrection).
+   */
+  private def planCfWrites(
+    workbook: Workbook,
+    sheetsToRegenerate: Set[Int],
+    preservedWorksheets: Map[Int, XLResult[Option[OoxmlWorksheet]]],
+    preservedDxfs: Option[Elem]
+  ): CfWritePlan =
+    import com.tjclp.xl.ooxml.style.DxfTable
+    import com.tjclp.xl.ooxml.worksheet.CfCodec
+    val sourceDxfChildren: Vector[Elem] =
+      preservedDxfs.map(e => XmlUtil.getChildren(e, "dxf").toVector).getOrElse(Vector.empty)
+    // Per regenerated sheet: Left(verbatim source elems) when clean, Right(sheet) when dirty.
+    val decisions: Vector[(Int, Either[Seq[Elem], Sheet])] =
+      sheetsToRegenerate.toVector.sorted
+        .flatMap(idx => workbook.sheets.lift(idx).map(idx -> _))
+        .map { case (idx, sheet) =>
+          val sourceCf: Option[Seq[Elem]] =
+            preservedWorksheets.get(idx).flatMap(_.toOption).flatten.map(_.conditionalFormatting)
+          sourceCf match
+            case Some(srcElems)
+                if CfCodec.parseAll(srcElems, sourceDxfChildren) == sheet.conditionalFormats =>
+              idx -> Left(srcElems)
+            case _ if sheet.conditionalFormats.isEmpty => idx -> Left(Seq.empty)
+            case _ => idx -> Right(sheet)
+        }
+    // Dxf planning only when some sheet is cf-dirty: collect needed dxfs in
+    // (sheetIdx, blockIdx, ruleIdx) order, reuse typed-equal source indices, dedup-append.
+    val neededDxfs: Vector[com.tjclp.xl.styles.Dxf] =
+      decisions.collect { case (_, Right(sheet)) =>
+        CfCodec.collectDxfs(sheet.conditionalFormats)
+      }.flatten
+    val dxfPlan = DxfTable.plan(preservedDxfs, neededDxfs)
+    val condFmt: Map[Int, Seq[Elem]] = decisions.map {
+      case (idx, Left(verbatim)) => idx -> verbatim
+      case (idx, Right(sheet)) => idx -> CfCodec.toElems(sheet.conditionalFormats, dxfPlan.dxfIds)
+    }.toMap
+    CfWritePlan(condFmt, dxfPlan.merged)
 
   /**
    * Unified write: intelligently regenerates only what changed, preserves the rest.
@@ -1658,6 +1434,22 @@ object XlsxWriter:
         (g, pres, regen)
       case None =>
         (RelationshipGraph.empty, Set.empty[String], Set.empty[String])
+
+    // GH-315: resolve a sheet's SOURCE worksheet part by stable identity (the name as read; the
+    // context re-keys on rename and drops on delete). An empty mapping is a context built without
+    // identity info — fall back to index naming (legacy behavior). A MISS in a populated mapping
+    // means the sheet has no source part (added in-session, or untracked direct surgery): no
+    // preserved metadata and no pre-edit SST contribution — never another sheet's part.
+    def sourceSheetPath(ctx: SourceContext, idx: Int): Option[String] =
+      workbook.sheets.lift(idx).flatMap { sheet =>
+        ctx.sheetPathMapping.get(sheet.name) match
+          case some @ Some(_) => some
+          case None if ctx.sheetPathMapping.isEmpty => Some(graph.pathForSheet(idx))
+          case None => None
+      }
+
+    def sourceSheetRelsPath(ctx: SourceContext, idx: Int): Option[String] =
+      sourceSheetPath(ctx, idx).map(partRelsPathOf)
 
     // Escaping must be applied to every text-bearing worksheet part; preserved sheets can contain
     // dangerous inline strings or shared-string references that would bypass WriterConfig.secure.
@@ -1704,31 +1496,68 @@ object XlsxWriter:
         val newEntries =
           modifiedSheetRefEntries.distinct.filterNot(preservedEntries.contains)
 
+        // GH-304: the count attribute counts REFERENCES, and edits can REMOVE or DUPLICATE
+        // references to existing strings, not just add new ones. Recount the modified sheets'
+        // contribution exactly: preserved sheets keep their counted contribution (original count
+        // minus the modified sheets' pre-edit t="s" cells), while modified sheets contribute one
+        // reference per post-edit text cell (regenerated sheets encode ALL text via the SST).
+        // GH-315: each modified sheet's pre-edit part resolves by IDENTITY — after a deletion the
+        // current index no longer names the right source part.
+        val preEditModifiedRefs = sourceContext
+          .map { ctx =>
+            tracker.modifiedSheets.toVector.sorted
+              .map(idx =>
+                sourceSheetPath(ctx, idx).fold(0)(countSourceSstReferences(ctx.sourcePath, _))
+              )
+              .sum
+          }
+          .getOrElse(0)
+        // GH-315: a DELETED sheet's references leave the workbook with it. Deleted source parts
+        // are the manifest's worksheet parts not claimed by any live sheet (identity-keyed and
+        // rename-stable, so only genuinely deleted parts remain).
+        val deletedSheetRefs = sourceContext
+          .filter(_.modificationTracker.deletedSheets.nonEmpty)
+          .map { ctx =>
+            val claimed = workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet
+            ctx.partManifest.entries.keysIterator
+              .filter(p => p.startsWith("xl/worksheets/") && !p.startsWith("xl/worksheets/_rels/"))
+              .filterNot(claimed)
+              .toVector
+              .sorted
+              .map(countSourceSstReferences(ctx.sourcePath, _))
+              .sum
+          }
+          .getOrElse(0)
+        val exactTotalCount = parsedSST match
+          case Some(preserved) =>
+            math.max(
+              0,
+              preserved.totalCount - preEditModifiedRefs - deletedSheetRefs +
+                modifiedSheetRefEntries.size
+            )
+          case None => modifiedSheetRefEntries.size
+
         if newEntries.nonEmpty then
           // New strings detected → build SST from preserved + new entries only
           // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
           val combinedEntries =
             parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries
 
-          // Total reference count: preserved count + one per REFERENCE of each new string (GH-277)
-          val originalTotalCount = parsedSST.map(_.totalCount).getOrElse(0)
-          val newEntrySet = newEntries.toSet
-          val newStringRefCount = modifiedSheetRefEntries.count(newEntrySet.contains)
-          val combinedTotalCount = originalTotalCount + newStringRefCount
-
-          // Create new SST with combined entries (exact-string index keys, GH-289)
-          val combinedSST = SharedStrings(
-            strings = combinedEntries,
-            indexMap = combinedEntries.zipWithIndex.map {
-              case (Left(s), idx) => s -> idx
-              case (Right(rt), idx) => rt.toPlainText -> idx
-            }.toMap,
-            totalCount = combinedTotalCount
-          )
+          // Create new SST with combined entries — exact-string keys for plain entries (GH-289),
+          // full-run-structure keys for RichText entries (GH-303); exact per-reference total
+          // count for the modified sheets (GH-304)
+          val combinedSST = SharedStrings.fromDedupedEntries(combinedEntries, exactTotalCount)
           (Some(combinedSST), true)
         else
-          // No new strings → copy preserved SST verbatim for byte-perfect preservation
-          (parsedSST, false)
+          parsedSST match
+            case Some(preserved) if preserved.totalCount != exactTotalCount =>
+              // GH-304: same strings, changed reference count → re-emit the SST with the exact
+              // count. Entries are never pruned or reordered: preserved sheets' t="s" indices
+              // must stay valid.
+              (Some(preserved.copy(totalCount = exactTotalCount)), true)
+            case _ =>
+              // No count drift → copy preserved SST verbatim for byte-perfect preservation
+              (parsedSST, false)
       else
         // No source SST - generate if policy allows
         val generated = config.sstPolicy match
@@ -1757,12 +1586,74 @@ object XlsxWriter:
       case Some(ctx) => parsePreservedStylesMetadata(ctx.sourcePath)
       case None => (None, TopScope, None)
 
-    val styles = OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, preservedDxfs)
+    // GH-136: parse each regenerated sheet's preserved worksheet ONCE — the cf pre-pass and the
+    // sheet loop below both consume this cache (no double parse of large worksheets).
+    // GH-315: the source part resolves by identity, so after a delete/reorder every sheet merges
+    // ITS OWN preserved metadata (cols, views, drawing refs), not a positional neighbor's.
+    val preservedWorksheets: Map[Int, XLResult[Option[OoxmlWorksheet]]] =
+      sourceContext match
+        case Some(ctx) =>
+          sheetsToRegenerate.toVector.sorted
+            .filter(workbook.sheets.indices.contains)
+            .map(idx =>
+              idx -> (sourceSheetPath(ctx, idx) match
+                case Some(path) => parsePreservedWorksheet(ctx.sourcePath, path)
+                case None => Right(None))
+            )
+            .toMap
+        case None => Map.empty
+
+    // GH-136: plan conditional-formatting emission + dxf-table merge BEFORE writeStyles —
+    // styles.xml is written before the sheet loop, so dxf indices must be assigned up front.
+    val cfPlan = planCfWrites(workbook, sheetsToRegenerate, preservedWorksheets, preservedDxfs)
+
+    val styles =
+      OoxmlStyles(styleIndex, preservedStylesAttrs, preservedStylesScope, cfPlan.mergedDxfs)
 
     // Build comments data and VML drawings
-    val (commentsBySheet, sheetsWithComments) = buildCommentsData(workbook)
+    val commentsBySheet = buildCommentsData(workbook)
     val vmlDrawings = commentsBySheet.map { case (idx, comments) =>
       idx -> VmlDrawing.generateForComments(comments, idx)
+    }
+
+    // GH-315: ONE deterministic comment-part assignment for every regenerated sheet that emits
+    // comments — the rels/emission sites, the preserved-VML skip set (the GH-292 mirroring
+    // requirement) and the content-type registration below all consume THIS map. Identity-mapped
+    // sheets keep their source part; unmapped sheets (fresh comments) allocate numbers ABOVE
+    // everything any manifest comment/VML part or mapping value claims — the drawing layer's
+    // maxDrawingNum+1 precedent — so a fresh comments{n}.xml (and its paired vmlDrawing{n}.vml)
+    // can never collide with a surviving sheet's identity-mapped part. In the no-source case the
+    // counter starts at 1, yielding Excel's own sequential numbering across commented sheets.
+    val commentPathBySheet: Map[Int, String] =
+      val mapping = sourceContext.map(_.commentPathMapping).getOrElse(Map.empty)
+      val claimedPaths =
+        sourceContext.map(_.partManifest.entries.keySet).getOrElse(Set.empty) ++ mapping.values
+      val maxClaimedNum = claimedPaths
+        .flatMap {
+          case legacyCommentPathPattern(n) => Some(n.toInt)
+          case legacyVmlPathPattern(n) => Some(n.toInt)
+          case _ => None
+        }
+        .maxOption
+        .getOrElse(0)
+      sheetsToRegenerate.toVector.sorted
+        .filter(commentsBySheet.contains)
+        .foldLeft((Map.empty[Int, String], maxClaimedNum + 1)) { case ((acc, next), idx) =>
+          workbook.sheets.lift(idx).flatMap(s => mapping.get(s.name)) match
+            case Some(mapped) => (acc.updated(idx, mapped), next)
+            case None => (acc.updated(idx, s"xl/comments$next.xml"), next + 1)
+        }
+        ._1
+
+    // The exact VML parts those assignments emit (legacy-numbered comment parts pair with
+    // vmlDrawing{n}.vml; foreign dialects resolve through the preserved rels, GH-292).
+    val vmlPathBySheet: Map[Int, String] = commentPathBySheet.map { case (idx, commentPath) =>
+      idx -> vmlPathForSheet(
+        sourceContext,
+        sourceContext.flatMap(sourceSheetRelsPath(_, idx)),
+        idx,
+        commentPath
+      )
     }
 
     // Build table data
@@ -1779,13 +1670,32 @@ object XlsxWriter:
         case Some(ctx) if !tracker.modifiedMetadata => parsePreservedStructure(ctx.sourcePath)
         case _ => (None, None, None, None)
 
+    // GH-314: the preserved [Content_Types].xml matters even when metadata changed — exotic
+    // preserved parts (pivots, custom XML, macro payloads) still ride the verbatim copy loop and
+    // must stay registered. Parsed here so the regenerate-from-minimal branch below can reconcile
+    // instead of dropping their overrides.
+    val preservedContentTypesForReconcile: Option[ContentTypes] =
+      preservedContentTypes.orElse {
+        sourceContext.flatMap { ctx =>
+          withZipFile(ctx.sourcePath) { zip =>
+            parseOptionalEntry(zip, "[Content_Types].xml")(ContentTypes.fromXml)
+          }
+        }
+      }
+
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
         // Update sheets in preserved structure (names/order/visibility may have changed).
         // Named ranges (definedNames) ride through verbatim here (byte-identical). Authoring a
         // name marks metadata modified, which routes to the fromDomain branch below (GH-236).
-        val updated = preserved.updateSheets(workbook.sheets, workbook.metadata.sheetStates)
+        // GH-294: the model's activeSheetIndex is overlaid on the preserved bookViews (model
+        // wins; unmodeled view attributes ride through), clamped like the fromDomain path.
+        val updated = preserved
+          .updateSheets(workbook.sheets, workbook.metadata.sheetStates)
+          .withActiveTab(
+            OoxmlWorkbook.clampActiveTab(workbook.activeSheetIndex, workbook.sheets.size)
+          )
         // GH-259: print names (_xlnm.Print_Area/_xlnm.Print_Titles) are modeled on Sheet.pageSetup,
         // so a sheet edit can change them WITHOUT marking metadata modified. Reconcile: keep the
         // preserved definedNames bytes when the model agrees, otherwise regenerate the element.
@@ -1806,9 +1716,9 @@ object XlsxWriter:
     val appPropsXml = DocProps.buildAppXml(workbook.metadata)
 
     // Content types: preserve from source when available, otherwise generate minimal.
-    // IMPORTANT: Don't call withCommentOverrides when preserving - the source already has
-    // correct comment entries with Excel's sequential numbering (comments1.xml, comments2.xml...)
-    // which differs from sheet-index-based numbering.
+    // GH-315: comment/VML registrations follow the EMITTED part paths (identity-mapped or freshly
+    // allocated) — withEmittedCommentParts is conservative, so source-declared parts ride through
+    // byte-identical and only genuinely fresh parts add overrides.
     val contentTypes = preservedContentTypes match
       case Some(preserved) =>
         // Add sharedStrings override if we're generating it but source didn't have it
@@ -1818,7 +1728,6 @@ object XlsxWriter:
               preserved.overrides + ("/xl/sharedStrings.xml" -> XmlUtil.ctSharedStrings)
             )
           else preserved
-        // Only add table overrides (comments already in preserved Content_Types).
         // GH-221: source drawing overrides/media defaults are already in the preserved types;
         // register only fresh parts and the media extensions this write touches (idempotent).
         withSst
@@ -1827,24 +1736,34 @@ object XlsxWriter:
           .withDrawingOverrides(drawingPlan.freshPartPaths)
           .withChartOverrides(drawingPlan.freshChartPaths)
           .withImageDefaults(drawingPlan.imageDefaults)
+          .withEmittedCommentParts(commentPathBySheet.values.toSet, vmlPathBySheet.values.toSet)
       case None =>
         // GH-221: this branch regenerates [Content_Types].xml from scratch while preserved
         // drawing/media parts still ride the copy loop, so register EVERY drawing part shipping
         // (manifest + fresh) and every known media extension (manifest + written). GH-222: chart
         // parts follow the same allPartPaths pattern.
-        ContentTypes
+        val model = ContentTypes
           .minimal(
             hasStyles = true,
             hasSharedStrings = sharedStringsInOutput,
-            sheetCount = workbook.sheets.size,
-            sheetsWithComments = sheetsWithComments
+            sheetCount = workbook.sheets.size
           )
-          .withCommentOverrides(sheetsWithComments)
+          .withEmittedCommentParts(commentPathBySheet.values.toSet, vmlPathBySheet.values.toSet)
           .withTableOverrides(totalTableCount)
           .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
           .withDrawingOverrides(drawingPlan.allPartPaths)
           .withChartOverrides(drawingPlan.allChartPartPaths)
           .withImageDefaults(drawingPlan.manifestImageDefaults ++ drawingPlan.imageDefaults)
+        // GH-314: a source can still exist here (metadata-modified write) — merge its preserved
+        // content types so exotic parts riding the copy loop keep their registrations. docProps
+        // reconciliation is re-applied AFTER the merge: it removes stale preserved overrides for
+        // docProps the model no longer emits (GH-242), which a plain union would resurrect.
+        preservedContentTypesForReconcile match
+          case Some(preserved) =>
+            ContentTypes
+              .reconcile(preserved, model)
+              .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
+          case None => model
 
     val rootRels = preservedRootRels
       .getOrElse(Relationships.root())
@@ -1907,15 +1826,17 @@ object XlsxWriter:
       // Write sheets: regenerate modified, copy unmodified (if source available)
       workbook.sheets.zipWithIndex.foreach { case (sheet, idx) =>
         if sheetsToRegenerate.contains(idx) then
-          // Regenerate modified sheet with preserved metadata (if available)
-          val sheetPath = graph.pathForSheet(idx)
-          val preservedMetadata = sourceContext
-            .map(ctx => parsePreservedWorksheet(ctx.sourcePath, sheetPath))
-            .getOrElse(Right(None)) match
+          // Regenerate modified sheet with preserved metadata (if available, via the GH-136
+          // pre-pass cache — parsed once, consumed by both the cf plan and this loop).
+          // GH-315: the sheet's SOURCE parts (worksheet metadata, rels) resolve by identity; the
+          // OUTPUT entry names follow the current index.
+          val sourcePathOpt = sourceContext.flatMap(sourceSheetPath(_, idx))
+          val preservedMetadata = preservedWorksheets.getOrElse(idx, Right(None)) match
             case Right(value) => value
             case Left(err) =>
               throw new IllegalStateException(
-                s"Failed to parse preserved worksheet $sheetPath: ${err.message}"
+                s"Failed to parse preserved worksheet " +
+                  s"${sourcePathOpt.getOrElse(graph.pathForSheet(idx))}: ${err.message}"
               )
           val remapping = sheetRemappings.getOrElse(idx, Map.empty)
 
@@ -1952,9 +1873,10 @@ object XlsxWriter:
           // For SaxStax backend with no preserved metadata, use direct SAX emission
           // (bypasses intermediate OOXML types for 5-7x performance improvement).
           // GH-221: sheets with drawings force the OoxmlWorksheet path — DirectSaxEmitter has no
-          // <drawing> support yet (deferred).
+          // <drawing> support yet (deferred). GH-136: same for conditional formats.
           (config.backend, preservedMetadata) match
-            case (XmlBackend.SaxStax, None) if sheet.drawings.isEmpty =>
+            case (XmlBackend.SaxStax, None)
+                if sheet.drawings.isEmpty && sheet.conditionalFormats.isEmpty =>
               writeWorksheetDirect(
                 zip,
                 s"xl/worksheets/sheet${idx + 1}.xml",
@@ -1974,19 +1896,24 @@ object XlsxWriter:
                   preservedMetadata,
                   tablePartsXml,
                   escapeFormulas,
-                  drawingPlan.drawingRefs.get(idx)
+                  drawingPlan.drawingRefs.get(idx),
+                  condFmt = Some(cfPlan.condFmtBySheet.getOrElse(idx, Seq.empty))
                 )
               writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
 
           // For modified sheets:
           // 1. Copy relationships from source (preserves printerSettings, drawings, customProperty)
           // 2. Regenerate comments/VML from domain model (handles comment add/remove/modify)
+          // GH-315: the OUTPUT rels entry is named by current index; the PRESERVED rels are
+          // looked up by the sheet's identity-resolved source path (they differ after deletion
+          // or reorder). The comment part comes from the per-write assignment (identity-mapped
+          // or collision-free fresh allocation); the index fallback is only reachable for sheets
+          // that emit no comments, where the value is never written.
           val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
-          val commentPath = sourceContext
-            .flatMap(_.commentPathMapping.get(idx))
-            .getOrElse(s"xl/comments${idx + 1}.xml")
-          val commentFileNum = commentPath.stripPrefix("xl/comments").stripSuffix(".xml")
-          val vmlPath = s"xl/drawings/vmlDrawing$commentFileNum.vml"
+          val sourceRelsPathOpt = sourceContext.flatMap(sourceSheetRelsPath(_, idx))
+          val commentPath = commentPathBySheet.getOrElse(idx, s"xl/comments${idx + 1}.xml")
+          // GH-292: foreign comment dialects resolve the VML target through the preserved rels
+          val vmlPath = vmlPathForSheet(sourceContext, sourceRelsPathOpt, idx, commentPath)
 
           val hasComments = commentsBySheet.contains(idx)
           val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
@@ -1996,22 +1923,45 @@ object XlsxWriter:
           // Otherwise regenerate minimal relationships. Authored hyperlinks (hlRels) are merged
           // in, as is a first-drawing rel (rIdDr1, GH-221) when this sheet gained a fresh part.
           val drawingRelAdd = drawingPlan.sheetRelAdditions.get(idx)
-          sourceContext match
-            case Some(ctx) if ctx.partManifest.contains(relsPath) =>
-              if hlRels.isEmpty && drawingRelAdd.isEmpty then
-                copyPreservedPart(ctx.sourcePath, relsPath, zip)
+          // GH-315: a sheet with preserved rels gaining its FIRST comments needs comment+VML
+          // rels appended — the source rels predate them. (A mapped comment part implies the
+          // source rels already reference it: the reader resolved the part THROUGH those rels,
+          // GH-292 — so only an unmapped emission appends.)
+          val needsCommentRels = hasComments &&
+            sourceContext.flatMap(_.commentPathMapping.get(sheet.name)).isEmpty
+          (sourceContext, sourceRelsPathOpt) match
+            case (Some(ctx), Some(sourceRelsPath)) if ctx.partManifest.contains(sourceRelsPath) =>
+              if hlRels.isEmpty && drawingRelAdd.isEmpty && !needsCommentRels &&
+                sourceRelsPath == relsPath
+              then copyPreservedPart(ctx.sourcePath, relsPath, zip)
               else
-                // Merge authored hyperlink rels into the preserved sheet rels (parse + append)
+                // Merge authored hyperlink rels into the preserved sheet rels (parse + append);
+                // also the path for source rels riding to a DIFFERENT output slot (GH-315).
                 val preserved = withZipFile(ctx.sourcePath) { z =>
-                  parseOptionalEntry(z, relsPath)(Relationships.fromXml)
+                  parseOptionalEntry(z, sourceRelsPath)(Relationships.fromXml)
                 }.getOrElse(Relationships(Seq.empty))
                 // Drop the source's hyperlink rels (we regenerate them from the model) to avoid
                 // orphans, but keep everything else (printerSettings, drawings, ...).
                 val kept = preserved.relationships.filterNot(_.`type` == XmlUtil.relTypeHyperlink)
+                val commentRelAdds =
+                  if needsCommentRels && !kept.exists(_.`type` == XmlUtil.relTypeComments) then
+                    Seq(
+                      Relationship(
+                        "rIdCmt1",
+                        XmlUtil.relTypeComments,
+                        s"../${commentPath.stripPrefix("xl/")}"
+                      ),
+                      Relationship(
+                        "rIdVml1",
+                        XmlUtil.relTypeVmlDrawing,
+                        s"../${vmlPath.stripPrefix("xl/")}"
+                      )
+                    )
+                  else Seq.empty
                 writePart(
                   zip,
                   relsPath,
-                  Relationships(kept ++ hlRels ++ drawingRelAdd.toList),
+                  Relationships(kept ++ hlRels ++ drawingRelAdd.toList ++ commentRelAdds),
                   config
                 )
             case _
@@ -2036,18 +1986,21 @@ object XlsxWriter:
             }
           }
         else
-          // Copy unmodified sheet from source (only if source available)
+          // Copy unmodified sheet from source (only if source available). Only reachable with
+          // stable indices — deletion/reorder/metadata changes force full regeneration — but the
+          // source paths resolve by identity anyway (GH-315); the legacy index fallback covers
+          // untracked direct surgery exactly as before.
           sourceContext.foreach { ctx =>
-            val sheetPath = graph.pathForSheet(idx)
+            val sheetPath = sourceSheetPath(ctx, idx).getOrElse(graph.pathForSheet(idx))
             copyPreservedPart(ctx.sourcePath, sheetPath, zip)
 
             // Copy comments and relationships using source's actual paths (from mapping)
-            ctx.commentPathMapping.get(idx).foreach { commentPath =>
+            ctx.commentPathMapping.get(sheet.name).foreach { commentPath =>
               if ctx.partManifest.contains(commentPath) then
                 copyPreservedPart(ctx.sourcePath, commentPath, zip)
             }
 
-            val relsPath = s"xl/worksheets/_rels/sheet${idx + 1}.xml.rels"
+            val relsPath = partRelsPathOf(sheetPath)
             if ctx.partManifest.contains(relsPath) then
               copyPreservedPart(ctx.sourcePath, relsPath, zip)
           }
@@ -2073,18 +2026,26 @@ object XlsxWriter:
       // (or omit it if comments were removed); skip drawing parts superseded by same-path
       // regeneration (GH-221)
       sourceContext.foreach { ctx =>
-        val vmlPathsToSkip = sheetsToRegenerate.flatMap { idx =>
-          ctx.commentPathMapping.get(idx).map { commentPath =>
-            val fileNum = commentPath.stripPrefix("xl/comments").stripSuffix(".xml")
-            s"xl/drawings/vmlDrawing$fileNum.vml"
-          }
+        val vmlPathsToSkip: Set[String] = sheetsToRegenerate.flatMap { idx =>
+          workbook.sheets.lift(idx) match
+            case None => Set.empty[String]
+            case Some(sheet) =>
+              val sourceRels = sourceSheetRelsPath(ctx, idx)
+              val mapped = ctx.commentPathMapping.get(sheet.name)
+              // GH-292/GH-315: mirror the regeneration paths EXACTLY, or the preserved copy
+              // ships too — the sheet's source-numbered VML (comment removal must drop it) AND
+              // the emission target from the SAME per-write assignment the emission consumed.
+              val emitted = commentPathBySheet.get(idx)
+              (mapped.toList ++ emitted.toList)
+                .toSet[String]
+                .map(cp => vmlPathForSheet(Some(ctx), sourceRels, idx, cp))
         }
 
         preservableParts.foreach { path =>
-          val isVmlDrawing = path.startsWith("xl/drawings/vmlDrawing") && path.endsWith(".vml")
+          // vmlPathsToSkip holds the exact regeneration targets — including foreign-named VML
+          // parts like openpyxl's commentsDrawing1.vml (GH-292), so no filename-prefix guard
           val shouldSkip =
-            (isVmlDrawing && vmlPathsToSkip.contains(path)) ||
-              drawingPlan.skipPaths.contains(path)
+            vmlPathsToSkip.contains(path) || drawingPlan.skipPaths.contains(path)
 
           if !shouldSkip then copyPreservedPart(ctx.sourcePath, path, zip)
         }

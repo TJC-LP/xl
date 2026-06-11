@@ -326,15 +326,28 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
    *   Optional tableParts XML element (generated from Sheet.tables)
    * @param escapeFormulas
    *   If true, escape text values starting with =, +, -, @ to prevent formula injection
+   * @param condFmt
+   *   Conditional-formatting slot (GH-136): `Some(elems)` is the planned emission (clean → source
+   *   elements verbatim, dirty/fresh → CfCodec-generated); `None` falls back to the preserved
+   *   source elements (legacy direct-caller behavior)
    */
   def fromDomainWithSST(
     sheet: Sheet,
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int] = Map.empty,
     tableParts: Option[Elem] = None,
-    escapeFormulas: Boolean = false
+    escapeFormulas: Boolean = false,
+    condFmt: Option[Seq[Elem]] = None
   ): OoxmlWorksheet =
-    fromDomainWithMetadata(sheet, sst, styleRemapping, None, tableParts, escapeFormulas)
+    fromDomainWithMetadata(
+      sheet,
+      sst,
+      styleRemapping,
+      None,
+      tableParts,
+      escapeFormulas,
+      condFmt = condFmt
+    )
 
   /**
    * Create worksheet from domain Sheet, preserving metadata from original worksheet XML.
@@ -358,6 +371,11 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
    *   Generated `<drawing r:id="..."/>` element for a sheet acquiring its FIRST drawing part
    *   (GH-221); takes priority over any preserved drawing element. None preserves the source
    *   element (the same-path regeneration case).
+   * @param condFmt
+   *   Conditional-formatting slot (GH-136): exactly one producer per sheet. The unified writer
+   *   always passes `Some(elems)` from its cf plan (cf-clean → preserved source elements verbatim,
+   *   cf-dirty/fresh → CfCodec-generated; `Some(Seq.empty)` actively clears). `None` falls back to
+   *   the preserved elements (legacy direct-caller behavior).
    */
   def fromDomainWithMetadata(
     sheet: Sheet,
@@ -366,7 +384,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     preservedMetadata: Option[OoxmlWorksheet] = None,
     tableParts: Option[Elem] = None,
     escapeFormulas: Boolean = false,
-    drawingRef: Option[Elem] = None
+    drawingRef: Option[Elem] = None,
+    condFmt: Option[Seq[Elem]] = None
   ): OoxmlWorksheet =
     // Build a map of row indices to preserved row attributes
     val preservedRowAttrs = preservedMetadata
@@ -522,7 +541,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           buildSheetViewsElem(preserved.sheetViews, sheet.freezePane, sheet.viewSettings),
           preserved.sheetFormatPr,
           generatedCols.orElse(preserved.cols), // Prefer domain props over preserved XML
-          preserved.conditionalFormatting,
+          condFmt.getOrElse(preserved.conditionalFormatting), // GH-136: planned slot wins
           preserved.printOptions,
           preserved.rowBreaks,
           preserved.colBreaks,
@@ -553,6 +572,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           dimension = calculatedDimension,
           sheetViews = buildSheetViewsElem(None, sheet.freezePane, sheet.viewSettings),
           cols = generatedCols,
+          conditionalFormatting = condFmt.getOrElse(Seq.empty), // GH-136: fresh workbooks get cf
           pageMargins = buildPageMarginsElem(sheet.pageSetup),
           pageSetup = mergePageSetupElem(None, sheet.pageSetup),
           headerFooter = mergeHeaderFooterElem(None, sheet.pageSetup),

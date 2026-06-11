@@ -40,7 +40,16 @@ import openpyxl
 from openpyxl.chart import BarChart, Reference, ScatterChart, Series as ChartSeries
 from openpyxl.comments import Comment
 from openpyxl.drawing.image import Image
+from openpyxl.formatting.rule import (
+    CellIsRule,
+    ColorScaleRule,
+    DataBarRule,
+    FormulaRule,
+    IconSetRule,
+    Rule,
+)
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.styles.differential import DifferentialStyle
 from openpyxl.utils import get_column_letter
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -289,6 +298,88 @@ def gen_comments_hyperlinks() -> Path:
     return save(wb, "comments-hyperlinks.xlsx")
 
 
+def gen_condformat() -> Path:
+    """Conditional formatting (GH-136): the six typed rule families + iconSet (Preserved).
+
+    Exercises both dxf fill dialects (openpyxl writes patternType="solid" with
+    fgColor+bgColor), stopIfTrue, a 3-point colorScale, a plain dataBar, top10,
+    containsText with openpyxl's canonical SEARCH formula, a multi-range sqref,
+    and an iconSet that must ride through xl's CfRule.Preserved verbatim.
+    """
+    wb = new_workbook()
+    ws = wb.active
+    ws.title = "CondFmt"
+    for i, v in enumerate([12, 250, 87, 101, 3, 999, 45, 150], start=2):
+        ws[f"B{i}"] = v
+        ws[f"C{i}"] = v * 2
+        ws[f"D{i}"] = v % 97
+        ws[f"F{i}"] = v + 1
+        ws[f"G{i}"] = v - 1
+    for i, t in enumerate(
+        ["todo: ship", "done", "todo later", "ok", "todone", "x", "todo", "none"], start=2
+    ):
+        ws[f"E{i}"] = t
+    for i, v in enumerate([5, 10, 15, 20], start=2):
+        ws[f"H{i}"] = v
+        ws[f"J{i}"] = v * 3
+
+    red_text = Font(color="FF9C0006", bold=True)
+    pink = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
+    yellow = PatternFill(start_color="FFFFEB9C", end_color="FFFFEB9C", fill_type="solid")
+
+    # 1+2. Two rules on the SAME range: cellIs+dxf, then expression with stopIfTrue.
+    ws.conditional_formatting.add(
+        "B2:B9",
+        CellIsRule(operator="greaterThan", formula=["100"], fill=pink, font=red_text),
+    )
+    ws.conditional_formatting.add(
+        "B2:B9",
+        FormulaRule(formula=["$B2>AVERAGE($B$2:$B$9)"], stopIfTrue=True, fill=yellow),
+    )
+    # 3. 3-point color scale.
+    ws.conditional_formatting.add(
+        "C2:C9",
+        ColorScaleRule(
+            start_type="min",
+            start_color="FFF8696B",
+            mid_type="percentile",
+            mid_value=50,
+            mid_color="FFFFEB84",
+            end_type="max",
+            end_color="FF63BE7B",
+        ),
+    )
+    # 4. Data bar (no minLength/maxLength so it stays inside xl's typed fence).
+    ws.conditional_formatting.add(
+        "D2:D9", DataBarRule(start_type="min", end_type="max", color="FF638EC6")
+    )
+    # 5. containsText with the canonical SEARCH formula against the range's top-left.
+    ws.conditional_formatting.add(
+        "E2:E9",
+        Rule(
+            type="containsText",
+            operator="containsText",
+            text="todo",
+            formula=['NOT(ISERROR(SEARCH("todo",E2)))'],
+            dxf=DifferentialStyle(font=red_text, fill=pink),
+        ),
+    )
+    # 6. top10 (rank 3) with a dxf.
+    ws.conditional_formatting.add(
+        "F2:F9", Rule(type="top10", rank=3, dxf=DifferentialStyle(fill=yellow))
+    )
+    # 7. iconSet: outside xl's typed fence - pins CfRule.Preserved verbatim round-trip.
+    ws.conditional_formatting.add(
+        "G2:G9", IconSetRule("3Arrows", "percent", [0, 33, 67])
+    )
+    # 8. Multi-range sqref (space-separated) with a between rule.
+    ws.conditional_formatting.add(
+        "H2:H5 J2:J5",
+        CellIsRule(operator="between", formula=["8", "40"], fill=pink),
+    )
+    return save(wb, "condformat.xlsx")
+
+
 def convert_with_libreoffice(sources: list[Path]) -> None:
     """Convert fixtures through LibreOffice headless -> *-lo.xlsx variants."""
     soffice = shutil.which("soffice") or "/usr/local/bin/soffice"
@@ -340,10 +431,11 @@ def main() -> int:
     gen_chart_scatter()
     gen_image()
     gen_comments_hyperlinks()
+    condformat = gen_condformat()
     if args.skip_lo:
         print("  --skip-lo: keeping committed *-lo.xlsx files")
     else:
-        convert_with_libreoffice([small, styled, formulas])
+        convert_with_libreoffice([small, styled, formulas, condformat])
 
     total = sum(f.stat().st_size for f in FIXTURES_DIR.glob("*.xlsx"))
     print(f"total corpus size: {total} bytes")

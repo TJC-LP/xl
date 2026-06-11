@@ -830,7 +830,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   private def writeWorksheetFooter(out: java.io.OutputStream): Unit =
     out.write("</sheetData></worksheet>".getBytes(StandardCharsets.UTF_8))
 
-  // Helper: Sync version of writeStaticParts for use in streaming writes.
+  // Helper: Write static OOXML parts (single sheet) for streaming writes.
   // hasSharedStrings declares the SST up front (the part itself is emitted after the worksheets);
   // styles carries the GH-223 style table (OoxmlStyles.minimal when unstyled).
   private def writeStaticPartsSync(
@@ -1150,7 +1150,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       finally zip.close()
     }
 
-  // Helper: Sync version of writeStaticPartsMulti
+  // Helper: Write static OOXML parts (multiple sheets) for streaming writes
   private def writeStaticPartsMultiSync(
     zip: ZipOutputStream,
     sheets: Seq[(String, Int)],
@@ -1289,112 +1289,6 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       sheet = Sheet(name, cells.map(c => c.ref -> c).toMap)
     yield sheet
 
-  // Helper: Write static OOXML parts to ZIP
-  private def writeStaticParts(
-    zip: ZipOutputStream,
-    sheetName: String,
-    sheetIndex: Int,
-    config: com.tjclp.xl.ooxml.WriterConfig
-  ): F[Unit] =
-    import com.tjclp.xl.ooxml.*
-    import com.tjclp.xl.addressing.SheetName
-
-    val contentTypes =
-      ContentTypes.forSheetIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
-    val rootRels = Relationships.root()
-    val workbookRels =
-      Relationships.workbookWithIndices(Seq(sheetIndex), hasStyles = true, hasSharedStrings = false)
-
-    // Create minimal workbook with one sheet (use provided sheetIndex)
-    val ooxmlWb = OoxmlWorkbook(
-      sheets = Vector(SheetRef(SheetName.unsafe(sheetName), sheetIndex, "rId1"))
-    )
-
-    // Minimal styles
-    val styles = OoxmlStyles.minimal
-
-    for
-      _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
-      _ <- writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
-      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
-      _ <- writePart(zip, "xl/styles.xml", styles.toXml, config)
-    yield ()
-
-  // Helper: Write static OOXML parts for multiple sheets
-  private def writeStaticPartsMulti(
-    zip: ZipOutputStream,
-    sheets: Seq[(String, Int)], // (name, sheetIndex)
-    config: com.tjclp.xl.ooxml.WriterConfig
-  ): F[Unit] =
-    import com.tjclp.xl.ooxml.*
-    import com.tjclp.xl.addressing.SheetName
-
-    val contentTypes = ContentTypes.forSheetIndices(
-      sheetIndices = sheets.map(_._2),
-      hasStyles = true,
-      hasSharedStrings = false
-    )
-    val rootRels = Relationships.root()
-    val workbookRels = Relationships.workbook(
-      sheetCount = sheets.size,
-      hasStyles = true,
-      hasSharedStrings = false
-    )
-
-    // Create workbook with all sheets
-    val sheetRefs = sheets.map { case (name, idx) =>
-      SheetRef(SheetName.unsafe(name), idx, s"rId$idx")
-    }
-    val ooxmlWb = OoxmlWorkbook(sheets = sheetRefs)
-
-    // Minimal styles
-    val styles = OoxmlStyles.minimal
-
-    for
-      _ <- writePart(zip, "[Content_Types].xml", contentTypes.toXml, config)
-      _ <- writePart(zip, "_rels/.rels", rootRels.toXml, config)
-      _ <- writePart(zip, "xl/workbook.xml", ooxmlWb.toXml, config)
-      _ <- writePart(zip, "xl/_rels/workbook.xml.rels", workbookRels.toXml, config)
-      _ <- writePart(zip, "xl/styles.xml", styles.toXml, config)
-    yield ()
-
-  // Helper: Write a single XML part to ZIP
-  private def writePart(
-    zip: ZipOutputStream,
-    entryName: String,
-    xml: scala.xml.Elem,
-    config: com.tjclp.xl.ooxml.WriterConfig
-  ): F[Unit] =
-    Sync[F].delay {
-      import com.tjclp.xl.ooxml.{XmlUtil, Compression}
-
-      // Use config for XML formatting
-      val xmlString = if config.prettyPrint then XmlUtil.prettyPrint(xml) else XmlUtil.compact(xml)
-      val bytes = xmlString.getBytes(StandardCharsets.UTF_8)
-
-      val entry = new ZipEntry(entryName)
-      entry.setMethod(config.compression.zipMethod)
-
-      // For STORED method, must set size and CRC before writing
-      // For DEFLATED, ZipOutputStream computes these automatically
-      config.compression match
-        case Compression.Stored =>
-          entry.setSize(bytes.length)
-          entry.setCompressedSize(bytes.length)
-          // Calculate CRC32
-          val crc = new CRC32()
-          crc.update(bytes)
-          entry.setCrc(crc.getValue)
-        case Compression.Deflated =>
-          () // ZipOutputStream handles automatically
-
-      zip.putNextEntry(entry)
-      zip.write(bytes)
-      zip.closeEntry()
-    }
-
-  // Helper: Find sheet index by name from workbook.xml
 object ExcelIO:
   /** Create default ExcelIO instance */
   def instance[F[_]: Async]: ExcelIO[F] = new ExcelIO[F](_ => Async[F].unit)

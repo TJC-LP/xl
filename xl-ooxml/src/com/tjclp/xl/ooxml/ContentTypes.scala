@@ -24,6 +24,28 @@ case class ContentTypes(
         )
       copy(overrides = overrides ++ overridesToAdd)
 
+  /**
+   * Register the comment + VML parts a write actually EMITS, by exact part path (GH-315): fresh
+   * comment parts allocate numbers above everything the source claims, so index-derived overrides
+   * can name the wrong part. Conservative — an Override is added only when the part is not already
+   * covered (an existing Override; for VML, also a matching extension Default) — so preserved
+   * content types ride through byte-identical when the source already declared the part.
+   */
+  def withEmittedCommentParts(commentPaths: Set[String], vmlPaths: Set[String]): ContentTypes =
+    val commentAdds = commentPaths
+      .filterNot(p => overrides.contains(s"/$p"))
+      .map(p => s"/$p" -> ctComments)
+    val vmlAdds = vmlPaths
+      .filterNot { p =>
+        overrides.contains(s"/$p") ||
+        ContentTypes
+          .extensionOf(p)
+          .exists(ext => defaults.keysIterator.exists(_.equalsIgnoreCase(ext)))
+      }
+      .map(p => s"/$p" -> ctVmlDrawing)
+    if commentAdds.isEmpty && vmlAdds.isEmpty then this
+    else copy(overrides = overrides ++ commentAdds ++ vmlAdds)
+
   def withTableOverrides(tableCount: Int): ContentTypes =
     if tableCount == 0 then this
     else
@@ -150,6 +172,28 @@ object ContentTypes extends XmlReadable[ContentTypes]:
       overrides = baseOverrides ++ stylesOverride ++ sstOverride
     )
 
+  /**
+   * Reconcile a PRESERVED [Content_Types].xml with the MODEL-required content types (GH-314).
+   *
+   * Used when a write regenerates the structural parts (metadata-modified surgical writes) but
+   * exotic preserved parts (pivots, custom XML, macro payloads) still ride the verbatim copy loop:
+   * their registrations must survive, or the package is corrupted.
+   *
+   * Union of Defaults and Overrides from both sides; the model wins on conflict — it knows exactly
+   * which worksheets/styles/sharedStrings/comments/tables ship — EXCEPT `/xl/workbook.xml`, whose
+   * content type encodes the package dialect (macro-enabled, template) that the domain model does
+   * not track.
+   */
+  def reconcile(preserved: ContentTypes, model: ContentTypes): ContentTypes =
+    val workbookDialect =
+      preserved.overrides.get(workbookPartName).map(workbookPartName -> _)
+    ContentTypes(
+      defaults = preserved.defaults ++ model.defaults,
+      overrides = preserved.overrides ++ model.overrides ++ workbookDialect
+    )
+
+  private val workbookPartName = "/xl/workbook.xml"
+
   def fromXml(elem: Elem): Either[String, ContentTypes] =
     val defaults = getChildren(elem, "Default").map { e =>
       for
@@ -193,3 +237,9 @@ object ContentTypes extends XmlReadable[ContentTypes]:
     (1 to tableCount).map { idx =>
       s"/xl/tables/table$idx.xml" -> ctTable
     }
+
+  /** File extension of a zip part path ("xl/drawings/vmlDrawing2.vml" -> "vml"). */
+  private def extensionOf(path: String): Option[String] =
+    val slash = path.lastIndexOf('/')
+    val dot = path.lastIndexOf('.')
+    Option.when(dot > slash && dot < path.length - 1)(path.substring(dot + 1))

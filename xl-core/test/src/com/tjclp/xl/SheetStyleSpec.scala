@@ -199,8 +199,14 @@ class SheetStyleSpec extends FunSuite:
       })
       .put(ref"A1", CellValue.Text("Updated Link"))
 
-    // Comment and hyperlink should be preserved
-    assertEquals(sheet(ref"A1").comment, Some("Important note"), "Comment should be preserved")
+    // GH-295: the legacy Cell.comment field is converted into Sheet.comments (the serialized
+    // store) on write-back; the hyperlink stays on the cell.
+    assertEquals(
+      sheet.getComment(ref"A1"),
+      Some(com.tjclp.xl.cells.Comment.plainText("Important note")),
+      "Comment should be preserved (in the sheet-level store)"
+    )
+    assertEquals(sheet(ref"A1").comment, None, "Vestigial field is cleared after write-through")
     assertEquals(
       sheet(ref"A1").hyperlink,
       Some("https://example.com"),
@@ -226,7 +232,9 @@ class SheetStyleSpec extends FunSuite:
       .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")).withComment("Note"))
     val updated = sheet.put(ref"A1", "New").unsafe
 
-    assertEquals(updated(ref"A1").comment, Some("Note"))
+    // GH-295: put(cell) converted the legacy field into Sheet.comments; the value put leaves it
+    assertEquals(updated.getComment(ref"A1"), Some(com.tjclp.xl.cells.Comment.plainText("Note")))
+    assertEquals(updated(ref"A1").comment, None)
   }
 
   test("put via Any preserves hyperlink metadata") {
@@ -237,6 +245,60 @@ class SheetStyleSpec extends FunSuite:
     val updated = sheet.put(ref"A1", "New").unsafe
 
     assertEquals(updated(ref"A1").hyperlink, Some("https://example.com"))
+  }
+
+  // ========== GH-295: Cell.comment write-through to Sheet.comments ==========
+  // Cell.comment is deprecated: it was never serialized (only Sheet.comments is).
+  // put(cell) converts the field into the sheet-level store so the comment survives writes.
+
+  test("GH-295: put(cell) converts Cell.comment into Sheet.comments and clears the field") {
+    val cell = com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Value")).withComment("Note")
+    val sheet = Sheet("Test").unsafe.put(cell)
+
+    assertEquals(
+      sheet.getComment(ref"A1"),
+      Some(com.tjclp.xl.cells.Comment.plainText("Note")),
+      "comment must land in the serialized store (Sheet.comments)"
+    )
+    assertEquals(
+      sheet(ref"A1").comment,
+      None,
+      "the vestigial field must be cleared after write-through"
+    )
+    assertEquals(sheet(ref"A1").value, CellValue.Text("Value"))
+  }
+
+  test("GH-295: put(cell) without legacy comment leaves sheet comment store untouched") {
+    val sheet = Sheet("Test").unsafe
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Existing", Some("Author")))
+      .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("New")))
+
+    assertEquals(
+      sheet.getComment(ref"A1"),
+      Some(com.tjclp.xl.cells.Comment.plainText("Existing", Some("Author"))),
+      "put(cell) with comment=None must not clear an existing sheet comment"
+    )
+  }
+
+  test("GH-295: put(cell) write-through overwrites existing sheet comment (last write wins)") {
+    val sheet = Sheet("Test").unsafe
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Old", Some("Author")))
+      .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("V")).withComment("New"))
+
+    assertEquals(sheet.getComment(ref"A1"), Some(com.tjclp.xl.cells.Comment.plainText("New")))
+  }
+
+  test("GH-295: put(ref, CellValue) on a legacy commented cell converts on write-back") {
+    // Legacy cell smuggled in via direct copy (bypasses put) — the next value put flows
+    // through put(cell) and must convert rather than silently carry the dead field.
+    val legacy = com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")).withComment("Note")
+    val sheet = Sheet("Test")
+      .copy(cells = Map(ref"A1" -> legacy))
+      .put(ref"A1", CellValue.Text("New"))
+
+    assertEquals(sheet.getComment(ref"A1"), Some(com.tjclp.xl.cells.Comment.plainText("Note")))
+    assertEquals(sheet(ref"A1").comment, None)
+    assertEquals(sheet(ref"A1").value, CellValue.Text("New"))
   }
 
   test("style merge: template bold + codec Date format") {

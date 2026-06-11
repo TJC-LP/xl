@@ -151,7 +151,9 @@ final case class Workbook(
       val newSheets = sheets.patch(index, Nil, 1)
       val newActiveIndex =
         if activeSheetIndex >= newSheets.size then newSheets.size - 1 else activeSheetIndex
-      val updatedContext = sourceContext.map(_.markSheetDeleted(index))
+      // GH-315: the deleted NAME drops out of the identity-keyed source mappings, so a later
+      // sheet reusing the name carries no stale source identity.
+      val updatedContext = sourceContext.map(_.markSheetDeleted(index, sheets(index).name))
       Right(
         copy(sheets = newSheets, activeSheetIndex = newActiveIndex, sourceContext = updatedContext)
       )
@@ -175,8 +177,12 @@ final case class Workbook(
           val renamedSheets = sheets
             .updated(index, updated)
             .map(Workbook.remapChartSheetName(_, oldName, newName))
-          // Mark both: metadata (workbook.xml has sheet names) AND sheet (to regenerate styles)
-          val updatedContext = sourceContext.map(_.markSheetModified(index).markMetadataModified)
+          // Mark both: metadata (workbook.xml has sheet names) AND sheet (to regenerate styles).
+          // GH-315: the identity-keyed source mappings follow the rename, so the renamed sheet
+          // keeps its source comment/drawing/worksheet parts.
+          val updatedContext = sourceContext.map(
+            _.markSheetModified(index).markMetadataModified.markSheetRenamed(oldName, newName)
+          )
           Right(copy(sheets = renamedSheets, sourceContext = updatedContext))
 
   /**
@@ -312,9 +318,19 @@ final case class Workbook(
   def renameSheet(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
     rename(oldName, newName)
 
-  /** Set active sheet index */
+  /**
+   * Set active sheet index.
+   *
+   * Serialized as `bookViews/workbookView@activeTab` (GH-294). A changed index marks workbook
+   * metadata modified so a surgical write regenerates workbook.xml instead of copying the source
+   * verbatim (which would silently drop the change).
+   */
   def setActiveSheet(index: Int): XLResult[Workbook] =
-    if index >= 0 && index < sheets.size then Right(copy(activeSheetIndex = index))
+    if index >= 0 && index < sheets.size then
+      if index == activeSheetIndex then Right(this)
+      else
+        val updatedContext = sourceContext.map(_.markMetadataModified)
+        Right(copy(activeSheetIndex = index, sourceContext = updatedContext))
     else Left(XLError.OutOfBounds(s"active[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
   /** Get active sheet */

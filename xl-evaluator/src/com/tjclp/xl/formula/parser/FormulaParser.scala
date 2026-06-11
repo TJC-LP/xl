@@ -19,11 +19,20 @@ import scala.annotation.tailrec
  *
  * Supported syntax:
  *   - Literals: numbers (42, 3.14), booleans (TRUE, FALSE), strings ("text")
- *   - Cell references: A1, $A$1, Sheet1!A1
+ *   - Cell references: A1, $A$1, Sheet1!A1, 'Quoted Name'!A1
  *   - Ranges: A1:B10
  *   - Operators: +, -, *, /, =, <>, <, <=, >, >=, &
  *   - Functions: SUM, COUNT, IF, AND, OR, NOT, etc.
  *   - Parentheses for grouping
+ *
+ * Sheet-name leniency (GH-281): any identifier followed by `!` parses as a sheet reference,
+ * including cell-ref-shaped names that Excel itself rejects unquoted — `=Q1!A1` parses here as
+ * sheet Q1, while Excel requires `='Q1'!A1`. This is intentional (Postel-style): such input has
+ * exactly one plausible meaning (Excel forbids defined names that collide with cell-ref shapes, so
+ * no ambiguity is possible), and FormulaPrinter always canonicalizes cell-ref-shaped sheet names to
+ * the quoted form on print (GH-263), so every formula xl emits is spec-valid and parse/print
+ * round-trips are stable. Consequence: xl accepts a strict superset of Excel's sheet-ref grammar;
+ * there is no strict-parity mode that rejects the unquoted form.
  *
  * Operator precedence (highest to lowest, Excel-compatible):
  *   1. Parentheses ()

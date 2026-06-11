@@ -139,7 +139,120 @@ class SurgicalSstCombineSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
+  // ========== GH-304: count attribute is recounted when edits REMOVE references ==========
+
+  test("GH-304.1: clearing 3 of 5 cells referencing an entry drops the count attribute by 3") {
+    // Source: "Alpha" referenced from A1..A5, "Beta" from B1, "Gamma" from B2 → count=7
+    val source = createRawSstFixtureWithDuplicateRefs()
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    val modified = wb("Sheet1")
+      .map(sheet => wb.put(sheet.remove(ref"A1").remove(ref"A2").remove(ref"A3")))
+      .fold(err => fail(s"Modify failed: $err"), identity)
+
+    val output = Files.createTempFile("gh304-clear", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val sstXml = new String(readEntry(output, "xl/sharedStrings.xml"), "UTF-8")
+    // 7 source references − 3 cleared = 4. Entries are NEVER pruned (preserved indices stay
+    // stable), so uniqueCount remains 3.
+    assert(
+      sstXml.contains("count=\"4\""),
+      s"SST count should drop from 7 to 4 after clearing 3 references. SST:\n$sstXml"
+    )
+    assert(sstXml.contains("uniqueCount=\"3\""), s"entries must not be pruned. SST:\n$sstXml")
+    existingStrings.foreach { s =>
+      assert(sstXml.contains(s"<t>$s</t>"), s"entry '$s' must survive the recount. SST:\n$sstXml")
+    }
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(textAt(reloaded, ref"A1"), None)
+    assertEquals(textAt(reloaded, ref"A4"), Some("Alpha"))
+    assertEquals(textAt(reloaded, ref"A5"), Some("Alpha"))
+    assertEquals(textAt(reloaded, ref"B1"), Some("Beta"))
+    assertEquals(textAt(reloaded, ref"B2"), Some("Gamma"))
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  test("GH-304.2: overwriting a text cell with a number drops the count attribute by 1") {
+    val source = createRawSstFixture() // A1..A3 reference Alpha/Beta/Gamma → count=3
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    val modified = wb("Sheet1")
+      .map(sheet => wb.put(sheet.put(ref"A1" -> 99)))
+      .fold(err => fail(s"Modify failed: $err"), identity)
+
+    val output = Files.createTempFile("gh304-overwrite", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val sstXml = new String(readEntry(output, "xl/sharedStrings.xml"), "UTF-8")
+    assert(
+      sstXml.contains("count=\"2\""),
+      s"SST count should drop from 3 to 2 after a text→number overwrite. SST:\n$sstXml"
+    )
+    assert(sstXml.contains("uniqueCount=\"3\""), s"entries must not be pruned. SST:\n$sstXml")
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(textAt(reloaded, ref"A1"), None, "A1 should no longer be text")
+    assertEquals(textAt(reloaded, ref"A2"), Some("Beta"))
+    assertEquals(textAt(reloaded, ref"A3"), Some("Gamma"))
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
+  // ========== GH-315: deletion + edit in one write keeps the count exact ==========
+
+  test("GH-315(c): deleting a sheet referencing SST strings + editing another → exact counts") {
+    // Source: Sheet1 references Alpha/Beta/Gamma (3 refs), Sheet2 references Alpha (1 ref)
+    // → count=4, uniqueCount=3
+    val source = createRawTwoSheetSstFixture()
+    val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
+
+    val modified = wb
+      .remove(com.tjclp.xl.addressing.SheetName.unsafe("Sheet1"))
+      .flatMap(
+        _.update(com.tjclp.xl.addressing.SheetName.unsafe("Sheet2"), _.put(ref"B1" -> "Delta"))
+      )
+      .fold(err => fail(s"Modify failed: $err"), identity)
+
+    val output = Files.createTempFile("gh315-delete-count", ".xlsx")
+    XlsxWriter.write(modified, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val sstXml = new String(readEntry(output, "xl/sharedStrings.xml"), "UTF-8")
+    // 4 source refs − 3 (deleted Sheet1) − 1 (Sheet2 pre-edit) + 2 (Sheet2 post-edit: Alpha+Delta)
+    // = 2. Entries are never pruned, Delta appends → uniqueCount=4.
+    assert(
+      sstXml.contains("count=\"2\""),
+      s"count must subtract the DELETED sheet's references and recount the edited sheet by " +
+        s"IDENTITY (not by drifted index). SST:\n$sstXml"
+    )
+    assert(
+      sstXml.contains("uniqueCount=\"4\""),
+      s"uniqueCount should be 3 preserved + 1 new (Delta). SST:\n$sstXml"
+    )
+    existingStrings.foreach { s =>
+      assert(sstXml.contains(s"<t>$s</t>"), s"entry '$s' must never be pruned. SST:\n$sstXml")
+    }
+
+    val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
+    assertEquals(reloaded.sheetNames.map(_.value), Vector("Sheet2"))
+    assertEquals(textAtIn(reloaded, "Sheet2", ref"A1"), Some("Alpha"))
+    assertEquals(textAtIn(reloaded, "Sheet2", ref"B1"), Some("Delta"))
+
+    Files.deleteIfExists(source)
+    Files.deleteIfExists(output)
+  }
+
   // ========== helpers ==========
+
+  private def textAtIn(wb: Workbook, sheet: String, r: ARef): Option[String] =
+    wb(com.tjclp.xl.addressing.SheetName.unsafe(sheet)).toOption
+      .flatMap(_.cells.get(r))
+      .map(_.value)
+      .collect { case CellValue.Text(s) => s }
 
   private def textAt(wb: Workbook, r: ARef): Option[String] =
     wb("Sheet1").toOption.flatMap(_.cells.get(r)).map(_.value).collect { case CellValue.Text(s) =>
@@ -164,12 +277,89 @@ class SurgicalSstCombineSpec extends FunSuite:
     out.write(content.getBytes("UTF-8"))
     out.closeEntry()
 
+  /** Structural parts shared by every fixture: content types, rels, workbook. */
+  private def writeCommonStructuralParts(out: ZipOutputStream): Unit =
+    writeEntry(
+      out,
+      "[Content_Types].xml",
+      """<?xml version="1.0"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"""
+    )
+    writeEntry(
+      out,
+      "_rels/.rels",
+      """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+    )
+    writeEntry(
+      out,
+      "xl/workbook.xml",
+      """<?xml version="1.0"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+    )
+    writeEntry(
+      out,
+      "xl/_rels/workbook.xml.rels",
+      """<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>"""
+    )
+
   /**
-   * Excel-shaped raw fixture: SST with three referenced strings (count=3, uniqueCount=3), Sheet1
-   * referencing all three via t="s".
+   * GH-304 variant: "Alpha" referenced from A1..A5, "Beta" from B1, "Gamma" from B2 — SST count=7,
+   * uniqueCount=3.
    */
-  private def createRawSstFixture(): Path =
-    val path = Files.createTempFile("gh277-fixture", ".xlsx")
+  private def createRawSstFixtureWithDuplicateRefs(): Path =
+    val path = Files.createTempFile("gh304-fixture", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1)
+    try
+      writeCommonStructuralParts(out)
+      writeEntry(
+        out,
+        "xl/sharedStrings.xml",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+          "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"7\" uniqueCount=\"3\">" +
+          existingStrings.map(s => s"<si><t>$s</t></si>").mkString +
+          "</sst>"
+      )
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+    <row r="2"><c r="A2" t="s"><v>0</v></c><c r="B2" t="s"><v>2</v></c></row>
+    <row r="3"><c r="A3" t="s"><v>0</v></c></row>
+    <row r="4"><c r="A4" t="s"><v>0</v></c></row>
+    <row r="5"><c r="A5" t="s"><v>0</v></c></row>
+  </sheetData>
+</worksheet>"""
+      )
+    finally out.close()
+    path
+
+  /**
+   * GH-315 variant: TWO sheets. Sheet1 references Alpha/Beta/Gamma (A1..A3), Sheet2 references
+   * Alpha (A1) — SST count=4, uniqueCount=3.
+   */
+  private def createRawTwoSheetSstFixture(): Path =
+    val path = Files.createTempFile("gh315-fixture", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
     out.setLevel(1)
     try
@@ -182,6 +372,7 @@ class SurgicalSstCombineSpec extends FunSuite:
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
 </Types>"""
       )
@@ -200,6 +391,7 @@ class SurgicalSstCombineSpec extends FunSuite:
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
     <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
   </sheets>
 </workbook>"""
       )
@@ -209,9 +401,53 @@ class SurgicalSstCombineSpec extends FunSuite:
         """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
 </Relationships>"""
       )
+      writeEntry(
+        out,
+        "xl/sharedStrings.xml",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+          "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"4\" uniqueCount=\"3\">" +
+          existingStrings.map(s => s"<si><t>$s</t></si>").mkString +
+          "</sst>"
+      )
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
+    <row r="2"><c r="A2" t="s"><v>1</v></c></row>
+    <row r="3"><c r="A3" t="s"><v>2</v></c></row>
+  </sheetData>
+</worksheet>"""
+      )
+      writeEntry(
+        out,
+        "xl/worksheets/sheet2.xml",
+        """<?xml version="1.0"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
+  </sheetData>
+</worksheet>"""
+      )
+    finally out.close()
+    path
+
+  /**
+   * Excel-shaped raw fixture: SST with three referenced strings (count=3, uniqueCount=3), Sheet1
+   * referencing all three via t="s".
+   */
+  private def createRawSstFixture(): Path =
+    val path = Files.createTempFile("gh277-fixture", ".xlsx")
+    val out = new ZipOutputStream(Files.newOutputStream(path))
+    out.setLevel(1)
+    try
+      writeCommonStructuralParts(out)
       writeEntry(
         out,
         "xl/sharedStrings.xml",

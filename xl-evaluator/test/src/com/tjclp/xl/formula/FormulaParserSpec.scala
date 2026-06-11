@@ -319,6 +319,34 @@ class FormulaParserSpec extends ScalaCheckSuite:
       case Left(err) => fail(s"=Sheet1!A1 should parse: $err")
   }
 
+  // ==================== GH-281: lenient unquoted sheet-ref parse ====================
+  // DECISION (GH-281): keep the leniency. Excel rejects the unquoted form (Q1 is
+  // cell-ref-shaped and Excel also forbids defined names that collide with cell-ref shapes,
+  // so the input has exactly one plausible meaning). Accepting it is Postel-style: parse the
+  // evident intent; the printer canonicalizes (GH-263) so nothing xl emits is spec-invalid.
+
+  test("GH-281: lenient parse of =Q1!A1 as sheet ref Q1 is intentional (Excel requires ='Q1'!A1)") {
+    FormulaParser.parse("=Q1!A1") match
+      case Right(TExpr.SheetRef(sheet, at, _, _)) =>
+        assertEquals(sheet.value, "Q1")
+        assertEquals(at.toA1, "A1")
+      case Right(TExpr.SheetPolyRef(sheet, at, _)) =>
+        assertEquals(sheet.value, "Q1")
+        assertEquals(at.toA1, "A1")
+      case other => fail(s"Expected lenient sheet-qualified parse of =Q1!A1, got $other")
+  }
+
+  test("GH-281: lenient unquoted sheet-ref never escapes unquoted (parse → print canonicalizes)") {
+    assertEquals(
+      FormulaParser.parse("=Q1!A1").map(e => FormulaPrinter.print(e)),
+      Right("='Q1'!A1")
+    )
+    assertEquals(
+      FormulaParser.parse("=SUM(Q1!A1:B2)").map(e => FormulaPrinter.print(e)),
+      Right("=SUM('Q1'!A1:B2)")
+    )
+  }
+
   test("parse decimal number") {
     val result = FormulaParser.parse("=3.14")
     assert(result.isRight)

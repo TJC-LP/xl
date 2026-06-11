@@ -39,3 +39,13 @@ object BaseImportProbe:
   val px: Px = pt.toPx
   val back: Double = px.value
   val chainedUnit: Double = Pt(12.0).toPx.value
+
+  // Conditional formatting (GH-136): enums, Dxf builders, and the Sheet authoring surface all
+  // resolve through the base import; constructors chain directly off companion factories.
+  val cfDxf: Dxf = Dxf.fillAndFont(Color.Rgb(0xffffc7ce), DxfFont(bold = Some(true)))
+  val cfRule: CfRule = CfRule.cellIs(CfOperator.GreaterThan, "100", cfDxf)
+  val cfPoint: CfPoint = CfPoint(Cfvo.Percentile(BigDecimal(50)), Color.Rgb(0xffffeb84))
+  val cfScale: CfRule = CfRule.colorScale2(CfPoint(Cfvo.Min, Color.Rgb(0xffff0000)), cfPoint)
+  val cfSheet: Sheet = Sheet(SheetName.unsafe("CF")).conditionalFormat(ref"A1:A9", cfRule, cfScale)
+  val cfBlocks: Vector[ConditionalFormat.Rules] = cfSheet.typedConditionalFormats
+  val cfText: CfTextOp = CfTextOp.Contains

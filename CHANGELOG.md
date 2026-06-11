@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (clean-sweep wave 7)
+
+- **Conditional formatting** (#136): typed model for cellIs / expression / colorScale /
+  dataBar / top10 / text-operator rules with dxf differential formats, `sheet.conditionalFormat`
+  authoring with auto-priority (saturating), structural row/column edits shift rule ranges,
+  unmodeled rule families ride namespace-self-contained `Preserved` payloads — x14/extLst
+  blocks (LibreOffice dataBars) survive dirty writes byte-faithfully. Joins the generative
+  round-trip law; openpyxl fixture in the corpus.
+- **activeTab serialization** (#294): `Workbook.activeSheetIndex` round-trips through
+  `bookViews/workbookView` both directions; equivalence un-ignores it.
+- **fitToPage tri-state** (#284): `PageSetup.fitToPage: Option[Boolean]` — `Some(false)`
+  actively strips a preserved flag; `None` keeps the 0.11.1 derived behavior.
+
+### Fixed (wave 7)
+
+- **openpyxl comments surface in the model** (#292): comment parts resolve via worksheet
+  relationship type instead of path patterns — `xl/comments/comment1.xml` (subdirectory
+  dialect) now populates `Sheet.comments`.
+- **RichText SST keying** (#303): rich-text entries key by run structure, not plain text —
+  a RichText whose plain text equals an existing plain string no longer collides; RichText
+  cells now generate in the round-trip law.
+- **Exact surgical SST counts** (#304): edits that remove or duplicate references to existing
+  strings recount the modified sheets' contributions exactly.
+- **Content_Types preservation** (#314): metadata-modified writes merge the preserved
+  `[Content_Types].xml` (exotic overrides survive) instead of rebuilding from minimal.
+- **Namespace-URI rel detection** (#316): preserved drawing fragments binding the
+  relationships namespace to exotic prefixes are detected as rel-bearing.
+- **Identity-keyed source mappings** (#315): drawing/comment path mappings and SST
+  modified-sheet accounting key by stable sheet name instead of index — sheet deletion or
+  reordering combined with drawing/comment edits in one write now regenerates correctly
+  (the wave-6a skip-guard is gone); fresh comment parts allocate collision-free paths and
+  register their actual emitted paths in [Content_Types].xml.
+- **`Cell.comment` deprecated and wired** (#295): the never-serialized field now
+  write-throughs into `Sheet.comments` on `put`; lenient sheet-ref parsing pinned as
+  intentional (#281).
+
+### Changed (wave 7)
+
+- **Codec put paths 2.4x faster** (#297): style registration fused into the codec put
+  pipeline — chained codec puts 2.44x, varargs 1.56x (smoke-mode JMH, `SheetPutBenchmark`).
+- **Dead writer paths deleted** (#313): `regenerateAll`/`writeZip*` and unused async
+  static-part helpers removed (−455 lines, zero callers).
+
 ## [0.12.0] "Visual" - 2026-06-11
 
 The Visual release: embedded pictures and typed charts with hybrid preservation —
