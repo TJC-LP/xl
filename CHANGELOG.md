@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Visual wave 6a)
+
+- **Embedded pictures** (#221): new pure `com.tjclp.xl.drawings` package — `Drawing` enum
+  (`Picture` + `Preserved` for unmodeled content), `DrawingAnchor` (OneCell/TwoCell/Absolute
+  over the `Emu` unit type), `ImageData` (7 formats with total magic detection and
+  png/gif/jpeg/bmp dimension sniffing, content-addressed sha256). `Sheet.addImage` (4
+  overloads incl. natural-size), `pictures`, `removeDrawing`; structural row/column edits
+  remap picture anchors like comments. Full OOXML round-trip on both writer backends:
+  deterministic drawing/media part emission, sha-deduplicated media, relationship-preserving
+  hybrid regeneration (clean drawings ride byte-preservation — the wave-2 corpus and the #291
+  namespace machinery hold by construction). Streaming envelope documented (in-memory writes
+  only). Pictures join the generative round-trip law (`genPicture`).
+
 ## [0.11.3] "Robustness" - 2026-06-11
 
 Waves 4+5 of the backlog burn-down: streaming/OOXML robustness (docProps, streaming SST,
