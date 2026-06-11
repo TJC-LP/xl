@@ -157,6 +157,14 @@ import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
 ```scala
 // Display: gridlines off (professional templates), zoom 10-400
+// Pictures & charts (0.12.0+) — drawing layer with hybrid preservation
+val image = ImageData.detect(bytes).unsafe                     // XLResult: format from magic bytes
+sheet.addImage(image, ref"B2").unsafe                          // natural size (XLResult; PNG/JPEG sniffed)
+sheet.addImage(image, ref"B2:D8")                              // stretched over a range — total
+val chart = Chart.bar(series, title = Some("Revenue")).unsafe  // XLResult: validated; also Chart.line/pie
+sheet.addChart(chart, ref"F2:K16")                             // anchored over the range — total
+sheet.pictures; sheet.charts                                   // typed views (unmodeled drawings preserved)
+
 sheet.withViewSettings(SheetView(showGridLines = false, zoomScale = Some(90)))
 
 // Print/PDF setup — all fields optional with Excel defaults
