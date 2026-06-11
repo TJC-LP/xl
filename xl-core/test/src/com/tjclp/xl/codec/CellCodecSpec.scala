@@ -355,7 +355,8 @@ class CellCodecSpec extends ScalaCheckSuite:
     )
     val cv: CellValue = CellValue.Number(BigDecimal(7))
     assertEquals(w.write(cv), (cv, None))
-    val formatted = com.tjclp.xl.formatted.Formatted(CellValue.Number(BigDecimal("0.25")), NumFmt.Percent)
+    val formatted =
+      com.tjclp.xl.formatted.Formatted(CellValue.Number(BigDecimal("0.25")), NumFmt.Percent)
     assertEquals(
       w.write(formatted),
       (formatted.value, Some(com.tjclp.xl.styles.CellStyle.default.withNumFmt(NumFmt.Percent)))

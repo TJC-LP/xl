@@ -137,10 +137,10 @@ object XlsxReader:
    *   - Worksheets (pattern: xl/worksheets/sheet*.xml)
    *   - Relationships
    *
-   * All other parts (charts, drawings, images, etc.) are preserved byte-for-byte. Comment parts
-   * are NOT matched here: which part is a sheet's comment part is decided by the worksheet
-   * RELATIONSHIP type (GH-292), so the scan only retains candidates (see
-   * [[isCommentCandidatePart]]) and the manifest is reconciled after rels resolution.
+   * All other parts (charts, drawings, images, etc.) are preserved byte-for-byte. Comment parts are
+   * NOT matched here: which part is a sheet's comment part is decided by the worksheet RELATIONSHIP
+   * type (GH-292), so the scan only retains candidates (see [[isCommentCandidatePart]]) and the
+   * manifest is reconciled after rels resolution.
    */
   private def isKnownPart(path: String): Boolean =
     knownParts.contains(path) ||

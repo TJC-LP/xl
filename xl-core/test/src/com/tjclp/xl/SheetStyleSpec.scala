@@ -336,4 +336,3 @@ class SheetStyleSpec extends FunSuite:
       "Explicit Currency should be preserved over General"
     )
   }
-

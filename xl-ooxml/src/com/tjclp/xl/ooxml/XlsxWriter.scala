@@ -1444,15 +1444,10 @@ object XlsxWriter:
           val combinedEntries =
             parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries
 
-          // Create new SST with combined entries (exact-string index keys, GH-289)
-          val combinedSST = SharedStrings(
-            strings = combinedEntries,
-            indexMap = combinedEntries.zipWithIndex.map {
-              case (Left(s), idx) => s -> idx
-              case (Right(rt), idx) => rt.toPlainText -> idx
-            }.toMap,
-            totalCount = exactTotalCount
-          )
+          // Create new SST with combined entries — exact-string keys for plain entries (GH-289),
+          // full-run-structure keys for RichText entries (GH-303); exact per-reference total
+          // count for the modified sheets (GH-304)
+          val combinedSST = SharedStrings.fromDedupedEntries(combinedEntries, exactTotalCount)
           (Some(combinedSST), true)
         else
           parsedSST match

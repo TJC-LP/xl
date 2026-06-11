@@ -271,8 +271,8 @@ class SurgicalSstCombineSpec extends FunSuite:
     )
 
   /**
-   * GH-304 variant: "Alpha" referenced from A1..A5, "Beta" from B1, "Gamma" from B2 — SST
-   * count=7, uniqueCount=3.
+   * GH-304 variant: "Alpha" referenced from A1..A5, "Beta" from B1, "Gamma" from B2 — SST count=7,
+   * uniqueCount=3.
    */
   private def createRawSstFixtureWithDuplicateRefs(): Path =
     val path = Files.createTempFile("gh304-fixture", ".xlsx")
