@@ -3,6 +3,7 @@ package com.tjclp.xl.sheets
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, Comment}
 import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
+import com.tjclp.xl.drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
 import com.tjclp.xl.tables.TableSpec
@@ -30,6 +31,10 @@ import scala.util.boundary, boundary.break
  *   Sheet view settings (gridline visibility, zoom). `None` preserves any existing `<sheetView>`
  *   attributes on write; `Some(view)` sets them. Freeze panes and view settings share a single
  *   `<sheetView>` element in the serialized XML.
+ *
+ * @param drawings
+ *   Drawing objects (pictures and preserved fragments, GH-221). Document order is z-order is
+ *   emission order: appended drawings paint on top.
  */
 final case class Sheet(
   name: SheetName,
@@ -44,7 +49,8 @@ final case class Sheet(
   tables: Map[String, TableSpec] = Map.empty,
   pageSetup: Option[PageSetup] = None,
   freezePane: Option[FreezePane] = None,
-  viewSettings: Option[SheetView] = None
+  viewSettings: Option[SheetView] = None,
+  drawings: Vector[Drawing] = Vector.empty
 ):
 
   /** Get cell at reference (returns empty cell if not present) */
@@ -170,13 +176,33 @@ final case class Sheet(
       case other => other
     }
 
+    // Drawings: remap each cell anchor point; a deleted anchor index clamps to `at` — unlike
+    // comments, Excel keeps pictures when their anchor row/column is deleted (a fully-deleted
+    // TwoCell range degenerates to zero extent). Absolute and Preserved anchors are untouched;
+    // editAs-aware size recomputation is deliberately not attempted (GH-221, deferred).
+    def remapPoint(p: AnchorPoint): AnchorPoint =
+      val ni = idx(axisOf(p.cell)).getOrElse(at)
+      p.copy(cell = rebuild(p.cell, ni))
+    val newDrawings = drawings.map {
+      case Drawing.Picture(anchor, image, n, d) =>
+        val remapped = anchor match
+          case DrawingAnchor.OneCell(from, extent) =>
+            DrawingAnchor.OneCell(remapPoint(from), extent)
+          case DrawingAnchor.TwoCell(from, to, editAs) =>
+            DrawingAnchor.TwoCell(remapPoint(from), remapPoint(to), editAs)
+          case abs: DrawingAnchor.Absolute => abs
+        Drawing.Picture(remapped, image, n, d)
+      case preserved: Drawing.Preserved => preserved
+    }
+
     copy(
       cells = newCells,
       comments = newComments,
       rowProperties = newRowProps,
       columnProperties = newColProps,
       mergedRanges = newMerges,
-      freezePane = newFreeze
+      freezePane = newFreeze,
+      drawings = newDrawings
     )
 
   /** Put CellValue at reference (always succeeds - CellValue is pre-validated) */
@@ -513,6 +539,45 @@ final case class Sheet(
   /** Check if cell has a comment */
   def hasComment(ref: ARef): Boolean =
     comments.contains(ref)
+
+  // ===== Drawings: embedded images (GH-221) =====
+
+  /** Add an image with full anchor control (total). */
+  def addImage(image: ImageData, anchor: DrawingAnchor): Sheet =
+    copy(drawings = drawings :+ Drawing.Picture(anchor, image))
+
+  /**
+   * Add an image one-cell-anchored at `at`, sized to its natural pixel dimensions at 96 DPI.
+   * Returns Left when the dimensions cannot be sniffed from the bytes (Tiff/Emf/Wmf or malformed
+   * headers) — no silent size guessing; pass an explicit [[Extent]] instead.
+   */
+  def addImage(image: ImageData, at: ARef): XLResult[Sheet] =
+    image.naturalExtent match
+      case Some(extent) => Right(addImage(image, DrawingAnchor.at(at, extent)))
+      case None =>
+        Left(
+          XLError.ParseError(
+            "image bytes",
+            s"cannot sniff natural size for ${image.format} image — use addImage(image, at, extent)"
+          )
+        )
+
+  /** Add an image one-cell-anchored at `at` with an explicit extent (total). */
+  def addImage(image: ImageData, at: ARef, extent: Extent): Sheet =
+    addImage(image, DrawingAnchor.at(at, extent))
+
+  /** Add an image two-cell-anchored over `range` (total). */
+  def addImage(image: ImageData, range: CellRange, editAs: EditAs = EditAs.TwoCell): Sheet =
+    addImage(image, DrawingAnchor.over(range, editAs))
+
+  /** All typed pictures in z-order (Preserved fragments excluded). */
+  def pictures: Vector[Drawing.Picture] =
+    drawings.collect { case p: Drawing.Picture => p }
+
+  /** Remove the drawing at `index` (z-order position); identity when out of range. */
+  def removeDrawing(index: Int): Sheet =
+    if drawings.isDefinedAt(index) then copy(drawings = drawings.patch(index, Nil, 1))
+    else this
 
   /** Add or update table in sheet */
   def withTable(table: TableSpec): Sheet =

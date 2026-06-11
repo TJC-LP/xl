@@ -29,8 +29,17 @@ object TestFixtures:
     "formulas-lo.xlsx"
   )
 
+  /**
+   * Fixtures derived from the openpyxl set by deterministic zip surgery (see PROVENANCE.md).
+   * image-shape.xlsx = image.xlsx with an `<sp>` shape anchor appended to the same wsDr (GH-221
+   * mixed typed-picture + preserved-fragment coverage).
+   */
+  val derived: List[String] = List(
+    "image-shape.xlsx"
+  )
+
   /** Every committed fixture. */
-  val all: List[String] = openpyxl ++ libreOffice
+  val all: List[String] = openpyxl ++ libreOffice ++ derived
 
   /**
    * Copy a fixture from the test classpath to a temp file (readers need a real Path). The caller

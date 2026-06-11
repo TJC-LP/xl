@@ -48,6 +48,10 @@ object api:
   // Sheet types
   export sheets.{Sheet, ColumnProperties, RowProperties}
 
+  // Drawing types (GH-221) — case classes/enums, so plain export forwarders are safe.
+  // NEVER export anything named `Anchor` here (taken by addressing above).
+  export drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData, ImageFormat}
+
   // Patch types
   export patch.Patch
 

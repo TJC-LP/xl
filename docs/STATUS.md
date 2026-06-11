@@ -32,6 +32,7 @@
 - ✅ StyleRegistry for per-sheet style management
 - ✅ **End-to-end XLSX read/write** (creates real Excel files)
 - ✅ **Surgical modification** (read → modify → write preserves unknown parts: charts, images, drawings, comments, and inline worksheet elements — dataValidations, sheetProtection, autoFilter — preserved through edits as of 0.10.0 / C1)
+- ✅ **Embedded images** (#221): `Sheet.addImage(image, at | range | anchor)` with natural-size sniffing (png/jpeg/gif/bmp), `Sheet.pictures`, `removeDrawing`; one-cell/two-cell/absolute anchors; charts & shapes ride through as `Drawing.Preserved`; media sha-256 dedup; in-memory read/write only (see LIMITATIONS §13)
 - ✅ **Structural editing** (0.10.0): insert/delete rows & columns shift cells, merges, row/col properties, freeze panes, and rewrite all affected formulas (cross-sheet) with `#REF!` generation
 - ✅ **Named ranges & hyperlinks authoring** (0.10.0): `DefinedName` and `Cell.hyperlink` are now serialized (previously read-only)
 - ✅ Hybrid write optimization (11x speedup for unmodified workbooks, 2-5x for partial modifications)
@@ -218,8 +219,8 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 **Not Started** (Future):
 - ❌ P6b: Full case class codec derivation (Magnolia/Shapeless)
 - ❌ P9: Advanced macros (path macro, style literal)
-- ❌ P10: Drawings (images, shapes)
-- ❌ P11: Charts
+- ✅ P10: Drawings — embedded pictures (#221): `Sheet.addImage`/`pictures`/`removeDrawing`, three anchor forms, 7-format classification, sha-deduped media, hybrid byte-preservation of non-picture drawings (charts/shapes as `Drawing.Preserved`); shapes/charts typed model still future (#222). In-memory only — see LIMITATIONS §13
+- ❌ P11: Charts (existing charts preserved through edits; typed model is #222)
 - ❌ Pivot Tables (remaining part of P12)
 
 ---

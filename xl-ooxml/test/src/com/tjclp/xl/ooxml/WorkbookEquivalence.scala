@@ -133,7 +133,62 @@ object WorkbookEquivalence:
           s"$name: pageSetup mismatch: expected ${expected.pageSetup}, actual ${actual.pageSetup}"
         )
       else Nil
-    refDiffs ++ cellDiffs ++ commentDiffs ++ mergeDiffs ++ viewDiffs ++ pageSetupDiffs
+    refDiffs ++ cellDiffs ++ commentDiffs ++ mergeDiffs ++ viewDiffs ++ pageSetupDiffs ++
+      drawingsDiff(name, expected, actual)
+
+  /**
+   * Drawing equality (GH-221): same length and per-index kind; Pictures compare by anchor, image
+   * (sha256 + format), description, and WRITER-CANONICAL name — an empty authored name reads back
+   * as the emitter's "Image {ordinal}" default (ordinal = 1-based position among the part's
+   * pictures), so equality is taken after the same canonicalization. Preserved fragments compare by
+   * exact canonical XML string.
+   */
+  private def drawingsDiff(sheet: String, expected: Sheet, actual: Sheet): List[String] =
+    import com.tjclp.xl.drawings.Drawing
+    def canonicalNames(drawings: Vector[Drawing]): Vector[String] =
+      drawings
+        .foldLeft((Vector.empty[String], 1)) {
+          case ((acc, ordinal), p: Drawing.Picture) =>
+            val name = if p.name.nonEmpty then p.name else s"Image $ordinal"
+            (acc :+ name, ordinal + 1)
+          case ((acc, ordinal), _) => (acc :+ "", ordinal)
+        }
+        ._1
+    if expected.drawings.sizeIs != actual.drawings.size then
+      List(
+        s"$sheet: drawings count mismatch: expected ${expected.drawings.size}, actual ${actual.drawings.size}"
+      )
+    else
+      val expNames = canonicalNames(expected.drawings)
+      val actNames = canonicalNames(actual.drawings)
+      expected.drawings.lazyZip(actual.drawings).lazyZip(expected.drawings.indices).toList.flatMap {
+        case (exp: Drawing.Picture, act: Drawing.Picture, i) =>
+          val anchorDiff = Option.when(exp.anchor != act.anchor)(
+            s"$sheet: drawing[$i] anchor mismatch: expected ${exp.anchor}, actual ${act.anchor}"
+          )
+          val imageDiff = Option.when(
+            exp.image.sha256 != act.image.sha256 || exp.image.format != act.image.format
+          )(
+            s"$sheet: drawing[$i] image mismatch: expected ${exp.image.format}/${exp.image.sha256}, " +
+              s"actual ${act.image.format}/${act.image.sha256}"
+          )
+          val nameDiff = Option.when(expNames(i) != actNames(i))(
+            s"$sheet: drawing[$i] name mismatch: expected '${expNames(i)}', actual '${actNames(i)}'"
+          )
+          val descrDiff = Option.when(exp.description != act.description)(
+            s"$sheet: drawing[$i] description mismatch: expected '${exp.description}', actual '${act.description}'"
+          )
+          anchorDiff.toList ++ imageDiff.toList ++ nameDiff.toList ++ descrDiff.toList
+        case (Drawing.Preserved(exp), Drawing.Preserved(act), i) =>
+          Option
+            .when(exp != act)(s"$sheet: drawing[$i] preserved xml mismatch")
+            .toList
+        case (exp, act, i) =>
+          List(
+            s"$sheet: drawing[$i] kind mismatch: expected ${exp.getClass.getSimpleName}, " +
+              s"actual ${act.getClass.getSimpleName}"
+          )
+      }
 
   private def keySetDiff(
     sheet: String,

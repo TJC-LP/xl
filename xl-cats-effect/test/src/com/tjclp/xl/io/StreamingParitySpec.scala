@@ -44,7 +44,8 @@ class StreamingParitySpec extends CatsEffectSuite:
     "comments-hyperlinks.xlsx",
     "small-values-lo.xlsx",
     "styled-lo.xlsx",
-    "formulas-lo.xlsx"
+    "formulas-lo.xlsx",
+    "image-shape.xlsx"
   )
 
   private def fixturePath(name: String): Path =

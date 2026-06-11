@@ -31,6 +31,22 @@ case class ContentTypes(
       copy(overrides = overrides ++ overridesToAdd)
 
   /**
+   * Register drawing-part overrides (GH-221). `partPaths` are zip paths without the leading slash
+   * ("xl/drawings/drawing1.xml"). Idempotent.
+   */
+  def withDrawingOverrides(partPaths: Set[String]): ContentTypes =
+    if partPaths.isEmpty then this
+    else copy(overrides = overrides ++ partPaths.map(p => s"/$p" -> ctDrawing))
+
+  /**
+   * Register media extension Defaults (GH-221), e.g. "png" -> "image/png", derived from the media
+   * filenames actually written or reused by the drawing layer. Idempotent.
+   */
+  def withImageDefaults(extToCt: Map[String, String]): ContentTypes =
+    if extToCt.isEmpty then this
+    else copy(defaults = defaults ++ extToCt)
+
+  /**
    * Reconcile docProps overrides with what the writer actually emits (GH-242).
    *
    * Idempotent: adds the override when the part is emitted, removes any stale override when it is

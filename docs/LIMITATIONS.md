@@ -287,13 +287,18 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
 
 ---
 
-#### 13. Drawings (Images, Shapes) Not Supported
-**Status**: Not implemented (existing drawings are preserved through edits) — tracked in #221
-**Impact**: Cannot embed images or shapes
-**Plan**: see [plan/roadmap.md](plan/roadmap.md)
+#### 13. Drawings & Images ✅ PICTURES SUPPORTED (#221) — with scoped limitations
+**Status**: Embedded pictures are fully modeled: read (`Sheet.drawings`/`Sheet.pictures`), authored (`Sheet.addImage` — png/jpeg/gif/bmp natural-size sniffing; tiff/emf/wmf with an explicit `Extent`), and round-tripped with all three anchor forms (`DrawingAnchor.OneCell`/`TwoCell`/`Absolute`, `editAs`). Non-picture drawing anchors (charts, shapes, group shapes, connectors, pictures with crops/rotation/effects/hyperlinks) are captured as `Drawing.Preserved` and re-emitted verbatim in z-order; untouched drawing parts are byte-preserved whole. Media parts are content-addressed (sha-256): identical bytes never produce two media parts in one write.
 
-**Effort**: 10-15 days
-**LOC**: ~800
+**Remaining limitations (by design, GH-221 scope fence)**:
+- **Streaming envelope**: drawings are an **in-memory** feature. `ExcelIO.readStream` surfaces no drawings (rows only); the streaming row writer (`writeStream`) emits none. Use `read`/`write`.
+- **Fresh emission of rel-referencing fragments**: writing a workbook **without** a `SourceContext` (programmatic build, or `Drawing.Preserved` values copied onto a new sheet) drops Preserved fragments that contain relationship references (`r:embed`/`r:id`/`r:link`) — their targets only exist in the source package. Rel-free fragments (plain shapes) are emitted.
+- **Orphan media is never garbage-collected**: removing pictures rewrites the drawing part but keeps all source media parts (orphans are legal OOXML).
+- **Preserved anchors are not shifted** by `insertRows`/`deleteColumns`/... (typed Picture anchors are; a deleted anchor index clamps instead of dropping — Excel keeps pictures). EditAs-aware size recomputation is not attempted.
+- **Accepted-and-dropped on dirty regeneration**: `a:blip/@cstate`, plain `a:xfrm`, `cNvPicPr` content (e.g. `a:picLocks`). The loss only materializes when a sheet's drawings vector actually changes; untouched parts are byte-identical.
+- **Sheet delete/reorder + drawing edits in one write**: the per-index drawing mappings follow the commentPathMapping precedent and become unreliable when sheets are deleted or reordered; drawing regeneration is skipped for that write (parts ride preservation). Split such edits into two writes.
+- **Source-/binary-compat**: `Sheet` gained a 14th field (`drawings`) — source-compatible, not binary-compatible with 0.11.x.
+- Deferred, tracked: typed Chart/Shape cases (#222), SVG (svgBlip), crop/rotation/effects, picture hyperlinks, pHYs DPI sizing, media GC, `Patch` case, CLI `add-image`, DirectSaxEmitter drawing emission, string-ref `addImage` overload.
 
 ---
 

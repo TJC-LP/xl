@@ -354,6 +354,10 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
    *   Optional tableParts XML element (takes priority over preserved metadata)
    * @param escapeFormulas
    *   If true, escape text values starting with =, +, -, @ to prevent formula injection
+   * @param drawingRef
+   *   Generated `<drawing r:id="..."/>` element for a sheet acquiring its FIRST drawing part
+   *   (GH-221); takes priority over any preserved drawing element. None preserves the source
+   *   element (the same-path regeneration case).
    */
   def fromDomainWithMetadata(
     sheet: Sheet,
@@ -361,7 +365,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     styleRemapping: Map[Int, Int] = Map.empty,
     preservedMetadata: Option[OoxmlWorksheet] = None,
     tableParts: Option[Elem] = None,
-    escapeFormulas: Boolean = false
+    escapeFormulas: Boolean = false,
+    drawingRef: Option[Elem] = None
   ): OoxmlWorksheet =
     // Build a map of row indices to preserved row attributes
     val preservedRowAttrs = preservedMetadata
@@ -526,7 +531,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           buildPageMarginsElem(sheet.pageSetup).orElse(preserved.pageMargins),
           mergePageSetupElem(preserved.pageSetup, sheet.pageSetup),
           mergeHeaderFooterElem(preserved.headerFooter, sheet.pageSetup),
-          preserved.drawing,
+          drawingRef.orElse(preserved.drawing), // GH-221: first-drawing wiring wins
           legacyDrawingElem, // Use computed element (preserved or generated)
           preserved.picture,
           preserved.oleObjects,
@@ -551,6 +556,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           pageMargins = buildPageMarginsElem(sheet.pageSetup),
           pageSetup = mergePageSetupElem(None, sheet.pageSetup),
           headerFooter = mergeHeaderFooterElem(None, sheet.pageSetup),
+          drawing = drawingRef, // GH-221
           legacyDrawing = legacyDrawingElem,
           tableParts = tableParts,
           preservedKnown = hyperlinksMap

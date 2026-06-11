@@ -5,6 +5,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, Comment}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.context.ModificationTracker
+import com.tjclp.xl.drawings.TestImages
 import com.tjclp.xl.sheets.{FreezePane, HeaderFooter, PageMargins, PageSetup, SheetView}
 import com.tjclp.xl.sheets.styleSyntax.*
 import com.tjclp.xl.styles.CellStyle
@@ -567,6 +568,61 @@ object Generators:
       ref2 <- genGridRef
     yield CellRange(ref1, ref2)
 
+  // ===== Drawing generators (GH-221) =====
+
+  /** Image payload drawn from fixed, valid byte templates (png/gif/jpeg/bmp, all 2x3 px). */
+  val genImageData: Gen[ImageData] =
+    Gen.oneOf(
+      ImageData(TestImages.png2x3, ImageFormat.Png),
+      ImageData(TestImages.gif2x3, ImageFormat.Gif),
+      ImageData(TestImages.jpeg2x3, ImageFormat.Jpeg),
+      ImageData(TestImages.bmp2x3, ImageFormat.Bmp)
+    )
+
+  /** EMU offset inside a cell (small, non-negative). */
+  private val genEmuOffset: Gen[Emu] =
+    Gen.oneOf(0L, 9525L, 95250L).map(Emu.apply)
+
+  /** Drawing extent between ~1px and ~100px square-ish. */
+  private val genExtent: Gen[Extent] =
+    for
+      cx <- Gen.choose(1L, 100L).map(_ * 9525L)
+      cy <- Gen.choose(1L, 100L).map(_ * 9525L)
+    yield Extent(Emu(cx), Emu(cy))
+
+  /** All three anchor forms within the compact grid. */
+  val genDrawingAnchor: Gen[DrawingAnchor] =
+    val genPoint = for
+      ref <- genGridRef
+      dx <- genEmuOffset
+      dy <- genEmuOffset
+    yield AnchorPoint(ref, dx, dy)
+    Gen.oneOf(
+      for
+        p <- genPoint
+        e <- genExtent
+      yield DrawingAnchor.OneCell(p, e),
+      for
+        range <- genGridRange
+        editAs <- Gen.oneOf(EditAs.TwoCell, EditAs.OneCell, EditAs.Absolute)
+      // markers built off the range corners; `over` gives the canonical one-past-end form
+      yield DrawingAnchor.over(range, editAs),
+      for
+        x <- Gen.choose(0L, 1000L).map(v => Emu(v * 9525L))
+        y <- Gen.choose(0L, 1000L).map(v => Emu(v * 9525L))
+        e <- genExtent
+      yield DrawingAnchor.Absolute(x, y, e)
+    )
+
+  /** Typed picture: varied anchors/formats; names sometimes empty (writer assigns a default). */
+  val genPicture: Gen[Drawing.Picture] =
+    for
+      anchor <- genDrawingAnchor
+      image <- genImageData
+      name <- Gen.frequency(3 -> Gen.alphaNumStr.map(_.take(12)), 1 -> Gen.const(""))
+      description <- Gen.frequency(1 -> Gen.alphaNumStr.map(_.take(20)), 2 -> Gen.const(""))
+    yield Drawing.Picture(anchor, image, name, description)
+
   /**
    * Rich sheet for the round-trip law: ≤30 cells with values/styles/comments/hyperlinks, merges,
    * optional view settings, page setup, and freeze panes. Styles are registered through the sheet's
@@ -590,6 +646,11 @@ object Generators:
       view <- Gen.option(genSheetView)
       pageSetup <- Gen.option(genPageSetup)
       freeze <- Gen.frequency(3 -> Gen.const(None), 1 -> genFreezePane.map(Some.apply))
+      // GH-221: pictures at comment-like frequency (3:1 none, then 1-2 pictures)
+      drawings <- Gen.frequency(
+        3 -> Gen.const(Vector.empty[Drawing]),
+        1 -> Gen.choose(1, 2).flatMap(n => Gen.listOfN(n, genPicture).map(_.toVector))
+      )
     yield
       val withCells = entries.foldLeft(Sheet(name)) {
         case (sheet, (ref, value, style, comment, hyperlink)) =>
@@ -598,7 +659,12 @@ object Generators:
           comment.fold(styled)(c => styled.comment(ref, c))
       }
       val withMerges = merges.foldLeft(withCells)(_.merge(_))
-      withMerges.copy(viewSettings = view, pageSetup = pageSetup, freezePane = freeze)
+      withMerges.copy(
+        viewSettings = view,
+        pageSetup = pageSetup,
+        freezePane = freeze,
+        drawings = drawings
+      )
 
   /**
    * Rich workbook for the round-trip law: 1-3 rich sheets with unique, realistic names (spaces,
