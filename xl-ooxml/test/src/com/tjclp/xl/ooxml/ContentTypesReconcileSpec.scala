@@ -153,7 +153,10 @@ class ContentTypesReconcileSpec extends FunSuite:
     // ...and NO override points at a part that does not ship (index-derived registration would
     // leave /xl/comments1.xml + /xl/drawings/vmlDrawing1.vml dangling here)
     val dangling = ct.overrides.keys.filterNot(p => entries.contains(p.stripPrefix("/")))
-    assert(dangling.isEmpty, s"overrides point at parts that do not ship: ${dangling.mkString(", ")}")
+    assert(
+      dangling.isEmpty,
+      s"overrides point at parts that do not ship: ${dangling.mkString(", ")}"
+    )
 
     // The comment itself round-trips
     val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
@@ -191,7 +194,10 @@ class ContentTypesReconcileSpec extends FunSuite:
     assert(entryExists(output, "customXml/item1.xml"), "preserved customXml part should ship")
     // ...and no override anywhere points at a part that does not ship
     val dangling = ct.overrides.keys.filterNot(p => entries.contains(p.stripPrefix("/")))
-    assert(dangling.isEmpty, s"overrides point at parts that do not ship: ${dangling.mkString(", ")}")
+    assert(
+      dangling.isEmpty,
+      s"overrides point at parts that do not ship: ${dangling.mkString(", ")}"
+    )
 
     val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
     assertEquals(reloaded.sheetNames.map(_.value), Vector("Sheet1"))

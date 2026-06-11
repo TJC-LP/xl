@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (wave 9)
+
+- **Editing LibreOffice-produced workbooks no longer corrupts them** (#320):
+  `workbook.xml.rels` regenerates in the same pass as `workbook.xml` — sheet rIds stay
+  consistent with their rels (LO maps rId1 to the theme; any edit previously made the first
+  sheet resolve to `theme1.xml`), preserved workbook-level elements survive the regeneration,
+  and multi-add/multi-rename allocates distinct sheetIds. Verified end-to-end: xl and
+  openpyxl both read edited LO files correctly; the wave-7 CfPreservationSpec workaround is
+  undone (full re-reads assert directly).
+- **Comment content-type registration follows actual emitted paths** (#321 — proven already
+  fixed by the GH-315 rework; falsifiability-tested regression guard committed).
+- **No dangling [Content_Types] overrides for dropped writer-owned parts** (#322): deleted
+  sheets' worksheet/comment/VML overrides are pruned from the preserved merge; exotic
+  non-writer-owned overrides still survive.
+- **New sheets join surgical SST accounting** (#323): `Workbook.put` of a fresh sheet on a
+  source-backed workbook references the combined SST (`t="s"`) with exact counts instead of
+  re-inlining its strings.
+
 ## [0.12.1] "Clean Sweep" - 2026-06-11
 
 Wave 7: every remaining open issue closed in one wave — conditional formatting lands as
