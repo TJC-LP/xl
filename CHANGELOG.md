@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (streaming & OOXML robustness, wave 4)
+
+- **docProps emission** (#242): `docProps/core.xml` + `app.xml` written from `WorkbookMetadata`
+  (deterministic — only modeled fields, no GUIDs or wall-clock stamps); reader parses them back;
+  the model wins over preserved verbatim parts; metadata fields un-ignored in the generative
+  equivalence.
+- **Streaming SST + style registry** (#223): two-pass streaming writes emit a real
+  `sharedStrings.xml` (first-occurrence order, per-reference counts) and `styles.xml` instead of
+  inline strings everywhere — per the smart-streaming design; SST accumulator created per run
+  (referential transparency: re-running the same compiled `IO` no longer reuses a dirty
+  accumulator).
+- **1904 date system** (#243): `workbookPr date1904` parsed into `WorkbookMetadata`, preserved on
+  write, epoch-aware serial conversion (no phantom-leap-day in the 1904 system); streaming-edit
+  envelope documented.
+- **Fraction + conditional formats** (#243, #285): Excel fraction rendering (`# ?/?`, `# ??/??`,
+  fixed denominators; continued-fraction nearest under the digit budget, total for BigDecimal
+  beyond Double range) and `[>100]`-style condition-prefix section routing.
+
+### Fixed (wave 4)
+
+- **Date display gaps** (#283): General + date value renders the serial (Excel behavior);
+  custom date codes route through sections (`;;;` hides dates).
+- **Streaming reader parity** (#293, #305): inlineStr cells keep their `s=` style indices;
+  `<f>` formula text trimmed like the DOM reader; `_xHHHH_` escapes decode per-run (bare `<t>`
+  ignored when rich runs present, matching DOM).
+- **StyleParser totality** (#278): malformed `<sz val>` (and sibling numeric attributes) no
+  longer throw through Font's domain guard on read.
+- **Drawing corruption on modify** (#291): namespace prefixes (`xmlns:r`) stay bound when
+  regenerating worksheets with preserved drawings — bindings retained at capture AND hoisted at
+  re-emission; modifying cells in chart/image sheets now produces valid workbooks (unblocks the
+  0.12.0 Visual theme).
+
 ## [0.11.2] "Laws & Functions" - 2026-06-10
 
 Waves 2+3 of the backlog burn-down: the test-infrastructure release that ships its laws
