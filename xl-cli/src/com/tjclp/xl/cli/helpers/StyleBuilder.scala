@@ -241,17 +241,9 @@ object StyleBuilder:
     val mergedFill =
       if newStyle.fill != Fill.None then newStyle.fill else existingStyle.fill
 
-    // Merge border: per-side merging - apply non-none sides from newStyle
-    val mergedBorder = {
-      val existing = existingStyle.border
-      val newer = newStyle.border
-      Border(
-        top = if newer.top != BorderSide.none then newer.top else existing.top,
-        right = if newer.right != BorderSide.none then newer.right else existing.right,
-        bottom = if newer.bottom != BorderSide.none then newer.bottom else existing.bottom,
-        left = if newer.left != BorderSide.none then newer.left else existing.left
-      )
-    }
+    // Merge border: delegate to the core per-side overlay so CLI semantics cannot drift
+    // from the library's (Border.merge / Patch.MergeBorder, GH-279)
+    val mergedBorder = existingStyle.border.merge(newStyle.border)
 
     // Merge numFmt: use newStyle if not General
     val mergedNumFmt =
