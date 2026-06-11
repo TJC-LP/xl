@@ -29,6 +29,10 @@ object XmlUtil:
   val nsPackageRels = "http://schemas.openxmlformats.org/package/2006/relationships"
   val nsContentTypes = "http://schemas.openxmlformats.org/package/2006/content-types"
   val nsX14ac = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+  // DrawingML namespaces (GH-221)
+  val nsSpreadsheetDrawing =
+    "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+  val nsDrawingMain = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
   /** Relationship type URIs */
   val relTypeOfficeDocument =
@@ -46,6 +50,10 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table"
   val relTypeHyperlink =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+  val relTypeDrawing =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing"
+  val relTypeImage =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
   // docProps relationships (GH-242): core props is a PACKAGE relationship type, app is officeDocument
   val relTypeCoreProperties =
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
@@ -61,6 +69,7 @@ object XmlUtil:
   val ctComments = "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
   val ctVmlDrawing = "application/vnd.openxmlformats-officedocument.vmlDrawing"
   val ctTable = "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
+  val ctDrawing = "application/vnd.openxmlformats-officedocument.drawing+xml"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
   val ctCoreProperties = "application/vnd.openxmlformats-package.core-properties+xml"
   val ctExtendedProperties =

@@ -93,12 +93,42 @@ private[ooxml] def usedPrefixBindings(root: Elem): Seq[(String, String)] =
  * sorted-prefix order for deterministic output.
  */
 private[ooxml] def rebindUsedNamespaces(elem: Elem): Elem =
+  rebindUsedNamespaces(elem, includeDefault = false)
+
+/**
+ * The default-namespace URI the subtree's unprefixed elements resolve to, taken from the scope in
+ * effect at the first unprefixed element in document order (GH-221: preserved drawing anchors are
+ * unprefixed in the openpyxl dialect, so their default binding must travel with the fragment for it
+ * to be scope-self-contained). None when every element is prefixed or the binding is absent.
+ */
+private[ooxml] def usedDefaultNamespace(root: Elem): Option[String] =
+  def find(e: Elem, inherited: NamespaceBinding): Option[String] =
+    val effective = Option(e.scope).filterNot(_ == TopScope).getOrElse(inherited)
+    val here =
+      if e.prefix == null || e.prefix.isEmpty then Option(effective.getURI(null))
+      else None
+    here.orElse {
+      e.child.collect { case c: Elem => c }.foldLeft(Option.empty[String]) { (acc, c) =>
+        acc.orElse(find(c, effective))
+      }
+    }
+  find(root, TopScope)
+
+/**
+ * rebindUsedNamespaces extended to also re-bind the DEFAULT namespace used by unprefixed elements
+ * (GH-221). Used for preserved drawing fragments, which must remain namespace-self-contained as
+ * standalone strings; the worksheet path keeps the prefix-only variant (the worksheet's default
+ * namespace is structural and never travels with fragments).
+ */
+private[ooxml] def rebindUsedNamespaces(elem: Elem, includeDefault: Boolean): Elem =
   val used = usedPrefixBindings(elem)
+  val default = if includeDefault then usedDefaultNamespace(elem) else None
   val cleaned = cleanNamespaces(elem)
-  if used.isEmpty then cleaned
+  if used.isEmpty && default.isEmpty then cleaned
   else
-    val scope = used.sortBy(_._1).foldRight(TopScope: NamespaceBinding) {
-      case ((prefix, uri), parent) => NamespaceBinding(prefix, uri, parent)
+    val base = default.fold(TopScope: NamespaceBinding)(NamespaceBinding(null, _, TopScope))
+    val scope = used.sortBy(_._1).foldRight(base) { case ((prefix, uri), parent) =>
+      NamespaceBinding(prefix, uri, parent)
     }
     cleaned.copy(scope = scope)
 

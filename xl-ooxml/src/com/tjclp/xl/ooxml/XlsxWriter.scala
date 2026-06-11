@@ -6,13 +6,16 @@ import java.security.MessageDigest
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.nio.charset.StandardCharsets
+import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try, Using}
 import com.tjclp.xl.api.{Sheet, Workbook, CellValue}
+import com.tjclp.xl.drawings.ImageFormat
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContext}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.tables.TableSpec
+import com.tjclp.xl.ooxml.drawing.{DrawingReader, OoxmlDrawing}
 import com.tjclp.xl.ooxml.worksheet.collectHyperlinks
 
 // Re-export writer config types for backward compatibility
@@ -1085,6 +1088,291 @@ object XlsxWriter:
       case Success(value) => value
       case Failure(exception) => throw exception
 
+  // ========== Drawing layer (GH-221) ==========
+
+  /**
+   * Everything the drawing layer contributes to one write: regenerated/fresh drawing parts, their
+   * rels, new media, source paths superseded by regeneration, first-drawing worksheet wiring, and
+   * the ContentTypes raw material. Pure value computed once per write.
+   */
+  private final case class DrawingWritePlan(
+    parts: Vector[(String, OoxmlDrawing)],
+    rels: Vector[(String, Relationships)],
+    media: Vector[(String, ArraySeq[Byte])],
+    skipPaths: Set[String],
+    drawingRefs: Map[Int, Elem],
+    sheetRelAdditions: Map[Int, Relationship],
+    freshPartPaths: Set[String],
+    allPartPaths: Set[String],
+    imageDefaults: Map[String, String],
+    manifestImageDefaults: Map[String, String]
+  )
+
+  private def drawingRelsPathOf(partPath: String): String =
+    val slash = partPath.lastIndexOf('/')
+    val (dir, name) = partPath.splitAt(slash + 1)
+    s"${dir}_rels/$name.rels"
+
+  private def fileNameOf(path: String): String =
+    path.split('/').lastOption.getOrElse(path)
+
+  private def extensionOf(path: String): String =
+    val name = fileNameOf(path)
+    val dot = name.lastIndexOf('.')
+    if dot >= 0 && dot < name.length - 1 then name.substring(dot + 1) else ""
+
+  private def sha256Hex(bytes: Array[Byte]): String =
+    MessageDigest.getInstance("SHA-256").digest(bytes).map("%02x".format(_)).mkString
+
+  /** Generated `<drawing r:id="rIdDr1"/>` element; GH-291 hoisting carries the r binding. */
+  private def drawingRefElem: Elem =
+    Elem(
+      null,
+      "drawing",
+      new PrefixedAttribute("r", "id", "rIdDr1", Null),
+      NamespaceBinding("r", XmlUtil.nsRelationships, TopScope),
+      minimizeEmpty = true
+    )
+
+  /**
+   * Plan all drawing-layer output for this write (GH-221).
+   *
+   * The hinge is the snapshot-equality dirty test, computed independently of sheetsToRegenerate: a
+   * sheet's drawing part is regenerated IFF its `drawings` vector differs from the as-parsed
+   * snapshot (reference-equality fast path for untouched sheets). Clean sheets contribute nothing —
+   * their parts ride the byte-preservation copy loop, which is what keeps FixturePreservationSpec
+   * green by construction.
+   *
+   * Dirty with a source part: regenerate at the SAME path (worksheet `<drawing r:id>` and sheet
+   * rels stay valid), keep ALL source relationships verbatim, sha256-match picture bytes against
+   * source image targets (reuse rId), else append `rId{max+1}` and write new media
+   * `xl/media/image{M}.{ext}` (M = manifest max + k, ordered by need, sha-deduped per write).
+   *
+   * First drawings on a sheet (no source part / fresh workbook): a new part `drawing{N}.xml`, a
+   * fresh rels file, a `rIdDr1` sheet-rel addition and a generated worksheet `<drawing>` element.
+   * Preserved fragments carrying relationship references are dropped on this path (their targets do
+   * not exist without the source part's rels — documented in LIMITATIONS).
+   *
+   * When sheets were deleted or reordered the index-keyed mappings are unreliable (the
+   * commentPathMapping precedent has the same shape); drawing regeneration is skipped for that
+   * write and parts ride preservation unchanged.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def planDrawingWrites(
+    workbook: Workbook,
+    sourceContext: Option[SourceContext],
+    sheetsToRegenerate: Set[Int]
+  ): DrawingWritePlan =
+    import com.tjclp.xl.drawings.Drawing as DomainDrawing
+
+    val manifestPaths: Set[String] =
+      sourceContext.map(_.partManifest.entries.keySet).getOrElse(Set.empty)
+    val manifestDrawingParts: Set[String] =
+      manifestPaths.filter(_.matches("xl/drawings/drawing\\d+\\.xml"))
+    val manifestImageDefaults: Map[String, String] =
+      manifestPaths
+        .filter(_.startsWith("xl/media/"))
+        .flatMap { p =>
+          val ext = extensionOf(p).toLowerCase
+          ImageFormat.fromExtension(ext).map(f => ext -> f.contentType)
+        }
+        .toMap
+
+    val mappingsUnreliable = sourceContext.exists { ctx =>
+      ctx.modificationTracker.deletedSheets.nonEmpty || ctx.modificationTracker.reorderedSheets
+    }
+
+    val dirtyIndices: Vector[Int] = sourceContext match
+      case Some(_) if mappingsUnreliable => Vector.empty
+      case Some(ctx) =>
+        workbook.sheets.indices.toVector.filter { idx =>
+          workbook.sheets(idx).drawings != ctx.drawingSnapshots.getOrElse(idx, Vector.empty)
+        }
+      case None =>
+        workbook.sheets.indices.toVector.filter(idx => workbook.sheets(idx).drawings.nonEmpty)
+
+    val maxDrawingNum = manifestDrawingParts
+      .flatMap("""drawing(\d+)\.xml""".r.findFirstMatchIn(_))
+      .map(_.group(1).toInt)
+      .maxOption
+      .getOrElse(0)
+    val maxImageNum = manifestPaths
+      .flatMap("""^xl/media/image(\d+)\.""".r.findFirstMatchIn(_))
+      .map(_.group(1).toInt)
+      .maxOption
+      .getOrElse(0)
+
+    var nextDrawing = maxDrawingNum + 1
+    var nextImage = maxImageNum + 1
+    val newMediaByKey = mutable.Map.empty[(String, String), String] // (sha, ext) -> media path
+    val mediaOut = Vector.newBuilder[(String, ArraySeq[Byte])]
+    val partsOut = Vector.newBuilder[(String, OoxmlDrawing)]
+    val relsOut = Vector.newBuilder[(String, Relationships)]
+    val skip = Set.newBuilder[String]
+    val refs = Map.newBuilder[Int, Elem]
+    val relAdds = Map.newBuilder[Int, Relationship]
+    val fresh = Set.newBuilder[String]
+    val usedExts = mutable.Map.empty[String, String]
+
+    def allocMedia(image: com.tjclp.xl.drawings.ImageData): String =
+      val key = (image.sha256, image.format.extension)
+      newMediaByKey.getOrElseUpdate(
+        key, {
+          val path = s"xl/media/image$nextImage.${image.format.extension}"
+          nextImage += 1
+          mediaOut += path -> image.bytes
+          usedExts.update(image.format.extension, image.format.contentType)
+          path
+        }
+      )
+
+    def emitFreshPart(idx: Int, drawings: Vector[DomainDrawing]): Unit =
+      // Rel-referencing Preserved fragments are dropped: no source rels exist to resolve them
+      val keep = drawings.filter {
+        case _: DomainDrawing.Picture => true
+        case DomainDrawing.Preserved(xml) => !OoxmlDrawing.hasRelationshipRefs(xml)
+      }
+      if keep.nonEmpty then
+        val partPath = s"xl/drawings/drawing$nextDrawing.xml"
+        nextDrawing += 1
+        var relCounter = 0
+        val partRels = Vector.newBuilder[Relationship]
+        val targetToRel = mutable.Map.empty[String, String]
+        val embeds = Map.newBuilder[Int, String]
+        keep.zipWithIndex.foreach {
+          case (p: DomainDrawing.Picture, i) =>
+            val target = s"../media/${fileNameOf(allocMedia(p.image))}"
+            val relId = targetToRel.getOrElseUpdate(
+              target, {
+                relCounter += 1
+                val id = s"rId$relCounter"
+                partRels += Relationship(id, XmlUtil.relTypeImage, target)
+                id
+              }
+            )
+            embeds += i -> relId
+          case _ => ()
+        }
+        partsOut += partPath -> OoxmlDrawing.build(keep, embeds.result(), None)
+        val rels = partRels.result()
+        if rels.nonEmpty then relsOut += drawingRelsPathOf(partPath) -> Relationships(rels)
+        fresh += partPath
+        refs += idx -> drawingRefElem
+        relAdds += idx -> Relationship(
+          "rIdDr1",
+          XmlUtil.relTypeDrawing,
+          s"../drawings/${fileNameOf(partPath)}"
+        )
+
+    def emitSamePathPart(ctx: SourceContext, idx: Int, partPath: String): Unit =
+      val sheet = workbook.sheets(idx)
+      val relsPath = drawingRelsPathOf(partPath)
+      val sourceRelsOpt: Option[Relationships] =
+        Try(
+          withZipFile(ctx.sourcePath)(z => parseOptionalEntry(z, relsPath)(Relationships.fromXml))
+        ).toOption.flatten
+      val sourceRels = sourceRelsOpt.getOrElse(Relationships.empty)
+      val sourceScope: Option[NamespaceBinding] =
+        Try(withZipFile(ctx.sourcePath)(z => readZipEntry(z, partPath))).toOption.flatten
+          .flatMap(xml => XmlSecurity.parseSafe(xml, partPath).toOption)
+          .map(_.scope)
+      // sha256 of each source image-rel target (hashed on demand, only on this dirty path)
+      val shaToSourceRel: Map[String, String] =
+        sourceRels.relationships
+          .filter(_.`type` == XmlUtil.relTypeImage)
+          .flatMap { r =>
+            DrawingReader.resolveMediaTarget(r.target).flatMap { mediaPath =>
+              Try(withZipFile(ctx.sourcePath) { z =>
+                Option(z.getEntry(mediaPath)).map(e => z.getInputStream(e).readAllBytes())
+              }).toOption.flatten.map { bytes =>
+                ImageFormat
+                  .fromExtension(extensionOf(mediaPath))
+                  .foreach(f => usedExts.update(extensionOf(mediaPath).toLowerCase, f.contentType))
+                sha256Hex(bytes) -> r.id
+              }
+            }
+          }
+          .toMap
+      var relCounter =
+        sourceRels.relationships.flatMap(_.id.stripPrefix("rId").toIntOption).maxOption.getOrElse(0)
+      val appended = Vector.newBuilder[Relationship]
+      val targetToRel = mutable.Map.empty[String, String]
+      val embeds = Map.newBuilder[Int, String]
+      sheet.drawings.zipWithIndex.foreach {
+        case (p: DomainDrawing.Picture, anchorIdx) =>
+          shaToSourceRel.get(p.image.sha256) match
+            case Some(relId) => embeds += anchorIdx -> relId
+            case None =>
+              val target = s"../media/${fileNameOf(allocMedia(p.image))}"
+              val relId = targetToRel.getOrElseUpdate(
+                target, {
+                  relCounter += 1
+                  val id = s"rId$relCounter"
+                  appended += Relationship(id, XmlUtil.relTypeImage, target)
+                  id
+                }
+              )
+              embeds += anchorIdx -> relId
+        case _ => ()
+      }
+      // ALL source relationships are kept verbatim: preserved fragments' embedded rIds resolve by
+      // construction, and orphaned image rels are legal (their media is still byte-copied — media
+      // is never deleted in 6a).
+      val finalRels = Relationships(sourceRels.relationships ++ appended.result())
+      partsOut += partPath -> OoxmlDrawing.build(sheet.drawings, embeds.result(), sourceScope)
+      skip += partPath
+      if sourceRelsOpt.isDefined then skip += relsPath
+      if finalRels.relationships.nonEmpty then relsOut += relsPath -> finalRels
+
+    dirtyIndices.foreach { idx =>
+      sourceContext match
+        case Some(ctx) =>
+          ctx.drawingPathMapping.get(idx) match
+            case Some(partPath) => emitSamePathPart(ctx, idx, partPath)
+            case None =>
+              // First drawings on this sheet. Only wire when the worksheet is regenerated (it
+              // must carry the <drawing> ref); untracked direct-Sheet surgery already loses
+              // modification tracking for cells too — same documented caveat.
+              if sheetsToRegenerate.contains(idx) then
+                emitFreshPart(idx, workbook.sheets(idx).drawings)
+        case None =>
+          emitFreshPart(idx, workbook.sheets(idx).drawings)
+    }
+
+    val freshPaths = fresh.result()
+    DrawingWritePlan(
+      parts = partsOut.result(),
+      rels = relsOut.result(),
+      media = mediaOut.result(),
+      skipPaths = skip.result(),
+      drawingRefs = refs.result(),
+      sheetRelAdditions = relAdds.result(),
+      freshPartPaths = freshPaths,
+      allPartPaths = manifestDrawingParts ++ freshPaths,
+      imageDefaults = usedExts.toMap,
+      manifestImageDefaults = manifestImageDefaults
+    )
+
+  /** Write a raw binary part (media bytes) to the output zip. */
+  private def writeBinaryPart(
+    zip: ZipOutputStream,
+    entryName: String,
+    bytes: Array[Byte],
+    config: WriterConfig
+  ): Unit =
+    val entry = new ZipEntry(entryName)
+    entry.setTime(0L)
+    entry.setMethod(config.compression.zipMethod)
+    config.compression match
+      case Compression.Stored =>
+        entry.setSize(bytes.length)
+        entry.setCompressedSize(bytes.length)
+        entry.setCrc(calculateCrc(bytes))
+      case Compression.Deflated => ()
+    zip.putNextEntry(entry)
+    zip.write(bytes)
+    zip.closeEntry()
+
   /** Helper to open a ZipFile with automatic resource management. */
   private def withZipFile[A](path: Path)(f: ZipFile => A): A =
     usingOrThrow(Using.Manager { use =>
@@ -1382,6 +1670,9 @@ object XlsxWriter:
     // Build table data
     val (tablesBySheet, totalTableCount, tableIdMap) = buildTablesData(workbook)
 
+    // GH-221: drawing-layer plan — snapshot-equality dirty test, media dedup, first-drawing wiring
+    val drawingPlan = planDrawingWrites(workbook, sourceContext, sheetsToRegenerate)
+
     // Preserve structural parts from source (or fallback to minimal)
     // IMPORTANT: When metadata is modified (add/remove/rename/reorder sheets),
     // we MUST regenerate the structural parts since sheet count/order changed.
@@ -1429,11 +1720,18 @@ object XlsxWriter:
               preserved.overrides + ("/xl/sharedStrings.xml" -> XmlUtil.ctSharedStrings)
             )
           else preserved
-        // Only add table overrides (comments already in preserved Content_Types)
+        // Only add table overrides (comments already in preserved Content_Types).
+        // GH-221: source drawing overrides/media defaults are already in the preserved types;
+        // register only fresh parts and the media extensions this write touches (idempotent).
         withSst
           .withTableOverrides(totalTableCount)
           .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
+          .withDrawingOverrides(drawingPlan.freshPartPaths)
+          .withImageDefaults(drawingPlan.imageDefaults)
       case None =>
+        // GH-221: this branch regenerates [Content_Types].xml from scratch while preserved
+        // drawing/media parts still ride the copy loop, so register EVERY drawing part shipping
+        // (manifest + fresh) and every known media extension (manifest + written).
         ContentTypes
           .minimal(
             hasStyles = true,
@@ -1444,6 +1742,8 @@ object XlsxWriter:
           .withCommentOverrides(sheetsWithComments)
           .withTableOverrides(totalTableCount)
           .withDocPropsOverrides(corePropsXml.isDefined, appPropsXml.isDefined)
+          .withDrawingOverrides(drawingPlan.allPartPaths)
+          .withImageDefaults(drawingPlan.manifestImageDefaults ++ drawingPlan.imageDefaults)
 
     val rootRels = preservedRootRels
       .getOrElse(Relationships.root())
@@ -1549,9 +1849,11 @@ object XlsxWriter:
           }
 
           // For SaxStax backend with no preserved metadata, use direct SAX emission
-          // (bypasses intermediate OOXML types for 5-7x performance improvement)
+          // (bypasses intermediate OOXML types for 5-7x performance improvement).
+          // GH-221: sheets with drawings force the OoxmlWorksheet path — DirectSaxEmitter has no
+          // <drawing> support yet (deferred).
           (config.backend, preservedMetadata) match
-            case (XmlBackend.SaxStax, None) =>
+            case (XmlBackend.SaxStax, None) if sheet.drawings.isEmpty =>
               writeWorksheetDirect(
                 zip,
                 s"xl/worksheets/sheet${idx + 1}.xml",
@@ -1570,7 +1872,8 @@ object XlsxWriter:
                   remapping,
                   preservedMetadata,
                   tablePartsXml,
-                  escapeFormulas
+                  escapeFormulas,
+                  drawingPlan.drawingRefs.get(idx)
                 )
               writeWorksheet(zip, s"xl/worksheets/sheet${idx + 1}.xml", ooxmlSheet, config)
 
@@ -1589,10 +1892,13 @@ object XlsxWriter:
           val hlRels = hyperlinkRelationships(sheet) // GH-235
 
           // Copy relationships from source if available (preserves non-comment relationships).
-          // Otherwise regenerate minimal relationships. Authored hyperlinks (hlRels) are merged in.
+          // Otherwise regenerate minimal relationships. Authored hyperlinks (hlRels) are merged
+          // in, as is a first-drawing rel (rIdDr1, GH-221) when this sheet gained a fresh part.
+          val drawingRelAdd = drawingPlan.sheetRelAdditions.get(idx)
           sourceContext match
             case Some(ctx) if ctx.partManifest.contains(relsPath) =>
-              if hlRels.isEmpty then copyPreservedPart(ctx.sourcePath, relsPath, zip)
+              if hlRels.isEmpty && drawingRelAdd.isEmpty then
+                copyPreservedPart(ctx.sourcePath, relsPath, zip)
               else
                 // Merge authored hyperlink rels into the preserved sheet rels (parse + append)
                 val preserved = withZipFile(ctx.sourcePath) { z =>
@@ -1601,11 +1907,22 @@ object XlsxWriter:
                 // Drop the source's hyperlink rels (we regenerate them from the model) to avoid
                 // orphans, but keep everything else (printerSettings, drawings, ...).
                 val kept = preserved.relationships.filterNot(_.`type` == XmlUtil.relTypeHyperlink)
-                writePart(zip, relsPath, Relationships(kept ++ hlRels), config)
-            case _ if hasComments || tableIds.nonEmpty || hlRels.nonEmpty =>
+                writePart(
+                  zip,
+                  relsPath,
+                  Relationships(kept ++ hlRels ++ drawingRelAdd.toList),
+                  config
+                )
+            case _
+                if hasComments || tableIds.nonEmpty || hlRels.nonEmpty || drawingRelAdd.nonEmpty =>
               val base =
                 buildWorksheetRelationshipsWithCommentsPath(commentPath, hasComments, tableIds)
-              writePart(zip, relsPath, Relationships(base.relationships ++ hlRels), config)
+              writePart(
+                zip,
+                relsPath,
+                Relationships(base.relationships ++ hlRels ++ drawingRelAdd.toList),
+                config
+              )
             case _ => // No relationships needed
 
           // Always regenerate comments/VML from domain model for modified sheets
@@ -1641,9 +1958,17 @@ object XlsxWriter:
         writePart(zip, s"xl/tables/table$tableId.xml", ooxmlTable, config)
       }
 
+      // GH-221: regenerated/fresh drawing parts, their rels, and new media
+      drawingPlan.parts.foreach { case (path, part) => writePart(zip, path, part, config) }
+      drawingPlan.rels.foreach { case (path, rels) => writePart(zip, path, rels, config) }
+      drawingPlan.media.foreach { case (path, bytes) =>
+        writeBinaryPart(zip, path, bytes.toArray, config)
+      }
+
       // Copy preserved parts (charts, drawings, images, etc.) if source available
       // Skip VML drawings for regenerated sheets - we regenerate VML from domain model
-      // (or omit it if comments were removed)
+      // (or omit it if comments were removed); skip drawing parts superseded by same-path
+      // regeneration (GH-221)
       sourceContext.foreach { ctx =>
         val vmlPathsToSkip = sheetsToRegenerate.flatMap { idx =>
           ctx.commentPathMapping.get(idx).map { commentPath =>
@@ -1654,7 +1979,9 @@ object XlsxWriter:
 
         preservableParts.foreach { path =>
           val isVmlDrawing = path.startsWith("xl/drawings/vmlDrawing") && path.endsWith(".vml")
-          val shouldSkip = isVmlDrawing && vmlPathsToSkip.contains(path)
+          val shouldSkip =
+            (isVmlDrawing && vmlPathsToSkip.contains(path)) ||
+              drawingPlan.skipPaths.contains(path)
 
           if !shouldSkip then copyPreservedPart(ctx.sourcePath, path, zip)
         }

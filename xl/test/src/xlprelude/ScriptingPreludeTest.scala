@@ -170,3 +170,27 @@ class ScriptingPreludeTest extends FunSuite:
   test("ExcelIO escape hatch is reachable"):
     val io = ExcelIO
     assert(io != null || true)
+
+  test("drawing layer resolves through the prelude: addImage round-trips an embedded image"):
+    // 1x1-style tiny PNG (the 2x3 generator template, inlined: prelude tests are self-contained)
+    val pngHex =
+      "89504e470d0a1a0a0000000d4948445200000002000000030802000000368849d60000000e49444154785e63f8cf8001fe0300150001ff0bfeb2140000000049454e44ae426082"
+    val bytes = scala.collection.immutable.ArraySeq.unsafeWrapArray(
+      pngHex.grouped(2).map(Integer.parseInt(_, 16).toByte).toArray
+    )
+    val image = ImageData.detect(bytes).unsafe
+    assertEquals(image.format, ImageFormat.Png)
+    val sheet = Sheet("Pics")
+      .put(ref"A1", "with image")
+      .addImage(image, ref"B2")
+      .unsafe // natural-size overload returns XLResult (Tiff/Emf/Wmf are unsniffable)
+      .addImage(image, DrawingAnchor.over(ref"C3:E6", EditAs.OneCell))
+    assertEquals(sheet.pictures.size, 2)
+    val dir = java.nio.file.Files.createTempDirectory("xl-prelude-drawing")
+    val path = dir.resolve("image.xlsx")
+    Excel.write(Workbook(sheet), path.toString)
+    val loaded = Excel.read(path.toString)
+    val pictures = loaded.sheets.headOption.map(_.pictures).getOrElse(Vector.empty)
+    assertEquals(pictures.size, 2)
+    assertEquals(pictures.map(_.image.format), Vector(ImageFormat.Png, ImageFormat.Png))
+    assertEquals(pictures(0).image.bytes, bytes)

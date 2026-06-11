@@ -1,5 +1,6 @@
 package com.tjclp.xl.context
 
+import com.tjclp.xl.drawings.Drawing
 import com.tjclp.xl.ooxml.PartManifest
 import com.tjclp.xl.workbooks.Workbook
 
@@ -16,13 +17,22 @@ import scala.collection.immutable.ArraySeq
  *   Mapping from 0-based sheet index to comment file path (e.g., "xl/comments1.xml"). Excel numbers
  *   comment files sequentially across only sheets that have comments, NOT by sheet index. This
  *   mapping preserves the original paths to enable correct surgical writes.
+ * @param drawingPathMapping
+ *   Mapping from 0-based sheet index to drawing part path (e.g., "xl/drawings/drawing1.xml") for
+ *   sheets whose drawing part was parsed at read time (GH-221).
+ * @param drawingSnapshots
+ *   As-parsed `Sheet.drawings` vectors by 0-based sheet index — the SAME references stored on the
+ *   sheets, so the writer's snapshot-equality dirty test hits the reference-equality fast path for
+ *   untouched sheets (GH-221).
  */
 final case class SourceContext(
   sourcePath: Path,
   partManifest: PartManifest,
   modificationTracker: ModificationTracker,
   fingerprint: SourceFingerprint,
-  commentPathMapping: Map[Int, String] = Map.empty
+  commentPathMapping: Map[Int, String] = Map.empty,
+  drawingPathMapping: Map[Int, String] = Map.empty,
+  drawingSnapshots: Map[Int, Vector[Drawing]] = Map.empty
 ) derives CanEqual:
 
   /** True when no workbook modifications have been recorded. */
@@ -51,11 +61,25 @@ object SourceContext:
    * @param commentPathMapping
    *   Mapping from 0-based sheet index to comment file path. Excel numbers comment files
    *   sequentially (comments1.xml, comments2.xml...) across only sheets that have comments.
+   * @param drawingPathMapping
+   *   Mapping from 0-based sheet index to drawing part path (GH-221).
+   * @param drawingSnapshots
+   *   As-parsed drawings vectors by 0-based sheet index (GH-221).
    */
   def fromFile(
     path: Path,
     manifest: PartManifest,
     fingerprint: SourceFingerprint,
-    commentPathMapping: Map[Int, String] = Map.empty
+    commentPathMapping: Map[Int, String] = Map.empty,
+    drawingPathMapping: Map[Int, String] = Map.empty,
+    drawingSnapshots: Map[Int, Vector[Drawing]] = Map.empty
   ): SourceContext =
-    SourceContext(path, manifest, ModificationTracker.clean, fingerprint, commentPathMapping)
+    SourceContext(
+      path,
+      manifest,
+      ModificationTracker.clean,
+      fingerprint,
+      commentPathMapping,
+      drawingPathMapping,
+      drawingSnapshots
+    )

@@ -6,8 +6,11 @@ package com.tjclp.xl.ooxml
  * Tracks which ZIP entries depend on which sheets, enabling surgical modification to determine
  * which parts can be preserved byte-for-byte vs. which must be regenerated.
  *
- * Example: If xl/drawings/drawing1.xml references Sheet1, and Sheet1 is modified, the drawing must
- * be regenerated or dropped (XL doesn't yet parse drawings, so we drop).
+ * Example: If a part carried a sheetIndex hint and that sheet is modified, the part is excluded
+ * from byte-preservation. Drawing/media parts deliberately carry NO sheet dependencies here: the
+ * drawing layer (GH-221) preserves them whole-part and regenerates a drawing part only when its
+ * sheet's `drawings` vector actually changed (snapshot-equality dirty test in XlsxWriter). Adding
+ * graph edges for drawing parts would un-preserve them on EVERY cell edit — do not.
  *
  * PURITY: This is a pure data structure with no IO. All graph construction is deterministic.
  */

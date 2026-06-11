@@ -51,6 +51,9 @@ object XlsxReader:
   enum Warning:
     case MissingStylesXml
 
+    /** A drawing part was structurally unparseable; it rides byte-preservation only (GH-221). */
+    case MalformedDrawingPart(path: String)
+
   /** Successful read result with accumulated warnings. */
   case class ReadResult(workbook: Workbook, warnings: Vector[Warning])
 
@@ -137,6 +140,22 @@ object XlsxReader:
       path.matches("xl/worksheets/_rels/sheet\\d+\\.xml\\.rels")
 
   /**
+   * Drawing parts and media retained as raw content during the zip scan (GH-221). These entries
+   * stay `recordUnparsed` in the manifest — their unparsed status feeds the surgical writer's
+   * preservation machinery (determinePreservableParts), which must keep copying them verbatim. Only
+   * the media bytes referenced by parsed Pictures survive into the model; this scan-time container
+   * is discarded after parsing.
+   */
+  private case class RetainedDrawingParts(
+    xml: Map[String, String], // drawingN.xml and drawingN.xml.rels, as UTF-8
+    media: Map[String, ArraySeq[Byte]] // xl/media/*
+  )
+
+  private def isDrawingXmlPart(path: String): Boolean =
+    path.matches("xl/drawings/drawing\\d+\\.xml") ||
+      path.matches("xl/drawings/_rels/drawing\\d+\\.xml\\.rels")
+
+  /**
    * Read workbook from XLSX file (in-memory).
    *
    * Loads entire file into memory. For large files, use `ExcelIO.readStream()` instead.
@@ -216,6 +235,8 @@ object XlsxReader:
   ): XLResult[ReadResult] =
     val zip = new ZipInputStream(is)
     val parts = mutable.Map[String, String]()
+    val drawingXml = mutable.Map[String, String]()
+    val mediaBytes = mutable.Map[String, ArraySeq[Byte]]()
     val manifestBuilder = PartManifestBuilder.empty
 
     // Security tracking
@@ -274,6 +295,14 @@ object XlsxReader:
                 parts(entryName) = new String(content, "UTF-8")
                 builder = builder.recordParsed(entryName)
               else
+                // GH-221: retain drawing XML and media bytes for the drawing layer. The entries
+                // stay UNPARSED in the manifest (byte-preservation contract); zero extra IO —
+                // content was already read for security accounting. Memory stays bounded by
+                // ReaderConfig.maxUncompressedSize.
+                if isDrawingXmlPart(entryName) then
+                  drawingXml(entryName) = new String(content, "UTF-8")
+                else if entryName.startsWith("xl/media/") then
+                  mediaBytes(entryName) = ArraySeq.unsafeWrapArray(content)
                 // Unknown part - index but don't store content
                 builder = builder.recordUnparsed(entryName)
 
@@ -299,7 +328,14 @@ object XlsxReader:
           val fingerprint = source.map(_.finalizeFingerprint())
 
           // Parse workbook structure from known parts
-          parseWorkbook(parts.toMap, source, manifest, fingerprint, config)
+          parseWorkbook(
+            parts.toMap,
+            RetainedDrawingParts(drawingXml.toMap, mediaBytes.toMap),
+            source,
+            manifest,
+            fingerprint,
+            config
+          )
 
     finally zip.close()
 
@@ -319,6 +355,7 @@ object XlsxReader:
    */
   private def parseWorkbook(
     parts: Map[String, String],
+    retainedDrawings: RetainedDrawingParts,
     source: Option[SourceHandle],
     manifest: PartManifest,
     fingerprint: Option[SourceFingerprint],
@@ -347,8 +384,16 @@ object XlsxReader:
       // Parse theme (optional, falls back to Office theme)
       theme = parseTheme(parts)
 
-      // Parse sheets and collect comment path mapping
-      (sheets, commentPathMapping) <- parseSheets(parts, ooxmlWb.sheets, sst, styles, workbookRels)
+      // Parse sheets and collect comment/drawing mappings (GH-221)
+      parsedSheets <- parseSheets(
+        parts,
+        retainedDrawings,
+        ooxmlWb.sheets,
+        sst,
+        styles,
+        workbookRels
+      )
+      (sheets, commentPathMapping) = (parsedSheets.sheets, parsedSheets.commentPathMapping)
 
       // Parse defined names from workbook.xml (shared with the surgical writer)
       definedNames = OoxmlWorkbook.parseDefinedNames(ooxmlWb.definedNames)
@@ -373,9 +418,11 @@ object XlsxReader:
         sheetStates,
         commentPathMapping,
         date1904 = ooxmlWb.date1904,
-        docProps
+        docProps,
+        drawingPathMapping = parsedSheets.drawingPathMapping,
+        drawingSnapshots = parsedSheets.drawingSnapshots
       )
-    yield ReadResult(workbook, styleWarnings)
+    yield ReadResult(workbook, styleWarnings ++ parsedSheets.warnings)
 
   /**
    * Parse docProps/core.xml + app.xml into the modeled metadata fields (GH-242).
@@ -409,20 +456,22 @@ object XlsxReader:
         yield Some(sst)
 
   /**
-   * Parse worksheet relationships to find comment and table references.
+   * Parse worksheet relationships to find comment, table, hyperlink, and drawing references.
    *
-   * Returns (commentPath, tableTargets) where:
+   * Returns (commentPath, tableTargets, hyperlinkRels, drawingPath) where:
    *   - commentPath: Optional path to comments file (e.g., "../comments1.xml")
    *   - tableTargets: Sequence of table file paths (e.g., ["../tables/table1.xml",
    *     "../tables/table2.xml"])
+   *   - drawingPath: Optional resolved drawing part path (GH-221) — lenient: an unresolvable target
+   *     yields None (the part still rides byte-preservation) rather than failing the read.
    */
   private def parseWorksheetRelationships(
     parts: Map[String, String],
     sheetIndex: Int
-  ): XLResult[(Option[String], Seq[String], Map[String, String])] =
+  ): XLResult[(Option[String], Seq[String], Map[String, String], Option[String])] =
     val relsPath = s"xl/worksheets/_rels/sheet$sheetIndex.xml.rels"
     parts.get(relsPath) match
-      case None => Right((None, Seq.empty, Map.empty)) // No relationships for this sheet
+      case None => Right((None, Seq.empty, Map.empty, None)) // No relationships for this sheet
       case Some(xml) =>
         for
           elem <- parseXml(xml, relsPath)
@@ -446,7 +495,13 @@ object XlsxReader:
             .filter(_.`type` == XmlUtil.relTypeHyperlink)
             .map(r => r.id -> r.target)
             .toMap
-        yield (commentTarget, tableTargets, hyperlinkRels)
+
+          // GH-221: drawing relationship — same normalization as comments (the fixture target is
+          // ABSOLUTE "/xl/drawings/drawing1.xml"; Excel writes "../drawings/drawing1.xml")
+          drawingTarget = rels.relationships
+            .find(_.`type` == XmlUtil.relTypeDrawing)
+            .flatMap(rel => resolveCommentPath(rel.target, relsPath).toOption)
+        yield (commentTarget, tableTargets, hyperlinkRels, drawingTarget)
 
   private def resolveCommentPath(target: String, relsPath: String): XLResult[String] =
     val cleanedTarget = if target.startsWith("/") then target.drop(1) else target
@@ -682,22 +737,38 @@ object XlsxReader:
           case Right(palette) => palette
           case Left(_) => ThemePalette.office
 
+  /** Result of [[parseSheets]]: sheets plus the per-sheet part mappings and read warnings. */
+  private case class ParsedSheets(
+    sheets: Vector[Sheet],
+    commentPathMapping: Map[Int, String],
+    drawingPathMapping: Map[Int, String],
+    drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]],
+    warnings: Vector[Warning]
+  )
+
   /**
-   * Parse all worksheets and collect comment path mapping.
+   * Parse all worksheets and collect comment/drawing path mappings.
    *
-   * Returns both the parsed sheets and a mapping from 0-based sheet index to comment file path.
    * Excel numbers comment files sequentially (comments1.xml, comments2.xml...) across only sheets
-   * that have comments, NOT by sheet index. This mapping preserves the original paths.
+   * that have comments, NOT by sheet index. The mappings preserve the original paths.
+   *
+   * GH-221: drawing parts are parsed into `Sheet.drawings`; the as-parsed vectors are ALSO recorded
+   * (same references) as snapshots for the writer's dirty test. A structurally unparseable drawing
+   * part contributes a warning and an empty vector — the part itself still rides byte-preservation.
    */
   private def parseSheets(
     parts: Map[String, String],
+    retainedDrawings: RetainedDrawingParts,
     sheetRefs: Seq[SheetRef],
     sst: Option[SharedStrings],
     styles: WorkbookStyles,
     relationships: Relationships
-  ): XLResult[(Vector[Sheet], Map[Int, String])] =
+  ): XLResult[ParsedSheets] =
     val relMap = relationships.relationships.map(rel => rel.id -> rel).toMap
     val commentPathBuilder = Map.newBuilder[Int, String]
+    val drawingPathBuilder = Map.newBuilder[Int, String]
+    val drawingSnapshotBuilder = Map.newBuilder[Int, Vector[com.tjclp.xl.drawings.Drawing]]
+    val warningBuilder = Vector.newBuilder[Warning]
 
     sheetRefs.toVector.zipWithIndex
       .traverse { case (ref, idx) =>
@@ -716,10 +787,8 @@ object XlsxReader:
             .left
             .map(err => XLError.ParseError(sheetPath, err): XLError)
           // Parse worksheet relationships to find comment/table references (1-based sheet index)
-          (commentTarget, tableTargets, hyperlinkRels) <- parseWorksheetRelationships(
-            parts,
-            idx + 1
-          )
+          (commentTarget, tableTargets, hyperlinkRels, drawingTarget) <-
+            parseWorksheetRelationships(parts, idx + 1)
 
           // Parse comments if relationship exists
           comments <- commentTarget match
@@ -732,6 +801,19 @@ object XlsxReader:
           // Parse tables if relationships exist
           tables <- parseTablesForSheet(parts, tableTargets)
 
+          // GH-221: parse the drawing part (total — never fails the read)
+          drawings = drawingTarget.filter(retainedDrawings.xml.contains) match
+            case Some(drawingPath) =>
+              drawingPathBuilder += (idx -> drawingPath)
+              val parsed = parseDrawingsForSheet(retainedDrawings, drawingPath) match
+                case Right(vector) => vector
+                case Left(warning) =>
+                  warningBuilder += warning
+                  Vector.empty
+              drawingSnapshotBuilder += (idx -> parsed)
+              parsed
+            case None => Vector.empty[com.tjclp.xl.drawings.Drawing]
+
           domainSheet <- convertToDomainSheet(
             ref.name,
             ooxmlSheet,
@@ -739,11 +821,51 @@ object XlsxReader:
             styles,
             comments,
             tables,
-            hyperlinkRels
+            hyperlinkRels,
+            drawings
           )
         yield domainSheet
       }
-      .map(sheets => (sheets, commentPathBuilder.result()))
+      .map(sheets =>
+        ParsedSheets(
+          sheets,
+          commentPathBuilder.result(),
+          drawingPathBuilder.result(),
+          drawingSnapshotBuilder.result(),
+          warningBuilder.result()
+        )
+      )
+
+  /**
+   * Parse one drawing part with its rels into the typed/preserved drawing vector (GH-221).
+   * Left(warning) when the part XML itself is structurally malformed.
+   */
+  private def parseDrawingsForSheet(
+    retainedDrawings: RetainedDrawingParts,
+    drawingPath: String
+  ): Either[Warning, Vector[com.tjclp.xl.drawings.Drawing]] =
+    import com.tjclp.xl.ooxml.drawing.DrawingReader
+    val relsPath = drawingRelsPath(drawingPath)
+    val rels = retainedDrawings.xml
+      .get(relsPath)
+      .flatMap(xml => XmlSecurity.parseSafe(xml, relsPath).toOption)
+      .flatMap(elem => Relationships.fromXml(elem).toOption)
+      .getOrElse(Relationships.empty)
+    retainedDrawings.xml.get(drawingPath) match
+      case None => Right(Vector.empty)
+      case Some(xml) =>
+        XmlSecurity.parseSafe(xml, drawingPath) match
+          case Left(_) => Left(Warning.MalformedDrawingPart(drawingPath))
+          case Right(elem) =>
+            Right(DrawingReader.fromElem(elem, rels, retainedDrawings.media.get))
+
+  /**
+   * Rels path for a drawing part: xl/drawings/drawing1.xml -> xl/drawings/_rels/drawing1.xml.rels
+   */
+  private def drawingRelsPath(drawingPath: String): String =
+    val slash = drawingPath.lastIndexOf('/')
+    val (dir, name) = drawingPath.splitAt(slash + 1)
+    s"${dir}_rels/$name.rels"
 
   private def defaultSheetPath(sheetId: Int): String = s"xl/worksheets/sheet$sheetId.xml"
 
@@ -767,7 +889,8 @@ object XlsxReader:
     styles: WorkbookStyles,
     comments: Map[ARef, com.tjclp.xl.cells.Comment],
     tables: Map[String, TableSpec],
-    hyperlinkRels: Map[String, String]
+    hyperlinkRels: Map[String, String],
+    drawings: Vector[com.tjclp.xl.drawings.Drawing]
   ): XLResult[Sheet] =
     val (preRegisteredRegistry, styleMapping) = buildStyleRegistry(styles)
 
@@ -834,7 +957,8 @@ object XlsxReader:
         columnProperties = columnProperties,
         rowProperties = rowProperties,
         pageSetup = pageSetup,
-        viewSettings = viewSettings
+        viewSettings = viewSettings,
+        drawings = drawings
       )
     )
 
@@ -1024,14 +1148,27 @@ object XlsxReader:
     sheetStates: Map[SheetName, Option[String]],
     commentPathMapping: Map[Int, String],
     date1904: Boolean,
-    docProps: DocProps.Data
+    docProps: DocProps.Data,
+    drawingPathMapping: Map[Int, String],
+    drawingSnapshots: Map[Int, Vector[com.tjclp.xl.drawings.Drawing]]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
       val sourceContextEither: XLResult[Option[SourceContext]] =
         (source, fingerprint) match
           case (Some(handle), Some(fp)) =>
-            Right(Some(SourceContext.fromFile(handle.path, manifest, fp, commentPathMapping)))
+            Right(
+              Some(
+                SourceContext.fromFile(
+                  handle.path,
+                  manifest,
+                  fp,
+                  commentPathMapping,
+                  drawingPathMapping,
+                  drawingSnapshots
+                )
+              )
+            )
           case (None, None) => Right(None)
           case (Some(_), None) =>
             Left(XLError.IOError("Missing source fingerprint for workbook"))
