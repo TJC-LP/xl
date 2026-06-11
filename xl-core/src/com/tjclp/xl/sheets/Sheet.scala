@@ -85,9 +85,25 @@ final case class Sheet(
   def contains(ref: ARef): Boolean =
     cells.contains(ref)
 
-  /** Put cell at reference (always succeeds - Cell is pre-validated) */
+  /**
+   * Put cell at reference (always succeeds - Cell is pre-validated).
+   *
+   * If the deprecated `Cell.comment` field is set, it is converted into the sheet-level comment
+   * store ([[comments]], the store the OOXML writer serializes) as a plain-text comment without
+   * author, and the field is cleared on the stored cell. Previously the field silently vanished on
+   * write (GH-295); an existing sheet comment at the same ref is overwritten (last write wins). A
+   * cell without the field set never touches [[comments]].
+   */
+  @annotation.nowarn("cat=deprecation") // write-through shim for the deprecated Cell.comment field
   def put(cell: Cell): Sheet =
-    copy(cells = cells.updated(cell.ref, cell))
+    cell.comment match
+      case Some(text) =>
+        copy(
+          cells = cells.updated(cell.ref, cell.copy(comment = None)),
+          comments = comments.updated(cell.ref, Comment.plainText(text))
+        )
+      case None =>
+        copy(cells = cells.updated(cell.ref, cell))
 
   // ===== Structural editing: insert/delete rows & columns (GH-128, GH-129) =====
   // PURE cell/merge/property/freeze shifting along one axis. Formula-reference rewriting is layered
