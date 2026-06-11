@@ -65,13 +65,27 @@ trait FormulaDisplayStrategy:
  */
 trait LowPriorityFormulaDisplay:
   /**
-   * Default strategy: Show raw formula text (no evaluation).
+   * Default strategy: Show the cached value when present, raw formula text otherwise.
    *
-   * This is the fallback when xl-evaluator is not imported. Formulas display as `"=SUM(A1:A10)"`.
+   * This is the fallback when xl-evaluator is not imported. It never evaluates, but it does prefer
+   * the cached value carried by `CellValue.Formula` (populated by `Workbook.recalculate()` or read
+   * from disk), formatted via the cell's number format — files Excel or xl already evaluated thus
+   * display meaningfully for xl-core-only consumers (GH-282, mirroring the evaluating strategy's
+   * cache preference from GH-275). Uncached formulas display as `"=SUM(A1:A10)"`.
    */
   given default: FormulaDisplayStrategy with
     def format(formula: String, sheet: Sheet): String =
       // Formula expression already includes "=" prefix
       if formula.startsWith("=") then formula else s"=$formula"
+
+    override def formatCached(
+      formula: String,
+      cached: Option[CellValue],
+      numFmt: NumFmt,
+      sheet: Sheet
+    ): String =
+      cached match
+        case Some(value) => NumFmtFormatter.formatValue(value, numFmt)
+        case None => format(formula, sheet)
 
 object FormulaDisplayStrategy extends LowPriorityFormulaDisplay

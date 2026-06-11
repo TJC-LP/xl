@@ -63,6 +63,9 @@ class StreamingReadSpec extends CatsEffectSuite:
         )
       yield
         assertEquals(streaming, inMemory)
-        assert(!streaming.endsWith("\n"), s"streaming CSV should not end with newline: '$streaming'")
+        assert(
+          !streaming.endsWith("\n"),
+          s"streaming CSV should not end with newline: '$streaming'"
+        )
     }
   }

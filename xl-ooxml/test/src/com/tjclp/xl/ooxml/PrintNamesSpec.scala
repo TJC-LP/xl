@@ -6,8 +6,8 @@ import munit.FunSuite
 /**
  * GH-263: sheet names that parse as cell references (Q1, A1, R1C1, ...) must be single-quoted in
  * defined-name formulas, or the generated workbook.xml is spec-invalid (Excel writes
- * `'Q1'!$A$1:$B$2`, never `Q1!$A$1:$B$2`). Quoting delegates to the shared
- * `SheetName.needsQuoting` predicate.
+ * `'Q1'!$A$1:$B$2`, never `Q1!$A$1:$B$2`). Quoting delegates to the shared `SheetName.needsQuoting`
+ * predicate.
  */
 class PrintNamesSpec extends FunSuite:
 

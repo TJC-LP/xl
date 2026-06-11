@@ -50,7 +50,7 @@ class XmlValueSanitizationSpec extends FunSuite:
   }
 
   test("sanitizeXmlText preserves astral characters (emoji surrogate pairs)") {
-    val emoji = "hi " + new String(Character.toChars(0x1F600)) // grinning face
+    val emoji = "hi " + new String(Character.toChars(0x1f600)) // grinning face
     assertEquals(XmlUtil.sanitizeXmlText(emoji), emoji)
   }
 

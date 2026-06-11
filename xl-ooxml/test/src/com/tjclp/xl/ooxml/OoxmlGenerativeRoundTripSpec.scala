@@ -51,12 +51,30 @@ class OoxmlGenerativeRoundTripSpec extends ScalaCheckSuite:
       .flatMap(_.toIntOption)
       .getOrElse(100)
 
+  // GH-308: the scheduled law-fuzz workflow sets XL_ROUNDTRIP_RANDOM_SEED=true to explore
+  // beyond the pinned seed; the chosen seed is printed so failures replay locally via
+  // -Dxl.roundtrip.seed=<value>.
+  private val explicitSeed: Option[org.scalacheck.rng.Seed] =
+    sys.props.get("xl.roundtrip.seed").flatMap { raw =>
+      raw.toLongOption
+        .map(org.scalacheck.rng.Seed.apply)
+        .orElse(org.scalacheck.rng.Seed.fromBase64(raw).toOption)
+    }
+
+  private val randomSeed: Boolean =
+    explicitSeed.isEmpty &&
+      sys.env.get("XL_ROUNDTRIP_RANDOM_SEED").exists(_.equalsIgnoreCase("true"))
+
   override def scalaCheckTestParameters: org.scalacheck.Test.Parameters =
-    super.scalaCheckTestParameters
-      .withMinSuccessfulTests(minSuccess)
+    val base = super.scalaCheckTestParameters.withMinSuccessfulTests(minSuccess)
+    if randomSeed then
+      val seed = org.scalacheck.rng.Seed.random()
+      println(s"[law-fuzz] random seed for this run: ${seed.toBase64} (GH-308)")
+      base.withInitialSeed(seed)
+    else
       // Fixed seed: CI failures replay exactly. The generator space was shaken out at 1000+
       // cases across multiple random seeds before pinning (see GH-240).
-      .withInitialSeed(org.scalacheck.rng.Seed(20260610L))
+      base.withInitialSeed(explicitSeed.getOrElse(org.scalacheck.rng.Seed(20260610L)))
 
   private def roundTripDiff(wb: Workbook): List[String] =
     XlsxWriter.writeToBytes(wb) match

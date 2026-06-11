@@ -11,10 +11,10 @@ import org.scalacheck.Prop.*
 /**
  * GH-274: INDIRECT(ref_text, [a1]) — dynamic text-to-reference resolution.
  *
- * INDIRECT resolves A1-style text to a cell/range at evaluation time and rides the same
- * ArrayResult mechanism as OFFSET (GH-122): aggregates flatten it, array formulas spill it,
- * scalar contexts collapse 1×1 results. Unresolvable text is the #REF! VALUE (total, never
- * throws); R1C1 mode (a1=FALSE) is a documented-unsupported eval error.
+ * INDIRECT resolves A1-style text to a cell/range at evaluation time and rides the same ArrayResult
+ * mechanism as OFFSET (GH-122): aggregates flatten it, array formulas spill it, scalar contexts
+ * collapse 1×1 results. Unresolvable text is the #REF! VALUE (total, never throws); R1C1 mode
+ * (a1=FALSE) is a documented-unsupported eval error.
  */
 class IndirectFunctionSpec extends ScalaCheckSuite:
 
@@ -202,17 +202,86 @@ class IndirectFunctionSpec extends ScalaCheckSuite:
       case Right(v) => fail(s"expected Left(R1C1 unsupported), got $v")
   }
 
-  // ===== 6. IFERROR pins (inherited evalArg array-rejection — family follow-up) =====
+  // ===== 6. Scalar argument positions (GH-302: implicit-intersection collapse) =====
 
   test("IFERROR(INDIRECT(\"bad\"),0) returns the fallback") {
     assertEquals(s.evaluateFormula("=IFERROR(INDIRECT(\"bad\"),0)"), Right(num(0)))
   }
 
-  test("IFERROR(INDIRECT(\"B2\"),0) returns the fallback EVEN for a valid ref (pinned wart)") {
-    // Scalar argument positions reject ArrayResult (Evaluator.evalArg), so IFERROR sees a
-    // Left and returns its fallback. Identical to shipped OFFSET behavior; tracked as the
-    // range-function family follow-up (1×1 ArrayResult collapse in scalar arg positions).
-    assertEquals(base.evaluateFormula("=IFERROR(INDIRECT(\"B2\"),0)"), Right(num(0)))
+  test("GH-302: IFERROR(INDIRECT(\"B2\"),0) returns B2's VALUE for a valid ref") {
+    // Scalar argument positions collapse a 1×1 ArrayResult to its value (implicit
+    // intersection) instead of rejecting it — previously the rejection made IFERROR
+    // return its fallback even for valid references.
+    assertEquals(base.evaluateFormula("=IFERROR(INDIRECT(\"B2\"),0)"), Right(num(42)))
+  }
+
+  test("GH-302: LEFT(INDIRECT(\"B2\"), 1) collapses to text position") {
+    assertEquals(
+      base.evaluateFormula("=LEFT(INDIRECT(\"B2\"), 1)"),
+      Right(CellValue.Text("4"))
+    )
+  }
+
+  test("GH-302: ABS(INDIRECT(\"B2\")) collapses 1x1 to numeric position") {
+    assertEquals(base.evaluateFormula("=ABS(INDIRECT(\"B2\"))"), Right(num(42)))
+  }
+
+  test("GH-302: multi-cell INDIRECT in a scalar position collapses to top-left") {
+    assertEquals(col.evaluateFormula("=ABS(INDIRECT(\"A1:A3\"))"), Right(num(10)))
+    assertEquals(col.evaluateFormula("=IFERROR(INDIRECT(\"A1:A3\"),0)"), Right(num(10)))
+  }
+
+  test("GH-302: truly invalid ref still fires the IFERROR fallback") {
+    // The collapsed value of INDIRECT("bad") is the #REF! VALUE — IFERROR must keep
+    // catching it after the collapse change.
+    assertEquals(s.evaluateFormula("=IFERROR(INDIRECT(\"nope\"),7)"), Right(num(7)))
+    assertEquals(s.evaluateFormula("=ISERROR(INDIRECT(\"nope\"))"), Right(CellValue.Bool(true)))
+  }
+
+  test("GH-302: ISNUMBER(INDIRECT(\"B2\")) sees the collapsed number") {
+    assertEquals(base.evaluateFormula("=ISNUMBER(INDIRECT(\"B2\"))"), Right(CellValue.Bool(true)))
+  }
+
+  // ===== 6b. Scalar-mode OPERATOR positions collapse like argument positions (GH-302) =====
+
+  test("GH-302: INDIRECT in arithmetic collapses in scalar mode") {
+    // Operator positions collapse 1×1 ArrayResults exactly like scalar argument
+    // positions (=ABS(INDIRECT("B2")) already worked; =INDIRECT("B2")+1 must too).
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")+1"), Right(num(43)))
+    assertEquals(base.evaluateFormula("=INDIRECT(\"A1\")+INDIRECT(\"B2\")"), Right(num(52)))
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")*10"), Right(num(420)))
+  }
+
+  test("GH-302: multi-cell INDIRECT in arithmetic collapses to top-left") {
+    // col A1:A3 = 10,20,30 — same top-left convention as the standalone collapse.
+    assertEquals(col.evaluateFormula("=INDIRECT(\"A1:A3\")*10"), Right(num(100)))
+  }
+
+  test("GH-302: INDIRECT in comparison collapses in scalar mode") {
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")>15"), Right(CellValue.Bool(true)))
+    assertEquals(base.evaluateFormula("=INDIRECT(\"A1\")>15"), Right(CellValue.Bool(false)))
+  }
+
+  test("GH-302: IF over an INDIRECT comparison works in scalar mode") {
+    assertEquals(
+      base.evaluateFormula("=IF(INDIRECT(\"B2\")>15,\"big\",\"small\")"),
+      Right(CellValue.Text("big"))
+    )
+    assertEquals(
+      base.evaluateFormula("=IF(INDIRECT(\"A1\")>15,\"big\",\"small\")"),
+      Right(CellValue.Text("small"))
+    )
+  }
+
+  test("GH-302: INDIRECT equality collapses in scalar mode (all three operand shapes)") {
+    // array=scalar, scalar=array, array=array — the three equality branches
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")=42"), Right(CellValue.Bool(true)))
+    assertEquals(base.evaluateFormula("=42=INDIRECT(\"B2\")"), Right(CellValue.Bool(true)))
+    assertEquals(
+      base.evaluateFormula("=INDIRECT(\"A1\")=INDIRECT(\"B2\")"),
+      Right(CellValue.Bool(false))
+    )
+    assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")<>42"), Right(CellValue.Bool(false)))
   }
 
   // ===== 7. Spill / collapse / broadcast =====
@@ -220,7 +289,9 @@ class IndirectFunctionSpec extends ScalaCheckSuite:
   test("INDIRECT(\"A1:B2\") spills 2x2 via evaluateArrayFormula") {
     val sheet = s.put("A1" -> 1).put("B1" -> 2).put("A2" -> 3).put("B2" -> 4)
     val (out, range) =
-      sheet.evaluateArrayFormula("=INDIRECT(\"A1:B2\")", ref"E1").fold(e => fail(e.message), identity)
+      sheet
+        .evaluateArrayFormula("=INDIRECT(\"A1:B2\")", ref"E1")
+        .fold(e => fail(e.message), identity)
     assertEquals(range.height, 2)
     assertEquals(range.width, 2)
     assertEquals(out(ref"E1").value, num(1))
@@ -235,7 +306,9 @@ class IndirectFunctionSpec extends ScalaCheckSuite:
 
   test("INDIRECT(\"A1:A3\")*10 broadcasts as an array formula") {
     val (out, range) =
-      col.evaluateArrayFormula("=INDIRECT(\"A1:A3\")*10", ref"E1").fold(e => fail(e.message), identity)
+      col
+        .evaluateArrayFormula("=INDIRECT(\"A1:A3\")*10", ref"E1")
+        .fold(e => fail(e.message), identity)
     assertEquals(range.height, 3)
     assertEquals(out(ref"E1").value, num(100))
     assertEquals(out(ref"E2").value, num(200))

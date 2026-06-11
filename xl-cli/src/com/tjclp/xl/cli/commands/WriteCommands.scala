@@ -7,7 +7,14 @@ import cats.implicits.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.helpers.{BatchParser, CopyOps, SheetResolver, StyleBuilder, ValueParser}
+import com.tjclp.xl.cli.helpers.{
+  BatchParser,
+  ColumnAutoFit,
+  CopyOps,
+  SheetResolver,
+  StyleBuilder,
+  ValueParser
+}
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formula.{
   FormulaParser,
@@ -661,63 +668,13 @@ object WriteCommands:
 
   /**
    * Calculate optimal column width based on cell content. Returns width in Excel character units.
-   * Uses a multiplier approach calibrated against Excel's actual autofit behavior.
+   *
+   * Measures formatted display text with AWT font metrics (respecting each cell's font family,
+   * size, and bold), with a char-count heuristic fallback when fonts are unavailable. See
+   * [[com.tjclp.xl.cli.helpers.ColumnAutoFit]] (GH-156).
    */
   private def calculateAutoFitWidth(sheet: Sheet, col: Column): Double =
-    val cellsInColumn = sheet.cells.filter { case (ref, _) => ref.col == col }
-
-    if cellsInColumn.isEmpty then 8.43 // Default Excel column width
-    else
-      val maxCharWidth = cellsInColumn.values
-        .map { cell =>
-          estimateCellWidth(cell, sheet)
-        }
-        .maxOption
-        .getOrElse(0.0)
-
-      // Use multiplier + small padding (calibrated to match Excel's font-metric-aware autofit)
-      // Excel uses ~0.90x char count for proportional fonts (Calibri 11pt default)
-      // Bumped from 0.85 to avoid "####" on formatted currency values like $45,500.00
-      val width =
-        BigDecimal(maxCharWidth * 0.90 + 1.5).setScale(2, BigDecimal.RoundingMode.HALF_UP).toDouble
-      math.max(width, 5.0) // Allow narrower columns like Excel does
-
-  /**
-   * Estimate the display width of a cell value in characters.
-   *
-   * Uses the cell's number format (if any) to calculate formatted width. This ensures currency
-   * ($45,500.00), percentage (45.5%), and date formats are properly accounted for (TJC-696).
-   */
-  private def estimateCellWidth(cell: Cell, sheet: Sheet): Double =
-    import com.tjclp.xl.cells.CellValue.*
-    import com.tjclp.xl.display.NumFmtFormatter
-
-    // Get the cell's style for number format and font properties
-    val styleOpt = cell.styleId.flatMap(sheet.styleRegistry.get)
-    val numFmt = styleOpt.map(_.numFmt).getOrElse(NumFmt.General)
-    // Bold text is ~10% wider in proportional fonts
-    val boldFactor = if styleOpt.exists(_.font.bold) then 1.1 else 1.0
-
-    val baseWidth: Double = cell.value match
-      case Text(s) => s.length.toDouble
-      case n @ Number(_) =>
-        // Use formatted display value for width calculation
-        NumFmtFormatter.formatValue(n, numFmt).length.toDouble
-      case Bool(b) => if b then 4.0 else 5.0 // "TRUE" or "FALSE"
-      case Error(e) => e.toString.length.toDouble
-      case Empty => 0.0
-      case dt @ DateTime(_) =>
-        // Use formatted display value for dates
-        NumFmtFormatter.formatValue(dt, numFmt).length.toDouble
-      case Formula(_, Some(cached)) =>
-        // For formulas with cached values, estimate width of the cached value
-        // Create a temporary cell with the cached value to reuse formatting logic
-        val tempCell = cell.copy(value = cached)
-        estimateCellWidth(tempCell, sheet)
-      case Formula(expr, None) => expr.length.toDouble
-      case RichText(rt) => rt.toPlainText.length.toDouble
-
-    baseWidth * boldFactor
+    ColumnAutoFit.calculateWidth(sheet, col)
 
   /**
    * Apply multiple operations atomically (JSON from stdin or file).

@@ -387,9 +387,9 @@ object Generators:
     yield CellStyle(font, fill, border, numFmt, None, align)
 
   /**
-   * Generate comment: plain text body plus optional author. Authors may carry edge whitespace or
-   * be whitespace-only — the writer canonicalizes (trim; blank → unauthored, GH-290), and
-   * round-trip equivalence compares canonical authors.
+   * Generate comment: plain text body plus optional author. Authors may carry edge whitespace or be
+   * whitespace-only — the writer canonicalizes (trim; blank → unauthored, GH-290), and round-trip
+   * equivalence compares canonical authors.
    */
   val genComment: Gen[Comment] =
     val genAuthor: Gen[String] =

@@ -36,7 +36,7 @@ class SheetStyleSpec extends FunSuite:
   }
 
   test("withCellStyle deduplicates same style applied twice") {
-    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff0000)))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Text1", ref"A2" -> "Text2")
       .unsafe
@@ -91,7 +91,7 @@ class SheetStyleSpec extends FunSuite:
 
   test("multiple different styles accumulate in registry") {
     val bold = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
-    val red = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val red = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff0000)))
     val bordered = CellStyle.default.withBorder(Border.all(BorderStyle.Thin))
 
     val sheet = Sheet("Test")
@@ -106,8 +106,14 @@ class SheetStyleSpec extends FunSuite:
     assertEquals(sheet.styleRegistry.size, 4)
 
     // Each cell should have different styleId
-    assert(sheet(ref"A1").styleId != sheet(ref"A2").styleId, "A1 and A2 should have different styles")
-    assert(sheet(ref"A2").styleId != sheet(ref"A3").styleId, "A2 and A3 should have different styles")
+    assert(
+      sheet(ref"A1").styleId != sheet(ref"A2").styleId,
+      "A1 and A2 should have different styles"
+    )
+    assert(
+      sheet(ref"A2").styleId != sheet(ref"A3").styleId,
+      "A2 and A3 should have different styles"
+    )
   }
 
   test("withCellStyle creates cell if it doesn't exist") {
@@ -124,7 +130,7 @@ class SheetStyleSpec extends FunSuite:
   test("complex styling workflow") {
     val headerStyle = CellStyle.default
       .withFont(Font("Arial", 14.0, bold = true))
-      .withFill(Fill.Solid(Color.Rgb(0xFFCCCCCC)))
+      .withFill(Fill.Solid(Color.Rgb(0xffcccccc)))
       .withAlign(Align(HAlign.Center, VAlign.Middle))
 
     val dataStyle = CellStyle.default
@@ -153,7 +159,7 @@ class SheetStyleSpec extends FunSuite:
   test("put() preserves existing cell style") {
     val titleStyle = CellStyle.default
       .withFont(Font("Arial", 14.0, bold = true))
-      .withFill(Fill.Solid(Color.Rgb(0xFF0000FF)))
+      .withFill(Fill.Solid(Color.Rgb(0xff0000ff)))
 
     // Style first, then put value (template pattern)
     val sheet = Sheet("Test")
@@ -185,7 +191,8 @@ class SheetStyleSpec extends FunSuite:
     val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Link"))
       .copy(cells = {
-        val cell = Sheet("Test").unsafe(ref"A1")
+        val cell = Sheet("Test")
+          .unsafe(ref"A1")
           .withComment("Important note")
           .withHyperlink("https://example.com")
         Map(ref"A1" -> cell)
@@ -194,7 +201,11 @@ class SheetStyleSpec extends FunSuite:
 
     // Comment and hyperlink should be preserved
     assertEquals(sheet(ref"A1").comment, Some("Important note"), "Comment should be preserved")
-    assertEquals(sheet(ref"A1").hyperlink, Some("https://example.com"), "Hyperlink should be preserved")
+    assertEquals(
+      sheet(ref"A1").hyperlink,
+      Some("https://example.com"),
+      "Hyperlink should be preserved"
+    )
     assertEquals(sheet(ref"A1").value, CellValue.Text("Updated Link"), "Value should be updated")
   }
 
@@ -220,7 +231,9 @@ class SheetStyleSpec extends FunSuite:
 
   test("put via Any preserves hyperlink metadata") {
     val sheet = Sheet("Test").unsafe
-      .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")).withHyperlink("https://example.com"))
+      .put(
+        com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")).withHyperlink("https://example.com")
+      )
     val updated = sheet.put(ref"A1", "New").unsafe
 
     assertEquals(updated(ref"A1").hyperlink, Some("https://example.com"))
@@ -252,8 +265,12 @@ class SheetStyleSpec extends FunSuite:
     val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
     val sheet = Sheet("Test").unsafe
       .withCellStyle(ref"A1", currencyStyle)
-    val updated = sheet.put(ref"A1", "Label").unsafe  // String codec returns General NumFmt
+    val updated = sheet.put(ref"A1", "Label").unsafe // String codec returns General NumFmt
 
     val style = updated.getCellStyle(ref"A1").getOrElse(fail("Missing style"))
-    assertEquals(style.numFmt, NumFmt.Currency, "Explicit Currency should be preserved over General")
+    assertEquals(
+      style.numFmt,
+      NumFmt.Currency,
+      "Explicit Currency should be preserved over General"
+    )
   }

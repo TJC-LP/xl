@@ -21,7 +21,10 @@ class Phase3FunctionsSpec extends FunSuite:
   }
 
   test("SWITCH matches a case") {
-    assertEquals(s.evaluateFormula("=SWITCH(2,1,\"a\",2,\"b\",\"def\")"), Right(CellValue.Text("b")))
+    assertEquals(
+      s.evaluateFormula("=SWITCH(2,1,\"a\",2,\"b\",\"def\")"),
+      Right(CellValue.Text("b"))
+    )
   }
 
   test("SWITCH falls back to the trailing default") {
@@ -61,10 +64,19 @@ class Phase3FunctionsSpec extends FunSuite:
 
   test("PERCENTILE inclusive, with interpolation") {
     // A1:A5 sorted = 1,1,3,4,5
-    assertEquals(nums.evaluateFormula("=PERCENTILE(A1:A5,0.5)"), Right(CellValue.Number(BigDecimal(3))))
-    assertEquals(nums.evaluateFormula("=PERCENTILE(A1:A5,0)"), Right(CellValue.Number(BigDecimal(1))))
+    assertEquals(
+      nums.evaluateFormula("=PERCENTILE(A1:A5,0.5)"),
+      Right(CellValue.Number(BigDecimal(3)))
+    )
+    assertEquals(
+      nums.evaluateFormula("=PERCENTILE(A1:A5,0)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
     // A1:A4 sorted = 1,1,3,4; p=0.5 → 1 + 0.5*(3-1) = 2
-    assertEquals(nums.evaluateFormula("=PERCENTILE(A1:A4,0.5)"), Right(CellValue.Number(BigDecimal(2))))
+    assertEquals(
+      nums.evaluateFormula("=PERCENTILE(A1:A4,0.5)"),
+      Right(CellValue.Number(BigDecimal(2)))
+    )
   }
 
   test("QUARTILE maps quart to percentiles") {
@@ -107,9 +119,15 @@ class Phase3FunctionsSpec extends FunSuite:
   }
 
   test("HLOOKUP approximate (default) finds the largest key <= lookup") {
-    val t = s.put("A1" -> 1).put("B1" -> 5).put("C1" -> 10).put("A2" -> "x").put("B2" -> "y").put(
-      "C2" -> "z"
-    )
+    val t = s
+      .put("A1" -> 1)
+      .put("B1" -> 5)
+      .put("C1" -> 10)
+      .put("A2" -> "x")
+      .put("B2" -> "y")
+      .put(
+        "C2" -> "z"
+      )
     assertEquals(t.evaluateFormula("=HLOOKUP(7,A1:C2,2)"), Right(CellValue.Text("y")))
   }
 
@@ -179,4 +197,77 @@ class Phase3FunctionsSpec extends FunSuite:
   test("aggregate scalar/range fast paths still work (regression guard)") {
     assertEquals(crit.evaluateFormula("=SUM(A1:A5)"), Right(CellValue.Number(BigDecimal(150))))
     assertEquals(crit.evaluateFormula("=SUM(1,2,3)"), Right(CellValue.Number(BigDecimal(6))))
+  }
+
+  // GH-302: OFFSET in scalar argument positions — implicit-intersection collapse,
+  // family parity with INDIRECT (same ArrayResult mechanism).
+  test("GH-302: IFERROR(OFFSET(A1,2,3),0) returns the shifted VALUE for a valid ref") {
+    val grid = s.put("D3" -> 99)
+    assertEquals(
+      grid.evaluateFormula("=IFERROR(OFFSET(A1,2,3),0)"),
+      Right(CellValue.Number(BigDecimal(99)))
+    )
+  }
+
+  test("GH-302: LEFT(OFFSET(...), 1) collapses to text position") {
+    val grid = s.put("D3" -> 99)
+    assertEquals(grid.evaluateFormula("=LEFT(OFFSET(A1,2,3), 1)"), Right(CellValue.Text("9")))
+  }
+
+  test("GH-302: multi-cell OFFSET in a scalar position collapses to top-left") {
+    // crit A1:A5 = 10,20,30,40,50; OFFSET(A1,0,0,3,1) = A1:A3 → top-left = 10
+    assertEquals(
+      crit.evaluateFormula("=ABS(OFFSET(A1,0,0,3,1))"),
+      Right(CellValue.Number(BigDecimal(10)))
+    )
+  }
+
+  test("GH-302: out-of-bounds OFFSET still fires the IFERROR fallback") {
+    assertEquals(
+      s.evaluateFormula("=IFERROR(OFFSET(A1,-1,0),0)"),
+      Right(CellValue.Number(BigDecimal(0)))
+    )
+  }
+
+  test("GH-302: OFFSET in arithmetic collapses in scalar mode") {
+    // Operator positions collapse like scalar argument positions (family parity
+    // with INDIRECT) — =ABS(OFFSET(...)) already worked; =OFFSET(...)+1 must too.
+    // crit A1:A5 = 10,20,30,40,50; OFFSET(A1,1,0) = A2 = 20.
+    assertEquals(
+      crit.evaluateFormula("=OFFSET(A1,1,0)+1"),
+      Right(CellValue.Number(BigDecimal(21)))
+    )
+    // multi-cell OFFSET window collapses to its top-left in arithmetic
+    assertEquals(
+      crit.evaluateFormula("=OFFSET(A1,0,0,3,1)*10"),
+      Right(CellValue.Number(BigDecimal(100)))
+    )
+  }
+
+  // GH-301: OFFSET parity with INDIRECT — eval-aware extraction (uncached formula targets
+  // evaluate fresh instead of leaking raw Formula values / being skipped by aggregates).
+  test("GH-301: OFFSET over an UNCACHED formula target evaluates it") {
+    val sheet = s
+      .put("A1" -> 3)
+      .put(ref"C1", CellValue.Formula("=A1*2", None))
+    assertEquals(
+      sheet.evaluateFormula("=OFFSET(C1,0,0)"),
+      Right(CellValue.Number(BigDecimal(6)))
+    )
+  }
+
+  test("GH-301: SUM(OFFSET(...)) evaluates uncached formulas inside the window") {
+    val sheet = s
+      .put("A1" -> 1)
+      .put(ref"A2", CellValue.Formula("=A1+1", None)) // uncached
+      .put(ref"A3", CellValue.Formula("=A1+2", Some(CellValue.Number(BigDecimal(3))))) // cached
+    assertEquals(
+      sheet.evaluateFormula("=SUM(OFFSET(A1,0,0,3,1))"),
+      Right(CellValue.Number(BigDecimal(6)))
+    )
+  }
+
+  test("GH-301: OFFSET over a cached formula target trusts the cache") {
+    val sheet = s.put(ref"C1", CellValue.Formula("=1+1", Some(CellValue.Number(BigDecimal(2)))))
+    assertEquals(sheet.evaluateFormula("=OFFSET(C1,0,0)"), Right(CellValue.Number(BigDecimal(2))))
   }

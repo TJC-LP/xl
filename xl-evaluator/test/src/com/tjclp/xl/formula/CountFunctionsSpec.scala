@@ -9,8 +9,8 @@ import munit.FunSuite
 /**
  * Comprehensive tests for COUNTBLANK function.
  *
- * COUNTBLANK counts empty cells in a range.
- * Cells with formulas that return "" are NOT counted as blank (Excel behavior).
+ * COUNTBLANK counts empty cells in a range. Cells with formulas that return "" are NOT counted as
+ * blank (Excel behavior).
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class CountFunctionsSpec extends FunSuite:

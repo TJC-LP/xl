@@ -17,7 +17,9 @@ import scala.math.BigDecimal
  *
  * Tests round-trip laws, edge cases, and integration with existing formula system.
  */
-@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.AsInstanceOf"))
+@SuppressWarnings(
+  Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.AsInstanceOf")
+)
 class FormulaParserSpec extends ScalaCheckSuite:
 
   // ==================== Generators ====================
@@ -130,7 +132,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
       parsed.isRight &&
       parsed.exists {
         case TExpr.Lit(value: Boolean) => value == b
-        case _                          => false
+        case _ => false
       }
     }
   }
@@ -145,7 +147,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
       parsed.isRight &&
       parsed.exists {
         case TExpr.Ref(at, _, _) => at == ref // PolyRef resolved to typed Ref
-        case _                   => false
+        case _ => false
       }
     }
   }
@@ -159,7 +161,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
       parsed.isRight &&
       parsed.exists {
         case TExpr.Add(_, _) => true
-        case _               => false
+        case _ => false
       }
     }
   }
@@ -201,7 +203,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Lit(value: BigDecimal) => assertEquals(value, BigDecimal(42))
-      case other                         => fail(s"Expected Lit(42), got $other")
+      case other => fail(s"Expected Lit(42), got $other")
     }
   }
 
@@ -322,7 +324,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Lit(value: BigDecimal) => assertEquals(value, BigDecimal(3.14))
-      case other                         => fail(s"Expected Lit(3.14), got $other")
+      case other => fail(s"Expected Lit(3.14), got $other")
     }
   }
 
@@ -332,7 +334,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Lit(value: BigDecimal) => assertEquals(value, BigDecimal("1E10"))
-      case other                         => fail(s"Expected Lit(1E10), got $other")
+      case other => fail(s"Expected Lit(1E10), got $other")
     }
   }
 
@@ -341,7 +343,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Lit(value: BigDecimal) => assertEquals(value, BigDecimal("1E-10"))
-      case other                         => fail(s"Expected Lit(1E-10), got $other")
+      case other => fail(s"Expected Lit(1E-10), got $other")
     }
   }
 
@@ -350,7 +352,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Lit(value: BigDecimal) => assertEquals(value, BigDecimal("1.5E+5"))
-      case other                         => fail(s"Expected Lit(1.5E+5), got $other")
+      case other => fail(s"Expected Lit(1.5E+5), got $other")
     }
   }
 
@@ -359,7 +361,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Lit(value: BigDecimal) => assertEquals(value, BigDecimal("2.3E-7"))
-      case other                         => fail(s"Expected Lit(2.3E-7), got $other")
+      case other => fail(s"Expected Lit(2.3E-7), got $other")
     }
   }
 
@@ -368,7 +370,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Lit(value: BigDecimal) => assertEquals(value, BigDecimal("3.14e2"))
-      case other                         => fail(s"Expected Lit(3.14e2), got $other")
+      case other => fail(s"Expected Lit(3.14e2), got $other")
     }
   }
 
@@ -421,7 +423,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Lit(true) => ()
-      case other           => fail(s"Expected Lit(true), got $other")
+      case other => fail(s"Expected Lit(true), got $other")
     }
   }
 
@@ -430,7 +432,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Lit(false) => ()
-      case other            => fail(s"Expected Lit(false), got $other")
+      case other => fail(s"Expected Lit(false), got $other")
     }
   }
 
@@ -472,7 +474,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Sub(_, _) => ()
-      case other           => fail(s"Expected Sub, got $other")
+      case other => fail(s"Expected Sub, got $other")
     }
   }
 
@@ -481,7 +483,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Mul(_, _) => ()
-      case other           => fail(s"Expected Mul, got $other")
+      case other => fail(s"Expected Mul, got $other")
     }
   }
 
@@ -490,7 +492,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Div(_, _) => ()
-      case other           => fail(s"Expected Div, got $other")
+      case other => fail(s"Expected Div, got $other")
     }
   }
 
@@ -558,7 +560,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight, s"Expected success, got $result")
     result.foreach {
       case TExpr.Pow(_, _) => ()
-      case other           => fail(s"Expected Pow, got $other")
+      case other => fail(s"Expected Pow, got $other")
     }
   }
 
@@ -647,7 +649,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=COUNT(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "COUNT" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil)
+          if spec.name == "COUNT" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
       case other => fail(s"Expected Call(COUNT) with List(Left(Local range)), got $other")
@@ -658,7 +661,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     val result = FormulaParser.parse("=AVERAGE(A1:B10)")
     assert(result.isRight)
     result.foreach {
-      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil) if spec.name == "AVERAGE" =>
+      case TExpr.Call(spec, Left(TExpr.RangeLocation.Local(range)) :: Nil)
+          if spec.name == "AVERAGE" =>
         val expected = CellRange.parse("A1:B10").fold(err => fail(s"Invalid range: $err"), identity)
         assertEquals(range, expected)
       case other => fail(s"Expected Call(AVERAGE), got $other")
@@ -681,7 +685,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
         assertEquals(countSpec.name, "COUNT")
         assertEquals(avgSpec.name, "AVERAGE")
       case (Right(s), Right(c), Right(a)) =>
-        fail(s"Unexpected types: SUM=${s.getClass.getSimpleName}, COUNT=${c.getClass.getSimpleName}, AVERAGE=${a.getClass.getSimpleName}")
+        fail(
+          s"Unexpected types: SUM=${s.getClass.getSimpleName}, COUNT=${c.getClass.getSimpleName}, AVERAGE=${a.getClass.getSimpleName}"
+        )
       case _ => fail("All three functions should parse successfully")
   }
 
@@ -743,7 +749,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isLeft)
     result.left.foreach {
       case ParseError.EmptyFormula => ()
-      case other                   => fail(s"Expected EmptyFormula, got $other")
+      case other => fail(s"Expected EmptyFormula, got $other")
     }
   }
 
@@ -774,7 +780,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isLeft)
     result.left.foreach {
       case ParseError.FormulaTooLong(_, _) => ()
-      case other                           => fail(s"Expected FormulaTooLong, got $other")
+      case other => fail(s"Expected FormulaTooLong, got $other")
     }
   }
 
@@ -1100,9 +1106,13 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Call(upperSpec, inner) if upperSpec.name == "UPPER" =>
+        // GH-306: calls in typed argument positions are wrapped in the total runtime-coercion
+        // node (TExpr.Coerced) — see through it to the nested call.
         inner match
+          case TExpr.Coerced(TExpr.Call(concatSpec, _), _) if concatSpec.name == "CONCATENATE" =>
+            assert(true)
           case TExpr.Call(concatSpec, _) if concatSpec.name == "CONCATENATE" => assert(true)
-          case _ => fail("Expected nested CONCATENATE")
+          case other => fail(s"Expected nested CONCATENATE, got $other")
       case _ => fail("Expected nested text functions")
     }
   }

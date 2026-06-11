@@ -376,16 +376,23 @@ class LetFunctionSpec extends ScalaCheckSuite:
     )
   }
 
-  test("Int position coerces boolean binding like decodeAsInt: LET(b, TRUE, LEFT(\"hey\", b)) = 'h'") {
+  test(
+    "Int position coerces boolean binding like decodeAsInt: LET(b, TRUE, LEFT(\"hey\", b)) = 'h'"
+  ) {
     assertEquals(
       sheet.evaluateFormula("""=LET(b, TRUE, LEFT("hey", b))"""),
       Right(CellValue.Text("h"))
     )
   }
 
-  test("Int position rejects non-integral binding with a clean Left: LET(x, 1.7, LEFT(\"hey\", x))") {
-    val result = sheet.evaluateFormula("""=LET(x, 1.7, LEFT("hey", x))""")
-    assert(result.isLeft, s"expected clean Left for non-integral count, got $result")
+  test("Int position TRUNCATES a non-integral binding: LET(x, 1.7, LEFT(\"hey\", x)) = \"h\"") {
+    // GH-306/GH-307: Excel truncates fractional values toward zero in integer positions
+    // (LEFT("hey", 1.7) → "h"); previously this was a clean Left. Updated with the shared
+    // ScalarCoercion table — totality preserved, now also Excel-correct.
+    assertEquals(
+      sheet.evaluateFormula("""=LET(x, 1.7, LEFT("hey", x))"""),
+      Right(CellValue.Text("h"))
+    )
   }
 
   test("String position: LET(x, A1, UPPER(x)) = '10' (parity with UPPER(A1))") {
@@ -400,9 +407,11 @@ class LetFunctionSpec extends ScalaCheckSuite:
   test("Boolean position: LET(x, A1, IF(x, 1, 2)) matches IF(A1, 1, 2) and never throws") {
     val direct = sheet.evaluateFormula("=IF(A1, 1, 2)")
     val bound = sheet.evaluateFormula("=LET(x, A1, IF(x, 1, 2))")
-    // Load-bearing assertion: totality + parity with the direct form (today both are a
-    // clean TypeMismatch Left; if numeric truthiness ever lands, both must follow).
-    assertEquals(bound.isLeft, direct.isLeft)
+    // Load-bearing assertion: totality + parity with the direct form. GH-306: numeric
+    // truthiness landed (Excel: 0 = FALSE, non-zero = TRUE) — both forms now follow,
+    // exactly as this pin's original comment demanded. A1 = 10 → truthy → 1.
+    assertEquals(bound, direct)
+    assertEquals(direct, Right(CellValue.Number(BigDecimal(1))))
   }
 
   test("Numeric position gives clean Left for a text binding: LET(s, \"ab\", ABS(s))") {
@@ -419,9 +428,15 @@ class LetFunctionSpec extends ScalaCheckSuite:
     assertEquals(evalNum("=LET(d, DATE(2024, 1, 5), MONTH(d))"), BigDecimal(1))
   }
 
-  test("array binding in a scalar text position gives clean Left: LET(t, TRANSPOSE(A1:A2), UPPER(t))") {
-    val result = sheet.evaluateFormula("=LET(t, TRANSPOSE(A1:A2), UPPER(t))")
-    assert(result.isLeft, s"expected clean Left for array in scalar position, got $result")
+  test("array binding in a scalar text position collapses: LET(t, TRANSPOSE(A1:A2), UPPER(t))") {
+    // GH-302: scalar argument positions collapse arrays to their top-left value (implicit
+    // intersection) instead of rejecting them; previously this was a clean Left. The bound
+    // TRANSPOSE(A1:A2) is [10, 20] → top-left 10 → UPPER renders "10". Array contexts are
+    // unaffected (SUM(t) above still aggregates the whole array).
+    assertEquals(
+      sheet.evaluateFormula("=LET(t, TRANSPOSE(A1:A2), UPPER(t))"),
+      Right(CellValue.Text("10"))
+    )
   }
 
   test("parse.print = id through typed argument positions") {

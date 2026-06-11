@@ -14,7 +14,7 @@ class StyleIndexSpec extends FunSuite:
 
   test("fromWorkbook with single sheet extracts styles from registry") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
-    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff0000)))
 
     val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Bold"))
@@ -61,12 +61,16 @@ class StyleIndexSpec extends FunSuite:
     val sheet1Remapping = remappings.getOrElse(0, Map.empty)
     val sheet2Remapping = remappings.getOrElse(1, Map.empty)
 
-    assertEquals(sheet1Remapping.get(1), sheet2Remapping.get(1), "Same style should map to same global index")
+    assertEquals(
+      sheet1Remapping.get(1),
+      sheet2Remapping.get(1),
+      "Same style should map to same global index"
+    )
   }
 
   test("fromWorkbook with conflicting local indices remaps correctly") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
-    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff0000)))
 
     // Sheet1: localId=1 is bold
     val sheet1 = Sheet("Sheet1")
@@ -115,7 +119,9 @@ class StyleIndexSpec extends FunSuite:
 
   test("fromWorkbook deduplicates fonts, fills, and borders") {
     val style1 = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
-    val style2 = CellStyle.default.withFont(Font("Arial", 12.0, bold = true)).withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val style2 = CellStyle.default
+      .withFont(Font("Arial", 12.0, bold = true))
+      .withFill(Fill.Solid(Color.Rgb(0xffff0000)))
     // Both use same font
 
     val sheet = Sheet("Test")
@@ -156,10 +162,16 @@ class StyleIndexSpec extends FunSuite:
     val sheet1Remapping = remappings.getOrElse(0, Map.empty)
     val sheet2Remapping = remappings.getOrElse(1, Map.empty)
 
-    assertEquals(sheet1Remapping.get(1), sheet2Remapping.get(1), "Same style should map to same global index")
+    assertEquals(
+      sheet1Remapping.get(1),
+      sheet2Remapping.get(1),
+      "Same style should map to same global index"
+    )
   }
 
-  test("fromWorkbookWithSource adds new font/fill components for new styles (regression #style-components-bug)") {
+  test(
+    "fromWorkbookWithSource adds new font/fill components for new styles (regression #style-components-bug)"
+  ) {
     // Regression test: When adding new styles to existing files, the font/fill/border
     // components weren't being added to the output. New styles referenced non-existent
     // component indices, falling back to defaults (fontId=0, fillId=0).
@@ -180,8 +192,8 @@ class StyleIndexSpec extends FunSuite:
 
       // Add new style with bold font and blue fill
       val boldBlueFill = CellStyle.default
-        .withFont(Font("Calibri", 11.0, bold = true, color = Some(Color.Rgb(0xFFFFFFFF))))
-        .withFill(Fill.Solid(Color.Rgb(0xFF003366)))
+        .withFont(Font("Calibri", 11.0, bold = true, color = Some(Color.Rgb(0xffffffff))))
+        .withFill(Fill.Solid(Color.Rgb(0xff003366)))
 
       val modifiedSheet = readWb.sheets.head
         .put(ref"A1", CellValue.Text("Styled"))

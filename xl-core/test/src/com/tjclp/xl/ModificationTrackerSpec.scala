@@ -45,7 +45,10 @@ class ModificationTrackerSpec extends FunSuite:
   test("delete first, middle, last in sequence") {
     // Test edge cases: delete in various orders
     val tracker = ModificationTracker.clean
-      .markSheet(0).markSheet(3).markSheet(6).markSheet(9)
+      .markSheet(0)
+      .markSheet(3)
+      .markSheet(6)
+      .markSheet(9)
       .delete(0) // Delete first (shifts 3→2, 6→5, 9→8), removes 0 from modified
       .delete(4) // Shifts 5→4, 8→7, then removes 4 (which was 5)
       .delete(7) // Removes 7 (which was 9)

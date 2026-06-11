@@ -103,7 +103,8 @@ class PatchSpec extends ScalaCheckSuite:
     val styleId = StyleId(42)
 
     // First put a cell, then style it
-    val patch = (Patch.Put(ref, CellValue.Text("Test")): Patch) |+| (Patch.SetStyle(ref, styleId): Patch)
+    val patch =
+      (Patch.Put(ref, CellValue.Text("Test")): Patch) |+| (Patch.SetStyle(ref, styleId): Patch)
     val updated = Patch.applyPatch(sheet, patch)
 
     assertEquals(updated(ref).styleId, Some(styleId))
@@ -139,7 +140,7 @@ class PatchSpec extends ScalaCheckSuite:
   }
 
   test("SetCellStyle deduplicates identical styles") {
-    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff0000)))
     val sheet = emptySheet
       .put(ref"A1", CellValue.Text("Red1"))
       .put(ref"A2", CellValue.Text("Red2"))
@@ -272,7 +273,10 @@ class PatchSpec extends ScalaCheckSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val patch = (Patch.Put(ref, CellValue.Text("First")): Patch) |+| (Patch.Put(ref, CellValue.Text("Second")): Patch)
+    val patch = (Patch.Put(ref, CellValue.Text("First")): Patch) |+| (Patch.Put(
+      ref,
+      CellValue.Text("Second")
+    ): Patch)
     val updated = Patch.applyPatch(sheet, patch)
 
     assertEquals(updated(ref).value, CellValue.Text("Second"))
@@ -282,7 +286,8 @@ class PatchSpec extends ScalaCheckSuite:
     val sheet = emptySheet.put(ARef.from1(1, 1), CellValue.Empty)
     val ref = ARef.from1(1, 1)
 
-    val patch = (Patch.SetStyle(ref, StyleId(1)): Patch) |+| (Patch.SetStyle(ref, StyleId(2)): Patch)
+    val patch =
+      (Patch.SetStyle(ref, StyleId(1)): Patch) |+| (Patch.SetStyle(ref, StyleId(2)): Patch)
     val updated = Patch.applyPatch(sheet, patch)
 
     assertEquals(updated(ref).styleId, Some(StyleId(2)))

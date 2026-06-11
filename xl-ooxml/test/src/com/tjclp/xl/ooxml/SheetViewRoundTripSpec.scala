@@ -67,7 +67,10 @@ class SheetViewRoundTripSpec extends FunSuite:
   test("GH-258: freeze panes + view settings share ONE sheetView element and round-trip") {
     val view = SheetView(showGridLines = false, zoomScale = Some(120))
     val wb = Workbook(
-      Sheet("Sheet1").put(ref"A1" -> "Header", ref"A2" -> 1).freezeAt(ref"B2").withViewSettings(view)
+      Sheet("Sheet1")
+        .put(ref"A1" -> "Header", ref"A2" -> 1)
+        .freezeAt(ref"B2")
+        .withViewSettings(view)
     )
     val (reread, out) = writeRead(wb)
 

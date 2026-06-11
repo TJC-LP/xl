@@ -18,8 +18,8 @@ import java.time.LocalDate
  * Functions: TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT.
  *
  * Each remaining test kills a specific bug class — redundant boundary cases and overlapping
- * properties were dropped to bring this spec in line with the repo's per-category density
- * (~10 tests / function). Pinning decisions:
+ * properties were dropped to bring this spec in line with the repo's per-category density (~10
+ * tests / function). Pinning decisions:
  *   - Type coercion: text functions accept Number / Bool via Excel-style coercion (TRIM(123) ==
  *     "123", TRIM(true) == "TRUE").
  *   - Negative TEXT formatting preserves the default minus sign for single-section formats and also

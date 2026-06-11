@@ -407,7 +407,10 @@ class MainSpec extends CatsEffectSuite:
 
     BatchParser.applyBatchOperations(wb, Some(sheet), ops).attempt.map {
       case Left(err) =>
-        assert(err.getMessage.contains("already exists"), s"Expected duplicate error: ${err.getMessage}")
+        assert(
+          err.getMessage.contains("already exists"),
+          s"Expected duplicate error: ${err.getMessage}"
+        )
       case Right(_) =>
         fail("Duplicate sheet name should fail")
     }
@@ -442,7 +445,10 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.ops, Vector(BatchOp.Put("A1", CellValue.Text("foo{bar}baz"), None)))
+    assertEquals(
+      result.toOption.get.ops,
+      Vector(BatchOp.Put("A1", CellValue.Text("foo{bar}baz"), None))
+    )
   }
 
   test("parseBatchJson: handles JSON object syntax in string values (GH-67 regression)") {
@@ -473,7 +479,10 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.ops, Vector(BatchOp.Put("A1", CellValue.Text("日本語 emoji: 🎉"), None)))
+    assertEquals(
+      result.toOption.get.ops,
+      Vector(BatchOp.Put("A1", CellValue.Text("日本語 emoji: 🎉"), None))
+    )
   }
 
   test("parseBatchJson: handles native JSON numbers") {
@@ -481,17 +490,24 @@ class MainSpec extends CatsEffectSuite:
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
-    assertEquals(result.toOption.get.ops, Vector(BatchOp.Put("A1", CellValue.Number(BigDecimal("12345.67")), None)))
+    assertEquals(
+      result.toOption.get.ops,
+      Vector(BatchOp.Put("A1", CellValue.Number(BigDecimal("12345.67")), None))
+    )
   }
 
   test("parseBatchJson: handles native JSON booleans") {
-    val json = """[{"op": "put", "ref": "A1", "value": true}, {"op": "put", "ref": "A2", "value": false}]"""
+    val json =
+      """[{"op": "put", "ref": "A1", "value": true}, {"op": "put", "ref": "A2", "value": false}]"""
     val result = BatchParser.parseBatchJson(json)
 
     assert(result.isRight, s"Should parse: $result")
     assertEquals(
       result.toOption.get.ops,
-      Vector(BatchOp.Put("A1", CellValue.Bool(true), None), BatchOp.Put("A2", CellValue.Bool(false), None))
+      Vector(
+        BatchOp.Put("A1", CellValue.Bool(true), None),
+        BatchOp.Put("A2", CellValue.Bool(false), None)
+      )
     )
   }
 
@@ -755,9 +771,12 @@ class MainSpec extends CatsEffectSuite:
     // Create sheet with pre-styled cell
     val sheet = Sheet("Test")
       .put(ref"A1" -> CellValue.Text("Hello"))
-      .style(ref"A1", com.tjclp.xl.styles.CellStyle.default.withFont(
-        com.tjclp.xl.styles.font.Font.default.withBold(true).withItalic(true)
-      ))
+      .style(
+        ref"A1",
+        com.tjclp.xl.styles.CellStyle.default.withFont(
+          com.tjclp.xl.styles.font.Font.default.withBold(true).withItalic(true)
+        )
+      )
     val wb = Workbook(Vector(sheet))
 
     // Apply style with replace=true - should clear existing italic
@@ -959,7 +978,8 @@ class MainSpec extends CatsEffectSuite:
   test("dry-run: parseBatchOperations + formatSummary produces validation without side effects") {
     // Regression: --dry-run on the --file/--output batch path previously ignored the flag
     // and still wrote the workbook. This test verifies the dry-run pipeline works end-to-end.
-    val json = """[{"op":"put","ref":"A1","value":"Revenue"},{"op":"putf","ref":"B1","formula":"=SUM(A1:A10)"}]"""
+    val json =
+      """[{"op":"put","ref":"A1","value":"Revenue"},{"op":"putf","ref":"B1","formula":"=SUM(A1:A10)"}]"""
     val result = BatchParser.parseBatchOperations(json).unsafeRunSync()
     assertEquals(result.ops.size, 2)
     assertEquals(result.warnings.size, 0)
@@ -1031,12 +1051,12 @@ class MainSpec extends CatsEffectSuite:
   test("StyleBuilder.parseNumFmt: custom format codes accepted") {
     // Test various custom format patterns
     val formats = Seq(
-      ("0.0x", true),           // MOIC format
+      ("0.0x", true), // MOIC format
       ("$#,##0;($#,##0)", true), // Accounting
-      ("0 \"bps\"", true),      // Basis points
-      ("0.00%", true),          // Explicit percent
-      ("yyyy-mm-dd", true),     // Date format
-      ("hh:mm:ss", true)        // Time format
+      ("0 \"bps\"", true), // Basis points
+      ("0.00%", true), // Explicit percent
+      ("yyyy-mm-dd", true), // Date format
+      ("hh:mm:ss", true) // Time format
     )
 
     formats.foreach { case (code, shouldSucceed) =>
@@ -1051,7 +1071,6 @@ class MainSpec extends CatsEffectSuite:
             assert(true)
           case Left(err) =>
             fail(s"Format '$code' failed: $err")
-      else
-        assert(result.isLeft, s"Format '$code' should fail")
+      else assert(result.isLeft, s"Format '$code' should fail")
     }
   }

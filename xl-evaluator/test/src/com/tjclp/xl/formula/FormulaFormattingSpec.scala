@@ -173,7 +173,11 @@ class FormulaFormattingSpec extends FunSuite:
     val summary = new Sheet(name = SheetName.unsafe("Summary"))
     val wb = Workbook(data, summary)
     val inferred =
-      FormulaFormatting.inferFormatFromReferences(parseOrFail("=SUM(Data!B1:B3)"), summary, Some(wb))
+      FormulaFormatting.inferFormatFromReferences(
+        parseOrFail("=SUM(Data!B1:B3)"),
+        summary,
+        Some(wb)
+      )
     assertEquals(inferred, Some(NumFmt.Currency))
   }
 
@@ -286,7 +290,9 @@ class FormulaFormattingSpec extends FunSuite:
       case Left(err) => fail(s"putFormulaInheriting failed: $err")
   }
 
-  test("LET formulas traverse without MatchError and inherit from binding-value refs (GH-193 integration)") {
+  test(
+    "LET formulas traverse without MatchError and inherit from binding-value refs (GH-193 integration)"
+  ) {
     // Cross-cluster integration pin: TExpr.Let/BindingRef landed in the same wave as
     // FormulaFormatting — an unhandled GADT case here fails at RUNTIME, not compile time.
     val sheet = base.put(ref"B2", 500000, currency).put(ref"B3", 100000, currency)

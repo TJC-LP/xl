@@ -8,8 +8,8 @@ import java.nio.file.{Files, Path}
 /**
  * Regression tests for Batik rasterizer (#83/#86).
  *
- * Tests cover error handling, format validation, and basic functionality.
- * Note: Full rasterization tests require AWT which may not be available in all environments.
+ * Tests cover error handling, format validation, and basic functionality. Note: Full rasterization
+ * tests require AWT which may not be available in all environments.
  */
 @SuppressWarnings(Array("org.wartremover.warts.IsInstanceOf"))
 class BatikRasterizerSpec extends CatsEffectSuite:
@@ -55,18 +55,21 @@ class BatikRasterizerSpec extends CatsEffectSuite:
 
   test("WebP format returns error (not natively supported)") {
     val tempFile = Files.createTempFile("test", ".webp")
-    val svg = """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="red" width="100" height="100"/></svg>"""
+    val svg =
+      """<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="red" width="100" height="100"/></svg>"""
 
     val result = BatikRasterizer
       .convertSvgToRaster(svg, tempFile, RasterFormat.WebP)
       .attempt
 
-    result.map { either =>
-      assert(either.isLeft, "WebP should fail")
-      either.left.foreach { err =>
-        assert(err.isInstanceOf[RasterError.FormatNotSupported])
+    result
+      .map { either =>
+        assert(either.isLeft, "WebP should fail")
+        either.left.foreach { err =>
+          assert(err.isInstanceOf[RasterError.FormatNotSupported])
+        }
       }
-    }.guarantee(IO(Files.deleteIfExists(tempFile)))
+      .guarantee(IO(Files.deleteIfExists(tempFile)))
   }
 
   // ========== Availability Test ==========

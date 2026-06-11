@@ -19,52 +19,75 @@ class WorkbookModificationSpec extends FunSuite:
   override def afterAll(): Unit =
     Files.deleteIfExists(path)
 
-  private val ctx = SourceContext.fromFile(path, PartManifest.empty, SourceFingerprint.fromPath(path))
+  private val ctx =
+    SourceContext.fromFile(path, PartManifest.empty, SourceFingerprint.fromPath(path))
   private val baseSheet = Sheet("Sheet1")
   private val workbook = Workbook(Vector(baseSheet), sourceContext = Some(ctx))
 
   test("update marks tracker") {
-    val updated = workbook.update("Sheet1", identity).fold(err => fail(s"Update failed: $err"), identity)
-    val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
+    val updated =
+      workbook.update("Sheet1", identity).fold(err => fail(s"Update failed: $err"), identity)
+    val tracker =
+      updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assertEquals(tracker.modifiedSheets, Set(0))
   }
 
   test("delete tracks deletions") {
     val sheet2 = Sheet("Sheet2")
     val wb = workbook.copy(sheets = Vector(baseSheet, sheet2))
-    val updated = wb.delete(SheetName.unsafe("Sheet2")).fold(err => fail(s"Delete failed: $err"), identity)
-    val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
+    val updated =
+      wb.delete(SheetName.unsafe("Sheet2")).fold(err => fail(s"Delete failed: $err"), identity)
+    val tracker =
+      updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assertEquals(tracker.deletedSheets, Set(1))
   }
 
   test("reorder marks reorder flag without marking sheets modified") {
     val sheet2 = Sheet("Sheet2")
     val wb = workbook.copy(sheets = Vector(baseSheet, sheet2))
-    val reordered = wb.reorder(Vector(SheetName.unsafe("Sheet2"), SheetName.unsafe("Sheet1"))).fold(err => fail(s"Reorder failed: $err"), identity)
-    val tracker = reordered.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
+    val reordered = wb
+      .reorder(Vector(SheetName.unsafe("Sheet2"), SheetName.unsafe("Sheet1")))
+      .fold(err => fail(s"Reorder failed: $err"), identity)
+    val tracker =
+      reordered.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assert(tracker.reorderedSheets)
     assertEquals(tracker.modifiedSheets, Set.empty)
   }
 
   test("rename marks both sheet and metadata as modified") {
-    val renamed = workbook.rename(SheetName.unsafe("Sheet1"), SheetName.unsafe("Sales")).fold(err => fail(s"Rename failed: $err"), identity)
-    val tracker = renamed.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
-    assert(tracker.modifiedMetadata, "Metadata should be marked modified (workbook.xml has sheet names)")
-    assertEquals(tracker.modifiedSheets, Set(0), "Sheet should be marked modified to preserve styles")
+    val renamed = workbook
+      .rename(SheetName.unsafe("Sheet1"), SheetName.unsafe("Sales"))
+      .fold(err => fail(s"Rename failed: $err"), identity)
+    val tracker =
+      renamed.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
+    assert(
+      tracker.modifiedMetadata,
+      "Metadata should be marked modified (workbook.xml has sheet names)"
+    )
+    assertEquals(
+      tracker.modifiedSheets,
+      Set(0),
+      "Sheet should be marked modified to preserve styles"
+    )
     assertEquals(renamed.sheets(0).name.value, "Sales")
   }
 
   test("put marks sheet as modified when replacing existing sheet") {
     val modifiedSheet = baseSheet.put(ref"A1" -> "New Value")
     val updated = workbook.put(modifiedSheet)
-    val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
+    val tracker =
+      updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assertEquals(tracker.modifiedSheets, Set(0))
   }
 
   test("put marks metadata as modified when adding new sheet") {
     val newSheet = Sheet("Sheet2")
     val updated = workbook.put(newSheet)
-    val tracker = updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
+    val tracker =
+      updated.sourceContext.fold(fail("Missing source context"))(identity).modificationTracker
     assert(tracker.modifiedMetadata, "Adding new sheet should mark metadata as modified")
-    assertEquals(tracker.modifiedSheets, Set.empty) // Individual sheets not modified, just workbook.xml
+    assertEquals(
+      tracker.modifiedSheets,
+      Set.empty
+    ) // Individual sheets not modified, just workbook.xml
   }

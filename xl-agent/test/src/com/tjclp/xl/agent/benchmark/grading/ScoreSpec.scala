@@ -103,8 +103,14 @@ class ScoreSpec extends FunSuite:
 
   test("LetterGrade.average computes correct average"):
     assertEquals(LetterGrade.average(List(LetterGrade.A, LetterGrade.A)), Some(LetterGrade.A))
-    assertEquals(LetterGrade.average(List(LetterGrade.A, LetterGrade.B)), Some(LetterGrade.A)) // 3.5 -> A
-    assertEquals(LetterGrade.average(List(LetterGrade.B, LetterGrade.C)), Some(LetterGrade.B)) // 2.5 -> B
+    assertEquals(
+      LetterGrade.average(List(LetterGrade.A, LetterGrade.B)),
+      Some(LetterGrade.A)
+    ) // 3.5 -> A
+    assertEquals(
+      LetterGrade.average(List(LetterGrade.B, LetterGrade.C)),
+      Some(LetterGrade.B)
+    ) // 2.5 -> B
     assertEquals(LetterGrade.average(List(LetterGrade.F, LetterGrade.F)), Some(LetterGrade.F))
     assertEquals(LetterGrade.average(Nil), None)
 

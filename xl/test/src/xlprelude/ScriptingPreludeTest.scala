@@ -9,10 +9,10 @@ import munit.FunSuite
 import com.tjclp.xl.scripting.{*, given}
 
 /**
- * Gate test for the scripting prelude: every public surface a script touches must resolve
- * through `import com.tjclp.xl.scripting.{*, given}` alone — macros (transparent inline through
- * an export hop), given instances, DSL operators, evaluator extensions, sync IO, and the unsafe
- * boundary. Compile success is most of the test; runtime assertions confirm semantics.
+ * Gate test for the scripting prelude: every public surface a script touches must resolve through
+ * `import com.tjclp.xl.scripting.{*, given}` alone — macros (transparent inline through an export
+ * hop), given instances, DSL operators, evaluator extensions, sync IO, and the unsafe boundary.
+ * Compile success is most of the test; runtime assertions confirm semantics.
  */
 class ScriptingPreludeTest extends FunSuite:
 

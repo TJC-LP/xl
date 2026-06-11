@@ -345,18 +345,21 @@ class ArrayArithmeticSpec extends FunSuite:
 
   // ========== Array Mode Distinction Tests ==========
 
-  test("regular evaluateFormula errors on range arithmetic (GH-array-mode)") {
-    // Regular evaluation should NOT allow array results to propagate
+  test("regular evaluateFormula collapses range arithmetic to top-left (GH-302)") {
+    // GH-302 follow-up: scalar-mode OPERATOR positions collapse array results to
+    // their top-left value (implicit intersection), consistent with scalar argument
+    // positions and the standalone-range collapse convention. Previously this was
+    // pinned as a TypeMismatch error; spilling still requires evaluateArrayFormula.
     val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Number(1))
       .put(ref"A2", CellValue.Number(2))
       .put(ref"B1", CellValue.Number(10))
       .put(ref"B2", CellValue.Number(20))
 
-    // Range * Range would produce array in array mode, but should error in regular mode
-    val result = sheet.evaluateFormula("=A1:A2*B1:B2")
-
-    assert(result.isLeft, s"Expected Left (array not allowed), got $result")
+    // top-left of {1*10; 2*20} is 1*10
+    assertEquals(sheet.evaluateFormula("=A1:A2*B1:B2"), Right(CellValue.Number(10)))
+    // range * scalar collapses the same way
+    assertEquals(sheet.evaluateFormula("=A1:A2*10"), Right(CellValue.Number(10)))
   }
 
   test("evaluateArrayFormula allows range arithmetic") {

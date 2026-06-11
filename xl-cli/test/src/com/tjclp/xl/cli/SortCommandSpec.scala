@@ -144,7 +144,10 @@ class SortCommandSpec extends FunSuite:
 
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     val s = imported.sheets.head
-    assertEquals(s.cells.get(ref(0, 0)).map(_.value), Some(CellValue.Text("Name"))) // Header unchanged
+    assertEquals(
+      s.cells.get(ref(0, 0)).map(_.value),
+      Some(CellValue.Text("Name"))
+    ) // Header unchanged
     assertEquals(s.cells.get(ref(0, 1)).map(_.value), Some(CellValue.Text("Amy")))
     assertEquals(s.cells.get(ref(0, 2)).map(_.value), Some(CellValue.Text("Zoe")))
   }
@@ -579,7 +582,10 @@ class SortCommandSpec extends FunSuite:
     val wb = Workbook(sheet)
 
     // Verify styles are set before sort
-    assert(sheet.cells.get(ref(1, 1)).flatMap(_.styleId).isDefined, "B2 should have style before sort")
+    assert(
+      sheet.cells.get(ref(1, 1)).flatMap(_.styleId).isDefined,
+      "B2 should have style before sort"
+    )
 
     val key = SortKey("A", SortDirection.Ascending, SortMode.Alphanumeric)
     WriteCommands

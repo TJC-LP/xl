@@ -16,7 +16,10 @@ class WhitespacePreservationSpec extends FunSuite:
     assert(xmlString.contains("<is>"), "Should have inline string element")
 
     // Check for xml:space="preserve"
-    assert(xmlString.contains("xml:space=\"preserve\""), "Should have xml:space='preserve' for leading space")
+    assert(
+      xmlString.contains("xml:space=\"preserve\""),
+      "Should have xml:space='preserve' for leading space"
+    )
 
     // Verify text content contains leading space
     assert(xmlString.contains(" leading"), "Text should contain leading space")
@@ -27,7 +30,10 @@ class WhitespacePreservationSpec extends FunSuite:
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
-    assert(xmlString.contains("xml:space=\"preserve\""), "Should have xml:space='preserve' for trailing space")
+    assert(
+      xmlString.contains("xml:space=\"preserve\""),
+      "Should have xml:space='preserve' for trailing space"
+    )
     assert(xmlString.contains("trailing "), "Text should contain trailing space")
   }
 
@@ -36,7 +42,10 @@ class WhitespacePreservationSpec extends FunSuite:
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
-    assert(xmlString.contains("xml:space=\"preserve\""), "Should have xml:space='preserve' for double spaces")
+    assert(
+      xmlString.contains("xml:space=\"preserve\""),
+      "Should have xml:space='preserve' for double spaces"
+    )
     assert(xmlString.contains("double  space"), "Text should contain double spaces")
   }
 
@@ -50,29 +59,37 @@ class WhitespacePreservationSpec extends FunSuite:
   }
 
   test("RichText with spaces includes xml:space on run text elements") {
-    val richText = RichText(Vector(
-      TextRun(" leading", None),
-      TextRun("trailing ", None)
-    ))
+    val richText = RichText(
+      Vector(
+        TextRun(" leading", None),
+        TextRun("trailing ", None)
+      )
+    )
     val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
-    assert(xmlString.contains("xml:space=\"preserve\""), "RichText with spaces should have xml:space='preserve' on <t> elements")
+    assert(
+      xmlString.contains("xml:space=\"preserve\""),
+      "RichText with spaces should have xml:space='preserve' on <t> elements"
+    )
     assert(xmlString.contains(" leading"), "Should contain leading space")
     assert(xmlString.contains("trailing "), "Should contain trailing space")
   }
 
   test("RichText with internal double spaces preserves xml:space") {
-    val richText = RichText(Vector(
-      TextRun("hello  world", None)  // Internal double space
-    ))
+    val richText = RichText(
+      Vector(
+        TextRun("hello  world", None) // Internal double space
+      )
+    )
     val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 
     val xmlString = xml.toString
-    assert(xmlString.contains("xml:space=\"preserve\""),
-      "RichText with internal double spaces should have xml:space='preserve'")
-    assert(xmlString.contains("hello  world"),
-      "Should preserve internal double spaces")
+    assert(
+      xmlString.contains("xml:space=\"preserve\""),
+      "RichText with internal double spaces should have xml:space='preserve'"
+    )
+    assert(xmlString.contains("hello  world"), "Should preserve internal double spaces")
   }

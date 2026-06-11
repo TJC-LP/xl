@@ -24,8 +24,8 @@ import munit.FunSuite
  *      (preserved entries must keep their indices)
  *   1. Fixture authored by the xl writer itself (not raw XML), then surgically modified
  *
- * Each test asserts BOTH the reloaded domain values and the raw xl/sharedStrings.xml bytes
- * (exact text content and xml:space="preserve" attributes).
+ * Each test asserts BOTH the reloaded domain values and the raw xl/sharedStrings.xml bytes (exact
+ * text content and xml:space="preserve" attributes).
  */
 class SurgicalWhitespaceSpec extends FunSuite:
 
@@ -214,8 +214,8 @@ class SurgicalWhitespaceSpec extends FunSuite:
   // ========== Assertion helpers ==========
 
   private def textAt(wb: Workbook, sheetName: String, r: ARef): Option[String] =
-    wb(sheetName).toOption.flatMap(_.cells.get(r)).map(_.value).collect {
-      case CellValue.Text(s) => s
+    wb(sheetName).toOption.flatMap(_.cells.get(r)).map(_.value).collect { case CellValue.Text(s) =>
+      s
     }
 
   private def assertWhitespaceValues(wb: Workbook, sheetName: String, where: String): Unit =
@@ -271,9 +271,9 @@ class SurgicalWhitespaceSpec extends FunSuite:
   // ========== Raw XML fixture (Excel-shaped, bypasses the xl writer on the way in) ==========
 
   /**
-   * Build an xlsx whose SST carries the GH-17 whitespace corpus with xml:space="preserve",
-   * exactly as Excel emits it. Sheet1 references all entries via t="s"; the optional Sheet2 holds
-   * only a number (so cross-sheet edits leave Sheet1 untouched).
+   * Build an xlsx whose SST carries the GH-17 whitespace corpus with xml:space="preserve", exactly
+   * as Excel emits it. Sheet1 references all entries via t="s"; the optional Sheet2 holds only a
+   * number (so cross-sheet edits leave Sheet1 untouched).
    */
   private def createRawSstFixture(twoSheets: Boolean): Path =
     val path = Files.createTempFile(s"gh17-fixture-${if twoSheets then "2s" else "1s"}", ".xlsx")
@@ -288,7 +288,8 @@ class SurgicalWhitespaceSpec extends FunSuite:
     val sheet2Decl = if twoSheets then """
     <sheet name="Sheet2" sheetId="2" r:id="rId2"/>""" else ""
     val sheet2Rel =
-      if twoSheets then """
+      if twoSheets then
+        """
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>"""
       else ""
     val sstRelId = if twoSheets then "rId3" else "rId2"

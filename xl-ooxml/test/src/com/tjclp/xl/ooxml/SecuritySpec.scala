@@ -20,7 +20,8 @@ class SecuritySpec extends FunSuite:
 
   override def afterAll(): Unit =
     // Clean up temp files
-    Files.walk(tempDir)
+    Files
+      .walk(tempDir)
       .sorted(java.util.Comparator.reverseOrder())
       .forEach(Files.delete)
 

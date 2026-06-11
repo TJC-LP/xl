@@ -26,7 +26,9 @@ import munit.FunSuite
  *   - 802e020: Element ordering
  *   - 4998af2: dxfs preservation
  */
-@SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.AsInstanceOf"))
+@SuppressWarnings(
+  Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.AsInstanceOf")
+)
 class XlsxWriterStyleMetadataSpec extends FunSuite:
 
   test("surgical style mode preserves original style IDs for unmodified sheets") {

@@ -105,7 +105,7 @@ class RichTextXmlSpec extends FunSuite:
   }
 
   test("OoxmlCell: rich text run without formatting has no <rPr>") {
-    val richText = RichText.plain("Plain")  // Create plain RichText
+    val richText = RichText.plain("Plain") // Create plain RichText
     val ooxmlCell = OoxmlCell(ref"A1", CellValue.RichText(richText), None, "inlineStr")
     val xml = ooxmlCell.toXml
 

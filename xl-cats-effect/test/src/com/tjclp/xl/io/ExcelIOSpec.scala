@@ -29,7 +29,8 @@ class ExcelIOSpec extends CatsEffectSuite:
   val tempDir: FunFixture[Path] = FunFixture[Path](
     setup = _ => Files.createTempDirectory("xl-streaming-"),
     teardown = dir =>
-      Files.walk(dir)
+      Files
+        .walk(dir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
   )
@@ -94,7 +95,9 @@ class ExcelIOSpec extends CatsEffectSuite:
     // Create test file using current writer
     val initial = Workbook("Test")
     val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Hello"))
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
+    val wb = initial
+      .update(initial.sheets(0).name, _ => sheet)
+      .getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("test.xlsx")
     IO(com.tjclp.xl.ooxml.XlsxWriter.write(wb, path)).flatMap { _ =>
@@ -109,10 +112,13 @@ class ExcelIOSpec extends CatsEffectSuite:
 
   tempDir.test("write: creates valid XLSX file") { dir =>
     val initial = Workbook("Output")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("Written"))
       .put(ref"B1", CellValue.Number(BigDecimal(42)))
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
+    val wb = initial
+      .update(initial.sheets(0).name, _ => sheet)
+      .getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("output.xlsx")
     val excel = ExcelIO.instance[IO]
@@ -127,10 +133,13 @@ class ExcelIOSpec extends CatsEffectSuite:
 
   tempDir.test("writeWith SaxStax: creates valid XLSX file using SAX backend") { dir =>
     val initial = Workbook("OutputFast")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("Fast"))
       .put(ref"B1", CellValue.Number(BigDecimal(84)))
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
+    val wb = initial
+      .update(initial.sheets(0).name, _ => sheet)
+      .getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("output-fast.xlsx")
     val excel = ExcelIO.instance[IO]
@@ -148,7 +157,9 @@ class ExcelIOSpec extends CatsEffectSuite:
     val sheet = (1 to 10).foldLeft(initial.sheets(0)) { (s, i) =>
       s.put(ARef(Column.from0(0), Row.from1(i)), CellValue.Number(BigDecimal(i)))
     }
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
+    val wb = initial
+      .update(initial.sheets(0).name, _ => sheet)
+      .getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("stream-test.xlsx")
     IO(com.tjclp.xl.ooxml.XlsxWriter.write(wb, path)).flatMap { _ =>
@@ -301,10 +312,13 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Create row stream
     val rows = fs2.Stream.range(1, 6).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Text(s"Row $i"),
-        1 -> CellValue.Number(BigDecimal(i * 100))
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Text(s"Row $i"),
+          1 -> CellValue.Number(BigDecimal(i * 100))
+        )
+      )
     }
 
     // Write stream
@@ -312,7 +326,7 @@ class ExcelIOSpec extends CatsEffectSuite:
       // Read back to verify
       excel.read(path).map { wb =>
         assertEquals(wb.sheets.size, 1)
-        assertEquals(wb.sheets(0).cellCount, 10)  // 5 rows × 2 cols
+        assertEquals(wb.sheets(0).cellCount, 10) // 5 rows × 2 cols
       }
     }
   }
@@ -328,11 +342,14 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Generate 1000 rows
     val rows = fs2.Stream.range(1, 1001).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Text(s"Row $i"),
-        1 -> CellValue.Number(BigDecimal(i * 100)),
-        2 -> CellValue.Bool(i % 2 == 0)
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Text(s"Row $i"),
+          1 -> CellValue.Number(BigDecimal(i * 100)),
+          2 -> CellValue.Bool(i % 2 == 0)
+        )
+      )
     }
 
     // Write with true streaming
@@ -356,10 +373,13 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Generate 100,000 rows (this would OOM with materialized approach)
     val rows = fs2.Stream.range(1, 100001).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Text(s"Row $i"),
-        1 -> CellValue.Number(BigDecimal(i))
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Text(s"Row $i"),
+          1 -> CellValue.Number(BigDecimal(i))
+        )
+      )
     }
 
     // Write with true streaming
@@ -378,10 +398,13 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Generate test data
     val rows = fs2.Stream.range(1, 101).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Number(BigDecimal(i)),
-        1 -> CellValue.Text(s"Text $i")
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Number(BigDecimal(i)),
+          1 -> CellValue.Text(s"Text $i")
+        )
+      )
     }
 
     rows.through(excel.writeStream(path, "Test")).compile.drain.flatMap { _ =>
@@ -391,7 +414,7 @@ class ExcelIOSpec extends CatsEffectSuite:
         result.foreach { wb =>
           assertEquals(wb.sheets.size, 1)
           val sheet = wb.sheets(0)
-          assertEquals(sheet.cellCount, 200)  // 100 rows × 2 cols
+          assertEquals(sheet.cellCount, 200) // 100 rows × 2 cols
 
           // Verify first cell
           val firstCell = sheet(ref"A1")
@@ -420,13 +443,19 @@ class ExcelIOSpec extends CatsEffectSuite:
         import java.util.zip.ZipFile
         val zipFile = new ZipFile(path.toFile)
         try {
-          val entries = scala.jdk.CollectionConverters.IteratorHasAsScala(
-            zipFile.entries().asIterator()
-          ).asScala.map(_.getName).toSet
+          val entries = scala.jdk.CollectionConverters
+            .IteratorHasAsScala(
+              zipFile.entries().asIterator()
+            )
+            .asScala
+            .map(_.getName)
+            .toSet
 
           // Should have sheet3.xml
-          assert(entries.contains("xl/worksheets/sheet3.xml"),
-            s"Expected sheet3.xml, got: ${entries.filter(_.contains("sheet"))}")
+          assert(
+            entries.contains("xl/worksheets/sheet3.xml"),
+            s"Expected sheet3.xml, got: ${entries.filter(_.contains("sheet"))}"
+          )
 
           // Should NOT have sheet1.xml or sheet2.xml
           assert(!entries.contains("xl/worksheets/sheet1.xml"), "Should not have sheet1.xml")
@@ -435,14 +464,14 @@ class ExcelIOSpec extends CatsEffectSuite:
           zipFile.close()
         }
       } >>
-      // Verify workbook.xml has sheetId="3"
-      IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
-        assert(result.isRight, s"Should read successfully, got: $result")
-        result.foreach { wb =>
-          assertEquals(wb.sheets.size, 1)
-          assertEquals(wb.sheets(0).name.value, "ThirdSheet")
+        // Verify workbook.xml has sheetId="3"
+        IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
+          assert(result.isRight, s"Should read successfully, got: $result")
+          result.foreach { wb =>
+            assertEquals(wb.sheets.size, 1)
+            assertEquals(wb.sheets(0).name.value, "ThirdSheet")
+          }
         }
-      }
     }
   }
 
@@ -452,8 +481,10 @@ class ExcelIOSpec extends CatsEffectSuite:
     val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
 
     // sheetIndex = 0 should fail
-    rows.through(excel.writeStream(path, "Bad", sheetIndex = 0))
-      .compile.drain
+    rows
+      .through(excel.writeStream(path, "Bad", sheetIndex = 0))
+      .compile
+      .drain
       .attempt
       .map {
         case Left(err: IllegalArgumentException) =>
@@ -476,31 +507,30 @@ class ExcelIOSpec extends CatsEffectSuite:
       RowData(i, Map(0 -> CellValue.Number(BigDecimal(i * 100))))
     }
 
-    excel.writeStreamsSeq(path, Seq("First" -> sheet1Rows, "Second" -> sheet2Rows)).flatMap {
-      _ =>
-        // Verify with XlsxReader
-        IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
-          assert(result.isRight, s"Should read successfully: $result")
-          result.foreach { wb =>
-            // Should have 2 sheets
-            assertEquals(wb.sheets.size, 2)
+    excel.writeStreamsSeq(path, Seq("First" -> sheet1Rows, "Second" -> sheet2Rows)).flatMap { _ =>
+      // Verify with XlsxReader
+      IO(com.tjclp.xl.ooxml.XlsxReader.read(path)).map { result =>
+        assert(result.isRight, s"Should read successfully: $result")
+        result.foreach { wb =>
+          // Should have 2 sheets
+          assertEquals(wb.sheets.size, 2)
 
-            // First sheet
-            assertEquals(wb.sheets(0).name.value, "First")
-            assertEquals(wb.sheets(0).cellCount, 10)
+          // First sheet
+          assertEquals(wb.sheets(0).name.value, "First")
+          assertEquals(wb.sheets(0).cellCount, 10)
 
-            // Second sheet
-            assertEquals(wb.sheets(1).name.value, "Second")
-            assertEquals(wb.sheets(1).cellCount, 5)
+          // Second sheet
+          assertEquals(wb.sheets(1).name.value, "Second")
+          assertEquals(wb.sheets(1).cellCount, 5)
 
-            // Verify content
-            val firstCell = wb.sheets(0)(ref"A1")
-            assertEquals(firstCell.value, CellValue.Text("Sheet1 Row 1"))
+          // Verify content
+          val firstCell = wb.sheets(0)(ref"A1")
+          assertEquals(firstCell.value, CellValue.Text("Sheet1 Row 1"))
 
-            val secondCell = wb.sheets(1)(ref"A1")
-            assertEquals(secondCell.value, CellValue.Number(BigDecimal(100)))
-          }
+          val secondCell = wb.sheets(1)(ref"A1")
+          assertEquals(secondCell.value, CellValue.Number(BigDecimal(100)))
         }
+      }
     }
   }
 
@@ -509,7 +539,8 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = ExcelIO.instance[IO]
 
     val sales = fs2.Stream.range(1, 101).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
-    val inventory = fs2.Stream.range(1, 51).map(i => RowData(i, Map(0 -> CellValue.Text(s"Item $i"))))
+    val inventory =
+      fs2.Stream.range(1, 51).map(i => RowData(i, Map(0 -> CellValue.Text(s"Item $i"))))
     val summary = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("Summary"))))
 
     excel
@@ -540,7 +571,8 @@ class ExcelIOSpec extends CatsEffectSuite:
     // 3 sheets with 10k rows each (30k total rows)
     val sheet1 = fs2.Stream.range(1, 10001).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
     val sheet2 = fs2.Stream.range(1, 10001).map(i => RowData(i, Map(0 -> CellValue.Text(s"$i"))))
-    val sheet3 = fs2.Stream.range(1, 10001).map(i => RowData(i, Map(0 -> CellValue.Bool(i % 2 == 0))))
+    val sheet3 =
+      fs2.Stream.range(1, 10001).map(i => RowData(i, Map(0 -> CellValue.Bool(i % 2 == 0))))
 
     excel
       .writeStreamsSeq(path, Seq("Numbers" -> sheet1, "Text" -> sheet2, "Booleans" -> sheet3))
@@ -596,11 +628,14 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Write 100k rows with streaming
     val writeRows = fs2.Stream.range(1, 100001).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Number(BigDecimal(i)),
-        1 -> CellValue.Text(s"Row $i"),
-        2 -> CellValue.Bool(i % 2 == 0)
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Number(BigDecimal(i)),
+          1 -> CellValue.Text(s"Row $i"),
+          2 -> CellValue.Bool(i % 2 == 0)
+        )
+      )
     }
 
     writeRows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
@@ -617,11 +652,14 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Write test data
     val writeRows = fs2.Stream.range(1, 1001).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Number(BigDecimal(i)),
-        1 -> CellValue.Text(s"Text $i"),
-        2 -> CellValue.Bool(i % 2 == 0)
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Number(BigDecimal(i)),
+          1 -> CellValue.Text(s"Text $i"),
+          2 -> CellValue.Bool(i % 2 == 0)
+        )
+      )
     }
 
     writeRows.through(excel.writeStream(path, "Test")).compile.drain.flatMap { _ =>
@@ -688,15 +726,17 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = ExcelIO.instance[IO]
 
     // Write 10k rows
-    val writeRows = fs2.Stream.range(1, 10001).map(i =>
-      RowData(i, Map(0 -> CellValue.Number(BigDecimal(i))))
-    )
+    val writeRows =
+      fs2.Stream.range(1, 10001).map(i => RowData(i, Map(0 -> CellValue.Number(BigDecimal(i)))))
 
     writeRows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
       // Read and filter incrementally (should not materialize all rows)
-      excel.readStream(path)
-        .filter(_.rowIndex % 100 == 0)  // Only every 100th row
-        .compile.count.map { count =>
+      excel
+        .readStream(path)
+        .filter(_.rowIndex % 100 == 0) // Only every 100th row
+        .compile
+        .count
+        .map { count =>
           assertEquals(count, 100L, "Should find 100 rows (1% of 10k)")
         }
     }
@@ -711,7 +751,8 @@ class ExcelIOSpec extends CatsEffectSuite:
     val sheet2 = fs2.Stream.range(1, 21).map(i => RowData(i, Map(0 -> CellValue.Text(s"S2-$i"))))
     val sheet3 = fs2.Stream.range(1, 31).map(i => RowData(i, Map(0 -> CellValue.Bool(i % 2 == 0))))
 
-    excel.writeStreamsSeq(path, Seq("First" -> sheet1, "Second" -> sheet2, "Third" -> sheet3))
+    excel
+      .writeStreamsSeq(path, Seq("First" -> sheet1, "Second" -> sheet2, "Third" -> sheet3))
       .flatMap { _ =>
         // Read second sheet by index
         excel.readStreamByIndex(path, 2).compile.toVector.map { rows =>
@@ -732,10 +773,12 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Write 3 sheets
     val sales = fs2.Stream.range(1, 11).map(i => RowData(i, Map(0 -> CellValue.Number(i * 100))))
-    val inventory = fs2.Stream.range(1, 6).map(i => RowData(i, Map(0 -> CellValue.Text(s"Item $i"))))
+    val inventory =
+      fs2.Stream.range(1, 6).map(i => RowData(i, Map(0 -> CellValue.Text(s"Item $i"))))
     val summary = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("Done"))))
 
-    excel.writeStreamsSeq(path, Seq("Sales" -> sales, "Inventory" -> inventory, "Summary" -> summary))
+    excel
+      .writeStreamsSeq(path, Seq("Sales" -> sales, "Inventory" -> inventory, "Summary" -> summary))
       .flatMap { _ =>
         // Read "Inventory" sheet by name
         excel.readSheetStream(path, "Inventory").compile.toVector.map { rows =>
@@ -757,8 +800,10 @@ class ExcelIOSpec extends CatsEffectSuite:
     val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
     rows.through(excel.writeStream(path, "Only")).compile.drain.flatMap { _ =>
       // Try to read sheet 5 (doesn't exist)
-      excel.readStreamByIndex(path, 5)
-        .compile.toList
+      excel
+        .readStreamByIndex(path, 5)
+        .compile
+        .toList
         .attempt
         .map {
           case Left(err) =>
@@ -774,11 +819,14 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = ExcelIO.instance[IO]
 
     val rows = fs2.Stream.range(1, 6).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Number(BigDecimal(i)),
-        1 -> CellValue.Number(BigDecimal(i * 10)),
-        2 -> CellValue.Number(BigDecimal(i * 100))
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Number(BigDecimal(i)),
+          1 -> CellValue.Number(BigDecimal(i * 10)),
+          2 -> CellValue.Number(BigDecimal(i * 100))
+        )
+      )
     }
 
     rows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
@@ -809,7 +857,10 @@ class ExcelIOSpec extends CatsEffectSuite:
       val remapped = remapWorksheetEntry(source, "sheet2.xml", "sheet3.xml")
       val range = CellRange.parse("B10:C12").toOption.getOrElse(fail("Bad range"))
 
-      excel.readSheetStreamRange(remapped, "Data", range).compile.toVector
+      excel
+        .readSheetStreamRange(remapped, "Data", range)
+        .compile
+        .toVector
         .guarantee(IO(Files.deleteIfExists(remapped)).void)
         .map { rows =>
           assertEquals(rows.map(_.rowIndex), Vector(10, 11, 12))
@@ -832,7 +883,8 @@ class ExcelIOSpec extends CatsEffectSuite:
     excel.write(wb, source).flatMap { _ =>
       val remapped = remapWorksheetEntry(source, "sheet2.xml", "sheet4.xml")
 
-      excel.streamCellDetails(remapped, "Sheet2", ARef.from0(2, 4))
+      excel
+        .streamCellDetails(remapped, "Sheet2", ARef.from0(2, 4))
         .guarantee(IO(Files.deleteIfExists(remapped)).void)
         .map { details =>
           assertEquals(details.value, CellValue.Text("target"))
@@ -883,7 +935,10 @@ class ExcelIOSpec extends CatsEffectSuite:
         assert(styles.cellStyles.nonEmpty, "Should have cell styles")
         // Find a currency style
         val hasCurrency = styles.cellStyles.exists(_.numFmt == NumFmt.Currency)
-        assert(hasCurrency, s"Should have a Currency numFmt, got: ${styles.cellStyles.map(_.numFmt)}")
+        assert(
+          hasCurrency,
+          s"Should have a Currency numFmt, got: ${styles.cellStyles.map(_.numFmt)}"
+        )
       }
     }
   }
@@ -935,8 +990,10 @@ class ExcelIOSpec extends CatsEffectSuite:
     val rows = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("test"))))
     rows.through(excel.writeStream(path, "RealSheet")).compile.drain.flatMap { _ =>
       // Try to read "FakeSheet"
-      excel.readSheetStream(path, "FakeSheet")
-        .compile.toList
+      excel
+        .readSheetStream(path, "FakeSheet")
+        .compile
+        .toList
         .attempt
         .map {
           case Left(err) =>
@@ -957,18 +1014,24 @@ class ExcelIOSpec extends CatsEffectSuite:
     // This test specifically verifies the fix from readAllBytes() → fs2.io.readInputStream
     // Reduced from 500k to 100k for faster CI (still validates O(1) behavior)
     val writeRows = fs2.Stream.range(1, 100001).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Number(BigDecimal(i)),
-        1 -> CellValue.Text(s"Row-$i-with-some-text-content")
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Number(BigDecimal(i)),
+          1 -> CellValue.Text(s"Row-$i-with-some-text-content")
+        )
+      )
     }
 
     writeRows.through(excel.writeStream(path, "LargeData")).compile.drain.flatMap { _ =>
       // Read with true streaming (constant memory via fs2.io.readInputStream)
       // If this completes without OOM, the O(1) fix is working
-      excel.readStream(path)
-        .filter(_.rowIndex % 10000 == 0)  // Sample 0.01% (1 in 10,000) to verify correctness
-        .compile.count.map { count =>
+      excel
+        .readStream(path)
+        .filter(_.rowIndex % 10000 == 0) // Sample 0.01% (1 in 10,000) to verify correctness
+        .compile
+        .count
+        .map { count =>
           assertEquals(count, 10L, "Should find 10 sampled rows (100k / 10k)")
         }
     }
@@ -981,7 +1044,8 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Write two 100k row files
     val writeRows1 = fs2.Stream.range(1, 100001).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
-    val writeRows2 = fs2.Stream.range(1, 100001).map(i => RowData(i, Map(0 -> CellValue.Text(s"Row-$i"))))
+    val writeRows2 =
+      fs2.Stream.range(1, 100001).map(i => RowData(i, Map(0 -> CellValue.Text(s"Row-$i"))))
 
     for
       _ <- writeRows1.through(excel.writeStream(path1, "Data1")).compile.drain
@@ -1026,7 +1090,10 @@ class ExcelIOSpec extends CatsEffectSuite:
       storedSize <- IO(java.nio.file.Files.size(storedPath))
     yield
       // DEFLATED should produce smaller or equal size (worksheets always DEFLATED regardless of config)
-      assert(deflatedSize <= storedSize, s"DEFLATED config ($deflatedSize) should be <= STORED config ($storedSize)")
+      assert(
+        deflatedSize <= storedSize,
+        s"DEFLATED config ($deflatedSize) should be <= STORED config ($storedSize)"
+      )
   }
 
   tempDir.test("writeStream: produces compressed output") { dir =>
@@ -1034,10 +1101,13 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Large dataset with repetitive content
     val rows = fs2.Stream.range(1, 5001).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Text("Repeated content that should compress well"),
-        1 -> CellValue.Number(BigDecimal(i))
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Text("Repeated content that should compress well"),
+          1 -> CellValue.Number(BigDecimal(i))
+        )
+      )
     }
 
     val path = dir.resolve("compressed.xlsx")
@@ -1057,15 +1127,20 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = ExcelIO.instance[IO]
 
     // Test data with potentially dangerous formula-like text
-    val rows = fs2.Stream.emits(List(
-      RowData(1, Map(
-        0 -> CellValue.Text("=SUM(A2:A10)"),      // Starts with =
-        1 -> CellValue.Text("+1234"),             // Starts with +
-        2 -> CellValue.Text("-dangerous"),        // Starts with -
-        3 -> CellValue.Text("@import"),           // Starts with @
-        4 -> CellValue.Text("Normal text")        // Normal text
-      ))
-    ))
+    val rows = fs2.Stream.emits(
+      List(
+        RowData(
+          1,
+          Map(
+            0 -> CellValue.Text("=SUM(A2:A10)"), // Starts with =
+            1 -> CellValue.Text("+1234"), // Starts with +
+            2 -> CellValue.Text("-dangerous"), // Starts with -
+            3 -> CellValue.Text("@import"), // Starts with @
+            4 -> CellValue.Text("Normal text") // Normal text
+          )
+        )
+      )
+    )
 
     val path = dir.resolve("streaming-injection.xlsx")
 
@@ -1101,12 +1176,17 @@ class ExcelIOSpec extends CatsEffectSuite:
   tempDir.test("writeStream: WriterConfig.default does not escape text") { dir =>
     val excel = ExcelIO.instance[IO]
 
-    val rows = fs2.Stream.emits(List(
-      RowData(1, Map(
-        0 -> CellValue.Text("=SUM(A2:A10)"),
-        1 -> CellValue.Text("Normal text")
-      ))
-    ))
+    val rows = fs2.Stream.emits(
+      List(
+        RowData(
+          1,
+          Map(
+            0 -> CellValue.Text("=SUM(A2:A10)"),
+            1 -> CellValue.Text("Normal text")
+          )
+        )
+      )
+    )
 
     val path = dir.resolve("streaming-no-escape.xlsx")
 
@@ -1131,7 +1211,11 @@ class ExcelIOSpec extends CatsEffectSuite:
     val path = dir.resolve("streaming-multi-escape.xlsx")
 
     for
-      _ <- excel.writeStreamsSeq(path, Seq(("Sheet1", sheet1), ("Sheet2", sheet2)), WriterConfig.secure)
+      _ <- excel.writeStreamsSeq(
+        path,
+        Seq(("Sheet1", sheet1), ("Sheet2", sheet2)),
+        WriterConfig.secure
+      )
       wb <- IO(XlsxReader.read(path)).map(_.toOption.get)
     yield
       // Both sheets should have escaped text
@@ -1149,7 +1233,8 @@ class ExcelIOSpec extends CatsEffectSuite:
   tempDir.test("writeWorkbookStream: WriterConfig.secure escapes clean read workbook") { dir =>
     val excel = ExcelIO.instance[IO]
     val initial = Workbook("Data")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("=DANGER"))
       .put(ref"A2", CellValue.Text("+EVIL"))
       .put(ref"A3", CellValue.Text("Normal text"))
@@ -1195,11 +1280,14 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Write data spanning A1:C5
     val rows = fs2.Stream.range(1, 6).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Text(s"A$i"),
-        1 -> CellValue.Number(BigDecimal(i * 10)),
-        2 -> CellValue.Bool(i % 2 == 0)
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Text(s"A$i"),
+          1 -> CellValue.Number(BigDecimal(i * 10)),
+          2 -> CellValue.Bool(i % 2 == 0)
+        )
+      )
     }
 
     rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.flatMap { _ =>
@@ -1212,8 +1300,10 @@ class ExcelIOSpec extends CatsEffectSuite:
           val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
 
           // Should contain dimension element with correct range
-          assert(content.contains("""<dimension ref="A1:C5"/>"""),
-            s"Should have dimension element A1:C5, got: ${content.take(500)}")
+          assert(
+            content.contains("""<dimension ref="A1:C5"/>"""),
+            s"Should have dimension element A1:C5, got: ${content.take(500)}"
+          )
         } finally {
           zipFile.close()
         }
@@ -1227,11 +1317,14 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Write data starting at B3:D7 (not starting at A1)
     val rows = fs2.Stream.range(3, 8).map { i =>
-      RowData(i, Map(
-        1 -> CellValue.Text(s"B$i"),  // Column B (index 1)
-        2 -> CellValue.Number(BigDecimal(i)),  // Column C (index 2)
-        3 -> CellValue.Bool(true)  // Column D (index 3)
-      ))
+      RowData(
+        i,
+        Map(
+          1 -> CellValue.Text(s"B$i"), // Column B (index 1)
+          2 -> CellValue.Number(BigDecimal(i)), // Column C (index 2)
+          3 -> CellValue.Bool(true) // Column D (index 3)
+        )
+      )
     }
 
     rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.flatMap { _ =>
@@ -1243,8 +1336,10 @@ class ExcelIOSpec extends CatsEffectSuite:
           val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
 
           // Should have dimension B3:D7 (not A1:D7)
-          assert(content.contains("""<dimension ref="B3:D7"/>"""),
-            s"Should have dimension B3:D7, got: ${content.take(500)}")
+          assert(
+            content.contains("""<dimension ref="B3:D7"/>"""),
+            s"Should have dimension B3:D7, got: ${content.take(500)}"
+          )
         } finally {
           zipFile.close()
         }
@@ -1268,8 +1363,10 @@ class ExcelIOSpec extends CatsEffectSuite:
           val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
 
           // Should NOT contain dimension element for empty sheet
-          assert(!content.contains("<dimension"),
-            s"Empty sheet should not have dimension element, got: ${content.take(500)}")
+          assert(
+            !content.contains("<dimension"),
+            s"Empty sheet should not have dimension element, got: ${content.take(500)}"
+          )
         } finally {
           zipFile.close()
         }
@@ -1283,7 +1380,7 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Single cell at F10
     val rows = fs2.Stream.emit(
-      RowData(10, Map(5 -> CellValue.Text("Only cell")))  // Column F (index 5)
+      RowData(10, Map(5 -> CellValue.Text("Only cell"))) // Column F (index 5)
     )
 
     rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.flatMap { _ =>
@@ -1295,8 +1392,10 @@ class ExcelIOSpec extends CatsEffectSuite:
           val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
 
           // Dimension should be F10:F10 for single cell
-          assert(content.contains("""<dimension ref="F10:F10"/>"""),
-            s"Single cell should have dimension F10:F10, got: ${content.take(500)}")
+          assert(
+            content.contains("""<dimension ref="F10:F10"/>"""),
+            s"Single cell should have dimension F10:F10, got: ${content.take(500)}"
+          )
         } finally {
           zipFile.close()
         }
@@ -1310,10 +1409,13 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Write 10k rows
     val rows = fs2.Stream.range(1, 10001).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Number(BigDecimal(i)),
-        4 -> CellValue.Text(s"Row $i")  // Column E (index 4)
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Number(BigDecimal(i)),
+          4 -> CellValue.Text(s"Row $i") // Column E (index 4)
+        )
+      )
     }
 
     rows.through(excel.writeStreamWithAutoDetect(path, "Data")).compile.drain.flatMap { _ =>
@@ -1331,32 +1433,44 @@ class ExcelIOSpec extends CatsEffectSuite:
     val excel = ExcelIO.instance[IO]
 
     val sheet1 = fs2.Stream.range(1, 11).map(i => RowData(i, Map(0 -> CellValue.Number(i))))
-    val sheet2 = fs2.Stream.range(1, 6).map(i => RowData(i, Map(
-      0 -> CellValue.Text(s"A$i"),
-      1 -> CellValue.Text(s"B$i"),
-      2 -> CellValue.Text(s"C$i")
-    )))
+    val sheet2 = fs2.Stream
+      .range(1, 6)
+      .map(i =>
+        RowData(
+          i,
+          Map(
+            0 -> CellValue.Text(s"A$i"),
+            1 -> CellValue.Text(s"B$i"),
+            2 -> CellValue.Text(s"C$i")
+          )
+        )
+      )
 
-    excel.writeStreamsSeqWithAutoDetect(path, Seq("Numbers" -> sheet1, "Text" -> sheet2)).flatMap { _ =>
-      IO {
-        import java.util.zip.ZipFile
-        val zipFile = new ZipFile(path.toFile)
-        try {
-          // Check first sheet: A1:A10
-          val entry1 = zipFile.getEntry("xl/worksheets/sheet1.xml")
-          val content1 = new String(zipFile.getInputStream(entry1).readAllBytes(), "UTF-8")
-          assert(content1.contains("""<dimension ref="A1:A10"/>"""),
-            s"Sheet1 should have dimension A1:A10")
+    excel.writeStreamsSeqWithAutoDetect(path, Seq("Numbers" -> sheet1, "Text" -> sheet2)).flatMap {
+      _ =>
+        IO {
+          import java.util.zip.ZipFile
+          val zipFile = new ZipFile(path.toFile)
+          try {
+            // Check first sheet: A1:A10
+            val entry1 = zipFile.getEntry("xl/worksheets/sheet1.xml")
+            val content1 = new String(zipFile.getInputStream(entry1).readAllBytes(), "UTF-8")
+            assert(
+              content1.contains("""<dimension ref="A1:A10"/>"""),
+              s"Sheet1 should have dimension A1:A10"
+            )
 
-          // Check second sheet: A1:C5
-          val entry2 = zipFile.getEntry("xl/worksheets/sheet2.xml")
-          val content2 = new String(zipFile.getInputStream(entry2).readAllBytes(), "UTF-8")
-          assert(content2.contains("""<dimension ref="A1:C5"/>"""),
-            s"Sheet2 should have dimension A1:C5")
-        } finally {
-          zipFile.close()
+            // Check second sheet: A1:C5
+            val entry2 = zipFile.getEntry("xl/worksheets/sheet2.xml")
+            val content2 = new String(zipFile.getInputStream(entry2).readAllBytes(), "UTF-8")
+            assert(
+              content2.contains("""<dimension ref="A1:C5"/>"""),
+              s"Sheet2 should have dimension A1:C5"
+            )
+          } finally {
+            zipFile.close()
+          }
         }
-      }
     }
   }
 
@@ -1370,7 +1484,10 @@ class ExcelIOSpec extends CatsEffectSuite:
     // Count xl-stream temp files before
     val countTempFilesBefore = IO {
       import scala.jdk.CollectionConverters.*
-      java.nio.file.Files.list(tempDir).iterator().asScala
+      java.nio.file.Files
+        .list(tempDir)
+        .iterator()
+        .asScala
         .count(p => p.getFileName.toString.startsWith("xl-stream-"))
     }
 
@@ -1394,7 +1511,10 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     val countTempFilesBefore = IO {
       import scala.jdk.CollectionConverters.*
-      java.nio.file.Files.list(tempDir).iterator().asScala
+      java.nio.file.Files
+        .list(tempDir)
+        .iterator()
+        .asScala
         .count(p => p.getFileName.toString.startsWith("xl-stream-"))
     }
 
@@ -1423,11 +1543,14 @@ class ExcelIOSpec extends CatsEffectSuite:
 
     // Write data with explicit dimension hint
     val rows = fs2.Stream.range(1, 6).map { i =>
-      RowData(i, Map(
-        0 -> CellValue.Text(s"A$i"),
-        1 -> CellValue.Number(BigDecimal(i * 10)),
-        2 -> CellValue.Bool(i % 2 == 0)
-      ))
+      RowData(
+        i,
+        Map(
+          0 -> CellValue.Text(s"A$i"),
+          1 -> CellValue.Number(BigDecimal(i * 10)),
+          2 -> CellValue.Bool(i % 2 == 0)
+        )
+      )
     }
 
     // Provide explicit dimension hint A1:C5
@@ -1442,8 +1565,10 @@ class ExcelIOSpec extends CatsEffectSuite:
           val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
 
           // Should contain dimension element from hint
-          assert(content.contains("""<dimension ref="A1:C5"/>"""),
-            s"Should have dimension element A1:C5 from hint, got: ${content.take(500)}")
+          assert(
+            content.contains("""<dimension ref="A1:C5"/>"""),
+            s"Should have dimension element A1:C5 from hint, got: ${content.take(500)}"
+          )
         } finally {
           zipFile.close()
         }
@@ -1469,8 +1594,10 @@ class ExcelIOSpec extends CatsEffectSuite:
           val content = new String(zipFile.getInputStream(entry).readAllBytes(), "UTF-8")
 
           // Should NOT contain dimension element without hint
-          assert(!content.contains("<dimension"),
-            s"Should not have dimension element without hint, got: ${content.take(500)}")
+          assert(
+            !content.contains("<dimension"),
+            s"Should not have dimension element without hint, got: ${content.take(500)}"
+          )
         } finally {
           zipFile.close()
         }
@@ -1511,6 +1638,8 @@ class ExcelIOSpec extends CatsEffectSuite:
     yield
       // Single-pass should be faster (roughly 2x due to no temp file I/O)
       // We allow some tolerance since timing can vary
-      assert(singlePassMs < autoDetectMs * 1.5,
-        s"Single-pass ($singlePassMs ms) should be faster than auto-detect ($autoDetectMs ms)")
+      assert(
+        singlePassMs < autoDetectMs * 1.5,
+        s"Single-pass ($singlePassMs ms) should be faster than auto-detect ($autoDetectMs ms)"
+      )
   }

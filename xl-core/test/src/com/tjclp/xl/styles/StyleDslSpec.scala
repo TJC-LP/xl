@@ -81,7 +81,7 @@ class StyleDslSpec extends ScalaCheckSuite:
 
   test("hex with invalid code silently ignored (runtime validation)") {
     // Use variable to bypass compile-time validation, test runtime path
-    val invalidCode: String = "invalid"  // Runtime string
+    val invalidCode: String = "invalid" // Runtime string
     val style = CellStyle.default.hex(invalidCode)
     assertEquals(style, CellStyle.default) // No change, silent fail
   }
@@ -97,7 +97,10 @@ class StyleDslSpec extends ScalaCheckSuite:
     // String literals are validated at compile-time by macro
     val red = CellStyle.default.hex("#FF0000")
     assert(red.font.color.isDefined)
-    assertEquals(red.font.color.getOrElse(fail("Color should be defined")), Color.fromRgb(255, 0, 0))
+    assertEquals(
+      red.font.color.getOrElse(fail("Color should be defined")),
+      Color.fromRgb(255, 0, 0)
+    )
 
     val blue = CellStyle.default.hex("#0000FF")
     assert(blue.font.color.isDefined)
@@ -148,7 +151,7 @@ class StyleDslSpec extends ScalaCheckSuite:
     val style = CellStyle.default.bgHex("#F0F0F0")
     style.fill match
       case Fill.Solid(Color.Rgb(argb)) =>
-        assert((argb & 0x00FFFFFF) == 0x00F0F0F0)
+        assert((argb & 0x00ffffff) == 0x00f0f0f0)
       case _ => fail("Expected Solid fill with RGB color")
   }
 
@@ -349,11 +352,12 @@ class StyleDslSpec extends ScalaCheckSuite:
   }
 
   test("complex chaining with custom colors") {
-    val style = CellStyle.default
-      .bold.size(14.0)
+    val style = CellStyle.default.bold
+      .size(14.0)
       .rgb(68, 114, 196)
       .bgRgb(240, 240, 240)
-      .center.middle
+      .center
+      .middle
       .bordered
 
     assert(style.font.bold)
@@ -368,7 +372,8 @@ class StyleDslSpec extends ScalaCheckSuite:
     val style = CellStyle.default
       .hex("#FF6B35")
       .bgHex("#F7F7F7")
-      .bold.center
+      .bold
+      .center
 
     assert(style.font.bold)
     assertEquals(style.align.horizontal, HAlign.Center)
@@ -480,8 +485,8 @@ class StyleDslSpec extends ScalaCheckSuite:
 
     val patch =
       StylePatch.SetFont(Font.default.withBold(true)) ++
-      StylePatch.SetFill(Fill.Solid(Color.fromRgb(0, 0, 255))) ++
-      StylePatch.SetAlign(Align.default.withHAlign(HAlign.Center))
+        StylePatch.SetFill(Fill.Solid(Color.fromRgb(0, 0, 255))) ++
+        StylePatch.SetAlign(Align.default.withHAlign(HAlign.Center))
 
     val result = CellStyle.default.applyPatch(patch)
     assert(result.font.bold)
@@ -499,7 +504,7 @@ class StyleDslSpec extends ScalaCheckSuite:
     // Build equivalent with StylePatch
     val patch =
       StylePatch.SetFont(Font.default.withBold(true).withColor(Color.fromRgb(255, 0, 0))) ++
-      StylePatch.SetAlign(Align.default.withHAlign(HAlign.Center))
+        StylePatch.SetAlign(Align.default.withHAlign(HAlign.Center))
     val patchStyle = CellStyle.default.applyPatch(patch)
 
     assertEquals(dslStyle.font.bold, patchStyle.font.bold)
@@ -508,8 +513,7 @@ class StyleDslSpec extends ScalaCheckSuite:
   }
 
   test("DSL can be composed with existing withX methods") {
-    val style = CellStyle.default
-      .bold.red // DSL
+    val style = CellStyle.default.bold.red // DSL
       .withBorder(Border.all(BorderStyle.Thick)) // Existing method
       .center // DSL
 

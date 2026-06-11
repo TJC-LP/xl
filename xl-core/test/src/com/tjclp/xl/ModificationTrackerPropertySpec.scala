@@ -101,9 +101,9 @@ class ModificationTrackerPropertySpec extends ScalaCheckSuite:
     forAll { (t: ModificationTracker) =>
       val hasModifications =
         t.modifiedSheets.nonEmpty ||
-        t.deletedSheets.nonEmpty ||
-        t.reorderedSheets ||
-        t.modifiedMetadata
+          t.deletedSheets.nonEmpty ||
+          t.reorderedSheets ||
+          t.modifiedMetadata
 
       assertEquals(t.isClean, !hasModifications)
     }

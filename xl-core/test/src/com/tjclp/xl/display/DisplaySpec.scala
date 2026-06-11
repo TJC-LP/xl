@@ -4,11 +4,11 @@ import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, CellError}
 import com.tjclp.xl.codec.CellCodec.given
-import com.tjclp.xl.conversions.given  // For put(ARef, value)
+import com.tjclp.xl.conversions.given // For put(ARef, value)
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
-import com.tjclp.xl.unsafe.*  // For .unsafe extension
+import com.tjclp.xl.unsafe.* // For .unsafe extension
 
 import munit.FunSuite
 
@@ -51,13 +51,13 @@ class DisplaySpec extends FunSuite:
   test("formatValue - Decimal format") {
     val value = CellValue.Number(BigDecimal("123.456"))
     val result = NumFmtFormatter.formatValue(value, NumFmt.Decimal)
-    assert(result.startsWith("123.4"))  // At least 2 decimal places
+    assert(result.startsWith("123.4")) // At least 2 decimal places
   }
 
   test("formatValue - Integer format") {
     val value = CellValue.Number(BigDecimal("123.7"))
     val result = NumFmtFormatter.formatValue(value, NumFmt.Integer)
-    assertEquals(result, "124")  // Rounded
+    assertEquals(result, "124") // Rounded
   }
 
   test("formatValue - General format (whole number)") {
@@ -205,6 +205,41 @@ class DisplaySpec extends FunSuite:
     assertEquals(result, "=SUM(A1:A10)")
   }
 
+  test("Default strategy prefers cached value formatted via numFmt (GH-282)") {
+    val sheet = Sheet(name = SheetName.unsafe("Test"))
+    val strategy = FormulaDisplayStrategy.default
+    val result = strategy.formatCached(
+      "='Data'!A1*2",
+      Some(CellValue.Number(BigDecimal("1234.5"))),
+      NumFmt.Currency,
+      sheet
+    )
+    assertEquals(result, "$1,234.50")
+  }
+
+  test("Default strategy falls back to formula text when uncached (GH-282)") {
+    val sheet = Sheet(name = SheetName.unsafe("Test"))
+    val strategy = FormulaDisplayStrategy.default
+    val result = strategy.formatCached("='Data'!A1*2", None, NumFmt.Currency, sheet)
+    assertEquals(result, "='Data'!A1*2")
+  }
+
+  test("Default strategy displays cached cross-sheet formula through cell display (GH-282)") {
+    import DisplayConversions.given
+
+    // Cross-sheet formula cannot be evaluated sheet-locally; the cached value (as written
+    // by Excel or Workbook.recalculate()) is the only meaningful display for xl-core users.
+    given Sheet = Sheet(name = SheetName.unsafe("Test"))
+      .put(ref"C1", CellValue.Formula("='Data'!A1*2", Some(CellValue.Number(BigDecimal("0.6")))))
+      .style(ref"C1", CellStyle.default.withNumFmt(NumFmt.Percent))
+      .unsafe
+
+    given FormulaDisplayStrategy = FormulaDisplayStrategy.default
+
+    val conv = summon[Conversion[ARef, DisplayWrapper]]
+    assertEquals(conv.apply(ref"C1").formatted, "60%")
+  }
+
   // ========== DisplayConversions Tests ==========
 
   test("ARef conversion with given Sheet") {
@@ -301,7 +336,9 @@ class DisplaySpec extends FunSuite:
     assertEquals(result, "Product: 5 units @ $1,000.00 each")
   }
 
-  test("excel interpolator routes zero through positive section of 2-section custom code (GH-254)") {
+  test(
+    "excel interpolator routes zero through positive section of 2-section custom code (GH-254)"
+  ) {
     import ExcelInterpolator.*
     import DisplayConversions.given
 
@@ -375,5 +412,5 @@ class DisplaySpec extends FunSuite:
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
     val result = mySheet.displayFormula(ref"A1")
-    assertEquals(result, "100.00")  // BigDecimal auto-applies Decimal format
+    assertEquals(result, "100.00") // BigDecimal auto-applies Decimal format
   }

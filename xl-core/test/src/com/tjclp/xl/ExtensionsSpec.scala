@@ -435,11 +435,14 @@ class ExtensionsSpec extends FunSuite:
 
     val cells = sheet.range("A1:A3")
     assertEquals(cells.length, 3)
-    assertEquals(cells.map(_.value), List(
-      CellValue.Text("A"),
-      CellValue.Text("B"),
-      CellValue.Text("C")
-    ))
+    assertEquals(
+      cells.map(_.value),
+      List(
+        CellValue.Text("A"),
+        CellValue.Text("B"),
+        CellValue.Text("C")
+      )
+    )
   }
 
   test("range includes only existing cells") {

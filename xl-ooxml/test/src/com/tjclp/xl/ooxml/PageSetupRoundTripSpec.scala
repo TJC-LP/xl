@@ -40,7 +40,12 @@ class PageSetupRoundTripSpec extends FunSuite:
 
   test("GH-259: scale/orientation/fitTo round-trip (previously never serialized)") {
     val setup =
-      PageSetup(scale = 85, orientation = Some("landscape"), fitToWidth = Some(1), fitToHeight = Some(2))
+      PageSetup(
+        scale = 85,
+        orientation = Some("landscape"),
+        fitToWidth = Some(1),
+        fitToHeight = Some(2)
+      )
     val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(setup))
     val (reread, out) = writeRead(wb)
     assertEquals(sheetSetup(reread), setup)
@@ -49,7 +54,9 @@ class PageSetupRoundTripSpec extends FunSuite:
 
   test("GH-259: page margins round-trip") {
     val setup = PageSetup(margins =
-      Some(PageMargins(left = 1.0, right = 0.5, top = 0.75, bottom = 0.75, header = 0.25, footer = 0.4))
+      Some(
+        PageMargins(left = 1.0, right = 0.5, top = 0.75, bottom = 0.75, header = 0.25, footer = 0.4)
+      )
     )
     val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).withPageSetup(setup))
     val (reread, out) = writeRead(wb)
@@ -155,7 +162,9 @@ class PageSetupRoundTripSpec extends FunSuite:
       fitToWidth = Some(1),
       fitToHeight = Some(0),
       headerFooter = Some(HeaderFooter(oddHeader = Some("&A"), oddFooter = Some("Page &P of &N"))),
-      margins = Some(PageMargins(left = 0.25, right = 0.25, top = 0.5, bottom = 0.5, header = 0.2, footer = 0.2)),
+      margins = Some(
+        PageMargins(left = 0.25, right = 0.25, top = 0.5, bottom = 0.5, header = 0.2, footer = 0.2)
+      ),
       printArea = Some(ref"A1:H44"),
       repeatRows = Some((1, 2))
     )

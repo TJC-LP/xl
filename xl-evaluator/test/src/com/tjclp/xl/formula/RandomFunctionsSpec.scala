@@ -15,8 +15,8 @@ import org.scalacheck.Gen
  * GH-115: RAND() and RANDBETWEEN(bottom, top).
  *
  * Purity-preserving design: randomness is an explicit Rng capability (Clock pattern). Production
- * uses Rng.system (ThreadLocalRandom); tests and reproducible pipelines use Rng.seeded(seed),
- * which is deterministic.
+ * uses Rng.system (ThreadLocalRandom); tests and reproducible pipelines use Rng.seeded(seed), which
+ * is deterministic.
  */
 class RandomFunctionsSpec extends ScalaCheckSuite:
 

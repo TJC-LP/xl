@@ -12,7 +12,12 @@ class StylePatchSpec extends ScalaCheckSuite:
   // Reuse generators from StyleSpec
   val styleSpec = new StyleSpec
   import styleSpec.{genFont, genFill, genBorder, genNumFmt, genAlign, genCellStyle}
-  import styleSpec.{given Arbitrary[Font], given Arbitrary[Fill], given Arbitrary[Border], given Arbitrary[CellStyle]}
+  import styleSpec.{
+    given Arbitrary[Font],
+    given Arbitrary[Fill],
+    given Arbitrary[Border],
+    given Arbitrary[CellStyle]
+  }
 
   // Generator for StylePatch
   val genStylePatch: Gen[StylePatch] = Gen.oneOf(
@@ -87,7 +92,7 @@ class StylePatchSpec extends ScalaCheckSuite:
 
   test("SetFill patch updates fill") {
     val style = CellStyle.default
-    val newFill = Fill.Solid(Color.Rgb(0xFF0000FF))
+    val newFill = Fill.Solid(Color.Rgb(0xff0000ff))
     val patch = StylePatch.SetFill(newFill)
 
     val result = applyPatch(style, patch)
@@ -128,14 +133,16 @@ class StylePatchSpec extends ScalaCheckSuite:
   test("Batch patch applies multiple patches in order") {
     val style = CellStyle.default
     val font = Font("Arial", 14.0, bold = true)
-    val fill = Fill.Solid(Color.Rgb(0xFFFF0000))
+    val fill = Fill.Solid(Color.Rgb(0xffff0000))
     val border = Border.all(BorderStyle.Thin)
 
-    val batch = StylePatch.Batch(Vector(
-      StylePatch.SetFont(font),
-      StylePatch.SetFill(fill),
-      StylePatch.SetBorder(border)
-    ))
+    val batch = StylePatch.Batch(
+      Vector(
+        StylePatch.SetFont(font),
+        StylePatch.SetFill(fill),
+        StylePatch.SetBorder(border)
+      )
+    )
 
     val result = applyPatch(style, batch)
     assertEquals(result.font, font)
@@ -199,8 +206,8 @@ class StylePatchSpec extends ScalaCheckSuite:
 
   test("Later SetFill overrides earlier SetFill") {
     val style = CellStyle.default
-    val fill1 = Fill.Solid(Color.Rgb(0xFF0000FF))
-    val fill2 = Fill.Solid(Color.Rgb(0xFF00FF00))
+    val fill1 = Fill.Solid(Color.Rgb(0xff0000ff))
+    val fill2 = Fill.Solid(Color.Rgb(0xff00ff00))
 
     val patch = (StylePatch.SetFill(fill1): StylePatch) |+| (StylePatch.SetFill(fill2): StylePatch)
     val result = applyPatch(style, patch)
@@ -211,7 +218,7 @@ class StylePatchSpec extends ScalaCheckSuite:
   test("Different patch types compose without interference") {
     val style = CellStyle.default
     val font = Font("Arial", 14.0, bold = true)
-    val fill = Fill.Solid(Color.Rgb(0xFFFF0000))
+    val fill = Fill.Solid(Color.Rgb(0xffff0000))
 
     val patch = (StylePatch.SetFont(font): StylePatch) |+| (StylePatch.SetFill(fill): StylePatch)
     val result = applyPatch(style, patch)
@@ -234,7 +241,7 @@ class StylePatchSpec extends ScalaCheckSuite:
   test("CellStyle.applyPatches extension method works with varargs") {
     val style = CellStyle.default
     val font = Font("Arial", 14.0, bold = true)
-    val fill = Fill.Solid(Color.Rgb(0xFFFF0000))
+    val fill = Fill.Solid(Color.Rgb(0xffff0000))
 
     val result = style.applyPatches(
       StylePatch.SetFont(font),
@@ -251,16 +258,16 @@ class StylePatchSpec extends ScalaCheckSuite:
     val style = CellStyle.default
 
     val font = Font("Arial", 16.0, bold = true, italic = true)
-    val fill = Fill.Solid(Color.Rgb(0xFFFFFFFF))
-    val border = Border.all(BorderStyle.Medium, Some(Color.Rgb(0xFF000000)))
+    val fill = Fill.Solid(Color.Rgb(0xffffffff))
+    val border = Border.all(BorderStyle.Medium, Some(Color.Rgb(0xff000000)))
     val numFmt = NumFmt.Currency
     val align = Align(HAlign.Right, VAlign.Middle, wrapText = true, indent = 2)
 
     val patch = (StylePatch.SetFont(font): StylePatch) |+|
-                (StylePatch.SetFill(fill): StylePatch) |+|
-                (StylePatch.SetBorder(border): StylePatch) |+|
-                (StylePatch.SetNumFmt(numFmt): StylePatch) |+|
-                (StylePatch.SetAlign(align): StylePatch)
+      (StylePatch.SetFill(fill): StylePatch) |+|
+      (StylePatch.SetBorder(border): StylePatch) |+|
+      (StylePatch.SetNumFmt(numFmt): StylePatch) |+|
+      (StylePatch.SetAlign(align): StylePatch)
 
     val result = applyPatch(style, patch)
 

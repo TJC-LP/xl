@@ -236,4 +236,4 @@ class RefCompileTimeOptimizationSpec extends ScalaCheckSuite:
     val result = ref"$sheet!"  // Should NOT compile
     // Expected: "Missing reference after '!'"
   }
-  */
+   */

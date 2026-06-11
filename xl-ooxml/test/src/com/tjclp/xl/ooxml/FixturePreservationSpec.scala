@@ -174,22 +174,18 @@ class FixturePreservationSpec extends FunSuite:
   /** Every r:id value (relationships-namespace `id` attribute) referenced in the document. */
   private def relationshipRefs(doc: org.w3c.dom.Document): Set[String] =
     val all = doc.getElementsByTagNameNS("*", "*")
-    (0 until all.getLength)
-      .flatMap { i =>
-        Option(all.item(i)).collect { case e: org.w3c.dom.Element =>
-          Option(e.getAttributeNS(nsRel, "id")).filter(_.nonEmpty)
-        }.flatten
-      }
-      .toSet
+    (0 until all.getLength).flatMap { i =>
+      Option(all.item(i)).collect { case e: org.w3c.dom.Element =>
+        Option(e.getAttributeNS(nsRel, "id")).filter(_.nonEmpty)
+      }.flatten
+    }.toSet
 
   /** Relationship Ids declared in a rels part of the zip. */
   private def relationshipIdsOf(path: Path, relsEntry: String): Set[String] =
     val relsDoc = parseNamespaceAware(entryText(path, relsEntry), relsEntry)
     val rels = relsDoc.getElementsByTagNameNS("*", "Relationship")
-    (0 until rels.getLength)
-      .flatMap { i =>
-        Option(rels.item(i)).collect { case e: org.w3c.dom.Element =>
-          Option(e.getAttribute("Id")).filter(_.nonEmpty)
-        }.flatten
-      }
-      .toSet
+    (0 until rels.getLength).flatMap { i =>
+      Option(rels.item(i)).collect { case e: org.w3c.dom.Element =>
+        Option(e.getAttribute("Id")).filter(_.nonEmpty)
+      }.flatten
+    }.toSet

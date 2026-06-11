@@ -58,10 +58,10 @@ class XlsxWriterSurgicalSpec extends FunSuite:
         outputZip.close()
 
       case Left(err) if err.message.contains("Source file changed") =>
-        // Expected for test-created ZIPs - fingerprint validation working as designed
-        // Test ZIPs may have different metadata than real Excel files (ZIP central directory, etc.)
-        // The fingerprint validation prevents corruption, which is the important behavior
-        // Real Excel files will successfully use verbatim copy
+      // Expected for test-created ZIPs - fingerprint validation working as designed
+      // Test ZIPs may have different metadata than real Excel files (ZIP central directory, etc.)
+      // The fingerprint validation prevents corruption, which is the important behavior
+      // Real Excel files will successfully use verbatim copy
 
       case Left(err) =>
         fail(s"Unexpected error: $err")
@@ -269,7 +269,10 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     // SST should be REGENERATED (not byte-identical) because "Updated Text" is a new string
     // This prevents inline string corruption that Excel rejects
     assert(outputSst.length >= sourceSst.length, "Output SST should contain original + new strings")
-    assert(!java.util.Arrays.equals(outputSst, sourceSst), "SST should be regenerated for new strings")
+    assert(
+      !java.util.Arrays.equals(outputSst, sourceSst),
+      "SST should be regenerated for new strings"
+    )
 
     val sheetXmlBytes = readEntryBytes(outputZip, outputZip.getEntry("xl/worksheets/sheet1.xml"))
     val sheetXml = new String(sheetXmlBytes, "UTF-8")
@@ -277,11 +280,16 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     // ALL cells (including the new one) should use SST references (t="s") to avoid corruption
     // The SST is regenerated to include new strings, so all cells reference the combined SST
     assert(sheetXml.contains("""t="s""""), "All cells should use SST references (t=\"s\")")
-    assert(!sheetXml.contains("""t="inlineStr""""), "Should not use inline strings (causes corruption)")
+    assert(
+      !sheetXml.contains("""t="inlineStr""""),
+      "Should not use inline strings (causes corruption)"
+    )
 
     // Verify the modified cell is present
     val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
-    val cell = reloaded("Sheet1").flatMap(s => Right(s.cells.get(ref"A1"))).fold(err => fail(s"Get cell failed: $err"), identity)
+    val cell = reloaded("Sheet1")
+      .flatMap(s => Right(s.cells.get(ref"A1")))
+      .fold(err => fail(s"Get cell failed: $err"), identity)
     assertEquals(cell.map(_.value), Some(CellValue.Text("Updated Text")))
 
     sourceZip.close()
@@ -299,7 +307,9 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     val initialWb = Workbook(Vector(sheet1, sheet2))
     val sourcePath = Files.createTempFile("comments-source", ".xlsx")
-    XlsxWriter.write(initialWb, sourcePath).fold(err => fail(s"Initial write failed: $err"), identity)
+    XlsxWriter
+      .write(initialWb, sourcePath)
+      .fold(err => fail(s"Initial write failed: $err"), identity)
 
     // Reload to get SourceContext for surgical write
     val withContext = XlsxReader.read(sourcePath).fold(err => fail(s"Read failed: $err"), identity)
@@ -310,7 +320,9 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val modifiedWb = modified.fold(err => fail(s"Modification failed: $err"), identity)
 
     val outputPath = Files.createTempFile("comments-output", ".xlsx")
-    XlsxWriter.write(modifiedWb, outputPath).fold(err => fail(s"Surgical write failed: $err"), identity)
+    XlsxWriter
+      .write(modifiedWb, outputPath)
+      .fold(err => fail(s"Surgical write failed: $err"), identity)
 
     val sourceZip = new ZipFile(sourcePath.toFile)
     val outputZip = new ZipFile(outputPath.toFile)
@@ -359,23 +371,31 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     // Write initial workbook
     val sourcePath = Files.createTempFile("comment-removal-source", ".xlsx")
-    XlsxWriter.write(initialWb, sourcePath).fold(err => fail(s"Initial write failed: $err"), identity)
+    XlsxWriter
+      .write(initialWb, sourcePath)
+      .fold(err => fail(s"Initial write failed: $err"), identity)
 
     // Verify comments exist in source
     val sourceZip = new ZipFile(sourcePath.toFile)
     assert(sourceZip.getEntry("xl/comments1.xml") != null, "Source should have comments1.xml")
-    assert(sourceZip.getEntry("xl/drawings/vmlDrawing1.vml") != null, "Source should have vmlDrawing1.vml")
+    assert(
+      sourceZip.getEntry("xl/drawings/vmlDrawing1.vml") != null,
+      "Source should have vmlDrawing1.vml"
+    )
     sourceZip.close()
 
     // Reload and remove comment (surgical modification)
     val withContext = XlsxReader.read(sourcePath).fold(err => fail(s"Read failed: $err"), identity)
-    val sheetWithComment = withContext("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity)
+    val sheetWithComment =
+      withContext("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity)
     val sheetWithoutComment = sheetWithComment.removeComment(ref"A1")
     val modifiedWb = withContext.put(sheetWithoutComment)
 
     // Write modified workbook
     val outputPath = Files.createTempFile("comment-removal-output", ".xlsx")
-    XlsxWriter.write(modifiedWb, outputPath).fold(err => fail(s"Surgical write failed: $err"), identity)
+    XlsxWriter
+      .write(modifiedWb, outputPath)
+      .fold(err => fail(s"Surgical write failed: $err"), identity)
 
     // CRITICAL: Verify comments XML is GONE (this was the bug!)
     val outputZip = new ZipFile(outputPath.toFile)
@@ -443,8 +463,14 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     // Verify XML files exist (since we have a comment now)
     val finalZip = new ZipFile(path3.toFile)
-    assert(finalZip.getEntry("xl/comments1.xml") != null, "Should have comments1.xml for new comment")
-    assert(finalZip.getEntry("xl/drawings/vmlDrawing1.vml") != null, "Should have vmlDrawing1.vml for new comment")
+    assert(
+      finalZip.getEntry("xl/comments1.xml") != null,
+      "Should have comments1.xml for new comment"
+    )
+    assert(
+      finalZip.getEntry("xl/drawings/vmlDrawing1.vml") != null,
+      "Should have vmlDrawing1.vml for new comment"
+    )
     finalZip.close()
 
     // Clean up
@@ -498,7 +524,9 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(path2)
   }
 
-  test("VML drawings for multi-sheet workbook are cleaned up per-sheet (regression #vml-cleanup-bug)") {
+  test(
+    "VML drawings for multi-sheet workbook are cleaned up per-sheet (regression #vml-cleanup-bug)"
+  ) {
     // Verifies that VML drawings are only removed for sheets that lost their comments,
     // not for other sheets that still have comments
 
@@ -510,7 +538,9 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val initialWb = Workbook(Vector(sheet1, sheet2))
 
     val sourcePath = Files.createTempFile("multi-sheet-vml-source", ".xlsx")
-    XlsxWriter.write(initialWb, sourcePath).fold(err => fail(s"Initial write failed: $err"), identity)
+    XlsxWriter
+      .write(initialWb, sourcePath)
+      .fold(err => fail(s"Initial write failed: $err"), identity)
 
     // Verify both sheets have comments/VML
     val sourceZip = new ZipFile(sourcePath.toFile)
@@ -533,7 +563,10 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     // Verify Sheet1's comment files are gone, but Sheet2's remain
     val outputZip = new ZipFile(outputPath.toFile)
     assert(outputZip.getEntry("xl/comments1.xml") == null, "Sheet1 comments should be REMOVED")
-    assert(outputZip.getEntry("xl/drawings/vmlDrawing1.vml") == null, "Sheet1 VML should be REMOVED")
+    assert(
+      outputZip.getEntry("xl/drawings/vmlDrawing1.vml") == null,
+      "Sheet1 VML should be REMOVED"
+    )
     assert(outputZip.getEntry("xl/comments2.xml") != null, "Sheet2 comments should REMAIN")
     assert(outputZip.getEntry("xl/drawings/vmlDrawing2.vml") != null, "Sheet2 VML should REMAIN")
 
@@ -1021,12 +1054,16 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     // Read workbook and remove a sheet
     val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
-    val withoutSheet = wb.remove(com.tjclp.xl.addressing.SheetName.unsafe("Sheet2"))
+    val withoutSheet = wb
+      .remove(com.tjclp.xl.addressing.SheetName.unsafe("Sheet2"))
       .fold(err => fail(s"Remove failed: $err"), identity)
 
     // Verify metadata is marked as modified
     val tracker = requireContext(withoutSheet).modificationTracker
-    assert(tracker.modifiedMetadata || tracker.deletedSheets.nonEmpty, "Removing sheet should mark tracker")
+    assert(
+      tracker.modifiedMetadata || tracker.deletedSheets.nonEmpty,
+      "Removing sheet should mark tracker"
+    )
 
     // Write should succeed
     val output = Files.createTempFile("remove-sheet-test", ".xlsx")
@@ -1146,7 +1183,10 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val ctContent = new String(readEntryBytes(outputZip, ctEntry), "UTF-8")
 
     assert(ctContent.contains("/xl/worksheets/sheet1.xml"), "Content types should have sheet1")
-    assert(ctContent.contains("/xl/worksheets/sheet2.xml"), "Content types should have sheet2 (new)")
+    assert(
+      ctContent.contains("/xl/worksheets/sheet2.xml"),
+      "Content types should have sheet2 (new)"
+    )
 
     outputZip.close()
     Files.deleteIfExists(source)
@@ -1183,7 +1223,9 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     Files.deleteIfExists(output)
   }
 
-  test("non-sequential comment files are preserved during surgical write (regression GH-comment-numbering)") {
+  test(
+    "non-sequential comment files are preserved during surgical write (regression GH-comment-numbering)"
+  ) {
     // This test validates the fix for the comment file numbering bug where:
     // - Excel numbers comment files sequentially (comments1.xml, comments2.xml...)
     //   across only sheets that HAVE comments, NOT by sheet index
@@ -1225,12 +1267,17 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     // Verify Content_Types doesn't have spurious entries
     val ctEntry = outputZip.getEntry("[Content_Types].xml")
     val ctContent = new String(readEntryBytes(outputZip, ctEntry), "UTF-8")
-    assert(!ctContent.contains("/xl/comments3.xml"), "Content_Types should NOT reference comments3.xml")
+    assert(
+      !ctContent.contains("/xl/comments3.xml"),
+      "Content_Types should NOT reference comments3.xml"
+    )
 
     // Verify comments are preserved
     val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
-    val sheet1Comments = reloaded("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity).comments
-    val sheet3Comments = reloaded("Sheet3").fold(err => fail(s"Sheet3 missing: $err"), identity).comments
+    val sheet1Comments =
+      reloaded("Sheet1").fold(err => fail(s"Sheet1 missing: $err"), identity).comments
+    val sheet3Comments =
+      reloaded("Sheet3").fold(err => fail(s"Sheet3 missing: $err"), identity).comments
     assertEquals(sheet1Comments.size, 1, "Sheet1 should have 1 comment")
     assertEquals(sheet3Comments.size, 1, "Sheet3 should have 1 comment")
 

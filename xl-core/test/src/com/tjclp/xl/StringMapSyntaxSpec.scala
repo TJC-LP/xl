@@ -166,8 +166,8 @@ class StringMapSyntaxSpec extends FunSuite:
         "B3" -> 0.25
       )
       .style(
-        "A1:A3" -> bold,     // Range
-        "B1"    -> percent   // Single cell
+        "A1:A3" -> bold, // Range
+        "B1" -> percent // Single cell
       )
 
     val a1Style = sheet.getCellStyle(ARef.parse("A1").toOption.get)
@@ -219,8 +219,8 @@ class StringMapSyntaxSpec extends FunSuite:
       )
       .style(
         "A1:A2" -> bold,
-        "B1"    -> currency,
-        "B2"    -> percent
+        "B1" -> currency,
+        "B2" -> percent
       )
 
     assertEquals(sheet.cellCount, 4)
@@ -263,7 +263,7 @@ class StringMapSyntaxSpec extends FunSuite:
       )
       .style(
         "A1:A4" -> bold,
-        "B4"    -> percent
+        "B4" -> percent
       )
 
     assertEquals(sheet.cellCount, 8)

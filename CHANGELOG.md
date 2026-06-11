@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (CLI & evaluator totality, wave 5)
+
+- **`import-md`** (#159): GFM pipe-table import (file or stdin) with smart per-cell type
+  detection (currency/percent/date via `FormattedParsers.detect`), `--start`/`--new-sheet`/
+  `--skip-header`/`--no-type-inference`, alignment markers map to cell alignment.
+- **`diff`** (#137): compare two workbooks — cells (value/formula/resolved-style), sheets,
+  merges, comments, hyperlinks; markdown + stable JSON output; diff-tool exit codes
+  (0 identical / 1 differs / 2 error).
+- **`filter`** (#134, phase 1): `--where` row predicates (comparisons, AND/OR/NOT, LIKE,
+  BETWEEN, IN, IS EMPTY; `--header` name resolution; `--columns`/`--limit`;
+  markdown/csv/json) — total evaluation, type mismatch = no match, never an error.
+- **Font-metric autofit** (#156): column auto-fit measures real AWT font metrics
+  (family/size/bold) with the heuristic as headless fallback.
+- **Batik-first rasterization** (#86): pure-JVM Batik is the documented default; subprocess
+  backends (incl. ImageMagick) are explicit opt-ins; best-effort native-image configs added.
+- **Scheduled law fuzzing** (#308): weekly random-seed runs of the generative law at 2000
+  cases (`law-fuzz.yml`), seeds printed for replay via `-Dxl.roundtrip.seed`.
+
+### Fixed (wave 5)
+
+- **Default display strategy prefers cached formula values** (#282) — xl-core-only consumers
+  see numbers, not formula text, for already-evaluated files.
+- **SVG renderer** (#298): shared-edge borders resolve by weight (heavier wins, one line per
+  edge); clipPath ids keyed by cell ref (no duplicate ids in hidden ranges).
+- **Evaluator totality sweep** (#302, #306, #307, #301, #280): ArrayResult collapses to its
+  top-left value in scalar argument AND operator positions (implicit intersection —
+  `IFERROR(INDIRECT("A1"), x)` works); cross-type call-result coercion per cell-decoder
+  conventions (`=UPPER(SUM(...))`, `=IF(SUM(...),1,2)`); integer-argument coercion
+  total-with-error across the date-function family (toInt sweep); OFFSET joins INDIRECT's
+  deferred-partition recalc semantics (dynamicDeps parity); internal diagnostics quote
+  cell-ref-shaped sheet names.
+- **CLI border merging delegates to core `Border.merge`** (#279) — CLI semantics can no
+  longer drift from the library's.
+- **Test sources join the scalafmt gate** (#296): CI and pre-commit run `checkFormatAll
+  __.sources`; the 130-file formatting backlog cleared.
+
 ### Added (streaming & OOXML robustness, wave 4)
 
 - **docProps emission** (#242): `docProps/core.xml` + `app.xml` written from `WorkbookMetadata`

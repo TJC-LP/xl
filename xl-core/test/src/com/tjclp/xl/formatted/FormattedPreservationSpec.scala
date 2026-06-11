@@ -92,13 +92,14 @@ class FormattedPreservationSpec extends FunSuite:
   test("mixed formatted and plain values in single batch put") {
     val sheet = Sheet("Test")
 
-    val updated = sheet.put(
-      ref"A1" -> "Product",               // Plain String
-      ref"B1" -> money"$$1,234.56",       // Formatted Currency
-      ref"C1" -> percent"15%",            // Formatted Percent
-      ref"D1" -> BigDecimal("999.99"),    // Plain BigDecimal (auto Decimal format)
-      ref"E1" -> date"2025-11-10"         // Formatted Date
-    )
+    val updated = sheet
+      .put(
+        ref"A1" -> "Product", // Plain String
+        ref"B1" -> money"$$1,234.56", // Formatted Currency
+        ref"C1" -> percent"15%", // Formatted Percent
+        ref"D1" -> BigDecimal("999.99"), // Plain BigDecimal (auto Decimal format)
+        ref"E1" -> date"2025-11-10" // Formatted Date
+      )
       .unsafe
 
     // Verify A1 (plain String) has no specific format
@@ -164,14 +165,15 @@ class FormattedPreservationSpec extends FunSuite:
     val reportDate = date"2025-11-14"
 
     // Pass variables to batch put
-    val updated = sheet.put(
-      ref"A1" -> "Revenue",
-      ref"B1" -> revenue,     // Variable, not literal
-      ref"A2" -> "Growth",
-      ref"B2" -> growth,      // Variable, not literal
-      ref"A3" -> "Date",
-      ref"B3" -> reportDate   // Variable, not literal
-    )
+    val updated = sheet
+      .put(
+        ref"A1" -> "Revenue",
+        ref"B1" -> revenue, // Variable, not literal
+        ref"A2" -> "Growth",
+        ref"B2" -> growth, // Variable, not literal
+        ref"A3" -> "Date",
+        ref"B3" -> reportDate // Variable, not literal
+      )
       .unsafe
 
     // Verify Currency format is preserved for money variable
@@ -181,7 +183,11 @@ class FormattedPreservationSpec extends FunSuite:
         val style = updated.styleRegistry.get(styleId).getOrElse {
           fail(s"Style $styleId not found")
         }
-        assertEquals(style.numFmt, NumFmt.Currency, "money variable should preserve Currency format")
+        assertEquals(
+          style.numFmt,
+          NumFmt.Currency,
+          "money variable should preserve Currency format"
+        )
       case None =>
         fail("Cell B1 should have a style with Currency format")
 
@@ -192,7 +198,11 @@ class FormattedPreservationSpec extends FunSuite:
         val style = updated.styleRegistry.get(styleId).getOrElse {
           fail(s"Style $styleId not found")
         }
-        assertEquals(style.numFmt, NumFmt.Percent, "percent variable should preserve Percent format")
+        assertEquals(
+          style.numFmt,
+          NumFmt.Percent,
+          "percent variable should preserve Percent format"
+        )
       case None =>
         fail("Cell B2 should have a style with Percent format")
 

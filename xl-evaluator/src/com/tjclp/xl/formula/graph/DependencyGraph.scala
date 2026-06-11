@@ -178,6 +178,9 @@ object DependencyGraph:
       case TExpr.BindingRef(_) => false
       case TExpr.CoercedBindingRef(_, _) => false
 
+      // GH-306: runtime coercion wrapper — transparent for analysis
+      case TExpr.Coerced(inner, _) => containsCellReferences(inner)
+
       // Literals and constants
       case TExpr.Lit(_) => false
 
@@ -214,6 +217,12 @@ object DependencyGraph:
       case TExpr.ToInt(e) => containsDynamicReference(e)
       case TExpr.DateToSerial(e) => containsDynamicReference(e)
       case TExpr.DateTimeToSerial(e) => containsDynamicReference(e)
+      // GH-306: runtime coercion wrapper — a coerced INDIRECT/OFFSET is still dynamic
+      case TExpr.Coerced(inner, _) => containsDynamicReference(inner)
+      // GH-193: LET — binding values and the body may carry dynamic calls
+      case TExpr.Let(bindings, body) =>
+        bindings.exists((_, value) => containsDynamicReference(value)) ||
+        containsDynamicReference(body)
       case _ => false
 
   /**
@@ -339,6 +348,9 @@ object DependencyGraph:
       case TExpr.BindingRef(_) => false
       case TExpr.CoercedBindingRef(_, _) => false
 
+      // GH-306: runtime coercion wrapper — transparent for analysis
+      case TExpr.Coerced(inner, _) => containsUnqualifiedCellReferences(inner)
+
       // Literals and constants
       case TExpr.Lit(_) => false
 
@@ -414,6 +426,9 @@ object DependencyGraph:
         }
       case TExpr.BindingRef(_) => Set.empty
       case TExpr.CoercedBindingRef(_, _) => Set.empty
+
+      // GH-306: runtime coercion wrapper — transparent for analysis
+      case TExpr.Coerced(inner, _) => extractDependencies(inner)
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -498,6 +513,9 @@ object DependencyGraph:
         }
       case TExpr.BindingRef(_) => Set.empty
       case TExpr.CoercedBindingRef(_, _) => Set.empty
+
+      // GH-306: runtime coercion wrapper — transparent for analysis
+      case TExpr.Coerced(inner, _) => extractDependenciesBounded(inner, bounds)
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
@@ -844,7 +862,9 @@ object DependencyGraph:
    * }}}
    */
   final case class QualifiedRef(sheet: SheetName, ref: ARef):
-    override def toString: String = s"${sheet.value}!${ref.toA1}"
+    // GH-280: quote cell-ref-shaped sheet names so a sheet literally named "A1" renders
+    // unambiguously in diagnostics ('A1'!B2, not A1!B2)
+    override def toString: String = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}"
 
   /**
    * Build dependency graph from Workbook (cross-sheet aware).
@@ -1008,6 +1028,9 @@ object DependencyGraph:
         }
       case TExpr.BindingRef(_) => Set.empty
       case TExpr.CoercedBindingRef(_, _) => Set.empty
+
+      // GH-306: runtime coercion wrapper — transparent for analysis
+      case TExpr.Coerced(inner, _) => extractQualifiedDependencies(inner, currentSheet)
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty

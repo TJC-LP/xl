@@ -187,7 +187,7 @@ class RefInterpolationSpec extends ScalaCheckSuite:
   property("Round-trip: RefType -> toA1 -> parse -> RefType") {
     forAll(Generators.genRefType) { refType =>
       val a1 = refType.toA1
-      val dynamicStr = identity(a1)  // Force runtime path
+      val dynamicStr = identity(a1) // Force runtime path
       val result = ref"$dynamicStr"
 
       result match
@@ -252,9 +252,9 @@ class RefInterpolationSpec extends ScalaCheckSuite:
     val sheetStr = "Sales"
     val cellStr = "A1"
 
-    val result = for
-      ref <- ref"$sheetStr!$cellStr"
-    yield ref.toA1
+    val result =
+      for ref <- ref"$sheetStr!$cellStr"
+      yield ref.toA1
 
     result match
       case Right(a1) => assertEquals(a1, "Sales!A1")

@@ -41,12 +41,14 @@ class NewFunctionsSpec extends FunSuite:
   }
 
   test("CONCATENATE: multiple strings") {
-    val expr = TExpr.concatenate(List(
-      TExpr.Lit("Hello"),
-      TExpr.Lit(" "),
-      TExpr.Lit("World"),
-      TExpr.Lit("!")
-    ))
+    val expr = TExpr.concatenate(
+      List(
+        TExpr.Lit("Hello"),
+        TExpr.Lit(" "),
+        TExpr.Lit("World"),
+        TExpr.Lit("!")
+      )
+    )
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("Hello World!"))
   }
@@ -178,21 +180,21 @@ class NewFunctionsSpec extends FunSuite:
     val date = LocalDate.of(2025, 11, 21)
     val expr = TExpr.year(TExpr.Lit(date))
     val result = evaluator.eval(expr, emptySheet)
-    assertEquals(result, Right(BigDecimal(2025)))  // Now returns BigDecimal
+    assertEquals(result, Right(BigDecimal(2025))) // Now returns BigDecimal
   }
 
   test("MONTH: extract month from date") {
     val date = LocalDate.of(2025, 11, 21)
     val expr = TExpr.month(TExpr.Lit(date))
     val result = evaluator.eval(expr, emptySheet)
-    assertEquals(result, Right(BigDecimal(11)))  // Now returns BigDecimal
+    assertEquals(result, Right(BigDecimal(11))) // Now returns BigDecimal
   }
 
   test("DAY: extract day from date") {
     val date = LocalDate.of(2025, 11, 21)
     val expr = TExpr.day(TExpr.Lit(date))
     val result = evaluator.eval(expr, emptySheet)
-    assertEquals(result, Right(BigDecimal(21)))  // Now returns BigDecimal
+    assertEquals(result, Right(BigDecimal(21))) // Now returns BigDecimal
   }
 
   test("Date functions: round-trip DATE/YEAR/MONTH/DAY") {
@@ -370,10 +372,12 @@ class NewFunctionsSpec extends FunSuite:
 
   test("Integration: nested text functions") {
     val expr = TExpr.upper(
-      TExpr.concatenate(List(
-        TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(3)),
-        TExpr.right(TExpr.Lit("World"), TExpr.Lit(3))
-      ))
+      TExpr.concatenate(
+        List(
+          TExpr.left(TExpr.Lit("Hello"), TExpr.Lit(3)),
+          TExpr.right(TExpr.Lit("World"), TExpr.Lit(3))
+        )
+      )
     )
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("HELRLD"))
@@ -395,7 +399,10 @@ class NewFunctionsSpec extends FunSuite:
 
     // Recompose into DATE (use literal Ints since DATE expects Int arguments)
     val reconstructed = TExpr.date(TExpr.Lit(2025), TExpr.Lit(11), TExpr.Lit(21))
-    assertEquals(evaluator.eval(reconstructed, emptySheet, clock), Right(LocalDate.of(2025, 11, 21)))
+    assertEquals(
+      evaluator.eval(reconstructed, emptySheet, clock),
+      Right(LocalDate.of(2025, 11, 21))
+    )
   }
 
   test("Integration: MIN/MAX with LEN") {

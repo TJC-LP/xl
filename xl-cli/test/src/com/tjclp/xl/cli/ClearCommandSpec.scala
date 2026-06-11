@@ -41,7 +41,16 @@ class ClearCommandSpec extends FunSuite:
     val wb = Workbook(sheet)
 
     val result = CellCommands
-      .clear(wb, Some(sheet), "A1:B1", all = false, styles = false, comments = false, outputPath, config)
+      .clear(
+        wb,
+        Some(sheet),
+        "A1:B1",
+        all = false,
+        styles = false,
+        comments = false,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
 
     assert(result.contains("Cleared contents"))
@@ -62,7 +71,16 @@ class ClearCommandSpec extends FunSuite:
     val wb = Workbook(sheet)
 
     val result = CellCommands
-      .clear(wb, Some(sheet), "A1", all = false, styles = false, comments = false, outputPath, config)
+      .clear(
+        wb,
+        Some(sheet),
+        "A1",
+        all = false,
+        styles = false,
+        comments = false,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
 
     assert(result.contains("A1:A1"))
@@ -76,13 +94,14 @@ class ClearCommandSpec extends FunSuite:
   // ========== Clear Styles Only ==========
 
   test("clear --styles: clears styles but keeps contents and comments") {
-    val style = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF00)))
+    val style = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff00)))
     val ref = ARef.from0(0, 0)
     val sheet = Sheet("Test")
       .put(ref, CellValue.Text("A1"))
       .comment(ref, Comment.plainText("Note", None))
     // Apply style via styleRegistry
-    val styledSheet = com.tjclp.xl.sheets.styleSyntax.withRangeStyle(sheet)(CellRange(ref, ref), style)
+    val styledSheet =
+      com.tjclp.xl.sheets.styleSyntax.withRangeStyle(sheet)(CellRange(ref, ref), style)
     val wb = Workbook(styledSheet)
 
     // Verify style is applied
@@ -90,7 +109,16 @@ class ClearCommandSpec extends FunSuite:
     assert(styleId.isDefined, "Cell should have styleId before clearing")
 
     val result = CellCommands
-      .clear(wb, Some(styledSheet), "A1", all = false, styles = true, comments = false, outputPath, config)
+      .clear(
+        wb,
+        Some(styledSheet),
+        "A1",
+        all = false,
+        styles = true,
+        comments = false,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
 
     assert(result.contains("Cleared styles"))
@@ -118,7 +146,16 @@ class ClearCommandSpec extends FunSuite:
     assert(sheet.comments.contains(ref))
 
     val result = CellCommands
-      .clear(wb, Some(sheet), "A1", all = false, styles = false, comments = true, outputPath, config)
+      .clear(
+        wb,
+        Some(sheet),
+        "A1",
+        all = false,
+        styles = false,
+        comments = true,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
 
     assert(result.contains("Cleared comments"))
@@ -145,7 +182,16 @@ class ClearCommandSpec extends FunSuite:
     val wb = Workbook(sheet)
 
     val result = CellCommands
-      .clear(wb, Some(sheet), "A1:A2", all = false, styles = false, comments = true, outputPath, config)
+      .clear(
+        wb,
+        Some(sheet),
+        "A1:A2",
+        all = false,
+        styles = false,
+        comments = true,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
 
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
@@ -161,15 +207,25 @@ class ClearCommandSpec extends FunSuite:
 
   test("clear --all: clears contents, styles, and comments") {
     val ref = ARef.from0(0, 0)
-    val style = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFF0000)))
+    val style = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xff0000)))
     val sheet = Sheet("Test")
       .put(ref, CellValue.Text("A1"))
       .comment(ref, Comment.plainText("Note", None))
-    val styledSheet = com.tjclp.xl.sheets.styleSyntax.withRangeStyle(sheet)(CellRange(ref, ref), style)
+    val styledSheet =
+      com.tjclp.xl.sheets.styleSyntax.withRangeStyle(sheet)(CellRange(ref, ref), style)
     val wb = Workbook(styledSheet)
 
     val result = CellCommands
-      .clear(wb, Some(styledSheet), "A1", all = true, styles = false, comments = false, outputPath, config)
+      .clear(
+        wb,
+        Some(styledSheet),
+        "A1",
+        all = true,
+        styles = false,
+        comments = false,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
 
     assert(result.contains("contents"))
@@ -197,11 +253,20 @@ class ClearCommandSpec extends FunSuite:
     assert(sheet.cells.get(ref).exists { cell =>
       cell.value match
         case _: CellValue.Formula => true
-        case _                    => false
+        case _ => false
     })
 
     val result = CellCommands
-      .clear(wb, Some(sheet), "A1", all = false, styles = false, comments = false, outputPath, config)
+      .clear(
+        wb,
+        Some(sheet),
+        "A1",
+        all = false,
+        styles = false,
+        comments = false,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
 
     assert(result.contains("Cleared contents"))
@@ -228,7 +293,16 @@ class ClearCommandSpec extends FunSuite:
 
     // Clear A1 which overlaps with the merge
     val result = CellCommands
-      .clear(wb, Some(sheet), "A1", all = false, styles = false, comments = false, outputPath, config)
+      .clear(
+        wb,
+        Some(sheet),
+        "A1",
+        all = false,
+        styles = false,
+        comments = false,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
 
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
@@ -243,15 +317,25 @@ class ClearCommandSpec extends FunSuite:
 
   test("clear --styles --comments: clears both but keeps contents") {
     val ref = ARef.from0(0, 0)
-    val style = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0x00FF00)))
+    val style = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0x00ff00)))
     val sheet = Sheet("Test")
       .put(ref, CellValue.Text("A1"))
       .comment(ref, Comment.plainText("Note", None))
-    val styledSheet = com.tjclp.xl.sheets.styleSyntax.withRangeStyle(sheet)(CellRange(ref, ref), style)
+    val styledSheet =
+      com.tjclp.xl.sheets.styleSyntax.withRangeStyle(sheet)(CellRange(ref, ref), style)
     val wb = Workbook(styledSheet)
 
     val result = CellCommands
-      .clear(wb, Some(styledSheet), "A1", all = false, styles = true, comments = true, outputPath, config)
+      .clear(
+        wb,
+        Some(styledSheet),
+        "A1",
+        all = false,
+        styles = true,
+        comments = true,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
 
     assert(result.contains("styles"))

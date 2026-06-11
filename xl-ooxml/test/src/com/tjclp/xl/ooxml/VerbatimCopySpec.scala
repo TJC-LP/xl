@@ -12,8 +12,8 @@ import munit.FunSuite
 /**
  * GH-261: an untouched workbook read from a file and written to a new path must take the
  * verbatim-copy fast path and produce byte-identical output. The read-side digest previously
- * stopped at the ZIP central directory (ZipInputStream never consumes it) while copyVerbatim
- * hashed the whole file, so the fingerprints could never match and every clean copy failed.
+ * stopped at the ZIP central directory (ZipInputStream never consumes it) while copyVerbatim hashed
+ * the whole file, so the fingerprints could never match and every clean copy failed.
  */
 class VerbatimCopySpec extends FunSuite:
 

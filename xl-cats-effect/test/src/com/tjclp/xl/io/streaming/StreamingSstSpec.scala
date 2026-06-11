@@ -18,10 +18,10 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 /**
  * GH-223: two-pass streaming writes — SST deduplication and style registry.
  *
- * Pass 1 accumulates unique strings (first-occurrence order) and the style table while rows
- * stream; pass 2 emits cells as t="s" SST references plus s= style indices, then writes
- * sharedStrings.xml / styles.xml from the accumulators. Memory: O(distinct strings), per the
- * smart-streaming design envelope.
+ * Pass 1 accumulates unique strings (first-occurrence order) and the style table while rows stream;
+ * pass 2 emits cells as t="s" SST references plus s= style indices, then writes sharedStrings.xml /
+ * styles.xml from the accumulators. Memory: O(distinct strings), per the smart-streaming design
+ * envelope.
  *
  * The inline-string dialect stays available behind the existing config: SstPolicy.Never.
  */
@@ -50,7 +50,8 @@ class StreamingSstSpec extends CatsEffectSuite:
   /** (count, uniqueCount, entries in document order) from xl/sharedStrings.xml. */
   private def parseSst(path: Path): (Int, Int, Vector[String]) =
     val xml = entryText(path, "xl/sharedStrings.xml")
-    val elem = XmlSecurity.parseSafe(xml, "sst").fold(e => fail(s"sst parse: ${e.message}"), identity)
+    val elem =
+      XmlSecurity.parseSafe(xml, "sst").fold(e => fail(s"sst parse: ${e.message}"), identity)
     val count = (elem \@ "count").toInt
     val unique = (elem \@ "uniqueCount").toInt
     val entries = (elem \ "si").map(si => (si \ "t").text).toVector
@@ -68,7 +69,9 @@ class StreamingSstSpec extends CatsEffectSuite:
     )
     .covary[IO]
 
-  test("writeStream (default) emits SST: first-occurrence order, count=refs, uniqueCount=distinct") {
+  test(
+    "writeStream (default) emits SST: first-occurrence order, count=refs, uniqueCount=distinct"
+  ) {
     val path = tempXlsx("dedup")
     dupRows.through(excel.writeStream(path, "Data")).compile.drain.map { _ =>
       assert(hasEntry(path, "xl/sharedStrings.xml"), "sharedStrings.xml missing")

@@ -8,12 +8,12 @@ import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
 
 /**
- * Tests for Workbook.recalculate (0.11.0): total whole-workbook recalculation with per-cell
- * error reporting, cycle isolation, and automatic cross-sheet context.
+ * Tests for Workbook.recalculate (0.11.0): total whole-workbook recalculation with per-cell error
+ * reporting, cycle isolation, and automatic cross-sheet context.
  *
  * Also covers the latent bugs in the pre-0.11.0 withCachedFormulas this replaces: one failing
- * formula uncached the ENTIRE sheet, and cross-sheet formulas always failed (no workbook
- * context), silently uncaching their sheet.
+ * formula uncached the ENTIRE sheet, and cross-sheet formulas always failed (no workbook context),
+ * silently uncaching their sheet.
  */
 class RecalcSpec extends FunSuite:
 
@@ -126,8 +126,14 @@ class RecalcSpec extends FunSuite:
     val result = Workbook(s1, s2).recalculate()
     assertEquals(cached(result.workbook, "S1", a3), Some(num(10)))
     val errorRefs = result.errors.map(e => (e.sheet.value, e.ref)).toSet
-    assert(errorRefs.contains(("S1", a1)), s"S1!A1 should error, got: ${result.errors.map(_.render)}")
-    assert(errorRefs.contains(("S2", a1)), s"S2!A1 should error, got: ${result.errors.map(_.render)}")
+    assert(
+      errorRefs.contains(("S1", a1)),
+      s"S1!A1 should error, got: ${result.errors.map(_.render)}"
+    )
+    assert(
+      errorRefs.contains(("S2", a1)),
+      s"S2!A1 should error, got: ${result.errors.map(_.render)}"
+    )
     assertEquals(cached(result.workbook, "S1", a1), None)
     assertEquals(cached(result.workbook, "S2", a1), None)
 
@@ -156,8 +162,8 @@ class RecalcSpec extends FunSuite:
 
   test("recalculate end-to-end on a 3k-deep formula chain stays total and clean"):
     val n = 3000
-    val sheet = (1 until n).foldLeft(Sheet(SheetName.unsafe("Deep")).put(a1, num(1))) {
-      (s, i) => s.put(ARef.from0(0, i), formula(s"=A$i+1"))
+    val sheet = (1 until n).foldLeft(Sheet(SheetName.unsafe("Deep")).put(a1, num(1))) { (s, i) =>
+      s.put(ARef.from0(0, i), formula(s"=A$i+1"))
     }
     val result = Workbook(sheet).recalculate()
     assert(result.isClean, s"expected clean, got ${result.errors.take(3).map(_.render)}")
@@ -168,7 +174,9 @@ class RecalcSpec extends FunSuite:
 
   // ===== GH-274: INDIRECT — deferred-bucket recalculation =====
 
-  test("GH-274 deferred bucket: INDIRECT cell reads the freshly computed target, not a stale cache"):
+  test(
+    "GH-274 deferred bucket: INDIRECT cell reads the freshly computed target, not a stale cache"
+  ):
     // C1=INDIRECT("A1") has ZERO static deps, so Kahn may schedule it before A1; the
     // evaluate-last bucket + cache strip guarantee it sees the computed A1, not the stale 999.
     val sheet = Sheet(SheetName.unsafe("S"))
@@ -265,3 +273,45 @@ class RecalcSpec extends FunSuite:
     assert(byRef(ref"A1").contains("Circular"), byRef.toString)
     assert(byRef(ref"A2").contains("Circular"), byRef.toString)
     assertEquals(result.errors.map(_.ref).toSet, Set(ref"A1", ref"A2"))
+
+  // ===== GH-301: OFFSET — deferred-bucket recalculation (INDIRECT parity) =====
+
+  test("GH-301 deferred bucket: OFFSET reads the freshly computed target, not a stale cache"):
+    // B9 anchors at B5 and reads A1 (shift -4,-1): no static edge to A1 exists, so only the
+    // deferred bucket + cache strip + eval-aware extraction guarantee the fresh value.
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(1))
+      .put(ref"X2", num(2))
+      .put(ref"X3", num(3))
+      .put(ref"A1", CellValue.Formula("=SUM(X1:X3)", Some(num(999)))) // stale cache
+      .put(ref"B9", formula("=OFFSET(B5,-4,-1)"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"A1"), Some(num(6)))
+    assertEquals(cached(result.workbook, "S", ref"B9"), Some(num(6)))
+
+  test("GH-301 stale-cache regression: edit upstream, recalculate again, OFFSET chain reflects it"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(1))
+      .put(ref"A1", formula("=X1*2"))
+      .put(ref"C1", formula("=OFFSET(C5,-4,-2)")) // reads A1, no static edge
+      .put(ref"D1", formula("=C1+1"))
+    val wb1 = Workbook(sheet).recalculate().workbook // generation 1: caches populated
+    val s1 = wb1.sheets.find(_.name.value == "S").fold(fail("missing sheet"))(identity)
+    val wb2 = wb1.put(s1.put(ref"X1", num(100)))
+    val result = wb2.recalculate() // generation 2 must not trust generation 1's caches
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"A1"), Some(num(200)))
+    assertEquals(cached(result.workbook, "S", ref"C1"), Some(num(200)))
+    assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(201)))
+
+  test("GH-301 mixed dynamics: INDIRECT and OFFSET defer together and stay correct"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"X1", num(7))
+      .put(ref"A1", CellValue.Formula("=X1*2", Some(num(999)))) // stale cache
+      .put(ref"B1", formula("=INDIRECT(\"A1\")"))
+      .put(ref"C1", formula("=OFFSET(C5,-4,-2)")) // reads A1
+      .put(ref"D1", formula("=B1+C1"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(28)))

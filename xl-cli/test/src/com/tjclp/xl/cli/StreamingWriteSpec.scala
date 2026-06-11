@@ -124,7 +124,15 @@ class StreamingWriteSpec extends FunSuite:
     try
       val wb = Workbook(Sheet("Test"))
       val result = WriteCommands
-        .put(wb, Some(wb.sheets.head), "A1:A3", List("10", "20", "30"), outputPath, config, stream = true)
+        .put(
+          wb,
+          Some(wb.sheets.head),
+          "A1:A3",
+          List("10", "20", "30"),
+          outputPath,
+          config,
+          stream = true
+        )
         .unsafeRunSync()
 
       assert(result.contains("Put 3 values"))
@@ -132,9 +140,18 @@ class StreamingWriteSpec extends FunSuite:
 
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       val sheet = imported.sheets.head
-      assertEquals(sheet.cells.get(ARef.from0(0, 0)).map(_.value), Some(CellValue.Number(BigDecimal("10"))))
-      assertEquals(sheet.cells.get(ARef.from0(0, 1)).map(_.value), Some(CellValue.Number(BigDecimal("20"))))
-      assertEquals(sheet.cells.get(ARef.from0(0, 2)).map(_.value), Some(CellValue.Number(BigDecimal("30"))))
+      assertEquals(
+        sheet.cells.get(ARef.from0(0, 0)).map(_.value),
+        Some(CellValue.Number(BigDecimal("10")))
+      )
+      assertEquals(
+        sheet.cells.get(ARef.from0(0, 1)).map(_.value),
+        Some(CellValue.Number(BigDecimal("20")))
+      )
+      assertEquals(
+        sheet.cells.get(ARef.from0(0, 2)).map(_.value),
+        Some(CellValue.Number(BigDecimal("30")))
+      )
     finally Files.deleteIfExists(outputPath)
   }
 
@@ -143,7 +160,15 @@ class StreamingWriteSpec extends FunSuite:
     try
       val wb = Workbook(Sheet("Test").put(ARef.from0(0, 0), CellValue.Number(BigDecimal("10"))))
       val result = WriteCommands
-        .putFormula(wb, Some(wb.sheets.head), "B1", List("=A1*2"), outputPath, config, stream = true)
+        .putFormula(
+          wb,
+          Some(wb.sheets.head),
+          "B1",
+          List("=A1*2"),
+          outputPath,
+          config,
+          stream = true
+        )
         .unsafeRunSync()
 
       assert(result.contains("Put: B1"))
@@ -179,8 +204,14 @@ class StreamingWriteSpec extends FunSuite:
       // Verify both values exist and A1 retains style
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       val sheet = imported.sheets.head
-      assertEquals(sheet.cells.get(ARef.from0(0, 0)).map(_.value), Some(CellValue.Number(BigDecimal("100"))))
-      assertEquals(sheet.cells.get(ARef.from0(1, 0)).map(_.value), Some(CellValue.Number(BigDecimal("200"))))
+      assertEquals(
+        sheet.cells.get(ARef.from0(0, 0)).map(_.value),
+        Some(CellValue.Number(BigDecimal("100")))
+      )
+      assertEquals(
+        sheet.cells.get(ARef.from0(1, 0)).map(_.value),
+        Some(CellValue.Number(BigDecimal("200")))
+      )
 
       // Check that A1 has a style (styleId should be present)
       val a1StyleId = sheet.cells.get(ARef.from0(0, 0)).flatMap(_.styleId)
@@ -266,7 +297,10 @@ class StreamingWriteSpec extends FunSuite:
       // Verify data was copied
       val copySheet = imported.sheets.find(_.name.value == "Copy")
       assert(copySheet.isDefined)
-      assertEquals(copySheet.get.cells.get(ARef.from0(0, 0)).map(_.value), Some(CellValue.Text("Hello")))
+      assertEquals(
+        copySheet.get.cells.get(ARef.from0(0, 0)).map(_.value),
+        Some(CellValue.Text("Hello"))
+      )
     finally Files.deleteIfExists(outputPath)
   }
 
@@ -319,11 +353,23 @@ class StreamingWriteSpec extends FunSuite:
   test("streaming: clear cells") {
     val outputPath = tempXlsx()
     try
-      val wb = Workbook(Sheet("Test")
-        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("1")))
-        .put(ARef.from0(1, 0), CellValue.Number(BigDecimal("2"))))
+      val wb = Workbook(
+        Sheet("Test")
+          .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("1")))
+          .put(ARef.from0(1, 0), CellValue.Number(BigDecimal("2")))
+      )
       val result = CellCommands
-        .clear(wb, Some(wb.sheets.head), "A1", all = false, styles = false, comments = false, outputPath, config, stream = true)
+        .clear(
+          wb,
+          Some(wb.sheets.head),
+          "A1",
+          all = false,
+          styles = false,
+          comments = false,
+          outputPath,
+          config,
+          stream = true
+        )
         .unsafeRunSync()
 
       assert(result.contains("Cleared contents from A1"))
@@ -332,7 +378,10 @@ class StreamingWriteSpec extends FunSuite:
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       val sheet = imported.sheets.head
       assertEquals(sheet.cells.get(ARef.from0(0, 0)), None) // A1 cleared
-      assertEquals(sheet.cells.get(ARef.from0(1, 0)).map(_.value), Some(CellValue.Number(BigDecimal("2")))) // B1 preserved
+      assertEquals(
+        sheet.cells.get(ARef.from0(1, 0)).map(_.value),
+        Some(CellValue.Number(BigDecimal("2")))
+      ) // B1 preserved
     finally Files.deleteIfExists(outputPath)
   }
 
@@ -355,9 +404,18 @@ class StreamingWriteSpec extends FunSuite:
 
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
       val sheet = imported.sheets.head
-      assertEquals(sheet.cells.get(ARef.from0(0, 0)).map(_.value), Some(CellValue.Number(BigDecimal("1"))))
-      assertEquals(sheet.cells.get(ARef.from0(0, 1)).map(_.value), Some(CellValue.Number(BigDecimal("2"))))
-      assertEquals(sheet.cells.get(ARef.from0(1, 1)).map(_.value), Some(CellValue.Number(BigDecimal("9"))))
+      assertEquals(
+        sheet.cells.get(ARef.from0(0, 0)).map(_.value),
+        Some(CellValue.Number(BigDecimal("1")))
+      )
+      assertEquals(
+        sheet.cells.get(ARef.from0(0, 1)).map(_.value),
+        Some(CellValue.Number(BigDecimal("2")))
+      )
+      assertEquals(
+        sheet.cells.get(ARef.from0(1, 1)).map(_.value),
+        Some(CellValue.Number(BigDecimal("9")))
+      )
     finally
       Files.deleteIfExists(sourcePath)
       Files.deleteIfExists(outputPath)
@@ -383,7 +441,10 @@ class StreamingWriteSpec extends FunSuite:
       val sheet2 = imported.sheets.find(_.name.value == "Sheet2").getOrElse {
         fail("Sheet2 not found in output workbook")
       }
-      assertEquals(sheet2.cells.get(ARef.from0(1, 0)).map(_.value), Some(CellValue.Number(BigDecimal("99"))))
+      assertEquals(
+        sheet2.cells.get(ARef.from0(1, 0)).map(_.value),
+        Some(CellValue.Number(BigDecimal("99")))
+      )
       assertEquals(sheet2.cells.get(ARef.from0(0, 0)).map(_.value), Some(CellValue.Text("two")))
     finally
       Files.deleteIfExists(sourcePath)
@@ -534,9 +595,11 @@ class StreamingWriteSpec extends FunSuite:
   test("streaming write: dimension element present in output") {
     val outputPath = tempXlsx()
     try
-      val wb = Workbook(Sheet("Test")
-        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("1")))
-        .put(ARef.from0(2, 2), CellValue.Number(BigDecimal("2")))) // C3
+      val wb = Workbook(
+        Sheet("Test")
+          .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("1")))
+          .put(ARef.from0(2, 2), CellValue.Number(BigDecimal("2")))
+      ) // C3
       val result = WriteCommands
         .put(wb, Some(wb.sheets.head), "D4", List("3"), outputPath, config, stream = true)
         .unsafeRunSync()
@@ -765,9 +828,9 @@ class StreamingWriteSpec extends FunSuite:
       val wb = Workbook(
         Sheet("Test")
           .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("100"))) // A1 = base
-          .put(ARef.from0(0, 1), CellValue.Number(BigDecimal("1")))   // A2
-          .put(ARef.from0(0, 2), CellValue.Number(BigDecimal("2")))   // A3
-          .put(ARef.from0(0, 3), CellValue.Number(BigDecimal("3")))   // A4
+          .put(ARef.from0(0, 1), CellValue.Number(BigDecimal("1"))) // A2
+          .put(ARef.from0(0, 2), CellValue.Number(BigDecimal("2"))) // A3
+          .put(ARef.from0(0, 3), CellValue.Number(BigDecimal("3"))) // A4
       )
       ExcelIO.instance[IO].write(wb, sourcePath).unsafeRunSync()
 

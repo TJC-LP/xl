@@ -191,6 +191,11 @@ object FormulaPrinter:
       // A binding in a typed argument position prints as the bare name, exactly like BindingRef
       case TExpr.CoercedBindingRef(name, _) => name
 
+      // GH-306: a runtime coercion wrapper prints transparently as the wrapped expression —
+      // the coercion is an evaluation concern, invisible in formula text (round-trip safe:
+      // re-parsing re-derives the same wrapper from the argument position)
+      case TExpr.Coerced(inner, _) => printExpr(inner, precedence)
+
   /**
    * Format ARef to A1 notation with default Relative anchor.
    *
@@ -334,14 +339,16 @@ object FormulaPrinter:
         s"Ref($at, $anchor)"
       case TExpr.PolyRef(at, anchor) =>
         s"PolyRef($at, $anchor)"
+      // GH-280: debug rendering quotes cell-ref-shaped sheet names (a sheet literally named
+      // "A1" must read unambiguously)
       case TExpr.SheetRef(sheet, at, anchor, _) =>
-        s"SheetRef(${sheet.value}, $at, $anchor)"
+        s"SheetRef(${SheetName.quoteForFormula(sheet.value)}, $at, $anchor)"
       case TExpr.SheetPolyRef(sheet, at, anchor) =>
-        s"SheetPolyRef(${sheet.value}, $at, $anchor)"
+        s"SheetPolyRef(${SheetName.quoteForFormula(sheet.value)}, $at, $anchor)"
       case TExpr.RangeRef(range) =>
         s"RangeRef(${formatRange(range)})"
       case TExpr.SheetRange(sheet, range) =>
-        s"SheetRange(${sheet.value}, ${formatRange(range)})"
+        s"SheetRange(${SheetName.quoteForFormula(sheet.value)}, ${formatRange(range)})"
       case TExpr.Add(x, y) =>
         s"Add(${printWithTypes(x)}, ${printWithTypes(y)})"
       case TExpr.Sub(x, y) =>
@@ -389,3 +396,5 @@ object FormulaPrinter:
         s"BindingRef($name)"
       case TExpr.CoercedBindingRef(name, target) =>
         s"CoercedBindingRef($name, $target)"
+      case TExpr.Coerced(inner, target) =>
+        s"Coerced(${printWithTypes(inner)}, $target)"

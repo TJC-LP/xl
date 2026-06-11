@@ -46,6 +46,8 @@ trait TExprAnalysis:
     // GH-193: LET — check binding values (the body may reference them) and the body
     case Let(bindings, body) =>
       bindings.exists((_, value) => containsDateFunction(value)) || containsDateFunction(body)
+    // GH-306: runtime coercion wrapper — transparent for analysis
+    case Coerced(inner, _) => containsDateFunction(inner)
     // Default: no date function
     case _ => false
 
@@ -82,6 +84,8 @@ trait TExprAnalysis:
     // GH-193: LET — check binding values (the body may reference them) and the body
     case Let(bindings, body) =>
       bindings.exists((_, value) => containsTimeFunction(value)) || containsTimeFunction(body)
+    // GH-306: runtime coercion wrapper — transparent for analysis
+    case Coerced(inner, _) => containsTimeFunction(inner)
     // Default: no time function
     case _ => false
 
@@ -122,6 +126,8 @@ trait TExprAnalysis:
     // GH-193: LET — ranges from binding values and the body
     case Let(bindings, body) =>
       bindings.flatMap((_, value) => collectRanges(value)) ++ collectRanges(body)
+    // GH-306: runtime coercion wrapper — transparent for analysis
+    case Coerced(inner, _) => collectRanges(inner)
     // Default: no ranges (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, BindingRef, etc.)
     case _ => Nil
 
@@ -175,6 +181,8 @@ trait TExprAnalysis:
           bindings.map((name, value) => (name, transformRanges(value, f))),
           transformRanges(body, f)
         )
+      // GH-306: runtime coercion wrapper — transform the wrapped expression
+      case Coerced(inner, target) => Coerced(transformRanges(inner, f), target)
       // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, Call, etc.)
       case other => other
     ).asInstanceOf[TExpr[A]]

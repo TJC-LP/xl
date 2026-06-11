@@ -20,10 +20,28 @@ class WorksheetPreservationInvariantSpec extends FunSuite:
   // Labels backed by a dedicated OoxmlWorksheet field, or regenerated from the domain model
   // (sheetData from cells, mergeCells from mergedRanges).
   private val modeledOrRegenerated: Set[String] = Set(
-    "sheetPr", "dimension", "sheetViews", "sheetFormatPr", "cols", "sheetData", "mergeCells",
-    "conditionalFormatting", "printOptions", "rowBreaks", "colBreaks", "customProperties",
-    "pageMargins", "pageSetup", "headerFooter", "drawing", "legacyDrawing", "picture",
-    "oleObjects", "controls", "tableParts", "extLst"
+    "sheetPr",
+    "dimension",
+    "sheetViews",
+    "sheetFormatPr",
+    "cols",
+    "sheetData",
+    "mergeCells",
+    "conditionalFormatting",
+    "printOptions",
+    "rowBreaks",
+    "colBreaks",
+    "customProperties",
+    "pageMargins",
+    "pageSetup",
+    "headerFooter",
+    "drawing",
+    "legacyDrawing",
+    "picture",
+    "oleObjects",
+    "controls",
+    "tableParts",
+    "extLst"
   )
 
   test("every known worksheet element is modeled or preserved (no tier-3 silent data loss)") {

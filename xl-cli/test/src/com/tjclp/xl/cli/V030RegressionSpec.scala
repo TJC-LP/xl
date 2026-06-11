@@ -254,8 +254,42 @@ class V030RegressionSpec extends CatsEffectSuite:
 
     assertEquals(merged.border.top.style, BorderStyle.Thick, "Top should be overridden to Thick")
     assertEquals(merged.border.bottom.style, BorderStyle.Thin, "Bottom should be preserved as Thin")
-    assertEquals(merged.border.left.style, BorderStyle.Double, "Left should be overridden to Double")
+    assertEquals(
+      merged.border.left.style,
+      BorderStyle.Double,
+      "Left should be overridden to Double"
+    )
     assertEquals(merged.border.right.style, BorderStyle.Thin, "Right should be preserved as Thin")
+  }
+
+  test("mergeStyles: border merging matches core Border.merge for all side combos (GH-279)") {
+    // CLI border-merge must be the core implementation, not a parallel re-implementation,
+    // so CLI semantics cannot drift from the library's (Border.merge / Patch.MergeBorder).
+    val red = Color.fromRgb(255, 0, 0)
+    val sides = List(
+      BorderSide.none,
+      BorderSide(BorderStyle.Thin, None),
+      BorderSide(BorderStyle.Thick, Some(red)),
+      BorderSide(BorderStyle.None, Some(red)) // styled "none" with color is still a set side
+    )
+    for
+      existingTop <- sides
+      existingLeft <- sides
+      newTop <- sides
+      newLeft <- sides
+    do
+      val existing = CellStyle.default.copy(
+        border = Border(top = existingTop, left = existingLeft)
+      )
+      val newStyle = CellStyle.default.copy(
+        border = Border(top = newTop, left = newLeft)
+      )
+      val merged = StyleBuilder.mergeStyles(existing, newStyle)
+      assertEquals(
+        merged.border,
+        existing.border.merge(newStyle.border),
+        s"CLI border merge must equal core Border.merge for existing=${existing.border} new=${newStyle.border}"
+      )
   }
 
   test("mergeStyles: per-side border preserves color from existing when new has no color") {
@@ -448,6 +482,7 @@ class V030RegressionSpec extends CatsEffectSuite:
     val lines = output.split("\n")
     val styleStart = lines.indexWhere(_.startsWith("Style:"))
     if styleStart >= 0 then
-      val styleLines = lines.drop(styleStart).takeWhile(l => l.startsWith("Style:") || l.startsWith("  "))
+      val styleLines =
+        lines.drop(styleStart).takeWhile(l => l.startsWith("Style:") || l.startsWith("  "))
       Some(styleLines.mkString("\n"))
     else None

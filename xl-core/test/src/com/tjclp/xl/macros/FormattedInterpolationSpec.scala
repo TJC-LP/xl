@@ -189,7 +189,7 @@ class FormattedInterpolationSpec extends ScalaCheckSuite:
   }
 
   test("Runtime date: invalid format returns Left") {
-    val invalidStr = "11/10/2025"  // US format not supported
+    val invalidStr = "11/10/2025" // US format not supported
     date"$invalidStr" match
       case Left(XLError.DateFormatError(value, reason)) =>
         assertEquals(value, "11/10/2025")
@@ -198,7 +198,7 @@ class FormattedInterpolationSpec extends ScalaCheckSuite:
   }
 
   test("Runtime date: invalid date returns Left") {
-    val invalidStr = "2025-02-30"  // Feb 30 doesn't exist
+    val invalidStr = "2025-02-30" // Feb 30 doesn't exist
     date"$invalidStr" match
       case Left(XLError.DateFormatError(_, _)) => () // Expected
       case other => fail(s"Should fail, got $other")

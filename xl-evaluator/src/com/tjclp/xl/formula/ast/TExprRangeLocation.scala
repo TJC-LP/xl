@@ -66,10 +66,13 @@ trait TExprRangeLocation:
       /** Get height of the range */
       def height: Int = loc.range.height
 
-      /** Get A1 string representation */
+      /**
+       * Get A1 string representation. Used in diagnostics (never re-parsed); GH-280: cell-ref-
+       * shaped sheet names quote so a sheet literally named "A1" reads unambiguously.
+       */
       def toA1: String = loc match
         case Local(r) => r.toA1
-        case CrossSheet(s, r) => s"${s.value}!${r.toA1}"
+        case CrossSheet(s, r) => s"${SheetName.quoteForFormula(s.value)}!${r.toA1}"
 
       /** Get starting column of the range */
       def colStart: Column = loc.range.colStart

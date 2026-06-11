@@ -84,7 +84,7 @@ class StreamingErrorSpec extends FunSuite:
   test("StylePatcher.mergeStyles: preserves existing properties when overlay is default") {
     val existing = CellStyle.default
       .withFont(Font.default.withBold(true).withSize(14))
-      .withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+      .withFill(Fill.Solid(Color.Rgb(0xffff0000)))
 
     val overlay = CellStyle.default // Default overlay
 
@@ -93,7 +93,7 @@ class StreamingErrorSpec extends FunSuite:
     // Existing properties should be preserved
     assertEquals(merged.font.bold, true)
     assertEquals(merged.font.sizePt, 14.0)
-    assertEquals(merged.fill, Fill.Solid(Color.Rgb(0xFFFF0000)))
+    assertEquals(merged.fill, Fill.Solid(Color.Rgb(0xffff0000)))
   }
 
   test("StylePatcher.mergeStyles: overlay takes precedence") {

@@ -337,8 +337,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
           lookupValueEval <- evalValue(ctx, lookupValue)
           matchModeRaw <- evalValue(ctx, matchModeExpr)
           searchModeRaw <- evalValue(ctx, searchModeExpr)
-          matchMode = toInt(matchModeRaw)
-          searchMode = toInt(searchModeRaw)
+          matchMode <- toIntArg("XLOOKUP", matchModeRaw)
+          searchMode <- toIntArg("XLOOKUP", searchModeRaw)
           result <- performXLookup(
             lookupValueEval,
             lookupArray,

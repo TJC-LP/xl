@@ -22,9 +22,16 @@ class StyleSpec extends ScalaCheckSuite:
   val genEmu: Gen[Emu] = Gen.choose(1000L, 1000000L).map(Emu.apply)
 
   val genThemeSlot: Gen[ThemeSlot] = Gen.oneOf(
-    ThemeSlot.Dark1, ThemeSlot.Light1, ThemeSlot.Dark2, ThemeSlot.Light2,
-    ThemeSlot.Accent1, ThemeSlot.Accent2, ThemeSlot.Accent3,
-    ThemeSlot.Accent4, ThemeSlot.Accent5, ThemeSlot.Accent6
+    ThemeSlot.Dark1,
+    ThemeSlot.Light1,
+    ThemeSlot.Dark2,
+    ThemeSlot.Light2,
+    ThemeSlot.Accent1,
+    ThemeSlot.Accent2,
+    ThemeSlot.Accent3,
+    ThemeSlot.Accent4,
+    ThemeSlot.Accent5,
+    ThemeSlot.Accent6
   )
 
   val genTint: Gen[Double] = Gen.choose(-1.0, 1.0)
@@ -37,14 +44,25 @@ class StyleSpec extends ScalaCheckSuite:
     yield Color.Theme(slot, tint)
   )
 
-  val genNumFmt: Gen[NumFmt] = Gen.oneOf(
-    Gen.const(NumFmt.General), Gen.const(NumFmt.Integer), Gen.const(NumFmt.Decimal),
-    Gen.const(NumFmt.ThousandsSeparator), Gen.const(NumFmt.ThousandsDecimal),
-    Gen.const(NumFmt.Currency), Gen.const(NumFmt.Percent), Gen.const(NumFmt.PercentDecimal),
-    Gen.const(NumFmt.Scientific), Gen.const(NumFmt.Fraction), Gen.const(NumFmt.Date),
-    Gen.const(NumFmt.DateTime), Gen.const(NumFmt.Time), Gen.const(NumFmt.Text),
-    Gen.alphaNumStr.map(NumFmt.Custom.apply)
-  ).flatMap(identity)
+  val genNumFmt: Gen[NumFmt] = Gen
+    .oneOf(
+      Gen.const(NumFmt.General),
+      Gen.const(NumFmt.Integer),
+      Gen.const(NumFmt.Decimal),
+      Gen.const(NumFmt.ThousandsSeparator),
+      Gen.const(NumFmt.ThousandsDecimal),
+      Gen.const(NumFmt.Currency),
+      Gen.const(NumFmt.Percent),
+      Gen.const(NumFmt.PercentDecimal),
+      Gen.const(NumFmt.Scientific),
+      Gen.const(NumFmt.Fraction),
+      Gen.const(NumFmt.Date),
+      Gen.const(NumFmt.DateTime),
+      Gen.const(NumFmt.Time),
+      Gen.const(NumFmt.Text),
+      Gen.alphaNumStr.map(NumFmt.Custom.apply)
+    )
+    .flatMap(identity)
 
   val genFont: Gen[Font] = for
     name <- Gen.oneOf("Calibri", "Arial", "Times New Roman", "Courier New")
@@ -56,8 +74,13 @@ class StyleSpec extends ScalaCheckSuite:
   yield Font(name, size, bold, italic, underline, color)
 
   val genPatternType: Gen[PatternType] = Gen.oneOf(
-    PatternType.None, PatternType.Solid, PatternType.Gray125, PatternType.Gray0625,
-    PatternType.DarkGray, PatternType.MediumGray, PatternType.LightGray
+    PatternType.None,
+    PatternType.Solid,
+    PatternType.Gray125,
+    PatternType.Gray0625,
+    PatternType.DarkGray,
+    PatternType.MediumGray,
+    PatternType.LightGray
   )
 
   val genFill: Gen[Fill] = Gen.oneOf(
@@ -71,8 +94,13 @@ class StyleSpec extends ScalaCheckSuite:
   )
 
   val genBorderStyle: Gen[BorderStyle] = Gen.oneOf(
-    BorderStyle.None, BorderStyle.Thin, BorderStyle.Medium, BorderStyle.Thick,
-    BorderStyle.Dashed, BorderStyle.Dotted, BorderStyle.Double
+    BorderStyle.None,
+    BorderStyle.Thin,
+    BorderStyle.Medium,
+    BorderStyle.Thick,
+    BorderStyle.Dashed,
+    BorderStyle.Dotted,
+    BorderStyle.Double
   )
 
   val genBorderSide: Gen[BorderSide] = for
@@ -88,11 +116,18 @@ class StyleSpec extends ScalaCheckSuite:
   yield Border(left, right, top, bottom)
 
   val genHAlign: Gen[HAlign] = Gen.oneOf(
-    HAlign.Left, HAlign.Center, HAlign.Right, HAlign.Justify, HAlign.Fill
+    HAlign.Left,
+    HAlign.Center,
+    HAlign.Right,
+    HAlign.Justify,
+    HAlign.Fill
   )
 
   val genVAlign: Gen[VAlign] = Gen.oneOf(
-    VAlign.Top, VAlign.Middle, VAlign.Bottom, VAlign.Justify
+    VAlign.Top,
+    VAlign.Middle,
+    VAlign.Bottom,
+    VAlign.Justify
   )
 
   val genAlign: Gen[Align] = for
@@ -167,10 +202,10 @@ class StyleSpec extends ScalaCheckSuite:
     val color = Color.fromRgb(255, 128, 64, 200)
     color match
       case Color.Rgb(argb) =>
-        assertEquals((argb >> 24) & 0xFF, 200) // Alpha
-        assertEquals((argb >> 16) & 0xFF, 255) // Red
-        assertEquals((argb >> 8) & 0xFF, 128)  // Green
-        assertEquals(argb & 0xFF, 64)          // Blue
+        assertEquals((argb >> 24) & 0xff, 200) // Alpha
+        assertEquals((argb >> 16) & 0xff, 255) // Red
+        assertEquals((argb >> 8) & 0xff, 128) // Green
+        assertEquals(argb & 0xff, 64) // Blue
       case _ => fail("Should be Rgb")
   }
 
@@ -179,9 +214,9 @@ class StyleSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case Color.Rgb(argb) =>
-        assertEquals((argb >> 16) & 0xFF, 0xFF)
-        assertEquals((argb >> 8) & 0xFF, 0x80)
-        assertEquals(argb & 0xFF, 0x40)
+        assertEquals((argb >> 16) & 0xff, 0xff)
+        assertEquals((argb >> 8) & 0xff, 0x80)
+        assertEquals(argb & 0xff, 0x40)
       case _ => fail("Should be Rgb")
     }
   }
@@ -191,10 +226,10 @@ class StyleSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case Color.Rgb(argb) =>
-        assertEquals((argb >> 24) & 0xFF, 0xC8)
-        assertEquals((argb >> 16) & 0xFF, 0xFF)
-        assertEquals((argb >> 8) & 0xFF, 0x80)
-        assertEquals(argb & 0xFF, 0x40)
+        assertEquals((argb >> 24) & 0xff, 0xc8)
+        assertEquals((argb >> 16) & 0xff, 0xff)
+        assertEquals((argb >> 8) & 0xff, 0x80)
+        assertEquals(argb & 0xff, 0x40)
       case _ => fail("Should be Rgb")
     }
   }
@@ -296,7 +331,7 @@ class StyleSpec extends ScalaCheckSuite:
   // ========== Border Tests ==========
 
   test("Border.all creates uniform border") {
-    val border = Border.all(BorderStyle.Thin, Some(Color.Rgb(0xFF000000)))
+    val border = Border.all(BorderStyle.Thin, Some(Color.Rgb(0xff000000)))
     assertEquals(border.left.style, BorderStyle.Thin)
     assertEquals(border.right.style, BorderStyle.Thin)
     assertEquals(border.top.style, BorderStyle.Thin)
@@ -337,20 +372,21 @@ class StyleSpec extends ScalaCheckSuite:
   }
 
   property("CellStyle builder methods work correctly") {
-    forAll { (style: CellStyle, font: Font, fill: Fill, border: Border, numFmt: NumFmt, align: Align) =>
-      val updated = style
-        .withFont(font)
-        .withFill(fill)
-        .withBorder(border)
-        .withNumFmt(numFmt)
-        .withAlign(align)
+    forAll {
+      (style: CellStyle, font: Font, fill: Fill, border: Border, numFmt: NumFmt, align: Align) =>
+        val updated = style
+          .withFont(font)
+          .withFill(fill)
+          .withBorder(border)
+          .withNumFmt(numFmt)
+          .withAlign(align)
 
-      assertEquals(updated.font, font)
-      assertEquals(updated.fill, fill)
-      assertEquals(updated.border, border)
-      assertEquals(updated.numFmt, numFmt)
-      assertEquals(updated.align, align)
-      true
+        assertEquals(updated.font, font)
+        assertEquals(updated.fill, fill)
+        assertEquals(updated.border, border)
+        assertEquals(updated.numFmt, numFmt)
+        assertEquals(updated.align, align)
+        true
     }
   }
 
@@ -359,7 +395,7 @@ class StyleSpec extends ScalaCheckSuite:
   test("CellStyle.canonicalKey is deterministic") {
     val style = CellStyle(
       font = Font("Arial", 12.0, bold = true),
-      fill = Fill.Solid(Color.Rgb(0xFFFFFFFF)),
+      fill = Fill.Solid(Color.Rgb(0xffffffff)),
       border = Border.all(BorderStyle.Thin),
       numFmt = NumFmt.Percent,
       align = Align(HAlign.Center, VAlign.Middle)

@@ -19,9 +19,9 @@ object FunctionRegistry:
     byName.keys.toList.sorted
 
   /**
-   * GH-274: upper-case names of functions flagged `FunctionFlags.dynamicDeps` (today: INDIRECT).
-   * Used by `DependencyGraph.dynamicCells` as a cheap substring pre-filter before parsing — zero
-   * parse cost for sheets without dynamic references.
+   * GH-274: upper-case names of functions flagged `FunctionFlags.dynamicDeps` (INDIRECT, and OFFSET
+   * since GH-301). Used by `DependencyGraph.dynamicCells` as a cheap substring pre-filter before
+   * parsing — zero parse cost for sheets without dynamic references.
    */
   lazy val dynamicFunctionNames: List[String] =
     byName.values.filter(_.flags.dynamicDeps).map(_.name.toUpperCase).toList.sorted

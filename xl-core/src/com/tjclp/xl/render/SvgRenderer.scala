@@ -64,9 +64,12 @@ object SvgRenderer:
     val xOffset = if showLabels then HeaderWidth else 0
     val yOffset = if showLabels then HeaderHeight else 0
 
-    // Pre-calculate positions
-    val colXPositions = colWidths.scanLeft(xOffset)(_ + _).dropRight(1)
-    val rowYPositions = rowHeights.scanLeft(yOffset)(_ + _).dropRight(1)
+    // Pre-calculate positions; full boundary scans (n+1 entries) also locate grid edges
+    // for shared-edge border resolution (GH-298)
+    val colBoundaries = colWidths.scanLeft(xOffset)(_ + _)
+    val rowBoundaries = rowHeights.scanLeft(yOffset)(_ + _)
+    val colXPositions = colBoundaries.dropRight(1)
+    val rowYPositions = rowBoundaries.dropRight(1)
 
     // Calculate total dimensions
     val totalWidth = xOffset + colWidths.sum
@@ -136,7 +139,11 @@ object SvgRenderer:
     // Three-pass rendering: backgrounds first, then borders, then text on top
     // This ensures text overflow is visible and not covered by adjacent cell backgrounds
     val textBuffer = new StringBuilder
-    val borderBuffer = new StringBuilder
+    // Border declarations keyed by unit grid edge: (boundary index, cell index along the
+    // edge). Adjacent cells declaring the same edge are resolved heavier-wins (GH-298)
+    // instead of double-drawn with painter's order deciding.
+    val hEdges = scala.collection.mutable.Map.empty[(Int, Int), EdgeDecl]
+    val vEdges = scala.collection.mutable.Map.empty[(Int, Int), EdgeDecl]
 
     // Clip paths will be rendered in defs section after cell loop completes
 
@@ -202,8 +209,10 @@ object SvgRenderer:
 
             val effectiveHeight = if mergeRange.isDefined then mergeHeight else rowHeight
 
-            // Generate clip path for this cell (to prevent text overflow beyond effective width)
-            val clipId = s"clip-$xPos-$y"
+            // Generate clip path for this cell (to prevent text overflow beyond effective
+            // width). Keyed by cell ref: pixel positions collide when hidden rows/columns
+            // collapse to the same coordinates, emitting duplicate ids — invalid SVG (GH-298).
+            val clipId = s"clip-${ref.toA1}"
             clipPathBuffer.append(
               s"""    <clipPath id="$clipId"><rect x="$xPos" y="$y" width="$effectiveWidth" height="$effectiveHeight"/></clipPath>\n"""
             )
@@ -223,13 +232,19 @@ object SvgRenderer:
             )
             sb.append(s"""$fillAttr$strokeAttr class="cell"/>\n""")
 
-            // Collect borders for second pass
+            // Collect border declarations for second pass, decomposed into the unit grid
+            // edges of the cell's effective rect (merge- or overflow-expanded), so shared
+            // edges resolve to the heavier declaration (GH-298)
             if includeStyles then
               cellOpt.flatMap(_.styleId).flatMap(sheet.styleRegistry.get).foreach { style =>
                 if style.border != Border.none then
-                  borderBuffer.append(
-                    renderBorders(style.border, xPos, y, effectiveWidth, effectiveHeight, theme)
-                  )
+                  val spanCols = mergeRange match
+                    case Some(range) => math.min(range.end.col.index0, endCol) - col + 1
+                    case None => math.min(overflowColspan, endCol - col + 1)
+                  val spanRows = mergeRange match
+                    case Some(range) => math.min(range.end.row.index0, endRow) - row + 1
+                    case None => 1
+                  declareCellEdges(hEdges, vEdges, style.border, col, row, spanCols, spanRows)
               }
 
             // Collect text for third pass (skip hidden rows/cols)
@@ -338,9 +353,12 @@ object SvgRenderer:
     // Append remaining content (headers and cells)
     result.append(content.substring(styleEndIdx))
 
-    // Pass 2: Cell borders (rendered above backgrounds, below text)
+    // Pass 2: Cell borders (rendered above backgrounds, below text), one line per
+    // resolved grid edge run
     result.append("  <g class=\"cell-borders\">\n")
-    result.append(borderBuffer)
+    result.append(
+      renderResolvedBorders(hEdges, vEdges, colBoundaries, rowBoundaries, startCol, startRow, theme)
+    )
     result.append("  </g>\n")
 
     // Pass 3: Cell text (rendered on top of all backgrounds and borders, clipped to cell boundaries)
@@ -371,40 +389,132 @@ object SvgRenderer:
     }
 
   /**
-   * Render cell borders as individual line elements for each side.
+   * A border declaration competing for one unit grid edge.
    *
-   * Unlike the rect stroke approach, this allows different styles/colors per side and supports
+   * `fromTrailing` marks the declaring cell as the trailing cell of the edge (right of a vertical
+   * edge, below a horizontal edge); it breaks weight ties and orients double-border offsets.
+   */
+  private final case class EdgeDecl(side: BorderSide, fromTrailing: Boolean)
+
+  /**
+   * Visual weight for shared-edge resolution (GH-298), ordered: none < hair < thin family
+   * (thin/dotted/dashed/dash-dot/dash-dot-dot) < medium family (medium + medium-dashed variants +
+   * slant) < thick < double.
+   */
+  private def borderWeight(style: BorderStyle): Int =
+    style match
+      case BorderStyle.None => 0
+      case BorderStyle.Hair => 1
+      case BorderStyle.Thin | BorderStyle.Dotted | BorderStyle.Dashed | BorderStyle.DashDot |
+          BorderStyle.DashDotDot =>
+        2
+      case BorderStyle.Medium | BorderStyle.MediumDashed | BorderStyle.MediumDashDot |
+          BorderStyle.MediumDashDotDot | BorderStyle.SlantDashDot =>
+        3
+      case BorderStyle.Thick => 4
+      case BorderStyle.Double => 5
+
+  /**
+   * Excel's shared-edge rule: the heavier border wins; ties go to the trailing (right/bottom)
+   * cell's declaration, matching Excel's drawing order.
+   */
+  private def resolveSharedEdge(a: EdgeDecl, b: EdgeDecl): EdgeDecl =
+    val aw = borderWeight(a.side.style)
+    val bw = borderWeight(b.side.style)
+    if bw > aw then b
+    else if aw > bw then a
+    else if b.fromTrailing then b
+    else a
+
+  /**
+   * Decompose a cell's border into unit grid edges of its effective rect: the perimeter spans
+   * `spanCols` columns and `spanRows` rows starting at (col, row). Top/left declarations come from
+   * the trailing cell of their edges; bottom/right from the leading cell.
+   */
+  private def declareCellEdges(
+    hEdges: scala.collection.mutable.Map[(Int, Int), EdgeDecl],
+    vEdges: scala.collection.mutable.Map[(Int, Int), EdgeDecl],
+    border: Border,
+    col: Int,
+    row: Int,
+    spanCols: Int,
+    spanRows: Int
+  ): Unit =
+    val lastCol = col + spanCols - 1
+    val lastRow = row + spanRows - 1
+    (col to lastCol).foreach { c =>
+      declareEdge(hEdges, (row, c), border.top, fromTrailing = true)
+      declareEdge(hEdges, (lastRow + 1, c), border.bottom, fromTrailing = false)
+    }
+    (row to lastRow).foreach { r =>
+      declareEdge(vEdges, (col, r), border.left, fromTrailing = true)
+      declareEdge(vEdges, (lastCol + 1, r), border.right, fromTrailing = false)
+    }
+
+  private def declareEdge(
+    edges: scala.collection.mutable.Map[(Int, Int), EdgeDecl],
+    key: (Int, Int),
+    side: BorderSide,
+    fromTrailing: Boolean
+  ): Unit =
+    if side.style != BorderStyle.None then
+      val incoming = EdgeDecl(side, fromTrailing)
+      edges(key) = edges.get(key) match
+        case Some(existing) => resolveSharedEdge(existing, incoming)
+        case None => incoming
+
+  /**
+   * Render the resolved border edges as line elements, one `<line>` per maximal run of contiguous
+   * unit edges with identical winning declarations. Zero-length segments (hidden rows/columns) are
+   * dropped.
+   *
+   * Unlike a rect stroke approach, line elements allow different styles/colors per side and support
    * dashed, dotted, and double borders.
    */
-  private def renderBorders(
-    border: Border,
-    x: Double,
-    y: Double,
-    width: Double,
-    height: Double,
+  private def renderResolvedBorders(
+    hEdges: scala.collection.Map[(Int, Int), EdgeDecl],
+    vEdges: scala.collection.Map[(Int, Int), EdgeDecl],
+    colBoundaries: IndexedSeq[Int],
+    rowBoundaries: IndexedSeq[Int],
+    startCol: Int,
+    startRow: Int,
     theme: ThemePalette
   ): String =
     val sb = new StringBuilder
-
-    // Top border
-    if border.top.style != BorderStyle.None then
-      sb.append(renderBorderLine("top", border.top, x, y, x + width, y, theme))
-
-    // Bottom border
-    if border.bottom.style != BorderStyle.None then
-      sb.append(
-        renderBorderLine("bottom", border.bottom, x, y + height, x + width, y + height, theme)
-      )
-
-    // Left border
-    if border.left.style != BorderStyle.None then
-      sb.append(renderBorderLine("left", border.left, x, y, x, y + height, theme))
-
-    // Right border
-    if border.right.style != BorderStyle.None then
-      sb.append(renderBorderLine("right", border.right, x + width, y, x + width, y + height, theme))
-
+    edgeRuns(hEdges).foreach { case (b, c0, c1, decl) =>
+      val y = rowBoundaries(b - startRow)
+      val x1 = colBoundaries(c0 - startCol)
+      val x2 = colBoundaries(c1 + 1 - startCol)
+      if x1 != x2 then
+        val side = if decl.fromTrailing then "top" else "bottom"
+        sb.append(renderBorderLine(side, decl.side, x1, y, x2, y, theme))
+    }
+    edgeRuns(vEdges).foreach { case (b, r0, r1, decl) =>
+      val x = colBoundaries(b - startCol)
+      val y1 = rowBoundaries(r0 - startRow)
+      val y2 = rowBoundaries(r1 + 1 - startRow)
+      if y1 != y2 then
+        val side = if decl.fromTrailing then "left" else "right"
+        sb.append(renderBorderLine(side, decl.side, x, y1, x, y2, theme))
+    }
     sb.toString
+
+  /**
+   * Sorted maximal runs `(boundary, first, last, decl)` of contiguous unit edges sharing a boundary
+   * line and an identical declaration.
+   */
+  private def edgeRuns(
+    edges: scala.collection.Map[(Int, Int), EdgeDecl]
+  ): List[(Int, Int, Int, EdgeDecl)] =
+    edges.toList
+      .map { case ((b, u), decl) => (b, u, decl) }
+      .sortBy { case (b, u, _) => (b, u) }
+      .foldLeft(List.empty[(Int, Int, Int, EdgeDecl)]) {
+        case ((rb, r0, r1, rd) :: rest, (b, u, d)) if b == rb && u == r1 + 1 && d == rd =>
+          (rb, r0, u, rd) :: rest
+        case (acc, (b, u, d)) => (b, u, u, d) :: acc
+      }
+      .reverse
 
   /**
    * Render a single border line. Handles double borders specially.

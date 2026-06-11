@@ -4,7 +4,8 @@ import munit.FunSuite
 
 class ContentTypesSpec extends FunSuite:
   test("forSheetIndices emits overrides for given sheet indices") {
-    val contentTypes = ContentTypes.forSheetIndices(Seq(3, 1, 3), hasStyles = true, hasSharedStrings = false)
+    val contentTypes =
+      ContentTypes.forSheetIndices(Seq(3, 1, 3), hasStyles = true, hasSharedStrings = false)
 
     val overrides = contentTypes.overrides
     assert(overrides.contains("/xl/workbook.xml"), "Workbook override missing")

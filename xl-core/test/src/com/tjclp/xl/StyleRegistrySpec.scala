@@ -76,10 +76,10 @@ class StyleRegistrySpec extends FunSuite:
     // Two different instances with same properties
     val style1 = CellStyle.default
       .withFont(Font("Arial", 12.0, bold = true))
-      .withFill(Fill.Solid(Color.Rgb(0xFF000000)))
+      .withFill(Fill.Solid(Color.Rgb(0xff000000)))
     val style2 = CellStyle.default
       .withFont(Font("Arial", 12.0, bold = true))
-      .withFill(Fill.Solid(Color.Rgb(0xFF000000)))
+      .withFill(Fill.Solid(Color.Rgb(0xff000000)))
 
     val (r1, idx1) = StyleRegistry.default.register(style1)
     val (r2, idx2) = r1.register(style2)
@@ -92,13 +92,14 @@ class StyleRegistrySpec extends FunSuite:
     val registry = StyleRegistry.default
     assert(registry.isEmpty)
 
-    val (updated, _) = registry.register(CellStyle.default.withFont(Font("Arial", 14.0, bold = true)))
+    val (updated, _) =
+      registry.register(CellStyle.default.withFont(Font("Arial", 14.0, bold = true)))
     assert(!updated.isEmpty, "Should not be empty after adding custom style")
   }
 
   test("register preserves order") {
     val style1 = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
-    val style2 = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val style2 = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff0000)))
     val style3 = CellStyle.default.withBorder(Border.all(BorderStyle.Thick))
 
     val (r1, _) = StyleRegistry.default.register(style1)
@@ -114,7 +115,7 @@ class StyleRegistrySpec extends FunSuite:
   test("register complex style with all components") {
     val complexStyle = CellStyle(
       font = Font("Calibri", 12.0, bold = true, italic = true),
-      fill = Fill.Solid(Color.Rgb(0xFFFFCC00)),
+      fill = Fill.Solid(Color.Rgb(0xffffcc00)),
       border = Border.all(BorderStyle.Medium),
       numFmt = NumFmt.Currency,
       align = Align(HAlign.Center, VAlign.Middle, wrapText = true)

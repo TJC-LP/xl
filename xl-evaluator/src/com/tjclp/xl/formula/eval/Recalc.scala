@@ -14,8 +14,11 @@ final case class CellEvalError(
   ref: ARef,
   error: XLError
 ) derives CanEqual:
-  /** Human-readable one-liner: `Sales!B2: Formula error in '=A1/0': ...` */
-  def render: String = s"${sheet.value}!${ref.toA1}: ${error.message}"
+  /**
+   * Human-readable one-liner: `Sales!B2: Formula error in '=A1/0': ...` — GH-280: cell-ref-shaped
+   * sheet names quote (`'A1'!B2: ...`) so the location reads unambiguously.
+   */
+  def render: String = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}: ${error.message}"
 
 /**
  * Result of a total, whole-workbook recalculation (`wb.recalculate()`).

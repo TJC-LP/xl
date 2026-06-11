@@ -191,7 +191,11 @@ class CommentsSpec extends FunSuite:
     val reparsed = OoxmlComments.fromXml(encoded)
 
     assert(reparsed.isRight)
-    val comment2 = reparsed.toOption.getOrElse(fail("Expected Right")).comments.headOption.getOrElse(fail("Expected comment"))
+    val comment2 = reparsed.toOption
+      .getOrElse(fail("Expected Right"))
+      .comments
+      .headOption
+      .getOrElse(fail("Expected comment"))
     assertEquals(comment2.otherAttrs.get("futureAttr"), Some("value123"))
   }
 
@@ -213,7 +217,11 @@ class CommentsSpec extends FunSuite:
     val result = OoxmlComments.fromXml(xml)
     assert(result.isRight)
 
-    val comment = result.toOption.getOrElse(fail("Expected Right")).comments.headOption.getOrElse(fail("Expected comment"))
+    val comment = result.toOption
+      .getOrElse(fail("Expected Right"))
+      .comments
+      .headOption
+      .getOrElse(fail("Expected comment"))
     // Whitespace should be preserved
     assertEquals(comment.text.toPlainText, "  Leading and trailing spaces  ")
   }
@@ -373,10 +381,13 @@ class CommentsSpec extends FunSuite:
     val commentText = "Important note"
 
     // Create OOXML comment as writer would generate it
-    val richTextWithAuthor = com.tjclp.xl.richtext.RichText(Vector(
-      com.tjclp.xl.richtext.TextRun(s"$authorName:", Some(com.tjclp.xl.styles.font.Font.default.copy(bold = true))),
-      com.tjclp.xl.richtext.TextRun(s"\n$commentText")
-    ))
+    val richTextWithAuthor = com.tjclp.xl.richtext.RichText(
+      Vector(
+        com.tjclp.xl.richtext
+          .TextRun(s"$authorName:", Some(com.tjclp.xl.styles.font.Font.default.copy(bold = true))),
+        com.tjclp.xl.richtext.TextRun(s"\n$commentText")
+      )
+    )
 
     val ooxmlComment = OoxmlComment(
       ref = ref"A1",
@@ -404,8 +415,10 @@ class CommentsSpec extends FunSuite:
     assertEquals(domainComment.text.toPlainText, commentText)
 
     // Verify no double-prefixing after round-trip
-    assert(!domainComment.text.toPlainText.contains("John Doe:"),
-      "Author prefix should be stripped on read")
+    assert(
+      !domainComment.text.toPlainText.contains("John Doe:"),
+      "Author prefix should be stripped on read"
+    )
   }
 
   test("stripAuthorPrefix handles Excel-style CRLF author prefix") {
@@ -499,9 +512,11 @@ class CommentsSpec extends FunSuite:
       case Left(err) => fail(s"Read failed: $err")
 
     val rereadSheet = reread.sheets.headOption.getOrElse(fail("Expected sheet"))
-    val comment = rereadSheet.comments.get(ref"A1").getOrElse(
-      fail("Missing comment after round-trip")
-    )
+    val comment = rereadSheet.comments
+      .get(ref"A1")
+      .getOrElse(
+        fail("Missing comment after round-trip")
+      )
 
     assertEquals(comment.author, Some(longAuthor))
   }

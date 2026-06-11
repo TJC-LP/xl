@@ -142,8 +142,8 @@ class SurgicalSstCombineSpec extends FunSuite:
   // ========== helpers ==========
 
   private def textAt(wb: Workbook, r: ARef): Option[String] =
-    wb("Sheet1").toOption.flatMap(_.cells.get(r)).map(_.value).collect {
-      case CellValue.Text(s) => s
+    wb("Sheet1").toOption.flatMap(_.cells.get(r)).map(_.value).collect { case CellValue.Text(s) =>
+      s
     }
 
   private def containsSlice(haystack: Array[Byte], needle: Array[Byte]): Boolean =

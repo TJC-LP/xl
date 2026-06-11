@@ -132,52 +132,76 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 
     try
       // Content Types
-      writeEntry(out, "[Content_Types].xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
-</Types>""")
+</Types>"""
+      )
 
       // Root rels
-      writeEntry(out, "_rels/.rels", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>""")
+</Relationships>"""
+      )
 
       // Workbook
-      writeEntry(out, "xl/workbook.xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
     <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>""")
+</workbook>"""
+      )
 
       // Workbook rels
-      writeEntry(out, "xl/_rels/workbook.xml.rels", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-</Relationships>""")
+</Relationships>"""
+      )
 
       // Worksheet
-      writeEntry(out, "xl/worksheets/sheet1.xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
     <row r="1">
       <c r="A1" t="inlineStr"><is><t>Test</t></is></c>
     </row>
   </sheetData>
-</worksheet>""")
+</worksheet>"""
+      )
 
       // Chart (unknown part - should be preserved)
-      writeEntry(out, "xl/charts/chart1.xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/charts/chart1.xml",
+        """<?xml version="1.0"?>
 <chartSpace xmlns="http://schemas.openxmlformats.org/drawingml/2006/chart">
   <chart>
     <plotArea/>
   </chart>
-</chartSpace>""")
+</chartSpace>"""
+      )
 
     finally out.close()
 
@@ -190,43 +214,63 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 
     try
       // Content Types
-      writeEntry(out, "[Content_Types].xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-</Types>""")
+</Types>"""
+      )
 
       // Root rels
-      writeEntry(out, "_rels/.rels", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>""")
+</Relationships>"""
+      )
 
       // Workbook
-      writeEntry(out, "xl/workbook.xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
     <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>""")
+</workbook>"""
+      )
 
       // Workbook rels
-      writeEntry(out, "xl/_rels/workbook.xml.rels", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-</Relationships>""")
+</Relationships>"""
+      )
 
       // Worksheet
-      writeEntry(out, "xl/worksheets/sheet1.xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
     <row r="1">
       <c r="A1" t="inlineStr"><is><t>Test</t></is></c>
     </row>
   </sheetData>
-</worksheet>""")
+</worksheet>"""
+      )
 
     finally out.close()
 
@@ -239,40 +283,60 @@ class XlsxReaderPassthroughSpec extends FunSuite:
 
     try
       // Same structure as createMinimalWorkbookWithChart but with custom chart content
-      writeEntry(out, "[Content_Types].xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "[Content_Types].xml",
+        """<?xml version="1.0"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
   <Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>
-</Types>""")
+</Types>"""
+      )
 
-      writeEntry(out, "_rels/.rels", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "_rels/.rels",
+        """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>""")
+</Relationships>"""
+      )
 
-      writeEntry(out, "xl/workbook.xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/workbook.xml",
+        """<?xml version="1.0"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
     <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
-</workbook>""")
+</workbook>"""
+      )
 
-      writeEntry(out, "xl/_rels/workbook.xml.rels", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/_rels/workbook.xml.rels",
+        """<?xml version="1.0"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-</Relationships>""")
+</Relationships>"""
+      )
 
-      writeEntry(out, "xl/worksheets/sheet1.xml", """<?xml version="1.0"?>
+      writeEntry(
+        out,
+        "xl/worksheets/sheet1.xml",
+        """<?xml version="1.0"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
     <row r="1">
       <c r="A1" t="inlineStr"><is><t>Test</t></is></c>
     </row>
   </sheetData>
-</worksheet>""")
+</worksheet>"""
+      )
 
       // Large chart (unknown part)
       writeEntry(out, "xl/charts/chart1.xml", chartContent)

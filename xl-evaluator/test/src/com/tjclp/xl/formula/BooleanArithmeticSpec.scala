@@ -23,13 +23,13 @@ class BooleanArithmeticSpec extends FunSuite:
     entries.foldLeft(Sheet("Test")) { case (s, (ref, value)) =>
       val cv = value match
         case cv: CellValue => cv
-        case str: String   => CellValue.Text(str)
-        case n: Int        => CellValue.Number(BigDecimal(n))
-        case n: Long       => CellValue.Number(BigDecimal(n))
-        case n: Double     => CellValue.Number(BigDecimal(n))
+        case str: String => CellValue.Text(str)
+        case n: Int => CellValue.Number(BigDecimal(n))
+        case n: Long => CellValue.Number(BigDecimal(n))
+        case n: Double => CellValue.Number(BigDecimal(n))
         case n: BigDecimal => CellValue.Number(n)
-        case b: Boolean    => CellValue.Bool(b)
-        case _             => CellValue.Text(value.toString)
+        case b: Boolean => CellValue.Bool(b)
+        case _ => CellValue.Text(value.toString)
       s.put(ref, cv).unsafe
     }
 
@@ -42,8 +42,8 @@ class BooleanArithmeticSpec extends FunSuite:
       case Right(expr) =>
         Evaluator.eval(expr, sheet) match
           case Right(value: BigDecimal) => Right(value)
-          case Right(other)             => Left(s"Expected BigDecimal, got: $other")
-          case Left(err)                => Left(s"Eval error: $err")
+          case Right(other) => Left(s"Expected BigDecimal, got: $other")
+          case Left(err) => Left(s"Eval error: $err")
       case Left(err) => Left(s"Parse error: $err")
 
   // Helper for expected results
@@ -52,7 +52,7 @@ class BooleanArithmeticSpec extends FunSuite:
   ): Unit =
     evalFormula(formula) match
       case Right(value) => assertEquals(value, expected)
-      case Left(err)    => fail(s"Formula evaluation failed: $err")
+      case Left(err) => fail(s"Formula evaluation failed: $err")
 
   private def assertEval(formula: String, expected: Int)(implicit
     loc: munit.Location
@@ -64,7 +64,7 @@ class BooleanArithmeticSpec extends FunSuite:
   ): Unit =
     evalFormula(formula, sheet) match
       case Right(value) => assertEquals(value, expected)
-      case Left(err)    => fail(s"Formula evaluation failed: $err")
+      case Left(err) => fail(s"Formula evaluation failed: $err")
 
   // ===== GH-196: Boolean Arithmetic Coercion =====
 

@@ -60,6 +60,14 @@ enum CliCommand:
   case Cell(ref: String, noStyle: Boolean)
   case Search(pattern: String, limit: Int, sheetsFilter: Option[String])
   case Stats(ref: String)
+  // Row filtering with a --where predicate (GH-134, phase 1 — read-only, in-memory)
+  case Filter(
+    where: String,
+    columns: Option[String],
+    limit: Int,
+    format: FilterFormat,
+    header: Boolean
+  )
   // Analyze
   case Eval(formula: String, overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
@@ -99,6 +107,13 @@ enum CliCommand:
     newSheet: Option[String],
     noTypeInference: Boolean
   )
+  case ImportMarkdown(
+    mdPath: String, // "-" for stdin or file path
+    startRef: Option[String],
+    skipHeader: Boolean,
+    newSheet: Option[String],
+    noTypeInference: Boolean
+  )
   // Sheet management
   case AddSheet(name: String, after: Option[String], before: Option[String])
   case RemoveSheet(name: String)
@@ -124,11 +139,24 @@ enum CliCommand:
   case DeleteRows(at: Int, count: Int) // Delete `count` rows starting at 1-based row `at`
   case InsertColumns(col: String, count: Int) // Insert `count` columns before column `col`
   case DeleteColumns(col: String, count: Int) // Delete `count` columns starting at column `col`
+  // Compare two workbooks (-f vs -g); exit code 0 = identical, 1 = differs, 2 = error
+  case Diff(file2: Path, format: DiffFormat)
 
 /** Fill direction for the fill command */
 enum FillDirection derives CanEqual:
   case Down // Fill downward (default)
   case Right // Fill rightward
+
+/** Output format for the diff command */
+enum DiffFormat derives CanEqual:
+  case Markdown // Human-readable, grouped by sheet (default)
+  case Json // Stable machine-readable schema
+
+/** Output format for the filter command */
+enum FilterFormat derives CanEqual:
+  case Markdown // Table with Row column (default)
+  case Csv // RFC 4180 with a label header line
+  case Json // Array of {row, cells} objects with typed values
 
 /** Sort direction for the sort command */
 enum SortDirection derives CanEqual:

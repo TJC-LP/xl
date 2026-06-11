@@ -9,11 +9,9 @@ import munit.FunSuite
 /**
  * Comprehensive tests for statistical functions: MEDIAN, STDEV, STDEVP, VAR, VARP.
  *
- * MEDIAN - Returns the middle value in a sorted list
- * STDEV  - Sample standard deviation (divides by n-1)
- * STDEVP - Population standard deviation (divides by n)
- * VAR    - Sample variance (divides by n-1)
- * VARP   - Population variance (divides by n)
+ * MEDIAN - Returns the middle value in a sorted list STDEV - Sample standard deviation (divides by
+ * n-1) STDEVP - Population standard deviation (divides by n) VAR - Sample variance (divides by n-1)
+ * VARP - Population variance (divides by n)
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class StatisticalFunctionsSpec extends FunSuite:
@@ -27,8 +25,12 @@ class StatisticalFunctionsSpec extends FunSuite:
     }
 
   /** Helper to assert approximate equality for floating point results */
-  def assertApprox(result: Either[EvalError, BigDecimal], expected: Double, tolerance: Double = 0.001)(
-      implicit loc: munit.Location
+  def assertApprox(
+    result: Either[EvalError, BigDecimal],
+    expected: Double,
+    tolerance: Double = 0.001
+  )(implicit
+    loc: munit.Location
   ): Unit =
     result match
       case Right(value) =>

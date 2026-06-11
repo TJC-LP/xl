@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
-import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, ArrayArithmetic}
+import com.tjclp.xl.formula.ast.{TExpr, ExprValue, BindingCoercion}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, ArrayArithmetic, ScalarCoercion}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -158,10 +158,29 @@ trait FunctionSpecsBase:
       case ExprValue.DateTime(dt) => CellValue.DateTime(dt)
       case ExprValue.Opaque(other) => CellValue.Text(other.toString)
 
-  protected def toInt(value: ExprValue): Int =
-    value match
-      case ExprValue.Number(n) => n.toInt
-      case _ => 0
+  /**
+   * GH-307: total integer-argument extraction for ExprValue-evaluated arguments (EDATE/EOMONTH
+   * months, WORKDAY days, YEARFRAC basis, XLOOKUP modes).
+   *
+   * Replaces the silent `toInt` (non-numeric → 0 → garbage results). Conventions come from the
+   * shared ScalarCoercion Integer table: fractionals TRUNCATE toward zero (Excel truncates
+   * months/days), numeric text parses ("3" → 3), booleans are TRUE = 1 / FALSE = 0, anything else
+   * is a clean per-cell error naming the function (Excel: #VALUE!).
+   */
+  protected def toIntArg(fnName: String, value: ExprValue): Either[EvalError, Int] =
+    val raw = value match
+      case ExprValue.Number(n) => n
+      case ExprValue.Text(s) => s
+      case ExprValue.Bool(b) => b
+      case ExprValue.Date(d) => d
+      case ExprValue.DateTime(dt) => dt
+      case ExprValue.Cell(cv) => cv
+      case ExprValue.Opaque(other) => other
+    ScalarCoercion.coerce(s"$fnName integer argument", raw, BindingCoercion.Integer).flatMap {
+      case i: Int => Right(i)
+      case other =>
+        Left(EvalError.TypeMismatch(s"$fnName integer argument", "integer", s"$other"))
+    }
 
   protected def coerceToNumeric(value: CellValue): BigDecimal =
     value match

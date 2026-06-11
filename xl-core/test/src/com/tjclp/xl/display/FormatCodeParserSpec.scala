@@ -46,7 +46,7 @@ class FormatCodeParserSpec extends FunSuite:
 
     val hasLiteralDollar = code.positive.pattern.tokens.exists {
       case FormatToken.Literal("$") => true
-      case _                        => false
+      case _ => false
     }
     assert(hasLiteralDollar, "Should have literal dollar sign")
   }
@@ -59,7 +59,7 @@ class FormatCodeParserSpec extends FunSuite:
 
     val hasOpenParen = code.negative.get.pattern.tokens.exists {
       case FormatToken.Literal("(") => true
-      case _                        => false
+      case _ => false
     }
     assert(hasOpenParen, "Negative section should have parenthesis")
   }
@@ -109,7 +109,7 @@ class FormatCodeParserSpec extends FunSuite:
 
     val hasSpacer = code.positive.pattern.tokens.exists {
       case FormatToken.Spacer(')') => true
-      case _                       => false
+      case _ => false
     }
     assert(hasSpacer, "Should have spacer token")
   }
@@ -121,7 +121,7 @@ class FormatCodeParserSpec extends FunSuite:
 
     val hasLiteralDollar = code.positive.pattern.tokens.exists {
       case FormatToken.Literal("$") => true
-      case _                        => false
+      case _ => false
     }
     assert(hasLiteralDollar, "Should have escaped literal dollar")
   }
@@ -142,7 +142,7 @@ class FormatCodeParserSpec extends FunSuite:
 
     val hasAmPm = code.positive.pattern.tokens.exists {
       case FormatToken.AmPm(_) => true
-      case _                   => false
+      case _ => false
     }
     assert(hasAmPm, "Should have AM/PM token")
   }
@@ -406,7 +406,9 @@ class FormatCodeParserSpec extends FunSuite:
   //     undocumented (MS docs and major guides define no such case) and SSF's
   //     Excel-validated routing always resolves to a section
 
-  test("conditional routing: [>100]#,##0;[<=0]0.00;0.0 — first match wins, else fallback (GH-285)") {
+  test(
+    "conditional routing: [>100]#,##0;[<=0]0.00;0.0 — first match wins, else fallback (GH-285)"
+  ) {
     val code = FormatCodeParser.parse("[>100]#,##0;[<=0]0.00;0.0").toOption.get
     assertEquals(FormatCodeParser.applyFormat(BigDecimal(250), code)._1, "250")
     assertEquals(FormatCodeParser.applyFormat(BigDecimal(-5), code)._1, "5.00")
@@ -414,7 +416,9 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(FormatCodeParser.applyFormat(BigDecimal(50), code)._1, "50.0")
   }
 
-  test("conditional routing: [>100]0;0.0 — unconditioned second section is the else branch (GH-285)") {
+  test(
+    "conditional routing: [>100]0;0.0 — unconditioned second section is the else branch (GH-285)"
+  ) {
     val code = FormatCodeParser.parse("[>100]0;0.0").toOption.get
     assertEquals(FormatCodeParser.applyFormat(BigDecimal(250), code)._1, "250")
     assertEquals(FormatCodeParser.applyFormat(BigDecimal(50), code)._1, "50.0")
@@ -430,7 +434,9 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(FormatCodeParser.applyFormat(BigDecimal(-3), code), ("3", Some("Red")))
   }
 
-  test("conditional routing: both conditions unmatched, no third section → first pattern (GH-285)") {
+  test(
+    "conditional routing: both conditions unmatched, no third section → first pattern (GH-285)"
+  ) {
     // SSF pads 2 sections to [s1, s2, s1], so the no-match fallback is the FIRST
     // section's pattern (its condition ignored). No ###### — see block comment.
     val code = FormatCodeParser.parse("[>100]0;[<0]0.00").toOption.get
@@ -529,7 +535,10 @@ class FormatCodeParserSpec extends FunSuite:
   }
 
   test("formatNumber: serial with a date code still renders the date (GH-283 regression)") {
-    assertEquals(NumFmtFormatter.formatNumber(BigDecimal(45982), NumFmt.Custom("m/d/yy")), "11/21/25")
+    assertEquals(
+      NumFmtFormatter.formatNumber(BigDecimal(45982), NumFmt.Custom("m/d/yy")),
+      "11/21/25"
+    )
     assertEquals(
       NumFmtFormatter.formatNumber(BigDecimal("0.5"), NumFmt.Custom("h:mm AM/PM")),
       "12:00 PM"
@@ -648,7 +657,10 @@ class FormatCodeParserSpec extends FunSuite:
     val numCode = FormatCodeParser.parse("#,##0.00").toOption.get
 
     assert(FormatCodeParser.hasDateTokens(dateCode), "Should detect date tokens")
-    assert(!FormatCodeParser.hasDateTokens(numCode), "Should not detect date tokens in number format")
+    assert(
+      !FormatCodeParser.hasDateTokens(numCode),
+      "Should not detect date tokens in number format"
+    )
   }
 
   // ========== Syndigo Real-World Formats ==========
@@ -720,7 +732,9 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(NumFmtFormatter.formatNumber(BigDecimal("3.14159"), NumFmt.Fraction), "3 1/7")
   }
 
-  test("NumFmt.Fraction: 0.3 → ' 2/7' — double of 0.3 sits below 3/10 so the CF path differs from 12.3 (GH-243)") {
+  test(
+    "NumFmt.Fraction: 0.3 → ' 2/7' — double of 0.3 sits below 3/10 so the CF path differs from 12.3 (GH-243)"
+  ) {
     assertEquals(NumFmtFormatter.formatNumber(BigDecimal("0.3"), NumFmt.Fraction), " 2/7")
   }
 
@@ -863,7 +877,10 @@ class FormatCodeParserSpec extends FunSuite:
 
   test("fraction totality: custom # ?/? with 1E400 renders the whole form, no throw (GH-243)") {
     val expected = "1" + "0" * 400 + "    "
-    assertEquals(NumFmtFormatter.formatNumber(BigDecimal("1E400"), NumFmt.Custom("# ?/?")), expected)
+    assertEquals(
+      NumFmtFormatter.formatNumber(BigDecimal("1E400"), NumFmt.Custom("# ?/?")),
+      expected
+    )
   }
 
   test("fraction totality: # ??/?? with -1E400 keeps the default minus, no throw (GH-243)") {

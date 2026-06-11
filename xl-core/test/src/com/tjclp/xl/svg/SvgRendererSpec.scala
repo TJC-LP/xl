@@ -210,7 +210,10 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:A1", showLabels = true)
 
     // With showLabels=true: HeaderWidth (40) + CellPaddingX (6) + indent (21) = 67
-    assert(svg.contains("""x="67""""), s"Text should be at x=67 with indent=1 and labels, got: $svg")
+    assert(
+      svg.contains("""x="67""""),
+      s"Text should be at x=67 with indent=1 and labels, got: $svg"
+    )
   }
 
   test("toSvg: indent 0 uses default padding") {
@@ -467,8 +470,14 @@ class SvgRendererSpec extends FunSuite:
       .put(ref"A1" -> "First Second Third Fourth Fifth")
       .unsafe
       .withCellStyle(ref"A1", wrapStyle)
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(6.0))) // very narrow ~47px
-      .setRowProperties(Row.from0(0), RowProperties(height = Some(60.0))) // tall row for wrapped text
+      .setColumnProperties(
+        Column.from0(0),
+        ColumnProperties(width = Some(6.0))
+      ) // very narrow ~47px
+      .setRowProperties(
+        Row.from0(0),
+        RowProperties(height = Some(60.0))
+      ) // tall row for wrapped text
 
     val svg = sheet.toSvg(ref"A1:A1")
 
@@ -908,7 +917,10 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:A1")
 
     // Should use the background color (#C8C8C8 = 200,200,200)
-    assert(svg.contains("""fill="#C8C8C8""""), s"Pattern fill should use background color, got: $svg")
+    assert(
+      svg.contains("""fill="#C8C8C8""""),
+      s"Pattern fill should use background color, got: $svg"
+    )
   }
 
   test("toSvg: pattern fill does not render as white") {
@@ -929,10 +941,15 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:A1")
 
     // Should not render as white (the old bug behavior)
-    assert(!svg.contains("""fill="#FFFFFF"""") || svg.contains("""fill="#0080FF""""),
-      s"Pattern fill should not be white, should be blue #0080FF, got: $svg")
+    assert(
+      !svg.contains("""fill="#FFFFFF"""") || svg.contains("""fill="#0080FF""""),
+      s"Pattern fill should not be white, should be blue #0080FF, got: $svg"
+    )
     // Should use the background color
-    assert(svg.contains("""fill="#0080FF""""), s"Pattern fill should use blue background, got: $svg")
+    assert(
+      svg.contains("""fill="#0080FF""""),
+      s"Pattern fill should use blue background, got: $svg"
+    )
   }
 
   test("toSvg: solid fill still works correctly") {
@@ -974,19 +991,26 @@ class SvgRendererSpec extends FunSuite:
     assert(svg.contains("<defs>"), "Should have defs section")
     assert(svg.contains("</defs>"), "Should close defs section")
 
-    // Should have clip paths for both cells
-    assert(svg.contains("""<clipPath id="clip-0-0">"""), "Should have clip path for A1")
-    assert(svg.contains("""<clipPath id="clip-72-0">"""), "Should have clip path for B1")
+    // Should have clip paths for both cells, keyed by cell ref (GH-298: pixel-keyed ids
+    // collide when hidden rows/cols collapse positions)
+    assert(svg.contains("""<clipPath id="clip-A1">"""), "Should have clip path for A1")
+    assert(svg.contains("""<clipPath id="clip-B1">"""), "Should have clip path for B1")
 
     // Text elements should reference their clip paths
-    assert(svg.contains("""clip-path="url(#clip-0-0)">Sales Report</text>"""),
-      s"A1 text should have clip-path attribute, got: $svg")
-    assert(svg.contains("""clip-path="url(#clip-72-0)">Revenue</text>"""),
-      s"B1 text should have clip-path attribute, got: $svg")
+    assert(
+      svg.contains("""clip-path="url(#clip-A1)">Sales Report</text>"""),
+      s"A1 text should have clip-path attribute, got: $svg"
+    )
+    assert(
+      svg.contains("""clip-path="url(#clip-B1)">Revenue</text>"""),
+      s"B1 text should have clip-path attribute, got: $svg"
+    )
 
     // Clip path for A1 should be cell width only (72px) since B1 is not empty
-    assert(svg.contains("""<clipPath id="clip-0-0"><rect x="0" y="0" width="72" height="20"/>"""),
-      s"A1 clip should be 72px (single cell), got: $svg")
+    assert(
+      svg.contains("""<clipPath id="clip-A1"><rect x="0" y="0" width="72" height="20"/>"""),
+      s"A1 clip should be 72px (single cell), got: $svg"
+    )
   }
 
   test("toSvg: text can overflow into empty cells with expanded clip region") {
@@ -997,14 +1021,16 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:C1")
 
     // Should have clip path for A1
-    assert(svg.contains("""<clipPath id="clip-0-0">"""), "Should have clip path for A1")
+    assert(svg.contains("""<clipPath id="clip-A1">"""), "Should have clip path for A1")
 
     // Clip region should be expanded to allow overflow into empty B1
     // Width should be >72px (at least 2 cells = 144px)
-    val clipPattern = """<clipPath id="clip-0-0"><rect x="0" y="0" width="(\d+)" """.r
+    val clipPattern = """<clipPath id="clip-A1"><rect x="0" y="0" width="(\d+)" """.r
     val widthOpt = clipPattern.findFirstMatchIn(svg).map(_.group(1).toInt)
-    assert(widthOpt.exists(_ >= 144),
-      s"Clip region should be ≥144px for overflow into empty cells, got: ${widthOpt.getOrElse(0)}")
+    assert(
+      widthOpt.exists(_ >= 144),
+      s"Clip region should be ≥144px for overflow into empty cells, got: ${widthOpt.getOrElse(0)}"
+    )
   }
 
   test("toSvg: all cells have clip paths in defs section") {
@@ -1027,10 +1053,14 @@ class SvgRendererSpec extends FunSuite:
     // All clip paths should appear before </defs>
     val firstClipPath = svg.indexOf("""<clipPath""")
     val lastClipPath = svg.lastIndexOf("""</clipPath>""")
-    assert(firstClipPath > defsStart && firstClipPath < defsEnd,
-      "Clip paths should be inside defs section")
-    assert(lastClipPath > defsStart && lastClipPath < defsEnd,
-      "All clip paths should be inside defs section")
+    assert(
+      firstClipPath > defsStart && firstClipPath < defsEnd,
+      "Clip paths should be inside defs section"
+    )
+    assert(
+      lastClipPath > defsStart && lastClipPath < defsEnd,
+      "All clip paths should be inside defs section"
+    )
   }
 
   test("toSvg: defs section appears before cells group") {
@@ -1040,8 +1070,10 @@ class SvgRendererSpec extends FunSuite:
     val defsIdx = svg.indexOf("<defs>")
     val cellsIdx = svg.indexOf("""<g class="cells">""")
 
-    assert(defsIdx < cellsIdx,
-      s"Defs section should appear before cells group, defs at $defsIdx, cells at $cellsIdx")
+    assert(
+      defsIdx < cellsIdx,
+      s"Defs section should appear before cells group, defs at $defsIdx, cells at $cellsIdx"
+    )
   }
 
   // ========== Date Formatting (TJC-742 regression) ==========
@@ -1154,14 +1186,11 @@ class SvgRendererSpec extends FunSuite:
     assert(math.abs(svgH - htmlH) <= 1, s"Height parity: svg=$svgH html=$htmlH")
   }
 
-  test("toSvg: shared-edge borders are both drawn overlapping — documents current behavior (GH-47)") {
+  test("toSvg: shared-edge borders resolve to the heavier border (GH-298)") {
     import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
     // A1 right=Thick vs B1 left=Thin meet at the same grid edge (x=72).
-    // CURRENT behavior (pinned here): each cell draws its own border, so BOTH <line> elements
-    // land at identical coordinates in deterministic cell order — A1's thick line first, B1's
-    // thin line second. SVG painter's order means the later thin line paints on top.
-    // Excel instead resolves shared edges to the heavier border (thick should win) — known
-    // fidelity gap; fixing it needs a shared-edge resolution pass, not done here.
+    // Excel resolves shared edges to the heavier border: exactly ONE line is emitted
+    // and the thick declaration (A1) wins over the thin one (B1).
     val thickRight = CellStyle.default.withBorder(
       Border.none.withRight(BorderSide(BorderStyle.Thick, Some(Color.fromRgb(0, 0, 0))))
     )
@@ -1180,13 +1209,70 @@ class SvgRendererSpec extends FunSuite:
     val edgeLines = """<line x1="72\.0" y1="0\.0" x2="72\.0" y2="20\.0"[^>]*/>""".r
       .findAllIn(svg)
       .toList
-    val widths = edgeLines.flatMap(l =>
-      """stroke-width="(\d+)"""".r.findFirstMatchIn(l).map(_.group(1).toInt)
-    )
+    val widths =
+      edgeLines.flatMap(l => """stroke-width="(\d+)"""".r.findFirstMatchIn(l).map(_.group(1).toInt))
     assertEquals(
       widths,
-      List(3, 1),
-      s"Both cells draw the shared edge, thick (A1) before thin (B1), got: $svg"
+      List(3),
+      s"Shared edge must emit exactly one line with the heavier (thick) border, got: $svg"
+    )
+  }
+
+  test("toSvg: shared-edge weight tie resolves to the trailing (right) cell (GH-298)") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    // Equal weight (both Thin) but different colors: the right/bottom cell's declaration
+    // wins ties, matching Excel's drawing order. B1's blue left border must paint x=72.
+    val thinRedRight = CellStyle.default.withBorder(
+      Border.none.withRight(BorderSide(BorderStyle.Thin, Some(Color.fromRgb(255, 0, 0))))
+    )
+    val thinBlueLeft = CellStyle.default.withBorder(
+      Border.none.withLeft(BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 255))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "L", ref"B1" -> "R")
+      .unsafe
+      .withCellStyle(ref"A1", thinRedRight)
+      .withCellStyle(ref"B1", thinBlueLeft)
+
+    val svg = sheet.toSvg(ref"A1:B1")
+
+    val edgeLines = """<line x1="72\.0" y1="0\.0" x2="72\.0" y2="20\.0"[^>]*/>""".r
+      .findAllIn(svg)
+      .toList
+    assertEquals(edgeLines.length, 1, s"Tie must still emit exactly one line, got: $svg")
+    assert(
+      edgeLines.forall(_.contains("""stroke="#0000FF"""")),
+      s"Tie must resolve to the right cell's (blue) declaration, got: $svg"
+    )
+  }
+
+  test("toSvg: horizontal shared edge resolves to the heavier border (GH-298)") {
+    import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
+    // A1 bottom=Thin vs A2 top=Medium share the edge y=20: medium (weight class above
+    // thin) must win and exactly one line is emitted there.
+    val thinBottom = CellStyle.default.withBorder(
+      Border.none.withBottom(BorderSide(BorderStyle.Thin, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val mediumTop = CellStyle.default.withBorder(
+      Border.none.withTop(BorderSide(BorderStyle.Medium, Some(Color.fromRgb(0, 0, 0))))
+    )
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Up", ref"A2" -> "Down")
+      .unsafe
+      .withCellStyle(ref"A1", thinBottom)
+      .withCellStyle(ref"A2", mediumTop)
+
+    val svg = sheet.toSvg(ref"A1:A2")
+
+    val edgeLines = """<line x1="0\.0" y1="20\.0" x2="72\.0" y2="20\.0"[^>]*/>""".r
+      .findAllIn(svg)
+      .toList
+    val widths =
+      edgeLines.flatMap(l => """stroke-width="(\d+)"""".r.findFirstMatchIn(l).map(_.group(1).toInt))
+    assertEquals(
+      widths,
+      List(2),
+      s"Shared horizontal edge must emit exactly one medium line, got: $svg"
     )
   }
 
@@ -1217,4 +1303,25 @@ class SvgRendererSpec extends FunSuite:
     // Text in hidden cells must not leak into the output
     assert(!svg.contains("Invisible"), s"Hidden cell text must not render, got: $svg")
     assert(svg.endsWith("</svg>"), "SVG should be closed")
+  }
+
+  test("toSvg: clipPath ids are unique even when hidden cells share pixel positions (GH-298)") {
+    // All rows/cols hidden: every cell collapses to pixel position (0,0). Pixel-keyed clip
+    // ids produced N identical id="clip-0-0" entries — invalid SVG (duplicate ids). Ids are
+    // now keyed by cell ref, which is unique by construction.
+    val sheet = Sheet("Test")
+      .put(ref"A1" -> "Invisible")
+      .setColumnProperties(Column.from0(0), ColumnProperties(hidden = true))
+      .setColumnProperties(Column.from0(1), ColumnProperties(hidden = true))
+      .setRowProperties(Row.from0(0), RowProperties(hidden = true))
+      .setRowProperties(Row.from0(1), RowProperties(hidden = true))
+
+    val svg = sheet.toSvg(ref"A1:B2")
+
+    val ids = """<clipPath id="([^"]+)"""".r.findAllMatchIn(svg).map(_.group(1)).toList
+    // B1 is absent: A1's text overflow covers the empty B1, which is skipped entirely
+    // (pre-existing overflow behavior, orthogonal to id uniqueness)
+    assertEquals(ids, List("clip-A1", "clip-A2", "clip-B2"))
+    assertEquals(ids.distinct, ids, s"Duplicate clipPath ids in: $svg")
+    assert(ids.forall(_.matches("clip-[A-Z]+\\d+")), s"Clip ids must be ref-keyed, got: $ids")
   }

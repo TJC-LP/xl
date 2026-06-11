@@ -99,6 +99,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `cell` | `<ref> [--no-style]` | Get single cell details |
 | `search` | `<pattern> [--limit n] [--sheets a,b]` | Find cells matching pattern (regex, all sheets by default) |
 | `stats` | `<range>` | Statistics for numeric values in range |
+| `filter` | `--where <pred> [--columns A,C:E] [--limit n] [--format md\|csv\|json] [--header]` | Show rows matching a predicate (read-only) |
 | `eval` | `<formula> [--with overrides]` | Evaluate formula without modifying |
 | `evala` | `<formula> [--at <ref>] [--with overrides]` | Evaluate array formula; display or spill result grid |
 | `put` | `<ref\|range> <value...> [--csv]` | Write value(s) to cell or range (requires `-o`) |
@@ -118,6 +119,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `freeze` | `<ref>` | Freeze panes at cell (requires `-o`) |
 | `unfreeze` | | Remove freeze panes (requires `-o`) |
 | `import` | `<csv-file> [start-ref] [options]` | Import CSV with type detection (requires `-o`) |
+| `import-md` | `<md-file\|-> [--start ref] [options]` | Import GFM markdown table with type detection (requires `-o`) |
 | `add-sheet` | `<name> [--after s] [--before s]` | Add new empty sheet (requires `-o`) |
 | `remove-sheet` | `<name>` | Remove sheet (requires `-o`) |
 | `rename-sheet` | `<name> <new-name>` | Rename sheet (requires `-o`) |
@@ -128,6 +130,7 @@ xl rasterizers                                     # List available PNG/PDF back
 | `insert-cols` | `<at-col> [count]` | Insert columns; shifts cells, rewrites formulas (requires `-o`) |
 | `delete-cols` | `<at-col> [count]` | Delete columns; `#REF!` on lost references (requires `-o`) |
 | `batch` | `<file\|-> [--dry-run]` | Apply multiple operations from JSON (requires `-o`; `--dry-run` validates without a file) |
+| `diff` | `-g <file2> [--format markdown\|json]` | Compare two workbooks; exit 0 identical, 1 differs, 2 error |
 
 ---
 
@@ -201,7 +204,7 @@ View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG
 | `--raster-output` | path | For raster | — | Output file (required for png/jpeg/webp/pdf) |
 | `--dpi` | int | No | 144 | Resolution for raster output |
 | `--quality` | int | No | 90 | JPEG quality 1-100 |
-| `--rasterizer` | string | No | auto | Force backend: batik, cairosvg, rsvg-convert, resvg, imagemagick |
+| `--rasterizer` | string | No | batik | PNG/JPEG export uses Apache Batik by default (pure JVM, no external tools). Force another backend: cairosvg, rsvg-convert, resvg, imagemagick (explicit opt-in since 0.11.3) |
 | `--gridlines` | flag | No | false | Show cell gridlines in SVG output |
 | `--print-scale` | flag | No | false | Apply print scaling (for PDF-like output) |
 
@@ -312,6 +315,47 @@ Calculate statistics (count, sum, min, max, average, ...) for numeric values in 
 xl -f data.xlsx -s Sheet1 stats B2:B10000
 xl -f huge.xlsx --stream stats A1:E100000
 ```
+
+---
+
+### `xl filter --where <predicate> [options]`
+
+Show rows of the used range matching a predicate. Read-only (no `-o`); phase 1 of GH-134 — predicate filtering only, no SQL-style SELECT/GROUP BY.
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `--where` | string | Yes | — | Filter predicate (grammar below) |
+| `--columns` | string | No | all used | Output columns, e.g. `A,C:E` |
+| `--limit` | int | No | 50 | Max matching rows to display |
+| `--format` | string | No | markdown | `markdown`, `csv`, or `json` |
+| `--header` | flag | No | false | First used row holds column names (excluded from matching) |
+
+**Predicate grammar** (keywords case-insensitive; `NOT` > `AND` > `OR`, parens allowed):
+
+| Form | Example |
+|------|---------|
+| Comparison (`=` `!=` `<>` `>` `>=` `<` `<=`) | `B > 100`, `A = 'Widget'`, `C = TRUE` |
+| Wildcard match (`%` only) | `A LIKE 'Widget%'` |
+| Inclusive range | `B BETWEEN 10 AND 100` |
+| Set membership | `A IN ('x', 'y', 'z')` |
+| Blank test | `A IS EMPTY`, `A IS NOT EMPTY` |
+
+**Semantics**:
+- Column refs are letters (`A`, `B`) or, with `--header`, header names from the first used row (case-insensitive; header names win over letters on collision)
+- Numbers compare numerically, strings case-insensitively, booleans against `TRUE`/`FALSE`
+- Type mismatch (e.g. text cell vs number literal) means the row doesn't match — never an error
+- Formula cells compare by their cached value; `IS EMPTY` is true for missing cells, empty cells, and blank text
+
+```bash
+xl -f sales.xlsx -s Q1 filter --where "Revenue > 10000 AND Region = 'EMEA'" --header
+xl -f data.xlsx -s Sheet1 filter --where "A LIKE 'Widget%'" --columns A,C:E --format csv
+xl -f data.xlsx -s Sheet1 filter --where "B BETWEEN 10 AND 99" --format json
+```
+
+**Output**: matching rows keep their original row numbers. Markdown adds a `Row` column and a match-count footer; CSV starts with a `row,<labels>` header line; JSON is an array of `{"row": n, "cells": {<label>: <typed value>}}` objects (labels are header names with `--header`, letters otherwise).
+
+**Limitations**: loads the workbook in memory (`--max-size` envelope applies); `--stream` is not supported. No date literals in predicates yet.
 
 ---
 
@@ -640,6 +684,35 @@ xl -f f.xlsx -o o.xlsx import data.csv --new-sheet "Imported"
 
 ---
 
+### `xl import-md <md-file|-> [--start ref] [options]`
+
+Import a GFM (GitHub Flavored Markdown) pipe table with smart type detection. Use `-` to read from stdin — handy for LLM agents that generate tables inline.
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `md-file` | string | Yes | — | Markdown file path, or `-` for stdin |
+| `--start` | string | No | A1 | Top-left cell for the imported table |
+| `--skip-header` | flag | No | false | Skip the table's header row (do not import) |
+| `--new-sheet` | string | No | — | Create new sheet for imported data |
+| `--no-type-inference` | flag | No | false | Treat all values as text |
+
+```bash
+xl -f f.xlsx -s S1 -o o.xlsx import-md table.md --start B2
+xl -f f.xlsx -o o.xlsx import-md table.md --new-sheet "Data"
+printf '| A | B |\n|---|---|\n| 1 | 2 |\n' | xl -f f.xlsx -s S1 -o o.xlsx import-md -
+```
+
+**Table format** (GFM): header row, delimiter row (`|---|---|`), body rows. The first table found in the input is imported (preamble prose is skipped); the table ends at the first blank line. Outer pipes are optional, `\|` inside a cell is a literal pipe, and cell whitespace is trimmed. Body rows are padded/truncated to the delimiter row's column count.
+
+**Type detection** (per cell, same smart detection as batch `put`): currency `$1,234.56` → Number + Currency format, percent `45.5%` → `0.455` + Percent format, ISO dates `2025-01-15` → date-formatted cell, plain numbers and `true`/`false` → typed values, everything else → text. Opt out with `--no-type-inference`.
+
+**Alignment**: GFM markers map to cell horizontal alignment — `:---` left, `:---:` center, `---:` right (no marker leaves alignment unset).
+
+**Limitations**: input is read as UTF-8 and parsed in memory; one table per import (first wins).
+
+---
+
 ### Sheet management: `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`
 
 ```bash
@@ -859,6 +932,56 @@ EOF
 | Percent as decimal | `"59.4%"` stored as `0.594` | Excel displays correctly with percent format |
 | Invalid custom formats | Accepted but may render incorrectly in Excel | Test format codes in Excel first |
 | `--stream` mode | Supports formula dragging but not formula evaluation | Use non-streaming for `--eval` |
+
+---
+
+### `xl diff -g <file2> [--format markdown|json]`
+
+Compare two workbooks and report differences. The first file comes from the global `-f`, the second from `-g/--file2`. Optional global `-s/--sheet` restricts the comparison to one sheet.
+
+**Arguments**:
+| Arg | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `-g, --file2` | path | Yes | — | Second file to compare against |
+| `--format` | string | No | markdown | `markdown` (human) or `json` (stable schema) |
+
+**Exit codes** (diff-tool convention): `0` identical, `1` differences found, `2` error.
+
+**What is compared** (per sheet, refs in A1, row-major order):
+- **Changed cells** — value, formula text, and resolved style (`styleChanged` boolean). Formula cells compare by formula text; cached values are derived and ignored. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference.
+- **Added / removed cells** — a cell with Empty value, default style, and no hyperlink counts as absent.
+- **Sheets added / removed** (by name).
+- **Merged ranges, comments, hyperlinks** — separate added/removed/changed deltas per sheet.
+
+```bash
+xl -f old.xlsx diff -g new.xlsx                      # Markdown report
+xl -f old.xlsx -s Sheet1 diff -g new.xlsx            # One sheet only
+xl -f old.xlsx diff -g new.xlsx --format json        # Machine-readable
+xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
+```
+
+**JSON schema** (stable; `sheets` lists only sheets with differences):
+
+```json
+{
+  "identical": false,
+  "sheetsAdded": [], "sheetsRemoved": [],
+  "sheets": [{
+    "name": "Sheet1",
+    "added":   [{"ref": "D5", "value": "New", "formula": null}],
+    "removed": [{"ref": "E5", "value": "Old", "formula": null}],
+    "changed": [{"ref": "A5",
+                 "before": {"value": "Revenue", "formula": null},
+                 "after":  {"value": "Total Revenue", "formula": null},
+                 "styleChanged": false}],
+    "mergesAdded": [], "mergesRemoved": [],
+    "commentsAdded": [], "commentsRemoved": [], "commentsChanged": [],
+    "hyperlinksAdded": [], "hyperlinksRemoved": [], "hyperlinksChanged": []
+  }]
+}
+```
+
+**Limitations**: both workbooks load in memory (`--max-size` applies to each); no range-level filter yet.
 
 ---
 

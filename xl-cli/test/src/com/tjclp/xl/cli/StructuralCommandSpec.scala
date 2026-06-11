@@ -85,7 +85,10 @@ class StructuralCommandSpec extends CatsEffectSuite:
       read <- excel.read(in)
       _ <- WriteCommands.insertColumns(read, read.sheets.headOption, "B", 1, out, config)
       result <- excel.read(out)
-    yield assertEquals(result.sheets.head(ref"A2").value, CellValue.Formula("=D1", None)) // C1 -> D1
+    yield assertEquals(
+      result.sheets.head(ref"A2").value,
+      CellValue.Formula("=D1", None)
+    ) // C1 -> D1
   }
 
   test("delete-cols: range form C:E removes the whole span (GH-129)") {
@@ -148,7 +151,9 @@ class StructuralCommandSpec extends CatsEffectSuite:
     for
       _ <- excel.write(wb, in)
       read <- excel.read(in)
-      r1 <- WriteCommands.deleteColumns(read, read.sheets.headOption, "C:E:F", 1, out, config).attempt
+      r1 <- WriteCommands
+        .deleteColumns(read, read.sheets.headOption, "C:E:F", 1, out, config)
+        .attempt
       r2 <- WriteCommands.deleteColumns(read, read.sheets.headOption, "C:", 1, out, config).attempt
     yield
       assert(r1.isLeft) // three-part range

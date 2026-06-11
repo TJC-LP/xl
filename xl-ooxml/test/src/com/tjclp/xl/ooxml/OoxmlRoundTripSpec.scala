@@ -27,7 +27,8 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   override def afterAll(): Unit =
     // Clean up temp files
-    Files.walk(tempDir)
+    Files
+      .walk(tempDir)
       .sorted(java.util.Comparator.reverseOrder())
       .forEach(Files.delete)
 
@@ -53,13 +54,15 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Workbook with text cells") {
     val initial = Workbook("Data")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("Hello"))
       .put(ref"B1", CellValue.Text("World"))
       .put(ref"A2", CellValue.Text("Scala"))
       .put(ref"B2", CellValue.Text("Excel"))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Round-trip
     val outputPath = tempDir.resolve("text-cells.xlsx")
@@ -77,12 +80,14 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Workbook with number cells") {
     val initial = Workbook("Numbers")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Number(BigDecimal(42)))
       .put(ref"A2", CellValue.Number(BigDecimal(3.14159)))
       .put(ref"A3", CellValue.Number(BigDecimal(-100)))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Round-trip
     val outputPath = tempDir.resolve("numbers.xlsx")
@@ -101,11 +106,13 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Workbook with boolean cells") {
     val initial = Workbook("Bools")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Bool(true))
       .put(ref"A2", CellValue.Bool(false))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Round-trip
     val outputPath = tempDir.resolve("booleans.xlsx")
@@ -123,7 +130,8 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Workbook with mixed cell types") {
     val initial = Workbook("Mixed")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("Name"))
       .put(ref"B1", CellValue.Text("Age"))
       .put(ref"C1", CellValue.Text("Active"))
@@ -134,7 +142,8 @@ class OoxmlRoundTripSpec extends FunSuite:
       .put(ref"B3", CellValue.Number(BigDecimal(25)))
       .put(ref"C3", CellValue.Bool(false))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Round-trip
     val outputPath = tempDir.resolve("mixed.xlsx")
@@ -157,7 +166,9 @@ class OoxmlRoundTripSpec extends FunSuite:
 
     val wb2 = initial.put(Sheet("Sheet2"))
     val wb3 = wb2.update(wb2.sheets(0).name, _ => sheet1).getOrElse(fail("Should update sheet1"))
-    val wb = wb3.update(wb3.sheets(1).name, _ => wb3.sheets(1).put(ref"A1", CellValue.Text("Second"))).getOrElse(fail("Should update sheet2"))
+    val wb = wb3
+      .update(wb3.sheets(1).name, _ => wb3.sheets(1).put(ref"A1", CellValue.Text("Second")))
+      .getOrElse(fail("Should update sheet2"))
 
     // Round-trip
     val outputPath = tempDir.resolve("multi-sheet.xlsx")
@@ -181,7 +192,8 @@ class OoxmlRoundTripSpec extends FunSuite:
       s.put(ARef(Column.from0(0), row), CellValue.Text("Repeated"))
         .put(ARef(Column.from0(1), row), CellValue.Text("Value"))
     }
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     // Verify SST would be used
     assert(SharedStrings.shouldUseSST(wb), "SST should be beneficial")
@@ -217,12 +229,14 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Formula cell roundtrips expression without cached value") {
     val initial = Workbook("Formulas")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Number(BigDecimal(100)))
       .put(ref"B1", CellValue.Number(BigDecimal(200)))
       .put(ref"C1", CellValue.Formula("A1+B1", None))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-no-cache.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -239,12 +253,14 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Formula cell roundtrips expression with cached numeric value") {
     val initial = Workbook("Formulas")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Number(BigDecimal(100)))
       .put(ref"B1", CellValue.Number(BigDecimal(200)))
       .put(ref"C1", CellValue.Formula("A1+B1", Some(CellValue.Number(BigDecimal(300)))))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-cached-number.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -264,12 +280,14 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Formula cell roundtrips expression with cached text value") {
     val initial = Workbook("Formulas")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("Hello"))
       .put(ref"B1", CellValue.Text(" World"))
       .put(ref"C1", CellValue.Formula("CONCATENATE(A1,B1)", Some(CellValue.Text("Hello World"))))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-cached-text.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -289,12 +307,14 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Formula cell roundtrips expression with cached boolean value") {
     val initial = Workbook("Formulas")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Number(BigDecimal(100)))
       .put(ref"B1", CellValue.Number(BigDecimal(50)))
       .put(ref"C1", CellValue.Formula("A1>B1", Some(CellValue.Bool(true))))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-cached-bool.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -314,12 +334,14 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Formula cell roundtrips expression with cached error value") {
     val initial = Workbook("Formulas")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Number(BigDecimal(100)))
       .put(ref"B1", CellValue.Number(BigDecimal(0)))
       .put(ref"C1", CellValue.Formula("A1/B1", Some(CellValue.Error(CellError.Div0))))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-cached-error.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -339,7 +361,8 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Multiple formula cells roundtrip correctly") {
     val initial = Workbook("Formulas")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Number(BigDecimal(10)))
       .put(ref"A2", CellValue.Number(BigDecimal(20)))
       .put(ref"A3", CellValue.Number(BigDecimal(30)))
@@ -348,7 +371,8 @@ class OoxmlRoundTripSpec extends FunSuite:
       .put(ref"B3", CellValue.Formula("A3*2", Some(CellValue.Number(BigDecimal(60)))))
       .put(ref"C1", CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(BigDecimal(120)))))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("formula-multiple.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -370,7 +394,8 @@ class OoxmlRoundTripSpec extends FunSuite:
       case other => fail(s"B3: Expected Formula, got $other")
 
     readSheet(ref"C1").value match
-      case CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(n))) => assertEquals(n, BigDecimal(120))
+      case CellValue.Formula("SUM(B1:B3)", Some(CellValue.Number(n))) =>
+        assertEquals(n, BigDecimal(120))
       case other => fail(s"C1: Expected Formula, got $other")
   }
 
@@ -394,11 +419,13 @@ class OoxmlRoundTripSpec extends FunSuite:
 
   test("Workbook with merged cells preserves merges") {
     val initial = Workbook("Merged")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("Merged Header"))
       .merge(ref"A1:C1")
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("merged.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -421,14 +448,16 @@ class OoxmlRoundTripSpec extends FunSuite:
     import java.time.LocalDateTime
 
     val dt1 = LocalDateTime.of(2025, 11, 10, 0, 0, 0) // Nov 10, 2025 midnight
-    val dt2 = LocalDateTime.of(2000, 1, 1, 12, 0, 0)   // Jan 1, 2000 noon
+    val dt2 = LocalDateTime.of(2000, 1, 1, 12, 0, 0) // Jan 1, 2000 noon
 
     val initial = Workbook("Dates")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.DateTime(dt1))
       .put(ref"A2", CellValue.DateTime(dt2))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("dates.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))

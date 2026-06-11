@@ -62,7 +62,9 @@ object Generators:
   val genCaseDetails: Gen[CaseDetails] =
     Gen.oneOf(
       Gen.const(CaseDetails.NoDetails),
-      Gen.listOfN(Gen.choose(0, 5).sample.getOrElse(0), genCellMismatch).map(CaseDetails.FileComparison.apply),
+      Gen
+        .listOfN(Gen.choose(0, 5).sample.getOrElse(0), genCellMismatch)
+        .map(CaseDetails.FileComparison.apply),
       for
         response <- Gen.alphaNumStr.map(_.take(100))
         expected <- Gen.option(Gen.alphaNumStr.map(_.take(50)))

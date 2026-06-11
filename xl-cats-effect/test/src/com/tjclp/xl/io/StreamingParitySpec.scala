@@ -214,11 +214,9 @@ class StreamingParitySpec extends CatsEffectSuite:
         .compile
         .toVector
         .map { rows =>
-          val streamedStyles = rows
-            .flatMap { row =>
-              row.cellStyles.map { case (colIdx, sid) => (row.rowIndex, colIdx) -> sid }
-            }
-            .toMap
+          val streamedStyles = rows.flatMap { row =>
+            row.cellStyles.map { case (colIdx, sid) => (row.rowIndex, colIdx) -> sid }
+          }.toMap
           assertEquals(
             streamedStyles,
             inMemoryStyleIdx,
@@ -254,11 +252,14 @@ class StreamingParitySpec extends CatsEffectSuite:
         assertEquals(expected.size, 150, "expected 50 rows x 3 cells")
         assertEquals(expected.get((1, 0)), Some(CellValue.Text("name-1")))
         streamedValues(path, "Data").map { streamed =>
-          assertEquals(streamed, expected, "streaming vs in-memory drift on streaming-written SST file")
+          assertEquals(
+            streamed,
+            expected,
+            "streaming vs in-memory drift on streaming-written SST file"
+          )
         }
       }
   }
-
 
   // ========== GH-293 / GH-305: raw-XML dialect probes ==========
   // XL's own writer never emits whitespace-padded formulas or escape sequences

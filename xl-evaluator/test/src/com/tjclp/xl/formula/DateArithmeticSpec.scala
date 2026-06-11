@@ -14,8 +14,8 @@ import java.time.{LocalDate, LocalDateTime}
  *   - NOW() + 0.5 → 12 hours later (0.5 days)
  *   - DATE(2025,1,15) - 7 → January 8th
  *
- * These tests verify that the TExpr.DateToSerial wrapper correctly converts date functions
- * to serial numbers for arithmetic operations.
+ * These tests verify that the TExpr.DateToSerial wrapper correctly converts date functions to
+ * serial numbers for arithmetic operations.
  */
 class DateArithmeticSpec extends FunSuite:
 
