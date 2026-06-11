@@ -52,6 +52,19 @@ object api:
   // NEVER export anything named `Anchor` here (taken by addressing above).
   export drawings.{AnchorPoint, Drawing, DrawingAnchor, EditAs, Extent, ImageData, ImageFormat}
 
+  // Chart types (GH-222) — all plain enums/case classes, safe export forwarders.
+  export charts.{
+    BarDirection,
+    BarGrouping,
+    Chart,
+    ChartType,
+    DataRef,
+    Legend,
+    LegendPosition,
+    Series,
+    SeriesName
+  }
+
   // Patch types
   export patch.Patch
 

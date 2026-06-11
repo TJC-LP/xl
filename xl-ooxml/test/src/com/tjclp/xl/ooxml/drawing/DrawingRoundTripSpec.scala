@@ -95,16 +95,64 @@ class DrawingRoundTripSpec extends FunSuite:
     assertEquals(sheet.pictures.size, 1)
   }
 
-  test("chart-bar.xlsx parses to exactly one Preserved fragment (chart graphicFrame)") {
+  test("chart-bar.xlsx parses to exactly one typed ChartFrame (GH-222)") {
     val (_, wb) = readFixture("chart-bar.xlsx")
+    val sheet = wb.sheets(0)
+    assertEquals(sheet.drawings.size, 1)
+    val chartData = SheetName.unsafe("ChartData")
+    sheet.drawings(0) match
+      case Drawing.ChartFrame(DrawingAnchor.OneCell(from, ext), chart, name) =>
+        assertEquals(from.cell, ref"D2") // CT_Marker col=3/row=1, 0-based
+        assertEquals(ext, Extent(Emu(5400000L), Emu(2700000L)))
+        assertEquals(name, "Chart 1")
+        assertEquals(chart.chartType, ChartType.Bar(BarDirection.Col, BarGrouping.Clustered))
+        assertEquals(chart.title, Some("Synthetic Units by Quarter"))
+        assertEquals(chart.legend, Some(Legend(LegendPosition.Right, overlay = false)))
+        assertEquals(
+          chart.series,
+          Vector(
+            Series(
+              values = DataRef(chartData, ref"B2:B5"),
+              categories = Some(DataRef(chartData, ref"A2:A5")),
+              name = Some(SeriesName.FromCell(chartData, ref"B1"))
+            )
+          )
+        )
+      case other => fail(s"expected a typed OneCell ChartFrame, got $other")
+    assert(sheet.pictures.isEmpty)
+    assertEquals(sheet.charts.size, 1)
+  }
+
+  test("chart-stacked.xlsx parses typed: two series, Stacked grouping, overlap dialect accepted") {
+    val (_, wb) = readFixture("chart-stacked.xlsx")
+    val sheet = wb.sheets(0)
+    assertEquals(sheet.charts.size, 1)
+    val chart = sheet.charts(0).chart
+    assertEquals(chart.chartType, ChartType.Bar(BarDirection.Col, BarGrouping.Stacked))
+    assertEquals(chart.title, Some("Synthetic Stacked Units"))
+    val stackData = SheetName.unsafe("StackData")
+    assertEquals(chart.series.size, 2)
+    assertEquals(chart.series(0).values, DataRef(stackData, ref"B2:B4"))
+    assertEquals(chart.series(1).values, DataRef(stackData, ref"C2:C4"))
+    assertEquals(chart.series(0).name, Some(SeriesName.FromCell(stackData, ref"B1")))
+  }
+
+  test("chart-scatter.xlsx stays a whole-anchor Preserved fragment (outside the typed fence)") {
+    val (in, wb) = readFixture("chart-scatter.xlsx")
     val sheet = wb.sheets(0)
     assertEquals(sheet.drawings.size, 1)
     sheet.drawings(0) match
       case Drawing.Preserved(xml) =>
         assert(xml.contains("graphicFrame"), s"expected graphicFrame in preserved xml: $xml")
-        assert(xml.contains("oneCellAnchor"), "preserved fragment must be the whole anchor")
-      case other => fail(s"expected Preserved, got $other")
-    assert(sheet.pictures.isEmpty)
+      case other => fail(s"expected Preserved (scatter is out of fence), got $other")
+    assert(sheet.charts.isEmpty)
+    // byte round-trip pin: untouched write ships the scatter chart part verbatim
+    val out = write(wb, "scatter-pin")
+    assertEquals(
+      entryBytes(out, "xl/charts/chart1.xml").toSeq,
+      entryBytes(in, "xl/charts/chart1.xml").toSeq,
+      "scatter chart part must ride byte-preservation"
+    )
   }
 
   test("image-shape.xlsx (mixed wsDr) parses to [Picture, Preserved sp]") {
@@ -290,7 +338,7 @@ class DrawingRoundTripSpec extends FunSuite:
     assertDrawingStructure(out, "xl/drawings/drawing1.xml")
   }
 
-  test("chart-bar.xlsx + addImage: chart bytes identical, Preserved graphicFrame stays FIRST") {
+  test("chart-bar.xlsx + addImage: chart bytes identical, typed ChartFrame stays FIRST") {
     val (in, wb) = readFixture("chart-bar.xlsx")
     val sheetName = wb.sheets(0).name
     val updated = wb
@@ -298,6 +346,8 @@ class DrawingRoundTripSpec extends FunSuite:
       .fold(err => fail(s"update failed: $err"), identity)
     val out = write(updated, "hybrid-chart")
 
+    // pins the GH-222 equality-match preservation path: the untouched chart's part rides
+    // byte-preservation even though the drawing part regenerated
     assertEquals(
       entryBytes(out, "xl/charts/chart1.xml").toSeq,
       entryBytes(in, "xl/charts/chart1.xml").toSeq,
@@ -308,9 +358,9 @@ class DrawingRoundTripSpec extends FunSuite:
     val drawings = readBack.sheets(0).drawings
     assertEquals(drawings.size, 2)
     drawings(0) match
-      case Drawing.Preserved(xml) =>
-        assert(xml.contains("graphicFrame"), "chart fragment must survive FIRST (z-order law)")
-      case other => fail(s"expected Preserved first, got $other")
+      case Drawing.ChartFrame(_, chart, _) =>
+        assertEquals(chart.title, Some("Synthetic Units by Quarter"))
+      case other => fail(s"expected typed ChartFrame first (z-order law), got $other")
     assert(isPicture(drawings(1)), "added picture appended after")
     assertDrawingStructure(out, "xl/drawings/drawing1.xml")
   }

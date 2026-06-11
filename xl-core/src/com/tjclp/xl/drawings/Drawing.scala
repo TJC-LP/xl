@@ -60,8 +60,8 @@ object DrawingAnchor:
  * A drawing object on a sheet (GH-221). Document order in `Sheet.drawings` is z-order is emission
  * order: appended drawings paint on top.
  *
- * Future typed cases (Chart/Shape, GH-222) extend this enum under the accepted Patch.MergeBorder
- * enum-extension policy.
+ * Typed cases extend this enum under the accepted Patch.MergeBorder enum-extension policy
+ * (ChartFrame added by GH-222; Shape still future).
  */
 enum Drawing derives CanEqual:
   /**
@@ -75,6 +75,17 @@ enum Drawing derives CanEqual:
     image: ImageData,
     name: String = "",
     description: String = ""
+  )
+
+  /**
+   * A typed chart hosted in a `graphicFrame` (GH-222). The chart part itself is regenerated from
+   * the model whenever the enclosing drawings vector changes; an empty `name` emits as the writer
+   * default "Chart {ordinal}".
+   */
+  case ChartFrame(
+    anchor: DrawingAnchor,
+    chart: com.tjclp.xl.charts.Chart,
+    name: String = ""
   )
 
   /**

@@ -18,6 +18,8 @@ object TestFixtures:
     "formulas.xlsx",
     "autofilter.xlsx",
     "chart-bar.xlsx",
+    "chart-stacked.xlsx",
+    "chart-scatter.xlsx",
     "image.xlsx",
     "comments-hyperlinks.xlsx"
   )

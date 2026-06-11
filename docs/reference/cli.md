@@ -118,6 +118,8 @@ xl rasterizers                                     # List available PNG/PDF back
 | `remove-comment` | `<ref>` | Remove cell comment (requires `-o`) |
 | `freeze` | `<ref>` | Freeze panes at cell (requires `-o`) |
 | `unfreeze` | | Remove freeze panes (requires `-o`) |
+| `chart add` | `--type <t> --data <range> --at <ref> [options]` | Add a chart built from sheet ranges (requires `-o`) |
+| `add-image` | `<image-file> --at <ref> [--size WxH]` | Embed an image (requires `-o`) |
 | `import` | `<csv-file> [start-ref] [options]` | Import CSV with type detection (requires `-o`) |
 | `import-md` | `<md-file\|-> [--start ref] [options]` | Import GFM markdown table with type detection (requires `-o`) |
 | `add-sheet` | `<name> [--after s] [--before s]` | Add new empty sheet (requires `-o`) |
@@ -656,6 +658,57 @@ Freeze panes at a cell reference (rows above and columns to the left are locked)
 ```bash
 xl -f input.xlsx -s S1 -o output.xlsx freeze B2    # Freeze row 1 + column A
 xl -f input.xlsx -s S1 -o output.xlsx unfreeze
+```
+
+---
+
+### `xl chart add --type <t> --data <range> --at <ref> [options]`
+
+Add a typed chart built from sheet data ranges. Supported types: `column`, `bar` (horizontal),
+`line`, `pie`.
+
+```bash
+# Column chart: one series per data column, categories down column A
+xl -f in.xlsx -s Data -o out.xlsx chart add --type column \
+   --data B2:D10 --categories A2:A10 --series-names "Q1,Q2,Q3" \
+   --title "Revenue" --at F2:K15
+
+# Stacked horizontal bars, no legend, single-cell placement (default ~5.6x2.8cm size)
+xl -f in.xlsx -s Data -o out.xlsx chart add --type bar --grouping stacked \
+   --data B2:D10 --legend none --at F2
+
+# Pie over one series
+xl -f in.xlsx -s Data -o out.xlsx chart add --type pie \
+   --data B2:B6 --categories A2:A6 --at E2:J12
+```
+
+| Flag | Description |
+|------|-------------|
+| `--type, -t` | `column`, `bar`, `line`, `pie` (required) |
+| `--grouping` | `clustered` (default), `stacked`, `percent-stacked` — column/bar only |
+| `--data` | Values range; qualified refs (`Data!B2:D10`) accepted (required) |
+| `--categories` | Categories vector (one row or one column) |
+| `--series-names` | Comma-separated literal names, applied positionally |
+| `--title` | Chart title |
+| `--legend` | `right` (default), `left`, `top`, `bottom`, `top-right`, `none` |
+| `--at` | Placement: a range (chart stretches over it) or a single cell (required) |
+
+**Series split** (deterministic): orientation follows the categories vector — column categories
+(`A2:A10`) make one series per data **column**, row categories (`B1:D1`) one per data **row**,
+absent categories default to per-column. A dimension mismatch between categories and data is an
+error, never a guess. Pie charts require exactly one series.
+
+---
+
+### `xl add-image <image-file> --at <ref> [--size WxH]`
+
+Embed an image. PNG/JPEG/GIF/BMP get natural-size sniffing for a single-cell `--at`; TIFF/EMF/WMF
+need an explicit `--size`. A range `--at` stretches the image over the range.
+
+```bash
+xl -f in.xlsx -s S1 -o out.xlsx add-image logo.png --at B2               # natural size
+xl -f in.xlsx -s S1 -o out.xlsx add-image logo.png --at B2 --size 320x240
+xl -f in.xlsx -s S1 -o out.xlsx add-image banner.jpeg --at A1:F4         # stretch over range
 ```
 
 ---

@@ -171,6 +171,41 @@ class ScriptingPreludeTest extends FunSuite:
     val io = ExcelIO
     assert(io != null || true)
 
+  test("chart layer resolves through the prelude: addChart round-trips a typed chart"):
+    val data = SheetName.unsafe("Data")
+    val chart = Chart
+      .bar(
+        Vector(
+          Series(
+            values = DataRef(data, ref"B2:B4"),
+            categories = Some(DataRef(data, ref"A2:A4")),
+            name = Some(SeriesName.Literal("Units"))
+          )
+        ),
+        direction = BarDirection.Col,
+        grouping = BarGrouping.Clustered,
+        title = Some("Prelude Chart"),
+        legend = Some(Legend(LegendPosition.Right))
+      )
+      .unsafe
+    val sheet = Sheet("Data")
+      .put(ref"A2", "Q1")
+      .put(ref"A3", "Q2")
+      .put(ref"A4", "Q3")
+      .put(ref"B2", 1)
+      .put(ref"B3", 2)
+      .put(ref"B4", 3)
+      .addChart(chart, ref"D2:K15")
+    assertEquals(sheet.charts.size, 1)
+    assertEquals(chart.chartType, ChartType.Bar(): ChartType)
+    val dir = java.nio.file.Files.createTempDirectory("xl-prelude-chart")
+    val path = dir.resolve("chart.xlsx")
+    Excel.write(Workbook(sheet), path.toString)
+    val loaded = Excel.read(path.toString)
+    val frames = loaded.sheets.headOption.map(_.charts).getOrElse(Vector.empty)
+    assertEquals(frames.size, 1)
+    assertEquals(frames.headOption.map(_.chart), Some(chart))
+
   test("drawing layer resolves through the prelude: addImage round-trips an embedded image"):
     // 1x1-style tiny PNG (the 2x3 generator template, inlined: prelude tests are self-contained)
     val pngHex =

@@ -15,6 +15,7 @@ import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 import com.tjclp.xl.cli.commands.{
   CellCommands,
+  ChartCommands,
   CommentCommands,
   DiffCommands,
   FilterCommands,
@@ -98,7 +99,7 @@ object Main
     // Sheet-level write: --file, --sheet, and --output (required)
     // --stream uses SAX/StAX workbook writes for modifying commands.
     val sheetWriteSubcmds =
-      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd
+      putCmd orElse putfCmd orElse styleCmd orElse rowCmd orElse colCmd orElse autoFitCmd orElse batchCmd orElse importCmd orElse importMdCmd orElse addSheetCmd orElse removeSheetCmd orElse renameSheetCmd orElse moveSheetCmd orElse copySheetCmd orElse mergeCmd orElse unmergeCmd orElse commentCmd orElse removeCommentCmd orElse clearCmd orElse fillCmd orElse sortCmd orElse freezeCmd orElse unfreezeCmd orElse copyCmd orElse nameCmd orElse insertRowsCmd orElse deleteRowsCmd orElse insertColsCmd orElse deleteColsCmd orElse chartCmd orElse addImageCmd
 
     val sheetWriteOpts =
       (
@@ -1113,6 +1114,57 @@ Use --dry-run to validate JSON without writing."""
       (copySrcArg, copyTgtArg, valuesOnlyOpt).mapN(CliCommand.Copy.apply)
     }
 
+  // --- Chart + image commands (GH-222) ---
+
+  private val chartCmd: Opts[CliCommand] =
+    Opts.subcommand("chart", "Chart operations: add") {
+      Opts.subcommand("add", "Add a typed chart built from sheet data ranges") {
+        val typeOpt =
+          Opts.option[String]("type", "Chart type: column, bar, line, pie", "t")
+        val groupingOpt = Opts
+          .option[String](
+            "grouping",
+            "Bar grouping: clustered (default), stacked, percent-stacked (column/bar only)"
+          )
+          .orNone
+        val dataOpt =
+          Opts.option[String](
+            "data",
+            "Values range (e.g. B2:D10); column categories split per column"
+          )
+        val categoriesOpt =
+          Opts.option[String]("categories", "Categories vector (e.g. A2:A10)").orNone
+        val seriesNamesOpt = Opts
+          .option[String]("series-names", "Comma-separated literal series names (positional)")
+          .orNone
+        val titleOpt = Opts.option[String]("title", "Chart title").orNone
+        val legendOpt = Opts
+          .option[String](
+            "legend",
+            "Legend position: right (default), left, top, bottom, top-right, none"
+          )
+          .orNone
+        val atOpt = Opts.option[String](
+          "at",
+          "Placement: a range (chart stretches over it) or a single cell (default size)"
+        )
+        (typeOpt, groupingOpt, dataOpt, categoriesOpt, seriesNamesOpt, titleOpt, legendOpt, atOpt)
+          .mapN(CliCommand.ChartAdd.apply)
+      }
+    }
+
+  private val addImageCmd: Opts[CliCommand] =
+    Opts.subcommand("add-image", "Embed an image (png/jpeg/gif/bmp/tiff/emf/wmf)") {
+      val imageArg = Opts.argument[Path]("image-file")
+      val atOpt = Opts.option[String](
+        "at",
+        "Placement: a single cell (natural size unless --size) or a range (image stretches)"
+      )
+      val sizeOpt =
+        Opts.option[String]("size", "Pixel size WxH for a single-cell --at (e.g. 320x240)").orNone
+      (imageArg, atOpt, sizeOpt).mapN(CliCommand.AddImage.apply)
+    }
+
   // --- Structural editing commands (insert/delete rows & columns) ---
 
   private val insertRowsCmd: Opts[CliCommand] =
@@ -1899,6 +1951,30 @@ Use --dry-run to validate JSON without writing."""
     case CliCommand.Copy(source, target, valuesOnly) =>
       requireOutput(outputOpt, backendOpt, stream)(
         WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _)
+      )
+
+    case CliCommand.ChartAdd(typeStr, grouping, data, categories, seriesNames, title, legend, at) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        ChartCommands.chartAdd(
+          wb,
+          sheetOpt,
+          typeStr,
+          grouping,
+          data,
+          categories,
+          seriesNames,
+          title,
+          legend,
+          at,
+          _,
+          _,
+          _
+        )
+      )
+
+    case CliCommand.AddImage(imagePath, at, size) =>
+      requireOutput(outputOpt, backendOpt, stream)(
+        ChartCommands.addImage(wb, sheetOpt, imagePath, at, size, _, _, _)
       )
 
     case CliCommand.InsertRows(at, count) =>

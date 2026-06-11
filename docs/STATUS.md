@@ -32,7 +32,8 @@
 - ✅ StyleRegistry for per-sheet style management
 - ✅ **End-to-end XLSX read/write** (creates real Excel files)
 - ✅ **Surgical modification** (read → modify → write preserves unknown parts: charts, images, drawings, comments, and inline worksheet elements — dataValidations, sheetProtection, autoFilter — preserved through edits as of 0.10.0 / C1)
-- ✅ **Embedded images** (#221): `Sheet.addImage(image, at | range | anchor)` with natural-size sniffing (png/jpeg/gif/bmp), `Sheet.pictures`, `removeDrawing`; one-cell/two-cell/absolute anchors; charts & shapes ride through as `Drawing.Preserved`; media sha-256 dedup; in-memory read/write only (see LIMITATIONS §13)
+- ✅ **Embedded images** (#221): `Sheet.addImage(image, at | range | anchor)` with natural-size sniffing (png/jpeg/gif/bmp), `Sheet.pictures`, `removeDrawing`; one-cell/two-cell/absolute anchors; shapes ride through as `Drawing.Preserved`; media sha-256 dedup; in-memory read/write only (see LIMITATIONS §13)
+- ✅ **Typed charts** (#222): bar (clustered/stacked/percent-stacked, column/horizontal), line, pie — `Chart`/`Series`/`DataRef` model, `Sheet.addChart`/`charts`, CLI `chart add` + `add-image`; typed-parse-or-Preserved hybrid read (out-of-fence charts stay byte-preserved); structural edits + rename track chart references; value caches resolved from stored cells on write (see LIMITATIONS §12)
 - ✅ **Structural editing** (0.10.0): insert/delete rows & columns shift cells, merges, row/col properties, freeze panes, and rewrite all affected formulas (cross-sheet) with `#REF!` generation
 - ✅ **Named ranges & hyperlinks authoring** (0.10.0): `DefinedName` and `Cell.hyperlink` are now serialized (previously read-only)
 - ✅ Hybrid write optimization (11x speedup for unmodified workbooks, 2-5x for partial modifications)

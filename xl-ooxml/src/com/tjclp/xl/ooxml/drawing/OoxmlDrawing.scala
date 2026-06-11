@@ -50,6 +50,14 @@ private[ooxml] object OoxmlDrawing:
   )
 
   /**
+   * TRAP-6 (GH-222): `xmlns:c` must join the wsDr root scope whenever a ChartFrame emits
+   * (fixture-proven binding) — the emitted `c:chart` element would otherwise carry an unresolvable
+   * prefix. Pictures' default/a/r bindings are also required (graphicFrame uses all three).
+   */
+  private val requiredChartBindings: Seq[(Option[String], String)] =
+    Seq(Some("c") -> XmlUtil.nsChart)
+
+  /**
    * Pure string scan for relationship references inside a preserved fragment — fragments whose rIds
    * have no rels to resolve against (fresh parts without the source zip) must be dropped.
    */
@@ -66,50 +74,82 @@ private[ooxml] object OoxmlDrawing:
    * @param embedIds
    *   anchor index -> r:embed relationship id for typed Pictures (allocated by the writer's media
    *   planner); a Picture without an entry is skipped (defensive — the planner always allocates)
+   * @param chartRelIds
+   *   anchor index -> r:id relationship id for typed ChartFrames (allocated by the writer's chart
+   *   planner, GH-222); a ChartFrame without an entry is skipped (same defensive precedent)
    * @param sourceScope
    *   root scope of the source part for same-path regeneration; None = fresh dialect
    */
   def build(
     drawings: Vector[Drawing],
     embedIds: Map[Int, String],
+    chartRelIds: Map[Int, String],
     sourceScope: Option[NamespaceBinding]
   ): OoxmlDrawing =
     // Re-parse preserved fragments (canonicalized at read; a user-constructed garbage payload is
     // dropped — documented contract on Drawing.Preserved)
-    val resolved: Vector[Either[Elem, (Drawing.Picture, String)]] =
+    val resolved: Vector[Either[Elem, (Drawing, String)]] =
       drawings.zipWithIndex.flatMap {
         case (pic: Drawing.Picture, idx) =>
           embedIds.get(idx).map(relId => Right(pic -> relId))
+        case (frame: Drawing.ChartFrame, idx) =>
+          chartRelIds.get(idx).map(relId => Right(frame -> relId))
         case (Drawing.Preserved(xml), _) =>
           XmlSecurity.parseSafe(xml, "preserved drawing fragment").toOption.map(Left(_))
       }
 
     val fragments = resolved.collect { case Left(e) => e }
-    val hasPictures = resolved.exists(_.isRight)
+    val hasPictures = resolved.exists {
+      case Right((_: Drawing.Picture, _)) => true
+      case _ => false
+    }
+    val hasCharts = resolved.exists {
+      case Right((_: Drawing.ChartFrame, _)) => true
+      case _ => false
+    }
 
-    // cNvPr ids: max over the part (preserved ids scanned) + 1, sequential, nonzero
+    // cNvPr ids: max over the part (preserved ids scanned) + 1, sequential, nonzero.
+    // Picture and chart ordinals are counted SEPARATELY ("Image 1", "Chart 1", ...).
     val usedIds = fragments.flatMap(collectCNvPrIds)
     val firstFreeId = (usedIds.maxOption.getOrElse(0L)).max(0L) + 1L
 
     val children = resolved
-      .foldLeft((Vector.empty[Elem], firstFreeId, 1)) { case ((acc, nextId, ordinal), entry) =>
-        entry match
-          case Left(fragment) => (acc :+ cleanNamespaces(fragment), nextId, ordinal)
-          case Right((pic, relId)) =>
-            (acc :+ anchorElem(pic, relId, nextId, ordinal), nextId + 1, ordinal + 1)
+      .foldLeft((Vector.empty[Elem], firstFreeId, 1, 1)) {
+        case ((acc, nextId, picOrdinal, chartOrdinal), entry) =>
+          entry match
+            case Left(fragment) =>
+              (acc :+ cleanNamespaces(fragment), nextId, picOrdinal, chartOrdinal)
+            case Right((pic: Drawing.Picture, relId)) =>
+              (
+                acc :+ anchorElem(pic, relId, nextId, picOrdinal),
+                nextId + 1,
+                picOrdinal + 1,
+                chartOrdinal
+              )
+            case Right((frame: Drawing.ChartFrame, relId)) =>
+              (
+                acc :+ chartAnchorElem(frame, relId, nextId, chartOrdinal),
+                nextId + 1,
+                picOrdinal,
+                chartOrdinal + 1
+              )
+            case Right((_: Drawing.Preserved, _)) => (acc, nextId, picOrdinal, chartOrdinal)
       }
       ._1
 
     // Root scope, first-binding-wins: source bindings (same-path regen) or the fresh dialect;
-    // then picture-required bindings (fills gaps when an xdr-dialect source lacks default/a/r);
+    // then picture/chart-required bindings (fills gaps when an xdr-dialect source lacks them);
     // then bindings hoisted from preserved fragments (GH-291 machinery, default ns included).
     val baseBindings =
       sourceScope.map(flattenScope).getOrElse(requiredPictureBindings)
     val pictureBindings = if hasPictures then requiredPictureBindings else Seq.empty
+    val chartBindings =
+      if hasCharts then requiredPictureBindings ++ requiredChartBindings else Seq.empty
     val fragmentBindings: Seq[(Option[String], String)] =
       fragments.flatMap(usedPrefixBindings).map((p, u) => (Some(p), u)) ++
         fragments.flatMap(usedDefaultNamespace).map(u => (None, u))
-    val all = (baseBindings ++ pictureBindings ++ fragmentBindings).distinctBy(_._1)
+    val all =
+      (baseBindings ++ pictureBindings ++ chartBindings ++ fragmentBindings).distinctBy(_._1)
     OoxmlDrawing(children, canonicalScope(all))
 
   // ===== scope helpers =====
@@ -169,11 +209,22 @@ private[ooxml] object OoxmlDrawing:
     sd("ext", "cx" -> extent.cx.value.toString, "cy" -> extent.cy.value.toString)()
 
   private def anchorElem(pic: Drawing.Picture, relId: String, cnvId: Long, ordinal: Int): Elem =
-    val picElem = buildPic(pic, relId, cnvId, ordinal)
+    wrapAnchor(pic.anchor, buildPic(pic, relId, cnvId, ordinal))
+
+  /** ChartFrame anchor (GH-222): the fixture byte-shape graphicFrame hosting `c:chart r:id`. */
+  private def chartAnchorElem(
+    frame: Drawing.ChartFrame,
+    relId: String,
+    cnvId: Long,
+    ordinal: Int
+  ): Elem =
+    wrapAnchor(frame.anchor, buildGraphicFrame(frame, relId, cnvId, ordinal))
+
+  private def wrapAnchor(anchor: DrawingAnchor, objectElem: Elem): Elem =
     val clientData = sd("clientData")()
-    pic.anchor match
+    anchor match
       case DrawingAnchor.OneCell(from, extent) =>
-        sd("oneCellAnchor")(markerElem("from", from), extentElem(extent), picElem, clientData)
+        sd("oneCellAnchor")(markerElem("from", from), extentElem(extent), objectElem, clientData)
       case DrawingAnchor.TwoCell(from, to, editAs) =>
         val editAttrs = editAs match
           case EditAs.TwoCell => Seq.empty // schema default omitted
@@ -182,16 +233,39 @@ private[ooxml] object OoxmlDrawing:
         sd("twoCellAnchor", editAttrs*)(
           markerElem("from", from),
           markerElem("to", to),
-          picElem,
+          objectElem,
           clientData
         )
       case DrawingAnchor.Absolute(x, y, extent) =>
         sd("absoluteAnchor")(
           sd("pos", "x" -> x.value.toString, "y" -> y.value.toString)(),
           extentElem(extent),
-          picElem,
+          objectElem,
           clientData
         )
+
+  private def buildGraphicFrame(
+    frame: Drawing.ChartFrame,
+    relId: String,
+    cnvId: Long,
+    ordinal: Int
+  ): Elem =
+    val name = if frame.name.nonEmpty then frame.name else s"Chart $ordinal"
+    val chartRef = Elem(
+      "c",
+      "chart",
+      new PrefixedAttribute("r", "id", relId, Null),
+      TopScope,
+      minimizeEmpty = true
+    )
+    sd("graphicFrame")(
+      sd("nvGraphicFramePr")(
+        sd("cNvPr", "id" -> cnvId.toString, "name" -> name)(),
+        sd("cNvGraphicFramePr")()
+      ),
+      sd("xfrm")(),
+      a("graphic")(a("graphicData", "uri" -> XmlUtil.nsChart)(chartRef))
+    )
 
   private def buildPic(pic: Drawing.Picture, relId: String, cnvId: Long, ordinal: Int): Elem =
     val name = if pic.name.nonEmpty then pic.name else s"Image $ordinal"

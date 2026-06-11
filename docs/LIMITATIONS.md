@@ -277,13 +277,22 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
 
 ---
 
-#### 12. Charts Not Supported
-**Status**: Not implemented (existing charts are preserved through edits) — tracked in #222
-**Impact**: Cannot generate charts
-**Plan**: see [plan/roadmap.md](plan/roadmap.md)
+#### 12. Charts ✅ TYPED BAR/LINE/PIE SUPPORTED (#222) — with scoped limitations
+**Status**: Bar (clustered/stacked/percent-stacked, column or horizontal), line, and pie charts are fully modeled: read into `Drawing.ChartFrame(anchor, Chart, name)` (`Sheet.charts`), authored (`Chart.validated`/`Chart.bar`/`line`/`pie` + `Sheet.addChart`, CLI `chart add`), and round-tripped. The read path is a typed-parse-or-Preserved hybrid: a chart parses to the typed model only when its entire `chartN.xml` fits the strict whitelist; ANY out-of-fence construct keeps the whole anchor as `Drawing.Preserved` and the part rides byte-preservation — never half-typed. Structural edits (`insertRows`/`deleteColumns`/... and the evaluator's `StructuralEditor`) shift typed chart data references, including cross-sheet; `Workbook.rename` remaps typed chart references.
 
-**Effort**: 20-30 days (massive scope)
-**LOC**: ~1500+
+**Scope fence (v1 OUT — all ride `Preserved` byte-faithfully)**:
+- Scatter/area/combo/doughnut/radar/bubble/stock/3D charts; secondary axes; pivot charts; sparklines; chartex; chartsheets.
+- A user-facing Axis model (titles, bounds, numFmt, date axes): axes are write-time constants derived from the chart type.
+- Data labels, per-point `dPt`, trendlines, error bars, series/chart colors and `spPr` styling, real line markers, smooth lines, multi-level categories, external-workbook refs.
+- **Excel-authored charts stay Preserved** (they carry `c:style`, colors/style part rels, etc.) — byte-faithful round-trip exactly as before; to change one, delete it and re-author.
+
+**Behavioral limitations (by design)**:
+- **Stale caches on clean charts**: an untouched chart's part is byte-preserved even when the cells it references changed — its embedded value cache goes stale (same as Excel-without-recalc; Excel recalculates on open). Any edit to the sheet's drawings regenerates the part with fresh caches from STORED cell values (no evaluator).
+- **Full deletion drops series, not `#REF!`**: deleting all rows/columns under a series' values removes the series (categories fall back to 1..N, a deleted name cell clears the name). Excel would keep a broken `#REF!` stub; the typed model has no broken-ref state.
+- **Orphaned chart parts on degenerate reorder+edit**: moving a chart to a different anchor index AND editing it in one write allocates a fresh `chartN.xml`; the old part stays on disk (never deleted — the media GC policy; orphaned parts are legal OOXML).
+- **Rename doesn't touch Preserved charts or formula strings** (existing limitation): only typed `ChartFrame` references are remapped.
+- Reading a stacked bar chart requires `overlap="100"` (Excel/openpyxl write it; without it stacked bars visibly misrender, so such charts stay Preserved). Reading an empty-series pie chart (possible after structural deletion + rewrite) falls back to Preserved on the next read.
+- CLI `--series-names` are literals only (cell-sourced names are library-API-only); batch JSON chart ops and streaming-write charts are out of v1. HTML/SVG/PNG rendering does not draw charts.
 
 ---
 

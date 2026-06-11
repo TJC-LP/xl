@@ -623,6 +623,117 @@ object Generators:
       description <- Gen.frequency(1 -> Gen.alphaNumStr.map(_.take(20)), 2 -> Gen.const(""))
     yield Drawing.Picture(anchor, image, name, description)
 
+  // ===== Chart generators (GH-222) =====
+
+  /** Grid-constrained 1×N / N×1 vector range with Relative anchors (the chart-range contract). */
+  val genVectorGridRange: Gen[CellRange] =
+    for
+      column <- Gen.oneOf(true, false)
+      range <-
+        if column then
+          for
+            col <- Gen.choose(0, 7)
+            r1 <- Gen.choose(0, 11)
+            r2 <- Gen.choose(0, 11)
+          yield CellRange(ARef.from0(col, r1), ARef.from0(col, r2))
+        else
+          for
+            row <- Gen.choose(0, 11)
+            c1 <- Gen.choose(0, 7)
+            c2 <- Gen.choose(0, 7)
+          yield CellRange(ARef.from0(c1, row), ARef.from0(c2, row))
+    yield range
+
+  /** Sheet-qualified vector data range on `sheet`. */
+  def genDataRef(sheet: SheetName): Gen[com.tjclp.xl.charts.DataRef] =
+    genVectorGridRange.map(com.tjclp.xl.charts.DataRef(sheet, _))
+
+  /** Chart series referencing `sheet` (self-referential — the genRichWorkbook rename remaps). */
+  def genSeries(sheet: SheetName): Gen[com.tjclp.xl.charts.Series] =
+    import com.tjclp.xl.charts.{Series, SeriesName}
+    for
+      values <- genDataRef(sheet)
+      categories <- Gen.frequency(1 -> Gen.const(None), 2 -> genDataRef(sheet).map(Some.apply))
+      name <- Gen.frequency(
+        1 -> Gen.const(None),
+        1 -> Gen.alphaNumStr.map(s => Some(SeriesName.Literal(s.take(12)))),
+        1 -> genGridRef.map(ref => Some(SeriesName.FromCell(sheet, ref)))
+      )
+    yield Series(values, categories, name)
+
+  /** Typed chart in the validated shape: ≥1 series, pie forced to exactly one. */
+  def genChart(sheet: SheetName): Gen[com.tjclp.xl.charts.Chart] =
+    import com.tjclp.xl.charts.*
+    val genChartType: Gen[ChartType] = Gen
+      .oneOf(
+        Gen
+          .zip(
+            Gen.oneOf(BarDirection.Col, BarDirection.Bar),
+            Gen.oneOf(BarGrouping.Clustered, BarGrouping.Stacked, BarGrouping.PercentStacked)
+          )
+          .map(ChartType.Bar(_, _)),
+        Gen.const(ChartType.Line),
+        Gen.const(ChartType.Pie)
+      )
+      .flatMap(identity)
+    for
+      chartType <- genChartType
+      numSeries <- if chartType == ChartType.Pie then Gen.const(1) else Gen.choose(1, 3)
+      series <- Gen.listOfN(numSeries, genSeries(sheet)).map(_.toVector)
+      title <- Gen.frequency(
+        1 -> Gen.const(None),
+        2 -> Gen.alphaNumStr.map(s => Some(s.take(20)))
+      )
+      legend <- Gen.frequency(
+        1 -> Gen.const(None),
+        3 -> (for
+          pos <- Gen.oneOf(
+            LegendPosition.Right,
+            LegendPosition.Left,
+            LegendPosition.Top,
+            LegendPosition.Bottom,
+            LegendPosition.TopRight
+          )
+          overlay <- Gen.oneOf(true, false)
+        yield Some(Legend(pos, overlay)))
+      )
+    yield Chart(chartType, series, title, legend)
+
+  /** Typed chart frame on `sheet`; names sometimes empty (writer assigns "Chart {ordinal}"). */
+  def genChartFrame(sheet: SheetName): Gen[Drawing.ChartFrame] =
+    for
+      anchor <- genDrawingAnchor
+      chart <- genChart(sheet)
+      name <- Gen.frequency(1 -> Gen.alphaNumStr.map(_.take(12)), 2 -> Gen.const(""))
+    yield Drawing.ChartFrame(anchor, chart, name)
+
+  /**
+   * Remap a sheet's typed-chart references from `oldName` to `newName` — the genRichWorkbook rename
+   * fixup (TRAP-3): generated charts self-reference their sheet, so the post-generation rename must
+   * follow or every DataRef dangles and caches never get exercised.
+   */
+  private def remapChartSheet(sheet: Sheet, oldName: SheetName, newName: SheetName): Sheet =
+    import com.tjclp.xl.charts.{DataRef, SeriesName}
+    def remap(ref: DataRef): DataRef =
+      if ref.sheet.value.equalsIgnoreCase(oldName.value) then ref.copy(sheet = newName) else ref
+    val drawings = sheet.drawings.map {
+      case Drawing.ChartFrame(anchor, chart, n) =>
+        val series = chart.series.map { s =>
+          s.copy(
+            values = remap(s.values),
+            categories = s.categories.map(remap),
+            name = s.name.map {
+              case SeriesName.FromCell(sn, ref) if sn.value.equalsIgnoreCase(oldName.value) =>
+                SeriesName.FromCell(newName, ref)
+              case other => other
+            }
+          )
+        }
+        Drawing.ChartFrame(anchor, chart.copy(series = series), n)
+      case other => other
+    }
+    sheet.copy(drawings = drawings)
+
   /**
    * Rich sheet for the round-trip law: ≤30 cells with values/styles/comments/hyperlinks, merges,
    * optional view settings, page setup, and freeze panes. Styles are registered through the sheet's
@@ -646,10 +757,11 @@ object Generators:
       view <- Gen.option(genSheetView)
       pageSetup <- Gen.option(genPageSetup)
       freeze <- Gen.frequency(3 -> Gen.const(None), 1 -> genFreezePane.map(Some.apply))
-      // GH-221: pictures at comment-like frequency (3:1 none, then 1-2 pictures)
+      // GH-221/GH-222: pictures at comment-like frequency, charts rarer still
       drawings <- Gen.frequency(
         3 -> Gen.const(Vector.empty[Drawing]),
-        1 -> Gen.choose(1, 2).flatMap(n => Gen.listOfN(n, genPicture).map(_.toVector))
+        1 -> Gen.choose(1, 2).flatMap(n => Gen.listOfN(n, genPicture).map(_.toVector)),
+        1 -> genChartFrame(name).map(Vector(_))
       )
     yield
       val withCells = entries.foldLeft(Sheet(name)) {
@@ -680,7 +792,9 @@ object Generators:
       activeIndex <- Gen.choose(0, numSheets - 1)
     yield
       val unique = sheets.zipWithIndex.map { case (sheet, i) =>
-        sheet.copy(name = SheetName.unsafe(s"${namePool((offset + i) % namePool.size)} ${i + 1}"))
+        val newName = SheetName.unsafe(s"${namePool((offset + i) % namePool.size)} ${i + 1}")
+        // TRAP-3 (GH-222): chart refs are self-referential — remap them with the rename
+        remapChartSheet(sheet.copy(name = newName), sheet.name, newName)
       }
       Workbook(
         sheets = unique.toVector,

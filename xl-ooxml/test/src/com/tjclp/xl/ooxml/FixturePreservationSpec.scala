@@ -57,78 +57,79 @@ class FixturePreservationSpec extends FunSuite:
       .fold(err => fail(s"$label write failed: ${err.message}"), _ => ())
     out
 
-  List("chart-bar.xlsx", "image.xlsx").foreach { fixture =>
-    test(s"$fixture: untouched read->write preserves charts/drawings/media byte-identically") {
-      val (in, wb) = readFixture(fixture)
-      val out = writeTo(wb, "clean")
-      val before = visualParts(in)
-      val after = visualParts(out)
-      assert(before.nonEmpty, s"$fixture has no visual parts - fixture broken")
-      assertEquals(after, before, s"$fixture visual parts drifted on untouched write")
-    }
+  List("chart-bar.xlsx", "chart-stacked.xlsx", "chart-scatter.xlsx", "image.xlsx").foreach {
+    fixture =>
+      test(s"$fixture: untouched read->write preserves charts/drawings/media byte-identically") {
+        val (in, wb) = readFixture(fixture)
+        val out = writeTo(wb, "clean")
+        val before = visualParts(in)
+        val after = visualParts(out)
+        assert(before.nonEmpty, s"$fixture has no visual parts - fixture broken")
+        assertEquals(after, before, s"$fixture visual parts drifted on untouched write")
+      }
 
-    test(s"$fixture: cell-modified write keeps visual part bytes (current behavior)") {
-      val (in, wb) = readFixture(fixture)
-      val sheetName = wb.sheets(0).name
-      val modified = wb
-        .update(sheetName, _.put(ref"A20", CellValue.Text("modified after read")))
-        .fold(err => fail(s"$fixture update failed: $err"), identity)
-      val out = writeTo(modified, "modified")
-      val before = visualParts(in)
-      val after = visualParts(out)
-      assertEquals(after, before, s"$fixture visual parts drifted on modified write")
-    }
-
-    // GH-291: openpyxl binds xmlns:r ON the <drawing> element itself; regenerating a modified
-    // worksheet must keep that prefix bound (hoisted to the root) or the workbook is corrupt.
-    // Both writer backends regenerate modified sheets, so both must produce valid output.
-    List(
-      "ScalaXml" -> WriterConfig.scalaXml,
-      "SaxStax" -> WriterConfig.saxStax
-    ).foreach { case (backend, config) =>
-      test(s"$fixture/$backend: cell-modified write stays namespace-valid and re-readable") {
+      test(s"$fixture: cell-modified write keeps visual part bytes (current behavior)") {
         val (in, wb) = readFixture(fixture)
         val sheetName = wb.sheets(0).name
         val modified = wb
           .update(sheetName, _.put(ref"A20", CellValue.Text("modified after read")))
           .fold(err => fail(s"$fixture update failed: $err"), identity)
-        val out = writeToWith(modified, s"valid-$backend", config)
-
-        // Drawing survived regeneration
-        val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
-        assert(sheetXml.contains("<drawing"), "drawing element vanished entirely")
-
-        // Namespace well-formedness: a namespace-aware parser accepts the worksheet
-        // (an unbound r: prefix on <drawing> throws here)
-        val doc = parseNamespaceAware(sheetXml, s"$fixture/$backend regenerated worksheet")
-
-        // The drawing's r:id attribute resolves in the relationships namespace
-        val drawings = doc.getElementsByTagNameNS("*", "drawing")
-        assertEquals(drawings.getLength, 1, "expected exactly one <drawing>")
-        val drawingId = Option(drawings.item(0))
-          .collect { case e: org.w3c.dom.Element => e.getAttributeNS(nsRel, "id") }
-          .filter(_.nonEmpty)
-          .getOrElse(fail("drawing r:id missing or not in the relationships namespace"))
-
-        // Zip-level structure: every r:id referenced from the worksheet exists in sheet rels
-        val relIds = relationshipIdsOf(out, "xl/worksheets/_rels/sheet1.xml.rels")
-        val referenced = relationshipRefs(doc)
-        assert(referenced.contains(drawingId), "drawing r:id not among collected references")
-        assert(
-          referenced.subsetOf(relIds),
-          s"worksheet references missing from sheet rels: ${(referenced -- relIds).mkString(", ")}"
-        )
-
-        // The output re-reads cleanly (the original GH-291 failure mode)
-        val reread = XlsxReader
-          .read(out)
-          .fold(err => fail(s"re-read of modified write failed: ${err.message}"), identity)
-        assertEquals(reread.sheets(0).name, sheetName)
-
-        // Visual parts survive byte-identically
-        assertEquals(visualParts(out), visualParts(in), "visual parts drifted")
+        val out = writeTo(modified, "modified")
+        val before = visualParts(in)
+        val after = visualParts(out)
+        assertEquals(after, before, s"$fixture visual parts drifted on modified write")
       }
-    }
+
+      // GH-291: openpyxl binds xmlns:r ON the <drawing> element itself; regenerating a modified
+      // worksheet must keep that prefix bound (hoisted to the root) or the workbook is corrupt.
+      // Both writer backends regenerate modified sheets, so both must produce valid output.
+      List(
+        "ScalaXml" -> WriterConfig.scalaXml,
+        "SaxStax" -> WriterConfig.saxStax
+      ).foreach { case (backend, config) =>
+        test(s"$fixture/$backend: cell-modified write stays namespace-valid and re-readable") {
+          val (in, wb) = readFixture(fixture)
+          val sheetName = wb.sheets(0).name
+          val modified = wb
+            .update(sheetName, _.put(ref"A20", CellValue.Text("modified after read")))
+            .fold(err => fail(s"$fixture update failed: $err"), identity)
+          val out = writeToWith(modified, s"valid-$backend", config)
+
+          // Drawing survived regeneration
+          val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+          assert(sheetXml.contains("<drawing"), "drawing element vanished entirely")
+
+          // Namespace well-formedness: a namespace-aware parser accepts the worksheet
+          // (an unbound r: prefix on <drawing> throws here)
+          val doc = parseNamespaceAware(sheetXml, s"$fixture/$backend regenerated worksheet")
+
+          // The drawing's r:id attribute resolves in the relationships namespace
+          val drawings = doc.getElementsByTagNameNS("*", "drawing")
+          assertEquals(drawings.getLength, 1, "expected exactly one <drawing>")
+          val drawingId = Option(drawings.item(0))
+            .collect { case e: org.w3c.dom.Element => e.getAttributeNS(nsRel, "id") }
+            .filter(_.nonEmpty)
+            .getOrElse(fail("drawing r:id missing or not in the relationships namespace"))
+
+          // Zip-level structure: every r:id referenced from the worksheet exists in sheet rels
+          val relIds = relationshipIdsOf(out, "xl/worksheets/_rels/sheet1.xml.rels")
+          val referenced = relationshipRefs(doc)
+          assert(referenced.contains(drawingId), "drawing r:id not among collected references")
+          assert(
+            referenced.subsetOf(relIds),
+            s"worksheet references missing from sheet rels: ${(referenced -- relIds).mkString(", ")}"
+          )
+
+          // The output re-reads cleanly (the original GH-291 failure mode)
+          val reread = XlsxReader
+            .read(out)
+            .fold(err => fail(s"re-read of modified write failed: ${err.message}"), identity)
+          assertEquals(reread.sheets(0).name, sheetName)
+
+          // Visual parts survive byte-identically
+          assertEquals(visualParts(out), visualParts(in), "visual parts drifted")
+        }
+      }
   }
 
   test("chart-bar.xlsx: workbook relationships to drawings survive a modified write") {
