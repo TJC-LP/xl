@@ -6,21 +6,33 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.syntax.*
-import com.tjclp.xl.styles.{CellStyle, Font, Fill, Color, Border, BorderStyle, HAlign, VAlign, Align, NumFmt}
+import com.tjclp.xl.styles.{
+  CellStyle,
+  Font,
+  Fill,
+  Color,
+  Border,
+  BorderStyle,
+  HAlign,
+  VAlign,
+  Align,
+  NumFmt
+}
 import java.nio.file.Paths
 
-/** Manual test to generate a styled XLSX for visual verification in Excel.
-  *
-  * Run with: ./mill xl-ooxml.test.runMain ManualStyleTest
-  *
-  * Then open test-styles.xlsx in Excel to verify:
-  * - A1 is BOLD
-  * - B1 is ITALIC
-  * - C1 has RED background
-  * - D1 has BLUE font
-  * - A2:D2 have GRAY background (header row)
-  * - B3 has currency format
-  */
+/**
+ * Manual test to generate a styled XLSX for visual verification in Excel.
+ *
+ * Run with: ./mill xl-ooxml.test.runMain ManualStyleTest
+ *
+ * Then open test-styles.xlsx in Excel to verify:
+ *   - A1 is BOLD
+ *   - B1 is ITALIC
+ *   - C1 has RED background
+ *   - D1 has BLUE font
+ *   - A2:D2 have GRAY background (header row)
+ *   - B3 has currency format
+ */
 object ManualStyleTest:
   def main(args: Array[String]): Unit =
     // Define styles
@@ -28,15 +40,15 @@ object ManualStyleTest:
 
     val italicStyle = CellStyle.default.withFont(Font("Arial", 12.0, italic = true))
 
-    val redFillStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val redFillStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff0000)))
 
     val blueFontStyle = CellStyle.default.withFont(
-      Font("Arial", 12.0, color = Some(Color.Rgb(0xFF0000FF)))
+      Font("Arial", 12.0, color = Some(Color.Rgb(0xff0000ff)))
     )
 
     val headerStyle = CellStyle.default
       .withFont(Font("Arial", 12.0, bold = true))
-      .withFill(Fill.Solid(Color.Rgb(0xFFCCCCCC)))
+      .withFill(Fill.Solid(Color.Rgb(0xffcccccc)))
       .withAlign(Align(HAlign.Center, VAlign.Middle))
 
     val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)

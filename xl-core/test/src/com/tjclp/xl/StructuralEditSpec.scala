@@ -6,7 +6,9 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.FreezePane
 import munit.FunSuite
 
-/** GH-128/#129: pure structural row/column insert/delete on Sheet (cells, merges, props, freeze). */
+/**
+ * GH-128/#129: pure structural row/column insert/delete on Sheet (cells, merges, props, freeze).
+ */
 class StructuralEditSpec extends FunSuite:
 
   private def num(n: Int) = CellValue.Number(BigDecimal(n))

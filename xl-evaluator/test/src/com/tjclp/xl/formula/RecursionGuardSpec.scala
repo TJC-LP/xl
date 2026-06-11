@@ -7,8 +7,8 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import munit.FunSuite
 
 /**
- * GH-56: pathologically nested formulas must be rejected with a `ParseError.NestingTooDeep`
- * (a total `Left`), never a `StackOverflowError`. Capping parse depth also keeps the AST shallow
+ * GH-56: pathologically nested formulas must be rejected with a `ParseError.NestingTooDeep` (a
+ * total `Left`), never a `StackOverflowError`. Capping parse depth also keeps the AST shallow
  * enough that evaluation cannot overflow, so this single guard protects both parser and evaluator.
  */
 class RecursionGuardSpec extends FunSuite:

@@ -26,7 +26,7 @@ class StyleIntegrationSpec extends FunSuite:
 
   tempDir.test("generated XLSX includes styled cells in XML") { dir =>
     val boldStyle = CellStyle.default.withFont(Font("Arial", 14.0, bold = true))
-    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+    val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff0000)))
 
     val sheet = Sheet("Styled")
       .put(ref"A1", CellValue.Text("Bold Text"))
@@ -174,6 +174,9 @@ class StyleIntegrationSpec extends FunSuite:
       assertEquals(readSheet(ref"A1").value, CellValue.Text("Bold"))
 
       // Cell should have styleId (TODO: Eventually verify it resolves to bold font)
-      assert(readSheet(ref"A1").styleId.isDefined, "Styled cell should have styleId after round-trip")
+      assert(
+        readSheet(ref"A1").styleId.isDefined,
+        "Styled cell should have styleId after round-trip"
+      )
     }
   }

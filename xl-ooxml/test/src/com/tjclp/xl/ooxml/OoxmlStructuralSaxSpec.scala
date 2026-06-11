@@ -97,7 +97,10 @@ class OoxmlStructuralSaxSpec extends FunSuite:
     val dom = table.toXml
 
     assertEquals((sax \ "table" \ "@ref").map(_.text), (dom \ "table" \ "@ref").map(_.text))
-    assertEquals((sax \ "tableColumn" \ "@name").map(_.text), (dom \ "tableColumn" \ "@name").map(_.text))
+    assertEquals(
+      (sax \ "tableColumn" \ "@name").map(_.text),
+      (dom \ "tableColumn" \ "@name").map(_.text)
+    )
   }
 
   test("OoxmlComments.writeSax preserves refs and text") {

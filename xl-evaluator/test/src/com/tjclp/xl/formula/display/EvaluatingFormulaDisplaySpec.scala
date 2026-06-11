@@ -126,7 +126,7 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     val result = excel"Average: ${ref"B1"}"
     // AVERAGE evaluates correctly - just check it's numeric
     assert(result.startsWith("Average: "))
-    assert(result.contains("20") || result.contains("(60,3)"))  // Either formatted or raw tuple
+    assert(result.contains("20") || result.contains("(60,3)")) // Either formatted or raw tuple
   }
 
   test("excel interpolator evaluates IF formula") {
@@ -226,7 +226,10 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     // Cross-sheet expr so local evaluation cannot accidentally succeed: only the
     // cached value can produce a number here.
     val sheet = Sheet(name = SheetName.unsafe("Test"))
-      .put(ref"B1", CellValue.Formula("='Other'!A1/'Other'!A2", Some(CellValue.Number(BigDecimal("0.5")))))
+      .put(
+        ref"B1",
+        CellValue.Formula("='Other'!A1/'Other'!A2", Some(CellValue.Number(BigDecimal("0.5"))))
+      )
       .style(ref"B1", CellStyle.default.withNumFmt(NumFmt.Percent))
       .unsafe
 

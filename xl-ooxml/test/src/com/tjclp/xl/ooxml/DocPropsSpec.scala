@@ -50,7 +50,9 @@ class DocPropsSpec extends FunSuite:
       Iterator
         .continually(zis.getNextEntry)
         .takeWhile(_ != null)
-        .collect { case e: ZipEntry if !e.isDirectory => e.getName -> new String(zis.readAllBytes(), "UTF-8") }
+        .collect {
+          case e: ZipEntry if !e.isDirectory => e.getName -> new String(zis.readAllBytes(), "UTF-8")
+        }
         .toMap
     finally zis.close()
 
@@ -59,7 +61,10 @@ class DocPropsSpec extends FunSuite:
 
     val core = parts.getOrElse("docProps/core.xml", fail("docProps/core.xml missing from output"))
     assert(core.contains("<dc:creator>Jane Analyst</dc:creator>"), s"creator missing: $core")
-    assert(core.contains("<cp:lastModifiedBy>Bob Reviewer</cp:lastModifiedBy>"), s"lastModifiedBy missing: $core")
+    assert(
+      core.contains("<cp:lastModifiedBy>Bob Reviewer</cp:lastModifiedBy>"),
+      s"lastModifiedBy missing: $core"
+    )
     assert(core.contains("2024-01-15T10:30:00Z"), s"created W3CDTF missing: $core")
     assert(core.contains("2025-06-01T08:00:00Z"), s"modified W3CDTF missing: $core")
     assert(core.contains("dcterms:W3CDTF"), s"xsi:type W3CDTF marker missing: $core")
@@ -99,8 +104,14 @@ class DocPropsSpec extends FunSuite:
     // Default WorkbookMetadata: creator/created/modified/lastModifiedBy = None,
     // application/appVersion default to the XL identifiers
     val parts = entryMap(writeBytes(workbookWith(WorkbookMetadata())))
-    assert(!parts.contains("docProps/core.xml"), "core.xml should be omitted when all fields are None")
-    assert(parts.contains("docProps/app.xml"), "app.xml should be emitted from default application/appVersion")
+    assert(
+      !parts.contains("docProps/core.xml"),
+      "core.xml should be omitted when all fields are None"
+    )
+    assert(
+      parts.contains("docProps/app.xml"),
+      "app.xml should be emitted from default application/appVersion"
+    )
     val ct = parts.getOrElse("[Content_Types].xml", fail("no content types"))
     assert(!ct.contains("/docProps/core.xml"), "stale core.xml content-type override")
     val rels = parts.getOrElse("_rels/.rels", fail("no package rels"))
@@ -110,12 +121,16 @@ class DocPropsSpec extends FunSuite:
   test("app.xml omitted when application and appVersion are both None") {
     val meta = WorkbookMetadata(application = None, appVersion = None)
     val parts = entryMap(writeBytes(workbookWith(meta)))
-    assert(!parts.contains("docProps/app.xml"), "app.xml should be omitted when both fields are None")
+    assert(
+      !parts.contains("docProps/app.xml"),
+      "app.xml should be omitted when both fields are None"
+    )
   }
 
   test("round-trip: write metadata -> read -> metadata equal") {
     val bytes = writeBytes(workbookWith(fullMetadata))
-    val readBack = XlsxReader.readFromBytes(bytes).fold(err => fail(s"read failed: ${err.message}"), identity)
+    val readBack =
+      XlsxReader.readFromBytes(bytes).fold(err => fail(s"read failed: ${err.message}"), identity)
     assertEquals(readBack.metadata.creator, fullMetadata.creator)
     assertEquals(readBack.metadata.created, fullMetadata.created)
     assertEquals(readBack.metadata.modified, fullMetadata.modified)
@@ -127,7 +142,8 @@ class DocPropsSpec extends FunSuite:
   test("round-trip: XML-escapable characters in creator survive") {
     val meta = WorkbookMetadata(creator = Some("""R&D <Team> "quoted""""))
     val bytes = writeBytes(workbookWith(meta))
-    val readBack = XlsxReader.readFromBytes(bytes).fold(err => fail(s"read failed: ${err.message}"), identity)
+    val readBack =
+      XlsxReader.readFromBytes(bytes).fold(err => fail(s"read failed: ${err.message}"), identity)
     assertEquals(readBack.metadata.creator, meta.creator)
   }
 
@@ -135,7 +151,8 @@ class DocPropsSpec extends FunSuite:
     // Write a workbook with NO app/core fields at all, read it back
     val meta = WorkbookMetadata(application = None, appVersion = None)
     val bytes = writeBytes(workbookWith(meta))
-    val readBack = XlsxReader.readFromBytes(bytes).fold(err => fail(s"read failed: ${err.message}"), identity)
+    val readBack =
+      XlsxReader.readFromBytes(bytes).fold(err => fail(s"read failed: ${err.message}"), identity)
     assertEquals(readBack.metadata.creator, None)
     assertEquals(readBack.metadata.application, None)
     assertEquals(readBack.metadata.appVersion, None)
@@ -168,7 +185,9 @@ class DocPropsSpec extends FunSuite:
       .update(wb.sheets(0).name, _.put(ref"B2", CellValue.Number(BigDecimal(42))))
       .fold(err => fail(s"update failed: $err"), identity)
 
-    XlsxWriter.write(modified, dst).fold(err => fail(s"surgical write failed: ${err.message}"), identity)
+    XlsxWriter
+      .write(modified, dst)
+      .fold(err => fail(s"surgical write failed: ${err.message}"), identity)
 
     // Count occurrences of each docProps entry: duplicate zip entries would corrupt the file
     val zis = new ZipInputStream(new java.io.FileInputStream(dst.toFile))
@@ -178,7 +197,8 @@ class DocPropsSpec extends FunSuite:
     assertEquals(names.count(_ == "docProps/core.xml"), 1, s"core.xml count in $names")
     assertEquals(names.count(_ == "docProps/app.xml"), 1, s"app.xml count in $names")
 
-    val readBack = XlsxReader.read(dst).fold(err => fail(s"re-read failed: ${err.message}"), identity)
+    val readBack =
+      XlsxReader.read(dst).fold(err => fail(s"re-read failed: ${err.message}"), identity)
     assertEquals(readBack.metadata.creator, fullMetadata.creator)
     assertEquals(readBack.metadata.application, fullMetadata.application)
   }

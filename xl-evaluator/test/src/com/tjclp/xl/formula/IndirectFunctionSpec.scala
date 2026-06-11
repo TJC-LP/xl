@@ -11,10 +11,10 @@ import org.scalacheck.Prop.*
 /**
  * GH-274: INDIRECT(ref_text, [a1]) — dynamic text-to-reference resolution.
  *
- * INDIRECT resolves A1-style text to a cell/range at evaluation time and rides the same
- * ArrayResult mechanism as OFFSET (GH-122): aggregates flatten it, array formulas spill it,
- * scalar contexts collapse 1×1 results. Unresolvable text is the #REF! VALUE (total, never
- * throws); R1C1 mode (a1=FALSE) is a documented-unsupported eval error.
+ * INDIRECT resolves A1-style text to a cell/range at evaluation time and rides the same ArrayResult
+ * mechanism as OFFSET (GH-122): aggregates flatten it, array formulas spill it, scalar contexts
+ * collapse 1×1 results. Unresolvable text is the #REF! VALUE (total, never throws); R1C1 mode
+ * (a1=FALSE) is a documented-unsupported eval error.
  */
 class IndirectFunctionSpec extends ScalaCheckSuite:
 
@@ -289,7 +289,9 @@ class IndirectFunctionSpec extends ScalaCheckSuite:
   test("INDIRECT(\"A1:B2\") spills 2x2 via evaluateArrayFormula") {
     val sheet = s.put("A1" -> 1).put("B1" -> 2).put("A2" -> 3).put("B2" -> 4)
     val (out, range) =
-      sheet.evaluateArrayFormula("=INDIRECT(\"A1:B2\")", ref"E1").fold(e => fail(e.message), identity)
+      sheet
+        .evaluateArrayFormula("=INDIRECT(\"A1:B2\")", ref"E1")
+        .fold(e => fail(e.message), identity)
     assertEquals(range.height, 2)
     assertEquals(range.width, 2)
     assertEquals(out(ref"E1").value, num(1))
@@ -304,7 +306,9 @@ class IndirectFunctionSpec extends ScalaCheckSuite:
 
   test("INDIRECT(\"A1:A3\")*10 broadcasts as an array formula") {
     val (out, range) =
-      col.evaluateArrayFormula("=INDIRECT(\"A1:A3\")*10", ref"E1").fold(e => fail(e.message), identity)
+      col
+        .evaluateArrayFormula("=INDIRECT(\"A1:A3\")*10", ref"E1")
+        .fold(e => fail(e.message), identity)
     assertEquals(range.height, 3)
     assertEquals(out(ref"E1").value, num(100))
     assertEquals(out(ref"E2").value, num(200))

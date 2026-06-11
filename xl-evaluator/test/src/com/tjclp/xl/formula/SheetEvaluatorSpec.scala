@@ -98,7 +98,10 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"A1" -> CellValue.Number(BigDecimal(5)),
       ref"B1" -> CellValue.Number(BigDecimal(5))
     )
-    assertEquals(sheet.evaluateFormula("=IF(A1=B1,\"match\",\"no\")"), Right(CellValue.Text("match")))
+    assertEquals(
+      sheet.evaluateFormula("=IF(A1=B1,\"match\",\"no\")"),
+      Right(CellValue.Text("match"))
+    )
   }
 
   test("GH-233: cross-sheet-style ref equality with text cells") {
@@ -321,7 +324,10 @@ class SheetEvaluatorSpec extends FunSuite:
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 2)
-      assertEquals(results.get(ref"A1"), Some(CellValue.DateTime(LocalDate.of(2025, 11, 21).atStartOfDay())))
+      assertEquals(
+        results.get(ref"A1"),
+        Some(CellValue.DateTime(LocalDate.of(2025, 11, 21).atStartOfDay()))
+      )
       assertEquals(results.get(ref"B1"), Some(CellValue.Number(BigDecimal(2025))))
     }
   }
@@ -384,9 +390,9 @@ class SheetEvaluatorSpec extends FunSuite:
     // Test that formulas can reference other formulas and get evaluated values
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(5)),
-      ref"A2" -> CellValue.Formula("=A1*2"),    // 10
-      ref"A3" -> CellValue.Formula("=A2+A1"),   // 10 + 5 = 15
-      ref"A4" -> CellValue.Formula("=A3*A2")    // 15 * 10 = 150
+      ref"A2" -> CellValue.Formula("=A1*2"), // 10
+      ref"A3" -> CellValue.Formula("=A2+A1"), // 10 + 5 = 15
+      ref"A4" -> CellValue.Formula("=A3*A2") // 15 * 10 = 150
     )
     val result = sheet.evaluateWithDependencyCheck()
     assert(result.isRight)
@@ -468,9 +474,9 @@ class SheetEvaluatorSpec extends FunSuite:
   test("evaluateForRange: only evaluates formulas in range") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(5)),
-      ref"A2" -> CellValue.Formula("=A1*2"),   // In range
-      ref"A3" -> CellValue.Formula("=A2+10"),  // Outside range
-      ref"B1" -> CellValue.Formula("=A1+100")  // Outside range
+      ref"A2" -> CellValue.Formula("=A1*2"), // In range
+      ref"A3" -> CellValue.Formula("=A2+10"), // Outside range
+      ref"B1" -> CellValue.Formula("=A1+100") // Outside range
     )
     val range = CellRange(ref"A1", ref"A2")
     val result = sheet.evaluateForRange(range)
@@ -487,8 +493,8 @@ class SheetEvaluatorSpec extends FunSuite:
     // C1 is in range, depends on B1, which depends on A1 (both outside range)
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(5)),
-      ref"B1" -> CellValue.Formula("=A1*2"),   // Outside range but needed
-      ref"C1" -> CellValue.Formula("=B1+10")   // In range
+      ref"B1" -> CellValue.Formula("=A1*2"), // Outside range but needed
+      ref"C1" -> CellValue.Formula("=B1+10") // In range
     )
     val range = CellRange(ref"C1", ref"C1")
     val result = sheet.evaluateForRange(range)
@@ -496,7 +502,10 @@ class SheetEvaluatorSpec extends FunSuite:
     result.foreach { results =>
       // Only C1 should be in results (in range), but B1 was evaluated to compute it
       assertEquals(results.size, 1)
-      assertEquals(results.get(ref"C1"), Some(CellValue.Number(BigDecimal(20)))) // B1=10, C1=10+10=20
+      assertEquals(
+        results.get(ref"C1"),
+        Some(CellValue.Number(BigDecimal(20)))
+      ) // B1=10, C1=10+10=20
     }
   }
 
@@ -549,9 +558,9 @@ class SheetEvaluatorSpec extends FunSuite:
     // D1 = (A1 + B1) * C1 where each is a formula
     val sheet = sheetWith(
       ref"X1" -> CellValue.Number(BigDecimal(2)),
-      ref"A1" -> CellValue.Formula("=X1*5"),   // 10
-      ref"B1" -> CellValue.Formula("=X1+3"),   // 5
-      ref"C1" -> CellValue.Formula("=X1"),     // 2
+      ref"A1" -> CellValue.Formula("=X1*5"), // 10
+      ref"B1" -> CellValue.Formula("=X1+3"), // 5
+      ref"C1" -> CellValue.Formula("=X1"), // 2
       ref"D1" -> CellValue.Formula("=(A1+B1)*C1") // (10+5)*2 = 30
     )
     val range = CellRange(ref"D1", ref"D1")
@@ -569,8 +578,8 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"A2" -> CellValue.Number(BigDecimal(2)),
       ref"A3" -> CellValue.Number(BigDecimal(3)),
       ref"B1" -> CellValue.Formula("=SUM(A1:A3)"), // 6
-      ref"C1" -> CellValue.Formula("=B1*10"),      // 60
-      ref"Z1" -> CellValue.Formula("=999")         // Outside, should not be evaluated
+      ref"C1" -> CellValue.Formula("=B1*10"), // 60
+      ref"Z1" -> CellValue.Formula("=999") // Outside, should not be evaluated
     )
     val range = CellRange(ref"C1", ref"C1")
     val result = sheet.evaluateForRange(range)

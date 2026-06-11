@@ -17,9 +17,8 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 /**
  * Integration tests for the import-md command (GH-159).
  *
- * Covers: positioned import, --new-sheet, smart type detection (numbers, currency, percent,
- * dates), --no-type-inference opt-out, --skip-header, and GFM alignment markers mapping to cell
- * alignment.
+ * Covers: positioned import, --new-sheet, smart type detection (numbers, currency, percent, dates),
+ * --no-type-inference opt-out, --skip-header, and GFM alignment markers mapping to cell alignment.
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class ImportMarkdownSpec extends CatsEffectSuite:
@@ -157,14 +156,20 @@ class ImportMarkdownSpec extends CatsEffectSuite:
         imported <- readBack(out)
         s = imported.sheets.head
       yield
-        assertEquals(s.cells.get(ref"A2").map(_.value), Some(CellValue.Number(BigDecimal("1234.56"))))
-        val a2Fmt = s.cells.get(ref"A2").flatMap(_.styleId).flatMap(s.styleRegistry.get).map(_.numFmt)
+        assertEquals(
+          s.cells.get(ref"A2").map(_.value),
+          Some(CellValue.Number(BigDecimal("1234.56")))
+        )
+        val a2Fmt =
+          s.cells.get(ref"A2").flatMap(_.styleId).flatMap(s.styleRegistry.get).map(_.numFmt)
         assertEquals(a2Fmt, Some(NumFmt.Currency))
         assertEquals(s.cells.get(ref"B2").map(_.value), Some(CellValue.Number(BigDecimal("0.455"))))
-        val b2Fmt = s.cells.get(ref"B2").flatMap(_.styleId).flatMap(s.styleRegistry.get).map(_.numFmt)
+        val b2Fmt =
+          s.cells.get(ref"B2").flatMap(_.styleId).flatMap(s.styleRegistry.get).map(_.numFmt)
         assertEquals(b2Fmt, Some(NumFmt.Percent))
         // Dates serialize as Excel serial numbers; the Date numFmt carries the semantics
-        val c2Fmt = s.cells.get(ref"C2").flatMap(_.styleId).flatMap(s.styleRegistry.get).map(_.numFmt)
+        val c2Fmt =
+          s.cells.get(ref"C2").flatMap(_.styleId).flatMap(s.styleRegistry.get).map(_.numFmt)
         assertEquals(c2Fmt, Some(NumFmt.Date))
         assert(
           s.cells.get(ref"C2").map(_.value).exists {

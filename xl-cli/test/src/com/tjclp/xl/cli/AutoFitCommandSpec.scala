@@ -45,7 +45,17 @@ class AutoFitCommandSpec extends FunSuite:
   private def autoFitWidthOfColumnA(sheet: Sheet, outputPath: Path): Double =
     val wb = Workbook(sheet)
     WriteCommands
-      .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
+      .col(
+        wb,
+        Some(sheet),
+        "A",
+        None,
+        hide = false,
+        show = false,
+        autoFit = true,
+        outputPath,
+        config
+      )
       .unsafeRunSync()
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     val s = imported.sheets.headOption.getOrElse(fail("No sheets found"))
@@ -154,7 +164,17 @@ class AutoFitCommandSpec extends FunSuite:
       val wb = Workbook(sheet)
 
       val result = WriteCommands
-        .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
+        .col(
+          wb,
+          Some(sheet),
+          "A",
+          None,
+          hide = false,
+          show = false,
+          autoFit = true,
+          outputPath,
+          config
+        )
         .unsafeRunSync()
 
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
@@ -181,7 +201,17 @@ class AutoFitCommandSpec extends FunSuite:
       val wb = Workbook(sheet)
 
       val result = WriteCommands
-        .col(wb, Some(sheet), "B", None, hide = false, show = false, autoFit = true, outputPath, config)
+        .col(
+          wb,
+          Some(sheet),
+          "B",
+          None,
+          hide = false,
+          show = false,
+          autoFit = true,
+          outputPath,
+          config
+        )
         .unsafeRunSync()
 
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
@@ -198,7 +228,17 @@ class AutoFitCommandSpec extends FunSuite:
       val wb = Workbook(sheet)
 
       val result = WriteCommands
-        .col(wb, Some(sheet), "C", None, hide = false, show = false, autoFit = true, outputPath, config)
+        .col(
+          wb,
+          Some(sheet),
+          "C",
+          None,
+          hide = false,
+          show = false,
+          autoFit = true,
+          outputPath,
+          config
+        )
         .unsafeRunSync()
 
       assert(result.contains("(auto)"), s"Expected '(auto)' in output: $result")
@@ -215,7 +255,17 @@ class AutoFitCommandSpec extends FunSuite:
       val wb = Workbook(sheet)
 
       val result = WriteCommands
-        .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
+        .col(
+          wb,
+          Some(sheet),
+          "A",
+          None,
+          hide = false,
+          show = false,
+          autoFit = true,
+          outputPath,
+          config
+        )
         .unsafeRunSync()
 
       // Driven by "FALSE" (5 chars); exact width is font-metric dependent (GH-156)
@@ -233,7 +283,17 @@ class AutoFitCommandSpec extends FunSuite:
       val wb = Workbook(sheet)
 
       val result = WriteCommands
-        .col(wb, Some(sheet), "B", None, hide = false, show = false, autoFit = true, outputPath, config)
+        .col(
+          wb,
+          Some(sheet),
+          "B",
+          None,
+          hide = false,
+          show = false,
+          autoFit = true,
+          outputPath,
+          config
+        )
         .unsafeRunSync()
 
       // "200" (3 chars) measures well below the 5.0 minimum width floor
@@ -249,7 +309,17 @@ class AutoFitCommandSpec extends FunSuite:
       val wb = Workbook(sheet)
 
       val result = WriteCommands
-        .col(wb, Some(sheet), "A", None, hide = false, show = false, autoFit = true, outputPath, config)
+        .col(
+          wb,
+          Some(sheet),
+          "A",
+          None,
+          hide = false,
+          show = false,
+          autoFit = true,
+          outputPath,
+          config
+        )
         .unsafeRunSync()
 
       // Driven by "123.456789" (10 chars); exact width is font-metric dependent (GH-156)
@@ -267,7 +337,17 @@ class AutoFitCommandSpec extends FunSuite:
 
       // autoFit=true should override width=100
       val result = WriteCommands
-        .col(wb, Some(sheet), "A", Some(100.0), hide = false, show = false, autoFit = true, outputPath, config)
+        .col(
+          wb,
+          Some(sheet),
+          "A",
+          Some(100.0),
+          hide = false,
+          show = false,
+          autoFit = true,
+          outputPath,
+          config
+        )
         .unsafeRunSync()
 
       // Auto-fit should win over width=100: "Short" needs far less than 100 units
@@ -284,7 +364,17 @@ class AutoFitCommandSpec extends FunSuite:
       val wb = Workbook(sheet)
 
       val result = WriteCommands
-        .col(wb, Some(sheet), "A", Some(25.0), hide = false, show = false, autoFit = false, outputPath, config)
+        .col(
+          wb,
+          Some(sheet),
+          "A",
+          Some(25.0),
+          hide = false,
+          show = false,
+          autoFit = false,
+          outputPath,
+          config
+        )
         .unsafeRunSync()
 
       assert(result.contains("25.00"), s"Expected '25.00' in output: $result")
@@ -303,7 +393,17 @@ class AutoFitCommandSpec extends FunSuite:
       val wb = Workbook(sheet)
 
       val result = WriteCommands
-        .col(wb, Some(sheet), "A:C", None, hide = false, show = false, autoFit = true, outputPath, config)
+        .col(
+          wb,
+          Some(sheet),
+          "A:C",
+          None,
+          hide = false,
+          show = false,
+          autoFit = true,
+          outputPath,
+          config
+        )
         .unsafeRunSync()
 
       // Should output multiple columns
@@ -400,6 +500,9 @@ class AutoFitCommandSpec extends FunSuite:
         .autoFit(wb, Some(sheet), None, outputPath, config)
         .unsafeRunSync()
 
-      assert(result.contains("No columns to auto-fit"), s"Expected empty sheet message in output: $result")
+      assert(
+        result.contains("No columns to auto-fit"),
+        s"Expected empty sheet message in output: $result"
+      )
     }
   }

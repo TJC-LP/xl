@@ -8,12 +8,12 @@ import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
 
 /**
- * Tests for Workbook.recalculate (0.11.0): total whole-workbook recalculation with per-cell
- * error reporting, cycle isolation, and automatic cross-sheet context.
+ * Tests for Workbook.recalculate (0.11.0): total whole-workbook recalculation with per-cell error
+ * reporting, cycle isolation, and automatic cross-sheet context.
  *
  * Also covers the latent bugs in the pre-0.11.0 withCachedFormulas this replaces: one failing
- * formula uncached the ENTIRE sheet, and cross-sheet formulas always failed (no workbook
- * context), silently uncaching their sheet.
+ * formula uncached the ENTIRE sheet, and cross-sheet formulas always failed (no workbook context),
+ * silently uncaching their sheet.
  */
 class RecalcSpec extends FunSuite:
 
@@ -126,8 +126,14 @@ class RecalcSpec extends FunSuite:
     val result = Workbook(s1, s2).recalculate()
     assertEquals(cached(result.workbook, "S1", a3), Some(num(10)))
     val errorRefs = result.errors.map(e => (e.sheet.value, e.ref)).toSet
-    assert(errorRefs.contains(("S1", a1)), s"S1!A1 should error, got: ${result.errors.map(_.render)}")
-    assert(errorRefs.contains(("S2", a1)), s"S2!A1 should error, got: ${result.errors.map(_.render)}")
+    assert(
+      errorRefs.contains(("S1", a1)),
+      s"S1!A1 should error, got: ${result.errors.map(_.render)}"
+    )
+    assert(
+      errorRefs.contains(("S2", a1)),
+      s"S2!A1 should error, got: ${result.errors.map(_.render)}"
+    )
     assertEquals(cached(result.workbook, "S1", a1), None)
     assertEquals(cached(result.workbook, "S2", a1), None)
 
@@ -156,8 +162,8 @@ class RecalcSpec extends FunSuite:
 
   test("recalculate end-to-end on a 3k-deep formula chain stays total and clean"):
     val n = 3000
-    val sheet = (1 until n).foldLeft(Sheet(SheetName.unsafe("Deep")).put(a1, num(1))) {
-      (s, i) => s.put(ARef.from0(0, i), formula(s"=A$i+1"))
+    val sheet = (1 until n).foldLeft(Sheet(SheetName.unsafe("Deep")).put(a1, num(1))) { (s, i) =>
+      s.put(ARef.from0(0, i), formula(s"=A$i+1"))
     }
     val result = Workbook(sheet).recalculate()
     assert(result.isClean, s"expected clean, got ${result.errors.take(3).map(_.render)}")
@@ -168,7 +174,9 @@ class RecalcSpec extends FunSuite:
 
   // ===== GH-274: INDIRECT — deferred-bucket recalculation =====
 
-  test("GH-274 deferred bucket: INDIRECT cell reads the freshly computed target, not a stale cache"):
+  test(
+    "GH-274 deferred bucket: INDIRECT cell reads the freshly computed target, not a stale cache"
+  ):
     // C1=INDIRECT("A1") has ZERO static deps, so Kahn may schedule it before A1; the
     // evaluate-last bucket + cache strip guarantee it sees the computed A1, not the stale 999.
     val sheet = Sheet(SheetName.unsafe("S"))

@@ -9,8 +9,8 @@ import com.tjclp.xl.cli.helpers.FilterPredicate.{CmpOp, Literal, Pred}
  * Tests for the filter predicate grammar and evaluator (GH-134, phase 1).
  *
  * Grammar: comparisons (= != <> > >= < <=) between a column ref and a literal, AND/OR/NOT with
- * parens, LIKE 'pat%', BETWEEN x AND y, IN (a, b, c), IS [NOT] EMPTY. Total: parse errors are
- * Left, evaluation never throws — type mismatches simply don't match.
+ * parens, LIKE 'pat%', BETWEEN x AND y, IN (a, b, c), IS [NOT] EMPTY. Total: parse errors are Left,
+ * evaluation never throws — type mismatches simply don't match.
  */
 class FilterPredicateSpec extends FunSuite:
 

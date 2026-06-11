@@ -81,7 +81,10 @@ class FilterCommandSpec extends CatsEffectSuite:
     run("Cost > 100", header = true).attempt.map {
       case Left(err) =>
         assert(err.getMessage.contains("Cost"), err.getMessage)
-        assert(err.getMessage.contains("Price"), s"Should list available headers: ${err.getMessage}")
+        assert(
+          err.getMessage.contains("Price"),
+          s"Should list available headers: ${err.getMessage}"
+        )
       case Right(out) => fail(s"Expected error, got: $out")
     }
   }

@@ -141,12 +141,18 @@ class EasyExcelSpec extends CatsEffectSuite:
       Excel.write(original, tempFile.toString)
       val loaded = Excel.read(tempFile.toString)
 
-      assertEquals(loaded.get("First").flatMap(_.cell("A1").map(_.value)),
-                   Some(CellValue.Text("1")))
-      assertEquals(loaded.get("Second").flatMap(_.cell("A1").map(_.value)),
-                   Some(CellValue.Text("2")))
-      assertEquals(loaded.get("Third").flatMap(_.cell("A1").map(_.value)),
-                   Some(CellValue.Text("3")))
+      assertEquals(
+        loaded.get("First").flatMap(_.cell("A1").map(_.value)),
+        Some(CellValue.Text("1"))
+      )
+      assertEquals(
+        loaded.get("Second").flatMap(_.cell("A1").map(_.value)),
+        Some(CellValue.Text("2"))
+      )
+      assertEquals(
+        loaded.get("Third").flatMap(_.cell("A1").map(_.value)),
+        Some(CellValue.Text("3"))
+      )
     } finally {
       Files.deleteIfExists(tempFile)
     }

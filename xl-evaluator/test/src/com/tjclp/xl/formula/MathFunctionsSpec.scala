@@ -9,8 +9,8 @@ import munit.FunSuite
 /**
  * Comprehensive tests for math functions.
  *
- * Tests SQRT, MOD, POWER, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, INT functions.
- * Covers basic operations, edge cases, and error conditions.
+ * Tests SQRT, MOD, POWER, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, INT functions. Covers basic
+ * operations, edge cases, and error conditions.
  */
 class MathFunctionsSpec extends FunSuite:
   val emptySheet = new Sheet(name = SheetName.unsafe("Test"))
@@ -410,7 +410,8 @@ class MathFunctionsSpec extends FunSuite:
   test("EXP parser: parse and evaluate =EXP(2)") {
     val result = emptySheet.evaluateFormula("=EXP(2)")
     result match
-      case Right(CellValue.Number(value)) => assertEqualsDouble(value.toDouble, Math.E * Math.E, 0.0001)
+      case Right(CellValue.Number(value)) =>
+        assertEqualsDouble(value.toDouble, Math.E * Math.E, 0.0001)
       case other => fail(s"Expected Number, got $other")
   }
 

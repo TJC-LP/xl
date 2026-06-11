@@ -125,17 +125,19 @@ class DependentRecalculationSpec extends FunSuite:
     val recalculated = updatedSheet.recalculateDependents(Set(ref"A1"))
 
     // B1 should be 100 (50 * 2)
-    val b1Value = recalculated.cells.get(ref"B1").flatMap(_.value match
-      case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
-      case _ => None
-    )
+    val b1Value = recalculated.cells
+      .get(ref"B1")
+      .flatMap(_.value match
+        case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+        case _ => None)
     assertEquals(b1Value, Some(BigDecimal(100)))
 
     // C1 should be 105 (100 + 5)
-    val c1Value = recalculated.cells.get(ref"C1").flatMap(_.value match
-      case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
-      case _ => None
-    )
+    val c1Value = recalculated.cells
+      .get(ref"C1")
+      .flatMap(_.value match
+        case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+        case _ => None)
     assertEquals(c1Value, Some(BigDecimal(105)))
   }
 
@@ -152,10 +154,11 @@ class DependentRecalculationSpec extends FunSuite:
     val recalculated = updatedSheet.recalculateDependents(Set(ref"A1"))
 
     // C1 should be untouched (still 100)
-    val c1Value = recalculated.cells.get(ref"C1").flatMap(_.value match
-      case CellValue.Formula(expr, cached) => Some((expr, cached))
-      case _ => None
-    )
+    val c1Value = recalculated.cells
+      .get(ref"C1")
+      .flatMap(_.value match
+        case CellValue.Formula(expr, cached) => Some((expr, cached))
+        case _ => None)
     assertEquals(c1Value.map(_._1), Some("100"))
     assertEquals(
       c1Value.flatMap(_._2),
@@ -192,7 +195,6 @@ class DependentRecalculationSpec extends FunSuite:
     assertEquals(result.cells, sheet.cells)
   }
 
-
   // ===== Workbook Cross-Sheet Tests (3 tests) =====
 
   test("workbook recalculateDependents: updates dependent on same sheet") {
@@ -206,10 +208,11 @@ class DependentRecalculationSpec extends FunSuite:
     val updatedWb = wb.put(updatedSheet).recalculateDependents(sheet.name, Set(ref"A1"))
 
     val resultSheet = updatedWb(sheet.name).toOption.get
-    val b1Value = resultSheet.cells.get(ref"B1").flatMap(_.value match
-      case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
-      case _ => None
-    )
+    val b1Value = resultSheet.cells
+      .get(ref"B1")
+      .flatMap(_.value match
+        case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+        case _ => None)
     assertEquals(b1Value, Some(BigDecimal(100)))
   }
 
@@ -228,10 +231,11 @@ class DependentRecalculationSpec extends FunSuite:
 
     // Sheet2!A1 should be recalculated to 100
     val resultSheet2 = updatedWb(SheetName.unsafe("Sheet2")).toOption.get
-    val a1Value = resultSheet2.cells.get(ref"A1").flatMap(_.value match
-      case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
-      case _ => None
-    )
+    val a1Value = resultSheet2.cells
+      .get(ref"A1")
+      .flatMap(_.value match
+        case CellValue.Formula(_, Some(CellValue.Number(n))) => Some(n)
+        case _ => None)
     assertEquals(a1Value, Some(BigDecimal(100)))
   }
 
@@ -293,9 +297,13 @@ class DependentRecalculationSpec extends FunSuite:
   }
 
   test("GH-274: workbook recalculateDependents treats INDIRECT cells as always dirty") {
-    val s1 = (new Sheet(name = SheetName.unsafe("S1"))).put(ref"A1", CellValue.Number(BigDecimal(5)))
+    val s1 =
+      (new Sheet(name = SheetName.unsafe("S1"))).put(ref"A1", CellValue.Number(BigDecimal(5)))
     val s2 = (new Sheet(name = SheetName.unsafe("S2")))
-      .put(ref"B1", CellValue.Formula("=INDIRECT(\"S1!A1\")", Some(CellValue.Number(BigDecimal(5)))))
+      .put(
+        ref"B1",
+        CellValue.Formula("=INDIRECT(\"S1!A1\")", Some(CellValue.Number(BigDecimal(5))))
+      )
     val wb0 = Workbook(s1, s2)
     val wb1 = wb0
       .put(s1.put(ref"A1", CellValue.Number(BigDecimal(9))))
@@ -348,7 +356,10 @@ class DependentRecalculationSpec extends FunSuite:
       ref"C1" -> CellValue.Number(BigDecimal(1)),
       ref"C2" -> CellValue.Number(BigDecimal(2)),
       ref"C3" -> CellValue.Number(BigDecimal(3)),
-      ref"B1" -> CellValue.Formula("=SUM(OFFSET(C1,0,0,3,1))", Some(CellValue.Number(BigDecimal(6))))
+      ref"B1" -> CellValue.Formula(
+        "=SUM(OFFSET(C1,0,0,3,1))",
+        Some(CellValue.Number(BigDecimal(6)))
+      )
     )
     val updated = sheet
       .put(ref"C3", CellValue.Number(BigDecimal(30)))

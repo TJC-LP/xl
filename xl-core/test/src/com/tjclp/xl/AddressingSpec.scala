@@ -15,8 +15,7 @@ class AddressingSpec extends ScalaCheckSuite:
         val col = Column.from0(n)
         assertEquals(col.index0, n)
         true
-      else
-        true
+      else true
     }
   }
 
@@ -26,8 +25,7 @@ class AddressingSpec extends ScalaCheckSuite:
         val col = Column.from1(n)
         assertEquals(col.index1, n)
         true
-      else
-        true
+      else true
     }
   }
 
@@ -48,8 +46,7 @@ class AddressingSpec extends ScalaCheckSuite:
         val row = Row.from0(n)
         assertEquals(row.index0, n)
         true
-      else
-        true
+      else true
     }
   }
 
@@ -59,8 +56,7 @@ class AddressingSpec extends ScalaCheckSuite:
         val row = Row.from1(n)
         assertEquals(row.index1, n)
         true
-      else
-        true
+      else true
     }
   }
 

@@ -11,9 +11,9 @@ import munit.FunSuite
  * GH-290: comment author whitespace must not corrupt the round-trip.
  *
  * Probe: author " Bob " read back as Some("Bob") (the reader trims authors), AND the writer's
- * author-prefix presentation run leaked into the comment text — text "note" returned
- * " Bob :\nnote" because XlsxReader.stripAuthorPrefix compared the TRIMMED author against the
- * UNTRIMMED " Bob :" first run and failed to match.
+ * author-prefix presentation run leaked into the comment text — text "note" returned " Bob :\nnote"
+ * because XlsxReader.stripAuthorPrefix compared the TRIMMED author against the UNTRIMMED " Bob :"
+ * first run and failed to match.
  *
  * The TRIM IS CANONICAL at write time: XlsxWriter.buildCommentsData normalizes the author once
  * (trim; whitespace-only → unauthored) and builds the <authors> entry AND the bold prefix run from
@@ -62,9 +62,11 @@ class CommentAuthorWhitespaceSpec extends FunSuite:
       "note",
       "author-prefix presentation run leaked into the comment text"
     )
-    val commentsXml = parts.collectFirst {
-      case (name, content) if name.startsWith("xl/comments") => content
-    }.getOrElse(fail("no comments part written"))
+    val commentsXml = parts
+      .collectFirst {
+        case (name, content) if name.startsWith("xl/comments") => content
+      }
+      .getOrElse(fail("no comments part written"))
     assert(
       commentsXml.contains("<author>Bob</author>"),
       s"<authors> should store the TRIMMED author. XML:\n$commentsXml"

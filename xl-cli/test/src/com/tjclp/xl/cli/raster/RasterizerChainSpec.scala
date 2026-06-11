@@ -37,7 +37,7 @@ class RasterizerChainSpec extends CatsEffectSuite:
       else
         failWith match
           case Some(err) => IO.raiseError(err)
-          case None      => IO.unit // Success
+          case None => IO.unit // Success
 
   /** Helper to run chain with custom rasterizers */
   private def runChainWith(
@@ -194,7 +194,11 @@ class RasterizerChainSpec extends CatsEffectSuite:
   test("chain falls back when format not supported") {
     val chain = List(
       new MockRasterizer("PngOnly", available = true, supportedFormats = Set(RasterFormat.Png)),
-      new MockRasterizer("JpegSupport", available = true, supportedFormats = Set(RasterFormat.Jpeg(90)))
+      new MockRasterizer(
+        "JpegSupport",
+        available = true,
+        supportedFormats = Set(RasterFormat.Jpeg(90))
+      )
     )
 
     runChainWith(chain, RasterFormat.Jpeg(90)).map { result =>
@@ -474,10 +478,14 @@ class RasterizerChainSpec extends CatsEffectSuite:
     val scaled = RasterizerChain.scaleSvgForDpi(svg, 192) // 2x scale (192/96)
 
     // Root SVG dimensions should be scaled
-    assert(scaled.contains("""<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">"""),
-      s"Root SVG should be scaled: $scaled")
+    assert(
+      scaled.contains("""<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">"""),
+      s"Root SVG should be scaled: $scaled"
+    )
 
     // Rect dimensions should NOT be scaled (they define cell size, not canvas size)
-    assert(scaled.contains("""width="100" height="25" fill="red"/>"""),
-      s"Rect should NOT be scaled: $scaled")
+    assert(
+      scaled.contains("""width="100" height="25" fill="red"/>"""),
+      s"Rect should NOT be scaled: $scaled"
+    )
   }

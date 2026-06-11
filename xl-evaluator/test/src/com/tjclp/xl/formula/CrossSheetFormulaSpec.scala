@@ -108,15 +108,15 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
   yield (first :: rest).mkString).suchThat(n => !SheetName.needsQuoting(n))
 
   // Generator for sheet names requiring quotes (spaces, special chars)
-  val genQuotedSheetName: Gen[String] = for
-    name <- Gen.oneOf(
-      Gen.const("Q1 Report"),
-      Gen.const("Sales&Marketing"),
-      Gen.const("2024 Data"),
-      Gen.const("Jan-Mar"),
-      Gen.const("O'Brien's")
-    )
-  yield name
+  val genQuotedSheetName: Gen[String] =
+    for name <- Gen.oneOf(
+        Gen.const("Q1 Report"),
+        Gen.const("Sales&Marketing"),
+        Gen.const("2024 Data"),
+        Gen.const("Jan-Mar"),
+        Gen.const("O'Brien's")
+      )
+    yield name
 
   property("round-trip: parse . print = id for simple cross-sheet refs") {
     forAll(genSimpleSheetName, Gen.choose(1, 100), Gen.choose(1, 26)) { (sheetName, row, col) =>
@@ -129,15 +129,15 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
   }
 
   property("round-trip: parse . print = id for cross-sheet SUM") {
-    forAll(genSimpleSheetName, Gen.choose(1, 50), Gen.choose(2, 100)) { (sheetName, startRow, endRow) =>
-      val actualEnd = Math.max(startRow + 1, endRow)
-      val formula = s"=SUM($sheetName!A$startRow:A$actualEnd)"
-      val parsed = FormulaParser.parse(formula)
-      val reprinted = parsed.map(FormulaPrinter.print(_))
-      reprinted == Right(formula)
+    forAll(genSimpleSheetName, Gen.choose(1, 50), Gen.choose(2, 100)) {
+      (sheetName, startRow, endRow) =>
+        val actualEnd = Math.max(startRow + 1, endRow)
+        val formula = s"=SUM($sheetName!A$startRow:A$actualEnd)"
+        val parsed = FormulaParser.parse(formula)
+        val reprinted = parsed.map(FormulaPrinter.print(_))
+        reprinted == Right(formula)
     }
   }
-
 
   // ===== GH-268: keyword-prefixed sheet names must parse as references =====
 

@@ -376,7 +376,9 @@ class LetFunctionSpec extends ScalaCheckSuite:
     )
   }
 
-  test("Int position coerces boolean binding like decodeAsInt: LET(b, TRUE, LEFT(\"hey\", b)) = 'h'") {
+  test(
+    "Int position coerces boolean binding like decodeAsInt: LET(b, TRUE, LEFT(\"hey\", b)) = 'h'"
+  ) {
     assertEquals(
       sheet.evaluateFormula("""=LET(b, TRUE, LEFT("hey", b))"""),
       Right(CellValue.Text("h"))

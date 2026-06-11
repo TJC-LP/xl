@@ -71,24 +71,23 @@ class CopyCommandSpec extends FunSuite:
       assertEquals(cellValueAt(s, 0, 3), Some(CellValue.Number(3)), "A4 = source A3")
   }
 
-  outputFixture.test("copy: overlapping B1:D1 -> A1 shifts left without corruption") {
-    outputPath =>
-      // B1=10, C1=20, D1=30. Copy B1:D1 left by 1. Result: A1=10, B1=20, C1=30
-      val sheet = Sheet("Test")
-        .put(ARef.from0(1, 0), CellValue.Number(10))
-        .put(ARef.from0(2, 0), CellValue.Number(20))
-        .put(ARef.from0(3, 0), CellValue.Number(30))
-      val wb = Workbook(sheet)
+  outputFixture.test("copy: overlapping B1:D1 -> A1 shifts left without corruption") { outputPath =>
+    // B1=10, C1=20, D1=30. Copy B1:D1 left by 1. Result: A1=10, B1=20, C1=30
+    val sheet = Sheet("Test")
+      .put(ARef.from0(1, 0), CellValue.Number(10))
+      .put(ARef.from0(2, 0), CellValue.Number(20))
+      .put(ARef.from0(3, 0), CellValue.Number(30))
+    val wb = Workbook(sheet)
 
-      WriteCommands
-        .copyRange(wb, Some(sheet), "B1:D1", "A1", valuesOnly = false, outputPath, config)
-        .unsafeRunSync()
+    WriteCommands
+      .copyRange(wb, Some(sheet), "B1:D1", "A1", valuesOnly = false, outputPath, config)
+      .unsafeRunSync()
 
-      val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
-      val s = imported.sheets.head
-      assertEquals(cellValueAt(s, 0, 0), Some(CellValue.Number(10)), "A1 = source B1")
-      assertEquals(cellValueAt(s, 1, 0), Some(CellValue.Number(20)), "B1 = source C1")
-      assertEquals(cellValueAt(s, 2, 0), Some(CellValue.Number(30)), "C1 = source D1")
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    val s = imported.sheets.head
+    assertEquals(cellValueAt(s, 0, 0), Some(CellValue.Number(10)), "A1 = source B1")
+    assertEquals(cellValueAt(s, 1, 0), Some(CellValue.Number(20)), "B1 = source C1")
+    assertEquals(cellValueAt(s, 2, 0), Some(CellValue.Number(30)), "C1 = source D1")
   }
 
   // =========================================================================

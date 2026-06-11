@@ -177,8 +177,8 @@ class ReferenceFunctionsSpec extends FunSuite:
       TExpr.Lit(BigDecimal(1)), // row
       TExpr.Lit(BigDecimal(1)), // col
       TExpr.Lit(BigDecimal(1)), // abs_num = 1 ($A$1)
-      TExpr.Lit(true),          // a1_style = true
-      None                       // no sheet name
+      TExpr.Lit(true), // a1_style = true
+      None // no sheet name
     )
     val result = evaluator.eval(expr, emptySheet)
     assertEquals(result, Right("$A$1"))
@@ -273,7 +273,7 @@ class ReferenceFunctionsSpec extends FunSuite:
       TExpr.Lit(BigDecimal(5)),
       TExpr.Lit(BigDecimal(3)),
       TExpr.Lit(BigDecimal(1)), // abs = 1 for R5C3 (absolute)
-      TExpr.Lit(false),         // a1_style = false (R1C1)
+      TExpr.Lit(false), // a1_style = false (R1C1)
       None
     )
     val result = evaluator.eval(expr, emptySheet)

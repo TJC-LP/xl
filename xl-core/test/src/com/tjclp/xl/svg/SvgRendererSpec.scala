@@ -210,7 +210,10 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:A1", showLabels = true)
 
     // With showLabels=true: HeaderWidth (40) + CellPaddingX (6) + indent (21) = 67
-    assert(svg.contains("""x="67""""), s"Text should be at x=67 with indent=1 and labels, got: $svg")
+    assert(
+      svg.contains("""x="67""""),
+      s"Text should be at x=67 with indent=1 and labels, got: $svg"
+    )
   }
 
   test("toSvg: indent 0 uses default padding") {
@@ -467,8 +470,14 @@ class SvgRendererSpec extends FunSuite:
       .put(ref"A1" -> "First Second Third Fourth Fifth")
       .unsafe
       .withCellStyle(ref"A1", wrapStyle)
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(6.0))) // very narrow ~47px
-      .setRowProperties(Row.from0(0), RowProperties(height = Some(60.0))) // tall row for wrapped text
+      .setColumnProperties(
+        Column.from0(0),
+        ColumnProperties(width = Some(6.0))
+      ) // very narrow ~47px
+      .setRowProperties(
+        Row.from0(0),
+        RowProperties(height = Some(60.0))
+      ) // tall row for wrapped text
 
     val svg = sheet.toSvg(ref"A1:A1")
 
@@ -908,7 +917,10 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:A1")
 
     // Should use the background color (#C8C8C8 = 200,200,200)
-    assert(svg.contains("""fill="#C8C8C8""""), s"Pattern fill should use background color, got: $svg")
+    assert(
+      svg.contains("""fill="#C8C8C8""""),
+      s"Pattern fill should use background color, got: $svg"
+    )
   }
 
   test("toSvg: pattern fill does not render as white") {
@@ -929,10 +941,15 @@ class SvgRendererSpec extends FunSuite:
     val svg = sheet.toSvg(ref"A1:A1")
 
     // Should not render as white (the old bug behavior)
-    assert(!svg.contains("""fill="#FFFFFF"""") || svg.contains("""fill="#0080FF""""),
-      s"Pattern fill should not be white, should be blue #0080FF, got: $svg")
+    assert(
+      !svg.contains("""fill="#FFFFFF"""") || svg.contains("""fill="#0080FF""""),
+      s"Pattern fill should not be white, should be blue #0080FF, got: $svg"
+    )
     // Should use the background color
-    assert(svg.contains("""fill="#0080FF""""), s"Pattern fill should use blue background, got: $svg")
+    assert(
+      svg.contains("""fill="#0080FF""""),
+      s"Pattern fill should use blue background, got: $svg"
+    )
   }
 
   test("toSvg: solid fill still works correctly") {
@@ -980,14 +997,20 @@ class SvgRendererSpec extends FunSuite:
     assert(svg.contains("""<clipPath id="clip-B1">"""), "Should have clip path for B1")
 
     // Text elements should reference their clip paths
-    assert(svg.contains("""clip-path="url(#clip-A1)">Sales Report</text>"""),
-      s"A1 text should have clip-path attribute, got: $svg")
-    assert(svg.contains("""clip-path="url(#clip-B1)">Revenue</text>"""),
-      s"B1 text should have clip-path attribute, got: $svg")
+    assert(
+      svg.contains("""clip-path="url(#clip-A1)">Sales Report</text>"""),
+      s"A1 text should have clip-path attribute, got: $svg"
+    )
+    assert(
+      svg.contains("""clip-path="url(#clip-B1)">Revenue</text>"""),
+      s"B1 text should have clip-path attribute, got: $svg"
+    )
 
     // Clip path for A1 should be cell width only (72px) since B1 is not empty
-    assert(svg.contains("""<clipPath id="clip-A1"><rect x="0" y="0" width="72" height="20"/>"""),
-      s"A1 clip should be 72px (single cell), got: $svg")
+    assert(
+      svg.contains("""<clipPath id="clip-A1"><rect x="0" y="0" width="72" height="20"/>"""),
+      s"A1 clip should be 72px (single cell), got: $svg"
+    )
   }
 
   test("toSvg: text can overflow into empty cells with expanded clip region") {
@@ -1004,8 +1027,10 @@ class SvgRendererSpec extends FunSuite:
     // Width should be >72px (at least 2 cells = 144px)
     val clipPattern = """<clipPath id="clip-A1"><rect x="0" y="0" width="(\d+)" """.r
     val widthOpt = clipPattern.findFirstMatchIn(svg).map(_.group(1).toInt)
-    assert(widthOpt.exists(_ >= 144),
-      s"Clip region should be ≥144px for overflow into empty cells, got: ${widthOpt.getOrElse(0)}")
+    assert(
+      widthOpt.exists(_ >= 144),
+      s"Clip region should be ≥144px for overflow into empty cells, got: ${widthOpt.getOrElse(0)}"
+    )
   }
 
   test("toSvg: all cells have clip paths in defs section") {
@@ -1028,10 +1053,14 @@ class SvgRendererSpec extends FunSuite:
     // All clip paths should appear before </defs>
     val firstClipPath = svg.indexOf("""<clipPath""")
     val lastClipPath = svg.lastIndexOf("""</clipPath>""")
-    assert(firstClipPath > defsStart && firstClipPath < defsEnd,
-      "Clip paths should be inside defs section")
-    assert(lastClipPath > defsStart && lastClipPath < defsEnd,
-      "All clip paths should be inside defs section")
+    assert(
+      firstClipPath > defsStart && firstClipPath < defsEnd,
+      "Clip paths should be inside defs section"
+    )
+    assert(
+      lastClipPath > defsStart && lastClipPath < defsEnd,
+      "All clip paths should be inside defs section"
+    )
   }
 
   test("toSvg: defs section appears before cells group") {
@@ -1041,8 +1070,10 @@ class SvgRendererSpec extends FunSuite:
     val defsIdx = svg.indexOf("<defs>")
     val cellsIdx = svg.indexOf("""<g class="cells">""")
 
-    assert(defsIdx < cellsIdx,
-      s"Defs section should appear before cells group, defs at $defsIdx, cells at $cellsIdx")
+    assert(
+      defsIdx < cellsIdx,
+      s"Defs section should appear before cells group, defs at $defsIdx, cells at $cellsIdx"
+    )
   }
 
   // ========== Date Formatting (TJC-742 regression) ==========
@@ -1178,9 +1209,8 @@ class SvgRendererSpec extends FunSuite:
     val edgeLines = """<line x1="72\.0" y1="0\.0" x2="72\.0" y2="20\.0"[^>]*/>""".r
       .findAllIn(svg)
       .toList
-    val widths = edgeLines.flatMap(l =>
-      """stroke-width="(\d+)"""".r.findFirstMatchIn(l).map(_.group(1).toInt)
-    )
+    val widths =
+      edgeLines.flatMap(l => """stroke-width="(\d+)"""".r.findFirstMatchIn(l).map(_.group(1).toInt))
     assertEquals(
       widths,
       List(3),
@@ -1237,9 +1267,8 @@ class SvgRendererSpec extends FunSuite:
     val edgeLines = """<line x1="0\.0" y1="20\.0" x2="72\.0" y2="20\.0"[^>]*/>""".r
       .findAllIn(svg)
       .toList
-    val widths = edgeLines.flatMap(l =>
-      """stroke-width="(\d+)"""".r.findFirstMatchIn(l).map(_.group(1).toInt)
-    )
+    val widths =
+      edgeLines.flatMap(l => """stroke-width="(\d+)"""".r.findFirstMatchIn(l).map(_.group(1).toInt))
     assertEquals(
       widths,
       List(2),

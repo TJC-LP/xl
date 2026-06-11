@@ -6,7 +6,17 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.time.LocalDateTime
 import java.util.zip.ZipFile
-import scala.xml.{Elem, MetaData, Node, Null, PrefixedAttribute, Text, TopScope, UnprefixedAttribute, XML}
+import scala.xml.{
+  Elem,
+  MetaData,
+  Node,
+  Null,
+  PrefixedAttribute,
+  Text,
+  TopScope,
+  UnprefixedAttribute,
+  XML
+}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.cells.{Cell, CellValue, Comment}
@@ -190,7 +200,12 @@ class DirectSaxEmitterParitySpec extends FunSuite:
       )
       .setColumnProperties(
         Column.from1(3),
-        ColumnProperties(width = Some(20.0), hidden = true, outlineLevel = Some(2), collapsed = true)
+        ColumnProperties(
+          width = Some(20.0),
+          hidden = true,
+          outlineLevel = Some(2),
+          collapsed = true
+        )
       )
 
   private def buildTableParts(): Elem =

@@ -18,7 +18,8 @@ class SaxStaxRoundTripSpec extends FunSuite:
   val tempDir: Path = Files.createTempDirectory("xl-sax-roundtrip-")
 
   override def afterAll(): Unit =
-    Files.walk(tempDir)
+    Files
+      .walk(tempDir)
       .sorted(java.util.Comparator.reverseOrder())
       .forEach(Files.delete)
 
@@ -108,7 +109,12 @@ class SaxStaxRoundTripSpec extends FunSuite:
       )
       .setColumnProperties(
         Column.from1(3),
-        ColumnProperties(width = Some(20.0), hidden = true, outlineLevel = Some(2), collapsed = true)
+        ColumnProperties(
+          width = Some(20.0),
+          hidden = true,
+          outlineLevel = Some(2),
+          collapsed = true
+        )
       )
       .withCellStyle(
         ref"A1",

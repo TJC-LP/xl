@@ -19,7 +19,10 @@ class ScalaXmlSaxWriterSpec extends FunSuite:
 
     val domElem = ws.toXml
 
-    assertEquals((saxElem \\ "c").map(_ \ "@r").map(_.text), (domElem \\ "c").map(_ \ "@r").map(_.text))
+    assertEquals(
+      (saxElem \\ "c").map(_ \ "@r").map(_.text),
+      (domElem \\ "c").map(_ \ "@r").map(_.text)
+    )
   }
 
   test("ScalaXmlSaxWriter preserves xml:space on inline strings") {
@@ -32,7 +35,8 @@ class ScalaXmlSaxWriterSpec extends FunSuite:
     val saxElem = writer.result.getOrElse(fail("expected worksheet root"))
 
     val tElem = (saxElem \\ "t").headOption.getOrElse(fail("expected <t> element"))
-    val spaceAttr = tElem.attributes.asAttrMap.get("xml:space").orElse(tElem.attributes.asAttrMap.get("space"))
+    val spaceAttr =
+      tElem.attributes.asAttrMap.get("xml:space").orElse(tElem.attributes.asAttrMap.get("space"))
     assertEquals(spaceAttr, Some("preserve"))
     assertEquals(tElem.text, "  spaced")
   }

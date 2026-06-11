@@ -4,11 +4,11 @@ import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, CellError}
 import com.tjclp.xl.codec.CellCodec.given
-import com.tjclp.xl.conversions.given  // For put(ARef, value)
+import com.tjclp.xl.conversions.given // For put(ARef, value)
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
-import com.tjclp.xl.unsafe.*  // For .unsafe extension
+import com.tjclp.xl.unsafe.* // For .unsafe extension
 
 import munit.FunSuite
 
@@ -51,13 +51,13 @@ class DisplaySpec extends FunSuite:
   test("formatValue - Decimal format") {
     val value = CellValue.Number(BigDecimal("123.456"))
     val result = NumFmtFormatter.formatValue(value, NumFmt.Decimal)
-    assert(result.startsWith("123.4"))  // At least 2 decimal places
+    assert(result.startsWith("123.4")) // At least 2 decimal places
   }
 
   test("formatValue - Integer format") {
     val value = CellValue.Number(BigDecimal("123.7"))
     val result = NumFmtFormatter.formatValue(value, NumFmt.Integer)
-    assertEquals(result, "124")  // Rounded
+    assertEquals(result, "124") // Rounded
   }
 
   test("formatValue - General format (whole number)") {
@@ -336,7 +336,9 @@ class DisplaySpec extends FunSuite:
     assertEquals(result, "Product: 5 units @ $1,000.00 each")
   }
 
-  test("excel interpolator routes zero through positive section of 2-section custom code (GH-254)") {
+  test(
+    "excel interpolator routes zero through positive section of 2-section custom code (GH-254)"
+  ) {
     import ExcelInterpolator.*
     import DisplayConversions.given
 
@@ -410,5 +412,5 @@ class DisplaySpec extends FunSuite:
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
     val result = mySheet.displayFormula(ref"A1")
-    assertEquals(result, "100.00")  // BigDecimal auto-applies Decimal format
+    assertEquals(result, "100.00") // BigDecimal auto-applies Decimal format
   }

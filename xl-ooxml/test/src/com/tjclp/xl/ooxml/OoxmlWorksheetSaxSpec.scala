@@ -19,7 +19,8 @@ class OoxmlWorksheetSaxSpec extends FunSuite:
     val parsed = XML.loadString(saxXml)
 
     val tElem = (parsed \\ "t").headOption.getOrElse(fail("expected <t> element"))
-    val spaceAttr = tElem.attributes.asAttrMap.get("xml:space").orElse(tElem.attributes.asAttrMap.get("space"))
+    val spaceAttr =
+      tElem.attributes.asAttrMap.get("xml:space").orElse(tElem.attributes.asAttrMap.get("space"))
     assertEquals(spaceAttr, Some("preserve"))
     assertEquals(tElem.text, "  spaced")
   }
@@ -37,7 +38,10 @@ class OoxmlWorksheetSaxSpec extends FunSuite:
     val saxRows = saxXml \\ "row"
     val xmlRows = xmlTree \\ "row"
     assertEquals(saxRows.map(_ \ "@r").map(_.text), xmlRows.map(_ \ "@r").map(_.text))
-    assertEquals(saxRows.flatMap(_ \ "c").map(_ \ "@r").map(_.text), xmlRows.flatMap(_ \ "c").map(_ \ "@r").map(_.text))
+    assertEquals(
+      saxRows.flatMap(_ \ "c").map(_ \ "@r").map(_.text),
+      xmlRows.flatMap(_ \ "c").map(_ \ "@r").map(_.text)
+    )
   }
 
   private def writeWithSax(ws: OoxmlWorksheet): String =

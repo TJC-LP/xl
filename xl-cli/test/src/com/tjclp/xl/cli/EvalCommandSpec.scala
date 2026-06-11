@@ -14,9 +14,8 @@ import com.tjclp.xl.macros.ref
 /**
  * Tests for eval command, particularly --with override propagation (TJC-698).
  *
- * The eval command with --with flag should propagate overrides through formula chains. For
- * example, if A1=100, B1=A1*2, C1=B1+50, then `eval "=C1" --with "A1=200"` should return 450 (not
- * 250).
+ * The eval command with --with flag should propagate overrides through formula chains. For example,
+ * if A1=100, B1=A1*2, C1=B1+50, then `eval "=C1" --with "A1=200"` should return 450 (not 250).
  */
 // Test code uses .get/.head for brevity in assertions
 @SuppressWarnings(

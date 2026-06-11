@@ -87,14 +87,26 @@ class BatchUpdateSpec extends FunSuite:
     assertEquals(sheet(ref"A1").value, CellValue.Text("Title"))
     assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal(42)))
     assertEquals(sheet(ref"C1").value, CellValue.Number(BigDecimal("123.45")))
-    assert(sheet(ref"D1").value match { case _: CellValue.DateTime => true; case _ => false }, "D1 should contain DateTime")
+    assert(
+      sheet(ref"D1").value match { case _: CellValue.DateTime => true; case _ => false },
+      "D1 should contain DateTime"
+    )
     assertEquals(sheet(ref"E1").value, CellValue.Bool(true))
 
     // Verify styles applied correctly
     assert(sheet.getCellStyle(ref"A1").isEmpty, "String should have no style")
-    assert(sheet.getCellStyle(ref"B1").exists(_.numFmt == NumFmt.General), "Int should have General format")
-    assert(sheet.getCellStyle(ref"C1").exists(_.numFmt == NumFmt.Decimal), "BigDecimal should have Decimal format")
-    assert(sheet.getCellStyle(ref"D1").exists(_.numFmt == NumFmt.Date), "LocalDate should have Date format")
+    assert(
+      sheet.getCellStyle(ref"B1").exists(_.numFmt == NumFmt.General),
+      "Int should have General format"
+    )
+    assert(
+      sheet.getCellStyle(ref"C1").exists(_.numFmt == NumFmt.Decimal),
+      "BigDecimal should have Decimal format"
+    )
+    assert(
+      sheet.getCellStyle(ref"D1").exists(_.numFmt == NumFmt.Date),
+      "LocalDate should have Date format"
+    )
     assert(sheet.getCellStyle(ref"E1").isEmpty, "Boolean should have no style")
   }
 
@@ -107,10 +119,11 @@ class BatchUpdateSpec extends FunSuite:
       .put(ref"B1", CellValue.Number(BigDecimal(42)))
 
     // Using batch put
-    val batched = sheet.put(
-      ref"A1" -> "Hello",
-      ref"B1" -> 42
-    )
+    val batched = sheet
+      .put(
+        ref"A1" -> "Hello",
+        ref"B1" -> 42
+      )
       .unsafe
 
     // Values should be the same (styles might differ due to auto-inference)
@@ -166,7 +179,10 @@ class BatchUpdateSpec extends FunSuite:
       .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("123.45")))
-    assert(sheet.getCellStyle(ref"A1").exists(_.numFmt == NumFmt.Decimal), "Should have Decimal format")
+    assert(
+      sheet.getCellStyle(ref"A1").exists(_.numFmt == NumFmt.Decimal),
+      "Should have Decimal format"
+    )
   }
 
   test("readTyped: reads existing ref") {
@@ -216,7 +232,10 @@ class BatchUpdateSpec extends FunSuite:
       .unsafe
 
     // Should have: default + decimal + date = 3 styles
-    assert(sheet.styleRegistry.size >= 3, s"Expected at least 3 styles, got ${sheet.styleRegistry.size}")
+    assert(
+      sheet.styleRegistry.size >= 3,
+      s"Expected at least 3 styles, got ${sheet.styleRegistry.size}"
+    )
   }
 
   test("put: deduplicates identical styles") {
@@ -261,7 +280,10 @@ class BatchUpdateSpec extends FunSuite:
       .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Plain text"))
-    assert(sheet(ref"A2").value match { case _: CellValue.RichText => true; case _ => false }, "A2 should be RichText")
+    assert(
+      sheet(ref"A2").value match { case _: CellValue.RichText => true; case _ => false },
+      "A2 should be RichText"
+    )
     assertEquals(sheet(ref"A3").value, CellValue.Number(BigDecimal(42)))
   }
 

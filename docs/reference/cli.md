@@ -204,7 +204,7 @@ View a rectangular range — markdown table by default, or JSON/CSV/HTML/SVG/PNG
 | `--raster-output` | path | For raster | — | Output file (required for png/jpeg/webp/pdf) |
 | `--dpi` | int | No | 144 | Resolution for raster output |
 | `--quality` | int | No | 90 | JPEG quality 1-100 |
-| `--rasterizer` | string | No | auto | Force backend: batik, cairosvg, rsvg-convert, resvg, imagemagick |
+| `--rasterizer` | string | No | batik | PNG/JPEG export uses Apache Batik by default (pure JVM, no external tools). Force another backend: cairosvg, rsvg-convert, resvg, imagemagick (explicit opt-in since 0.11.3) |
 | `--gridlines` | flag | No | false | Show cell gridlines in SVG output |
 | `--print-scale` | flag | No | false | Apply print scaling (for PDF-like output) |
 

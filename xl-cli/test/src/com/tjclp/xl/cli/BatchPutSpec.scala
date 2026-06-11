@@ -33,7 +33,9 @@ class BatchPutSpec extends FunSuite:
   test("put: single cell mode") {
     val wb = Workbook(Sheet("Test"))
     val result =
-      WriteCommands.put(wb, Some(wb.sheets.head), "A1", List("100"), outputPath, config).unsafeRunSync()
+      WriteCommands
+        .put(wb, Some(wb.sheets.head), "A1", List("100"), outputPath, config)
+        .unsafeRunSync()
 
     assert(result.contains("Put: A1 = 100"))
 
@@ -45,7 +47,9 @@ class BatchPutSpec extends FunSuite:
   test("put: fill pattern mode (1 value, range)") {
     val wb = Workbook(Sheet("Test"))
     val result =
-      WriteCommands.put(wb, Some(wb.sheets.head), "A1:A5", List("TBD"), outputPath, config).unsafeRunSync()
+      WriteCommands
+        .put(wb, Some(wb.sheets.head), "A1:A5", List("TBD"), outputPath, config)
+        .unsafeRunSync()
 
     assert(result.contains("Filled 5 cells"))
 
@@ -68,9 +72,18 @@ class BatchPutSpec extends FunSuite:
 
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     val sheet = imported.sheets.head
-    assertEquals(sheet.cells.get(ARef.from0(0, 0)).map(_.value), Some(CellValue.Number(BigDecimal("10"))))
-    assertEquals(sheet.cells.get(ARef.from0(0, 1)).map(_.value), Some(CellValue.Number(BigDecimal("20"))))
-    assertEquals(sheet.cells.get(ARef.from0(0, 2)).map(_.value), Some(CellValue.Number(BigDecimal("30"))))
+    assertEquals(
+      sheet.cells.get(ARef.from0(0, 0)).map(_.value),
+      Some(CellValue.Number(BigDecimal("10")))
+    )
+    assertEquals(
+      sheet.cells.get(ARef.from0(0, 1)).map(_.value),
+      Some(CellValue.Number(BigDecimal("20")))
+    )
+    assertEquals(
+      sheet.cells.get(ARef.from0(0, 2)).map(_.value),
+      Some(CellValue.Number(BigDecimal("30")))
+    )
   }
 
   test("put: batch values 2D range (row-major)") {
@@ -83,10 +96,22 @@ class BatchPutSpec extends FunSuite:
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     val sheet = imported.sheets.head
     // Row-major: A1, B1, A2, B2
-    assertEquals(sheet.cells.get(ARef.from0(0, 0)).map(_.value), Some(CellValue.Number(BigDecimal("1")))) // A1
-    assertEquals(sheet.cells.get(ARef.from0(1, 0)).map(_.value), Some(CellValue.Number(BigDecimal("2")))) // B1
-    assertEquals(sheet.cells.get(ARef.from0(0, 1)).map(_.value), Some(CellValue.Number(BigDecimal("3")))) // A2
-    assertEquals(sheet.cells.get(ARef.from0(1, 1)).map(_.value), Some(CellValue.Number(BigDecimal("4")))) // B2
+    assertEquals(
+      sheet.cells.get(ARef.from0(0, 0)).map(_.value),
+      Some(CellValue.Number(BigDecimal("1")))
+    ) // A1
+    assertEquals(
+      sheet.cells.get(ARef.from0(1, 0)).map(_.value),
+      Some(CellValue.Number(BigDecimal("2")))
+    ) // B1
+    assertEquals(
+      sheet.cells.get(ARef.from0(0, 1)).map(_.value),
+      Some(CellValue.Number(BigDecimal("3")))
+    ) // A2
+    assertEquals(
+      sheet.cells.get(ARef.from0(1, 1)).map(_.value),
+      Some(CellValue.Number(BigDecimal("4")))
+    ) // B2
   }
 
   test("put: error - count mismatch (too few values)") {
@@ -146,10 +171,12 @@ class BatchPutSpec extends FunSuite:
   }
 
   test("putf: formula dragging mode preserves $ anchors") {
-    val wb = Workbook(Sheet("Test")
-      .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("10")))
-      .put(ARef.from0(0, 1), CellValue.Number(BigDecimal("20")))
-      .put(ARef.from0(0, 2), CellValue.Number(BigDecimal("30"))))
+    val wb = Workbook(
+      Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("10")))
+        .put(ARef.from0(0, 1), CellValue.Number(BigDecimal("20")))
+        .put(ARef.from0(0, 2), CellValue.Number(BigDecimal("30")))
+    )
 
     val result = WriteCommands
       .putFormula(wb, Some(wb.sheets.head), "B1:B3", List("=SUM($A$1:A1)"), outputPath, config)
@@ -166,11 +193,13 @@ class BatchPutSpec extends FunSuite:
   }
 
   test("putf: batch formulas mode (no dragging)") {
-    val wb = Workbook(Sheet("Test")
-      .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("1")))
-      .put(ARef.from0(1, 0), CellValue.Number(BigDecimal("2")))
-      .put(ARef.from0(0, 1), CellValue.Number(BigDecimal("3")))
-      .put(ARef.from0(1, 1), CellValue.Number(BigDecimal("4"))))
+    val wb = Workbook(
+      Sheet("Test")
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal("1")))
+        .put(ARef.from0(1, 0), CellValue.Number(BigDecimal("2")))
+        .put(ARef.from0(0, 1), CellValue.Number(BigDecimal("3")))
+        .put(ARef.from0(1, 1), CellValue.Number(BigDecimal("4")))
+    )
 
     val result = WriteCommands
       .putFormula(

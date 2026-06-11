@@ -12,9 +12,9 @@ import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
 
 /**
  * Integration tests for row/column operations including:
- * - col"A" compile-time macro
- * - Row/Column builder DSL
- * - Round-trip serialization of row/column properties
+ *   - col"A" compile-time macro
+ *   - Row/Column builder DSL
+ *   - Round-trip serialization of row/column properties
  */
 @SuppressWarnings(Array("org.wartremover.warts.IterableOps", "org.wartremover.warts.OptionPartial"))
 class RowColumnOperationsSpec extends FunSuite:
@@ -22,7 +22,8 @@ class RowColumnOperationsSpec extends FunSuite:
   val tempDir: Path = Files.createTempDirectory("xl-rowcol-test-")
 
   override def afterAll(): Unit =
-    Files.walk(tempDir)
+    Files
+      .walk(tempDir)
       .sorted(java.util.Comparator.reverseOrder())
       .forEach(Files.delete)
 
@@ -166,11 +167,13 @@ class RowColumnOperationsSpec extends FunSuite:
 
   test("column width round-trips through OOXML") {
     val initial = Workbook("Test")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("Data"))
       .setColumnProperties(col"A", ColumnProperties(width = Some(25.5)))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("col-width.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -183,11 +186,13 @@ class RowColumnOperationsSpec extends FunSuite:
 
   test("column hidden flag round-trips through OOXML") {
     val initial = Workbook("Test")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"B1", CellValue.Text("Hidden"))
       .setColumnProperties(col"B", ColumnProperties(hidden = true))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("col-hidden.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -200,11 +205,13 @@ class RowColumnOperationsSpec extends FunSuite:
 
   test("column outlineLevel round-trips through OOXML") {
     val initial = Workbook("Test")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"C1", CellValue.Text("Outlined"))
       .setColumnProperties(col"C", ColumnProperties(outlineLevel = Some(2)))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("col-outline.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -217,11 +224,13 @@ class RowColumnOperationsSpec extends FunSuite:
 
   test("column collapsed flag round-trips through OOXML") {
     val initial = Workbook("Test")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"D1", CellValue.Text("Collapsed"))
       .setColumnProperties(col"D", ColumnProperties(collapsed = true, outlineLevel = Some(1)))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("col-collapsed.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -235,11 +244,13 @@ class RowColumnOperationsSpec extends FunSuite:
 
   test("row height round-trips through OOXML") {
     val initial = Workbook("Test")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("Tall row"))
       .setRowProperties(Row.from0(0), RowProperties(height = Some(40.0)))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("row-height.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -252,11 +263,13 @@ class RowColumnOperationsSpec extends FunSuite:
 
   test("row hidden flag round-trips through OOXML") {
     val initial = Workbook("Test")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A2", CellValue.Text("Hidden row"))
       .setRowProperties(Row.from0(1), RowProperties(hidden = true))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("row-hidden.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -269,11 +282,13 @@ class RowColumnOperationsSpec extends FunSuite:
 
   test("row outlineLevel round-trips through OOXML") {
     val initial = Workbook("Test")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A3", CellValue.Text("Outlined row"))
       .setRowProperties(Row.from0(2), RowProperties(outlineLevel = Some(3)))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("row-outline.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -286,11 +301,13 @@ class RowColumnOperationsSpec extends FunSuite:
 
   test("row collapsed flag round-trips through OOXML") {
     val initial = Workbook("Test")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A4", CellValue.Text("Collapsed row"))
       .setRowProperties(Row.from0(3), RowProperties(collapsed = true, outlineLevel = Some(1)))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("row-collapsed.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -304,7 +321,8 @@ class RowColumnOperationsSpec extends FunSuite:
 
   test("multiple columns with different widths round-trip") {
     val initial = Workbook("Test")
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("Col A"))
       .put(ref"B1", CellValue.Text("Col B"))
       .put(ref"C1", CellValue.Text("Col C"))
@@ -312,7 +330,8 @@ class RowColumnOperationsSpec extends FunSuite:
       .setColumnProperties(col"B", ColumnProperties(width = Some(20.0)))
       .setColumnProperties(col"C", ColumnProperties(width = Some(30.0)))
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("multi-col-width.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))
@@ -329,7 +348,8 @@ class RowColumnOperationsSpec extends FunSuite:
     // This tests that columns A, B, C with same width become a single <col min="1" max="3">
     val initial = Workbook("Test")
     val sameProps = ColumnProperties(width = Some(15.0))
-    val sheet = initial.sheets(0)
+    val sheet = initial
+      .sheets(0)
       .put(ref"A1", CellValue.Text("A"))
       .put(ref"B1", CellValue.Text("B"))
       .put(ref"C1", CellValue.Text("C"))
@@ -337,7 +357,8 @@ class RowColumnOperationsSpec extends FunSuite:
       .setColumnProperties(col"B", sameProps)
       .setColumnProperties(col"C", sameProps)
 
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
+    val wb =
+      initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Should create workbook"))
 
     val outputPath = tempDir.resolve("grouped-cols.xlsx")
     XlsxWriter.write(wb, outputPath).getOrElse(fail("Write failed"))

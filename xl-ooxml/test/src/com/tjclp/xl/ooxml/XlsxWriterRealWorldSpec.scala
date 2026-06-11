@@ -12,8 +12,8 @@ import munit.FunSuite
 /**
  * Real-world integration test for surgical modification.
  *
- * This test validates the surgical modification system against a complex workbook
- * that mimics real-world Excel files with:
+ * This test validates the surgical modification system against a complex workbook that mimics
+ * real-world Excel files with:
  *   - Multiple sheets (some hidden)
  *   - Charts and drawings
  *   - Conditional formatting
@@ -49,7 +49,9 @@ class XlsxWriterRealWorldSpec extends FunSuite:
     val modified = for
       wb <- XlsxReader.read(source)
       sheet <- wb("Sheet1")
-      updatedSheet = sheet.put(ref"B1" -> "Modified by XL") // B1 has no comment, so A1's comment preserved
+      updatedSheet = sheet.put(
+        ref"B1" -> "Modified by XL"
+      ) // B1 has no comment, so A1's comment preserved
     yield wb.put(updatedSheet)
 
     val wb = modified.fold(err => fail(s"Failed to modify: $err"), identity)

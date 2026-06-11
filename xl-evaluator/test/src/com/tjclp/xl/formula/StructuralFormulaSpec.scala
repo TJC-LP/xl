@@ -85,7 +85,8 @@ class StructuralFormulaSpec extends FunSuite:
     val data = new Sheet(name = SheetName.unsafe("Data")).put(ref"A5", CellValue.Number(99))
     val report =
       new Sheet(name = SheetName.unsafe("Report")).put(ref"B1", formulaCell("=Data!A5"))
-    val r = StructuralEditor.insertRows(Workbook(Vector(data, report)), SheetName.unsafe("Data"), 2, 1)
+    val r =
+      StructuralEditor.insertRows(Workbook(Vector(data, report)), SheetName.unsafe("Data"), 2, 1)
     assertEquals(sheetNamed(r, "Report")(ref"B1").value, formulaCell("=Data!A6"))
   }
 
@@ -93,7 +94,8 @@ class StructuralFormulaSpec extends FunSuite:
     val data = new Sheet(name = SheetName.unsafe("Data"))
     val report = new Sheet(name = SheetName.unsafe("Report")).put(ref"B1", formulaCell("=Data!A5"))
     // Edit Report (not Data); the cross-ref to Data must not move.
-    val r = StructuralEditor.insertRows(Workbook(Vector(data, report)), SheetName.unsafe("Report"), 2, 1)
+    val r =
+      StructuralEditor.insertRows(Workbook(Vector(data, report)), SheetName.unsafe("Report"), 2, 1)
     assertEquals(sheetNamed(r, "Report")(ref"B1").value, formulaCell("=Data!A5"))
   }
 

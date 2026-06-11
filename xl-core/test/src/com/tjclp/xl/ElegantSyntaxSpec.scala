@@ -22,7 +22,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, "Hello").unsafe  // String auto-converts
+    val updated = sheet.put(ref, "Hello").unsafe // String auto-converts
     assertEquals(updated(ref).value, CellValue.Text("Hello"))
   }
 
@@ -32,7 +32,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, 42).unsafe  // Int auto-converts
+    val updated = sheet.put(ref, 42).unsafe // Int auto-converts
     assertEquals(updated(ref).value, CellValue.Number(BigDecimal(42)))
   }
 
@@ -42,7 +42,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, 3.14159).unsafe  // Double auto-converts
+    val updated = sheet.put(ref, 3.14159).unsafe // Double auto-converts
     assertEquals(updated(ref).value, CellValue.Number(BigDecimal(3.14159)))
   }
 
@@ -52,7 +52,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, true).unsafe  // Boolean auto-converts
+    val updated = sheet.put(ref, true).unsafe // Boolean auto-converts
     assertEquals(updated(ref).value, CellValue.Bool(true))
   }
 
@@ -143,7 +143,7 @@ class ElegantSyntaxSpec extends FunSuite:
   test("money literal: parses $1,234.56") {
     import com.tjclp.xl.macros.money
 
-    val formatted = money"$$1,234.56"  // $$ escapes the dollar sign
+    val formatted = money"$$1,234.56" // $$ escapes the dollar sign
 
     assertEquals(formatted.value, CellValue.Number(BigDecimal("1234.56")))
     assertEquals(formatted.numFmt, NumFmt.Currency)
@@ -232,9 +232,9 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
       .put(
         ref"A1" -> "Revenue",
-        ref"B1" -> money"$$10,000.00",    // Preserves Currency format
+        ref"B1" -> money"$$10,000.00", // Preserves Currency format
         ref"A2" -> "Growth",
-        ref"B2" -> percent"15.5%"         // Preserves Percent format
+        ref"B2" -> percent"15.5%" // Preserves Percent format
       )
       .unsafe
 
@@ -264,8 +264,8 @@ class ElegantSyntaxSpec extends FunSuite:
         ref"C1" -> "Growth",
         // Q1
         ref"A2" -> "Q1 2025",
-        ref"B2" -> money"$$125,000.00",   // Preserves Currency format
-        ref"C2" -> percent"12.5%",        // Preserves Percent format
+        ref"B2" -> money"$$125,000.00", // Preserves Currency format
+        ref"C2" -> percent"12.5%", // Preserves Percent format
         // Q2
         ref"A3" -> "Q2 2025",
         ref"B3" -> money"$$150,000.00",

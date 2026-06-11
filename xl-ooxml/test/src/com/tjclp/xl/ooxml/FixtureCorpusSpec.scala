@@ -142,7 +142,9 @@ class FixtureCorpusSpec extends FunSuite:
     assertEquals(sheet(ref"B1").value, CellValue.Text("example link"))
   }
 
-  test("comments-hyperlinks.xlsx: KNOWN GAP - openpyxl comment dialect is invisible to the domain") {
+  test(
+    "comments-hyperlinks.xlsx: KNOWN GAP - openpyxl comment dialect is invisible to the domain"
+  ) {
     // openpyxl stores the comment part at xl/comments/comment1.xml (subdirectory,
     // singular) and points to it from the sheet rels with an absolute target
     // (/xl/comments/comment1.xml). XlsxReader only treats xl/comments\d+.xml as a
@@ -164,10 +166,12 @@ class FixtureCorpusSpec extends FunSuite:
     assertEquals(sheet(ref"A1").value, CellValue.Text("Region"))
     assertEquals(sheet(ref"C6").value, CellValue.Number(BigDecimal(19)))
     // Round-trip: the autoFilter element must survive an in-memory write
-    val out = XlsxWriter.writeToBytes(load("autofilter.xlsx")).fold(
-      err => fail(s"write failed: ${err.message}"),
-      identity
-    )
+    val out = XlsxWriter
+      .writeToBytes(load("autofilter.xlsx"))
+      .fold(
+        err => fail(s"write failed: ${err.message}"),
+        identity
+      )
     val sheetXml = zipEntry(out, "xl/worksheets/sheet1.xml")
     assert(
       sheetXml.contains("autoFilter") && sheetXml.contains("A1:C6"),

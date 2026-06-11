@@ -170,7 +170,10 @@ class StyleEnumCasingSpec extends FunSuite:
           .fold(err => fail(s"XML parse failed for ($borderToken, $patternToken): $err"), identity)
         val parsed = WorkbookStyles
           .fromXml(elem)
-          .fold(msg => fail(s"styles parse failed for ($borderToken, $patternToken): $msg"), identity)
+          .fold(
+            msg => fail(s"styles parse failed for ($borderToken, $patternToken): $msg"),
+            identity
+          )
         assertEquals(
           parsed.borders(0).left.style,
           BorderStyle.MediumDashDotDot,

@@ -12,8 +12,8 @@ import java.nio.charset.StandardCharsets
 /**
  * Regression tests for error handling paths inside XlsxReader.
  *
- * These cover malformed XML, missing parts, and corrupted ZIP archives to
- * ensure we surface precise XLErrors instead of throwing.
+ * These cover malformed XML, missing parts, and corrupted ZIP archives to ensure we surface precise
+ * XLErrors instead of throwing.
  */
 class XlsxReaderErrorSpec extends FunSuite:
 

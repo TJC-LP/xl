@@ -39,7 +39,7 @@ jobs:
             ${{ runner.os }}-mill-
 
       - name: Check Formatting
-        run: ./mill __.checkFormat
+        run: ./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources
 
       - name: Compile
         run: ./mill __.compile

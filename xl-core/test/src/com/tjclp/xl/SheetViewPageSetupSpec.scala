@@ -37,7 +37,10 @@ class SheetViewPageSetupSpec extends FunSuite:
 
   test("PageMargins defaults match Excel's Normal preset") {
     val m = PageMargins.default
-    assertEquals((m.left, m.right, m.top, m.bottom, m.header, m.footer), (0.7, 0.7, 0.75, 0.75, 0.3, 0.3))
+    assertEquals(
+      (m.left, m.right, m.top, m.bottom, m.header, m.footer),
+      (0.7, 0.7, 0.75, 0.75, 0.3, 0.3)
+    )
   }
 
   test("PageMargins rejects negative margins") {

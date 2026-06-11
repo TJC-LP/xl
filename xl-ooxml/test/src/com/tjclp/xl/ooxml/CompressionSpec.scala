@@ -13,8 +13,8 @@ import com.tjclp.xl.unsafe.*
 /**
  * Tests for ZIP compression configuration.
  *
- * Verifies that WriterConfig correctly applies DEFLATED vs STORED compression
- * and that file sizes match expectations.
+ * Verifies that WriterConfig correctly applies DEFLATED vs STORED compression and that file sizes
+ * match expectations.
  */
 class CompressionSpec extends FunSuite:
 
@@ -41,7 +41,9 @@ class CompressionSpec extends FunSuite:
       )
     }
     val sheet = initial.sheets(0).put(cells*).unsafe
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
+    val wb = initial
+      .update(initial.sheets(0).name, _ => sheet)
+      .getOrElse(fail("Failed to create workbook"))
 
     // Write with DEFLATED (default)
     val deflatedPath = dir.resolve("deflated.xlsx")
@@ -62,17 +64,25 @@ class CompressionSpec extends FunSuite:
     val storedSize = Files.size(storedPath)
 
     // DEFLATED should be 50-90% smaller (compression ratio 2x-10x, typical for realistic data)
-    assert(deflatedSize < storedSize, s"DEFLATED ($deflatedSize) should be smaller than STORED ($storedSize)")
+    assert(
+      deflatedSize < storedSize,
+      s"DEFLATED ($deflatedSize) should be smaller than STORED ($storedSize)"
+    )
 
     val ratio = storedSize.toDouble / deflatedSize.toDouble
     assert(ratio >= 2.0, s"Compression ratio ($ratio) should be at least 2x")
-    assert(ratio <= 10.0, s"Compression ratio ($ratio) seems unreasonably high (expected 2-10x for realistic data)")
+    assert(
+      ratio <= 10.0,
+      s"Compression ratio ($ratio) seems unreasonably high (expected 2-10x for realistic data)"
+    )
   }
 
   tempDir.test("prettyPrint increases file size") { dir =>
     val initial = Workbook("Simple")
     val sheet = initial.sheets(0).put(ref"A1", CellValue.Text("Test"))
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
+    val wb = initial
+      .update(initial.sheets(0).name, _ => sheet)
+      .getOrElse(fail("Failed to create workbook"))
 
     // Write with compact XML (must use ScalaXml backend since prettyPrint is ScalaXml-specific)
     val compactPath = dir.resolve("compact.xlsx")
@@ -93,7 +103,10 @@ class CompressionSpec extends FunSuite:
     val prettySize = Files.size(prettyPath)
 
     // Pretty-printed XML should be larger (whitespace overhead)
-    assert(prettySize > compactSize, s"Pretty ($prettySize) should be larger than compact ($compactSize)")
+    assert(
+      prettySize > compactSize,
+      s"Pretty ($prettySize) should be larger than compact ($compactSize)"
+    )
   }
 
   tempDir.test("default config produces valid XLSX with DEFLATED compression") { dir =>
@@ -102,7 +115,9 @@ class CompressionSpec extends FunSuite:
       ARef(Column.from1(1), Row.from1(row)) -> s"Row $row"
     }
     val sheet = initial.sheets(0).put(cells*).unsafe
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
+    val wb = initial
+      .update(initial.sheets(0).name, _ => sheet)
+      .getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("default.xlsx")
 
@@ -130,7 +145,9 @@ class CompressionSpec extends FunSuite:
   tempDir.test("WriterConfig.debug uses STORED + prettyPrint") { dir =>
     val initial = Workbook("Debug")
     val sheet = initial.sheets(0).put(ref"A1", CellValue.Number(42))
-    val wb = initial.update(initial.sheets(0).name, _ => sheet).getOrElse(fail("Failed to create workbook"))
+    val wb = initial
+      .update(initial.sheets(0).name, _ => sheet)
+      .getOrElse(fail("Failed to create workbook"))
 
     val path = dir.resolve("debug.xlsx")
     XlsxWriter.writeWith(wb, path, WriterConfig.debug) match

@@ -254,7 +254,11 @@ class V030RegressionSpec extends CatsEffectSuite:
 
     assertEquals(merged.border.top.style, BorderStyle.Thick, "Top should be overridden to Thick")
     assertEquals(merged.border.bottom.style, BorderStyle.Thin, "Bottom should be preserved as Thin")
-    assertEquals(merged.border.left.style, BorderStyle.Double, "Left should be overridden to Double")
+    assertEquals(
+      merged.border.left.style,
+      BorderStyle.Double,
+      "Left should be overridden to Double"
+    )
     assertEquals(merged.border.right.style, BorderStyle.Thin, "Right should be preserved as Thin")
   }
 
@@ -478,6 +482,7 @@ class V030RegressionSpec extends CatsEffectSuite:
     val lines = output.split("\n")
     val styleStart = lines.indexWhere(_.startsWith("Style:"))
     if styleStart >= 0 then
-      val styleLines = lines.drop(styleStart).takeWhile(l => l.startsWith("Style:") || l.startsWith("  "))
+      val styleLines =
+        lines.drop(styleStart).takeWhile(l => l.startsWith("Style:") || l.startsWith("  "))
       Some(styleLines.mkString("\n"))
     else None

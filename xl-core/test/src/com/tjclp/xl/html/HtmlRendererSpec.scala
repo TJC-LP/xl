@@ -171,13 +171,21 @@ class HtmlRendererSpec extends FunSuite:
 
   test("toHtml: escapes comment tooltip content (HTML + quotes)") {
     val sheet = Sheet("Test")
-      .put(ref"A1" -> "value").unsafe
-      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("""<b onload="x" data='y'>&test</b>""", Some("""Auth"or'&""")))
+      .put(ref"A1" -> "value")
+      .unsafe
+      .comment(
+        ref"A1",
+        com.tjclp.xl.cells.Comment
+          .plainText("""<b onload="x" data='y'>&test</b>""", Some("""Auth"or'&"""))
+      )
 
     val html = sheet.toHtml(ref"A1:A1", includeComments = true)
     assert(html.contains("""title=""""), s"Tooltip should be present, got: $html")
     assert(html.contains("""Auth&quot;or&#39;&amp;:"""), "Author should be escaped")
-    assert(html.contains("""&lt;b onload=&quot;x&quot; data=&#39;y&#39;&gt;"""), "Comment body should escape tags/quotes")
+    assert(
+      html.contains("""&lt;b onload=&quot;x&quot; data=&#39;y&#39;&gt;"""),
+      "Comment body should escape tags/quotes"
+    )
     assert(html.contains("""&amp;test"""), "Ampersand in body should be escaped")
   }
 
@@ -308,7 +316,7 @@ class HtmlRendererSpec extends FunSuite:
     assert(html.contains("font-family:"), "Should contain font-family property")
   }
 
-  //========== Real-World Use Case ==========
+  // ========== Real-World Use Case ==========
 
   test("toHtml: complete financial report with rich text and styles") {
     val headerStyle = CellStyle.default
@@ -466,7 +474,10 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:A1")
     // 2 levels * 21px = 42px padding-left
-    assert(html.contains("padding-left: 42px"), s"Should have padding-left for indent=2, got: $html")
+    assert(
+      html.contains("padding-left: 42px"),
+      s"Should have padding-left for indent=2, got: $html"
+    )
   }
 
   test("toHtml: indent 0 does not add padding") {
@@ -477,7 +488,10 @@ class HtmlRendererSpec extends FunSuite:
       .withCellStyle(ref"A1", noIndent)
 
     val html = sheet.toHtml(ref"A1:A1")
-    assert(!html.contains("padding-left:"), s"Should not have padding-left for indent=0, got: $html")
+    assert(
+      !html.contains("padding-left:"),
+      s"Should not have padding-left for indent=0, got: $html"
+    )
   }
 
   test("toHtml: large indent value works") {
@@ -490,7 +504,10 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:A1")
     // 15 levels * 21px = 315px
-    assert(html.contains("padding-left: 315px"), s"Should have padding-left for indent=15, got: $html")
+    assert(
+      html.contains("padding-left: 315px"),
+      s"Should have padding-left for indent=15, got: $html"
+    )
   }
 
   // ========== Merged Cells Tests ==========
@@ -502,7 +519,10 @@ class HtmlRendererSpec extends FunSuite:
       .merge(range)
 
     val html = sheet.toHtml(ref"A1:C1")
-    assert(html.contains("""colspan="3""""), s"Should have colspan=3 for 3-column merge, got: $html")
+    assert(
+      html.contains("""colspan="3""""),
+      s"Should have colspan=3 for 3-column merge, got: $html"
+    )
     // Should only have 1 td element (interior cells skipped)
     val tdCount = "<td".r.findAllIn(html).length
     assertEquals(tdCount, 1, s"Merged row should have only 1 <td>, got: $html")
@@ -538,7 +558,10 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:B1")
     assert(html.contains("Anchor"), "Anchor cell content should appear")
-    assert(!html.contains("Should be hidden"), s"Interior cell content should not appear, got: $html")
+    assert(
+      !html.contains("Should be hidden"),
+      s"Interior cell content should not appear, got: $html"
+    )
   }
 
   test("toHtml: unmerged cells not affected by merge logic") {
@@ -586,7 +609,10 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:C1")
     // Should still have colspan, but limited to A1:B1 (colspan=2, not 3)
-    assert(html.contains("""colspan="2""""), s"Should overflow into B1 only (colspan=2), got: $html")
+    assert(
+      html.contains("""colspan="2""""),
+      s"Should overflow into B1 only (colspan=2), got: $html"
+    )
     assert(html.contains("Blocker"), "Blocker cell should still appear")
   }
 
@@ -598,7 +624,8 @@ class HtmlRendererSpec extends FunSuite:
 
     val html = sheet.toHtml(ref"A1:B1")
     // Overflow should not go past B1 even if text is longer
-    val maxColspan = """colspan="(\d+)"""".r.findFirstMatchIn(html).map(_.group(1).toInt).getOrElse(1)
+    val maxColspan =
+      """colspan="(\d+)"""".r.findFirstMatchIn(html).map(_.group(1).toInt).getOrElse(1)
     assert(maxColspan <= 2, s"Colspan should not exceed range width (2), got colspan=$maxColspan")
   }
 
@@ -622,13 +649,19 @@ class HtmlRendererSpec extends FunSuite:
     // Short text should not get colspan even if adjacent cells are empty
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Hi")
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // ~75px, enough for "Hi"
+      .setColumnProperties(
+        Column.from0(0),
+        ColumnProperties(width = Some(10.0))
+      ) // ~75px, enough for "Hi"
 
     val html = sheet.toHtml(ref"A1:C1")
     // No colspan needed for short text
     assert(!html.contains("colspan="), s"Short text should not overflow, got: $html")
     // Should have overflow: hidden since it's not spanning
-    assert(html.contains("overflow: hidden"), s"Non-spanning cell should have overflow: hidden, got: $html")
+    assert(
+      html.contains("overflow: hidden"),
+      s"Non-spanning cell should have overflow: hidden, got: $html"
+    )
   }
 
   test("toHtml: merged cells take priority over overflow") {
@@ -663,7 +696,10 @@ class HtmlRendererSpec extends FunSuite:
     val sheet = Sheet("Test")
       .put(ref"A1" -> "This is a long text that will overflow")
       .put(ref"A2" -> "Short")
-      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(8.0))) // ~61px, fits "Short"
+      .setColumnProperties(
+        Column.from0(0),
+        ColumnProperties(width = Some(8.0))
+      ) // ~61px, fits "Short"
 
     val html = sheet.toHtml(ref"A1:B2")
     // Row 1 should have colspan

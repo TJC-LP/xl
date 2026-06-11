@@ -267,14 +267,16 @@ class CellCodecSpec extends ScalaCheckSuite:
     val result = CellCodec[LocalDateTime].read(cell)
     assert(result.isRight)
     // DateTime may lose subsecond precision in Excel serial format
-    result.foreach(opt => assert(opt.exists { dt =>
-      dt.getYear == original.getYear &&
-      dt.getMonthValue == original.getMonthValue &&
-      dt.getDayOfMonth == original.getDayOfMonth &&
-      dt.getHour == original.getHour &&
-      dt.getMinute == original.getMinute &&
-      math.abs(dt.getSecond - original.getSecond) <= 1 // Allow 1 second tolerance
-    }))
+    result.foreach(opt =>
+      assert(opt.exists { dt =>
+        dt.getYear == original.getYear &&
+        dt.getMonthValue == original.getMonthValue &&
+        dt.getDayOfMonth == original.getDayOfMonth &&
+        dt.getHour == original.getHour &&
+        dt.getMinute == original.getMinute &&
+        math.abs(dt.getSecond - original.getSecond) <= 1 // Allow 1 second tolerance
+      })
+    )
   }
 
   // ========== Error Cases ==========

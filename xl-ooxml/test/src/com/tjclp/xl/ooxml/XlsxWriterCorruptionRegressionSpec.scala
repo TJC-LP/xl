@@ -17,8 +17,8 @@ import munit.FunSuite
 /**
  * Regression tests for surgical modification corruption fixes.
  *
- * These tests prevent regression of 26 critical fixes made during surgical
- * modification implementation (feat/surgical-mod branch).
+ * These tests prevent regression of 26 critical fixes made during surgical modification
+ * implementation (feat/surgical-mod branch).
  *
  * **Primary Corruption Triggers (P0)**:
  *   1. Missing mc:Ignorable attribute → Excel corruption warning
@@ -67,7 +67,10 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     val rootElem = doc.getDocumentElement
 
     // CRITICAL: mc:Ignorable must be present (tells Excel to ignore unknown namespaces)
-    val mcIgnorable = rootElem.getAttributeNS("http://schemas.openxmlformats.org/markup-compatibility/2006", "Ignorable")
+    val mcIgnorable = rootElem.getAttributeNS(
+      "http://schemas.openxmlformats.org/markup-compatibility/2006",
+      "Ignorable"
+    )
     assert(
       mcIgnorable != null && mcIgnorable.nonEmpty,
       s"mc:Ignorable attribute missing - PRIMARY corruption trigger! Found: '$mcIgnorable'"
@@ -174,7 +177,10 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 
     // Row 1: Empty row with formatting (was getting dropped)
     // Note: Attribute order may vary between backends but row is preserved
-    assert(sheetXml.contains("""r="1"""") && sheetXml.contains("<row"), "Empty row 1 should be preserved")
+    assert(
+      sheetXml.contains("""r="1"""") && sheetXml.contains("<row"),
+      "Empty row 1 should be preserved"
+    )
 
     // Row 2: All 10 attributes
     assert(sheetXml.contains("""spans="1:5""""), "Row 'spans' attribute missing")
@@ -645,7 +651,7 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 
     val boldRedStyle = CellStyle.default
       .withFont(Font("Arial", 12.0, bold = true))
-      .withFill(Fill.Solid(Color.Rgb(0xFFFF0000)))
+      .withFill(Fill.Solid(Color.Rgb(0xffff0000)))
 
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Styled")
@@ -995,7 +1001,9 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
 
   // ===== Regression Test for SharedStrings Metadata Bug (Jan 2026) =====
 
-  test("sharedStrings.xml is properly referenced in Content_Types and workbook.xml.rels when generated") {
+  test(
+    "sharedStrings.xml is properly referenced in Content_Types and workbook.xml.rels when generated"
+  ) {
     // Regression test for: SharedStrings metadata missing when SST generated from preserved source
     // Bug: When batch operations added enough strings to trigger SST generation (SstPolicy.Auto),
     //      the preserved Content_Types.xml and workbook.xml.rels from source didn't include
@@ -1044,7 +1052,8 @@ class XlsxWriterCorruptionRegressionSpec extends FunSuite:
     )
 
     // CRITICAL: Verify workbook.xml.rels references sharedStrings
-    val workbookRelsXml = readEntryString(outputZip, outputZip.getEntry("xl/_rels/workbook.xml.rels"))
+    val workbookRelsXml =
+      readEntryString(outputZip, outputZip.getEntry("xl/_rels/workbook.xml.rels"))
     assert(
       workbookRelsXml.contains("sharedStrings.xml"),
       "workbook.xml.rels must reference sharedStrings.xml when SST is present - causes Excel corruption!"

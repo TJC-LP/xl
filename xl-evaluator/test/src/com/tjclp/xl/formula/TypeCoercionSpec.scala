@@ -300,12 +300,18 @@ class TypeCoercionSpec extends FunSuite:
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"A2" -> CellValue.Number(BigDecimal(20))
     )
-    assertEquals(sheet.evaluateFormula("=IF(SUM(A1:A2), 1, 2)"), Right(CellValue.Number(BigDecimal(1))))
+    assertEquals(
+      sheet.evaluateFormula("=IF(SUM(A1:A2), 1, 2)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
   }
 
   test("GH-306: IF(SUM(empty), 1, 2) — zero is FALSE") {
     val sheet = sheetWith(ref"Z9" -> CellValue.Text("unrelated"))
-    assertEquals(sheet.evaluateFormula("=IF(SUM(A1:A2), 1, 2)"), Right(CellValue.Number(BigDecimal(2))))
+    assertEquals(
+      sheet.evaluateFormula("=IF(SUM(A1:A2), 1, 2)"),
+      Right(CellValue.Number(BigDecimal(2)))
+    )
   }
 
   test("GH-306: LEFT(text, SUM(...)) — numeric call result in int position (probe seed)") {
@@ -313,7 +319,10 @@ class TypeCoercionSpec extends FunSuite:
       ref"A1" -> CellValue.Number(BigDecimal(1)),
       ref"A2" -> CellValue.Number(BigDecimal(2))
     )
-    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", SUM(A1:A2))"), Right(CellValue.Text("hel")))
+    assertEquals(
+      sheet.evaluateFormula("=LEFT(\"hello\", SUM(A1:A2))"),
+      Right(CellValue.Text("hel"))
+    )
   }
 
   test("GH-306/GH-307: fractional call result in int position TRUNCATES like Excel") {

@@ -8,7 +8,7 @@ repos:
     hooks:
       - id: scalafmt-check
         name: Check Scala formatting (Scalafmt 3.10.1)
-        entry: ./mill __.checkFormat
+        entry: ./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources
         language: system
         pass_filenames: false
         files: \.scala$

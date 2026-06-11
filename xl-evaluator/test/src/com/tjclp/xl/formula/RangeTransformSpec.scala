@@ -32,18 +32,22 @@ class RangeTransformSpec extends FunSuite:
       case Right(expr) =>
         println(s"Original: $expr")
         // Transform A:A to A1:A3
-        val transformed = TExpr.transformRanges(expr, { (_, range) =>
-          if range.isFullColumn then
-            CellRange(ref"A1", ref"A3")
-          else
-            range
-        })
+        val transformed = TExpr.transformRanges(
+          expr,
+          { (_, range) =>
+            if range.isFullColumn then CellRange(ref"A1", ref"A3")
+            else range
+          }
+        )
         println(s"Transformed: $transformed")
         // Check that ranges were transformed
         val newRanges = TExpr.collectRanges(transformed)
         println(s"New ranges: $newRanges")
         val rangeStrings = newRanges.map(_._2.toA1)
-        assert(!rangeStrings.contains("A:A"), s"Should NOT contain A:A after transform, got: $rangeStrings")
+        assert(
+          !rangeStrings.contains("A:A"),
+          s"Should NOT contain A:A after transform, got: $rangeStrings"
+        )
       case Left(err) =>
         fail(s"Parse failed: $err")
   }

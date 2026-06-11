@@ -17,7 +17,8 @@ import munit.FunSuite
 class DefinedNameRoundTripSpec extends FunSuite:
 
   test("GH-236: programmatically authored named range serializes and round-trips") {
-    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1)).withDefinedName("MyRange", "Sheet1!$A$1:$A$10")
+    val wb =
+      Workbook(Sheet("Sheet1").put(ref"A1" -> 1)).withDefinedName("MyRange", "Sheet1!$A$1:$A$10")
     val out = Files.createTempFile("named-fresh", ".xlsx")
     XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)
 

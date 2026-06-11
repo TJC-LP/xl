@@ -223,6 +223,12 @@ class RichTextSpec extends FunSuite:
   test("Report header: mixed sizes and styles") {
     val title = "Annual Report ".size(18.0).bold + "2025".size(18.0).italic
     assertEquals(title.runs.size, 2)
-    assert(title.runs(0).font.exists(f => f.bold && f.sizePt == 18.0), "First run should be bold 18pt")
-    assert(title.runs(1).font.exists(f => f.italic && f.sizePt == 18.0), "Second run should be italic 18pt")
+    assert(
+      title.runs(0).font.exists(f => f.bold && f.sizePt == 18.0),
+      "First run should be bold 18pt"
+    )
+    assert(
+      title.runs(1).font.exists(f => f.italic && f.sizePt == 18.0),
+      "Second run should be italic 18pt"
+    )
   }

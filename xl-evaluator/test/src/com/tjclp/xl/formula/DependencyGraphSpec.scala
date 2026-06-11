@@ -80,11 +80,13 @@ class DependencyGraphSpec extends ScalaCheckSuite:
   }
 
   test("extractDependencies: text functions with Refs") {
-    val expr = TExpr.concatenate(List(
-      TExpr.ref(ref"A1", TExpr.decodeAsString),
-      TExpr.Lit(" "),
-      TExpr.ref(ref"B1", TExpr.decodeAsString)
-    ))
+    val expr = TExpr.concatenate(
+      List(
+        TExpr.ref(ref"A1", TExpr.decodeAsString),
+        TExpr.Lit(" "),
+        TExpr.ref(ref"B1", TExpr.decodeAsString)
+      )
+    )
     assertEquals(DependencyGraph.extractDependencies(expr), Set(ref"A1", ref"B1"))
   }
 
@@ -321,7 +323,7 @@ class DependencyGraphSpec extends ScalaCheckSuite:
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"B1" -> CellValue.Formula("=A1+5"),
       ref"C1" -> CellValue.Formula("=B1+D1"), // Depends on D1 (cycle)
-      ref"D1" -> CellValue.Formula("=C1*2")   // Depends on C1 (cycle)
+      ref"D1" -> CellValue.Formula("=C1*2") // Depends on C1 (cycle)
     )
     val graph = DependencyGraph.fromSheet(sheet)
     val result = DependencyGraph.detectCycles(graph)
@@ -355,7 +357,7 @@ class DependencyGraphSpec extends ScalaCheckSuite:
       ref"A1" -> CellValue.Formula("=A2"),
       ref"A2" -> CellValue.Formula("=A1"), // Cycle 1: A1 <-> A2
       ref"B1" -> CellValue.Formula("=B2"),
-      ref"B2" -> CellValue.Formula("=B1")  // Cycle 2: B1 <-> B2
+      ref"B2" -> CellValue.Formula("=B1") // Cycle 2: B1 <-> B2
     )
     val graph = DependencyGraph.fromSheet(sheet)
     val result = DependencyGraph.detectCycles(graph)

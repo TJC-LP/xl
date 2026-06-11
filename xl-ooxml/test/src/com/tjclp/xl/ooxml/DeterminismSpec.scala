@@ -11,8 +11,8 @@ import com.tjclp.xl.macros.ref
 /**
  * Tests for deterministic output (byte-identical on re-serialization)
  *
- * Verifies that allFills deduplication preserves insertion order for
- * stable diffs and reproducible builds
+ * Verifies that allFills deduplication preserves insertion order for stable diffs and reproducible
+ * builds
  */
 class DeterminismSpec extends FunSuite:
 
@@ -42,7 +42,10 @@ class DeterminismSpec extends FunSuite:
 
     // Verify fill order: None, Gray125, fill1, fill2, fill3 (no duplicates)
     val fillsRegex = """<fills count="5">""".r
-    assert(fillsRegex.findFirstIn(xml1).isDefined, "Should have exactly 5 fills (2 defaults + 3 custom)")
+    assert(
+      fillsRegex.findFirstIn(xml1).isDefined,
+      "Should have exactly 5 fills (2 defaults + 3 custom)"
+    )
 
     // Verify deduplication by checking overall XML structure
     assert(xml1.contains("<fills"), "Should have fills element")

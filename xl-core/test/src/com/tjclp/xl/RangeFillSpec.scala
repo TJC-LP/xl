@@ -14,8 +14,8 @@ import com.tjclp.xl.sheets.syntax.*
 
 /**
  * Properties for range fill semantics (`range := value`, Excel Ctrl+Enter) and total ARef
- * navigation, added in 0.11.0. Before 0.11.0, `:=` on a RefType range silently returned
- * Patch.empty and CellRange had no `:=` at all.
+ * navigation, added in 0.11.0. Before 0.11.0, `:=` on a RefType range silently returned Patch.empty
+ * and CellRange had no `:=` at all.
  */
 class RangeFillSpec extends ScalaCheckSuite:
 

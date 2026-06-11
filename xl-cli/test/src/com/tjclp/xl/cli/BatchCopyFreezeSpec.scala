@@ -171,7 +171,10 @@ class BatchCopyFreezeSpec extends FunSuite:
     val sheet = Sheet("Test")
       .put(ARef.from0(0, 0), CellValue.Number(999)) // A1 = 999
       .put(ARef.from0(1, 0), CellValue.Number(1)) // B1 = 1 (pre-existing)
-      .put(ARef.from0(3, 0), CellValue.Formula("B1", Some(CellValue.Number(1)))) // D1 = B1, cached 1
+      .put(
+        ARef.from0(3, 0),
+        CellValue.Formula("B1", Some(CellValue.Number(1)))
+      ) // D1 = B1, cached 1
     val wb = Workbook(sheet)
 
     val json = """[{"op":"copy","source":"A1","target":"B1"}]"""
@@ -210,7 +213,9 @@ class BatchCopyFreezeSpec extends FunSuite:
         fail(s"Expected Formula(VLOOKUP(...,Test!D1:F1,...), Some(Number(42))), got: $other")
   }
 
-  test("batch copy: copied formula with sheet-qualified self-range sees copied formula sibling cache") {
+  test(
+    "batch copy: copied formula with sheet-qualified self-range sees copied formula sibling cache"
+  ) {
     // Stronger cache regression: the lookup key itself is a copied formula sibling.
     // D1 comes from A1 (=1) and E1 comes from B1 (=VLOOKUP(1, Test!A1:C1, 3, FALSE)).
     // E1's cache should only resolve if the copy path makes D1's copied formula cache visible.

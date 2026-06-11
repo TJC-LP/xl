@@ -16,8 +16,8 @@ class StylePerformanceSpec extends FunSuite:
     // Generate 1000 unique cell styles
     val styles = (0 until 1000).map { i =>
       val hue = (i * 360.0 / 1000.0).toInt
-      val r = ((hue / 360.0) * 255).toInt & 0xFF
-      val g = ((i / 1000.0) * 255).toInt & 0xFF
+      val r = ((hue / 360.0) * 255).toInt & 0xff
+      val g = ((i / 1000.0) * 255).toInt & 0xff
       val b = 128
       CellStyle(
         font = Font.default.copy(sizePt = 10.0 + (i % 20)),
@@ -57,7 +57,10 @@ class StylePerformanceSpec extends FunSuite:
 
     // Should complete in under 200ms (O(n) performance, generous threshold for CI)
     // With O(n²), 1000 styles could take 1000ms+
-    assert(elapsed < 200, s"Style serialization took ${elapsed}ms, expected <200ms for O(n) performance")
+    assert(
+      elapsed < 200,
+      s"Style serialization took ${elapsed}ms, expected <200ms for O(n) performance"
+    )
 
     // Verify XML was generated correctly
     val xmlString = xml.toString
@@ -66,7 +69,10 @@ class StylePerformanceSpec extends FunSuite:
     assert(xmlString.contains("<cellXfs"), "Should have cellXfs element")
 
     // Verify correct count
-    assert(xmlString.contains(s"count=\"${styles.size}\""), s"Should have ${styles.size} cell styles")
+    assert(
+      xmlString.contains(s"count=\"${styles.size}\""),
+      s"Should have ${styles.size} cell styles"
+    )
   }
 
   test("performance comparison: 100 vs 1000 styles scales sub-quadratically".ignore) {
@@ -74,7 +80,7 @@ class StylePerformanceSpec extends FunSuite:
       val styles = (0 until styleCount).map { i =>
         CellStyle(
           font = Font.default.copy(sizePt = 10.0 + (i % 20)),
-          fill = Fill.Solid(Color.Rgb((0xff000000 | (i * 1000)) & 0xFFFFFFFF)),
+          fill = Fill.Solid(Color.Rgb((0xff000000 | (i * 1000)) & 0xffffffff)),
           border = Border.none,
           numFmt = NumFmt.General,
           align = Align.default
@@ -112,5 +118,8 @@ class StylePerformanceSpec extends FunSuite:
     // With O(n), ratio should be ~10 (10x styles → 10x time)
     // Allow up to 40x for variance (increased from 30x after unification refactor added dispatch overhead)
     // TODO: Investigate if dispatch overhead can be optimized (inline hint, etc.)
-    assert(ratio < 40.0, s"Performance ratio ${ratio} suggests O(n²) behavior (expected <40 for O(n))")
+    assert(
+      ratio < 40.0,
+      s"Performance ratio ${ratio} suggests O(n²) behavior (expected <40 for O(n))"
+    )
   }

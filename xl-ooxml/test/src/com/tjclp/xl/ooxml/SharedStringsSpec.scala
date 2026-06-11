@@ -55,8 +55,10 @@ class SharedStringsSpec extends FunSuite:
     val wb = Workbook(Vector(sheet))
     val sst = SharedStrings.fromWorkbook(wb)
 
-    assert(sst.totalCount > sst.strings.size,
-      s"count (${sst.totalCount}) should be > uniqueCount (${sst.strings.size})")
+    assert(
+      sst.totalCount > sst.strings.size,
+      s"count (${sst.totalCount}) should be > uniqueCount (${sst.strings.size})"
+    )
     assertEquals(sst.totalCount, 4)
     assertEquals(sst.strings.size, 2)
   }
@@ -70,8 +72,11 @@ class SharedStringsSpec extends FunSuite:
     val wb = Workbook(Vector(sheet))
     val sst = SharedStrings.fromWorkbook(wb)
 
-    assertEquals(sst.totalCount, sst.strings.size,
-      "count should equal uniqueCount when no duplicates")
+    assertEquals(
+      sst.totalCount,
+      sst.strings.size,
+      "count should equal uniqueCount when no duplicates"
+    )
     assertEquals(sst.totalCount, 3)
     assertEquals(sst.strings.size, 3)
   }

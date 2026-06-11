@@ -9,19 +9,20 @@ import com.tjclp.xl.sheets.syntax.*
 import com.tjclp.xl.unsafe.*
 import java.nio.file.Paths
 
-/** Manual test to verify rich text formatting in Excel.
-  *
-  * Run this test and open the generated rich-text-demo.xlsx in Excel to verify that:
-  * 1. Bold/italic/underline formatting appears correctly
-  * 2. Colors (red, green, blue) appear correctly
-  * 3. Font sizes work
-  * 4. Multiple runs within a cell display properly
-  *
-  * To run:
-  * {{{
-  * ./mill xl-cats-effect.test.runMain ManualRichTextTest
-  * }}}
-  */
+/**
+ * Manual test to verify rich text formatting in Excel.
+ *
+ * Run this test and open the generated rich-text-demo.xlsx in Excel to verify that:
+ *   1. Bold/italic/underline formatting appears correctly
+ *   2. Colors (red, green, blue) appear correctly
+ *   3. Font sizes work
+ *   4. Multiple runs within a cell display properly
+ *
+ * To run:
+ * {{{
+ * ./mill xl-cats-effect.test.runMain ManualRichTextTest
+ * }}}
+ */
 object ManualRichTextTest extends IOApp.Simple:
 
   def run: IO[Unit] =

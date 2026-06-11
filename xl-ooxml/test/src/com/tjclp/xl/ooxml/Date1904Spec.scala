@@ -16,11 +16,11 @@ import com.tjclp.xl.macros.ref
 /**
  * GH-243: 1904 date system support.
  *
- * Files written by legacy Mac Excel set `<workbookPr date1904="1"/>` and store date serials
- * counted from the 1904-01-01 epoch (no phantom 1900 leap day). Dropping the flag silently shifts
- * every date by 1462 days (~4 years). These tests pin: the flag is read into
- * `WorkbookMetadata.date1904`, preserved on write (preserve-the-system), and DateTime values are
- * serialized with the 1904 epoch when the flag is set.
+ * Files written by legacy Mac Excel set `<workbookPr date1904="1"/>` and store date serials counted
+ * from the 1904-01-01 epoch (no phantom 1900 leap day). Dropping the flag silently shifts every
+ * date by 1462 days (~4 years). These tests pin: the flag is read into `WorkbookMetadata.date1904`,
+ * preserved on write (preserve-the-system), and DateTime values are serialized with the 1904 epoch
+ * when the flag is set.
  */
 class Date1904Spec extends FunSuite:
 
@@ -86,7 +86,9 @@ class Date1904Spec extends FunSuite:
 </styleSheet>"""
 
   /** Build a minimal xlsx from raw parts, with the given workbookPr element. */
-  private def build1904Workbook(workbookPr: String = """<workbookPr date1904="1"/>"""): Array[Byte] =
+  private def build1904Workbook(
+    workbookPr: String = """<workbookPr date1904="1"/>"""
+  ): Array[Byte] =
     val parts = Map(
       "[Content_Types].xml" -> contentTypesXml,
       "_rels/.rels" -> rootRelationshipsXml,

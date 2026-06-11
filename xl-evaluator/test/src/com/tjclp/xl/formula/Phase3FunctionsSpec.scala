@@ -21,7 +21,10 @@ class Phase3FunctionsSpec extends FunSuite:
   }
 
   test("SWITCH matches a case") {
-    assertEquals(s.evaluateFormula("=SWITCH(2,1,\"a\",2,\"b\",\"def\")"), Right(CellValue.Text("b")))
+    assertEquals(
+      s.evaluateFormula("=SWITCH(2,1,\"a\",2,\"b\",\"def\")"),
+      Right(CellValue.Text("b"))
+    )
   }
 
   test("SWITCH falls back to the trailing default") {
@@ -61,10 +64,19 @@ class Phase3FunctionsSpec extends FunSuite:
 
   test("PERCENTILE inclusive, with interpolation") {
     // A1:A5 sorted = 1,1,3,4,5
-    assertEquals(nums.evaluateFormula("=PERCENTILE(A1:A5,0.5)"), Right(CellValue.Number(BigDecimal(3))))
-    assertEquals(nums.evaluateFormula("=PERCENTILE(A1:A5,0)"), Right(CellValue.Number(BigDecimal(1))))
+    assertEquals(
+      nums.evaluateFormula("=PERCENTILE(A1:A5,0.5)"),
+      Right(CellValue.Number(BigDecimal(3)))
+    )
+    assertEquals(
+      nums.evaluateFormula("=PERCENTILE(A1:A5,0)"),
+      Right(CellValue.Number(BigDecimal(1)))
+    )
     // A1:A4 sorted = 1,1,3,4; p=0.5 → 1 + 0.5*(3-1) = 2
-    assertEquals(nums.evaluateFormula("=PERCENTILE(A1:A4,0.5)"), Right(CellValue.Number(BigDecimal(2))))
+    assertEquals(
+      nums.evaluateFormula("=PERCENTILE(A1:A4,0.5)"),
+      Right(CellValue.Number(BigDecimal(2)))
+    )
   }
 
   test("QUARTILE maps quart to percentiles") {
@@ -107,9 +119,15 @@ class Phase3FunctionsSpec extends FunSuite:
   }
 
   test("HLOOKUP approximate (default) finds the largest key <= lookup") {
-    val t = s.put("A1" -> 1).put("B1" -> 5).put("C1" -> 10).put("A2" -> "x").put("B2" -> "y").put(
-      "C2" -> "z"
-    )
+    val t = s
+      .put("A1" -> 1)
+      .put("B1" -> 5)
+      .put("C1" -> 10)
+      .put("A2" -> "x")
+      .put("B2" -> "y")
+      .put(
+        "C2" -> "z"
+      )
     assertEquals(t.evaluateFormula("=HLOOKUP(7,A1:C2,2)"), Right(CellValue.Text("y")))
   }
 

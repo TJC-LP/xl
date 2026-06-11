@@ -113,22 +113,31 @@ class FillCommandSpec extends FunSuite:
     val s = imported.sheets.head
     // B1 should have =A1*2
     val b1 = s.cells.get(ref(1, 0)).map(_.value)
-    assert(b1.exists {
-      case CellValue.Formula(f, _) => f == "A1*2"
-      case _                       => false
-    }, s"B1 formula should be =A1*2, got: $b1")
+    assert(
+      b1.exists {
+        case CellValue.Formula(f, _) => f == "A1*2"
+        case _ => false
+      },
+      s"B1 formula should be =A1*2, got: $b1"
+    )
     // B2 should have =A2*2 (shifted down by 1)
     val b2 = s.cells.get(ref(1, 1)).map(_.value)
-    assert(b2.exists {
-      case CellValue.Formula(f, _) => f == "A2*2"
-      case _                       => false
-    }, s"B2 formula should be =A2*2, got: $b2")
+    assert(
+      b2.exists {
+        case CellValue.Formula(f, _) => f == "A2*2"
+        case _ => false
+      },
+      s"B2 formula should be =A2*2, got: $b2"
+    )
     // B3 should have =A3*2 (shifted down by 2)
     val b3 = s.cells.get(ref(1, 2)).map(_.value)
-    assert(b3.exists {
-      case CellValue.Formula(f, _) => f == "A3*2"
-      case _                       => false
-    }, s"B3 formula should be =A3*2, got: $b3")
+    assert(
+      b3.exists {
+        case CellValue.Formula(f, _) => f == "A3*2"
+        case _ => false
+      },
+      s"B3 formula should be =A3*2, got: $b3"
+    )
   }
 
   test("fill down: anchored references preserved") {
@@ -146,10 +155,13 @@ class FillCommandSpec extends FunSuite:
     val s = imported.sheets.head
     // All should have $A$1 (anchored)
     val b2 = s.cells.get(ref(1, 1)).map(_.value)
-    assert(b2.exists {
-      case CellValue.Formula(f, _) => f.contains("$A$1")
-      case _                       => false
-    }, s"B2 formula should contain $$A$$1, got: $b2")
+    assert(
+      b2.exists {
+        case CellValue.Formula(f, _) => f.contains("$A$1")
+        case _ => false
+      },
+      s"B2 formula should contain $$A$$1, got: $b2"
+    )
   }
 
   // ========== Fill Right - Values ==========
@@ -216,22 +228,31 @@ class FillCommandSpec extends FunSuite:
     val s = imported.sheets.head
     // A2 should have =A1*2
     val a2 = s.cells.get(ref(0, 1)).map(_.value)
-    assert(a2.exists {
-      case CellValue.Formula(f, _) => f == "A1*2"
-      case _                       => false
-    }, s"A2 formula should be =A1*2, got: $a2")
+    assert(
+      a2.exists {
+        case CellValue.Formula(f, _) => f == "A1*2"
+        case _ => false
+      },
+      s"A2 formula should be =A1*2, got: $a2"
+    )
     // B2 should have =B1*2 (shifted right by 1)
     val b2 = s.cells.get(ref(1, 1)).map(_.value)
-    assert(b2.exists {
-      case CellValue.Formula(f, _) => f == "B1*2"
-      case _                       => false
-    }, s"B2 formula should be =B1*2, got: $b2")
+    assert(
+      b2.exists {
+        case CellValue.Formula(f, _) => f == "B1*2"
+        case _ => false
+      },
+      s"B2 formula should be =B1*2, got: $b2"
+    )
     // C2 should have =C1*2 (shifted right by 2)
     val c2 = s.cells.get(ref(2, 1)).map(_.value)
-    assert(c2.exists {
-      case CellValue.Formula(f, _) => f == "C1*2"
-      case _                       => false
-    }, s"C2 formula should be =C1*2, got: $c2")
+    assert(
+      c2.exists {
+        case CellValue.Formula(f, _) => f == "C1*2"
+        case _ => false
+      },
+      s"C2 formula should be =C1*2, got: $c2"
+    )
   }
 
   // ========== Validation Errors ==========
@@ -314,14 +335,20 @@ class FillCommandSpec extends FunSuite:
     val s = imported.sheets.head
     // B2 should have =SUM(A2:A4)
     val b2 = s.cells.get(ref(1, 1)).map(_.value)
-    assert(b2.exists {
-      case CellValue.Formula(f, _) => f == "SUM(A2:A4)"
-      case _                       => false
-    }, s"B2 formula should be =SUM(A2:A4), got: $b2")
+    assert(
+      b2.exists {
+        case CellValue.Formula(f, _) => f == "SUM(A2:A4)"
+        case _ => false
+      },
+      s"B2 formula should be =SUM(A2:A4), got: $b2"
+    )
     // B3 should have =SUM(A3:A5)
     val b3 = s.cells.get(ref(1, 2)).map(_.value)
-    assert(b3.exists {
-      case CellValue.Formula(f, _) => f == "SUM(A3:A5)"
-      case _                       => false
-    }, s"B3 formula should be =SUM(A3:A5), got: $b3")
+    assert(
+      b3.exists {
+        case CellValue.Formula(f, _) => f == "SUM(A3:A5)"
+        case _ => false
+      },
+      s"B3 formula should be =SUM(A3:A5), got: $b3"
+    )
   }

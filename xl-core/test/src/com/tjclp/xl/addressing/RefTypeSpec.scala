@@ -505,12 +505,16 @@ class RefTypeSpec extends ScalaCheckSuite:
 
   test("Workbook.apply(RefType) - qualified range reference") {
     val wb = Workbook("Data")
-    val sheet = wb.sheets(0)
+    val sheet = wb
+      .sheets(0)
       .put(ARef.from1(1, 1), CellValue.Text("A"))
       .put(ARef.from1(1, 2), CellValue.Text("B"))
     val updatedWb = wb.put(sheet)
 
-    val ref = RefType.QualifiedRange(SheetName.unsafe("Data"), CellRange(ARef.from1(1, 1), ARef.from1(1, 2)))
+    val ref = RefType.QualifiedRange(
+      SheetName.unsafe("Data"),
+      CellRange(ARef.from1(1, 1), ARef.from1(1, 2))
+    )
     updatedWb(ref) match
       case Right(cells: Iterable[Cell] @unchecked) =>
         val values = cells.map(_.value).toList

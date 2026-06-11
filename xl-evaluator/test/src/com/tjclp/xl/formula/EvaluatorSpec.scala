@@ -132,7 +132,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
 
   property("Short-circuit: And(Lit(false), error) doesn't evaluate error") {
     forAll(genARef) { missingRef =>
-      val errorExpr = TExpr.Ref[Boolean](missingRef, Anchor.Relative, _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty)))
+      val errorExpr = TExpr.Ref[Boolean](
+        missingRef,
+        Anchor.Relative,
+        _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty))
+      )
       val andExpr = TExpr.Lit(false) && errorExpr
       val sheet = new Sheet(name = SheetName.unsafe("Empty"))
       // Should return Right(false) without evaluating errorExpr
@@ -142,7 +146,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
 
   property("Short-circuit: Or(Lit(true), error) doesn't evaluate error") {
     forAll(genARef) { missingRef =>
-      val errorExpr = TExpr.Ref[Boolean](missingRef, Anchor.Relative, _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty)))
+      val errorExpr = TExpr.Ref[Boolean](
+        missingRef,
+        Anchor.Relative,
+        _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty))
+      )
       val orExpr = TExpr.Lit(true) || errorExpr
       val sheet = new Sheet(name = SheetName.unsafe("Empty"))
       // Should return Right(true) without evaluating errorExpr
@@ -421,7 +429,8 @@ class EvaluatorSpec extends ScalaCheckSuite:
       refB1 -> CellValue.Number(BigDecimal(5)),
       refC1 -> CellValue.Number(BigDecimal(2))
     )
-    val mul = TExpr.Mul(TExpr.ref(refB1, TExpr.decodeNumeric), TExpr.ref(refC1, TExpr.decodeNumeric))
+    val mul =
+      TExpr.Mul(TExpr.ref(refB1, TExpr.decodeNumeric), TExpr.ref(refC1, TExpr.decodeNumeric))
     val expr = TExpr.Add(TExpr.ref(refA1, TExpr.decodeNumeric), mul)
     // A1 + (B1 * C1) = 10 + (5 * 2) = 10 + 10 = 20
     assert(evalOk(expr, sheet) == BigDecimal(20))
@@ -438,8 +447,10 @@ class EvaluatorSpec extends ScalaCheckSuite:
       refC1 -> CellValue.Number(BigDecimal(10)),
       refD1 -> CellValue.Number(BigDecimal(4))
     )
-    val numerator = TExpr.Add(TExpr.ref(refA1, TExpr.decodeNumeric), TExpr.ref(refB1, TExpr.decodeNumeric))
-    val denominator = TExpr.Sub(TExpr.ref(refC1, TExpr.decodeNumeric), TExpr.ref(refD1, TExpr.decodeNumeric))
+    val numerator =
+      TExpr.Add(TExpr.ref(refA1, TExpr.decodeNumeric), TExpr.ref(refB1, TExpr.decodeNumeric))
+    val denominator =
+      TExpr.Sub(TExpr.ref(refC1, TExpr.decodeNumeric), TExpr.ref(refD1, TExpr.decodeNumeric))
     val expr = TExpr.Div(numerator, denominator)
     // (20 + 10) / (10 - 4) = 30 / 6 = 5
     assert(evalOk(expr, sheet) == BigDecimal(5))
@@ -550,12 +561,12 @@ class EvaluatorSpec extends ScalaCheckSuite:
     // with .isEmpty before .min/.max/.sum - that would skip the first element.
     // We place the extreme value FIRST to catch this bug.
     val sheet = sheetWith(
-      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(1)),   // A1: MIN is here (first!)
-      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(5)),   // A2
+      ARef.from0(0, 0) -> CellValue.Number(BigDecimal(1)), // A1: MIN is here (first!)
+      ARef.from0(0, 1) -> CellValue.Number(BigDecimal(5)), // A2
       ARef.from0(0, 2) -> CellValue.Number(BigDecimal(100)), // A3: MAX is here (last)
-      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(99)),  // B1: MAX is here (first!)
-      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(50)),  // B2
-      ARef.from0(1, 2) -> CellValue.Number(BigDecimal(10))   // B3: MIN is here (last)
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(99)), // B1: MAX is here (first!)
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(50)), // B2
+      ARef.from0(1, 2) -> CellValue.Number(BigDecimal(10)) // B3: MIN is here (last)
     )
 
     val rangeA = CellRange(ARef.from0(0, 0), ARef.from0(0, 2)) // A1:A3
@@ -592,7 +603,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
 
   test("Error: Nested error - error in IF condition propagates") {
     val refA1 = ARef.from0(0, 0) // A1 doesn't exist
-    val condition = TExpr.Ref[Boolean](refA1, Anchor.Relative, _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty)))
+    val condition = TExpr.Ref[Boolean](
+      refA1,
+      Anchor.Relative,
+      _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty))
+    )
     val expr = TExpr.cond(condition, TExpr.Lit("Yes"), TExpr.Lit("No"))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     val error = evalErr(expr, sheet)
@@ -604,7 +619,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
   test("Error: Nested error - error in IF true branch (condition=true)") {
     val refA1 = ARef.from0(0, 0)
     val condition = TExpr.Lit(true)
-    val trueBranch = TExpr.Ref[String](refA1, Anchor.Relative, _ => Left(CodecError.TypeMismatch("String", CellValue.Empty)))
+    val trueBranch = TExpr.Ref[String](
+      refA1,
+      Anchor.Relative,
+      _ => Left(CodecError.TypeMismatch("String", CellValue.Empty))
+    )
     val expr = TExpr.cond(condition, trueBranch, TExpr.Lit("No"))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     val error = evalErr(expr, sheet)
@@ -616,7 +635,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
   test("Error: Nested error - error in IF false branch NOT evaluated (condition=true)") {
     val refA1 = ARef.from0(0, 0)
     val condition = TExpr.Lit(true)
-    val falseBranch = TExpr.Ref[String](refA1, Anchor.Relative, _ => Left(CodecError.TypeMismatch("String", CellValue.Empty)))
+    val falseBranch = TExpr.Ref[String](
+      refA1,
+      Anchor.Relative,
+      _ => Left(CodecError.TypeMismatch("String", CellValue.Empty))
+    )
     val expr = TExpr.cond(condition, TExpr.Lit("Yes"), falseBranch)
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     // False branch should NOT be evaluated, so no error
@@ -638,25 +661,29 @@ class EvaluatorSpec extends ScalaCheckSuite:
   // ==================== Variadic Aggregate Tests ====================
 
   test("SUM: variadic literals SUM(1,2,3) = 6") {
-    val expr = TExpr.sum(TExpr.Lit(BigDecimal(1)), TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
+    val expr =
+      TExpr.sum(TExpr.Lit(BigDecimal(1)), TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == BigDecimal(6))
   }
 
   test("AVERAGE: variadic literals AVERAGE(1,2,3) = 2") {
-    val expr = TExpr.average(TExpr.Lit(BigDecimal(1)), TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
+    val expr =
+      TExpr.average(TExpr.Lit(BigDecimal(1)), TExpr.Lit(BigDecimal(2)), TExpr.Lit(BigDecimal(3)))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == BigDecimal(2))
   }
 
   test("MIN: variadic literals MIN(5,3,8) = 3") {
-    val expr = TExpr.min(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(8)))
+    val expr =
+      TExpr.min(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(8)))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == BigDecimal(3))
   }
 
   test("MAX: variadic literals MAX(5,3,8) = 8") {
-    val expr = TExpr.max(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(8)))
+    val expr =
+      TExpr.max(TExpr.Lit(BigDecimal(5)), TExpr.Lit(BigDecimal(3)), TExpr.Lit(BigDecimal(8)))
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     assert(evalOk(expr, sheet) == BigDecimal(8))
   }
@@ -693,7 +720,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
 
   test("Error: AND with error in second operand (first=true, evaluates second)") {
     val refA1 = ARef.from0(0, 0) // Missing
-    val errorExpr = TExpr.Ref[Boolean](refA1, Anchor.Relative, _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty)))
+    val errorExpr = TExpr.Ref[Boolean](
+      refA1,
+      Anchor.Relative,
+      _ => Left(CodecError.TypeMismatch("Boolean", CellValue.Empty))
+    )
     val andExpr = TExpr.Lit(true) && errorExpr
     val sheet = new Sheet(name = SheetName.unsafe("Empty"))
     // First is true, so second is evaluated and error propagates
@@ -956,9 +987,15 @@ class EvaluatorSpec extends ScalaCheckSuite:
       ARef.from0(0, 3) -> CellValue.Number(BigDecimal(500)), // A4: payment 3
       // Dates in B1:B4
       ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 1, 1, 0, 0)), // B1
-      ARef.from0(1, 1) -> CellValue.DateTime(LocalDateTime.of(2024, 4, 1, 0, 0)), // B2 (~90 days later)
-      ARef.from0(1, 2) -> CellValue.DateTime(LocalDateTime.of(2024, 7, 1, 0, 0)), // B3 (~180 days later)
-      ARef.from0(1, 3) -> CellValue.DateTime(LocalDateTime.of(2025, 1, 1, 0, 0)) // B4 (~365 days later)
+      ARef.from0(1, 1) -> CellValue.DateTime(
+        LocalDateTime.of(2024, 4, 1, 0, 0)
+      ), // B2 (~90 days later)
+      ARef.from0(1, 2) -> CellValue.DateTime(
+        LocalDateTime.of(2024, 7, 1, 0, 0)
+      ), // B3 (~180 days later)
+      ARef.from0(1, 3) -> CellValue.DateTime(
+        LocalDateTime.of(2025, 1, 1, 0, 0)
+      ) // B4 (~365 days later)
     )
     sheet.evaluateFormula("=XNPV(0.1, A1:A4, B1:B4)") match
       case Right(CellValue.Number(n)) =>
@@ -999,7 +1036,10 @@ class EvaluatorSpec extends ScalaCheckSuite:
     sheet.evaluateFormula("=XIRR(A1:A5, B1:B5)") match
       case Right(CellValue.Number(n)) =>
         // Excel calculates ~37.34% (0.3734) for this example
-        assert(n > BigDecimal("0.30") && n < BigDecimal("0.45"), s"Expected XIRR around 0.37, got $n")
+        assert(
+          n > BigDecimal("0.30") && n < BigDecimal("0.45"),
+          s"Expected XIRR around 0.37, got $n"
+        )
       case other => fail(s"Expected Number, got $other")
   }
 
@@ -1033,7 +1073,10 @@ class EvaluatorSpec extends ScalaCheckSuite:
     sheet.evaluateFormula("=XIRR(A1:A5, B1:B5, 0.5)") match
       case Right(CellValue.Number(n)) =>
         // Should still converge to ~0.37 even with different starting guess
-        assert(n > BigDecimal("0.30") && n < BigDecimal("0.45"), s"Expected XIRR around 0.37, got $n")
+        assert(
+          n > BigDecimal("0.30") && n < BigDecimal("0.45"),
+          s"Expected XIRR around 0.37, got $n"
+        )
       case other => fail(s"Expected Number, got $other")
   }
 

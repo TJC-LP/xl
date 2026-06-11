@@ -11,9 +11,9 @@ import munit.FunSuite
 /**
  * GH-280: internal diagnostic formatters quote cell-ref-shaped sheet names.
  *
- * After GH-263, user-facing formula PRINTING quotes sheet names that read as cell references —
- * but diagnostics still built bare strings, so an error about a sheet literally named `A1` read
- * `A1!B2` (ambiguous: is that a ref chain?). These are never re-parsed; the quoting is purely for
+ * After GH-263, user-facing formula PRINTING quotes sheet names that read as cell references — but
+ * diagnostics still built bare strings, so an error about a sheet literally named `A1` read `A1!B2`
+ * (ambiguous: is that a ref chain?). These are never re-parsed; the quoting is purely for
  * unambiguous human reading via SheetName.quoteForFormula.
  */
 class DiagnosticQuotingSpec extends FunSuite:

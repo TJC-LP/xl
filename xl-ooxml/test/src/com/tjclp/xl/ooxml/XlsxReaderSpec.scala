@@ -40,7 +40,8 @@ class XlsxReaderSpec extends FunSuite:
     val bytes = XlsxWriter.writeToBytes(wb).getOrElse(fail("Failed to write workbook"))
     val mutated = rewriteWorksheetTarget(bytes, "sheet42.xml")
 
-    val readWb = XlsxReader.readFromBytes(mutated).getOrElse(fail("Failed to read mutated workbook"))
+    val readWb =
+      XlsxReader.readFromBytes(mutated).getOrElse(fail("Failed to read mutated workbook"))
     val readSheet = readWb("Rel").getOrElse(fail("Missing sheet"))
 
     assertEquals(readSheet(ref"A1").value, CellValue.Text("ok"))
@@ -52,8 +53,7 @@ class XlsxReaderSpec extends FunSuite:
     val entries = mutable.LinkedHashMap.empty[String, Array[Byte]]
     var entry = zip.getNextEntry
     while entry != null do
-      if !entry.isDirectory then
-        entries(entry.getName) = zip.readAllBytes()
+      if !entry.isDirectory then entries(entry.getName) = zip.readAllBytes()
       zip.closeEntry()
       entry = zip.getNextEntry
     zip.close()
