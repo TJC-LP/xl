@@ -205,6 +205,41 @@ class DisplaySpec extends FunSuite:
     assertEquals(result, "=SUM(A1:A10)")
   }
 
+  test("Default strategy prefers cached value formatted via numFmt (GH-282)") {
+    val sheet = Sheet(name = SheetName.unsafe("Test"))
+    val strategy = FormulaDisplayStrategy.default
+    val result = strategy.formatCached(
+      "='Data'!A1*2",
+      Some(CellValue.Number(BigDecimal("1234.5"))),
+      NumFmt.Currency,
+      sheet
+    )
+    assertEquals(result, "$1,234.50")
+  }
+
+  test("Default strategy falls back to formula text when uncached (GH-282)") {
+    val sheet = Sheet(name = SheetName.unsafe("Test"))
+    val strategy = FormulaDisplayStrategy.default
+    val result = strategy.formatCached("='Data'!A1*2", None, NumFmt.Currency, sheet)
+    assertEquals(result, "='Data'!A1*2")
+  }
+
+  test("Default strategy displays cached cross-sheet formula through cell display (GH-282)") {
+    import DisplayConversions.given
+
+    // Cross-sheet formula cannot be evaluated sheet-locally; the cached value (as written
+    // by Excel or Workbook.recalculate()) is the only meaningful display for xl-core users.
+    given Sheet = Sheet(name = SheetName.unsafe("Test"))
+      .put(ref"C1", CellValue.Formula("='Data'!A1*2", Some(CellValue.Number(BigDecimal("0.6")))))
+      .style(ref"C1", CellStyle.default.withNumFmt(NumFmt.Percent))
+      .unsafe
+
+    given FormulaDisplayStrategy = FormulaDisplayStrategy.default
+
+    val conv = summon[Conversion[ARef, DisplayWrapper]]
+    assertEquals(conv.apply(ref"C1").formatted, "60%")
+  }
+
   // ========== DisplayConversions Tests ==========
 
   test("ARef conversion with given Sheet") {
