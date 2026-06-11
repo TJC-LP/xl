@@ -70,6 +70,9 @@ trait TExprCoercions:
     // Date-returning calls (TODAY, DATE, EDATE, ...) already produce LocalDate
     case call: TExpr.Call[?] if call.spec.flags.returnsDate =>
       call.asInstanceOf[TExpr[java.time.LocalDate]]
+    // GH-307: cross-typed literals coerce at evaluation time (Excel serial → date)
+    case TExpr.Lit(_: BigDecimal) | TExpr.Lit(_: String) =>
+      coerced[java.time.LocalDate](expr, BindingCoercion.Date)
     // GH-306: time-returning calls (NOW), serial arithmetic (TODAY()+1), numeric calls — coerce
     // at evaluation time (LocalDateTime → date, Excel serial → date)
     case other if isRuntimePolymorphic(other) =>
@@ -90,6 +93,10 @@ trait TExprCoercions:
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[Int](name, BindingCoercion.Integer)
     case TExpr.Lit(bd: BigDecimal) if bd.isValidInt => TExpr.Lit(bd.toInt)
+    // GH-307: cross-typed literals coerce at evaluation time — fractionals truncate like
+    // Excel (LEFT("hello", 2.7) → "he"), numeric text parses, booleans are 1/0, anything
+    // else is a clean error (previously an erased cast deferring a ClassCastException)
+    case lit: TExpr.Lit[?] => coerced[Int](lit, BindingCoercion.Integer)
     // Any function call returning BigDecimal (flagged via returnsNumeric) — wrap in ToInt.
     // Covers SUM, COUNT, AVERAGE, ROUND, ABS, MOD, ROW, COLUMN, MATCH, PMT, FIND, LEN,
     // YEAR/MONTH/DAY, etc. — every numeric-returning function in the registry.
@@ -117,6 +124,10 @@ trait TExprCoercions:
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeNumeric)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[BigDecimal](name, BindingCoercion.Numeric)
+    // GH-307: cross-typed literals coerce at evaluation time (=SQRT("16") → 4, TRUE → 1);
+    // numeric literals keep their shape
+    case TExpr.Lit(_: String) | TExpr.Lit(_: Boolean) =>
+      coerced[BigDecimal](expr, BindingCoercion.Numeric)
     // Date functions return LocalDate/LocalDateTime - convert to Excel serial number
     case call: TExpr.Call[?] if call.spec.flags.returnsDate =>
       DateToSerial(call.asInstanceOf[TExpr[java.time.LocalDate]])
@@ -161,6 +172,10 @@ trait TExprCoercions:
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeBool)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[Boolean](name, BindingCoercion.Bool)
+    // GH-307: cross-typed literals coerce at evaluation time (=IF(1, ...) uses Excel
+    // truthiness; text is a clean error); boolean literals keep their shape
+    case TExpr.Lit(_: BigDecimal) | TExpr.Lit(_: String) =>
+      coerced[Boolean](expr, BindingCoercion.Bool)
     // Comparisons are the statically boolean-typed operators — keep their shape
     case _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt | _: TExpr.Lte | _: TExpr.Gt |
         _: TExpr.Gte =>

@@ -1430,3 +1430,98 @@ class EvaluatorSpec extends ScalaCheckSuite:
       case Left(_) => ()
       case Right(v) => fail(s"Expected error for basis 5, got $v")
   }
+
+  // ==================== GH-307: total integer arguments (toIntArg truth table) ====================
+  // FunctionSpecsBase.toInt silently coerced non-numeric values to 0, so EDATE/EOMONTH/WORKDAY
+  // accepted garbage and computed nonsense (Excel: #VALUE!). Truth table per function:
+  // valid | fractional (Excel TRUNCATES) | numeric text (Excel coerces) | non-numeric text
+  // (clean error) | boolean (TRUE = 1, in-repo convention shared with decodeAsInt).
+
+  private def dateSheet(y: Int, m: Int, d: Int): Sheet =
+    import java.time.LocalDateTime
+    sheetWith(ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(y, m, d, 0, 0)))
+
+  private def expectDate(result: Either[?, CellValue], y: Int, m: Int, d: Int)(using
+    munit.Location
+  ): Unit =
+    import java.time.LocalDateTime
+    assertEquals(result, Right(CellValue.DateTime(LocalDateTime.of(y, m, d, 0, 0))))
+
+  test("GH-307 EDATE truth table") {
+    val sheet = dateSheet(2024, 1, 15)
+    expectDate(sheet.evaluateFormula("=EDATE(A1, 2)"), 2024, 3, 15) // valid
+    expectDate(sheet.evaluateFormula("=EDATE(A1, 1.9)"), 2024, 2, 15) // fractional truncates
+    expectDate(sheet.evaluateFormula("=EDATE(A1, -1.9)"), 2023, 12, 15) // toward zero
+    expectDate(sheet.evaluateFormula("=EDATE(A1, \"3\")"), 2024, 4, 15) // numeric text coerces
+    expectDate(sheet.evaluateFormula("=EDATE(A1, TRUE)"), 2024, 2, 15) // TRUE = 1
+    val bad = sheet.evaluateFormula("=EDATE(A1, \"abc\")")
+    assert(bad.isLeft, s"expected clean error for non-numeric months, got $bad")
+  }
+
+  test("GH-307 EOMONTH truth table") {
+    val sheet = dateSheet(2024, 1, 15)
+    expectDate(sheet.evaluateFormula("=EOMONTH(A1, 1)"), 2024, 2, 29) // valid (leap year)
+    expectDate(sheet.evaluateFormula("=EOMONTH(A1, 1.9)"), 2024, 2, 29) // fractional truncates
+    expectDate(sheet.evaluateFormula("=EOMONTH(A1, \"2\")"), 2024, 3, 31) // numeric text coerces
+    expectDate(sheet.evaluateFormula("=EOMONTH(A1, TRUE)"), 2024, 2, 29) // TRUE = 1
+    val bad = sheet.evaluateFormula("=EOMONTH(A1, \"x\")")
+    assert(bad.isLeft, s"expected clean error for non-numeric months, got $bad")
+  }
+
+  test("GH-307 WORKDAY truth table") {
+    val sheet = dateSheet(2024, 1, 15) // a Monday
+    expectDate(sheet.evaluateFormula("=WORKDAY(A1, 5)"), 2024, 1, 22) // valid
+    expectDate(sheet.evaluateFormula("=WORKDAY(A1, 5.9)"), 2024, 1, 22) // fractional truncates
+    expectDate(sheet.evaluateFormula("=WORKDAY(A1, \"3\")"), 2024, 1, 18) // numeric text coerces
+    expectDate(sheet.evaluateFormula("=WORKDAY(A1, TRUE)"), 2024, 1, 16) // TRUE = 1
+    val bad = sheet.evaluateFormula("=WORKDAY(A1, \"y\")")
+    assert(bad.isLeft, s"expected clean error for non-numeric days, got $bad")
+  }
+
+  test("GH-307 YEARFRAC basis argument is total") {
+    import java.time.LocalDateTime
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 1, 1, 0, 0)),
+      ARef.from0(1, 0) -> CellValue.DateTime(LocalDateTime.of(2024, 7, 1, 0, 0))
+    )
+    // numeric text coerces to a valid basis
+    assert(sheet.evaluateFormula("=YEARFRAC(A1, B1, \"2\")").isRight)
+    // non-numeric text is a clean error (previously: silent basis 0)
+    val bad = sheet.evaluateFormula("=YEARFRAC(A1, B1, \"z\")")
+    assert(bad.isLeft, s"expected clean error for non-numeric basis, got $bad")
+  }
+
+  test("GH-307 XLOOKUP match_mode/search_mode arguments are total") {
+    val sheet = sheetWith(
+      ARef.from0(0, 0) -> CellValue.Text("a"),
+      ARef.from0(0, 1) -> CellValue.Text("b"),
+      ARef.from0(1, 0) -> CellValue.Number(BigDecimal(1)),
+      ARef.from0(1, 1) -> CellValue.Number(BigDecimal(2))
+    )
+    // valid + numeric-text modes work
+    assertEquals(
+      sheet.evaluateFormula("=XLOOKUP(\"b\", A1:A2, B1:B2, 0, 0, 1)"),
+      Right(CellValue.Number(BigDecimal(2)))
+    )
+    assertEquals(
+      sheet.evaluateFormula("=XLOOKUP(\"b\", A1:A2, B1:B2, 0, \"0\", \"1\")"),
+      Right(CellValue.Number(BigDecimal(2)))
+    )
+    // non-numeric mode text is a clean error (previously: silent mode 0)
+    val bad = sheet.evaluateFormula("=XLOOKUP(\"b\", A1:A2, B1:B2, 0, \"nope\")")
+    assert(bad.isLeft, s"expected clean error for non-numeric match_mode, got $bad")
+  }
+
+  test("GH-307 literal cross-typed positions are total (no ClassCastException)") {
+    val sheet = sheetWith(ARef.from0(0, 0) -> CellValue.Number(BigDecimal(7)))
+    // int position: numeric text and fractionals work, like Excel
+    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", \"3\")"), Right(CellValue.Text("hel")))
+    assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", 2.7)"), Right(CellValue.Text("he")))
+    // boolean position: Excel truthiness for numeric literals
+    assertEquals(sheet.evaluateFormula("=IF(1, 2, 3)"), Right(CellValue.Number(BigDecimal(2))))
+    assertEquals(sheet.evaluateFormula("=IF(0, 2, 3)"), Right(CellValue.Number(BigDecimal(3))))
+    // numeric position: numeric text parses, non-numeric is a clean Left
+    assertEquals(sheet.evaluateFormula("=SQRT(\"16\")"), Right(CellValue.Number(BigDecimal(4))))
+    val bad = sheet.evaluateFormula("=SQRT(\"abc\")")
+    assert(bad.isLeft, s"expected clean error, got $bad")
+  }

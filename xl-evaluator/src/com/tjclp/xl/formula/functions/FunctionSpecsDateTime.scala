@@ -10,6 +10,19 @@ import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 
 trait FunctionSpecsDateTime extends FunctionSpecsBase:
+  /**
+   * GH-307: total month arithmetic for EDATE/EOMONTH — LocalDate.plusMonths throws past year
+   * 999,999,999, so extreme (but Int-valid) month counts become a clean per-cell error.
+   */
+  private def shiftMonths(
+    fnName: String,
+    date: LocalDate,
+    months: Int
+  ): Either[EvalError, LocalDate] =
+    scala.util.Try(date.plusMonths(months.toLong)).toEither.left.map { ex =>
+      EvalError.EvalFailed(s"$fnName: month offset $months is out of range: ${ex.getMessage}", None)
+    }
+
   private def holidaySet(rangeOpt: Option[CellRange], ctx: EvalContext): Set[LocalDate] =
     rangeOpt
       .map { range =>
@@ -129,10 +142,11 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
       for
         date <- ctx.evalExpr(startDateExpr)
         monthsRaw <- evalValue(ctx, monthsExpr)
-      yield
-        val monthsValue = toInt(monthsRaw)
-        val targetMonth = date.plusMonths(monthsValue.toLong)
-        targetMonth.withDayOfMonth(targetMonth.lengthOfMonth)
+        monthsValue <- toIntArg("EOMONTH", monthsRaw)
+        result <- shiftMonths("EOMONTH", date, monthsValue).map { targetMonth =>
+          targetMonth.withDayOfMonth(targetMonth.lengthOfMonth)
+        }
+      yield result
     }
 
   val edate: FunctionSpec[LocalDate] { type Args = DateInt } =
@@ -145,7 +159,9 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
       for
         date <- ctx.evalExpr(startDateExpr)
         monthsRaw <- evalValue(ctx, monthsExpr)
-      yield date.plusMonths(toInt(monthsRaw).toLong)
+        monthsValue <- toIntArg("EDATE", monthsRaw)
+        result <- shiftMonths("EDATE", date, monthsValue)
+      yield result
     }
 
   val datedif: FunctionSpec[BigDecimal] { type Args = DatePairUnit } =
@@ -227,8 +243,8 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
       for
         start <- ctx.evalExpr(startDateExpr)
         daysRaw <- evalValue(ctx, daysExpr)
+        daysValue <- toIntArg("WORKDAY", daysRaw)
       yield
-        val daysValue = toInt(daysRaw)
         val holidays = holidaySet(holidaysOpt, ctx)
         addWorkingDays(start, daysValue, holidays)
     }
@@ -256,7 +272,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     ) { (args, ctx) =>
       val (startDateExpr, endDateExpr, basisOpt) = args
       val basisValueEither = basisOpt match
-        case Some(expr) => evalValue(ctx, expr).map(toInt)
+        case Some(expr) => evalValue(ctx, expr).flatMap(toIntArg("YEARFRAC", _))
         case None => Right(0)
       for
         start <- ctx.evalExpr(startDateExpr)
