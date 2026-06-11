@@ -168,6 +168,9 @@ object FormulaFormatting:
         case TExpr.BindingRef(_) => Vector.empty
         case TExpr.CoercedBindingRef(_, _) => Vector.empty
 
+        // GH-306: runtime coercion wrapper — transparent for format inference
+        case TExpr.Coerced(inner, _) => loop(inner)
+
         // Literals: no references
         case TExpr.Lit(_) => Vector.empty
 

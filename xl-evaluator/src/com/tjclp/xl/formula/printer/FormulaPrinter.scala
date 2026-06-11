@@ -191,6 +191,11 @@ object FormulaPrinter:
       // A binding in a typed argument position prints as the bare name, exactly like BindingRef
       case TExpr.CoercedBindingRef(name, _) => name
 
+      // GH-306: a runtime coercion wrapper prints transparently as the wrapped expression —
+      // the coercion is an evaluation concern, invisible in formula text (round-trip safe:
+      // re-parsing re-derives the same wrapper from the argument position)
+      case TExpr.Coerced(inner, _) => printExpr(inner, precedence)
+
   /**
    * Format ARef to A1 notation with default Relative anchor.
    *
@@ -389,3 +394,5 @@ object FormulaPrinter:
         s"BindingRef($name)"
       case TExpr.CoercedBindingRef(name, target) =>
         s"CoercedBindingRef($name, $target)"
+      case TExpr.Coerced(inner, target) =>
+        s"Coerced(${printWithTypes(inner)}, $target)"

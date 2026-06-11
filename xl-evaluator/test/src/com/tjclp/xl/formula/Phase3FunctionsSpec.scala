@@ -180,3 +180,33 @@ class Phase3FunctionsSpec extends FunSuite:
     assertEquals(crit.evaluateFormula("=SUM(A1:A5)"), Right(CellValue.Number(BigDecimal(150))))
     assertEquals(crit.evaluateFormula("=SUM(1,2,3)"), Right(CellValue.Number(BigDecimal(6))))
   }
+
+  // GH-302: OFFSET in scalar argument positions — implicit-intersection collapse,
+  // family parity with INDIRECT (same ArrayResult mechanism).
+  test("GH-302: IFERROR(OFFSET(A1,2,3),0) returns the shifted VALUE for a valid ref") {
+    val grid = s.put("D3" -> 99)
+    assertEquals(
+      grid.evaluateFormula("=IFERROR(OFFSET(A1,2,3),0)"),
+      Right(CellValue.Number(BigDecimal(99)))
+    )
+  }
+
+  test("GH-302: LEFT(OFFSET(...), 1) collapses to text position") {
+    val grid = s.put("D3" -> 99)
+    assertEquals(grid.evaluateFormula("=LEFT(OFFSET(A1,2,3), 1)"), Right(CellValue.Text("9")))
+  }
+
+  test("GH-302: multi-cell OFFSET in a scalar position collapses to top-left") {
+    // crit A1:A5 = 10,20,30,40,50; OFFSET(A1,0,0,3,1) = A1:A3 → top-left = 10
+    assertEquals(
+      crit.evaluateFormula("=ABS(OFFSET(A1,0,0,3,1))"),
+      Right(CellValue.Number(BigDecimal(10)))
+    )
+  }
+
+  test("GH-302: out-of-bounds OFFSET still fires the IFERROR fallback") {
+    assertEquals(
+      s.evaluateFormula("=IFERROR(OFFSET(A1,-1,0),0)"),
+      Right(CellValue.Number(BigDecimal(0)))
+    )
+  }

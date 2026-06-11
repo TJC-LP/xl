@@ -1100,9 +1100,13 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result.foreach {
       case TExpr.Call(upperSpec, inner) if upperSpec.name == "UPPER" =>
+        // GH-306: calls in typed argument positions are wrapped in the total runtime-coercion
+        // node (TExpr.Coerced) — see through it to the nested call.
         inner match
+          case TExpr.Coerced(TExpr.Call(concatSpec, _), _) if concatSpec.name == "CONCATENATE" =>
+            assert(true)
           case TExpr.Call(concatSpec, _) if concatSpec.name == "CONCATENATE" => assert(true)
-          case _ => fail("Expected nested CONCATENATE")
+          case other => fail(s"Expected nested CONCATENATE, got $other")
       case _ => fail("Expected nested text functions")
     }
   }

@@ -159,6 +159,10 @@ object FormulaShifter:
       case bref: BindingRef => bref.asInstanceOf[TExpr[A]]
       case cbref: CoercedBindingRef[?] => cbref.asInstanceOf[TExpr[A]]
 
+      // GH-306: runtime coercion wrapper — shift the wrapped expression, preserve the wrapper
+      case Coerced(inner, target) =>
+        Coerced(shiftInternal(inner, colDelta, rowDelta), target).asInstanceOf[TExpr[A]]
+
   /**
    * Shift a cell reference based on its anchor mode.
    *
@@ -416,3 +420,7 @@ object FormulaShifter:
         yield Let(bs.reverse, sb).asInstanceOf[TExpr[A]]
       case _: BindingRef => Some(expr)
       case _: CoercedBindingRef[?] => Some(expr)
+
+      // GH-306: runtime coercion wrapper — shift the wrapped expression, preserve the wrapper
+      case Coerced(inner, target) =>
+        go(inner).map(si => Coerced(si, target).asInstanceOf[TExpr[A]])

@@ -202,17 +202,44 @@ class IndirectFunctionSpec extends ScalaCheckSuite:
       case Right(v) => fail(s"expected Left(R1C1 unsupported), got $v")
   }
 
-  // ===== 6. IFERROR pins (inherited evalArg array-rejection — family follow-up) =====
+  // ===== 6. Scalar argument positions (GH-302: implicit-intersection collapse) =====
 
   test("IFERROR(INDIRECT(\"bad\"),0) returns the fallback") {
     assertEquals(s.evaluateFormula("=IFERROR(INDIRECT(\"bad\"),0)"), Right(num(0)))
   }
 
-  test("IFERROR(INDIRECT(\"B2\"),0) returns the fallback EVEN for a valid ref (pinned wart)") {
-    // Scalar argument positions reject ArrayResult (Evaluator.evalArg), so IFERROR sees a
-    // Left and returns its fallback. Identical to shipped OFFSET behavior; tracked as the
-    // range-function family follow-up (1×1 ArrayResult collapse in scalar arg positions).
-    assertEquals(base.evaluateFormula("=IFERROR(INDIRECT(\"B2\"),0)"), Right(num(0)))
+  test("GH-302: IFERROR(INDIRECT(\"B2\"),0) returns B2's VALUE for a valid ref") {
+    // Scalar argument positions collapse a 1×1 ArrayResult to its value (implicit
+    // intersection) instead of rejecting it — previously the rejection made IFERROR
+    // return its fallback even for valid references.
+    assertEquals(base.evaluateFormula("=IFERROR(INDIRECT(\"B2\"),0)"), Right(num(42)))
+  }
+
+  test("GH-302: LEFT(INDIRECT(\"B2\"), 1) collapses to text position") {
+    assertEquals(
+      base.evaluateFormula("=LEFT(INDIRECT(\"B2\"), 1)"),
+      Right(CellValue.Text("4"))
+    )
+  }
+
+  test("GH-302: ABS(INDIRECT(\"B2\")) collapses 1x1 to numeric position") {
+    assertEquals(base.evaluateFormula("=ABS(INDIRECT(\"B2\"))"), Right(num(42)))
+  }
+
+  test("GH-302: multi-cell INDIRECT in a scalar position collapses to top-left") {
+    assertEquals(col.evaluateFormula("=ABS(INDIRECT(\"A1:A3\"))"), Right(num(10)))
+    assertEquals(col.evaluateFormula("=IFERROR(INDIRECT(\"A1:A3\"),0)"), Right(num(10)))
+  }
+
+  test("GH-302: truly invalid ref still fires the IFERROR fallback") {
+    // The collapsed value of INDIRECT("bad") is the #REF! VALUE — IFERROR must keep
+    // catching it after the collapse change.
+    assertEquals(s.evaluateFormula("=IFERROR(INDIRECT(\"nope\"),7)"), Right(num(7)))
+    assertEquals(s.evaluateFormula("=ISERROR(INDIRECT(\"nope\"))"), Right(CellValue.Bool(true)))
+  }
+
+  test("GH-302: ISNUMBER(INDIRECT(\"B2\")) sees the collapsed number") {
+    assertEquals(base.evaluateFormula("=ISNUMBER(INDIRECT(\"B2\"))"), Right(CellValue.Bool(true)))
   }
 
   // ===== 7. Spill / collapse / broadcast =====

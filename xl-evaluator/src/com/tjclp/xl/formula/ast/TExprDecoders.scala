@@ -62,12 +62,21 @@ trait TExprDecoders:
    * Decode cell as Boolean value.
    *
    * Handles Formula cells by extracting the cached Boolean value when available.
+   *
+   * GH-306: numbers coerce with Excel truthiness (0 = FALSE, non-zero = TRUE) and blanks are FALSE,
+   * so `=IF(A1, ...)` over a numeric or empty cell matches Excel — and matches the
+   * BindingCoercion.Bool conventions for LET bindings (the LetFunctionSpec parity pin requires the
+   * direct and bound forms to agree). Text still refuses (clean per-cell error).
    */
   def decodeBool(cell: Cell): Either[CodecError, Boolean] =
     cell.value match
       case CellValue.Bool(value) => scala.util.Right(value)
+      case CellValue.Number(n) => scala.util.Right(n.signum != 0)
+      case CellValue.Empty => scala.util.Right(false)
       case CellValue.Formula(_, Some(CellValue.Bool(cached))) =>
         scala.util.Right(cached)
+      case CellValue.Formula(_, Some(CellValue.Number(cached))) =>
+        scala.util.Right(cached.signum != 0)
       case other =>
         scala.util.Left(
           CodecError.TypeMismatch(

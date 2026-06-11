@@ -313,10 +313,29 @@ enum TExpr[A] derives CanEqual:
    */
   case CoercedBindingRef[A](name: String, target: BindingCoercion) extends TExpr[A]
 
+  /**
+   * GH-302/GH-306: a runtime-polymorphic expression used in a statically-typed argument position.
+   *
+   * The typed coercion boundary (asStringExpr, asIntExpr, asBooleanExpr, asNumericExpr, asDateExpr)
+   * wraps shapes whose runtime value can disagree with the position's static type — function calls
+   * (`UPPER(SUM(A1:A2))`), aggregates, LET bodies, cross-typed operators — in this node instead of
+   * an erased cast that defers a ClassCastException to the consuming function. The evaluator
+   * coerces the runtime value TOTALLY per the target's conventions (number→text, number→boolean
+   * 0=FALSE, 1×1 ArrayResult collapse to its top-left value, ...), returning Left(TypeMismatch)
+   * when uncoercible. In array operand positions (arithmetic/comparison broadcasting) ArrayResults
+   * pass through untouched so `INDIRECT("A1:A3")*10` still broadcasts.
+   *
+   * The type parameter must agree with the target, exactly like [[CoercedBindingRef]]; the coercion
+   * helpers in [[TExprCoercions]] are the only construction sites. Prints transparently as the
+   * wrapped expression.
+   */
+  case Coerced[A](expr: TExpr[Any], target: BindingCoercion) extends TExpr[A]
+
 /**
- * Target type for [[TExpr.CoercedBindingRef]] — carried as data (not a decoder function) so TExpr
- * keeps structural equality. Each case mirrors the decode conventions of the corresponding cell
- * decoder (decodeAsString, decodeAsInt, decodeBool, decodeNumeric, decodeAsDate).
+ * Target type for [[TExpr.CoercedBindingRef]] and [[TExpr.Coerced]] — carried as data (not a
+ * decoder function) so TExpr keeps structural equality. Each case mirrors the decode conventions of
+ * the corresponding cell decoder (decodeAsString, decodeAsInt, decodeBool, decodeNumeric,
+ * decodeAsDate); the single evaluation-time table is `ScalarCoercion.coerce`.
  */
 enum BindingCoercion derives CanEqual:
   case Text, Integer, Bool, Numeric, Date

@@ -418,16 +418,12 @@ private class EvaluatorImpl(
       // ===== Type Conversions =====
       case TExpr.ToInt(expr) =>
         // ToInt: total conversion to Int. The operand is statically BigDecimal, but erased
-        // upstream casts can deliver other runtime values — evaluate as Any and pattern-match
-        // (the old BigDecimal-typed binder would checkcast and throw) per GH-193 totality.
-        eval(expr.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell).flatMap {
-          case bd: BigDecimal if bd.isValidInt => Right(bd.toInt)
-          case bd: BigDecimal =>
-            Left(EvalError.TypeMismatch("ToInt", "valid integer", s"$bd (out of Int range)"))
-          case i: Int => Right(i)
-          case other =>
-            Left(EvalError.TypeMismatch("ToInt", "number", s"$other"))
-        }
+        // upstream casts can deliver other runtime values — evaluate as Any and coerce with the
+        // shared Integer conventions (GH-307: fractional values TRUNCATE toward zero like Excel,
+        // numeric text parses, anything else is a clean Left) per GH-193 totality.
+        eval(expr.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+          .flatMap(value => ScalarCoercion.coerce("ToInt", value, BindingCoercion.Integer))
+          .asInstanceOf[Either[EvalError, A]]
 
       // ===== Date/Time Conversions =====
       case TExpr.DateToSerial(dateExpr) =>
@@ -472,11 +468,21 @@ private class EvaluatorImpl(
             }
 
       case call: TExpr.Call[?] =>
+        // GH-302: scalar argument positions COLLAPSE ArrayResults (implicit intersection:
+        // top-left value, Empty when empty) instead of rejecting them. Typed positions
+        // (Coerced/CoercedBindingRef) collapse-then-coerce so the value matches the position's
+        // type regardless of the evaluator's array mode; Any/CellValue positions collapse to the
+        // raw CellValue (consumers go through ExprValue.from).
         def evalArg[A](expr: TExpr[A]): Either[EvalError, A] =
-          eval(expr, sheet, clock, workbook, currentCell).flatMap {
-            case _: ArrayResult =>
-              Left(EvalError.TypeMismatch("function argument", "scalar", "array"))
-            case value => Right(value.asInstanceOf[A])
+          val result = expr match
+            case TExpr.Coerced(inner, target) =>
+              evalCoercedExpr(inner, target, sheet, clock, workbook, currentCell, collapse = true)
+            case TExpr.CoercedBindingRef(name, target) =>
+              evalCoercedBinding(name, target, collapse = true)
+            case other => eval(other, sheet, clock, workbook, currentCell)
+          result.map {
+            case ar: ArrayResult => ScalarCoercion.collapseArray(ar).asInstanceOf[A]
+            case value => value.asInstanceOf[A]
           }
         // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
         // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
@@ -513,12 +519,24 @@ private class EvaluatorImpl(
       // A binding used in a typed argument position (rewritten from BindingRef by the as*Expr
       // coercion boundary): coerce the bound value totally — Left(TypeMismatch) when
       // uncoercible — so consuming functions never checkcast a mistyped value and throw.
+      // Arrays pass through in array mode (SUM(t) aggregates a bound TRANSPOSE) and collapse to
+      // their top-left value in scalar mode (GH-302 implicit intersection).
       case TExpr.CoercedBindingRef(name, target) =>
-        (bindings.get(name) match
-          case Some(value) => coerceBinding(name, value, target)
-          case None =>
-            // Parser-prevented: emitted only for lexically resolved names
-            Left(EvalError.EvalFailed(s"LET name '$name' is not in scope", None))
+        evalCoercedBinding(name, target, collapse = !allowArrayResults)
+          .asInstanceOf[Either[EvalError, A]]
+
+      // GH-302/GH-306: a runtime-polymorphic expression in a typed argument position — evaluate,
+      // then coerce the runtime value totally per the target's conventions. Same array policy as
+      // CoercedBindingRef; evalArg and evalMaybeArray override the collapse policy positionally.
+      case TExpr.Coerced(inner, target) =>
+        evalCoercedExpr(
+          inner,
+          target,
+          sheet,
+          clock,
+          workbook,
+          currentCell,
+          collapse = !allowArrayResults
         ).asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Let(letBindings, body) =>
@@ -612,68 +630,58 @@ private class EvaluatorImpl(
     case CellValue.Formula(_, Some(cached)) => unwrapBindingValue(cached)
     case other => other
 
-  /** Largest Excel date serial (9999-12-31); guards excelSerialToDateTime against overflow. */
-  private val MaxExcelDateSerial = BigDecimal(2958465)
-
   /**
    * Total coercion of a bound value into a typed argument position (TExpr.CoercedBindingRef).
    *
-   * Each target mirrors the conventions of the corresponding cell decoder (decodeAsString,
-   * decodeAsInt, decodeBool, decodeNumeric, decodeAsDate) plus the binding value model: dates read
-   * from cells are stored as Excel serial numbers (see unwrapBindingValue), so Date converts
-   * serials back and Numeric accepts LocalDate/LocalDateTime as serials (like toOperand).
-   * ArrayResult passes through untouched for every target — the scalar/array policy belongs to
-   * evalArg/evalArrayArg above, which reject or accept arrays per call site. Uncoercible values
+   * Scalar conventions live in the shared [[ScalarCoercion]] table (the GH-193 precedent,
+   * generalized by GH-306). Array policy: pass through when `collapse` is false (array operand
+   * positions, evalArrayExpr aggregation) so SUM over a bound TRANSPOSE still aggregates; otherwise
+   * collapse to the top-left value and coerce (GH-302 implicit intersection). Uncoercible values
    * produce Left(TypeMismatch) naming the binding; never a ClassCastException downstream.
    */
-  private def coerceBinding(
+  private def evalCoercedBinding(
     name: String,
-    value: Any,
-    target: BindingCoercion
+    target: BindingCoercion,
+    collapse: Boolean
   ): Either[EvalError, Any] =
-    def mismatch(expected: String): Either[EvalError, Any] =
-      Left(EvalError.TypeMismatch(s"LET binding '$name'", expected, s"$value"))
-    value match
-      case arr: ArrayResult => Right(arr)
-      case _ =>
-        target match
-          case BindingCoercion.Text =>
-            value match
-              case s: String => Right(s)
-              case bd: BigDecimal => Right(bd.toString)
-              case i: Int => Right(i.toString)
-              case b: Boolean => Right(if b then "TRUE" else "FALSE")
-              case ld: java.time.LocalDate => Right(ld.toString)
-              case ldt: java.time.LocalDateTime => Right(ldt.toString)
-              case _ => mismatch("text")
-          case BindingCoercion.Integer =>
-            value match
-              case bd: BigDecimal if bd.isValidInt => Right(bd.toInt)
-              case bd: BigDecimal => mismatch("valid integer")
-              case i: Int => Right(i)
-              case b: Boolean => Right(if b then 1 else 0)
-              case _ => mismatch("integer")
-          case BindingCoercion.Bool =>
-            value match
-              case b: Boolean => Right(b)
-              case _ => mismatch("boolean")
-          case BindingCoercion.Numeric =>
-            value match
-              case bd: BigDecimal => Right(bd)
-              case i: Int => Right(BigDecimal(i))
-              case b: Boolean => Right(if b then BigDecimal(1) else BigDecimal(0))
-              case ld: java.time.LocalDate =>
-                Right(BigDecimal(CellValue.dateTimeToExcelSerial(ld.atStartOfDay())))
-              case ldt: java.time.LocalDateTime =>
-                Right(BigDecimal(CellValue.dateTimeToExcelSerial(ldt)))
-              case _ => mismatch("number")
-          case BindingCoercion.Date =>
-            value match
-              case ld: java.time.LocalDate => Right(ld)
-              case ldt: java.time.LocalDateTime => Right(ldt.toLocalDate)
-              case bd: BigDecimal if bd >= 0 && bd <= MaxExcelDateSerial =>
-                Right(CellValue.excelSerialToDateTime(bd.toDouble).toLocalDate)
-              case _ => mismatch("date")
+    bindings.get(name) match
+      case None =>
+        // Parser-prevented: emitted only for lexically resolved names
+        Left(EvalError.EvalFailed(s"LET name '$name' is not in scope", None))
+      case Some(arr: ArrayResult) if !collapse => Right(arr)
+      case Some(arr: ArrayResult) =>
+        ScalarCoercion.coerce(s"LET binding '$name'", ScalarCoercion.collapseArray(arr), target)
+      case Some(value) => ScalarCoercion.coerce(s"LET binding '$name'", value, target)
+
+  /**
+   * GH-302/GH-306: evaluate a [[TExpr.Coerced]] wrapper — the inner expression evaluates with this
+   * evaluator (LET environment, rng and depth preserved), then the runtime value coerces totally
+   * per the target. Arrays pass through when `collapse` is false (operand positions: broadcasting)
+   * and collapse to top-left before coercion otherwise (scalar positions).
+   */
+  private def evalCoercedExpr(
+    inner: TExpr[Any],
+    target: BindingCoercion,
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef],
+    collapse: Boolean
+  ): Either[EvalError, Any] =
+    eval(inner, sheet, clock, workbook, currentCell).flatMap {
+      case arr: ArrayResult if !collapse => Right(arr)
+      case arr: ArrayResult =>
+        ScalarCoercion.coerce(coercionLabel(target), ScalarCoercion.collapseArray(arr), target)
+      case value => ScalarCoercion.coerce(coercionLabel(target), value, target)
+    }
+
+  /** Position description for Coerced error messages. */
+  private def coercionLabel(target: BindingCoercion): String = target match
+    case BindingCoercion.Text => "text argument"
+    case BindingCoercion.Integer => "integer argument"
+    case BindingCoercion.Bool => "boolean argument"
+    case BindingCoercion.Numeric => "numeric argument"
+    case BindingCoercion.Date => "date argument"
 
   // ===== Array Arithmetic Helpers =====
 
@@ -703,6 +711,13 @@ private class EvaluatorImpl(
             workbook
           )
           .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+      // GH-302: coerced nodes in OPERAND positions pass ArrayResults through (so
+      // =INDIRECT("A1:A3")*10 broadcasts exactly like =A1:A3*10) and coerce scalars totally
+      // (so ="16"&"" or a text call result still enters arithmetic per the Numeric table).
+      case TExpr.Coerced(inner, target) =>
+        evalCoercedExpr(inner, target, sheet, clock, workbook, currentCell, collapse = false)
+      case TExpr.CoercedBindingRef(name, target) =>
+        evalCoercedBinding(name, target, collapse = false)
       case other =>
         eval(other.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
 
