@@ -1,12 +1,19 @@
 # XL Project Status
 
-**Last Updated**: 2026-06-10
+**Last Updated**: 2026-06-15
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.12.0–0.12.2** (2026-06-11):
+- ✅ **Typed charts** (0.12.0, #222) — bar/line/pie via `Chart.bar`/`line`/`pie` + `Sheet.addChart` (CLI `chart add`); typed-parse-or-Preserved hybrid read, structural-edit + rename reference tracking (see LIMITATIONS §12)
+- ✅ **Embedded pictures** (0.12.0, #221) — `Sheet.addImage`/`pictures`/`removeDrawing`, three anchor forms, 7-format sniffing, sha-deduped media; non-picture drawings preserved (see LIMITATIONS §13)
+- ✅ **Conditional formatting** (0.12.1, #136) — `Sheet.conditionalFormat` with cellIs/expression/colorScale/dataBar/top10/text rules + `Dxf` differential formats; joins the generative round-trip law (library API; see LIMITATIONS §10)
+- ✅ **LibreOffice interop** (0.12.2) — editing LibreOffice-produced workbooks no longer corrupts them; `[Content_Types]`/SST writer accounting hardened (#320–#323)
+- ✅ Codec `put` paths ~2.4x faster (0.12.1, #297)
 
 **New in 0.11.0 "Scripting"** (2026-06-10):
 - ✅ **Scripting prelude** `com.tjclp.xl.scripting.{*, given}` — ONE import for scripts: core API + DSL + compile-time literals + formula evaluation + sync `Excel` + streaming `ExcelIO` + smart detection (`String.toFormatted`) + `.unsafe` boundary
@@ -57,14 +64,14 @@
 - ✅ `readTyped[A]` for type-safe cell reading
 - ✅ **Optics** module (Lens, Optional, focus DSL)
 - ✅ RichText DSL: `"Bold".bold.red + " normal " + "Italic".italic.blue`
-- ✅ HTML export: `sheet.toHtml(range"A1:B10")`
+- ✅ HTML export: `sheet.toHtml(ref"A1:B10")`
 - ✅ **Formula Parsing** (WI-07 complete): TExpr GADT, FormulaParser, FormulaPrinter with round-trip verification and scientific notation
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
 - ✅ **Function Library**: **107 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math, statistical, dynamic arrays), extensible type class parser, evaluation API. 0.10.0 added IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, and the spill functions SEQUENCE/SORT/UNIQUE/FILTER (#76, #120, #122); 0.11.2 added INDIRECT (GH-274), RAND/RANDBETWEEN via the seeded Rng capability (GH-115), and LET lexical bindings (GH-193) (dynamic text-to-reference resolution with deferred-bucket recalculation).
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
 - ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
 
-**Performance** (JMH Benchmarked - WI-15):
+**Performance** (JMH Benchmarked - WI-15; figures captured on an earlier release, not re-validated for 0.12.x — treat as indicative):
 - ✅ **Streaming reads: 35% faster than POI for small files** (0.887ms vs 1.357ms @ 1k rows)
 - ✅ **Streaming reads: Competitive with POI for large files** (8.408ms vs 7.773ms @ 10k rows - within 8%)
 - ✅ **In-memory reads: 26% faster than POI for small files** (1.225ms vs 1.650ms @ 1k rows)
@@ -97,17 +104,17 @@
 
 ### Test Coverage
 
-**3005+ tests** (verified via `./mill __.test`, 2026-06-10):
+**3,858 tests** (verified via `./mill __.test`, 2026-06-15):
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 1279 | parser, evaluator, 105-function library, dependency graph, cross-sheet formulas, recalculation, structural editing |
-| xl-core | 971 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL |
-| xl-ooxml | 381 | round-trips (cells, styles, tables, comments, hyperlinks), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 308 | command parsing, batch ops, view/eval/export, streaming mode |
-| xl-cats-effect | 76 | streaming I/O, O(1) memory verification, SAX/StAX write |
+| xl-evaluator | 1485 | parser, evaluator, 107-function library, dependency graph, cross-sheet formulas, recalculation, structural editing |
+| xl-core | 1104 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 680 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 406 | command parsing, batch ops, view/eval/export, streaming mode |
+| xl-cats-effect | 110 | streaming I/O, O(1) memory verification, SAX/StAX write |
 | xl-agent | 54 | benchmark engine, skill abstraction |
-| xl (prelude) | 17 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 19 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
@@ -132,6 +139,7 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
   - **Financial** (9): NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
   - **Lookup / Reference** (12): VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
   - **Dynamic Arrays** (5): TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
+  - **Random** (2): RAND, RANDBETWEEN
   - FunctionSpec registry: macro-collected specs with extensible registry
   - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
   - Clock trait for pure date/time functions (deterministic testing)
@@ -158,8 +166,8 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 - ⚠️ xl/theme/theme1.xml (theme palette) — preserved from source on round-trip, not generated for new workbooks
 - ❌ xl/calcChain.xml (formula calculation order)
 - ✅ Worksheet relationships (`_rels/sheetN.xml.rels`) — written when a sheet has comments, tables, or hyperlinks
-- ⚠️ Print settings, page setup — partial as of 0.11.0: header/footer (odd), margins, print area, repeat rows (#259); even/first headers + fitToPage tracked in #266
-- ❌ Conditional formatting
+- ⚠️ Print settings, page setup — odd + even/first header/footer, margins, print area, repeat rows (#259, #266), and `fitToPage` tri-state (#284); shipped across 0.11.0–0.12.1
+- ✅ Conditional formatting (0.12.1, #136): typed `Sheet.conditionalFormat` rules (cellIs/expression/colorScale/dataBar/top10/text) + `Dxf` differential formats; library API (no CLI yet) — see LIMITATIONS §10
 - ❌ Data validation (preserved through edits, but no authoring API yet)
 - ✅ Named ranges (authoring shipped in 0.10.0: `DefinedName` serialization + CLI `name add/rm`)
 
@@ -217,11 +225,11 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 - ✅ **SAX Write** (WI-17): Fast SAX/StAX streaming write path
 - ✅ **Security Hardening** (WI-30): ZIP bomb detection, XXE prevention, formula injection guards
 
-**Not Started** (Future):
+**Future (and recently shipped)**:
 - ❌ P6b: Full case class codec derivation (Magnolia/Shapeless)
 - ❌ P9: Advanced macros (path macro, style literal)
-- ✅ P10: Drawings — embedded pictures (#221): `Sheet.addImage`/`pictures`/`removeDrawing`, three anchor forms, 7-format classification, sha-deduped media, hybrid byte-preservation of non-picture drawings (charts/shapes as `Drawing.Preserved`); shapes/charts typed model still future (#222). In-memory only — see LIMITATIONS §13
-- ❌ P11: Charts (existing charts preserved through edits; typed model is #222)
+- ✅ P10: Drawings — embedded pictures (#221): `Sheet.addImage`/`pictures`/`removeDrawing`, three anchor forms, 7-format classification, sha-deduped media, hybrid byte-preservation of non-picture drawings (shapes as `Drawing.Preserved`); shape *authoring* still future. In-memory only — see LIMITATIONS §13
+- ✅ P11: Charts (0.12.0, #222): typed bar/line/pie via `Chart.bar`/`line`/`pie` + `Sheet.addChart` (CLI `chart add`); out-of-fence/Excel-authored charts stay byte-preserved — see LIMITATIONS §12
 - ❌ Pivot Tables (remaining part of P12)
 
 ---
@@ -299,14 +307,14 @@ xl-cats-effect/src/com/tjclp/xl/io/
 
 ### Completed Modules (Additional)
 - `xl-evaluator/` ✅ **Complete** (WI-07/08/09 - formula parsing, evaluation, 107 functions, dependency graph, structural editing, recalculation)
-- `xl-cli/` ✅ **Complete** (stateless `xl` CLI: 40 subcommands, 21 batch ops, rendering, streaming mode)
+- `xl-cli/` ✅ **Complete** (stateless `xl` CLI: 45 subcommands, 21 batch ops, rendering, streaming mode)
 - `xl-agent/` ✅ **Complete** (AI agent benchmark runner)
 - `xl-benchmarks/` ✅ **Complete** (WI-15 - JMH performance benchmarks)
 
 ### Not Started (Future Phases)
-- `xl-testkit/` (law helpers, golden test framework)
-- `xl-drawings/` (P8 - images, shapes)
-- `xl-charts/` (P9 - chart generation)
+- `xl-testkit/` (law helpers, golden test framework) — still a placeholder
+
+> Drawings and charts shipped in 0.12.0 as `com.tjclp.xl.drawings` / `com.tjclp.xl.charts` **within `xl-core`**, not as separate modules.
 
 ---
 
@@ -327,6 +335,8 @@ xl-cats-effect/src/com/tjclp/xl/io/
 ---
 
 ## Performance Results (Actual)
+
+> ⚠️ **Captured on an earlier release (JDK 25, Apple Silicon); not re-validated for 0.12.x — treat as indicative.** 0.12.1 made codec `put` paths ~2.4x faster (#297), not reflected below.
 
 ### JMH Benchmark Results (WI-15) - XL vs Apache POI
 
@@ -379,7 +389,7 @@ xl-cats-effect/src/com/tjclp/xl/io/
 | **Read 100k** | 1.8s @ 10MB | ~8s @ 1GB | **4.4x faster, 100x less memory** ✅ |
 | **Read 500k** | ~9s @ 10MB | OOM @ 1GB+ | **Constant memory vs OOM** ✅ |
 
-**Note**: All performance claims now verified for both reads **and** writes. True O(1) streaming achieved.
+**Note**: The SXSSF comparison figures above are approximate (POI columns marked `~` are estimates); the JMH tables earlier in this section are the measured numbers. True O(1) streaming is verified by memory tests.
 
 **Result for Writes**: Exceeded goal of 3-5x throughput, achieved 80x memory improvement with constant memory.
 

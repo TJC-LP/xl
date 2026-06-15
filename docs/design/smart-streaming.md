@@ -8,7 +8,7 @@ Make the XL CLI handle files of any size with optimal performance by automatical
 
 ---
 
-## Shipped (as of 0.11.0)
+## Shipped (as of 0.12.2)
 
 ### Manual Mode Selection
 - `--stream` flag opts into O(1) streaming for compatible commands
@@ -39,7 +39,7 @@ memory, but the write goes through the lower-allocation SAX/StAX backend
 
 ## Architecture Phases: Status
 
-Each phase below was designed when streaming was read-only (v0.8.0 era). Status as of 0.11.0:
+Each phase below was designed when streaming was read-only (v0.8.0 era). Status as of 0.12.2:
 
 | Phase | Status |
 |-------|--------|
@@ -257,7 +257,7 @@ ZIP File → Probe Metadata → Choose Mode → Execute Optimal Path → Output
 (The original plan pinned phases to v0.9.0/v1.0.0/v1.1.0; delivery diverged — range
 modifications shipped first, lazy metadata has not shipped. Restated against reality:)
 
-### Shipped (0.8.0 – 0.11.0)
+### Shipped (0.8.0 – 0.12.2)
 - [x] `--stream` flag for opt-in streaming
 - [x] `--max-size` flag for large file override
 - [x] Streaming reads: search, stats, bounds, view (md/csv/json), cell

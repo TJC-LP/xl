@@ -1,6 +1,6 @@
 # FAQ & Glossary
 
-**Last Updated**: 2026-06-10
+**Last Updated**: 2026-06-15
 
 ---
 
@@ -13,7 +13,7 @@ A: We want immutability, type safety, and compile-time guarantees; POI's design 
 A: One import — `import com.tjclp.xl.scripting.{*, given}` with scala-cli (since 0.11.0). See [reference/scripting.md](reference/scripting.md).
 
 **Q: Will charts look identical to Excel's?**
-A: Charts are not implemented yet; when added they will target ChartML with deterministic output.
+A: Typed bar/line/pie charts ship (0.12.0) and emit deterministic ChartML that Excel renders natively; Excel-authored charts round-trip byte-for-byte. Note: XL's own HTML/SVG/PNG export does not draw charts. See [LIMITATIONS §12](LIMITATIONS.md).
 
 **Q: Do you support `.xls`?**
 A: Not initially. Focus is `.xlsx`/`.xlsm`. BIFF can be a separate module later.

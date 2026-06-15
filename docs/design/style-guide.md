@@ -127,7 +127,7 @@ Tier rationale, suppression rules, and the process for adding warts are in
 ```bash
 ./mill __.checkFormat    # Scalafmt drift → CI failure
 ./mill __.compile        # WartRemover Tier 1 → compile error
-./mill __.test           # 3005+ tests
+./mill __.test           # 3,858 tests
 ```
 
 Pre-commit hooks (`.pre-commit-config.yaml`) run the same `checkFormat` and `compile` steps;

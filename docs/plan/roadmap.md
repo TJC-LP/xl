@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-06-10
+**Last Updated**: 2026-06-15
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **104 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 3005+ tests passing.
+**Current Status**: Production-ready with **107 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 3,858 tests passing.
 
 **Current Version**: **0.12.2 "Interop"** (released 2026-06-11)
 
@@ -56,6 +56,14 @@ All open bugs, one patch release (PR #276). Reviewer-discovered gaps filed as #2
 ### v0.12.0 "Visual" — wave 6 (Released 2026-06-11)
 
 Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture corpus; (b) `Drawing`/`Image`/anchor domain model + image authoring ([#221](https://github.com/TJC-LP/xl/issues/221)); (c) typed chart AST (bar/line/pie) + authoring + `xl chart` CLI ([#222](https://github.com/TJC-LP/xl/issues/222)). Re-scoped by its own design panel when reached.
+
+### v0.12.1 "Clean Sweep" — wave 7 (Released 2026-06-11)
+
+Every remaining open issue closed in one wave. **Conditional formatting** ([#136](https://github.com/TJC-LP/xl/issues/136)) is the headline — typed cellIs/expression/colorScale/dataBar/top10/text rules + `dxf` differential formats, `sheet.conditionalFormat` authoring with auto-priority, structural-edit range shifting, unmodeled families preserved byte-faithfully — alongside twelve fidelity/writer fixes: openpyxl comment subdirectory dialect (#292), RichText SST keying (#303), exact surgical SST counts (#304), `[Content_Types]` preservation (#314), identity-keyed source mappings (#315), activeTab (#294), fitToPage tri-state (#284), `Cell.comment` deprecated→`Sheet.comments` (#295). Codec `put` paths 2.4x faster (#297).
+
+### v0.12.2 "Interop" — wave 9 (Released 2026-06-11)
+
+The LibreOffice edit-corruption fix and the writer follow-ups it surfaced: editing LO-produced workbooks no longer corrupts them ([#320](https://github.com/TJC-LP/xl/issues/320) — `workbook.xml.rels` regenerates in the same pass as `workbook.xml`, so sheet rIds stay consistent), comment content-type registration follows actual emitted paths (#321), no dangling `[Content_Types]` overrides for dropped writer-owned parts (#322), and new sheets join surgical SST accounting (#323).
 
 ### v0.11.0 "Scripting" (Released 2026-06-10)
 
@@ -106,9 +114,8 @@ Authoring and rendering features not yet shipped:
 | Feature | Status |
 |---------|--------|
 | XLSM macro preservation policy + tests (macros never executed) | Planned |
-| Data-validation / conditional-formatting **authoring** (currently preserved through edits, no write API) | Planned |
-| Drawing Layer (Images, Shapes) | Planned |
-| Chart Model | Planned |
+| Data-validation **authoring** (currently preserved through edits, no write API; conditional-formatting authoring shipped in 0.12.1) | Planned |
+| Drawing Layer — Shapes/connectors authoring (images shipped in 0.12.0) | Planned |
 | Two-phase streaming (SST + styles in row-stream write path) | Planned |
 | Merged Cells in row-stream Write | Backlog |
 | Query API | Backlog |
@@ -121,7 +128,7 @@ Authoring and rendering features not yet shipped:
 All completed phases are documented in git history. Key milestones:
 
 - **P0-P8**: Foundation, OOXML, streaming, codecs, macros
-- **WI-07/08/09**: Formula parser, evaluator (now **104 functions** after the 0.10.0 breadth pass)
+- **WI-07/08/09**: Formula parser, evaluator (**107 functions**; the 0.10.0 breadth pass took the registry 88→104, then 0.11.2 added INDIRECT/RAND/RANDBETWEEN/LET)
 - **TJC-1055** (closes GH-116): Text functions — TRIM, MID, FIND, SUBSTITUTE, VALUE, TEXT
 - **WI-10**: Excel table support
 - **WI-17**: SAX streaming write (36% faster than POI)
