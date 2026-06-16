@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: CI runs the full Mill test graph across the library, evaluator, CLI, and support modules — **3005+ tests** as of 0.11.0. Use `./mill __.test` as the authoritative count.
+**Current Status**: CI runs the full Mill test graph across the library, evaluator, CLI, and support modules — **3,858 tests** as of 0.12.2. Use `./mill __.test` as the authoritative count.
 
 ## Test Infrastructure
 
@@ -211,18 +211,18 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of 0.11.0 (`./mill show __.test`; macros are part of xl-core — there is no separate xl-macros module):
+As of 0.12.2 (per-module `./mill <module>.test`; macros are part of xl-core — there is no separate xl-macros module):
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 1198 |
-| xl-core | 971 |
-| xl-ooxml | 381 |
-| xl-cli | 308 |
-| xl-cats-effect | 76 |
+| xl-evaluator | 1485 |
+| xl-core | 1104 |
+| xl-ooxml | 680 |
+| xl-cli | 406 |
+| xl-cats-effect | 110 |
 | xl-agent | 54 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 17 |
-| **Total** | **3005** (3004 passing + 1 ignored) |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 19 |
+| **Total** | **3,858** |
 
 ## Test Quality Metrics
 

@@ -1,9 +1,9 @@
 # Implementation Scaffolds: Idiomatic Scala 3 Code Examples
 
-> **Status (2026-06-10)**: historical scaffold record — several targets have since shipped (hyperlinks & named ranges in 0.10.0, page setup in 0.11.0) and the test scaffolds use ScalaTest while the project standardized on MUnit. Useful as design sketches, not as current API documentation.
+> **Status (2026-06-15)**: historical scaffold record — several targets have since shipped (hyperlinks & named ranges in 0.10.0, page setup in 0.11.0, **typed charts + embedded pictures in 0.12.0, conditional formatting in 0.12.1** — so the `OoxmlDrawing`/`OoxmlChartPart` scaffolds below still marked `// TODO` are obsolete; see [LIMITATIONS §12/§13](../LIMITATIONS.md)) and the test scaffolds use ScalaTest while the project standardized on MUnit. Useful as design sketches, not as current API documentation.
 
 **Purpose**: Complete, runnable code scaffolds for AI agents and developers
-**Last Updated**: 2026-01-23
+**Scaffold authored**: 2026-01-23 · **Status reviewed**: 2026-06-15 (see the Status note above)
 **Companion To**: [docs/plan/roadmap.md](../plan/roadmap.md)
 
 > **Note**: These are idiomatic Scala 3 scaffolds with enough structure for AI agents to expand. Assumes modules: `xl-core`, `xl-ooxml`, `xl-cats-effect`, `xl-benchmarks`.
@@ -1130,6 +1130,6 @@ object PartRegistry:
 
 ---
 
-**Last Updated**: 2026-01-23
+**Scaffold authored**: 2026-01-23 · **Status reviewed**: 2026-06-15 (see the Status note at the top)
 **Maintained By**: XL Core Team
 **For Strategic Context**: See [docs/plan/roadmap.md](../plan/roadmap.md)

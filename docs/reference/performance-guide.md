@@ -375,7 +375,9 @@ excel.read(largeFile)
 
 ## Performance Roadmap
 
-### Current (as of 0.11.0, 2026-06-10)
+### Current (as of 0.12.2)
+
+> ⚠️ Throughput figures here are indicative, captured on an earlier release; see [STATUS.md](../STATUS.md) for the benchmark tables and caveats.
 - ✅ Streaming write: O(1) memory, ~88k rows/sec
 - ✅ Streaming read: O(1) memory via `fs2.io.readInputStream` (+ SST materialized once)
 - ✅ Lazy optimizations: 30-75% speedup (memoized canonicalKey, single-pass usedRange)

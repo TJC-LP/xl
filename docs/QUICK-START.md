@@ -253,7 +253,7 @@ sheet.put(ref"A1" -> text)
 
 ### Export to HTML
 ```scala
-val html = sheet.toHtml(range"A1:B10")
+val html = sheet.toHtml(ref"A1:B10")
 println(html)  // <table>...</table> with inline CSS
 ```
 
@@ -307,7 +307,7 @@ cyclicSheet.evaluateWithDependencyCheck() match
   case Right(_) => // Won't happen
 ```
 
-**Available Functions** (104 total):
+**Available Functions** (107 total):
 - **Aggregate**: SUM, COUNT, COUNTA, COUNTBLANK, AVERAGE, MEDIAN, MIN, MAX, STDEV, STDEVP, VAR, VARP
 - **Statistical**: LARGE, SMALL, RANK, PERCENTILE, QUARTILE
 - **Conditional**: SUMIF, COUNTIF, SUMIFS, COUNTIFS, AVERAGEIF, AVERAGEIFS, MAXIFS, MINIFS, SUMPRODUCT
@@ -316,8 +316,9 @@ cyclicSheet.evaluateWithDependencyCheck() match
 - **Date**: TODAY, NOW, DATE, YEAR, MONTH, DAY, EOMONTH, EDATE, DATEDIF, NETWORKDAYS, WORKDAY, YEARFRAC
 - **Math**: ABS, ROUND, ROUNDUP, ROUNDDOWN, INT, MOD, POWER, SQRT, LOG, LN, EXP, FLOOR, CEILING, TRUNC, SIGN, PI
 - **Financial**: NPV, IRR, XNPV, XIRR, PMT, FV, PV, RATE, NPER
-- **Lookup / Reference**: VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
+- **Lookup / Reference**: VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, ROW, COLUMN, ROWS, COLUMNS, ADDRESS
 - **Dynamic Arrays**: TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
+- **Random**: RAND, RANDBETWEEN
 
 See CLAUDE.md for the complete list.
 

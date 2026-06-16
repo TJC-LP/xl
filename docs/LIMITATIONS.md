@@ -1,11 +1,11 @@
 # XL Current Limitations and Future Roadmap
 
-**Last Updated**: 2026-06-10
-**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**107 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes); scripting prelude + whole-workbook recalculation + print setup authoring (0.11.0).
+**Last Updated**: 2026-06-15
+**Current Phase**: Core domain + OOXML + streaming I/O complete; formula system complete (**107 functions** + cross-sheet support + dynamic arrays); structural editing (insert/delete rows & columns with formula rewriting); named-range & hyperlink authoring; tables + benchmarks complete; row/column serialization complete; **security hardening complete** (ZIP bomb detection, XXE prevention, formula injection guards in both in-memory and streaming writes); scripting prelude + whole-workbook recalculation + print setup authoring (0.11.0); typed bar/line/pie charts + embedded pictures (0.12.0); conditional formatting (0.12.1); LibreOffice-edit interop fixes (0.12.2).
 
-> **Note (0.11.0):** Sections below largely predate the 0.10.0 "Trust & Author" and 0.11.0 "Scripting" releases and may understate current capabilities. Hyperlinks (#9) and named ranges (#15) are **supported**; inline worksheet elements like data validation (#11) are **preserved through edits** (authoring still pending); print setup is **partially supported** as of 0.11.0 (#16). 0.11.0 also added the scripting prelude (`com.tjclp.xl.scripting`), whole-workbook `recalculate` with per-cell errors, per-side borders/outlines, and sheet view settings — see the [CHANGELOG](../CHANGELOG.md). For the 0.10.0 rationale, see [archive/plan/v0.10.0-execution.md](archive/plan/v0.10.0-execution.md).
+> **Note (through 0.12.2):** Sections below largely predate the 0.10.0 "Trust & Author", 0.11.0 "Scripting", and 0.12.0–0.12.2 ("Visual"/"Clean Sweep"/"Interop") releases and may understate current capabilities. **Charts, drawings/pictures, and conditional formatting now ship** — see §12, §13, and §10 below. Hyperlinks (#9) and named ranges (#15) are **supported**; inline worksheet elements like data validation (#11) are **preserved through edits** (authoring still pending); print setup is **partially supported** as of 0.11.0 (#16). 0.11.0 also added the scripting prelude (`com.tjclp.xl.scripting`), whole-workbook `recalculate` with per-cell errors, per-side borders/outlines, and sheet view settings — see the [CHANGELOG](../CHANGELOG.md). For the 0.10.0 rationale, see [archive/plan/v0.10.0-execution.md](archive/plan/v0.10.0-execution.md).
 >
-> **Known open issues** (GitHub): leading `=+` formula prefix rejected (#271), trailing empty number-format sections (#262), quoting of cell-ref-shaped sheet names (#263), streaming StylePatcher indent (#264), SaxStax DirectSaxEmitter metadata gaps (#265), even/first page headers + fitToPage (#266), charts (#222), drawings (#221).
+> **Known open issues**: the issues previously listed here (#262–#266, #271) were closed in the v0.11.1 "Totality" wave, and charts (#222) / drawings (#221) shipped in 0.12.0. For the current open set, see [GitHub Issues](https://github.com/TJC-LP/xl/issues).
 
 This document provides a comprehensive overview of what XL can and cannot do today, with clear links to future implementation plans.
 
@@ -649,31 +649,22 @@ See: [plan/roadmap.md](plan/roadmap.md)
 
 ---
 
-### Phase 8: Drawings (Priority 4)
-**Effort**: 2-3 weeks
+### Phase 8: Drawings ✅ SHIPPED (0.12.0, #221)
 **Focus**: Images and shapes
 
-See: [plan/roadmap.md](plan/roadmap.md) (drawings tracked in #221)
-
-- [ ] Image embedding (5-7 days)
-- [ ] Shapes (3-4 days)
-- [ ] Drawing relationships (2-3 days)
+Embedded pictures are modeled, authored, and round-tripped (`Sheet.addImage`/`pictures`/`removeDrawing`, three anchor forms, 7-format classification, sha-deduped media); non-picture drawings (shapes, etc.) ride byte-preservation. See §13 below and [plan/roadmap.md](plan/roadmap.md) (#221). Shape *authoring* remains future.
 
 ---
 
-### Phase 9: Charts (Priority 5)
-**Effort**: 4-6 weeks
+### Phase 9: Charts ✅ TYPED BAR/LINE/PIE SHIPPED (0.12.0, #222)
 **Focus**: Chart generation
 
-See: [plan/roadmap.md](plan/roadmap.md) (charts tracked in #222)
-
-**Very complex**: 15+ chart types, each with custom XML structure
+Typed bar/line/pie charts are modeled, authored (`Chart.bar`/`line`/`pie` + `Sheet.addChart`, CLI `chart add`), and round-tripped; Excel-authored and out-of-fence charts stay byte-preserved. See §12 below and [plan/roadmap.md](plan/roadmap.md) (#222). Scatter/area/combo/3D and chart styling remain future.
 
 ---
 
 ### Phase 10: Tables & Advanced Features (Priority 6)
-**Effort**: 3-4 weeks
-**Focus**: Tables, pivots, conditional formatting
+**Focus**: Tables ✅ (shipped), conditional formatting ✅ (0.12.1, #136 — see §10), pivot tables ⏳ (still future)
 
 See: [plan/roadmap.md](plan/roadmap.md)
 
@@ -708,21 +699,23 @@ See: [plan/roadmap.md](plan/roadmap.md)
 | **Styles** | ✅ | ✅ | XL: Full in-memory; streaming uses minimal default styles |
 | **Formulas (eval)** | ✅ | ✅ | XL: 107 functions, dependency graph, cycle detection |
 | **Tables** | ✅ | ✅ | XL: Full table support with AutoFilter, structured refs |
-| **Charts** | ❌ | ✅ | POI: Full support |
-| **Drawings** | ❌ | ✅ | POI: Images/shapes |
+| **Charts** | ⚠️ | ✅ | XL: typed bar/line/pie (scoped, §12); POI: full |
+| **Drawings** | ⚠️ | ✅ | XL: embedded pictures (scoped, §13); POI: images/shapes |
 | **Memory (100k rows)** | ✅ 50MB | ❌ 800MB | XL: 16x better |
 | **Type Safety** | ✅ | ❌ | XL: Compile-time, POI: Runtime |
 | **Purity** | ✅ | ❌ | XL: Pure, POI: Mutable |
 | **Determinism** | ✅ | ❌ | XL: Stable diffs, POI: Non-deterministic |
 | **Security** | ✅ | ⚠️ | XL: ZIP bomb, XXE, formula injection protection |
 
-**Verdict**: XL is production-ready for data-heavy use cases (streaming, ETL). POI better for rich formatting/charts (for now).
+**Verdict**: XL is production-ready for data-heavy use cases (streaming, ETL) and now authors typed charts + embedded pictures (scoped — see §12/§13). POI still leads for advanced chart types, shapes, and pivot tables.
 
 ---
 
 ## Performance Benchmarks: XL vs Apache POI
 
 *See [design/performance-investigation.md](design/performance-investigation.md) for full analysis.*
+
+> ⚠️ **Benchmarks below were captured on an earlier release and have not been re-validated for 0.12.x — treat as indicative.** (0.12.1 additionally made codec put paths ~2.4x faster, #297.)
 
 ### Summary (Apple Silicon, JDK 21)
 
@@ -768,8 +761,8 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 - Performance-critical workloads (benchmarked vs POI)
 
 **No/Not yet, if you need**:
-- Charts or drawings (planned)
-- Pivot tables/conditional formatting/data validation (planned)
+- Advanced chart types (scatter/area/combo/3D), shapes, or chart styling — typed bar/line/pie charts + embedded pictures **do** ship (scoped, §12/§13)
+- Pivot tables or data-validation authoring (planned)
 - Excel macros (not planned to execute; preservation planned)
 
 ---
@@ -830,8 +823,8 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 
 ### If you hit a limitation today:
 
-1. **Need charts or drawings**: Use POI for chart/drawing *authoring* (#222, #221); XL preserves existing charts/drawings through edits
-2. **Unsupported formula function**: Store the formula as a string and let Excel recalculate on open (XL evaluates the 104 built-ins)
+1. **Need advanced charts/shapes**: XL authors typed bar/line/pie charts + embedded pictures (#222, #221; scoped — see §12/§13) and preserves everything else through edits; reach for POI only for chart types XL doesn't model yet (scatter/area/combo/3D, shapes)
+2. **Unsupported formula function**: Store the formula as a string and let Excel recalculate on open (XL evaluates the 107 built-ins)
 3. **Streaming update of one sheet in a huge workbook**: Use the in-memory read → modify → write path (surgical modification preserves untouched parts)
 
 ---
@@ -855,4 +848,4 @@ Want to help implement these features? See:
 
 ---
 
-*Last updated 2026-06-10 (0.11.0 doc-truth pass, GH-272: refreshed fixed/open status against the 0.10.0 and 0.11.0 releases, corrected the function registry breakdown, repointed retired plan links).*
+*Last updated 2026-06-15 (0.12.2 doc-truth pass: refreshed fixed/open status against the 0.12.0 "Visual" (charts/drawings), 0.12.1 "Clean Sweep" (conditional formatting), and 0.12.2 "Interop" releases; the earlier 0.11.0 pass is tracked under GH-272).*

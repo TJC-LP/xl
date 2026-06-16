@@ -500,10 +500,10 @@ Memory: ~100MB (10x less)
 **A**: Not easily. They use different in-memory representations. You'd need to write to file and read back.
 
 ### Q: Does XL support all POI features?
-**A**: No. Still missing: charts, drawings, pivot tables, VBA. Formula **evaluation** is a point in XL's favor: 104 functions with whole-workbook recalculation (POI's evaluator exists but is partial and mutable). See [roadmap](../plan/roadmap.md) and [LIMITATIONS](../LIMITATIONS.md).
+**A**: Mostly. Now supported, with scoped limits (see [LIMITATIONS](../LIMITATIONS.md) §12/§13): typed bar/line/pie **charts** and embedded **pictures/drawings**. Still missing: pivot tables, data-validation authoring, VBA. Formula **evaluation** is a point in XL's favor: 107 functions with whole-workbook recalculation (POI's evaluator exists but is partial and mutable). See [roadmap](../plan/roadmap.md) and [LIMITATIONS](../LIMITATIONS.md).
 
 ### Q: Is XL production-ready?
-**A**: Yes for core features (read/write, styling, formulas, structural editing, streaming). No for visual features (charts, drawings).
+**A**: Yes for core features (read/write, styling, formulas, structural editing, streaming) and, as of 0.12.0, typed charts + embedded pictures (scoped — see [LIMITATIONS](../LIMITATIONS.md)). Pivot tables and data-validation authoring remain unsupported.
 
 ### Q: How do I handle errors in XL?
 **A**: XL uses Either[XLError, A]. Pattern match or use flatMap/map:

@@ -36,7 +36,7 @@ graph TD
 
 Published (Maven Central):
 
-- `xl-core`: Pure domain model (`Cell`, `Sheet`, `Workbook`, styles, codecs, optics, macros).
+- `xl-core`: Pure domain model (`Cell`, `Sheet`, `Workbook`, styles, codecs, optics, macros, charts, drawings/pictures, conditional formatting).
 - `xl-ooxml`: Pure OOXML mapping layer (`XlsxReader` / `XlsxWriter`, `OoxmlWorkbook`, `OoxmlWorksheet`, `SharedStrings`, `Styles`).
 - `xl-cats-effect`: Effectful interpreters (`Excel[F]` / `ExcelIO`) and true streaming I/O built on Cats Effect, fs2, and fs2-data-xml.
 - `xl-evaluator`: Formula parser, printer, evaluator, function registry, dependency graph, cross-sheet formula support, and whole-workbook recalculation.
@@ -194,7 +194,7 @@ The evaluator implements: `Evaluator.eval: TExpr[A] => Sheet => Either[EvalError
 - Topological sort for evaluation order (Kahn's algorithm)
 - Short-circuit evaluation for And/Or
 - Division by zero handling (returns `CellError.Div0`)
-- 104 Excel functions: SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, OFFSET, SUMIF, COUNTIF, NPV, IRR, dynamic arrays (SEQUENCE/SORT/UNIQUE/FILTER), and more
+- 107 Excel functions: SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, OFFSET, SUMIF, COUNTIF, NPV, IRR, dynamic arrays (SEQUENCE/SORT/UNIQUE/FILTER), and more
 - Whole-workbook recalculation: `Workbook.recalculate(clock)` is total and returns `RecalcResult` (recached workbook + per-sheet values + per-cell `CellEvalError`s); cycle participants are isolated while the acyclic remainder still evaluates
 
 See `docs/STATUS.md` for the complete function list.

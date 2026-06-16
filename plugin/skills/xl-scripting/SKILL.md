@@ -317,7 +317,7 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 
 ## Reference
 
-- `reference/API.md` — types, extension methods, style builders, all 105 formula functions, streaming API
+- `reference/API.md` — types, extension methods, style builders, all 107 formula functions, streaming API
 - `reference/RECIPES.md` — 7 complete, runnable scripts (bulk transform, typed extraction, model build, merge, streaming, diff, CSV ingest)
 - Repo examples: `examples/*.sc` in https://github.com/TJC-LP/xl (start with `scripting_tour.sc`)
 - The `xl-cli` skill for CLI operations (visual exports, quick inspection)

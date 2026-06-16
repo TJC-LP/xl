@@ -119,7 +119,7 @@ parsedFormula.foreach { expr =>
 }
 ```
 
-**Note**: Evaluation is fully operational — 104 functions, whole-workbook `recalculate()`, dependency graphs with cycle detection. See the runnable scripts below.
+**Note**: Evaluation is fully operational — 107 functions, whole-workbook `recalculate()`, dependency graphs with cycle detection. See the runnable scripts below.
 
 ## 3) Example Scripts Catalog
 
@@ -210,19 +210,28 @@ scala-cli run examples/financial_model.sc
 
 CI compiles every script via `scripts/test-examples.sh` (and runs a curated subset), so the catalog cannot silently rot.
 
-## 4) Chart spec (Future — #222)
+## 4) Charts & pictures (shipped — 0.12.0, #222/#221)
 ```scala
-// Note: Chart support is a 0.12.0 candidate (GH #222, on the DrawingML layer #221).
-// This is a design preview only.
 import com.tjclp.xl.{*, given}
-// import com.tjclp.xl.chart.*  // Future module
+import com.tjclp.xl.unsafe.*       // .unsafe boundary (XLResult → value)
+import com.tjclp.xl.charts.*       // Chart, Series, DataRef, BarDirection, ...
+import com.tjclp.xl.drawings.*     // ImageData, Drawing, DrawingAnchor
+import scala.collection.immutable.ArraySeq
 
-// val revenue = ChartSpec(
-//   title  = Some("Revenue by Quarter"),
-//   series = Vector(Series(MarkType.Column(true, false), Encoding(Field.Range(ref"A2:A5"), Field.Range(ref"B2:B5")), Some("2025"))),
-//   xAxis  = Axis(AxisType.Category, Scale.Linear, Some("Quarter")),
-//   yAxis  = Axis(AxisType.Value, Scale.Linear, Some("USD (mm)")),
-//   legend = Legend(true, "right"),
-//   plotAreaFill = None
-// )
+// Typed bar chart: a values series (B2:B5) labelled by categories (A2:A5).
+val series = Series(
+  values     = DataRef(sheet.name, ref"B2:B5"),
+  categories = Some(DataRef(sheet.name, ref"A2:A5"))
+)
+val chart = Chart.bar(Vector(series), title = Some("Revenue by Quarter")).unsafe  // also Chart.line / Chart.pie
+val withChart = sheet.addChart(chart, ref"F2:K16")     // anchored over the range — total
+
+// Embedded picture (format sniffed from magic bytes; png/jpeg/gif/bmp natural-size):
+val imageBytes = ArraySeq.unsafeWrapArray(java.nio.file.Files.readAllBytes(java.nio.file.Path.of("logo.png")))
+val image      = ImageData.detect(imageBytes).unsafe
+val withImage  = sheet.addImage(image, ref"B2").unsafe
+
+withChart.charts    // typed chart views (unmodeled drawings are preserved byte-for-byte)
+withImage.pictures
 ```
+See [LIMITATIONS §12 (Charts)](../LIMITATIONS.md) and the scripting [API reference](../../plugin/skills/xl-scripting/reference/API.md) for the full surface and scoped limitations.

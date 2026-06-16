@@ -325,7 +325,7 @@ test("streaming read uses constant memory"):
 
 ## Migration Path
 
-### Current State (As of 2026-06, v0.11.0)
+### Current State (As of 2026-06, v0.12.2)
 - In-memory: Production-ready for <100k rows
 - Streaming write: Production-ready for >100k rows (minimal styling)
 - Streaming read: Production-ready for >100k rows (O(1) memory)
