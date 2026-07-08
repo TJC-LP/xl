@@ -12,12 +12,12 @@ object `package` extends build.XLInternalModule {
   )
 
   override def mvnDeps = Seq(
-    mvn"com.anthropic:anthropic-java:2.11.1",
-    mvn"io.circe::circe-core:0.14.10",
-    mvn"io.circe::circe-generic:0.14.10",
-    mvn"io.circe::circe-parser:0.14.10",
-    mvn"io.github.cdimascio:dotenv-java:3.1.0",
-    mvn"org.apache.commons:commons-compress:1.27.1",
+    mvn"com.anthropic:anthropic-java:2.48.0",
+    mvn"io.circe::circe-core:0.14.13",
+    mvn"io.circe::circe-generic:0.14.13",
+    mvn"io.circe::circe-parser:0.14.13",
+    mvn"io.github.cdimascio:dotenv-java:3.2.0",
+    mvn"org.apache.commons:commons-compress:1.28.0",
     mvn"com.squareup.okhttp3:okhttp:4.12.0"
   )
 

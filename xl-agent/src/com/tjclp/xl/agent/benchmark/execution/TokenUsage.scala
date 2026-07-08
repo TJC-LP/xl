@@ -71,7 +71,12 @@ object TokenUsage:
 
   /** Create from the agent's TokenUsage type */
   def fromAgentUsage(usage: com.tjclp.xl.agent.TokenUsage): TokenUsage =
-    TokenUsage(usage.inputTokens, usage.outputTokens, 0, 0)
+    TokenUsage(
+      usage.inputTokens,
+      usage.outputTokens,
+      usage.cacheCreationTokens,
+      usage.cacheReadTokens
+    )
 
   /** Monoid instance for combining token usage */
   given Monoid[TokenUsage] with
@@ -100,16 +105,19 @@ object TokenUsage:
 type ModelPricing = Models.Pricing
 
 object ModelPricing:
-  /** Claude Opus 4.5 pricing */
-  val opus45: ModelPricing = Models.OpusPricing
+  /** Claude Fable 5 pricing */
+  val fable: ModelPricing = Models.FablePricing
 
-  /** Claude Sonnet 4 pricing */
-  val sonnet4: ModelPricing = Models.SonnetPricing
+  /** Claude Opus pricing */
+  val opus: ModelPricing = Models.OpusPricing
 
-  /** Claude Haiku 3.5 pricing */
-  val haiku35: ModelPricing = Models.HaikuPricing
+  /** Claude Sonnet pricing */
+  val sonnet: ModelPricing = Models.SonnetPricing
 
-  /** Default pricing (Sonnet 4) */
+  /** Claude Haiku pricing */
+  val haiku: ModelPricing = Models.HaikuPricing
+
+  /** Default pricing (Sonnet) */
   val default: ModelPricing = Models.DefaultPricing
 
   /** Get pricing for a model by name */

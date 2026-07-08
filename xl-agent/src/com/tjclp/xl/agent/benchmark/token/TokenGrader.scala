@@ -5,7 +5,11 @@ import cats.syntax.all.*
 import com.anthropic.client.AnthropicClient as JAnthropicClient
 import com.anthropic.core.JsonValue
 import com.anthropic.models.beta.AnthropicBeta
-import com.anthropic.models.beta.messages.{BetaJsonOutputFormat, MessageCreateParams}
+import com.anthropic.models.beta.messages.{
+  BetaJsonOutputFormat,
+  BetaOutputConfig,
+  MessageCreateParams
+}
 import com.tjclp.xl.agent.benchmark.Models
 import com.tjclp.xl.agent.error.AgentError
 import io.circe.*
@@ -14,7 +18,7 @@ import io.circe.parser.*
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-/** Grading result from Opus 4.5 */
+/** Grading result from the grader model */
 case class GradeResult(
   grade: Grade,
   reason: String
@@ -29,7 +33,7 @@ object GradeResult:
     yield GradeResult(grade, reason)
   }
 
-/** Grades task responses using Opus 4.5 with structured outputs */
+/** Grades task responses using the default grader model with structured outputs */
 object TokenGrader:
 
   private val Model = Models.DefaultGrader
@@ -74,9 +78,9 @@ object TokenGrader:
         .putAdditionalProperty("additionalProperties", JsonValue.from(false))
         .build()
 
-      val outputFormat = BetaJsonOutputFormat
+      val outputConfig = BetaOutputConfig
         .builder()
-        .schema(gradeSchema)
+        .format(BetaJsonOutputFormat.builder().schema(gradeSchema).build())
         .build()
 
       val params = MessageCreateParams
@@ -84,7 +88,7 @@ object TokenGrader:
         .model(Model)
         .maxTokens(256L)
         .addUserMessage(prompt)
-        .outputFormat(outputFormat)
+        .outputConfig(outputConfig)
         .addBeta(AnthropicBeta.of("structured-outputs-2025-11-13"))
         .build()
 

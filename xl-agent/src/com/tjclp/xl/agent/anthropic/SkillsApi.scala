@@ -59,8 +59,13 @@ object SkillsApi:
   def listCustomSkills(apiKey: String): IO[List[SkillMetadata]] =
     IO.blocking {
       val client = new OkHttpClient()
+      // limit=1000: the default page is 20 and the endpoint's has_more/next_page
+      // have been observed reporting no-more-data while more exists, so request
+      // one page large enough to cover the org's custom skills. Without this,
+      // an existing xl-cli skill outside the first page triggers a duplicate
+      // display_title error on create.
       val request = new Request.Builder()
-        .url(s"$ApiBase/skills?source=custom")
+        .url(s"$ApiBase/skills?source=custom&limit=1000")
         .addHeader("x-api-key", apiKey)
         .addHeader("anthropic-version", "2023-06-01")
         .addHeader("anthropic-beta", SkillsBeta)
@@ -96,10 +101,10 @@ object SkillsApi:
         .setType(MultipartBody.FORM)
         .addFormDataPart("display_title", displayTitle)
 
-      // Add each file
+      // Add each file (API requires files[] array notation)
       files.foreach { case (filename, content) =>
         bodyBuilder.addFormDataPart(
-          "files",
+          "files[]",
           filename,
           RequestBody.create(content, OctetMediaType)
         )
@@ -245,22 +250,26 @@ object SkillsApi:
     yield skillId
 
   /**
-   * Extract files from a zip archive.
+   * Extract files from a zip archive, normalized for the Skills API.
    *
-   * The zip should have xl-cli/ as the top-level folder with SKILL.md at the root. This matches the
-   * Skills API requirement.
+   * The Skills API requires every file inside exactly one top-level folder with SKILL.md at that
+   * folder's root (e.g. xl-cli/SKILL.md). Release zips ship flat (SKILL.md at the archive root), so
+   * flat archives are wrapped in `rootFolder`; already-rooted archives pass through unchanged.
    */
-  private def extractZipFiles(zipPath: Path): IO[List[(String, Array[Byte])]] =
+  private def extractZipFiles(
+    zipPath: Path,
+    rootFolder: String = "xl-cli"
+  ): IO[List[(String, Array[Byte])]] =
     IO.blocking {
       Using.resource(new ZipFile(zipPath.toFile)) { zip =>
-        zip.entries().asScala.toList.flatMap { entry =>
-          if entry.isDirectory then None
-          else
-            val content = Using.resource(zip.getInputStream(entry)) { is =>
-              is.readAllBytes()
-            }
-            // Use the path as-is from the zip (should already be xl-cli/...)
-            Some((entry.getName, content))
+        val entries = zip.entries().asScala.toList.filterNot(_.isDirectory)
+        val isFlat = entries.exists(_.getName == "SKILL.md")
+        entries.map { entry =>
+          val content = Using.resource(zip.getInputStream(entry)) { is =>
+            is.readAllBytes()
+          }
+          val name = if isFlat then s"$rootFolder/${entry.getName}" else entry.getName
+          (name, content)
         }
       }
     }

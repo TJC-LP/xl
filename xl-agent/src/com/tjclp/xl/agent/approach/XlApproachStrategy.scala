@@ -2,7 +2,7 @@ package com.tjclp.xl.agent.approach
 
 import com.anthropic.models.beta.AnthropicBeta
 import com.anthropic.models.beta.messages.{
-  BetaCodeExecutionTool20250825,
+  BetaCodeExecutionTool20260521,
   BetaContainerParams,
   BetaSkillParams,
   MessageCreateParams
@@ -61,7 +61,7 @@ INPUT="$$INPUT_DIR/$inputFilename"
 
     builder
       .container(container)
-      .addTool(BetaCodeExecutionTool20250825.builder().build())
+      .addTool(BetaCodeExecutionTool20260521.builder().build())
       .addBeta(AnthropicBeta.of("code-execution-2025-08-25"))
       .addBeta(AnthropicBeta.SKILLS_2025_10_02)
       .addBeta(AnthropicBeta.FILES_API_2025_04_14)

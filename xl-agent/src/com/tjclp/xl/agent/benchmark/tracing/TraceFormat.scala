@@ -28,9 +28,13 @@ object TraceFormat:
       .getOrElse("")
     val costStr = meta.usage
       .map { u =>
-        val pricing = ModelPricing.Opus45
+        // Price by the model that actually ran (Sonnet-tier fallback if unknown)
+        val pricing = ModelPricing.forModel(meta.model.getOrElse(""))
         val cost =
-          (u.inputTokens * pricing.inputPerMillion + u.outputTokens * pricing.outputPerMillion) / 1_000_000.0
+          (u.inputTokens * pricing.inputPerMillion +
+            u.outputTokens * pricing.outputPerMillion +
+            u.cacheCreationTokens * pricing.cacheWritePerMillion +
+            u.cacheReadTokens * pricing.cacheReadPerMillion) / 1_000_000.0
         f"**Cost:** $$$cost%.2f"
       }
       .getOrElse("")

@@ -31,6 +31,7 @@ case class ConversationMetadata(
   skillName: String,
   caseNum: Int,
   startTime: Instant,
+  model: Option[String] = None,
   endTime: Option[Instant] = None,
   usage: Option[TokenUsage] = None,
   passed: Option[Boolean] = None,
@@ -45,6 +46,7 @@ object ConversationMetadata:
       "taskId" -> m.taskId.asJson,
       "skillName" -> m.skillName.asJson,
       "caseNum" -> m.caseNum.asJson,
+      "model" -> m.model.asJson,
       "startTime" -> m.startTime.toString.asJson,
       "endTime" -> m.endTime.map(_.toString).asJson,
       "durationMs" -> m.durationMs.asJson,
@@ -218,11 +220,12 @@ object ConversationTracer:
     taskId: String,
     skillName: String,
     caseNum: Int,
-    streaming: Boolean = false
+    streaming: Boolean = false,
+    model: Option[String] = None
   ): IO[ConversationTracer] =
     for
       now <- IO.realTimeInstant
-      initialMeta = ConversationMetadata(taskId, skillName, caseNum, now)
+      initialMeta = ConversationMetadata(taskId, skillName, caseNum, now, model = model)
       eventsRef <- Ref.of[IO, Vector[TracedEvent]](Vector.empty)
       metaRef <- Ref.of[IO, ConversationMetadata](initialMeta)
       streamContext = StreamingConsole.StreamContext(taskId, skillName, caseNum)

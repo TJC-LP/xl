@@ -11,26 +11,43 @@ import java.nio.file.Path
 /** Configuration for the agent */
 case class AgentConfig(
   model: String = benchmark.Models.DefaultAgent,
-  maxTokens: Int = 8192,
+  // Claude 5 models run adaptive thinking by default; thinking tokens count
+  // against maxTokens, so leave headroom beyond the expected response size.
+  maxTokens: Int = 16384,
   verbose: Boolean = false,
   xlBinaryPath: Option[Path] = None,
   xlSkillPath: Option[Path] = None,
   forceUpload: Boolean = false
 )
 
-/** Token usage from API */
+/** Token usage from API (cache fields track prompt-caching activity) */
 case class TokenUsage(
   inputTokens: Long,
-  outputTokens: Long
+  outputTokens: Long,
+  cacheCreationTokens: Long = 0,
+  cacheReadTokens: Long = 0
 ):
   def totalTokens: Long = inputTokens + outputTokens
   def +(other: TokenUsage): TokenUsage =
-    TokenUsage(inputTokens + other.inputTokens, outputTokens + other.outputTokens)
+    TokenUsage(
+      inputTokens + other.inputTokens,
+      outputTokens + other.outputTokens,
+      cacheCreationTokens + other.cacheCreationTokens,
+      cacheReadTokens + other.cacheReadTokens
+    )
 
 object TokenUsage:
   val zero: TokenUsage = TokenUsage(0, 0)
   given Encoder[TokenUsage] = deriveEncoder
-  given Decoder[TokenUsage] = deriveDecoder
+  // Custom decoder: cache fields default to 0 so pre-existing traces still decode
+  given Decoder[TokenUsage] = Decoder.instance { c =>
+    for
+      input <- c.get[Long]("inputTokens")
+      output <- c.get[Long]("outputTokens")
+      cacheCreate <- c.getOrElse[Long]("cacheCreationTokens")(0L)
+      cacheRead <- c.getOrElse[Long]("cacheReadTokens")(0L)
+    yield TokenUsage(input, output, cacheCreate, cacheRead)
+  }
 
 /** Per-turn token usage tracking */
 case class TurnUsage(

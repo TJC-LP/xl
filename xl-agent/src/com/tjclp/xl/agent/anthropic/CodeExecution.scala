@@ -4,7 +4,6 @@ import cats.effect.{IO, Ref}
 import cats.effect.std.{Dispatcher, Queue}
 import cats.syntax.all.*
 import com.anthropic.client.AnthropicClient as JAnthropicClient
-import com.anthropic.core.JsonValue
 import com.anthropic.helpers.BetaMessageAccumulator
 import com.anthropic.models.beta.messages.*
 import com.tjclp.xl.agent.{AgentConfig, AgentEvent, TokenUsage, UploadedFile}
@@ -41,35 +40,40 @@ object CodeExecution:
         streamProcessor <- StreamEventProcessor.create(eventQueue, onEvent, config.verbose)
         result <- IO
           .blocking {
-            import java.util.{List as JList, Map as JMap}
+            // Prompt caching (5m TTL): the code-execution loop re-samples the
+            // conversation on every server-side sub-turn, and a task's cases
+            // share tools + system + skill context — both re-read from cache.
+            val cacheMarker = BetaCacheControlEphemeral.builder().build()
+
+            // System block breakpoint: shared read point across a task's cases
+            val systemBlock = BetaTextBlockParam
+              .builder()
+              .text(systemPrompt)
+              .cacheControl(cacheMarker)
+              .build()
 
             // Build content blocks: text + container uploads
-            val contentBlocks = new java.util.ArrayList[JMap[String, Any]]()
-            contentBlocks.add(JMap.of("type", "text", "text", userPrompt))
+            val contentBlocks = new java.util.ArrayList[BetaContentBlockParam]()
+            contentBlocks.add(
+              BetaContentBlockParam.ofText(BetaTextBlockParam.builder().text(userPrompt).build())
+            )
             containerUploads.foreach { fileId =>
-              contentBlocks.add(JMap.of("type", "container_upload", "file_id", fileId))
+              contentBlocks.add(
+                BetaContentBlockParam.ofContainerUpload(
+                  BetaContainerUploadBlockParam.builder().fileId(fileId).build()
+                )
+              )
             }
 
             val baseBuilder = MessageCreateParams
               .builder()
               .model(config.model)
               .maxTokens(config.maxTokens.toLong)
-              .system(systemPrompt)
-              .addUserMessage("placeholder")
-              // Override messages to include container_upload blocks
-              .putAdditionalBodyProperty(
-                "messages",
-                JsonValue.from(
-                  JList.of(
-                    JMap.of(
-                      "role",
-                      "user",
-                      "content",
-                      contentBlocks
-                    )
-                  )
-                )
-              )
+              .systemOfBetaTextBlockParams(java.util.List.of(systemBlock))
+              .addUserMessageOfBetaContentBlockParams(contentBlocks)
+              // Top-level cache_control auto-places on the last cacheable
+              // block, covering the whole initial prompt for the loop
+              .cacheControl(cacheMarker)
 
             // Apply strategy-specific configuration (tools, betas, container)
             val params = configureRequest(baseBuilder).build()

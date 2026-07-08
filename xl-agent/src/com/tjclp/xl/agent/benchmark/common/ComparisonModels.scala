@@ -59,14 +59,17 @@ object ModelPricing:
       cacheReadPerMillion = p.cacheReadPerMillion.toDouble
     )
 
-  // Claude Opus 4.5 pricing (delegates to Models)
-  val Opus45: ModelPricing = fromModels(Models.OpusPricing)
+  // Claude Fable 5 pricing (delegates to Models)
+  val Fable: ModelPricing = fromModels(Models.FablePricing)
 
-  // Claude Sonnet 4.5 pricing (delegates to Models)
-  val Sonnet45: ModelPricing = fromModels(Models.SonnetPricing)
+  // Claude Opus pricing (delegates to Models)
+  val Opus: ModelPricing = fromModels(Models.OpusPricing)
 
-  // Claude Haiku 4.5 pricing (delegates to Models)
-  val Haiku45: ModelPricing = fromModels(Models.HaikuPricing)
+  // Claude Sonnet pricing (delegates to Models)
+  val Sonnet: ModelPricing = fromModels(Models.SonnetPricing)
+
+  // Claude Haiku pricing (delegates to Models)
+  val Haiku: ModelPricing = fromModels(Models.HaikuPricing)
 
   def forModel(modelName: String): ModelPricing =
     fromModels(Models.pricingFor(modelName))

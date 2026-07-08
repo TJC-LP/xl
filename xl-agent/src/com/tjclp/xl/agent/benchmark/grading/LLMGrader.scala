@@ -6,7 +6,11 @@ import cats.syntax.all.*
 import com.anthropic.client.AnthropicClient as JAnthropicClient
 import com.anthropic.core.JsonValue
 import com.anthropic.models.beta.AnthropicBeta
-import com.anthropic.models.beta.messages.{BetaJsonOutputFormat, MessageCreateParams}
+import com.anthropic.models.beta.messages.{
+  BetaJsonOutputFormat,
+  BetaOutputConfig,
+  MessageCreateParams
+}
 import com.tjclp.xl.agent.benchmark.Models
 import io.circe.*
 import io.circe.parser.*
@@ -15,11 +19,11 @@ import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
 // ============================================================================
-// LLM-Based Grader (Opus 4.5 as Judge)
+// LLM-Based Grader (Opus as Judge)
 // ============================================================================
 
 /**
- * Grader that uses Opus 4.5 with structured outputs for evaluation.
+ * Grader that uses an Opus-tier model with structured outputs for evaluation.
  *
  * Supports parallel grading via `gradeAll` with configurable concurrency.
  */
@@ -88,9 +92,9 @@ class OpusLLMGrader(
         .putAdditionalProperty("additionalProperties", JsonValue.from(false))
         .build()
 
-      val outputFormat = BetaJsonOutputFormat
+      val outputConfig = BetaOutputConfig
         .builder()
-        .schema(gradeSchema)
+        .format(BetaJsonOutputFormat.builder().schema(gradeSchema).build())
         .build()
 
       val params = MessageCreateParams
@@ -98,7 +102,7 @@ class OpusLLMGrader(
         .model(model)
         .maxTokens(256L)
         .addUserMessage(prompt)
-        .outputFormat(outputFormat)
+        .outputConfig(outputConfig)
         .addBeta(AnthropicBeta.of("structured-outputs-2025-11-13"))
         .build()
 
@@ -283,7 +287,7 @@ class SonnetLLMGrader(client: JAnthropicClient, parallelism: Int = OpusLLMGrader
   override val name: String = "llm-sonnet"
 
 object SonnetLLMGrader:
-  val Model: String = "claude-sonnet-4-20250514"
+  val Model: String = Models.Sonnet5
 
   def apply(client: JAnthropicClient): SonnetLLMGrader =
     new SonnetLLMGrader(client)
