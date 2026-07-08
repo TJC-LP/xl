@@ -1,7 +1,13 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue, BindingCoercion}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, ArrayArithmetic, ScalarCoercion}
+import com.tjclp.xl.formula.eval.{
+  EvalError,
+  Evaluator,
+  ArrayArithmetic,
+  ArrayResult,
+  ScalarCoercion
+}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -144,6 +150,36 @@ trait FunctionSpecsBase:
       case _: TExpr.PolyRef | _: TExpr.SheetPolyRef => TExpr.asResolvedValueExpr(expr)
       case other => other
     ctx.evalExpr[Any](resolved.asInstanceOf[TExpr[Any]])
+
+  /**
+   * GH-333: evaluate an argument array-aware, materializing bare ranges.
+   *
+   * Unlike evalAny (whose scalar boundary collapses arrays and rejects bare RangeRefs), this yields
+   * ArrayResults for range-shaped arguments and array-producing expressions — the IF
+   * branch/condition convention, mirroring the evaluator's own evalMaybeArray operand handling.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  protected def evalMaybeArrayArg(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
+    expr match
+      case TExpr.RangeRef(range) =>
+        Right(ArrayArithmetic.rangeToArray(range, ctx.sheet))
+      case TExpr.SheetRange(sheetName, range) =>
+        Evaluator
+          .resolveRangeLocation(
+            TExpr.RangeLocation.CrossSheet(sheetName, range),
+            ctx.sheet,
+            ctx.workbook
+          )
+          .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
+      case _: TExpr.PolyRef | _: TExpr.SheetPolyRef =>
+        ctx.evalArrayExpr(TExpr.asResolvedValueExpr(expr).asInstanceOf[TExpr[Any]])
+      case other =>
+        ctx.evalArrayExpr(other.asInstanceOf[TExpr[Any]])
+
+  /** Normalize an evaluated value to an ArrayResult (scalars become 1x1). */
+  protected def toCellArray(value: Any): ArrayResult = value match
+    case arr: ArrayResult => arr
+    case scalar => ArrayResult.single(ArrayArithmetic.anyToCellValue(scalar))
 
   protected def evalValue(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, ExprValue] =
     evalAny(ctx, expr).map(ExprValue.from)

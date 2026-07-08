@@ -94,6 +94,22 @@ trait TExprDecoders:
     scala.util.Right(cell.value)
 
   /**
+   * Decode cell for comparison operands (GH-335): extracts cached formula values but PRESERVES
+   * emptiness, unlike decodeResolvedValue's Empty -> 0.
+   *
+   * Excel coerces an empty cell relative to the OTHER comparison operand (0 against numbers, ""
+   * against text, FALSE against booleans) — that coercion lives in
+   * ArrayArithmetic.compareCellValues and needs to see the Empty. An uncached formula value keeps
+   * the decodeResolvedValue zero convention.
+   */
+  def decodeComparableValue(cell: Cell): Either[CodecError, CellValue] =
+    val resolved = cell.value match
+      case CellValue.Formula(_, Some(cached)) => cached
+      case CellValue.Formula(_, None) => CellValue.Number(BigDecimal(0))
+      case other => other
+    scala.util.Right(resolved)
+
+  /**
    * Decode cell as resolved CellValue (extracts cached values, converts empty to 0).
    *
    * Used for standalone cell references (e.g., =A1, =Sheet1!B2) where the formula returns the

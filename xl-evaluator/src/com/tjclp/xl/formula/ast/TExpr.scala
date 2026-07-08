@@ -193,24 +193,28 @@ enum TExpr[A] derives CanEqual:
   case Neq[A](x: TExpr[A], y: TExpr[A]) extends TExpr[Boolean]
 
   /**
-   * Less than: x < y (numeric comparison)
+   * Less than: x < y.
+   *
+   * GH-335: polymorphic like Eq — Excel's ordered comparison ranks number < text < logical,
+   * compares text case-insensitively/lexicographically, and coerces empty cells to the other
+   * operand's zero value (0 / "" / FALSE). See ArrayArithmetic.compareCellValues.
    */
-  case Lt(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[Boolean]
+  case Lt[A](x: TExpr[A], y: TExpr[A]) extends TExpr[Boolean]
 
   /**
-   * Less than or equal: x <= y
+   * Less than or equal: x <= y (Excel ordering — see Lt)
    */
-  case Lte(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[Boolean]
+  case Lte[A](x: TExpr[A], y: TExpr[A]) extends TExpr[Boolean]
 
   /**
-   * Greater than: x > y
+   * Greater than: x > y (Excel ordering — see Lt)
    */
-  case Gt(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[Boolean]
+  case Gt[A](x: TExpr[A], y: TExpr[A]) extends TExpr[Boolean]
 
   /**
-   * Greater than or equal: x >= y
+   * Greater than or equal: x >= y (Excel ordering — see Lt)
    */
-  case Gte(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[Boolean]
+  case Gte[A](x: TExpr[A], y: TExpr[A]) extends TExpr[Boolean]
 
   // Type conversions
 

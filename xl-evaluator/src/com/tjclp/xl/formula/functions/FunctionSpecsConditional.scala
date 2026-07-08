@@ -1,7 +1,13 @@
 package com.tjclp.xl.formula.functions
 
-import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, ArrayArithmetic}
+import com.tjclp.xl.formula.ast.{TExpr, ExprValue, BindingCoercion}
+import com.tjclp.xl.formula.eval.{
+  EvalError,
+  Evaluator,
+  ArrayArithmetic,
+  ArrayResult,
+  ScalarCoercion
+}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 import com.tjclp.xl.cells.{CellError, CellValue}
@@ -10,10 +16,32 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
   val ifFn: FunctionSpec[Any] { type Args = IfArgs } =
     FunctionSpec.simple[Any, IfArgs]("IF", Arity.three) { (args, ctx) =>
       val (condExpr, ifTrueExpr, ifFalseExpr) = args
-      for
-        cond <- ctx.evalExpr(condExpr)
-        result <- if cond then evalAny(ctx, ifTrueExpr) else evalAny(ctx, ifFalseExpr)
-      yield result
+      // GH-333: evaluate the condition array-aware. A range-shaped condition (the classic
+      // MIN(IF(A1:A10>0,…)) CSE idiom) yields an ArrayResult that must broadcast elementwise —
+      // collapsing it to a scalar (the old ctx.evalExpr path) delivered a CellValue.Bool into a
+      // Boolean position and crashed with a ClassCastException.
+      evalMaybeArrayArg(ctx, condExpr).flatMap {
+        case condArr: ArrayResult =>
+          // CSE semantics: both branches evaluate (they broadcast elementwise against the
+          // condition), so branch laziness only applies to the scalar path below.
+          for
+            ifTrueVal <- evalMaybeArrayArg(ctx, ifTrueExpr)
+            ifFalseVal <- evalMaybeArrayArg(ctx, ifFalseExpr)
+            result <- ArrayArithmetic.broadcastIf(
+              condArr,
+              toCellArray(ifTrueVal),
+              toCellArray(ifFalseVal)
+            )
+          yield result
+        case scalarCond =>
+          // Scalar condition: coerce totally (Excel truthiness) and keep lazy branch selection.
+          ScalarCoercion.coerce("IF condition", scalarCond, BindingCoercion.Bool).flatMap {
+            case cond: Boolean =>
+              if cond then evalAny(ctx, ifTrueExpr) else evalAny(ctx, ifFalseExpr)
+            case other =>
+              Left(EvalError.TypeMismatch("IF condition", "boolean", other.toString))
+          }
+      }
     }
 
   // GH-76 (tier 1): variadic conditional / selection functions. Args are a flat List[TExpr[Any]].

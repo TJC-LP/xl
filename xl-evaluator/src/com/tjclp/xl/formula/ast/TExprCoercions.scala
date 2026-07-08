@@ -22,8 +22,8 @@ trait TExprCoercions:
     case _: TExpr.Call[?] | _: TExpr.Let[?] | _: TExpr.Aggregate | _: TExpr.Coerced[?] => true
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow => true
     case _: TExpr.Concat => true
-    case _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt | _: TExpr.Lte | _: TExpr.Gt |
-        _: TExpr.Gte =>
+    case _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] | _: TExpr.Gt[?] |
+        _: TExpr.Gte[?] =>
       true
     case _: TExpr.ToInt | _: TExpr.DateToSerial | _: TExpr.DateTimeToSerial => true
     case _ => false
@@ -177,10 +177,11 @@ trait TExprCoercions:
     // truthiness; text is a clean error); boolean literals keep their shape
     case TExpr.Lit(_: BigDecimal) | TExpr.Lit(_: String) =>
       coerced[Boolean](expr, BindingCoercion.Bool)
-    // Comparisons are the statically boolean-typed operators — keep their shape
-    case _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt | _: TExpr.Lte | _: TExpr.Gt |
-        _: TExpr.Gte =>
-      expr.asInstanceOf[TExpr[Boolean]]
+    // GH-333: comparisons are statically Boolean but runtime-polymorphic — over a range operand
+    // in array mode they yield an ArrayResult of booleans. Coerce at evaluation time so scalar
+    // boolean positions (IFS/AND/OR/NOT conditions) collapse-and-coerce totally instead of
+    // deferring a ClassCastException; array/operand positions still pass the array through.
+    // (No dedicated case: isRuntimePolymorphic already includes the comparison operators.)
     // GH-306: numeric call results use Excel truthiness (=IF(SUM(A1:A2), 1, 2), 0 = FALSE);
     // uncoercible results (text) are a clean error instead of a ClassCastException
     case other if isRuntimePolymorphic(other) => coerced[Boolean](other, BindingCoercion.Bool)
@@ -210,5 +211,19 @@ trait TExprCoercions:
   def asResolvedValueExpr(expr: TExpr[?]): TExpr[CellValue] = expr match
     case PolyRef(at, anchor) => Ref(at, anchor, decodeResolvedValue)
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeResolvedValue)
+    case other =>
+      other.asInstanceOf[TExpr[CellValue]] // Safe: non-PolyRef already has correct type
+
+  /**
+   * Convert any TExpr to a comparison operand (GH-335).
+   *
+   * Like asResolvedValueExpr but cell references PRESERVE emptiness (decodeComparableValue) so
+   * ArrayArithmetic.compareCellValues can coerce an empty cell relative to the other operand (0 vs
+   * numbers, "" vs text, FALSE vs booleans) — the Excel comparison semantics for = <> < <= > >=.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  def asComparableValueExpr(expr: TExpr[?]): TExpr[CellValue] = expr match
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeComparableValue)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeComparableValue)
     case other =>
       other.asInstanceOf[TExpr[CellValue]] // Safe: non-PolyRef already has correct type

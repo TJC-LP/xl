@@ -131,78 +131,95 @@ object ArrayArithmetic:
       case (ArrayOperand.Array(l), ArrayOperand.Array(r)) =>
         broadcastArrays(l, r, op).map(ArrayOperand.Array(_))
 
-  /** Comparison operation type (returns Boolean, not Either) */
-  type CompareOp = (BigDecimal, BigDecimal) => Boolean
+  /**
+   * GH-335: Excel's total order for the comparison operators, shared by the scalar and
+   * array/broadcast paths so `A1<B1` and `(A1:A10<B1)` agree elementwise.
+   *
+   * Within a type: numbers compare numerically (dates ARE numbers via their Excel serial), text
+   * case-insensitively and lexicographically, booleans FALSE < TRUE. Across types Excel ranks
+   * number < text < logical — text never parses as a number under comparison (unlike arithmetic).
+   * Empty cells coerce to the other operand's zero value (0 against numbers, "" against text, FALSE
+   * against booleans; two empties are equal). Error values refuse to compare with a clean Left
+   * naming the Excel error code.
+   *
+   * @return
+   *   the comparison sign (negative, zero, positive), or Left for incomparable values
+   */
+  def compareCellValues(a: CellValue, b: CellValue): Either[EvalError, Int] =
+    (normalizeForCompare(a), normalizeForCompare(b)) match
+      case (CellValue.Error(err), _) =>
+        Left(EvalError.EvalFailed(s"comparison: cannot compare ${err.toExcel} error value", None))
+      case (_, CellValue.Error(err)) =>
+        Left(EvalError.EvalFailed(s"comparison: cannot compare ${err.toExcel} error value", None))
+      case (CellValue.Number(x), CellValue.Number(y)) => Right(x.compare(y))
+      case (CellValue.Text(x), CellValue.Text(y)) => Right(x.compareToIgnoreCase(y))
+      case (CellValue.Bool(x), CellValue.Bool(y)) => Right(java.lang.Boolean.compare(x, y))
+      case (CellValue.Empty, CellValue.Empty) => Right(0)
+      // Empty coerces to the other operand's zero value
+      case (CellValue.Empty, CellValue.Number(y)) => Right(BigDecimal(0).compare(y))
+      case (CellValue.Number(x), CellValue.Empty) => Right(x.compare(BigDecimal(0)))
+      case (CellValue.Empty, CellValue.Text(y)) => Right("".compareToIgnoreCase(y))
+      case (CellValue.Text(x), CellValue.Empty) => Right(x.compareToIgnoreCase(""))
+      case (CellValue.Empty, CellValue.Bool(y)) => Right(java.lang.Boolean.compare(false, y))
+      case (CellValue.Bool(x), CellValue.Empty) => Right(java.lang.Boolean.compare(x, false))
+      // Cross-type: number < text < logical
+      case (x, y) =>
+        for
+          rx <- typeRank(x)
+          ry <- typeRank(y)
+        yield Integer.compare(rx, ry)
+
+  /** Excel's cross-type comparison rank: number < text < logical. */
+  private def typeRank(cv: CellValue): Either[EvalError, Int] = cv match
+    case CellValue.Number(_) => Right(0)
+    case CellValue.Text(_) => Right(1)
+    case CellValue.Bool(_) => Right(2)
+    case other => Left(EvalError.TypeMismatch("comparison", "comparable value", other.toString))
 
   /**
-   * GH-197: Perform broadcasting comparison operation.
+   * Normalize a CellValue for comparison: cached formula values extract, dates become their Excel
+   * serial number, rich text flattens to its plain text.
+   */
+  private def normalizeForCompare(cv: CellValue): CellValue = cv match
+    case CellValue.Formula(_, Some(cached)) => normalizeForCompare(cached)
+    case CellValue.DateTime(dt) =>
+      CellValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+    case CellValue.RichText(rt) => CellValue.Text(rt.toPlainText)
+    case other => other
+
+  /**
+   * GH-335: broadcast an ordered comparison over two arrays elementwise (scalar operands wrap as
+   * 1x1 arrays and broadcast like any other dimension-1 axis).
    *
-   * Like `broadcast`, but for comparison operators (>, <, =, etc.). Returns ArrayResult of
-   * booleans.
-   *
-   * @param left
-   *   Left operand (scalar or array)
-   * @param right
-   *   Right operand (scalar or array)
    * @param op
-   *   Comparison operation to apply element-wise
+   *   interprets the comparison sign from [[compareCellValues]] (e.g. `_ < 0` for Lt)
    * @return
    *   ArrayResult of CellValue.Bool values
    */
-  def broadcastCompare(
-    left: ArrayOperand,
-    right: ArrayOperand,
-    op: CompareOp
-  ): Either[EvalError, ArrayResult] =
-    (left, right) match
-      // scalar vs scalar -> 1x1 boolean array
-      case (ArrayOperand.Scalar(l), ArrayOperand.Scalar(r)) =>
-        Right(ArrayResult.single(CellValue.Bool(op(l, r))))
-
-      // scalar vs array -> broadcast scalar to all elements
-      case (ArrayOperand.Scalar(s), ArrayOperand.Array(arr)) =>
-        arrayToNumeric(arr).map { nums =>
-          ArrayResult(nums.map(_.map(v => CellValue.Bool(op(s, v)))))
-        }
-
-      // array vs scalar -> broadcast scalar to all elements
-      case (ArrayOperand.Array(arr), ArrayOperand.Scalar(s)) =>
-        arrayToNumeric(arr).map { nums =>
-          ArrayResult(nums.map(_.map(v => CellValue.Bool(op(v, s)))))
-        }
-
-      // array vs array -> broadcast with dimension matching
-      case (ArrayOperand.Array(l), ArrayOperand.Array(r)) =>
-        broadcastCompareArrays(l, r, op)
-
-  /**
-   * GH-197: Broadcast compare two arrays together.
-   */
-  private def broadcastCompareArrays(
+  def broadcastOrderedCompare(
     left: ArrayResult,
     right: ArrayResult,
-    op: CompareOp
+    op: Int => Boolean
   ): Either[EvalError, ArrayResult] =
     for
       outRows <- broadcastDim(left.rows, right.rows, "rows")
       outCols <- broadcastDim(left.cols, right.cols, "columns")
-      leftNums <- arrayToNumeric(left)
-      rightNums <- arrayToNumeric(right)
-    yield
-      val result = (0 until outRows).toVector.map { row =>
-        (0 until outCols).toVector.map { col =>
-          val lVal = getWithBroadcast(leftNums, row, col, left.rows, left.cols)
-          val rVal = getWithBroadcast(rightNums, row, col, right.rows, right.cols)
-          CellValue.Bool(op(lVal, rVal))
+      result <- traverseVV(
+        (0 until outRows).toVector.map { row =>
+          (0 until outCols).toVector.map { col =>
+            val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
+            val rVal = getWithBroadcastCV(right.values, row, col, right.rows, right.cols)
+            (lVal, rVal)
+          }
         }
-      }
-      ArrayResult(result)
+      ) { case (l, r) => compareCellValues(l, r).map(c => CellValue.Bool(op(c))) }
+    yield ArrayResult(result)
 
   /**
    * GH-197: Element-wise equality/inequality comparison with broadcasting.
    *
-   * Unlike `broadcastCompare`, this works on CellValue directly for polymorphic equality (strings,
-   * numbers, booleans). Used by Eq/Neq operators.
+   * Works on CellValue directly for polymorphic equality (strings, numbers, booleans). Used by
+   * Eq/Neq operators.
    */
   def broadcastEqualityCompare(
     left: ArrayResult,
@@ -245,6 +262,53 @@ object ArrayArithmetic:
     val c = if arrCols == 1 then 0 else col
     arr(r)(c)
 
+  /**
+   * GH-333: elementwise IF over an array condition (Excel CSE semantics).
+   *
+   * The condition broadcasts against both branch arrays (scalar branches arrive as 1x1 arrays and
+   * repeat like any dimension-1 axis): out(i)(j) = if cond(i)(j) then ifTrue(i)(j) else
+   * ifFalse(i)(j). This is the classic MIN(IF(...))/MAX(IF(...)) shape — the aggregate then folds
+   * the resulting array.
+   *
+   * Condition elements follow Excel truthiness (booleans as-is, numbers zero/non-zero, empty is
+   * FALSE); text or error elements refuse with a clean Left.
+   */
+  def broadcastIf(
+    cond: ArrayResult,
+    ifTrue: ArrayResult,
+    ifFalse: ArrayResult
+  ): Either[EvalError, ArrayResult] =
+    for
+      rowsCT <- broadcastDim(cond.rows, ifTrue.rows, "rows")
+      outRows <- broadcastDim(rowsCT, ifFalse.rows, "rows")
+      colsCT <- broadcastDim(cond.cols, ifTrue.cols, "columns")
+      outCols <- broadcastDim(colsCT, ifFalse.cols, "columns")
+      result <- traverseVV(
+        (0 until outRows).toVector.map { row =>
+          (0 until outCols).toVector.map(col => (row, col))
+        }
+      ) { case (row, col) =>
+        val condCV = getWithBroadcastCV(cond.values, row, col, cond.rows, cond.cols)
+        cellValueTruthy(condCV).map { truthy =>
+          if truthy then getWithBroadcastCV(ifTrue.values, row, col, ifTrue.rows, ifTrue.cols)
+          else getWithBroadcastCV(ifFalse.values, row, col, ifFalse.rows, ifFalse.cols)
+        }
+      }
+    yield ArrayResult(result)
+
+  /**
+   * Excel truthiness for an IF-condition element: booleans as-is, numbers zero/non-zero, empty is
+   * FALSE (the ScalarCoercion Bool conventions); text and errors refuse cleanly.
+   */
+  private def cellValueTruthy(cv: CellValue): Either[EvalError, Boolean] = cv match
+    case CellValue.Bool(b) => Right(b)
+    case CellValue.Number(n) => Right(n.signum != 0)
+    case CellValue.Empty => Right(false)
+    case CellValue.Formula(_, Some(cached)) => cellValueTruthy(cached)
+    case CellValue.Error(err) =>
+      Left(EvalError.EvalFailed(s"IF condition: cannot coerce ${err.toExcel} error value", None))
+    case other => Left(EvalError.TypeMismatch("IF condition", "boolean", other.toString))
+
   /** Convert any value to CellValue for comparison. */
   def anyToCellValue(v: Any): CellValue = v match
     case cv: CellValue => cv
@@ -254,31 +318,22 @@ object ArrayArithmetic:
     case n: Long => CellValue.Number(BigDecimal(n))
     case n: Double => CellValue.Number(BigDecimal(n))
     case b: Boolean => CellValue.Bool(b)
+    // GH-335: date-returning calls (TODAY, DATE, ...) compare as dates, not as their toString
+    case ld: java.time.LocalDate => CellValue.DateTime(ld.atStartOfDay())
+    case ldt: java.time.LocalDateTime => CellValue.DateTime(ldt)
     case _ => CellValue.Text(v.toString)
 
   /**
    * Compare CellValues for equality (case-insensitive for text), matching Excel.
    *
    * Shared with the scalar equality fast path in Evaluator (GH-234) so scalar `=A1=B1` and array
-   * `=A1:A3=B1:B3` equality use identical semantics.
+   * `=A1:A3=B1:B3` equality use identical semantics. GH-335: defined via [[compareCellValues]] so
+   * = and < agree — empty cells equal 0 / "" / FALSE, dates equal their serial number, and
+   * cross-type values (which never coerce under comparison) are simply unequal. Error values
+   * equal nothing.
    */
-  def cellValueEquals(a: CellValue, b: CellValue): Boolean = (a, b) match
-    case (CellValue.Text(t1), CellValue.Text(t2)) =>
-      t1.equalsIgnoreCase(t2)
-    case (CellValue.Number(n1), CellValue.Number(n2)) =>
-      n1 == n2
-    case (CellValue.Bool(b1), CellValue.Bool(b2)) =>
-      b1 == b2
-    case (CellValue.DateTime(d1), CellValue.DateTime(d2)) =>
-      d1.isEqual(d2)
-    case (CellValue.Empty, CellValue.Empty) =>
-      true
-    case (CellValue.Formula(_, Some(c1)), other) =>
-      cellValueEquals(c1, other)
-    case (other, CellValue.Formula(_, Some(c2))) =>
-      cellValueEquals(other, c2)
-    case _ =>
-      false
+  def cellValueEquals(a: CellValue, b: CellValue): Boolean =
+    compareCellValues(a, b).fold(_ => false, _ == 0)
 
   /**
    * Broadcast two arrays together.

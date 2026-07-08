@@ -270,12 +270,11 @@ object FormulaParser:
           val s3 = skipWhitespace(s2.advance())
           descend(s3).flatMap { sd =>
             parseComparison(sd).map { case (right, s4) =>
-              // GH-233: resolve PolyRef operands polymorphically (like the inequality
-              // branches use asNumericExpr) so =A1=B1 / =IF(A1=B1,…) evaluate instead of
-              // erroring with "Unresolved PolyRef". asResolvedValueExpr preserves
-              // text/number/bool/date equality (unlike numeric-only asNumericExpr).
+              // GH-233: resolve PolyRef operands polymorphically so =A1=B1 / =IF(A1=B1,…)
+              // evaluate instead of erroring with "Unresolved PolyRef". GH-335: the comparable
+              // decoder preserves emptiness so empty cells equal 0 / "" / FALSE like Excel.
               (
-                TExpr.Eq(TExpr.asResolvedValueExpr(left), TExpr.asResolvedValueExpr(right)),
+                TExpr.Eq(TExpr.asComparableValueExpr(left), TExpr.asComparableValueExpr(right)),
                 s4.copy(depth = s3.depth)
               )
             }
@@ -286,9 +285,10 @@ object FormulaParser:
               val s3 = skipWhitespace(s2.advance(2))
               descend(s3).flatMap { sd =>
                 parseComparison(sd).map { case (right, s4) =>
-                  // GH-233: resolve PolyRef operands so =A1<>B1 evaluates (see Eq above).
+                  // GH-233/GH-335: resolve PolyRef operands so =A1<>B1 evaluates (see Eq above).
                   (
-                    TExpr.Neq(TExpr.asResolvedValueExpr(left), TExpr.asResolvedValueExpr(right)),
+                    TExpr
+                      .Neq(TExpr.asComparableValueExpr(left), TExpr.asComparableValueExpr(right)),
                     s4.copy(depth = s3.depth)
                   )
                 }
@@ -297,10 +297,13 @@ object FormulaParser:
               val s3 = skipWhitespace(s2.advance(2))
               descend(s3).flatMap { sd =>
                 parseComparison(sd).map { case (right, s4) =>
+                  // GH-335: resolve operands polymorphically (like Eq) — Excel compares text
+                  // lexicographically and ranks number < text < logical, so numeric-only
+                  // coercion would reject text operands.
                   (
                     TExpr.Lte(
-                      TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
-                      TExpr.asNumericExpr(right)
+                      TExpr.asComparableValueExpr(left),
+                      TExpr.asComparableValueExpr(right)
                     ),
                     s4.copy(depth = s3.depth)
                   )
@@ -310,11 +313,9 @@ object FormulaParser:
               val s3 = skipWhitespace(s2.advance())
               descend(s3).flatMap { sd =>
                 parseComparison(sd).map { case (right, s4) =>
+                  // GH-335: polymorphic operands (see Lte above)
                   (
-                    TExpr.Lt(
-                      TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
-                      TExpr.asNumericExpr(right)
-                    ),
+                    TExpr.Lt(TExpr.asComparableValueExpr(left), TExpr.asComparableValueExpr(right)),
                     s4.copy(depth = s3.depth)
                   )
                 }
@@ -325,10 +326,11 @@ object FormulaParser:
               val s3 = skipWhitespace(s2.advance(2))
               descend(s3).flatMap { sd =>
                 parseComparison(sd).map { case (right, s4) =>
+                  // GH-335: polymorphic operands (see Lte above)
                   (
                     TExpr.Gte(
-                      TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
-                      TExpr.asNumericExpr(right)
+                      TExpr.asComparableValueExpr(left),
+                      TExpr.asComparableValueExpr(right)
                     ),
                     s4.copy(depth = s3.depth)
                   )
@@ -338,11 +340,9 @@ object FormulaParser:
               val s3 = skipWhitespace(s2.advance())
               descend(s3).flatMap { sd =>
                 parseComparison(sd).map { case (right, s4) =>
+                  // GH-335: polymorphic operands (see Lte above)
                   (
-                    TExpr.Gt(
-                      TExpr.asNumericExpr(left), // Convert PolyRef to typed Ref
-                      TExpr.asNumericExpr(right)
-                    ),
+                    TExpr.Gt(TExpr.asComparableValueExpr(left), TExpr.asComparableValueExpr(right)),
                     s4.copy(depth = s3.depth)
                   )
                 }

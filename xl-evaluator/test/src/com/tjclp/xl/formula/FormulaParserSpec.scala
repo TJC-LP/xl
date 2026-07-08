@@ -78,10 +78,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
         op <- Gen.oneOf[
           (TExpr[BigDecimal], TExpr[BigDecimal]) => TExpr[Boolean]
         ](
-          TExpr.Lt.apply,
-          TExpr.Lte.apply,
-          TExpr.Gt.apply,
-          TExpr.Gte.apply
+          TExpr.Lt(_, _),
+          TExpr.Lte(_, _),
+          TExpr.Gt(_, _),
+          TExpr.Gte(_, _)
         )
       yield op(x, y)
 
