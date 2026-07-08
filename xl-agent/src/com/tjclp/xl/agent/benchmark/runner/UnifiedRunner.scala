@@ -25,15 +25,22 @@ import java.time.{Duration, Instant}
 /** Single entry point for all benchmark types */
 object UnifiedRunner extends IOApp:
 
+  /** Raised by parseArgs after printing help; mapped to a clean successful exit */
+  private object HelpRequested extends RuntimeException("Help requested")
+
   override def run(args: List[String]): IO[ExitCode] =
-    for
-      config <- parseArgs(args)
-      _ <- config.listSkills.fold(IO.unit)(listSkillsAndExit)
-      _ <- IO.println(s"${Console.BOLD}Unified Benchmark Runner${Console.RESET}")
-      _ <- IO(SkillRegistry.initialize())
-      benchmarkRun <- runBenchmarkWithEngine(config)
-      _ <- writeUnifiedReport(config, benchmarkRun)
-    yield ExitCode.Success
+    parseArgs(args)
+      .flatMap { config =>
+        if config.listSkills.isDefined then printSkillsList
+        else
+          for
+            _ <- IO.println(s"${Console.BOLD}Unified Benchmark Runner${Console.RESET}")
+            _ <- IO(SkillRegistry.initialize())
+            benchmarkRun <- runBenchmarkWithEngine(config)
+            _ <- writeUnifiedReport(config, benchmarkRun)
+          yield ExitCode.Success
+      }
+      .recover { case HelpRequested => ExitCode.Success }
 
   /** Run the benchmark using BenchmarkEngine */
   def runBenchmarkWithEngine(config: UnifiedConfig): IO[BenchmarkRun] =
@@ -293,7 +300,7 @@ ${"=" * 60}
             parse(rest, config.copy(forceUpload = true))
           case ("--help" | "-h") :: _ =>
             printHelp()
-            throw new RuntimeException("Help requested")
+            throw HelpRequested
           case arg :: _ if arg.startsWith("-") =>
             throw new IllegalArgumentException(s"Unknown argument: $arg")
           case _ :: rest => parse(rest, config) // Skip positional args
@@ -302,7 +309,7 @@ ${"=" * 60}
     }
 
   private def printHelp(): Unit =
-    println("""
+    println(s"""
       |Unified Benchmark Runner
       |
       |Usage: UnifiedRunner [options]
@@ -335,7 +342,7 @@ ${"=" * 60}
       |  --stream               Real-time streaming output
       |
       |Execution:
-      |  --model <name>         Model to use (default: claude-sonnet-4-20250514)
+      |  --model <name>         Model to use (default: ${Models.DefaultAgent})
       |  --parallelism <n>      Number of parallel tasks (default: 4)
       |  --xl-cli <path>        Path to xl CLI for local grading (default: xl)
       |  --xl-binary <path>     Path to xl binary for upload (default: auto-download)
@@ -343,13 +350,13 @@ ${"=" * 60}
       |  --force-upload         Force re-upload of binary and skill (bypass cache)
       |""".stripMargin)
 
-  private def listSkillsAndExit(unit: Unit): IO[Nothing] =
+  private def printSkillsList: IO[ExitCode] =
     for
       _ <- IO(SkillRegistry.initialize())
       skills <- IO(SkillRegistry.all)
       _ <- IO.println("Available skills:")
       _ <- skills.traverse_(s => IO.println(s"  ${s.name}: ${s.description}"))
-    yield throw new RuntimeException("Listed skills")
+    yield ExitCode.Success
 
 // ============================================================================
 // Configuration

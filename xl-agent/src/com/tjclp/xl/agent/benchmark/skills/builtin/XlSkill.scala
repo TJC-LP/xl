@@ -127,7 +127,8 @@ object XlSkill extends Skill:
         taskId = task.taskIdValue,
         skillName = name,
         caseNum = testCase.caseNum,
-        streaming = engineConfig.stream
+        streaming = engineConfig.stream,
+        model = Some(agentConfig.model)
       )
 
       // Create agent task
@@ -214,7 +215,8 @@ object XlSkill extends Skill:
         taskId = task.taskIdValue,
         skillName = name,
         caseNum = testCase.caseNum,
-        streaming = engineConfig.stream
+        streaming = engineConfig.stream,
+        model = Some(agentConfig.model)
       )
 
       agentTask = AgentTask(

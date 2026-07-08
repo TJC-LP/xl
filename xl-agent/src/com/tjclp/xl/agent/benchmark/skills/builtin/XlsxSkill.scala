@@ -103,7 +103,8 @@ object XlsxSkill extends Skill:
         taskId = task.taskIdValue,
         skillName = name,
         caseNum = testCase.caseNum,
-        streaming = engineConfig.stream
+        streaming = engineConfig.stream,
+        model = Some(agentConfig.model)
       )
 
       agentTask = AgentTask(
@@ -187,7 +188,8 @@ object XlsxSkill extends Skill:
         taskId = task.taskIdValue,
         skillName = name,
         caseNum = testCase.caseNum,
-        streaming = engineConfig.stream
+        streaming = engineConfig.stream,
+        model = Some(agentConfig.model)
       )
 
       agentTask = AgentTask(

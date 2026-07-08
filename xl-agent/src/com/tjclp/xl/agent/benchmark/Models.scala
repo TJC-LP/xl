@@ -18,23 +18,28 @@ package com.tjclp.xl.agent.benchmark
 object Models:
 
   // --------------------------------------------------------------------------
-  // Model Identifiers (Claude 4.5 Series)
+  // Model Identifiers (Claude 5 family + current Opus/Haiku)
+  //
+  // Aliases (not dated snapshots) so new snapshots are picked up automatically.
   // --------------------------------------------------------------------------
 
-  /** Claude Opus 4.5 - highest capability, best for grading */
-  val Opus45: String = "claude-opus-4-5-20251101"
+  /** Claude Fable 5 - most capable model, for the hardest tasks (premium pricing) */
+  val Fable5: String = "claude-fable-5"
 
-  /** Claude Sonnet 4.5 - balanced capability and cost, good default for agents */
-  val Sonnet45: String = "claude-sonnet-4-5-20250929"
+  /** Claude Opus 4.8 - highest-capability Opus tier, best for grading */
+  val Opus48: String = "claude-opus-4-8"
+
+  /** Claude Sonnet 5 - near-Opus coding/agentic quality at Sonnet cost, default for agents */
+  val Sonnet5: String = "claude-sonnet-5"
 
   /** Claude Haiku 4.5 - fastest and cheapest, good for simple tasks */
-  val Haiku45: String = "claude-haiku-4-5-20251001"
+  val Haiku45: String = "claude-haiku-4-5"
 
   /** Default model for agent execution */
-  val DefaultAgent: String = Sonnet45
+  val DefaultAgent: String = Sonnet5
 
   /** Default model for grading (uses Opus for accuracy) */
-  val DefaultGrader: String = Opus45
+  val DefaultGrader: String = Opus48
 
   // --------------------------------------------------------------------------
   // Pricing
@@ -76,7 +81,15 @@ object Models:
         (BigDecimal(cacheCreateTokens) * cacheWritePerMillion / 1_000_000) +
         (BigDecimal(cacheReadTokens) * cacheReadPerMillion / 1_000_000)
 
-  /** Claude Opus 4.5 pricing (as of Feb 2026) */
+  /** Claude Fable 5 / Mythos 5 pricing (as of Jun 2026) */
+  val FablePricing: Pricing = Pricing(
+    inputPerMillion = BigDecimal("10.00"),
+    outputPerMillion = BigDecimal("50.00"),
+    cacheWritePerMillion = BigDecimal("12.50"),
+    cacheReadPerMillion = BigDecimal("1.00")
+  )
+
+  /** Claude Opus 4.x pricing (as of Jun 2026) */
   val OpusPricing: Pricing = Pricing(
     inputPerMillion = BigDecimal("5.00"),
     outputPerMillion = BigDecimal("25.00"),
@@ -84,7 +97,7 @@ object Models:
     cacheReadPerMillion = BigDecimal("0.50")
   )
 
-  /** Claude Sonnet 4.5 pricing (as of Feb 2026) */
+  /** Claude Sonnet pricing (standard rate; Sonnet 5 has intro $2/$10 through 2026-08-31) */
   val SonnetPricing: Pricing = Pricing(
     inputPerMillion = BigDecimal("3.00"),
     outputPerMillion = BigDecimal("15.00"),
@@ -92,7 +105,7 @@ object Models:
     cacheReadPerMillion = BigDecimal("0.30")
   )
 
-  /** Claude Haiku 4.5 pricing (as of Feb 2026) */
+  /** Claude Haiku 4.5 pricing (as of Jun 2026) */
   val HaikuPricing: Pricing = Pricing(
     inputPerMillion = BigDecimal("1.00"),
     outputPerMillion = BigDecimal("5.00"),
@@ -100,12 +113,13 @@ object Models:
     cacheReadPerMillion = BigDecimal("0.10")
   )
 
-  /** Default pricing (Sonnet 4.5) */
+  /** Default pricing (Sonnet) */
   val DefaultPricing: Pricing = SonnetPricing
 
   /** Get pricing for a model by name */
   def pricingFor(model: String): Pricing =
     model.toLowerCase match
+      case m if m.contains("fable") || m.contains("mythos") => FablePricing
       case m if m.contains("opus") => OpusPricing
       case m if m.contains("haiku") => HaikuPricing
       case _ => SonnetPricing

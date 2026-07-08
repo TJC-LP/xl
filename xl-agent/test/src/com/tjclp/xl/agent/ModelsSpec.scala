@@ -14,9 +14,27 @@ class ModelsSpec extends CatsEffectSuite:
     assertEquals(result.totalTokens, 450L)
   }
 
+  test("TokenUsage addition combines cache tokens") {
+    val a = TokenUsage(100, 50, cacheCreationTokens = 10, cacheReadTokens = 5)
+    val b = TokenUsage(200, 100, cacheCreationTokens = 20, cacheReadTokens = 15)
+    val result = a + b
+    assertEquals(result.cacheCreationTokens, 30L)
+    assertEquals(result.cacheReadTokens, 20L)
+  }
+
   test("TokenUsage.zero") {
     assertEquals(TokenUsage.zero.inputTokens, 0L)
     assertEquals(TokenUsage.zero.outputTokens, 0L)
+    assertEquals(TokenUsage.zero.cacheCreationTokens, 0L)
+    assertEquals(TokenUsage.zero.cacheReadTokens, 0L)
+  }
+
+  test("TokenUsage decodes legacy JSON without cache fields") {
+    val json = io.circe.Json.obj(
+      "inputTokens" -> io.circe.Json.fromLong(100),
+      "outputTokens" -> io.circe.Json.fromLong(50)
+    )
+    assertEquals(json.as[TokenUsage], Right(TokenUsage(100, 50)))
   }
 
   test("AgentEvent JSON encoding") {
@@ -41,8 +59,8 @@ class ModelsSpec extends CatsEffectSuite:
 
   test("AgentConfig defaults") {
     val config = AgentConfig()
-    // Default is Sonnet 4.5 (balanced capability and cost)
-    assertEquals(config.model, "claude-sonnet-4-5-20250929")
-    assertEquals(config.maxTokens, 8192)
+    // Default is Sonnet 5 (near-Opus coding/agentic quality at Sonnet cost)
+    assertEquals(config.model, "claude-sonnet-5")
+    assertEquals(config.maxTokens, 16384)
     assertEquals(config.verbose, false)
   }

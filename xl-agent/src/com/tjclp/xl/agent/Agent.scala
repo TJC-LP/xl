@@ -5,10 +5,12 @@ import cats.effect.std.Queue
 import cats.syntax.all.*
 import com.tjclp.xl.agent.anthropic.{AnthropicClientIO, CodeExecution, SkillsApi}
 import com.tjclp.xl.agent.approach.{ApproachStrategy, XlApproachStrategy}
+import com.tjclp.xl.agent.benchmark.common.FileManager
 import com.tjclp.xl.agent.error.AgentError
 
 import java.nio.file.{Files, Path}
 import java.util.concurrent.TimeUnit
+import scala.jdk.OptionConverters.*
 
 /** A task for the agent to execute */
 case class AgentTask(
@@ -79,7 +81,14 @@ object Agent:
         // Extract response info
         responseText = CodeExecution.extractResponseText(response)
         outputFileId = CodeExecution.extractOutputFileId(response, config.verbose)
-        usage = TokenUsage(response.usage().inputTokens(), response.usage().outputTokens())
+        usage = TokenUsage(
+          inputTokens = response.usage().inputTokens(),
+          outputTokens = response.usage().outputTokens(),
+          cacheCreationTokens =
+            response.usage().cacheCreationInputTokens().toScala.map(Long.unbox).getOrElse(0L),
+          cacheReadTokens =
+            response.usage().cacheReadInputTokens().toScala.map(Long.unbox).getOrElse(0L)
+        )
 
         // Download output file if found
         outputPath <- outputFileId match
@@ -129,9 +138,9 @@ object Agent:
     for
       client <- AnthropicClientIO.fromEnv
 
-      // Resolve binary and skill paths
-      binaryPath <- Resource.eval(resolveBinaryPath(config))
-      skillPath <- Resource.eval(resolveSkillPath(config))
+      // Resolve binary and skill paths (version-agnostic, auto-downloads latest release)
+      binaryPath <- Resource.eval(FileManager.resolveBinaryPath(config.xlBinaryPath))
+      skillPath <- Resource.eval(FileManager.resolveSkillPath(config.xlSkillPath))
 
       // Upload binary file
       binaryFile <- Resource.make(client.uploadFile(binaryPath))(f =>
@@ -145,30 +154,3 @@ object Agent:
       // Create xl-cli approach strategy with skill ID
       strategy = XlApproachStrategy(binaryFile, skillId)
     yield create(client, config, strategy)
-
-  private def resolveBinaryPath(config: AgentConfig): IO[Path] =
-    config.xlBinaryPath match
-      case Some(p) => IO.pure(p)
-      case None =>
-        findFile(
-          "xl-0.9.0-linux-amd64",
-          List("../benchmark", "examples/anthropic-sdk/benchmark", ".")
-        )
-
-  private def resolveSkillPath(config: AgentConfig): IO[Path] =
-    config.xlSkillPath match
-      case Some(p) => IO.pure(p)
-      case None =>
-        findFile(
-          "xl-skill-0.9.0.zip",
-          List("../benchmark", "examples/anthropic-sdk/benchmark", ".")
-        )
-
-  private def findFile(name: String, dirs: List[String]): IO[Path] =
-    IO.blocking {
-      import java.nio.file.Paths
-      dirs.view
-        .map(d => Paths.get(d, name))
-        .find(p => Files.exists(p))
-        .getOrElse(Paths.get(dirs.head, name))
-    }
