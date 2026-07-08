@@ -99,16 +99,26 @@ object UnifiedRunner extends IOApp:
       yield benchmarkRun
     }
 
+  /** Max characters of an error message shown on the streaming console line */
+  private val MaxStreamedErrorLength = 200
+
   /** Format an ExecutionResult for streaming output */
-  private def formatExecutionResult(result: ExecutionResult): String =
+  private[runner] def formatExecutionResult(result: ExecutionResult): String =
     val status =
       if result.passed then Console.GREEN + "✓" + Console.RESET
       else if result.error.isDefined then Console.RED + "✗" + Console.RESET
       else Console.YELLOW + "○" + Console.RESET
 
-    f"$status ${result.skill}%-8s ${result.taskIdValue}%-12s " +
+    val base = f"$status ${result.skill}%-8s ${result.taskIdValue}%-12s " +
       f"${result.passedCases}/${result.totalCases} cases " +
       f"tokens=${result.totalTokens}%6d latency=${result.latencyMs}%5dms"
+
+    // Surface the first error (task-level or per-case) so failed cases are diagnosable
+    // from the console without digging through result files (issue #334)
+    val firstError = result.error.orElse(result.caseResults.flatMap(_.error).headOption)
+    firstError.fold(base) { e =>
+      s"$base error=${e.replace("\n", " ").take(MaxStreamedErrorLength)}"
+    }
 
   /** Print summary after benchmark completion */
   private def printSummary(run: BenchmarkRun): IO[Unit] =
@@ -178,7 +188,10 @@ ${"=" * 60}
   // --------------------------------------------------------------------------
 
   /** Build a BenchmarkReport from a BenchmarkRun (for legacy compatibility) */
-  private def buildReportFromRun(config: UnifiedConfig, run: BenchmarkRun): IO[BenchmarkReport] =
+  private[runner] def buildReportFromRun(
+    config: UnifiedConfig,
+    run: BenchmarkRun
+  ): IO[BenchmarkReport] =
     IO {
       // Convert ExecutionResults to TaskResultEntries
       val entries = run.allResults.flatMap { result =>
@@ -204,7 +217,7 @@ ${"=" * 60}
               outputTokens = caseResult.usage.outputTokens
             ),
             latencyMs = caseResult.latencyMs,
-            error = result.error
+            error = caseResult.error.orElse(result.error)
           )
         }
       }.toList

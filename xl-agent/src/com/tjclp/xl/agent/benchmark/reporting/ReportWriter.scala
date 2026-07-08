@@ -32,6 +32,12 @@ object ReportWriter:
   /** Max cell refs to show in failed case summary */
   private[reporting] val MaxCellRefsInSummary: Int = 5
 
+  /**
+   * Max characters for error messages in report output. Deliberately generous: when a case dies
+   * mid-run the error string is often the only surviving diagnostic (issue #334).
+   */
+  private[reporting] val MaxErrorLength: Int = 200
+
   // --------------------------------------------------------------------------
   // Public API
   // --------------------------------------------------------------------------
@@ -102,6 +108,7 @@ object ReportWriter:
       sb.append("## Failed Tasks Details\n\n")
       failedTasks.foreach { result =>
         sb.append(s"### Task ${result.taskId} (${result.skill})\n\n")
+        result.error.foreach(e => sb.append(s"**Error:** ${sanitizeError(e)}\n\n"))
         result.gradeDetails.reasoning.foreach(r => sb.append(s"**Reason:** $r\n\n"))
         if result.gradeDetails.mismatches.nonEmpty then
           sb.append("**Mismatches:**\n\n")
@@ -182,6 +189,10 @@ object ReportWriter:
 
   private def escapeMarkdown(s: String): String =
     s.replace("|", "\\|").replace("\n", " ").take(MaxMarkdownCellLength)
+
+  /** Flatten an error message to one line, keeping enough of it to be diagnosable */
+  private[reporting] def sanitizeError(s: String): String =
+    s.replace("\n", " ").take(MaxErrorLength)
 
 /** Paths to generated report files */
 case class ReportPaths(
@@ -301,14 +312,17 @@ object UnifiedReportWriter:
           }
           .getOrElse(Json.Null)
 
-        // Per-case results with mismatches
+        // Per-case results with mismatches and failure diagnostics (issue #334)
         val caseResultsJson = Json.arr(r.caseResults.map { cr =>
           val mismatchRefs = cr.mismatches.take(ReportWriter.MaxCellRefsInSummary).map(_.ref)
           Json.obj(
             "caseNum" -> Json.fromInt(cr.caseNum),
             "passed" -> Json.fromBoolean(cr.passed),
+            "latencyMs" -> Json.fromLong(cr.latencyMs),
             "mismatches" -> (if mismatchRefs.isEmpty then Json.Null
-                             else Json.arr(mismatchRefs.map(Json.fromString)*))
+                             else Json.arr(mismatchRefs.map(Json.fromString)*)),
+            "error" -> cr.error.map(Json.fromString).getOrElse(Json.Null),
+            "tracePath" -> cr.tracePath.map(p => Json.fromString(p.toString)).getOrElse(Json.Null)
           )
         }*)
 
@@ -455,7 +469,7 @@ object UnifiedReportWriter:
                 cr.mismatches.take(ReportWriter.MaxMismatchesPerCase).map(_.ref).mkString(", ")
               val refsDisplay = if refs.nonEmpty then s": $refs" else ""
               val errorDisplay = cr.error
-                .map(e => s" - Error: ${e.take(ReportWriter.MaxReasoningLength)}")
+                .map(e => s" - Error: ${ReportWriter.sanitizeError(e)}")
                 .getOrElse("")
               sb.append(s"- Case ${cr.caseNum}$refsDisplay$errorDisplay\n")
             }
@@ -505,7 +519,9 @@ object UnifiedReportWriter:
             Json.obj(
               "caseNum" -> Json.fromInt(cr.caseNum),
               "passed" -> Json.fromBoolean(cr.passed),
-              "latencyMs" -> Json.fromLong(cr.latencyMs)
+              "latencyMs" -> Json.fromLong(cr.latencyMs),
+              "error" -> cr.error.map(Json.fromString).getOrElse(Json.Null),
+              "tracePath" -> cr.tracePath.map(p => Json.fromString(p.toString)).getOrElse(Json.Null)
             )
           }*)
         )

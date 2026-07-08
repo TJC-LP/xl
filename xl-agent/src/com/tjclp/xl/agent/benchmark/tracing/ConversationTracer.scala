@@ -180,7 +180,7 @@ class ConversationTracer private (
         )
       )
       _ <- IO.whenA(streaming)(
-        StreamingConsole.enqueueCaseComplete(streamContext, passed, durationMs)
+        StreamingConsole.enqueueCaseComplete(streamContext, passed, durationMs, error)
       )
     yield ()
 
