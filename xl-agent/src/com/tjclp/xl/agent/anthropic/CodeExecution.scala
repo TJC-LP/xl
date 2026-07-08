@@ -40,6 +40,18 @@ object CodeExecution:
         streamProcessor <- StreamEventProcessor.create(eventQueue, onEvent, config.verbose)
         result <- IO
           .blocking {
+            // Prompt caching (5m TTL): the code-execution loop re-samples the
+            // conversation on every server-side sub-turn, and a task's cases
+            // share tools + system + skill context — both re-read from cache.
+            val cacheMarker = BetaCacheControlEphemeral.builder().build()
+
+            // System block breakpoint: shared read point across a task's cases
+            val systemBlock = BetaTextBlockParam
+              .builder()
+              .text(systemPrompt)
+              .cacheControl(cacheMarker)
+              .build()
+
             // Build content blocks: text + container uploads
             val contentBlocks = new java.util.ArrayList[BetaContentBlockParam]()
             contentBlocks.add(
@@ -57,8 +69,11 @@ object CodeExecution:
               .builder()
               .model(config.model)
               .maxTokens(config.maxTokens.toLong)
-              .system(systemPrompt)
+              .systemOfBetaTextBlockParams(java.util.List.of(systemBlock))
               .addUserMessageOfBetaContentBlockParams(contentBlocks)
+              // Top-level cache_control auto-places on the last cacheable
+              // block, covering the whole initial prompt for the loop
+              .cacheControl(cacheMarker)
 
             // Apply strategy-specific configuration (tools, betas, container)
             val params = configureRequest(baseBuilder).build()
