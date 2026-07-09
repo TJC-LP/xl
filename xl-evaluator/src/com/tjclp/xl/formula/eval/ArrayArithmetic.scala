@@ -146,7 +146,9 @@ object ArrayArithmetic:
    * number < text < logical — text never parses as a number under comparison (unlike arithmetic).
    * Empty cells coerce to the other operand's zero value (0 against numbers, "" against text, FALSE
    * against booleans; two empties are equal). Error values refuse to compare with a clean Left
-   * naming the Excel error code.
+   * naming the Excel error code — on the SCALAR path only: the array broadcasts pre-check both
+   * operands with [[carriedError]] and carry error elements through instead (GH-337), so this
+   * refusal surfaces solely from scalar comparisons like `=A1<B1` on an error cell.
    *
    * @return
    *   the comparison sign (negative, zero, positive), or Left for incomparable values
@@ -380,6 +382,11 @@ object ArrayArithmetic:
    * array condition) and the logical functions' array paths (AND/OR aggregation, NOT broadcast):
    * booleans as-is, numbers zero/non-zero, empty is FALSE (the ScalarCoercion Bool conventions);
    * text and errors refuse cleanly with a Left naming the position via `label`.
+   *
+   * GH-337: the refusal Left is the ABORT convention of the logical folds (AND/OR/NOT keep it — a
+   * text or error element fails those formulas whole). broadcastIf instead pre-checks errors with
+   * [[carriedError]] and demotes its residual refusals to error elements, so its condition failures
+   * stay positional.
    */
   def conditionTruthy(label: String, cv: CellValue): Either[EvalError, Boolean] = cv match
     case CellValue.Bool(b) => Right(b)
@@ -392,8 +399,9 @@ object ArrayArithmetic:
 
   /**
    * GH-338: truthiness of every element (row-major), for the AND/OR aggregation folds (AND =
-   * forall, OR = exists). The first refusing element (text/error) short-circuits with its Left,
-   * consistent with broadcastIf's whole-array traversal.
+   * forall, OR = exists). The first refusing element (text/error) short-circuits with its Left —
+   * the logical functions keep abort semantics, deliberately NOT the positional error carriage
+   * broadcastIf gained in GH-337.
    */
   def truthyElements(label: String, arr: ArrayResult): Either[EvalError, Vector[Boolean]] =
     traverseV(arr.values.flatten)(cv => conditionTruthy(label, cv))
@@ -427,7 +435,8 @@ object ArrayArithmetic:
    * `=A1:A3=B1:B3` equality use identical semantics. GH-335: defined via [[compareCellValues]] so
    * = and < agree — empty cells equal 0 / "" / FALSE, dates equal their serial number, and
    * cross-type values (which never coerce under comparison) are simply unequal. Error values
-   * equal nothing.
+   * equal nothing on this scalar path; the equality broadcast pre-checks them with
+   * [[carriedError]] and carries error elements instead (GH-337).
    */
   def cellValueEquals(a: CellValue, b: CellValue): Boolean =
     compareCellValues(a, b).fold(_ => false, _ == 0)
