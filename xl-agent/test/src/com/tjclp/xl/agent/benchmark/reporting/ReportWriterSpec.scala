@@ -1,6 +1,7 @@
 package com.tjclp.xl.agent.benchmark.reporting
 
 import munit.FunSuite
+import com.tjclp.xl.agent.benchmark.grading.{GradeDetails, Score}
 
 class ReportWriterSpec extends FunSuite:
 
@@ -70,6 +71,34 @@ class ReportWriterSpec extends FunSuite:
 
   test("escapeMarkdown handles combined escaping") {
     assertEquals(escapeMarkdown("a|b\nc"), "a\\|b c")
+  }
+
+  // --------------------------------------------------------------------------
+  // Error surfacing (issue #334)
+  // --------------------------------------------------------------------------
+
+  test("formatMarkdown surfaces the per-entry error in Failed Tasks Details") {
+    val error = "RuntimeException: agent connection dropped mid-run"
+    val entry = TaskResultEntry(
+      taskId = "13894",
+      skill = "xl",
+      caseNum = Some(3),
+      instruction = "Fill the summary table",
+      category = "cell_level",
+      score = Score.BinaryScore.Fail,
+      gradeDetails = GradeDetails.fail("Case failed"),
+      usage = TokenSummary.zero,
+      latencyMs = 570_000L,
+      error = Some(error)
+    )
+    val report = ReportBuilder()
+      .withTitle("Test Report")
+      .withSkills(List("xl"))
+      .addResult(entry)
+      .build()
+
+    val md = ReportWriter.formatMarkdown(report)
+    assert(md.contains(error), s"markdown must contain the entry error:\n$md")
   }
 
   // --------------------------------------------------------------------------

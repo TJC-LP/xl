@@ -409,3 +409,91 @@ class ArrayArithmeticSpec extends FunSuite:
     assertEquals(updatedSheet(ref"C2").value, CellValue.Number(9)) // 3^2
     assertEquals(updatedSheet(ref"C3").value, CellValue.Number(16)) // 4^2
   }
+
+  // ========== GH-333: IF over array conditions (CSE semantics) ==========
+  //
+  // MIN(IF(cond_array, values, fallback)) is the classic pre-MINIFS idiom. IF must broadcast
+  // the condition elementwise (Excel CSE) so aggregators receive the resulting array — never
+  // an uncaught exception escaping the total-function boundary.
+
+  test("GH-333: MIN(IF(...)) on an empty sheet evaluates to the fallback") {
+    // The exact issue shape: even an empty sheet crashed with an uncaught exception.
+    val sheet = Sheet("Test")
+    val result = sheet.evaluateArrayFormula("=MIN(IF(A1:A2>0,A1:A2,99))", ref"D1")
+    assert(result.isRight, s"Expected Right, got $result")
+    val (updatedSheet, _) = result.toOption.get
+    assertEquals(updatedSheet(ref"D1").value, CellValue.Number(99))
+  }
+
+  test("GH-333: MIN(IF(...)) selects elementwise over data") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(5))
+      .put(ref"A2", CellValue.Number(-3))
+
+    // cond [TRUE, FALSE] -> [5, 99] -> MIN = 5
+    val result = sheet.evaluateArrayFormula("=MIN(IF(A1:A2>0,A1:A2,99))", ref"D1")
+    assert(result.isRight, s"Expected Right, got $result")
+    val (updatedSheet, _) = result.toOption.get
+    assertEquals(updatedSheet(ref"D1").value, CellValue.Number(5))
+  }
+
+  test("GH-333: MAX(IF(...)) and SUM(IF(...)) aggregate the broadcast array") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(5))
+      .put(ref"A2", CellValue.Number(-3))
+      .put(ref"A3", CellValue.Number(7))
+
+    val maxResult = sheet.evaluateArrayFormula("=MAX(IF(A1:A3>0,A1:A3,0))", ref"D1")
+    assert(maxResult.isRight, s"Expected Right, got $maxResult")
+    assertEquals(maxResult.toOption.get._1(ref"D1").value, CellValue.Number(7))
+
+    val sumResult = sheet.evaluateArrayFormula("=SUM(IF(A1:A3>0,A1:A3,0))", ref"E1")
+    assert(sumResult.isRight, s"Expected Right, got $sumResult")
+    assertEquals(sumResult.toOption.get._1(ref"E1").value, CellValue.Number(12))
+  }
+
+  test("GH-333: MIN(IF(...)) via scalar evaluateFormula also evaluates") {
+    // The aggregate evaluates its argument array-aware even under scalar entry.
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(5))
+      .put(ref"A2", CellValue.Number(-3))
+
+    val result = sheet.evaluateFormula("=MIN(IF(A1:A2>0,A1:A2,99))")
+    assert(result.isRight, s"Expected Right, got $result")
+    assertEquals(result.toOption.get, CellValue.Number(5))
+  }
+
+  test("GH-333: standalone IF over array condition spills") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(5))
+      .put(ref"A2", CellValue.Number(-3))
+
+    val result = sheet.evaluateArrayFormula("=IF(A1:A2>0,A1:A2,99)", ref"C1")
+    assert(result.isRight, s"Expected Right, got $result")
+    val (updatedSheet, spillRange) = result.toOption.get
+    assertEquals(spillRange.height, 2)
+    assertEquals(updatedSheet(ref"C1").value, CellValue.Number(5))
+    assertEquals(updatedSheet(ref"C2").value, CellValue.Number(99))
+  }
+
+  test("GH-333: IF broadcasts scalar branches over the condition array") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(5))
+      .put(ref"A2", CellValue.Number(-3))
+
+    // cond [TRUE, FALSE] -> [1, 0] -> MIN = 0
+    val result = sheet.evaluateArrayFormula("=MIN(IF(A1:A2>0,1,0))", ref"D1")
+    assert(result.isRight, s"Expected Right, got $result")
+    assertEquals(result.toOption.get._1(ref"D1").value, CellValue.Number(0))
+  }
+
+  test("GH-333: scalar IF is unchanged (lazy branch selection)") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", CellValue.Number(5))
+      .put(ref"B1", CellValue.Number(0))
+
+    // The untaken branch would divide by zero; scalar IF must not evaluate it.
+    val result = sheet.evaluateFormula("=IF(A1>0,42,A1/B1)")
+    assert(result.isRight, s"Expected Right, got $result")
+    assertEquals(result.toOption.get, CellValue.Number(42))
+  }

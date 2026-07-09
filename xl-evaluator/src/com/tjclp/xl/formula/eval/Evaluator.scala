@@ -388,24 +388,22 @@ private class EvaluatorImpl(
 
       // ===== Comparison Operators =====
       // GH-197: Use evalComparison for array-aware comparisons
+      // GH-335: polymorphic Excel ordering (number < text < logical, case-insensitive text,
+      // empty coerces) — op interprets the comparison sign from compareCellValues
       case TExpr.Lt(x, y) =>
-        // Less than: numeric comparison (array-aware)
-        evalComparison(x, y, _ < _, sheet, clock, workbook, currentCell)
+        evalComparison(x, y, _ < 0, sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Lte(x, y) =>
-        // Less than or equal: numeric comparison (array-aware)
-        evalComparison(x, y, _ <= _, sheet, clock, workbook, currentCell)
+        evalComparison(x, y, _ <= 0, sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Gt(x, y) =>
-        // Greater than: numeric comparison (array-aware)
-        evalComparison(x, y, _ > _, sheet, clock, workbook, currentCell)
+        evalComparison(x, y, _ > 0, sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Gte(x, y) =>
-        // Greater than or equal: numeric comparison (array-aware)
-        evalComparison(x, y, _ >= _, sheet, clock, workbook, currentCell)
+        evalComparison(x, y, _ >= 0, sheet, clock, workbook, currentCell)
           .asInstanceOf[Either[EvalError, A]]
 
       case TExpr.Eq(x, y) =>
@@ -795,40 +793,49 @@ private class EvaluatorImpl(
     yield output
 
   /**
-   * GH-197: Evaluate comparison with array support.
+   * GH-197/GH-335: Evaluate an ordered comparison (< <= > >=) with array support.
    *
-   * When either operand is a range or array:
-   *   - Convert to arrays and perform element-wise comparison
-   *   - Return ArrayResult of booleans
+   * Operands evaluate polymorphically and compare with Excel's total order
+   * (ArrayArithmetic.compareCellValues): text lexicographic/case-insensitive, number < text <
+   * logical across types, empty coercing to the other operand's zero value. When either operand is
+   * a range or array the comparison broadcasts elementwise into an ArrayResult of booleans; two
+   * scalars return a plain Boolean.
    *
-   * When both operands are scalars:
-   *   - Return plain Boolean (fast path)
+   * @param op
+   *   interprets the comparison sign (e.g. `_ < 0` for Lt)
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalComparison(
-    xExpr: TExpr[BigDecimal],
-    yExpr: TExpr[BigDecimal],
-    op: ArrayArithmetic.CompareOp,
+    xExpr: TExpr[?],
+    yExpr: TExpr[?],
+    op: Int => Boolean,
     sheet: Sheet,
     clock: Clock,
     workbook: Option[Workbook],
     currentCell: Option[ARef]
   ): Either[EvalError, Any] =
+    def broadcastToBool(left: ArrayResult, right: ArrayResult): Either[EvalError, Any] =
+      ArrayArithmetic
+        .broadcastOrderedCompare(left, right, op)
+        .flatMap(collapseUnlessArrayMode("comparison", BindingCoercion.Bool))
+    def single(scalar: Any): ArrayResult =
+      ArrayResult.single(ArrayArithmetic.anyToCellValue(scalar))
     for
       xVal <- evalMaybeArray(xExpr, sheet, clock, workbook, currentCell)
       yVal <- evalMaybeArray(yExpr, sheet, clock, workbook, currentCell)
       result <- (xVal, yVal) match
+        // At least one array -> element-wise comparison with broadcasting
+        case (lArr: ArrayResult, rArr: ArrayResult) => broadcastToBool(lArr, rArr)
+        case (lArr: ArrayResult, scalar) => broadcastToBool(lArr, single(scalar))
+        case (scalar, rArr: ArrayResult) => broadcastToBool(single(scalar), rArr)
         // Both scalars -> plain boolean (fast path)
-        case (x: BigDecimal, y: BigDecimal) =>
-          Right(op(x, y))
-        // At least one array -> element-wise comparison
-        case _ =>
-          for
-            xOp <- toOperand(xVal, sheet)
-            yOp <- toOperand(yVal, sheet)
-            compared <- ArrayArithmetic.broadcastCompare(xOp, yOp, op)
-            output <- collapseUnlessArrayMode("comparison", BindingCoercion.Bool)(compared)
-          yield output
+        case (x, y) =>
+          ArrayArithmetic
+            .compareCellValues(
+              ArrayArithmetic.anyToCellValue(x),
+              ArrayArithmetic.anyToCellValue(y)
+            )
+            .map(op)
     yield result
 
   /**

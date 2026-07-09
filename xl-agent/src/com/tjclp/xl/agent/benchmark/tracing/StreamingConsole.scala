@@ -16,8 +16,12 @@ object StreamingConsole:
   private sealed trait StreamItem
   private object StreamItem:
     case class CaseStart(ctx: StreamContext) extends StreamItem
-    case class CaseComplete(ctx: StreamContext, passed: Boolean, durationMs: Long)
-        extends StreamItem
+    case class CaseComplete(
+      ctx: StreamContext,
+      passed: Boolean,
+      durationMs: Long,
+      error: Option[String]
+    ) extends StreamItem
     case class Event(ctx: StreamContext, traced: TracedEvent) extends StreamItem
     case object Shutdown extends StreamItem
 
@@ -30,6 +34,7 @@ object StreamingConsole:
 
   private val DefaultQueueSize = 2048
   private val DefaultMaxTextChars = 4096
+  private val MaxErrorChars = 200
 
   // ANSI color codes
   private val Reset = "\u001b[0m"
@@ -67,8 +72,13 @@ object StreamingConsole:
   def enqueueCaseStart(ctx: StreamContext): IO[Unit] =
     enqueue(StreamItem.CaseStart(ctx))
 
-  def enqueueCaseComplete(ctx: StreamContext, passed: Boolean, durationMs: Long): IO[Unit] =
-    enqueue(StreamItem.CaseComplete(ctx, passed, durationMs))
+  def enqueueCaseComplete(
+    ctx: StreamContext,
+    passed: Boolean,
+    durationMs: Long,
+    error: Option[String] = None
+  ): IO[Unit] =
+    enqueue(StreamItem.CaseComplete(ctx, passed, durationMs, error))
 
   def enqueueEvent(ctx: StreamContext, traced: TracedEvent): IO[Unit] =
     enqueue(StreamItem.Event(ctx, traced))
@@ -95,9 +105,10 @@ object StreamingConsole:
         case StreamItem.CaseStart(ctx) =>
           pending.fold(IO.unit) { case (pctx, buffer) => flushText(pctx, buffer) } *>
             printCaseHeader(ctx) *> loop(None)
-        case StreamItem.CaseComplete(ctx, passed, durationMs) =>
+        case StreamItem.CaseComplete(ctx, passed, durationMs, error) =>
           pending.fold(IO.unit) { case (pctx, buffer) => flushText(pctx, buffer) } *>
-            printComplete(ctx.skillName, ctx.taskId, ctx.caseNum, passed, durationMs) *> loop(None)
+            printComplete(ctx.skillName, ctx.taskId, ctx.caseNum, passed, durationMs, error) *>
+            loop(None)
         case StreamItem.Event(ctx, traced) =>
           traced.event match
             case AgentEvent.TextOutput(text, _) =>
@@ -216,13 +227,27 @@ object StreamingConsole:
     taskId: String,
     caseNum: Int,
     passed: Boolean,
-    durationMs: Long
+    durationMs: Long,
+    error: Option[String] = None
   ): IO[Unit] =
     IO.blocking {
-      val status = if passed then s"${Green}PASSED" else s"${Red}FAILED"
-      val duration = f"${durationMs / 1000.0}%.1fs"
-      Console.println(s"\n$status$Reset Task $taskId:$caseNum ($duration)")
+      Console.println("\n" + formatCompleteLine(taskId, caseNum, passed, durationMs, error))
     }
+
+  /** Completion line, with the error surfaced on failure so crashes are visible live */
+  private[tracing] def formatCompleteLine(
+    taskId: String,
+    caseNum: Int,
+    passed: Boolean,
+    durationMs: Long,
+    error: Option[String]
+  ): String =
+    val status = if passed then s"${Green}PASSED" else s"${Red}FAILED"
+    val duration = f"${durationMs / 1000.0}%.1fs"
+    val errorSuffix = error.fold("") { e =>
+      s" $Red${e.replace("\n", " ").take(MaxErrorChars)}$Reset"
+    }
+    s"$status$Reset Task $taskId:$caseNum ($duration)$errorSuffix"
 
   private def truncateLines(s: String, maxLines: Int): String =
     val lines = s.split("\n")

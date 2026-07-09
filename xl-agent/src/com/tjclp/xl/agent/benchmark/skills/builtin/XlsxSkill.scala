@@ -8,7 +8,7 @@ import com.tjclp.xl.agent.approach.XlsxApproachStrategy
 import com.tjclp.xl.agent.benchmark.{Evaluator, RangeResult}
 import com.tjclp.xl.agent.benchmark.execution.*
 import com.tjclp.xl.agent.benchmark.grading.{CellMismatch, Score}
-import com.tjclp.xl.agent.benchmark.skills.{Skill, SkillContext, SkillRegistry}
+import com.tjclp.xl.agent.benchmark.skills.{CaseFailure, Skill, SkillContext, SkillRegistry}
 import com.tjclp.xl.agent.benchmark.task.*
 import com.tjclp.xl.agent.benchmark.tracing.ConversationTracer
 
@@ -93,11 +93,58 @@ object XlsxSkill extends Skill:
       engineConfig.outputDir.resolve("outputs").resolve(task.taskIdValue).resolve(name)
     val outputPath = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
 
+    // The fallible section: everything after the tracer exists, so a failure anywhere in
+    // here can still save the partial conversation trace (issue #334)
+    def runCase(tracer: ConversationTracer, startTime: Long): IO[CaseResult] =
+      val agentTask = AgentTask(
+        instruction = task.instruction,
+        inputFile = testCase.inputPath,
+        outputFile = outputPath,
+        answerPosition = task.evaluation.answerPosition
+      )
+      for
+        // Run agent with streaming to capture conversation
+        result <- agent.runStreaming(agentTask, tracer.onEvent)
+
+        rangeResults <- result.outputPath match
+          case Some(path) =>
+            val answerPos = task.evaluation.answerPosition.getOrElse("A1")
+            Evaluator.compare(path, testCase.answerPath, answerPos, engineConfig.xlCliPath)
+          case None =>
+            IO.pure(List(RangeResult("N/A", false, Nil)))
+
+        passed = rangeResults.forall(_.passed)
+
+        endTime <- Clock[IO].monotonic.map(_.toMillis)
+        latencyMs = endTime - startTime
+
+        // Complete and save tracer
+        _ <- tracer.complete(result.usage, passed, result.error)
+        tracePath <- tracer.save()
+
+        mismatches = rangeResults.flatMap(_.mismatches).map { m =>
+          CellMismatch(
+            ref = m.ref,
+            expected = m.expected.toString,
+            actual = m.actual.toString
+          )
+        }
+
+        details =
+          if passed then CaseDetails.filePass
+          else CaseDetails.fileFail(mismatches)
+      yield CaseResult(
+        caseNum = testCase.caseNum,
+        passed = passed,
+        usage = TokenUsage.fromAgentUsage(result.usage),
+        latencyMs = latencyMs,
+        details = details,
+        tracePath = Some(tracePath)
+      )
+
     (for
       _ <- IO.blocking(Files.createDirectories(outputDir))
       startTime <- Clock[IO].monotonic.map(_.toMillis)
-
-      // Create tracer for conversation logs
       tracer <- ConversationTracer.create(
         outputDir = engineConfig.outputDir,
         taskId = task.taskIdValue,
@@ -106,63 +153,10 @@ object XlsxSkill extends Skill:
         streaming = engineConfig.stream,
         model = Some(agentConfig.model)
       )
-
-      agentTask = AgentTask(
-        instruction = task.instruction,
-        inputFile = testCase.inputPath,
-        outputFile = outputPath,
-        answerPosition = task.evaluation.answerPosition
-      )
-
-      // Run agent with streaming to capture conversation
-      result <- agent.runStreaming(agentTask, tracer.onEvent)
-
-      rangeResults <- result.outputPath match
-        case Some(path) =>
-          val answerPos = task.evaluation.answerPosition.getOrElse("A1")
-          Evaluator.compare(path, testCase.answerPath, answerPos, engineConfig.xlCliPath)
-        case None =>
-          IO.pure(List(RangeResult("N/A", false, Nil)))
-
-      passed = rangeResults.forall(_.passed)
-
-      endTime <- Clock[IO].monotonic.map(_.toMillis)
-      latencyMs = endTime - startTime
-
-      // Complete and save tracer
-      _ <- tracer.complete(result.usage, passed, result.error)
-      tracePath <- tracer.save()
-
-      mismatches = rangeResults.flatMap(_.mismatches).map { m =>
-        CellMismatch(
-          ref = m.ref,
-          expected = m.expected.toString,
-          actual = m.actual.toString
-        )
+      result <- runCase(tracer, startTime).handleErrorWith { e =>
+        CaseFailure.withPartialTrace(tracer, testCase.caseNum, startTime, e)
       }
-
-      details =
-        if passed then CaseDetails.filePass
-        else CaseDetails.fileFail(mismatches)
-    yield CaseResult(
-      caseNum = testCase.caseNum,
-      passed = passed,
-      usage = TokenUsage.fromAgentUsage(result.usage),
-      latencyMs = latencyMs,
-      details = details,
-      tracePath = Some(tracePath)
-    )).handleErrorWith { e =>
-      IO.pure(
-        CaseResult(
-          caseNum = testCase.caseNum,
-          passed = false,
-          usage = TokenUsage.zero,
-          latencyMs = 0,
-          details = CaseDetails.NoDetails,
-          error = Some(s"${e.getClass.getSimpleName}: ${e.getMessage}")
-        )
-      )
-    }
+    yield result).handleErrorWith(e => CaseFailure.withoutTrace(testCase.caseNum, e))
 
   /** Run a token comparison test case (TokenBenchmark/analysis style) */
   private def runTokenComparisonCase(
@@ -178,11 +172,46 @@ object XlsxSkill extends Skill:
       engineConfig.outputDir.resolve("outputs").resolve(task.taskIdValue).resolve(name)
     val outputPath = outputDir.resolve(s"${testCase.caseNum}_output.xlsx")
 
+    // The fallible section: everything after the tracer exists, so a failure anywhere in
+    // here can still save the partial conversation trace (issue #334)
+    def runCase(tracer: ConversationTracer, startTime: Long): IO[CaseResult] =
+      val agentTask = AgentTask(
+        instruction = task.instruction,
+        inputFile = testCase.inputPath,
+        outputFile = outputPath,
+        answerPosition = task.evaluation.answerPosition
+      )
+      for
+        // Run agent with streaming to capture conversation
+        result <- agent.runStreaming(agentTask, tracer.onEvent)
+
+        endTime <- Clock[IO].monotonic.map(_.toMillis)
+        latencyMs = endTime - startTime
+
+        usage = TokenUsage.fromAgentUsage(result.usage)
+
+        // For analysis tasks, "success" means agent ran without error.
+        // Actual correctness is determined by LLM grading (via CaseDetails.TokenComparison).
+        agentSucceeded = result.error.isEmpty
+
+        // Complete and save tracer
+        _ <- tracer.complete(result.usage, agentSucceeded, result.error)
+        tracePath <- tracer.save()
+      yield CaseResult(
+        caseNum = testCase.caseNum,
+        passed = agentSucceeded, // Agent ran without error; grading determines correctness
+        usage = usage,
+        latencyMs = latencyMs,
+        details = CaseDetails.token(
+          result.responseText.getOrElse(""),
+          task.evaluation.expectedAnswer
+        ),
+        tracePath = Some(tracePath)
+      )
+
     (for
       _ <- IO.blocking(Files.createDirectories(outputDir))
       startTime <- Clock[IO].monotonic.map(_.toMillis)
-
-      // Create tracer for conversation logs
       tracer <- ConversationTracer.create(
         outputDir = engineConfig.outputDir,
         taskId = task.taskIdValue,
@@ -191,48 +220,7 @@ object XlsxSkill extends Skill:
         streaming = engineConfig.stream,
         model = Some(agentConfig.model)
       )
-
-      agentTask = AgentTask(
-        instruction = task.instruction,
-        inputFile = testCase.inputPath,
-        outputFile = outputPath,
-        answerPosition = task.evaluation.answerPosition
-      )
-
-      // Run agent with streaming to capture conversation
-      result <- agent.runStreaming(agentTask, tracer.onEvent)
-
-      endTime <- Clock[IO].monotonic.map(_.toMillis)
-      latencyMs = endTime - startTime
-
-      usage = TokenUsage.fromAgentUsage(result.usage)
-
-      // For analysis tasks, "success" means agent ran without error.
-      // Actual correctness is determined by LLM grading (via CaseDetails.TokenComparison).
-      agentSucceeded = result.error.isEmpty
-
-      // Complete and save tracer
-      _ <- tracer.complete(result.usage, agentSucceeded, result.error)
-      tracePath <- tracer.save()
-    yield CaseResult(
-      caseNum = testCase.caseNum,
-      passed = agentSucceeded, // Agent ran without error; grading determines correctness
-      usage = usage,
-      latencyMs = latencyMs,
-      details = CaseDetails.token(
-        result.responseText.getOrElse(""),
-        task.evaluation.expectedAnswer
-      ),
-      tracePath = Some(tracePath)
-    )).handleErrorWith { e =>
-      IO.pure(
-        CaseResult(
-          caseNum = testCase.caseNum,
-          passed = false,
-          usage = TokenUsage.zero,
-          latencyMs = 0,
-          details = CaseDetails.NoDetails,
-          error = Some(s"${e.getClass.getSimpleName}: ${e.getMessage}")
-        )
-      )
-    }
+      result <- runCase(tracer, startTime).handleErrorWith { e =>
+        CaseFailure.withPartialTrace(tracer, testCase.caseNum, startTime, e)
+      }
+    yield result).handleErrorWith(e => CaseFailure.withoutTrace(testCase.caseNum, e))
