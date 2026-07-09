@@ -231,11 +231,18 @@ object StreamingConsole:
     error: Option[String] = None
   ): IO[Unit] =
     IO.blocking {
-      Console.println("\n" + formatCompleteLine(taskId, caseNum, passed, durationMs, error))
+      Console.println(
+        "\n" + formatCompleteLine(skillName, taskId, caseNum, passed, durationMs, error)
+      )
     }
 
-  /** Completion line, with the error surfaced on failure so crashes are visible live */
+  /**
+   * Completion line, with the error surfaced on failure so crashes are visible live. Carries the
+   * skill in the same '[skill task.case]' shape as event lines, so parallel multi-skill streams
+   * stay attributable (issue #340).
+   */
   private[tracing] def formatCompleteLine(
+    skillName: String,
     taskId: String,
     caseNum: Int,
     passed: Boolean,
@@ -243,11 +250,12 @@ object StreamingConsole:
     error: Option[String]
   ): String =
     val status = if passed then s"${Green}PASSED" else s"${Red}FAILED"
+    val ctxStr = formatContext(StreamContext(taskId, skillName, caseNum))
     val duration = f"${durationMs / 1000.0}%.1fs"
     val errorSuffix = error.fold("") { e =>
       s" $Red${e.replace("\n", " ").take(MaxErrorChars)}$Reset"
     }
-    s"$status$Reset Task $taskId:$caseNum ($duration)$errorSuffix"
+    s"$status$Reset [$ctxStr] ($duration)$errorSuffix"
 
   private def truncateLines(s: String, maxLines: Int): String =
     val lines = s.split("\n")

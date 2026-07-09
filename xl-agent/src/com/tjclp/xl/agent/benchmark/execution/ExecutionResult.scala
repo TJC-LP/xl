@@ -146,13 +146,21 @@ object ExecutionResult:
     latencyMs: Long
   ): ExecutionResult =
     val passed = caseResults.count(_.passed)
+    // Every case errored: an execution failure, not a graded fail — surface the first
+    // error at task level so the console renders red ✗ (issue #340). Partial errors
+    // stay case-level only (the task remains a graded result).
+    val error =
+      if caseResults.nonEmpty && caseResults.forall(_.error.isDefined) then
+        caseResults.flatMap(_.error).headOption
+      else None
     ExecutionResult(
       taskId = taskId,
       skill = skill,
       caseResults = caseResults,
       aggregateScore = Score.FractionalScore(passed, caseResults.length),
       usage = usage,
-      latencyMs = latencyMs
+      latencyMs = latencyMs,
+      error = error
     )
 
 // ============================================================================

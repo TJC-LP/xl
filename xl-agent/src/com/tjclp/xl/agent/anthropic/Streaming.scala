@@ -20,12 +20,34 @@ case class ProcessorState(
   prevCumulativeOutput: Long = 0L,
   lastCumulativeInput: Long = 0L,
   lastCumulativeOutput: Long = 0L,
+  // True between message_start and message_stop: the turn's usage has not been
+  // reported by a TurnComplete yet (truncated-stream recovery, issue #340)
+  turnOpen: Boolean = false,
   // Sub-turn tracking for code execution (assistant → tool → result cycles)
   subTurnNum: Int = 0,
   subTurnStartTime: Option[Instant] = None,
   subTurnAnchorTime: Option[Instant] = None,
   pendingToolCall: Boolean = false
-)
+):
+  /**
+   * Usage accrued in the currently open turn, or None once message_stop reported it.
+   *
+   * Pure decision behind [[StreamEventProcessor.flushPartialTurn]]: only an open turn may emit a
+   * synthetic TurnComplete, otherwise the last completed turn would be double-counted.
+   */
+  def openTurnUsage(now: Instant): Option[TurnUsage] =
+    Option.when(turnOpen) {
+      TurnUsage(
+        turnNum = turnNum,
+        inputTokens = lastCumulativeInput - prevCumulativeInput,
+        outputTokens = lastCumulativeOutput - prevCumulativeOutput,
+        cumulativeInputTokens = lastCumulativeInput,
+        cumulativeOutputTokens = lastCumulativeOutput,
+        durationMs = turnStartTime
+          .map(start => java.time.Duration.between(start, now).toMillis)
+          .getOrElse(0L)
+      )
+    }
 
 /** Processes streaming events from the Anthropic API and emits AgentEvents */
 class StreamEventProcessor private (
@@ -95,6 +117,25 @@ class StreamEventProcessor private (
     val messageStopIO = processMessageStop(event)
     textIO *> toolStartIO *> toolResultIO *> toolStopIO *>
       messageStartIO *> messageDeltaIO *> messageStopIO
+
+  /**
+   * Emit a synthetic TurnComplete carrying the usage accrued in a turn cut off mid-stream.
+   *
+   * TurnComplete normally fires only on message_stop, so a stream that dies mid-turn loses all
+   * token accounting for the open turn (issue #340). Called best-effort when the SSE stream fails;
+   * a no-op when no turn is open, so completed turns are never double-counted.
+   */
+  def flushPartialTurn: IO[Unit] =
+    for
+      now <- IO.realTimeInstant
+      partial <- state.modify { s =>
+        (s.copy(turnOpen = false), s.openTurnUsage(now))
+      }
+      _ <- partial.fold(IO.unit) { usage =>
+        val turnEvent = AgentEvent.TurnComplete(usage)
+        eventQueue.offer(turnEvent) *> onEvent(turnEvent)
+      }
+    yield ()
 
   private def processTextDelta(event: BetaRawMessageStreamEvent): IO[Unit] =
     event.contentBlockDelta().toScala match
@@ -328,6 +369,7 @@ class StreamEventProcessor private (
               prevCumulativeInput = s.lastCumulativeInput,
               prevCumulativeOutput = s.lastCumulativeOutput,
               lastCumulativeInput = usage.inputTokens(),
+              turnOpen = true,
               subTurnStartTime = None,
               subTurnAnchorTime = Some(now),
               pendingToolCall = false
@@ -381,6 +423,8 @@ class StreamEventProcessor private (
           turnEvent = AgentEvent.TurnComplete(usage)
           _ <- eventQueue.offer(turnEvent)
           _ <- onEvent(turnEvent)
+          // The turn's usage is reported; a later flushPartialTurn must not repeat it
+          _ <- state.update(_.copy(turnOpen = false))
           _ <- IO.whenA(verbose) {
             IO {
               println(

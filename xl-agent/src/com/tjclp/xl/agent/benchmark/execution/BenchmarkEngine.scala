@@ -3,12 +3,13 @@ package com.tjclp.xl.agent.benchmark.execution
 import cats.effect.{Clock, IO}
 import cats.effect.syntax.concurrent.*
 import cats.syntax.all.*
-import com.tjclp.xl.agent.AgentConfig
+import com.tjclp.xl.agent.{AgentConfig, TokenUsage as AgentTokenUsage}
 import com.tjclp.xl.agent.anthropic.AnthropicClientIO
 import com.tjclp.xl.agent.benchmark.grading.*
 import com.tjclp.xl.agent.benchmark.reporting.TokenSummary
-import com.tjclp.xl.agent.benchmark.skills.{Skill, SkillContext}
+import com.tjclp.xl.agent.benchmark.skills.{CaseFailure, Skill, SkillContext}
 import com.tjclp.xl.agent.benchmark.task.*
+import com.tjclp.xl.agent.benchmark.tracing.ConversationTracer
 
 import java.nio.file.Path
 import java.time.{Duration, Instant}
@@ -324,6 +325,10 @@ private class DefaultBenchmarkEngine(
 
   /**
    * Execute a single work unit (one case for one skill on one task).
+   *
+   * Skills own their failure paths and save partial traces themselves (see CaseFailure); this
+   * engine-level handler is a last resort for Skill implementations that raise outside their own
+   * guarded sections. No tracer exists here, so it records a metadata-only failure trace.
    */
   private def executeWorkUnit(
     unit: WorkUnit,
@@ -336,21 +341,49 @@ private class DefaultBenchmarkEngine(
         WorkUnitResult(unit.taskId, unit.skillName, caseResult)
       }
       .handleErrorWith { e =>
-        IO.pure(
-          WorkUnitResult(
-            unit.taskId,
-            unit.skillName,
-            CaseResult(
-              caseNum = unit.testCase.caseNum,
-              passed = false,
-              usage = TokenUsage.zero,
-              latencyMs = 0,
-              details = CaseDetails.NoDetails,
-              error = Some(s"Execution failed: ${e.getClass.getSimpleName}: ${e.getMessage}")
-            )
-          )
-        )
+        lastResortFailure(unit, agentConfig, config, e)
       }
+
+  /**
+   * Total fallback for a work unit whose Skill raised: best-effort save of a metadata-only trace
+   * (error + model, zero events) so even third-party skill crashes leave forensics on disk (issue
+   * #340).
+   */
+  private def lastResortFailure(
+    unit: WorkUnit,
+    agentConfig: AgentConfig,
+    config: EngineConfig,
+    error: Throwable
+  ): IO[WorkUnitResult] =
+    val message = s"Execution failed: ${CaseFailure.describe(error)}"
+    val saveTrace = for
+      tracer <- ConversationTracer.create(
+        outputDir = config.outputDir,
+        taskId = unit.task.taskIdValue,
+        skillName = unit.skillName,
+        caseNum = unit.testCase.caseNum,
+        streaming = false,
+        model = Some(agentConfig.model)
+      )
+      _ <- tracer.complete(AgentTokenUsage.zero, passed = false, error = Some(message)).attempt
+      saved <- tracer.save().attempt
+    yield saved.toOption
+
+    saveTrace.handleError(_ => None).map { tracePath =>
+      WorkUnitResult(
+        unit.taskId,
+        unit.skillName,
+        CaseResult(
+          caseNum = unit.testCase.caseNum,
+          passed = false,
+          usage = TokenUsage.zero,
+          latencyMs = 0,
+          details = CaseDetails.NoDetails,
+          tracePath = tracePath,
+          error = Some(message)
+        )
+      )
+    }
 
   /**
    * Aggregate work unit results by (task, skill) and apply grading.

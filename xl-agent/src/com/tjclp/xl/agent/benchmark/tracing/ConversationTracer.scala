@@ -35,7 +35,9 @@ case class ConversationMetadata(
   endTime: Option[Instant] = None,
   usage: Option[TokenUsage] = None,
   passed: Option[Boolean] = None,
-  error: Option[String] = None
+  error: Option[String] = None,
+  /** Final API stop_reason (wire value); non-clean stops also surface via error (issue #340) */
+  stopReason: Option[String] = None
 ):
   def durationMs: Long =
     endTime.map(e => Duration.between(startTime, e).toMillis).getOrElse(0L)
@@ -52,7 +54,8 @@ object ConversationMetadata:
       "durationMs" -> m.durationMs.asJson,
       "usage" -> m.usage.asJson,
       "passed" -> m.passed.asJson,
-      "error" -> m.error.asJson
+      "error" -> m.error.asJson,
+      "stopReason" -> m.stopReason.asJson
     )
   }
 
@@ -165,7 +168,8 @@ class ConversationTracer private (
   def complete(
     usage: TokenUsage,
     passed: Boolean,
-    error: Option[String] = None
+    error: Option[String] = None,
+    stopReason: Option[String] = None
   ): IO[Unit] =
     for
       now <- IO.realTimeInstant
@@ -176,7 +180,8 @@ class ConversationTracer private (
           endTime = Some(now),
           usage = Some(usage),
           passed = Some(passed),
-          error = error
+          error = error,
+          stopReason = stopReason
         )
       )
       _ <- IO.whenA(streaming)(

@@ -65,6 +65,7 @@ object UnifiedRunner extends IOApp:
 
         agentConfig = AgentConfig(
           model = config.model,
+          maxTokens = config.maxTokens,
           verbose = false,
           xlBinaryPath = config.xlBinaryPath,
           xlSkillPath = config.xlSkillPath,
@@ -260,7 +261,7 @@ ${"=" * 60}
   // CLI Argument Parsing
   // --------------------------------------------------------------------------
 
-  private def parseArgs(args: List[String]): IO[UnifiedConfig] =
+  private[runner] def parseArgs(args: List[String]): IO[UnifiedConfig] =
     IO {
       @annotation.tailrec
       def parse(remaining: List[String], config: UnifiedConfig): UnifiedConfig =
@@ -293,6 +294,8 @@ ${"=" * 60}
             parse(rest, config.copy(tasksFile = Some(Path.of(value))))
           case "--model" :: value :: rest =>
             parse(rest, config.copy(model = value))
+          case "--max-tokens" :: value :: rest =>
+            parse(rest, config.copy(maxTokens = value.toInt))
           case "--stream" :: rest =>
             parse(rest, config.copy(stream = true))
           case "--no-grade" :: rest =>
@@ -356,6 +359,8 @@ ${"=" * 60}
       |
       |Execution:
       |  --model <name>         Model to use (default: ${Models.DefaultAgent})
+      |  --max-tokens <n>       Per-iteration token budget; adaptive thinking counts
+      |                         against it (default: ${AgentConfig.DefaultMaxTokens})
       |  --parallelism <n>      Number of parallel tasks (default: 4)
       |  --xl-cli <path>        Path to xl CLI for local grading (default: xl)
       |  --xl-binary <path>     Path to xl binary for upload (default: auto-download)
@@ -392,6 +397,7 @@ case class UnifiedConfig(
   tasksFile: Option[Path] = None,
   outputDir: Path = Path.of("results", BenchmarkUtils.formatTimestamp),
   model: String = Models.DefaultAgent,
+  maxTokens: Int = AgentConfig.DefaultMaxTokens,
   parallelism: Int = 4,
   stream: Boolean = false,
   enableGrading: Boolean = true,
