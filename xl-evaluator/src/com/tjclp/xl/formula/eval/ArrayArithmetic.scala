@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 
 /**
@@ -12,6 +12,12 @@ import com.tjclp.xl.sheets.Sheet
  *   - 1xN * MxN -> broadcast row across M rows
  *   - Mx1 * MxN -> broadcast column across N columns
  *   - MxN * MxN -> element-wise (dimensions must match)
+ *
+ * GH-337: errors propagate ELEMENTWISE through the broadcasts (compare, arithmetic, IF), matching
+ * Excel: a carried `CellValue.Error` input element (left operand's error wins) or an element-local
+ * failure (non-numeric text, division by zero) becomes an error OUTPUT element via
+ * [[EvalError.toCellError]] instead of failing the whole formula. The broadcasts return Left only
+ * for broadcast-dimension mismatch; aggregators decide whether consumed error elements propagate.
  */
 object ArrayArithmetic:
 
@@ -96,6 +102,10 @@ object ArrayArithmetic:
   /**
    * Perform broadcasting binary operation.
    *
+   * GH-337: the array arms operate per CellValue element, carrying errors elementwise (see
+   * [[applyOpCarrying]]) — only the scalar*scalar fast path keeps the whole-result Left for element
+   * failures (scalar `=10/0` stays a formula error, matching Excel's scalar semantics).
+   *
    * @param left
    *   Left operand (scalar or array)
    * @param right
@@ -115,17 +125,13 @@ object ArrayArithmetic:
       case (ArrayOperand.Scalar(l), ArrayOperand.Scalar(r)) =>
         op(l, r).map(ArrayOperand.Scalar(_))
 
-      // scalar * array -> broadcast scalar to all elements
+      // scalar * array -> the scalar broadcasts as a 1x1 array (keeps operand order for op)
       case (ArrayOperand.Scalar(s), ArrayOperand.Array(arr)) =>
-        arrayToNumeric(arr).flatMap { nums =>
-          traverseVV(nums)(v => op(s, v)).map(toArrayResult).map(ArrayOperand.Array(_))
-        }
+        broadcastArrays(ArrayResult.single(CellValue.Number(s)), arr, op).map(ArrayOperand.Array(_))
 
-      // array * scalar -> broadcast scalar to all elements
+      // array * scalar -> the scalar broadcasts as a 1x1 array (keeps operand order for op)
       case (ArrayOperand.Array(arr), ArrayOperand.Scalar(s)) =>
-        arrayToNumeric(arr).flatMap { nums =>
-          traverseVV(nums)(v => op(v, s)).map(toArrayResult).map(ArrayOperand.Array(_))
-        }
+        broadcastArrays(arr, ArrayResult.single(CellValue.Number(s)), op).map(ArrayOperand.Array(_))
 
       // array * array -> broadcast with dimension matching
       case (ArrayOperand.Array(l), ArrayOperand.Array(r)) =>
@@ -140,7 +146,9 @@ object ArrayArithmetic:
    * number < text < logical — text never parses as a number under comparison (unlike arithmetic).
    * Empty cells coerce to the other operand's zero value (0 against numbers, "" against text, FALSE
    * against booleans; two empties are equal). Error values refuse to compare with a clean Left
-   * naming the Excel error code.
+   * naming the Excel error code — on the SCALAR path only: the array broadcasts pre-check both
+   * operands with [[carriedError]] and carry error elements through instead (GH-337), so this
+   * refusal surfaces solely from scalar comparisons like `=A1<B1` on an error cell.
    *
    * @return
    *   the comparison sign (negative, zero, positive), or Left for incomparable values
@@ -191,10 +199,14 @@ object ArrayArithmetic:
    * GH-335: broadcast an ordered comparison over two arrays elementwise (scalar operands wrap as
    * 1x1 arrays and broadcast like any other dimension-1 axis).
    *
+   * GH-337: error elements carry through elementwise — a carried error on either operand (left
+   * wins) becomes the OUTPUT element, and a residual per-element comparison refusal (e.g. an
+   * uncomparable value) demotes to #VALUE!. Returns Left ONLY for broadcast-dimension mismatch.
+   *
    * @param op
    *   interprets the comparison sign from [[compareCellValues]] (e.g. `_ < 0` for Lt)
    * @return
-   *   ArrayResult of CellValue.Bool values
+   *   ArrayResult of CellValue.Bool values with carried CellValue.Error elements
    */
   def broadcastOrderedCompare(
     left: ArrayResult,
@@ -212,7 +224,14 @@ object ArrayArithmetic:
             (lVal, rVal)
           }
         }
-      ) { case (l, r) => compareCellValues(l, r).map(c => CellValue.Bool(op(c))) }
+      ) { case (l, r) =>
+        carriedError(l).orElse(carriedError(r)) match
+          case Some(err) => Right(CellValue.Error(err))
+          case None =>
+            compareCellValues(l, r) match
+              case Right(sign) => Right(CellValue.Bool(op(sign)))
+              case Left(e) => toErrorElement(e)
+      }
     yield ArrayResult(result)
 
   /**
@@ -220,6 +239,10 @@ object ArrayArithmetic:
    *
    * Works on CellValue directly for polymorphic equality (strings, numbers, booleans). Used by
    * Eq/Neq operators.
+   *
+   * GH-337: a carried error on either operand (left wins) becomes the OUTPUT element — errors are
+   * never "equal" or "unequal", they propagate (negate does not flip them). Returns Left ONLY for
+   * broadcast-dimension mismatch.
    */
   def broadcastEqualityCompare(
     left: ArrayResult,
@@ -230,10 +253,7 @@ object ArrayArithmetic:
       case Right(scalar) =>
         // Array vs scalar - compare each element to the scalar
         val scalarCV = anyToCellValue(scalar)
-        Right(ArrayResult(left.values.map(_.map { cv =>
-          val eq = cellValueEquals(cv, scalarCV)
-          CellValue.Bool(if negate then !eq else eq)
-        })))
+        Right(ArrayResult(left.values.map(_.map(cv => equalityElement(cv, scalarCV, negate)))))
       case Left(rightArr) =>
         // Array vs array - broadcast
         for
@@ -244,11 +264,18 @@ object ArrayArithmetic:
             (0 until outCols).toVector.map { col =>
               val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
               val rVal = getWithBroadcastCV(rightArr.values, row, col, rightArr.rows, rightArr.cols)
-              val eq = cellValueEquals(lVal, rVal)
-              CellValue.Bool(if negate then !eq else eq)
+              equalityElement(lVal, rVal, negate)
             }
           }
           ArrayResult(result)
+
+  /** GH-337: one equality output element — carried errors win (left first), then Bool equality. */
+  private def equalityElement(l: CellValue, r: CellValue, negate: Boolean): CellValue =
+    carriedError(l).orElse(carriedError(r)) match
+      case Some(err) => CellValue.Error(err)
+      case None =>
+        val eq = cellValueEquals(l, r)
+        CellValue.Bool(if negate then !eq else eq)
 
   /** Get CellValue with broadcasting. */
   private def getWithBroadcastCV(
@@ -263,6 +290,51 @@ object ArrayArithmetic:
     arr(r)(c)
 
   /**
+   * GH-337: the Excel error an element carries, if any — a `CellValue.Error` directly or cached
+   * inside a formula value. Package-visible so the aggregate error guards (FunctionSpecsAggregate)
+   * share the exact matching semantics of the broadcasts.
+   */
+  private[formula] def carriedError(cv: CellValue): Option[CellError] = cv match
+    case CellValue.Error(err) => Some(err)
+    case CellValue.Formula(_, Some(cached)) => carriedError(cached)
+    case _ => None
+
+  /**
+   * GH-337: demote an element-local failure to the error ELEMENT it carries, via the
+   * [[EvalError.toCellError]] table. Failures with no element form (CircularRef — structural, never
+   * element-local) stay a fatal Left.
+   */
+  private def toErrorElement(e: EvalError): Either[EvalError, CellValue] =
+    EvalError.toCellError(e) match
+      case Some(err) => Right(CellValue.Error(err))
+      case None => Left(e)
+
+  /**
+   * GH-337: apply a numeric binary op to two elements, carrying errors elementwise: a carried error
+   * on either operand wins (left first), and element-local failures (non-numeric text → #VALUE!,
+   * division by zero → #DIV/0!) become error elements rather than failing the whole broadcast.
+   * Accepted micro-divergence: pow overflow arrives as a generic EvalFailed and surfaces as #VALUE!
+   * (Excel: #NUM!).
+   */
+  private def applyOpCarrying(
+    l: CellValue,
+    r: CellValue,
+    op: BinaryOp
+  ): Either[EvalError, CellValue] =
+    carriedError(l).orElse(carriedError(r)) match
+      case Some(err) => Right(CellValue.Error(err))
+      case None =>
+        val computed =
+          for
+            ln <- cellValueToNumeric(l)
+            rn <- cellValueToNumeric(r)
+            v <- op(ln, rn)
+          yield CellValue.Number(v)
+        computed match
+          case Right(cv) => Right(cv)
+          case Left(e) => toErrorElement(e)
+
+  /**
    * GH-333: elementwise IF over an array condition (Excel CSE semantics).
    *
    * The condition broadcasts against both branch arrays (scalar branches arrive as 1x1 arrays and
@@ -271,7 +343,9 @@ object ArrayArithmetic:
    * the resulting array.
    *
    * Condition elements follow Excel truthiness (booleans as-is, numbers zero/non-zero, empty is
-   * FALSE); text or error elements refuse with a clean Left.
+   * FALSE). GH-337: a condition element carrying an error emits THAT error at its output position
+   * (masking whatever the branches hold there); a text condition element demotes to a #VALUE!
+   * element. Returns Left ONLY for broadcast-dimension mismatch.
    */
   def broadcastIf(
     cond: ArrayResult,
@@ -289,10 +363,17 @@ object ArrayArithmetic:
         }
       ) { case (row, col) =>
         val condCV = getWithBroadcastCV(cond.values, row, col, cond.rows, cond.cols)
-        conditionTruthy("IF condition", condCV).map { truthy =>
-          if truthy then getWithBroadcastCV(ifTrue.values, row, col, ifTrue.rows, ifTrue.cols)
-          else getWithBroadcastCV(ifFalse.values, row, col, ifFalse.rows, ifFalse.cols)
-        }
+        carriedError(condCV) match
+          case Some(err) => Right(CellValue.Error(err))
+          case None =>
+            conditionTruthy("IF condition", condCV) match
+              case Right(truthy) =>
+                Right(
+                  if truthy then
+                    getWithBroadcastCV(ifTrue.values, row, col, ifTrue.rows, ifTrue.cols)
+                  else getWithBroadcastCV(ifFalse.values, row, col, ifFalse.rows, ifFalse.cols)
+                )
+              case Left(e) => toErrorElement(e)
       }
     yield ArrayResult(result)
 
@@ -301,6 +382,11 @@ object ArrayArithmetic:
    * array condition) and the logical functions' array paths (AND/OR aggregation, NOT broadcast):
    * booleans as-is, numbers zero/non-zero, empty is FALSE (the ScalarCoercion Bool conventions);
    * text and errors refuse cleanly with a Left naming the position via `label`.
+   *
+   * GH-337: the refusal Left is the ABORT convention of the logical folds (AND/OR/NOT keep it — a
+   * text or error element fails those formulas whole). broadcastIf instead pre-checks errors with
+   * [[carriedError]] and demotes its residual refusals to error elements, so its condition failures
+   * stay positional.
    */
   def conditionTruthy(label: String, cv: CellValue): Either[EvalError, Boolean] = cv match
     case CellValue.Bool(b) => Right(b)
@@ -313,8 +399,9 @@ object ArrayArithmetic:
 
   /**
    * GH-338: truthiness of every element (row-major), for the AND/OR aggregation folds (AND =
-   * forall, OR = exists). The first refusing element (text/error) short-circuits with its Left,
-   * consistent with broadcastIf's whole-array traversal.
+   * forall, OR = exists). The first refusing element (text/error) short-circuits with its Left —
+   * the logical functions keep abort semantics, deliberately NOT the positional error carriage
+   * broadcastIf gained in GH-337.
    */
   def truthyElements(label: String, arr: ArrayResult): Either[EvalError, Vector[Boolean]] =
     traverseV(arr.values.flatten)(cv => conditionTruthy(label, cv))
@@ -348,13 +435,15 @@ object ArrayArithmetic:
    * `=A1:A3=B1:B3` equality use identical semantics. GH-335: defined via [[compareCellValues]] so
    * = and < agree — empty cells equal 0 / "" / FALSE, dates equal their serial number, and
    * cross-type values (which never coerce under comparison) are simply unequal. Error values
-   * equal nothing.
+   * equal nothing on this scalar path; the equality broadcast pre-checks them with
+   * [[carriedError]] and carries error elements instead (GH-337).
    */
   def cellValueEquals(a: CellValue, b: CellValue): Boolean =
     compareCellValues(a, b).fold(_ => false, _ == 0)
 
   /**
-   * Broadcast two arrays together.
+   * Broadcast two arrays together, operating per CellValue element (GH-337: errors carry
+   * elementwise via [[applyOpCarrying]]; Left ONLY for broadcast-dimension mismatch).
    */
   private def broadcastArrays(
     left: ArrayResult,
@@ -365,18 +454,16 @@ object ArrayArithmetic:
     for
       outRows <- broadcastDim(left.rows, right.rows, "rows")
       outCols <- broadcastDim(left.cols, right.cols, "columns")
-      leftNums <- arrayToNumeric(left)
-      rightNums <- arrayToNumeric(right)
       result <- traverseVV(
         (0 until outRows).toVector.map { row =>
           (0 until outCols).toVector.map { col =>
-            val lVal = getWithBroadcast(leftNums, row, col, left.rows, left.cols)
-            val rVal = getWithBroadcast(rightNums, row, col, right.rows, right.cols)
+            val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
+            val rVal = getWithBroadcastCV(right.values, row, col, right.rows, right.cols)
             (lVal, rVal)
           }
         }
-      ) { case (l, r) => op(l, r) }
-    yield toArrayResult(result)
+      ) { case (l, r) => applyOpCarrying(l, r, op) }
+    yield ArrayResult(result)
 
   /**
    * Compute broadcast output dimension for a single axis.
@@ -392,26 +479,6 @@ object ArrayArithmetic:
           None
         )
       )
-
-  /**
-   * Get value with broadcasting (dimensions of 1 repeat).
-   */
-  private def getWithBroadcast(
-    arr: Vector[Vector[BigDecimal]],
-    row: Int,
-    col: Int,
-    arrRows: Int,
-    arrCols: Int
-  ): BigDecimal =
-    val r = if arrRows == 1 then 0 else row
-    val c = if arrCols == 1 then 0 else col
-    arr(r)(c)
-
-  /**
-   * Convert numeric matrix to ArrayResult.
-   */
-  private def toArrayResult(nums: Vector[Vector[BigDecimal]]): ArrayResult =
-    ArrayResult(nums.map(_.map(n => CellValue.Number(n))))
 
   // ===== Helper: traverse for Vector[Vector[A]] =====
   // We don't have Cats, so implement manually

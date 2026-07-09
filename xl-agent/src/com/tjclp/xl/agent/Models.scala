@@ -12,13 +12,18 @@ import java.nio.file.Path
 case class AgentConfig(
   model: String = benchmark.Models.DefaultAgent,
   // Claude 5 models run adaptive thinking by default; thinking tokens count
-  // against maxTokens, so leave headroom beyond the expected response size.
-  maxTokens: Int = 16384,
+  // against maxTokens, so leave generous headroom beyond the expected response
+  // size (a 16K cap truncated a real thinking-heavy benchmark turn, issue #340).
+  maxTokens: Int = AgentConfig.DefaultMaxTokens,
   verbose: Boolean = false,
   xlBinaryPath: Option[Path] = None,
   xlSkillPath: Option[Path] = None,
   forceUpload: Boolean = false
 )
+
+object AgentConfig:
+  /** Default per-iteration token budget, shared with the CLI's --max-tokens flag */
+  val DefaultMaxTokens: Int = 32768
 
 /** Token usage from API (cache fields track prompt-caching activity) */
 case class TokenUsage(
@@ -205,7 +210,9 @@ case class AgentResult(
   latencyMs: Long,
   transcript: Vector[AgentEvent],
   responseText: Option[String] = None,
-  error: Option[String] = None
+  error: Option[String] = None,
+  /** Final API stop_reason (wire value, e.g. "end_turn", "max_tokens"); see StopReasonPolicy */
+  stopReason: Option[String] = None
 )
 
 object AgentResult:
@@ -217,7 +224,8 @@ object AgentResult:
       "usage" -> Encoder[TokenUsage].apply(r.usage),
       "latencyMs" -> Json.fromLong(r.latencyMs),
       "responseText" -> r.responseText.fold(Json.Null)(Json.fromString),
-      "error" -> r.error.fold(Json.Null)(Json.fromString)
+      "error" -> r.error.fold(Json.Null)(Json.fromString),
+      "stopReason" -> r.stopReason.fold(Json.Null)(Json.fromString)
     )
   }
 

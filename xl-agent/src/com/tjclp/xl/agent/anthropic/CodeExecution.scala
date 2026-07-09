@@ -101,6 +101,15 @@ object CodeExecution:
               accumulator.message()
             finally streamResponse.close()
           }
+          .onError { case _ =>
+            // Best-effort recovery of the open turn's token usage when the stream dies
+            // mid-turn (issue #340). Routed through the same sequential dispatcher so it
+            // runs after every already-submitted stream event (a pending message_stop
+            // must close the turn first, or its usage would be double-counted).
+            IO.fromFuture(IO(dispatcher.unsafeToFuture(streamProcessor.flushPartialTurn)))
+              .attempt
+              .void
+          }
           .adaptError { case e: Exception =>
             AgentError.StreamingError(e.getMessage)
           }

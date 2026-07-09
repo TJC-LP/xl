@@ -138,6 +138,11 @@ trait Skill:
    * single-case execution. The default implementation delegates to the full execute() method for
    * backward compatibility, but skills should override this for better efficiency.
    *
+   * Failure contract: implementations should handle their own failures and return a failing
+   * CaseResult with the conversation trace saved (see [[CaseFailure]] for total handlers). If an
+   * implementation raises instead, the engine's last-resort fallback only records a metadata-only
+   * failure trace — the conversation collected before the crash is lost.
+   *
    * @param testCase
    *   The specific test case to execute
    * @param task

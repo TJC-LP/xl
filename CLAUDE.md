@@ -147,6 +147,7 @@ The `xl-agent` module runs AI agent benchmarks comparing different Excel manipul
 | `--task <id>` | Run specific task ID (can repeat) |
 | `--skills <list>` | Comma-separated: `xl`, `xlsx`, or `xl,xlsx` |
 | `--parallelism <n>` | Number of parallel work units (default: 4) |
+| `--max-tokens <n>` | Per-iteration output cap for agent turns (default: 32768; thinking counts against it) |
 | `--stream` | Real-time colored console output |
 | `--force-upload` | Bypass file cache, re-upload skill |
 | `--output-dir <path>` | Results directory (default: `results/`) |

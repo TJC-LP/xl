@@ -81,6 +81,9 @@ object Agent:
         // Extract response info
         responseText = CodeExecution.extractResponseText(response)
         outputFileId = CodeExecution.extractOutputFileId(response, config.verbose)
+        // Final stop_reason of the accumulated message: max_tokens/refusal/pause_turn
+        // silently end the code-execution loop and must not read as clean completions
+        stopReason = response.stopReason().toScala.map(_.asString)
         usage = TokenUsage(
           inputTokens = response.usage().inputTokens(),
           outputTokens = response.usage().outputTokens(),
@@ -107,7 +110,8 @@ object Agent:
         latencyMs = endTime - startTime
       // For file modification tasks, success = output file created.
       // For analysis tasks (no expected output), success = agent completed.
-      // Don't set error for missing output files - let grading layer handle this.
+      // Don't set error for missing output files - let grading layer handle this;
+      // error only reports non-clean stops (truncation/refusal), issue #340.
       yield AgentResult(
         success = outputPath.isDefined || responseText.nonEmpty,
         outputFileId = outputFileId,
@@ -116,7 +120,8 @@ object Agent:
         latencyMs = latencyMs,
         transcript = collectedEvents,
         responseText = Some(responseText),
-        error = None // Grading determines correctness, not output file presence
+        error = StopReasonPolicy.errorFor(stopReason),
+        stopReason = stopReason
       )
 
     private def drainQueue(

@@ -13,6 +13,27 @@ import com.tjclp.xl.formula.{Clock, Arity}
 import com.tjclp.xl.cells.{CellError, CellValue}
 
 trait FunctionSpecsConditional extends FunctionSpecsBase:
+
+  /**
+   * GH-339: demote a whole-result evaluation failure to a 1x1 carried-error element (via the
+   * [[EvalError.toCellError]] table) so an error from an entirely-unselected IF/IFS branch no
+   * longer poisons the formula — broadcastIf selects it away positionally, and it only surfaces
+   * where selected (as an error element, or loudly via a consuming aggregate). Failures with no
+   * element form (CircularRef) stay a fatal Left.
+   */
+  private def carryLeft(result: Either[EvalError, Any]): Either[EvalError, Any] =
+    result match
+      case Left(e) =>
+        EvalError
+          .toCellError(e)
+          .map(err => ArrayResult.single(CellValue.Error(err)): Any)
+          .toRight(e)
+      case right => right
+
+  /** GH-339: evaluate an IF/IFS branch expression, carrying a failure as a 1x1 error element. */
+  private def evalBranchCarrying(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
+    carryLeft(evalMaybeArrayArg(ctx, expr))
+
   val ifFn: FunctionSpec[Any] { type Args = IfArgs } =
     FunctionSpec.simple[Any, IfArgs]("IF", Arity.three) { (args, ctx) =>
       val (condExpr, ifTrueExpr, ifFalseExpr) = args
@@ -20,13 +41,16 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
       // MIN(IF(A1:A10>0,…)) CSE idiom) yields an ArrayResult that must broadcast elementwise —
       // collapsing it to a scalar (the old ctx.evalExpr path) delivered a CellValue.Bool into a
       // Boolean position and crashed with a ClassCastException.
+      // A failing CONDITION stays fatal (it is not a branch); GH-339 carriage below applies to
+      // the two branch expressions only.
       evalMaybeArrayArg(ctx, condExpr).flatMap {
         case condArr: ArrayResult =>
           // CSE semantics: both branches evaluate (they broadcast elementwise against the
-          // condition), so branch laziness only applies to the scalar path below.
+          // condition), so branch laziness only applies to the scalar path below. GH-339: a
+          // branch that fails wholesale carries as a 1x1 error element instead of aborting.
           for
-            ifTrueVal <- evalMaybeArrayArg(ctx, ifTrueExpr)
-            ifFalseVal <- evalMaybeArrayArg(ctx, ifFalseExpr)
+            ifTrueVal <- evalBranchCarrying(ctx, ifTrueExpr)
+            ifFalseVal <- evalBranchCarrying(ctx, ifFalseExpr)
             result <- ArrayArithmetic.broadcastIf(
               condArr,
               toCellArray(ifTrueVal),
@@ -53,14 +77,17 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
       // the lazy pair walk; an array condition switches to CSE semantics — its value and the
       // remaining pairs all evaluate, chaining elementwise through broadcastIf with the no-match
       // #N/A as the final fallback: IFS(c1,v1,c2,v2) = if c1 then v1 else (if c2 then v2 else NA).
+      // GH-339: under an array condition, the pair's VALUE and the remaining-pairs fallback are
+      // branches — their failures carry as 1x1 error elements. The CURRENT pair's condition
+      // failure stays fatal (it is not a branch).
       def loop(pairs: List[TExpr[Any]]): Either[EvalError, Any] =
         pairs match
           case cond :: value :: rest =>
             evalMaybeArrayArg(ctx, cond).flatMap {
               case condArr: ArrayResult =>
                 for
-                  valueVal <- evalMaybeArrayArg(ctx, value)
-                  restVal <- loop(rest)
+                  valueVal <- evalBranchCarrying(ctx, value)
+                  restVal <- carryLeft(loop(rest))
                   result <- ArrayArithmetic.broadcastIf(
                     condArr,
                     toCellArray(valueVal),

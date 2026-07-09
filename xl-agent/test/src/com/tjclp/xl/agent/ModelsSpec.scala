@@ -57,10 +57,31 @@ class ModelsSpec extends CatsEffectSuite:
     assertEquals(json.hcursor.get[String]("command").toOption, Some("ls -la"))
   }
 
+  test("AgentResult JSON carries the stop reason") {
+    val result = AgentResult(
+      success = true,
+      outputFileId = None,
+      outputPath = None,
+      usage = TokenUsage.zero,
+      latencyMs = 191_000L,
+      transcript = Vector.empty,
+      responseText = Some("done"),
+      error = Some("turn truncated: stop_reason=max_tokens (raise --max-tokens)"),
+      stopReason = Some("max_tokens")
+    )
+    val json = result.asJson
+    assertEquals(json.hcursor.get[String]("stopReason").toOption, Some("max_tokens"))
+
+    val absent = result.copy(stopReason = None, error = None)
+    assertEquals(absent.asJson.hcursor.get[Option[String]]("stopReason"), Right(None))
+  }
+
   test("AgentConfig defaults") {
     val config = AgentConfig()
     // Default is Sonnet 5 (near-Opus coding/agentic quality at Sonnet cost)
     assertEquals(config.model, "claude-sonnet-5")
-    assertEquals(config.maxTokens, 16384)
+    // 32K leaves headroom for adaptive thinking, which counts against maxTokens
+    // (GH-340: a 16K cap truncated a real benchmark turn at 16,819 output tokens)
+    assertEquals(config.maxTokens, 32768)
     assertEquals(config.verbose, false)
   }

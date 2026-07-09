@@ -145,7 +145,8 @@ class ArrayArithmeticSpec extends FunSuite:
     assert(result.swap.toOption.get.toString.contains("mismatch"))
   }
 
-  test("division by zero in array returns error") {
+  test("division by zero in array yields an elementwise #DIV/0! (GH-337)") {
+    // Pre-GH-337 this was a whole-broadcast Left; Excel carries the error per element.
     val arr = ArrayResult(
       Vector(
         Vector(CellValue.Number(1), CellValue.Number(0), CellValue.Number(3))
@@ -159,7 +160,12 @@ class ArrayArithmeticSpec extends FunSuite:
       ArrayArithmetic.div
     )
 
-    assert(result.isLeft, s"Expected Left (div by zero), got $result")
+    result match
+      case Right(ArrayArithmetic.ArrayOperand.Array(out)) =>
+        assertEquals(out(0, 0), CellValue.Number(10))
+        assertEquals(out(0, 1), CellValue.Error(com.tjclp.xl.cells.CellError.Div0))
+        assertEquals(out(0, 2), CellValue.Number(BigDecimal(10) / BigDecimal(3)))
+      case other => fail(s"Expected Array with elementwise #DIV/0!, got $other")
   }
 
   // ========== Integration Tests with evaluateArrayFormula ==========

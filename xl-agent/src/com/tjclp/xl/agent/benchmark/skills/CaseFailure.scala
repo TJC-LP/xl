@@ -23,7 +23,9 @@ object CaseFailure:
    * Build the failing CaseResult for a case that raised after its tracer was created.
    *
    * Completes the tracer with the error and saves the partial trace; a successfully saved path is
-   * wired into the CaseResult so reports can point at the surviving trace.
+   * wired into the CaseResult so reports can point at the surviving trace. Token usage is recovered
+   * by summing the per-turn deltas of the TurnComplete events collected before the failure (issue
+   * #340) — recording zero undercounted the real cost of failed cases.
    */
   def withPartialTrace(
     tracer: ConversationTracer,
@@ -34,12 +36,16 @@ object CaseFailure:
     val message = describe(error)
     for
       endTimeMs <- Clock[IO].monotonic.map(_.toMillis)
-      _ <- tracer.complete(AgentTokenUsage.zero, passed = false, error = Some(message)).attempt
+      trace <- tracer.getTrace
+      partialUsage = trace.turnUsages.foldLeft(AgentTokenUsage.zero) { (acc, turn) =>
+        acc + AgentTokenUsage(turn.inputTokens, turn.outputTokens)
+      }
+      _ <- tracer.complete(partialUsage, passed = false, error = Some(message)).attempt
       saved <- tracer.save().attempt
     yield CaseResult(
       caseNum = caseNum,
       passed = false,
-      usage = TokenUsage.zero,
+      usage = TokenUsage.fromAgentUsage(partialUsage),
       latencyMs = math.max(0L, endTimeMs - startTimeMs),
       details = CaseDetails.NoDetails,
       tracePath = saved.toOption,

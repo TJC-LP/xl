@@ -144,7 +144,7 @@ object XlSkill extends Skill:
         latencyMs = endTime - startTime
 
         // Complete and save tracer
-        _ <- tracer.complete(result.usage, passed, result.error)
+        _ <- tracer.complete(result.usage, passed, result.error, result.stopReason)
         tracePath <- tracer.save()
 
         // Convert mismatches to grading format
@@ -165,7 +165,8 @@ object XlSkill extends Skill:
         usage = TokenUsage.fromAgentUsage(result.usage),
         latencyMs = latencyMs,
         details = details,
-        tracePath = Some(tracePath)
+        tracePath = Some(tracePath),
+        error = result.error // Non-clean stop (truncation/refusal) is a case error (issue #340)
       )
 
     (for
@@ -221,7 +222,7 @@ object XlSkill extends Skill:
         agentSucceeded = result.error.isEmpty
 
         // Complete and save tracer
-        _ <- tracer.complete(result.usage, agentSucceeded, result.error)
+        _ <- tracer.complete(result.usage, agentSucceeded, result.error, result.stopReason)
         tracePath <- tracer.save()
       yield CaseResult(
         caseNum = testCase.caseNum,
@@ -232,7 +233,8 @@ object XlSkill extends Skill:
           result.responseText.getOrElse(""),
           task.evaluation.expectedAnswer
         ),
-        tracePath = Some(tracePath)
+        tracePath = Some(tracePath),
+        error = result.error // Non-clean stop (truncation/refusal) is a case error (issue #340)
       )
 
     (for

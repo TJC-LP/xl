@@ -69,6 +69,61 @@ class UnifiedRunnerSpec extends CatsEffectSuite:
     assert(!line.contains("X" * 201), "long errors must be truncated")
   }
 
+  test("all-errored task renders the red error glyph") {
+    // Every case errored: the task is an execution failure, not a graded fail (GH-340)
+    val result = ExecutionResult.fromCases(
+      TaskId("13894"),
+      "xl",
+      Vector(failedCase(1), failedCase(2), failedCase(3)),
+      TokenUsage.zero,
+      570_000L
+    )
+    assertEquals(result.error, Some(caseError))
+    val line = UnifiedRunner.formatExecutionResult(result)
+    assert(line.contains(Console.RED + "✗"), s"all-errored task must render red ✗: $line")
+    assert(line.contains(caseError), line)
+  }
+
+  test("partially-errored task keeps the yellow glyph") {
+    // One clean pass among the errors: not an execution failure, just a failing score
+    val result = ExecutionResult.fromCases(
+      TaskId("13894"),
+      "xl",
+      Vector(CaseResult.passed(1, TokenUsage.zero, 1000), failedCase(2), failedCase(3)),
+      TokenUsage.zero,
+      571_000L
+    )
+    assertEquals(result.error, None)
+    val line = UnifiedRunner.formatExecutionResult(result)
+    assert(
+      line.contains(Console.YELLOW + "○"),
+      s"partially-errored task must keep yellow ○: $line"
+    )
+    assert(line.contains(caseError), line)
+  }
+
+  test("all-passed task keeps fromCases error empty") {
+    val result = ExecutionResult.fromCases(
+      TaskId("2768"),
+      "xl",
+      Vector(CaseResult.passed(1, TokenUsage.zero, 1000)),
+      TokenUsage.zero,
+      1000L
+    )
+    assertEquals(result.error, None)
+    val line = UnifiedRunner.formatExecutionResult(result)
+    assert(line.contains(Console.GREEN + "✓"), line)
+  }
+
+  test("--max-tokens is parsed and defaults to 32768") {
+    for
+      parsed <- UnifiedRunner.parseArgs(List("--max-tokens", "65536"))
+      defaults <- UnifiedRunner.parseArgs(Nil)
+    yield
+      assertEquals(parsed.maxTokens, 65536)
+      assertEquals(defaults.maxTokens, 32768)
+  }
+
   test("legacy report entries carry the per-case error") {
     val result = ExecutionResult.fromCases(
       TaskId("13894"),
