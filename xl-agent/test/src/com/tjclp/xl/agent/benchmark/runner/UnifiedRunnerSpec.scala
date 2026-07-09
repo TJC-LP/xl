@@ -90,7 +90,12 @@ class UnifiedRunnerSpec extends CatsEffectSuite:
       endTime = start.plusSeconds(600),
       config = EngineConfig.default,
       skillResults = Map(
-        "xl" -> SkillRunResult("xl", "xl-cli", Vector(result), ExecSkillSummary.fromResults(Vector(result)))
+        "xl" -> SkillRunResult(
+          "xl",
+          "xl-cli",
+          Vector(result),
+          ExecSkillSummary.fromResults(Vector(result))
+        )
       ),
       tasks = List(task)
     )

@@ -14,8 +14,8 @@ import java.nio.file.{Files, Path}
  * must return a total CaseResult carrying the error AND leave the partial conversation trace on
  * disk.
  *
- * Runs fully offline: the dummy-key client never reaches the network because the missing input
- * file makes the upload raise first.
+ * Runs fully offline: the dummy-key client never reaches the network because the missing input file
+ * makes the upload raise first.
  */
 class SkillFailurePathSpec extends CatsEffectSuite:
 

@@ -14,11 +14,10 @@ import com.tjclp.xl.sheets.Sheet
  *   - number vs number: numeric order (dates ARE numbers via their Excel serial)
  *   - boolean vs boolean: FALSE < TRUE
  *   - cross-type: number < text < logical (no numeric parsing of text under comparison)
- *   - empty cells coerce relative to the other operand: 0 vs numbers, "" vs text, FALSE vs
- *     booleans
+ *   - empty cells coerce relative to the other operand: 0 vs numbers, "" vs text, FALSE vs booleans
  *
- * The dogfooding repro: SUMPRODUCT over a text column raised
- * TypeMismatch(numeric argument,number,z) instead of comparing lexicographically.
+ * The dogfooding repro: SUMPRODUCT over a text column raised TypeMismatch(numeric
+ * argument,number,z) instead of comparing lexicographically.
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class ComparisonSemanticsSpec extends FunSuite:
