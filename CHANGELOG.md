@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3] "Parity" - 2026-07-09
+
+Waves 10–11: evaluator correctness gaps found by live SpreadsheetBench dogfooding, plus the
+xl-agent benchmark refresh that found them.
+
+### Fixed
+
+- **Excel comparison semantics** (#335): ordered comparisons (`<` `<=` `>` `>=`) no longer
+  raise `TypeMismatch` on text operands. Comparisons now follow Excel's total order — text
+  compares case-insensitively and lexicographically, cross-type rank is
+  `number < text < logical` with `FALSE < TRUE`, dates compare by their Excel serial,
+  and empty cells coerce to the other operand's zero value (`0` / `""` / `FALSE`) — uniformly
+  in scalar and array/broadcast paths (`=SUMPRODUCT((B1:B2<"z")*1)` works).
+- **Array-aware IF; evaluator crash family eliminated** (#333): `=MIN(IF(range>0,range,99))`
+  and friends no longer escape the total-function boundary with a `ClassCastException`
+  (a raw GraalVM stack trace in the native CLI). IF broadcasts array conditions elementwise
+  per Excel CSE semantics; scalar IF keeps lazy branch selection.
+- **AND/OR aggregate over array conditions; NOT and IFS broadcast** (#338): logical
+  functions fold arrays per Excel (AND=forall, OR=exists) instead of silently collapsing to
+  the top-left element; `=NOT(range>0)` spills elementwise; IFS array conditions follow CSE
+  chaining. Cross-argument short-circuit and scalar laziness are preserved.
+- **Benchmark failure diagnostics preserved** (#334, internal xl-agent): per-case errors now
+  serialize into reports and partial conversation traces survive mid-run failures.
+
+### Changed
+
+- **Equality semantics** (`=`, `<>`, `SWITCH`) now equate `Empty` with `0`/`""`/`FALSE` and
+  dates with their Excel serial (Excel-correct; previously type-strict).
+- **Numeric-looking text no longer parses as a number under ordered comparisons**
+  (`="2">100` is `TRUE`, matching Excel's type ranking).
+
+### Internal (xl-agent benchmark harness, #332)
+
+- Claude 5 model registry (`claude-sonnet-5` agent default, `claude-opus-4-8` grader),
+  anthropic-java 2.11.1 → 2.48.0, code-execution tool `20260521`, typed container uploads.
+- Prompt caching on code-execution requests (−52–59% cost per benchmark task) and
+  cache-token capture end-to-end (traces price by the model that actually ran).
+- Version-agnostic release-asset resolution (auto-download of the latest binary/skill now
+  works); Skills API drift fixes (`files[]` form field, list pagination, flat-zip layouts).
+
 ## [0.12.2] "Interop" - 2026-06-11
 
 Wave 9: the LibreOffice edit-corruption fix and the writer follow-ups it surfaced.
