@@ -12,7 +12,7 @@ import com.tjclp.xl.formula.eval.{
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 
 trait FunctionSpecsAggregate extends FunctionSpecsBase:
   import ArgSpec.NumericArg
@@ -22,6 +22,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
   private type RowBounds = (Row, Row)
   private type ColBounds = (Column, Column)
+
+  /**
+   * GH-337: the loud failure for a carried error element consumed from an evaluated expression
+   * array — names the function and the Excel error code, and stays IFERROR-catchable.
+   */
+  private def propagatedElementError(fnName: String, err: CellError): EvalError =
+    EvalError.EvalFailed(s"$fnName: array element contains ${err.toExcel} error", None)
 
   /**
    * GH-192: Compute shared bounds across all involved sheets for full-column/row optimization.
@@ -225,30 +232,49 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         case (Right(acc), Right(expr)) =>
           // GH-122: evaluate array-aware so a range-returning call (e.g. OFFSET) flattens into the
           // aggregate exactly like a literal range would; scalars keep their existing behavior.
-          ctx.evalArrayExpr(expr.asInstanceOf[TExpr[Any]]).map {
+          // GH-337: carried error ELEMENTS in the evaluated array fail loudly (per the
+          // aggregator's propagatesErrors policy) instead of silently skipping — an error the
+          // broadcast carried must not vanish into a wrong number. Raw-range arguments (the
+          // Left(location) branch above) keep their pre-existing skip semantics.
+          ctx.evalArrayExpr(expr.asInstanceOf[TExpr[Any]]).flatMap {
             case ar: ArrayResult =>
-              ar.values.flatten.foldLeft(acc) { (values, cellValue) =>
-                if agg.countsNonEmpty then
-                  cellValue match
-                    case CellValue.Empty => values
-                    case _ => values :+ BigDecimal(1)
-                else if agg.countsEmpty then
-                  cellValue match
-                    case CellValue.Empty => values :+ BigDecimal(1)
-                    case _ => values
-                else
-                  extractNumericValue(cellValue) match
-                    case Some(n) => values :+ n
-                    case None => values
+              ar.values.flatten.foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(acc)) {
+                case (Left(err), _) => Left(err)
+                case (Right(values), cellValue) =>
+                  if agg.countsNonEmpty then
+                    cellValue match
+                      case CellValue.Empty => Right(values)
+                      case _ => Right(values :+ BigDecimal(1))
+                  else if agg.countsEmpty then
+                    cellValue match
+                      case CellValue.Empty => Right(values :+ BigDecimal(1))
+                      case _ => Right(values)
+                  else
+                    ArrayArithmetic.carriedError(cellValue) match
+                      case Some(err) if agg.propagatesErrors =>
+                        Left(propagatedElementError(agg.name, err))
+                      case Some(_) => Right(values) // COUNT: errors are not numbers
+                      case None =>
+                        extractNumericValue(cellValue) match
+                          case Some(n) => Right(values :+ n)
+                          case None => Right(values)
               }
             case value: BigDecimal =>
-              if agg.countsNonEmpty || agg.countsEmpty then acc :+ BigDecimal(1) else acc :+ value
+              Right(
+                if agg.countsNonEmpty || agg.countsEmpty then acc :+ BigDecimal(1) else acc :+ value
+              )
             case other =>
-              if agg.countsNonEmpty || agg.countsEmpty then acc :+ BigDecimal(1)
+              if agg.countsNonEmpty || agg.countsEmpty then Right(acc :+ BigDecimal(1))
               else
-                extractNumericValue(ArrayArithmetic.anyToCellValue(other)) match
-                  case Some(n) => acc :+ n
-                  case None => acc
+                val cellValue = ArrayArithmetic.anyToCellValue(other)
+                ArrayArithmetic.carriedError(cellValue) match
+                  case Some(err) if agg.propagatesErrors =>
+                    Left(propagatedElementError(agg.name, err))
+                  case Some(_) => Right(acc)
+                  case None =>
+                    extractNumericValue(cellValue) match
+                      case Some(n) => Right(acc :+ n)
+                      case None => Right(acc)
           }
       }
 
@@ -1132,13 +1158,22 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   val boundedExpr = constrainExprRanges(expr)
                   ctx.evalArrayExpr(boundedExpr).flatMap {
                     case ar: ArrayResult =>
-                      // Convert ArrayResult to numeric matrix with boolean coercion
-                      val matrix = (0 until ar.rows).map { row =>
-                        (0 until ar.cols).map { col =>
-                          coerceToNumeric(ar.values(row)(col))
-                        }.toVector
-                      }.toVector
-                      Right(acc :+ MatrixArray(matrix))
+                      // Convert ArrayResult to numeric matrix with boolean coercion.
+                      // GH-337: a carried error element fails loudly naming the code — the
+                      // pre-carriage coerceToNumeric would silently turn it into 0 and produce
+                      // a wrong sum for the exact issue-cited =SUMPRODUCT((A1:A3<5)*1) case.
+                      val matrix = ar.values.flatten
+                        .collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
+                        case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+                        case None =>
+                          Right(
+                            (0 until ar.rows).map { row =>
+                              (0 until ar.cols).map { col =>
+                                coerceToNumeric(ar.values(row)(col))
+                              }.toVector
+                            }.toVector
+                          )
+                      matrix.map(m => acc :+ MatrixArray(m))
                     case bd: BigDecimal =>
                       // Scalar treated as 1x1 matrix
                       Right(acc :+ MatrixArray(Vector(Vector(bd))))
@@ -1147,8 +1182,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       val n = if b then BigDecimal(1) else BigDecimal(0)
                       Right(acc :+ MatrixArray(Vector(Vector(n))))
                     case cv: CellValue =>
-                      // CellValue coerced to numeric
-                      Right(acc :+ MatrixArray(Vector(Vector(coerceToNumeric(cv)))))
+                      // CellValue coerced to numeric; GH-337: carried errors fail loudly
+                      ArrayArithmetic.carriedError(cv) match
+                        case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+                        case None => Right(acc :+ MatrixArray(Vector(Vector(coerceToNumeric(cv)))))
                     case other =>
                       Left(EvalError.TypeMismatch("SUMPRODUCT", "array or number", other.toString))
                   }

@@ -62,6 +62,17 @@ trait Aggregator[A]:
    */
   def countsEmpty: Boolean = false
 
+  /**
+   * GH-337: whether a carried error ELEMENT in an evaluated expression array (e.g. `SUM((A1:A2)*1)`
+   * where the broadcast carried a #DIV/0!) fails the aggregate loudly.
+   *
+   * Excel propagates errors through nearly every aggregate; COUNT alone genuinely ignores them (it
+   * counts numbers, and an error is not a number). COUNTA/COUNTBLANK are governed by their counts*
+   * modes instead (an error element is non-empty). Raw-RANGE arguments keep their pre-existing skip
+   * semantics — this flag governs expression-array elements only.
+   */
+  def propagatesErrors: Boolean = true
+
 object Aggregator:
   /** Registry of all aggregators by name (uppercase) */
   private lazy val registry: Map[String, Aggregator[?]] = Map(
@@ -105,6 +116,8 @@ object Aggregator:
     def empty = 0
     def combine(acc: Int, value: BigDecimal) = acc + 1
     def finalize(acc: Int) = BigDecimal(acc)
+    // GH-337: Excel's COUNT counts numbers only — error elements are skipped, not propagated
+    override def propagatesErrors: Boolean = false
 
   /** COUNTA: Count non-empty cells in a range (not just numeric) */
   given countaAggregator: Aggregator[Int] with
