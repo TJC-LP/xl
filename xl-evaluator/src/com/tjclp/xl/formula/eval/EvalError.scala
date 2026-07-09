@@ -8,6 +8,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.Clock
 
 import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.cells.CellError
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.codec.CodecError
 
@@ -142,6 +143,25 @@ object EvalError:
     formula match
       case Some(f) => XLError.FormulaError(f, message)
       case None => XLError.Other(s"Formula evaluation error: $message")
+
+  /**
+   * GH-337: map an evaluation failure to the Excel error VALUE it carries as an array element.
+   *
+   * Elementwise error carriage (array compare/arithmetic/IF) demotes element-local failures to
+   * `CellValue.Error` elements instead of failing the whole formula; this is the single
+   * EvalError→CellError table for that demotion. `None` marks errors that must stay a fatal `Left`
+   * (CircularRef — a structural property of the sheet, not of any one element).
+   *
+   * Known micro-divergences from Excel, accepted by design: pow overflow surfaces as #VALUE!
+   * (Excel: #NUM!) because it arrives as a generic EvalFailed.
+   */
+  def toCellError(error: EvalError): Option[CellError] = error match
+    case DivByZero(_, _) => Some(CellError.Div0)
+    case RefError(_, _) => Some(CellError.Ref)
+    case TypeMismatch(_, _, _) => Some(CellError.Value)
+    case CodecFailed(_, _) => Some(CellError.Value)
+    case EvalFailed(_, _) => Some(CellError.Value)
+    case CircularRef(_) => None
 
   /**
    * Create a RefError with standard "cell not found" message.
