@@ -233,6 +233,17 @@ class ArrayErrorPropagationSpec extends ScalaCheckSuite:
     assertEquals(updatedEq(ref"D2").value, na)
   }
 
+  test("GH-337: SCALAR comparison against an error cell still refuses (unchanged boundary)") {
+    // Carriage is an array-path behavior: the scalar compare path keeps its clean Left.
+    val sheet = Sheet("Test").put(ref"A1", num(1)).put(ref"B1", na)
+    val result = sheet.evaluateFormula("=A1<B1")
+    assert(result.isLeft, s"expected Left, got $result")
+    assert(
+      result.left.toOption.get.message.contains("cannot compare"),
+      s"unexpected error: $result"
+    )
+  }
+
   test("GH-337: scalar entry collapses — error at top-left refuses, error elsewhere intersects") {
     // Implicit intersection takes the top-left element; a carried error there refuses cleanly,
     // while an error elsewhere in the array no longer poisons the collapsed scalar (improvement
