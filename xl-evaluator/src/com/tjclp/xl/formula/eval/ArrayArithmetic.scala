@@ -289,7 +289,7 @@ object ArrayArithmetic:
         }
       ) { case (row, col) =>
         val condCV = getWithBroadcastCV(cond.values, row, col, cond.rows, cond.cols)
-        cellValueTruthy(condCV).map { truthy =>
+        conditionTruthy("IF condition", condCV).map { truthy =>
           if truthy then getWithBroadcastCV(ifTrue.values, row, col, ifTrue.rows, ifTrue.cols)
           else getWithBroadcastCV(ifFalse.values, row, col, ifFalse.rows, ifFalse.cols)
         }
@@ -297,17 +297,35 @@ object ArrayArithmetic:
     yield ArrayResult(result)
 
   /**
-   * Excel truthiness for an IF-condition element: booleans as-is, numbers zero/non-zero, empty is
-   * FALSE (the ScalarCoercion Bool conventions); text and errors refuse cleanly.
+   * GH-333/GH-338: Excel truthiness for a condition element, shared by broadcastIf (IF over an
+   * array condition) and the logical functions' array paths (AND/OR aggregation, NOT broadcast):
+   * booleans as-is, numbers zero/non-zero, empty is FALSE (the ScalarCoercion Bool conventions);
+   * text and errors refuse cleanly with a Left naming the position via `label`.
    */
-  private def cellValueTruthy(cv: CellValue): Either[EvalError, Boolean] = cv match
+  def conditionTruthy(label: String, cv: CellValue): Either[EvalError, Boolean] = cv match
     case CellValue.Bool(b) => Right(b)
     case CellValue.Number(n) => Right(n.signum != 0)
     case CellValue.Empty => Right(false)
-    case CellValue.Formula(_, Some(cached)) => cellValueTruthy(cached)
+    case CellValue.Formula(_, Some(cached)) => conditionTruthy(label, cached)
     case CellValue.Error(err) =>
-      Left(EvalError.EvalFailed(s"IF condition: cannot coerce ${err.toExcel} error value", None))
-    case other => Left(EvalError.TypeMismatch("IF condition", "boolean", other.toString))
+      Left(EvalError.EvalFailed(s"$label: cannot coerce ${err.toExcel} error value", None))
+    case other => Left(EvalError.TypeMismatch(label, "boolean", other.toString))
+
+  /**
+   * GH-338: truthiness of every element (row-major), for the AND/OR aggregation folds (AND =
+   * forall, OR = exists). The first refusing element (text/error) short-circuits with its Left,
+   * consistent with broadcastIf's whole-array traversal.
+   */
+  def truthyElements(label: String, arr: ArrayResult): Either[EvalError, Vector[Boolean]] =
+    traverseV(arr.values.flatten)(cv => conditionTruthy(label, cv))
+
+  /**
+   * GH-338: elementwise NOT over an array condition, preserving shape (Excel broadcasts NOT rather
+   * than aggregating). Elements follow the conditionTruthy conventions.
+   */
+  def broadcastNot(label: String, arr: ArrayResult): Either[EvalError, ArrayResult] =
+    traverseVV(arr.values)(cv => conditionTruthy(label, cv).map(b => CellValue.Bool(!b)))
+      .map(ArrayResult(_))
 
   /** Convert any value to CellValue for comparison. */
   def anyToCellValue(v: Any): CellValue = v match

@@ -49,14 +49,32 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
   /** IFS(cond1, val1, cond2, val2, ...) — first TRUE condition's value, else #N/A. */
   val ifs: FunctionSpec[Any] { type Args = List[TExpr[Any]] } =
     FunctionSpec.simple[Any, List[TExpr[Any]]]("IFS", Arity.AtLeast(2)) { (args, ctx) =>
-      @annotation.tailrec
+      // GH-338: condition slots evaluate array-aware like IF (GH-333). A scalar condition keeps
+      // the lazy pair walk; an array condition switches to CSE semantics — its value and the
+      // remaining pairs all evaluate, chaining elementwise through broadcastIf with the no-match
+      // #N/A as the final fallback: IFS(c1,v1,c2,v2) = if c1 then v1 else (if c2 then v2 else NA).
       def loop(pairs: List[TExpr[Any]]): Either[EvalError, Any] =
         pairs match
           case cond :: value :: rest =>
-            ctx.evalExpr(TExpr.asBooleanExpr(cond)) match
-              case Left(err) => Left(err)
-              case Right(true) => evalAny(ctx, value)
-              case Right(false) => loop(rest)
+            evalMaybeArrayArg(ctx, cond).flatMap {
+              case condArr: ArrayResult =>
+                for
+                  valueVal <- evalMaybeArrayArg(ctx, value)
+                  restVal <- loop(rest)
+                  result <- ArrayArithmetic.broadcastIf(
+                    condArr,
+                    toCellArray(valueVal),
+                    toCellArray(restVal)
+                  )
+                yield result
+              case scalarCond =>
+                ScalarCoercion.coerce("IFS condition", scalarCond, BindingCoercion.Bool).flatMap {
+                  case condBool: Boolean =>
+                    if condBool then evalAny(ctx, value) else loop(rest)
+                  case other =>
+                    Left(EvalError.TypeMismatch("IFS condition", "boolean", other.toString))
+                }
+            }
           case _ => Right(CellValue.Error(CellError.NA))
       loop(args)
     }
