@@ -1,12 +1,17 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-09
+**Last Updated**: 2026-07-09 (0.12.4)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.12.4** (2026-07-09):
+- ✅ **Elementwise error carriage** (#337) — array comparisons/arithmetic carry `#DIV/0!`/`#REF!`/`#VALUE!` per element (Left only on dimension mismatch, property-tested); aggregates fail loudly on carried errors (IFERROR-catchable)
+- ✅ **Array-IF branch errors** (#339) — unused-branch failures demote to discarded error elements per CSE
+- ✅ **Benchmark truncation diagnostics** (#340, internal) — stop_reason capture, 32K output cap + `--max-tokens`; divergence backlog in #344
 
 **New in 0.12.3** (2026-07-09):
 - ✅ **Excel comparison semantics** (#335) — ordered comparisons follow Excel's total order (case-insensitive lexicographic text, `number < text < logical`, dates by serial, empty coercion) in scalar and array paths
@@ -109,16 +114,16 @@
 
 ### Test Coverage
 
-**3,930 tests** (verified via `./mill __.test`, 2026-07-09):
+**3,996 tests** (verified via `./mill __.test`, 2026-07-09):
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 1529 | parser, evaluator, 107-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 1571 | parser, evaluator, 107-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1104 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 684 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 406 | command parsing, batch ops, view/eval/export, streaming mode |
 | xl-cats-effect | 110 | streaming I/O, O(1) memory verification, SAX/StAX write |
-| xl-agent | 78 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
+| xl-agent | 102 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 19 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 

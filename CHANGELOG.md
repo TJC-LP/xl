@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4] "Carriage" - 2026-07-09
+
+Wave 11: elementwise error semantics through array operations, and loud benchmark
+failure diagnostics. Follow-up divergences tracked in #344.
+
+### Fixed
+
+- **Errors carry elementwise through array operations** (#337): comparisons and
+  arithmetic over arrays containing error values produce the error *as that element*
+  (`=10/A1:A3` with a zero spills `{10, #DIV/0!, 5}`) instead of failing the whole
+  formula. Left operand's error wins for binary ops; per-element division by zero
+  yields `#DIV/0!`; uncoercible text yields `#VALUE!`. New invariant, property-tested:
+  broadcast operations return a formula error only for dimension mismatch.
+- **Unused IF/IFS branch errors no longer poison the array path** (#339):
+  `=SUM(IF(A1:A2>0,A1:A2,1/0))` on all-positive data evaluates — branch failures
+  demote to error elements that unselected positions discard, per Excel CSE.
+  Scalar-path branch laziness is unchanged and pinned.
+- **Aggregates fail loudly on carried errors instead of silently mis-summing**:
+  SUM/MIN/MAX/AVERAGE/SUMPRODUCT over expression arrays containing an error value
+  return a formula error naming the Excel code (previously SUMPRODUCT coerced error
+  elements to 0 — a silently wrong number). COUNT keeps Excel's ignore-errors
+  behavior; the guards remain IFERROR-catchable.
+- **Benchmark truncations are loud** (#340, internal xl-agent): the agent loop now
+  captures `stop_reason` — `max_tokens`/`refusal`/`pause_turn` turns surface as case
+  errors in reports, glyphs, and traces instead of reading as clean completions;
+  default per-iteration output cap raised to 32,768 with a new `--max-tokens` flag;
+  partial usage is recovered from completed turns; engine-level failures leave a
+  metadata trace; all-errored tasks render red; stream lines carry the skill name.
+
+### Changed
+
+- New `EvalError → CellError` demotion table (`#DIV/0!`, `#REF!`, `#VALUE!`);
+  circular references remain fatal formula errors. Documented divergences from
+  Excel (pow-overflow `#VALUE!` vs `#NUM!`, AND/OR error aborts, scalar error
+  refusals, aggregate error-value returns) are enumerated in #344.
+
 ## [0.12.3] "Parity" - 2026-07-09
 
 Waves 10–11: evaluator correctness gaps found by live SpreadsheetBench dogfooding, plus the
