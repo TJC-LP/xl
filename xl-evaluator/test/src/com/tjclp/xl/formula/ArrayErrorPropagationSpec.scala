@@ -249,6 +249,89 @@ class ArrayErrorPropagationSpec extends ScalaCheckSuite:
     assertEquals(errBelow.evaluateFormula("=A1:A2*2"), Right(num(10)))
   }
 
+  // ===== Commit 3: broadcastIf condition carriage =====
+
+  test("GH-337: broadcastIf carries a condition element's error to the output position") {
+    val cond = colOf(CellValue.Bool(true), div0, CellValue.Bool(false))
+    val ifTrue = colOf(num(1), num(2), num(3))
+    val ifFalse = ArrayResult.single(num(99))
+    val result = ArrayArithmetic.broadcastIf(cond, ifTrue, ifFalse)
+    assertEquals(elementsOf(result), Vector(num(1), div0, num(99)))
+  }
+
+  test("GH-337: broadcastIf demotes a text condition element to #VALUE! (was whole-formula Left)") {
+    val cond = colOf(CellValue.Bool(true), CellValue.Text("x"))
+    val result =
+      ArrayArithmetic.broadcastIf(cond, ArrayResult.single(num(1)), ArrayResult.single(num(2)))
+    assertEquals(elementsOf(result), Vector(num(1), valueErr))
+  }
+
+  test("GH-337: broadcastIf condition errors mask branch errors positionally") {
+    // The condition's own error wins at its position; other positions still select normally,
+    // including selecting error elements from a branch.
+    val cond = colOf(na, CellValue.Bool(false))
+    val result = ArrayArithmetic.broadcastIf(
+      cond,
+      ArrayResult.single(num(1)),
+      ArrayResult.single(div0)
+    )
+    assertEquals(elementsOf(result), Vector(na, div0))
+  }
+
+  test("GH-337: =IF over a condition range with an error cell selects errors positionally") {
+    val sheet = Sheet("Test")
+      .put(ref"A1", num(1))
+      .put(ref"A2", div0)
+      .put(ref"A3", num(-1))
+    val result = sheet.evaluateArrayFormula("=IF(A1:A3>0,1,2)", ref"C1")
+    assert(result.isRight, s"expected Right, got $result")
+    val (updated, _) = result.toOption.get
+    assertEquals(updated(ref"C1").value, num(1))
+    assertEquals(updated(ref"C2").value, div0)
+    assertEquals(updated(ref"C3").value, num(2))
+  }
+
+  property("GH-337: broadcastIf never Lefts for element-local condition failures") {
+    val genCondElement: Gen[CellValue] = Gen.frequency(
+      3 -> Gen.oneOf(
+        Gen.oneOf(true, false).map(CellValue.Bool(_)),
+        Gen.chooseNum(-5, 5).map(n => CellValue.Number(BigDecimal(n))),
+        Gen.const(CellValue.Empty)
+      ),
+      1 -> genErrorValue,
+      1 -> Gen.oneOf("abc", "").map(CellValue.Text(_))
+    )
+    forAll(
+      Gen.choose(1, 3).flatMap(n => Gen.listOfN(n, genCondElement)),
+      Gen.chooseNum(-50, 50),
+      Gen.chooseNum(-50, 50)
+    ) { (condElems, t, f) =>
+      val cond = ArrayResult(condElems.toVector.map(Vector(_)))
+      val result = ArrayArithmetic.broadcastIf(
+        cond,
+        ArrayResult.single(CellValue.Number(BigDecimal(t))),
+        ArrayResult.single(CellValue.Number(BigDecimal(f)))
+      )
+      result match
+        case Right(out) =>
+          Prop.all(
+            condElems.zipWithIndex.map { case (condCV, idx) =>
+              val expected = condCV match
+                case CellValue.Error(err) => CellValue.Error(err)
+                case CellValue.Text(_) => valueErr
+                case CellValue.Bool(b) =>
+                  if b then CellValue.Number(BigDecimal(t)) else CellValue.Number(BigDecimal(f))
+                case CellValue.Number(n) =>
+                  if n.signum != 0 then CellValue.Number(BigDecimal(t))
+                  else CellValue.Number(BigDecimal(f))
+                case _ => CellValue.Number(BigDecimal(f)) // Empty is FALSE
+              Prop(out(idx, 0) == expected) :| s"idx=$idx cond=$condCV out=${out(idx, 0)}"
+            }*
+          )
+        case Left(err) => Prop.falsified :| s"expected Right, got Left($err)"
+    }
+  }
+
   // ===== Commit 2: property tests =====
 
   private val genPlainValue: Gen[CellValue] = Gen.oneOf(

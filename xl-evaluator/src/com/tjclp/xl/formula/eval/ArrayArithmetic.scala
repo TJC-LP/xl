@@ -341,7 +341,9 @@ object ArrayArithmetic:
    * the resulting array.
    *
    * Condition elements follow Excel truthiness (booleans as-is, numbers zero/non-zero, empty is
-   * FALSE); text or error elements refuse with a clean Left.
+   * FALSE). GH-337: a condition element carrying an error emits THAT error at its output position
+   * (masking whatever the branches hold there); a text condition element demotes to a #VALUE!
+   * element. Returns Left ONLY for broadcast-dimension mismatch.
    */
   def broadcastIf(
     cond: ArrayResult,
@@ -359,10 +361,17 @@ object ArrayArithmetic:
         }
       ) { case (row, col) =>
         val condCV = getWithBroadcastCV(cond.values, row, col, cond.rows, cond.cols)
-        conditionTruthy("IF condition", condCV).map { truthy =>
-          if truthy then getWithBroadcastCV(ifTrue.values, row, col, ifTrue.rows, ifTrue.cols)
-          else getWithBroadcastCV(ifFalse.values, row, col, ifFalse.rows, ifFalse.cols)
-        }
+        carriedError(condCV) match
+          case Some(err) => Right(CellValue.Error(err))
+          case None =>
+            conditionTruthy("IF condition", condCV) match
+              case Right(truthy) =>
+                Right(
+                  if truthy then
+                    getWithBroadcastCV(ifTrue.values, row, col, ifTrue.rows, ifTrue.cols)
+                  else getWithBroadcastCV(ifFalse.values, row, col, ifFalse.rows, ifFalse.cols)
+                )
+              case Left(e) => toErrorElement(e)
       }
     yield ArrayResult(result)
 
