@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **107 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 3,858 tests passing.
+**Current Status**: Production-ready with **107 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 3,930 tests passing.
 
-**Current Version**: **0.12.2 "Interop"** (released 2026-06-11)
+**Current Version**: **0.12.3 "Parity"** (released 2026-07-09)
 
 ---
 
@@ -60,6 +60,10 @@ Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture cor
 ### v0.12.1 "Clean Sweep" — wave 7 (Released 2026-06-11)
 
 Every remaining open issue closed in one wave. **Conditional formatting** ([#136](https://github.com/TJC-LP/xl/issues/136)) is the headline — typed cellIs/expression/colorScale/dataBar/top10/text rules + `dxf` differential formats, `sheet.conditionalFormat` authoring with auto-priority, structural-edit range shifting, unmodeled families preserved byte-faithfully — alongside twelve fidelity/writer fixes: openpyxl comment subdirectory dialect (#292), RichText SST keying (#303), exact surgical SST counts (#304), `[Content_Types]` preservation (#314), identity-keyed source mappings (#315), activeTab (#294), fitToPage tri-state (#284), `Cell.comment` deprecated→`Sheet.comments` (#295). Codec `put` paths 2.4x faster (#297).
+
+### v0.12.3 "Parity" — waves 10–11 (Released 2026-07-09)
+
+Evaluator correctness gaps found by live SpreadsheetBench dogfooding: Excel comparison total order — text/cross-type/date/empty semantics ([#335](https://github.com/TJC-LP/xl/issues/335)), array-aware IF per CSE + elimination of the aggregator crash family ([#333](https://github.com/TJC-LP/xl/issues/333)), AND/OR array aggregation with NOT/IFS broadcast ([#338](https://github.com/TJC-LP/xl/issues/338)), and benchmark failure diagnostics ([#334](https://github.com/TJC-LP/xl/issues/334)). Plus the xl-agent harness refresh (#332): Claude 5 registry, anthropic-java 2.48.0, prompt caching (−52–59%/task), version-agnostic release-asset resolution, Skills API drift fixes. Follow-ups filed: #337 (elementwise error propagation), #339 (IF eager branches, depends on #337), #340 (diagnostics polish).
 
 ### v0.12.2 "Interop" — wave 9 (Released 2026-06-11)
 
