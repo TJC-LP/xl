@@ -745,6 +745,10 @@ private class EvaluatorImpl(
         )
       case ldt: java.time.LocalDateTime =>
         Right(ArrayArithmetic.ArrayOperand.Scalar(BigDecimal(CellValue.dateTimeToExcelSerial(ldt))))
+      // GH-337: a scalar error VALUE (e.g. a carried #N/A) enters array arithmetic as a 1x1
+      // error element and broadcasts across the other operand instead of failing the formula.
+      case cv @ CellValue.Error(_) =>
+        Right(ArrayArithmetic.ArrayOperand.Array(ArrayResult.single(cv)))
       case _ => Left(EvalError.TypeMismatch("arithmetic", "number or array", value.toString))
 
   /**
