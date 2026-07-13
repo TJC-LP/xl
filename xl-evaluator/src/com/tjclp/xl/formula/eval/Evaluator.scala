@@ -230,7 +230,10 @@ object Evaluator:
    * reading uncached cells at depth 0) and threads only through the derived `EvaluatorWithDepth`
    * instances and `EvalContext`s of that pass, so it never outlives a single top-level evaluation
    * and is invisible at the public API — local mutation only, the same pattern as the iterative
-   * Tarjan engine in DependencyGraph. Entries key by Sheet IDENTITY, then ref: two same-named Sheet
+   * Tarjan engine in DependencyGraph. Sharing is per recursion tree, not per top-level eval:
+   * sibling depth-0 references (`=A1+A1`) each start their own memo and re-walk the shared subtree
+   * once each — bounded and linear per subtree, a constant-factor cost accepted to keep the memo's
+   * lifetime trivially safe. Entries key by Sheet IDENTITY, then ref: two same-named Sheet
    * snapshots (a recalc temp sheet vs the original workbook copy) memoize independently, so a stale
    * snapshot can never serve values for a newer one.
    *

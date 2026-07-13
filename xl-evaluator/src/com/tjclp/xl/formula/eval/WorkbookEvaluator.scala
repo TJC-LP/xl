@@ -244,7 +244,9 @@ object WorkbookEvaluator:
 
         // Evaluate in the single global order, threading the partially evaluated workbook:
         // every reference — same-sheet or cross-sheet — reads its precedents as already-computed
-        // values, so recursive re-derivation only arises on dynamic reads.
+        // values, so recursive re-derivation only arises on dynamic reads. Rebuilding tempWb per
+        // cell is O(sheets) shallow-copy work per formula — negligible at realistic sheet
+        // counts, and each evaluation must see a workbook consistent with the fold state.
         val (_, evaluated, evalErrors) = ordered.foldLeft(
           (initialTemps, Map.empty[SheetName, Map[ARef, CellValue]], Vector.empty[CellEvalError])
         ) { case ((temps, acc, errs), q) =>
