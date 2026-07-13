@@ -115,9 +115,10 @@ class RecalcSpec extends FunSuite:
     val result = Workbook(sheet).recalculate()
     assert(result.errors.headOption.exists(_.render.startsWith("S!A1:")))
 
-  test("cross-sheet cycle stays total: caught by depth guard, reported per cell (not Tarjan)"):
-    // Cycle spanning sheets is invisible to the per-sheet Tarjan pass — pin the graceful path:
-    // both cells error (recursion guard), nothing throws, the acyclic remainder still evaluates.
+  test("cross-sheet cycle is detected by workbook-level Tarjan: circular per cell, still total"):
+    // GH-346: the qualified (sheet!cell) graph makes a cycle spanning sheets first-class — both
+    // participants report as circular (previously a generic depth-guard eval error), nothing
+    // throws, and the acyclic remainder still evaluates.
     val s1 = Sheet(SheetName.unsafe("S1"))
       .put(a1, formula("=S2!A1+1"))
       .put(a2, num(5))
@@ -125,14 +126,14 @@ class RecalcSpec extends FunSuite:
     val s2 = Sheet(SheetName.unsafe("S2")).put(a1, formula("=S1!A1+1"))
     val result = Workbook(s1, s2).recalculate()
     assertEquals(cached(result.workbook, "S1", a3), Some(num(10)))
-    val errorRefs = result.errors.map(e => (e.sheet.value, e.ref)).toSet
+    val byRef = result.errors.map(e => (e.sheet.value, e.ref) -> e.error.message).toMap
     assert(
-      errorRefs.contains(("S1", a1)),
-      s"S1!A1 should error, got: ${result.errors.map(_.render)}"
+      byRef.get(("S1", a1)).exists(_.contains("Circular")),
+      s"S1!A1 should be circular, got: ${result.errors.map(_.render)}"
     )
     assert(
-      errorRefs.contains(("S2", a1)),
-      s"S2!A1 should error, got: ${result.errors.map(_.render)}"
+      byRef.get(("S2", a1)).exists(_.contains("Circular")),
+      s"S2!A1 should be circular, got: ${result.errors.map(_.render)}"
     )
     assertEquals(cached(result.workbook, "S1", a1), None)
     assertEquals(cached(result.workbook, "S2", a1), None)
@@ -201,6 +202,24 @@ class RecalcSpec extends FunSuite:
     val result = Workbook(sheet).recalculate()
     assert(result.isClean, result.errors.map(_.render).mkString("; "))
     assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(7)))
+
+  test("GH-346 workbook-level dynamic closure: cross-sheet static dependent defers with INDIRECT"):
+    // S2!D1 depends statically on S1!C1, which is dynamic. With a per-sheet closure D1 would stay
+    // in the front partition and could evaluate before C1's target A1 refreshes, reading the
+    // stale 999 through the recursive fallback — an evaluation-order lottery. The workbook-level
+    // closure defers D1 with the bucket, so it deterministically reads the fresh chain.
+    val s1 = Sheet(SheetName.unsafe("S1"))
+      .put(ref"X1", num(1))
+      .put(ref"X2", num(2))
+      .put(ref"X3", num(3))
+      .put(ref"A1", CellValue.Formula("=SUM(X1:X3)", Some(num(999)))) // stale cache
+      .put(ref"C1", formula("=INDIRECT(\"A1\")"))
+    val s2 = Sheet(SheetName.unsafe("S2")).put(ref"D1", formula("=S1!C1+1"))
+    val result = Workbook(s1, s2).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S1", ref"A1"), Some(num(6)))
+    assertEquals(cached(result.workbook, "S1", ref"C1"), Some(num(6)))
+    assertEquals(cached(result.workbook, "S2", ref"D1"), Some(num(7)))
 
   test("GH-274 stale-cache regression: edit target, recalculate again, INDIRECT chain reflects it"):
     val sheet = Sheet(SheetName.unsafe("S"))

@@ -3,6 +3,7 @@ package com.tjclp.xl.formula.eval
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
 import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
@@ -136,12 +137,12 @@ object WorkbookEvaluator:
      * result.toEither                           // Left(errors) when not clean
      * }}}
      *
-     * Scope notes: cycle isolation is per-sheet (Tarjan over each sheet's graph) — a cycle that
-     * spans sheets is caught instead by the evaluator's recursion depth guard and surfaces as a
-     * generic per-cell eval error (still total, still collected; see RecalcSpec). Cross-sheet
-     * references to upstream formulas evaluate on demand against the original workbook snapshot and
-     * are not memoized across sheets — fine for typical workbooks; a workbook-level topological
-     * order is future work for deep cross-sheet fan-out.
+     * Scope notes (GH-346): ordering and cycle isolation are workbook-level — one topological order
+     * over the qualified (sheet!cell) graph, so every precedent (same-sheet or cross-sheet) is
+     * computed exactly once before its dependents and never re-derived on demand, and a cycle that
+     * spans sheets is detected by Tarjan exactly like a same-sheet one (participants reported
+     * circular, downstream dependents blocked, the acyclic remainder still evaluating; see
+     * RecalcSpec).
      *
      * Dynamic references (GH-274): the static graph sees INDIRECT's *arguments*, not its resolved
      * *targets*. INDIRECT-bearing cells and their static dependents evaluate after all other
@@ -169,93 +170,118 @@ object WorkbookEvaluator:
   // ========== recalculate internals ==========
 
   private def recalculateImpl(wb: Workbook, clock: Clock, rngOpt: Option[Rng]): RecalcResult =
-    val perSheet = wb.sheets.map(sheet => recalcSheet(sheet, wb, clock, rngOpt))
-    RecalcResult(
-      workbook = wb.copy(sheets = perSheet.map(_.sheet)),
-      evaluated = perSheet.map(r => r.sheet.name -> r.evaluated).toMap,
-      errors = perSheet.flatMap(_.errors).toVector
-    )
+    val (deps, dependents) = DependencyGraph.fromWorkbookBounded(wb)
 
-  private final case class SheetRecalc(
-    sheet: Sheet,
-    evaluated: Map[ARef, CellValue],
-    errors: Vector[CellEvalError]
-  )
+    def formulaText(q: QualifiedRef): String =
+      wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
+        case Some(CellValue.Formula(expr, _)) => expr
+        case _ => q.ref.toA1
 
-  private def formulaText(sheet: Sheet, ref: ARef): String =
-    sheet.cells.get(ref).map(_.value) match
-      case Some(CellValue.Formula(expr, _)) => expr
-      case _ => ref.toA1
+    // GH-346: cycle isolation on the WORKBOOK-level graph — same-sheet and cross-sheet cycles
+    // alike are detected by Tarjan and removed up front (previously a cross-sheet cycle fell
+    // through to the evaluator's recursion depth guard).
+    val cyclicCore = DependencyGraph.qualifiedCyclicNodes(deps)
+    val blocked = DependencyGraph.qualifiedTransitiveDependents(dependents, cyclicCore)
 
-  private def recalcSheet(
-    sheet: Sheet,
-    wb: Workbook,
-    clock: Clock,
-    rngOpt: Option[Rng]
-  ): SheetRecalc =
-    val graph = DependencyGraph.fromSheet(sheet)
-    val cyclicCore = DependencyGraph.cyclicNodes(graph)
-    val blocked = DependencyGraph.transitiveDependents(graph, cyclicCore)
-
-    val cycleErrors = cyclicCore.toVector.map { ref =>
-      CellEvalError(
-        sheet.name,
-        ref,
-        XLError.FormulaError(formulaText(sheet, ref), "Circular reference")
-      )
+    val cycleErrors = cyclicCore.toVector.map { q =>
+      CellEvalError(q.sheet, q.ref, XLError.FormulaError(formulaText(q), "Circular reference"))
     }
-    // transitiveDependents excludes its seed set, so `blocked` is already disjoint from the core
-    val blockedErrors = blocked.toVector.map { ref =>
+    // qualifiedTransitiveDependents excludes its seed set, so `blocked` is disjoint from the core
+    val blockedErrors = blocked.toVector.map { q =>
       CellEvalError(
-        sheet.name,
-        ref,
-        XLError.FormulaError(formulaText(sheet, ref), "Blocked by an upstream circular reference")
+        q.sheet,
+        q.ref,
+        XLError.FormulaError(formulaText(q), "Blocked by an upstream circular reference")
       )
     }
 
     val removed = cyclicCore ++ blocked
-    val pruned = DependencyGraph(
-      dependencies = (graph.dependencies -- removed).view.mapValues(_ -- removed).toMap,
-      dependents = (graph.dependents -- removed).view.mapValues(_ -- removed).toMap
-    )
+    val prunedDeps = (deps -- removed).view.mapValues(_ -- removed).toMap
+    val prunedDependents = (dependents -- removed).view.mapValues(_ -- removed).toMap
 
-    DependencyGraph.topologicalSort(pruned) match
+    DependencyGraph.qualifiedTopologicalSort(prunedDeps, prunedDependents) match
       case Left(circular) =>
-        // Unreachable: cyclicNodes removed every cycle participant. Stay total regardless.
-        val residual = pruned.dependencies.keySet.toVector.map { ref =>
+        // Unreachable: qualifiedCyclicNodes removed every cycle participant. Stay total anyway.
+        val residual = prunedDeps.keySet.toVector.map { q =>
           CellEvalError(
-            sheet.name,
-            ref,
-            XLError.FormulaError(formulaText(sheet, ref), s"Unresolvable order: $circular")
+            q.sheet,
+            q.ref,
+            XLError.FormulaError(formulaText(q), s"Unresolvable order: $circular")
           )
         }
-        SheetRecalc(sheet, Map.empty, cycleErrors ++ blockedErrors ++ residual)
+        RecalcResult(
+          workbook = wb,
+          evaluated = wb.sheets.map(s => s.name -> Map.empty[ARef, CellValue]).toMap,
+          errors = cycleErrors ++ blockedErrors ++ residual
+        )
 
       case Right(evalOrder) =>
-        // GH-274: INDIRECT-bearing cells and their transitive static dependents evaluate last
-        // (stable evaluate-last partition), against a temp sheet whose bucket members have had
-        // stale caches stripped — a dynamic read of a not-yet-evaluated bucket cell then
-        // recursively evaluates fresh (depth-guarded) instead of trusting a previous
-        // generation's cache. INDIRECT-free sheets take the identity path, bit-identical.
-        val dynamic = DependencyGraph.dynamicCells(sheet) -- removed
-        val (ordered, initial) =
-          SheetEvaluator.deferDynamicWithStrip(sheet, pruned, evalOrder, dynamic)
-        val (tempSheet, results, evalErrors) = ordered.foldLeft(
-          (initial, Map.empty[ARef, CellValue], Vector.empty[CellEvalError])
-        ) { case ((temp, acc, errs), ref) =>
-          val evaluated = rngOpt match
-            case Some(rng) => temp.evaluateCell(ref, clock, rng, Some(wb))
-            case None => temp.evaluateCell(ref, clock, Some(wb))
-          evaluated match
-            case Right(value) => (temp.put(ref, value), acc + (ref -> value), errs)
-            case Left(error) => (temp, acc, errs :+ CellEvalError(sheet.name, ref, error))
+        // GH-274/GH-301: dynamic-reference cells (INDIRECT/OFFSET) and their transitive static
+        // dependents evaluate last (stable partition — preserves topological validity per the
+        // deferDynamic lemma), with stale caches stripped so a dynamic read of a
+        // not-yet-evaluated bucket cell recursively evaluates fresh (depth-guarded) instead of
+        // trusting a previous generation's cache. The closure is workbook-level (GH-346): a
+        // cross-sheet static dependent of a dynamic cell defers with it. Dynamic-free workbooks
+        // take the identity path.
+        val dynamic: Set[QualifiedRef] =
+          wb.sheets.iterator.flatMap { s =>
+            DependencyGraph.dynamicCells(s).iterator.map(r => QualifiedRef(s.name, r))
+          }.toSet -- removed
+        val bucket =
+          if dynamic.isEmpty then Set.empty[QualifiedRef]
+          else dynamic ++ DependencyGraph.qualifiedTransitiveDependents(prunedDependents, dynamic)
+        val ordered =
+          if bucket.isEmpty then evalOrder
+          else evalOrder.filterNot(bucket.contains) ++ evalOrder.filter(bucket.contains)
+
+        val stripBySheet: Map[SheetName, Set[ARef]] = bucket.groupMap(_.sheet)(_.ref)
+        val initialSheets: Vector[Sheet] =
+          wb.sheets.map { s =>
+            val toStrip = stripBySheet.getOrElse(s.name, Set.empty)
+            if toStrip.isEmpty then s else SheetEvaluator.stripFormulaCaches(s, toStrip)
+          }
+        val sheetIndex: Map[SheetName, Int] =
+          wb.sheets.zipWithIndex.map((s, i) => s.name -> i).toMap
+
+        // Evaluate in the single global order, threading the partially evaluated workbook:
+        // every reference — same-sheet or cross-sheet — reads its precedents as already-computed
+        // values, so recursive re-derivation only arises on dynamic reads. The temp sheets live
+        // in a Vector parallel to wb.sheets, updated incrementally, so per-cell cost is one
+        // Workbook shell copy + one Vector update rather than re-mapping every sheet.
+        val (_, evaluated, evalErrors) = ordered.foldLeft(
+          (initialSheets, Map.empty[SheetName, Map[ARef, CellValue]], Vector.empty[CellEvalError])
+        ) { case ((sheets, acc, errs), q) =>
+          sheetIndex.get(q.sheet) match
+            case None => (sheets, acc, errs) // node names a sheet absent from the workbook
+            case Some(idx) =>
+              val tempSheet = sheets(idx)
+              val tempWb = wb.copy(sheets = sheets)
+              val evaluatedCell = rngOpt match
+                case Some(rng) => tempSheet.evaluateCell(q.ref, clock, rng, Some(tempWb))
+                case None => tempSheet.evaluateCell(q.ref, clock, Some(tempWb))
+              evaluatedCell match
+                case Right(value) =>
+                  (
+                    sheets.updated(idx, tempSheet.put(q.ref, value)),
+                    acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
+                    errs
+                  )
+                case Left(error) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
         }
 
-        // Cache computed values into formula cells; failed cells stay uncached
-        val cachedSheet = results.foldLeft(sheet) { case (s, (ref, computed)) =>
-          s.cells.get(ref).map(_.value) match
-            case Some(CellValue.Formula(expr, _)) =>
-              s.put(ref, CellValue.Formula(expr, Some(computed)))
-            case _ => s
+        // Cache computed values into formula cells on the original sheets; failed cells stay
+        // uncached (Excel recalculates them on open)
+        val cachedSheets = wb.sheets.map { orig =>
+          evaluated.getOrElse(orig.name, Map.empty).foldLeft(orig) { case (s, (ref, computed)) =>
+            s.cells.get(ref).map(_.value) match
+              case Some(CellValue.Formula(expr, _)) =>
+                s.put(ref, CellValue.Formula(expr, Some(computed)))
+              case _ => s
+          }
         }
-        SheetRecalc(cachedSheet, results, cycleErrors ++ blockedErrors ++ evalErrors)
+
+        RecalcResult(
+          workbook = wb.copy(sheets = cachedSheets),
+          evaluated = wb.sheets.map(s => s.name -> evaluated.getOrElse(s.name, Map.empty)).toMap,
+          errors = cycleErrors ++ blockedErrors ++ evalErrors
+        )

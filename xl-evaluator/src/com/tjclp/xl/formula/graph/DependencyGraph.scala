@@ -628,23 +628,28 @@ object DependencyGraph:
     graph: DependencyGraph,
     refs: Set[ARef]
   ): Set[ARef] =
-    transitiveDependentsImpl(graph, refs, refs, Set.empty)
-
-  @scala.annotation.tailrec
-  private def transitiveDependentsImpl(
-    graph: DependencyGraph,
-    originalRefs: Set[ARef],
-    frontier: Set[ARef],
-    visited: Set[ARef]
-  ): Set[ARef] =
-    val toVisit = frontier -- visited
-    if toVisit.isEmpty then visited -- originalRefs // Exclude starting refs
-    else
-      val directDeps = toVisit.flatMap(ref => graph.dependents.getOrElse(ref, Set.empty))
-      transitiveDependentsImpl(graph, originalRefs, directDeps, visited ++ toVisit)
+    transitiveDependentsOf(graph.dependents, refs)
 
   /**
-   * Iterative Tarjan SCC engine shared by `detectCycles` and `cyclicNodes`.
+   * Reverse-reachability core shared by the sheet-level and workbook-level (qualified) variants —
+   * generic in the node type (GH-346). Excludes the starting refs from the result.
+   */
+  private def transitiveDependentsOf[K](
+    dependents: Map[K, Set[K]],
+    originalRefs: Set[K]
+  ): Set[K] =
+    @scala.annotation.tailrec
+    def impl(frontier: Set[K], visited: Set[K]): Set[K] =
+      val toVisit = frontier -- visited
+      if toVisit.isEmpty then visited -- originalRefs // Exclude starting refs
+      else
+        val directDeps = toVisit.flatMap(ref => dependents.getOrElse(ref, Set.empty))
+        impl(directDeps, visited ++ toVisit)
+    impl(originalRefs, Set.empty)
+
+  /**
+   * Iterative Tarjan SCC engine shared by `detectCycles`, `cyclicNodes`, and their qualified
+   * (workbook-level) counterparts — generic in the node type (GH-346).
    *
    * Uses an explicit work stack instead of recursion: `recalculate` promises totality, and a deep
    * linear dependency chain (e.g. 100k sequential formulas) must not throw StackOverflowError.
@@ -652,24 +657,24 @@ object DependencyGraph:
    * component root last).
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private def foreachScc(graph: DependencyGraph)(onScc: List[ARef] => Unit): Unit =
+  private def foreachSccOf[K](dependencies: Map[K, Set[K]])(onScc: List[K] => Unit): Unit =
     var index = 0
-    var indices = Map.empty[ARef, Int]
-    var lowLinks = Map.empty[ARef, Int]
-    var stack = List.empty[ARef]
-    var onStack = Set.empty[ARef]
+    var indices = Map.empty[K, Int]
+    var lowLinks = Map.empty[K, Int]
+    var stack = List.empty[K]
+    var onStack = Set.empty[K]
     // DFS frames: (node, successors not yet examined)
-    var frames = List.empty[(ARef, List[ARef])]
+    var frames = List.empty[(K, List[K])]
 
-    def push(v: ARef): Unit =
+    def push(v: K): Unit =
       indices = indices.updated(v, index)
       lowLinks = lowLinks.updated(v, index)
       index += 1
       stack = v :: stack
       onStack = onStack + v
-      frames = (v, graph.dependencies.getOrElse(v, Set.empty).toList) :: frames
+      frames = (v, dependencies.getOrElse(v, Set.empty).toList) :: frames
 
-    graph.dependencies.keySet.foreach { root =>
+    dependencies.keySet.foreach { root =>
       if !indices.contains(root) then
         push(root)
         while frames.nonEmpty do
@@ -693,6 +698,9 @@ object DependencyGraph:
                 case Nil => ()
             case Nil => () // unreachable: guarded by frames.nonEmpty
     }
+
+  private def foreachScc(graph: DependencyGraph)(onScc: List[ARef] => Unit): Unit =
+    foreachSccOf(graph.dependencies)(onScc)
 
   /**
    * Detect circular references using Tarjan's strongly connected components algorithm.
@@ -758,6 +766,58 @@ object DependencyGraph:
     cyclic
 
   /**
+   * Kahn's-algorithm core shared by the sheet-level and workbook-level (qualified) sorts — generic
+   * in the node type (GH-346). Only nodes present in `dependencies` (formula cells) are ordered;
+   * edges to non-nodes (constants, empty cells) are ignored. Left carries the nodes that could not
+   * be ordered (cycle participants and everything downstream of them).
+   */
+  private def kahnOrder[K](
+    dependencies: Map[K, Set[K]],
+    dependents: Map[K, Set[K]]
+  ): Either[Set[K], List[K]] =
+    // All formula cells (only process formulas, not constants)
+    val allNodes = dependencies.keySet
+
+    // If no formula cells, early exit
+    if allNodes.isEmpty then scala.util.Right(List.empty[K])
+    else
+      // Calculate in-degree for each node (number of formula cells it depends on)
+      // Only count dependencies on other formula cells, not constants
+      val inDegree = allNodes.map { node =>
+        val deps = dependencies.getOrElse(node, Set.empty)
+        val formulaDeps = deps.filter(allNodes.contains)
+        node -> formulaDeps.size
+      }.toMap
+
+      // Start with nodes that have in-degree 0 (no dependencies)
+      val initialQueue = allNodes.filter(node => inDegree(node) == 0).toList
+
+      @tailrec
+      def process(
+        queue: List[K],
+        processedInDegree: Map[K, Int],
+        acc: List[K]
+      ): (List[K], Map[K, Int]) =
+        queue match
+          case Nil => (acc, processedInDegree)
+          case node :: rest =>
+            val deps = dependents.getOrElse(node, Set.empty).filter(allNodes.contains)
+            val (nextInDegree, newlyZero) = deps.foldLeft((processedInDegree, List.empty[K])) {
+              case ((degreeAcc, zeros), dep) =>
+                val newInDegree = degreeAcc(dep) - 1
+                val updatedDegree = degreeAcc.updated(dep, newInDegree)
+                val nextZeros = if newInDegree == 0 then zeros :+ dep else zeros
+                (updatedDegree, nextZeros)
+            }
+            process(rest ++ newlyZero, nextInDegree, acc :+ node)
+
+      val (result, _) = process(initialQueue, inDegree, List.empty)
+
+      // If all nodes are processed, graph is acyclic
+      if result.size == allNodes.size then scala.util.Right(result)
+      else scala.util.Left(allNodes -- result.toSet)
+
+  /**
    * Topological sort using Kahn's algorithm.
    *
    * Returns a linear ordering of cells such that for every dependency A → B, cell B appears before
@@ -782,52 +842,10 @@ object DependencyGraph:
    * }}}
    */
   def topologicalSort(graph: DependencyGraph): Either[EvalError.CircularRef, List[ARef]] =
-    import scala.util.boundary, boundary.break
-
-    boundary:
-      // All formula cells (only process formulas, not constants)
-      val allNodes = graph.dependencies.keySet
-
-      // If no formula cells, early exit
-      if allNodes.isEmpty then break(scala.util.Right(List.empty[ARef]))
-
-      // Calculate in-degree for each node (number of formula cells it depends on)
-      // Only count dependencies on other formula cells, not constants
-      val inDegree = allNodes.map { node =>
-        val deps = graph.dependencies.getOrElse(node, Set.empty)
-        val formulaDeps = deps.filter(allNodes.contains)
-        node -> formulaDeps.size
-      }.toMap
-
-      // Start with nodes that have in-degree 0 (no dependencies)
-      val initialQueue = allNodes.filter(node => inDegree(node) == 0).toList
-
-      @tailrec
-      def process(
-        queue: List[ARef],
-        processedInDegree: Map[ARef, Int],
-        acc: List[ARef]
-      ): (List[ARef], Map[ARef, Int]) =
-        queue match
-          case Nil => (acc, processedInDegree)
-          case node :: rest =>
-            val deps = graph.dependents.getOrElse(node, Set.empty).filter(allNodes.contains)
-            val (nextInDegree, newlyZero) = deps.foldLeft((processedInDegree, List.empty[ARef])) {
-              case ((degreeAcc, zeros), dep) =>
-                val newInDegree = degreeAcc(dep) - 1
-                val updatedDegree = degreeAcc.updated(dep, newInDegree)
-                val nextZeros = if newInDegree == 0 then zeros :+ dep else zeros
-                (updatedDegree, nextZeros)
-            }
-            process(rest ++ newlyZero, nextInDegree, acc :+ node)
-
-      val (result, _) = process(initialQueue, inDegree, List.empty)
-
-      // If all nodes are processed, graph is acyclic
-      if result.size == allNodes.size then scala.util.Right(result)
-      else
+    kahnOrder(graph.dependencies, graph.dependents) match
+      case scala.util.Right(order) => scala.util.Right(order)
+      case scala.util.Left(remainingNodes) =>
         // Cycle detected: find one cycle for error reporting
-        val remainingNodes = allNodes -- result.toSet
         val cycle = remainingNodes.headOption match
           case Some(start) =>
             // Follow dependencies to reconstruct cycle
@@ -901,143 +919,174 @@ object DependencyGraph:
     }.toMap
 
   /**
-   * Convert a RangeLocation to qualified cell references.
+   * GH-346: workbook-level dependency graph with ranges bounded by each TARGET sheet's used range —
+   * the qualified analog of `fromSheet`'s bounded extraction (a full-column reference must not
+   * enumerate 1M+ cells). Single refs stay exact. Ranges over sheets absent from the workbook (or
+   * empty ones) contribute no edges: they cannot affect evaluation order, and the referencing
+   * formula still errors per cell on evaluation.
    *
-   * For Local ranges, uses the current sheet. For CrossSheet ranges, uses the specified sheet.
+   * Returns forward edges (ref → its dependencies) and reverse edges (ref → its dependents), which
+   * together drive `qualifiedTopologicalSort`.
    */
-  private def locationToQualifiedRefs(
-    location: TExpr.RangeLocation,
-    currentSheet: SheetName
+  def fromWorkbookBounded(
+    workbook: com.tjclp.xl.workbooks.Workbook
+  ): (Map[QualifiedRef, Set[QualifiedRef]], Map[QualifiedRef, Set[QualifiedRef]]) =
+    val bounds: Map[SheetName, Option[CellRange]] =
+      workbook.sheets.map(s => s.name -> s.usedRange).toMap
+    val cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = (sheet, range) =>
+      bounds.get(sheet) match
+        case Some(Some(b)) =>
+          range.intersect(b) match
+            case Some(clipped) => clipped.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+            case None => Set.empty
+        case _ => Set.empty // empty or missing sheet: nothing to depend on
+
+    val dependencies = workbook.sheets.flatMap { sheet =>
+      sheet.cells.flatMap { case (cellRef, cell) =>
+        cell.value match
+          case CellValue.Formula(expression, _) =>
+            val deps = FormulaParser.parse(expression) match
+              case scala.util.Right(expr) =>
+                extractQualifiedDependencies(expr, sheet.name, cellsFor)
+              case scala.util.Left(_) => Set.empty[QualifiedRef]
+            Some(QualifiedRef(sheet.name, cellRef) -> deps)
+          case _ => None
+      }
+    }.toMap
+
+    val dependents =
+      dependencies.foldLeft(Map.empty[QualifiedRef, Set[QualifiedRef]]) { case (acc, (ref, deps)) =>
+        deps.foldLeft(acc) { (acc2, dep) =>
+          acc2.updated(dep, acc2.getOrElse(dep, Set.empty) + ref)
+        }
+      }
+
+    (dependencies, dependents)
+
+  /**
+   * GH-346: every node participating in a reference cycle of the workbook-level graph — the
+   * qualified analog of `cyclicNodes`, sharing the iterative (stack-safe) Tarjan engine. Detects
+   * cycles that span sheets, which per-sheet analysis cannot see.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def qualifiedCyclicNodes(
+    dependencies: Map[QualifiedRef, Set[QualifiedRef]]
   ): Set[QualifiedRef] =
-    location match
-      case TExpr.RangeLocation.Local(range) =>
-        range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
-      case TExpr.RangeLocation.CrossSheet(sheet, range) =>
-        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
+    var cyclic = Set.empty[QualifiedRef]
+    foreachSccOf(dependencies) {
+      case single :: Nil =>
+        if dependencies.get(single).exists(_.contains(single)) then cyclic = cyclic + single
+      case multi => cyclic = cyclic ++ multi
+    }
+    cyclic
+
+  /**
+   * GH-346: transitive dependents over the workbook-level reverse edges (excludes the starting
+   * refs) — the qualified analog of `transitiveDependents`.
+   */
+  def qualifiedTransitiveDependents(
+    dependents: Map[QualifiedRef, Set[QualifiedRef]],
+    refs: Set[QualifiedRef]
+  ): Set[QualifiedRef] =
+    transitiveDependentsOf(dependents, refs)
+
+  /**
+   * GH-346: Kahn order over the workbook-level graph. Left carries the nodes that could not be
+   * ordered (cycle participants and their downstream); callers that prune cycles first only reach
+   * Left as a defensive-totality path.
+   */
+  def qualifiedTopologicalSort(
+    dependencies: Map[QualifiedRef, Set[QualifiedRef]],
+    dependents: Map[QualifiedRef, Set[QualifiedRef]]
+  ): Either[Set[QualifiedRef], List[QualifiedRef]] =
+    kahnOrder(dependencies, dependents)
+
+  /** Unbounded range expansion — the original `fromWorkbook` semantics. */
+  private val unboundedQualifiedCells: (SheetName, CellRange) => Set[QualifiedRef] =
+    (sheet, range) => range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
 
   /**
    * Extract all qualified cell references from TExpr.
    *
    * Similar to extractDependencies but returns QualifiedRef to track cross-sheet references.
-   * Same-sheet references are qualified with the current sheet name.
+   * Same-sheet references are qualified with the current sheet name. Range expansion is delegated
+   * to `cellsFor` so workbook-level callers can bound ranges by the TARGET sheet's used range
+   * (GH-346) — the qualified analog of `extractDependenciesBounded`; single refs stay exact.
    *
    * @param expr
    *   The expression to analyze
    * @param currentSheet
    *   The sheet containing the formula (used for same-sheet ref qualification)
+   * @param cellsFor
+   *   Expands a range on a named sheet to qualified cells (possibly bounded)
    * @return
    *   Set of qualified cell references used in the expression
    */
   @nowarn("msg=Unreachable case")
   private def extractQualifiedDependencies[A](
     expr: TExpr[A],
-    currentSheet: SheetName
+    currentSheet: SheetName,
+    cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells
   ): Set[QualifiedRef] =
-    expr match
-      // Same-sheet references - qualify with current sheet
-      case TExpr.Ref(at, _, _) => Set(QualifiedRef(currentSheet, at))
-      case TExpr.PolyRef(at, _) => Set(QualifiedRef(currentSheet, at))
-      case TExpr.RangeRef(range) =>
-        range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
+    def locCells(location: TExpr.RangeLocation): Set[QualifiedRef] =
+      location match
+        case TExpr.RangeLocation.Local(range) => cellsFor(currentSheet, range)
+        case TExpr.RangeLocation.CrossSheet(sheet, range) => cellsFor(sheet, range)
 
-      // Cross-sheet references - use target sheet
-      case TExpr.SheetRef(sheet, at, _, _) => Set(QualifiedRef(sheet, at))
-      case TExpr.SheetPolyRef(sheet, at, _) => Set(QualifiedRef(sheet, at))
-      case TExpr.SheetRange(sheet, range) =>
-        range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-      case TExpr.Add(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Sub(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Mul(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Div(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Pow(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Concat(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Eq(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Neq(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Lt(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Lte(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Gt(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      case TExpr.Gte(l, r) =>
-        extractQualifiedDependencies(l, currentSheet) ++ extractQualifiedDependencies(
-          r,
-          currentSheet
-        )
-      // Unary operators
-      case TExpr.ToInt(x) => extractQualifiedDependencies(x, currentSheet)
+    def go(e: TExpr[?]): Set[QualifiedRef] =
+      e match
+        // Same-sheet references - qualify with current sheet
+        case TExpr.Ref(at, _, _) => Set(QualifiedRef(currentSheet, at))
+        case TExpr.PolyRef(at, _) => Set(QualifiedRef(currentSheet, at))
+        case TExpr.RangeRef(range) => cellsFor(currentSheet, range)
 
-      // Reference functions
-      case TExpr.Aggregate(_, location) => locationToQualifiedRefs(location, currentSheet)
+        // Cross-sheet references - use target sheet
+        case TExpr.SheetRef(sheet, at, _, _) => Set(QualifiedRef(sheet, at))
+        case TExpr.SheetPolyRef(sheet, at, _) => Set(QualifiedRef(sheet, at))
+        case TExpr.SheetRange(sheet, range) => cellsFor(sheet, range)
+        case TExpr.Add(l, r) => go(l) ++ go(r)
+        case TExpr.Sub(l, r) => go(l) ++ go(r)
+        case TExpr.Mul(l, r) => go(l) ++ go(r)
+        case TExpr.Div(l, r) => go(l) ++ go(r)
+        case TExpr.Pow(l, r) => go(l) ++ go(r)
+        case TExpr.Concat(l, r) => go(l) ++ go(r)
+        case TExpr.Eq(l, r) => go(l) ++ go(r)
+        case TExpr.Neq(l, r) => go(l) ++ go(r)
+        case TExpr.Lt(l, r) => go(l) ++ go(r)
+        case TExpr.Lte(l, r) => go(l) ++ go(r)
+        case TExpr.Gt(l, r) => go(l) ++ go(r)
+        case TExpr.Gte(l, r) => go(l) ++ go(r)
+        // Unary operators
+        case TExpr.ToInt(x) => go(x)
 
-      case call: TExpr.Call[?] =>
-        val values = call.spec.argSpec.toValues(call.args)
-        values.foldLeft(Set.empty[QualifiedRef]) { (acc, value) =>
-          value match
-            case ArgValue.Expr(expr) => acc ++ extractQualifiedDependencies(expr, currentSheet)
-            case ArgValue.Range(range) => acc ++ locationToQualifiedRefs(range, currentSheet)
-            case ArgValue.Cells(range) =>
-              acc ++ range.cells.map(ref => QualifiedRef(currentSheet, ref)).toSet
-        }
+        // Reference functions
+        case TExpr.Aggregate(_, location) => locCells(location)
 
-      // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
-      case TExpr.Let(bindings, body) =>
-        bindings.foldLeft(extractQualifiedDependencies(body, currentSheet)) {
-          case (acc, (_, value)) => acc ++ extractQualifiedDependencies(value, currentSheet)
-        }
-      case TExpr.BindingRef(_) => Set.empty
-      case TExpr.CoercedBindingRef(_, _) => Set.empty
+        case call: TExpr.Call[?] =>
+          val values = call.spec.argSpec.toValues(call.args)
+          values.foldLeft(Set.empty[QualifiedRef]) { (acc, value) =>
+            value match
+              case ArgValue.Expr(expr) => acc ++ go(expr)
+              case ArgValue.Range(range) => acc ++ locCells(range)
+              case ArgValue.Cells(range) => acc ++ cellsFor(currentSheet, range)
+          }
 
-      // GH-306: runtime coercion wrapper — transparent for analysis
-      case TExpr.Coerced(inner, _) => extractQualifiedDependencies(inner, currentSheet)
+        // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
+        case TExpr.Let(bindings, body) =>
+          bindings.foldLeft(go(body)) { case (acc, (_, value)) => acc ++ go(value) }
+        case TExpr.BindingRef(_) => Set.empty
+        case TExpr.CoercedBindingRef(_, _) => Set.empty
 
-      // Literals and nullary functions (no dependencies)
-      case TExpr.Lit(_) => Set.empty
-      case TExpr.DateToSerial(dateExpr) => extractQualifiedDependencies(dateExpr, currentSheet)
-      case TExpr.DateTimeToSerial(dtExpr) => extractQualifiedDependencies(dtExpr, currentSheet)
+        // GH-306: runtime coercion wrapper — transparent for analysis
+        case TExpr.Coerced(inner, _) => go(inner)
 
-      // Financial functions
+        // Literals and nullary functions (no dependencies)
+        case TExpr.Lit(_) => Set.empty
+        case TExpr.DateToSerial(dateExpr) => go(dateExpr)
+        case TExpr.DateTimeToSerial(dtExpr) => go(dtExpr)
+
+    go(expr)
+
   /**
    * Detect circular references across sheets using Tarjan's SCC algorithm.
    *
