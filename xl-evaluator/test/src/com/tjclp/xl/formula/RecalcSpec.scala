@@ -203,6 +203,24 @@ class RecalcSpec extends FunSuite:
     assert(result.isClean, result.errors.map(_.render).mkString("; "))
     assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(7)))
 
+  test("GH-346 workbook-level dynamic closure: cross-sheet static dependent defers with INDIRECT"):
+    // S2!D1 depends statically on S1!C1, which is dynamic. With a per-sheet closure D1 would stay
+    // in the front partition and could evaluate before C1's target A1 refreshes, reading the
+    // stale 999 through the recursive fallback — an evaluation-order lottery. The workbook-level
+    // closure defers D1 with the bucket, so it deterministically reads the fresh chain.
+    val s1 = Sheet(SheetName.unsafe("S1"))
+      .put(ref"X1", num(1))
+      .put(ref"X2", num(2))
+      .put(ref"X3", num(3))
+      .put(ref"A1", CellValue.Formula("=SUM(X1:X3)", Some(num(999)))) // stale cache
+      .put(ref"C1", formula("=INDIRECT(\"A1\")"))
+    val s2 = Sheet(SheetName.unsafe("S2")).put(ref"D1", formula("=S1!C1+1"))
+    val result = Workbook(s1, s2).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    assertEquals(cached(result.workbook, "S1", ref"A1"), Some(num(6)))
+    assertEquals(cached(result.workbook, "S1", ref"C1"), Some(num(6)))
+    assertEquals(cached(result.workbook, "S2", ref"D1"), Some(num(7)))
+
   test("GH-274 stale-cache regression: edit target, recalculate again, INDIRECT chain reflects it"):
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(ref"X1", num(1))

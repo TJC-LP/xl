@@ -235,36 +235,38 @@ object WorkbookEvaluator:
           else evalOrder.filterNot(bucket.contains) ++ evalOrder.filter(bucket.contains)
 
         val stripBySheet: Map[SheetName, Set[ARef]] = bucket.groupMap(_.sheet)(_.ref)
-        val initialTemps: Map[SheetName, Sheet] =
+        val initialSheets: Vector[Sheet] =
           wb.sheets.map { s =>
             val toStrip = stripBySheet.getOrElse(s.name, Set.empty)
-            s.name ->
-              (if toStrip.isEmpty then s else SheetEvaluator.stripFormulaCaches(s, toStrip))
-          }.toMap
+            if toStrip.isEmpty then s else SheetEvaluator.stripFormulaCaches(s, toStrip)
+          }
+        val sheetIndex: Map[SheetName, Int] =
+          wb.sheets.zipWithIndex.map((s, i) => s.name -> i).toMap
 
         // Evaluate in the single global order, threading the partially evaluated workbook:
         // every reference — same-sheet or cross-sheet — reads its precedents as already-computed
-        // values, so recursive re-derivation only arises on dynamic reads. Rebuilding tempWb per
-        // cell is O(sheets) shallow-copy work per formula — negligible at realistic sheet
-        // counts, and each evaluation must see a workbook consistent with the fold state.
+        // values, so recursive re-derivation only arises on dynamic reads. The temp sheets live
+        // in a Vector parallel to wb.sheets, updated incrementally, so per-cell cost is one
+        // Workbook shell copy + one Vector update rather than re-mapping every sheet.
         val (_, evaluated, evalErrors) = ordered.foldLeft(
-          (initialTemps, Map.empty[SheetName, Map[ARef, CellValue]], Vector.empty[CellEvalError])
-        ) { case ((temps, acc, errs), q) =>
-          temps.get(q.sheet) match
-            case None => (temps, acc, errs) // node names a sheet absent from the workbook
-            case Some(tempSheet) =>
-              val tempWb = wb.copy(sheets = wb.sheets.map(s => temps.getOrElse(s.name, s)))
+          (initialSheets, Map.empty[SheetName, Map[ARef, CellValue]], Vector.empty[CellEvalError])
+        ) { case ((sheets, acc, errs), q) =>
+          sheetIndex.get(q.sheet) match
+            case None => (sheets, acc, errs) // node names a sheet absent from the workbook
+            case Some(idx) =>
+              val tempSheet = sheets(idx)
+              val tempWb = wb.copy(sheets = sheets)
               val evaluatedCell = rngOpt match
                 case Some(rng) => tempSheet.evaluateCell(q.ref, clock, rng, Some(tempWb))
                 case None => tempSheet.evaluateCell(q.ref, clock, Some(tempWb))
               evaluatedCell match
                 case Right(value) =>
                   (
-                    temps.updated(q.sheet, tempSheet.put(q.ref, value)),
+                    sheets.updated(idx, tempSheet.put(q.ref, value)),
                     acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
                     errs
                   )
-                case Left(error) => (temps, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+                case Left(error) => (sheets, acc, errs :+ CellEvalError(q.sheet, q.ref, error))
         }
 
         // Cache computed values into formula cells on the original sheets; failed cells stay

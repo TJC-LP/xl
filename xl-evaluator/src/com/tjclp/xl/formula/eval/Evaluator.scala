@@ -237,6 +237,9 @@ object Evaluator:
    * snapshots (a recalc temp sheet vs the original workbook copy) memoize independently, so a stale
    * snapshot can never serve values for a newer one.
    *
+   * Not thread-safe: an evaluation pass is single-threaded and the memo never escapes it — revisit
+   * if evaluation is ever parallelized internally.
+   *
    * Errors memoize too — a cycle otherwise re-burns the full recursion-depth guard once per path,
    * which is itself exponential. A depth-guard error consequently records by first-visit order;
    * that is observable only on chains deeper than the guard, where results were already
