@@ -380,7 +380,8 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
                         targetSheet,
                         ctx.clock,
                         ctx.workbook,
-                        ctx.depth + 1
+                        ctx.depth + 1,
+                        memo = ctx.memo.getOrElse(new Evaluator.EvalMemo)
                       )
                       .map(cols :+ _)
                   case other => Right(cols :+ other)

@@ -115,9 +115,10 @@ class RecalcSpec extends FunSuite:
     val result = Workbook(sheet).recalculate()
     assert(result.errors.headOption.exists(_.render.startsWith("S!A1:")))
 
-  test("cross-sheet cycle stays total: caught by depth guard, reported per cell (not Tarjan)"):
-    // Cycle spanning sheets is invisible to the per-sheet Tarjan pass — pin the graceful path:
-    // both cells error (recursion guard), nothing throws, the acyclic remainder still evaluates.
+  test("cross-sheet cycle is detected by workbook-level Tarjan: circular per cell, still total"):
+    // GH-346: the qualified (sheet!cell) graph makes a cycle spanning sheets first-class — both
+    // participants report as circular (previously a generic depth-guard eval error), nothing
+    // throws, and the acyclic remainder still evaluates.
     val s1 = Sheet(SheetName.unsafe("S1"))
       .put(a1, formula("=S2!A1+1"))
       .put(a2, num(5))
@@ -125,14 +126,14 @@ class RecalcSpec extends FunSuite:
     val s2 = Sheet(SheetName.unsafe("S2")).put(a1, formula("=S1!A1+1"))
     val result = Workbook(s1, s2).recalculate()
     assertEquals(cached(result.workbook, "S1", a3), Some(num(10)))
-    val errorRefs = result.errors.map(e => (e.sheet.value, e.ref)).toSet
+    val byRef = result.errors.map(e => (e.sheet.value, e.ref) -> e.error.message).toMap
     assert(
-      errorRefs.contains(("S1", a1)),
-      s"S1!A1 should error, got: ${result.errors.map(_.render)}"
+      byRef.get(("S1", a1)).exists(_.contains("Circular")),
+      s"S1!A1 should be circular, got: ${result.errors.map(_.render)}"
     )
     assert(
-      errorRefs.contains(("S2", a1)),
-      s"S2!A1 should error, got: ${result.errors.map(_.render)}"
+      byRef.get(("S2", a1)).exists(_.contains("Circular")),
+      s"S2!A1 should be circular, got: ${result.errors.map(_.render)}"
     )
     assertEquals(cached(result.workbook, "S1", a1), None)
     assertEquals(cached(result.workbook, "S2", a1), None)

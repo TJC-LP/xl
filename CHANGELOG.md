@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Recursive uncached-reference evaluation is memoized per pass** (#346): an
+  uncached formula reference (`CellValue.Formula(_, None)`) was recursively
+  re-evaluated once per *path* through the dependency graph — exponential on
+  multi-branch recursive chains (an LBO debt schedule at ~800 formulas ran for
+  hours at 100% CPU; the repro in `RecalcPerfSpec` never finished at n=24
+  periods). A pass-local memo (`Evaluator.EvalMemo`, keyed by sheet identity
+  then ref) threads through recursive evaluation, `EvalContext`, and the
+  aggregate/array uncached-cell readers, so each distinct cell evaluates at
+  most once per top-level evaluation — Excel's own one-computation-per-cell
+  semantics. Errors memoize too (a cycle no longer re-burns the depth guard
+  per path). The n=24 repro drops from unbounded to milliseconds.
+- **`Workbook.recalculate()` orders cells workbook-level, not per sheet**
+  (#346): recalculation now builds one qualified (sheet!cell) dependency graph
+  (`DependencyGraph.fromWorkbookBounded`, ranges bounded by each *target*
+  sheet's used range), prunes cycles with a workbook-level Tarjan pass, and
+  evaluates a single global topological order threading the partially
+  evaluated workbook — every precedent, same-sheet or cross-sheet, is computed
+  exactly once before its dependents instead of being re-derived on demand
+  against the original uncached snapshot. Consequences: mutually-referencing
+  sheets recalculate in linear time; cross-sheet aggregates over uncached
+  formula cells read computed values regardless of sheet order; **cycles that
+  span sheets are now detected and reported as circular** (participants
+  circular, downstream blocked, acyclic remainder evaluates) instead of
+  surfacing as depth-guard evaluation errors. The GH-274/GH-301 dynamic
+  (INDIRECT/OFFSET) evaluate-last bucket and cache-strip semantics are
+  preserved, with the closure now workbook-level.
+
 ## [0.12.4] "Carriage" - 2026-07-09
 
 Wave 11: elementwise error semantics through array operations, and loud benchmark

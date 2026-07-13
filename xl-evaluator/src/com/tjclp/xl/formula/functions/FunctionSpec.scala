@@ -57,7 +57,13 @@ final case class EvalContext(
   /** GH-193: in-scope LET bindings (declared name → evaluated value). */
   bindings: Map[String, Any] = Map.empty,
   /** GH-115: randomness capability for RAND/RANDBETWEEN (Clock pattern). */
-  rng: Rng = Rng.system
+  rng: Rng = Rng.system,
+  /**
+   * GH-346: the pass's memo for recursively evaluated uncached formula cells, so functions that
+   * read uncached cells (aggregates, array materialization) evaluate each precedent once per pass
+   * instead of once per reference (see Evaluator.EvalMemo).
+   */
+  memo: Option[Evaluator.EvalMemo] = None
 )
 
 sealed trait ArgValue

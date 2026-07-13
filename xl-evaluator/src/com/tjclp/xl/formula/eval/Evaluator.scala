@@ -170,7 +170,8 @@ object Evaluator:
     clock: Clock,
     workbook: Option[Workbook],
     depth: Int = 0,
-    rng: Rng = Rng.system
+    rng: Rng = Rng.system,
+    memo: EvalMemo = new EvalMemo
   ): Either[EvalError, CellValue] =
     boundary:
       // GH-161 review: Add recursion depth limit to prevent stack overflow on circular refs
@@ -195,8 +196,9 @@ object Evaluator:
         case Right(expr) =>
           // Recursively evaluate with depth-aware evaluator (GH-161 cycle protection).
           // The referenced formula is a separate lexical unit: the rng threads through, but LET
-          // bindings never leak across formula boundaries (fresh empty environment).
-          new EvaluatorWithDepth(depth + 1, rng = rng)
+          // bindings never leak across formula boundaries (fresh empty environment). The memo
+          // threads too (GH-346): every cell in this recursion tree evaluates at most once.
+          new EvaluatorWithDepth(depth + 1, rng = rng, memo = Some(memo))
             .eval(expr, targetSheet, clock, workbook)
             .map { result =>
               // Convert typed result to CellValue
@@ -214,6 +216,50 @@ object Evaluator:
                 case ar: ArrayResult => if ar.isEmpty then CellValue.Empty else ar(0, 0)
                 case other => CellValue.Text(other.toString)
             }
+
+  /**
+   * GH-346: per-pass memo for recursively evaluated uncached formula cells.
+   *
+   * Recursive evaluation of a `CellValue.Formula(_, None)` reference re-derived the referenced cell
+   * once per PATH through the dependency graph — exponential on multi-branch recursive chains (an
+   * LBO debt schedule: each period's balance read by several formulas, chained period over period).
+   * The memo makes each distinct cell evaluate at most once per evaluation pass, which is also
+   * Excel's one-computation-per-cell-per-recalc semantics.
+   *
+   * Scope and purity: a memo is created where recursion begins (an uncached reference or a function
+   * reading uncached cells at depth 0) and threads only through the derived `EvaluatorWithDepth`
+   * instances and `EvalContext`s of that pass, so it never outlives a single top-level evaluation
+   * and is invisible at the public API — local mutation only, the same pattern as the iterative
+   * Tarjan engine in DependencyGraph. Entries key by Sheet IDENTITY, then ref: two same-named Sheet
+   * snapshots (a recalc temp sheet vs the original workbook copy) memoize independently, so a stale
+   * snapshot can never serve values for a newer one.
+   *
+   * Errors memoize too — a cycle otherwise re-burns the full recursion-depth guard once per path,
+   * which is itself exponential. A depth-guard error consequently records by first-visit order;
+   * that is observable only on chains deeper than the guard, where results were already
+   * path-dependent (and where whole-workbook `recalculate()`, which orders iteratively, is the
+   * supported path).
+   */
+  private[formula] final class EvalMemo:
+    private val bySheet =
+      new java.util.IdentityHashMap[
+        Sheet,
+        scala.collection.mutable.HashMap[ARef, Either[EvalError, CellValue]]
+      ]()
+
+    def getOrCompute(sheet: Sheet, at: ARef)(
+      compute: => Either[EvalError, CellValue]
+    ): Either[EvalError, CellValue] =
+      val forSheet =
+        bySheet.computeIfAbsent(sheet, _ => scala.collection.mutable.HashMap.empty)
+      forSheet.get(at) match
+        case Some(hit) => hit
+        case None =>
+          // Compute BEFORE storing (never inside a map callback): the computation itself may
+          // recurse into this memo for other cells of the same sheet.
+          val computed = compute
+          forSheet.update(at, computed)
+          computed
 
 /**
  * Private implementation of Evaluator.
@@ -235,6 +281,13 @@ private class EvaluatorImpl(
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
+
+  /**
+   * GH-346: the current pass's memo for recursively evaluated uncached formula cells — None at the
+   * top level (a memo is created at the first point recursion can begin and threads through every
+   * derived evaluator of the pass via EvaluatorWithDepth).
+   */
+  protected def memoOpt: Option[Evaluator.EvalMemo] = None
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def eval[A](
@@ -294,15 +347,20 @@ private class EvaluatorImpl(
                     // Formula has no cached value - parse and evaluate against target sheet
                     // GH-161 review: Apply decoder to Cell with evaluated result (type-safe)
                     // GH-161 review: Pass currentDepth for cycle protection
-                    Evaluator
-                      .evalCrossSheetFormula(
-                        formulaStr,
-                        targetSheet,
-                        clock,
-                        workbook,
-                        currentDepth,
-                        rng
-                      )
+                    // GH-346: memoized per pass — a cell evaluates once, not once per path
+                    val memo = memoOpt.getOrElse(new Evaluator.EvalMemo)
+                    memo
+                      .getOrCompute(targetSheet, at) {
+                        Evaluator.evalCrossSheetFormula(
+                          formulaStr,
+                          targetSheet,
+                          clock,
+                          workbook,
+                          currentDepth,
+                          rng,
+                          memo
+                        )
+                      }
                       .flatMap { evaluatedValue =>
                         val resultCell = Cell(at, evaluatedValue)
                         decode(resultCell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
@@ -343,8 +401,21 @@ private class EvaluatorImpl(
         // GH-208: Handle same-sheet formula cells without cached values by recursively evaluating
         cell.value match
           case CellValue.Formula(formulaStr, None) =>
-            Evaluator
-              .evalCrossSheetFormula(formulaStr, sheet, clock, workbook, currentDepth, rng)
+            // GH-346: memoized per pass — a cell evaluates once, not once per path
+            val memo = memoOpt.getOrElse(new Evaluator.EvalMemo)
+            memo
+              .getOrCompute(sheet, at) {
+                Evaluator
+                  .evalCrossSheetFormula(
+                    formulaStr,
+                    sheet,
+                    clock,
+                    workbook,
+                    currentDepth,
+                    rng,
+                    memo
+                  )
+              }
               .flatMap { evaluatedValue =>
                 val resultCell = Cell(at, evaluatedValue)
                 decode(resultCell).left.map(codecErr => EvalError.CodecFailed(at, codecErr))
@@ -485,11 +556,22 @@ private class EvaluatorImpl(
             case ar: ArrayResult => ScalarCoercion.collapseArray(ar).asInstanceOf[A]
             case value => value.asInstanceOf[A]
           }
+        // GH-346: functions that read uncached formula cells (aggregates, array materialization)
+        // recurse through the same memo, so a shared precedent evaluates once per pass. Created
+        // here when the pass has none yet — the ctx is per Call node, so it cannot leak across
+        // top-level evaluations.
+        val callMemo = memoOpt.getOrElse(new Evaluator.EvalMemo)
         // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
         // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
         // (e.g. SUM over a range-valued binding) still resolve in-scope names.
         def evalArrayArg(expr: TExpr[Any]): Either[EvalError, Any] =
-          new EvaluatorWithDepth(currentDepth, allowArrayResults = true, bindings, rng)
+          new EvaluatorWithDepth(
+            currentDepth,
+            allowArrayResults = true,
+            bindings,
+            rng,
+            Some(callMemo)
+          )
             .eval(expr, sheet, clock, workbook, currentCell)
 
         val ctx = EvalContext(
@@ -501,7 +583,8 @@ private class EvaluatorImpl(
           currentCell,
           currentDepth,
           bindings,
-          rng
+          rng,
+          Some(callMemo)
         )
         call.spec.eval(call.args, ctx)
 
@@ -571,7 +654,7 @@ private class EvaluatorImpl(
             // Bare cell refs resolve to the cell's effective value (cached formula extracted,
             // Empty → 0) — same treatment as top-level refs and equality operands (GH-233).
             val resolved = TExpr.asResolvedValueExpr(valueExpr)
-            new EvaluatorWithDepth(currentDepth, allowArrayResults = true, env, rng)
+            new EvaluatorWithDepth(currentDepth, allowArrayResults = true, env, rng, memoOpt)
               .eval(resolved.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
               .map(value => env + (name -> unwrapBindingValue(value)))
               .left
@@ -595,7 +678,7 @@ private class EvaluatorImpl(
             .map(targetSheet => ArrayArithmetic.rangeToArray(range, targetSheet))
         case other =>
           val resolvedBody = TExpr.asResolvedValueExpr(other)
-          new EvaluatorWithDepth(currentDepth, allowArrayResults, env, rng)
+          new EvaluatorWithDepth(currentDepth, allowArrayResults, env, rng, memoOpt)
             .eval(resolvedBody.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
     }
 
@@ -901,6 +984,8 @@ private class EvaluatorWithDepth(
   depth: Int,
   allowArrayResults: Boolean = false,
   bindings: Map[String, Any] = Map.empty,
-  rng: Rng = Rng.system
+  rng: Rng = Rng.system,
+  memo: Option[Evaluator.EvalMemo] = None
 ) extends EvaluatorImpl(allowArrayResults, bindings, rng):
   override protected def currentDepth: Int = depth
+  override protected def memoOpt: Option[Evaluator.EvalMemo] = memo

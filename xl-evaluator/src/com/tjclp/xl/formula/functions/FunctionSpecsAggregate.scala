@@ -101,7 +101,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, Option[BigDecimal]] =
     cellValue match
       case CellValue.Formula(formulaStr, None) =>
-        // Recursively evaluate uncached formula
+        // Recursively evaluate uncached formula (GH-346: memoized once per pass)
         Evaluator
           .evalCrossSheetFormula(
             formulaStr,
@@ -109,7 +109,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             ctx.clock,
             ctx.workbook,
             ctx.depth + 1,
-            ctx.rng
+            ctx.rng,
+            ctx.memo.getOrElse(new Evaluator.EvalMemo)
           )
           .map {
             case CellValue.Number(n) => Some(n)
@@ -128,7 +129,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, BigDecimal] =
     cellValue match
       case CellValue.Formula(formulaStr, None) =>
-        // Recursively evaluate uncached formula
+        // Recursively evaluate uncached formula (GH-346: memoized once per pass)
         Evaluator
           .evalCrossSheetFormula(
             formulaStr,
@@ -136,7 +137,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             ctx.clock,
             ctx.workbook,
             ctx.depth + 1,
-            ctx.rng
+            ctx.rng,
+            ctx.memo.getOrElse(new Evaluator.EvalMemo)
           )
           .map(coerceToNumeric)
       case _ =>
@@ -151,7 +153,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, CellValue] =
     cellValue match
       case CellValue.Formula(formulaStr, None) =>
-        // Recursively evaluate uncached formula
+        // Recursively evaluate uncached formula (GH-346: memoized once per pass)
         Evaluator
           .evalCrossSheetFormula(
             formulaStr,
@@ -159,7 +161,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             ctx.clock,
             ctx.workbook,
             ctx.depth + 1,
-            ctx.rng
+            ctx.rng,
+            ctx.memo.getOrElse(new Evaluator.EvalMemo)
           )
       case CellValue.Formula(_, Some(cached)) =>
         // Use cached value
