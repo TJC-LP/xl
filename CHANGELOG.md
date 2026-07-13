@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.5] "Memo" - 2026-07-13
+
+Kills an exponential blowup in the formula evaluator on recursive multi-branch
+models (the LBO debt-schedule shape) — hours of CPU down to milliseconds — and
+moves whole-workbook recalculation onto a single workbook-level dependency
+order.
+
 ### Fixed
 
 - **Recursive uncached-reference evaluation is memoized per pass** (#346): an

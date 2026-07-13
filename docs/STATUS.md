@@ -1,12 +1,15 @@
 # XL Project Status
 
-**Last Updated**: 2026-07-09 (0.12.4)
+**Last Updated**: 2026-07-13 (0.12.5)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.12.5** (2026-07-13):
+- ✅ **Evaluator memoization + workbook-level recalculation** (#346) — recursive uncached-reference evaluation is memoized per pass, and `recalculate()` runs one topological order over the qualified (sheet!cell) graph: the recursive debt-schedule shape drops from hours (exponential in dependency paths) to milliseconds; cross-sheet cycles now report circular/blocked like same-sheet ones; cross-sheet aggregates over uncached formula cells compute correctly regardless of sheet order
 
 **New in 0.12.4** (2026-07-09):
 - ✅ **Elementwise error carriage** (#337) — array comparisons/arithmetic carry `#DIV/0!`/`#REF!`/`#VALUE!` per element (Left only on dimension mismatch, property-tested); aggregates fail loudly on carried errors (IFERROR-catchable)

@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **107 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 3,996 tests passing.
+**Current Status**: Production-ready with **107 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER and OFFSET), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 4,000 tests passing.
 
-**Current Version**: **0.12.4 "Carriage"** (released 2026-07-09)
+**Current Version**: **0.12.5 "Memo"** (released 2026-07-13)
 
 ---
 
@@ -60,6 +60,10 @@ Phased: (a) verbatim chart/drawing preservation proven by the wave-2 fixture cor
 ### v0.12.1 "Clean Sweep" — wave 7 (Released 2026-06-11)
 
 Every remaining open issue closed in one wave. **Conditional formatting** ([#136](https://github.com/TJC-LP/xl/issues/136)) is the headline — typed cellIs/expression/colorScale/dataBar/top10/text rules + `dxf` differential formats, `sheet.conditionalFormat` authoring with auto-priority, structural-edit range shifting, unmodeled families preserved byte-faithfully — alongside twelve fidelity/writer fixes: openpyxl comment subdirectory dialect (#292), RichText SST keying (#303), exact surgical SST counts (#304), `[Content_Types]` preservation (#314), identity-keyed source mappings (#315), activeTab (#294), fitToPage tri-state (#284), `Cell.comment` deprecated→`Sheet.comments` (#295). Codec `put` paths 2.4x faster (#297).
+
+### v0.12.5 "Memo" (Released 2026-07-13)
+
+Evaluator performance and correctness on recursive models ([#346](https://github.com/TJC-LP/xl/issues/346)): pass-local memoization of recursively evaluated uncached formula references (direct refs, aggregate readers, array materialization — each cell computes once per pass instead of once per dependency path), and `Workbook.recalculate()` rebuilt on a workbook-level qualified graph with global Tarjan cycle isolation + one global Kahn order. An LBO-style debt schedule that previously ran for hours (exponential) recalculates in milliseconds; cross-sheet cycles report as circular/blocked; cross-sheet aggregates over uncached formulas are sheet-order-independent.
 
 ### v0.12.4 "Carriage" — wave 11 (Released 2026-07-09)
 
