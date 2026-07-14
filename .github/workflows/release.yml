@@ -26,7 +26,9 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: linux-arm64
             extension: ""
-          - os: macos-latest
+          # macos-latest is arm64 — pin darwin-amd64 to an Intel runner so the
+          # published asset actually matches its advertised architecture (#354).
+          - os: macos-15-intel
             platform: darwin-amd64
             extension: ""
           - os: macos-14
@@ -59,18 +61,18 @@ jobs:
           path: |
             ~/.cache/coursier
             ~/.ivy2/cache
-          key: ${{ runner.os }}-coursier-native-${{ hashFiles('**/build.mill', '**/package.mill') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-coursier-native-${{ hashFiles('**/build.mill', '**/package.mill') }}
           restore-keys: |
-            ${{ runner.os }}-coursier-native-
+            ${{ runner.os }}-${{ runner.arch }}-coursier-native-
 
       - name: Cache Mill
         uses: actions/cache@v4
         with:
           path: |
             ~/.mill
-          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-mill-${{ hashFiles('**/build.mill') }}
           restore-keys: |
-            ${{ runner.os }}-mill-
+            ${{ runner.os }}-${{ runner.arch }}-mill-
 
       - name: Build native image (Unix)
         if: runner.os != 'Windows'
@@ -92,6 +94,10 @@ jobs:
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
         run: mv out/xl-cli/nativeImage.dest/native-executable.exe xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}.exe
+        shell: bash
+
+      - name: Smoke test binary
+        run: ./xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }} --version
         shell: bash
 
       - name: Upload artifact
@@ -244,7 +250,10 @@ jobs:
           INSTALL_DIR="${HOME}/.local/bin"
           mkdir -p "$INSTALL_DIR"
           echo "Installing xl $VERSION for $PLATFORM..."
-          curl -sL "https://github.com/TJC-LP/xl/releases/download/v${VERSION}/${BINARY}" -o "$INSTALL_DIR/xl"
+          curl -fsSL "https://github.com/TJC-LP/xl/releases/download/v${VERSION}/${BINARY}" -o "$INSTALL_DIR/xl" || {
+            echo "Error: no ${BINARY} published for v${VERSION} — use the JAR distribution xl-cli-${VERSION}.tar.gz instead" >&2
+            exit 1
+          }
           chmod +x "$INSTALL_DIR/xl"
           echo "Installed xl $VERSION to $INSTALL_DIR/xl"
           INSTALL_EOF
