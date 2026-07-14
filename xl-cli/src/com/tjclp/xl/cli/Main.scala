@@ -287,7 +287,10 @@ OUTPUT FLAGS:
   --format <fmt>      Output format
   --limit <n>         Max rows to display (default: 50; 0 = no limit).
                       When output is clipped, markdown appends a "… showing X of Y rows"
-                      trailer, json adds "truncated"/"totalRows" fields, csv notes on stderr.
+                      trailer; json adds "truncated"/"totalRows" fields (with --stream the
+                      notice goes to stderr instead — streaming json stays a bare array);
+                      csv/svg note on stderr; html notes on stderr and appends an HTML
+                      comment; raster formats append the notice to the "Exported:" line.
   --formulas          Show formulas instead of values
   --eval              Evaluate formulas (compute live values)
   --strict            Fail on formula evaluation errors (use with --eval)

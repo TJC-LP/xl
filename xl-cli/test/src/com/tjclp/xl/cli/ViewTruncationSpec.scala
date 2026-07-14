@@ -11,6 +11,7 @@ import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.{ReadCommands, StreamingReadCommands}
+import com.tjclp.xl.cli.raster.BatikRasterizer
 import com.tjclp.xl.io.ExcelIO
 
 /**
@@ -18,8 +19,11 @@ import com.tjclp.xl.io.ExcelIO
  *
  * Pins the truncation marker semantics per format:
  *   - markdown: trailer line after the table ("… showing X of Y rows")
- *   - csv: stdout stays byte-identical, notice goes to stderr
- *   - json: top-level "truncated"/"totalRows" fields (only when clipped)
+ *   - csv/svg: stdout stays byte-identical, notice goes to stderr
+ *   - html: notice on stderr plus a trailing HTML comment on stdout
+ *   - json: top-level "truncated"/"totalRows" fields (only when clipped); streaming json stays a
+ *     bare array and notes on stderr instead
+ *   - raster (png/jpeg/webp/pdf): notice appended to the "Exported:" status line
  *   - search: total match count + trailer when the hit list is clipped
  *   - --limit 0 means "no limit"
  */
@@ -184,6 +188,92 @@ class ViewTruncationSpec extends CatsEffectSuite:
       }
   }
 
+  // ========== view: html ==========
+
+  test("view html: clipped output appends HTML comment trailer and notes on stderr") {
+    captureStderr(runView(wbWithRows(100), "A1:A100", 50, ViewFormat.Html)).map {
+      case (out, stderr) =>
+        assert(
+          out.trim.endsWith(
+            "<!-- … showing 50 of 100 rows (use --limit to raise; --limit 0 = no limit) -->"
+          ),
+          s"missing trailing HTML comment:\n${out.takeRight(200)}"
+        )
+        assert(
+          stderr.contains("… showing 50 of 100 rows"),
+          s"expected truncation notice on stderr, got: '$stderr'"
+        )
+    }
+  }
+
+  test("view html: unclipped output has no comment or stderr notice") {
+    captureStderr(runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Html)).map {
+      case (out, stderr) =>
+        assert(!out.contains("… showing"), s"unexpected marker:\n${out.takeRight(200)}")
+        assert(!stderr.contains("showing"), s"unexpected stderr notice: '$stderr'")
+    }
+  }
+
+  // ========== view: svg ==========
+
+  test("view svg: stdout stays byte-identical, notice goes to stderr") {
+    val wb = wbWithRows(100)
+    val io =
+      for
+        clipped <- runView(wb, "A1:A100", 50, ViewFormat.Svg)
+        exact <- runView(wb, "A1:A50", 50, ViewFormat.Svg)
+      yield (clipped, exact)
+    captureStderr(io).map { case ((clipped, exact), stderr) =>
+      assertEquals(clipped, exact, "clipped SVG stdout must equal the unclipped 50-row render")
+      assert(!clipped.contains("showing"), "notice must not leak into SVG stdout")
+      assert(
+        stderr.contains("… showing 50 of 100 rows"),
+        s"expected truncation notice on stderr, got: '$stderr'"
+      )
+    }
+  }
+
+  test("view svg: no stderr notice when not clipped") {
+    captureStderr(runView(wbWithRows(30), "A1:A30", 50, ViewFormat.Svg)).map { case (_, stderr) =>
+      assert(!stderr.contains("showing"), s"unexpected stderr notice: '$stderr'")
+    }
+  }
+
+  // ========== view: raster ==========
+
+  test("view png: clipped export appends notice to the Exported status line") {
+    BatikRasterizer.isAvailable.flatMap { batikAvailable =>
+      assume(batikAvailable, "AWT not available - skipping raster truncation test")
+      val tempFile = Files.createTempFile("xl-cli-truncation-", ".png")
+      tempFile.toFile.deleteOnExit()
+      ReadCommands
+        .view(
+          wbWithRows(100),
+          wbWithRows(100).sheets.headOption,
+          "A1:A100",
+          showFormulas = false,
+          evalFormulas = false,
+          strict = false,
+          limit = 5,
+          format = ViewFormat.Png,
+          printScale = false,
+          showGridlines = false,
+          showLabels = false,
+          dpi = 48,
+          quality = 90,
+          rasterOutput = Some(tempFile),
+          skipEmpty = false,
+          headerRow = None
+        )
+        .map { out =>
+          assert(out.contains("Exported:"), s"expected export status line:\n$out")
+          assert(out.contains("… showing 5 of 100 rows"), s"missing raster notice:\n$out")
+          assert(Files.size(tempFile) > 0, "PNG should have content")
+        }
+        .guarantee(IO(Files.deleteIfExists(tempFile)).void)
+    }
+  }
+
   // ========== search ==========
 
   test("search: clipped hit list reports total count and trailer") {
@@ -263,6 +353,79 @@ class ViewTruncationSpec extends CatsEffectSuite:
           assert(out.contains("| 100 |"), "row 100 should be rendered with --limit 0")
           assert(!out.contains("… showing"), s"unexpected trailer:\n$out")
         }
+    }
+  }
+
+  private def runStreamingView(
+    path: Path,
+    range: String,
+    limit: Int,
+    format: ViewFormat
+  ): IO[String] =
+    StreamingReadCommands.view(
+      path,
+      Some("Data"),
+      range,
+      showFormulas = false,
+      limit = limit,
+      format = format,
+      showLabels = false,
+      skipEmpty = false,
+      headerRow = None
+    )
+
+  test("streaming view csv: stdout stays byte-identical, notice goes to stderr") {
+    withTempWorkbook(wbWithRows(100)) { path =>
+      val io =
+        for
+          clipped <- runStreamingView(path, "A1:A100", 50, ViewFormat.Csv)
+          exact <- runStreamingView(path, "A1:A50", 50, ViewFormat.Csv)
+        yield (clipped, exact)
+      captureStderr(io).map { case ((clipped, exact), stderr) =>
+        assertEquals(clipped, exact, "clipped CSV stdout must equal the unclipped 50-row render")
+        assert(!clipped.contains("showing"), "notice must not leak into CSV stdout")
+        assert(
+          stderr.contains("… showing 50 of 100 rows"),
+          s"expected truncation notice on stderr, got: '$stderr'"
+        )
+      }
+    }
+  }
+
+  test("streaming view csv: no stderr notice when not clipped") {
+    withTempWorkbook(wbWithRows(30)) { path =>
+      captureStderr(runStreamingView(path, "A1:A30", 50, ViewFormat.Csv)).map { case (_, stderr) =>
+        assert(!stderr.contains("showing"), s"unexpected stderr notice: '$stderr'")
+      }
+    }
+  }
+
+  test("streaming view json: stdout stays a bare parseable array, notice goes to stderr") {
+    withTempWorkbook(wbWithRows(100)) { path =>
+      val io =
+        for
+          clipped <- runStreamingView(path, "A1:A100", 50, ViewFormat.Json)
+          exact <- runStreamingView(path, "A1:A50", 50, ViewFormat.Json)
+        yield (clipped, exact)
+      captureStderr(io).map { case ((clipped, exact), stderr) =>
+        assertEquals(clipped, exact, "clipped JSON stdout must equal the unclipped 50-row render")
+        assert(clipped.trim.startsWith("["), s"streaming JSON must stay a bare array:\n$clipped")
+        assert(clipped.trim.endsWith("]"), s"streaming JSON must stay a bare array:\n$clipped")
+        assert(!clipped.contains("truncated"), "no in-band truncated field in streaming JSON")
+        assert(!clipped.contains("showing"), "notice must not leak into JSON stdout")
+        assert(
+          stderr.contains("… showing 50 of 100 rows"),
+          s"expected truncation notice on stderr, got: '$stderr'"
+        )
+      }
+    }
+  }
+
+  test("streaming view json: no stderr notice when not clipped") {
+    withTempWorkbook(wbWithRows(30)) { path =>
+      captureStderr(runStreamingView(path, "A1:A30", 50, ViewFormat.Json)).map { case (_, stderr) =>
+        assert(!stderr.contains("showing"), s"unexpected stderr notice: '$stderr'")
+      }
     }
   }
 

@@ -80,6 +80,7 @@ object ReadCommands:
       totalRows = range.end.row.index0 - range.start.row.index0 + 1
       shownRows = limitedRange.end.row.index0 - limitedRange.start.row.index0 + 1
       isTruncated = shownRows < totalRows
+      notice = RendererCommon.truncationNotice(shownRows, totalRows)
       theme = wb.metadata.theme // Use workbook's parsed theme
       result <- format match
         case ViewFormat.Markdown =>
@@ -95,38 +96,38 @@ object ReadCommands:
             skipEmpty,
             evalFormulas = false
           )
-          IO.pure(
-            if isTruncated then s"$table\n${RendererCommon.truncationNotice(shownRows, totalRows)}"
-            else table
-          )
+          IO.pure(if isTruncated then s"$table\n$notice" else table)
         case ViewFormat.Html =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
             if evalFormulas then
               evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
-          IO.pure(
-            sheetToRender.toHtml(
-              limitedRange,
-              theme = theme,
-              applyPrintScale = printScale,
-              showLabels = showLabels
-            )
+          val html = sheetToRender.toHtml(
+            limitedRange,
+            theme = theme,
+            applyPrintScale = printScale,
+            showLabels = showLabels
           )
+          // In-band marker as a trailing HTML comment (comments after the root
+          // element are valid HTML), plus a human-visible notice on stderr.
+          IO(System.err.println(notice))
+            .whenA(isTruncated)
+            .as(if isTruncated then s"$html\n<!-- $notice -->" else html)
         case ViewFormat.Svg =>
           // Pre-evaluate formulas if --eval flag is set
           val sheetToRender =
             if evalFormulas then
               evaluateSheetFormulas(targetSheet, Some(wb), Some(limitedRange), strict)
             else targetSheet
-          IO.pure(
-            sheetToRender.toSvg(
-              limitedRange,
-              theme = theme,
-              showGridlines = showGridlines,
-              showLabels = showLabels
-            )
+          val svg = sheetToRender.toSvg(
+            limitedRange,
+            theme = theme,
+            showGridlines = showGridlines,
+            showLabels = showLabels
           )
+          // SVG stdout must stay a clean XML document: notice goes to stderr only.
+          IO(System.err.println(notice)).whenA(isTruncated).as(svg)
         case ViewFormat.Json =>
           // Pre-evaluate formulas if --eval flag is set (for cross-sheet reference support)
           val sheetToRender =
@@ -159,9 +160,7 @@ object ReadCommands:
             evalFormulas = false
           )
           // CSV stdout must stay machine-parseable: truncation notice goes to stderr only.
-          IO(System.err.println(RendererCommon.truncationNotice(shownRows, totalRows)))
-            .whenA(isTruncated)
-            .as(csv)
+          IO(System.err.println(notice)).whenA(isTruncated).as(csv)
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
           rasterOutput match
             case None =>
@@ -195,7 +194,10 @@ object ReadCommands:
               RasterizerChain
                 .convert(svg, outputPath, rasterFormat, dpi, rasterizer)
                 .map { usedRasterizer =>
-                  s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, $usedRasterizer)"
+                  val exported =
+                    s"Exported: $outputPath (${format.toString.toLowerCase}, ${dpi} DPI, $usedRasterizer)"
+                  // Binary goes to --raster-output, so the notice can ride the status line.
+                  if isTruncated then s"$exported\n$notice" else exported
                 }
     yield result
 
