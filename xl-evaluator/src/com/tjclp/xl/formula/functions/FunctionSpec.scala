@@ -208,6 +208,10 @@ object ArgSpec:
           Right((TExpr.RangeLocation.Local(range), tail))
         case TExpr.SheetRange(sheet, range) :: tail =>
           Right((TExpr.RangeLocation.CrossSheet(sheet, range), tail))
+        // GH-353: external-workbook ranges parse (SUMIF([2]Book1!A1:A9, …)); the location can
+        // never resolve at evaluation time, but the cell's Excel-written cache pins its value
+        case TExpr.ExternalRange(index, name, range) :: tail =>
+          Right((TExpr.RangeLocation.External(index, name, range), tail))
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
 
@@ -234,6 +238,18 @@ object ArgSpec:
       args match
         case TExpr.RangeRef(range) :: tail =>
           Right((range, tail))
+        // GH-353: this slot requires a LOCAL literal range — name the unsupported construct
+        // instead of the generic arity message
+        case (_: TExpr.ExternalRef | _: TExpr.ExternalRange) :: _ =>
+          Left(
+            ParseError.InvalidArguments(
+              fnName,
+              pos,
+              describe,
+              "an external-workbook reference (not supported in this argument; " +
+                "external workbooks are not loaded)"
+            )
+          )
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
 
@@ -371,6 +387,9 @@ object ArgSpec:
           Right((Left(TExpr.RangeLocation.Local(range)), tail))
         case TExpr.SheetRange(sheet, range) :: tail =>
           Right((Left(TExpr.RangeLocation.CrossSheet(sheet, range)), tail))
+        // GH-353: external-workbook ranges take the range branch (like the other two shapes)
+        case TExpr.ExternalRange(index, name, range) :: tail =>
+          Right((Left(TExpr.RangeLocation.External(index, name, range)), tail))
         case head :: tail =>
           Right((Right(TExpr.asNumericExpr(head)), tail))
         case Nil =>
@@ -414,6 +433,9 @@ object ArgSpec:
           Right((Left(TExpr.RangeLocation.Local(range)), tail))
         case TExpr.SheetRange(sheet, range) :: tail =>
           Right((Left(TExpr.RangeLocation.CrossSheet(sheet, range)), tail))
+        // GH-353: external-workbook ranges take the range branch (like the other two shapes)
+        case TExpr.ExternalRange(index, name, range) :: tail =>
+          Right((Left(TExpr.RangeLocation.External(index, name, range)), tail))
         case head :: tail =>
           Right((Right(head.asInstanceOf[TExpr[Any]]), tail))
         case Nil =>

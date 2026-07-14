@@ -17,14 +17,27 @@ trait TExprRangeLocation:
     case Local(range: CellRange)
     case CrossSheet(sheet: SheetName, range: CellRange)
 
+    /**
+     * GH-353: external-workbook range in a range-typed argument slot — `SUMIF([2]Book1!A1:A9, …)`.
+     *
+     * The range analog of [[TExpr.ExternalRange]] for function arguments: `workbookIndex` is the
+     * 1-based external-link index, `sheetName` is the raw sheet (or workbook-file) name in that
+     * EXTERNAL workbook. The target cells live outside this workbook, so the location contributes
+     * no dependency edges and can never resolve to a sheet — evaluation yields
+     * `Evaluator.externalRefUnsupported`; cells CONTAINING such calls are pinned to their
+     * Excel-written cache upstream (SheetEvaluator.pinnedExternalCache).
+     */
+    case External(workbookIndex: Int, sheetName: String, range: CellRange)
+
   object RangeLocation:
     extension (loc: RangeLocation)
       /** Extract the CellRange regardless of location */
       def range: CellRange = loc match
         case Local(r) => r
         case CrossSheet(_, r) => r
+        case External(_, _, r) => r
 
-      /** Get sheet name for cross-sheet, None for local */
+      /** Get sheet name for cross-sheet, None for local or external-workbook locations */
       def sheetName: Option[SheetName] = loc match
         case CrossSheet(s, _) => Some(s)
         case _ => None
@@ -32,7 +45,7 @@ trait TExprRangeLocation:
       /** Get cells for local ranges only (for intra-sheet dependency graphs) */
       def localCells: Set[ARef] = loc match
         case Local(r) => r.cells.toSet
-        case CrossSheet(_, _) => Set.empty
+        case _ => Set.empty
 
       /**
        * Get cells for local ranges, bounded by the sheet's used range.
@@ -50,7 +63,7 @@ trait TExprRangeLocation:
           bounds match
             case Some(b) => r.intersect(b).map(_.cells.toSet).getOrElse(Set.empty)
             case None => r.cells.toSet
-        case CrossSheet(_, _) => Set.empty
+        case _ => Set.empty
 
       /** Check if this is a cross-sheet reference */
       def isCrossSheet: Boolean = loc match
@@ -73,6 +86,9 @@ trait TExprRangeLocation:
       def toA1: String = loc match
         case Local(r) => r.toA1
         case CrossSheet(s, r) => s"${SheetName.quoteForFormula(s.value)}!${r.toA1}"
+        // GH-353: same quoting rule as FormulaPrinter.formatExternalSheet
+        case External(i, n, r) =>
+          s"${com.tjclp.xl.formula.printer.FormulaPrinter.formatExternalSheet(i, n)}!${r.toA1}"
 
       /** Get starting column of the range */
       def colStart: Column = loc.range.colStart

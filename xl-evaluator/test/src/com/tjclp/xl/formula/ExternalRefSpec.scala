@@ -83,6 +83,35 @@ class ExternalRefSpec extends ScalaCheckSuite:
     assert(FormulaParser.parse("=[x]Book1!A1").isLeft)
     assert(FormulaParser.parse("=[2]!A1").isLeft)
 
+  test("parse: external ranges are accepted in range-typed argument slots (GH-353 review)"):
+    val forms = List(
+      """=SUMIF([2]Book1!A1:A9, ">0")""",
+      """=SUMIFS(D1:D9, [2]Book1!A1:A9, ">0")""",
+      """=COUNTIF([2]Book1!A1:A9, ">0")""",
+      """=AVERAGEIF([2]Book1!A1:A9, ">0")""",
+      "=VLOOKUP(A1, [2]Book1!A1:B9, 2, FALSE)",
+      "=SUMPRODUCT([2]Book1!A1:A9, B1:B9)"
+    )
+    forms.foreach { text =>
+      FormulaParser.parse(text) match
+        case Right(expr) => assert(TExpr.containsExternalRef(expr), s"not external: $text")
+        case Left(err) => fail(s"parse failed for $text: $err")
+    }
+
+  test("parse: LOCAL-literal-range slots reject external ranges naming the construct"):
+    // MATCH/INDEX/XLOOKUP array slots require a LOCAL literal range (same envelope as
+    // INDIRECT/OFFSET there); the rejection must name the unsupported construct, and cached
+    // cells bearing these shapes still pin via the pinnedExternalCache parse-failure fallback
+    List(
+      "=XLOOKUP(1, [2]Book1!A1:A9, B1:B9)",
+      "=MATCH(1, [2]Book1!A1:A9, 0)"
+    ).foreach { text =>
+      FormulaParser.parse(text) match
+        case Left(err) =>
+          assert(err.toString.contains("external-workbook"), s"unhelpful rejection for $text: $err")
+        case Right(v) => fail(s"expected parse rejection for $text, got $v")
+    }
+
   // ==================== Printer round-trips ====================
 
   test("print: canonical external forms round-trip the original text exactly"):
@@ -92,7 +121,8 @@ class ExternalRefSpec extends ScalaCheckSuite:
       "='[3]Sheet Name'!B2",
       "=[2]Book1!$A$1",
       "=SUM([2]Consolidation.xlsx!D5:D9)",
-      "=SUM([2]Book1!A1:A2)+1"
+      "=SUM([2]Book1!A1:A2)+1",
+      """=SUMIF([2]Book1!A1:A9, ">0")"""
     )
     forms.foreach { text =>
       FormulaParser.parse(text) match
@@ -174,6 +204,50 @@ class ExternalRefSpec extends ScalaCheckSuite:
     val result = Workbook(sheet).recalculate()
     assert(result.isClean, s"expected clean recalc, got ${result.errors.map(_.render)}")
     assertEquals(cached(result.workbook, "S", d1), Some(num(42)), "cache must be preserved")
+    assertEquals(cached(result.workbook, "S", e1), Some(num(43)))
+
+  test("recalculate: cached external SUMIF/SUMIFS pin verbatim and stay clean (GH-353 review)"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(d1, CellValue.Formula("""=SUMIF([2]Book1!A1:A9, ">0")""", Some(num(42))))
+      .put(d2, CellValue.Formula("""=SUMIFS(A1:A9, [2]Book1!A1:A9, ">0")""", Some(num(7))))
+      .put(e1, formula("=D1+D2"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, s"expected clean recalc, got ${result.errors.map(_.render)}")
+    assertEquals(cached(result.workbook, "S", d1), Some(num(42)))
+    assertEquals(cached(result.workbook, "S", d2), Some(num(7)))
+    assertEquals(cached(result.workbook, "S", e1), Some(num(49)))
+
+  test("recalculate: UNCACHED external SUMIF is the friendly per-cell error (GH-353 review)"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(d1, formula("""=SUMIF([2]Book1!A1:A9, ">0")"""))
+    val result = Workbook(sheet).recalculate()
+    assertEquals(result.errors.map(_.ref), Vector(d1))
+    assert(
+      result.errors.forall(_.error.message.contains("External workbook reference")),
+      result.errors.map(_.render).mkString("; ")
+    )
+
+  test("recalculate: MIXED local+external cached formula stays pinned when the local part changes"):
+    // The pin is verbatim: xl does NOT recompute from the external cache parts the way Excel
+    // does, so the cache is served even though A1 changed (documented in LIMITATIONS.md GH-353)
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ARef.from0(0, 0), num(5))
+      .put(d1, CellValue.Formula("=A1+[2]Book1!B1", Some(num(42))))
+      .put(e1, formula("=D1+1"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, s"expected clean recalc, got ${result.errors.map(_.render)}")
+    assertEquals(cached(result.workbook, "S", d1), Some(num(42)), "pin must survive verbatim")
+    assertEquals(cached(result.workbook, "S", e1), Some(num(43)))
+
+  test("recalculate: cached external cell whose shape is beyond the parser still pins (fallback)"):
+    // XLOOKUP's array slots require LOCAL literal ranges, so this formula fails to parse —
+    // the lexical '[n]' fallback in pinnedExternalCache must keep the Excel cache anyway
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(d1, CellValue.Formula("=XLOOKUP(1, [2]Book1!A1:A9, [2]Book1!B1:B9)", Some(num(42))))
+      .put(e1, formula("=D1+1"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, s"expected clean recalc, got ${result.errors.map(_.render)}")
+    assertEquals(cached(result.workbook, "S", d1), Some(num(42)))
     assertEquals(cached(result.workbook, "S", e1), Some(num(43)))
 
   test("recalculate: UNCACHED external formula errors per-cell and propagates to dependents"):

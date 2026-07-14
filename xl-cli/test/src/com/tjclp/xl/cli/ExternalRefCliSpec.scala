@@ -100,3 +100,44 @@ class ExternalRefCliSpec extends FunSuite:
         assertEquals(cachedValue, Some(CellValue.Number(BigDecimal(42))))
       case other => fail(s"Expected cached external Formula, got $other")
   }
+
+  test("put: a MIXED local+external formula keeps its Excel cache when its precedent changes") {
+    // GH-353 review: D1 has a real in-workbook edge (A1), so writing A1 puts D1 in the recalc
+    // set — this exercises the pinnedExternalCache guard in recalculateInOrder, which without
+    // the pin would hit the eval-failure arm and CLEAR the Excel-written cache (the sole source
+    // of truth). The pure-external test above never enters the recalc set at all.
+    val sheet = Sheet("Data")
+      .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+      .put(d1, CellValue.Formula("=A1+[2]Book1!B1", Some(CellValue.Number(BigDecimal(42)))))
+    val wb = Workbook(sheet)
+
+    WriteCommands
+      .put(wb, Some(wb.sheets.head), "A1", List("5"), outputPath, config)
+      .unsafeRunSync()
+
+    val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+    imported.sheets.head.cells.get(d1).map(_.value) match
+      case Some(CellValue.Formula(_, cachedValue)) =>
+        assertEquals(
+          cachedValue,
+          Some(CellValue.Number(BigDecimal(42))),
+          "pin guard must preserve the Excel-written cache verbatim"
+        )
+      case other => fail(s"Expected cached external Formula, got $other")
+  }
+
+  test("putf: accepts an external SUMIF (range-typed argument slot)") {
+    val wb = Workbook(Sheet("Data"))
+    val result = WriteCommands
+      .putFormula(
+        wb,
+        Some(wb.sheets.head),
+        "B1",
+        List("""=SUMIF([2]Book1!A1:A9, ">0")"""),
+        outputPath,
+        config
+      )
+      .unsafeRunSync()
+
+    assert(result.contains("Put: B1"), s"Expected success message, got: $result")
+  }

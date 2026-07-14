@@ -225,6 +225,9 @@ object FormulaShifter:
         RangeLocation.Local(shiftRange(range, colDelta, rowDelta))
       case RangeLocation.CrossSheet(sheet, range) =>
         RangeLocation.CrossSheet(sheet, shiftRange(range, colDelta, rowDelta))
+      // GH-353: external-workbook range args drag anchor-aware like the TExpr.ExternalRange node
+      case RangeLocation.External(index, name, range) =>
+        RangeLocation.External(index, name, shiftRange(range, colDelta, rowDelta))
 
   /**
    * Helper to shift TExpr[?] (wildcard type).
@@ -335,6 +338,9 @@ object FormulaShifter:
         if sheet.value.equalsIgnoreCase(editedSheet) then
           shiftRangeStructural(range, isRow, at, delta).map(r => RangeLocation.CrossSheet(sheet, r))
         else Some(location)
+      // GH-353: external-workbook ranges point into ANOTHER workbook — structural edits here
+      // never move or void them
+      case RangeLocation.External(_, _, _) => Some(location)
 
   @SuppressWarnings(
     Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var")

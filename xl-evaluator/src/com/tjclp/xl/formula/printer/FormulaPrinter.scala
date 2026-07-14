@@ -218,13 +218,16 @@ object FormulaPrinter:
     s"${formatARef(range.start, range.startAnchor)}:${formatARef(range.end, range.endAnchor)}"
 
   /**
-   * Format RangeLocation (local or cross-sheet) to A1 notation.
+   * Format RangeLocation (local, cross-sheet, or external-workbook) to A1 notation.
    */
   private def formatLocation(location: TExpr.RangeLocation): String =
     location match
       case TExpr.RangeLocation.Local(range) => formatRange(range)
       case TExpr.RangeLocation.CrossSheet(sheet, range) =>
         s"${formatSheetName(sheet)}!${formatRange(range)}"
+      // GH-353: external-workbook range args round-trip their surface form exactly
+      case TExpr.RangeLocation.External(index, name, range) =>
+        s"${formatExternalSheet(index, name)}!${formatRange(range)}"
 
   /**
    * Format ARef to A1 notation with anchor support.
@@ -302,8 +305,10 @@ object FormulaPrinter:
    * not accept (anything outside letters/digits/underscore/period), with the bracket prefix INSIDE
    * the quotes and embedded quotes doubled — so parse∘print is identity and the canonical surface
    * forms round-trip textually ([2]Book1!A1, [2]Consolidation.xlsx!D5:D9, '[3]Sheet Name'!B2).
+   *
+   * `private[formula]` so RangeLocation.toA1 (diagnostics) shares the exact same quoting rule.
    */
-  private def formatExternalSheet(index: Int, name: String): String =
+  private[formula] def formatExternalSheet(index: Int, name: String): String =
     val needsQuoting =
       name.isEmpty || name.exists(c => !c.isLetterOrDigit && c != '_' && c != '.')
     if needsQuoting then s"'[$index]${name.replace("'", "''")}'"

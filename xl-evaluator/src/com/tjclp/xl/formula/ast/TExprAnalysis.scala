@@ -106,9 +106,12 @@ trait TExprAnalysis:
         .toValues(call.args)
         .exists {
           case ArgValue.Expr(e) => containsExternalRef(e)
-          // Range/Cells positions hold local or cross-sheet ranges, never external ones
+          // Range positions carry externality via RangeLocation.External (SUMIF([2]Book1!…, …));
+          // Cells positions hold local literal ranges only
+          case ArgValue.Range(RangeLocation.External(_, _, _)) => true
           case _ => false
         }
+    case Aggregate(_, RangeLocation.External(_, _, _)) => true
     case Add(l, r) => containsExternalRef(l) || containsExternalRef(r)
     case Sub(l, r) => containsExternalRef(l) || containsExternalRef(r)
     case Mul(l, r) => containsExternalRef(l) || containsExternalRef(r)
@@ -147,6 +150,8 @@ trait TExprAnalysis:
         .toValues(call.args)
         .flatMap {
           case ArgValue.Expr(e) => collectRanges(e)
+          // GH-353: external-workbook ranges are not in this workbook — nothing to bound
+          case ArgValue.Range(RangeLocation.External(_, _, _)) => Nil
           case ArgValue.Range(l) => List((l.sheetName, l.range))
           case _ => Nil
         }

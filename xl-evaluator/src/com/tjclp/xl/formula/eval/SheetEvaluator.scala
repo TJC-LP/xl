@@ -564,15 +564,28 @@ object SheetEvaluator:
    * yields a clear per-cell error (Evaluator.externalRefUnsupported).
    *
    * The '[' pre-filter keeps the common recalculation path parse-free (same trick as
-   * DependencyGraph.dynamicCells); a formula that fails to parse is not external-pinned.
+   * DependencyGraph.dynamicCells).
+   *
+   * Parse-failure fallback: some external shapes are beyond xl's parser (e.g. an external range in
+   * an XLOOKUP array slot, or external defined names `[2]!name`). Re-evaluating such a cell can
+   * only produce a parse error, and clearing its cache would destroy the sole source of truth, so a
+   * CACHED formula that fails to parse but lexically carries the external-workbook prefix (`[n]…` /
+   * `'[n]…`) is pinned too. A false positive (a `[n]`-looking substring in an unparseable
+   * non-external formula) merely keeps that cell's existing cache — the same value every earlier xl
+   * version reported for it.
    */
   private[eval] def pinnedExternalCache(value: CellValue): Option[CellValue] =
     value match
       case CellValue.Formula(expr, Some(cached)) if expr.contains('[') =>
         FormulaParser.parse(expr) match
           case scala.util.Right(ast) if TExpr.containsExternalRef(ast) => Some(cached)
-          case _ => None
+          case scala.util.Right(_) => None
+          case scala.util.Left(_) if externalPrefixPattern.matcher(expr).find() => Some(cached)
+          case scala.util.Left(_) => None
       case _ => None
+
+  /** GH-353: lexical external-workbook prefix — `[2]Book1!`, `'[3]Sheet Name'!`, `[2]!name`. */
+  private val externalPrefixPattern = java.util.regex.Pattern.compile("""'?\[\d+\]""")
 
   /**
    * GH-274: strip stale formula caches from the given cells.

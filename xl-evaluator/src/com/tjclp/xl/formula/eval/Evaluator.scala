@@ -156,6 +156,11 @@ object Evaluator:
             wb(sheetName) match
               case Left(err) => Left(sheetNotFoundError(sheetName, err))
               case Right(targetSheet) => Right(targetSheet)
+      // GH-353: the target workbook is not loaded — same friendly error as a direct external
+      // ref; cells CONTAINING such calls are pinned to their Excel cache upstream and never
+      // reach this point
+      case loc @ TExpr.RangeLocation.External(_, _, _) =>
+        Left(externalRefUnsupported(loc.toA1))
 
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
