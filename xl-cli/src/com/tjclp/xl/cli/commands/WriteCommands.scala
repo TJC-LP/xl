@@ -687,15 +687,30 @@ object WriteCommands:
    * management, hyperlinks) leave every existing cached value correct — a rename even rewrites
    * referencing formulas without changing their values — so a batch made exclusively of them skips
    * the recalculation and preserves the input's caches as-is.
+   *
+   * The match is deliberately exhaustive (no wildcard): a future `BatchOp` must be consciously
+   * classified here, or the compiler flags this match — a silent `false` default would skip the
+   * recalculation for a new cell-mutating op and reintroduce GH-352.
    */
   private def isCellMutating(op: BatchParser.BatchOp): Boolean =
     op match
       case _: BatchParser.BatchOp.Put | _: BatchParser.BatchOp.PutFormula |
           _: BatchParser.BatchOp.PutFormulaDragging | _: BatchParser.BatchOp.PutFormulas |
-          _: BatchParser.BatchOp.PutValues | _: BatchParser.BatchOp.Clear |
-          _: BatchParser.BatchOp.CopyRange =>
+          _: BatchParser.BatchOp.PutValues | _: BatchParser.BatchOp.CopyRange =>
         true
-      case _ => false
+      // A styles-only or comments-only clear leaves every cell value intact — mirror
+      // BatchParser.applyClear's clearContents condition so those take the no-recalc path.
+      case c: BatchParser.BatchOp.Clear => c.all || (!c.styles && !c.comments)
+      case _: BatchParser.BatchOp.Style | _: BatchParser.BatchOp.Merge |
+          _: BatchParser.BatchOp.Unmerge | _: BatchParser.BatchOp.ColWidth |
+          _: BatchParser.BatchOp.RowHeight | _: BatchParser.BatchOp.AddComment |
+          _: BatchParser.BatchOp.RemoveComment | _: BatchParser.BatchOp.ColHide |
+          _: BatchParser.BatchOp.ColShow | _: BatchParser.BatchOp.RowHide |
+          _: BatchParser.BatchOp.RowShow | _: BatchParser.BatchOp.AutoFit |
+          _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
+          _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
+          _: BatchParser.BatchOp.Hyperlink =>
+        false
 
   /**
    * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula

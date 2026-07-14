@@ -38,6 +38,53 @@ class BatchRecalcSpec extends FunSuite:
   private def readBack(path: Path): Workbook =
     ExcelIO.instance[IO].read(path).unsafeRunSync()
 
+  /** Raw bytes of a zip entry (e.g. `xl/worksheets/sheet2.xml`) inside an xlsx package. */
+  private def zipEntryBytes(path: Path, entryName: String): Array[Byte] =
+    val zip = new java.util.zip.ZipFile(path.toFile)
+    try
+      Option(zip.getEntry(entryName)) match
+        case Some(entry) => zip.getInputStream(entry).readAllBytes()
+        case None => fail(s"missing $entryName in $path")
+    finally zip.close()
+
+  /**
+   * Marker comment that the writer never emits: it survives ONLY when the surgical writer copies
+   * the worksheet part verbatim, so its presence distinguishes byte-for-byte preservation from a
+   * (possibly byte-identical) regeneration.
+   */
+  private val preservationMarker = "<!--BatchRecalcSpec preservation marker-->"
+
+  /** Rewrite one zip entry in place, leaving every other entry untouched. */
+  private def rewriteZipEntry(path: Path, entryName: String)(
+    transform: Array[Byte] => Array[Byte]
+  ): Unit =
+    import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
+    import scala.jdk.CollectionConverters.*
+    val tmp = Files.createTempFile("zip-edit", ".xlsx")
+    val zip = new ZipFile(path.toFile)
+    try
+      val out = new ZipOutputStream(Files.newOutputStream(tmp))
+      try
+        zip.entries().asScala.foreach { entry =>
+          val bytes = zip.getInputStream(entry).readAllBytes()
+          out.putNextEntry(new ZipEntry(entry.getName))
+          out.write(if entry.getName == entryName then transform(bytes) else bytes)
+          out.closeEntry()
+        }
+      finally out.close()
+    finally zip.close()
+    Files.move(tmp, path, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+
+  /** Inject the preservation marker just before `</worksheet>` in a worksheet part. */
+  private def injectPreservationMarker(path: Path, entryName: String): Unit =
+    rewriteZipEntry(path, entryName) { bytes =>
+      val xml = new String(bytes, StandardCharsets.UTF_8)
+      assert(xml.contains("</worksheet>"), s"unexpected worksheet XML in $entryName")
+      xml
+        .replace("</worksheet>", s"$preservationMarker</worksheet>")
+        .getBytes(StandardCharsets.UTF_8)
+    }
+
   /** Cached value of the formula cell at (col0, row0) on the first sheet, failing otherwise. */
   private def cachedFormulaValue(wb: Workbook, col0: Int, row0: Int): Option[CellValue] =
     wb.sheets.head.cells.get(ARef.from0(col0, row0)).map(_.value) match
@@ -120,11 +167,21 @@ class BatchRecalcSpec extends FunSuite:
   }
 
   test("style-only batch does not recalculate (uncached formulas stay uncached)") {
-    val wb = Workbook(
-      Sheet("Data")
-        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(5)))
-        .put(ARef.from0(2, 0), CellValue.Formula("A1*2", None))
-    )
+    // Disk round-trip so the no-recalc path is pinned against the SourceContext /
+    // ModificationTracker seam, not just the in-memory workbook.
+    val srcFile = tempXlsx()
+    ExcelIO
+      .instance[IO]
+      .write(
+        Workbook(
+          Sheet("Data")
+            .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(5)))
+            .put(ARef.from0(2, 0), CellValue.Formula("A1*2", None))
+        ),
+        srcFile
+      )
+      .unsafeRunSync()
+    val wb = readBack(srcFile)
     val ops = writeOps("""[{"op":"style","range":"A1","bold":true}]""")
     val out = tempXlsx()
 
@@ -134,6 +191,110 @@ class BatchRecalcSpec extends FunSuite:
 
     assert(!result.contains("Recalculated"))
     assertEquals(cachedFormulaValue(readBack(out), 2, 0), None)
+    Files.deleteIfExists(srcFile)
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("styles-only clear does not recalculate (values untouched, presentation-only path)") {
+    // BatchParser.applyClear only clears contents when `all || (!styles && !comments)`;
+    // a styles-only clear must classify as non-mutating and skip the recalculation.
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(5)))
+        .put(ARef.from0(2, 0), CellValue.Formula("A1*2", None))
+    )
+    val ops = writeOps("""[{"op":"clear","range":"A1","styles":true}]""")
+    val out = tempXlsx()
+
+    val result = WriteCommands
+      .batch(wb, Some(wb.sheets.head), ops.toString, out, config)
+      .unsafeRunSync()
+
+    assert(!result.contains("Recalculated"))
+    val imported = readBack(out)
+    // The cleared-styles cell keeps its value; the formula stays uncached
+    assertEquals(
+      imported.sheets.head.cells.get(ARef.from0(0, 0)).map(_.value),
+      Some(CellValue.Number(BigDecimal(5)))
+    )
+    assertEquals(cachedFormulaValue(imported, 2, 0), None)
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("contents clear still recalculates (default clear mutates cell values)") {
+    val wb = Workbook(
+      Sheet("Data")
+        .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(5)))
+        .put(ARef.from0(2, 0), CellValue.Formula("A1*2", None))
+    )
+    val ops = writeOps("""[{"op":"clear","range":"A1"}]""")
+    val out = tempXlsx()
+
+    val result = WriteCommands
+      .batch(wb, Some(wb.sheets.head), ops.toString, out, config)
+      .unsafeRunSync()
+
+    assert(result.contains("Recalculated"))
+    Files.deleteIfExists(out)
+    Files.deleteIfExists(ops)
+  }
+
+  test("mutating batch preserves untouched formula-bearing sheets byte-for-byte") {
+    // Regression pin for the GH-352 over-marking hazard: a batch edit on Inputs recalculates
+    // the whole workbook, but Report's formula recomputes to the value it already cached, so
+    // Report must NOT be marked modified — the surgical writer then preserves its worksheet
+    // XML verbatim (which is also what keeps unparsed parts like pivot tables alive).
+    val srcFile = tempXlsx()
+    ExcelIO
+      .instance[IO]
+      .write(
+        Workbook(
+          Sheet("Inputs").put(ARef.from0(0, 0), CellValue.Number(BigDecimal(5))),
+          Sheet("Report")
+            .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(3)))
+            .put(
+              ARef.from0(1, 0),
+              CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(6))))
+            )
+        ),
+        srcFile
+      )
+      .unsafeRunSync()
+    // Stand-in for content our writer can't regenerate (pivot tables, slicers, ...): it
+    // survives only if Report is never marked modified and rides the verbatim copy path.
+    injectPreservationMarker(srcFile, "xl/worksheets/sheet2.xml")
+    val wb = readBack(srcFile)
+
+    // Edit Inputs!A1; no Report formula depends on it, so Report's caches are already correct
+    val ops = writeOps("""[{"op":"put","ref":"Inputs!A1","value":7}]""")
+    val out = tempXlsx()
+    val result = WriteCommands
+      .batch(wb, wb.sheets.headOption, ops.toString, out, config)
+      .unsafeRunSync()
+    assert(result.contains("Recalculated"))
+
+    // Report (sheet2.xml) rides byte-for-byte preservation; the Inputs edit still lands
+    assertEquals(
+      zipEntryBytes(out, "xl/worksheets/sheet2.xml").toSeq,
+      zipEntryBytes(srcFile, "xl/worksheets/sheet2.xml").toSeq
+    )
+    assert(
+      new String(zipEntryBytes(out, "xl/worksheets/sheet2.xml"), StandardCharsets.UTF_8)
+        .contains(preservationMarker),
+      "Report worksheet was regenerated: preservation marker lost"
+    )
+    val imported = readBack(out)
+    assertEquals(
+      imported.sheets.head.cells.get(ARef.from0(0, 0)).map(_.value),
+      Some(CellValue.Number(BigDecimal(7)))
+    )
+    val report = imported.sheets.find(_.name.value == "Report").getOrElse(fail("no Report"))
+    report.cells.get(ARef.from0(1, 0)).map(_.value) match
+      case Some(CellValue.Formula(_, Some(CellValue.Number(n)))) => assertEquals(n.toDouble, 6.0)
+      case other => fail(s"Expected cached Report formula, got $other")
+    Files.deleteIfExists(srcFile)
     Files.deleteIfExists(out)
     Files.deleteIfExists(ops)
   }
@@ -163,6 +324,44 @@ class BatchRecalcSpec extends FunSuite:
     assert(result.contains("Recalculated 1 formula"))
     assertCachedNumber(cachedFormulaValue(readBack(out), 2, 0), 10.0)
     Files.deleteIfExists(staleFile)
+    Files.deleteIfExists(out)
+  }
+
+  test("recalc on an already-fresh workbook preserves worksheet XML byte-for-byte") {
+    // Every recomputed value equals its existing cache, so no sheet may be marked modified
+    // and the surgical writer must copy the worksheet part verbatim.
+    val srcFile = tempXlsx()
+    ExcelIO
+      .instance[IO]
+      .write(
+        Workbook(
+          Sheet("Data")
+            .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(5)))
+            .put(
+              ARef.from0(2, 0),
+              CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal(10))))
+            )
+        ),
+        srcFile
+      )
+      .unsafeRunSync()
+    injectPreservationMarker(srcFile, "xl/worksheets/sheet1.xml")
+    val wb = readBack(srcFile)
+
+    val out = tempXlsx()
+    val result = WriteCommands.recalc(wb, out, config).unsafeRunSync()
+
+    assert(result.contains("Recalculated 1 formula"))
+    assertEquals(
+      zipEntryBytes(out, "xl/worksheets/sheet1.xml").toSeq,
+      zipEntryBytes(srcFile, "xl/worksheets/sheet1.xml").toSeq
+    )
+    assert(
+      new String(zipEntryBytes(out, "xl/worksheets/sheet1.xml"), StandardCharsets.UTF_8)
+        .contains(preservationMarker),
+      "worksheet was regenerated despite fresh caches: preservation marker lost"
+    )
+    Files.deleteIfExists(srcFile)
     Files.deleteIfExists(out)
   }
 
