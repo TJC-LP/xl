@@ -314,6 +314,9 @@ Switch to streaming above ~100k rows; `Excel.read` loads the whole workbook. Str
 - **Navigation is unchecked at the edges**: `ref"A1".up()` produces an invalid "A0" ref that corrupts output if written; keep loop bounds inside your data extent.
 - **First run is slow** (dependency download); afterwards scala-cli caches everything.
 - **`.sc` files**: top-level statements, no `@main`. A `.scala` file needs `@main def run(): Unit`.
+- **`Excel.write` does NOT recalculate** — freshly built `fx"…"` cells are written with no cached values, so Excel-before-recalc, openpyxl `data_only`, pandas, and previewers all show blanks. Always `val result = wb.recalculate()` and write `result.workbook` (a single pass is sufficient on 0.12.5+; see "Formulas & recalculation" above). Tracking a recalculating-write affordance: [#360](https://github.com/TJC-LP/xl/issues/360).
+- **Formulas containing external-workbook refs (`[2]Book!A1`) or percent literals (`10%`)** fail to parse/evaluate ([#353](https://github.com/TJC-LP/xl/issues/353), [#355](https://github.com/TJC-LP/xl/issues/355)) — compute external-linked cells from their cached values, and write `/100` instead of `%`.
+- **`setColumnProperties` wants a compile-time literal** (`ref"D1".col`); runtime-parsed refs don't expose `.col`, so column loops over runtime letters can't feed it directly ([#361](https://github.com/TJC-LP/xl/issues/361)). Until then, set widths with literal refs per column.
 
 ## Reference
 
