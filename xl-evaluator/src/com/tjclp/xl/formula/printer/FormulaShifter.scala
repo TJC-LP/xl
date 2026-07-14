@@ -82,6 +82,16 @@ object FormulaShifter:
         val shiftedRange = shiftRange(range, colDelta, rowDelta)
         SheetRange(sheet, shiftedRange).asInstanceOf[TExpr[A]]
 
+      // GH-353: external-workbook references shift anchor-aware like sheet-qualified ones —
+      // the workbook/sheet qualifier is fixed, the cell coordinates drag
+      case ExternalRef(index, name, at, anchor) =>
+        val shiftedRef = shiftARef(at, anchor, colDelta, rowDelta)
+        ExternalRef(index, name, shiftedRef, anchor).asInstanceOf[TExpr[A]]
+
+      case ExternalRange(index, name, range) =>
+        val shiftedRange = shiftRange(range, colDelta, rowDelta)
+        ExternalRange(index, name, shiftedRange).asInstanceOf[TExpr[A]]
+
       // Literals - unchanged
       case lit: Lit[?] => lit.asInstanceOf[TExpr[A]]
 
@@ -373,6 +383,9 @@ object FormulaShifter:
             SheetRange(sheet, r).asInstanceOf[TExpr[A]]
           )
         else Some(expr)
+      // GH-353: external-workbook refs point into ANOTHER workbook — structural edits here
+      // never move or void them
+      case _: ExternalRef | _: ExternalRange => Some(expr)
       case lit: Lit[?] => Some(lit.asInstanceOf[TExpr[A]])
       case Add(x, y) => for sx <- go(x); sy <- go(y) yield Add(sx, sy).asInstanceOf[TExpr[A]]
       case Sub(x, y) => for sx <- go(x); sy <- go(y) yield Sub(sx, sy).asInstanceOf[TExpr[A]]

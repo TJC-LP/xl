@@ -127,6 +127,11 @@ object FormulaFormatting:
           resolve(name).map(boundedCells(_, range)).getOrElse(Vector.empty)
         case TExpr.Aggregate(_, location) => locationRefs(location)
 
+        // GH-353: external-workbook refs — the target cells are not in this workbook, so
+        // there is no format to inherit from
+        case TExpr.ExternalRef(_, _, _, _) => Vector.empty
+        case TExpr.ExternalRange(_, _, _) => Vector.empty
+
         // Function calls: arguments in declaration order
         case call: TExpr.Call[?] =>
           call.spec.argSpec

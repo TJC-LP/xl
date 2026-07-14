@@ -160,6 +160,11 @@ object DependentRecalculation:
         .get(ref)
         .map { cell =>
           cell.value match
+            // GH-353: external-workbook formulas keep their Excel-written cache verbatim —
+            // re-evaluating can only fail (the external workbook is not loaded), and clearing
+            // the cache would destroy the sole source of truth
+            case value: CellValue.Formula if SheetEvaluator.pinnedExternalCache(value).isDefined =>
+              s
             case CellValue.Formula(expr, _) =>
               // Evaluate the formula and update cache
               val fullFormula = if expr.startsWith("=") then expr else s"=$expr"

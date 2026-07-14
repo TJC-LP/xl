@@ -89,6 +89,47 @@ trait TExprAnalysis:
     // Default: no time function
     case _ => false
 
+  // ===== External-Workbook Reference Detection (GH-353) =====
+
+  /**
+   * Check if an expression contains any external-workbook reference ([2]Book1!A1).
+   *
+   * Used by the evaluation layer to apply Excel's closed-workbook semantics: a formula cell whose
+   * expression touches an external workbook keeps its Excel-written cached value instead of being
+   * re-evaluated (the external workbook is not loaded, so evaluation can only fail).
+   */
+  def containsExternalRef(expr: TExpr[?]): Boolean = expr match
+    case ExternalRef(_, _, _, _) => true
+    case ExternalRange(_, _, _) => true
+    case call: Call[?] =>
+      call.spec.argSpec
+        .toValues(call.args)
+        .exists {
+          case ArgValue.Expr(e) => containsExternalRef(e)
+          // Range/Cells positions hold local or cross-sheet ranges, never external ones
+          case _ => false
+        }
+    case Add(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Sub(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Mul(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Div(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Pow(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Concat(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Eq(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Neq(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Lt(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Lte(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Gt(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case Gte(l, r) => containsExternalRef(l) || containsExternalRef(r)
+    case ToInt(e) => containsExternalRef(e)
+    case DateToSerial(e) => containsExternalRef(e)
+    case DateTimeToSerial(e) => containsExternalRef(e)
+    case Let(bindings, body) =>
+      bindings.exists((_, value) => containsExternalRef(value)) || containsExternalRef(body)
+    case Coerced(inner, _) => containsExternalRef(inner)
+    // Lit, Ref/PolyRef, SheetRef/SheetPolyRef, RangeRef, SheetRange, Aggregate, BindingRef, ...
+    case _ => false
+
   // ===== Range Collection and Transformation =====
   // GH-197: Used by SUMPRODUCT to bound full-column ranges in array expressions
 
