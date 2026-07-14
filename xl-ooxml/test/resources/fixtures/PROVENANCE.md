@@ -40,6 +40,7 @@ python3 scripts/generate-fixtures.py --skip-lo  # openpyxl fixtures only
 | `small-values-lo.xlsx` | LibreOffice (from small-values.xlsx) | **SST dialect** (everything `xml:space="preserve"`), explicit `t="n"`/`s=` on every cell, booleans rewritten as cached `TRUE()`/`FALSE()` formulas, `1.23E-010` three-digit exponent, adds `docProps/custom.xml` |
 | `styled-lo.xlsx` | LibreOffice (from styled.xlsx) | LibreOffice re-encoding of all styles (own styles.xml layout) |
 | `formulas-lo.xlsx` | LibreOffice (from formulas.xlsx) | Same formulas with **computed cached values** (`<f aca="false">…</f><v>150</v>`) |
+| `malformed-workbook.xlsx` | derived (zip surgery on small-values.xlsx) | **Intentionally NOT well-formed** (GH-349) — excluded from `TestFixtures.all`, corpus laws must not parse it. `xl/workbook.xml` closing tag replaced (`</workbook>` → `</workbook-truncated>`), so Xerces raises the XMLMessages-backed diagnostic `The end-tag for element type "workbook" must end with a '>' delimiter.` Pins that parse failures surface the real Xerces message (JVM: `WorkbookMetadataReaderSpec`; native binary: the GH-349 smoke step in `.github/workflows/release.yml`, where a missing bundle registration degrades it to `Could not load any resource bundle`). Zip timestamps pinned to 1980-01-01 |
 
 ## Consumers
 
@@ -48,3 +49,5 @@ python3 scripts/generate-fixtures.py --skip-lo  # openpyxl fixtures only
 - `xl-ooxml/test/.../CfPreservationSpec.scala` — conditional-formatting typed/Preserved split, authored+preserved coexistence, dxf append-only laws (GH-136, condformat*.xlsx)
 - `xl-cats-effect/test/.../StreamingParitySpec.scala` — streaming vs in-memory reader parity law
   (xl-cats-effect test resources include this directory via `xl-cats-effect/package.mill`)
+- `xl-ooxml/test/.../WorkbookMetadataReaderSpec.scala` + `.github/workflows/release.yml`
+  ("Smoke test native binary" step) — malformed-workbook.xlsx only (GH-349 readable-diagnostic guard)
